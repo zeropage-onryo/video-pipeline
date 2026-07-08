@@ -1,0 +1,19 @@
+# Video files
+*.mp4
+*.mov
+*.braw
+
+# Media directories
+/footage
+/renders
+
+# Environment variables
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
