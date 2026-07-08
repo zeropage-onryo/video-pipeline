@@ -1,2 +1,4 @@
 openai-whisper
 numpy<2
+anthropic
+python-dotenv
