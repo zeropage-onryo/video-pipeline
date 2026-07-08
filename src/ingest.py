@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import argparse
-import base64
 import json
 import os
 import subprocess
@@ -9,11 +8,12 @@ import tempfile
 from pathlib import Path
 
 import whisper
-from anthropic import Anthropic
 from dotenv import load_dotenv
+from google import genai
+from google.genai import types
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".braw"}
-VISION_MODEL = "claude-haiku-4-5-20251001"
+VISION_MODEL = "gemini-2.5-flash"
 VISION_PROMPT = (
     "These are frames sampled from the start, middle, and end of a video clip. "
     "Describe the shot in 1-2 sentences: subject, action, setting, and camera "
@@ -93,26 +93,12 @@ def extract_frames(path: Path, duration: float) -> list[bytes]:
     return frames
 
 
-def describe_shot(client: Anthropic, frames: list[bytes]) -> str:
-    content = [
-        {
-            "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": "image/jpeg",
-                "data": base64.standard_b64encode(frame).decode("utf-8"),
-            },
-        }
-        for frame in frames
-    ]
-    content.append({"type": "text", "text": VISION_PROMPT})
+def describe_shot(client: genai.Client, frames: list[bytes]) -> str:
+    parts = [types.Part.from_bytes(data=frame, mime_type="image/jpeg") for frame in frames]
+    parts.append(VISION_PROMPT)
 
-    message = client.messages.create(
-        model=VISION_MODEL,
-        max_tokens=200,
-        messages=[{"role": "user", "content": content}],
-    )
-    return message.content[0].text.strip()
+    response = client.models.generate_content(model=VISION_MODEL, contents=parts)
+    return response.text.strip()
 
 
 def main():
@@ -138,10 +124,10 @@ def main():
 
     model = whisper.load_model(args.model) if videos else None
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    client = Anthropic(api_key=api_key) if api_key else None
+    api_key = os.environ.get("GEMINI_API_KEY")
+    client = genai.Client(api_key=api_key) if api_key else None
     if videos and not client:
-        print("ANTHROPIC_API_KEY not set; skipping visual shot descriptions", file=sys.stderr)
+        print("GEMINI_API_KEY not set; skipping visual shot descriptions", file=sys.stderr)
 
     manifest = []
     for video in videos:
