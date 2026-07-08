@@ -17,3 +17,7 @@ __pycache__/
 *.pyd
 .Python
 *.egg-info/
+venv/
+
+# macOS
+.DS_Store
