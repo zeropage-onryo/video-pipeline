@@ -43,9 +43,35 @@ def probe_video(path: Path) -> dict:
     }
 
 
+NO_SPEECH_PROB_THRESHOLD = 0.6
+AVG_LOGPROB_THRESHOLD = -1.0
+
+
+def is_repetitive(text: str) -> bool:
+    words = text.split()
+    if len(words) < 6:
+        return False
+    for unit_len in (1, 2, 3):
+        units = [tuple(words[i:i + unit_len]) for i in range(0, len(words) - unit_len + 1, unit_len)]
+        if len(units) < 3:
+            continue
+        most_common = max(units.count(u) for u in set(units))
+        if most_common / len(units) > 0.5:
+            return True
+    return False
+
+
 def transcribe(model, path: Path) -> str:
     result = model.transcribe(str(path))
-    return result["text"].strip()
+    segments = result.get("segments", [])
+    kept = [
+        s["text"].strip()
+        for s in segments
+        if s.get("no_speech_prob", 0) < NO_SPEECH_PROB_THRESHOLD
+        and s.get("avg_logprob", 0) > AVG_LOGPROB_THRESHOLD
+    ]
+    text = " ".join(kept).strip()
+    return "" if is_repetitive(text) else text
 
 
 def extract_frames(path: Path, duration: float) -> list[bytes]:
