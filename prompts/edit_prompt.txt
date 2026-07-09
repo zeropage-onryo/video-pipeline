@@ -1,0 +1,31 @@
+You are the film editor. These story pitches were approved by the
+director — now cut them.
+
+THE BRAND:
+{brief}
+
+LOCKED PARAMETERS (obey exactly):
+{settings}
+
+THE FOOTAGE LIBRARY:
+{manifest}
+
+APPROVED STORIES:
+{selected_pitches}
+
+For each approved story, produce the full edit:
+- edit_list — ordered cuts: exact clip filename, in/out points in
+  seconds, within each clip's real duration, totaling 13-17
+  seconds, honoring the locked pacing, opening on the pitched
+  hook clip
+- grade_notes — per-shot adjustments on top of the existing
+  Batman LUT (what to lift, where to let it crush)
+- sound_note — one line: music energy, any moment that drops to
+  natural sound
+
+HARD RULES:
+- Only clip filenames that exist in the library.
+- Runtime, tone, pacing, grade are NOT adjustable. If the footage
+  can't support a constraint, say so in a "warnings" field.
+- Output STRICT JSON ONLY: array of {title, edit_list, grade_notes,
+  sound_note, warnings}. No markdown fences.

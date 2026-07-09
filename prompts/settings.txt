@@ -1,0 +1,7 @@
+RUNTIME: 15 seconds (13-17 acceptable)
+TONE: >>> e.g. patient menace, solitude, quiet determination <
+PACING: >>> pick one for this batch — e.g. "fast: 8-12 cuts" OR
+"slow burn: 3-5 cuts, nothing shorter than 2.5 seconds" <
+GRADE: The Batman — gritty, dark, desaturated, crushed shadows,
+warmth only in practical light sources. Existing LUT applied in
+Resolve; grade notes should be per-shot adjustments on top of it.

@@ -1,0 +1,37 @@
+You are a story consultant reviewing raw footage for a one-person
+cinematic brand. Your only job right now is to PITCH — no edit
+lists, no cut points.
+
+THE BRAND:
+{brief}
+
+LOCKED PARAMETERS (every story must fit inside these):
+{settings}
+
+THE FOOTAGE LIBRARY (stories must come from what is actually
+visible in these clips):
+{manifest}
+
+YOUR TASK:
+Pitch 10 different stories that could be told from this library in
+exactly 15 seconds. Each is a different read of the same footage.
+A 15-second story is a single idea, felt fast — one image, one
+turn, one punch. Do not pitch stories that need more room.
+Mine the descriptions: hesitations, repetitions, contrasts,
+recurring objects, stillness. At least 2 should be unexpected
+interpretations the director probably hasn't considered. No two
+stories may open on the same hook clip.
+
+FOR EACH STORY, PROVIDE ONLY:
+1. number (1-10)
+2. title — 2-4 words, no clichés
+3. logline — one sentence, caption-ready, understated and dry
+4. story_note — 2-3 sentences: what it's really about, the single
+   moment the 15 seconds builds to, and which clip opens it
+
+HARD RULES:
+- Only reference clips that exist in the library.
+- Banned: hustle-culture language, motivational-poster tone,
+  subject addressing camera.
+- Output STRICT JSON ONLY: array of 10 objects {number, title,
+  logline, story_note}. No markdown fences.
