@@ -2,9 +2,11 @@
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import whisper
@@ -13,7 +15,7 @@ from google import genai
 from google.genai import types
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".braw"}
-VISION_MODEL = "gemini-2.5-flash"
+VISION_MODEL = "gemini-3-flash-preview"
 VISION_PROMPT = (
     "These are frames sampled from the start, middle, and end of a video clip. "
     "Describe the shot in 1-2 sentences: subject, action, setting, and camera "
@@ -93,12 +95,26 @@ def extract_frames(path: Path, duration: float) -> list[bytes]:
     return frames
 
 
+MAX_RETRIES = 6
+DEFAULT_RETRY_DELAY = 20
+
+
 def describe_shot(client: genai.Client, frames: list[bytes]) -> str:
     parts = [types.Part.from_bytes(data=frame, mime_type="image/jpeg") for frame in frames]
     parts.append(VISION_PROMPT)
 
-    response = client.models.generate_content(model=VISION_MODEL, contents=parts)
-    return response.text.strip()
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = client.models.generate_content(model=VISION_MODEL, contents=parts)
+            return response.text.strip()
+        except Exception as e:
+            retriable = "RESOURCE_EXHAUSTED" in str(e) or "UNAVAILABLE" in str(e)
+            if not retriable or attempt == MAX_RETRIES - 1:
+                raise
+            match = re.search(r"retry in ([\d.]+)s", str(e))
+            delay = float(match.group(1)) + 2 if match else DEFAULT_RETRY_DELAY
+            print(f"  request failed, waiting {delay:.0f}s before retry...", file=sys.stderr)
+            time.sleep(delay)
 
 
 def main():
@@ -108,6 +124,7 @@ def main():
     parser.add_argument("--footage-dir", default="footage", type=Path)
     parser.add_argument("--output", default="manifest.json", type=Path)
     parser.add_argument("--model", default="base", help="Whisper model size")
+    parser.add_argument("--skip-transcription", action="store_true", help="Skip Whisper transcription entirely")
     args = parser.parse_args()
 
     if not args.footage_dir.is_dir():
@@ -122,12 +139,24 @@ def main():
     if not videos:
         print(f"No video files found in {args.footage_dir}", file=sys.stderr)
 
-    model = whisper.load_model(args.model) if videos else None
+    model = whisper.load_model(args.model) if videos and not args.skip_transcription else None
 
     api_key = os.environ.get("GEMINI_API_KEY")
     client = genai.Client(api_key=api_key) if api_key else None
     if videos and not client:
         print("GEMINI_API_KEY not set; skipping visual shot descriptions", file=sys.stderr)
+
+    previous_descriptions = {}
+    if args.output.exists():
+        try:
+            previous = json.loads(args.output.read_text())
+            previous_descriptions = {
+                entry["filename"]: entry["description"]
+                for entry in previous
+                if entry.get("description")
+            }
+        except (json.JSONDecodeError, KeyError):
+            pass
 
     manifest = []
     for video in videos:
@@ -139,14 +168,15 @@ def main():
             print(f"  ffprobe failed for {video.name}: {e.stderr.strip()}", file=sys.stderr)
             metadata = {"duration_seconds": None, "resolution": None}
 
-        try:
-            transcript = transcribe(model, video)
-        except Exception as e:
-            print(f"  transcription failed for {video.name}: {e}", file=sys.stderr)
-            transcript = None
+        transcript = None
+        if not args.skip_transcription:
+            try:
+                transcript = transcribe(model, video)
+            except Exception as e:
+                print(f"  transcription failed for {video.name}: {e}", file=sys.stderr)
 
-        description = None
-        if client:
+        description = previous_descriptions.get(video.name)
+        if client and not description:
             try:
                 frames = extract_frames(video, metadata.get("duration_seconds") or 0)
                 description = describe_shot(client, frames)
@@ -160,7 +190,9 @@ def main():
             "description": description,
         })
 
-    args.output.write_text(json.dumps(manifest, indent=2))
+        args.output.write_text(json.dumps(manifest, indent=2))
+        print(f"  saved ({len(manifest)}/{len(videos)})")
+
     print(f"Wrote {len(manifest)} entries to {args.output}")
 
 
