@@ -42,16 +42,28 @@ def build_prompt(manifest: list[dict]) -> str:
     )
 
 
+CLIP_REF_PATTERN = re.compile(r"[A-Z0-9]+_\d+_C\d{3}|DJI_\d+_\d+_D")
+
+
 def validate_pitches(pitches: list, manifest: list[dict]) -> None:
-    filenames = [entry["filename"] for entry in manifest]
+    base_names = {entry["filename"].rsplit(".", 1)[0] for entry in manifest}
     for pitch in pitches:
         note = pitch.get("story_note", "")
-        if not any(name in note for name in filenames):
+        refs = CLIP_REF_PATTERN.findall(note)
+        if not refs:
             print(
                 f"  warning: story {pitch.get('number')} ('{pitch.get('title')}') "
                 f"doesn't clearly reference a known clip filename in its story_note",
                 file=sys.stderr,
             )
+            continue
+        for ref in refs:
+            if ref not in base_names:
+                print(
+                    f"  warning: story {pitch.get('number')} ('{pitch.get('title')}') "
+                    f"references '{ref}', which doesn't match any clip in the manifest",
+                    file=sys.stderr,
+                )
 
 
 def main():
