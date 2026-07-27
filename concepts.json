@@ -1,0 +1,58 @@
+[
+  {
+    "title": "First-Person Resolve",
+    "edit_list": [
+      {
+        "filename": "DJI_20260402143402_0001_D.mov",
+        "in_point": 6.0,
+        "out_point": 9.5
+      },
+      {
+        "filename": "A037_01191836_C012.mov",
+        "in_point": 6.0,
+        "out_point": 10.0
+      },
+      {
+        "filename": "DJI_20260402144807_0003_D.mov",
+        "in_point": 5.9,
+        "out_point": 9.5
+      },
+      {
+        "filename": "DJI_20260402154458_0008_D.mov",
+        "in_point": 120.5,
+        "out_point": 124.5
+      }
+    ],
+    "grade_notes": "Shot 1: Crush blacks heavily to hide floor clutter, leaving only the boots in the low light. Shot 2: Desaturate the yellows of the engine, lift highlights on the chrome of the wrench. Shot 3: Maintain deep shadows in the bin, letting the white glove be the primary exposure point. Shot 4: Apply heavy vignette; crush the background to black, focusing light only on the hands inside the chassis.",
+    "sound_note": "A low, cinematic sub-bass pulse that cuts to the sharp, metallic click of a socket wrench at 0:08.",
+    "warnings": []
+  },
+  {
+    "title": "The Final Residue",
+    "edit_list": [
+      {
+        "filename": "A037_01201522_C014.mov",
+        "in_point": 112.8,
+        "out_point": 116.3
+      },
+      {
+        "filename": "DJI_20260402144937_0004_D.mov",
+        "in_point": 77.2,
+        "out_point": 81.2
+      },
+      {
+        "filename": "A037_01161332_C006.mov",
+        "in_point": 15.5,
+        "out_point": 19.5
+      },
+      {
+        "filename": "DJI_20260402144937_0004_D.mov",
+        "in_point": 139.0,
+        "out_point": 143.0
+      }
+    ],
+    "grade_notes": "Shot 1: High contrast to make the black grease on white plastic look like ink. Shot 2: Shift blue coolant toward a desaturated teal/cyan to match the noir palette. Shot 3: Lift the 'wetness' of the exhaust pipe in the midtones to emphasize the residue. Shot 4: Crush shadows until the subject's legs are silhouettes framing the mess.",
+    "sound_note": "Quiet, rhythmic industrial drone with the tactile sound of a cloth dragging over plastic emphasized in the first and last shots.",
+    "warnings": []
+  }
+]

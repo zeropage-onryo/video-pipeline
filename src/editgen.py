@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
+import argparse
 import json
 import os
-import re
 import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
 from google import genai
+
+from beat_sync import detect_beats, snap_edit_to_beats, synthetic_beats
+from gemini_utils import generate_with_retry, strip_fences
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MANIFEST_PATH = PROJECT_ROOT / "manifest.json"
@@ -21,14 +24,6 @@ MAX_RUNTIME = 17
 
 def load_json(path: Path):
     return json.loads(path.read_text())
-
-
-def strip_fences(text: str) -> str:
-    text = text.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
-        text = re.sub(r"\n?```$", "", text)
-    return text.strip()
 
 
 def build_prompt(manifest: list[dict], selected_pitches: list[dict]) -> str:
@@ -87,15 +82,26 @@ def validate_edit(edit: dict, manifest_by_name: dict) -> list[str]:
 def main():
     load_dotenv()
 
-    if len(sys.argv) < 2:
-        print("Usage: python src/editgen.py <pitch-number> [pitch-number ...]", file=sys.stderr)
+    parser = argparse.ArgumentParser(description="Generate full edit specs for selected pitches.")
+    parser.add_argument("pitch_numbers", type=int, nargs="+", help="Pitch numbers from pitches.json to edit")
+    parser.add_argument(
+        "--music", type=Path,
+        help="Path to a music file; snaps cut transitions to the nearest detected beat",
+    )
+    parser.add_argument(
+        "--bpm", type=float,
+        help="Tempo to snap to when you don't have the audio file itself "
+             "(e.g. a platform-native sound) — generates a synthetic beat grid instead",
+    )
+    parser.add_argument(
+        "--bpm-offset", type=float, default=0.0,
+        help="Seconds to the first downbeat, if not at t=0 (only used with --bpm)",
+    )
+    args = parser.parse_args()
+    if args.music and args.bpm:
+        print("Use --music or --bpm, not both", file=sys.stderr)
         sys.exit(1)
-
-    try:
-        selected_numbers = [int(n) for n in sys.argv[1:]]
-    except ValueError:
-        print("Pitch numbers must be integers", file=sys.stderr)
-        sys.exit(1)
+    selected_numbers = args.pitch_numbers
 
     api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
     if not api_key:
@@ -119,18 +125,32 @@ def main():
     prompt = build_prompt(manifest, selected_pitches)
 
     client = genai.Client(api_key=api_key)
-    response = client.models.generate_content(model=MODEL, contents=prompt)
+    response_text = generate_with_retry(client, MODEL, prompt)
 
-    text = strip_fences(response.text)
+    text = strip_fences(response_text)
     edits = json.loads(text)
 
+    beat_times = []
+    if args.music:
+        if not args.music.exists():
+            print(f"Music file not found: {args.music}", file=sys.stderr)
+        else:
+            print(f"Detecting beats in {args.music.name}...")
+            beat_times = detect_beats(str(args.music))
+            print(f"  found {len(beat_times)} beats")
+    elif args.bpm:
+        print(f"Generating a synthetic {args.bpm} BPM beat grid (offset {args.bpm_offset}s)...")
+        beat_times = synthetic_beats(args.bpm, args.bpm_offset)
+
     for edit in edits:
-        warnings = validate_edit(edit, manifest_by_name)
+        beat_warnings = snap_edit_to_beats(edit, beat_times, manifest_by_name, cut_field) if beat_times else []
+        warnings = validate_edit(edit, manifest_by_name) + beat_warnings
         existing_warnings = edit.get("warnings") or []
         edit["warnings"] = list(existing_warnings) + warnings
 
         cut_count = len(edit.get("edit_list", []))
-        print(f"{edit.get('title')}: {cut_count} cuts")
+        synced = " (beat-synced)" if beat_times else ""
+        print(f"{edit.get('title')}: {cut_count} cuts{synced}")
         for w in edit["warnings"]:
             print(f"  WARNING: {w}")
 

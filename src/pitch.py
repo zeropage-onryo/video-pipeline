@@ -8,6 +8,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
 
+from gemini_utils import generate_with_retry, strip_fences
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MANIFEST_PATH = PROJECT_ROOT / "manifest.json"
 PROMPTS_DIR = PROJECT_ROOT / "prompts"
@@ -18,14 +20,6 @@ MODEL = "gemini-3-flash-preview"
 
 def load_manifest() -> list[dict]:
     return json.loads(MANIFEST_PATH.read_text())
-
-
-def strip_fences(text: str) -> str:
-    text = text.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
-        text = re.sub(r"\n?```$", "", text)
-    return text.strip()
 
 
 def build_prompt(manifest: list[dict]) -> str:
@@ -78,9 +72,9 @@ def main():
     prompt = build_prompt(manifest)
 
     client = genai.Client(api_key=api_key)
-    response = client.models.generate_content(model=MODEL, contents=prompt)
+    response_text = generate_with_retry(client, MODEL, prompt)
 
-    text = strip_fences(response.text)
+    text = strip_fences(response_text)
     pitches = json.loads(text)
 
     validate_pitches(pitches, manifest)

@@ -2,11 +2,9 @@
 import argparse
 import json
 import os
-import re
 import subprocess
 import sys
 import tempfile
-import time
 from pathlib import Path
 
 import whisper
@@ -14,13 +12,10 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
+from gemini_utils import generate_with_retry, strip_fences
+
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".braw"}
 VISION_MODEL = "gemini-3-flash-preview"
-VISION_PROMPT = (
-    "These are frames sampled from the start, middle, and end of a video clip. "
-    "Describe the shot in 1-2 sentences: subject, action, setting, and camera "
-    "movement if apparent. Be concise and factual."
-)
 
 
 def probe_video(path: Path) -> dict:
@@ -76,7 +71,7 @@ def transcribe(model, path: Path) -> str:
     return "" if is_repetitive(text) else text
 
 
-def extract_frames(path: Path, duration: float) -> list[bytes]:
+def extract_frames(path: Path, duration: float) -> list[tuple[float, bytes]]:
     fractions = [0.1, 0.5, 0.9]
     timestamps = [duration * f for f in fractions] if duration else [0.0]
 
@@ -91,30 +86,34 @@ def extract_frames(path: Path, duration: float) -> list[bytes]:
                 ],
                 capture_output=True, check=True,
             )
-            frames.append(out_path.read_bytes())
+            frames.append((ts, out_path.read_bytes()))
     return frames
 
 
-MAX_RETRIES = 6
-DEFAULT_RETRY_DELAY = 20
+def build_vision_prompt(duration: float, timestamps: list[float]) -> str:
+    ts_list = ", ".join(f"t={ts:.1f}s" for ts in timestamps)
+    return (
+        f"These are frames sampled from a {duration:.1f}-second video clip, "
+        f"captured at {ts_list}.\n\n"
+        "For each frame, write one concise, factual sentence describing exactly "
+        "what is happening at that timestamp: subject, action, framing. Then add "
+        "one sentence describing the arc or change across the three timestamps, "
+        "if there is one (escalation, stillness, a hand entering/leaving frame, "
+        "camera movement).\n\n"
+        "Output STRICT JSON ONLY, no markdown fences, in this exact shape:\n"
+        '{"beats": [{"t": <seconds>, "text": <sentence>}, ...], "arc": <sentence>}'
+    )
 
 
-def describe_shot(client: genai.Client, frames: list[bytes]) -> str:
-    parts = [types.Part.from_bytes(data=frame, mime_type="image/jpeg") for frame in frames]
-    parts.append(VISION_PROMPT)
+def describe_shot(client: genai.Client, frames: list[tuple[float, bytes]], duration: float) -> dict:
+    timestamps = [ts for ts, _ in frames]
+    parts = [
+        types.Part.from_bytes(data=data, mime_type="image/jpeg") for _, data in frames
+    ]
+    parts.append(build_vision_prompt(duration, timestamps))
 
-    for attempt in range(MAX_RETRIES):
-        try:
-            response = client.models.generate_content(model=VISION_MODEL, contents=parts)
-            return response.text.strip()
-        except Exception as e:
-            retriable = "RESOURCE_EXHAUSTED" in str(e) or "UNAVAILABLE" in str(e)
-            if not retriable or attempt == MAX_RETRIES - 1:
-                raise
-            match = re.search(r"retry in ([\d.]+)s", str(e))
-            delay = float(match.group(1)) + 2 if match else DEFAULT_RETRY_DELAY
-            print(f"  request failed, waiting {delay:.0f}s before retry...", file=sys.stderr)
-            time.sleep(delay)
+    text = generate_with_retry(client, VISION_MODEL, parts)
+    return json.loads(strip_fences(text))
 
 
 def main():
@@ -153,7 +152,9 @@ def main():
             previous_descriptions = {
                 entry["filename"]: entry["description"]
                 for entry in previous
-                if entry.get("description")
+                # only reuse the current beats+arc shape; old flat-string
+                # descriptions get regenerated in the new format
+                if isinstance(entry.get("description"), dict)
             }
         except (json.JSONDecodeError, KeyError):
             pass
@@ -178,8 +179,9 @@ def main():
         description = previous_descriptions.get(video.name)
         if client and not description:
             try:
-                frames = extract_frames(video, metadata.get("duration_seconds") or 0)
-                description = describe_shot(client, frames)
+                duration = metadata.get("duration_seconds") or 0
+                frames = extract_frames(video, duration)
+                description = describe_shot(client, frames, duration)
             except Exception as e:
                 print(f"  visual description failed for {video.name}: {e}", file=sys.stderr)
 

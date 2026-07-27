@@ -13,11 +13,27 @@ THE FOOTAGE LIBRARY:
 APPROVED STORIES:
 {selected_pitches}
 
+STRUCTURE (every edit fits this shape):
+- HOOK (roughly the first 3s): the pitched hook clip, cut on the
+  beat that justifies why this shot opens the story — not an
+  arbitrary in-point.
+- BUILD (the middle): the turn — where the idea complicates or
+  escalates. Vary shot scale against the hook (don't follow a wide
+  with a wide, or a close-up with a close-up).
+- PUNCH (the last 2-4s): the single moment the story_note says the
+  15 seconds builds to. Land on it; don't run past it.
+
+Each clip in the library includes timestamped beats (roughly three
+per clip, anchored to real sample points) and an arc description.
+Choose in/out points that bracket an actual described beat, not a
+blind fraction of the clip's total duration — the timestamps in
+the beats are your evidence for what happens when.
+
 For each approved story, produce the full edit:
 - edit_list — ordered cuts: exact clip filename, in/out points in
   seconds, within each clip's real duration, totaling 13-17
-  seconds, honoring the locked pacing, opening on the pitched
-  hook clip
+  seconds, honoring the locked pacing and the HOOK/BUILD/PUNCH
+  structure above, opening on the pitched hook clip
 - grade_notes — per-shot adjustments on top of the existing
   Batman LUT (what to lift, where to let it crush)
 - sound_note — one line: music energy, any moment that drops to
@@ -25,6 +41,8 @@ For each approved story, produce the full edit:
 
 HARD RULES:
 - Only clip filenames that exist in the library.
+- Every in/out point must correspond to a real beat timestamp for
+  that clip, not a guessed fraction of its duration.
 - Runtime, tone, pacing, grade are NOT adjustable. If the footage
   can't support a constraint, say so in a "warnings" field.
 - Output STRICT JSON ONLY: array of {title, edit_list, grade_notes,

@@ -2,3 +2,4 @@ openai-whisper
 numpy<2
 google-genai
 python-dotenv
+librosa
