@@ -1,6 +1,7 @@
-"""Tests for editgen.py's plain-text cut-list formatter (the --print flag)."""
+"""Tests for editgen.py's plain-text cut-list formatter (the --print flag)
+and validate_edit's handling of generative clip slots."""
 
-from src.editgen import format_edit_as_text
+from src.editgen import format_edit_as_text, validate_edit
 
 
 SAMPLE_EDIT = {
@@ -32,3 +33,46 @@ def test_format_running_total_accumulates():
     lines = format_edit_as_text(SAMPLE_EDIT).splitlines()
     assert "4.50" in lines[1]  # first cut's own duration
     assert "8.50" in lines[2]  # running total after the second cut
+
+
+# ---------- validate_edit: generative slots ----------
+
+MANIFEST_BY_NAME = {
+    "A037_0812_C001.mov": {"filename": "A037_0812_C001.mov", "duration_seconds": 20.0},
+}
+
+
+def test_one_generative_slot_with_description_validates():
+    edit = {
+        "title": "Test",
+        "edit_list": [
+            {"clip": "A037_0812_C001.mov", "in": 0.0, "out": 10.0},
+            {"source": "generate", "description": "a gloved hand closes a steel drawer",
+             "in": 0.0, "out": 4.0},
+        ],
+    }
+    assert validate_edit(edit, MANIFEST_BY_NAME) == []
+
+
+def test_two_generative_slots_rejected():
+    edit = {
+        "title": "Test",
+        "edit_list": [
+            {"source": "generate", "description": "a hand on a wrench", "in": 0.0, "out": 7.0},
+            {"source": "generate", "description": "a door swings shut", "in": 0.0, "out": 7.0},
+        ],
+    }
+    warnings = validate_edit(edit, MANIFEST_BY_NAME)
+    assert any("one generative slot" in w for w in warnings)
+
+
+def test_generative_slot_without_description_rejected():
+    edit = {
+        "title": "Test",
+        "edit_list": [
+            {"clip": "A037_0812_C001.mov", "in": 0.0, "out": 10.0},
+            {"source": "generate", "in": 0.0, "out": 4.0},
+        ],
+    }
+    warnings = validate_edit(edit, MANIFEST_BY_NAME)
+    assert any("description" in w for w in warnings)
