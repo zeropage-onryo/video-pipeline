@@ -1,11 +1,6 @@
 """Tests for editgen.py's plain-text cut-list formatter (the --print flag)."""
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-
-from editgen import format_edit_as_text  # noqa: E402
+from src.editgen import format_edit_as_text
 
 
 SAMPLE_EDIT = {

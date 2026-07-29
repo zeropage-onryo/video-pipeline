@@ -7,14 +7,10 @@ The two that matter:
 """
 
 import json
-import sys
-from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from src import db  # noqa: E402
+from src import db
 
 
 # the exact shape pitch.py already emits

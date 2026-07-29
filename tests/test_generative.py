@@ -1,14 +1,9 @@
 """Tests for the Shot renderers and generation tracking."""
 
-import sys
-from pathlib import Path
-
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from src import db, generative as gen  # noqa: E402
-from src.shot import Shot, render, render_all, RENDERERS  # noqa: E402
+from src import db, generative as gen
+from src.shot import Shot, render, render_all, RENDERERS
 
 
 def make_shot(**kw):
