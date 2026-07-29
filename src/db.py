@@ -592,6 +592,52 @@ def get_video_history(
         ]
 
 
+_VIDEO_TEXT_FIELDS = {"topic", "hook_type"}
+
+
+def distinct_video_field_values(field: str, path: Path | str = DB_PATH) -> list[str]:
+    """
+    Values already used for a free-text video field, so a datalist can
+    converge vocabulary without locking it down. `field` is checked
+    against an allowlist rather than trusted directly -- column names
+    can't be parameterized, so this is what keeps it injection-safe.
+    """
+    if field not in _VIDEO_TEXT_FIELDS:
+        raise ValueError(f"field must be one of {sorted(_VIDEO_TEXT_FIELDS)}, got {field!r}")
+    with connect(path) as conn:
+        rows = conn.execute(
+            f"SELECT DISTINCT {field} FROM videos "
+            f"WHERE {field} IS NOT NULL AND {field} != '' ORDER BY {field}"
+        ).fetchall()
+    return [r[0] for r in rows]
+
+
+def latest_metrics_by_video(path: Path | str = DB_PATH) -> list[dict[str, Any]]:
+    """
+    One row per video with its most recent snapshot, if any. Backs
+    /metrics/new's "previous value greyed behind each input" -- the
+    reference point for whether a new number is worth typing.
+    """
+    with connect(path) as conn:
+        return [
+            dict(r)
+            for r in conn.execute(
+                """
+                SELECT v.id AS video_id, v.title, v.platform, v.posted_at,
+                       m.views, m.likes, m.comments, m.saves, m.captured_at
+                FROM videos v
+                LEFT JOIN metrics m ON m.id = (
+                    SELECT id FROM metrics
+                    WHERE video_id = v.id
+                    ORDER BY captured_at DESC
+                    LIMIT 1
+                )
+                ORDER BY v.posted_at DESC
+                """
+            )
+        ]
+
+
 def summary(path: Path | str = DB_PATH) -> dict[str, int]:
     """Row counts. A quick check that things are landing."""
     with connect(path) as conn:
