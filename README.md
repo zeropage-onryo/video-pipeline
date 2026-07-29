@@ -1,45 +1,42 @@
 ## Overview
-An AI-powered video editing pipeline that takes raw footage and 
-automatically produces a rough cut to use as an editing starting 
-point. It uses an LLM to generate creative edit concepts, assembles 
-a timeline from available clips, syncs cuts to the music's beat, and 
-applies color grade presets. Currently experimental — rough cuts are 
-generated end-to-end but coherence is still being improved (see 
-Roadmap).
+An AI pre-production tool for Zero Page Films. It decides what to cut, grounded in real footage
+rather than a script written first and matched to clips after. An LLM proposes edit concepts from
+an ingested manifest of what was actually filmed, a human picks a few favorites, and full edit
+specs — ordered clip in/out points, grade notes, sound notes — get generated and independently
+validated in code against real clip durations. Currently experimental — cut lists are generated
+end-to-end but coherence is still being improved (see Roadmap).
 
 ## Architecture
-The pipeline runs as a series of stages, each handled by its own module:
+The pipeline runs as a series of stages, each handled by its own module, ending at a validated
+cut list rather than an assembled timeline:
 
-1. **Ingest** (`src/ingest.py`) — scans raw footage and builds a 
-   manifest of available clips
-2. **Concept generation** (`src/pitch.py`, `src/editgen.py`) — sends 
-   footage context to Gemini to generate edit concepts and pitches
-3. **Timeline build** (`src/build_timeline.py`) — assembles selected 
-   clips into an edit timeline
-4. **Beat sync** (`src/beat_sync.py`) — aligns cuts to the audio 
-   track's beats
-5. **Color grade** (`src/apply_grade.py`) — applies DaVinci Resolve 
-   grade presets (`.drx`)
+1. **Ingest** (`src/ingest.py`) — scans raw footage and builds a manifest of available clips:
+   ffprobe metadata, a Whisper transcript, and a Gemini vision description per clip
+2. **Concept generation** (`src/pitch.py`) — sends footage context to Gemini for 10 cheap story
+   pitches; a human picks a few by number
+3. **Edit spec** (`src/editgen.py`) — turns the selected pitches into full edit specs and
+   validates every clip reference and cut point against the manifest before saving
 
 ## How It Works
-1. Point the pipeline at a folder of raw clips; ingest catalogs them 
-   into `manifest.json`
-2. The LLM reviews footage metadata and proposes edit concepts 
-   (`concepts.json`) and pitches (`pitches.json`)
-3. The timeline builder selects clips to match the chosen concept
-4. Beat detection finds the music's rhythm and snaps cuts to it
-5. The pipeline exports a rough cut for finishing in an editor
+1. Point the pipeline at a folder of raw clips; ingest catalogs them into `manifest.json`
+2. The LLM reviews footage metadata and proposes 10 story pitches (`pitches.json`)
+3. A human picks a few pitches by number
+4. The LLM writes full edit specs for those picks, which are validated against the manifest and
+   saved to `concepts.json`
+5. You execute the cut list by hand in Resolve — nothing downstream needs Resolve running
 
 ## Tech Stack
 - **Python** — core pipeline
-- **Google Gemini API** — edit concept and pitch generation
-- **DaVinci Resolve** — color grade presets (`.drx`)
-- **DaVinci Resolve Studio scripting API** (`DaVinciResolveScript`) — 
-  builds timelines directly in the Resolve project
-- **FFmpeg** — fallback preview rendering
+- **Google Gemini API** — pitch and edit-spec generation, plus per-clip vision descriptions
+- **OpenAI Whisper** — clip transcription
+- **FFmpeg** — frame extraction for vision descriptions during ingest
 
 ## Roadmap
-- Improve rough-cut coherence (clip selection and ordering)
+- Record which pitches get picked as labelled data, so past selections inform future prompts and
+  prompt changes can be measured against a real pick rate (see `BUILD_SPEC.md`)
+- Generative-clip prompts for the one footage gap an edit may have, with attempts-to-keeper
+  tracked per tool
+- A small dashboard for performance feedback: top performers, benchmarks, growth curves
 - Automated tests and CI
 - Case-study documentation with demo video
 
