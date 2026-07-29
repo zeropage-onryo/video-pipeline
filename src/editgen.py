@@ -78,11 +78,43 @@ def validate_edit(edit: dict, manifest_by_name: dict) -> list[str]:
     return warnings
 
 
+def format_edit_as_text(edit: dict) -> str:
+    """
+    Render one edit's cut list as plain text: clip, in, out, duration,
+    running total. concepts.json is machine-readable JSON; this is what
+    you read yourself, working beside Resolve.
+    """
+    lines = [edit.get("title", "untitled")]
+    total = 0.0
+
+    for cut in edit.get("edit_list", []):
+        filename = cut_field(cut, "clip", "filename", "file") or "?"
+        in_point = cut_field(cut, "in", "in_point", "start")
+        out_point = cut_field(cut, "out", "out_point", "end")
+
+        if in_point is None or out_point is None:
+            lines.append(f"  {filename:<28} in ?       out ?       dur  ?    total {total:6.2f}s")
+            continue
+
+        duration = out_point - in_point
+        total += duration
+        lines.append(
+            f"  {filename:<28} in {in_point:7.2f}  out {out_point:7.2f}  "
+            f"dur {duration:5.2f}s  total {total:6.2f}s"
+        )
+
+    return "\n".join(lines)
+
+
 def main():
     load_dotenv()
 
     parser = argparse.ArgumentParser(description="Generate full edit specs for selected pitches.")
     parser.add_argument("pitch_numbers", type=int, nargs="+", help="Pitch numbers from pitches.json to edit")
+    parser.add_argument(
+        "--print", dest="print_text", action="store_true",
+        help="Also render each edit's cut list as plain text, to read beside Resolve",
+    )
     args = parser.parse_args()
     selected_numbers = args.pitch_numbers
 
@@ -122,6 +154,8 @@ def main():
         print(f"{edit.get('title')}: {cut_count} cuts")
         for w in edit["warnings"]:
             print(f"  WARNING: {w}")
+        if args.print_text:
+            print(format_edit_as_text(edit))
 
     CONCEPTS_PATH.write_text(json.dumps(edits, indent=2))
     print(f"Saved {len(edits)} edits to {CONCEPTS_PATH}")
