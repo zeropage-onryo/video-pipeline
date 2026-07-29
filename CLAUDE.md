@@ -4,11 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-An AI-powered video editing pipeline for Zero Page Films (a one-person brand). It takes raw
-footage and automatically produces rough-cut timelines inside DaVinci Resolve: an LLM proposes
-edit concepts from real footage, a human picks favorites, full edit specs get generated, cuts are
-snapped to a music track's beat, and a saved color grade is applied. Experimental — cuts are
-generated end-to-end but coherence is still being tuned.
+An AI pre-production tool for Zero Page Films (a one-person brand). It takes raw footage and
+turns it into a validated cut list: an LLM proposes edit concepts from real footage, a human
+picks favorites, and full edit specs get generated and checked in code against the manifest.
+Experimental — cut lists are generated end-to-end but coherence is still being tuned.
 
 ## Commands
 
@@ -24,20 +23,12 @@ venv/bin/python src/ingest.py [--footage-dir footage] [--output manifest.json] [
 venv/bin/python src/pitch.py
 
 # 3. Generate full edit specs for chosen pitch numbers -> concepts.json
-venv/bin/python src/editgen.py <pitch_numbers...> [--music path/to/track.mp3] [--bpm 120 --bpm-offset 0.3]
-
-# 4. Build timelines in the currently-open DaVinci Resolve project from concepts.json
-venv/bin/python src/build_timeline.py
-
-# 5. Apply the saved grade to specific timelines (defaults to a hardcoded list of timeline names)
-venv/bin/python src/apply_grade.py ["Timeline Name" ...] [--grade grades/zero_page_batman.drx]
+venv/bin/python src/editgen.py <pitch_numbers...> [--print]
 ```
 
 There is no test suite, linter, or CI configured yet (see Roadmap in README.md).
 
-Requires `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) in `.env` for pitch/editgen/ingest's vision step,
-and DaVinci Resolve Studio running with a project open for build_timeline.py / apply_grade.py
-(Preferences > General > External scripting using = "Local").
+Requires `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) in `.env` for pitch/editgen/ingest's vision step.
 
 ## Architecture
 
@@ -50,11 +41,10 @@ footage/*.mov  --ingest.py-->  manifest.json  --pitch.py-->  pitches.json
                                      +-------- editgen.py <-------+  (human picks pitch numbers)
                                                     |
                                               concepts.json
-                                                    |
-                                        build_timeline.py (Resolve API)
-                                                    |
-                                          apply_grade.py (Resolve API)
 ```
+
+It ends at `concepts.json` — a validated cut list you execute by hand in Resolve. Nothing in the
+pipeline writes to Resolve or needs it running.
 
 - **`src/ingest.py`** — scans `footage/`, runs `ffprobe` for duration/resolution, Whisper for
   transcription (filtering low-confidence/repetitive segments via `is_repetitive`), and samples 3
@@ -71,16 +61,9 @@ footage/*.mov  --ingest.py-->  manifest.json  --pitch.py-->  pitches.json
   (ordered clip in/out points, grade notes, sound notes). `validate_edit` enforces (not just
   warns) that every clip exists in the manifest, in/out points fall within real clip duration, and
   total runtime is within `MIN_RUNTIME`/`MAX_RUNTIME` (13-17s) — model output is never trusted
-  without this code-level check. Optionally snaps cut boundaries to a real audio track's beats
-  (`--music`, via `librosa` in `src/beat_sync.py`) or a synthetic BPM grid (`--bpm`, for
-  platform-native sounds you can't download) — see `snap_edit_to_beats`, which keeps the first
-  cut's start and last cut's end fixed and only moves internal transitions.
-- **`src/build_timeline.py`** / **`src/resolve_edit.py`** — connect to a running DaVinci Resolve
-  Studio instance via `DaVinciResolveScript`, match `concepts.json` clip filenames (by base name,
-  extension-agnostic) against the media pool, and append matched sub-clips to new timelines using
-  each clip's real FPS to convert seconds to frames.
-- **`src/apply_grade.py`** — applies a saved `.drx` grade file to all video-track-1 items on named
-  timelines (defaults to a hardcoded list of timeline names from the current shoot).
+  without this code-level check. `--print` renders each edit's cut list as plain text (clip, in,
+  out, duration, running total) via `format_edit_as_text`, to read beside Resolve without parsing
+  `concepts.json` by eye.
 - **`src/gemini_utils.py`** — shared `generate_with_retry` (retries on `RESOURCE_EXHAUSTED`/
   `UNAVAILABLE`, falls through to `FALLBACK_MODELS` if the primary model stays down for the whole
   retry budget) and `strip_fences` (strips markdown code fences from model JSON output).
@@ -88,9 +71,8 @@ footage/*.mov  --ingest.py-->  manifest.json  --pitch.py-->  pitches.json
 ### Key conventions to preserve
 
 - **Manifest is the interface, filenames are IDs.** Every stage after ingest keys off
-  `manifest.json`'s `filename` field (or its base name without extension, for Resolve matching).
-  Renaming a clip after ingest breaks the chain — treat ingested filenames as immutable.
-  `resolve_edit.base_name()` / `pitch.py`'s regex both assume filenames follow the
+  `manifest.json`'s `filename` field. Renaming a clip after ingest breaks the chain — treat
+  ingested filenames as immutable. `pitch.py`'s regex assumes filenames follow the
   `A037_..._C001.mov` (camera card) or `DJI_..._D.mov` (drone) patterns.
 - **Pipeline operates on proxies, not camera originals.** `footage/` holds Resolve proxy files,
   not 6K Blackmagic RAW — ffmpeg/Whisper can't read `.braw` natively and don't need full image
