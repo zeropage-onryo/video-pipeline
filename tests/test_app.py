@@ -204,3 +204,48 @@ def test_dashboard_shows_pick_rate(tmp_db):
 
     response = client.get("/")
     assert "3" in response.text
+
+
+# ---------- /videos/{id} ----------
+
+def test_video_detail_404s_for_missing_video(tmp_db):
+    response = client.get("/videos/999")
+    assert response.status_code == 404
+
+
+def test_video_detail_shows_metadata(tmp_db):
+    vid = db.add_video("Night Run", "youtube", "2025-09-29",
+                       url="https://x", path=tmp_db)
+    response = client.get(f"/videos/{vid}")
+    assert response.status_code == 200
+    assert "Night Run" in response.text
+    assert "youtube" in response.text
+
+
+def test_video_detail_shows_snapshot_history(tmp_db):
+    vid = db.add_video("Night Run", "youtube", "2025-09-29", path=tmp_db)
+    db.record_metrics(vid, views=82, captured_at="2026-07-29", path=tmp_db)
+    response = client.get(f"/videos/{vid}")
+    assert "82" in response.text
+
+
+def test_video_detail_no_originating_pitch(tmp_db):
+    vid = db.add_video("Night Run", "youtube", "2025-09-29", path=tmp_db)
+    response = client.get(f"/videos/{vid}")
+    assert "Not linked to a pitch" in response.text
+
+
+def test_video_detail_shows_originating_pitch_when_linked(tmp_db):
+    run_id = db.save_pitch_run(
+        [{"number": n, "title": f"S{n}", "logline": f"L{n}.", "story_note": "n"} for n in range(1, 11)],
+        path=tmp_db,
+    )
+    with db.connect(tmp_db) as conn:
+        idea_id = conn.execute(
+            "SELECT id FROM ideas WHERE run_id = ? AND number = 2", (run_id,)
+        ).fetchone()[0]
+    vid = db.add_video("S2 video", "tiktok", "2026-01-01", idea_id=idea_id, path=tmp_db)
+
+    response = client.get(f"/videos/{vid}")
+    assert "S2" in response.text
+    assert "L2." in response.text
