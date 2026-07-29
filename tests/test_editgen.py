@@ -1,7 +1,7 @@
 """Tests for editgen.py's plain-text cut-list formatter (the --print flag)
 and validate_edit's handling of generative clip slots."""
 
-from src.editgen import format_edit_as_text, validate_edit
+from src.editgen import format_edit_as_text, merge_warnings, validate_edit
 
 
 SAMPLE_EDIT = {
@@ -76,3 +76,24 @@ def test_generative_slot_without_description_rejected():
     }
     warnings = validate_edit(edit, MANIFEST_BY_NAME)
     assert any("description" in w for w in warnings)
+
+
+# ---------- merge_warnings ----------
+# The model sometimes writes edit["warnings"] as a single string rather
+# than a list. list("a string") shatters it into one warning per
+# character -- that's the bug this guards against.
+
+def test_merge_warnings_wraps_a_string_instead_of_splitting_it():
+    edit = {"warnings": "subject looks at lens in the punch"}
+    assert merge_warnings(edit, ["real problem"]) == [
+        "subject looks at lens in the punch", "real problem",
+    ]
+
+
+def test_merge_warnings_handles_a_list_normally():
+    edit = {"warnings": ["already a list"]}
+    assert merge_warnings(edit, ["another"]) == ["already a list", "another"]
+
+
+def test_merge_warnings_handles_missing_field():
+    assert merge_warnings({}, ["x"]) == ["x"]
