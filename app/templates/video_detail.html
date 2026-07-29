@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{{ video.title }} — Zero Page Films</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <h1>{{ video.title }}</h1>
+
+  <section>
+    <h2>Metadata</h2>
+    <ul>
+      <li>Platform: {{ video.platform }}</li>
+      <li>Posted: {{ video.posted_at }}</li>
+      {% if video.url %}<li>URL: <a href="{{ video.url }}">{{ video.url }}</a></li>{% endif %}
+      {% if video.timeline %}<li>Timeline: {{ video.timeline }}</li>{% endif %}
+      {% if video.topic %}<li>Topic: {{ video.topic }}</li>{% endif %}
+      {% if video.hook_type %}<li>Hook type: {{ video.hook_type }}</li>{% endif %}
+    </ul>
+  </section>
+
+  <section>
+    <h2>Growth</h2>
+    {{ sparkline | safe }}
+  </section>
+
+  <section>
+    <h2>Snapshots</h2>
+    {% if history %}
+    <table>
+      <thead>
+        <tr><th>Captured</th><th>Age (days)</th><th>Views</th><th>Likes</th><th>Comments</th><th>Saves</th></tr>
+      </thead>
+      <tbody>
+        {% for h in history %}
+        <tr>
+          <td>{{ h.captured_at }}</td>
+          <td>{{ h.age_days }}</td>
+          <td>{{ h.views if h.views is not none else "" }}</td>
+          <td>{{ h.likes if h.likes is not none else "" }}</td>
+          <td>{{ h.comments if h.comments is not none else "" }}</td>
+          <td>{{ h.saves if h.saves is not none else "" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="dim">No numbers yet. <a href="/metrics/new">Add some.</a></p>
+    {% endif %}
+  </section>
+
+  <section>
+    <h2>Originating pitch</h2>
+    {% if video.idea_title %}
+    <p><strong>{{ video.idea_title }}</strong></p>
+    <p>{{ video.idea_logline }}</p>
+    <p class="dim">{{ video.idea_story_note }}</p>
+    {% else %}
+    <p class="dim">Not linked to a pitch.</p>
+    {% endif %}
+  </section>
+</body>
+</html>

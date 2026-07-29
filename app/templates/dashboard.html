@@ -57,7 +57,7 @@
       <tbody>
         {% for r in rows %}
         <tr>
-          <td>{{ r.title }}</td>
+          <td><a href="/videos/{{ r.video_id }}">{{ r.title }}</a></td>
           <td>{{ r.platform }}</td>
           <td class="{{ r.css_class }}">{{ r.score }}</td>
           <td>{{ r.sparkline | safe }}</td>

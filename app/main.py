@@ -176,3 +176,20 @@ async def metrics_new_submit(request: Request):
     for vid, fields in changed.items():
         db.record_metrics(vid, path=db.DB_PATH, **fields)
     return RedirectResponse(f"/metrics/new?updated={len(changed)}", status_code=303)
+
+
+@app.get("/videos/{video_id}")
+def video_detail(request: Request, video_id: int):
+    video = db.get_video(video_id, path=db.DB_PATH)
+    if video is None:
+        raise HTTPException(status_code=404, detail="video not found")
+    history = db.get_video_history(video_id, path=db.DB_PATH)
+    return templates.TemplateResponse(
+        request,
+        "video_detail.html",
+        {
+            "video": video,
+            "history": history,
+            "sparkline": render_sparkline(history, width=480, height=120),
+        },
+    )
