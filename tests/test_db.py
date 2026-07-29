@@ -337,3 +337,40 @@ def test_benchmark_respects_the_window(tmp_db):
 def test_benchmark_empty_is_safe(tmp_db):
     assert db.benchmark(path=tmp_db) == {
         "n": 0, "median": None, "best": None, "worst": None}
+
+
+# ---------- distinct_video_field_values ----------
+
+def test_distinct_video_field_values_returns_sorted_unique(tmp_db):
+    db.add_video("a", "tiktok", "2026-01-01", topic="workshop", path=tmp_db)
+    db.add_video("b", "tiktok", "2026-01-02", topic="workshop", path=tmp_db)
+    db.add_video("c", "tiktok", "2026-01-03", topic="commute", path=tmp_db)
+    assert db.distinct_video_field_values("topic", path=tmp_db) == ["commute", "workshop"]
+
+
+def test_distinct_video_field_values_excludes_blank(tmp_db):
+    db.add_video("a", "tiktok", "2026-01-01", topic="workshop", path=tmp_db)
+    db.add_video("b", "tiktok", "2026-01-02", path=tmp_db)
+    assert db.distinct_video_field_values("topic", path=tmp_db) == ["workshop"]
+
+
+def test_distinct_video_field_values_rejects_unknown_field(tmp_db):
+    with pytest.raises(ValueError, match="field must be one of"):
+        db.distinct_video_field_values("title", path=tmp_db)
+
+
+# ---------- latest_metrics_by_video ----------
+
+def test_latest_metrics_by_video_with_no_snapshot_yet(tmp_db):
+    vid = db.add_video("a", "tiktok", "2026-01-01", path=tmp_db)
+    rows = db.latest_metrics_by_video(path=tmp_db)
+    assert rows[0]["video_id"] == vid
+    assert rows[0]["views"] is None
+
+
+def test_latest_metrics_by_video_returns_most_recent_snapshot(tmp_db):
+    vid = db.add_video("a", "tiktok", "2026-01-01", path=tmp_db)
+    db.record_metrics(vid, views=100, captured_at="2026-01-02", path=tmp_db)
+    db.record_metrics(vid, views=500, captured_at="2026-01-10", path=tmp_db)
+    rows = db.latest_metrics_by_video(path=tmp_db)
+    assert rows[0]["views"] == 500
