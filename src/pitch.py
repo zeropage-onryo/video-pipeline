@@ -8,6 +8,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
 
+from . import db
 from .gemini_utils import generate_with_retry, strip_fences
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -60,7 +61,34 @@ def validate_pitches(pitches: list, manifest: list[dict]) -> None:
                 )
 
 
-def main():
+def record_pitch_run(pitches: list, manifest: list[dict], db_path=None) -> None:
+    """
+    Save this run to the database: the pitches, the model, how many clips
+    were in the manifest, and the raw prompt/brief/settings text.
+
+    A pick is a label -- ten pitches, a few marked good -- and it is the
+    only ground truth here that doesn't require waiting for a video to be
+    posted. But recording it must never be able to stop the pipeline:
+    generating pitches must not depend on bookkeeping, so a database
+    problem here prints a warning and nothing more.
+    """
+    try:
+        kwargs = {"path": db_path} if db_path is not None else {}
+        run_id = db.save_pitch_run(
+            pitches,
+            model=MODEL,
+            clip_count=len(manifest),
+            brief=(PROMPTS_DIR / "brief.txt").read_text(),
+            settings=(PROMPTS_DIR / "settings.txt").read_text(),
+            prompt_template=(PROMPTS_DIR / "pitch_prompt.txt").read_text(),
+            **kwargs,
+        )
+        print(f"Recorded pitch run {run_id} in the database")
+    except Exception as e:
+        print(f"warning: could not record pitch run in database: {e}", file=sys.stderr)
+
+
+def main(db_path=None):
     load_dotenv()
 
     api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
@@ -87,6 +115,8 @@ def main():
 
     PITCHES_PATH.write_text(json.dumps(pitches, indent=2))
     print(f"Saved {len(pitches)} pitches to {PITCHES_PATH}")
+
+    record_pitch_run(pitches, manifest, db_path=db_path)
 
 
 if __name__ == "__main__":
