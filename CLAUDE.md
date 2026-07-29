@@ -15,16 +15,20 @@ All Python commands run through the project's venv, not system Python:
 
 ```bash
 venv/bin/pip install -r requirements.txt
+venv/bin/pip install -e .
 
 # 1. Ingest raw footage -> manifest.json (ffprobe metadata, Whisper transcript, Gemini vision description per clip)
-venv/bin/python src/ingest.py [--footage-dir footage] [--output manifest.json] [--model base] [--skip-transcription]
+venv/bin/python -m src.ingest [--footage-dir footage] [--output manifest.json] [--model base] [--skip-transcription]
 
 # 2. Generate 10 story pitches from manifest.json -> pitches.json
-venv/bin/python src/pitch.py
+venv/bin/python -m src.pitch
 
 # 3. Generate full edit specs for chosen pitch numbers -> concepts.json
-venv/bin/python src/editgen.py <pitch_numbers...> [--print]
+venv/bin/python -m src.editgen <pitch_numbers...> [--print]
 ```
+
+`src/` is an installed editable package (`pyproject.toml`) — modules use relative imports and run
+via `python -m src.<module>`, not `python src/<module>.py`.
 
 There is no test suite, linter, or CI configured yet (see Roadmap in README.md).
 
