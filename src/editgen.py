@@ -157,6 +157,19 @@ def record_selection(run_id, numbers: list, db_path=None) -> None:
         print(f"warning: could not record selection in database: {e}", file=sys.stderr)
 
 
+def merge_warnings(edit: dict, generated_warnings: list[str]) -> list[str]:
+    """
+    Combine the model's own "warnings" field with the ones validate_edit
+    generated. The model sometimes writes a single string there instead
+    of a list -- wrapping it, rather than iterating it into one warning
+    per character, is the whole reason this function exists.
+    """
+    existing = edit.get("warnings") or []
+    if isinstance(existing, str):
+        existing = [existing]
+    return list(existing) + generated_warnings
+
+
 def main(db_path=None):
     load_dotenv()
 
@@ -203,8 +216,7 @@ def main(db_path=None):
 
     for edit in edits:
         warnings = validate_edit(edit, manifest_by_name)
-        existing_warnings = edit.get("warnings") or []
-        edit["warnings"] = list(existing_warnings) + warnings
+        edit["warnings"] = merge_warnings(edit, warnings)
 
         cut_count = len(edit.get("edit_list", []))
         print(f"{edit.get('title')}: {cut_count} cuts")
