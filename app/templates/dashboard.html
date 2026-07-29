@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Zero Page Films</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <h1>Dashboard</h1>
+
+  <section>
+    <h2>Counts</h2>
+    <ul>
+      <li>Pitch runs: {{ counts.pitch_runs }}</li>
+      <li>Ideas: {{ counts.ideas }}</li>
+      <li>Videos: {{ counts.videos }}</li>
+      <li>Metrics: {{ counts.metrics }}</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Recent pitches</h2>
+    {% if pitches %}
+    <table>
+      <thead>
+        <tr><th>#</th><th>Title</th><th>Selected</th></tr>
+      </thead>
+      <tbody>
+        {% for p in pitches %}
+        <tr>
+          <td>{{ p.number }}</td>
+          <td>{{ p.title }}</td>
+          <td>{{ "yes" if p.selected else "no" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="dim">No pitches yet. Run pitch.py to get started.</p>
+    {% endif %}
+  </section>
+</body>
+</html>

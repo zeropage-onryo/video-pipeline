@@ -1,0 +1,30 @@
+/* Palette only, per BUILD_SPEC.md's Design Direction. Full type/layout
+   system is Session 4 -- this session just proves data reaches the page. */
+:root {
+  --bg: #1C1C1C;
+  --panel: #242424;
+  --line: #333333;
+  --text: #E4E4E4;
+  --dim: #8A8A8A;
+  --good: #6FCF97;
+  --bad: #C97064;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+
+table {
+  border-collapse: collapse;
+}
+
+th, td {
+  border-bottom: 1px solid var(--line);
+  padding: 4px 12px 4px 0;
+  text-align: left;
+}
+
+.dim {
+  color: var(--dim);
+}
