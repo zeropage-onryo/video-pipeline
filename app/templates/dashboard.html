@@ -14,29 +14,59 @@
       <li>Pitch runs: {{ counts.pitch_runs }}</li>
       <li>Ideas: {{ counts.ideas }}</li>
       <li>Videos: {{ counts.videos }}</li>
-      <li>Metrics: {{ counts.metrics }}</li>
+      <li>Snapshots: {{ counts.metrics }}</li>
     </ul>
   </section>
 
   <section>
-    <h2>Recent pitches</h2>
-    {% if pitches %}
+    <h2>Pick rate</h2>
+    {% if pick_rate.rate is not none %}
+    <p>{{ pick_rate.chosen }} of {{ pick_rate.pitched }} pitches picked
+      ({{ (pick_rate.rate * 100) | round(1) }}%)</p>
+    {% else %}
+    <p class="dim">No reviewed pitch runs yet.</p>
+    {% endif %}
+  </section>
+
+  <section>
+    <h2>Top performers</h2>
+
+    <form method="get" action="/">
+      <label>Measured at
+        <select name="at_days" onchange="this.form.submit()">
+          <option value="7" {{ "selected" if at_days == 7 else "" }}>7 days</option>
+          <option value="30" {{ "selected" if at_days == 30 else "" }}>30 days</option>
+          <option value="90" {{ "selected" if at_days == 90 else "" }}>90 days</option>
+        </select>
+      </label>
+      <label>Posted in the last
+        <select name="posted_within" onchange="this.form.submit()">
+          <option value="3" {{ "selected" if posted_within == "3" else "" }}>3 months</option>
+          <option value="6" {{ "selected" if posted_within == "6" else "" }}>6 months</option>
+          <option value="12" {{ "selected" if posted_within == "12" else "" }}>12 months</option>
+          <option value="all" {{ "selected" if posted_within == "all" else "" }}>All time</option>
+        </select>
+      </label>
+    </form>
+
+    {% if rows %}
     <table>
       <thead>
-        <tr><th>#</th><th>Title</th><th>Selected</th></tr>
+        <tr><th>Title</th><th>Platform</th><th>Views</th><th>Growth</th></tr>
       </thead>
       <tbody>
-        {% for p in pitches %}
+        {% for r in rows %}
         <tr>
-          <td>{{ p.number }}</td>
-          <td>{{ p.title }}</td>
-          <td>{{ "yes" if p.selected else "no" }}</td>
+          <td>{{ r.title }}</td>
+          <td>{{ r.platform }}</td>
+          <td class="{{ r.css_class }}">{{ r.score }}</td>
+          <td>{{ r.sparkline | safe }}</td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
     {% else %}
-    <p class="dim">No pitches yet. Run pitch.py to get started.</p>
+    <p class="dim">No videos yet. <a href="/videos/new">Add your first one.</a></p>
     {% endif %}
   </section>
 </body>

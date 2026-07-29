@@ -29,6 +29,14 @@ th, td {
   color: var(--dim);
 }
 
+.good {
+  color: var(--good);
+}
+
+.bad {
+  color: var(--bad);
+}
+
 input, select, button {
   background: var(--panel);
   color: var(--text);

@@ -17,8 +17,13 @@ from fastapi.templating import Jinja2Templates
 
 from src import db
 
+from .sparkline import render_sparkline
+
 APP_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
+
+# "Posted in the last" control -> posted_within_days. "all" -> no cutoff.
+POSTED_WINDOWS = {"3": 90, "6": 180, "12": 365, "all": None}
 
 
 @asynccontextmanager
@@ -31,14 +36,56 @@ app = FastAPI(lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
 
 
+def benchmark_class(score, median) -> str:
+    """
+    "above median" / "below median" per BUILD_SPEC's Design Direction --
+    neutral (no class) when either value is missing or they're equal,
+    so a lone video isn't coloured against itself.
+    """
+    if score is None or median is None:
+        return ""
+    if score > median:
+        return "good"
+    if score < median:
+        return "bad"
+    return ""
+
+
 @app.get("/")
-def dashboard(request: Request):
+def dashboard(request: Request, at_days: int = 7, posted_within: str = "6"):
     counts = db.summary(path=db.DB_PATH)
-    pitches = db.get_labelled_pitches(limit=10, path=db.DB_PATH)
+    pick_rate = db.selection_rate(path=db.DB_PATH)
+
+    posted_within_days = POSTED_WINDOWS.get(posted_within, 180)
+    top = db.get_top_performers(
+        at_days=at_days, posted_within_days=posted_within_days, limit=10, path=db.DB_PATH,
+    )
+    # Same window as top, or the colouring lies -- an all-time median would
+    # make an average recent video look artificially good against the
+    # long tail, or artificially bad against an old outlier.
+    bench = db.benchmark(
+        at_days=at_days, posted_within_days=posted_within_days, path=db.DB_PATH,
+    )
+
+    rows = []
+    for t in top:
+        history = db.get_video_history(t["video_id"], path=db.DB_PATH)
+        rows.append({
+            **t,
+            "sparkline": render_sparkline(history),
+            "css_class": benchmark_class(t["score"], bench["median"]),
+        })
+
     return templates.TemplateResponse(
         request,
         "dashboard.html",
-        {"counts": counts, "pitches": pitches},
+        {
+            "counts": counts,
+            "pick_rate": pick_rate,
+            "rows": rows,
+            "at_days": at_days,
+            "posted_within": posted_within,
+        },
     )
 
 
