@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
-from gemini_utils import generate_with_retry, strip_fences
+from .gemini_utils import generate_with_retry, strip_fences
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".braw"}
 VISION_MODEL = "gemini-3-flash-preview"

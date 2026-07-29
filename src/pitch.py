@@ -8,7 +8,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
 
-from gemini_utils import generate_with_retry, strip_fences
+from .gemini_utils import generate_with_retry, strip_fences
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MANIFEST_PATH = PROJECT_ROOT / "manifest.json"
