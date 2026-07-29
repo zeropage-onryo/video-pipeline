@@ -8,6 +8,7 @@ dashboard design (top performers, sparklines, pick rate) is Session 4.
 """
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -86,3 +87,45 @@ async def videos_new_submit(request: Request):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return RedirectResponse("/", status_code=303)
+
+
+METRICS_FIELDS = ("views", "likes", "comments", "saves")
+
+
+def parse_metrics_form(form: dict, video_ids: list) -> dict:
+    """
+    Which videos got a new number typed in, and what. A video with
+    nothing typed is entirely absent from the result -- that's what
+    "one save writes every changed row" means: empty means "no change
+    this week," not "zero views."
+    """
+    changed = {}
+    for vid in video_ids:
+        entry = {}
+        for field in METRICS_FIELDS:
+            raw = (form.get(f"{field}_{vid}") or "").strip()
+            if raw:
+                entry[field] = int(raw)
+        if entry:
+            changed[vid] = entry
+    return changed
+
+
+@app.get("/metrics/new")
+def metrics_new_form(request: Request, updated: Optional[int] = None):
+    rows = db.latest_metrics_by_video(path=db.DB_PATH)
+    return templates.TemplateResponse(
+        request,
+        "metrics_new.html",
+        {"rows": rows, "updated": updated},
+    )
+
+
+@app.post("/metrics/new")
+async def metrics_new_submit(request: Request):
+    form = dict(await request.form())
+    video_ids = [r["video_id"] for r in db.latest_metrics_by_video(path=db.DB_PATH)]
+    changed = parse_metrics_form(form, video_ids)
+    for vid, fields in changed.items():
+        db.record_metrics(vid, path=db.DB_PATH, **fields)
+    return RedirectResponse(f"/metrics/new?updated={len(changed)}", status_code=303)

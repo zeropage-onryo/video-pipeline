@@ -28,3 +28,13 @@ th, td {
 .dim {
   color: var(--dim);
 }
+
+input, select, button {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+}
+
+input::placeholder {
+  color: var(--dim);
+}

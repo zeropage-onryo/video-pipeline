@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Add numbers — Zero Page Films</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <h1>Add numbers</h1>
+
+  {% if updated is not none %}
+  <p>{{ updated }} video{{ "s" if updated != 1 else "" }} updated.</p>
+  {% endif %}
+
+  {% if rows %}
+  <form method="post" action="/metrics/new">
+    <table>
+      <thead>
+        <tr>
+          <th>Title</th><th>Platform</th>
+          <th>Views</th><th>Likes</th><th>Comments</th><th>Saves</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>{{ r.title }}</td>
+          <td>{{ r.platform }}</td>
+          <td><input type="number" class="metric-input" data-row="{{ loop.index0 }}" data-col="0"
+                     name="views_{{ r.video_id }}"
+                     placeholder="{{ r.views if r.views is not none else '' }}"></td>
+          <td><input type="number" class="metric-input" data-row="{{ loop.index0 }}" data-col="1"
+                     name="likes_{{ r.video_id }}"
+                     placeholder="{{ r.likes if r.likes is not none else '' }}"></td>
+          <td><input type="number" class="metric-input" data-row="{{ loop.index0 }}" data-col="2"
+                     name="comments_{{ r.video_id }}"
+                     placeholder="{{ r.comments if r.comments is not none else '' }}"></td>
+          <td><input type="number" class="metric-input" data-row="{{ loop.index0 }}" data-col="3"
+                     name="saves_{{ r.video_id }}"
+                     placeholder="{{ r.saves if r.saves is not none else '' }}"></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p><button type="submit">Save</button></p>
+  </form>
+  {% else %}
+  <p class="dim">No videos yet. <a href="/videos/new">Add your first one.</a></p>
+  {% endif %}
+
+  <script>
+    document.querySelectorAll(".metric-input").forEach(function (input) {
+      input.addEventListener("keydown", function (e) {
+        if (e.key !== "Enter") return;
+        e.preventDefault();
+        var row = Number(input.dataset.row) + 1;
+        var col = input.dataset.col;
+        var next = document.querySelector(
+          '.metric-input[data-row="' + row + '"][data-col="' + col + '"]'
+        );
+        if (next) next.focus();
+      });
+    });
+  </script>
+</body>
+</html>
