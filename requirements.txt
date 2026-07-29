@@ -1,5 +1,4 @@
 openai-whisper
-numpy<2
+numpy<2   # whisper's torch build fails against numpy 2.x (torch._C._ARRAY_API); unpinning breaks transcription
 google-genai
 python-dotenv
-librosa
