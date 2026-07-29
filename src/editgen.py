@@ -8,7 +8,6 @@ from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
 
-from beat_sync import detect_beats, snap_edit_to_beats, synthetic_beats
 from gemini_utils import generate_with_retry, strip_fences
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -84,23 +83,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="Generate full edit specs for selected pitches.")
     parser.add_argument("pitch_numbers", type=int, nargs="+", help="Pitch numbers from pitches.json to edit")
-    parser.add_argument(
-        "--music", type=Path,
-        help="Path to a music file; snaps cut transitions to the nearest detected beat",
-    )
-    parser.add_argument(
-        "--bpm", type=float,
-        help="Tempo to snap to when you don't have the audio file itself "
-             "(e.g. a platform-native sound) — generates a synthetic beat grid instead",
-    )
-    parser.add_argument(
-        "--bpm-offset", type=float, default=0.0,
-        help="Seconds to the first downbeat, if not at t=0 (only used with --bpm)",
-    )
     args = parser.parse_args()
-    if args.music and args.bpm:
-        print("Use --music or --bpm, not both", file=sys.stderr)
-        sys.exit(1)
     selected_numbers = args.pitch_numbers
 
     api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
@@ -130,27 +113,13 @@ def main():
     text = strip_fences(response_text)
     edits = json.loads(text)
 
-    beat_times = []
-    if args.music:
-        if not args.music.exists():
-            print(f"Music file not found: {args.music}", file=sys.stderr)
-        else:
-            print(f"Detecting beats in {args.music.name}...")
-            beat_times = detect_beats(str(args.music))
-            print(f"  found {len(beat_times)} beats")
-    elif args.bpm:
-        print(f"Generating a synthetic {args.bpm} BPM beat grid (offset {args.bpm_offset}s)...")
-        beat_times = synthetic_beats(args.bpm, args.bpm_offset)
-
     for edit in edits:
-        beat_warnings = snap_edit_to_beats(edit, beat_times, manifest_by_name, cut_field) if beat_times else []
-        warnings = validate_edit(edit, manifest_by_name) + beat_warnings
+        warnings = validate_edit(edit, manifest_by_name)
         existing_warnings = edit.get("warnings") or []
         edit["warnings"] = list(existing_warnings) + warnings
 
         cut_count = len(edit.get("edit_list", []))
-        synced = " (beat-synced)" if beat_times else ""
-        print(f"{edit.get('title')}: {cut_count} cuts{synced}")
+        print(f"{edit.get('title')}: {cut_count} cuts")
         for w in edit["warnings"]:
             print(f"  WARNING: {w}")
 
