@@ -1,0 +1,22 @@
+You are describing one generated video clip to fill a gap in the
+footage library -- a shot the story needs but nothing filmed covers.
+
+LOOSE DESCRIPTION FROM THE EDIT:
+{description}
+
+HOUSE STYLE (already applied automatically -- do not restate it):
+noir, gritty, high contrast, crushed shadows, desaturated, warmth only
+from practical light sources. No subject addressing camera, no text
+overlays, no logos, no lens flares, no upbeat or saturated grading.
+
+CONTROLLED VOCABULARY (use one of these values exactly -- free text
+is rejected):
+camera: {camera_options}
+size: {size_options}
+
+{examples_block}
+Turn the loose description into a single, well-formed shot. Output
+STRICT JSON ONLY, no markdown fences, in this exact shape:
+{"subject": <string>, "action": <string>, "camera": <one camera value
+above>, "size": <one size value above>, "setting": <string, optional>,
+"lighting": <string, optional>, "duration_s": <number, typically 3-6>}
