@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Add video — Zero Page Films</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <h1>Add video</h1>
+  <form method="post" action="/videos/new">
+    <p>
+      <label>Title<br>
+        <input type="text" name="title" required>
+      </label>
+    </p>
+    <p>
+      <label>Platform<br>
+        <select name="platform" required>
+          {% for p in platforms %}
+          <option value="{{ p }}">{{ p }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </p>
+    <p>
+      <label>Posted<br>
+        <input type="date" name="posted_at" required>
+      </label>
+    </p>
+    <p>
+      <label>URL<br>
+        <input type="url" name="url">
+      </label>
+    </p>
+    <p>
+      <label>Timeline<br>
+        <input type="text" name="timeline">
+      </label>
+    </p>
+    <p>
+      <label>Topic<br>
+        <input type="text" name="topic" list="topic-list">
+        <datalist id="topic-list">
+          {% for t in topics %}<option value="{{ t }}">{% endfor %}
+        </datalist>
+      </label>
+    </p>
+    <p>
+      <label>Hook type<br>
+        <input type="text" name="hook_type" list="hook-type-list">
+        <datalist id="hook-type-list">
+          {% for h in hook_types %}<option value="{{ h }}">{% endfor %}
+        </datalist>
+      </label>
+    </p>
+    <p>
+      <label>Idea id (optional)<br>
+        <input type="number" name="idea_id">
+      </label>
+    </p>
+    <p><button type="submit">Add video</button></p>
+  </form>
+</body>
+</html>
