@@ -8,6 +8,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
 
+from . import db
 from .gemini_utils import generate_with_retry, strip_fences
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -106,7 +107,32 @@ def format_edit_as_text(edit: dict) -> str:
     return "\n".join(lines)
 
 
-def main():
+def record_selection(run_id, numbers: list, db_path=None) -> None:
+    """
+    Mark these pitch numbers as selected against a pitch run. run_id
+    resolves to the most recent run in the database if not given
+    explicitly -- the common case of editing right after the pitch run
+    that produced these numbers.
+
+    A cut list is already saved to concepts.json by the time this runs;
+    a database problem here must not undo that. It prints a warning and
+    nothing more.
+    """
+    try:
+        kwargs = {"path": db_path} if db_path is not None else {}
+        resolved_run_id = run_id
+        if resolved_run_id is None:
+            resolved_run_id = db.most_recent_run_id(**kwargs)
+        if resolved_run_id is None:
+            print("warning: no pitch runs recorded yet; skipping selection bookkeeping", file=sys.stderr)
+            return
+        updated = db.mark_selected_by_number(resolved_run_id, numbers, **kwargs)
+        print(f"Marked {updated} pitch(es) selected in run {resolved_run_id}")
+    except Exception as e:
+        print(f"warning: could not record selection in database: {e}", file=sys.stderr)
+
+
+def main(db_path=None):
     load_dotenv()
 
     parser = argparse.ArgumentParser(description="Generate full edit specs for selected pitches.")
@@ -114,6 +140,11 @@ def main():
     parser.add_argument(
         "--print", dest="print_text", action="store_true",
         help="Also render each edit's cut list as plain text, to read beside Resolve",
+    )
+    parser.add_argument(
+        "--run-id", type=int, default=None,
+        help="pitch_runs id to mark these numbers selected against; "
+             "defaults to the most recent run",
     )
     args = parser.parse_args()
     selected_numbers = args.pitch_numbers
@@ -159,6 +190,8 @@ def main():
 
     CONCEPTS_PATH.write_text(json.dumps(edits, indent=2))
     print(f"Saved {len(edits)} edits to {CONCEPTS_PATH}")
+
+    record_selection(args.run_id, selected_numbers, db_path=db_path)
 
 
 if __name__ == "__main__":

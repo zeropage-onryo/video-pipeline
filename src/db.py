@@ -237,6 +237,21 @@ def mark_selected_by_number(
         return cur.rowcount
 
 
+def most_recent_run_id(path: Path | str = DB_PATH) -> Optional[int]:
+    """
+    The id of the latest pitch_runs row, or None if none exist yet.
+
+    Backs editgen.py's --run-id default, so marking a selection doesn't
+    require typing the run id back in by hand for the common case of
+    editing right after the pitch run that produced it.
+    """
+    with connect(path) as conn:
+        row = conn.execute(
+            "SELECT id FROM pitch_runs ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    return row["id"] if row else None
+
+
 def get_labelled_pitches(
     selected_only: bool = False,
     limit: int = 200,
