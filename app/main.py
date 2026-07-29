@@ -193,3 +193,36 @@ def video_detail(request: Request, video_id: int):
             "sparkline": render_sparkline(history, width=480, height=120),
         },
     )
+
+
+def group_pitches_by_run(pitches: list) -> list:
+    """
+    get_labelled_pitches() already returns rows ordered run_id DESC,
+    number ASC -- this just buckets the flat list into per-run groups,
+    preserving that order (runs newest first).
+    """
+    runs = []
+    current_run_id = object()  # sentinel that can't equal a real run_id
+    for p in pitches:
+        if p["run_id"] != current_run_id:
+            runs.append({
+                "run_id": p["run_id"],
+                "run_created_at": p["run_created_at"],
+                "model": p.get("model"),
+                "prompt_hash": p.get("prompt_hash"),
+                "pitches": [],
+            })
+            current_run_id = p["run_id"]
+        runs[-1]["pitches"].append(p)
+    return runs
+
+
+@app.get("/pitches")
+def pitches_list(request: Request):
+    pitches = db.get_labelled_pitches(limit=200, path=db.DB_PATH)
+    rate = db.selection_rate(path=db.DB_PATH)
+    return templates.TemplateResponse(
+        request,
+        "pitches.html",
+        {"runs": group_pitches_by_run(pitches), "by_prompt": rate["by_prompt"]},
+    )

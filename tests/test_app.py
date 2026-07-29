@@ -260,10 +260,12 @@ def test_video_detail_shows_originating_pitch_when_linked(tmp_db):
 # ---------- group_pitches_by_run ----------
 
 def test_group_pitches_by_run_groups_and_preserves_order():
+    # Shape matches what get_labelled_pitches() actually returns -- run_id,
+    # run_created_at, model, prompt_hash always present (SQL-aliased columns).
     pitches = [
-        {"run_id": 2, "number": 1, "title": "A"},
-        {"run_id": 2, "number": 2, "title": "B"},
-        {"run_id": 1, "number": 1, "title": "C"},
+        {"run_id": 2, "run_created_at": "t2", "model": "m", "prompt_hash": "h", "number": 1, "title": "A"},
+        {"run_id": 2, "run_created_at": "t2", "model": "m", "prompt_hash": "h", "number": 2, "title": "B"},
+        {"run_id": 1, "run_created_at": "t1", "model": "m", "prompt_hash": "h", "number": 1, "title": "C"},
     ]
     runs = group_pitches_by_run(pitches)
     assert [r["run_id"] for r in runs] == [2, 1]

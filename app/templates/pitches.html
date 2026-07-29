@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Pitches — Zero Page Films</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <h1>Pitches</h1>
+
+  <section>
+    <h2>Pick rate per prompt</h2>
+    {% if by_prompt %}
+    <table>
+      <thead>
+        <tr><th>Prompt</th><th>Pitched</th><th>Chosen</th><th>Rate</th></tr>
+      </thead>
+      <tbody>
+        {% for b in by_prompt %}
+        <tr>
+          <td>{{ b.prompt_hash or "—" }}</td>
+          <td>{{ b.pitched }}</td>
+          <td>{{ b.chosen }}</td>
+          <td>{{ (b.rate * 100) | round(1) }}%</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="dim">No reviewed runs yet.</p>
+    {% endif %}
+  </section>
+
+  <section>
+    <h2>Runs</h2>
+    {% if runs %}
+    {% for run in runs %}
+    <h3>Run {{ run.run_id }} — {{ run.run_created_at }}{% if run.model %} ({{ run.model }}){% endif %}</h3>
+    <table>
+      <thead>
+        <tr><th>#</th><th>Title</th><th>Story note</th><th>Picked</th></tr>
+      </thead>
+      <tbody>
+        {% for p in run.pitches %}
+        <tr>
+          <td>{{ p.number }}</td>
+          <td>{{ p.title }}</td>
+          <td>{{ p.story_note }}</td>
+          <td>{{ "picked" if p.selected else "" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endfor %}
+    {% else %}
+    <p class="dim">No reviewed pitch runs yet. Run pitch.py, then editgen.py, to record a selection.</p>
+    {% endif %}
+  </section>
+</body>
+</html>
