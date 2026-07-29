@@ -102,3 +102,29 @@ DaVinciResolveScript, rather than rendering standalone preview files.
 Edits appear in the real project with media already linked — no 
 export/import round-trip. Fallback: FFmpeg-rendered preview .mp4s if 
 the API path fails or for quick triage.
+
+**2026-07-29 — Removed beat-synced cutting.**
+Cut transitions were being snapped to detected or synthetic musical beats.
+Removed because the timing of a cut is a creative decision and snapping
+overrode it mechanically — a cut landing on a beat is not the same as a cut
+landing where the shot wants to end. Also removed `librosa` and its
+dependency chain (`numba`, `scipy`, `soundfile`, `audioread`). Cut points now
+come only from the clip's own described beats, which is what the edit prompt
+was already reasoning about.
+
+**2026-07-29 — Removed automatic color grading.**
+`apply_grade.py` applied a saved `.drx` to every clip on named timelines.
+Removed because grading is shot-by-shot work and a blanket application
+produced something that always needed redoing by hand. The grade preset
+stays in `grades/` and is applied manually in Resolve.
+
+**2026-07-29 — Superseded 2026-07-08 "Rough cuts target Resolve Studio's
+scripting API". Removed the Resolve integration entirely.**
+`build_timeline.py`, `apply_grade.py` and `resolve_edit.py` are gone. The
+pipeline now ends at a validated cut list in `concepts.json`, which is
+executed by hand. Reason: assembling the timeline was the least valuable
+step and the most brittle — it required Resolve running with a project open,
+matched clips by filename across two systems, and produced an assembly that
+was always re-cut anyway. The judgment worth automating is which shots and
+which moments, not the mechanical assembly. Cost: no more one-command rough
+cut. Accepted, because the rough cut was never the output that got used.
