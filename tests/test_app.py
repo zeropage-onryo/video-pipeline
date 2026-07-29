@@ -2,10 +2,12 @@
 Tests for app/main.py's routes. Template-only rendering is exempt from
 strict TDD; form parsing and the routes that write data are not.
 """
+from datetime import date, timedelta
+
 import pytest
 from fastapi.testclient import TestClient
 
-from app.main import app, parse_metrics_form, parse_video_form
+from app.main import app, benchmark_class, parse_metrics_form, parse_video_form
 from src import db
 
 client = TestClient(app)
@@ -137,4 +139,68 @@ def test_post_metrics_new_skips_videos_with_nothing_typed(tmp_db):
 
 def test_metrics_new_shows_updated_count(tmp_db):
     response = client.get("/metrics/new?updated=3")
+    assert "3" in response.text
+
+
+# ---------- benchmark_class ----------
+
+def test_benchmark_class_above_median_is_good():
+    assert benchmark_class(100, 50) == "good"
+
+
+def test_benchmark_class_below_median_is_bad():
+    assert benchmark_class(10, 50) == "bad"
+
+
+def test_benchmark_class_equal_median_is_neutral():
+    assert benchmark_class(50, 50) == ""
+
+
+def test_benchmark_class_missing_data_is_neutral():
+    assert benchmark_class(None, 50) == ""
+    assert benchmark_class(50, None) == ""
+
+
+# ---------- full dashboard ----------
+
+def test_dashboard_empty_state_links_to_add_video(tmp_db):
+    response = client.get("/")
+    assert "No videos yet" in response.text
+    assert "/videos/new" in response.text
+
+
+def test_dashboard_colours_rows_by_benchmark(tmp_db):
+    v1 = db.add_video("Winner", "youtube", "2026-01-01", path=tmp_db)
+    v2 = db.add_video("Loser", "youtube", "2026-01-01", path=tmp_db)
+    db.record_metrics(v1, views=1000, captured_at="2026-01-08", path=tmp_db)
+    db.record_metrics(v2, views=10, captured_at="2026-01-08", path=tmp_db)
+
+    response = client.get("/?posted_within=all")
+    assert response.status_code == 200
+    assert "Winner" in response.text and "Loser" in response.text
+    assert 'class="good"' in response.text
+    assert 'class="bad"' in response.text
+
+
+def test_dashboard_benchmark_uses_same_window_as_top_performers(tmp_db):
+    old_date = (date.today() - timedelta(days=400)).isoformat()
+    old_measured = (date.today() - timedelta(days=393)).isoformat()
+    v_old = db.add_video("Old", "youtube", old_date, path=tmp_db)
+    db.record_metrics(v_old, views=99999, captured_at=old_measured, path=tmp_db)
+
+    response = client.get("/")  # default: posted in the last 6 months
+    assert "Old" not in response.text
+
+    response_all = client.get("/?posted_within=all")
+    assert "Old" in response_all.text
+
+
+def test_dashboard_shows_pick_rate(tmp_db):
+    run_id = db.save_pitch_run(
+        [{"number": n, "title": f"S{n}", "logline": "l", "story_note": "n"} for n in range(1, 11)],
+        path=tmp_db,
+    )
+    db.mark_selected_by_number(run_id, [1, 2, 3], path=tmp_db)
+
+    response = client.get("/")
     assert "3" in response.text
