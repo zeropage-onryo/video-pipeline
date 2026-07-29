@@ -374,3 +374,38 @@ def test_latest_metrics_by_video_returns_most_recent_snapshot(tmp_db):
     db.record_metrics(vid, views=500, captured_at="2026-01-10", path=tmp_db)
     rows = db.latest_metrics_by_video(path=tmp_db)
     assert rows[0]["views"] == 500
+
+
+# ---------- get_video ----------
+
+def test_get_video_returns_none_for_missing_id(tmp_db):
+    assert db.get_video(999, path=tmp_db) is None
+
+
+def test_get_video_includes_metadata(tmp_db):
+    vid = db.add_video("Night Run", "youtube", "2026-01-01",
+                       url="https://x", topic="workshop", path=tmp_db)
+    video = db.get_video(vid, path=tmp_db)
+    assert video["title"] == "Night Run"
+    assert video["platform"] == "youtube"
+    assert video["url"] == "https://x"
+
+
+def test_get_video_has_no_originating_pitch_when_not_linked(tmp_db):
+    vid = db.add_video("Night Run", "youtube", "2026-01-01", path=tmp_db)
+    video = db.get_video(vid, path=tmp_db)
+    assert video["idea_id"] is None
+    assert video["idea_title"] is None
+
+
+def test_get_video_includes_originating_pitch_when_linked(tmp_db):
+    run_id = db.save_pitch_run(PITCHES, path=tmp_db)
+    with db.connect(tmp_db) as conn:
+        idea_id = conn.execute(
+            "SELECT id FROM ideas WHERE run_id = ? AND number = 2", (run_id,)
+        ).fetchone()[0]
+    vid = db.add_video("Story 2", "tiktok", "2026-01-01", idea_id=idea_id, path=tmp_db)
+
+    video = db.get_video(vid, path=tmp_db)
+    assert video["idea_title"] == "Story 2"
+    assert video["idea_logline"] == "Line 2."
