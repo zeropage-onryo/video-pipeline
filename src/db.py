@@ -422,6 +422,26 @@ def list_videos(
         return [dict(r) for r in conn.execute(sql, params)]
 
 
+def get_video(video_id: int, path: Path | str = DB_PATH) -> Optional[dict[str, Any]]:
+    """
+    One video's full metadata, plus its originating pitch (idea_title,
+    idea_logline, idea_story_note) if idea_id is set -- all None
+    otherwise. None if no such video.
+    """
+    with connect(path) as conn:
+        row = conn.execute(
+            """
+            SELECT v.*, i.title AS idea_title, i.logline AS idea_logline,
+                   i.story_note AS idea_story_note
+            FROM videos v
+            LEFT JOIN ideas i ON i.id = v.idea_id
+            WHERE v.id = ?
+            """,
+            (video_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
 def _cutoff(
     within_days: Optional[int],
     since: Optional[str],
