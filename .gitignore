@@ -21,3 +21,11 @@ venv/
 
 # macOS
 .DS_Store
+
+# Local test data
+data/*.db
+
+# Generated pipeline artifacts
+manifest.json
+pitches.json
+concepts.json
