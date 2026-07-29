@@ -33,14 +33,21 @@ For each approved story, produce the full edit:
 - edit_list — ordered cuts: exact clip filename, in/out points in
   seconds, within each clip's real duration, totaling 13-17
   seconds, honoring the locked pacing and the HOOK/BUILD/PUNCH
-  structure above, opening on the pitched hook clip
+  structure above, opening on the pitched hook clip. At most one
+  entry may instead be `"source": "generate"` with a `"description"`
+  of the shot, when the footage library truly cannot support a
+  moment the story needs. That entry still needs in/out points
+  marking its intended duration within the cut (it still counts
+  toward the 13-17 second total) but does not need a real filename.
 - grade_notes — per-shot adjustments on top of the existing
   Batman LUT (what to lift, where to let it crush)
 - sound_note — one line: music energy, any moment that drops to
   natural sound
 
 HARD RULES:
-- Only clip filenames that exist in the library.
+- Only clip filenames that exist in the library, except at most one
+  edit_list entry may use `"source": "generate"` with a
+  `"description"` in place of a filename.
 - Every in/out point must correspond to a real beat timestamp for
   that clip, not a guessed fraction of its duration.
 - Runtime, tone, pacing, grade are NOT adjustable. If the footage
