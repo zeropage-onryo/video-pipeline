@@ -577,3 +577,25 @@ def test_concepts_page_no_shotlist_button_once_planned(tmp_preprod_db):
     preprod.update_concept_shots(concept_id, {"shots": CONCEPT_SHOTS}, path=tmp_preprod_db)
     response = client.get("/concepts")
     assert "Plan the shoot" not in response.text
+
+
+# ---------- navigation ----------
+# Every screen was built and verified in isolation by typing its URL,
+# which is exactly how a site ends up with no way to get between pages.
+
+NAV_TARGETS = ["/", "/concepts", "/locations", "/pitches", "/metrics/new", "/videos/new"]
+
+
+@pytest.mark.parametrize("page", NAV_TARGETS)
+def test_every_page_can_reach_every_other_page(page, tmp_preprod_db):
+    response = client.get(page)
+    assert response.status_code == 200
+    for target in NAV_TARGETS:
+        assert f'href="{target}"' in response.text, f"{page} has no link to {target}"
+
+
+def test_video_detail_also_has_nav(tmp_preprod_db):
+    vid = db.add_video("Night Run", "youtube", "2025-09-29", path=tmp_preprod_db)
+    response = client.get(f"/videos/{vid}")
+    for target in NAV_TARGETS:
+        assert f'href="{target}"' in response.text
