@@ -599,3 +599,92 @@ def test_video_detail_also_has_nav(tmp_preprod_db):
     response = client.get(f"/videos/{vid}")
     for target in NAV_TARGETS:
         assert f'href="{target}"' in response.text
+
+
+# ---------- photo upload ----------
+# The pipeline gap: without this, photos only get in by dropping files
+# into locations/<name>/ and running the CLI.
+
+TINY_PNG = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06"
+    b"\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05"
+    b"\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+
+
+def test_post_location_upload_saves_photos_and_describes(tmp_preprod_db, tmp_path, monkeypatch):
+    monkeypatch.setattr(app_main, "LOCATIONS_DIR", tmp_path / "locations")
+    monkeypatch.setattr(
+        app_main.locations, "describe_location",
+        lambda client, name, photos: {"space": f"{name} described from {len(photos)}"},
+    )
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+
+    response = client.post(
+        "/locations/upload",
+        data={"name": "garage"},
+        files=[("photos", ("a.png", TINY_PNG, "image/png")),
+               ("photos", ("b.png", TINY_PNG, "image/png"))],
+        follow_redirects=False,
+    )
+
+    assert response.status_code in (302, 303, 307)
+    saved = preprod.get_location_by_name("garage", path=tmp_preprod_db)
+    assert saved is not None
+    assert saved["photo_count"] == 2
+    assert "described from 2" in saved["description"]["space"]
+    assert (tmp_path / "locations" / "garage" / "a.png").exists()
+
+
+def test_post_location_upload_requires_a_name(tmp_preprod_db, tmp_path, monkeypatch):
+    monkeypatch.setattr(app_main, "LOCATIONS_DIR", tmp_path / "locations")
+    response = client.post(
+        "/locations/upload",
+        data={"name": "   "},
+        files=[("photos", ("a.png", TINY_PNG, "image/png"))],
+    )
+    assert response.status_code == 400
+
+
+def test_post_location_upload_requires_a_photo(tmp_preprod_db, tmp_path, monkeypatch):
+    monkeypatch.setattr(app_main, "LOCATIONS_DIR", tmp_path / "locations")
+    response = client.post("/locations/upload", data={"name": "garage"})
+    assert response.status_code == 400
+
+
+def test_post_location_upload_reports_failure_without_breaking(tmp_preprod_db, tmp_path, monkeypatch):
+    monkeypatch.setattr(app_main, "LOCATIONS_DIR", tmp_path / "locations")
+
+    def boom(client, name, photos):
+        raise Exception("vision unavailable")
+
+    monkeypatch.setattr(app_main.locations, "describe_location", boom)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+
+    response = client.post(
+        "/locations/upload",
+        data={"name": "garage"},
+        files=[("photos", ("a.png", TINY_PNG, "image/png"))],
+        follow_redirects=False,
+    )
+    assert response.status_code in (302, 303, 307)
+    assert preprod.get_location_by_name("garage", path=tmp_preprod_db) is None
+
+
+def test_post_location_upload_sanitises_the_space_name(tmp_preprod_db, tmp_path, monkeypatch):
+    """A name becomes a directory, so it can't escape the locations dir."""
+    monkeypatch.setattr(app_main, "LOCATIONS_DIR", tmp_path / "locations")
+    monkeypatch.setattr(
+        app_main.locations, "describe_location",
+        lambda client, name, photos: {"space": "x"},
+    )
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+
+    client.post(
+        "/locations/upload",
+        data={"name": "../../etc/evil"},
+        files=[("photos", ("a.png", TINY_PNG, "image/png"))],
+        follow_redirects=False,
+    )
+    assert not (tmp_path / "etc").exists()
+    assert not (tmp_path.parent / "etc").exists()
