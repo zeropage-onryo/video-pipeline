@@ -2,46 +2,80 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Locations — Zero Page Films</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   {% include "_nav.html" %}
-  <h1>Locations</h1>
-  <p class="dim">The spaces concepts get built around.</p>
 
-  {% if locations %}
-  {% for loc in locations %}
-  <section>
-    <h2>{{ loc.name }}</h2>
-    <p class="dim">{{ loc.photo_count or 0 }} photo(s)</p>
-    {% if loc.description %}
-    <p>{{ loc.description.space }}</p>
-    <table>
-      {% if loc.description.light_sources %}
-      <tr><td class="dim">Light</td><td>{{ loc.description.light_sources | join(", ") }}</td></tr>
-      {% endif %}
-      {% if loc.description.textures %}
-      <tr><td class="dim">Textures</td><td>{{ loc.description.textures | join(", ") }}</td></tr>
-      {% endif %}
-      {% if loc.description.angles %}
-      <tr><td class="dim">Angles</td><td>{{ loc.description.angles | join("; ") }}</td></tr>
-      {% endif %}
-      {% if loc.description.constraints %}
-      <tr><td class="dim">Constraints</td><td>{{ loc.description.constraints }}</td></tr>
-      {% endif %}
-    </table>
-    {% else %}
-    <p class="dim">Not described yet.</p>
+  <main>
+    <header class="page">
+      <div class="rule">Solo unit // house shoots // real spaces only</div>
+      <h1>LOCATIONS</h1>
+      <p class="dim">Upload photos of a spot. It gets described once, then every concept is built around what's actually there.</p>
+    </header>
+
+    {% if message %}
+    <p class="mono" style="color: var(--steel)">{{ message }}</p>
     {% endif %}
-  </section>
-  {% endfor %}
-  {% else %}
-  <p class="dim">
-    No locations yet. Put photos in <code>locations/&lt;name&gt;/</code>, then run
-    <code>python -m src.locations</code> to describe them.
-  </p>
-  {% endif %}
 
+    <section>
+      <h2>Add a space</h2>
+      <form method="post" action="/locations/upload" enctype="multipart/form-data">
+        <div style="display:grid; gap:10px; margin-bottom:12px">
+          <input type="text" name="name" placeholder="Name it how you'd say it — garage, hallway, studio-bedroom" required>
+          <input type="file" name="photos" accept="image/*" multiple required>
+        </div>
+        <button type="submit" class="primary">Describe this space</button>
+      </form>
+      <p class="mono" style="margin-top:10px; line-height:1.6">
+        Tip: shoot it at night with your practicals on. A couple of angles beats one wide.
+      </p>
+    </section>
+
+    <h2>Described spaces</h2>
+
+    {% if locations %}
+    {% for loc in locations %}
+    <article class="card">
+      <div class="card-head">
+        <span class="id">SPACE-{{ "%02d"|format(loop.index) }}</span>
+        <span class="meta">{{ loc.photo_count or 0 }} PHOTOS</span>
+      </div>
+      <div class="card-body">
+        <h3>{{ loc.name|upper }}</h3>
+        {% if loc.description %}
+        <p style="margin-top:8px">{{ loc.description.space }}</p>
+
+        {% if loc.description.light_sources %}
+        <div class="kicker" style="margin-top:14px">Light</div>
+        <ul>{% for x in loc.description.light_sources %}<li>{{ x }}</li>{% endfor %}</ul>
+        {% endif %}
+
+        {% if loc.description.textures %}
+        <div class="kicker" style="margin-top:10px">Textures</div>
+        <ul>{% for x in loc.description.textures %}<li>{{ x }}</li>{% endfor %}</ul>
+        {% endif %}
+
+        {% if loc.description.angles %}
+        <div class="kicker" style="margin-top:10px">Workable angles</div>
+        <ul>{% for x in loc.description.angles %}<li>{{ x }}</li>{% endfor %}</ul>
+        {% endif %}
+
+        {% if loc.description.constraints %}
+        <div class="kicker" style="margin-top:10px">Constraints</div>
+        <p class="dim">{{ loc.description.constraints }}</p>
+        {% endif %}
+        {% else %}
+        <p class="dim">Not described yet.</p>
+        {% endif %}
+      </div>
+    </article>
+    {% endfor %}
+    {% else %}
+    <p class="dim">No locations yet. Add one above — a concept needs a real space to sit in.</p>
+    {% endif %}
+  </main>
 </body>
 </html>

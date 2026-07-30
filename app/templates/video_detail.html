@@ -2,11 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ video.title }} — Zero Page Films</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   {% include "_nav.html" %}
+
+  <main>
   <h1>{{ video.title }}</h1>
 
   <section>
@@ -61,5 +64,6 @@
     <p class="dim">Not linked to a pitch.</p>
     {% endif %}
   </section>
+  </main>
 </body>
 </html>

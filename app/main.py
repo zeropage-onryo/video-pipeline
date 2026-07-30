@@ -7,25 +7,28 @@ data through src/db.py, proving it reaches the page. The full
 dashboard design (top performers, sparklines, pick rate) is Session 4.
 """
 import os
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 from urllib.parse import quote
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from google import genai
 
-from src import db, preprod, shootgen, youtube
+from src import db, locations, preprod, shootgen, youtube
 
 from .sparkline import render_sparkline
 
 load_dotenv()
 
 APP_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = APP_DIR.parent
+LOCATIONS_DIR = PROJECT_ROOT / "locations"
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
 
 # "Posted in the last" control -> posted_within_days. "all" -> no cutoff.
@@ -273,12 +276,64 @@ def pitches_list(request: Request):
 
 
 @app.get("/locations")
-def locations_list(request: Request):
+def locations_list(request: Request, message: Optional[str] = None):
     return templates.TemplateResponse(
         request,
         "locations.html",
-        {"locations": preprod.list_locations(path=db.DB_PATH)},
+        {"locations": preprod.list_locations(path=db.DB_PATH), "message": message},
     )
+
+
+def safe_space_name(name: str) -> str:
+    """
+    A space name becomes a directory name, so it can't be allowed to
+    contain separators or climb out of the locations dir.
+    """
+    cleaned = re.sub(r"[^A-Za-z0-9 _-]", "", name).strip().replace(" ", "-").lower()
+    return cleaned.strip("-.")
+
+
+@app.post("/locations/upload")
+async def locations_upload(name: str = Form(...), photos: List[UploadFile] = File(default=[])):
+    space = safe_space_name(name)
+    if not space:
+        raise HTTPException(status_code=400, detail="a space name is required")
+
+    images = [p for p in photos if p.filename and (p.content_type or "").startswith("image/")]
+    if not images:
+        raise HTTPException(status_code=400, detail="at least one photo is required")
+
+    space_dir = LOCATIONS_DIR / space
+    space_dir.mkdir(parents=True, exist_ok=True)
+
+    saved = []
+    for upload in images:
+        target = space_dir / Path(upload.filename).name
+        target.write_bytes(await upload.read())
+        saved.append(target)
+
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        return RedirectResponse(
+            f"/locations?message={quote('Photos saved, but GEMINI_API_KEY is not set so they were not described')}",
+            status_code=303,
+        )
+
+    # Describing is the deliverable, but a failed vision call shouldn't
+    # lose the photos or 500 the page -- they stay on disk to retry.
+    try:
+        gemini_client = genai.Client(api_key=api_key)
+        description = locations.describe_location(gemini_client, space, saved)
+        all_photos = sorted(
+            p for p in space_dir.iterdir()
+            if p.is_file() and p.suffix.lower() in locations.IMAGE_EXTENSIONS
+        )
+        preprod.add_location(space, description, photo_count=len(all_photos), path=db.DB_PATH)
+        message = f"Described {space} from {len(all_photos)} photo(s)"
+    except Exception as e:
+        message = f"Saved {len(saved)} photo(s) to {space} but could not describe it: {e}"
+
+    return RedirectResponse(f"/locations?message={quote(message)}", status_code=303)
 
 
 @app.get("/concepts")

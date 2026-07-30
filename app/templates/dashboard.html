@@ -2,11 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Zero Page Films</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   {% include "_nav.html" %}
+
+  <main>
   <h1>Dashboard</h1>
 
   {% if message %}
@@ -74,5 +77,6 @@
     <p class="dim">No videos yet. <a href="/videos/new">Add your first one.</a></p>
     {% endif %}
   </section>
+  </main>
 </body>
 </html>

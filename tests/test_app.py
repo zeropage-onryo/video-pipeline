@@ -459,7 +459,9 @@ def test_concepts_page_lists_concepts_with_shots(tmp_preprod_db):
         brand="antihero", path=tmp_preprod_db,
     )
     response = client.get("/concepts")
-    assert "The Waiting" in response.text
+    # case-insensitive: the design uppercases titles, which isn't the
+    # thing this test is about
+    assert "the waiting" in response.text.lower()
     assert "a hand on the handle" in response.text
     assert "he steps into frame" in response.text
 
@@ -472,7 +474,7 @@ def test_concepts_page_shows_shoot_rate(tmp_preprod_db):
     ]
     preprod.mark_shot(ids[0], path=tmp_preprod_db)
     response = client.get("/concepts")
-    assert "1 of 4" in response.text
+    assert "Shot 1/4" in response.text
 
 
 def test_post_mark_concept_shot_toggles_and_redirects(tmp_preprod_db):
@@ -562,7 +564,7 @@ def test_concepts_page_shows_shortlist_rate(tmp_preprod_db):
     )
     preprod.update_concept_shots(ids[0], {"shots": CONCEPT_SHOTS}, path=tmp_preprod_db)
     response = client.get("/concepts")
-    assert "1 of 4" in response.text
+    assert "Planned 1/4" in response.text
 
 
 def test_concepts_page_offers_shotlist_button_for_an_idea(tmp_preprod_db):
