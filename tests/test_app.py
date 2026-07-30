@@ -828,3 +828,48 @@ def test_page_asks_for_thumbnails(tmp_preprod_db, tmp_path, monkeypatch):
     preprod.add_location("garage", SAMPLE_SPACE, photo_count=1, path=tmp_preprod_db)
 
     assert "?thumb=1" in client.get("/locations").text
+
+
+# ---------- one screen: photos, settings, generate, results ----------
+
+def test_concepts_page_has_the_upload_form(tmp_preprod_db):
+    """Everything on one screen, like the original generator."""
+    response = client.get("/concepts")
+    assert 'action="/locations/upload"' in response.text
+    assert 'enctype="multipart/form-data"' in response.text
+
+
+def test_concepts_page_shows_space_thumbnails(tmp_preprod_db, tmp_path, monkeypatch):
+    monkeypatch.setattr(app_main, "LOCATIONS_DIR", tmp_path / "locations")
+    space = tmp_path / "locations" / "garage"
+    space.mkdir(parents=True)
+    (space / "a.jpg").write_bytes(_real_jpeg())
+    preprod.add_location("garage", SAMPLE_SPACE, photo_count=1, path=tmp_preprod_db)
+
+    response = client.get("/concepts")
+    assert "/locations/garage/photo/a.jpg?thumb=1" in response.text
+
+
+def test_concepts_page_has_a_pov_toggle(tmp_preprod_db):
+    preprod.add_location("garage", SAMPLE_SPACE, path=tmp_preprod_db)
+    response = client.get("/concepts")
+    assert 'name="use_pov"' in response.text
+
+
+def test_generate_honours_pov_off(tmp_preprod_db, monkeypatch):
+    preprod.add_location("hallway", SAMPLE_SPACE, path=tmp_preprod_db)
+    seen = {}
+
+    def fake(**kw):
+        seen["use_pov"] = kw.get("use_pov")
+        return {"concept_id": 1, "concept": {"title": "X"}, "warnings": []}
+
+    monkeypatch.setattr(app_main.shootgen, "generate_concept", fake)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+
+    client.post("/concepts/generate", data={"brand": "antihero"}, follow_redirects=False)
+    assert seen["use_pov"] is False, "unchecked box must mean the camera is off"
+
+    client.post("/concepts/generate", data={"brand": "antihero", "use_pov": "on"},
+                follow_redirects=False)
+    assert seen["use_pov"] is True

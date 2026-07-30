@@ -355,3 +355,57 @@ def test_generate_shot_list_validates_the_plan(tmp_db, monkeypatch):
 def test_generate_shot_list_rejects_missing_concept(tmp_db):
     with pytest.raises(ValueError, match="no concept"):
         shootgen.generate_shot_list(999, gemini_client=None, db_path=tmp_db)
+
+
+# ---------- POV camera toggle ----------
+
+def test_prompt_offers_the_pov_camera_when_on(tmp_db):
+    locations = preprod.list_locations(path=tmp_db)
+    prompt = shootgen.build_concept_prompt(locations, "antihero", None, None, use_pov=True)
+    assert "ACTION5" in prompt
+    assert "{pov}" not in prompt
+
+
+def test_prompt_withholds_the_pov_camera_when_off(tmp_db):
+    locations = preprod.list_locations(path=tmp_db)
+    prompt = shootgen.build_concept_prompt(locations, "antihero", None, None, use_pov=False)
+    assert "ACTION5" not in prompt
+    assert "BMPCC only" in prompt
+    assert "{pov}" not in prompt
+
+
+def test_shotlist_prompt_respects_the_pov_toggle(tmp_db):
+    locations = preprod.list_locations(path=tmp_db)
+    concept = {"title": "T", "hook": "h", "logline": "l"}
+    off = shootgen.build_shotlist_prompt(locations, "antihero", None, concept, use_pov=False)
+    assert "ACTION5" not in off
+    on = shootgen.build_shotlist_prompt(locations, "antihero", None, concept, use_pov=True)
+    assert "ACTION5" in on
+
+
+def test_validate_rejects_the_pov_camera_when_it_is_off():
+    """Prompts request, code enforces -- turning the camera off has to
+    mean the shot list can't quietly use it anyway."""
+    warnings = shootgen.validate_concept(make_concept(), LOCATION_NAMES, use_pov=False)
+    assert any("ACTION5" in w for w in warnings)
+
+
+def test_validate_allows_the_pov_camera_when_it_is_on():
+    assert shootgen.validate_concept(make_concept(), LOCATION_NAMES, use_pov=True) == []
+
+
+def test_generate_concept_threads_the_pov_setting_through(tmp_db, monkeypatch):
+    seen = {}
+
+    def fake(client, model, prompt):
+        seen["prompt"] = prompt
+        return response_for(make_concept(shots=[
+            {"n": 1, "type": "CHARACTER", "cam": "BMPCC", "location": "hallway",
+             "desc": "d", "light": "l"},
+        ]))
+
+    monkeypatch.setattr(shootgen, "generate_with_retry", fake)
+    shootgen.generate_concept(
+        brand="antihero", client=None, gemini_client=None, use_pov=False, db_path=tmp_db,
+    )
+    assert "ACTION5" not in seen["prompt"]

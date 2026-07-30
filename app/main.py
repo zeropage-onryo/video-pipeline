@@ -396,6 +396,9 @@ async def locations_upload(name: str = Form(...), photos: List[UploadFile] = Fil
 
 @app.get("/concepts")
 def concepts_list(request: Request, message: Optional[str] = None):
+    spaces = preprod.list_locations(path=db.DB_PATH)
+    for space in spaces:
+        space["photos"] = photos_for(space["name"])
     return templates.TemplateResponse(
         request,
         "concepts.html",
@@ -404,7 +407,8 @@ def concepts_list(request: Request, message: Optional[str] = None):
             "rate": preprod.shoot_rate(path=db.DB_PATH),
             "shortlist": preprod.shortlist_rate(path=db.DB_PATH),
             "brands": preprod.BRANDS,
-            "has_locations": bool(preprod.list_locations(path=db.DB_PATH)),
+            "spaces": spaces,
+            "has_locations": bool(spaces),
             "message": message,
         },
     )
@@ -416,6 +420,8 @@ async def concepts_generate(request: Request):
     brand = form.get("brand") or "antihero"
     spark = (form.get("spark") or "").strip() or None
     client_name = (form.get("client") or "").strip() or None
+    # an unchecked checkbox submits nothing, so absence means off
+    use_pov = bool(form.get("use_pov"))
 
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
@@ -436,7 +442,7 @@ async def concepts_generate(request: Request):
         else:
             result = shootgen.generate_concept(
                 brand=brand, client=client_name, spark=spark,
-                gemini_client=gemini_client, db_path=db.DB_PATH,
+                gemini_client=gemini_client, use_pov=use_pov, db_path=db.DB_PATH,
             )
             message = f"Generated \"{result['concept']['title']}\""
             if result["warnings"]:

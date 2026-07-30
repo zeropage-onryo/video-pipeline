@@ -399,3 +399,25 @@ td.num, .num {
   font-family: 'IBM Plex Mono', monospace;
   font-variant-numeric: tabular-nums;
 }
+
+/* POV camera toggle -- a real physical constraint, so it reads as a
+   switch rather than another text field */
+.pov-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  padding: 6px 12px;
+  margin-bottom: 12px;
+  cursor: pointer;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.pov-toggle:has(input:checked) {
+  border-color: var(--steel);
+  color: var(--steel);
+}

@@ -32,6 +32,32 @@
     </section>
 
     <section>
+      <div class="kicker" style="margin-bottom:8px">
+        Location photos{% if spaces %} — {{ spaces|length }} space{{ "s" if spaces|length != 1 }}{% endif %}
+      </div>
+
+      {% if spaces %}
+      <div class="photo-grid">
+        {% for sp in spaces %}
+          {% for src in sp.photos %}
+          <figure class="shot-thumb">
+            <img class="thumb" src="{{ src }}?thumb=1" alt="{{ sp.name }}" loading="lazy">
+            <figcaption>{{ sp.name[:6]|upper }}</figcaption>
+          </figure>
+          {% endfor %}
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      <form method="post" action="/locations/upload" enctype="multipart/form-data"
+            style="display:grid; gap:8px; margin-top:8px">
+        <input type="text" name="name" placeholder="New space — name it how you'd say it" required>
+        <input type="file" name="photos" accept="image/*" multiple required>
+        <button type="submit">Add this space</button>
+      </form>
+    </section>
+
+    <section>
       <h2>Generate</h2>
       {% if has_locations %}
       <form method="post" action="/concepts/generate">
@@ -44,6 +70,11 @@
           </label>
           {% endfor %}
         </div>
+        <label class="pov-toggle">
+          <input type="checkbox" name="use_pov" checked>
+          <span>POV cam (Action 5)</span>
+        </label>
+
         <div style="display:grid; gap:10px; margin-bottom:12px">
           <input type="text" name="client" placeholder="Spec/client type — e.g. cocktail bar, streetwear (zeropage only)">
           <input type="text" name="spark" placeholder="Spark an idea (optional) — e.g. gearing up ritual, 3am kitchen, someone knocked">

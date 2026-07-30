@@ -76,8 +76,29 @@ def format_locations(locations: list) -> str:
     return "\n".join(lines)
 
 
-def build_concept_prompt(locations: list, brand: str, client=None, spark=None) -> str:
-    template = (PROMPTS_DIR / "concept_prompt.txt").read_text()
+POV_ON = ('- Camera B ("ACTION5"): DJI Osmo Action 5 Pro, for POV / body-mount\n'
+          "  shots.")
+POV_OFF = "- No POV camera available this shoot — BMPCC only."
+
+
+def apply_pov(template: str, use_pov: bool) -> str:
+    """
+    The POV camera is a real physical constraint, so it has to reach
+    both the prompt and the validator. Off means the model is never
+    offered ACTION5 and never told it is a legal value.
+    """
+    return (
+        template
+        .replace("{pov}", POV_ON if use_pov else POV_OFF)
+        .replace("{cam_rule}", '- Every shot\'s "cam" is exactly '
+                 + ("BMPCC or ACTION5." if use_pov else "BMPCC."))
+        .replace("{cam_values}", '"BMPCC or ACTION5"' if use_pov else '"BMPCC"')
+    )
+
+
+def build_concept_prompt(locations: list, brand: str, client=None, spark=None,
+                         use_pov: bool = True) -> str:
+    template = apply_pov((PROMPTS_DIR / "concept_prompt.txt").read_text(), use_pov)
     return (
         template
         .replace("{locations}", format_locations(locations))
@@ -112,8 +133,9 @@ def parse_ideas_response(text: str) -> list:
     return ideas
 
 
-def build_shotlist_prompt(locations: list, brand: str, client, concept: dict) -> str:
-    template = (PROMPTS_DIR / "shotlist_prompt.txt").read_text()
+def build_shotlist_prompt(locations: list, brand: str, client, concept: dict,
+                          use_pov: bool = True) -> str:
+    template = apply_pov((PROMPTS_DIR / "shotlist_prompt.txt").read_text(), use_pov)
     return (
         template
         .replace("{locations}", format_locations(locations))
@@ -160,7 +182,7 @@ def generate_concept_ideas(brand: str, client=None, spark=None, gemini_client=No
 
 
 def generate_shot_list(concept_id: int, gemini_client=None, model: str = MODEL,
-                       db_path=None) -> dict:
+                       use_pov: bool = True, db_path=None) -> dict:
     """
     Stage two: the shot list for an idea you chose. This call is the
     pick -- bothering to plan a shoot for an idea is the signal
@@ -175,11 +197,12 @@ def generate_shot_list(concept_id: int, gemini_client=None, model: str = MODEL,
     if not locations:
         raise ValueError("no locations described yet")
 
-    prompt = build_shotlist_prompt(locations, concept["brand"], concept.get("client"), concept)
+    prompt = build_shotlist_prompt(locations, concept["brand"], concept.get("client"),
+                                   concept, use_pov=use_pov)
     plan = parse_plan_response(generate_with_retry(gemini_client, model, prompt))
 
     location_names = [loc["name"] for loc in locations]
-    warnings = validate_concept(plan, location_names)
+    warnings = validate_concept(plan, location_names, use_pov=use_pov)
 
     used = {shot.get("location") for shot in plan.get("shots") or []}
     location_ids = [loc["id"] for loc in locations if loc["name"] in used]
@@ -197,7 +220,7 @@ def parse_concept_response(text: str) -> dict:
     return concept
 
 
-def validate_concept(concept: dict, location_names: list) -> list:
+def validate_concept(concept: dict, location_names: list, use_pov: bool = True) -> list:
     """
     Check the model's output against the rules the prompt asked for.
     Returns warnings; an empty list means it's clean.
@@ -218,8 +241,11 @@ def validate_concept(concept: dict, location_names: list) -> list:
         n = shot.get("n", i)
         if shot.get("type") not in SHOT_TYPES:
             warnings.append(f"shot {n}: type must be one of {SHOT_TYPES}, got {shot.get('type')!r}")
-        if shot.get("cam") not in CAMERAS:
-            warnings.append(f"shot {n}: cam must be one of {CAMERAS}, got {shot.get('cam')!r}")
+        allowed_cams = CAMERAS if use_pov else ("BMPCC",)
+        if shot.get("cam") not in allowed_cams:
+            warnings.append(
+                f"shot {n}: cam must be one of {allowed_cams}, got {shot.get('cam')!r}"
+            )
         location = shot.get("location")
         if location not in location_names:
             warnings.append(f"shot {n}: unknown location {location!r} -- not a described space")
@@ -232,7 +258,7 @@ def validate_concept(concept: dict, location_names: list) -> list:
 
 
 def generate_concept(brand: str, client=None, spark=None, gemini_client=None,
-                     model: str = MODEL, db_path=None) -> dict:
+                     model: str = MODEL, use_pov: bool = True, db_path=None) -> dict:
     """
     One concept, grounded in the described locations, validated and
     saved. Returns {"concept_id", "concept", "warnings"}.
@@ -244,11 +270,11 @@ def generate_concept(brand: str, client=None, spark=None, gemini_client=None,
             "no locations described yet -- run `python -m src.locations` first"
         )
 
-    prompt = build_concept_prompt(locations, brand, client, spark)
+    prompt = build_concept_prompt(locations, brand, client, spark, use_pov=use_pov)
     concept = parse_concept_response(generate_with_retry(gemini_client, model, prompt))
 
     location_names = [loc["name"] for loc in locations]
-    warnings = validate_concept(concept, location_names)
+    warnings = validate_concept(concept, location_names, use_pov=use_pov)
 
     used = {shot.get("location") for shot in concept.get("shots") or []}
     location_ids = [loc["id"] for loc in locations if loc["name"] in used]

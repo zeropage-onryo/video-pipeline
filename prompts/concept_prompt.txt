@@ -11,8 +11,7 @@ FILMMAKER PROFILE:
 - Works completely solo, no crew. He is also the on-screen character.
 - Camera A ("BMPCC"): Blackmagic Pocket 6K Pro, rigged — handheld,
   tripod, slow push-ins, whip pans, rack focus.
-- Camera B ("ACTION5"): DJI Osmo Action 5 Pro, for POV / body-mount
-  shots.
+{pov}
 - Output: 8-15 second vertical (9:16), engineered so second 1 hooks.
 
 BRAND:
@@ -36,13 +35,13 @@ the moment the house can't give him:
 HARD RULES:
 - At most 6 shots.
 - Every shot's "type" is exactly CHARACTER or BROLL.
-- Every shot's "cam" is exactly BMPCC or ACTION5.
+{cam_rule}
 - Every shot's "location" is one of the location names listed above.
 - The AI "tool" is exactly KLING or RUNWAY.
 - Every shot must be genuinely achievable alone — self-timer, tripod,
   POV mount. No shot that needs a second pair of hands.
 
 Output STRICT JSON ONLY in this exact shape:
-{"concept": {"title": "2-4 word cinematic title", "hook": "what happens in second 1 that stops the scroll", "duration": "e.g. 12s", "logline": "one sentence micro-story", "shots": [{"n": 1, "type": "CHARACTER or BROLL", "cam": "BMPCC or ACTION5", "location": "one of the location names", "desc": "exact camera position in that space + framing + movement + action", "light": "lighting using what is actually visible there, or cheap practicals"}], "ai": {"tool": "KLING or RUNWAY", "technique": "which technique, attached to which shot number", "prompt": "paste-ready generation prompt including style keywords matching the grade"}, "edit": "cut order + rhythm + sound design", "grade": "one-line grade note"}}
+{"concept": {"title": "2-4 word cinematic title", "hook": "what happens in second 1 that stops the scroll", "duration": "e.g. 12s", "logline": "one sentence micro-story", "shots": [{"n": 1, "type": "CHARACTER or BROLL", "cam": {cam_values}, "location": "one of the location names", "desc": "exact camera position in that space + framing + movement + action", "light": "lighting using what is actually visible there, or cheap practicals"}], "ai": {"tool": "KLING or RUNWAY", "technique": "which technique, attached to which shot number", "prompt": "paste-ready generation prompt including style keywords matching the grade"}, "edit": "cut order + rhythm + sound design", "grade": "one-line grade note"}}
 
 Be specific to these real spaces. Never generic.
