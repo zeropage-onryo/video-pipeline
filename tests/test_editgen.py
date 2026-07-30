@@ -96,3 +96,34 @@ def test_merge_warnings_handles_a_list_normally():
 
 def test_merge_warnings_handles_missing_field():
     assert merge_warnings({}, ["x"]) == ["x"]
+
+
+def test_records_the_selection_on_a_brand_new_database(tmp_path):
+    """
+    Same fresh-clone hazard as pitch.py: no pre-existing schema. The
+    module has to create it rather than warn and drop the label.
+    """
+    from src import db, editgen
+
+    fresh = tmp_path / "brand-new.db"
+    editgen.record_selection(None, [2], db_path=fresh)   # no init beforehand
+    assert db.summary(fresh) == {
+        "pitch_runs": 0, "ideas": 0, "videos": 0, "metrics": 0
+    }
+
+
+def test_validate_edit_reports_non_numeric_cut_points_instead_of_crashing():
+    """
+    The model sometimes returns timecode strings. Raising here discards
+    the whole paid generation, since concepts.json is written after the
+    loop -- so this has to be a warning like any other bad value.
+    """
+    edit = {"edit_list": [{"clip": "A037_0812_C001.mov", "in": "0:02", "out": "0:06"}]}
+    warnings = validate_edit(edit, MANIFEST_BY_NAME)
+    assert any("not a number" in w for w in warnings)
+
+
+def test_validate_edit_survives_a_null_duration_in_the_manifest():
+    edit = {"edit_list": [{"clip": "B.mov", "in": 0.0, "out": 5.0}]}
+    warnings = validate_edit(edit, {"B.mov": {"duration_seconds": None}})
+    assert any("B.mov" in w for w in warnings)

@@ -84,6 +84,19 @@ def validate_edit(edit: dict, manifest_by_name: dict) -> list[str]:
             warnings.append(f"missing in/out point for '{filename or 'generative slot'}'")
             continue
 
+        # The model sometimes returns timecode strings ("0:02"). Raising
+        # here would discard the whole generation, since concepts.json is
+        # written after this loop -- so it's a warning like any other.
+        try:
+            in_point = float(in_point)
+            out_point = float(out_point)
+        except (TypeError, ValueError):
+            warnings.append(
+                f"'{filename or 'generative slot'}' in/out is not a number: "
+                f"{in_point!r}, {out_point!r}"
+            )
+            continue
+
         if is_generative:
             if in_point < 0 or out_point <= in_point:
                 warnings.append(f"generative slot cut [{in_point}, {out_point}] is invalid")
@@ -145,6 +158,10 @@ def record_selection(run_id, numbers: list, db_path=None) -> None:
     """
     try:
         kwargs = {"path": db_path} if db_path is not None else {}
+        # A fresh clone has no data/pipeline.db. Without this the label
+        # capture -- the whole point of this call -- fails to one stderr
+        # line buried under the printed output.
+        db.init_db(**kwargs)
         resolved_run_id = run_id
         if resolved_run_id is None:
             resolved_run_id = db.most_recent_run_id(**kwargs)

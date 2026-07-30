@@ -45,3 +45,20 @@ def test_broken_database_does_not_stop_pitches_json(tmp_path, monkeypatch, capsy
 
     err = capsys.readouterr().err
     assert "warning" in err.lower()
+
+
+def test_records_the_run_on_a_brand_new_database(tmp_path):
+    """
+    A fresh clone has no data/pipeline.db. If pitch.py doesn't create
+    the schema, the label capture -- the entire point of the module --
+    fails to one stderr line buried under ten printed pitches.
+    """
+    from src import db
+
+    fresh = tmp_path / "brand-new.db"
+    pitch.record_pitch_run(
+        [{"number": 1, "title": "Story 1", "logline": "l", "story_note": "n"}],
+        SAMPLE_MANIFEST,
+        db_path=fresh,
+    )
+    assert db.summary(fresh)["pitch_runs"] == 1

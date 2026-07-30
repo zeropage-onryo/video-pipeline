@@ -74,6 +74,10 @@ def record_pitch_run(pitches: list, manifest: list[dict], db_path=None) -> None:
     """
     try:
         kwargs = {"path": db_path} if db_path is not None else {}
+        # A fresh clone has no data/pipeline.db. Without this the label
+        # capture -- the whole point of this call -- fails to one stderr
+        # line buried under the printed output.
+        db.init_db(**kwargs)
         run_id = db.save_pitch_run(
             pitches,
             model=MODEL,
