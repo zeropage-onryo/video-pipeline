@@ -48,7 +48,10 @@
           <input type="text" name="client" placeholder="Spec/client type — e.g. cocktail bar, streetwear (zeropage only)">
           <input type="text" name="spark" placeholder="Spark an idea (optional) — e.g. gearing up ritual, 3am kitchen, someone knocked">
         </div>
-        <button type="submit" class="primary">Generate ideas</button>
+        <button type="submit" class="primary">Generate shoot plan</button>
+        <button type="submit" name="mode" value="ideas" style="width:100%; margin-top:8px">
+          or give me 8 ideas to pick from first
+        </button>
       </form>
       {% else %}
       <p class="dim">

@@ -45,6 +45,18 @@
       </div>
       <div class="card-body">
         <h3>{{ loc.name|upper }}</h3>
+
+        {% if loc.photos %}
+        <div class="photo-grid">
+          {% for src in loc.photos %}
+          <figure class="shot-thumb">
+            <img class="thumb" src="{{ src }}" alt="{{ loc.name }} photo {{ loop.index }}" loading="lazy">
+            <figcaption>P{{ loop.index }}</figcaption>
+          </figure>
+          {% endfor %}
+        </div>
+        {% endif %}
+
         {% if loc.description %}
         <p style="margin-top:8px">{{ loc.description.space }}</p>
 

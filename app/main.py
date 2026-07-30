@@ -15,7 +15,7 @@ from urllib.parse import quote
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from google import genai
@@ -275,13 +275,45 @@ def pitches_list(request: Request):
     )
 
 
+def photos_for(space: str) -> list:
+    """Web paths for a space's photos, so the page can actually show
+    them rather than just naming a count."""
+    space_dir = LOCATIONS_DIR / space
+    if not space_dir.is_dir():
+        return []
+    return [
+        f"/locations/{space}/photo/{p.name}"
+        for p in sorted(space_dir.iterdir())
+        if p.is_file() and p.suffix.lower() in locations.IMAGE_EXTENSIONS
+    ]
+
+
 @app.get("/locations")
 def locations_list(request: Request, message: Optional[str] = None):
+    spaces = preprod.list_locations(path=db.DB_PATH)
+    for space in spaces:
+        space["photos"] = photos_for(space["name"])
     return templates.TemplateResponse(
         request,
         "locations.html",
-        {"locations": preprod.list_locations(path=db.DB_PATH), "message": message},
+        {"locations": spaces, "message": message},
     )
+
+
+@app.get("/locations/{space}/photo/{filename}")
+def location_photo(space: str, filename: str):
+    """
+    Serve one photo. Both segments are resolved and checked against the
+    locations dir -- a path that climbs out of it is refused rather
+    than served, however it was encoded.
+    """
+    target = (LOCATIONS_DIR / space / filename).resolve()
+    root = LOCATIONS_DIR.resolve()
+    if root not in target.parents:
+        raise HTTPException(status_code=404, detail="not found")
+    if not target.is_file() or target.suffix.lower() not in locations.IMAGE_EXTENSIONS:
+        raise HTTPException(status_code=404, detail="not found")
+    return FileResponse(target)
 
 
 def safe_space_name(name: str) -> str:
@@ -369,11 +401,20 @@ async def concepts_generate(request: Request):
     # the screen usable rather than 500 -- same contract as the YouTube import.
     try:
         gemini_client = genai.Client(api_key=api_key)
-        result = shootgen.generate_concept_ideas(
-            brand=brand, client=client_name, spark=spark,
-            gemini_client=gemini_client, db_path=db.DB_PATH,
-        )
-        message = f"Generated {len(result['ideas'])} ideas — pick the ones worth shooting"
+        if (form.get("mode") or "").strip() == "ideas":
+            result = shootgen.generate_concept_ideas(
+                brand=brand, client=client_name, spark=spark,
+                gemini_client=gemini_client, db_path=db.DB_PATH,
+            )
+            message = f"Generated {len(result['ideas'])} ideas — plan the ones worth shooting"
+        else:
+            result = shootgen.generate_concept(
+                brand=brand, client=client_name, spark=spark,
+                gemini_client=gemini_client, db_path=db.DB_PATH,
+            )
+            message = f"Generated \"{result['concept']['title']}\""
+            if result["warnings"]:
+                message += f" ({len(result['warnings'])} warning(s))"
     except Exception as e:
         message = f"Could not generate: {e}"
 

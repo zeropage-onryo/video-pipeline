@@ -500,7 +500,8 @@ def test_post_generate_concept_creates_ideas(tmp_preprod_db, monkeypatch):
         app_main.shootgen, "generate_concept_ideas",
         lambda **kw: {"concept_ids": [1], "ideas": [{"title": "X"}]},
     )
-    response = client.post("/concepts/generate", data={"brand": "antihero", "spark": "a door"},
+    response = client.post("/concepts/generate",
+                           data={"brand": "antihero", "spark": "a door", "mode": "ideas"},
                            follow_redirects=False)
     assert response.status_code in (302, 303, 307)
     assert "message=" in response.headers["location"]
@@ -511,7 +512,8 @@ def test_post_generate_concept_reports_failure_without_breaking(tmp_preprod_db, 
         raise ValueError("no locations described yet")
 
     monkeypatch.setattr(app_main.shootgen, "generate_concept_ideas", boom)
-    response = client.post("/concepts/generate", data={"brand": "antihero"},
+    response = client.post("/concepts/generate",
+                           data={"brand": "antihero", "mode": "ideas"},
                            follow_redirects=False)
     assert response.status_code in (302, 303, 307)
     assert "message=" in response.headers["location"]
@@ -525,7 +527,8 @@ def test_post_generate_makes_ideas_not_one_concept(tmp_preprod_db, monkeypatch):
         app_main.shootgen, "generate_concept_ideas",
         lambda **kw: {"concept_ids": [1, 2, 3], "ideas": [{"title": "A"}] * 3},
     )
-    response = client.post("/concepts/generate", data={"brand": "antihero"},
+    response = client.post("/concepts/generate",
+                           data={"brand": "antihero", "mode": "ideas"},
                            follow_redirects=False)
     assert response.status_code in (302, 303, 307)
     assert "message=" in response.headers["location"]
@@ -690,3 +693,82 @@ def test_post_location_upload_sanitises_the_space_name(tmp_preprod_db, tmp_path,
     )
     assert not (tmp_path / "etc").exists()
     assert not (tmp_path.parent / "etc").exists()
+
+
+# ---------- serving location photos ----------
+
+def test_location_photo_is_served(tmp_preprod_db, tmp_path, monkeypatch):
+    monkeypatch.setattr(app_main, "LOCATIONS_DIR", tmp_path / "locations")
+    space = tmp_path / "locations" / "garage"
+    space.mkdir(parents=True)
+    (space / "a.png").write_bytes(TINY_PNG)
+
+    response = client.get("/locations/garage/photo/a.png")
+    assert response.status_code == 200
+    assert response.content == TINY_PNG
+
+
+def test_location_photo_404s_when_missing(tmp_preprod_db, tmp_path, monkeypatch):
+    monkeypatch.setattr(app_main, "LOCATIONS_DIR", tmp_path / "locations")
+    assert client.get("/locations/garage/photo/nope.png").status_code == 404
+
+
+def test_location_photo_refuses_to_escape_the_locations_dir(tmp_preprod_db, tmp_path, monkeypatch):
+    monkeypatch.setattr(app_main, "LOCATIONS_DIR", tmp_path / "locations")
+    (tmp_path / "locations").mkdir(parents=True)
+    (tmp_path / "secret.txt").write_text("not yours")
+
+    for attempt in ["/locations/garage/photo/..%2F..%2Fsecret.txt",
+                    "/locations/..%2F..%2Fetc/photo/passwd"]:
+        assert client.get(attempt).status_code in (400, 404)
+
+
+def test_location_photos_listed_on_the_page(tmp_preprod_db, tmp_path, monkeypatch):
+    monkeypatch.setattr(app_main, "LOCATIONS_DIR", tmp_path / "locations")
+    space = tmp_path / "locations" / "garage"
+    space.mkdir(parents=True)
+    (space / "a.png").write_bytes(TINY_PNG)
+    (space / "b.png").write_bytes(TINY_PNG)
+    preprod.add_location("garage", SAMPLE_SPACE, photo_count=2, path=tmp_preprod_db)
+
+    response = client.get("/locations")
+    assert "/locations/garage/photo/a.png" in response.text
+    assert "/locations/garage/photo/b.png" in response.text
+
+
+# ---------- generate: full concept vs ideas ----------
+
+def test_post_generate_returns_a_full_concept_by_default(tmp_preprod_db, monkeypatch):
+    """The main button behaves like the original generator: one
+    complete concept, shot list included, in one go."""
+    preprod.add_location("hallway", SAMPLE_SPACE, path=tmp_preprod_db)
+    called = {}
+
+    def fake(**kw):
+        called["full"] = True
+        return {"concept_id": 1, "concept": {"title": "Void Signal"}, "warnings": []}
+
+    monkeypatch.setattr(app_main.shootgen, "generate_concept", fake)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+
+    response = client.post("/concepts/generate", data={"brand": "antihero"},
+                           follow_redirects=False)
+    assert response.status_code in (302, 303, 307)
+    assert called.get("full") is True
+
+
+def test_post_generate_ideas_when_asked(tmp_preprod_db, monkeypatch):
+    preprod.add_location("hallway", SAMPLE_SPACE, path=tmp_preprod_db)
+    called = {}
+
+    def fake(**kw):
+        called["ideas"] = True
+        return {"concept_ids": [1, 2], "ideas": [{"title": "A"}, {"title": "B"}]}
+
+    monkeypatch.setattr(app_main.shootgen, "generate_concept_ideas", fake)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+
+    response = client.post("/concepts/generate", data={"brand": "antihero", "mode": "ideas"},
+                           follow_redirects=False)
+    assert response.status_code in (302, 303, 307)
+    assert called.get("ideas") is True

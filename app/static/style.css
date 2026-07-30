@@ -347,6 +347,30 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   font-size: 11px;
 }
 
+/* thumbnail with its P1/P2 stamp, like the generator's grid */
+.shot-thumb {
+  position: relative;
+  margin: 0;
+  width: 72px;
+  height: 72px;
+}
+
+.shot-thumb .thumb {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.shot-thumb figcaption {
+  position: absolute;
+  bottom: 2px;
+  left: 4px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9px;
+  color: var(--bone);
+  text-shadow: 0 0 4px #000;
+}
+
 /* ---- tables ---- */
 
 table {
