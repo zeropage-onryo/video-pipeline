@@ -365,3 +365,44 @@ def test_metrics_new_no_refresh_button_for_non_youtube(tmp_db):
     db.add_video("Some TikTok video", "tiktok", "2025-09-29", path=tmp_db)
     response = client.get("/metrics/new")
     assert "Refresh" not in response.text
+
+
+# ---------- /videos/import/youtube ----------
+
+def test_videos_new_shows_import_form(tmp_db):
+    response = client.get("/videos/new")
+    assert "Import" in response.text
+    assert "handle" in response.text
+
+
+def test_post_import_adds_videos_and_redirects(tmp_db, monkeypatch):
+    monkeypatch.setattr(
+        app_main.youtube, "import_channel_videos",
+        lambda handle, api_key=None, db_path=None: {"ok": True, "added": 9},
+    )
+
+    response = client.post("/videos/import/youtube", data={"handle": "@someone"},
+                           follow_redirects=False)
+
+    assert response.status_code in (302, 303, 307)
+    assert "message=" in response.headers["location"]
+
+
+def test_post_import_reports_failure_without_breaking(tmp_db, monkeypatch):
+    monkeypatch.setattr(
+        app_main.youtube, "import_channel_videos",
+        lambda handle, api_key=None, db_path=None: {
+            "ok": False, "error": "API key not valid", "added": 0,
+        },
+    )
+
+    response = client.post("/videos/import/youtube", data={"handle": "@someone"},
+                           follow_redirects=False)
+
+    assert response.status_code in (302, 303, 307)
+    assert db.list_videos(path=tmp_db) == []
+
+
+def test_post_import_requires_a_handle(tmp_db):
+    response = client.post("/videos/import/youtube", data={"handle": "  "})
+    assert response.status_code == 400
