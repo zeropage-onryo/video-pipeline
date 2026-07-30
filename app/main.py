@@ -6,18 +6,23 @@ This session is the skeleton only: the dashboard route, reading real
 data through src/db.py, proving it reaches the page. The full
 dashboard design (top performers, sparklines, pick rate) is Session 4.
 """
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from src import db
+from src import db, youtube
 
 from .sparkline import render_sparkline
+
+load_dotenv()
 
 APP_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
@@ -159,12 +164,12 @@ def parse_metrics_form(form: dict, video_ids: list) -> dict:
 
 
 @app.get("/metrics/new")
-def metrics_new_form(request: Request, updated: Optional[int] = None):
+def metrics_new_form(request: Request, updated: Optional[int] = None, message: Optional[str] = None):
     rows = db.latest_metrics_by_video(path=db.DB_PATH)
     return templates.TemplateResponse(
         request,
         "metrics_new.html",
-        {"rows": rows, "updated": updated},
+        {"rows": rows, "updated": updated, "message": message},
     )
 
 
@@ -176,6 +181,23 @@ async def metrics_new_submit(request: Request):
     for vid, fields in changed.items():
         db.record_metrics(vid, path=db.DB_PATH, **fields)
     return RedirectResponse(f"/metrics/new?updated={len(changed)}", status_code=303)
+
+
+@app.post("/metrics/refresh/{video_id}")
+def metrics_refresh(video_id: int):
+    video = db.get_video(video_id, path=db.DB_PATH)
+    if video is None:
+        raise HTTPException(status_code=404, detail="video not found")
+
+    api_key = os.environ.get("YOUTUBE_API_KEY")
+    result = youtube.refresh_metrics_for_video(video, api_key=api_key, db_path=db.DB_PATH)
+
+    if result["ok"]:
+        message = f"Refreshed {video['title']}: {result['views']} views"
+    else:
+        message = f"Could not refresh {video['title']}: {result['error']}"
+
+    return RedirectResponse(f"/metrics/new?message={quote(message)}", status_code=303)
 
 
 @app.get("/videos/{video_id}")

@@ -11,6 +11,9 @@
   {% if updated is not none %}
   <p>{{ updated }} video{{ "s" if updated != 1 else "" }} updated.</p>
   {% endif %}
+  {% if message %}
+  <p class="dim">{{ message }}</p>
+  {% endif %}
 
   {% if rows %}
   <form method="post" action="/metrics/new">
@@ -18,7 +21,7 @@
       <thead>
         <tr>
           <th>Title</th><th>Platform</th>
-          <th>Views</th><th>Likes</th><th>Comments</th><th>Saves</th>
+          <th>Views</th><th>Likes</th><th>Comments</th><th>Saves</th><th></th>
         </tr>
       </thead>
       <tbody>
@@ -38,12 +41,22 @@
           <td><input type="number" class="metric-input" data-row="{{ loop.index0 }}" data-col="3"
                      name="saves_{{ r.video_id }}"
                      placeholder="{{ r.saves if r.saves is not none else '' }}"></td>
+          <td>
+            {% if r.platform == "youtube" %}
+            <button type="submit" form="refresh-{{ r.video_id }}">Refresh</button>
+            {% endif %}
+          </td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
     <p><button type="submit">Save</button></p>
   </form>
+  {% for r in rows %}
+  {% if r.platform == "youtube" %}
+  <form id="refresh-{{ r.video_id }}" method="post" action="/metrics/refresh/{{ r.video_id }}"></form>
+  {% endif %}
+  {% endfor %}
   {% else %}
   <p class="dim">No videos yet. <a href="/videos/new">Add your first one.</a></p>
   {% endif %}
