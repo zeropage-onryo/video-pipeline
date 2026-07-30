@@ -199,3 +199,34 @@ shot list for footage you *need*. Don't merge them.
   passing only because the dev machine had a populated database, a site with no navigation between
   its own pages, tests quietly making billed API calls — passed review and passed its own tests.
   Each was found by starting the server, clicking the thing, or noticing the suite got slower.
+
+## Where the project stands
+
+Everything below is current as of the last commit on `main`. Update it when it stops being true.
+
+**Working and verified against real data:** both phases run end to end, including real Gemini
+calls. One location described from real photos, 9 concepts (2 with shot lists), 1 pitch run with
+10 ideas and 3 picked, 1 posted video with one metric snapshot. 313 tests, ruff clean, CI green
+on every push.
+
+**Not started:** the thing the tool exists for. The rates (`shortlist_rate`, `shoot_rate`,
+`selection_rate`) are structurally correct and currently meaningless — they need weeks of real use
+before a prompt change can be measured against them. The most valuable next step is not code: it
+is shooting one of the generated concepts, marking it shot, and adding the video.
+
+**Known gaps, in rough priority:**
+- `shot.py`'s `RUNWAY_CAMERA`/`VEO_CAMERA`/`KLING_CAMERA` maps and the AI-slot prompt phrasing are
+  general patterns, not current documentation. Check each tool's prompt guide before relying on a
+  generated prompt, and date the comment above each map.
+- `YOUTUBE_API_KEY` in `.env` is a placeholder, so channel import and metric refresh can't reach
+  the API. Everything else works without it.
+- `validate_edit` warns where BUILD_SPEC says enforce. Deliberate for now — warnings are visible
+  and you decide — but it is a real spec divergence, not an oversight.
+- `import_channel_videos` can report success when the bulk stats call failed; `mark_kept` doesn't
+  clear other keepers on the same shot, which skews `attempts_to_keeper`; `ingest.py` reads only
+  `GEMINI_API_KEY` where every other module also accepts `GOOGLE_API_KEY`.
+- `/shots` and the tool scoreboard aren't built — they need real generation attempts logged
+  through `genlog.py` first, and inventing that data would corrupt the only numbers that matter.
+
+**The user's real data lives in `data/pipeline.db` (gitignored, ~128KB) and `locations/`
+(gitignored, photos).** A fresh clone gets the tool, empty. Never overwrite either without asking.
