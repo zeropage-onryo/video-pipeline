@@ -29,6 +29,7 @@ load_dotenv()
 APP_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = APP_DIR.parent
 LOCATIONS_DIR = PROJECT_ROOT / "locations"
+THUMB_DIR = PROJECT_ROOT / "data" / "thumbs"
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
 
 # "Posted in the last" control -> posted_within_days. "all" -> no cutoff.
@@ -288,6 +289,31 @@ def photos_for(space: str) -> list:
     ]
 
 
+def thumbnail_for(source: Path) -> Path:
+    """
+    A cached small copy. Camera originals are multi-megabyte; sending
+    one down the wire to be drawn at 72px is the difference between a
+    page that feels built and one that feels slow. Falls back to the
+    original if the file can't be read as an image.
+    """
+    THUMB_DIR.mkdir(parents=True, exist_ok=True)
+    stat = source.stat()
+    cached = THUMB_DIR / f"{source.parent.name}__{source.stem}__{int(stat.st_mtime)}.jpg"
+    if cached.is_file():
+        return cached
+
+    try:
+        from PIL import Image, ImageOps
+
+        with Image.open(source) as img:
+            img = ImageOps.exif_transpose(img).convert("RGB")
+            img.thumbnail((480, 480))
+            img.save(cached, format="JPEG", quality=82)
+        return cached
+    except Exception:
+        return source
+
+
 @app.get("/locations")
 def locations_list(request: Request, message: Optional[str] = None):
     spaces = preprod.list_locations(path=db.DB_PATH)
@@ -301,7 +327,7 @@ def locations_list(request: Request, message: Optional[str] = None):
 
 
 @app.get("/locations/{space}/photo/{filename}")
-def location_photo(space: str, filename: str):
+def location_photo(space: str, filename: str, thumb: Optional[int] = None):
     """
     Serve one photo. Both segments are resolved and checked against the
     locations dir -- a path that climbs out of it is refused rather
@@ -313,7 +339,7 @@ def location_photo(space: str, filename: str):
         raise HTTPException(status_code=404, detail="not found")
     if not target.is_file() or target.suffix.lower() not in locations.IMAGE_EXTENSIONS:
         raise HTTPException(status_code=404, detail="not found")
-    return FileResponse(target)
+    return FileResponse(thumbnail_for(target) if thumb else target)
 
 
 def safe_space_name(name: str) -> str:

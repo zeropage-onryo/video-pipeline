@@ -25,6 +25,7 @@ venv/
 
 # Local test data
 data/*.db
+data/thumbs/
 
 # Generated pipeline artifacts
 manifest.json

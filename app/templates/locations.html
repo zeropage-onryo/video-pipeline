@@ -50,7 +50,7 @@
         <div class="photo-grid">
           {% for src in loc.photos %}
           <figure class="shot-thumb">
-            <img class="thumb" src="{{ src }}" alt="{{ loc.name }} photo {{ loop.index }}" loading="lazy">
+            <img class="thumb" src="{{ src }}?thumb=1" alt="{{ loc.name }} photo {{ loop.index }}" loading="lazy">
             <figcaption>P{{ loop.index }}</figcaption>
           </figure>
           {% endfor %}

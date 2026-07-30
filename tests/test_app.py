@@ -772,3 +772,59 @@ def test_post_generate_ideas_when_asked(tmp_preprod_db, monkeypatch):
                            follow_redirects=False)
     assert response.status_code in (302, 303, 307)
     assert called.get("ideas") is True
+
+
+# ---------- thumbnails ----------
+
+def _real_jpeg(width=1200, height=900):
+    from io import BytesIO
+
+    from PIL import Image
+    buf = BytesIO()
+    Image.new("RGB", (width, height), (40, 40, 48)).save(buf, format="JPEG")
+    return buf.getvalue()
+
+
+def test_thumbnail_is_much_smaller_than_the_original(tmp_preprod_db, tmp_path, monkeypatch):
+    monkeypatch.setattr(app_main, "LOCATIONS_DIR", tmp_path / "locations")
+    monkeypatch.setattr(app_main, "THUMB_DIR", tmp_path / "thumbs")
+    space = tmp_path / "locations" / "garage"
+    space.mkdir(parents=True)
+    original = _real_jpeg()
+    (space / "big.jpg").write_bytes(original)
+
+    response = client.get("/locations/garage/photo/big.jpg?thumb=1")
+    assert response.status_code == 200
+    assert len(response.content) < len(original) / 4
+
+
+def test_full_size_is_still_available(tmp_preprod_db, tmp_path, monkeypatch):
+    monkeypatch.setattr(app_main, "LOCATIONS_DIR", tmp_path / "locations")
+    monkeypatch.setattr(app_main, "THUMB_DIR", tmp_path / "thumbs")
+    space = tmp_path / "locations" / "garage"
+    space.mkdir(parents=True)
+    original = _real_jpeg()
+    (space / "big.jpg").write_bytes(original)
+
+    assert len(client.get("/locations/garage/photo/big.jpg").content) == len(original)
+
+
+def test_thumbnail_falls_back_to_the_original_if_it_cannot_be_made(tmp_preprod_db, tmp_path, monkeypatch):
+    """A file Pillow can't read should still render, not 500."""
+    monkeypatch.setattr(app_main, "LOCATIONS_DIR", tmp_path / "locations")
+    monkeypatch.setattr(app_main, "THUMB_DIR", tmp_path / "thumbs")
+    space = tmp_path / "locations" / "garage"
+    space.mkdir(parents=True)
+    (space / "broken.jpg").write_bytes(b"not actually a jpeg")
+
+    assert client.get("/locations/garage/photo/broken.jpg?thumb=1").status_code == 200
+
+
+def test_page_asks_for_thumbnails(tmp_preprod_db, tmp_path, monkeypatch):
+    monkeypatch.setattr(app_main, "LOCATIONS_DIR", tmp_path / "locations")
+    space = tmp_path / "locations" / "garage"
+    space.mkdir(parents=True)
+    (space / "a.jpg").write_bytes(_real_jpeg())
+    preprod.add_location("garage", SAMPLE_SPACE, photo_count=1, path=tmp_preprod_db)
+
+    assert "?thumb=1" in client.get("/locations").text
