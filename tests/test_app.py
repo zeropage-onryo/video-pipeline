@@ -513,3 +513,67 @@ def test_post_generate_concept_reports_failure_without_breaking(tmp_preprod_db, 
                            follow_redirects=False)
     assert response.status_code in (302, 303, 307)
     assert "message=" in response.headers["location"]
+
+
+# ---------- two-stage concepts in the UI ----------
+
+def test_post_generate_makes_ideas_not_one_concept(tmp_preprod_db, monkeypatch):
+    preprod.add_location("hallway", SAMPLE_SPACE, path=tmp_preprod_db)
+    monkeypatch.setattr(
+        app_main.shootgen, "generate_concept_ideas",
+        lambda **kw: {"concept_ids": [1, 2, 3], "ideas": [{"title": "A"}] * 3},
+    )
+    response = client.post("/concepts/generate", data={"brand": "antihero"},
+                           follow_redirects=False)
+    assert response.status_code in (302, 303, 307)
+    assert "message=" in response.headers["location"]
+
+
+def test_post_shotlist_plans_a_chosen_idea(tmp_preprod_db, monkeypatch):
+    concept_id = preprod.save_concept({"title": "Void Signal"}, brand="antihero",
+                                      path=tmp_preprod_db)
+    monkeypatch.setattr(
+        app_main.shootgen, "generate_shot_list",
+        lambda cid, **kw: {"concept_id": cid, "plan": {}, "warnings": []},
+    )
+    response = client.post(f"/concepts/{concept_id}/shotlist", follow_redirects=False)
+    assert response.status_code in (302, 303, 307)
+    assert "message=" in response.headers["location"]
+
+
+def test_post_shotlist_404s_for_missing_concept(tmp_preprod_db):
+    assert client.post("/concepts/999/shotlist").status_code == 404
+
+
+def test_post_shotlist_reports_failure_without_breaking(tmp_preprod_db, monkeypatch):
+    concept_id = preprod.save_concept({"title": "T"}, brand="antihero", path=tmp_preprod_db)
+
+    def boom(cid, **kw):
+        raise Exception("model unavailable")
+
+    monkeypatch.setattr(app_main.shootgen, "generate_shot_list", boom)
+    response = client.post(f"/concepts/{concept_id}/shotlist", follow_redirects=False)
+    assert response.status_code in (302, 303, 307)
+
+
+def test_concepts_page_shows_shortlist_rate(tmp_preprod_db):
+    ids = preprod.save_concept_ideas(
+        [{"title": f"Idea {n}"} for n in range(4)], brand="antihero", path=tmp_preprod_db,
+    )
+    preprod.update_concept_shots(ids[0], {"shots": CONCEPT_SHOTS}, path=tmp_preprod_db)
+    response = client.get("/concepts")
+    assert "1 of 4" in response.text
+
+
+def test_concepts_page_offers_shotlist_button_for_an_idea(tmp_preprod_db):
+    preprod.save_concept({"title": "Void Signal"}, brand="antihero", path=tmp_preprod_db)
+    response = client.get("/concepts")
+    assert "Plan the shoot" in response.text
+
+
+def test_concepts_page_no_shotlist_button_once_planned(tmp_preprod_db):
+    concept_id = preprod.save_concept({"title": "Void Signal"}, brand="antihero",
+                                      path=tmp_preprod_db)
+    preprod.update_concept_shots(concept_id, {"shots": CONCEPT_SHOTS}, path=tmp_preprod_db)
+    response = client.get("/concepts")
+    assert "Plan the shoot" not in response.text
