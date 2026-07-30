@@ -9,3 +9,15 @@ requires-python = ">=3.9"
 
 [tool.setuptools]
 packages = ["src", "app"]
+
+[tool.ruff]
+target-version = "py39"
+line-length = 120
+
+[tool.ruff.lint]
+# Standard baseline: pyflakes (real correctness issues -- unused
+# imports, undefined names) + pycodestyle errors + import sorting.
+# Not the broader opinionated rule families (pyupgrade, blind-except,
+# flake8-simplify, ...) -- those would demand rewrites unrelated to
+# what CI is here to catch.
+select = ["E", "F", "I"]

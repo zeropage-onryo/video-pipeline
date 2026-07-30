@@ -2,8 +2,9 @@
 
 import pytest
 
-from src import db, generative as gen
-from src.shot import Shot, render, render_all, RENDERERS
+from src import db
+from src import generative as gen
+from src.shot import RENDERERS, Shot, render, render_all
 
 
 def make_shot(**kw):

@@ -6,7 +6,8 @@ APIs get called here; this only ever records a decision already made.
 
 import pytest
 
-from src import db, generative as gen, genlog
+from src import db, genlog
+from src import generative as gen
 from src.shot import Shot
 
 

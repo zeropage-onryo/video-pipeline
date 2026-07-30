@@ -11,8 +11,8 @@ import json
 
 import pytest
 
-from src import db, generative as gen, promptgen
-
+from src import db, promptgen
+from src import generative as gen
 
 VALID_RESPONSE = json.dumps({
     "subject": "a gloved hand",

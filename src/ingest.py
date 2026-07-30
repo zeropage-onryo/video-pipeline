@@ -119,7 +119,9 @@ def describe_shot(client: genai.Client, frames: list[tuple[float, bytes]], durat
 def main():
     load_dotenv()
 
-    parser = argparse.ArgumentParser(description="Ingest footage: extract metadata, transcribe speech, and describe shots.")
+    parser = argparse.ArgumentParser(
+        description="Ingest footage: extract metadata, transcribe speech, and describe shots."
+    )
     parser.add_argument("--footage-dir", default="footage", type=Path)
     parser.add_argument("--output", default="manifest.json", type=Path)
     parser.add_argument("--model", default="base", help="Whisper model size")

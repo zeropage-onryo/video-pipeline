@@ -3,7 +3,6 @@ and validate_edit's handling of generative clip slots."""
 
 from src.editgen import format_edit_as_text, merge_warnings, validate_edit
 
-
 SAMPLE_EDIT = {
     "title": "Cold Open",
     "edit_list": [

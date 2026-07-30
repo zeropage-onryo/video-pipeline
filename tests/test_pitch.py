@@ -10,7 +10,6 @@ import json
 
 from src import pitch
 
-
 SAMPLE_MANIFEST = [
     {"filename": "A037_0812_C001.mov", "duration_seconds": 5.0},
 ]

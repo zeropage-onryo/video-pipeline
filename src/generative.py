@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Optional
 
 from .db import DB_PATH, _now, connect
 from .shot import TOOLS, Shot

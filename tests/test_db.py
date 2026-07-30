@@ -12,7 +12,6 @@ import pytest
 
 from src import db
 
-
 # the exact shape pitch.py already emits
 PITCHES = [
     {"number": n, "title": f"Story {n}", "logline": f"Line {n}.",
