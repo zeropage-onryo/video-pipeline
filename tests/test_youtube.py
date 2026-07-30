@@ -10,7 +10,15 @@ keeps working" -- refresh_metrics_for_video must never raise.
 import pytest
 
 from src import db, youtube
-from src.youtube import fetch_video_stats, parse_video_id, refresh_metrics_for_video
+from src.youtube import (
+    fetch_stats_bulk,
+    fetch_video_stats,
+    get_uploads_playlist_id,
+    import_channel_videos,
+    list_channel_videos,
+    parse_video_id,
+    refresh_metrics_for_video,
+)
 
 
 def test_parses_watch_url():
@@ -179,3 +187,204 @@ def test_refresh_fails_gracefully_when_api_call_raises(tmp_db, monkeypatch):
 
     assert result["ok"] is False
     assert db.get_video_history(vid, path=tmp_db) == []
+
+
+# ---------- channel import ----------
+
+def make_fake_api(channels=None, pages=None, stats=None, fail_on=None):
+    """
+    A requests.get stand-in that dispatches on which YouTube endpoint is
+    being hit, so one fake covers the whole multi-call import flow.
+    """
+    def fake_get(url, params=None, timeout=None):
+        if fail_on and fail_on in url:
+            return FakeResponse({}, status_code=403)
+
+        if url.endswith("/channels"):
+            return FakeResponse(channels)
+
+        if url.endswith("/playlistItems"):
+            token = (params or {}).get("pageToken")
+            index = 0 if token is None else int(token)
+            return FakeResponse(pages[index])
+
+        if url.endswith("/videos"):
+            requested = (params or {}).get("id", "").split(",")
+            return FakeResponse({
+                "items": [
+                    {"id": vid, "statistics": stats[vid]}
+                    for vid in requested if vid in (stats or {})
+                ]
+            })
+
+        raise AssertionError(f"unexpected url {url}")
+
+    return fake_get
+
+
+CHANNELS_OK = {
+    "items": [{"contentDetails": {"relatedPlaylists": {"uploads": "UUuploads123"}}}]
+}
+
+
+def _page(items, next_token=None):
+    page = {"items": [
+        {"snippet": {
+            "title": title,
+            "publishedAt": published,
+            "resourceId": {"videoId": vid},
+        }}
+        for vid, title, published in items
+    ]}
+    if next_token is not None:
+        page["nextPageToken"] = next_token
+    return page
+
+
+def test_get_uploads_playlist_id(monkeypatch):
+    monkeypatch.setattr(youtube.requests, "get", make_fake_api(channels=CHANNELS_OK))
+    assert get_uploads_playlist_id("@someone", "test-key") == "UUuploads123"
+
+
+def test_get_uploads_playlist_id_raises_for_unknown_channel(monkeypatch):
+    monkeypatch.setattr(youtube.requests, "get", make_fake_api(channels={"items": []}))
+    with pytest.raises(ValueError, match="no channel found"):
+        get_uploads_playlist_id("@nobody", "test-key")
+
+
+def test_list_channel_videos_returns_video_metadata(monkeypatch):
+    pages = [_page([("vid1", "Night Run", "2025-09-29T00:00:00Z")])]
+    monkeypatch.setattr(youtube.requests, "get",
+                        make_fake_api(channels=CHANNELS_OK, pages=pages))
+
+    videos = list_channel_videos("@someone", "test-key")
+
+    assert videos == [{
+        "video_id": "vid1", "title": "Night Run", "published_at": "2025-09-29",
+    }]
+
+
+def test_list_channel_videos_follows_pagination(monkeypatch):
+    pages = [
+        _page([("vid1", "One", "2025-01-01T00:00:00Z")], next_token="1"),
+        _page([("vid2", "Two", "2025-02-01T00:00:00Z")]),
+    ]
+    monkeypatch.setattr(youtube.requests, "get",
+                        make_fake_api(channels=CHANNELS_OK, pages=pages))
+
+    videos = list_channel_videos("@someone", "test-key")
+
+    assert [v["video_id"] for v in videos] == ["vid1", "vid2"]
+
+
+def test_fetch_stats_bulk_returns_stats_per_video(monkeypatch):
+    stats = {
+        "vid1": {"viewCount": "82", "likeCount": "5", "commentCount": "1"},
+        "vid2": {"viewCount": "344"},
+    }
+    monkeypatch.setattr(youtube.requests, "get", make_fake_api(stats=stats))
+
+    result = fetch_stats_bulk(["vid1", "vid2"], "test-key")
+
+    assert result["vid1"] == {"views": 82, "likes": 5, "comments": 1}
+    assert result["vid2"] == {"views": 344, "likes": None, "comments": None}
+
+
+def test_fetch_stats_bulk_empty_list_makes_no_call():
+    assert fetch_stats_bulk([], "test-key") == {}
+
+
+def test_fetch_stats_bulk_batches_over_50(monkeypatch):
+    ids = [f"vid{n}" for n in range(120)]
+    stats = {vid: {"viewCount": "1"} for vid in ids}
+    calls = []
+
+    fake = make_fake_api(stats=stats)
+
+    def counting_get(url, params=None, timeout=None):
+        calls.append(params.get("id"))
+        return fake(url, params=params, timeout=timeout)
+
+    monkeypatch.setattr(youtube.requests, "get", counting_get)
+
+    result = fetch_stats_bulk(ids, "test-key")
+
+    assert len(result) == 120
+    assert len(calls) == 3  # 50 + 50 + 20, not 120 separate calls
+
+
+def test_import_adds_new_videos_with_initial_snapshot(tmp_db, monkeypatch):
+    pages = [_page([
+        ("vid1", "Night Run", "2025-09-29T00:00:00Z"),
+        ("vid2", "Lone star", "2023-01-15T00:00:00Z"),
+    ])]
+    stats = {
+        "vid1": {"viewCount": "82"},
+        "vid2": {"viewCount": "344"},
+    }
+    monkeypatch.setattr(youtube.requests, "get",
+                        make_fake_api(channels=CHANNELS_OK, pages=pages, stats=stats))
+
+    result = import_channel_videos("@someone", api_key="test-key", db_path=tmp_db)
+
+    assert result["ok"] is True
+    assert result["added"] == 2
+
+    videos = db.list_videos(path=tmp_db)
+    assert {v["title"] for v in videos} == {"Night Run", "Lone star"}
+    assert all(v["platform"] == "youtube" for v in videos)
+
+    night_run = next(v for v in videos if v["title"] == "Night Run")
+    assert db.get_video_history(night_run["id"], path=tmp_db)[-1]["views"] == 82
+
+
+def test_import_skips_videos_already_in_the_database(tmp_db, monkeypatch):
+    db.add_video("Night Run", "youtube", "2025-09-29",
+                 url="https://www.youtube.com/watch?v=vid1", path=tmp_db)
+
+    pages = [_page([
+        ("vid1", "Night Run", "2025-09-29T00:00:00Z"),
+        ("vid2", "Lone star", "2023-01-15T00:00:00Z"),
+    ])]
+    monkeypatch.setattr(
+        youtube.requests, "get",
+        make_fake_api(channels=CHANNELS_OK, pages=pages,
+                      stats={"vid2": {"viewCount": "344"}}),
+    )
+
+    result = import_channel_videos("@someone", api_key="test-key", db_path=tmp_db)
+
+    assert result["added"] == 1
+    assert len(db.list_videos(path=tmp_db)) == 2  # not 3 -- no duplicate Night Run
+
+
+def test_import_fails_gracefully_without_api_key(tmp_db):
+    result = import_channel_videos("@someone", api_key=None, db_path=tmp_db)
+    assert result["ok"] is False
+    assert result["added"] == 0
+    assert db.list_videos(path=tmp_db) == []
+
+
+def test_import_fails_gracefully_when_channel_lookup_fails(tmp_db, monkeypatch):
+    monkeypatch.setattr(youtube.requests, "get", make_fake_api(fail_on="/channels"))
+
+    result = import_channel_videos("@someone", api_key="bad-key", db_path=tmp_db)
+
+    assert result["ok"] is False
+    assert db.list_videos(path=tmp_db) == []
+
+
+def test_import_still_adds_videos_when_stats_call_fails(tmp_db, monkeypatch):
+    """Stats are a bonus -- losing them shouldn't lose the videos too."""
+    pages = [_page([("vid1", "Night Run", "2025-09-29T00:00:00Z")])]
+    monkeypatch.setattr(
+        youtube.requests, "get",
+        make_fake_api(channels=CHANNELS_OK, pages=pages, fail_on="/videos"),
+    )
+
+    result = import_channel_videos("@someone", api_key="test-key", db_path=tmp_db)
+
+    assert result["ok"] is True
+    assert result["added"] == 1
+    videos = db.list_videos(path=tmp_db)
+    assert db.get_video_history(videos[0]["id"], path=tmp_db) == []
