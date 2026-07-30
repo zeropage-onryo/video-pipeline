@@ -32,6 +32,7 @@ PROMPTS_DIR = PROJECT_ROOT / "prompts"
 MODEL = "gemini-3-flash-preview"
 
 MAX_SHOTS = 6
+DEFAULT_IDEA_COUNT = 8
 SHOT_TYPES = ("CHARACTER", "BROLL")
 CAMERAS = ("BMPCC", "ACTION5")
 AI_TOOLS = ("KLING", "RUNWAY")
@@ -84,6 +85,107 @@ def build_concept_prompt(locations: list, brand: str, client=None, spark=None) -
         .replace("{client}", f"CLIENT / SPEC TYPE: {client}" if client else "")
         .replace("{spark}", f"CREATIVE SPARK FROM THE FILMMAKER: {spark}" if spark else "")
     )
+
+
+def build_ideas_prompt(locations: list, brand: str, client=None, spark=None,
+                       count: int = DEFAULT_IDEA_COUNT) -> str:
+    template = (PROMPTS_DIR / "concept_ideas_prompt.txt").read_text()
+    return (
+        template
+        .replace("{locations}", format_locations(locations))
+        .replace("{brand}", load_brand(brand))
+        .replace("{client}", f"CLIENT / SPEC TYPE: {client}" if client else "")
+        .replace("{spark}", f"CREATIVE SPARK FROM THE FILMMAKER: {spark}" if spark else "")
+        .replace("{count}", str(count))
+    )
+
+
+def parse_ideas_response(text: str) -> list:
+    """Stage one's testable seam: raw model text -> a list of ideas."""
+    data = json.loads(strip_fences(text))
+    ideas = data.get("ideas", data if isinstance(data, list) else [])
+    if not ideas:
+        raise ValueError("no ideas in response")
+    for i, idea in enumerate(ideas, start=1):
+        if not (idea.get("title") or "").strip():
+            raise ValueError(f"idea {i} has no title")
+    return ideas
+
+
+def build_shotlist_prompt(locations: list, brand: str, client, concept: dict) -> str:
+    template = (PROMPTS_DIR / "shotlist_prompt.txt").read_text()
+    return (
+        template
+        .replace("{locations}", format_locations(locations))
+        .replace("{brand}", load_brand(brand))
+        .replace("{client}", f"CLIENT / SPEC TYPE: {client}" if client else "")
+        .replace("{title}", concept.get("title") or "")
+        .replace("{hook}", concept.get("hook") or "")
+        .replace("{logline}", concept.get("logline") or "")
+    )
+
+
+def parse_plan_response(text: str) -> dict:
+    """Stage two's testable seam: raw model text -> the shot plan."""
+    data = json.loads(strip_fences(text))
+    plan = data.get("plan", data)
+    if not plan.get("shots"):
+        raise ValueError("plan has no shots")
+    return plan
+
+
+def generate_concept_ideas(brand: str, client=None, spark=None, gemini_client=None,
+                           model: str = MODEL, count: int = DEFAULT_IDEA_COUNT,
+                           db_path=None) -> dict:
+    """
+    Stage one: several cheap ideas in a single call, so they can be
+    varied against each other rather than rolled independently. No shot
+    lists -- an idea you discard shouldn't have cost shot detail.
+    """
+    kwargs = {"path": db_path} if db_path is not None else {}
+    locations = preprod.list_locations(**kwargs)
+    if not locations:
+        raise ValueError(
+            "no locations described yet -- run `python -m src.locations` first"
+        )
+
+    prompt = build_ideas_prompt(locations, brand, client, spark, count)
+    ideas = parse_ideas_response(generate_with_retry(gemini_client, model, prompt))
+
+    concept_ids = preprod.save_concept_ideas(
+        ideas, brand=brand, client=client, spark=spark,
+        prompt_template=prompt, **kwargs,
+    )
+    return {"concept_ids": concept_ids, "ideas": ideas}
+
+
+def generate_shot_list(concept_id: int, gemini_client=None, model: str = MODEL,
+                       db_path=None) -> dict:
+    """
+    Stage two: the shot list for an idea you chose. This call is the
+    pick -- bothering to plan a shoot for an idea is the signal
+    shortlist_rate measures.
+    """
+    kwargs = {"path": db_path} if db_path is not None else {}
+    concept = preprod.get_concept(concept_id, **kwargs)
+    if concept is None:
+        raise ValueError(f"no concept with id {concept_id}")
+
+    locations = preprod.list_locations(**kwargs)
+    if not locations:
+        raise ValueError("no locations described yet")
+
+    prompt = build_shotlist_prompt(locations, concept["brand"], concept.get("client"), concept)
+    plan = parse_plan_response(generate_with_retry(gemini_client, model, prompt))
+
+    location_names = [loc["name"] for loc in locations]
+    warnings = validate_concept(plan, location_names)
+
+    used = {shot.get("location") for shot in plan.get("shots") or []}
+    location_ids = [loc["id"] for loc in locations if loc["name"] in used]
+
+    preprod.update_concept_shots(concept_id, plan, location_ids=location_ids, **kwargs)
+    return {"concept_id": concept_id, "plan": plan, "warnings": warnings}
 
 
 def parse_concept_response(text: str) -> dict:
@@ -192,12 +294,16 @@ def main(db_path=None):
     load_dotenv()
 
     parser = argparse.ArgumentParser(
-        description="Generate a shoot concept grounded in your described locations."
+        description="Generate shoot concepts grounded in your described locations. "
+                    "Two stages: ideas first, then a shot list for the ones you pick."
     )
     parser.add_argument("--brand", choices=preprod.BRANDS, default="antihero")
     parser.add_argument("--client", default=None, help="client or spec type (zeropage only)")
-    parser.add_argument("--spark", default=None, help="a direction to build the concept around")
-    parser.add_argument("--count", type=int, default=1, help="how many concepts to generate")
+    parser.add_argument("--spark", default=None, help="a direction to build the ideas around")
+    parser.add_argument("--count", type=int, default=DEFAULT_IDEA_COUNT,
+                        help="how many ideas to generate (one call regardless)")
+    parser.add_argument("--shotlist", type=int, default=None, metavar="CONCEPT_ID",
+                        help="skip idea generation and plan the shoot for this concept id")
     args = parser.parse_args()
 
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
@@ -210,18 +316,41 @@ def main(db_path=None):
     preprod.init(path=path)
 
     gemini_client = genai.Client(api_key=api_key)
-    for _ in range(args.count):
+
+    if args.shotlist is not None:
         try:
-            result = generate_concept(
-                brand=args.brand, client=args.client, spark=args.spark,
-                gemini_client=gemini_client, db_path=path,
+            result = generate_shot_list(
+                args.shotlist, gemini_client=gemini_client, db_path=path,
             )
         except ValueError as e:
             print(e, file=sys.stderr)
             sys.exit(1)
 
-        print(f"\nConcept {result['concept_id']}")
-        print(format_concept_as_text(result["concept"], result["warnings"]))
+        concept = preprod.get_concept(args.shotlist, path=path)
+        print(f"\nConcept {args.shotlist}")
+        print(format_concept_as_text(concept, result["warnings"]))
+        return
+
+    try:
+        result = generate_concept_ideas(
+            brand=args.brand, client=args.client, spark=args.spark,
+            gemini_client=gemini_client, count=args.count, db_path=path,
+        )
+    except ValueError as e:
+        print(e, file=sys.stderr)
+        sys.exit(1)
+
+    print(f"\n{len(result['ideas'])} ideas — pick the ones worth shooting:\n")
+    for concept_id, idea in zip(result["concept_ids"], result["ideas"]):
+        print(f"  [{concept_id}] {idea['title']}")
+        print(f"       hook: {idea.get('hook', '')}")
+        print(f"       {idea.get('logline', '')}")
+        if idea.get("why"):
+            print(f"       ({idea['why']})")
+        print()
+
+    print("Plan a shoot for one:")
+    print(f"  venv/bin/python -m src.shootgen --shotlist {result['concept_ids'][0]}")
 
 
 if __name__ == "__main__":

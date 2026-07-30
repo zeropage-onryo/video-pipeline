@@ -195,6 +195,9 @@ def _concept_row(row, conn) -> dict[str, Any]:
     data["shots"] = json.loads(data.pop("shots_json") or "[]")
     ai_raw = data.pop("ai_json", None)
     data["ai"] = json.loads(ai_raw) if ai_raw else None
+    # Derived, not stored: an idea that hasn't been planned yet simply
+    # has no shots. Storing a flag as well would let the two disagree.
+    data["has_shot_list"] = bool(data["shots"])
     data["locations"] = [
         dict(r)
         for r in conn.execute(
@@ -226,6 +229,104 @@ def list_concepts(limit: int = 100, path: Path | str = DB_PATH) -> list[dict[str
             "SELECT * FROM shoot_concepts ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
         return [_concept_row(r, conn) for r in rows]
+
+
+def save_concept_ideas(
+    ideas: list,
+    brand: str,
+    client: Optional[str] = None,
+    spark: Optional[str] = None,
+    prompt_template: Optional[str] = None,
+    path: Path | str = DB_PATH,
+) -> list:
+    """
+    Stage one: save a batch of cheap ideas, no shot lists yet. Returns
+    their ids in order. Which of these later gets a shot list is the
+    pick worth measuring.
+    """
+    return [
+        save_concept(idea, brand=brand, client=client, spark=spark,
+                     prompt_template=prompt_template, path=path)
+        for idea in ideas
+    ]
+
+
+def update_concept_shots(
+    concept_id: int,
+    plan: dict,
+    location_ids: Optional[list] = None,
+    path: Path | str = DB_PATH,
+) -> None:
+    """
+    Stage two: attach a shot list to an idea you chose. Leaves the
+    idea's own fields (title, hook, logline) alone -- those were the
+    thing you picked, and rewriting them here would quietly change
+    what you agreed to.
+    """
+    with connect(path) as conn:
+        exists = conn.execute(
+            "SELECT 1 FROM shoot_concepts WHERE id = ?", (concept_id,)
+        ).fetchone()
+        if not exists:
+            raise ValueError(f"no concept with id {concept_id}")
+
+        conn.execute(
+            """
+            UPDATE shoot_concepts
+               SET duration   = COALESCE(?, duration),
+                   shots_json = ?,
+                   ai_json    = ?,
+                   edit_note  = COALESCE(?, edit_note),
+                   grade_note = COALESCE(?, grade_note)
+             WHERE id = ?
+            """,
+            (plan.get("duration"),
+             json.dumps(plan.get("shots") or []),
+             json.dumps(plan["ai"]) if plan.get("ai") else None,
+             plan.get("edit"), plan.get("grade"), concept_id),
+        )
+
+        for location_id in location_ids or []:
+            conn.execute(
+                "INSERT OR IGNORE INTO concept_locations (concept_id, location_id) VALUES (?, ?)",
+                (concept_id, location_id),
+            )
+
+
+def shortlist_rate(path: Path | str = DB_PATH) -> dict[str, Any]:
+    """
+    Of the ideas generated, how many were worth planning a shoot for.
+    The earlier of the two labels -- shoot_rate answers what actually
+    got made, this answers what was worth the next ten minutes.
+    """
+    with connect(path) as conn:
+        rows = conn.execute(
+            """
+            SELECT prompt_hash,
+                   COUNT(*) AS generated,
+                   SUM(CASE WHEN shots_json != '[]' THEN 1 ELSE 0 END) AS shortlisted
+            FROM shoot_concepts
+            GROUP BY prompt_hash
+            """
+        ).fetchall()
+
+    by_prompt = [
+        {
+            "prompt_hash": r["prompt_hash"],
+            "generated": r["generated"],
+            "shortlisted": r["shortlisted"] or 0,
+            "rate": round((r["shortlisted"] or 0) / r["generated"], 3),
+        }
+        for r in rows
+    ]
+    generated = sum(b["generated"] for b in by_prompt)
+    shortlisted = sum(b["shortlisted"] for b in by_prompt)
+    return {
+        "generated": generated,
+        "shortlisted": shortlisted,
+        "rate": round(shortlisted / generated, 3) if generated else None,
+        "by_prompt": by_prompt,
+    }
 
 
 def mark_shot(concept_id: int, shot: bool = True, path: Path | str = DB_PATH) -> None:
