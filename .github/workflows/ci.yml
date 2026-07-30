@@ -17,6 +17,11 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+          # openai-whisper pulls in torch, and torch's default GPU build
+          # drags in ~4GB of nvidia-* CUDA packages that runners have no
+          # GPU to use anyway -- installing the CPU-only build first
+          # satisfies whisper's dependency without pulling the GPU one in.
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
           pip install -r requirements.txt
           pip install -e .
 
