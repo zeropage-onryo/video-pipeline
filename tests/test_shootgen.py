@@ -205,3 +205,153 @@ def test_generate_concept_needs_at_least_one_location(tmp_path):
         shootgen.generate_concept(
             brand="antihero", client=None, gemini_client=None, db_path=empty,
         )
+
+
+# ---------- stage one: ideas ----------
+
+IDEAS_RESPONSE = json.dumps({"ideas": [
+    {"title": f"Idea {n}", "hook": f"hook {n}", "logline": f"line {n}", "why": f"why {n}"}
+    for n in range(8)
+]})
+
+
+def test_build_ideas_prompt_includes_locations_brand_and_count(tmp_db):
+    locations = preprod.list_locations(path=tmp_db)
+    prompt = shootgen.build_ideas_prompt(locations, "antihero", None, "a door", count=8)
+
+    assert "hallway" in prompt and "garage" in prompt
+    assert "ANTIHERO" in prompt
+    assert "a door" in prompt
+    assert "8" in prompt
+    for placeholder in ("{locations}", "{brand}", "{client}", "{spark}", "{count}"):
+        assert placeholder not in prompt
+
+
+def test_parse_ideas_response_returns_all_ideas():
+    ideas = shootgen.parse_ideas_response(IDEAS_RESPONSE)
+    assert len(ideas) == 8
+    assert ideas[0]["title"] == "Idea 0"
+
+
+def test_parse_ideas_response_strips_fences():
+    assert len(shootgen.parse_ideas_response(f"```json\n{IDEAS_RESPONSE}\n```")) == 8
+
+
+def test_parse_ideas_response_rejects_an_idea_without_a_title():
+    bad = json.dumps({"ideas": [{"hook": "h", "logline": "l"}]})
+    with pytest.raises(ValueError, match="title"):
+        shootgen.parse_ideas_response(bad)
+
+
+def test_parse_ideas_response_rejects_an_empty_batch():
+    with pytest.raises(ValueError, match="no ideas"):
+        shootgen.parse_ideas_response(json.dumps({"ideas": []}))
+
+
+def test_generate_concept_ideas_saves_them_all(tmp_db, monkeypatch):
+    monkeypatch.setattr(shootgen, "generate_with_retry", lambda *a, **kw: IDEAS_RESPONSE)
+
+    result = shootgen.generate_concept_ideas(
+        brand="antihero", spark="a door", client=None,
+        gemini_client=None, count=8, db_path=tmp_db,
+    )
+
+    assert len(result["concept_ids"]) == 8
+    saved = preprod.list_concepts(path=tmp_db)
+    assert len(saved) == 8
+    assert all(c["has_shot_list"] is False for c in saved)
+    assert all(c["brand"] == "antihero" for c in saved)
+
+
+def test_generate_concept_ideas_makes_one_call_not_n(tmp_db, monkeypatch):
+    """Eight ideas should cost one request, not eight."""
+    calls = []
+    monkeypatch.setattr(
+        shootgen, "generate_with_retry",
+        lambda *a, **kw: (calls.append(1), IDEAS_RESPONSE)[1],
+    )
+    shootgen.generate_concept_ideas(
+        brand="antihero", client=None, gemini_client=None, count=8, db_path=tmp_db,
+    )
+    assert len(calls) == 1
+
+
+def test_generate_concept_ideas_needs_a_location(tmp_path):
+    empty = tmp_path / "empty.db"
+    db.init_db(empty)
+    preprod.init(empty)
+    with pytest.raises(ValueError, match="no locations"):
+        shootgen.generate_concept_ideas(
+            brand="antihero", client=None, gemini_client=None, db_path=empty,
+        )
+
+
+# ---------- stage two: the shot list for a chosen idea ----------
+
+PLAN_RESPONSE = json.dumps({"plan": {
+    "duration": "12s",
+    "shots": [
+        {"n": 1, "type": "CHARACTER", "cam": "BMPCC", "location": "hallway",
+         "desc": "low angle", "light": "practical"},
+    ],
+    "ai": {"tool": "KLING", "technique": "t", "prompt": "p"},
+    "edit": "hard cuts",
+    "grade": "crushed",
+}})
+
+
+def test_build_shotlist_prompt_includes_the_chosen_idea(tmp_db):
+    locations = preprod.list_locations(path=tmp_db)
+    concept = {"title": "Void Signal", "hook": "a thumb", "logline": "he waits"}
+    prompt = shootgen.build_shotlist_prompt(locations, "antihero", None, concept)
+
+    assert "Void Signal" in prompt and "a thumb" in prompt and "he waits" in prompt
+    assert "hallway" in prompt
+    for placeholder in ("{title}", "{hook}", "{logline}", "{locations}", "{brand}", "{client}"):
+        assert placeholder not in prompt
+
+
+def test_parse_plan_response_reads_the_plan():
+    plan = shootgen.parse_plan_response(PLAN_RESPONSE)
+    assert plan["duration"] == "12s"
+    assert len(plan["shots"]) == 1
+
+
+def test_parse_plan_response_rejects_a_plan_with_no_shots():
+    with pytest.raises(ValueError, match="no shots"):
+        shootgen.parse_plan_response(json.dumps({"plan": {"shots": []}}))
+
+
+def test_generate_shot_list_fills_in_a_chosen_idea(tmp_db, monkeypatch):
+    concept_id = preprod.save_concept(
+        {"title": "Void Signal", "hook": "h", "logline": "l"},
+        brand="antihero", path=tmp_db,
+    )
+    monkeypatch.setattr(shootgen, "generate_with_retry", lambda *a, **kw: PLAN_RESPONSE)
+
+    result = shootgen.generate_shot_list(
+        concept_id, gemini_client=None, db_path=tmp_db,
+    )
+
+    assert result["warnings"] == []
+    saved = preprod.get_concept(concept_id, path=tmp_db)
+    assert saved["has_shot_list"] is True
+    assert saved["title"] == "Void Signal"  # the idea survived
+    assert [loc["name"] for loc in saved["locations"]] == ["hallway"]
+
+
+def test_generate_shot_list_validates_the_plan(tmp_db, monkeypatch):
+    concept_id = preprod.save_concept({"title": "T"}, brand="antihero", path=tmp_db)
+    bad = json.loads(PLAN_RESPONSE)
+    bad["plan"]["shots"][0]["location"] = "rooftop helipad"
+    monkeypatch.setattr(shootgen, "generate_with_retry", lambda *a, **kw: json.dumps(bad))
+
+    result = shootgen.generate_shot_list(concept_id, gemini_client=None, db_path=tmp_db)
+
+    assert any("rooftop helipad" in w for w in result["warnings"])
+    assert preprod.get_concept(concept_id, path=tmp_db)["has_shot_list"] is True
+
+
+def test_generate_shot_list_rejects_missing_concept(tmp_db):
+    with pytest.raises(ValueError, match="no concept"):
+        shootgen.generate_shot_list(999, gemini_client=None, db_path=tmp_db)
