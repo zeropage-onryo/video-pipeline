@@ -27,12 +27,12 @@ def tmp_db(tmp_path, monkeypatch):
     return path
 
 
-def test_dashboard_returns_200():
+def test_dashboard_returns_200(tmp_db):
     response = client.get("/")
     assert response.status_code == 200
 
 
-def test_dashboard_shows_real_counts():
+def test_dashboard_shows_counts(tmp_db):
     response = client.get("/")
     assert "Pitch runs" in response.text
     assert "Ideas" in response.text
