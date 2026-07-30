@@ -6,6 +6,7 @@
 # Media directories
 /footage
 /renders
+/locations
 
 # Environment variables
 .env
