@@ -873,3 +873,14 @@ def test_generate_honours_pov_off(tmp_preprod_db, monkeypatch):
     client.post("/concepts/generate", data={"brand": "antihero", "use_pov": "on"},
                 follow_redirects=False)
     assert seen["use_pov"] is True
+
+
+def test_concept_warnings_are_visible_on_the_page(tmp_preprod_db):
+    """Stored isn't enough -- you have to be able to see it."""
+    preprod.save_concept(
+        {"title": "Void Signal", "shots": CONCEPT_SHOTS}, brand="antihero",
+        warnings=["shot 1: location 'rooftop helipad' is not a described space"],
+        path=tmp_preprod_db,
+    )
+    response = client.get("/concepts")
+    assert "rooftop helipad" in response.text

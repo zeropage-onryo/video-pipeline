@@ -207,7 +207,8 @@ def generate_shot_list(concept_id: int, gemini_client=None, model: str = MODEL,
     used = {shot.get("location") for shot in plan.get("shots") or []}
     location_ids = [loc["id"] for loc in locations if loc["name"] in used]
 
-    preprod.update_concept_shots(concept_id, plan, location_ids=location_ids, **kwargs)
+    preprod.update_concept_shots(concept_id, plan, location_ids=location_ids,
+                                 warnings=warnings, **kwargs)
     return {"concept_id": concept_id, "plan": plan, "warnings": warnings}
 
 
@@ -281,7 +282,8 @@ def generate_concept(brand: str, client=None, spark=None, gemini_client=None,
 
     concept_id = preprod.save_concept(
         concept, brand=brand, client=client, spark=spark,
-        location_ids=location_ids, prompt_template=prompt, **kwargs,
+        location_ids=location_ids, prompt_template=prompt,
+        warnings=warnings, **kwargs,
     )
     return {"concept_id": concept_id, "concept": concept, "warnings": warnings}
 

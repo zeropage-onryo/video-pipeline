@@ -421,3 +421,14 @@ td.num, .num {
   border-color: var(--steel);
   color: var(--steel);
 }
+
+/* a concept that broke a rule is still saved -- so the warning has to
+   be visible on the concept itself, not just counted in a flash */
+.warnings {
+  border-left: 2px solid var(--red);
+  background: var(--panel2);
+  padding: 8px 12px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--bone);
+}

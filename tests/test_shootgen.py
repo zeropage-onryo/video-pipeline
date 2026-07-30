@@ -409,3 +409,27 @@ def test_generate_concept_threads_the_pov_setting_through(tmp_db, monkeypatch):
         brand="antihero", client=None, gemini_client=None, use_pov=False, db_path=tmp_db,
     )
     assert "ACTION5" not in seen["prompt"]
+
+
+def test_generated_concept_keeps_its_warnings_in_the_database(tmp_db, monkeypatch):
+    """The docs promise "saved, warnings attached" -- prove the second half."""
+    bad = make_concept()
+    bad["shots"][0]["location"] = "rooftop helipad"
+    monkeypatch.setattr(shootgen, "generate_with_retry", lambda *a, **kw: response_for(bad))
+
+    result = shootgen.generate_concept(
+        brand="antihero", client=None, gemini_client=None, db_path=tmp_db,
+    )
+    stored = preprod.get_concept(result["concept_id"], path=tmp_db)["warnings"]
+    assert any("rooftop helipad" in w for w in stored)
+
+
+def test_shot_list_warnings_survive_too(tmp_db, monkeypatch):
+    concept_id = preprod.save_concept({"title": "T"}, brand="antihero", path=tmp_db)
+    bad = json.loads(PLAN_RESPONSE)
+    bad["plan"]["shots"][0]["location"] = "rooftop helipad"
+    monkeypatch.setattr(shootgen, "generate_with_retry", lambda *a, **kw: json.dumps(bad))
+
+    shootgen.generate_shot_list(concept_id, gemini_client=None, db_path=tmp_db)
+    stored = preprod.get_concept(concept_id, path=tmp_db)["warnings"]
+    assert any("rooftop helipad" in w for w in stored)

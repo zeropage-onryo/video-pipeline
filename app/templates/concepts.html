@@ -108,6 +108,15 @@
       <div class="card-body">
         <h3>{{ c.title|upper }}{% if c.shot_done %} <span class="good" style="font-size:14px">◆ SHOT</span>{% endif %}</h3>
 
+        {% if c.warnings %}
+        <div class="warnings">
+          <div class="kicker" style="color:var(--red); margin-bottom:4px">
+            {{ c.warnings|length }} warning{{ "s" if c.warnings|length != 1 }}
+          </div>
+          {% for w in c.warnings %}<p style="margin:2px 0">{{ w }}</p>{% endfor %}
+        </div>
+        {% endif %}
+
         {% if c.logline %}<p class="dim" style="margin-top:8px">{{ c.logline }}</p>{% endif %}
 
         {% if c.hook %}

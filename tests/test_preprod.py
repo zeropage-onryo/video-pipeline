@@ -272,3 +272,44 @@ def test_shortlist_rate_measures_which_ideas_got_a_shot_list(tmp_db):
 
 def test_shortlist_rate_empty_is_safe(tmp_db):
     assert preprod.shortlist_rate(path=tmp_db)["rate"] is None
+
+
+# ---------- warnings are kept, not just counted ----------
+
+def test_concept_warnings_are_stored_and_returned(tmp_db):
+    """
+    A concept that breaks a rule is saved WITH its warnings -- the docs
+    claim this, so it has to be true. A count in a flash message that
+    vanishes on the next page load is not "attached".
+    """
+    concept_id = preprod.save_concept(
+        {"title": "T", "shots": SAMPLE_SHOTS}, brand="antihero",
+        warnings=["shot 1: location 'rooftop helipad' is not a described space"],
+        path=tmp_db,
+    )
+    saved = preprod.get_concept(concept_id, path=tmp_db)
+    assert saved["warnings"] == [
+        "shot 1: location 'rooftop helipad' is not a described space"
+    ]
+
+
+def test_concept_with_no_warnings_reads_as_empty(tmp_db):
+    concept_id = preprod.save_concept({"title": "T"}, brand="antihero", path=tmp_db)
+    assert preprod.get_concept(concept_id, path=tmp_db)["warnings"] == []
+
+
+def test_update_concept_shots_replaces_warnings(tmp_db):
+    """Planning the shoot re-validates, so stale warnings must not linger."""
+    concept_id = preprod.save_concept(
+        {"title": "T"}, brand="antihero", warnings=["idea-stage warning"], path=tmp_db,
+    )
+    preprod.update_concept_shots(
+        concept_id, {"shots": SAMPLE_SHOTS}, warnings=["shot 2: bad cam"], path=tmp_db,
+    )
+    assert preprod.get_concept(concept_id, path=tmp_db)["warnings"] == ["shot 2: bad cam"]
+
+
+def test_list_concepts_includes_warnings(tmp_db):
+    preprod.save_concept({"title": "T"}, brand="antihero",
+                         warnings=["something"], path=tmp_db)
+    assert preprod.list_concepts(path=tmp_db)[0]["warnings"] == ["something"]

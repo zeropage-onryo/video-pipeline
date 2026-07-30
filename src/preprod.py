@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS shoot_concepts (
     grade_note  TEXT,
     shot_done   INTEGER NOT NULL DEFAULT 0,
     prompt_hash TEXT,
+    warnings_json TEXT,
     notes       TEXT
 );
 
@@ -69,6 +70,12 @@ def init(path: Path | str = DB_PATH) -> None:
     """Create the pre-production tables. Run after db.init_db()."""
     with connect(path) as conn:
         conn.executescript(SCHEMA)
+        # CREATE TABLE IF NOT EXISTS won't add a column to a table that
+        # already exists, so databases created before warnings_json need
+        # it added explicitly.
+        existing = {r["name"] for r in conn.execute("PRAGMA table_info(shoot_concepts)")}
+        if "warnings_json" not in existing:
+            conn.execute("ALTER TABLE shoot_concepts ADD COLUMN warnings_json TEXT")
 
 
 # --------------------------------------------------------------------------
@@ -151,10 +158,15 @@ def save_concept(
     spark: Optional[str] = None,
     location_ids: Optional[list] = None,
     prompt_template: Optional[str] = None,
+    warnings: Optional[list] = None,
     path: Path | str = DB_PATH,
 ) -> int:
     """
-    Store one generated concept. Returns its id.
+    Store one generated concept, warnings and all. Returns its id.
+
+    Warnings are stored rather than just counted: a concept that broke a
+    rule is worth looking at and deciding on, and a number in a flash
+    message that disappears on the next page load is not "attached".
 
     prompt_template is hashed rather than stored, same as pitch_runs --
     enough to tell which prompt version produced which shoot rate,
@@ -171,14 +183,16 @@ def save_concept(
             """
             INSERT INTO shoot_concepts
                 (created_at, brand, client, spark, title, hook, logline,
-                 duration, shots_json, ai_json, edit_note, grade_note, prompt_hash)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 duration, shots_json, ai_json, edit_note, grade_note, prompt_hash,
+                 warnings_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (_now(), brand, client, spark, title,
              concept.get("hook"), concept.get("logline"), concept.get("duration"),
              json.dumps(concept.get("shots") or []),
              json.dumps(concept["ai"]) if concept.get("ai") else None,
-             concept.get("edit"), concept.get("grade"), _hash(prompt_template)),
+             concept.get("edit"), concept.get("grade"), _hash(prompt_template),
+             json.dumps(warnings) if warnings else None),
         )
         concept_id = int(cur.lastrowid)
 
@@ -195,6 +209,8 @@ def _concept_row(row, conn) -> dict[str, Any]:
     data["shots"] = json.loads(data.pop("shots_json") or "[]")
     ai_raw = data.pop("ai_json", None)
     data["ai"] = json.loads(ai_raw) if ai_raw else None
+    warn_raw = data.pop("warnings_json", None)
+    data["warnings"] = json.loads(warn_raw) if warn_raw else []
     # Derived, not stored: an idea that hasn't been planned yet simply
     # has no shots. Storing a flag as well would let the two disagree.
     data["has_shot_list"] = bool(data["shots"])
@@ -255,6 +271,7 @@ def update_concept_shots(
     concept_id: int,
     plan: dict,
     location_ids: Optional[list] = None,
+    warnings: Optional[list] = None,
     path: Path | str = DB_PATH,
 ) -> None:
     """
@@ -277,13 +294,18 @@ def update_concept_shots(
                    shots_json = ?,
                    ai_json    = ?,
                    edit_note  = COALESCE(?, edit_note),
-                   grade_note = COALESCE(?, grade_note)
+                   grade_note = COALESCE(?, grade_note),
+                   warnings_json = ?
              WHERE id = ?
             """,
             (plan.get("duration"),
              json.dumps(plan.get("shots") or []),
              json.dumps(plan["ai"]) if plan.get("ai") else None,
-             plan.get("edit"), plan.get("grade"), concept_id),
+             plan.get("edit"), plan.get("grade"),
+             # replaced, not merged: planning re-validates from scratch,
+             # so an idea-stage warning must not linger as if still true
+             json.dumps(warnings) if warnings else None,
+             concept_id),
         )
 
         for location_id in location_ids or []:
