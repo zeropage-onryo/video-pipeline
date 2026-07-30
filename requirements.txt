@@ -3,6 +3,7 @@ numpy<2   # whisper's torch build fails against numpy 2.x (torch._C._ARRAY_API);
 google-genai
 python-dotenv
 pytest
+ruff
 fastapi
 uvicorn
 jinja2

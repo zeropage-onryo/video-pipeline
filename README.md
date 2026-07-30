@@ -1,3 +1,5 @@
+[![CI](https://github.com/zeropage-onryo/video-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/zeropage-onryo/video-pipeline/actions/workflows/ci.yml)
+
 ## Overview
 An AI pre-production tool for Zero Page Films. It decides what to cut, grounded in real footage
 rather than a script written first and matched to clips after. An LLM proposes edit concepts from
