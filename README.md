@@ -1,55 +1,111 @@
 [![CI](https://github.com/zeropage-onryo/video-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/zeropage-onryo/video-pipeline/actions/workflows/ci.yml)
 
-## Overview
-An AI pre-production tool for Zero Page Films. It decides what to cut, grounded in real footage
-rather than a script written first and matched to clips after. An LLM proposes edit concepts from
-an ingested manifest of what was actually filmed, a human picks a few favorites, and full edit
-specs — ordered clip in/out points, grade notes, sound notes — get generated and independently
-validated in code against real clip durations. Currently experimental — cut lists are generated
-end-to-end but coherence is still being improved (see Roadmap).
+# Zero Page Films — production pipeline
 
-## Architecture
-The pipeline runs as a series of stages, each handled by its own module, ending at a validated
-cut list rather than an assembled timeline:
+A pre-production and post-production tool for a one-person film operation. It runs the whole
+workflow from an idea to a shot list to a finished cut plan, and every stage is grounded in
+something real: photographs of the rooms you can actually shoot in, and a manifest of the footage
+you actually captured. The model proposes; code checks the proposal against reality before it is
+allowed to count.
 
-1. **Ingest** (`src/ingest.py`) — scans raw footage and builds a manifest of available clips:
-   ffprobe metadata, a Whisper transcript, and a Gemini vision description per clip
-2. **Concept generation** (`src/pitch.py`) — sends footage context to Gemini for 10 cheap story
-   pitches; a human picks a few by number
-3. **Edit spec** (`src/editgen.py`) — turns the selected pitches into full edit specs and
-   validates every clip reference and cut point against the manifest before saving
+Built for solo shoots — one operator who is also the on-screen subject, two cameras, and a house.
 
-## How It Works
-1. Point the pipeline at a folder of raw clips; ingest catalogs them into `manifest.json`
-2. The LLM reviews footage metadata and proposes 10 story pitches (`pitches.json`)
-3. A human picks a few pitches by number
-4. The LLM writes full edit specs for those picks, which are validated against the manifest and
-   saved to `concepts.json`
-5. You execute the cut list by hand in Resolve — nothing downstream needs Resolve running
+## What it does
+
+**Before the shoot — idea to shot list.** Photograph a space and the tool describes it: geometry,
+light sources, textures, workable camera positions, and what the room *won't* allow. Concepts are
+then generated against those real rooms — 8 cheap ideas to choose between, or one complete shoot
+plan: a shot-by-shot list with camera, framing, movement, and lighting drawn from what's genuinely
+in the space, plus edit rhythm and grade notes.
+
+**One AI shot per concept.** Every plan reserves exactly one slot for the moment the house can't
+give you, with a paste-ready prompt for Kling or Runway tied to a specific shot — for example,
+pushing a camera through a gap too narrow for a real lens. Attempts are logged per tool, so you
+learn which prompts land in two tries and which take nine.
+
+**After the shoot — footage to cut list.** Ingest catalogs and organizes raw clips: duration and
+resolution via ffprobe, a Whisper transcript, and a vision pass that timestamps what happens
+inside each shot. From that manifest it proposes story pitches, and for the ones you pick it
+writes full edit specs — ordered in/out points, sound notes, and per-shot grade notes on top of
+your existing LUT.
+
+**It learns from your choices.** Which ideas you plan, which concepts you shoot, which pitches you
+cut — each decision is recorded against the hash of the prompt that produced it. So changing a
+prompt becomes something you can measure against the rate it produced, rather than argue about.
+Posted videos and their view counts feed back in, compared at equal age so a year-old video can't
+beat last week's on accumulated totals alone.
+
+## The rule the whole thing is built on
+
+**Prompts request, code enforces.** The model is never trusted on its own. An edit spec is checked
+against real filenames and real clip durations. A concept is rejected if it sets a shot in a room
+you haven't photographed. Turning off the POV camera rewrites the prompt *and* makes the validator
+refuse that camera. A generated shot list that breaks a rule is still saved — with its warnings —
+because it is worth looking at and deciding on, not silently discarded.
+
+The second rule, learned the hard way: **verify by running it.** Every real defect this project has
+had passed code review and passed its own tests. They were caught by starting the server, clicking
+the thing, or noticing the test suite had quietly gotten slower.
+
+## Pipeline
+
+```
+PRE-PRODUCTION                        POST-PRODUCTION
+photos of a room                      raw footage
+   |                                     |
+   | vision: light, texture,             | ffprobe + Whisper + vision:
+   | angles, constraints                 | duration, transcript, timestamped beats
+   v                                     v
+described spaces                      manifest
+   |                                     |
+   | + brand, spark, POV on/off          | story pitches (you pick a few)
+   v                                     v
+concepts  ->  shot list + AI slot     edit specs: in/out points, sound, grade notes
+   |             + edit & grade notes     |
+   | [ you shoot it ]  ------------------>|
+   |                                      v
+   |                                 execute by hand in Resolve
+   v
+what you actually shot  ---------->  posted videos + view counts  ---> informs the next prompt
+```
+
+## Running it
+
+```bash
+venv/bin/pip install -r requirements.txt && venv/bin/pip install -e .
+venv/bin/uvicorn app.main:app --reload      # everything, in the browser
+```
+
+Every step also has a CLI (`python -m src.locations`, `src.shootgen`, `src.ingest`, `src.pitch`,
+`src.editgen`, `src.promptgen`, `src.genlog`). See `CLAUDE.md` for the full command list and
+architecture notes.
+
+Needs `GEMINI_API_KEY` in `.env`. `YOUTUBE_API_KEY` is optional — it enables pulling public view
+counts and importing a channel automatically; without it manual entry works exactly the same.
 
 ## Tech Stack
-- **Python** — core pipeline
-- **Google Gemini API** — pitch and edit-spec generation, plus per-clip vision descriptions
+- **Python**, **FastAPI** + **Jinja2** — pipeline and a no-build-step web app
+- **SQLite** — spaces, concepts, pitches, videos, metric snapshots, generation attempts
+- **Google Gemini** — vision descriptions of rooms and clips, concept and edit-spec generation
 - **OpenAI Whisper** — clip transcription
-- **FFmpeg** — frame extraction for vision descriptions during ingest
+- **FFmpeg / ffprobe** — metadata and frame extraction
+- **Kling / Runway** — the one generated clip per edit (prompts written here, generated in their UI)
+- **pytest** + **ruff**, run in CI on every push
 
 ## Roadmap
-- Record which pitches get picked as labelled data, so past selections inform future prompts and
-  prompt changes can be measured against a real pick rate (see `BUILD_SPEC.md`)
-- Generative-clip prompts for the one footage gap an edit may have, with attempts-to-keeper
-  tracked per tool
-- A small dashboard for performance feedback: top performers, benchmarks, growth curves
-- Automated tests and CI
-- Case-study documentation with demo video
+- `/shots` queue and the tool scoreboard — waiting on real generation attempts to measure
+- Verify the per-tool camera vocabulary against each platform's current prompt guide
+- Instagram and TikTok stats stay manual until their developer approvals land; the screen
+  doesn't change when they do
+- Case-study writeup with a demo video
 
 ## Decisions Log
 
-- **Two-stage generation (pitch, then edit).** `src/pitch.py` generates a cheap
-  slate of 10 story descriptions from the manifest; a human selects 3; only
-  those get full edit specs (clip in/out points, grade notes, sound notes)
-  generated by `src/editgen.py`. Selection is the one decision kept manual —
-  everything before and after it is automated.
-  ## Decisions Log
+**2026-07-08 — Two-stage generation (pitch, then edit).**
+`src/pitch.py` generates a cheap slate of 10 story descriptions from the
+manifest; a human selects a few; only those get full edit specs (clip in/out
+points, grade notes, sound notes) generated by `src/editgen.py`. Selection is
+the one decision kept manual — everything before and after it is automated.
 
 **2026-07-08 — Pipeline operates on proxies, not camera originals.**
 All ingest and analysis runs on DaVinci Resolve proxy files rather than
@@ -130,3 +186,40 @@ matched clips by filename across two systems, and produced an assembly that
 was always re-cut anyway. The judgment worth automating is which shots and
 which moments, not the mechanical assembly. Cost: no more one-command rough
 cut. Accepted, because the rough cut was never the output that got used.
+
+<!-- DRAFT — per RUNBOOK, Decisions Log entries are yours to write. Edit the
+     reasoning (especially the "why now" in the first entry — that's your call,
+     not mine), delete this comment, then commit. -->
+
+**2026-07-30 — Added a pre-production phase: locations, then concepts.**
+The pipeline was footage-first end to end — it could only reason about clips
+that already existed. That meant the hardest part of a one-person operation,
+deciding what to shoot at all, happened entirely outside the tool. Now
+`locations.py` photographs and describes the spaces available (geometry,
+light sources, textures, workable angles, and what each space won't allow),
+and `shootgen.py` generates concepts and ≤6-shot lists grounded in those real
+rooms. Ported from two React generators that ran as Claude artifacts; moving
+them in swapped the Anthropic API for this project's existing Gemini client
+and browser storage for SQLite, which is what makes concepts queryable and
+comparable rather than trapped in one browser session. Cost: a second meaning
+for the word "concept" in this repo — `concepts.json` is a cut list for
+footage you have, `shoot_concepts` is a shot list for footage you need.
+Accepted, with the names kept deliberately distinct.
+
+**2026-07-30 — Concepts are grounded in photographed spaces, not imagined ones.**
+`validate_concept` rejects any shot whose `location` isn't a space that has
+actually been photographed and described. This is the pre-production version
+of the footage-first rule: the same reason edit specs are validated against
+the manifest applies one step earlier, because a concept set in a room you
+don't have is worse than no concept — it reads as usable and wastes a shoot
+day. Tradeoff: you can't generate anything until at least one space is
+described, and the UI hides the generate button until then rather than
+offering something that would fail.
+
+**2026-07-30 — Recording which concepts actually get shot.**
+`shoot_concepts.shot_done`, alongside the prompt's hash. Same reasoning as
+recording which pitches get picked: the decision is already being made, it's
+free to store, and without it a prompt rewrite can only be argued about
+rather than measured. Generating ten concepts and shooting one is a different
+outcome from generating three and shooting two, and `shoot_rate()` makes that
+difference visible per prompt version.
