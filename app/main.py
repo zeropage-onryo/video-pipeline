@@ -289,6 +289,7 @@ def concepts_list(request: Request, message: Optional[str] = None):
         {
             "concepts": preprod.list_concepts(path=db.DB_PATH),
             "rate": preprod.shoot_rate(path=db.DB_PATH),
+            "shortlist": preprod.shortlist_rate(path=db.DB_PATH),
             "brands": preprod.BRANDS,
             "has_locations": bool(preprod.list_locations(path=db.DB_PATH)),
             "message": message,
@@ -313,15 +314,41 @@ async def concepts_generate(request: Request):
     # the screen usable rather than 500 -- same contract as the YouTube import.
     try:
         gemini_client = genai.Client(api_key=api_key)
-        result = shootgen.generate_concept(
+        result = shootgen.generate_concept_ideas(
             brand=brand, client=client_name, spark=spark,
             gemini_client=gemini_client, db_path=db.DB_PATH,
         )
-        message = f"Generated \"{result['concept']['title']}\""
+        message = f"Generated {len(result['ideas'])} ideas — pick the ones worth shooting"
+    except Exception as e:
+        message = f"Could not generate: {e}"
+
+    return RedirectResponse(f"/concepts?message={quote(message)}", status_code=303)
+
+
+@app.post("/concepts/{concept_id}/shotlist")
+def concepts_shotlist(concept_id: int):
+    """Stage two. Bothering to plan a shoot for an idea is the pick
+    shortlist_rate measures."""
+    concept = preprod.get_concept(concept_id, path=db.DB_PATH)
+    if concept is None:
+        raise HTTPException(status_code=404, detail="concept not found")
+
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        return RedirectResponse(
+            f"/concepts?message={quote('GEMINI_API_KEY not set')}", status_code=303,
+        )
+
+    try:
+        gemini_client = genai.Client(api_key=api_key)
+        result = shootgen.generate_shot_list(
+            concept_id, gemini_client=gemini_client, db_path=db.DB_PATH,
+        )
+        message = f"Planned \"{concept['title']}\""
         if result["warnings"]:
             message += f" ({len(result['warnings'])} warning(s))"
     except Exception as e:
-        message = f"Could not generate: {e}"
+        message = f"Could not plan {concept['title']}: {e}"
 
     return RedirectResponse(f"/concepts?message={quote(message)}", status_code=303)
 

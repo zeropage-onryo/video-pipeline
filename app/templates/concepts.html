@@ -14,9 +14,11 @@
   {% endif %}
 
   <section>
-    <h2>Shoot rate</h2>
-    {% if rate.rate is not none %}
-    <p>{{ rate.shot }} of {{ rate.generated }} concepts shot
+    <h2>Rates</h2>
+    {% if shortlist.rate is not none %}
+    <p>Planned: {{ shortlist.shortlisted }} of {{ shortlist.generated }} ideas
+      ({{ (shortlist.rate * 100) | round(1) }}%)</p>
+    <p>Shot: {{ rate.shot }} of {{ rate.generated }}
       ({{ (rate.rate * 100) | round(1) }}%)</p>
     {% else %}
     <p class="dim">Nothing generated yet.</p>
@@ -40,7 +42,7 @@
       <label>Spark <span class="dim">(optional)</span>
         <input type="text" name="spark" placeholder="someone keeps leaving envelopes at the door">
       </label>
-      <button type="submit">Generate concept</button>
+      <button type="submit">Generate ideas</button>
     </form>
     {% else %}
     <p class="dim">
@@ -93,9 +95,15 @@
       {% if c.edit %}<p class="dim">Edit: {{ c.edit }}</p>{% endif %}
       {% if c.grade %}<p class="dim">Grade: {{ c.grade }}</p>{% endif %}
 
+      {% if not c.has_shot_list %}
+      <form method="post" action="/concepts/{{ c.id }}/shotlist">
+        <button type="submit">Plan the shoot</button>
+      </form>
+      {% else %}
       <form method="post" action="/concepts/{{ c.id }}/shot">
         <button type="submit">{{ "Mark unshot" if c.shot_done else "Mark shot" }}</button>
       </form>
+      {% endif %}
     </article>
     {% endfor %}
     {% else %}

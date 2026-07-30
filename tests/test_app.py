@@ -492,11 +492,11 @@ def test_post_mark_concept_shot_404s_for_missing_concept(tmp_preprod_db):
     assert client.post("/concepts/999/shot").status_code == 404
 
 
-def test_post_generate_concept_creates_one(tmp_preprod_db, monkeypatch):
+def test_post_generate_concept_creates_ideas(tmp_preprod_db, monkeypatch):
     preprod.add_location("hallway", SAMPLE_SPACE, path=tmp_preprod_db)
     monkeypatch.setattr(
-        app_main.shootgen, "generate_concept",
-        lambda **kw: {"concept_id": 1, "concept": {"title": "X"}, "warnings": []},
+        app_main.shootgen, "generate_concept_ideas",
+        lambda **kw: {"concept_ids": [1], "ideas": [{"title": "X"}]},
     )
     response = client.post("/concepts/generate", data={"brand": "antihero", "spark": "a door"},
                            follow_redirects=False)
@@ -508,7 +508,7 @@ def test_post_generate_concept_reports_failure_without_breaking(tmp_preprod_db, 
     def boom(**kw):
         raise ValueError("no locations described yet")
 
-    monkeypatch.setattr(app_main.shootgen, "generate_concept", boom)
+    monkeypatch.setattr(app_main.shootgen, "generate_concept_ideas", boom)
     response = client.post("/concepts/generate", data={"brand": "antihero"},
                            follow_redirects=False)
     assert response.status_code in (302, 303, 307)
