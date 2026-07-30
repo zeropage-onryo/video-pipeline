@@ -57,7 +57,8 @@ def benchmark_class(score, median) -> str:
 
 
 @app.get("/")
-def dashboard(request: Request, at_days: int = 7, posted_within: str = "6"):
+def dashboard(request: Request, at_days: int = 7, posted_within: str = "6",
+              message: Optional[str] = None):
     counts = db.summary(path=db.DB_PATH)
     pick_rate = db.selection_rate(path=db.DB_PATH)
 
@@ -90,6 +91,7 @@ def dashboard(request: Request, at_days: int = 7, posted_within: str = "6"):
             "rows": rows,
             "at_days": at_days,
             "posted_within": posted_within,
+            "message": message,
         },
     )
 
@@ -139,6 +141,24 @@ async def videos_new_submit(request: Request):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return RedirectResponse("/", status_code=303)
+
+
+@app.post("/videos/import/youtube")
+async def videos_import_youtube(request: Request):
+    form = dict(await request.form())
+    handle = (form.get("handle") or "").strip()
+    if not handle:
+        raise HTTPException(status_code=400, detail="a channel handle is required")
+
+    api_key = os.environ.get("YOUTUBE_API_KEY")
+    result = youtube.import_channel_videos(handle, api_key=api_key, db_path=db.DB_PATH)
+
+    if result["ok"]:
+        message = f"Imported {result['added']} video(s) from {handle}"
+    else:
+        message = f"Could not import from {handle}: {result['error']}"
+
+    return RedirectResponse(f"/?message={quote(message)}", status_code=303)
 
 
 METRICS_FIELDS = ("views", "likes", "comments", "saves")

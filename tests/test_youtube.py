@@ -374,6 +374,42 @@ def test_import_fails_gracefully_when_channel_lookup_fails(tmp_db, monkeypatch):
     assert db.list_videos(path=tmp_db) == []
 
 
+def test_import_error_never_leaks_the_api_key(tmp_db, monkeypatch):
+    """
+    requests puts the full request URL in its error text, and ours
+    carry key=<api key>. That error string gets rendered straight into
+    the page, so an unredacted key would be a real leak.
+    """
+    secret = "AIzaSuperSecretKeyValue"
+
+    def leaky_get(url, params=None, timeout=None):
+        raise Exception(f"400 Client Error for url: {url}?key={secret}")
+
+    monkeypatch.setattr(youtube.requests, "get", leaky_get)
+
+    result = import_channel_videos("@someone", api_key=secret, db_path=tmp_db)
+
+    assert result["ok"] is False
+    assert secret not in result["error"]
+    assert "<redacted>" in result["error"]
+
+
+def test_refresh_error_never_leaks_the_api_key(tmp_db, monkeypatch):
+    secret = "AIzaSuperSecretKeyValue"
+    vid = db.add_video("Night Run", "youtube", "2025-09-29",
+                       url="https://www.youtube.com/watch?v=abc12345678", path=tmp_db)
+    video = db.get_video(vid, path=tmp_db)
+
+    def leaky_fetch(video_id, api_key):
+        raise Exception(f"400 Client Error for url: https://x?key={secret}")
+
+    monkeypatch.setattr(youtube, "fetch_video_stats", leaky_fetch)
+
+    result = refresh_metrics_for_video(video, api_key=secret, db_path=tmp_db)
+
+    assert secret not in result["error"]
+
+
 def test_import_still_adds_videos_when_stats_call_fails(tmp_db, monkeypatch):
     """Stats are a bonus -- losing them shouldn't lose the videos too."""
     pages = [_page([("vid1", "Night Run", "2025-09-29T00:00:00Z")])]

@@ -7,6 +7,19 @@
 </head>
 <body>
   <h1>Add video</h1>
+
+  <section>
+    <h2>Import from a YouTube channel</h2>
+    <p class="dim">Adds every public video not already tracked, with its current numbers.</p>
+    <form method="post" action="/videos/import/youtube">
+      <label>Channel handle
+        <input type="text" name="handle" placeholder="@yourchannel" required>
+      </label>
+      <button type="submit">Import</button>
+    </form>
+  </section>
+
+  <h2>Add one by hand</h2>
   <form method="post" action="/videos/new">
     <p>
       <label>Title<br>

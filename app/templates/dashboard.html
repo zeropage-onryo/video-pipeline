@@ -8,6 +8,10 @@
 <body>
   <h1>Dashboard</h1>
 
+  {% if message %}
+  <p class="dim">{{ message }}</p>
+  {% endif %}
+
   <section>
     <h2>Counts</h2>
     <ul>

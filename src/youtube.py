@@ -71,6 +71,18 @@ def fetch_video_stats(video_id: str, api_key: str) -> dict:
     return _parse_statistics(items[0]["statistics"])
 
 
+def _safe_error(e: Exception, api_key=None) -> str:
+    """
+    requests puts the full request URL in its error messages, and our
+    URLs carry key=<api key> -- so raw exception text is not safe to
+    show in the UI. Redact the key before it ever reaches a page.
+    """
+    message = str(e)
+    if api_key:
+        message = message.replace(api_key, "<redacted>")
+    return message
+
+
 def _parse_statistics(stats: dict) -> dict:
     """YouTube returns these counts as strings, and omits a field
     entirely when it's disabled (e.g. likes hidden) rather than zeroing
@@ -102,7 +114,7 @@ def refresh_metrics_for_video(video: dict, api_key=None, db_path=None) -> dict:
     try:
         stats = fetch_video_stats(video_id, api_key)
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": _safe_error(e, api_key)}
 
     kwargs = {"path": db_path} if db_path is not None else {}
     db.record_metrics(video["id"], **stats, **kwargs)
@@ -201,7 +213,7 @@ def import_channel_videos(handle: str, api_key=None, db_path=None) -> dict:
     try:
         channel_videos = list_channel_videos(handle, api_key)
     except Exception as e:
-        return {"ok": False, "error": str(e), "added": 0}
+        return {"ok": False, "error": _safe_error(e, api_key), "added": 0}
 
     known_ids = {
         parse_video_id(v.get("url"))
