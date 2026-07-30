@@ -185,3 +185,90 @@ def test_concept_survives_json_round_trip(tmp_db):
     assert saved["shots"][0]["cam"] == "BMPCC"
     assert saved["client"] == "a bar"
     assert json.loads(json.dumps(saved["shots"])) == SAMPLE_SHOTS
+
+
+# ---------- two-stage: ideas, then shot lists ----------
+
+def test_save_concept_allows_an_idea_with_no_shots(tmp_db):
+    """Stage one saves ideas; the shot list comes later."""
+    concept_id = preprod.save_concept(
+        {"title": "Void Signal", "hook": "a thumb above a dark screen",
+         "logline": "He waits for a call."},
+        brand="antihero", path=tmp_db,
+    )
+    saved = preprod.get_concept(concept_id, path=tmp_db)
+    assert saved["shots"] == []
+    assert saved["has_shot_list"] is False
+
+
+def test_update_concept_shots_fills_in_the_plan(tmp_db):
+    concept_id = preprod.save_concept(
+        {"title": "Void Signal", "hook": "h", "logline": "l"},
+        brand="antihero", path=tmp_db,
+    )
+    preprod.update_concept_shots(
+        concept_id,
+        {"duration": "12s", "shots": SAMPLE_SHOTS,
+         "ai": {"tool": "KLING", "technique": "t", "prompt": "p"},
+         "edit": "hard cuts", "grade": "crushed"},
+        location_ids=[],
+        path=tmp_db,
+    )
+    saved = preprod.get_concept(concept_id, path=tmp_db)
+    assert saved["has_shot_list"] is True
+    assert len(saved["shots"]) == 2
+    assert saved["duration"] == "12s"
+    assert saved["ai"]["tool"] == "KLING"
+    assert saved["edit_note"] == "hard cuts"
+    # the idea's own fields survive
+    assert saved["title"] == "Void Signal"
+    assert saved["hook"] == "h"
+
+
+def test_update_concept_shots_links_locations(tmp_db):
+    loc_id = preprod.add_location("hallway", SAMPLE_DESCRIPTION, path=tmp_db)
+    concept_id = preprod.save_concept({"title": "T"}, brand="antihero", path=tmp_db)
+    preprod.update_concept_shots(
+        concept_id, {"shots": SAMPLE_SHOTS}, location_ids=[loc_id], path=tmp_db,
+    )
+    assert [loc["name"] for loc in preprod.get_concept(concept_id, path=tmp_db)["locations"]] == [
+        "hallway"
+    ]
+
+
+def test_update_concept_shots_rejects_missing_concept(tmp_db):
+    with pytest.raises(ValueError, match="no concept"):
+        preprod.update_concept_shots(999, {"shots": SAMPLE_SHOTS}, path=tmp_db)
+
+
+def test_save_concept_ideas_saves_a_batch(tmp_db):
+    ideas = [
+        {"title": f"Idea {n}", "hook": f"hook {n}", "logline": f"line {n}"}
+        for n in range(8)
+    ]
+    ids = preprod.save_concept_ideas(
+        ideas, brand="antihero", spark="a door", prompt_template="v1", path=tmp_db,
+    )
+    assert len(ids) == 8
+    assert preprod.summary(tmp_db)["shoot_concepts"] == 8
+    assert all(c["has_shot_list"] is False for c in preprod.list_concepts(path=tmp_db))
+
+
+def test_shortlist_rate_measures_which_ideas_got_a_shot_list(tmp_db):
+    """
+    The pick: of the ideas generated, which were worth planning. Same
+    shape as pitch selection, one stage earlier than actually shooting.
+    """
+    ids = preprod.save_concept_ideas(
+        [{"title": f"Idea {n}"} for n in range(4)], brand="antihero", path=tmp_db,
+    )
+    preprod.update_concept_shots(ids[0], {"shots": SAMPLE_SHOTS}, path=tmp_db)
+
+    rate = preprod.shortlist_rate(path=tmp_db)
+    assert rate["generated"] == 4
+    assert rate["shortlisted"] == 1
+    assert rate["rate"] == 0.25
+
+
+def test_shortlist_rate_empty_is_safe(tmp_db):
+    assert preprod.shortlist_rate(path=tmp_db)["rate"] is None
