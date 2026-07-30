@@ -74,7 +74,15 @@
       </tbody>
     </table>
     {% else %}
+    {% if video_count %}
+    <p class="dim">
+      No video has a reading taken near {{ at_days }} days old, so there's nothing
+      comparable to rank. Try another "measured at", widen "posted in the last", or
+      <a href="/metrics/new">add current numbers</a>.
+    </p>
+    {% else %}
     <p class="dim">No videos yet. <a href="/videos/new">Add your first one.</a></p>
+    {% endif %}
     {% endif %}
   </section>
   </main>

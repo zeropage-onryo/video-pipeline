@@ -267,10 +267,17 @@ def test_window_composes_with_at_days(tmp_db):
                       captured_at=(d + timedelta(days=28)).date().isoformat(),
                       path=tmp_db)
 
-    at7 = db.get_top_performers(at_days=7, posted_within_days=180, path=tmp_db)
+    # Ages that the video actually has readings near. This test used to
+    # ask at_days=7 and expect the day-1 reading, which was asserting the
+    # bug: the closest snapshot won however far away it was.
+    at1 = db.get_top_performers(at_days=1, posted_within_days=180, path=tmp_db)
     at28 = db.get_top_performers(at_days=28, posted_within_days=180, path=tmp_db)
-    assert at7[0]["score"] == 500
+    assert at1[0]["score"] == 500
     assert at28[0]["score"] == 40_000
+
+    # and asking for an age it was never measured at returns nothing,
+    # rather than quietly substituting a reading from a different week
+    assert db.get_top_performers(at_days=7, posted_within_days=180, path=tmp_db) == []
 
 
 def test_posted_since_explicit_date(tmp_db):
@@ -408,3 +415,44 @@ def test_get_video_includes_originating_pitch_when_linked(tmp_db):
     video = db.get_video(vid, path=tmp_db)
     assert video["idea_title"] == "Story 2"
     assert video["idea_logline"] == "Line 2."
+
+
+# ---------- at_days must actually mean "at that age" ----------
+
+def test_a_video_with_no_snapshot_near_the_age_is_excluded(tmp_db):
+    """
+    Without a tolerance, ROW_NUMBER picks the closest snapshot however
+    far off it is -- so a video measured on day 1 gets compared against
+    one measured on day 90, and the benchmark colouring lies.
+    """
+    old = db.add_video("measured late", "tiktok", "2026-01-01", path=tmp_db)
+    db.record_metrics(old, views=5000, captured_at="2026-04-01", path=tmp_db)  # ~90d
+
+    young = db.add_video("measured early", "tiktok", "2026-03-30", path=tmp_db)
+    db.record_metrics(young, views=40, captured_at="2026-03-31", path=tmp_db)  # ~1d
+
+    at_90 = [r["title"] for r in db.get_top_performers(
+        at_days=90, posted_within_days=None, posted_since="2025-01-01", path=tmp_db)]
+    assert at_90 == ["measured late"], "a 1-day-old reading is not a 90-day reading"
+
+    at_1 = [r["title"] for r in db.get_top_performers(
+        at_days=1, posted_within_days=None, posted_since="2025-01-01", path=tmp_db)]
+    assert at_1 == ["measured early"]
+
+
+def test_benchmark_only_averages_comparable_readings(tmp_db):
+    old = db.add_video("late", "tiktok", "2026-01-01", path=tmp_db)
+    db.record_metrics(old, views=5000, captured_at="2026-04-01", path=tmp_db)
+    young = db.add_video("early", "tiktok", "2026-03-30", path=tmp_db)
+    db.record_metrics(young, views=40, captured_at="2026-03-31", path=tmp_db)
+
+    bench = db.benchmark(at_days=90, posted_since="2025-01-01", path=tmp_db)
+    assert bench["n"] == 1 and bench["median"] == 5000
+
+
+def test_tolerance_is_generous_enough_for_a_few_days_slip(tmp_db):
+    """Checking numbers on day 9 instead of day 7 is normal use."""
+    vid = db.add_video("slightly late", "tiktok", "2026-01-01", path=tmp_db)
+    db.record_metrics(vid, views=100, captured_at="2026-01-10", path=tmp_db)  # 9d
+    got = db.get_top_performers(at_days=7, posted_since="2025-01-01", path=tmp_db)
+    assert [r["title"] for r in got] == ["slightly late"]

@@ -884,3 +884,18 @@ def test_concept_warnings_are_visible_on_the_page(tmp_preprod_db):
     )
     response = client.get("/concepts")
     assert "rooftop helipad" in response.text
+
+
+def test_dashboard_distinguishes_no_videos_from_none_at_this_age(tmp_db):
+    """
+    A video whose only reading is from day 300 legitimately doesn't
+    appear at "measured at 7 days" -- but saying "No videos yet" when
+    one exists is just wrong, and reads as a broken page.
+    """
+    vid = db.add_video("Night Run", "youtube", "2025-09-29", path=tmp_db)
+    db.record_metrics(vid, views=82, captured_at="2026-07-29", path=tmp_db)
+
+    response = client.get("/?posted_within=all&at_days=7")
+    assert "No videos yet" not in response.text
+    assert "measured at" in response.text.lower()
+    assert "Night Run" not in response.text   # correctly excluded from the table

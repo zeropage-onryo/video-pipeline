@@ -42,6 +42,14 @@ DB_PATH = PROJECT_ROOT / "data" / "pipeline.db"
 
 PLATFORMS = ("instagram", "tiktok", "youtube")
 
+# How far a snapshot may sit from the requested age and still count as a
+# reading "at" that age, as a fraction of at_days. Without this, the
+# closest snapshot always wins however far off it is, so a video measured
+# on day 1 gets ranked against one measured on day 90 and the benchmark
+# colouring is comparing two different questions. Proportional rather
+# than fixed: two days' slip matters at day 7 and is noise at day 90.
+AGE_TOLERANCE = 0.5
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS pitch_runs (
@@ -527,6 +535,7 @@ def get_top_performers(
             JOIN metrics m ON m.video_id = v.id
             LEFT JOIN ideas i ON i.id = v.idea_id
             WHERE m.{metric} IS NOT NULL
+              AND ABS(julianday(m.captured_at) - julianday(v.posted_at) - ?) <= ?
               {"AND substr(v.posted_at, 1, 10) >= ?" if cutoff else ""}
         )
         SELECT video_id, title, platform, posted_at, topic, hook_type,
@@ -538,7 +547,7 @@ def get_top_performers(
         ORDER BY score {"ASC" if ascending else "DESC"}
         LIMIT ?
     """
-    params: list[Any] = [at_days]
+    params: list[Any] = [at_days, at_days, at_days * AGE_TOLERANCE]
     if cutoff:
         params.append(cutoff)
     if platform:

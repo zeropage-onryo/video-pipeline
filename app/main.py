@@ -97,6 +97,10 @@ def dashboard(request: Request, at_days: int = 7, posted_within: str = "6",
             "rows": rows,
             "at_days": at_days,
             "posted_within": posted_within,
+            # a video with no reading near at_days is correctly absent from
+            # the table, but "No videos yet" would be a lie -- the page has
+            # to tell those two situations apart
+            "video_count": counts["videos"],
             "message": message,
         },
     )
