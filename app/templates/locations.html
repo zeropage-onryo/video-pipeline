@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Locations — Zero Page Films</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <h1>Locations</h1>
+  <p class="dim">The spaces concepts get built around.</p>
+
+  {% if locations %}
+  {% for loc in locations %}
+  <section>
+    <h2>{{ loc.name }}</h2>
+    <p class="dim">{{ loc.photo_count or 0 }} photo(s)</p>
+    {% if loc.description %}
+    <p>{{ loc.description.space }}</p>
+    <table>
+      {% if loc.description.light_sources %}
+      <tr><td class="dim">Light</td><td>{{ loc.description.light_sources | join(", ") }}</td></tr>
+      {% endif %}
+      {% if loc.description.textures %}
+      <tr><td class="dim">Textures</td><td>{{ loc.description.textures | join(", ") }}</td></tr>
+      {% endif %}
+      {% if loc.description.angles %}
+      <tr><td class="dim">Angles</td><td>{{ loc.description.angles | join("; ") }}</td></tr>
+      {% endif %}
+      {% if loc.description.constraints %}
+      <tr><td class="dim">Constraints</td><td>{{ loc.description.constraints }}</td></tr>
+      {% endif %}
+    </table>
+    {% else %}
+    <p class="dim">Not described yet.</p>
+    {% endif %}
+  </section>
+  {% endfor %}
+  {% else %}
+  <p class="dim">
+    No locations yet. Put photos in <code>locations/&lt;name&gt;/</code>, then run
+    <code>python -m src.locations</code> to describe them.
+  </p>
+  {% endif %}
+
+  <p><a href="/concepts">Concepts</a> · <a href="/">Dashboard</a></p>
+</body>
+</html>
