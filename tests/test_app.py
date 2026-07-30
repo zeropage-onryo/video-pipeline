@@ -7,6 +7,7 @@ from datetime import date, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
+from app import main as app_main
 from app.main import (
     app,
     benchmark_class,
@@ -311,3 +312,56 @@ def test_pitches_page_shows_pick_rate_per_prompt(tmp_db):
 
     response = client.get("/pitches")
     assert "30.0%" in response.text
+
+
+# ---------- /metrics/refresh/{video_id} and the refresh button ----------
+
+def test_post_metrics_refresh_records_a_snapshot(tmp_db, monkeypatch):
+    vid = db.add_video("Night Run", "youtube", "2025-09-29",
+                       url="https://www.youtube.com/watch?v=abc12345678", path=tmp_db)
+    monkeypatch.setattr(
+        app_main.youtube, "fetch_video_stats",
+        lambda video_id, api_key: {"views": 82, "likes": 5, "comments": 1},
+    )
+    monkeypatch.setenv("YOUTUBE_API_KEY", "test-key")
+
+    response = client.post(f"/metrics/refresh/{vid}", follow_redirects=False)
+
+    assert response.status_code in (302, 303, 307)
+    assert "message=" in response.headers["location"]
+    history = db.get_video_history(vid, path=tmp_db)
+    assert history[-1]["views"] == 82
+
+
+def test_post_metrics_refresh_404s_for_missing_video(tmp_db):
+    response = client.post("/metrics/refresh/999")
+    assert response.status_code == 404
+
+
+def test_post_metrics_refresh_reports_failure_without_breaking(tmp_db, monkeypatch):
+    vid = db.add_video("Night Run", "youtube", "2025-09-29",
+                       url="https://www.youtube.com/watch?v=abc12345678", path=tmp_db)
+    monkeypatch.delenv("YOUTUBE_API_KEY", raising=False)
+
+    response = client.post(f"/metrics/refresh/{vid}", follow_redirects=False)
+
+    assert response.status_code in (302, 303, 307)
+    assert db.get_video_history(vid, path=tmp_db) == []
+
+
+def test_metrics_new_shows_refresh_message(tmp_db):
+    response = client.get("/metrics/new?message=Refreshed+Night+Run")
+    assert "Refreshed Night Run" in response.text
+
+
+def test_metrics_new_shows_refresh_button_for_youtube(tmp_db):
+    db.add_video("Night Run", "youtube", "2025-09-29",
+                 url="https://www.youtube.com/watch?v=abc", path=tmp_db)
+    response = client.get("/metrics/new")
+    assert "Refresh" in response.text
+
+
+def test_metrics_new_no_refresh_button_for_non_youtube(tmp_db):
+    db.add_video("Some TikTok video", "tiktok", "2025-09-29", path=tmp_db)
+    response = client.get("/metrics/new")
+    assert "Refresh" not in response.text
