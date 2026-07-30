@@ -15,7 +15,7 @@ from app.main import (
     parse_metrics_form,
     parse_video_form,
 )
-from src import db
+from src import db, preprod
 
 client = TestClient(app)
 
@@ -26,6 +26,13 @@ def tmp_db(tmp_path, monkeypatch):
     db.init_db(path)
     monkeypatch.setattr(db, "DB_PATH", path)
     return path
+
+
+@pytest.fixture
+def tmp_preprod_db(tmp_db):
+    """tmp_db plus the pre-production tables."""
+    preprod.init(tmp_db)
+    return tmp_db
 
 
 def test_dashboard_returns_200(tmp_db):
@@ -406,3 +413,103 @@ def test_post_import_reports_failure_without_breaking(tmp_db, monkeypatch):
 def test_post_import_requires_a_handle(tmp_db):
     response = client.post("/videos/import/youtube", data={"handle": "  "})
     assert response.status_code == 400
+
+
+# ---------- /locations ----------
+
+SAMPLE_SPACE = {
+    "space": "narrow hallway with a door at the end",
+    "light_sources": ["overhead practical"],
+    "textures": ["scuffed paint"],
+    "angles": ["low from the doorway"],
+    "constraints": "tight, no wide lens",
+}
+
+CONCEPT_SHOTS = [
+    {"n": 1, "type": "CHARACTER", "cam": "BMPCC", "location": "hallway",
+     "desc": "low angle, he steps into frame", "light": "overhead practical"},
+]
+
+
+def test_locations_page_empty_state(tmp_preprod_db):
+    response = client.get("/locations")
+    assert response.status_code == 200
+    assert "No locations yet" in response.text
+
+
+def test_locations_page_lists_described_spaces(tmp_preprod_db):
+    preprod.add_location("hallway", SAMPLE_SPACE, photo_count=3, path=tmp_preprod_db)
+    response = client.get("/locations")
+    assert "hallway" in response.text
+    assert "narrow hallway" in response.text
+    assert "overhead practical" in response.text
+
+
+# ---------- /concepts ----------
+
+def test_concepts_page_empty_state(tmp_preprod_db):
+    response = client.get("/concepts")
+    assert response.status_code == 200
+    assert "No concepts yet" in response.text
+
+
+def test_concepts_page_lists_concepts_with_shots(tmp_preprod_db):
+    preprod.save_concept(
+        {"title": "The Waiting", "hook": "a hand on the handle", "shots": CONCEPT_SHOTS},
+        brand="antihero", path=tmp_preprod_db,
+    )
+    response = client.get("/concepts")
+    assert "The Waiting" in response.text
+    assert "a hand on the handle" in response.text
+    assert "he steps into frame" in response.text
+
+
+def test_concepts_page_shows_shoot_rate(tmp_preprod_db):
+    ids = [
+        preprod.save_concept({"title": f"C{n}", "shots": CONCEPT_SHOTS},
+                             brand="antihero", path=tmp_preprod_db)
+        for n in range(4)
+    ]
+    preprod.mark_shot(ids[0], path=tmp_preprod_db)
+    response = client.get("/concepts")
+    assert "1 of 4" in response.text
+
+
+def test_post_mark_concept_shot_toggles_and_redirects(tmp_preprod_db):
+    concept_id = preprod.save_concept(
+        {"title": "The Waiting", "shots": CONCEPT_SHOTS}, brand="antihero", path=tmp_preprod_db,
+    )
+    response = client.post(f"/concepts/{concept_id}/shot", follow_redirects=False)
+
+    assert response.status_code in (302, 303, 307)
+    assert preprod.get_concept(concept_id, path=tmp_preprod_db)["shot_done"] == 1
+
+    client.post(f"/concepts/{concept_id}/shot", follow_redirects=False)
+    assert preprod.get_concept(concept_id, path=tmp_preprod_db)["shot_done"] == 0
+
+
+def test_post_mark_concept_shot_404s_for_missing_concept(tmp_preprod_db):
+    assert client.post("/concepts/999/shot").status_code == 404
+
+
+def test_post_generate_concept_creates_one(tmp_preprod_db, monkeypatch):
+    preprod.add_location("hallway", SAMPLE_SPACE, path=tmp_preprod_db)
+    monkeypatch.setattr(
+        app_main.shootgen, "generate_concept",
+        lambda **kw: {"concept_id": 1, "concept": {"title": "X"}, "warnings": []},
+    )
+    response = client.post("/concepts/generate", data={"brand": "antihero", "spark": "a door"},
+                           follow_redirects=False)
+    assert response.status_code in (302, 303, 307)
+    assert "message=" in response.headers["location"]
+
+
+def test_post_generate_concept_reports_failure_without_breaking(tmp_preprod_db, monkeypatch):
+    def boom(**kw):
+        raise ValueError("no locations described yet")
+
+    monkeypatch.setattr(app_main.shootgen, "generate_concept", boom)
+    response = client.post("/concepts/generate", data={"brand": "antihero"},
+                           follow_redirects=False)
+    assert response.status_code in (302, 303, 307)
+    assert "message=" in response.headers["location"]
