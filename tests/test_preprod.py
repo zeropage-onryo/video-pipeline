@@ -313,3 +313,12 @@ def test_list_concepts_includes_warnings(tmp_db):
     preprod.save_concept({"title": "T"}, brand="antihero",
                          warnings=["something"], path=tmp_db)
     assert preprod.list_concepts(path=tmp_db)[0]["warnings"] == ["something"]
+
+
+def test_use_pov_is_remembered_on_the_concept(tmp_db):
+    """The shot list is generated later, so the choice has to persist."""
+    off = preprod.save_concept({"title": "A"}, brand="antihero",
+                               use_pov=False, path=tmp_db)
+    on = preprod.save_concept({"title": "B"}, brand="antihero", path=tmp_db)
+    assert preprod.get_concept(off, path=tmp_db)["use_pov"] is False
+    assert preprod.get_concept(on, path=tmp_db)["use_pov"] is True

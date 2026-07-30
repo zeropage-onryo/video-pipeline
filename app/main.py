@@ -440,7 +440,7 @@ async def concepts_generate(request: Request):
         if (form.get("mode") or "").strip() == "ideas":
             result = shootgen.generate_concept_ideas(
                 brand=brand, client=client_name, spark=spark,
-                gemini_client=gemini_client, db_path=db.DB_PATH,
+                gemini_client=gemini_client, use_pov=use_pov, db_path=db.DB_PATH,
             )
             message = f"Generated {len(result['ideas'])} ideas — plan the ones worth shooting"
         else:

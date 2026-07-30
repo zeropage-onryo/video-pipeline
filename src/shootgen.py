@@ -158,7 +158,7 @@ def parse_plan_response(text: str) -> dict:
 
 def generate_concept_ideas(brand: str, client=None, spark=None, gemini_client=None,
                            model: str = MODEL, count: int = DEFAULT_IDEA_COUNT,
-                           db_path=None) -> dict:
+                           use_pov: bool = True, db_path=None) -> dict:
     """
     Stage one: several cheap ideas in a single call, so they can be
     varied against each other rather than rolled independently. No shot
@@ -176,13 +176,13 @@ def generate_concept_ideas(brand: str, client=None, spark=None, gemini_client=No
 
     concept_ids = preprod.save_concept_ideas(
         ideas, brand=brand, client=client, spark=spark,
-        prompt_template=prompt, **kwargs,
+        prompt_template=prompt, use_pov=use_pov, **kwargs,
     )
     return {"concept_ids": concept_ids, "ideas": ideas}
 
 
 def generate_shot_list(concept_id: int, gemini_client=None, model: str = MODEL,
-                       use_pov: bool = True, db_path=None) -> dict:
+                       use_pov=None, db_path=None) -> dict:
     """
     Stage two: the shot list for an idea you chose. This call is the
     pick -- bothering to plan a shoot for an idea is the signal
@@ -192,6 +192,12 @@ def generate_shot_list(concept_id: int, gemini_client=None, model: str = MODEL,
     concept = preprod.get_concept(concept_id, **kwargs)
     if concept is None:
         raise ValueError(f"no concept with id {concept_id}")
+
+    # The camera choice was made when the idea was generated; planning
+    # happens later, so it has to come from the concept rather than a
+    # default that quietly turns the camera back on.
+    if use_pov is None:
+        use_pov = concept.get("use_pov", True)
 
     locations = preprod.list_locations(**kwargs)
     if not locations:
@@ -283,7 +289,7 @@ def generate_concept(brand: str, client=None, spark=None, gemini_client=None,
     concept_id = preprod.save_concept(
         concept, brand=brand, client=client, spark=spark,
         location_ids=location_ids, prompt_template=prompt,
-        warnings=warnings, **kwargs,
+        warnings=warnings, use_pov=use_pov, **kwargs,
     )
     return {"concept_id": concept_id, "concept": concept, "warnings": warnings}
 

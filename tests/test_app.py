@@ -899,3 +899,21 @@ def test_dashboard_distinguishes_no_videos_from_none_at_this_age(tmp_db):
     assert "No videos yet" not in response.text
     assert "measured at" in response.text.lower()
     assert "Night Run" not in response.text   # correctly excluded from the table
+
+
+def test_generate_ideas_records_the_pov_choice(tmp_preprod_db, monkeypatch):
+    """
+    The camera choice is made at idea time but needed at shot-list time,
+    so it has to be stored on the concept rather than re-defaulted.
+    """
+    preprod.add_location("hallway", SAMPLE_SPACE, path=tmp_preprod_db)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    seen = {}
+    monkeypatch.setattr(
+        app_main.shootgen, "generate_concept_ideas",
+        lambda **kw: seen.update(use_pov=kw.get("use_pov")) or
+        {"concept_ids": [1], "ideas": [{"title": "Idea"}]},
+    )
+    client.post("/concepts/generate", data={"brand": "antihero", "mode": "ideas"},
+                follow_redirects=False)   # checkbox absent -> POV off
+    assert seen["use_pov"] is False

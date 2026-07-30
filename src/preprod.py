@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS shoot_concepts (
     shot_done   INTEGER NOT NULL DEFAULT 0,
     prompt_hash TEXT,
     warnings_json TEXT,
+    use_pov     INTEGER NOT NULL DEFAULT 1,
     notes       TEXT
 );
 
@@ -76,6 +77,10 @@ def init(path: Path | str = DB_PATH) -> None:
         existing = {r["name"] for r in conn.execute("PRAGMA table_info(shoot_concepts)")}
         if "warnings_json" not in existing:
             conn.execute("ALTER TABLE shoot_concepts ADD COLUMN warnings_json TEXT")
+        if "use_pov" not in existing:
+            conn.execute(
+                "ALTER TABLE shoot_concepts ADD COLUMN use_pov INTEGER NOT NULL DEFAULT 1"
+            )
 
 
 # --------------------------------------------------------------------------
@@ -159,6 +164,7 @@ def save_concept(
     location_ids: Optional[list] = None,
     prompt_template: Optional[str] = None,
     warnings: Optional[list] = None,
+    use_pov: bool = True,
     path: Path | str = DB_PATH,
 ) -> int:
     """
@@ -184,15 +190,15 @@ def save_concept(
             INSERT INTO shoot_concepts
                 (created_at, brand, client, spark, title, hook, logline,
                  duration, shots_json, ai_json, edit_note, grade_note, prompt_hash,
-                 warnings_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 warnings_json, use_pov)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (_now(), brand, client, spark, title,
              concept.get("hook"), concept.get("logline"), concept.get("duration"),
              json.dumps(concept.get("shots") or []),
              json.dumps(concept["ai"]) if concept.get("ai") else None,
              concept.get("edit"), concept.get("grade"), _hash(prompt_template),
-             json.dumps(warnings) if warnings else None),
+             json.dumps(warnings) if warnings else None, 1 if use_pov else 0),
         )
         concept_id = int(cur.lastrowid)
 
@@ -214,6 +220,7 @@ def _concept_row(row, conn) -> dict[str, Any]:
     # Derived, not stored: an idea that hasn't been planned yet simply
     # has no shots. Storing a flag as well would let the two disagree.
     data["has_shot_list"] = bool(data["shots"])
+    data["use_pov"] = bool(data.get("use_pov", 1))
     data["locations"] = [
         dict(r)
         for r in conn.execute(
@@ -253,6 +260,7 @@ def save_concept_ideas(
     client: Optional[str] = None,
     spark: Optional[str] = None,
     prompt_template: Optional[str] = None,
+    use_pov: bool = True,
     path: Path | str = DB_PATH,
 ) -> list:
     """
@@ -262,7 +270,7 @@ def save_concept_ideas(
     """
     return [
         save_concept(idea, brand=brand, client=client, spark=spark,
-                     prompt_template=prompt_template, path=path)
+                     prompt_template=prompt_template, use_pov=use_pov, path=path)
         for idea in ideas
     ]
 

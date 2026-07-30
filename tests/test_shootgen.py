@@ -433,3 +433,24 @@ def test_shot_list_warnings_survive_too(tmp_db, monkeypatch):
     shootgen.generate_shot_list(concept_id, gemini_client=None, db_path=tmp_db)
     stored = preprod.get_concept(concept_id, path=tmp_db)["warnings"]
     assert any("rooftop helipad" in w for w in stored)
+
+
+def test_shot_list_inherits_the_concepts_pov_setting(tmp_db, monkeypatch):
+    """
+    Planning happens after generating, so the shot list must take the
+    camera choice from the concept rather than defaulting it back on --
+    otherwise you get ACTION5 shots for a shoot with no action cam, and
+    validate_concept won't flag them either.
+    """
+    concept_id = preprod.save_concept(
+        {"title": "T"}, brand="antihero", use_pov=False, path=tmp_db,
+    )
+    seen = {}
+
+    def fake(client, model, prompt):
+        seen["prompt"] = prompt
+        return PLAN_RESPONSE
+
+    monkeypatch.setattr(shootgen, "generate_with_retry", fake)
+    shootgen.generate_shot_list(concept_id, gemini_client=None, db_path=tmp_db)
+    assert "ACTION5" not in seen["prompt"]
