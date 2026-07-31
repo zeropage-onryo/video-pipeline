@@ -936,6 +936,27 @@ def test_analytics_page_renders_with_tiles_and_bars(tmp_db):
     assert 'width:25.0%' in response.text      # Small scaled against it
 
 
+def test_clean_title_strips_hashtags():
+    assert app_main.clean_title("Blonde boy #hairstyle #haircolor") == "Blonde boy"
+    assert app_main.clean_title("Ducati Engine Cleaning #ducati") == "Ducati Engine Cleaning"
+    assert app_main.clean_title("Night Run") == "Night Run"
+
+
+def test_clean_title_keeps_a_title_that_is_only_hashtags():
+    # stripping everything would leave a blank row; the raw title is
+    # better than no title
+    assert app_main.clean_title("#shorts #fyp") == "#shorts #fyp"
+
+
+def test_analytics_page_shows_cleaned_titles(tmp_db):
+    vid = db.add_video("Margarita Recipe #cocktail #margarita #fyp",
+                       "youtube", "2026-01-01", path=tmp_db)
+    db.record_metrics(vid, views=100, captured_at="2026-01-08", path=tmp_db)
+    response = client.get("/analytics")
+    assert "Margarita Recipe" in response.text
+    assert "#cocktail" not in response.text
+
+
 def test_metrics_new_still_works_as_an_alias(tmp_db):
     response = client.get("/metrics/new?updated=3")
     assert response.status_code == 200
