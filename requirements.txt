@@ -10,3 +10,5 @@ uvicorn
 jinja2
 python-multipart
 Pillow
+psycopg[binary]
+pgvector
