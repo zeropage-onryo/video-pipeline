@@ -246,10 +246,13 @@ is shooting one of the generated concepts, marking it shot, and adding the video
 - `import_channel_videos` can report success when the bulk stats call failed; `mark_kept` doesn't
   clear other keepers on the same shot, which skews `attempts_to_keeper`; `ingest.py` reads only
   `GEMINI_API_KEY` where every other module also accepts `GOOGLE_API_KEY`.
-- The RAG store runs live on this machine via Postgres.app (database `zeropage`,
+- The RAG store runs live on this machine via **Homebrew `postgresql@17`** (auto-starts at
+  login through `~/Library/LaunchAgents/homebrew.mxcl.postgresql@17.plist`; database `zeropage`,
   `DATABASE_URL` in `.env`); ingest, scoped query, and the eval harness are all verified
   against it with real embeddings (hit@3 1.00 / MRR 0.83 on `eval_cases.json`). Machines
-  without a local Postgres can use the repo's `docker-compose.yml` instead. The grounded
+  without a local Postgres can use the repo's `docker-compose.yml` instead. Note: Postgres.app
+  is also installed but is an uninitialised PostgreSQL 18 that owns none of this data — do not
+  "Initialize" it, it would contend for port 5432 with the server that actually has the library. The grounded
   `src.pitch` end-to-end run is still pending — next real pitch run exercises it.
 - `/shots` and the tool scoreboard aren't built — they need real generation attempts logged
   through `genlog.py` first, and inventing that data would corrupt the only numbers that matter.
