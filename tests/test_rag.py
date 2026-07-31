@@ -97,6 +97,8 @@ class FakeConn:
         conn = self
 
         class _Cursor:
+            rowcount = len(conn.rows)
+
             def fetchall(self):
                 return conn.rows
 
@@ -229,6 +231,28 @@ def test_format_references_numbers_and_attributes():
     )
     assert "1." in text and "2." in text
     assert "brief.txt" in text and "keep it dry" in text
+
+
+# ---------- store browsing (for the /library screen) ----------
+
+def test_list_sources_groups_and_shapes():
+    conn = FakeConn(rows=[
+        ("brief.txt", "personal_brand", None, 1, "2026-07-31"),
+        ("edit_prompt.txt", "editing", None, 4, "2026-07-31"),
+    ])
+    sources = rag.list_sources(conn)
+    sql, _ = conn.executed[0]
+    assert "GROUP BY" in sql
+    assert sources[0] == {"source": "brief.txt", "domain": "personal_brand",
+                          "project": None, "chunks": 1, "added": "2026-07-31"}
+
+
+def test_delete_source_is_parameterized():
+    conn = FakeConn()
+    rag.delete_source(conn, "brief.txt")
+    sql, params = conn.executed[0]
+    assert sql.startswith("DELETE FROM rag_documents")
+    assert params == ("brief.txt",)
 
 
 def test_module_rejects_unknown_cli_verbs():

@@ -501,3 +501,28 @@ td.entry-title {
 
 /* number inputs don't need browser-default width; keep the row on screen */
 .metric-input { width: 90px; }
+
+/* ---- library: search row + add form ---- */
+
+.library-search {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.library-add label {
+  display: block;
+  margin-bottom: 10px;
+}
+
+.library-add input, .library-add textarea {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+}
+
+.library-add-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}

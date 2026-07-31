@@ -234,6 +234,29 @@ def retrieve_references(text: str, k: int = 5, db_url: Optional[str] = None,
                 pass
 
 
+def list_sources(conn) -> list:
+    """What's on the shelves: one row per ingested source."""
+    cursor = conn.execute(
+        "SELECT source, domain, project, COUNT(*), MAX(created_at) "
+        "FROM rag_documents GROUP BY source, domain, project "
+        "ORDER BY MAX(created_at) DESC"
+    )
+    return [
+        {"source": source, "domain": domain, "project": project,
+         "chunks": chunks, "added": added}
+        for source, domain, project, chunks, added in cursor.fetchall()
+    ]
+
+
+def delete_source(conn, source: str) -> int:
+    """Remove every chunk of one source. Returns rows removed."""
+    cursor = conn.execute(
+        "DELETE FROM rag_documents WHERE source = %s", (source,)
+    )
+    conn.commit()
+    return cursor.rowcount
+
+
 def format_references(references: list) -> str:
     """The numbered block pitch prompts embed. Empty in, empty out."""
     lines = []

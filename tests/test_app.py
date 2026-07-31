@@ -20,6 +20,20 @@ from src import db, preprod
 client = TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def no_real_rag_store(monkeypatch):
+    """
+    libpq connects below the Python socket module, so conftest's network
+    guard can't stop a route from reaching a REAL local Postgres (one is
+    running on this machine now). Default every app test to 'store
+    unreachable'; tests that want the store patch these again themselves.
+    """
+    def refused(db_url=None):
+        raise ConnectionError("no rag store in tests")
+
+    monkeypatch.setattr(app_main.rag, "connect", refused)
+
+
 @pytest.fixture
 def tmp_db(tmp_path, monkeypatch):
     path = tmp_path / "test.db"
@@ -589,7 +603,8 @@ def test_concepts_page_no_shotlist_button_once_planned(tmp_preprod_db):
 # Every screen was built and verified in isolation by typing its URL,
 # which is exactly how a site ends up with no way to get between pages.
 
-NAV_TARGETS = ["/", "/concepts", "/locations", "/pitches", "/analytics", "/videos/new"]
+NAV_TARGETS = ["/", "/concepts", "/locations", "/pitches", "/analytics",
+               "/library", "/videos/new"]
 
 
 @pytest.mark.parametrize("page", NAV_TARGETS)
@@ -934,6 +949,107 @@ def test_analytics_page_renders_with_tiles_and_bars(tmp_db):
     assert 'class="bar"' in response.text
     assert 'width:100.0%' in response.text     # Big is the max
     assert 'width:25.0%' in response.text      # Small scaled against it
+
+
+# ---------- /library ----------
+
+class LibraryFakeConn:
+    """Just enough psycopg surface for the library routes."""
+
+    def __init__(self, rows=None):
+        self.rows = rows or []
+        self.executed = []
+        self.closed = False
+
+    def execute(self, sql, params=None):
+        self.executed.append((" ".join(sql.split()), params))
+        conn = self
+
+        class _Cursor:
+            rowcount = len(conn.rows)
+
+            def fetchall(self):
+                return conn.rows
+
+        return _Cursor()
+
+    def commit(self):
+        pass
+
+    def close(self):
+        self.closed = True
+
+
+def test_library_page_lists_sources(monkeypatch):
+    conn = LibraryFakeConn(rows=[("brief.txt", "personal_brand", None, 1, "2026-07-31")])
+    monkeypatch.setattr(app_main.rag, "connect", lambda db_url=None: conn)
+    response = client.get("/library")
+    assert response.status_code == 200
+    assert "brief.txt" in response.text
+    assert "personal_brand" in response.text
+    assert conn.closed        # no route may leak a connection
+
+
+def test_library_page_degrades_when_store_is_down():
+    # autouse fixture already makes connect() raise
+    response = client.get("/library")
+    assert response.status_code == 200
+    assert "unavailable" in response.text.lower()
+
+
+def test_library_search_renders_scored_results(monkeypatch):
+    # sources list empty; the query itself is patched separately below
+    conn = LibraryFakeConn(rows=[])
+    monkeypatch.setattr(app_main.rag, "connect", lambda db_url=None: conn)
+    monkeypatch.setattr(app_main.rag, "query",
+                        lambda text, client, conn, k=5, domain=None, project=None:
+                        [{"source": "notes.md", "chunk": "one image, one turn",
+                          "domain": "cinematography", "project": None,
+                          "source_ref": None, "score": 0.8}])
+    response = client.get("/library?q=structure")
+    assert response.status_code == 200
+    assert "one image, one turn" in response.text
+    assert "0.8" in response.text
+
+
+def test_library_ingest_posts_to_the_store(monkeypatch):
+    conn = LibraryFakeConn()
+    recorded = {}
+    monkeypatch.setattr(app_main.rag, "connect", lambda db_url=None: conn)
+    monkeypatch.setattr(app_main.rag, "init_store", lambda c: None)
+    monkeypatch.setattr(app_main.rag, "make_client", lambda: object())
+
+    def fake_ingest(records, client, c):
+        recorded.update(records[0])
+        return 3
+
+    monkeypatch.setattr(app_main.rag, "ingest_records", fake_ingest)
+    response = client.post("/library/ingest",
+                           data={"source": "my-notes", "domain": "cinematography",
+                                 "text": "night exteriors want practicals"},
+                           follow_redirects=False)
+    assert response.status_code == 303
+    assert "3" in response.headers["location"]      # "stored 3 chunks" message
+    assert recorded["source"] == "my-notes"
+    assert recorded["domain"] == "cinematography"
+
+
+def test_library_ingest_requires_the_domain_tag():
+    response = client.post("/library/ingest",
+                           data={"source": "x", "domain": "", "text": "words"},
+                           follow_redirects=False)
+    assert response.status_code == 303
+    assert "domain" in response.headers["location"].lower()
+
+
+def test_library_delete_removes_one_source(monkeypatch):
+    conn = LibraryFakeConn(rows=[("gone",)])
+    monkeypatch.setattr(app_main.rag, "connect", lambda db_url=None: conn)
+    response = client.post("/library/delete",
+                           data={"source": "old-notes.txt"}, follow_redirects=False)
+    assert response.status_code == 303
+    deletes = [p for s, p in conn.executed if s.startswith("DELETE")]
+    assert ("old-notes.txt",) in deletes
 
 
 def test_clean_title_strips_hashtags():

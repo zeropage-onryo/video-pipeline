@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from google import genai
 
-from src import db, locations, preprod, shootgen, youtube
+from src import db, locations, preprod, rag, shootgen, youtube
 
 from .sparkline import render_sparkline
 
@@ -205,6 +205,79 @@ def parse_metrics_form(form: dict, video_ids: list) -> dict:
         if entry:
             changed[vid] = entry
     return changed
+
+
+@app.get("/library")
+def library(request: Request, q: Optional[str] = None,
+            domain: Optional[str] = None, message: Optional[str] = None):
+    """
+    The reference library: what's on the shelves, semantic search over
+    it, and a form to add to it. The whole page must render when
+    Postgres is down -- the library is optional everywhere else, so it
+    can't be the one screen that 500s.
+    """
+    context = {"available": False, "sources": [], "results": [],
+               "domains": [], "q": q, "domain": domain,
+               "message": message, "error": None}
+    conn = None
+    try:
+        conn = rag.connect()
+        context["sources"] = rag.list_sources(conn)
+        context["domains"] = sorted({s["domain"] for s in context["sources"]})
+        context["available"] = True
+        if q:
+            try:
+                context["results"] = rag.query(
+                    q, rag.make_client(), conn, k=5, domain=domain or None
+                )
+            except Exception as e:
+                context["error"] = f"search failed: {e}"
+    except Exception as e:
+        context["error"] = f"library unavailable: {e}"
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    return templates.TemplateResponse(request, "library.html", context)
+
+
+@app.post("/library/ingest")
+def library_ingest(source: str = Form(""), domain: str = Form(""),
+                   project: str = Form(""), source_ref: str = Form(""),
+                   text: str = Form("")):
+    if not (source.strip() and domain.strip() and text.strip()):
+        return RedirectResponse(
+            "/library?message=" + quote("source, domain, and text are all required"),
+            status_code=303,
+        )
+    try:
+        conn = rag.connect()
+        rag.init_store(conn)
+        written = rag.ingest_records(
+            [{"source": source.strip(), "text": text,
+              "domain": domain.strip(), "project": project.strip() or None,
+              "source_ref": source_ref.strip() or None}],
+            rag.make_client(), conn,
+        )
+        conn.close()
+        message = f"stored {written} chunk(s) under '{domain.strip()}'"
+    except Exception as e:
+        message = f"ingest failed: {e}"
+    return RedirectResponse("/library?message=" + quote(message), status_code=303)
+
+
+@app.post("/library/delete")
+def library_delete(source: str = Form(...)):
+    try:
+        conn = rag.connect()
+        removed = rag.delete_source(conn, source)
+        conn.close()
+        message = f"removed '{source}' ({removed} chunk(s))"
+    except Exception as e:
+        message = f"delete failed: {e}"
+    return RedirectResponse("/library?message=" + quote(message), status_code=303)
 
 
 @app.get("/analytics")
