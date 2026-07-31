@@ -39,8 +39,8 @@
       </div>
       <div class="card-body">
         {% for b in bars %}
-        <div class="bar-row" title="{{ b.title }} — {{ b.views_fmt }} views">
-          <span class="bar-label">{{ b.title }}</span>
+        <div class="bar-row" title="{{ b.title | clean_title }} — {{ b.views_fmt }} views">
+          <span class="bar-label">{{ b.title | clean_title }}</span>
           <span class="bar-track"><span class="bar" style="width:{{ b.pct }}%"></span></span>
           <span class="bar-value num">{{ b.views_fmt }}</span>
         </div>
@@ -63,7 +63,7 @@
           <tbody>
             {% for r in rows %}
             <tr>
-              <td class="entry-title" title="{{ r.title }}">{{ r.title }}</td>
+              <td class="entry-title" title="{{ r.title | clean_title }}">{{ r.title | clean_title }}</td>
               <td>{{ r.platform }}</td>
               <td><input type="number" class="metric-input" data-row="{{ loop.index0 }}" data-col="0"
                          name="views_{{ r.video_id }}"

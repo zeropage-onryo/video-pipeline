@@ -32,6 +32,20 @@ LOCATIONS_DIR = PROJECT_ROOT / "locations"
 THUMB_DIR = PROJECT_ROOT / "data" / "thumbs"
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
 
+
+def clean_title(title: str) -> str:
+    """
+    Display form of a video title: the stored title is whatever YouTube
+    has, hashtags and all; on screen the tags are noise. A title that is
+    nothing but hashtags keeps its raw form rather than going blank.
+    """
+    stripped = re.sub(r"#\S+", "", title or "").strip()
+    stripped = re.sub(r"\s{2,}", " ", stripped)
+    return stripped if stripped else title
+
+
+templates.env.filters["clean_title"] = clean_title
+
 # "Posted in the last" control -> posted_within_days. "all" -> no cutoff.
 POSTED_WINDOWS = {"3": 90, "6": 180, "12": 365, "all": None}
 

@@ -498,3 +498,6 @@ td.entry-title {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* number inputs don't need browser-default width; keep the row on screen */
+.metric-input { width: 90px; }
