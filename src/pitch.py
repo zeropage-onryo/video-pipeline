@@ -8,7 +8,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
 
-from . import db
+from . import db, rag
 from .gemini_utils import generate_with_retry, strip_fences
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -23,7 +23,31 @@ def load_manifest() -> list[dict]:
     return json.loads(MANIFEST_PATH.read_text())
 
 
-def build_prompt(manifest: list[dict]) -> str:
+NO_REFERENCES_NOTE = (
+    "(no reference library available -- pitch from the footage alone)"
+)
+
+
+def build_reference_query(manifest: list[dict], max_chars: int = 6000) -> str:
+    """
+    The retrieval query is the footage itself: every clip's beats and
+    arc joined into one text, capped so an enormous manifest doesn't
+    blow the embedding input. Handles both description shapes --
+    {beats, arc} from current ingests, flat strings from old ones.
+    """
+    parts = []
+    for entry in manifest:
+        description = entry.get("description")
+        if isinstance(description, dict):
+            parts.extend(description.get("beats") or [])
+            if description.get("arc"):
+                parts.append(description["arc"])
+        elif isinstance(description, str):
+            parts.append(description)
+    return " ".join(parts)[:max_chars]
+
+
+def build_prompt(manifest: list[dict], references_block: str = "") -> str:
     brief = (PROMPTS_DIR / "brief.txt").read_text()
     settings = (PROMPTS_DIR / "settings.txt").read_text()
     template = (PROMPTS_DIR / "pitch_prompt.txt").read_text()
@@ -34,6 +58,7 @@ def build_prompt(manifest: list[dict]) -> str:
         .replace("{brief}", brief)
         .replace("{settings}", settings)
         .replace("{manifest}", manifest_json)
+        .replace("{references}", references_block or NO_REFERENCES_NOTE)
     )
 
 
@@ -101,7 +126,19 @@ def main(db_path=None):
         sys.exit(1)
 
     manifest = load_manifest()
-    prompt = build_prompt(manifest)
+
+    # Grounding is an enhancement: a missing reference library must
+    # never stop a pitch run, only be said out loud.
+    retrieval = rag.retrieve_references(build_reference_query(manifest))
+    if retrieval["ok"] and retrieval["references"]:
+        references_block = rag.format_references(retrieval["references"])
+        print(f"Grounding in {len(retrieval['references'])} retrieved reference(s)")
+    else:
+        references_block = ""
+        reason = retrieval.get("error", "reference library is empty")
+        print(f"note: pitching without references: {reason}", file=sys.stderr)
+
+    prompt = build_prompt(manifest, references_block)
 
     client = genai.Client(api_key=api_key)
     response_text = generate_with_retry(client, MODEL, prompt)

@@ -12,6 +12,12 @@ THE FOOTAGE LIBRARY (stories must come from what is actually
 visible in these clips):
 {manifest}
 
+REFERENCE LIBRARY (passages retrieved because they are close to
+this footage — study their tone and structural moves; never copy
+their content, and never pitch anything these references show but
+the footage doesn't):
+{references}
+
 YOUR TASK:
 Pitch 10 different stories that could be told from this library in
 exactly 15 seconds. Each is a different read of the same footage.
