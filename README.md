@@ -83,9 +83,38 @@ architecture notes.
 Needs `GEMINI_API_KEY` in `.env`. `YOUTUBE_API_KEY` is optional — it enables pulling public view
 counts and importing a channel automatically; without it manual entry works exactly the same.
 
+## Reference library (RAG)
+
+Pitches can be grounded in a retrieval library: text you want the writing to learn from —
+brand notes, past scripts, films-you-admire notes — chunked, embedded with
+`gemini-embedding-001`, and stored in **PostgreSQL + pgvector**. At pitch time the manifest's
+clip descriptions become the query, and the closest chunks are injected into the prompt as
+tone/structure references (with a hard rule: never pitch what a reference shows but the
+footage doesn't). No Postgres? The pitch run continues ungrounded and says so — the library
+is an enhancement, not a dependency.
+
+```bash
+# one-time setup (macOS)
+brew install postgresql@17 pgvector
+brew services start postgresql@17
+createdb zeropage        # or set RAG_DATABASE_URL in .env
+
+# build the library, ask it questions, wire it into pitches automatically
+venv/bin/python -m src.rag ingest prompts/brief.txt notes/*.md
+venv/bin/python -m src.rag query "stillness broken once" --k 5
+venv/bin/python -m src.pitch                # picks up references on its own
+
+# measure retrieval quality against labeled cases (hit@k, MRR)
+venv/bin/python -m src.rag_eval eval_cases.json --k 5
+```
+
+An eval case file is plain JSON — `[{"query": "...", "relevant": ["brief.txt"]}]` — judged at
+the document level, because that's what a human can actually label.
+
 ## Tech Stack
 - **Python**, **FastAPI** + **Jinja2** — pipeline and a no-build-step web app
 - **SQLite** — spaces, concepts, pitches, videos, metric snapshots, generation attempts
+- **PostgreSQL + pgvector** — the retrieval library grounding pitch generation (optional; everything else runs without it)
 - **Google Gemini** — vision descriptions of rooms and clips, concept and edit-spec generation
 - **OpenAI Whisper** — clip transcription
 - **FFmpeg / ffprobe** — metadata and frame extraction

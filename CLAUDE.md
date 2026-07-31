@@ -40,6 +40,11 @@ venv/bin/python -m src.editgen <pitch_numbers...> [--print]
 venv/bin/python -m src.promptgen "<loose shot description>" [--idea-id N] [--slot-index N]
 venv/bin/python -m src.genlog record|keep|reject ...
 
+# REFERENCE LIBRARY (RAG) — optional grounding for pitch.py
+venv/bin/python -m src.rag ingest <files...>        # (re-)build the pgvector library
+venv/bin/python -m src.rag query "<text>" [--k 5]
+venv/bin/python -m src.rag_eval <cases.json> [--k 5]   # hit@k + MRR over labeled cases
+
 # WEB APP — everything above is also doable in the browser at 127.0.0.1:8000
 venv/bin/uvicorn app.main:app --reload
 ```
@@ -158,6 +163,20 @@ shot list for footage you *need*. Don't merge them.
   refuses anything that escapes `locations/` — a space name becomes a directory name, so it's
   sanitised on the way in too. `?thumb=1` serves a cached 480px JPEG rather than the multi-megabyte
   original. Routes that call a model wrap it and redirect with a message rather than 500ing.
+- **`src/rag.py`** / **`src/rag_eval.py`** — the reference library. Text files are chunked at
+  word boundaries, embedded with `gemini-embedding-001` (768 dims — documents as
+  `RETRIEVAL_DOCUMENT`, queries as `RETRIEVAL_QUERY`; the model is asymmetric and mixing them
+  quietly worsens ranking), stored in PostgreSQL + pgvector (`RAG_DATABASE_URL`, default
+  `postgresql://localhost/zeropage`). Deliberately not in `data/pipeline.db`: SQLite has no
+  vector type, and the library is rebuildable from its sources. Re-ingesting a source replaces
+  its chunks. `pitch.py` queries it with the manifest's beats/arcs and injects the results into
+  the prompt's `{references}` section; `retrieve_references` never raises, so no Postgres means
+  an ungrounded pitch run with a stderr note, not a dead one. The `rag` CLI fails loudly — there
+  the store is the deliverable. `rag_eval.py` scores retrieval (hit@k, MRR) against a labeled
+  JSON case file, judged at document level, sources deduplicated before ranking. **Note:**
+  psycopg/libpq connects below Python's socket module, so `tests/conftest.py`'s network guard
+  cannot catch a stray Postgres connection in tests — anything touching the store must patch
+  `rag.connect` (or above) explicitly.
 - **`src/gemini_utils.py`** — shared `generate_with_retry` (retries on `RESOURCE_EXHAUSTED`/
   `UNAVAILABLE`, falls through to `FALLBACK_MODELS` if the primary model stays down for the whole
   retry budget) and `strip_fences` (strips markdown code fences from model JSON output).
@@ -225,6 +244,10 @@ is shooting one of the generated concepts, marking it shot, and adding the video
 - `import_channel_videos` can report success when the bulk stats call failed; `mark_kept` doesn't
   clear other keepers on the same shot, which skews `attempts_to_keeper`; `ingest.py` reads only
   `GEMINI_API_KEY` where every other module also accepts `GOOGLE_API_KEY`.
+- The RAG subsystem is code-complete with offline tests, but has never run against a live
+  Postgres — this machine has neither Postgres nor Docker installed. Before first use:
+  `brew install postgresql@17 pgvector`, `createdb zeropage`, then a real
+  `src.rag ingest` + `src.pitch` run to verify end to end.
 - `/shots` and the tool scoreboard aren't built — they need real generation attempts logged
   through `genlog.py` first, and inventing that data would corrupt the only numbers that matter.
 
