@@ -998,9 +998,13 @@ def test_library_page_degrades_when_store_is_down():
 
 
 def test_library_search_renders_scored_results(monkeypatch):
-    # sources list empty; the query itself is patched separately below
+    # sources list empty; the query itself is patched separately below.
+    # make_client must be patched too -- unpatched it only succeeds on a
+    # machine that happens to have GEMINI_API_KEY, which is how this test
+    # passed locally and failed in CI.
     conn = LibraryFakeConn(rows=[])
     monkeypatch.setattr(app_main.rag, "connect", lambda db_url=None: conn)
+    monkeypatch.setattr(app_main.rag, "make_client", lambda: object())
     monkeypatch.setattr(app_main.rag, "query",
                         lambda text, client, conn, k=5, domain=None, project=None:
                         [{"source": "notes.md", "chunk": "one image, one turn",
