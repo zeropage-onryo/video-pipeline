@@ -43,10 +43,15 @@ CREATE TABLE IF NOT EXISTS rag_documents (
     chunk_index integer NOT NULL,
     chunk       text NOT NULL,
     embedding   vector({EMBED_DIM}) NOT NULL,
+    domain      text NOT NULL,
+    project     text,
+    source_ref  text,
     UNIQUE (source, chunk_index)
 );
 CREATE INDEX IF NOT EXISTS rag_documents_embedding_idx
     ON rag_documents USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX IF NOT EXISTS rag_documents_domain_idx ON rag_documents (domain);
+CREATE INDEX IF NOT EXISTS rag_documents_project_idx ON rag_documents (project);
 """
 
 
@@ -109,7 +114,12 @@ def connect(db_url: Optional[str] = None):
     import psycopg
     from pgvector.psycopg import register_vector
 
-    conn = psycopg.connect(db_url or os.environ.get("RAG_DATABASE_URL", DEFAULT_DB_URL))
+    conn = psycopg.connect(
+        db_url
+        or os.environ.get("RAG_DATABASE_URL")
+        or os.environ.get("DATABASE_URL")
+        or DEFAULT_DB_URL
+    )
     try:
         register_vector(conn)
     except psycopg.ProgrammingError:
@@ -121,14 +131,27 @@ def connect(db_url: Optional[str] = None):
 def init_store(conn) -> None:
     conn.execute(SCHEMA)
     conn.commit()
+    # on a fresh database the adapter registration in connect() found no
+    # vector type to register against -- now the extension exists, redo it
+    from pgvector.psycopg import register_vector
+    register_vector(conn)
 
 
 def ingest_records(records: list, client, conn) -> int:
     """
-    records: [{"source": name, "text": full text}]. Each source's old
-    chunks are deleted first, so re-ingesting an edited file replaces
-    it instead of accumulating stale copies. Returns chunks written.
+    records: [{"source": name, "text": full text, "domain": shelf,
+    "project": optional, "source_ref": optional url/timestamp}]. domain
+    is required -- it's the shelf label that keeps retrieval scoped,
+    and nothing lands untagged. Each source's old chunks are deleted
+    first, so re-ingesting an edited file replaces it instead of
+    accumulating stale copies. Returns chunks written.
     """
+    for record in records:
+        if not record.get("domain"):
+            raise ValueError(
+                f"record '{record.get('source')}' has no domain -- "
+                "every reference needs a shelf label"
+            )
     written = 0
     for record in records:
         chunks = chunk_text(record["text"])
@@ -138,30 +161,52 @@ def ingest_records(records: list, client, conn) -> int:
         conn.execute("DELETE FROM rag_documents WHERE source = %s", (record["source"],))
         for index, (chunk, vector) in enumerate(zip(chunks, vectors)):
             conn.execute(
-                "INSERT INTO rag_documents (source, chunk_index, chunk, embedding) "
-                "VALUES (%s, %s, %s, %s)",
-                (record["source"], index, chunk, vector),
+                "INSERT INTO rag_documents "
+                "(source, chunk_index, chunk, embedding, domain, project, source_ref) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                (record["source"], index, chunk, vector, record["domain"],
+                 record.get("project"), record.get("source_ref")),
             )
             written += 1
     conn.commit()
     return written
 
 
-def query(text: str, client, conn, k: int = 5) -> list:
-    """Top-k chunks by cosine similarity: [{source, chunk, score}]."""
+def query(text: str, client, conn, k: int = 5,
+          domain: Optional[str] = None, project: Optional[str] = None) -> list:
+    """
+    Top-k chunks by cosine similarity, optionally scoped to one shelf
+    (domain) or one project. This pairing is the pgvector payoff:
+    semantic similarity and hard SQL filters in a single query.
+    """
     [vector] = embed_texts([text], client, task_type="RETRIEVAL_QUERY")
+    filters, params = [], [vector]
+    if domain:
+        filters.append("domain = %s")
+        params.append(domain)
+    if project:
+        filters.append("project = %s")
+        params.append(project)
+    where_sql = (" WHERE " + " AND ".join(filters)) if filters else ""
+    params.append(k)
     cursor = conn.execute(
-        "SELECT source, chunk, embedding <=> %s::vector AS distance "
-        "FROM rag_documents ORDER BY distance LIMIT %s",
-        (vector, k),
+        "SELECT source, chunk, domain, project, source_ref, "
+        "embedding <=> %s::vector AS distance "
+        f"FROM rag_documents{where_sql} ORDER BY distance LIMIT %s",
+        params,
     )
     return [
-        {"source": source, "chunk": chunk, "score": round(1.0 - distance, 4)}
-        for source, chunk, distance in cursor.fetchall()
+        {"source": source, "chunk": chunk, "domain": row_domain,
+         "project": row_project, "source_ref": source_ref,
+         "score": round(1.0 - distance, 4)}
+        for source, chunk, row_domain, row_project, source_ref, distance
+        in cursor.fetchall()
     ]
 
 
-def retrieve_references(text: str, k: int = 5, db_url: Optional[str] = None) -> dict:
+def retrieve_references(text: str, k: int = 5, db_url: Optional[str] = None,
+                        domain: Optional[str] = None,
+                        project: Optional[str] = None) -> dict:
     """
     Never raises. {"ok": True, "references": [...]} or
     {"ok": False, "references": [], "error": "..."} -- a missing key,
@@ -177,7 +222,8 @@ def retrieve_references(text: str, k: int = 5, db_url: Optional[str] = None) -> 
         conn = client = None
         conn = connect(db_url)
         client = make_client()
-        return {"ok": True, "references": query(text, client, conn, k=k)}
+        return {"ok": True, "references": query(
+            text, client, conn, k=k, domain=domain, project=project)}
     except Exception as e:
         return {"ok": False, "references": [], "error": str(e)}
     finally:
@@ -204,9 +250,15 @@ def main(argv=None) -> None:
     sub = parser.add_subparsers(dest="verb", required=True)
     ingest_p = sub.add_parser("ingest", help="(re-)ingest text files as references")
     ingest_p.add_argument("paths", nargs="+", type=Path)
+    ingest_p.add_argument("--domain", required=True,
+                          help="shelf label: cinematography, client_work, ...")
+    ingest_p.add_argument("--project")
+    ingest_p.add_argument("--source-ref", help="url / path / timestamp range")
     query_p = sub.add_parser("query", help="retrieve the closest reference chunks")
     query_p.add_argument("text")
     query_p.add_argument("--k", type=int, default=5)
+    query_p.add_argument("--domain")
+    query_p.add_argument("--project")
     args = parser.parse_args(argv)
 
     # loud on purpose: when you run this command, the store is the point
@@ -215,11 +267,17 @@ def main(argv=None) -> None:
     init_store(conn)
 
     if args.verb == "ingest":
-        records = [{"source": p.name, "text": p.read_text()} for p in args.paths]
+        records = [
+            {"source": p.name, "text": p.read_text(), "domain": args.domain,
+             "project": args.project, "source_ref": args.source_ref}
+            for p in args.paths
+        ]
         written = ingest_records(records, client, conn)
-        print(f"Ingested {len(records)} source(s), {written} chunk(s)")
+        print(f"Ingested {len(records)} source(s), {written} chunk(s) "
+              f"under domain '{args.domain}'")
     else:
-        results = query(args.text, client, conn, k=args.k)
+        results = query(args.text, client, conn, k=args.k,
+                        domain=args.domain, project=args.project)
         print(json.dumps(results, indent=2))
     conn.close()
 

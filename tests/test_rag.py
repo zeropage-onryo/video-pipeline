@@ -110,7 +110,8 @@ def test_ingest_records_replaces_a_source_then_inserts_each_chunk():
     client = FakeEmbedClient()
     conn = FakeConn()
     n = rag.ingest_records(
-        [{"source": "brief.txt", "text": "a small brand note"}], client, conn
+        [{"source": "brief.txt", "text": "a small brand note",
+          "domain": "personal_brand"}], client, conn
     )
     assert n == 1
     deletes = [s for s, _ in conn.executed if s.startswith("DELETE")]
@@ -122,15 +123,51 @@ def test_ingest_records_replaces_a_source_then_inserts_each_chunk():
     assert params[1] == 0                  # chunk_index
     assert params[2] == "a small brand note"
     assert len(params[3]) == rag.EMBED_DIM
+    assert params[4] == "personal_brand"   # domain: the shelf label
+    assert params[5] is None               # project
+    assert params[6] is None               # source_ref
+
+
+def test_ingest_refuses_an_untagged_record():
+    # domain is the shelf label; nothing lands untagged
+    with pytest.raises(ValueError):
+        rag.ingest_records(
+            [{"source": "brief.txt", "text": "words"}], FakeEmbedClient(), FakeConn()
+        )
+
+
+QUERY_ROW = ("brief.txt", "the chunk", "personal_brand", None, None, 0.25)
 
 
 def test_query_shapes_rows_and_converts_distance_to_score():
     client = FakeEmbedClient()
-    conn = FakeConn(rows=[("brief.txt", "the chunk", 0.25)])
+    conn = FakeConn(rows=[QUERY_ROW])
     results = rag.query("what is the brand", client, conn, k=3)
-    assert results == [{"source": "brief.txt", "chunk": "the chunk", "score": 0.75}]
+    assert results == [{"source": "brief.txt", "chunk": "the chunk",
+                        "domain": "personal_brand", "project": None,
+                        "source_ref": None, "score": 0.75}]
     # the query embedding must use the query task type, not the doc one
     assert client.calls[0]["config"].task_type == "RETRIEVAL_QUERY"
+
+
+def test_query_without_scope_has_no_where_clause():
+    conn = FakeConn(rows=[])
+    rag.query("anything", FakeEmbedClient(), conn, k=3)
+    sql, params = conn.executed[0]
+    assert "WHERE" not in sql
+    assert len(params) == 2                # vector, limit
+
+
+def test_query_scopes_by_domain_and_project_with_parameters():
+    conn = FakeConn(rows=[])
+    rag.query("anything", FakeEmbedClient(), conn, k=3,
+              domain="cinematography", project="juno_promo")
+    sql, params = conn.executed[0]
+    assert "WHERE" in sql
+    assert "domain = %s" in sql
+    assert "project = %s" in sql
+    assert "cinematography" in params      # parameterized, never interpolated
+    assert "juno_promo" in params
 
 
 # ---------- retrieve_references never raises ----------
@@ -158,12 +195,23 @@ def test_retrieve_references_degrades_when_postgres_is_down(monkeypatch):
 
 def test_retrieve_references_happy_path_uses_the_store(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    conn = FakeConn(rows=[("notes.md", "a reference", 0.1)])
+    conn = FakeConn(rows=[("notes.md", "a reference", "cinematography", None, None, 0.1)])
     monkeypatch.setattr(rag, "connect", lambda db_url=None: conn)
     monkeypatch.setattr(rag, "make_client", lambda: FakeEmbedClient())
     result = rag.retrieve_references("query text", k=1)
     assert result["ok"] is True
     assert result["references"][0]["source"] == "notes.md"
+
+
+def test_retrieve_references_passes_the_domain_scope_through(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    conn = FakeConn(rows=[])
+    monkeypatch.setattr(rag, "connect", lambda db_url=None: conn)
+    monkeypatch.setattr(rag, "make_client", lambda: FakeEmbedClient())
+    rag.retrieve_references("query text", k=1, domain="cinematography")
+    sql, params = conn.executed[0]
+    assert "domain = %s" in sql
+    assert "cinematography" in params
 
 
 # ---------- reference formatting for prompts ----------
@@ -186,3 +234,8 @@ def test_format_references_numbers_and_attributes():
 def test_module_rejects_unknown_cli_verbs():
     with pytest.raises(SystemExit):
         rag.main(["dance"])
+
+
+def test_cli_ingest_requires_a_domain():
+    with pytest.raises(SystemExit):
+        rag.main(["ingest", "some.txt"])   # no --domain: refuse untagged rows

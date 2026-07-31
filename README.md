@@ -94,14 +94,13 @@ footage doesn't). No Postgres? The pitch run continues ungrounded and says so â€
 is an enhancement, not a dependency.
 
 ```bash
-# one-time setup (macOS)
-brew install postgresql@17 pgvector
-brew services start postgresql@17
-createdb zeropage        # or set RAG_DATABASE_URL in .env
+# one-time setup: EITHER a local Postgres (Postgres.app / brew) + `createdb zeropage`,
+# OR no local install at all:
+docker compose up -d     # Postgres + pgvector; set DATABASE_URL per docker-compose.yml
 
 # build the library, ask it questions, wire it into pitches automatically
-venv/bin/python -m src.rag ingest prompts/brief.txt notes/*.md
-venv/bin/python -m src.rag query "stillness broken once" --k 5
+venv/bin/python -m src.rag ingest prompts/brief.txt --domain personal_brand
+venv/bin/python -m src.rag query "stillness broken once" --k 5 [--domain cinematography]
 venv/bin/python -m src.pitch                # picks up references on its own
 
 # measure retrieval quality against labeled cases (hit@k, MRR)

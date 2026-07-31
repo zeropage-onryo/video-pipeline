@@ -166,8 +166,10 @@ shot list for footage you *need*. Don't merge them.
 - **`src/rag.py`** / **`src/rag_eval.py`** — the reference library. Text files are chunked at
   word boundaries, embedded with `gemini-embedding-001` (768 dims — documents as
   `RETRIEVAL_DOCUMENT`, queries as `RETRIEVAL_QUERY`; the model is asymmetric and mixing them
-  quietly worsens ranking), stored in PostgreSQL + pgvector (`RAG_DATABASE_URL`, default
-  `postgresql://localhost/zeropage`). Deliberately not in `data/pipeline.db`: SQLite has no
+  quietly worsens ranking), stored in PostgreSQL + pgvector (`RAG_DATABASE_URL` or `DATABASE_URL`, default
+  `postgresql://localhost/zeropage`). Every row carries a required `domain` shelf label plus
+  optional `project`/`source_ref`, and queries can scope on them (`--domain`, `--project`) —
+  semantic similarity and hard SQL filters in one query. Deliberately not in `data/pipeline.db`: SQLite has no
   vector type, and the library is rebuildable from its sources. Re-ingesting a source replaces
   its chunks. `pitch.py` queries it with the manifest's beats/arcs and injects the results into
   the prompt's `{references}` section; `retrieve_references` never raises, so no Postgres means
@@ -244,10 +246,11 @@ is shooting one of the generated concepts, marking it shot, and adding the video
 - `import_channel_videos` can report success when the bulk stats call failed; `mark_kept` doesn't
   clear other keepers on the same shot, which skews `attempts_to_keeper`; `ingest.py` reads only
   `GEMINI_API_KEY` where every other module also accepts `GOOGLE_API_KEY`.
-- The RAG subsystem is code-complete with offline tests, but has never run against a live
-  Postgres — this machine has neither Postgres nor Docker installed. Before first use:
-  `brew install postgresql@17 pgvector`, `createdb zeropage`, then a real
-  `src.rag ingest` + `src.pitch` run to verify end to end.
+- The RAG store runs live on this machine via Postgres.app (database `zeropage`,
+  `DATABASE_URL` in `.env`); ingest, scoped query, and the eval harness are all verified
+  against it with real embeddings (hit@3 1.00 / MRR 0.83 on `eval_cases.json`). Machines
+  without a local Postgres can use the repo's `docker-compose.yml` instead. The grounded
+  `src.pitch` end-to-end run is still pending — next real pitch run exercises it.
 - `/shots` and the tool scoreboard aren't built — they need real generation attempts logged
   through `genlog.py` first, and inventing that data would corrupt the only numbers that matter.
 

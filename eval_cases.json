@@ -1,0 +1,14 @@
+[
+  {
+    "query": "what is the zero page films brand identity and tone",
+    "relevant": ["brief.txt"]
+  },
+  {
+    "query": "how long should a video run and how fast should it cut",
+    "relevant": ["settings.txt"]
+  },
+  {
+    "query": "how should in and out points be chosen for an edit",
+    "relevant": ["edit_prompt.txt"]
+  }
+]

@@ -1,0 +1,25 @@
+# Postgres + pgvector for the RAG reference library (src/rag.py), for
+# machines without a local Postgres: `docker compose up -d`.
+#
+# No schema file is mounted on purpose -- the rag CLI runs its own
+# idempotent init_store() on every invocation, so the schema lives in
+# exactly one place (src/rag.py).
+#
+# With this stack, set in .env:
+#   DATABASE_URL=postgresql://zeropage:zeropage@localhost:5432/zeropage
+# (A local install -- Postgres.app, brew -- typically needs only
+#   DATABASE_URL=postgresql://localhost/zeropage )
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: zeropage
+      POSTGRES_PASSWORD: zeropage
+      POSTGRES_DB: zeropage
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
