@@ -432,3 +432,69 @@ td.num, .num {
   font-size: 12px;
   color: var(--bone);
 }
+
+/* ---- analytics: stat tiles + bar list ---- */
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.tile {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  padding: 14px 16px 12px;
+}
+
+.tile-num {
+  font-family: 'Bebas Neue', Impact, sans-serif;
+  font-size: 34px;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* one measure, one hue; labels and values wear ink, not the series color */
+.bar-row {
+  display: grid;
+  grid-template-columns: minmax(0, 220px) 1fr 64px;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 6px;   /* >2px surface gap between bars */
+}
+
+.bar-label {
+  font-size: 12px;
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bar-track { display: block; min-width: 0; }
+
+.bar {
+  display: block;
+  height: 14px;                 /* thin mark */
+  background: var(--red);
+  border-radius: 0 4px 4px 0;   /* rounded at the data end only */
+  min-width: 2px;               /* a 52-view bar still visible next to 6,414 */
+}
+
+.bar-row:hover .bar { background: #F0554A; }
+.bar-row:hover .bar-label { color: var(--bone); }
+
+.bar-value {
+  font-size: 12px;
+  color: var(--bone);
+  text-align: right;
+}
+
+/* keep long video titles to one line in the entry table */
+td.entry-title {
+  max-width: 180px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

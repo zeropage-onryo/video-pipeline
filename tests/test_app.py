@@ -371,7 +371,8 @@ def test_metrics_new_shows_refresh_button_for_youtube(tmp_db):
 def test_metrics_new_no_refresh_button_for_non_youtube(tmp_db):
     db.add_video("Some TikTok video", "tiktok", "2025-09-29", path=tmp_db)
     response = client.get("/metrics/new")
-    assert "Refresh" not in response.text
+    # the page prose mentions Refresh; what must be absent is the button itself
+    assert 'form="refresh-' not in response.text
 
 
 # ---------- /videos/import/youtube ----------
@@ -588,7 +589,7 @@ def test_concepts_page_no_shotlist_button_once_planned(tmp_preprod_db):
 # Every screen was built and verified in isolation by typing its URL,
 # which is exactly how a site ends up with no way to get between pages.
 
-NAV_TARGETS = ["/", "/concepts", "/locations", "/pitches", "/metrics/new", "/videos/new"]
+NAV_TARGETS = ["/", "/concepts", "/locations", "/pitches", "/analytics", "/videos/new"]
 
 
 @pytest.mark.parametrize("page", NAV_TARGETS)
@@ -917,3 +918,32 @@ def test_generate_ideas_records_the_pov_choice(tmp_preprod_db, monkeypatch):
     client.post("/concepts/generate", data={"brand": "antihero", "mode": "ideas"},
                 follow_redirects=False)   # checkbox absent -> POV off
     assert seen["use_pov"] is False
+
+
+# ---------- /analytics ----------
+
+def test_analytics_page_renders_with_tiles_and_bars(tmp_db):
+    v1 = db.add_video("Big", "youtube", "2026-01-01", path=tmp_db)
+    v2 = db.add_video("Small", "youtube", "2026-01-02", path=tmp_db)
+    db.record_metrics(v1, views=1000, likes=10, captured_at="2026-01-08", path=tmp_db)
+    db.record_metrics(v2, views=250, likes=5, captured_at="2026-01-08", path=tmp_db)
+
+    response = client.get("/analytics")
+    assert response.status_code == 200
+    assert "1,250" in response.text            # total views tile
+    assert 'class="bar"' in response.text
+    assert 'width:100.0%' in response.text     # Big is the max
+    assert 'width:25.0%' in response.text      # Small scaled against it
+
+
+def test_metrics_new_still_works_as_an_alias(tmp_db):
+    response = client.get("/metrics/new?updated=3")
+    assert response.status_code == 200
+    assert "3" in response.text
+
+
+def test_post_metrics_redirects_to_analytics(tmp_db):
+    vid = db.add_video("T", "youtube", "2026-01-01", path=tmp_db)
+    response = client.post("/metrics/new", data={f"views_{vid}": "5"},
+                           follow_redirects=False)
+    assert "/analytics?updated=1" in response.headers["location"]

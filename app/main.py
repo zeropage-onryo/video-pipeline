@@ -193,13 +193,34 @@ def parse_metrics_form(form: dict, video_ids: list) -> dict:
     return changed
 
 
-@app.get("/metrics/new")
-def metrics_new_form(request: Request, updated: Optional[int] = None, message: Optional[str] = None):
+@app.get("/analytics")
+@app.get("/metrics/new")   # old URL, kept so bookmarks and habits still land
+def analytics(request: Request, updated: Optional[int] = None, message: Optional[str] = None):
     rows = db.latest_metrics_by_video(path=db.DB_PATH)
+
+    # One measure (views) across named videos: a sorted bar list, each
+    # bar scaled against the current best. Totals are headline numbers,
+    # not charts.
+    ranked = sorted((r for r in rows if r["views"] is not None),
+                    key=lambda r: r["views"], reverse=True)
+    max_views = ranked[0]["views"] if ranked else 0
+    bars = [
+        {**r,
+         "pct": round(r["views"] / max_views * 100, 1) if max_views else 0,
+         "views_fmt": f"{r['views']:,}"}
+        for r in ranked
+    ]
+    tiles = {
+        "views": f"{sum(r['views'] or 0 for r in rows):,}",
+        "likes": f"{sum(r['likes'] or 0 for r in rows):,}",
+        "comments": f"{sum(r['comments'] or 0 for r in rows):,}",
+        "videos": len(rows),
+    }
     return templates.TemplateResponse(
         request,
-        "metrics_new.html",
-        {"rows": rows, "updated": updated, "message": message},
+        "analytics.html",
+        {"rows": rows, "bars": bars, "tiles": tiles,
+         "updated": updated, "message": message},
     )
 
 
@@ -210,7 +231,7 @@ async def metrics_new_submit(request: Request):
     changed = parse_metrics_form(form, video_ids)
     for vid, fields in changed.items():
         db.record_metrics(vid, path=db.DB_PATH, **fields)
-    return RedirectResponse(f"/metrics/new?updated={len(changed)}", status_code=303)
+    return RedirectResponse(f"/analytics?updated={len(changed)}", status_code=303)
 
 
 @app.post("/metrics/refresh/{video_id}")
@@ -227,7 +248,7 @@ def metrics_refresh(video_id: int):
     else:
         message = f"Could not refresh {video['title']}: {result['error']}"
 
-    return RedirectResponse(f"/metrics/new?message={quote(message)}", status_code=303)
+    return RedirectResponse(f"/analytics?message={quote(message)}", status_code=303)
 
 
 @app.get("/videos/{video_id}")
