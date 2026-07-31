@@ -39,7 +39,17 @@ def build_reference_query(manifest: list[dict], max_chars: int = 6000) -> str:
     for entry in manifest:
         description = entry.get("description")
         if isinstance(description, dict):
-            parts.extend(description.get("beats") or [])
+            for beat in description.get("beats") or []:
+                # ingest writes {"t": seconds, "text": "..."}; older
+                # manifests and hand edits sometimes hold a bare string
+                if isinstance(beat, dict):
+                    text = beat.get("text")
+                elif isinstance(beat, str):
+                    text = beat
+                else:
+                    text = None
+                if text:
+                    parts.append(text)
             if description.get("arc"):
                 parts.append(description["arc"])
         elif isinstance(description, str):

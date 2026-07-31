@@ -25,8 +25,14 @@ DESCRIBED_MANIFEST = [
     {
         "filename": "A037_0812_C001.mov",
         "duration_seconds": 5.0,
+        # the real shape ingest.py writes: beats are {t, text} dicts, not
+        # strings. This test asserted strings once and passed while the
+        # code crashed on real data.
         "description": {
-            "beats": ["hand hesitates over the switch", "room goes red"],
+            "beats": [
+                {"t": 9.1, "text": "hand hesitates over the switch"},
+                {"t": 45.6, "text": "room goes red"},
+            ],
             "arc": "stillness broken once",
         },
     },
@@ -46,9 +52,21 @@ def test_build_reference_query_mines_clip_descriptions():
 
 
 def test_build_reference_query_is_capped():
-    huge = [{"filename": f"A{i}.mov", "description": {"beats": ["x" * 500], "arc": ""}}
+    huge = [{"filename": f"A{i}.mov",
+             "description": {"beats": [{"t": 0.0, "text": "x" * 500}], "arc": ""}}
             for i in range(100)]
     assert len(pitch.build_reference_query(huge, max_chars=2000)) <= 2000
+
+
+def test_build_reference_query_survives_odd_beat_shapes():
+    # never crash the whole pitch run over a malformed beat
+    odd = [{"filename": "A.mov", "description": {
+        "beats": ["a bare string beat", {"text": "no timestamp"}, {"t": 1.0}, None],
+        "arc": "an arc"}}]
+    text = pitch.build_reference_query(odd)
+    assert "a bare string beat" in text
+    assert "no timestamp" in text
+    assert "an arc" in text
 
 
 def test_build_prompt_embeds_the_references_block(tmp_path, monkeypatch):
