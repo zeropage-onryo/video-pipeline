@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zero Page AI Studio — grounded AI pre-production for filmmakers</title>
+<meta name="description" content="A grounded AI film studio. Photograph your real rooms, get concepts and shot lists only shootable in them, one AI shot per edit, and a cut list validated in code against your footage.">
+<link rel="canonical" href="{{ site_url }}/">
+<meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Zero Page AI Studio">
+<meta property="og:title" content="Zero Page AI Studio — grounded AI pre-production">
+<meta property="og:description" content="The model proposes; code enforces. Real rooms in, shot lists and validated cut lists out.">
+<meta property="og:url" content="{{ site_url }}/">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Zero Page AI Studio — grounded AI pre-production">
+<meta name="twitter:description" content="The model proposes; code enforces. Real rooms in, shot lists and validated cut lists out.">
+
+<link rel="alternate" type="text/markdown" href="{{ site_url }}/llms.txt" title="llms.txt">
+<script type="application/ld+json">{{ schema_json|safe }}</script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap');
+:root{
+  --bg:#0B0B0D;--panel:#121216;--panel2:#0F0F13;--line:#232329;
+  --bone:#CDC9C0;--dim:#77736C;--faint:#4A4842;--red:#E23B2E;--steel:#8FA3AD;--good:#6FCF97;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+html{scroll-behavior:smooth;}
+body{background:var(--bg);color:var(--bone);font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;
+  font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased;overflow-x:hidden;}
+.mono{font-family:'IBM Plex Mono',monospace;}
+.bebas{font-family:'Bebas Neue',Impact,sans-serif;letter-spacing:.03em;font-weight:400;}
+a{color:inherit;text-decoration:none;}
+.grain{position:fixed;inset:-50%;z-index:100;pointer-events:none;opacity:.05;
+  background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 250 250' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
+  animation:grain .9s steps(4) infinite;}
+@keyframes grain{0%{transform:translate(0,0)}25%{transform:translate(-2%,1%)}50%{transform:translate(1%,-2%)}75%{transform:translate(-1%,2%)}100%{transform:translate(0,0)}}
+@media (prefers-reduced-motion:reduce){.grain{animation:none}.ember{animation:none!important}.marquee-track{animation:none!important}}
+
+/* ---- top nav ---- */
+nav{position:fixed;top:0;left:0;right:0;z-index:60;display:flex;align-items:center;gap:24px;
+  padding:16px 32px;backdrop-filter:blur(8px);background:linear-gradient(180deg,rgba(11,11,13,.85),rgba(11,11,13,0));}
+nav .brand{font-family:'Bebas Neue',Impact,sans-serif;font-size:22px;letter-spacing:.06em;}
+nav .brand .a{color:var(--red);}
+nav .links{display:flex;gap:22px;margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--faint);}
+nav .links a:hover{color:var(--bone);}
+nav .cta{font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.16em;text-transform:uppercase;
+  border:1px solid var(--line);padding:7px 14px;color:var(--dim);}
+nav .cta:hover{border-color:var(--red);color:var(--bone);}
+@media (max-width:720px){nav .links{display:none;}}
+
+/* ---- hero ---- */
+.hero{position:relative;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  text-align:center;padding:120px 24px 60px;overflow:hidden;}
+.ember{position:absolute;z-index:0;width:80vw;height:80vw;max-width:900px;max-height:900px;border-radius:50%;
+  background:radial-gradient(circle,rgba(226,59,46,.16),rgba(226,59,46,.05) 40%,transparent 62%);
+  filter:blur(30px);top:42%;left:50%;transform:translate(-50%,-50%);animation:drift 14s ease-in-out infinite;}
+.ember.b{background:radial-gradient(circle,rgba(143,163,173,.10),transparent 60%);width:60vw;height:60vw;top:30%;left:38%;animation-duration:18s;animation-direction:reverse;}
+@keyframes drift{0%,100%{transform:translate(-50%,-50%) scale(1)}50%{transform:translate(-46%,-54%) scale(1.12)}}
+.hero-inner{position:relative;z-index:1;max-width:900px;}
+.kicker{font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.32em;text-transform:uppercase;color:var(--red);margin-bottom:22px;}
+.hero h1{font-family:'Bebas Neue',Impact,sans-serif;font-weight:400;letter-spacing:.02em;
+  font-size:clamp(64px,13vw,168px);line-height:.86;}
+.hero h1 .st{display:block;color:var(--red);}
+.hero .tagline{font-size:clamp(16px,2.4vw,22px);color:var(--bone);max-width:640px;margin:26px auto 0;line-height:1.5;}
+.hero .sub{font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);margin-top:16px;}
+.hero .actions{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-top:38px;}
+.btn{font-family:'Bebas Neue',Impact,sans-serif;font-size:22px;letter-spacing:.04em;padding:13px 30px;cursor:pointer;border:none;}
+.btn.primary{background:var(--red);color:#0B0B0D;}
+.btn.primary:hover{background:#F0554A;}
+.btn.ghost{background:transparent;border:1px solid var(--line);color:var(--bone);}
+.btn.ghost:hover{border-color:var(--dim);}
+.scrollcue{position:absolute;bottom:96px;left:50%;transform:translateX(-50%);z-index:1;font-family:'IBM Plex Mono',monospace;
+  font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--faint);animation:bob 2.2s ease-in-out infinite;}
+@keyframes bob{0%,100%{transform:translate(-50%,0)}50%{transform:translate(-50%,6px)}}
+
+/* footage marquee at base of hero */
+.marquee{position:absolute;bottom:0;left:0;right:0;z-index:1;border-top:1px solid var(--line);
+  background:linear-gradient(180deg,transparent,rgba(15,15,19,.7));overflow:hidden;padding:12px 0;}
+.marquee-track{display:flex;gap:44px;width:max-content;animation:scroll 44s linear infinite;white-space:nowrap;}
+.marquee-track span{font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.06em;color:var(--faint);}
+.marquee-track span::before{content:"▸ ";color:var(--red);}
+@keyframes scroll{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+
+/* ---- sections ---- */
+section{position:relative;z-index:1;padding:96px 32px;max-width:1160px;margin:0 auto;}
+.sec-kicker{font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.28em;text-transform:uppercase;color:var(--red);margin-bottom:12px;}
+.sec-title{font-family:'Bebas Neue',Impact,sans-serif;font-weight:400;letter-spacing:.02em;font-size:clamp(32px,5vw,52px);line-height:.98;}
+.sec-lead{color:var(--dim);max-width:620px;margin-top:14px;font-size:15px;}
+
+.reveal{opacity:0;transform:translateY(24px);transition:opacity .7s ease,transform .7s ease;}
+.reveal.in{opacity:1;transform:none;}
+
+/* pillars */
+.pillars{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border:1px solid var(--line);margin-top:40px;}
+.pillar{background:var(--bg);padding:30px 26px 34px;}
+.pillar .no{font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.2em;color:var(--faint);}
+.pillar h3{font-family:'Bebas Neue',Impact,sans-serif;font-weight:400;letter-spacing:.03em;font-size:34px;line-height:1;margin:10px 0 12px;}
+.pillar h3 .dot{color:var(--red);}
+.pillar p{color:var(--dim);font-size:13.5px;line-height:1.6;}
+.pillar .tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:16px;}
+.ptag{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.12em;text-transform:uppercase;border:1px solid var(--line);color:var(--faint);padding:3px 8px;}
+@media (max-width:820px){.pillars{grid-template-columns:1fr;}}
+
+/* ethos band */
+.ethos{border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:var(--panel2);}
+.ethos-inner{max-width:1160px;margin:0 auto;padding:64px 32px;display:grid;grid-template-columns:1fr 1fr;gap:40px;align-items:center;}
+.ethos .big{font-family:'Bebas Neue',Impact,sans-serif;font-weight:400;letter-spacing:.02em;font-size:clamp(30px,4.5vw,46px);line-height:1.02;}
+.ethos .big .red{color:var(--red);}.ethos .big .steel{color:var(--steel);}
+.ethos p{color:var(--dim);font-size:14.5px;}
+.ethos .vs{display:flex;flex-direction:column;gap:10px;}
+.vsrow{display:flex;gap:12px;align-items:flex-start;font-size:13px;}
+.vsrow .lbl{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.14em;text-transform:uppercase;padding:3px 7px;border:1px solid var(--line);white-space:nowrap;color:var(--faint);}
+.vsrow.flow .lbl{color:var(--steel);border-color:rgba(143,163,173,.4);}
+.vsrow.zp .lbl{color:var(--red);border-color:var(--red);}
+@media (max-width:820px){.ethos-inner{grid-template-columns:1fr;}}
+
+/* tools grid */
+.tools{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line);margin-top:40px;}
+.tool{background:var(--bg);padding:22px 20px;min-height:150px;display:flex;flex-direction:column;transition:background .2s;}
+.tool:hover{background:var(--panel);}
+.tool .tno{font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.14em;color:var(--red);}
+.tool h4{font-family:'Bebas Neue',Impact,sans-serif;font-weight:400;letter-spacing:.03em;font-size:24px;line-height:1;margin:12px 0 8px;}
+.tool p{color:var(--dim);font-size:12px;line-height:1.5;margin-top:auto;}
+@media (max-width:900px){.tools{grid-template-columns:repeat(2,1fr);}}
+@media (max-width:520px){.tools{grid-template-columns:1fr;}}
+
+/* final cta */
+.final{text-align:center;padding:110px 32px 90px;}
+.final h2{font-family:'Bebas Neue',Impact,sans-serif;font-weight:400;letter-spacing:.02em;font-size:clamp(40px,7vw,84px);line-height:.9;}
+.final p{color:var(--dim);margin:18px auto 32px;max-width:520px;}
+footer{border-top:1px solid var(--line);padding:26px 32px;display:flex;gap:16px;align-items:center;flex-wrap:wrap;
+  font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);}
+footer .sp{flex:1;}
+</style>
+</head>
+<body>
+<div class="grain"></div>
+
+<nav>
+  <a class="brand" href="#top">ZERO PAGE <span class="a">AI STUDIO</span></a>
+  <div class="links">
+    <a href="#plan">Pipeline</a>
+    <a href="#ethos">Ethos</a>
+    <a href="#tools">Workspace</a>
+    <a href="#definition">What it means</a>
+  </div>
+  <a class="cta" href="/studio">Enter the studio →</a>
+</nav>
+
+<!-- HERO -->
+<header class="hero" id="top">
+  <div class="ember"></div><div class="ember b"></div>
+  <div class="hero-inner">
+    <div class="kicker">An AI film studio</div>
+    <h1>ZERO PAGE<span class="st">AI STUDIO</span></h1>
+    <p class="tagline">Real rooms, storyboarding, and AI integrated — every frame checked in code against what actually exists.</p>
+    <div class="actions">
+      <a class="btn primary" href="/studio">Enter the studio →</a>
+      <a class="btn ghost" href="#plan">How it works</a>
+    </div>
+  </div>
+  <div class="marquee"><div class="marquee-track" id="marq"></div></div>
+</header>
+
+<!-- PILLARS -->
+<section id="plan">
+  <div class="reveal">
+    <div class="sec-kicker">The pipeline · idea to posted</div>
+    <div class="sec-title">Plan. Create. Refine.</div>
+    <p class="sec-lead">Idea to posted, grounded end to end. Reality goes in at every stage; the model only ever proposes.</p>
+  </div>
+  <div class="pillars reveal">
+    <div class="pillar">
+      <div class="no">01 / PLAN</div>
+      <h3>Rooms<span class="dot">.</span></h3>
+      <p>Photograph a space and it gets described — geometry, light, textures, and what it won't allow. Ideas come back that are only shootable in the rooms you actually have.</p>
+      <div class="tags"><span class="ptag">Locations</span><span class="ptag">Idea deck</span><span class="ptag">Grounded</span></div>
+    </div>
+    <div class="pillar">
+      <div class="no">02 / CREATE</div>
+      <h3>Shoot<span class="dot">.</span></h3>
+      <p>Swipe ideas into a shortlist, storyboard each shot, and get a ≤6-shot plan with one AI shot for the moment the house can't give you — a paste-ready Veo / Kling / Runway prompt.</p>
+      <div class="tags"><span class="ptag">Storyboard</span><span class="ptag">Shot list</span><span class="ptag">AI shot</span></div>
+    </div>
+    <div class="pillar">
+      <div class="no">03 / REFINE</div>
+      <h3>Perform<span class="dot">.</span></h3>
+      <p>Post it, and view counts feed back — compared at equal age, so a year-old video can't win on totals alone. What's actually working rises to the top.</p>
+      <div class="tags"><span class="ptag">Analytics</span><span class="ptag">Equal-age</span><span class="ptag">Learns</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ETHOS -->
+<div class="ethos" id="ethos">
+  <div class="ethos-inner">
+    <div class="reveal">
+      <div class="sec-kicker">Why it's built this way</div>
+      <div class="big">The model <span class="red">proposes</span>.<br>Code <span class="steel">enforces</span>.</div>
+      <p style="margin-top:16px">Most generative video builds a whole world from a prompt and keeps it consistent. This does the opposite: reality is the source of truth, generation is a scalpel used once per edit, and every proposal is checked against what exists before it counts.</p>
+    </div>
+    <div class="vs reveal">
+      <div class="vsrow flow"><span class="lbl">Most AI video</span><span>Generates the rooms, the light, the world — the model is the source of truth.</span></div>
+      <div class="vsrow zp"><span class="lbl">Zero Page</span><span>Generates from your photographed rooms — a concept set in a room you don't have is rejected.</span></div>
+      <div class="vsrow flow"><span class="lbl">Most AI video</span><span>Every shot is generated; consistency is the whole problem.</span></div>
+      <div class="vsrow zp"><span class="lbl">Zero Page</span><span>One generated shot per edit — the rest is real footage, validated by filename and duration.</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- TOOLS -->
+<section id="tools">
+  <div class="reveal">
+    <div class="sec-kicker">The workspace</div>
+    <div class="sec-title">One screen. Say what you want.</div>
+    <p class="sec-lead">No seven-screen cockpit. Your media and rooms on the left, the work on the canvas, and an assistant that runs the pipeline underneath — ideation, shot lists, the AI shot, the cut.</p>
+  </div>
+  <div class="tools reveal" style="grid-template-columns:repeat(3,1fr)">
+    <div class="tool"><div class="tno">LEFT RAIL</div><h4>What you have</h4><p>All your media, every photographed room, and the manual tools when you want to drive a stage yourself.</p></div>
+    <div class="tool"><div class="tno">CANVAS</div><h4>What you made</h4><p>Ideas, shot lists, AI prompts and cut lists land here as cards. Keeping or tossing one happens in place.</p></div>
+    <div class="tool"><div class="tno">ASSISTANT</div><h4>What you want</h4><p>“Deal ideas from my rooms.” “Plan that one.” It picks the right pipeline stage and runs it — grounded, validated, no stage-hopping.</p></div>
+  </div>
+</section>
+
+<!-- DEFINITION / ANSWER BLOCK -->
+<section id="definition">
+  <div class="reveal">
+    <div class="sec-kicker">Plain definition</div>
+    <div class="sec-title">What grounded pre-production means.</div>
+    <p class="sec-lead" style="max-width:760px;color:var(--bone)">
+      Grounded pre-production is planning a shoot from the spaces and footage that provably exist,
+      instead of from a prompt. You photograph a room; a vision model records its geometry, light
+      sources, textures and constraints; every generated concept is then checked against that
+      record in code. A shot set in a room you never photographed is rejected, not flagged. After
+      the shoot the same rule applies to the edit: every cut names a real file, at in and out
+      points inside that file's real duration.
+    </p>
+    <div class="pillars" style="margin-top:34px">
+      <div class="pillar">
+        <div class="no">SPEC</div><h3>≤ 6 shots<span class="dot">.</span></h3>
+        <p>A concept that proposes a seventh shot fails validation. Short-form doesn't survive more, and a plan you can't shoot in an afternoon doesn't get shot.</p>
+      </div>
+      <div class="pillar">
+        <div class="no">SPEC</div><h3>1 AI shot<span class="dot">.</span></h3>
+        <p>Exactly one generated clip per edit — the angle no lens can reach. Everything around it is real footage, so the piece can't drift into looking synthetic.</p>
+      </div>
+      <div class="pillar">
+        <div class="no">SPEC</div><h3>13–17s<span class="dot">.</span></h3>
+        <p>Runtime is enforced in code against the manifest's real durations, not requested in the prompt and hoped for.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FINAL CTA -->
+<section class="final">
+  <div class="reveal">
+    <h2>Real rooms in.<br>Ideas out.</h2>
+    <p>Drop in a space, deal a hand of ideas, keep the ones worth shooting.</p>
+    <a class="btn primary" href="/studio">Enter the studio →</a>
+  </div>
+</section>
+
+<footer>
+  <span>Zero Page AI Studio</span>
+  <a href="/studio">Studio</a>
+  <a href="/llms.txt">llms.txt</a>
+  <span class="sp"></span>
+  <span>Prompts request · code enforces</span>
+</footer>
+
+<script>
+// footage marquee — real beat lines, duplicated so the loop is seamless
+const LINES=[
+ "A wrench seats on a bolt before you see a face",
+ "brown residue wiped back to reveal '959'",
+ "a black cat watches from the sill, unimpressed",
+ "gloves snap on in a tight, loud POV",
+ "one black bolt held to the light like a verdict",
+ "the overhead killed for one warm practical",
+ "a bike-shaped ghost under a dust sheet",
+ "a macro push into a gap no hand could reach",
+ "an empty couch, a manual, no one in frame — yet",
+ "his shadow reaches the bike before he does"
+];
+const track=document.getElementById('marq');
+track.innerHTML=[...LINES,...LINES].map(l=>`<span>${l}</span>`).join('');
+
+// scroll reveals
+const io=new IntersectionObserver((es)=>es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target);}}),{threshold:.15});
+document.querySelectorAll('.reveal').forEach(el=>io.observe(el));
+</script>
+</body>
+</html>

@@ -2,10 +2,12 @@
 The web app: reads the same database the pipeline writes to. No build
 step, no framework, no component library -- vanilla Jinja2 and CSS.
 
-This session is the skeleton only: the dashboard route, reading real
-data through src/db.py, proving it reaches the page. The full
-dashboard design (top performers, sparklines, pick rate) is Session 4.
+The app is one page: /studio is the workspace, and the older
+per-stage screens (/concepts, /locations, /library, /analytics,
+/pitches) stay reachable as the engine behind it. /  is the public
+landing and the only indexed URL.
 """
+import json
 import os
 import re
 from contextlib import asynccontextmanager
@@ -15,13 +17,14 @@ from urllib.parse import quote
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from google import genai
 
 from src import db, locations, preprod, rag, shootgen, youtube
 
+from . import seo
 from .sparkline import render_sparkline
 
 load_dotenv()
@@ -77,22 +80,68 @@ def benchmark_class(score, median) -> str:
 
 
 @app.get("/")
-def dashboard(request: Request, at_days: int = 7, posted_within: str = "6",
-              message: Optional[str] = None):
-    counts = db.summary(path=db.DB_PATH)
-    pick_rate = db.selection_rate(path=db.DB_PATH)
+def landing(request: Request):
+    """
+    The marketing front door and the only indexed page. A template rather
+    than a static file purely so the canonical URL and the JSON-LD graph
+    are built from SITE_URL -- hardcoding a domain into the markup is how
+    a canonical tag ends up pointing at localhost in production. The
+    workspace lives at /studio.
+    """
+    return templates.TemplateResponse(
+        request,
+        "landing.html",
+        {"site_url": seo.site_url(), "schema_json": seo.homepage_schema_json()},
+    )
 
+
+@app.get("/robots.txt", response_class=PlainTextResponse)
+def robots_txt():
+    """Public page open to everyone including the AI crawlers; the app
+    itself kept out of the index."""
+    return seo.robots_txt()
+
+
+@app.get("/llms.txt", response_class=PlainTextResponse)
+def llms_txt():
+    """A markdown brief for language models: what the product is, what
+    'grounded' means here, and the hard specs — the answer we'd want cited
+    when someone asks an assistant about grounded pre-production."""
+    return seo.llms_txt()
+
+
+@app.get("/sitemap.xml")
+def sitemap_xml():
+    return Response(content=seo.sitemap_xml(), media_type="application/xml")
+
+
+@app.get("/dashboard")
+def dashboard():
+    """
+    Gone. The app is one page now: what the dashboard showed -- counts,
+    pick rate, top performers at equal age -- lives on the studio canvas,
+    where it sits next to the work that produced it instead of on a
+    screen you had to remember to visit. Kept as a redirect because it
+    was the app's front door for months and is in muscle memory.
+    """
+    return RedirectResponse("/studio", status_code=308)
+
+
+def performance_rows(at_days: int = 7, posted_within: str = "6") -> dict:
+    """
+    The feedback loop, as the canvas shows it: what's performing,
+    compared at equal age. The benchmark uses the same window as the
+    ranking or the colouring lies -- an all-time median would make an
+    average recent video look good against the long tail, or bad against
+    one old outlier.
+    """
     posted_within_days = POSTED_WINDOWS.get(posted_within, 180)
     top = db.get_top_performers(
-        at_days=at_days, posted_within_days=posted_within_days, limit=10, path=db.DB_PATH,
+        at_days=at_days, posted_within_days=posted_within_days, limit=5, path=db.DB_PATH,
     )
-    # Same window as top, or the colouring lies -- an all-time median would
-    # make an average recent video look artificially good against the
-    # long tail, or artificially bad against an old outlier.
     bench = db.benchmark(
         at_days=at_days, posted_within_days=posted_within_days, path=db.DB_PATH,
     )
-
     rows = []
     for t in top:
         history = db.get_video_history(t["video_id"], path=db.DB_PATH)
@@ -101,23 +150,268 @@ def dashboard(request: Request, at_days: int = 7, posted_within: str = "6",
             "sparkline": render_sparkline(history),
             "css_class": benchmark_class(t["score"], bench["median"]),
         })
+    return {"rows": rows, "at_days": at_days}
 
+
+def load_project_json(name: str, default):
+    """
+    Read one of the pipeline's on-disk JSON artifacts (manifest.json,
+    pitches.json, concepts.json). A missing or malformed file returns
+    the default rather than raising -- /studio is a read-only overview
+    and must render on a fresh clone where nothing has been generated
+    yet, the same contract every model-touching route already keeps.
+    """
+    try:
+        with (PROJECT_ROOT / name).open() as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return default
+
+
+def clip_row(clip: dict) -> dict:
+    """
+    One manifest clip flattened for the media pool: first beat as a
+    one-line summary (falling back to the arc, then an old flat-string
+    description), and camera inferred from the filename prefix -- DJI is
+    the drone/ACTION body, everything else the BMPCC card.
+    """
+    desc = clip.get("description")
+    beat = ""
+    if isinstance(desc, dict):
+        beats = desc.get("beats") or []
+        beat = beats[0].get("text", "") if beats else desc.get("arc", "")
+    elif isinstance(desc, str):
+        beat = desc
+    filename = clip.get("filename", "")
+    return {
+        "filename": filename,
+        "duration": clip.get("duration_seconds"),
+        "resolution": clip.get("resolution", ""),
+        "beat": beat,
+        "cam": "DRONE" if filename.startswith("DJI") else "BMPCC",
+    }
+
+
+# The assistant's vocabulary. Each intent is one pipeline stage; the
+# phrases are what a person actually types when they mean it. Order
+# matters -- the first intent with a matching phrase wins, so the more
+# specific stages are checked before the catch-all.
+INTENT_PHRASES = [
+    ("room", ("room", "space", "location", "photograph", "photo of", "scout")),
+    ("plan", ("plan", "shot list", "shotlist", "storyboard", "board it", "break it down")),
+    ("cut", ("cut", "edit it", "editgen", "assemble", "timeline", "runtime")),
+    ("concept", ("full concept", "one concept", "whole concept", "concept for",
+                 "make one", "single idea")),
+    ("ideas", ("idea", "deal", "pitch", "options", "slate", "give me")),
+]
+
+DEFAULT_INTENT = "ideas"
+
+
+def route_intent(text: str, explicit: Optional[str] = None) -> str:
+    """
+    What did the person just ask for? A chip sends its intent outright;
+    free text is matched against INTENT_PHRASES.
+
+    This is keyword routing, not a model call, and that is the point: the
+    assistant orchestrates stages that each cost a real API call, so the
+    routing itself has to be free, instant, and inspectable. A miss lands
+    on ideas -- the cheapest stage and the one an unclear request almost
+    always means -- rather than silently spending a generation on the
+    wrong thing.
+    """
+    if explicit in {name for name, _ in INTENT_PHRASES}:
+        return explicit
+    lowered = (text or "").lower()
+    for intent, phrases in INTENT_PHRASES:
+        if any(phrase in lowered for phrase in phrases):
+            return intent
+    return DEFAULT_INTENT
+
+
+def next_unplanned_concept(concepts: list) -> Optional[dict]:
+    """
+    The idea "plan that one" means when no card was clicked: the most
+    recent one that is still just an idea. list_concepts returns newest
+    first, so the first match is the right one.
+    """
+    return next((c for c in concepts if not c.get("has_shot_list")), None)
+
+
+def library_shelf() -> dict:
+    """
+    What's on the reference shelves, for the studio's left rail. The
+    library is optional everywhere else, so it cannot be the one panel
+    that takes the workspace down with it when Postgres is off: an
+    unreachable store is a state the rail renders, not an exception.
+    """
+    conn = None
+    try:
+        conn = rag.connect()
+        return {"available": True, "sources": rag.list_sources(conn)}
+    except Exception:
+        return {"available": False, "sources": []}
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+@app.get("/studio")
+def studio(request: Request, message: Optional[str] = None,
+           at_days: int = 7, posted_within: str = "6"):
+    """
+    The workspace -- one screen over the whole pipeline. Three zones:
+    what you have (media pool and photographed rooms) on the left, what
+    you've made in the middle, and the assistant on the right that runs
+    the pipeline stages under the hood. Reading is free of model calls
+    and renders even when every source is absent; the human gate (keeping
+    an idea, marking it shot) happens inline on the canvas rather than on
+    a separate screen, and is still recorded.
+    """
+    manifest = load_project_json("manifest.json", [])
+    pitches = load_project_json("pitches.json", [])
+    concepts = load_project_json("concepts.json", [])
+
+    # link each cut list back to its pitch by title, and total its runtime
+    concept_by_title = {}
+    for concept in concepts:
+        cuts = concept.get("edit_list", [])
+        runtime = round(
+            sum(cut["out_point"] - cut["in_point"] for cut in cuts), 1
+        )
+        concept_by_title[concept.get("title")] = {**concept, "runtime": runtime}
+
+    pitch_rows = []
+    for pitch in pitches:
+        concept = concept_by_title.get(pitch.get("title"))
+        pitch_rows.append({**pitch, "concept": concept, "picked": concept is not None})
+
+    spaces = preprod.list_locations(path=db.DB_PATH)
+    for space in spaces:
+        space["photos"] = photos_for(space["name"])
+    shoot_concepts = preprod.list_concepts(path=db.DB_PATH)
+    # the AI slot of the most recent concept that has one
+    latest_ai = next((c["ai"] for c in shoot_concepts if c.get("ai")), None)
+
+    counts = db.summary(path=db.DB_PATH)
     return templates.TemplateResponse(
         request,
-        "dashboard.html",
+        "studio.html",
         {
+            "clips": [clip_row(c) for c in manifest],
+            "pitches": pitch_rows,
+            "cut_count": len(concepts),
+            "spaces": spaces,
+            "shoot_concepts": shoot_concepts,
+            "shortlist": preprod.shortlist_rate(path=db.DB_PATH),
+            "rate": preprod.shoot_rate(path=db.DB_PATH),
+            "brands": preprod.BRANDS,
+            "has_locations": bool(spaces),
+            "latest_ai": latest_ai,
             "counts": counts,
-            "pick_rate": pick_rate,
-            "rows": rows,
-            "at_days": at_days,
-            "posted_within": posted_within,
-            # a video with no reading near at_days is correctly absent from
-            # the table, but "No videos yet" would be a lie -- the page has
-            # to tell those two situations apart
+            "pick_rate": db.selection_rate(path=db.DB_PATH),
+            "performance": performance_rows(at_days=at_days, posted_within=posted_within),
             "video_count": counts["videos"],
+            "library": library_shelf(),
             "message": message,
         },
     )
+
+
+def run_ideation(intent: str, *, brand: str, client_name, spark, use_pov: bool) -> str:
+    """
+    The two stages that generate from rooms. Split out of the route so
+    the intent routing above can be read without the API plumbing
+    underneath it. Returns the line to show on the canvas.
+    """
+    references = shootgen.reference_block(spark=spark, client=client_name,
+                                          db_path=db.DB_PATH)
+    gemini_client = genai.Client(
+        api_key=os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    )
+    if intent == "concept":
+        result = shootgen.generate_concept(
+            brand=brand, client=client_name, spark=spark,
+            gemini_client=gemini_client, use_pov=use_pov, db_path=db.DB_PATH,
+            references=references,
+        )
+        message = f"Generated \"{result['concept']['title']}\""
+        if result["warnings"]:
+            message += f" ({len(result['warnings'])} warning(s))"
+        return message
+
+    result = shootgen.generate_concept_ideas(
+        brand=brand, client=client_name, spark=spark,
+        gemini_client=gemini_client, use_pov=use_pov, db_path=db.DB_PATH,
+        references=references,
+    )
+    return f"Dealt {len(result['ideas'])} ideas — keep the ones worth planning"
+
+
+@app.post("/studio/assist")
+async def studio_assist(request: Request):
+    """
+    The assistant. One box and a row of chips stand in for the whole
+    pipeline: this reads the intent, runs the stage it names, and lands
+    back on the canvas with the result. Same contract as every other
+    model-touching route -- a missing key or a failed call becomes a
+    message, never a 500 -- and validation still happens inside
+    shootgen.validate_concept, because prompts request and code enforces.
+
+    Stages it can't run itself say so plainly instead of pretending: a
+    cut list needs ingested footage and a pitch run, which are CLI steps.
+    """
+    form = dict(await request.form())
+    text = (form.get("text") or "").strip()
+    intent = route_intent(text, (form.get("intent") or "").strip() or None)
+
+    brand = form.get("brand") or "antihero"
+    client_name = (form.get("client") or "").strip() or None
+    use_pov = bool(form.get("use_pov"))
+    # The typed text is the spark for a generation; for a chip pressed
+    # with an empty box there simply isn't one.
+    spark = text or None
+
+    if intent == "room":
+        return RedirectResponse(
+            "/studio?message=" + quote(
+                "Add a room in the left rail — photograph the space and it gets described."
+            ),
+            status_code=303,
+        )
+
+    if intent == "cut":
+        return RedirectResponse(
+            "/studio?message=" + quote(
+                "A cut list needs shot footage: run `python -m src.ingest`, then "
+                "`src.pitch`, then `src.editgen <numbers>`. The results land on this canvas."
+            ),
+            status_code=303,
+        )
+
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        return RedirectResponse(
+            f"/studio?message={quote('GEMINI_API_KEY not set')}", status_code=303,
+        )
+
+    if intent == "plan":
+        target = next_unplanned_concept(preprod.list_concepts(path=db.DB_PATH))
+        if target is None:
+            message = "Nothing left to plan — deal some ideas first."
+        else:
+            message = plan_concept(target["id"])
+        return RedirectResponse(f"/studio?message={quote(message)}", status_code=303)
+
+    try:
+        message = run_ideation(intent, brand=brand, client_name=client_name,
+                               spark=spark, use_pov=use_pov)
+    except Exception as e:
+        message = f"Could not generate: {e}"
+    return RedirectResponse(f"/studio?message={quote(message)}", status_code=303)
 
 
 def parse_video_form(form: dict) -> dict:
@@ -164,7 +458,7 @@ async def videos_new_submit(request: Request):
         db.add_video(**parsed, path=db.DB_PATH)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return RedirectResponse("/", status_code=303)
+    return RedirectResponse("/studio", status_code=303)
 
 
 @app.post("/videos/import/youtube")
@@ -182,7 +476,7 @@ async def videos_import_youtube(request: Request):
     else:
         message = f"Could not import from {handle}: {result['error']}"
 
-    return RedirectResponse(f"/?message={quote(message)}", status_code=303)
+    return RedirectResponse(f"/studio?message={quote(message)}", status_code=303)
 
 
 METRICS_FIELDS = ("views", "likes", "comments", "saves")
@@ -464,7 +758,9 @@ def safe_space_name(name: str) -> str:
 
 
 @app.post("/locations/upload")
-async def locations_upload(name: str = Form(...), photos: List[UploadFile] = File(default=[])):
+async def locations_upload(name: str = Form(...), next: str = Form(""),
+                           photos: List[UploadFile] = File(default=[])):
+    destination = safe_next(next, "/locations")
     space = safe_space_name(name)
     if not space:
         raise HTTPException(status_code=400, detail="a space name is required")
@@ -485,7 +781,7 @@ async def locations_upload(name: str = Form(...), photos: List[UploadFile] = Fil
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
         return RedirectResponse(
-            f"/locations?message={quote('Photos saved, but GEMINI_API_KEY is not set so they were not described')}",
+            f"{destination}?message={quote('Photos saved, but GEMINI_API_KEY is not set so they were not described')}",
             status_code=303,
         )
 
@@ -541,6 +837,11 @@ async def concepts_generate(request: Request):
             f"/concepts?message={quote('GEMINI_API_KEY not set')}", status_code=303,
         )
 
+    # Grounding is an enhancement, never a dependency: reference_block
+    # degrades to "" (with a stderr note) if the library is unreachable.
+    references = shootgen.reference_block(spark=spark, client=client_name,
+                                          db_path=db.DB_PATH)
+
     # Generating is the deliverable, but a failed generation should leave
     # the screen usable rather than 500 -- same contract as the YouTube import.
     try:
@@ -549,12 +850,14 @@ async def concepts_generate(request: Request):
             result = shootgen.generate_concept_ideas(
                 brand=brand, client=client_name, spark=spark,
                 gemini_client=gemini_client, use_pov=use_pov, db_path=db.DB_PATH,
+                references=references,
             )
             message = f"Generated {len(result['ideas'])} ideas — plan the ones worth shooting"
         else:
             result = shootgen.generate_concept(
                 brand=brand, client=client_name, spark=spark,
                 gemini_client=gemini_client, use_pov=use_pov, db_path=db.DB_PATH,
+                references=references,
             )
             message = f"Generated \"{result['concept']['title']}\""
             if result["warnings"]:
@@ -565,39 +868,67 @@ async def concepts_generate(request: Request):
     return RedirectResponse(f"/concepts?message={quote(message)}", status_code=303)
 
 
-@app.post("/concepts/{concept_id}/shotlist")
-def concepts_shotlist(concept_id: int):
-    """Stage two. Bothering to plan a shoot for an idea is the pick
-    shortlist_rate measures."""
+def plan_concept(concept_id: int) -> str:
+    """
+    Stage two for one idea, as a message. Shared by the concepts screen
+    and the studio assistant so both record the same pick the same way --
+    the shortlist label can't depend on which screen you were standing on
+    when you decided.
+    """
     concept = preprod.get_concept(concept_id, path=db.DB_PATH)
     if concept is None:
-        raise HTTPException(status_code=404, detail="concept not found")
-
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-    if not api_key:
-        return RedirectResponse(
-            f"/concepts?message={quote('GEMINI_API_KEY not set')}", status_code=303,
-        )
-
+        return "That concept no longer exists."
     try:
-        gemini_client = genai.Client(api_key=api_key)
+        gemini_client = genai.Client(
+            api_key=os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        )
         result = shootgen.generate_shot_list(
             concept_id, gemini_client=gemini_client, db_path=db.DB_PATH,
         )
         message = f"Planned \"{concept['title']}\""
         if result["warnings"]:
             message += f" ({len(result['warnings'])} warning(s))"
+        return message
     except Exception as e:
-        message = f"Could not plan {concept['title']}: {e}"
+        return f"Could not plan {concept['title']}: {e}"
 
-    return RedirectResponse(f"/concepts?message={quote(message)}", status_code=303)
+
+def safe_next(value: Optional[str], default: str) -> str:
+    """
+    Which screen a form wants to land on. Only a site-relative path is
+    honoured -- a `next` that names another host would turn every button
+    in the app into an open redirect.
+    """
+    candidate = (value or "").strip()
+    if candidate.startswith("/") and not candidate.startswith("//"):
+        return candidate
+    return default
+
+
+@app.post("/concepts/{concept_id}/shotlist")
+def concepts_shotlist(concept_id: int, next: str = Form("")):
+    """Stage two. Bothering to plan a shoot for an idea is the pick
+    shortlist_rate measures."""
+    concept = preprod.get_concept(concept_id, path=db.DB_PATH)
+    if concept is None:
+        raise HTTPException(status_code=404, detail="concept not found")
+
+    destination = safe_next(next, "/concepts")
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        return RedirectResponse(
+            f"{destination}?message={quote('GEMINI_API_KEY not set')}", status_code=303,
+        )
+
+    message = plan_concept(concept_id)
+    return RedirectResponse(f"{destination}?message={quote(message)}", status_code=303)
 
 
 @app.post("/concepts/{concept_id}/shot")
-def concepts_mark_shot(concept_id: int):
+def concepts_mark_shot(concept_id: int, next: str = Form("")):
     concept = preprod.get_concept(concept_id, path=db.DB_PATH)
     if concept is None:
         raise HTTPException(status_code=404, detail="concept not found")
 
     preprod.mark_shot(concept_id, shot=not concept["shot_done"], path=db.DB_PATH)
-    return RedirectResponse("/concepts", status_code=303)
+    return RedirectResponse(safe_next(next, "/concepts"), status_code=303)

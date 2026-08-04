@@ -3,11 +3,13 @@ Tests for app/main.py's routes. Template-only rendering is exempt from
 strict TDD; form parsing and the routes that write data are not.
 """
 from datetime import date, timedelta
+from urllib.parse import unquote
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app import main as app_main
+from app import seo
 from app.main import (
     app,
     benchmark_class,
@@ -32,6 +34,11 @@ def no_real_rag_store(monkeypatch):
         raise ConnectionError("no rag store in tests")
 
     monkeypatch.setattr(app_main.rag, "connect", refused)
+    # The generate routes retrieve grounding references before calling
+    # the model. Stub that at the edge helper rather than relying on the
+    # connect guard above, so a route test can never depend on how far
+    # down the retrieval path it gets.
+    monkeypatch.setattr(app_main.shootgen, "reference_block", lambda **k: "")
 
 
 @pytest.fixture
@@ -49,15 +56,33 @@ def tmp_preprod_db(tmp_db):
     return tmp_db
 
 
-def test_dashboard_returns_200(tmp_db):
+def test_root_serves_the_landing_page_not_the_workspace(tmp_db):
+    """`/` is the marketing front door and the only indexed page; the
+    workspace is /studio."""
     response = client.get("/")
+    assert response.status_code == 200
+    assert "Pitch runs" not in response.text      # not the workspace canvas
+    assert "/studio" in response.text             # the landing's call to action
+
+
+def test_studio_returns_200(tmp_preprod_db):
+    response = client.get("/studio")
     assert response.status_code == 200
 
 
-def test_dashboard_shows_counts(tmp_db):
-    response = client.get("/")
+def test_studio_shows_counts(tmp_preprod_db):
+    """The dashboard's substance moved onto the canvas -- if these
+    disappear, the feedback loop silently stopped being visible."""
+    response = client.get("/studio")
     assert "Pitch runs" in response.text
     assert "Ideas" in response.text
+
+
+def test_dashboard_redirects_to_the_studio(tmp_preprod_db):
+    """It was the front door for months; a dead bookmark is a bug."""
+    response = client.get("/dashboard", follow_redirects=False)
+    assert response.status_code == 308
+    assert response.headers["location"] == "/studio"
 
 
 # ---------- parse_video_form ----------
@@ -105,6 +130,10 @@ def test_post_videos_new_creates_a_video(tmp_db):
         "title": "Test Video", "platform": "youtube", "posted_at": "2026-01-01",
     }, follow_redirects=False)
     assert response.status_code in (302, 303, 307)
+
+    # the landing owns `/` now, so a save must land on the workspace
+    # rather than bouncing the user out to the marketing page
+    assert response.headers["location"] == "/studio"
 
     videos = db.list_videos(path=tmp_db)
     assert len(videos) == 1
@@ -189,49 +218,50 @@ def test_benchmark_class_missing_data_is_neutral():
     assert benchmark_class(50, None) == ""
 
 
-# ---------- full dashboard ----------
+# ---------- the performance strip on the canvas ----------
 
-def test_dashboard_empty_state_links_to_add_video(tmp_db):
-    response = client.get("/")
+def test_studio_empty_state_links_to_add_video(tmp_preprod_db):
+    response = client.get("/studio")
     assert "No videos yet" in response.text
     assert "/videos/new" in response.text
 
 
-def test_dashboard_colours_rows_by_benchmark(tmp_db):
-    v1 = db.add_video("Winner", "youtube", "2026-01-01", path=tmp_db)
-    v2 = db.add_video("Loser", "youtube", "2026-01-01", path=tmp_db)
-    db.record_metrics(v1, views=1000, captured_at="2026-01-08", path=tmp_db)
-    db.record_metrics(v2, views=10, captured_at="2026-01-08", path=tmp_db)
+def test_studio_colours_rows_by_benchmark(tmp_preprod_db):
+    v1 = db.add_video("Winner", "youtube", "2026-01-01", path=tmp_preprod_db)
+    v2 = db.add_video("Loser", "youtube", "2026-01-01", path=tmp_preprod_db)
+    db.record_metrics(v1, views=1000, captured_at="2026-01-08", path=tmp_preprod_db)
+    db.record_metrics(v2, views=10, captured_at="2026-01-08", path=tmp_preprod_db)
 
-    response = client.get("/?posted_within=all")
+    response = client.get("/studio?posted_within=all")
     assert response.status_code == 200
     assert "Winner" in response.text and "Loser" in response.text
     assert 'class="good"' in response.text
     assert 'class="bad"' in response.text
 
 
-def test_dashboard_benchmark_uses_same_window_as_top_performers(tmp_db):
+def test_studio_benchmark_uses_same_window_as_top_performers(tmp_preprod_db):
     old_date = (date.today() - timedelta(days=400)).isoformat()
     old_measured = (date.today() - timedelta(days=393)).isoformat()
-    v_old = db.add_video("Old", "youtube", old_date, path=tmp_db)
-    db.record_metrics(v_old, views=99999, captured_at=old_measured, path=tmp_db)
+    v_old = db.add_video("Old", "youtube", old_date, path=tmp_preprod_db)
+    db.record_metrics(v_old, views=99999, captured_at=old_measured, path=tmp_preprod_db)
 
-    response = client.get("/")  # default: posted in the last 6 months
+    response = client.get("/studio")  # default: posted in the last 6 months
     assert "Old" not in response.text
 
-    response_all = client.get("/?posted_within=all")
+    response_all = client.get("/studio?posted_within=all")
     assert "Old" in response_all.text
 
 
-def test_dashboard_shows_pick_rate(tmp_db):
+def test_studio_shows_pick_rate(tmp_preprod_db):
     run_id = db.save_pitch_run(
         [{"number": n, "title": f"S{n}", "logline": "l", "story_note": "n"} for n in range(1, 11)],
-        path=tmp_db,
+        path=tmp_preprod_db,
     )
-    db.mark_selected_by_number(run_id, [1, 2, 3], path=tmp_db)
+    db.mark_selected_by_number(run_id, [1, 2, 3], path=tmp_preprod_db)
 
-    response = client.get("/")
-    assert "3" in response.text
+    response = client.get("/studio")
+    assert "Pick rate" in response.text
+    assert "30%" in response.text
 
 
 # ---------- /videos/{id} ----------
@@ -408,6 +438,8 @@ def test_post_import_adds_videos_and_redirects(tmp_db, monkeypatch):
 
     assert response.status_code in (302, 303, 307)
     assert "message=" in response.headers["location"]
+    # the message is only visible on the workspace, not the landing
+    assert response.headers["location"].startswith("/studio?")
 
 
 def test_post_import_reports_failure_without_breaking(tmp_db, monkeypatch):
@@ -602,8 +634,13 @@ def test_concepts_page_no_shotlist_button_once_planned(tmp_preprod_db):
 # ---------- navigation ----------
 # Every screen was built and verified in isolation by typing its URL,
 # which is exactly how a site ends up with no way to get between pages.
+#
+# `/` is deliberately not in here: it's the marketing landing, served
+# outside the app shell, so it carries no nav bar. `/studio` isn't
+# either -- it's the workspace, has its own chrome, and is the thing
+# these deep screens link *back* to (asserted separately below).
 
-NAV_TARGETS = ["/", "/concepts", "/locations", "/pitches", "/analytics",
+NAV_TARGETS = ["/concepts", "/locations", "/pitches", "/analytics",
                "/library", "/videos/new"]
 
 
@@ -620,6 +657,14 @@ def test_video_detail_also_has_nav(tmp_preprod_db):
     response = client.get(f"/videos/{vid}")
     for target in NAV_TARGETS:
         assert f'href="{target}"' in response.text
+
+
+@pytest.mark.parametrize("page", NAV_TARGETS)
+def test_every_deep_screen_links_back_to_the_studio(page, tmp_preprod_db):
+    """The workspace is the one page; a deep screen you can't get out of
+    is how the seven-screen cockpit grew back."""
+    response = client.get(page)
+    assert 'href="/studio"' in response.text
 
 
 # ---------- photo upload ----------
@@ -902,16 +947,16 @@ def test_concept_warnings_are_visible_on_the_page(tmp_preprod_db):
     assert "rooftop helipad" in response.text
 
 
-def test_dashboard_distinguishes_no_videos_from_none_at_this_age(tmp_db):
+def test_studio_distinguishes_no_videos_from_none_at_this_age(tmp_preprod_db):
     """
     A video whose only reading is from day 300 legitimately doesn't
     appear at "measured at 7 days" -- but saying "No videos yet" when
     one exists is just wrong, and reads as a broken page.
     """
-    vid = db.add_video("Night Run", "youtube", "2025-09-29", path=tmp_db)
-    db.record_metrics(vid, views=82, captured_at="2026-07-29", path=tmp_db)
+    vid = db.add_video("Night Run", "youtube", "2025-09-29", path=tmp_preprod_db)
+    db.record_metrics(vid, views=82, captured_at="2026-07-29", path=tmp_preprod_db)
 
-    response = client.get("/?posted_within=all&at_days=7")
+    response = client.get("/studio?posted_within=all&at_days=7")
     assert "No videos yet" not in response.text
     assert "measured at" in response.text.lower()
     assert "Night Run" not in response.text   # correctly excluded from the table
@@ -1088,3 +1133,190 @@ def test_post_metrics_redirects_to_analytics(tmp_db):
     response = client.post("/metrics/new", data={f"views_{vid}": "5"},
                            follow_redirects=False)
     assert "/analytics?updated=1" in response.headers["location"]
+
+
+# ---------- the machine-readable growth surface ----------
+# These files exist for crawlers, so nothing in the app renders them and
+# a regression is invisible until citations stop. Assert the bytes.
+
+def test_robots_allows_the_ai_crawlers_by_name():
+    response = client.get("/robots.txt")
+    assert response.status_code == 200
+    for bot in ("GPTBot", "ClaudeBot", "PerplexityBot", "Google-Extended"):
+        assert f"User-agent: {bot}" in response.text
+
+
+def test_robots_keeps_the_app_out_of_the_index():
+    response = client.get("/robots.txt")
+    assert "Disallow: /studio" in response.text
+    assert "Disallow: /analytics" in response.text
+    assert "Sitemap:" in response.text
+
+
+def test_llms_txt_is_served_as_markdown_with_the_hard_specs():
+    """The specs are the citable part -- a model asked what this does
+    should be able to answer with numbers, not adjectives."""
+    response = client.get("/llms.txt")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/plain")
+    assert "# Zero Page AI Studio" in response.text
+    assert "6 shots" in response.text
+    assert "13–17 seconds" in response.text
+
+
+def test_sitemap_lists_the_public_page_only():
+    response = client.get("/sitemap.xml")
+    assert response.status_code == 200
+    assert "<urlset" in response.text
+    assert "/studio" not in response.text
+
+
+def test_landing_carries_the_jsonld_graph():
+    response = client.get("/")
+    assert 'application/ld+json' in response.text
+    assert '"@type": "SoftwareApplication"' in response.text
+    assert '"@type": "Organization"' in response.text
+
+
+def test_landing_has_a_canonical_and_a_description():
+    response = client.get("/")
+    assert 'rel="canonical"' in response.text
+    assert 'name="description"' in response.text
+
+
+def test_app_pages_are_noindex(tmp_preprod_db):
+    """The workspace is the product, not content. Indexing it splits the
+    ranking signal off the one page that should carry it."""
+    for page in ("/studio", "/concepts", "/analytics", "/library"):
+        assert "noindex" in client.get(page).text, page
+
+
+def test_schema_uses_the_configured_site_url(monkeypatch):
+    monkeypatch.setenv("SITE_URL", "https://example.test/")
+    graph = seo.homepage_schema()
+    assert graph["@graph"][0]["@id"] == "https://example.test/#org"
+    assert "https://example.test/sitemap.xml" in seo.robots_txt()
+
+
+# ---------- the assistant ----------
+
+def test_route_intent_prefers_an_explicit_chip():
+    assert app_main.route_intent("cut it now", explicit="ideas") == "ideas"
+
+
+def test_route_intent_reads_free_text():
+    assert app_main.route_intent("plan that one") == "plan"
+    assert app_main.route_intent("storyboard this") == "plan"
+    assert app_main.route_intent("add a room") == "room"
+    assert app_main.route_intent("give me a full concept for the garage") == "concept"
+
+
+def test_route_intent_falls_back_to_the_cheapest_stage():
+    """An unparseable ask must not spend a generation on the wrong
+    stage; ideas is the cheap one and almost always what was meant."""
+    assert app_main.route_intent("") == "ideas"
+    assert app_main.route_intent("something about a wrench") == "ideas"
+
+
+def test_assistant_deals_ideas_from_typed_text(tmp_preprod_db, monkeypatch):
+    preprod.add_location("garage", {"space": "garage"}, path=tmp_preprod_db)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(app_main.genai, "Client", lambda **k: object())
+
+    seen = {}
+
+    def fake_ideas(**kwargs):
+        seen.update(kwargs)
+        return {"ideas": [{"title": "A"}, {"title": "B"}]}
+
+    monkeypatch.setattr(app_main.shootgen, "generate_concept_ideas", fake_ideas)
+    response = client.post("/studio/assist", data={"text": "gearing up ritual"},
+                           follow_redirects=False)
+    assert response.status_code == 303
+    assert seen["spark"] == "gearing up ritual"
+    assert "Dealt 2 ideas" in unquote(response.headers["location"])
+
+
+def test_assistant_plans_the_most_recent_unplanned_idea(tmp_preprod_db, monkeypatch):
+    preprod.add_location("garage", {"space": "garage"}, path=tmp_preprod_db)
+    preprod.save_concept_ideas(
+        [{"title": "Older", "hook": "h", "logline": "l"},
+         {"title": "Newer", "hook": "h", "logline": "l"}],
+        brand="antihero", path=tmp_preprod_db,
+    )
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(app_main.genai, "Client", lambda **k: object())
+
+    planned = {}
+
+    def fake_shot_list(concept_id, **kwargs):
+        planned["id"] = concept_id
+        return {"warnings": []}
+
+    monkeypatch.setattr(app_main.shootgen, "generate_shot_list", fake_shot_list)
+    response = client.post("/studio/assist", data={"intent": "plan"},
+                           follow_redirects=False)
+    assert response.status_code == 303
+    assert "Planned" in unquote(response.headers["location"])
+    assert planned["id"] is not None
+
+
+def test_assistant_says_what_a_cut_list_needs_instead_of_faking_one(tmp_preprod_db):
+    response = client.post("/studio/assist", data={"intent": "cut"},
+                           follow_redirects=False)
+    assert response.status_code == 303
+    assert "src.ingest" in unquote(response.headers["location"])
+
+
+def test_assistant_reports_a_failed_generation_without_breaking(tmp_preprod_db, monkeypatch):
+    preprod.add_location("garage", {"space": "garage"}, path=tmp_preprod_db)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(app_main.genai, "Client", lambda **k: object())
+
+    def boom(**kwargs):
+        raise RuntimeError("model down")
+
+    monkeypatch.setattr(app_main.shootgen, "generate_concept_ideas", boom)
+    response = client.post("/studio/assist", data={"text": "anything"},
+                           follow_redirects=False)
+    assert response.status_code == 303
+    assert "Could not generate" in unquote(response.headers["location"])
+    assert client.get("/studio").status_code == 200
+
+
+def test_assistant_without_an_api_key_says_so(tmp_preprod_db, monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    response = client.post("/studio/assist", data={"text": "ideas please"},
+                           follow_redirects=False)
+    assert "GEMINI_API_KEY" in response.headers["location"]
+
+
+# ---------- inline actions land back on the canvas ----------
+
+def test_mark_shot_from_the_studio_returns_to_the_studio(tmp_preprod_db):
+    preprod.add_location("garage", {"space": "garage"}, path=tmp_preprod_db)
+    cid = preprod.save_concept(
+        {"title": "T", "hook": "h", "logline": "l", "shots": []},
+        brand="antihero", path=tmp_preprod_db,
+    )
+    response = client.post(f"/concepts/{cid}/shot", data={"next": "/studio"},
+                           follow_redirects=False)
+    assert response.headers["location"] == "/studio"
+
+
+def test_mark_shot_without_next_still_returns_to_concepts(tmp_preprod_db):
+    preprod.add_location("garage", {"space": "garage"}, path=tmp_preprod_db)
+    cid = preprod.save_concept(
+        {"title": "T", "hook": "h", "logline": "l", "shots": []},
+        brand="antihero", path=tmp_preprod_db,
+    )
+    response = client.post(f"/concepts/{cid}/shot", follow_redirects=False)
+    assert response.headers["location"] == "/concepts"
+
+
+def test_next_refuses_to_leave_the_site(tmp_preprod_db):
+    """`next` on a form is an open redirect waiting to happen."""
+    assert app_main.safe_next("https://evil.test", "/concepts") == "/concepts"
+    assert app_main.safe_next("//evil.test", "/concepts") == "/concepts"
+    assert app_main.safe_next("/studio", "/concepts") == "/studio"

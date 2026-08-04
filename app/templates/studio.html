@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Zero Page · Studio</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+  /* The workspace. Three zones: what you have (rail), what you made
+     (canvas), what you want (assistant). Full-bleed -- the rest of the
+     app lives in a 760px column, this doesn't. Tokens come from
+     style.css; everything here is prefixed wk- so it can't leak. */
+  body{overflow-x:hidden;}
+  .wk-page{max-width:none;margin:0;padding:0;}
+
+  /* ---- top bar ---- */
+  .wk-top{position:sticky;top:0;z-index:40;display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+    padding:11px 18px;border-bottom:1px solid var(--line);background:var(--panel2);}
+  .wk-brand{font-family:'Bebas Neue',Impact,sans-serif;font-size:21px;letter-spacing:.06em;color:var(--bone);text-decoration:none;}
+  .wk-brand .a{color:var(--red);}
+  .wk-top .sp{flex:1;}
+  .wk-count{font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.1em;color:var(--faint);text-transform:uppercase;}
+  .wk-count b{font-family:'Bebas Neue',Impact,sans-serif;font-size:19px;color:var(--bone);margin-right:4px;vertical-align:-1px;}
+  .wk-enforce{display:inline-flex;align-items:center;gap:7px;font-family:'IBM Plex Mono',monospace;font-size:9px;
+    letter-spacing:.16em;text-transform:uppercase;color:var(--good);border:1px solid rgba(111,207,151,.3);padding:5px 9px;}
+  .wk-enforce .dot{width:6px;height:6px;border-radius:50%;background:var(--good);box-shadow:0 0 8px var(--good);}
+
+  /* ---- three-zone grid ---- */
+  .wk{display:grid;grid-template-columns:250px minmax(0,1fr) 330px;align-items:start;}
+  .wk-rail,.wk-assist{position:sticky;top:47px;max-height:calc(100vh - 47px);overflow-y:auto;}
+  .wk-rail{border-right:1px solid var(--line);}
+  .wk-assist{border-left:1px solid var(--line);background:var(--panel2);}
+  .wk-canvas{padding:20px 24px 80px;min-width:0;}
+
+  /* ---- rail: CSS-only tabs ---- */
+  .wk-tabs{display:flex;border-bottom:1px solid var(--line);}
+  .wk-tabs label{flex:1;text-align:center;cursor:pointer;padding:10px 4px;
+    font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);}
+  /* Visually hidden, NOT hidden from the machine: opacity:0 plus
+     pointer-events:none took these radios out of the accessibility tree
+     and off the tab order, which meant the rail could only be switched
+     with a mouse. Clipped instead, so they stay focusable. */
+  .wk-tabs input{position:absolute;width:1px;height:1px;margin:-1px;padding:0;
+    border:0;clip:rect(0 0 0 0);clip-path:inset(50%);overflow:hidden;}
+  .wk-tabs label:has(input:checked){color:var(--bone);border-bottom:2px solid var(--red);background:var(--panel);}
+  .wk-tabs label:has(input:focus-visible){outline:1px solid var(--steel);outline-offset:-2px;}
+  .wk-panel{display:none;padding:14px 13px 40px;}
+  .wk-rail:has(#tab-media:checked)   #panel-media,
+  .wk-rail:has(#tab-rooms:checked)   #panel-rooms,
+  .wk-rail:has(#tab-library:checked) #panel-library,
+  .wk-rail:has(#tab-tools:checked)   #panel-tools{display:block;}
+
+  .wk-h{font-family:'Bebas Neue',Impact,sans-serif;font-size:17px;letter-spacing:.05em;margin:0;font-weight:400;}
+  .wk-sub{font-size:10.5px;color:var(--dim);margin:3px 0 12px;line-height:1.45;}
+
+  .wk-clip{border:1px solid var(--line);background:var(--panel);padding:7px 9px;margin-bottom:6px;}
+  .wk-clip .fn{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--bone);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .wk-clip .r{display:flex;justify-content:space-between;align-items:center;margin-top:3px;}
+  .wk-clip .beat{font-size:10px;color:var(--dim);line-height:1.35;margin-top:5px;
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+  .wk-pill{font-family:'IBM Plex Mono',monospace;font-size:8.5px;letter-spacing:.1em;padding:1px 5px;border:1px solid var(--steel);color:var(--steel);}
+  .wk-pill.drone{border-color:var(--faint);color:var(--faint);}
+  .wk-dur{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--faint);}
+  #wk-search{width:100%;margin-bottom:9px;}
+
+  .wk-room{border:1px solid var(--line);background:var(--panel);padding:9px;margin-bottom:8px;}
+  .wk-room .nm{font-family:'Bebas Neue',Impact,sans-serif;font-size:17px;letter-spacing:.03em;line-height:1;}
+  .wk-room .cnt{font-family:'IBM Plex Mono',monospace;font-size:8.5px;color:var(--faint);letter-spacing:.1em;text-transform:uppercase;margin-top:3px;}
+  .wk-room .d{font-size:10.5px;color:var(--dim);line-height:1.45;margin-top:6px;}
+  .wk-shots{display:flex;gap:4px;flex-wrap:wrap;margin-top:7px;}
+  .wk-shots img{width:44px;height:44px;object-fit:cover;border:1px solid var(--line);}
+
+  .wk-add{border:1px dashed var(--line);padding:11px;margin-top:12px;}
+  .wk-add input[type=text]{width:100%;margin-bottom:7px;}
+  .wk-add input[type=file]{width:100%;font-size:10px;color:var(--dim);margin-bottom:8px;}
+  .wk-add button{width:100%;}
+
+  .wk-src{border-left:2px solid var(--line);padding:5px 0 5px 8px;margin-bottom:7px;}
+  .wk-src .s{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--bone);word-break:break-all;}
+  .wk-src .m{font-family:'IBM Plex Mono',monospace;font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin-top:2px;}
+
+  .wk-tool{display:block;border:1px solid var(--line);background:var(--panel);padding:9px 10px;margin-bottom:6px;text-decoration:none;}
+  .wk-tool:hover{border-color:var(--dim);}
+  .wk-tool .t{display:block;font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--bone);}
+  .wk-tool .d{display:block;font-size:10px;color:var(--dim);margin-top:3px;line-height:1.4;}
+  .wk-cli{font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:var(--faint);line-height:1.7;
+    border-left:2px solid var(--line);padding-left:8px;margin-top:12px;}
+
+  /* ---- canvas ---- */
+  .wk-msg{font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:var(--steel);
+    border:1px solid rgba(143,163,173,.3);background:var(--panel);padding:10px 13px;margin-bottom:18px;}
+  .wk-sec{font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.22em;text-transform:uppercase;
+    color:var(--faint);margin:26px 0 12px;display:flex;align-items:center;gap:10px;}
+  .wk-sec::after{content:"";flex:1;height:1px;background:var(--line);}
+  .wk-sec:first-child{margin-top:0;}
+
+  .wk-blank{text-align:center;border:1px dashed var(--line);padding:56px 28px;color:var(--dim);}
+  .wk-blank h2{font-family:'Bebas Neue',Impact,sans-serif;font-weight:400;font-size:34px;letter-spacing:.03em;color:var(--bone);line-height:1;}
+  .wk-blank p{font-size:13px;max-width:420px;margin:12px auto 0;line-height:1.6;}
+
+  .wk-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;align-items:start;}
+  .wk-card{border:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;}
+  .wk-card.planned{border-color:rgba(226,59,46,.4);}
+  .wk-card.done{border-color:rgba(111,207,151,.4);}
+  .wk-chead{display:flex;align-items:center;gap:8px;padding:8px 11px;border-bottom:1px solid var(--line);background:var(--panel2);}
+  .wk-chead .id{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.14em;color:var(--faint);}
+  .wk-chead .sp{flex:1;}
+  .wk-chead .st{font-family:'IBM Plex Mono',monospace;font-size:8.5px;letter-spacing:.12em;text-transform:uppercase;
+    border:1px solid var(--line);color:var(--dim);padding:2px 6px;}
+  .wk-chead .st.plan{border-color:var(--red);color:var(--red);}
+  .wk-chead .st.shot{border-color:var(--good);color:var(--good);}
+  .wk-cbody{padding:12px 13px 14px;flex:1;display:flex;flex-direction:column;}
+  .wk-cbody h3{font-family:'Bebas Neue',Impact,sans-serif;font-weight:400;font-size:24px;letter-spacing:.03em;line-height:1;margin:0 0 7px;}
+  .wk-hook{display:flex;gap:7px;align-items:flex-start;margin:10px 0;}
+  .wk-log{font-size:12px;color:var(--dim);font-style:italic;line-height:1.5;}
+  .wk-meta{font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.08em;color:var(--faint);margin-top:10px;text-transform:uppercase;}
+  .wk-warn{border-left:2px solid var(--red);padding-left:9px;margin-top:10px;}
+  .wk-warn .lb{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--red);}
+  .wk-warn p{font-size:11px;color:var(--dim);margin:3px 0 0;line-height:1.45;}
+  .wk-shotline{display:grid;grid-template-columns:18px 1fr;gap:8px;font-size:11.5px;line-height:1.5;
+    border-left:2px solid var(--line);padding:6px 0 6px 9px;margin-top:6px;}
+  .wk-shotline.character{border-left-color:var(--red);}
+  .wk-shotline .n{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--faint);}
+  .wk-shotline .tags{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:3px;}
+  .wk-acts{display:flex;gap:7px;margin-top:14px;padding-top:12px;border-top:1px solid var(--line);}
+
+  .wk-prompt{font-family:'IBM Plex Mono',monospace;font-size:10.5px;line-height:1.6;color:var(--bone);
+    background:var(--bg);border:1px solid var(--line);padding:10px 11px;white-space:pre-wrap;margin-top:8px;}
+
+  .wk-cut{border:1px solid var(--line);background:var(--panel);margin-bottom:14px;}
+  .wk-cuthead{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 13px;
+    border-bottom:1px solid var(--line);background:var(--panel2);}
+  .wk-cuthead .t{font-family:'Bebas Neue',Impact,sans-serif;font-size:22px;letter-spacing:.03em;line-height:1;}
+  .wk-cuthead .rt{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--steel);letter-spacing:.08em;}
+  .wk-cutbody{padding:12px 13px 14px;}
+  .wk-checks{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:11px;}
+  .wk-check{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.09em;text-transform:uppercase;
+    color:var(--good);border:1px solid rgba(111,207,151,.28);padding:3px 7px;}
+  .wk-row{display:grid;grid-template-columns:18px 1fr 150px;gap:9px;align-items:center;
+    border-left:2px solid var(--bone);background:var(--panel2);padding:6px 11px;margin-bottom:5px;}
+  .wk-row .i{font-family:'IBM Plex Mono',monospace;color:var(--faint);font-size:10.5px;}
+  .wk-row .fn{font-family:'IBM Plex Mono',monospace;font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .wk-row .io{font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:var(--dim);text-align:right;}
+  .wk-row .io b{color:var(--bone);font-weight:500;}
+  .wk-note{margin-top:10px;}
+  .wk-note .lb{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);margin-bottom:3px;}
+  .wk-note.grade .lb{color:var(--red);}.wk-note.sound .lb{color:var(--steel);}
+  .wk-note .tx{font-size:11.5px;color:var(--bone);line-height:1.5;}
+
+  /* performance strip */
+  .wk-perf{display:grid;grid-template-columns:repeat(auto-fit,minmax(112px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);}
+  .wk-stat{background:var(--bg);padding:13px 12px;}
+  .wk-stat .v{font-family:'Bebas Neue',Impact,sans-serif;font-size:27px;line-height:1;color:var(--bone);}
+  .wk-stat .k{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin-top:5px;}
+  .wk-perf-tbl{width:100%;border-collapse:collapse;margin-top:12px;}
+  .wk-perf-tbl td{border-bottom:1px solid var(--line);padding:8px 6px;font-size:12px;vertical-align:middle;}
+  .wk-perf-tbl td.sc{font-family:'IBM Plex Mono',monospace;font-size:11px;text-align:right;white-space:nowrap;}
+  .wk-perf-tbl tr.good td.sc{color:var(--good);}
+  .wk-perf-tbl tr.bad td.sc{color:var(--bad);}
+
+  /* ---- assistant ---- */
+  .wk-ap{padding:16px 15px 30px;}
+  .wk-ask{font-family:'Bebas Neue',Impact,sans-serif;font-weight:400;font-size:23px;letter-spacing:.03em;line-height:1;margin:0 0 4px;}
+  .wk-ap textarea{width:100%;background:var(--bg);border:1px solid var(--line);color:var(--bone);
+    font-family:'Inter',sans-serif;font-size:13px;line-height:1.5;padding:11px 12px;resize:vertical;min-height:82px;}
+  .wk-ap textarea::placeholder{color:var(--faint);}
+  .wk-chips{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 4px;}
+  .wk-chip{font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;
+    background:transparent;border:1px solid var(--line);color:var(--dim);padding:7px 9px;cursor:pointer;text-align:left;}
+  .wk-chip:hover{color:var(--bone);border-color:var(--dim);}
+  .wk-run{width:100%;font-family:'Bebas Neue',Impact,sans-serif;background:var(--red);color:#0B0B0D;border:none;
+    padding:11px;font-size:21px;letter-spacing:.05em;cursor:pointer;margin-top:10px;}
+  .wk-run:hover{background:#F0554A;}
+  .wk-opts{margin-top:14px;padding-top:13px;border-top:1px solid var(--line);}
+  .wk-brand{display:flex;border:1px solid var(--line);margin-bottom:8px;}
+  .wk-brand label{flex:1;text-align:center;font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.1em;
+    text-transform:uppercase;color:var(--faint);padding:8px 6px;cursor:pointer;}
+  .wk-brand input{display:none;}
+  .wk-brand label:has(input:checked){background:var(--panel);color:var(--bone);}
+  .wk-pov{display:flex;align-items:center;gap:8px;border:1px solid var(--line);padding:8px 10px;cursor:pointer;
+    font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);user-select:none;}
+  .wk-pov:has(input:checked){border-color:var(--steel);color:var(--steel);}
+  .wk-pov input{accent-color:var(--steel);}
+  .wk-ap input[type=text]{width:100%;margin-bottom:8px;}
+  .wk-unver{margin-top:12px;font-size:9.5px;color:var(--faint);line-height:1.45;border-left:2px solid var(--faint);padding-left:8px;}
+  .wk-empty{color:var(--dim);font-size:11.5px;padding:12px;border:1px dashed var(--line);}
+
+  @media (max-width:1180px){
+    .wk{grid-template-columns:220px minmax(0,1fr);}
+    .wk-assist{grid-column:1/-1;position:static;max-height:none;border-left:none;border-top:1px solid var(--line);}
+  }
+  @media (max-width:760px){
+    .wk{grid-template-columns:1fr;}
+    .wk-rail{position:static;max-height:none;border-right:none;border-bottom:1px solid var(--line);}
+  }
+  </style>
+</head>
+<body>
+<div class="wk-page">
+
+  <div class="wk-top">
+    <a class="wk-brand" href="/">ZERO PAGE <span class="a">AI STUDIO</span></a>
+    <span class="sp"></span>
+    <span class="wk-count"><b>{{ clips|length }}</b>clips</span>
+    <span class="wk-count"><b>{{ spaces|length }}</b>rooms</span>
+    <span class="wk-count"><b>{{ shoot_concepts|length }}</b>concepts</span>
+    <span class="wk-count"><b>{{ cut_count }}</b>cut&nbsp;lists</span>
+    <span class="wk-enforce"><span class="dot"></span>Code enforces</span>
+  </div>
+
+  <div class="wk">
+
+    <!-- ============ LEFT RAIL — what you have ============ -->
+    <aside class="wk-rail">
+      <div class="wk-tabs" role="tablist" aria-label="Workspace rail">
+        <label><input type="radio" name="rail" id="tab-media" aria-label="All media" {{ "checked" if clips and not spaces else "" }}><span>Media</span></label>
+        <label><input type="radio" name="rail" id="tab-rooms" aria-label="Rooms" {{ "" if clips and not spaces else "checked" }}><span>Rooms</span></label>
+        <label><input type="radio" name="rail" id="tab-library" aria-label="Reference library"><span>Library</span></label>
+        <label><input type="radio" name="rail" id="tab-tools" aria-label="Tools"><span>Tools</span></label>
+      </div>
+
+      <div class="wk-panel" id="panel-media">
+        <h4 class="wk-h">All media</h4>
+        <p class="wk-sub">Real footage. Every cut is validated against these filenames and durations.</p>
+        {% if clips %}<input id="wk-search" class="mono" placeholder="filter clips…">{% endif %}
+        <div id="wk-clips">
+          {% for c in clips %}
+          <div class="wk-clip" data-fn="{{ c.filename|lower }}" data-beat="{{ c.beat|lower }}">
+            <div class="fn">{{ c.filename }}</div>
+            <div class="r">
+              <span class="wk-pill {{ 'drone' if c.cam == 'DRONE' else '' }}">{{ c.cam }}</span>
+              <span class="wk-dur">{{ c.duration }}s · {{ c.resolution }}</span>
+            </div>
+            {% if c.beat %}<div class="beat">{{ c.beat }}</div>{% endif %}
+          </div>
+          {% else %}
+          <div class="wk-empty">No footage catalogued yet. Ingest runs in the Tools tab.</div>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="wk-panel" id="panel-rooms">
+        <h4 class="wk-h">Rooms</h4>
+        <p class="wk-sub">The spaces you've photographed. Nothing gets planned in a room that isn't here.</p>
+        {% for s in spaces %}
+        <div class="wk-room">
+          <div class="nm">{{ s.name }}</div>
+          {% if s.photo_count is not none %}<div class="cnt">{{ s.photo_count }} photo(s)</div>{% endif %}
+          {% if s.photos %}
+          <div class="wk-shots">
+            {% for p in s.photos[:4] %}<img src="{{ p }}?thumb=1" alt="{{ s.name }}">{% endfor %}
+          </div>
+          {% endif %}
+          {% if s.description is mapping %}
+            {% if s.description.constraints %}<div class="d">{{ s.description.constraints }}</div>{% endif %}
+          {% elif s.description %}<div class="d">{{ s.description }}</div>{% endif %}
+        </div>
+        {% else %}
+        <div class="wk-empty">No rooms yet — a concept needs somewhere real to happen.</div>
+        {% endfor %}
+
+        <form class="wk-add" method="post" action="/locations/upload" enctype="multipart/form-data">
+          <input type="hidden" name="next" value="/studio">
+          <div class="kicker" style="margin-bottom:7px">Add a room</div>
+          <input type="text" name="name" placeholder="e.g. garage" required>
+          <input type="file" name="photos" accept="image/*" multiple required>
+          <button type="submit">Photograph &amp; describe</button>
+        </form>
+      </div>
+
+      <div class="wk-panel" id="panel-library">
+        <h4 class="wk-h">Reference library</h4>
+        <p class="wk-sub">What ideation is grounded in, beyond the rooms themselves.</p>
+        {% if library.available %}
+          {% for s in library.sources %}
+          <div class="wk-src">
+            <div class="s">{{ s.source }}</div>
+            <div class="m">{{ s.domain }}{% if s.chunks is defined %} · {{ s.chunks }} chunk(s){% endif %}</div>
+          </div>
+          {% else %}
+          <div class="wk-empty">Store is up but empty. Add reference material in the library tool.</div>
+          {% endfor %}
+          <a class="wk-tool" href="/library" style="margin-top:10px"><span class="t">Manage library →</span></a>
+        {% else %}
+          <div class="wk-empty">Store unreachable — generation still runs, just ungrounded by references.</div>
+        {% endif %}
+      </div>
+
+      <div class="wk-panel" id="panel-tools">
+        <h4 class="wk-h">Tools</h4>
+        <p class="wk-sub">The stages the assistant drives, if you'd rather drive one yourself.</p>
+        <a class="wk-tool" href="/locations"><span class="t">Rooms</span><span class="d">Photograph and describe a space.</span></a>
+        <a class="wk-tool" href="/concepts"><span class="t">Concepts</span><span class="d">The full ideation screen and its rates.</span></a>
+        <a class="wk-tool" href="/pitches"><span class="t">Pitches</span><span class="d">Every pitch run, per prompt hash.</span></a>
+        <a class="wk-tool" href="/library"><span class="t">Library</span><span class="d">Ingest and search reference material.</span></a>
+        <a class="wk-tool" href="/analytics"><span class="t">Analytics</span><span class="d">Record and refresh view counts.</span></a>
+        <a class="wk-tool" href="/videos/new"><span class="t">Add video</span><span class="d">Log something you posted.</span></a>
+        <div class="wk-cli">
+          Footage stages are CLI:<br>
+          python -m src.ingest<br>
+          python -m src.pitch<br>
+          python -m src.editgen &lt;n&gt;
+        </div>
+      </div>
+    </aside>
+
+    <!-- ============ CANVAS — what you made ============ -->
+    <main class="wk-canvas">
+      {% if message %}<div class="wk-msg">{{ message }}</div>{% endif %}
+
+      {% if not shoot_concepts and not pitches and not spaces %}
+      <div class="wk-blank">
+        <h2>Start with a room.</h2>
+        <p>Photograph a space in the left rail and it gets described — geometry, light, textures, and what it won't allow. Then ask for ideas, and only shootable ones come back.</p>
+      </div>
+      {% elif not shoot_concepts and not pitches %}
+      <div class="wk-blank">
+        <h2>{{ spaces|length }} room{{ "s" if spaces|length != 1 }} ready.</h2>
+        <p>Ask the assistant for ideas. They'll be built from these rooms, and any shot set somewhere you haven't photographed is rejected before you see it.</p>
+      </div>
+      {% endif %}
+
+      {% if shoot_concepts %}
+      <div class="wk-sec">Concepts · {{ shortlist.shortlisted if shortlist.rate is not none else 0 }}/{{ shoot_concepts|length }} planned · {{ rate.shot }} shot</div>
+      <div class="wk-cards">
+        {% for c in shoot_concepts %}
+        <article class="wk-card {{ 'done' if c.shot_done else ('planned' if c.has_shot_list else '') }}" id="c-{{ c.id }}">
+          <div class="wk-chead">
+            <span class="id">SHOOT-{{ "%02d"|format(c.id) }}</span>
+            <span class="sp"></span>
+            {% if c.shot_done %}<span class="st shot">◆ Shot</span>
+            {% elif c.has_shot_list %}<span class="st plan">{{ c.shots|length }} shots{% if c.duration %} · {{ c.duration }}{% endif %}</span>
+            {% else %}<span class="st">Idea</span>{% endif %}
+          </div>
+          <div class="wk-cbody">
+            <h3>{{ c.title|upper }}</h3>
+            {% if c.logline %}<p class="wk-log">{{ c.logline }}</p>{% endif %}
+            {% if c.hook %}
+            <div class="wk-hook"><span class="tag red">HOOK / 0:01</span><p style="margin:0;font-size:12px">{{ c.hook }}</p></div>
+            {% endif %}
+            {% if c.warnings %}
+            <div class="wk-warn">
+              <div class="lb">{{ c.warnings|length }} warning{{ "s" if c.warnings|length != 1 }}</div>
+              {% for w in c.warnings %}<p>{{ w }}</p>{% endfor %}
+            </div>
+            {% endif %}
+            <div class="wk-meta">{{ c.brand }}{% if c.client %} · {{ c.client }}{% endif %}{% if c.locations %} · {{ c.locations | map(attribute="name") | join(", ") }}{% endif %}</div>
+
+            {% if c.has_shot_list %}
+            <div style="margin-top:12px">
+              {% for s in c.shots %}
+              <div class="wk-shotline {{ 'character' if s.type == 'CHARACTER' else '' }}">
+                <span class="n">{{ "%02d"|format(s.n or loop.index) }}</span>
+                <div>
+                  <div class="tags">
+                    <span class="tag {{ 'red' if s.type == 'CHARACTER' else 'bone' }}">{{ s.type }}</span>
+                    <span class="tag {{ 'steel' if s.cam == 'ACTION5' else '' }}">{{ "ACTION 5" if s.cam == "ACTION5" else "BMPCC 6K" }}</span>
+                    <span class="tag faint">{{ s.location|upper }}</span>
+                  </div>
+                  <div>{{ s.desc }}</div>
+                  {% if s.light %}<div class="light" style="font-size:10.5px">LIGHT: {{ s.light }}</div>{% endif %}
+                </div>
+              </div>
+              {% endfor %}
+            </div>
+            {% if c.ai %}
+            <div style="margin-top:13px">
+              <div class="kicker" style="margin-bottom:5px">AI shot — one generation</div>
+              <div class="tags" style="display:flex;gap:6px"><span class="tag steel">{{ c.ai.tool }}</span><span class="dim" style="font-size:10.5px">{{ c.ai.technique }}</span></div>
+              <div class="wk-prompt" id="p-{{ c.id }}">{{ c.ai.prompt }}</div>
+              <div style="margin-top:7px"><button type="button" class="copy" data-target="p-{{ c.id }}">Copy prompt</button></div>
+            </div>
+            {% endif %}
+            {% if c.edit_note or c.grade_note %}
+            <div style="margin-top:12px;display:grid;gap:5px">
+              {% if c.edit_note %}<p class="mono" style="margin:0;font-size:10.5px;line-height:1.6">EDIT / SOUND: <span style="color:var(--bone)">{{ c.edit_note }}</span></p>{% endif %}
+              {% if c.grade_note %}<p class="mono" style="margin:0;font-size:10.5px;line-height:1.6">GRADE: <span style="color:var(--bone)">{{ c.grade_note }}</span></p>{% endif %}
+            </div>
+            {% endif %}
+            {% endif %}
+
+            <div class="wk-acts">
+              {% if not c.has_shot_list %}
+              <form method="post" action="/concepts/{{ c.id }}/shotlist">
+                <input type="hidden" name="next" value="/studio">
+                <button type="submit">Plan the shoot</button>
+              </form>
+              {% else %}
+              <form method="post" action="/concepts/{{ c.id }}/shot">
+                <input type="hidden" name="next" value="/studio">
+                <button type="submit">{{ "Mark unshot" if c.shot_done else "Mark shot" }}</button>
+              </form>
+              {% endif %}
+            </div>
+          </div>
+        </article>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {% if pitches %}
+      <div class="wk-sec">Cut lists · validated against the manifest</div>
+      {% for p in pitches if p.picked %}
+      {% set c = p.concept %}
+      <div class="wk-cut" id="cut-{{ p.number }}">
+        <div class="wk-cuthead">
+          <span class="t">{{ c.title }}</span>
+          <span class="rt">RUNTIME {{ c.runtime }}s · 13–17 OK</span>
+        </div>
+        <div class="wk-cutbody">
+          <div class="wk-checks">
+            <span class="wk-check">✓ {{ c.edit_list|length }} filenames in manifest</span>
+            <span class="wk-check">✓ in/out within clip duration</span>
+            <span class="wk-check">✓ runtime {{ c.runtime }}s in range</span>
+          </div>
+          {% for cut in c.edit_list %}
+          <div class="wk-row">
+            <span class="i">{{ loop.index }}</span>
+            <span class="fn">{{ cut.filename }}</span>
+            <span class="io"><b>{{ cut.in_point }}</b> → <b>{{ cut.out_point }}</b> · +{{ (cut.out_point - cut.in_point)|round(1) }}s</span>
+          </div>
+          {% endfor %}
+          {% if c.grade_notes %}<div class="wk-note grade"><div class="lb">Grade notes</div><div class="tx">{{ c.grade_notes }}</div></div>{% endif %}
+          {% if c.sound_note %}<div class="wk-note sound"><div class="lb">Sound</div><div class="tx">{{ c.sound_note }}</div></div>{% endif %}
+        </div>
+      </div>
+      {% else %}
+      <div class="wk-empty">{{ pitches|length }} pitches on the slate, none turned into a cut list yet — that's <span class="mono">src.editgen</span>.</div>
+      {% endfor %}
+      {% endif %}
+
+      <div class="wk-sec">Performance · compared at equal age</div>
+      <div class="wk-perf">
+        <div class="wk-stat"><div class="v">{{ counts.pitch_runs }}</div><div class="k">Pitch runs</div></div>
+        <div class="wk-stat"><div class="v">{{ counts.ideas }}</div><div class="k">Ideas</div></div>
+        <div class="wk-stat"><div class="v">{% if pick_rate.rate is not none %}{{ (pick_rate.rate * 100)|round|int }}%{% else %}—{% endif %}</div><div class="k">Pick rate</div></div>
+        <div class="wk-stat"><div class="v">{% if shortlist.rate is not none %}{{ (shortlist.rate * 100)|round|int }}%{% else %}—{% endif %}</div><div class="k">Shortlist rate</div></div>
+        <div class="wk-stat"><div class="v">{{ counts.videos }}</div><div class="k">Videos posted</div></div>
+      </div>
+      {% if performance.rows %}
+      <table class="wk-perf-tbl">
+        {% for r in performance.rows %}
+        <tr class="{{ r.css_class }}">
+          <td><a href="/videos/{{ r.video_id }}">{{ r.title|clean_title }}</a></td>
+          <td style="width:120px">{{ r.sparkline|safe }}</td>
+          <td class="sc">{{ r.score }} @ {{ performance.at_days }}d</td>
+        </tr>
+        {% endfor %}
+      </table>
+      {% elif video_count %}
+      <p class="wk-empty" style="margin-top:12px">{{ video_count }} video(s) logged, but none measured at {{ performance.at_days }} days yet. <a href="/analytics">Record view counts →</a></p>
+      {% else %}
+      <p class="wk-empty" style="margin-top:12px">No videos yet. <a href="/videos/new">Log one →</a> once something's posted.</p>
+      {% endif %}
+    </main>
+
+    <!-- ============ ASSISTANT — what you want ============ -->
+    <aside class="wk-assist">
+      <form class="wk-ap" method="post" action="/studio/assist">
+        <h4 class="wk-ask">What do you want to make?</h4>
+        <p class="wk-sub">It picks the stage and runs it. Rooms ground it; code checks it.</p>
+
+        <textarea name="text" placeholder="e.g. “gearing up ritual, 3am garage” — or just press a chip below"></textarea>
+
+        <button type="submit" class="wk-run">Run</button>
+
+        <div class="wk-chips">
+          <button type="submit" name="intent" value="ideas" class="wk-chip">Deal ideas from my rooms</button>
+          <button type="submit" name="intent" value="concept" class="wk-chip">Make one full concept</button>
+          <button type="submit" name="intent" value="plan" class="wk-chip">Plan the last idea</button>
+          <button type="submit" name="intent" value="cut" class="wk-chip">Cut it</button>
+        </div>
+
+        <div class="wk-opts">
+          <div class="kicker" style="margin-bottom:6px">Voice</div>
+          <div class="wk-brand">
+            {% for b in brands %}
+            <label><input type="radio" name="brand" value="{{ b }}" {{ "checked" if loop.first }}>{{ "Antihero" if b == "antihero" else "Zero Page" }}</label>
+            {% endfor %}
+          </div>
+          <input type="text" name="client" placeholder="Client type (Zero Page only)">
+          <label class="wk-pov"><input type="checkbox" name="use_pov" aria-label="Allow POV camera" checked><span>POV cam allowed</span></label>
+        </div>
+      </form>
+
+      <div class="wk-ap" style="padding-top:0">
+        <div class="kicker" style="margin-bottom:6px">Latest AI shot</div>
+        {% if latest_ai %}
+        <div style="display:flex;gap:6px;margin-bottom:6px"><span class="tag steel">{{ latest_ai.tool }}</span><span class="dim" style="font-size:10.5px">{{ latest_ai.technique }}</span></div>
+        <div class="wk-prompt" id="ai-latest">{{ latest_ai.prompt }}</div>
+        <div style="margin-top:7px"><button type="button" class="copy" data-target="ai-latest">Copy prompt</button></div>
+        {% else %}
+        <div class="wk-empty">No AI shot yet — plan a concept and its one generated slot appears here, paste-ready.</div>
+        {% endif %}
+        <div class="wk-unver">Camera vocab is a dated pattern, not current docs — check each tool's prompt guide before trusting the wording.</div>
+      </div>
+    </aside>
+
+  </div>
+</div>
+
+<script>
+// filter the media pool. JS off -> every clip still shows.
+(function(){
+  var box=document.getElementById('wk-search');
+  if(box) box.addEventListener('input',function(){
+    var q=this.value.trim().toLowerCase();
+    document.querySelectorAll('#wk-clips .wk-clip').forEach(function(el){
+      var hit=!q||el.dataset.fn.indexOf(q)>-1||el.dataset.beat.indexOf(q)>-1;
+      el.style.display=hit?'':'none';
+    });
+  });
+})();
+// copy buttons for AI-slot prompts
+document.querySelectorAll("button.copy").forEach(function(btn){
+  btn.addEventListener("click",function(){
+    var el=document.getElementById(btn.dataset.target);
+    navigator.clipboard.writeText(el.innerText).then(function(){
+      var was=btn.textContent; btn.textContent="Copied";
+      setTimeout(function(){ btn.textContent=was; },1500);
+    });
+  });
+});
+</script>
+</body>
+</html>
