@@ -44,6 +44,13 @@ venv/bin/python -m src.editgen <pitch_numbers...> [--print]
 venv/bin/python -m src.promptgen "<loose shot description>" [--idea-id N] [--slot-index N]
 venv/bin/python -m src.genlog record|keep|reject ...
 
+# THE LOOP (L2 -> L3) — analytics into the next slate
+venv/bin/python -m src.promote_winners propose|approve|reject|run     # winners -> proven_results shelf
+venv/bin/python -m src.rework [--count 6] [--brand ...]               # evidence-grounded next slate
+
+# AUTOPILOT (L4) — OFF by default; dry-run unless env+approve+no kill switch align
+venv/bin/python -m src.autopilot plan|run|kill
+
 # REFERENCE LIBRARY (RAG) — optional grounding for pitch.py
 venv/bin/python -m src.rag ingest <files...>        # (re-)build the pgvector library
 venv/bin/python -m src.rag query "<text>" [--k 5]
@@ -217,6 +224,19 @@ shot list for footage you *need*. Don't merge them.
   psycopg/libpq connects below Python's socket module, so `tests/conftest.py`'s network guard
   cannot catch a stray Postgres connection in tests — anything touching the store must patch
   `rag.connect` (or above) explicitly.
+- **`src/post_seo.py`** / **`src/promote_winners.py`** / **`src/rework.py`** — the L2→L3 loop.
+  `post_seo` derives winning/losing traits (topics, hooks, title words) at the comparison-window
+  median, equal-age, and `score_post` grades a draft with reasons that cite the evidence — pure
+  against SQLite, so a hundred drafts cost nothing. (Two "seo"s on purpose: `app/seo.py` is the
+  site's crawler surface; this scores *posts*.) `promote_winners` proposes/approves winners onto
+  the RAG `proven_results` shelf, docs now carrying the window's patterns; `rework` proposes the
+  next slate from those signals + shelf (CRAG-graded retrieval), each idea carrying an "evidence"
+  sentence, saved as ordinary concept ideas so the pick stays the measured label.
+- **`src/autopilot.py`** — the L4 scaffold, where the contract is the gate: nothing executes
+  unless `ZEROPAGE_AUTOPILOT=1` AND a per-run `--approve` AND no `data/autopilot.off` kill switch
+  all align; anything less is a dry run that describes every action. The generate/post executors
+  are deliberately unwired registration points — real platform APIs and accounts are an explicit
+  human step, never a default.
 - **`src/gemini_utils.py`** — shared `generate_with_retry` (retries on `RESOURCE_EXHAUSTED`/
   `UNAVAILABLE`, falls through to `FALLBACK_MODELS` if the primary model stays down for the whole
   retry budget) and `strip_fences` (strips markdown code fences from model JSON output).
@@ -283,10 +303,16 @@ tab controls out of the accessibility tree and off the keyboard entirely; `.wk-t
 description were inline spans, so every tool read as "ROOMSPhotograph and describe a space"; and
 the card and stat grids were sized for a wider canvas than the three-zone layout leaves.
 
-**Not started:** the thing the tool exists for. The rates (`shortlist_rate`, `shoot_rate`,
-`selection_rate`) are structurally correct and currently meaningless — they need weeks of real use
-before a prompt change can be measured against them. The most valuable next step is not code: it
-is shooting one of the generated concepts, marking it shot, and adding the video.
+**Structurally complete, statistically empty:** the L2→L3 loop is built and verified live —
+`promote_winners propose` honestly reports nothing clears the bar (no videos measured at equal
+age yet), and `src.rework` generates an evidence-free slate with the note. The rates
+(`shortlist_rate`, `shoot_rate`, `selection_rate`) and `post_seo`'s signals are structurally
+correct and currently meaningless — they need weeks of real posting before a prompt change can be
+measured or a slate genuinely reworked from evidence. The most valuable next step is not code: it
+is shooting one of the generated concepts, marking it shot, posting it, and recording metrics.
+The de-cap is verified live: SHOOT-25 generated with 2 AI shots (WAN, RUNWAY) + 2 camera shots,
+zero warnings, rendered on the studio canvas. L4 exists as `src.autopilot` — gated, dry-run,
+default off, executors unwired.
 
 **Known gaps, in rough priority:**
 - `shot.py`'s `RUNWAY_CAMERA`/`VEO_CAMERA`/`KLING_CAMERA` maps and the AI-slot prompt phrasing are
