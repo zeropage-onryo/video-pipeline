@@ -30,27 +30,30 @@ blind fraction of the clip's total duration — the timestamps in
 the beats are your evidence for what happens when.
 
 For each approved story, produce the full edit:
-- edit_list — ordered cuts: exact clip filename, in/out points in
-  seconds, within each clip's real duration, totaling 13-17
-  seconds, honoring the locked pacing and the HOOK/BUILD/PUNCH
-  structure above, opening on the pitched hook clip. At most one
-  entry may instead be `"source": "generate"` with a `"description"`
-  of the shot, when the footage library truly cannot support a
-  moment the story needs. That entry still needs in/out points
-  marking its intended duration within the cut (it still counts
-  toward the 13-17 second total) but does not need a real filename.
+- edit_list — ordered cuts: real clips and generated clips are
+  co-inputs to the same cut. A real clip names its exact filename
+  with in/out points in seconds, within that clip's real duration.
+  A generated clip uses `"source": "generate"` with a `"description"`
+  of the shot instead of a filename — use one wherever the footage
+  library cannot support a moment the story needs, grounded in the
+  same rooms and grade as the real footage so it cuts without a
+  seam. Every entry, real or generated, needs in/out points marking
+  its duration within the cut. The whole cut totals 13-17 seconds,
+  honoring the locked pacing and the HOOK/BUILD/PUNCH structure
+  above, opening on the pitched hook clip. Real footage should
+  stay the spine of the cut — generated clips earn their place
+  shot by shot.
 - grade_notes — per-shot adjustments on top of the existing
   Batman LUT (what to lift, where to let it crush)
 - sound_note — one line: music energy, any moment that drops to
   natural sound
 
-HARD RULES:
-- Only clip filenames that exist in the library, except at most one
-  edit_list entry may use `"source": "generate"` with a
-  `"description"` in place of a filename.
-- Every in/out point must correspond to a real beat timestamp for
-  that clip, not a guessed fraction of its duration.
-- Runtime, tone, pacing, grade are NOT adjustable. If the footage
-  can't support a constraint, say so in a "warnings" field.
+GUIDANCE (breaks are flagged for review, not discarded):
+- Real clips name only filenames that exist in the library;
+  generated entries use `"source": "generate"` + `"description"`.
+- Every real clip's in/out point must correspond to a real beat
+  timestamp for that clip, not a guessed fraction of its duration.
+- Runtime, tone, pacing, grade are locked. If the footage can't
+  support a constraint, say so in a "warnings" field.
 - Output STRICT JSON ONLY: array of {title, edit_list, grade_notes,
   sound_note, warnings}. No markdown fences.

@@ -220,6 +220,13 @@ def _concept_row(row, conn) -> dict[str, Any]:
     # Derived, not stored: an idea that hasn't been planned yet simply
     # has no shots. Storing a flag as well would let the two disagree.
     data["has_shot_list"] = bool(data["shots"])
+    # Derived the same way: the AI shots are the shots whose source says
+    # so. Rows written before the de-cap carried one concept-level ai
+    # dict instead -- surface it here too, so old concepts keep
+    # rendering wherever ai_shots is read.
+    data["ai_shots"] = [s for s in data["shots"] if s.get("source") == "AI"]
+    if not data["ai_shots"] and data["ai"]:
+        data["ai_shots"] = [data["ai"]]
     data["use_pov"] = bool(data.get("use_pov", 1))
     data["locations"] = [
         dict(r)

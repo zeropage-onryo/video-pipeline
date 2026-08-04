@@ -293,8 +293,11 @@ def studio(request: Request, message: Optional[str] = None,
     for space in spaces:
         space["photos"] = photos_for(space["name"])
     shoot_concepts = preprod.list_concepts(path=db.DB_PATH)
-    # the AI slot of the most recent concept that has one
-    latest_ai = next((c["ai"] for c in shoot_concepts if c.get("ai")), None)
+    # the AI shots of the most recent concept that has any -- a concept
+    # can carry several now, so this is a list, not a single slot
+    latest_ai = next(
+        (c["ai_shots"] for c in shoot_concepts if c.get("ai_shots")), []
+    )
 
     counts = db.summary(path=db.DB_PATH)
     return templates.TemplateResponse(

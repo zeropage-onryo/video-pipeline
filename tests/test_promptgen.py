@@ -93,7 +93,10 @@ def test_generate_prompts_for_slot_returns_three_prompts_and_persists(tmp_db, mo
         client=None, db_path=tmp_db,
     )
 
-    assert set(result["prompts"]) == {"runway", "veo", "kling"}
+    # one prompt per registered platform — the registry is the source,
+    # so a platform added there shows up here with no promptgen edit
+    from src.shot import PLATFORMS
+    assert set(result["prompts"]) == set(PLATFORMS)
     assert all(result["prompts"][tool].strip() for tool in result["prompts"])
 
     stored = gen.get_shot(result["shot_id"], tmp_db)

@@ -355,18 +355,27 @@
                 <div>
                   <div class="tags">
                     <span class="tag {{ 'red' if s.type == 'CHARACTER' else 'bone' }}">{{ s.type }}</span>
+                    {% if s.source == 'AI' %}
+                    <span class="tag steel">AI · {{ s.tool }}</span>
+                    {% else %}
                     <span class="tag {{ 'steel' if s.cam == 'ACTION5' else '' }}">{{ "ACTION 5" if s.cam == "ACTION5" else "BMPCC 6K" }}</span>
+                    {% endif %}
                     <span class="tag faint">{{ s.location|upper }}</span>
                   </div>
                   <div>{{ s.desc }}</div>
                   {% if s.light %}<div class="light" style="font-size:10.5px">LIGHT: {{ s.light }}</div>{% endif %}
+                  {% if s.source == 'AI' and s.prompt %}
+                  <div class="wk-prompt" id="p-{{ c.id }}-{{ loop.index }}" style="margin-top:6px">{{ s.prompt }}</div>
+                  <div style="margin-top:5px"><button type="button" class="copy" data-target="p-{{ c.id }}-{{ loop.index }}">Copy prompt</button></div>
+                  {% endif %}
                 </div>
               </div>
               {% endfor %}
             </div>
-            {% if c.ai %}
+            {% if c.ai and not (c.shots | selectattr("source", "equalto", "AI") | list) %}
+            {# legacy concepts: one concept-level AI slot, not per-shot #}
             <div style="margin-top:13px">
-              <div class="kicker" style="margin-bottom:5px">AI shot — one generation</div>
+              <div class="kicker" style="margin-bottom:5px">AI shot</div>
               <div class="tags" style="display:flex;gap:6px"><span class="tag steel">{{ c.ai.tool }}</span><span class="dim" style="font-size:10.5px">{{ c.ai.technique }}</span></div>
               <div class="wk-prompt" id="p-{{ c.id }}">{{ c.ai.prompt }}</div>
               <div style="margin-top:7px"><button type="button" class="copy" data-target="p-{{ c.id }}">Copy prompt</button></div>
@@ -485,15 +494,17 @@
       </form>
 
       <div class="wk-ap" style="padding-top:0">
-        <div class="kicker" style="margin-bottom:6px">Latest AI shot</div>
-        {% if latest_ai %}
-        <div style="display:flex;gap:6px;margin-bottom:6px"><span class="tag steel">{{ latest_ai.tool }}</span><span class="dim" style="font-size:10.5px">{{ latest_ai.technique }}</span></div>
-        <div class="wk-prompt" id="ai-latest">{{ latest_ai.prompt }}</div>
-        <div style="margin-top:7px"><button type="button" class="copy" data-target="ai-latest">Copy prompt</button></div>
+        <div class="kicker" style="margin-bottom:6px">Latest AI shots</div>
+        {% for a in latest_ai %}
+        <div style="{{ 'margin-top:12px' if not loop.first }}">
+          <div style="display:flex;gap:6px;margin-bottom:6px"><span class="tag steel">{{ a.tool }}</span>{% if a.technique %}<span class="dim" style="font-size:10.5px">{{ a.technique }}</span>{% endif %}</div>
+          <div class="wk-prompt" id="ai-latest-{{ loop.index }}">{{ a.prompt }}</div>
+          <div style="margin-top:7px"><button type="button" class="copy" data-target="ai-latest-{{ loop.index }}">Copy prompt</button></div>
+        </div>
         {% else %}
-        <div class="wk-empty">No AI shot yet — plan a concept and its one generated slot appears here, paste-ready.</div>
-        {% endif %}
-        <div class="wk-unver">Camera vocab is a dated pattern, not current docs — check each tool's prompt guide before trusting the wording.</div>
+        <div class="wk-empty">No AI shots yet — plan a concept and its generated shots appear here, paste-ready.</div>
+        {% endfor %}
+        <div class="wk-unver">Camera vocab is dated per platform in shot.py — an undated map is a general pattern; check that tool's prompt guide before trusting the wording.</div>
       </div>
     </aside>
 

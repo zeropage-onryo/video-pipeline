@@ -85,19 +85,22 @@ def cut_field(cut: dict, *keys):
 
 def validate_edit(edit: dict, manifest_by_name: dict) -> list[str]:
     """
-    One edit_list entry may be a generative slot ("source": "generate")
-    instead of a real clip -- a footage gap the model flagged rather than
-    forcing a hallucinated filename. It's exempt from the unknown-clip
-    check, but everything else about it is still enforced: it needs a
-    shot description, valid in/out points, and it still counts toward
-    total runtime, since the generated clip has to fit the cut like any
-    other. At most one per edit -- see BUILD_SPEC.md's generative-clips
-    addendum.
+    Any edit_list entry may be a generative slot ("source": "generate")
+    instead of a real clip -- real footage and AI clips are co-inputs
+    to the same cut, with no per-edit ceiling. A generative slot is
+    exempt from the unknown-clip check, but everything else about it is
+    still advised on: it needs a shot description and sane in/out
+    points, and it still counts toward total runtime, since the
+    generated clip has to fit the cut like any other.
+
+    Everything returned here is advisory -- visible warnings the human
+    weighs, never a gate. The in/out-inside-duration and runtime checks
+    are kept because they catch genuinely broken cuts, not because a
+    cut "doesn't count" until it passes.
     """
     warnings = []
     edit_list = edit.get("edit_list", [])
     total = 0.0
-    generative_count = 0
 
     for cut in edit_list:
         is_generative = cut.get("source") == "generate"
@@ -106,7 +109,6 @@ def validate_edit(edit: dict, manifest_by_name: dict) -> list[str]:
         out_point = cut_field(cut, "out", "out_point", "end")
 
         if is_generative:
-            generative_count += 1
             description = cut_field(cut, "description")
             if not description or not str(description).strip():
                 warnings.append("generative slot is missing a shot description")
@@ -141,9 +143,6 @@ def validate_edit(edit: dict, manifest_by_name: dict) -> list[str]:
                     f"'{filename}' cut [{in_point}, {out_point}] outside real duration ({duration}s)"
                 )
         total += max(0, out_point - in_point)
-
-    if generative_count > 1:
-        warnings.append(f"at most one generative slot allowed per edit, found {generative_count}")
 
     if not (MIN_RUNTIME <= total <= MAX_RUNTIME):
         warnings.append(f"total runtime {total:.1f}s outside {MIN_RUNTIME}-{MAX_RUNTIME}s window")

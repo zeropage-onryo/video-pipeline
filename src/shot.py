@@ -1,19 +1,24 @@
 """
-One generated clip, described once and compiled per tool.
+One generated clip, described once and compiled per platform.
 
-The pattern: a Shot is tool-agnostic. Separate renderer functions compile
-it into whatever Runway, Veo or Kling currently want. Two reasons this
-layer exists rather than storing prompt strings directly:
+The pattern: a Shot is tool-agnostic. PLATFORMS is the registry — one
+entry per generation tool, carrying its camera vocabulary map and a pure
+renderer — and it is the single source everything else reads (TOOLS,
+render_all, shootgen's tool validation, promptgen's choices). Adding a
+platform is adding one entry here, nothing else. Two reasons this layer
+exists rather than storing prompt strings directly:
 
 1. These tools change their prompt vocabulary. When one does, you fix one
-   render function instead of rewriting every prompt you have stored.
+   registry entry instead of rewriting every prompt you have stored.
 2. Renderers are testable without spending money. Generative video is slow
    and paid; you want the compile step covered by tests that run in
    milliseconds.
 
-IMPORTANT: the per-tool phrasing below is a starting point. Verify it
-against each tool's current documentation before trusting the output —
-these vocabularies move. The structure is what is stable, not the words.
+Verification status is per-map: each camera map carries a dated comment
+naming the guide it was checked against. An undated map is a general
+pattern, not current documentation — check the tool's prompt guide
+before trusting the wording. The structure is what is stable, not the
+words.
 """
 
 from __future__ import annotations
@@ -47,8 +52,6 @@ SHOT_SIZE = (
     "close",
     "extreme_close",
 )
-
-TOOLS = ("runway", "veo", "kling")
 
 # Zero Page Films house style, from prompts/brief.txt and settings.txt.
 # Every rendered prompt carries this so generated clips cut against real
@@ -247,23 +250,154 @@ def render_kling(shot: Shot) -> str:
     )
 
 
-RENDERERS: dict[str, Callable[[Shot], str]] = {
-    "runway": render_runway,
-    "veo": render_veo,
-    "kling": render_kling,
+# Seedance 2.0 — labeled director-style sections (Setting/Action/Camera/
+# Style/Audio), per the Volcengine prompt guide and Seed launch examples.
+# Updated 2026-08-04 from
+# .claude/skills/video-prompting/references/models/seedance2/prompting.md
+SEEDANCE_CAMERA = {
+    "static": "locked camera, no movement",
+    "pan_left": "slow pan left",
+    "pan_right": "slow pan right",
+    "tilt_up": "tilt up",
+    "tilt_down": "tilt down",
+    "push_in": "slow push-in toward the subject",
+    "pull_out": "slow pull-back from the subject",
+    "tracking": "tracking move alongside the subject",
+    "handheld": "subtle handheld sway",
+    "crane_up": "crane rising",
+    "crane_down": "crane descending",
+    "orbit": "orbit around the subject",
 }
+
+
+def render_seedance(shot: Shot) -> str:
+    """
+    Seedance takes literal labeled sections and generates audio, so the
+    soundstage is directed explicitly (ambience only by house style).
+    Reference-asset mapping (@Image/@Video) is out of scope here — this
+    renderer covers the text-only path.
+    """
+    lines = [
+        f"Setting: {_phrase(shot.setting or 'an unspecified interior', shot.lighting)}",
+        f"Action: {_readable_size(shot.size)} shot — {shot.subject} {shot.action}",
+        f"Camera: {SEEDANCE_CAMERA[shot.camera]}",
+        f"Style: {shot.look}",
+        f"Audio: {shot.audio.strip() or 'quiet ambience only, no dialogue, no music'}",
+        f"Avoid: {shot.negative}",
+    ]
+    return "\n".join(lines)
+
+
+# LTX-2 — one flowing present-tense paragraph, style cue first
+# ("Style: <style>, ..."), duration/aspect/model kept OUT of the text.
+# Updated 2026-08-04 from
+# .claude/skills/video-prompting/references/models/ltx2/prompting.md
+LTX_CAMERA = {
+    "static": "the camera holds perfectly still",
+    "pan_left": "the camera pans slowly left",
+    "pan_right": "the camera pans slowly right",
+    "tilt_up": "the camera tilts upward",
+    "tilt_down": "the camera tilts downward",
+    "push_in": "the camera dollies in slowly",
+    "pull_out": "the camera dollies out slowly",
+    "tracking": "the camera tracks alongside",
+    "handheld": "the camera drifts with a subtle handheld sway",
+    "crane_up": "the camera cranes upward",
+    "crane_down": "the camera cranes downward",
+    "orbit": "the camera arcs around the subject",
+}
+
+
+def render_ltx(shot: Shot) -> str:
+    """
+    Style-first single paragraph, chronological, audio integrated into
+    the scene description rather than a separate field. No "The scene
+    opens with" framing — the guide bans it.
+    """
+    audio = shot.audio.strip() or "only quiet ambient sound"
+    sentences = [
+        f"Style: {shot.look}.",
+        _phrase(
+            f"A {_readable_size(shot.size)} shot of {shot.subject}",
+            shot.setting,
+            shot.lighting,
+        ) + ".",
+        f"{shot.subject.capitalize()} {shot.action} as {LTX_CAMERA[shot.camera]}.",
+        f"The soundscape is {audio}, with no dialogue.",
+    ]
+    return " ".join(sentences)
+
+
+# Wan 2.2 — Subject + Scene + Motion, then aesthetic control and
+# stylization; explicit camera verbs (pan/tilt/dolly/orbit/crane);
+# model name, duration and aspect stay out of the text.
+# Updated 2026-08-04 from
+# .claude/skills/video-prompting/references/models/wan22/prompting.md
+WAN_CAMERA = {
+    "static": "fixed camera",
+    "pan_left": "slow pan left",
+    "pan_right": "slow pan right",
+    "tilt_up": "slow tilt up",
+    "tilt_down": "slow tilt down",
+    "push_in": "slow dolly-in",
+    "pull_out": "slow dolly-out",
+    "tracking": "steady tracking shot",
+    "handheld": "subtle handheld movement",
+    "crane_up": "crane up",
+    "crane_down": "crane down",
+    "orbit": "slow orbit around the subject",
+}
+
+
+def render_wan(shot: Shot) -> str:
+    """Wan's advanced formula: subject description, scene, motion,
+    aesthetic control, stylization — in that order."""
+    return _phrase(
+        f"{shot.subject}, {_readable_size(shot.size)} shot",
+        shot.setting,
+        f"{shot.subject} {shot.action}",
+        WAN_CAMERA[shot.camera],
+        shot.lighting,
+        shot.look,
+    )
+
+
+@dataclass(frozen=True)
+class Platform:
+    """One generation tool: its camera vocabulary and its renderer."""
+
+    name: str
+    camera: dict[str, str]
+    render: Callable[[Shot], str]
+    # date the camera map was last checked against the tool's own prompt
+    # guide; None means it's a general pattern, not verified docs
+    verified: str | None = None
+
+
+PLATFORMS: dict[str, Platform] = {
+    "runway": Platform("runway", RUNWAY_CAMERA, render_runway, verified=None),
+    "veo": Platform("veo", VEO_CAMERA, render_veo, verified="2026-08-04"),
+    "kling": Platform("kling", KLING_CAMERA, render_kling, verified=None),
+    "seedance": Platform("seedance", SEEDANCE_CAMERA, render_seedance, verified="2026-08-04"),
+    "ltx": Platform("ltx", LTX_CAMERA, render_ltx, verified="2026-08-04"),
+    "wan": Platform("wan", WAN_CAMERA, render_wan, verified="2026-08-04"),
+}
+
+# Derived, never written by hand: the legal tool set everywhere else
+# (shootgen validation, promptgen choices) is exactly the registry.
+TOOLS = tuple(PLATFORMS)
 
 
 def render(shot: Shot, tool: str) -> str:
     """Compile a Shot for one tool."""
-    if tool not in RENDERERS:
-        raise ValueError(f"tool must be one of {tuple(RENDERERS)}, got {tool!r}")
-    return RENDERERS[tool](shot)
+    if tool not in PLATFORMS:
+        raise ValueError(f"tool must be one of {TOOLS}, got {tool!r}")
+    return PLATFORMS[tool].render(shot)
 
 
 def render_all(shot: Shot) -> dict[str, str]:
-    """Compile for every tool, so you can run the same shot head to head."""
-    return {tool: fn(shot) for tool, fn in RENDERERS.items()}
+    """Compile for every platform, so you can run the same shot head to head."""
+    return {name: platform.render(shot) for name, platform in PLATFORMS.items()}
 
 
 def negative_prompt(shot: Shot) -> str:

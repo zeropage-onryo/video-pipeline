@@ -23,6 +23,7 @@ from dotenv import load_dotenv
 from google import genai
 
 from . import preprod, rag
+from . import shot as shot_module
 from .db import DB_PATH, init_db
 from .gemini_utils import generate_with_retry, strip_fences
 
@@ -31,11 +32,18 @@ PROMPTS_DIR = PROJECT_ROOT / "prompts"
 
 MODEL = "gemini-3-flash-preview"
 
-MAX_SHOTS = 6
 DEFAULT_IDEA_COUNT = 8
 SHOT_TYPES = ("CHARACTER", "BROLL")
+SHOT_SOURCES = ("CAMERA", "AI")
 CAMERAS = ("BMPCC", "ACTION5")
-AI_TOOLS = ("KLING", "RUNWAY")
+# The legal AI tool set is the shot.py platform registry — uppercase to
+# match how concepts name tools. One registry, no second list to drift.
+AI_TOOLS = tuple(t.upper() for t in shot_module.TOOLS)
+
+NO_LOCATIONS_NOTE = (
+    "note: no described locations -- generating ungrounded. Photograph and "
+    "describe a space to ground concepts in real rooms."
+)
 
 NO_REFERENCES_NOTE = (
     "(no reference library available -- generate from the rooms and brand alone)"
@@ -238,9 +246,9 @@ def generate_concept_ideas(brand: str, client=None, spark=None, gemini_client=No
     kwargs = {"path": db_path} if db_path is not None else {}
     locations = preprod.list_locations(**kwargs)
     if not locations:
-        raise ValueError(
-            "no locations described yet -- run `python -m src.locations` first"
-        )
+        # Grounding is an enhancement, never a gate -- the same degrade
+        # contract reference_block keeps when the library is down.
+        print(NO_LOCATIONS_NOTE, file=sys.stderr)
 
     prompt = build_ideas_prompt(locations, brand, client, spark, count,
                                 references=references)
@@ -273,7 +281,7 @@ def generate_shot_list(concept_id: int, gemini_client=None, model: str = MODEL,
 
     locations = preprod.list_locations(**kwargs)
     if not locations:
-        raise ValueError("no locations described yet")
+        print(NO_LOCATIONS_NOTE, file=sys.stderr)
 
     prompt = build_shotlist_prompt(locations, concept["brand"], concept.get("client"),
                                    concept, use_pov=use_pov)
@@ -301,34 +309,52 @@ def parse_concept_response(text: str) -> dict:
 
 def validate_concept(concept: dict, location_names: list, use_pov: bool = True) -> list:
     """
-    Check the model's output against the rules the prompt asked for.
-    Returns warnings; an empty list means it's clean.
+    Check the model's output against what the prompt asked for and
+    return visible warnings. Nothing here blocks: a concept that breaks
+    a rule is still saved with its warnings attached, because it is
+    worth looking at and deciding on. Grounding shapes the generation;
+    a mismatch is advice to the human, not a gate.
 
-    The location check is the one that matters: a concept set in a room
-    that doesn't exist defeats the entire point of describing real
-    spaces first.
+    A shot's source is CAMERA (you capture it; `cam` names the body) or
+    AI (a platform generates it; `tool` + `prompt` say how). No source
+    means CAMERA -- every concept written before the de-cap.
     """
     warnings = []
     shots = concept.get("shots") or []
 
     if not shots:
         warnings.append("concept has no shots")
-    if len(shots) > MAX_SHOTS:
-        warnings.append(f"at most {MAX_SHOTS} shots, got {len(shots)}")
 
     for i, shot in enumerate(shots, start=1):
         n = shot.get("n", i)
         if shot.get("type") not in SHOT_TYPES:
             warnings.append(f"shot {n}: type must be one of {SHOT_TYPES}, got {shot.get('type')!r}")
-        allowed_cams = CAMERAS if use_pov else ("BMPCC",)
-        if shot.get("cam") not in allowed_cams:
+
+        source = shot.get("source", "CAMERA")
+        if source not in SHOT_SOURCES:
             warnings.append(
-                f"shot {n}: cam must be one of {allowed_cams}, got {shot.get('cam')!r}"
+                f"shot {n}: source must be one of {SHOT_SOURCES}, got {source!r}"
             )
+        elif source == "AI":
+            # cam names a physical body; an AI shot doesn't have one.
+            if shot.get("tool") not in AI_TOOLS:
+                warnings.append(
+                    f"shot {n}: AI tool must be one of {AI_TOOLS}, got {shot.get('tool')!r}"
+                )
+            if not (shot.get("prompt") or "").strip():
+                warnings.append(f"shot {n}: AI shot has no generation prompt")
+        else:
+            allowed_cams = CAMERAS if use_pov else ("BMPCC",)
+            if shot.get("cam") not in allowed_cams:
+                warnings.append(
+                    f"shot {n}: cam must be one of {allowed_cams}, got {shot.get('cam')!r}"
+                )
+
         location = shot.get("location")
         if location not in location_names:
             warnings.append(f"shot {n}: unknown location {location!r} -- not a described space")
 
+    # legacy shape: one concept-level ai dict instead of per-shot source
     ai = concept.get("ai")
     if ai and ai.get("tool") not in AI_TOOLS:
         warnings.append(f"ai tool must be one of {AI_TOOLS}, got {ai.get('tool')!r}")
@@ -349,9 +375,7 @@ def generate_concept(brand: str, client=None, spark=None, gemini_client=None,
     kwargs = {"path": db_path} if db_path is not None else {}
     locations = preprod.list_locations(**kwargs)
     if not locations:
-        raise ValueError(
-            "no locations described yet -- run `python -m src.locations` first"
-        )
+        print(NO_LOCATIONS_NOTE, file=sys.stderr)
 
     prompt = build_concept_prompt(locations, brand, client, spark, use_pov=use_pov,
                                   references=references)

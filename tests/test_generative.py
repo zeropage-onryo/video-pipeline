@@ -4,7 +4,7 @@ import pytest
 
 from src import db
 from src import generative as gen
-from src.shot import RENDERERS, Shot, render, render_all
+from src.shot import PLATFORMS, Shot, render, render_all
 
 
 def make_shot(**kw):
@@ -56,7 +56,7 @@ def test_absurd_duration_rejected():
 def test_every_tool_renders_non_empty():
     shot = make_shot()
     out = render_all(shot)
-    assert set(out) == set(RENDERERS)
+    assert set(out) == set(PLATFORMS)
     assert all(v.strip() for v in out.values())
 
 
