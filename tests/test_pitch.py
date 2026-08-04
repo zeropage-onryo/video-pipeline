@@ -81,6 +81,38 @@ def test_build_prompt_without_references_says_so_explicitly():
     assert "{references}" not in prompt
 
 
+def test_pitch_run_scopes_grounding_to_the_pitch_domains(tmp_path, monkeypatch):
+    """
+    Pitching must never ground against marketing or ai_prompting shelves
+    -- those belong to shootgen.py and promptgen.py respectively. This
+    is the regression test for that boundary staying in place.
+    """
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(SAMPLE_MANIFEST))
+    pitches_path = tmp_path / "pitches.json"
+
+    monkeypatch.setattr(pitch, "MANIFEST_PATH", manifest_path)
+    monkeypatch.setattr(pitch, "PITCHES_PATH", pitches_path)
+    monkeypatch.setattr(pitch, "generate_with_retry",
+                        lambda *a, **kw: json.dumps(SAMPLE_PITCHES))
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+
+    calls = []
+
+    def fake_retrieve(*args, **kwargs):
+        calls.append(kwargs)
+        return {"ok": False, "references": [], "error": "not exercised"}
+
+    monkeypatch.setattr(pitch.rag, "retrieve_references", fake_retrieve)
+
+    pitch.main(db_path=tmp_path / "pipeline.db")
+
+    assert len(calls) == 1
+    assert calls[0]["domain"] == pitch.PITCH_DOMAINS
+    assert "marketing" not in pitch.PITCH_DOMAINS
+    assert "ai_prompting" not in pitch.PITCH_DOMAINS
+
+
 def test_pitch_run_survives_rag_being_down(tmp_path, monkeypatch, capsys):
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text(json.dumps(SAMPLE_MANIFEST))
@@ -130,6 +162,141 @@ def test_broken_database_does_not_stop_pitches_json(tmp_path, monkeypatch, capsy
 
     err = capsys.readouterr().err
     assert "warning" in err.lower()
+
+
+REFERENCES = [{"source": "brief.txt", "chunk": "noir, gritty, high contrast", "score": 0.9}]
+
+
+def make_score_result(faithfulness, reason="unsupported claim about X"):
+    return {"scores": {"faithfulness": faithfulness, "answer_relevancy": 0.9,
+                       "contextual_precision": None, "contextual_recall": None},
+            "reasons": {"faithfulness": reason, "answer_relevancy": "fine"}}
+
+
+# ---------- revise_pitch_until_grounded ----------
+
+def test_revise_pitch_skips_when_there_are_no_references():
+    pitches, check = pitch.revise_pitch_until_grounded(
+        client=None, model="m", manifest=SAMPLE_MANIFEST, references_block="",
+        references=[], query_used="q", pitches=SAMPLE_PITCHES,
+    )
+    assert pitches == SAMPLE_PITCHES
+    assert check == {"checked": False, "reason": "no references to check faithfulness against"}
+
+
+def test_revise_pitch_passes_on_the_first_check_without_regenerating(monkeypatch):
+    import src.quality as quality
+    calls = []
+    monkeypatch.setattr(quality, "score_generation", lambda **kw: (calls.append(kw), make_score_result(0.9))[1])
+    monkeypatch.setattr(pitch, "generate_with_retry", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("should not regenerate when the first check already passes")))
+
+    pitches, check = pitch.revise_pitch_until_grounded(
+        client=None, model="m", manifest=SAMPLE_MANIFEST, references_block="refs",
+        references=REFERENCES, query_used="q", pitches=SAMPLE_PITCHES,
+    )
+
+    assert pitches == SAMPLE_PITCHES
+    assert check == {"checked": True, "faithfulness": 0.9, "needs_review": False,
+                     "attempts": 1, "reason": None}
+    assert len(calls) == 1
+
+
+def test_revise_pitch_regenerates_once_then_escalates_when_still_weak(monkeypatch):
+    import src.quality as quality
+    monkeypatch.setattr(quality, "score_generation", lambda **kw: make_score_result(0.2))
+    regenerated = [{"number": n, "title": f"Revised {n}", "logline": "l", "story_note": "n"} for n in range(1, 11)]
+    monkeypatch.setattr(pitch, "generate_with_retry", lambda *a, **k: json.dumps(regenerated))
+
+    pitches, check = pitch.revise_pitch_until_grounded(
+        client=None, model="m", manifest=SAMPLE_MANIFEST, references_block="refs",
+        references=REFERENCES, query_used="q", pitches=SAMPLE_PITCHES, max_attempts=1,
+    )
+
+    # max_attempts=1: the loop scores once, is still weak, but has no
+    # budget left to regenerate again -- comes back with the first
+    # attempt's (unregenerated) pitches and needs_review=True.
+    assert pitches == SAMPLE_PITCHES
+    assert check["needs_review"] is True
+    assert check["attempts"] == 1
+    assert check["faithfulness"] == 0.2
+
+
+def test_revise_pitch_adopts_a_regenerated_batch_that_passes(monkeypatch):
+    import src.quality as quality
+    scores = iter([0.2, 0.9])
+    monkeypatch.setattr(quality, "score_generation", lambda **kw: make_score_result(next(scores)))
+    regenerated = [{"number": n, "title": f"Revised {n}", "logline": "l", "story_note": "n"} for n in range(1, 11)]
+    monkeypatch.setattr(pitch, "generate_with_retry", lambda *a, **k: json.dumps(regenerated))
+
+    pitches, check = pitch.revise_pitch_until_grounded(
+        client=None, model="m", manifest=SAMPLE_MANIFEST, references_block="refs",
+        references=REFERENCES, query_used="q", pitches=SAMPLE_PITCHES, max_attempts=2,
+    )
+
+    assert pitches == regenerated
+    assert check["needs_review"] is False
+    assert check["attempts"] == 2
+    assert check["faithfulness"] == 0.9
+
+
+def test_revise_pitch_skips_gracefully_when_scoring_itself_fails(monkeypatch):
+    import src.quality as quality
+
+    def broken(**kw):
+        raise RuntimeError("no judge model configured")
+
+    monkeypatch.setattr(quality, "score_generation", broken)
+
+    pitches, check = pitch.revise_pitch_until_grounded(
+        client=None, model="m", manifest=SAMPLE_MANIFEST, references_block="refs",
+        references=REFERENCES, query_used="q", pitches=SAMPLE_PITCHES,
+    )
+
+    assert pitches == SAMPLE_PITCHES
+    assert check["checked"] is False
+    assert "no judge model configured" in check["reason"]
+
+
+def test_pitch_run_with_self_correct_flag_runs_the_faithfulness_check(tmp_path, monkeypatch, capsys):
+    import src.quality as quality
+
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(SAMPLE_MANIFEST))
+    pitches_path = tmp_path / "pitches.json"
+
+    monkeypatch.setattr(pitch, "MANIFEST_PATH", manifest_path)
+    monkeypatch.setattr(pitch, "PITCHES_PATH", pitches_path)
+    monkeypatch.setattr(pitch, "generate_with_retry",
+                        lambda *a, **kw: json.dumps(SAMPLE_PITCHES))
+    monkeypatch.setattr(pitch.rag, "retrieve_references",
+                        lambda *a, **kw: {"ok": True, "references": REFERENCES})
+    monkeypatch.setattr(quality, "score_generation", lambda **kw: make_score_result(0.95))
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+
+    pitch.main(db_path=tmp_path / "pipeline.db", self_correct=True)
+
+    assert "Faithfulness check passed: 0.95" in capsys.readouterr().out
+
+
+def test_pitch_run_without_self_correct_flag_skips_the_faithfulness_check(tmp_path, monkeypatch):
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(SAMPLE_MANIFEST))
+    pitches_path = tmp_path / "pitches.json"
+
+    monkeypatch.setattr(pitch, "MANIFEST_PATH", manifest_path)
+    monkeypatch.setattr(pitch, "PITCHES_PATH", pitches_path)
+    monkeypatch.setattr(pitch, "generate_with_retry",
+                        lambda *a, **kw: json.dumps(SAMPLE_PITCHES))
+    monkeypatch.setattr(pitch.rag, "retrieve_references",
+                        lambda *a, **kw: {"ok": True, "references": REFERENCES})
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+
+    # self_correct defaults to False -- no import of src.quality should
+    # be needed at all for this call to succeed.
+    pitch.main(db_path=tmp_path / "pipeline.db")
+
+    assert len(json.loads(pitches_path.read_text())) == 10
 
 
 def test_records_the_run_on_a_brand_new_database(tmp_path):

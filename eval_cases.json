@@ -1,14 +1,30 @@
 [
   {
     "query": "what is the zero page films brand identity and tone",
-    "relevant": ["brief.txt"]
+    "relevant": ["prompts/brief.txt"]
   },
   {
     "query": "how long should a video run and how fast should it cut",
-    "relevant": ["settings.txt"]
+    "relevant": ["prompts/settings.txt"]
   },
   {
-    "query": "how should in and out points be chosen for an edit",
-    "relevant": ["edit_prompt.txt"]
+    "query": "how do I write a Veo 3.1 prompt that directs dialogue or sound effects",
+    "relevant": [".claude/skills/video-prompting/references/models/veo3/prompting.md"]
+  },
+  {
+    "query": "how do I keep a character looking consistent across multiple generated clips",
+    "relevant": [".claude/skills/video-prompting/references/workflows/character-sheets.md"]
+  },
+  {
+    "query": "what's the prompting structure for Seedance 2.0",
+    "relevant": [".claude/skills/video-prompting/references/models/seedance2/prompting.md"]
+  },
+  {
+    "query": "good hook formulas for a short-form video on TikTok or Reels",
+    "relevant": ["docs/marketing/_mine-for-frameworks/social/references/short-form-video.md"]
+  },
+  {
+    "query": "how do I break down a viral edit into a reusable beat sheet",
+    "relevant": ["docs/marketing/_mine-for-frameworks/video/references/edit-anatomy.md"]
   }
 ]

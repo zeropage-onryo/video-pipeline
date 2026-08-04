@@ -1,0 +1,16 @@
+[
+  {"path": "prompts/brief.txt", "domain": "personal_brand"},
+  {"path": "prompts/settings.txt", "domain": "cinematography"},
+  {"path": ".claude/skills/video-prompting/references/models/veo3/prompting.md", "domain": "ai_prompting"},
+  {"path": ".claude/skills/video-prompting/references/models/seedance2/prompting.md", "domain": "ai_prompting"},
+  {"path": ".claude/skills/video-prompting/references/models/sora/prompting.md", "domain": "ai_prompting"},
+  {"path": ".claude/skills/video-prompting/references/models/wan22/prompting.md", "domain": "ai_prompting"},
+  {"path": ".claude/skills/video-prompting/references/models/minimax-h3/prompting.md", "domain": "ai_prompting"},
+  {"path": ".claude/skills/video-prompting/references/models/ltx2/prompting.md", "domain": "ai_prompting"},
+  {"path": ".claude/skills/video-prompting/references/models/ltx2-3/prompting.md", "domain": "ai_prompting"},
+  {"path": ".claude/skills/video-prompting/references/models/ovi/prompting.md", "domain": "ai_prompting"},
+  {"path": ".claude/skills/video-prompting/references/workflows/character-sheets.md", "domain": "ai_prompting"},
+  {"path": "docs/marketing/_mine-for-frameworks/social/references/short-form-video.md", "domain": "marketing"},
+  {"path": "docs/marketing/_mine-for-frameworks/social/references/platform-limits.md", "domain": "marketing"},
+  {"path": "docs/marketing/_mine-for-frameworks/video/references/edit-anatomy.md", "domain": "marketing"}
+]

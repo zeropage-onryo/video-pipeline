@@ -34,6 +34,8 @@ EMBED_DIM = 768
 EMBED_BATCH = 100
 DEFAULT_DB_URL = "postgresql://localhost/zeropage"
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 SCHEMA = f"""
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE TABLE IF NOT EXISTS rag_documents (
@@ -137,6 +139,25 @@ def init_store(conn) -> None:
     register_vector(conn)
 
 
+def source_key(path) -> str:
+    """
+    The stable identity of a reference file: its path relative to the
+    project root, POSIX-style, independent of the cwd you ran from.
+
+    This has to be the *path* and not the basename. ingest_records
+    deletes by source before inserting, so with basenames
+    references/editing/notes.txt and references/lighting/notes.txt are
+    one source that silently overwrites itself rather than two
+    references -- which is exactly what a folder tree of references
+    would produce. A file outside the project keeps its absolute path.
+    """
+    resolved = Path(path).resolve()
+    try:
+        return resolved.relative_to(PROJECT_ROOT).as_posix()
+    except ValueError:
+        return resolved.as_posix()
+
+
 def ingest_records(records: list, client, conn) -> int:
     """
     records: [{"source": name, "text": full text, "domain": shelf,
@@ -173,15 +194,25 @@ def ingest_records(records: list, client, conn) -> int:
 
 
 def query(text: str, client, conn, k: int = 5,
-          domain: Optional[str] = None, project: Optional[str] = None) -> list:
+          domain=None, project: Optional[str] = None) -> list:
     """
-    Top-k chunks by cosine similarity, optionally scoped to one shelf
-    (domain) or one project. This pairing is the pgvector payoff:
+    Top-k chunks by cosine similarity, optionally scoped to one or more
+    shelves (domain) or one project. This pairing is the pgvector payoff:
     semantic similarity and hard SQL filters in a single query.
+
+    domain accepts a single string (one shelf) or a list/tuple/set of
+    strings (any of several shelves) -- a caller like pitch.py grounds
+    against both its brand and cinematography shelves in one query
+    rather than needing two round trips whose results it would then
+    have to merge and re-rank itself.
     """
     [vector] = embed_texts([text], client, task_type="RETRIEVAL_QUERY")
     filters, params = [], [vector]
-    if domain:
+    if isinstance(domain, (list, tuple, set)):
+        if domain:
+            filters.append("domain = ANY(%s)")
+            params.append(list(domain))
+    elif domain:
         filters.append("domain = %s")
         params.append(domain)
     if project:
@@ -205,7 +236,7 @@ def query(text: str, client, conn, k: int = 5,
 
 
 def retrieve_references(text: str, k: int = 5, db_url: Optional[str] = None,
-                        domain: Optional[str] = None,
+                        domain=None,
                         project: Optional[str] = None) -> dict:
     """
     Never raises. {"ok": True, "references": [...]} or
@@ -214,6 +245,8 @@ def retrieve_references(text: str, k: int = 5, db_url: Optional[str] = None,
     contract as youtube.refresh_metrics_for_video. Deliberately does
     not load .env itself: the entry points do, and a library function
     that re-reads .env would un-do a test's environment on purpose.
+
+    domain: same str | list/tuple/set | None contract as query().
     """
     if not (os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")):
         return {"ok": False, "references": [],
@@ -265,6 +298,29 @@ def format_references(references: list) -> str:
     return "\n".join(lines)
 
 
+def load_manifest_records(manifest_path: Path) -> list:
+    """
+    Turn a checked-in {path, domain, project?, source_ref?} manifest
+    (see evals/reference_library.json) into ingest_records() input.
+
+    This is the single versioned source of truth for "what's on the
+    shelves" -- one file both a human re-running an ingest by hand and
+    CI's ephemeral eval-gate database read from, so the two can't drift
+    out of sync with each other the way remembering N separate `rag
+    ingest --domain ...` commands eventually would.
+    """
+    entries = json.loads(manifest_path.read_text())
+    records = []
+    for entry in entries:
+        path = Path(entry["path"])
+        records.append({
+            "source": source_key(path), "text": path.read_text(),
+            "domain": entry["domain"], "project": entry.get("project"),
+            "source_ref": entry.get("source_ref"),
+        })
+    return records
+
+
 def main(argv=None) -> None:
     load_dotenv()
     parser = argparse.ArgumentParser(
@@ -277,6 +333,11 @@ def main(argv=None) -> None:
                           help="shelf label: cinematography, client_work, ...")
     ingest_p.add_argument("--project")
     ingest_p.add_argument("--source-ref", help="url / path / timestamp range")
+    manifest_p = sub.add_parser(
+        "ingest-manifest",
+        help="(re-)ingest every file listed in a {path, domain} manifest, e.g. evals/reference_library.json",
+    )
+    manifest_p.add_argument("manifest", type=Path)
     query_p = sub.add_parser("query", help="retrieve the closest reference chunks")
     query_p.add_argument("text")
     query_p.add_argument("--k", type=int, default=5)
@@ -291,13 +352,21 @@ def main(argv=None) -> None:
 
     if args.verb == "ingest":
         records = [
-            {"source": p.name, "text": p.read_text(), "domain": args.domain,
+            {"source": source_key(p), "text": p.read_text(), "domain": args.domain,
              "project": args.project, "source_ref": args.source_ref}
             for p in args.paths
         ]
         written = ingest_records(records, client, conn)
         print(f"Ingested {len(records)} source(s), {written} chunk(s) "
               f"under domain '{args.domain}'")
+    elif args.verb == "ingest-manifest":
+        records = load_manifest_records(args.manifest)
+        written = ingest_records(records, client, conn)
+        by_domain: dict = {}
+        for r in records:
+            by_domain[r["domain"]] = by_domain.get(r["domain"], 0) + 1
+        breakdown = ", ".join(f"{n} {d}" for d, n in sorted(by_domain.items()))
+        print(f"Ingested {len(records)} source(s) ({breakdown}), {written} chunk(s) total")
     else:
         results = query(args.text, client, conn, k=args.k,
                         domain=args.domain, project=args.project)

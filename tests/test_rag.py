@@ -7,6 +7,7 @@ fakes; the two thin edges (a real psycopg connection, a real Gemini
 embedding call) are not reachable from tests -- conftest.py blocks
 sockets -- so everything here runs offline.
 """
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -130,6 +131,79 @@ def test_ingest_records_replaces_a_source_then_inserts_each_chunk():
     assert params[6] is None               # source_ref
 
 
+# ---------- source_key: the identity ingest deletes by ----------
+
+def test_source_key_is_the_path_relative_to_the_project_root():
+    assert rag.source_key(rag.PROJECT_ROOT / "prompts" / "brief.txt") == "prompts/brief.txt"
+
+
+def test_source_key_is_independent_of_how_the_path_was_written():
+    """Same file, three spellings, one identity -- otherwise re-ingesting
+    from a different cwd would duplicate a source instead of replacing it."""
+    direct = rag.PROJECT_ROOT / "prompts" / "brief.txt"
+    indirect = rag.PROJECT_ROOT / "src" / ".." / "prompts" / "brief.txt"
+    assert rag.source_key(direct) == rag.source_key(indirect) == "prompts/brief.txt"
+
+
+def test_source_key_distinguishes_same_name_in_different_folders():
+    """The whole point: a folder tree of references must not collapse
+    into one source that overwrites itself on every ingest."""
+    editing = rag.source_key(rag.PROJECT_ROOT / "references" / "editing" / "notes.txt")
+    lighting = rag.source_key(rag.PROJECT_ROOT / "references" / "lighting" / "notes.txt")
+    assert editing != lighting
+    assert editing == "references/editing/notes.txt"
+
+
+def test_source_key_keeps_an_outside_file_absolute():
+    key = rag.source_key("/etc/hosts")
+    assert key.startswith("/")
+
+
+def test_load_manifest_records_reads_paths_domains_and_text(tmp_path):
+    """
+    The manifest is the single versioned source of truth for what's on
+    the shelves (evals/reference_library.json) -- this is the
+    regression test that reading it produces exactly what
+    ingest_records expects: source, text, domain, and the optional
+    project/source_ref carried through untouched.
+    """
+    manifest_path = tmp_path / "library.json"
+    manifest_path.write_text(json.dumps([
+        {"path": "prompts/brief.txt", "domain": "personal_brand"},
+        {"path": "prompts/settings.txt", "domain": "cinematography",
+         "project": "zpf", "source_ref": "hand-written"},
+    ]))
+
+    records = rag.load_manifest_records(manifest_path)
+
+    assert [r["source"] for r in records] == ["prompts/brief.txt", "prompts/settings.txt"]
+    assert records[0]["domain"] == "personal_brand"
+    assert records[0]["project"] is None
+    assert records[0]["source_ref"] is None
+    assert "Zero Page Films" in records[0]["text"]
+    assert records[1]["domain"] == "cinematography"
+    assert records[1]["project"] == "zpf"
+    assert records[1]["source_ref"] == "hand-written"
+
+
+def test_two_same_named_files_in_different_folders_delete_independently():
+    """Regression: with basenames, ingesting the second file deleted the
+    first one's chunks, because DELETE keys off source."""
+    conn = FakeConn()
+    rag.ingest_records(
+        [{"source": "references/editing/notes.txt", "text": "cut on motion",
+          "domain": "editing"},
+         {"source": "references/lighting/notes.txt", "text": "one source, hard",
+          "domain": "cinematography"}],
+        FakeEmbedClient(), conn,
+    )
+    deleted = [p[0] for s, p in conn.executed if s.startswith("DELETE")]
+    assert deleted == ["references/editing/notes.txt", "references/lighting/notes.txt"]
+    inserted = [p[0] for s, p in conn.executed if s.startswith("INSERT")]
+    assert set(inserted) == {"references/editing/notes.txt",
+                             "references/lighting/notes.txt"}
+
+
 def test_ingest_refuses_an_untagged_record():
     # domain is the shelf label; nothing lands untagged
     with pytest.raises(ValueError):
@@ -170,6 +244,29 @@ def test_query_scopes_by_domain_and_project_with_parameters():
     assert "project = %s" in sql
     assert "cinematography" in params      # parameterized, never interpolated
     assert "juno_promo" in params
+
+
+def test_query_scopes_by_multiple_domains_with_a_single_any_call():
+    """A caller like pitch.py grounds against several shelves at once
+    (brand + cinematography, never marketing/ai_prompting) -- this has
+    to be one query with one ranking, not several merged client-side."""
+    conn = FakeConn(rows=[])
+    rag.query("anything", FakeEmbedClient(), conn, k=3,
+              domain=("personal_brand", "cinematography"))
+    sql, params = conn.executed[0]
+    assert "domain = ANY(%s)" in sql
+    assert "domain = %s" not in sql        # the single-value form, not used here
+    assert ["personal_brand", "cinematography"] in params
+
+
+def test_query_with_an_empty_domain_list_has_no_where_clause():
+    """[] and None both mean "no scope" -- an empty collection must not
+    silently become a WHERE domain = ANY('{}') that matches nothing."""
+    conn = FakeConn(rows=[])
+    rag.query("anything", FakeEmbedClient(), conn, k=3, domain=())
+    sql, params = conn.executed[0]
+    assert "WHERE" not in sql
+    assert len(params) == 2
 
 
 # ---------- retrieve_references never raises ----------
@@ -214,6 +311,17 @@ def test_retrieve_references_passes_the_domain_scope_through(monkeypatch):
     sql, params = conn.executed[0]
     assert "domain = %s" in sql
     assert "cinematography" in params
+
+
+def test_retrieve_references_passes_a_multi_domain_scope_through(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    conn = FakeConn(rows=[])
+    monkeypatch.setattr(rag, "connect", lambda db_url=None: conn)
+    monkeypatch.setattr(rag, "make_client", lambda: FakeEmbedClient())
+    rag.retrieve_references("query text", k=1, domain=("personal_brand", "cinematography"))
+    sql, params = conn.executed[0]
+    assert "domain = ANY(%s)" in sql
+    assert ["personal_brand", "cinematography"] in params
 
 
 # ---------- reference formatting for prompts ----------
