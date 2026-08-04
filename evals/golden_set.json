@@ -67,5 +67,56 @@
       "Visual style: noir, gritty, high contrast, crushed shadows. References: The Batman, Enemy."
     ],
     "expected_output": "The Batman and Enemy define the visual look -- noir, gritty, high contrast, with crushed shadows."
+  },
+  {
+    "id": "veo3-prompt-formula",
+    "query": "What's the five-part prompt formula for a Veo 3.1 prompt?",
+    "ideal_context": [
+      "Use this five-part structure for consistent control: [Cinematography] + [Subject] + [Action] + [Context] + [Style & Ambiance]",
+      "Cinematography: camera work + shot composition. Subject: main character/focal point. Action: what the subject does (prefer clear beats). Context: environment/background elements. Style & ambiance: aesthetic + mood + lighting."
+    ],
+    "expected_output": "The formula is Cinematography + Subject + Action + Context + Style & Ambiance -- camera work and composition, the main character or focal point, what the subject does in clear beats, the environment or background, and the aesthetic, mood, and lighting."
+  },
+  {
+    "id": "seedance2-clip-length-and-refs",
+    "query": "How long can a Seedance 2.0 clip run, and how many reference assets can I combine?",
+    "ideal_context": [
+      "Up to 15-second high-quality multi-shot audio-video output.",
+      "The official blog also says users can combine up to: 9 images, 3 video clips, 3 audio clips, natural-language instructions"
+    ],
+    "expected_output": "Seedance 2.0 can output up to 15 seconds of high-quality multi-shot audio-video, and you can combine up to 9 images, 3 video clips, and 3 audio clips along with natural-language instructions as references."
+  },
+  {
+    "id": "character-sheet-default-panels",
+    "query": "What views should a default character turnaround sheet include?",
+    "ideal_context": [
+      "Default panel set: full-body front view, full-body 3/4 view, side profile, back view"
+    ],
+    "expected_output": "A default character turnaround sheet should include a full-body front view, a full-body 3/4 view, a side profile, and a back view."
+  },
+  {
+    "id": "short-form-hook-curiosity",
+    "query": "What's an example of a curiosity hook for short-form video?",
+    "ideal_context": [
+      "Curiosity Hooks (Best for engagement) -- The \"Secret\" Formula: \"The secret to [outcome] that nobody talks about\", \"I found the hidden feature in [product/platform] that changes everything\", \"I can't believe this actually works...\""
+    ],
+    "expected_output": "A curiosity hook example is the \"secret\" formula, like \"The secret to [outcome] that nobody talks about\" or \"I found the hidden feature in [product/platform] that changes everything\" -- curiosity hooks are best for engagement."
+  },
+  {
+    "id": "platform-caption-limits",
+    "query": "What's the max caption length on TikTok versus Instagram?",
+    "ideal_context": [
+      "TikTok -- Max caption chars: 4,000",
+      "Instagram -- Max caption chars: 2,200"
+    ],
+    "expected_output": "TikTok allows up to 4,000 caption characters, while Instagram's max caption length is 2,200 characters."
+  },
+  {
+    "id": "edit-anatomy-cuts-per-second",
+    "query": "What's the single most telling number about how energetic a short-form edit feels?",
+    "ideal_context": [
+      "Note the total duration and roughly how many cuts there are before you start -- cuts-per-second is the single most telling number about an edit's energy."
+    ],
+    "expected_output": "Cuts-per-second is the single most telling number about a short-form edit's energy."
   }
 ]
