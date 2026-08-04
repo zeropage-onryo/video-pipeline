@@ -45,7 +45,8 @@ venv/bin/python -m src.rag ingest <files...>        # (re-)build the pgvector li
 venv/bin/python -m src.rag query "<text>" [--k 5]
 venv/bin/python -m src.rag_eval <cases.json> [--k 5]   # hit@k + MRR over labeled cases
 
-# WEB APP — everything above is also doable in the browser at 127.0.0.1:8000
+# WEB APP — one page at 127.0.0.1:8000/studio does everything above.
+# 127.0.0.1:8000 is the public landing (the only indexed URL).
 venv/bin/uvicorn app.main:app --reload
 ```
 
@@ -119,7 +120,11 @@ shot list for footage you *need*. Don't merge them.
   matters — that every shot's `location` is a space that actually exists. A concept with warnings
   is still saved, warnings attached. `apply_pov(template, use_pov)` is why the POV toggle is real:
   off rewrites the prompt so `ACTION5` is never offered *or* named as legal, and `validate_concept`
-  rejects it if the model reaches for it anyway.
+  rejects it if the model reaches for it anyway. Ideation is also reference-grounded, the same
+  way `pitch.py` is: `reference_block` (the *edge* helper — called from `main()` and the web
+  routes, never from inside the generators) queries the RAG library with the spark, client, and
+  the mood of the described rooms, and the generators take the resulting `references` string as a
+  plain argument defaulting to `""`. That split is what keeps the generators hermetic in tests.
 - **`src/preprod.py`** — `locations`, `shoot_concepts`, `concept_locations` tables. Extends
   `db.py` in its own module (own `SCHEMA`, own `init()`), same pattern as `generative.py`.
   Two labels, not one: `shortlist_rate()` is which ideas were worth planning (derived from
@@ -157,12 +162,33 @@ shot list for footage you *need*. Don't merge them.
   actually breaks), public stats via the Data API v3, and channel import. `refresh_metrics_for_video`
   and `import_channel_videos` never raise: a missing key or failed call returns `{"ok": False}` so
   manual entry keeps working, per BUILD_SPEC.
-- **`app/main.py`** — the web app; every CLI step above is also doable in the browser. `/concepts`
-  is the one-screen generator (photos, add-a-space, brand, POV toggle, spark, generate, results).
-  `/locations` serves photos through `location_photo`, which resolves both path segments and
-  refuses anything that escapes `locations/` — a space name becomes a directory name, so it's
-  sanitised on the way in too. `?thumb=1` serves a cached 480px JPEG rather than the multi-megabyte
-  original. Routes that call a model wrap it and redirect with a message rather than 500ing.
+- **`app/main.py`** — the web app; every CLI step above is also doable in the browser. **The app
+  is one page.** `/studio` is the workspace: a left rail of what you have (media pool, rooms +
+  add-a-room, library shelves, escape-hatch tool links), a canvas of what you've made (concept
+  cards, cut lists, the performance strip), and an assistant on the right. The per-stage screens
+  (`/concepts`, `/locations`, `/library`, `/analytics`, `/pitches`) still exist as the engine and
+  each links back to `/studio`; `/dashboard` is gone (308 → `/studio`, since it was the front door
+  for months). Inline actions pass `next` so a decision made on the canvas lands back on the
+  canvas — `safe_next` refuses anything that isn't a site-relative path, or every button becomes
+  an open redirect. `/locations` serves photos through `location_photo`, which resolves both path
+  segments and refuses anything that escapes `locations/` — a space name becomes a directory name,
+  so it's sanitised on the way in too. `?thumb=1` serves a cached 480px JPEG rather than the
+  multi-megabyte original. Routes that call a model wrap it and redirect with a message rather
+  than 500ing.
+- **The assistant is keyword routing, not a model call.** `route_intent` matches typed text (or an
+  explicit chip) against `INTENT_PHRASES` → one pipeline stage, falling back to `ideas`. Free and
+  inspectable on purpose: the stages it dispatches each cost a billed generation, so an unclear
+  ask must not spend one on the wrong stage. Stages the browser can't run (a cut list needs
+  ingested footage and a pitch run) say what to run instead of pretending.
+- **`app/seo.py`** — the machine-readable growth surface, all pure functions so the exact bytes a
+  crawler sees are testable without a server: `robots.txt` (the AI crawlers named explicitly and
+  allowed; the app disallowed), `llms.txt` (what "grounded" means plus the hard specs — the part
+  worth citing), `sitemap.xml`, and the homepage JSON-LD `@graph`
+  (Organization + WebSite + SoftwareApplication, **no** `Offer` — nothing is for sale yet).
+  `PUBLIC_PAGES` is the single list all three read, so they can't drift apart. Everything is built
+  from `SITE_URL` (default `http://127.0.0.1:8000`) — set it before the site goes public or every
+  canonical tag points at localhost. `/` is the only indexed URL; every app template carries
+  `noindex`.
 - **`src/rag.py`** / **`src/rag_eval.py`** — the reference library. Text files are chunked at
   word boundaries, embedded with `gemini-embedding-001` (768 dims — documents as
   `RETRIEVAL_DOCUMENT`, queries as `RETRIEVAL_QUERY`; the model is asymmetric and mixing them
@@ -171,9 +197,13 @@ shot list for footage you *need*. Don't merge them.
   optional `project`/`source_ref`, and queries can scope on them (`--domain`, `--project`) —
   semantic similarity and hard SQL filters in one query. Deliberately not in `data/pipeline.db`: SQLite has no
   vector type, and the library is rebuildable from its sources. Re-ingesting a source replaces
-  its chunks. `pitch.py` queries it with the manifest's beats/arcs and injects the results into
-  the prompt's `{references}` section; `retrieve_references` never raises, so no Postgres means
-  an ungrounded pitch run with a stderr note, not a dead one. The `rag` CLI fails loudly — there
+  its chunks, keyed by `source_key(path)` — the path relative to the project root, **not** the
+  basename. That matters for a folder tree of references: keyed by basename,
+  `references/editing/notes.txt` and `references/lighting/notes.txt` are one source that deletes
+  itself on every ingest. Two consumers inject into a prompt's `{references}` section: `pitch.py` queries with
+  the manifest's beats/arcs, `shootgen.py` with the spark plus the mood of the described rooms.
+  `retrieve_references` never raises, so no Postgres means an ungrounded run with a stderr note,
+  not a dead one. The `rag` CLI fails loudly — there
   the store is the deliverable. `rag_eval.py` scores retrieval (hit@k, MRR) against a labeled
   JSON case file, judged at document level, sources deduplicated before ranking. **Note:**
   psycopg/libpq connects below Python's socket module, so `tests/conftest.py`'s network guard
@@ -226,9 +256,22 @@ shot list for footage you *need*. Don't merge them.
 Everything below is current as of the last commit on `main`. Update it when it stops being true.
 
 **Working and verified against real data:** both phases run end to end, including real Gemini
-calls. One location described from real photos, 9 concepts (2 with shot lists), 1 pitch run with
-10 ideas and 3 picked, 1 posted video with one metric snapshot. 313 tests, ruff clean, CI green
-on every push.
+calls. One location described from real photos, 23 concepts (5 with shot lists), 1 pitch run with
+10 ideas and 3 picked, 1 posted video with one metric snapshot. Reference-grounded ideation is
+verified live both ways: `src.shootgen --spark "gearing up ritual"` printed "Grounding in 5
+retrieved reference(s)" against the real library, and the same command with the store pointed at
+a dead URL printed the ungrounded note and still produced ideas (exit 0). 411 tests, ruff clean,
+CI green on every push.
+
+The one-page workspace was verified in the browser against the real database, not just by its
+tests: the rail's four panels (36 clips, the described room with thumbnails, the two live library
+chunks, the tool links), an idea card, a planned card with its 5 shots and AI slot, a cut list
+with real filenames and its three validation checks, the performance strip (2 pitch runs, 20
+ideas, 30% pick rate, 22% shortlist, 10 videos), and an assistant round trip. Three real defects
+only showed up there: the rail's radios were `opacity:0; pointer-events:none`, which took the
+tab controls out of the accessibility tree and off the keyboard entirely; `.wk-tool`'s title and
+description were inline spans, so every tool read as "ROOMSPhotograph and describe a space"; and
+the card and stat grids were sized for a wider canvas than the three-zone layout leaves.
 
 **Not started:** the thing the tool exists for. The rates (`shortlist_rate`, `shoot_rate`,
 `selection_rate`) are structurally correct and currently meaningless — they need weeks of real use
@@ -248,8 +291,20 @@ is shooting one of the generated concepts, marking it shot, and adding the video
   `GEMINI_API_KEY` where every other module also accepts `GOOGLE_API_KEY`.
 - The RAG store runs live on this machine via **Homebrew `postgresql@17`** (auto-starts at
   login through `~/Library/LaunchAgents/homebrew.mxcl.postgresql@17.plist`; database `zeropage`,
-  `DATABASE_URL` in `.env`); ingest, scoped query, and the eval harness are all verified
-  against it with real embeddings (hit@3 1.00 / MRR 0.83 on `eval_cases.json`). Machines
+  data directory `/usr/local/var/postgresql@17`). No `DATABASE_URL` is set in `.env` — connections
+  fall through to `rag.DEFAULT_DB_URL`, which is already `postgresql://localhost/zeropage`, so
+  nothing needs setting on this machine; set `RAG_DATABASE_URL` to point elsewhere. There are no
+  standalone vector files to back up: the embeddings are Postgres pages (TOASTed out of
+  `rag_documents`, since 768 floats exceed the inline threshold). Use `pg_dump zeropage`, or just
+  re-run `python -m src.rag ingest` — the library is rebuildable from its sources by design.
+  Ingest, scoped query, and the eval harness are all verified against it with real embeddings.
+  **The library is nearly empty and its eval scores are not yet evidence of anything.** It holds
+  two chunks — `prompts/brief.txt` and `prompts/settings.txt` — so `eval_cases.json`'s hit@3 1.00 /
+  MRR 1.00 over 2 queries is arithmetic, not retrieval quality: with 2 documents and k=3 every
+  query retrieves the whole store. `prompts/edit_prompt.txt` was ingested early and has been
+  removed: it is a prompt *template*, and retrieving `THE BRAND: {brief}` scaffolding as a
+  "reference" to inject into another prompt is worse than no grounding. Don't re-add prompt
+  templates; the library wants real reference material. Machines
   without a local Postgres can use the repo's `docker-compose.yml` instead. Note: Postgres.app
   is also installed but is an uninitialised PostgreSQL 18 that owns none of this data — do not
   "Initialize" it, it would contend for port 5432 with the server that actually has the library. The grounded

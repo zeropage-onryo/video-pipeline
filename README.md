@@ -2,6 +2,11 @@
 
 # Zero Page Films — production pipeline
 
+> **A grounded AI production tool for solo filmmakers — the grounded inverse of Google Flow.**
+> Where Flow generates a world from a prompt, this generates a *shoot* from your real rooms and a
+> *cut* from your real footage, validating every model output against what actually exists before
+> it's allowed to count. The model proposes; code enforces.
+
 A pre-production and post-production tool for a one-person film operation. It runs the whole
 workflow from an idea to a shot list to a finished cut plan, and every stage is grounded in
 something real: photographs of the rooms you can actually shoot in, and a manifest of the footage
