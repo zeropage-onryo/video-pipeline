@@ -1,7 +1,15 @@
-"""Tests for editgen.py's plain-text cut-list formatter (the --print flag)
-and validate_edit's handling of generative clip slots."""
+"""Tests for editgen.py's plain-text cut-list formatter (the --print flag),
+validate_edit's handling of generative clip slots, and the revise_until_valid
+self-correction loop."""
 
-from src.editgen import format_edit_as_text, merge_warnings, validate_edit
+import json
+
+from src.editgen import (
+    format_edit_as_text,
+    merge_warnings,
+    revise_until_valid,
+    validate_edit,
+)
 
 SAMPLE_EDIT = {
     "title": "Cold Open",
@@ -127,3 +135,110 @@ def test_validate_edit_survives_a_null_duration_in_the_manifest():
     edit = {"edit_list": [{"clip": "B.mov", "in": 0.0, "out": 5.0}]}
     warnings = validate_edit(edit, {"B.mov": {"duration_seconds": None}})
     assert any("B.mov" in w for w in warnings)
+
+
+# ---------- revise_until_valid: the level-3 decide -> act -> check loop ----------
+
+BROKEN_EDIT = {
+    "title": "Cold Open",
+    "edit_list": [{"clip": "unknown_clip.mov", "in": 0.0, "out": 15.0}],
+}
+
+FIXED_EDIT = {
+    "title": "Cold Open",
+    "edit_list": [{"clip": "A037_0812_C001.mov", "in": 0.0, "out": 15.0}],
+}
+
+PITCH = {"number": 1, "title": "Cold Open", "logline": "x", "story_note": "A037_0812_C001"}
+MANIFEST = [{"filename": "A037_0812_C001.mov", "duration_seconds": 20.0}]
+
+
+def test_revise_until_valid_accepts_a_fix_on_the_first_attempt(monkeypatch):
+    """The core loop: broken edit in, one round-trip, clean edit out."""
+    import src.editgen as editgen
+
+    monkeypatch.setattr(editgen, "generate_with_retry", lambda client, model, prompt: json.dumps(FIXED_EDIT))
+
+    edit, warnings = revise_until_valid(
+        client=None, model="test-model", pitch=PITCH, manifest=MANIFEST,
+        manifest_by_name=MANIFEST_BY_NAME, edit=BROKEN_EDIT,
+    )
+
+    assert warnings == []
+    assert edit["edit_list"][0]["clip"] == "A037_0812_C001.mov"
+    assert edit["revision_attempts"] == 1
+
+
+def test_revise_until_valid_stops_at_the_attempt_budget(monkeypatch):
+    """A model that never actually fixes it shouldn't loop forever or
+    silently keep paying for more attempts than the budget allows."""
+    import src.editgen as editgen
+
+    calls = []
+
+    def fake_generate(client, model, prompt):
+        calls.append(prompt)
+        return json.dumps(BROKEN_EDIT)  # returns the same broken edit every time
+
+    monkeypatch.setattr(editgen, "generate_with_retry", fake_generate)
+
+    edit, warnings = revise_until_valid(
+        client=None, model="test-model", pitch=PITCH, manifest=MANIFEST,
+        manifest_by_name=MANIFEST_BY_NAME, edit=BROKEN_EDIT, max_attempts=2,
+    )
+
+    assert len(calls) == 2
+    assert edit["revision_attempts"] == 2
+    assert warnings  # still broken -- the loop gave up, it didn't fabricate success
+
+
+def test_revise_until_valid_rejects_a_revision_that_makes_things_worse(monkeypatch):
+    """If the "fix" trades one problem for two, the loop must not accept
+    it just because it's the newest attempt."""
+    import src.editgen as editgen
+
+    worse_edit = {
+        "title": "Cold Open",
+        "edit_list": [
+            {"clip": "unknown_clip.mov", "in": 0.0, "out": 15.0},
+            {"clip": "also_unknown.mov", "in": 0.0, "out": 2.0},
+        ],
+    }
+    monkeypatch.setattr(editgen, "generate_with_retry", lambda client, model, prompt: json.dumps(worse_edit))
+
+    edit, warnings = revise_until_valid(
+        client=None, model="test-model", pitch=PITCH, manifest=MANIFEST,
+        manifest_by_name=MANIFEST_BY_NAME, edit=BROKEN_EDIT, max_attempts=1,
+    )
+
+    # kept the original edit, not the "fix" that adds a second broken clip
+    assert edit["edit_list"] == BROKEN_EDIT["edit_list"]
+    assert len(warnings) == 2
+
+
+def test_revise_until_valid_survives_a_malformed_json_response(monkeypatch):
+    """A response that doesn't even parse is a failed attempt, not a
+    crash -- the loop keeps the best edit it had going in."""
+    import src.editgen as editgen
+
+    monkeypatch.setattr(editgen, "generate_with_retry", lambda client, model, prompt: "not valid json {{")
+
+    edit, warnings = revise_until_valid(
+        client=None, model="test-model", pitch=PITCH, manifest=MANIFEST,
+        manifest_by_name=MANIFEST_BY_NAME, edit=BROKEN_EDIT, max_attempts=1,
+    )
+
+    assert edit["edit_list"] == BROKEN_EDIT["edit_list"]
+    assert warnings  # unchanged from the original validation
+    assert edit["revision_attempts"] == 1
+
+
+def test_revise_until_valid_skips_the_call_entirely_when_already_clean():
+    """A clean edit shouldn't trigger a paid call at all -- zero warnings
+    in means the while loop body never runs."""
+    edit, warnings = revise_until_valid(
+        client=None, model="test-model", pitch=PITCH, manifest=MANIFEST,
+        manifest_by_name=MANIFEST_BY_NAME, edit=FIXED_EDIT,
+    )
+    assert warnings == []
+    assert edit.get("revision_attempts", 0) == 0

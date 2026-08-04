@@ -21,6 +21,13 @@ MODEL = "gemini-3-flash-preview"
 MIN_RUNTIME = 13
 MAX_RUNTIME = 17
 
+# The self-correction loop below is bounded, not open-ended: each retry is
+# a paid Gemini call, and an edit that's still broken after a couple of
+# tries is more likely fighting a real footage gap than a fixable mistake.
+# At that point the loop should stop and hand the warnings to Mike rather
+# than keep spending money chasing them.
+MAX_REVISE_ATTEMPTS = 2
+
 
 def load_json(path: Path):
     return json.loads(path.read_text())
@@ -39,6 +46,33 @@ def build_prompt(manifest: list[dict], selected_pitches: list[dict]) -> str:
         .replace("{settings}", settings)
         .replace("{manifest}", manifest_json)
         .replace("{selected_pitches}", pitches_json)
+    )
+
+
+def build_revision_prompt(pitch: dict, manifest: list[dict], edit: dict, warnings: list[str]) -> str:
+    """
+    The revise half of the level-3 loop: same grounding as the original
+    generation (brand, locked settings, footage library) plus the specific
+    story it's still working from, the broken edit itself, and the exact
+    problems validate_edit found -- so the model is fixing named defects,
+    not guessing what's wrong from scratch.
+    """
+    brief = (PROMPTS_DIR / "brief.txt").read_text()
+    settings = (PROMPTS_DIR / "settings.txt").read_text()
+    template = (PROMPTS_DIR / "edit_revise_prompt.txt").read_text()
+    manifest_json = json.dumps(manifest, indent=2)
+    pitch_json = json.dumps(pitch, indent=2)
+    edit_json = json.dumps(edit, indent=2)
+    warnings_block = "\n".join(f"- {w}" for w in warnings)
+
+    return (
+        template
+        .replace("{brief}", brief)
+        .replace("{settings}", settings)
+        .replace("{manifest}", manifest_json)
+        .replace("{pitch}", pitch_json)
+        .replace("{previous_edit}", edit_json)
+        .replace("{warnings}", warnings_block)
     )
 
 
@@ -187,6 +221,46 @@ def merge_warnings(edit: dict, generated_warnings: list[str]) -> list[str]:
     return list(existing) + generated_warnings
 
 
+def revise_until_valid(client, model: str, pitch: dict, manifest: list[dict],
+                        manifest_by_name: dict, edit: dict,
+                        max_attempts: int = MAX_REVISE_ATTEMPTS) -> tuple[dict, list[str]]:
+    """
+    The decide -> act -> check loop: validate_edit is the check, a fresh
+    Gemini call scoped to just the named problems is the action, and it
+    repeats until the edit passes clean or the attempt budget runs out.
+
+    A revision is only kept if it's not worse than what came before --
+    the model can trade one problem for another instead of actually
+    fixing it, and this loop must not let that regression through
+    silently just because it happened on the "fixed" pass. If a
+    response can't even be parsed as JSON, that attempt is discarded
+    and the best edit found so far is kept; a malformed revision is a
+    failed attempt, not grounds to lose the last good edit.
+
+    Returns the best (edit, warnings) pair found, same contract as
+    validate_edit alone would have given the caller -- callers that
+    don't want the loop can still call validate_edit directly.
+    """
+    best_edit, best_warnings = edit, validate_edit(edit, manifest_by_name)
+    attempts = 0
+
+    while best_warnings and attempts < max_attempts:
+        attempts += 1
+        prompt = build_revision_prompt(pitch, manifest, best_edit, best_warnings)
+        response_text = generate_with_retry(client, model, prompt)
+        try:
+            candidate = json.loads(strip_fences(response_text))
+        except json.JSONDecodeError:
+            continue  # unusable response; try again if attempts remain
+
+        candidate_warnings = validate_edit(candidate, manifest_by_name)
+        if len(candidate_warnings) <= len(best_warnings):
+            best_edit, best_warnings = candidate, candidate_warnings
+
+    best_edit["revision_attempts"] = attempts
+    return best_edit, best_warnings
+
+
 def main(db_path=None):
     load_dotenv()
 
@@ -231,12 +305,32 @@ def main(db_path=None):
     text = strip_fences(response_text)
     edits = json.loads(text)
 
-    for edit in edits:
+    # edit_prompt.txt asks for "the full edit" per approved story, in the
+    # order selected_pitches was given -- so edits[i] is expected to be
+    # the cut for selected_pitches[i]. That pairing only holds when the
+    # counts match; if the model dropped or added one, revision has no
+    # story to ground itself in, so it's skipped rather than guessed at.
+    pitches_for_edits = selected_pitches if len(edits) == len(selected_pitches) else None
+    if pitches_for_edits is None:
+        print(
+            f"  note: model returned {len(edits)} edit(s) for {len(selected_pitches)} "
+            "selected pitch(es); skipping self-correction, can't match edits to stories",
+            file=sys.stderr,
+        )
+
+    for index, edit in enumerate(edits):
         warnings = validate_edit(edit, manifest_by_name)
+        if warnings and pitches_for_edits is not None:
+            edit, warnings = revise_until_valid(
+                client, MODEL, pitches_for_edits[index], manifest, manifest_by_name, edit
+            )
+            edits[index] = edit
         edit["warnings"] = merge_warnings(edit, warnings)
 
         cut_count = len(edit.get("edit_list", []))
-        print(f"{edit.get('title')}: {cut_count} cuts")
+        attempts = edit.get("revision_attempts", 0)
+        attempts_note = f", {attempts} revision attempt(s)" if attempts else ""
+        print(f"{edit.get('title')}: {cut_count} cuts{attempts_note}")
         for w in edit["warnings"]:
             print(f"  WARNING: {w}")
         if args.print_text:
