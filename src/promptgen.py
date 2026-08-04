@@ -31,7 +31,7 @@ PROMPTS_DIR = PROJECT_ROOT / "prompts"
 
 MODEL = "gemini-3-flash-preview"
 
-SHOT_FIELDS = ("subject", "action", "camera", "size", "setting", "lighting", "duration_s")
+SHOT_FIELDS = ("subject", "action", "camera", "size", "setting", "lighting", "audio", "duration_s")
 
 
 def format_examples(entries: list[dict]) -> str:

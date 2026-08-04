@@ -85,6 +85,7 @@ class Shot:
     look: str = HOUSE_LOOK
     negative: str = HOUSE_NEGATIVE
     notes: str = ""
+    audio: str = ""      # ambient/SFX direction for models that generate sound (Veo). No dialogue by house style.
     tags: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -114,6 +115,7 @@ class Shot:
             "duration_s": self.duration_s,
             "aspect": self.aspect,
             "notes": self.notes,
+            "audio": self.audio,
             "tags": list(self.tags),
         }
 
@@ -159,38 +161,63 @@ def render_runway(shot: Shot) -> str:
     )
 
 
+# Veo 3.1 cinematography vocabulary — the standard camera terms Google Cloud's
+# "Ultimate prompting guide for Veo 3.1" recommends (dolly / tracking / crane /
+# pan / POV). Verify against that guide before changing.
+# Updated 2026-08-04 from .claude/skills/video-prompting/references/models/veo3/prompting.md
 VEO_CAMERA = {
-    "static": "locked-off",
+    "static": "locked-off static shot",
     "pan_left": "slow pan left",
     "pan_right": "slow pan right",
     "tilt_up": "tilt up",
     "tilt_down": "tilt down",
-    "push_in": "slow dolly in",
-    "pull_out": "slow dolly out",
-    "tracking": "tracking alongside",
+    "push_in": "slow dolly in, pushing toward the subject",
+    "pull_out": "slow dolly out, pulling back from the subject",
+    "tracking": "tracking shot moving alongside the subject",
     "handheld": "subtle handheld",
-    "crane_up": "craning upward",
-    "crane_down": "craning downward",
-    "orbit": "arcing around subject",
+    "crane_up": "crane shot rising",
+    "crane_down": "crane shot descending",
+    "orbit": "arcing orbit around the subject",
 }
+
+# Veo's guide says to phrase exclusions as a described scene rather than an
+# abstract "no X" list, so the house negatives are rewritten as a positive
+# frame description for this model only.
+VEO_NEGATIVE = (
+    "a clean, unbranded frame with no on-screen text, logos, or lens flares; "
+    "the subject faces away from or past the lens and never addresses the camera; "
+    "colour stays muted and filmic, never saturated or upbeat"
+)
 
 
 def render_veo(shot: Shot) -> str:
-    """Labelled fields — this family responds well to explicit structure."""
+    """
+    Veo 3.1's five-part formula:
+    [Cinematography] + [Subject] + [Action] + [Context] + [Style & ambiance].
+    Aspect/duration are deliberately NOT in the prompt text — Veo's guide says
+    keep those as external parameters (see veo_parameters()). Veo generates
+    audio, so it's directed explicitly and defaults to no dialogue to match the
+    house style.
+    """
+    cinematography = _phrase(VEO_CAMERA[shot.camera], f"{_readable_size(shot.size)} shot")
+    context = _phrase(shot.setting, shot.lighting)
     lines = [
+        f"Cinematography: {cinematography}",
         f"Subject: {shot.subject}",
         f"Action: {shot.action}",
-        f"Shot: {_readable_size(shot.size)}",
-        f"Camera: {VEO_CAMERA[shot.camera]}",
     ]
-    if shot.setting:
-        lines.append(f"Setting: {shot.setting}")
-    if shot.lighting:
-        lines.append(f"Lighting: {shot.lighting}")
-    lines.append(f"Style: {shot.look}")
-    lines.append(f"Aspect: {shot.aspect}")
-    lines.append(f"Avoid: {shot.negative}")
+    if context:
+        lines.append(f"Context: {context}")
+    lines.append(f"Style & ambiance: {shot.look}")
+    lines.append(f"Audio: {shot.audio.strip() or 'ambient sound only, no dialogue'}")
+    lines.append(f"Avoid: {VEO_NEGATIVE}")
     return "\n".join(lines)
+
+
+def veo_parameters(shot: Shot) -> dict:
+    """The generation params Veo's guide says to keep OUT of the prompt text —
+    supply them alongside the prompt, not inside it."""
+    return {"aspect_ratio": shot.aspect, "duration_s": shot.duration_s}
 
 
 KLING_CAMERA = {
