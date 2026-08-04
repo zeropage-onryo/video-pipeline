@@ -19,6 +19,11 @@ BRAND:
 {client}
 {spark}
 
+REFERENCE LIBRARY (tone and structure to echo — match the sensibility,
+but never call for something a reference shows that these rooms can't
+deliver):
+{references}
+
 SHOOT DISCIPLINE — THIS IS THE POINT: the whole shoot must be fast.
 MAXIMUM 6 shots, fewer is better. Mix CHARACTER shots (him on camera,
 tripod or POV, since he is alone) and BROLL (details, space, objects,

@@ -20,6 +20,11 @@ BRAND:
 {client}
 {spark}
 
+REFERENCE LIBRARY (tone and structure to echo — match the sensibility,
+but never call for something a reference shows that these rooms can't
+deliver):
+{references}
+
 Generate exactly {count} DIFFERENT ideas. These are cheap options for
 him to choose between, so range matters more than polish — no shot
 lists yet, just the idea. Vary them deliberately:

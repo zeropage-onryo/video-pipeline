@@ -22,7 +22,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
 
-from . import preprod
+from . import preprod, rag
 from .db import DB_PATH, init_db
 from .gemini_utils import generate_with_retry, strip_fences
 
@@ -36,6 +36,70 @@ DEFAULT_IDEA_COUNT = 8
 SHOT_TYPES = ("CHARACTER", "BROLL")
 CAMERAS = ("BMPCC", "ACTION5")
 AI_TOOLS = ("KLING", "RUNWAY")
+
+NO_REFERENCES_NOTE = (
+    "(no reference library available -- generate from the rooms and brand alone)"
+)
+
+# Ideation grounds in brand/cinematography (what the concept has to look and
+# feel like), marketing (what actually earns a swipe/watch), and
+# proven_results (what actually worked for us, per promote_winners) -- but
+# never ai_prompting, which is AI-video-tool prompt syntax for a later stage
+# (promptgen.py), not "what should we shoot" material.
+IDEATION_DOMAINS = ("personal_brand", "cinematography", "marketing", "proven_results")
+
+
+def build_reference_query(locations: list, spark=None, client=None,
+                          max_chars: int = 4000) -> str:
+    """
+    The retrieval query for ideation: the creative direction actually in
+    play -- the spark, the client/spec, and the mood of the described
+    rooms (their space, textures, constraints) -- so the library returns
+    tone/structure notes close to what's being made. The ideation
+    analogue of pitch.py's build_reference_query, which queries with the
+    footage itself.
+    """
+    parts: list = []
+    if spark:
+        parts.append(spark)
+    if client:
+        parts.append(client)
+    for loc in locations:
+        description = loc.get("description") or {}
+        if description.get("space"):
+            parts.append(description["space"])
+        for key in ("textures", "constraints"):
+            value = description.get(key)
+            if isinstance(value, list):
+                parts.extend(value)
+            elif value:
+                parts.append(value)
+    return " ".join(str(p) for p in parts)[:max_chars]
+
+
+def reference_block(spark=None, client=None, db_path=None) -> str:
+    """
+    Retrieve grounding references for an ideation run and return the
+    formatted block, or "" if the library is unavailable. Never raises --
+    the same enhancement-not-dependency contract pitch.py keeps. This is
+    the *edge* helper: call it from entry points (CLI, web routes), not
+    from inside the tested generate functions, so those stay hermetic.
+    """
+    kwargs = {"path": db_path} if db_path is not None else {}
+    locations = preprod.list_locations(**kwargs)
+    query = build_reference_query(locations, spark=spark, client=client)
+    if not query.strip():
+        return ""
+
+    retrieval = rag.retrieve_references(query, domain=IDEATION_DOMAINS)
+    if retrieval["ok"] and retrieval["references"]:
+        print(f"Grounding in {len(retrieval['references'])} retrieved reference(s)",
+              file=sys.stderr)
+        return rag.format_references(retrieval["references"])
+
+    reason = retrieval.get("error", "reference library is empty")
+    print(f"note: generating without references: {reason}", file=sys.stderr)
+    return ""
 
 
 def load_brand(brand: str) -> str:
@@ -97,7 +161,7 @@ def apply_pov(template: str, use_pov: bool) -> str:
 
 
 def build_concept_prompt(locations: list, brand: str, client=None, spark=None,
-                         use_pov: bool = True) -> str:
+                         use_pov: bool = True, references: str = "") -> str:
     template = apply_pov((PROMPTS_DIR / "concept_prompt.txt").read_text(), use_pov)
     return (
         template
@@ -105,11 +169,12 @@ def build_concept_prompt(locations: list, brand: str, client=None, spark=None,
         .replace("{brand}", load_brand(brand))
         .replace("{client}", f"CLIENT / SPEC TYPE: {client}" if client else "")
         .replace("{spark}", f"CREATIVE SPARK FROM THE FILMMAKER: {spark}" if spark else "")
+        .replace("{references}", references or NO_REFERENCES_NOTE)
     )
 
 
 def build_ideas_prompt(locations: list, brand: str, client=None, spark=None,
-                       count: int = DEFAULT_IDEA_COUNT) -> str:
+                       count: int = DEFAULT_IDEA_COUNT, references: str = "") -> str:
     template = (PROMPTS_DIR / "concept_ideas_prompt.txt").read_text()
     return (
         template
@@ -118,6 +183,7 @@ def build_ideas_prompt(locations: list, brand: str, client=None, spark=None,
         .replace("{client}", f"CLIENT / SPEC TYPE: {client}" if client else "")
         .replace("{spark}", f"CREATIVE SPARK FROM THE FILMMAKER: {spark}" if spark else "")
         .replace("{count}", str(count))
+        .replace("{references}", references or NO_REFERENCES_NOTE)
     )
 
 
@@ -158,11 +224,16 @@ def parse_plan_response(text: str) -> dict:
 
 def generate_concept_ideas(brand: str, client=None, spark=None, gemini_client=None,
                            model: str = MODEL, count: int = DEFAULT_IDEA_COUNT,
-                           use_pov: bool = True, db_path=None) -> dict:
+                           use_pov: bool = True, db_path=None,
+                           references: str = "") -> dict:
     """
     Stage one: several cheap ideas in a single call, so they can be
     varied against each other rather than rolled independently. No shot
     lists -- an idea you discard shouldn't have cost shot detail.
+
+    `references` is passed in already retrieved, by the caller at the
+    edge (reference_block), so this stays pure with respect to the
+    reference library and testable without a store.
     """
     kwargs = {"path": db_path} if db_path is not None else {}
     locations = preprod.list_locations(**kwargs)
@@ -171,7 +242,8 @@ def generate_concept_ideas(brand: str, client=None, spark=None, gemini_client=No
             "no locations described yet -- run `python -m src.locations` first"
         )
 
-    prompt = build_ideas_prompt(locations, brand, client, spark, count)
+    prompt = build_ideas_prompt(locations, brand, client, spark, count,
+                                references=references)
     ideas = parse_ideas_response(generate_with_retry(gemini_client, model, prompt))
 
     concept_ids = preprod.save_concept_ideas(
@@ -265,10 +337,14 @@ def validate_concept(concept: dict, location_names: list, use_pov: bool = True) 
 
 
 def generate_concept(brand: str, client=None, spark=None, gemini_client=None,
-                     model: str = MODEL, use_pov: bool = True, db_path=None) -> dict:
+                     model: str = MODEL, use_pov: bool = True, db_path=None,
+                     references: str = "") -> dict:
     """
     One concept, grounded in the described locations, validated and
     saved. Returns {"concept_id", "concept", "warnings"}.
+
+    Like generate_concept_ideas, `references` arrives already retrieved
+    from the edge rather than being fetched here.
     """
     kwargs = {"path": db_path} if db_path is not None else {}
     locations = preprod.list_locations(**kwargs)
@@ -277,7 +353,8 @@ def generate_concept(brand: str, client=None, spark=None, gemini_client=None,
             "no locations described yet -- run `python -m src.locations` first"
         )
 
-    prompt = build_concept_prompt(locations, brand, client, spark, use_pov=use_pov)
+    prompt = build_concept_prompt(locations, brand, client, spark, use_pov=use_pov,
+                                  references=references)
     concept = parse_concept_response(generate_with_retry(gemini_client, model, prompt))
 
     location_names = [loc["name"] for loc in locations]
@@ -365,10 +442,12 @@ def main(db_path=None):
         print(format_concept_as_text(concept, result["warnings"]))
         return
 
+    references = reference_block(spark=args.spark, client=args.client, db_path=path)
     try:
         result = generate_concept_ideas(
             brand=args.brand, client=args.client, spark=args.spark,
             gemini_client=gemini_client, count=args.count, db_path=path,
+            references=references,
         )
     except ValueError as e:
         print(e, file=sys.stderr)
