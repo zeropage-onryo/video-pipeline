@@ -251,3 +251,34 @@ def test_promote_winners_module_never_imports_requests():
 
     source = inspect.getsource(pw)
     assert "import requests" not in source
+
+
+def test_render_reference_doc_carries_field_patterns_when_given_signals():
+    """With derived signals, the doc names the traits that made the
+    window's winners win -- retrievable pattern, not just one video."""
+    doc = pw.render_reference_doc(
+        {
+            "title": "Winner", "platform": "youtube",
+            "hook_type": "cold-open", "topic": "workshop",
+            "score": 10_000, "metric": "views", "median": 5_500,
+            "multiple": 1.82, "measured_at_days": 7.0,
+        },
+        signals={
+            "sample": 6, "median": 5_500,
+            "winning_topics": {"workshop": 3}, "losing_topics": {"gear": 3},
+            "winning_hooks": {"cold-open": 2}, "losing_hooks": {"talking-head": 3},
+            "winning_title_words": {"ritual": 3},
+        },
+    )
+    assert "Patterns across this window's winners" in doc
+    assert "workshop" in doc and "cold-open" in doc
+    assert "talking-head" in doc          # the losing pattern is named too
+
+
+def test_render_reference_doc_without_signals_is_unchanged():
+    doc = pw.render_reference_doc({
+        "title": "Winner", "platform": "youtube",
+        "score": 10_000, "metric": "views", "median": 5_500,
+        "multiple": 1.82, "measured_at_days": 7.0,
+    })
+    assert "Patterns" not in doc
