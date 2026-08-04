@@ -1365,3 +1365,33 @@ def test_next_refuses_to_leave_the_site(tmp_preprod_db):
     assert app_main.safe_next("https://evil.test", "/concepts") == "/concepts"
     assert app_main.safe_next("//evil.test", "/concepts") == "/concepts"
     assert app_main.safe_next("/studio", "/concepts") == "/studio"
+
+
+# ---------- platform dispatch on metrics refresh ----------
+
+def test_post_metrics_refresh_dispatches_instagram(tmp_db, monkeypatch):
+    """An Instagram row refreshes through instagram.py, the same shape
+    YouTube already has -- one dispatch on the stored platform."""
+    vid = db.add_video("Reel", "instagram", "2026-08-01",
+                       url="ig://17912345678901234", path=tmp_db)
+
+    seen = {}
+
+    def fake_refresh(video, token=None, db_path=None):
+        seen.update({"video_id": video["id"], "token": token})
+        return {"ok": True, "views": 77, "likes": 1, "comments": 0,
+                "saves": 0, "shares": 0}
+
+    monkeypatch.setattr(app_main.instagram, "refresh_metrics_for_video", fake_refresh)
+    monkeypatch.setenv("IG_ACCESS_TOKEN", "tok")
+    response = client.post(f"/metrics/refresh/{vid}", follow_redirects=False)
+    assert response.status_code == 303
+    assert seen["video_id"] == vid
+    assert seen["token"] == "tok"
+    assert "77" in unquote(response.headers["location"])
+
+
+def test_metrics_page_offers_refresh_for_instagram(tmp_db):
+    db.add_video("Reel", "instagram", "2026-08-01", path=tmp_db)
+    response = client.get("/metrics/new")
+    assert 'form="refresh-' in response.text

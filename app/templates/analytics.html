@@ -79,7 +79,7 @@
                          name="saves_{{ r.video_id }}"
                          placeholder="{{ r.saves if r.saves is not none else '' }}"></td>
               <td>
-                {% if r.platform == "youtube" %}
+                {% if r.platform in ("youtube", "instagram") %}
                 <button type="submit" form="refresh-{{ r.video_id }}">Refresh</button>
                 {% endif %}
               </td>
@@ -90,7 +90,7 @@
         <p><button type="submit" class="primary">Save this week's numbers</button></p>
       </form>
       {% for r in rows %}
-      {% if r.platform == "youtube" %}
+      {% if r.platform in ("youtube", "instagram") %}
       <form id="refresh-{{ r.video_id }}" method="post" action="/metrics/refresh/{{ r.video_id }}"></form>
       {% endif %}
       {% endfor %}

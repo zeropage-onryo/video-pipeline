@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from google import genai
 
-from src import db, locations, preprod, rag, shootgen, youtube
+from src import db, instagram, locations, preprod, rag, shootgen, youtube
 from src import shot as shot_module
 
 from . import seo
@@ -632,12 +632,21 @@ async def metrics_new_submit(request: Request):
 
 @app.post("/metrics/refresh/{video_id}")
 def metrics_refresh(video_id: int):
+    """One dispatch on the video's platform; every branch returns a
+    result dict, so a missing key or failed call is a message on the
+    analytics page and manual entry keeps working."""
     video = db.get_video(video_id, path=db.DB_PATH)
     if video is None:
         raise HTTPException(status_code=404, detail="video not found")
 
-    api_key = os.environ.get("YOUTUBE_API_KEY")
-    result = youtube.refresh_metrics_for_video(video, api_key=api_key, db_path=db.DB_PATH)
+    if video["platform"] == "instagram":
+        result = instagram.refresh_metrics_for_video(
+            video, token=instagram.access_token(), db_path=db.DB_PATH,
+        )
+    else:
+        api_key = os.environ.get("YOUTUBE_API_KEY")
+        result = youtube.refresh_metrics_for_video(video, api_key=api_key,
+                                                   db_path=db.DB_PATH)
 
     if result["ok"]:
         message = f"Refreshed {video['title']}: {result['views']} views"

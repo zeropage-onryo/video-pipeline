@@ -29,7 +29,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from . import preprod
+from . import instagram, preprod
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 KILL_SWITCH_PATH = PROJECT_ROOT / "data" / "autopilot.off"
@@ -46,11 +46,14 @@ def _unwired(kind: str) -> Callable[[dict], Any]:
     return executor
 
 
-# kind -> callable(action). Registration point for real adapters; both
-# stay unwired until real spend / real accounts are authorized.
+# kind -> callable(action). The post adapter is real (Instagram via
+# instagram.execute_post_action) but only ever runs in live mode -- the
+# gate above it is unchanged, and the adapter itself refuses to run
+# without IG_USER_ID/IG_ACCESS_TOKEN. generate stays unwired until real
+# generation spend is authorized.
 EXECUTORS: dict[str, Callable[[dict], Any]] = {
     "generate": _unwired("generate"),
-    "post": _unwired("post"),
+    "post": instagram.execute_post_action,
 }
 
 
@@ -84,6 +87,24 @@ def build_plan(db_path=None) -> dict[str, Any]:
                 "concept_title": concept.get("title"),
                 "tool": shot.get("tool"),
                 "prompt": prompt,
+            })
+        # Posting enters the plan only once generated media exists: a
+        # shot carrying a rendered public media_url (which is also what
+        # Meta's API requires). One post per concept, first rendered
+        # shot wins -- the plan never invents deliverables.
+        rendered = next(
+            (s for s in concept.get("shots") or []
+             if (s.get("media_url") or "").strip()),
+            None,
+        )
+        if rendered:
+            actions.append({
+                "kind": "post",
+                "platform": "instagram",
+                "concept_id": concept["id"],
+                "title": concept.get("title"),
+                "video_url": rendered["media_url"].strip(),
+                "caption": concept.get("hook") or concept.get("title") or "",
             })
     return {"actions": actions}
 

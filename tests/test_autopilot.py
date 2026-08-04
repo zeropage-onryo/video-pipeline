@@ -105,3 +105,83 @@ def test_build_plan_reads_ai_shots_without_touching_anything(tmp_path):
     assert kinds == ["generate"]
     assert plan["actions"][0]["prompt"] == "a drawer closing"
     assert plan["actions"][0]["tool"] == "VEO"
+
+
+def test_build_plan_emits_post_only_once_media_exists(tmp_path):
+    """The plan never invents deliverables: a post action appears only
+    when a shot carries a rendered media_url for Meta to fetch."""
+    from src import db, preprod
+    path = tmp_path / "test.db"
+    db.init_db(path)
+    preprod.init(path)
+    preprod.add_location("garage", {"space": "g"}, path=path)
+    preprod.save_concept(
+        {"title": "No media yet", "hook": "h", "shots": [
+            {"n": 1, "type": "BROLL", "source": "AI", "tool": "VEO",
+             "location": "garage", "desc": "d", "prompt": "p"},
+        ]},
+        brand="antihero", path=path,
+    )
+    preprod.save_concept(
+        {"title": "Rendered", "hook": "the hook", "shots": [
+            {"n": 1, "type": "BROLL", "source": "AI", "tool": "VEO",
+             "location": "garage", "desc": "d", "prompt": "p",
+             "media_url": "https://cdn.example/rendered.mp4"},
+        ]},
+        brand="antihero", path=path,
+    )
+    plan = autopilot.build_plan(db_path=path)
+    posts = [a for a in plan["actions"] if a["kind"] == "post"]
+    assert len(posts) == 1
+    assert posts[0]["video_url"] == "https://cdn.example/rendered.mp4"
+    assert posts[0]["platform"] == "instagram"
+    assert posts[0]["caption"] == "the hook"
+
+
+# ---------- the real post adapter, still caged ----------
+
+def test_real_post_adapter_is_registered():
+    from src import instagram
+    assert autopilot.EXECUTORS["post"] is instagram.execute_post_action
+
+
+def test_gate_modes_never_touch_instagram_with_real_adapter(tmp_path, monkeypatch):
+    """The adapter being wired must not weaken the gate: disabled /
+    unapproved / dry-run still execute nothing and never reach the API."""
+    from src import instagram
+    monkeypatch.setattr(autopilot, "KILL_SWITCH_PATH", tmp_path / "autopilot.off")
+
+    def explode(*a, **k):
+        raise AssertionError("instagram touched outside live mode")
+
+    monkeypatch.setattr(instagram, "post_reel", explode)
+    plan = {"actions": [{"kind": "post", "platform": "instagram",
+                         "video_url": "https://x/v.mp4", "caption": "c"}]}
+
+    monkeypatch.delenv(autopilot.ENABLE_ENV, raising=False)
+    assert autopilot.execute(plan, approve=True, dry_run=False)["executed"] == 0
+
+    monkeypatch.setenv(autopilot.ENABLE_ENV, "1")
+    assert autopilot.execute(plan, dry_run=False)["executed"] == 0       # unapproved
+    assert autopilot.execute(plan, approve=True)["executed"] == 0        # dry-run
+
+
+def test_live_mode_calls_the_instagram_adapter(tmp_path, monkeypatch):
+    from src import instagram
+    monkeypatch.setattr(autopilot, "KILL_SWITCH_PATH", tmp_path / "autopilot.off")
+    monkeypatch.setenv(autopilot.ENABLE_ENV, "1")
+    monkeypatch.setenv("IG_USER_ID", "user-9")
+    monkeypatch.setenv("IG_ACCESS_TOKEN", "tok")
+
+    calls = []
+    monkeypatch.setattr(
+        instagram, "post_reel",
+        lambda *a, **k: (calls.append(a), {"ok": True, "media_id": "m-1",
+                                           "step": "publish", "error": None})[1],
+    )
+    plan = {"actions": [{"kind": "post", "platform": "instagram",
+                         "video_url": "https://x/v.mp4", "caption": "c"}]}
+    result = autopilot.execute(plan, approve=True, dry_run=False)
+    assert result["mode"] == "live"
+    assert result["executed"] == 1
+    assert len(calls) == 1

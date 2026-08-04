@@ -51,6 +51,10 @@ venv/bin/python -m src.rework [--count 6] [--brand ...]               # evidence
 # AUTOPILOT (L4) — OFF by default; dry-run unless env+approve+no kill switch align
 venv/bin/python -m src.autopilot plan|run|kill
 
+# SCHEDULED PUBLISHING — the queue cron invokes; publishes only through the autopilot gate
+venv/bin/python -m src.scheduling list
+venv/bin/python -m src.scheduling run [--approve] [--live]
+
 # REFERENCE LIBRARY (RAG) — optional grounding for pitch.py
 venv/bin/python -m src.rag ingest <files...>        # (re-)build the pgvector library
 venv/bin/python -m src.rag query "<text>" [--k 5]
@@ -234,9 +238,32 @@ shot list for footage you *need*. Don't merge them.
   sentence, saved as ordinary concept ideas so the pick stays the measured label.
 - **`src/autopilot.py`** — the L4 scaffold, where the contract is the gate: nothing executes
   unless `ZEROPAGE_AUTOPILOT=1` AND a per-run `--approve` AND no `data/autopilot.off` kill switch
-  all align; anything less is a dry run that describes every action. The generate/post executors
-  are deliberately unwired registration points — real platform APIs and accounts are an explicit
-  human step, never a default.
+  all align; anything less is a dry run that describes every action. The `generate` executor is
+  a deliberately unwired registration point; `post` is wired to `instagram.execute_post_action`
+  but only ever runs in live mode and refuses without `IG_USER_ID`/`IG_ACCESS_TOKEN` — the gate
+  above it is unchanged. `build_plan` emits a `post` action only when a concept's shot carries a
+  rendered `media_url` (the plan never invents deliverables).
+- **`src/instagram.py`** — the Meta Graph publish + insights module, youtube.py's shape exactly:
+  thin raising wrappers (container create/status/publish, `publishing_limit`, insights) under
+  never-raising edges (`post_reel` walks create → poll-until-FINISHED → publish, never publishing
+  an unprocessed container; `refresh_metrics_for_video` guards platform/token, maps insights →
+  `db.record_metrics`, `saved`→`saves`). `_safe_error` redacts the token from every error that
+  could reach a page or a db row. `VERSION` and `REEL_METRICS` are single dated constants —
+  insight metric names shift between Graph versions, so verify on bump. A `/reel/<shortcode>`
+  permalink does **not** contain the numeric media id; store `ig://<media_id>` (or the raw id) in
+  a video's url for refresh to work, or pass a `media_id` key. Token refresh (long-lived tokens
+  expire ~60 days) is a noted follow-up, not built.
+- **`src/scheduling.py`** — the publish queue, because Meta has no native future-scheduling: a
+  `scheduled_posts` table (own `SCHEMA`/`init()`, the preprod.py pattern), pure `due_posts`
+  windowing, and `run_due`, the worker step cron invokes. Queue management is ungated — rows are
+  intentions; the publish itself always goes through `autopilot.execute`, so gate/dry-run/kill
+  switch apply unchanged and there is no second posting path. Idempotency: a row is marked
+  `publishing` *before* dispatch and `publishing` rows are excluded from `due_posts`, so a crash
+  can't double-post — a stuck row is visible in `list` and resolved by hand. `DAILY_CAP` (20)
+  sits well under Meta's 100/24h quota, which is also checked live and treated pessimistically
+  (unverifiable = don't post). `build_caption` grounds captions in `post_seo.derive_signals` and
+  picks the best of several candidates by `score_post` (pure, free), degrading to the fallback
+  caption on any failure.
 - **`src/gemini_utils.py`** — shared `generate_with_retry` (retries on `RESOURCE_EXHAUSTED`/
   `UNAVAILABLE`, falls through to `FALLBACK_MODELS` if the primary model stays down for the whole
   retry budget) and `strip_fences` (strips markdown code fences from model JSON output).
