@@ -24,8 +24,9 @@ DEFAULT_SITE_URL = "http://127.0.0.1:8000"
 
 PRODUCT_NAME = "Zero Page AI Studio"
 TAGLINE = (
-    "A grounded AI film studio: real rooms in, concepts, shot lists, and one AI "
-    "shot per edit — every proposal checked in code against what actually exists."
+    "An automated video production machine that mixes real footage and AI: "
+    "concepts, shot lists, and platform-native AI video prompts, all grounded "
+    "in your real rooms and footage — and it learns from what performs."
 )
 
 # path -> (title, one-line description for llms.txt, sitemap priority)
@@ -123,57 +124,62 @@ def llms_txt(base: Optional[str] = None) -> str:
 
 > {TAGLINE}
 
-{PRODUCT_NAME} is an AI pre-production and edit-planning tool for filmmakers.
-It is deliberately not a video generator. The model proposes; code enforces.
+{PRODUCT_NAME} is an automated video production pipeline for filmmakers:
+real footage and AI-generated shots are co-inputs to the same concept,
+and the system learns from what performs.
 
 ## What "grounded" means here
 
 Generative video tools invent the world: the rooms, the light, the whole
-scene come out of the model, and keeping them consistent across shots is
-the central problem. This inverts that. You photograph the spaces you
-actually have; vision models describe each one's geometry, light sources,
-textures, and constraints; and every generated concept is validated
-against that list. A concept set in a room you have not photographed is
-rejected in code, not warned about.
-
-The same rule applies one stage later. An edit is built from an ingested
-footage manifest, so every cut references a real filename with in/out
-points inside that clip's real duration.
+scene come out of the model. This starts from reality instead. You
+photograph the spaces you actually have; vision models describe each
+one's geometry, light sources, textures, and constraints; and every
+concept, shot list, and AI prompt is generated from that record — so AI
+shots extend real rooms and cut against real footage without a seam.
+Grounding shapes the generation; mismatches surface as visible
+advisories for the filmmaker, not silent rejections.
 
 ## The pipeline
 
 1. **Rooms** — photograph a space; a vision model records what it can and
    cannot shoot.
-2. **Ideas** — a cheap slate of concepts generated from those rooms in one
+2. **Ideas** — a slate of concepts generated from those rooms in one
    call, so they vary against each other.
-3. **The pick** — a human keeps a few. That choice is the label the system
-   measures prompt changes against.
-4. **Shot list** — the kept ideas get a plan of at most 6 shots.
-5. **The AI shot** — exactly one generated clip per edit, for the moment
-   real footage cannot cover. Paste-ready for Veo, Kling, or Runway.
-6. **Cut list** — after the shoot, footage is ingested and a validated
-   edit spec is produced: real filenames, real in/out points, runtime
-   enforced at 13–17 seconds.
+3. **The pick** — a human keeps a few. That choice is recorded against
+   the prompt hash that produced it, so prompt changes are measured
+   rather than argued about.
+4. **Shot list** — each kept idea becomes a plan mixing camera shots
+   (shot solo: tripod, self-timer, POV mount) and AI shots, each AI shot
+   carrying a paste-ready, platform-native prompt.
+5. **Cut list** — after the shoot, footage is ingested and an edit spec
+   is produced: real clips by filename, generated clips by description,
+   in one cut plan executed by hand in the edit bay.
+6. **The loop** — posted videos and their analytics feed back in,
+   compared at equal age, and proven winners ground the next slate.
 
-## Specifications
+## Capabilities
 
-- At most 6 shots per concept, enforced in code.
-- Exactly one AI-generated shot per edit.
-- Runtime validated to 13–17 seconds for short-form.
-- Every shot's location must be a space that exists in the database.
-- Every cut's filename must exist in the footage manifest.
+- Concepts mixing any number of real and AI shots.
+- Platform-native AI video prompts for Veo, Kling, Runway, Seedance,
+  LTX, and Wan — one controlled shot vocabulary, one renderer per
+  platform, so prompts stay reproducible.
 - Retrieval-grounded ideation over a PostgreSQL + pgvector reference
-  library, so generated work inherits a house style rather than a
+  library, including the filmmaker's own proven winners, so generated
+  work inherits a house style and a performance record rather than a
   model's default taste.
+- Every human choice recorded against its prompt hash — the measurement
+  that makes self-improvement real rather than claimed.
+- Advisory checks on cut plans (in/out points inside real clip
+  durations, runtime in range) — visible signal, never a gate.
 
 ## Compared to generative video tools
 
 | | Generative video (Runway, Flow, Sora) | {PRODUCT_NAME} |
 |---|---|---|
 | Source of truth | The model | Your photographed rooms and shot footage |
-| Generated shots | Every shot | Exactly one per edit |
-| Main failure mode | Inconsistency between shots | Refuses to plan what you cannot shoot |
-| Output | Clips | A shot list, and a validated cut list you execute |
+| Generated shots | Every shot | As many as the story needs, cut against real footage |
+| Feedback | None | Posted-video analytics ground the next slate |
+| Output | Clips | Shot lists, platform-native prompts, and a cut plan you execute |
 
 ## Pages
 
@@ -226,11 +232,11 @@ def homepage_schema(base: Optional[str] = None) -> dict:
                 "publisher": {"@id": f"{base}/#org"},
                 "featureList": [
                     "Vision-described shooting locations",
-                    "Concept ideation grounded in real spaces",
-                    "Shot lists capped at six shots",
-                    "One AI-generated shot per edit",
-                    "Cut lists validated against a footage manifest",
+                    "Concepts mixing real and AI-generated shots",
+                    "Platform-native AI video prompts (Veo, Kling, Runway, Seedance, LTX, Wan)",
+                    "Cut plans built from ingested real footage",
                     "Retrieval-grounded reference library",
+                    "Performance analytics that ground the next slate",
                 ],
             },
         ],

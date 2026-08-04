@@ -4,10 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-An AI pre-production tool for Zero Page Films (a one-person brand). It takes raw footage and
-turns it into a validated cut list: an LLM proposes edit concepts from real footage, a human
-picks favorites, and full edit specs get generated and checked in code against the manifest.
-Experimental — cut lists are generated end-to-end but coherence is still being tuned.
+An automated video production pipeline for Zero Page Films (a one-person brand), mixing real
+footage and AI and aimed at running more of itself over time. It generates concepts and shot
+lists from described real rooms, decides shot by shot what gets captured versus AI-generated,
+writes platform-native AI video prompts, plans cuts from ingested footage, and feeds
+posted-video analytics back into the next slate. The autonomy ladder: L1 assisted -> L2
+grounded generation + measurement -> L3 self-improving ideation -> L4 supervised
+generate-and-post (gated, default off). Editing stays manual — an explicit L1 hold.
+Experimental — the loop is structurally in place but needs weeks of real use to mean anything.
 
 ## Commands
 
@@ -115,12 +119,15 @@ shot list for footage you *need*. Don't merge them.
   from `prompts/brands.txt`: `generate_concept_ideas` (N cheap ideas in **one** call, so they're
   varied against each other rather than rolled independently), `generate_shot_list` (the shot plan
   for an idea you picked, leaving its title/hook/logline untouched), and `generate_concept` (both
-  at once, what the web app's main button uses). `validate_concept` enforces (not just warns) at
-  most 6 shots, `CHARACTER`/`BROLL`, `BMPCC`/`ACTION5`, `KLING`/`RUNWAY`, and — the one that
-  matters — that every shot's `location` is a space that actually exists. A concept with warnings
-  is still saved, warnings attached. `apply_pov(template, use_pov)` is why the POV toggle is real:
-  off rewrites the prompt so `ACTION5` is never offered *or* named as legal, and `validate_concept`
-  rejects it if the model reaches for it anyway. Ideation is also reference-grounded, the same
+  at once, what the web app's main button uses). `validate_concept` advises (never blocks): shot
+  `type` in `CHARACTER`/`BROLL`, per-shot `source` in `CAMERA`/`AI`, camera shots' `cam` in
+  `BMPCC`/`ACTION5`, AI shots' `tool` in the `shot.PLATFORMS` registry with a non-empty prompt,
+  and — the one that matters — that every shot's `location` is a described space. Everything is
+  a visible warning on a saved concept; nothing is rejected, and no shot-count cap exists. No
+  described locations degrades to an ungrounded run with a stderr note, same as a missing
+  reference library. `apply_pov(template, use_pov)` is why the POV toggle is real: off rewrites
+  the prompt so `ACTION5` is never offered *or* named as legal, and `validate_concept` flags it
+  if the model reaches for it anyway. Ideation is also reference-grounded, the same
   way `pitch.py` is: `reference_block` (the *edge* helper — called from `main()` and the web
   routes, never from inside the generators) queries the RAG library with the spark, client, and
   the mood of the described rooms, and the generators take the resulting `references` string as a
@@ -142,10 +149,10 @@ shot list for footage you *need*. Don't merge them.
   pitch's `story_note` doesn't reference a real clip filename.
 - **`src/editgen.py`** — takes pitch numbers selected by a human, loads the corresponding entries
   from `pitches.json`, fills `prompts/edit_prompt.txt`, and asks Gemini for full edit specs
-  (ordered clip in/out points, grade notes, sound notes). `validate_edit` enforces (not just
-  warns) that every clip exists in the manifest, in/out points fall within real clip duration, and
-  total runtime is within `MIN_RUNTIME`/`MAX_RUNTIME` (13-17s) — model output is never trusted
-  without this code-level check. `--print` renders each edit's cut list as plain text (clip, in,
+  (ordered clip in/out points, grade notes, sound notes). `validate_edit` advises: unknown clips,
+  in/out points outside real clip duration, and total runtime outside `MIN_RUNTIME`/`MAX_RUNTIME`
+  (13-17s) all surface as visible warnings on a saved edit. Any number of edit_list entries may be
+  generative slots (`"source": "generate"` + description) — real and AI clips are co-inputs. `--print` renders each edit's cut list as plain text (clip, in,
   out, duration, running total) via `format_edit_as_text`, to read beside Resolve without parsing
   `concepts.json` by eye.
 - **`src/shot.py`** / **`src/promptgen.py`** / **`src/genlog.py`** / **`src/generative.py`** — the
@@ -155,9 +162,10 @@ shot list for footage you *need*. Don't merge them.
   `Shot`. That split is deliberate: a bad prompt is then either a bad `Shot` (visible in the JSON,
   the model's fault) or a bad compile (catchable in a render test, the renderer's fault). Collapse
   it and you can't tell which broke. `genlog.py` records attempts after you generate in the tool's
-  own UI; `generative.py` holds `shots`/`generations` and the scoreboards. **Unverified:** the
-  `RUNWAY_CAMERA`/`VEO_CAMERA`/`KLING_CAMERA` maps are general patterns, not current docs — check
-  each tool's prompt guide before trusting the wording, and date the comment above each map.
+  own UI; `generative.py` holds `shots`/`generations` and the scoreboards. **Verification is per-map:** each camera map carries a dated comment naming the guide it was
+  checked against (Veo/Seedance/LTX/Wan dated 2026-08-04 from the local video-prompting skill
+  references); `RUNWAY_CAMERA` and `KLING_CAMERA` remain undated general patterns — check those
+  tools' guides before trusting their wording.
 - **`src/youtube.py`** — video-id parser for `watch?v=`/`youtu.be`/`shorts` URLs (the part that
   actually breaks), public stats via the Data API v3, and channel import. `refresh_metrics_for_video`
   and `import_channel_videos` never raise: a missing key or failed call returns `{"ok": False}` so
@@ -227,14 +235,16 @@ shot list for footage you *need*. Don't merge them.
   `{selected_pitches}`, `{locations}`, `{brand}`, `{client}`, `{spark}`, `{count}`,
   `{title}`/`{hook}`/`{logline}`, and `{pov}`/`{cam_rule}`/`{cam_values}` as the templating
   placeholders when changing prompt files.
-- **Prompts request, code enforces.** Model output is always independently validated against
-  reality — real filenames and durations for edits, real location names for concepts — never
-  trust the prompt alone to keep the model from hallucinating clip references, out-of-range cut
-  points, or rooms that don't exist.
-- **Grounded in what exists, never invented.** Post-production is footage-first: edits come from
-  what's in the manifest, never a script matched to clips afterward. Pre-production is the same
-  rule one step earlier: concepts are built from photographed, described spaces, so the model
-  can't call for a rooftop you don't have.
+- **Prompts request, code advises.** Model output is always independently checked against
+  reality — real filenames and durations for edits, described location names for concepts — and
+  every mismatch surfaces as a visible warning on a saved result. Nothing is rejected: the
+  checks exist because models hallucinate clip references, cut points and rooms, and the human
+  deciding needs to see that, not because output "doesn't count" until it validates.
+- **Grounded in what exists — grounding shapes, it doesn't gate.** Every stage generates *from*
+  real material: concepts from photographed spaces, edits from the manifest, AI prompts from the
+  named real room they extend, ideation from the reference library and proven winners. That is
+  what keeps output shootable and on-brand. A mismatch is a warning, and a missing grounding
+  source degrades to an ungrounded run with a note.
 - **The human choice is the label, and it gets recorded.** `pitch.py` generates 10 pitches and a
   human picks a few (`ideas.selected`); `shootgen.py` generates ideas, a human plans some
   (`shortlist_rate`), and shoots fewer still (`shoot_done`). All stored with the prompt's hash, so
@@ -284,8 +294,6 @@ is shooting one of the generated concepts, marking it shot, and adding the video
   generated prompt, and date the comment above each map.
 - `YOUTUBE_API_KEY` in `.env` is a placeholder, so channel import and metric refresh can't reach
   the API. Everything else works without it.
-- `validate_edit` warns where BUILD_SPEC says enforce. Deliberate for now — warnings are visible
-  and you decide — but it is a real spec divergence, not an oversight.
 - `import_channel_videos` can report success when the bulk stats call failed; `mark_kept` doesn't
   clear other keepers on the same shot, which skews `attempts_to_keeper`; `ingest.py` reads only
   `GEMINI_API_KEY` where every other module also accepts `GOOGLE_API_KEY`.

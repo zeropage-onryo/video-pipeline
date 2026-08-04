@@ -1153,15 +1153,17 @@ def test_robots_keeps_the_app_out_of_the_index():
     assert "Sitemap:" in response.text
 
 
-def test_llms_txt_is_served_as_markdown_with_the_hard_specs():
-    """The specs are the citable part -- a model asked what this does
-    should be able to answer with numbers, not adjectives."""
+def test_llms_txt_is_served_as_markdown_with_the_capabilities():
+    """The concrete capabilities are the citable part -- a model asked
+    what this does should answer with specifics, not adjectives."""
     response = client.get("/llms.txt")
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/plain")
     assert "# Zero Page AI Studio" in response.text
-    assert "6 shots" in response.text
-    assert "13–17 seconds" in response.text
+    assert "real and AI shots" in response.text
+    assert "Seedance" in response.text          # the platform breadth claim
+    assert "learns from what performs" in response.text.lower() or \
+        "analytics" in response.text
 
 
 def test_sitemap_lists_the_public_page_only():

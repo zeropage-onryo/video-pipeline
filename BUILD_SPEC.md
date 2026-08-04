@@ -2,6 +2,16 @@
 
 Read this whole file before writing code. One session per section.
 
+> **2026-08-04 — partially retired by the pivot** (see README's Decisions Log entry of the same
+> date). This spec built the measurement spine and it stands. Retired deliberately, not left to
+> rot: the addendum's "one generated clip per edit, maximum" constraint and its "multiple
+> generated clips per edit" out-of-scope line (real and AI shots are now co-inputs, uncapped);
+> the main out-of-scope lines on retrieval (built: `src/rag.py`) and on generative video prompts
+> being "a different product" (they are now this product). Deferred, not retired: "calling
+> generation APIs directly" and automated posting are an L4 stage behind an approval gate and
+> dry-run, default off. Still binding: the label-capture core, the measurement functions, the
+> design direction, and the removal of the Resolve integration — editing stays manual.
+
 ## What already exists
 
 ```

@@ -2,18 +2,19 @@
 
 # Zero Page Films — production pipeline
 
-> **A grounded AI production tool for solo filmmakers — the grounded inverse of Google Flow.**
-> Where Flow generates a world from a prompt, this generates a *shoot* from your real rooms and a
-> *cut* from your real footage, validating every model output against what actually exists before
-> it's allowed to count. The model proposes; code enforces.
+> **An automated video production machine for a solo filmmaker — real footage and AI, mixed.**
+> It generates concepts and shot lists from your real rooms, writes platform-native AI video
+> prompts for the shots a camera can't get, plans the cut from your real footage, and learns from
+> what performs. Real material grounds everything; AI extends it.
 
-A pre-production and post-production tool for a one-person film operation. It runs the whole
-workflow from an idea to a shot list to a finished cut plan, and every stage is grounded in
-something real: photographs of the rooms you can actually shoot in, and a manifest of the footage
-you actually captured. The model proposes; code checks the proposal against reality before it is
-allowed to count.
+A production pipeline for a one-person film operation, aimed at running more of itself over
+time: it helps decide what to make (concepts, shot lists), decides shot by shot what gets
+captured versus generated, writes the AI prompts across platforms, and feeds posted-video
+analytics back into the next slate. Editing stays by hand — the judgment worth automating is
+which shots and which moments, not the mechanical assembly.
 
-Built for solo shoots — one operator who is also the on-screen subject, two cameras, and a house.
+Built for solo shoots — one operator who is also the on-screen subject, two cameras, a house,
+and six AI video platforms.
 
 ## What it does
 
@@ -23,9 +24,10 @@ then generated against those real rooms — 8 cheap ideas to choose between, or 
 plan: a shot-by-shot list with camera, framing, movement, and lighting drawn from what's genuinely
 in the space, plus edit rhythm and grade notes.
 
-**One AI shot per concept.** Every plan reserves exactly one slot for the moment the house can't
-give you, with a paste-ready prompt for Kling or Runway tied to a specific shot — for example,
-pushing a camera through a gap too narrow for a real lens. Attempts are logged per tool, so you
+**Real and AI shots, mixed.** Every plan decides shot by shot what you capture and what a model
+generates — both grounded in the same photographed rooms, so the mix cuts as one piece. Each AI
+shot carries a paste-ready, platform-native prompt (Veo, Kling, Runway, Seedance, LTX, Wan; one
+controlled shot vocabulary, one renderer per platform). Attempts are logged per tool, so you
 learn which prompts land in two tries and which take nine.
 
 **After the shoot — footage to cut list.** Ingest catalogs and organizes raw clips: duration and
@@ -42,11 +44,12 @@ beat last week's on accumulated totals alone.
 
 ## The rule the whole thing is built on
 
-**Prompts request, code enforces.** The model is never trusted on its own. An edit spec is checked
-against real filenames and real clip durations. A concept is rejected if it sets a shot in a room
-you haven't photographed. Turning off the POV camera rewrites the prompt *and* makes the validator
-refuse that camera. A generated shot list that breaks a rule is still saved — with its warnings —
-because it is worth looking at and deciding on, not silently discarded.
+**Grounded in what exists — grounding shapes, it doesn't gate.** Every idea, shot list, AI
+prompt and cut plan is generated from real material: photographed rooms, ingested footage, your
+own posted results. Checks still run — in/out points against real clip durations, locations
+against described spaces — but as visible advisories the filmmaker weighs, never rejections. A
+generated plan that breaks a rule is saved with its warnings, because it is worth looking at and
+deciding on, not silently discarded.
 
 The second rule, learned the hard way: **verify by running it.** Every real defect this project has
 had passed code review and passed its own tests. They were caught by starting the server, clicking
@@ -122,7 +125,7 @@ the document level, because that's what a human can actually label.
 - **Google Gemini** — vision descriptions of rooms and clips, concept and edit-spec generation
 - **OpenAI Whisper** — clip transcription
 - **FFmpeg / ffprobe** — metadata and frame extraction
-- **Kling / Runway** — the one generated clip per edit (prompts written here, generated in their UI)
+- **Veo / Kling / Runway / Seedance / LTX / Wan** — AI shots (prompts written here, generated in each tool's UI)
 - **pytest** + **ruff**, run in CI on every push
 
 ## Roadmap
@@ -256,3 +259,20 @@ free to store, and without it a prompt rewrite can only be argued about
 rather than measured. Generating ten concepts and shooting one is a different
 outcome from generating three and shooting two, and `shoot_rate()` makes that
 difference visible per prompt version.
+
+**2026-08-04 — The pivot: from grounded validator to autonomous content machine.**
+Retired the "grounded inverse of Google Flow" identity — a tool whose selling point was
+rejecting model output that didn't match reality. The mission now is an automated production
+pipeline mixing real footage and AI that runs more of itself over time: L1 assisted → L2
+grounded generation + measurement → L3 self-improving ideation from performance data → L4
+supervised autonomous generate-and-post (gated, dry-run, default off). What changed in code:
+the 6-shot cap, the one-AI-shot-per-concept slot, and the one-generative-clip-per-edit cap are
+gone — real and AI shots are co-inputs, each shot carrying `source: CAMERA | AI`; the AI
+platform set became data (`shot.PLATFORMS`, now also Seedance 2.0, LTX-2, Wan 2.2); and a
+missing described location degrades to an ungrounded run with a note instead of raising. What
+deliberately did not change: grounding itself (rooms, footage, and the reference library still
+shape every generation), every human pick recorded against its prompt hash, degrade-don't-break,
+and the 2026-07-29 removal of the Resolve integration — **editing stays manual (an explicit L1
+hold)**. Validators survive as advisories: visible warnings, never gates. Supersedes the
+rejection clause of "Concepts are grounded in photographed spaces" (2026-07-30) and
+BUILD_SPEC's "one generated clip per edit, maximum."
