@@ -14,24 +14,21 @@
   body{overflow-x:hidden;}
   .wk-page{max-width:none;margin:0;padding:0;}
 
-  /* ---- top bar ---- */
-  .wk-top{position:sticky;top:0;z-index:40;display:flex;align-items:center;gap:14px;flex-wrap:wrap;
-    padding:11px 18px;border-bottom:1px solid var(--line);background:var(--panel2);}
+  /* ---- top bar: quiet chrome, the work is the interface ---- */
+  .wk-top{position:sticky;top:0;z-index:40;display:flex;align-items:center;gap:18px;flex-wrap:wrap;
+    padding:13px 22px;border-bottom:1px solid var(--line);background:var(--panel2);}
   .wk-brand{font-family:'Bebas Neue',Impact,sans-serif;font-size:21px;letter-spacing:.06em;color:var(--bone);text-decoration:none;}
   .wk-brand .a{color:var(--red);}
   .wk-top .sp{flex:1;}
   .wk-count{font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.1em;color:var(--faint);text-transform:uppercase;}
-  .wk-count b{font-family:'Bebas Neue',Impact,sans-serif;font-size:19px;color:var(--bone);margin-right:4px;vertical-align:-1px;}
-  .wk-enforce{display:inline-flex;align-items:center;gap:7px;font-family:'IBM Plex Mono',monospace;font-size:9px;
-    letter-spacing:.16em;text-transform:uppercase;color:var(--good);border:1px solid rgba(111,207,151,.3);padding:5px 9px;}
-  .wk-enforce .dot{width:6px;height:6px;border-radius:50%;background:var(--good);box-shadow:0 0 8px var(--good);}
+  .wk-count b{color:var(--dim);margin-right:3px;}
 
   /* ---- three-zone grid ---- */
   .wk{display:grid;grid-template-columns:250px minmax(0,1fr) 330px;align-items:start;}
   .wk-rail,.wk-assist{position:sticky;top:47px;max-height:calc(100vh - 47px);overflow-y:auto;}
   .wk-rail{border-right:1px solid var(--line);}
   .wk-assist{border-left:1px solid var(--line);background:var(--panel2);}
-  .wk-canvas{padding:20px 24px 80px;min-width:0;}
+  .wk-canvas{padding:34px 40px 100px;min-width:0;max-width:1060px;}
 
   /* ---- rail: CSS-only tabs ---- */
   .wk-tabs{display:flex;border-bottom:1px solid var(--line);}
@@ -91,7 +88,7 @@
   .wk-msg{font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:var(--steel);
     border:1px solid rgba(143,163,173,.3);background:var(--panel);padding:10px 13px;margin-bottom:18px;}
   .wk-sec{font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.22em;text-transform:uppercase;
-    color:var(--faint);margin:26px 0 12px;display:flex;align-items:center;gap:10px;}
+    color:var(--faint);margin:40px 0 16px;display:flex;align-items:center;gap:10px;}
   .wk-sec::after{content:"";flex:1;height:1px;background:var(--line);}
   .wk-sec:first-child{margin-top:0;}
 
@@ -99,7 +96,7 @@
   .wk-blank h2{font-family:'Bebas Neue',Impact,sans-serif;font-weight:400;font-size:34px;letter-spacing:.03em;color:var(--bone);line-height:1;}
   .wk-blank p{font-size:13px;max-width:420px;margin:12px auto 0;line-height:1.6;}
 
-  .wk-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;align-items:start;}
+  .wk-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:22px;align-items:start;}
   .wk-card{border:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;}
   .wk-card.planned{border-color:rgba(226,59,46,.4);}
   .wk-card.done{border-color:rgba(111,207,151,.4);}
@@ -110,13 +107,13 @@
     border:1px solid var(--line);color:var(--dim);padding:2px 6px;}
   .wk-chead .st.plan{border-color:var(--red);color:var(--red);}
   .wk-chead .st.shot{border-color:var(--good);color:var(--good);}
-  .wk-cbody{padding:12px 13px 14px;flex:1;display:flex;flex-direction:column;}
+  .wk-cbody{padding:16px 18px 18px;flex:1;display:flex;flex-direction:column;}
   .wk-cbody h3{font-family:'Bebas Neue',Impact,sans-serif;font-weight:400;font-size:24px;letter-spacing:.03em;line-height:1;margin:0 0 7px;}
   .wk-hook{display:flex;gap:7px;align-items:flex-start;margin:10px 0;}
   .wk-log{font-size:12px;color:var(--dim);font-style:italic;line-height:1.5;}
   .wk-meta{font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.08em;color:var(--faint);margin-top:10px;text-transform:uppercase;}
-  .wk-warn{border-left:2px solid var(--red);padding-left:9px;margin-top:10px;}
-  .wk-warn .lb{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--red);}
+  .wk-warn{border-left:2px solid var(--line);padding-left:9px;margin-top:10px;}
+  .wk-warn .lb{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);}
   .wk-warn p{font-size:11px;color:var(--dim);margin:3px 0 0;line-height:1.45;}
   .wk-shotline{display:grid;grid-template-columns:18px 1fr;gap:8px;font-size:11.5px;line-height:1.5;
     border-left:2px solid var(--line);padding:6px 0 6px 9px;margin-top:6px;}
@@ -134,7 +131,7 @@
   .wk-cuthead .t{font-family:'Bebas Neue',Impact,sans-serif;font-size:22px;letter-spacing:.03em;line-height:1;}
   .wk-cuthead .rt{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--steel);letter-spacing:.08em;}
   .wk-cutbody{padding:12px 13px 14px;}
-  .wk-checks{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:11px;}
+  .wk-checks{font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.08em;color:var(--faint);margin-bottom:12px;text-transform:uppercase;}
   .wk-check{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.09em;text-transform:uppercase;
     color:var(--good);border:1px solid rgba(111,207,151,.28);padding:3px 7px;}
   .wk-row{display:grid;grid-template-columns:18px 1fr 150px;gap:9px;align-items:center;
@@ -160,8 +157,8 @@
   .wk-perf-tbl tr.bad td.sc{color:var(--bad);}
 
   /* ---- assistant ---- */
-  .wk-ap{padding:16px 15px 30px;}
-  .wk-ask{font-family:'Bebas Neue',Impact,sans-serif;font-weight:400;font-size:23px;letter-spacing:.03em;line-height:1;margin:0 0 4px;}
+  .wk-ap{padding:22px 18px 30px;}
+  .wk-ask{font-family:'Bebas Neue',Impact,sans-serif;font-weight:400;font-size:30px;letter-spacing:.03em;line-height:.95;margin:0 0 6px;}
   .wk-ap textarea{width:100%;background:var(--bg);border:1px solid var(--line);color:var(--bone);
     font-family:'Inter',sans-serif;font-size:13px;line-height:1.5;padding:11px 12px;resize:vertical;min-height:82px;}
   .wk-ap textarea::placeholder{color:var(--faint);}
@@ -206,7 +203,6 @@
     <span class="wk-count"><b>{{ spaces|length }}</b>rooms</span>
     <span class="wk-count"><b>{{ shoot_concepts|length }}</b>concepts</span>
     <span class="wk-count"><b>{{ cut_count }}</b>cut&nbsp;lists</span>
-    <span class="wk-enforce"><span class="dot"></span>Code enforces</span>
   </div>
 
   <div class="wk">
@@ -222,7 +218,7 @@
 
       <div class="wk-panel" id="panel-media">
         <h4 class="wk-h">All media</h4>
-        <p class="wk-sub">Real footage. Every cut is validated against these filenames and durations.</p>
+        <p class="wk-sub">Real footage — the spine of every cut, and the grounding for every generated shot.</p>
         {% if clips %}<input id="wk-search" class="mono" placeholder="filter clips…">{% endif %}
         <div id="wk-clips">
           {% for c in clips %}
@@ -409,20 +405,16 @@
       {% endif %}
 
       {% if pitches %}
-      <div class="wk-sec">Cut lists · validated against the manifest</div>
+      <div class="wk-sec">Cut lists</div>
       {% for p in pitches if p.picked %}
       {% set c = p.concept %}
       <div class="wk-cut" id="cut-{{ p.number }}">
         <div class="wk-cuthead">
           <span class="t">{{ c.title }}</span>
-          <span class="rt">RUNTIME {{ c.runtime }}s · 13–17 OK</span>
+          <span class="rt">{{ c.runtime }}s</span>
         </div>
         <div class="wk-cutbody">
-          <div class="wk-checks">
-            <span class="wk-check">✓ {{ c.edit_list|length }} filenames in manifest</span>
-            <span class="wk-check">✓ in/out within clip duration</span>
-            <span class="wk-check">✓ runtime {{ c.runtime }}s in range</span>
-          </div>
+          <div class="wk-checks">{{ c.edit_list|length }} cuts · from real footage · execute in Resolve</div>
           {% for cut in c.edit_list %}
           <div class="wk-row">
             <span class="i">{{ loop.index }}</span>
@@ -468,7 +460,7 @@
     <aside class="wk-assist">
       <form class="wk-ap" method="post" action="/studio/assist">
         <h4 class="wk-ask">What do you want to make?</h4>
-        <p class="wk-sub">It picks the stage and runs it. Rooms ground it; code checks it.</p>
+        <p class="wk-sub">Say it, and the right stage runs — grounded in your rooms and footage, real and AI shots together.</p>
 
         <textarea name="text" placeholder="e.g. “gearing up ritual, 3am garage” — or just press a chip below"></textarea>
 
