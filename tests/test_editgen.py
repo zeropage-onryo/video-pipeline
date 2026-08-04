@@ -61,7 +61,10 @@ def test_one_generative_slot_with_description_validates():
     assert validate_edit(edit, MANIFEST_BY_NAME) == []
 
 
-def test_two_generative_slots_rejected():
+def test_multiple_generative_slots_validate():
+    """The one-AI-shot ceiling is retired: real and AI clips are
+    co-inputs to the same cut. Each generative slot still needs a
+    description and sane in/out points."""
     edit = {
         "title": "Test",
         "edit_list": [
@@ -69,8 +72,7 @@ def test_two_generative_slots_rejected():
             {"source": "generate", "description": "a door swings shut", "in": 0.0, "out": 7.0},
         ],
     }
-    warnings = validate_edit(edit, MANIFEST_BY_NAME)
-    assert any("one generative slot" in w for w in warnings)
+    assert validate_edit(edit, MANIFEST_BY_NAME) == []
 
 
 def test_generative_slot_without_description_rejected():

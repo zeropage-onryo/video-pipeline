@@ -2,9 +2,11 @@
 Tests for shootgen.py -- generating shoot concepts from real locations.
 
 Same split promptgen.py follows: the model's only job is producing a
-concept, and validate_concept is what enforces it. "Prompts request,
-code enforces" -- the prompt asks for at most 6 shots and a real
-location name, validate_concept is what makes those true.
+concept, and validate_concept turns rule breaks into visible warnings.
+"Prompts request, code advises" -- the rooms ground every idea, and a
+mismatch is flagged for the human, never silently discarded and never
+a rejection. A concept may mix CAMERA and AI shots freely; AI shots
+name a tool from the shot.py platform registry.
 """
 import json
 
@@ -108,14 +110,59 @@ def test_validate_accepts_a_good_concept():
     assert shootgen.validate_concept(make_concept(), LOCATION_NAMES) == []
 
 
-def test_validate_rejects_more_than_six_shots():
+def test_validate_accepts_any_number_of_shots():
+    """The 6-shot cap is retired: a concept mixing real and AI shots
+    can run as long as the story needs. Shoot discipline is the
+    prompt's guidance, not the validator's business."""
     shots = [
         {"n": n, "type": "BROLL", "cam": "BMPCC", "location": "hallway",
          "desc": "d", "light": "l"}
-        for n in range(1, 8)
+        for n in range(1, 12)
     ]
+    assert shootgen.validate_concept(make_concept(shots=shots), LOCATION_NAMES) == []
+
+
+def test_validate_accepts_multiple_ai_shots():
+    """Real and AI are co-inputs: any shot may be generated instead of
+    captured, and there is no per-concept AI ceiling."""
+    shots = [
+        {"n": 1, "type": "CHARACTER", "source": "CAMERA", "cam": "BMPCC",
+         "location": "hallway", "desc": "d", "light": "l"},
+        {"n": 2, "type": "BROLL", "source": "AI", "tool": "VEO",
+         "location": "garage", "desc": "d", "prompt": "a drawer closing"},
+        {"n": 3, "type": "BROLL", "source": "AI", "tool": "SEEDANCE",
+         "location": "garage", "desc": "d", "prompt": "dust in the light"},
+    ]
+    assert shootgen.validate_concept(make_concept(shots=shots), LOCATION_NAMES) == []
+
+
+def test_validate_warns_on_unknown_source():
+    concept = make_concept()
+    concept["shots"][0]["source"] = "DREAM"
+    warnings = shootgen.validate_concept(concept, LOCATION_NAMES)
+    assert any("source" in w for w in warnings)
+
+
+def test_validate_warns_on_ai_shot_with_unknown_tool():
+    shots = [{"n": 1, "type": "BROLL", "source": "AI", "tool": "SORA",
+              "location": "garage", "desc": "d", "prompt": "p"}]
     warnings = shootgen.validate_concept(make_concept(shots=shots), LOCATION_NAMES)
-    assert any("at most 6 shots" in w for w in warnings)
+    assert any("tool" in w for w in warnings)
+
+
+def test_validate_warns_on_ai_shot_without_a_prompt():
+    """An AI shot with no prompt is a slot nobody can act on."""
+    shots = [{"n": 1, "type": "BROLL", "source": "AI", "tool": "VEO",
+              "location": "garage", "desc": "d"}]
+    warnings = shootgen.validate_concept(make_concept(shots=shots), LOCATION_NAMES)
+    assert any("prompt" in w for w in warnings)
+
+
+def test_validate_skips_cam_check_for_ai_shots():
+    """cam names a physical body; an AI shot doesn't have one."""
+    shots = [{"n": 1, "type": "BROLL", "source": "AI", "tool": "KLING",
+              "location": "garage", "desc": "d", "prompt": "p"}]
+    assert shootgen.validate_concept(make_concept(shots=shots), LOCATION_NAMES) == []
 
 
 def test_validate_rejects_unknown_shot_type():
@@ -141,10 +188,19 @@ def test_validate_rejects_invented_location():
     assert any("rooftop helipad" in w for w in warnings)
 
 
-def test_validate_rejects_unknown_ai_tool():
+def test_validate_warns_on_unknown_legacy_ai_tool():
     concept = make_concept(ai={"tool": "SORA", "technique": "x", "prompt": "y"})
     warnings = shootgen.validate_concept(concept, LOCATION_NAMES)
     assert any("tool" in w for w in warnings)
+
+
+def test_validate_accepts_every_registered_platform():
+    """The legal tool set is the shot.py registry, not a hardcoded
+    pair -- a platform added there is legal here with no second edit."""
+    from src import shot as shot_mod
+    for tool in shot_mod.TOOLS:
+        concept = make_concept(ai={"tool": tool.upper(), "technique": "t", "prompt": "p"})
+        assert shootgen.validate_concept(concept, LOCATION_NAMES) == [], tool
 
 
 def test_validate_rejects_empty_shot_list():
@@ -194,17 +250,28 @@ def test_generate_concept_saves_even_with_warnings(tmp_db, monkeypatch):
     assert preprod.get_concept(result["concept_id"], path=tmp_db) is not None
 
 
-def test_generate_concept_needs_at_least_one_location(tmp_path):
-    """Without a described space there's nothing to ground a concept
-    in, so this fails loudly rather than inventing rooms."""
+def test_generate_concept_degrades_without_locations(tmp_path, capsys):
+    """No described spaces means an ungrounded run with a stderr note,
+    not a dead one -- the same contract reference_block keeps for a
+    missing library. Grounding is an enhancement, never a gate."""
     empty = tmp_path / "empty.db"
     db.init_db(empty)
     preprod.init(empty)
 
-    with pytest.raises(ValueError, match="no locations"):
-        shootgen.generate_concept(
+    def fake_generate(*a, **kw):
+        return response_for(make_concept())
+
+    import unittest.mock
+    with unittest.mock.patch.object(shootgen, "generate_with_retry", fake_generate):
+        result = shootgen.generate_concept(
             brand="antihero", client=None, gemini_client=None, db_path=empty,
         )
+
+    assert result["concept"]["title"] == "The Waiting"
+    assert "ungrounded" in capsys.readouterr().err
+    # every location the model used is unknown to an empty db -- that's
+    # a visible warning, not a rejection
+    assert any("location" in w for w in result["warnings"])
 
 
 # ---------- stage one: ideas ----------
@@ -276,14 +343,17 @@ def test_generate_concept_ideas_makes_one_call_not_n(tmp_db, monkeypatch):
     assert len(calls) == 1
 
 
-def test_generate_concept_ideas_needs_a_location(tmp_path):
+def test_generate_concept_ideas_degrades_without_locations(tmp_path, capsys, monkeypatch):
     empty = tmp_path / "empty.db"
     db.init_db(empty)
     preprod.init(empty)
-    with pytest.raises(ValueError, match="no locations"):
-        shootgen.generate_concept_ideas(
-            brand="antihero", client=None, gemini_client=None, db_path=empty,
-        )
+    monkeypatch.setattr(shootgen, "generate_with_retry", lambda *a, **kw: IDEAS_RESPONSE)
+
+    result = shootgen.generate_concept_ideas(
+        brand="antihero", client=None, gemini_client=None, db_path=empty,
+    )
+    assert len(result["ideas"]) == 8
+    assert "ungrounded" in capsys.readouterr().err
 
 
 # ---------- stage two: the shot list for a chosen idea ----------

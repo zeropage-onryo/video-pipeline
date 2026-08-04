@@ -322,3 +322,48 @@ def test_use_pov_is_remembered_on_the_concept(tmp_db):
     on = preprod.save_concept({"title": "B"}, brand="antihero", path=tmp_db)
     assert preprod.get_concept(off, path=tmp_db)["use_pov"] is False
     assert preprod.get_concept(on, path=tmp_db)["use_pov"] is True
+
+
+# ---------- ai_shots: real + AI as co-inputs ----------
+# A shot may carry source: "CAMERA" | "AI"; AI shots bring tool +
+# prompt. ai_shots is derived from shots on read (never stored, so the
+# two can't disagree), and a legacy row's single ai_json dict still
+# surfaces there so old concepts keep rendering.
+
+def test_ai_shots_derived_from_per_shot_source(tmp_db):
+    shots = [
+        {"n": 1, "type": "CHARACTER", "source": "CAMERA", "cam": "BMPCC",
+         "location": "hallway", "desc": "d"},
+        {"n": 2, "type": "BROLL", "source": "AI", "tool": "VEO",
+         "location": "garage", "desc": "d", "prompt": "a drawer closing"},
+        {"n": 3, "type": "BROLL", "source": "AI", "tool": "SEEDANCE",
+         "location": "garage", "desc": "d", "prompt": "dust in the light"},
+    ]
+    cid = preprod.save_concept({"title": "T", "shots": shots},
+                               brand="antihero", path=tmp_db)
+    saved = preprod.get_concept(cid, path=tmp_db)
+    assert [s["tool"] for s in saved["ai_shots"]] == ["VEO", "SEEDANCE"]
+
+
+def test_legacy_single_ai_dict_appears_in_ai_shots(tmp_db):
+    """Rows written before the de-cap have ai_json, not per-shot
+    sources. They surface as a one-entry ai_shots list."""
+    cid = preprod.save_concept(
+        {"title": "T", "shots": [{"n": 1, "type": "BROLL", "cam": "BMPCC",
+                                  "location": "hallway", "desc": "d"}],
+         "ai": {"tool": "KLING", "technique": "t", "prompt": "p"}},
+        brand="antihero", path=tmp_db,
+    )
+    saved = preprod.get_concept(cid, path=tmp_db)
+    assert len(saved["ai_shots"]) == 1
+    assert saved["ai_shots"][0]["tool"] == "KLING"
+
+
+def test_shots_without_source_default_to_camera(tmp_db):
+    """Legacy shots have no source field; they are camera shots."""
+    cid = preprod.save_concept(
+        {"title": "T", "shots": [{"n": 1, "type": "BROLL", "cam": "BMPCC",
+                                  "location": "hallway", "desc": "d"}]},
+        brand="antihero", path=tmp_db,
+    )
+    assert preprod.get_concept(cid, path=tmp_db)["ai_shots"] == []
