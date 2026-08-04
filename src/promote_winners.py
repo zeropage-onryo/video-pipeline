@@ -30,7 +30,7 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
-from . import db, rag
+from . import db, post_seo, rag
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 QUEUE_PATH = PROJECT_ROOT / "data" / "promotion_queue.json"
@@ -76,11 +76,16 @@ def _promoted_video_ids(conn) -> set:
     return ids
 
 
-def render_reference_doc(candidate: dict) -> str:
+def render_reference_doc(candidate: dict, signals: Optional[dict] = None) -> str:
     """
     The reference text that lands in RAG for a winning video: what the
     concept was, plus enough performance context that a future pitch
     reads it as "this worked", not just "this happened".
+
+    With `signals` (post_seo.derive_signals over the same window), the
+    doc also names the *patterns* across the window's winners and losers
+    -- hooks, topics, title words -- so retrieval returns actionable
+    field-level signal, not just one video's story.
     """
     lines = [f"WINNING CONCEPT -- {candidate['title']} ({candidate['platform']})"]
     if candidate.get("logline"):
@@ -100,6 +105,25 @@ def render_reference_doc(candidate: dict) -> str:
         f"{candidate['multiple']:.1f}x the {candidate['median']:,.0f} median "
         f"for videos posted in the same comparison window."
     )
+    if signals and signals.get("sample"):
+        def top(counter, n=3):
+            items = sorted(counter.items(), key=lambda kv: -kv[1])[:n]
+            return ", ".join(f"{k} ({v})" for k, v in items)
+
+        lines.append("Patterns across this window's winners:")
+        if signals["winning_topics"]:
+            lines.append(f"  winning topics: {top(signals['winning_topics'])}")
+        if signals["winning_hooks"]:
+            lines.append(f"  winning hooks: {top(signals['winning_hooks'])}")
+        if signals["winning_title_words"]:
+            lines.append(f"  winning title words: {top(signals['winning_title_words'], 5)}")
+        losing = []
+        if signals["losing_topics"]:
+            losing.append(f"topics {top(signals['losing_topics'])}")
+        if signals["losing_hooks"]:
+            losing.append(f"hooks {top(signals['losing_hooks'])}")
+        if losing:
+            lines.append(f"  below-median patterns to avoid: {'; '.join(losing)}")
     return "\n".join(lines)
 
 
@@ -146,19 +170,36 @@ def candidate_winners(
     return out
 
 
-def _to_queue_entry(c: dict) -> dict:
+def _window_signals(kwargs: dict) -> Optional[dict]:
+    """post_seo signals for the same comparison window as the candidate
+    query, so the patterns written into a doc describe the field that
+    video actually beat. Never raises -- a signal failure just means a
+    doc without a Patterns section."""
+    try:
+        return post_seo.derive_signals(
+            at_days=kwargs.get("at_days", 7),
+            posted_within_days=kwargs.get("posted_within_days", 180),
+            metric=kwargs.get("metric", "views"),
+            db_path=kwargs.get("db_path"),
+        )
+    except Exception:
+        return None
+
+
+def _to_queue_entry(c: dict, signals: Optional[dict] = None) -> dict:
     return {
         "video_id": c["video_id"], "idea_id": c["idea_id"],
         "title": c["title"], "platform": c["platform"],
         "metric": c["metric"], "score": c["score"],
         "median": c["median"], "multiple": round(c["multiple"], 2),
-        "doc": render_reference_doc(c),
+        "doc": render_reference_doc(c, signals=signals),
     }
 
 
-def _ingest_candidates(candidates: list) -> None:
+def _ingest_candidates(candidates: list, signals: Optional[dict] = None) -> None:
     records = [
-        {"source": source_key(c["video_id"]), "text": render_reference_doc(c),
+        {"source": source_key(c["video_id"]),
+         "text": render_reference_doc(c, signals=signals),
          "domain": DOMAIN, "source_ref": f"video:{c['video_id']}"}
         for c in candidates
     ]
@@ -184,7 +225,8 @@ def propose(**kwargs) -> list[dict[str, Any]]:
     finally:
         conn.close()
 
-    queue = [_to_queue_entry(c) for c in candidates]
+    signals = _window_signals(kwargs)
+    queue = [_to_queue_entry(c, signals=signals) for c in candidates]
     QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
     QUEUE_PATH.write_text(json.dumps(queue, indent=2))
     return queue
@@ -254,7 +296,7 @@ def run_auto(**kwargs) -> dict[str, Any]:
     finally:
         conn.close()
 
-    _ingest_candidates(candidates)
+    _ingest_candidates(candidates, signals=_window_signals(kwargs))
     return {"promoted": len(candidates),
             "video_ids": sorted(c["video_id"] for c in candidates)}
 
