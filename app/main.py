@@ -23,6 +23,7 @@ from fastapi.templating import Jinja2Templates
 from google import genai
 
 from src import db, locations, preprod, rag, shootgen, youtube
+from src import shot as shot_module
 
 from . import seo
 from .sparkline import render_sparkline
@@ -319,6 +320,7 @@ def studio(request: Request, message: Optional[str] = None,
             "performance": performance_rows(at_days=at_days, posted_within=posted_within),
             "video_count": counts["videos"],
             "library": library_shelf(),
+            "platforms": shot_module.TOOLS,
             "message": message,
         },
     )
@@ -375,13 +377,23 @@ async def studio_assist(request: Request):
     client_name = (form.get("client") or "").strip() or None
     use_pov = bool(form.get("use_pov"))
     # The typed text is the spark for a generation; for a chip pressed
-    # with an empty box there simply isn't one.
+    # with an empty box there simply isn't one. Selected ingredients
+    # (rooms, clips, references from the tray) and preferred platforms
+    # ride along as extra spark lines — they steer both the RAG query
+    # and the prompt's creative-spark section through the existing
+    # grounding path, with no generator signature changes.
     spark = text or None
+    ingredients = (form.get("ingredients") or "").strip()
+    if ingredients:
+        spark = f"{spark or ''}\nGround on: {ingredients}".strip()
+    platforms = (form.get("platforms") or "").strip()
+    if platforms:
+        spark = f"{spark or ''}\nPreferred AI platforms: {platforms}".strip()
 
     if intent == "room":
         return RedirectResponse(
             "/studio?message=" + quote(
-                "Add a room in the left rail — photograph the space and it gets described."
+                "Open the ingredients tray — photograph the space and it gets described."
             ),
             status_code=303,
         )

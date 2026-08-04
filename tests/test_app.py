@@ -1239,6 +1239,49 @@ def test_assistant_deals_ideas_from_typed_text(tmp_preprod_db, monkeypatch):
     assert "Dealt 2 ideas" in unquote(response.headers["location"])
 
 
+def test_assistant_folds_ingredients_and_platforms_into_the_spark(tmp_preprod_db, monkeypatch):
+    """Tray chips genuinely steer the generation: their labels ride into
+    the spark, which reaches both the RAG query and the prompt."""
+    preprod.add_location("garage", {"space": "garage"}, path=tmp_preprod_db)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(app_main.genai, "Client", lambda **k: object())
+
+    seen = {}
+
+    def fake_ideas(**kwargs):
+        seen.update(kwargs)
+        return {"ideas": [{"title": "A"}]}
+
+    monkeypatch.setattr(app_main.shootgen, "generate_concept_ideas", fake_ideas)
+    client.post("/studio/assist", data={
+        "text": "night ritual",
+        "ingredients": "room: garage, clip: A037_C004.mov",
+        "platforms": "VEO, WAN",
+    }, follow_redirects=False)
+    assert "night ritual" in seen["spark"]
+    assert "Ground on: room: garage, clip: A037_C004.mov" in seen["spark"]
+    assert "Preferred AI platforms: VEO, WAN" in seen["spark"]
+
+
+def test_assistant_ingredients_alone_still_make_a_spark(tmp_preprod_db, monkeypatch):
+    """Chips selected with an empty text box are still a real spark --
+    not None with the grounding silently dropped."""
+    preprod.add_location("garage", {"space": "garage"}, path=tmp_preprod_db)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(app_main.genai, "Client", lambda **k: object())
+
+    seen = {}
+
+    def fake_ideas(**kwargs):
+        seen.update(kwargs)
+        return {"ideas": [{"title": "A"}]}
+
+    monkeypatch.setattr(app_main.shootgen, "generate_concept_ideas", fake_ideas)
+    client.post("/studio/assist", data={"ingredients": "room: garage"},
+                follow_redirects=False)
+    assert seen["spark"] == "Ground on: room: garage"
+
+
 def test_assistant_plans_the_most_recent_unplanned_idea(tmp_preprod_db, monkeypatch):
     preprod.add_location("garage", {"space": "garage"}, path=tmp_preprod_db)
     preprod.save_concept_ideas(

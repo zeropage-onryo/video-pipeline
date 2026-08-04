@@ -3,10 +3,11 @@
    accent. Fonts are loaded locally-ish via Google Fonts; if that
    fails the stack falls back to system faces rather than breaking. */
 
-@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600&family=Inter+Tight:wght@400;500;600&display=swap');
 
 :root {
   --bg: #0B0B0D;
+  --header-height: 76px;
   --panel: #121216;
   --panel2: #0F0F13;
   --line: #232329;
