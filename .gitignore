@@ -31,3 +31,5 @@ data/thumbs/
 manifest.json
 pitches.json
 concepts.json
+data/promotion_queue.json
+data/autopilot.off
