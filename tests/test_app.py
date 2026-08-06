@@ -13,7 +13,6 @@ from app import seo
 from app.main import (
     app,
     benchmark_class,
-    group_pitches_by_run,
     parse_metrics_form,
     parse_video_form,
 )
@@ -294,62 +293,6 @@ def test_video_detail_shows_originating_pitch_when_linked(tmp_db):
     response = client.get(f"/videos/{vid}")
     assert "S2" in response.text
     assert "L2." in response.text
-
-
-# ---------- group_pitches_by_run ----------
-
-def test_group_pitches_by_run_groups_and_preserves_order():
-    # Shape matches what get_labelled_pitches() actually returns -- run_id,
-    # run_created_at, model, prompt_hash always present (SQL-aliased columns).
-    pitches = [
-        {"run_id": 2, "run_created_at": "t2", "model": "m", "prompt_hash": "h", "number": 1, "title": "A"},
-        {"run_id": 2, "run_created_at": "t2", "model": "m", "prompt_hash": "h", "number": 2, "title": "B"},
-        {"run_id": 1, "run_created_at": "t1", "model": "m", "prompt_hash": "h", "number": 1, "title": "C"},
-    ]
-    runs = group_pitches_by_run(pitches)
-    assert [r["run_id"] for r in runs] == [2, 1]
-    assert len(runs[0]["pitches"]) == 2
-    assert len(runs[1]["pitches"]) == 1
-
-
-def test_group_pitches_by_run_empty_is_safe():
-    assert group_pitches_by_run([]) == []
-
-
-# ---------- /pitches ----------
-
-PITCH_BATCH = [
-    {"number": n, "title": f"Story {n}", "logline": f"Line {n}.", "story_note": f"Note {n}."}
-    for n in range(1, 11)
-]
-
-
-def test_pitches_page_returns_200(tmp_db):
-    response = client.get("/pitches")
-    assert response.status_code == 200
-
-
-def test_pitches_page_empty_state(tmp_db):
-    response = client.get("/pitches")
-    assert "No reviewed pitch runs yet" in response.text
-
-
-def test_pitches_page_shows_run_and_marks_picked(tmp_db):
-    run_id = db.save_pitch_run(PITCH_BATCH, prompt_template="v1", path=tmp_db)
-    db.mark_selected_by_number(run_id, [2, 5, 9], path=tmp_db)
-
-    response = client.get("/pitches")
-    assert "Story 2" in response.text
-    assert "Story 3" in response.text  # unpicked pitches still shown
-    assert "picked" in response.text.lower()
-
-
-def test_pitches_page_shows_pick_rate_per_prompt(tmp_db):
-    run_id = db.save_pitch_run(PITCH_BATCH, prompt_template="v1", path=tmp_db)
-    db.mark_selected_by_number(run_id, [2, 5, 9], path=tmp_db)
-
-    response = client.get("/pitches")
-    assert "30.0%" in response.text
 
 
 # ---------- /metrics/refresh/{video_id} and the refresh button ----------
@@ -644,9 +587,8 @@ def test_every_railed_page_carries_the_whole_rail(page, tmp_preprod_db):
 
 
 def test_pages_off_the_rail_are_still_reachable(tmp_preprod_db):
-    """/pitches and /videos/new aren't rail items; they must be linked
-    from somewhere on the railed surface or they become dead URLs."""
-    assert 'href="/pitches"' in client.get("/studio").text      # the pills
+    """/videos/new isn't a rail item; it must be linked from somewhere
+    on the railed surface or it becomes a dead URL."""
     assert 'href="/videos/new"' in client.get("/analytics").text
 
 

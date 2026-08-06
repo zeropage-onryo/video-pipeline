@@ -7,7 +7,6 @@ per-stage screens (/concepts, /locations, /library, /analytics,
 /pitches) stay reachable as the engine behind it. /  is the public
 landing and the only indexed URL.
 """
-import json
 import os
 import re
 from contextlib import asynccontextmanager
@@ -23,7 +22,6 @@ from fastapi.templating import Jinja2Templates
 from google import genai
 
 from src import db, entities, instagram, locations, preprod, rag, shootgen, youtube
-from src import shot as shot_module
 
 from . import seo
 from .sparkline import render_sparkline
@@ -83,6 +81,34 @@ def benchmark_class(score, median) -> str:
     return ""
 
 
+def performance_rows(at_days: int = 7, posted_within: str = "6") -> dict:
+    """
+    The feedback loop: what's performing, compared at equal age. The
+    benchmark uses the same window as the ranking or the colouring
+    lies -- an all-time median would make an average recent video look
+    good against the long tail, or bad against one old outlier. The
+    current skin doesn't render the strip, but the discipline is pinned
+    by tests here so a future skin inherits it rather than reinventing
+    it wrong.
+    """
+    posted_within_days = POSTED_WINDOWS.get(posted_within, 180)
+    top = db.get_top_performers(
+        at_days=at_days, posted_within_days=posted_within_days, limit=5, path=db.DB_PATH,
+    )
+    bench = db.benchmark(
+        at_days=at_days, posted_within_days=posted_within_days, path=db.DB_PATH,
+    )
+    rows = []
+    for t in top:
+        history = db.get_video_history(t["video_id"], path=db.DB_PATH)
+        rows.append({
+            **t,
+            "sparkline": render_sparkline(history),
+            "css_class": benchmark_class(t["score"], bench["median"]),
+        })
+    return {"rows": rows, "at_days": at_days}
+
+
 @app.get("/")
 def landing(request: Request):
     """
@@ -131,71 +157,6 @@ def dashboard():
     return RedirectResponse("/studio", status_code=308)
 
 
-def performance_rows(at_days: int = 7, posted_within: str = "6") -> dict:
-    """
-    The feedback loop, as the canvas shows it: what's performing,
-    compared at equal age. The benchmark uses the same window as the
-    ranking or the colouring lies -- an all-time median would make an
-    average recent video look good against the long tail, or bad against
-    one old outlier.
-    """
-    posted_within_days = POSTED_WINDOWS.get(posted_within, 180)
-    top = db.get_top_performers(
-        at_days=at_days, posted_within_days=posted_within_days, limit=5, path=db.DB_PATH,
-    )
-    bench = db.benchmark(
-        at_days=at_days, posted_within_days=posted_within_days, path=db.DB_PATH,
-    )
-    rows = []
-    for t in top:
-        history = db.get_video_history(t["video_id"], path=db.DB_PATH)
-        rows.append({
-            **t,
-            "sparkline": render_sparkline(history),
-            "css_class": benchmark_class(t["score"], bench["median"]),
-        })
-    return {"rows": rows, "at_days": at_days}
-
-
-def load_project_json(name: str, default):
-    """
-    Read one of the pipeline's on-disk JSON artifacts (manifest.json,
-    pitches.json, concepts.json). A missing or malformed file returns
-    the default rather than raising -- /studio is a read-only overview
-    and must render on a fresh clone where nothing has been generated
-    yet, the same contract every model-touching route already keeps.
-    """
-    try:
-        with (PROJECT_ROOT / name).open() as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return default
-
-
-def clip_row(clip: dict) -> dict:
-    """
-    One manifest clip flattened for the media pool: first beat as a
-    one-line summary (falling back to the arc, then an old flat-string
-    description), and camera inferred from the filename prefix -- DJI is
-    the drone/ACTION body, everything else the BMPCC card.
-    """
-    desc = clip.get("description")
-    beat = ""
-    if isinstance(desc, dict):
-        beats = desc.get("beats") or []
-        beat = beats[0].get("text", "") if beats else desc.get("arc", "")
-    elif isinstance(desc, str):
-        beat = desc
-    filename = clip.get("filename", "")
-    return {
-        "filename": filename,
-        "duration": clip.get("duration_seconds"),
-        "resolution": clip.get("resolution", ""),
-        "beat": beat,
-        "cam": "DRONE" if filename.startswith("DJI") else "BMPCC",
-    }
-
-
 # The assistant's vocabulary. Each intent is one pipeline stage; the
 # phrases are what a person actually types when they mean it. Order
 # matters -- the first intent with a matching phrase wins, so the more
@@ -203,7 +164,6 @@ def clip_row(clip: dict) -> dict:
 INTENT_PHRASES = [
     ("room", ("room", "space", "location", "photograph", "photo of", "scout")),
     ("plan", ("plan", "shot list", "shotlist", "storyboard", "board it", "break it down")),
-    ("cut", ("cut", "edit it", "editgen", "assemble", "timeline", "runtime")),
     ("concept", ("full concept", "one concept", "whole concept", "concept for",
                  "make one", "single idea")),
     ("ideas", ("idea", "deal", "pitch", "options", "slate", "give me")),
@@ -242,57 +202,15 @@ def next_unplanned_concept(concepts: list) -> Optional[dict]:
     return next((c for c in concepts if not c.get("has_shot_list")), None)
 
 
-def library_shelf() -> dict:
-    """
-    What's on the reference shelves, for the studio's left rail. The
-    library is optional everywhere else, so it cannot be the one panel
-    that takes the workspace down with it when Postgres is off: an
-    unreachable store is a state the rail renders, not an exception.
-    """
-    conn = None
-    try:
-        conn = rag.connect()
-        return {"available": True, "sources": rag.list_sources(conn)}
-    except Exception:
-        return {"available": False, "sources": []}
-    finally:
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
-
-
 @app.get("/studio")
-def studio(request: Request, message: Optional[str] = None,
-           at_days: int = 7, posted_within: str = "6"):
+def studio(request: Request, message: Optional[str] = None):
     """
-    The workspace -- one screen over the whole pipeline. Three zones:
-    what you have (media pool and photographed rooms) on the left, what
-    you've made in the middle, and the assistant on the right that runs
-    the pipeline stages under the hood. Reading is free of model calls
-    and renders even when every source is absent; the human gate (keeping
-    an idea, marking it shot) happens inline on the canvas rather than on
-    a separate screen, and is still recorded.
+    The workspace. Pre-production only now: the Workflow library
+    (characters, rooms, props) reads the DB, the canvas shows the
+    latest AI shots, and the assistant runs the ideation stages under
+    the hood. Reading is free of model calls and renders even when
+    every source is absent.
     """
-    manifest = load_project_json("manifest.json", [])
-    pitches = load_project_json("pitches.json", [])
-    concepts = load_project_json("concepts.json", [])
-
-    # link each cut list back to its pitch by title, and total its runtime
-    concept_by_title = {}
-    for concept in concepts:
-        cuts = concept.get("edit_list", [])
-        runtime = round(
-            sum(cut["out_point"] - cut["in_point"] for cut in cuts), 1
-        )
-        concept_by_title[concept.get("title")] = {**concept, "runtime": runtime}
-
-    pitch_rows = []
-    for pitch in pitches:
-        concept = concept_by_title.get(pitch.get("title"))
-        pitch_rows.append({**pitch, "concept": concept, "picked": concept is not None})
-
     spaces = preprod.list_locations(path=db.DB_PATH)
     for space in spaces:
         space["photos"] = [f"{u}?thumb=1" for u in photos_for(space["name"])]
@@ -310,14 +228,6 @@ def studio(request: Request, message: Optional[str] = None,
         p["photos"] = [f"/props/{slug}/photo/{fn}?thumb=1"
                        for fn in _entity_photos(PROPS_DIR, slug)]
 
-    # The film-still strip: real frames from the photographed rooms,
-    # labelled by room. Empty when nothing is photographed yet -- the
-    # template degrades to its placeholder tiles.
-    stills = [
-        {"src": photo, "label": space["name"]}
-        for space in spaces for photo in space["photos"]
-    ][:5]
-
     shoot_concepts = preprod.list_concepts(path=db.DB_PATH)
     # the AI shots of the most recent concept that has any -- a concept
     # can carry several now, so this is a list, not a single slot
@@ -325,30 +235,15 @@ def studio(request: Request, message: Optional[str] = None,
         (c["ai_shots"] for c in shoot_concepts if c.get("ai_shots")), []
     )
 
-    counts = db.summary(path=db.DB_PATH)
     return templates.TemplateResponse(
         request,
         "studio.html",
         {
-            "clips": [clip_row(c) for c in manifest],
-            "pitches": pitch_rows,
-            "cut_count": len(concepts),
             "spaces": spaces,
             "characters": characters,
             "props": props,
-            "stills": stills,
             "shoot_concepts": shoot_concepts,
-            "shortlist": preprod.shortlist_rate(path=db.DB_PATH),
-            "rate": preprod.shoot_rate(path=db.DB_PATH),
-            "brands": preprod.BRANDS,
-            "has_locations": bool(spaces),
             "latest_ai": latest_ai,
-            "counts": counts,
-            "pick_rate": db.selection_rate(path=db.DB_PATH),
-            "performance": performance_rows(at_days=at_days, posted_within=posted_within),
-            "video_count": counts["videos"],
-            "library": library_shelf(),
-            "platforms": shot_module.TOOLS,
             "active_nav": "home",
             "message": message,
         },
@@ -423,15 +318,6 @@ async def studio_assist(request: Request):
         return RedirectResponse(
             "/studio?message=" + quote(
                 "Open the ingredients tray — photograph the space and it gets described."
-            ),
-            status_code=303,
-        )
-
-    if intent == "cut":
-        return RedirectResponse(
-            "/studio?message=" + quote(
-                "A cut list needs shot footage: run `python -m src.ingest`, then "
-                "`src.pitch`, then `src.editgen <numbers>`. The results land on this canvas."
             ),
             status_code=303,
         )
@@ -699,39 +585,6 @@ def video_detail(request: Request, video_id: int):
             "history": history,
             "sparkline": render_sparkline(history, width=480, height=120),
         },
-    )
-
-
-def group_pitches_by_run(pitches: list) -> list:
-    """
-    get_labelled_pitches() already returns rows ordered run_id DESC,
-    number ASC -- this just buckets the flat list into per-run groups,
-    preserving that order (runs newest first).
-    """
-    runs = []
-    current_run_id = object()  # sentinel that can't equal a real run_id
-    for p in pitches:
-        if p["run_id"] != current_run_id:
-            runs.append({
-                "run_id": p["run_id"],
-                "run_created_at": p["run_created_at"],
-                "model": p.get("model"),
-                "prompt_hash": p.get("prompt_hash"),
-                "pitches": [],
-            })
-            current_run_id = p["run_id"]
-        runs[-1]["pitches"].append(p)
-    return runs
-
-
-@app.get("/pitches")
-def pitches_list(request: Request):
-    pitches = db.get_labelled_pitches(limit=200, path=db.DB_PATH)
-    rate = db.selection_rate(path=db.DB_PATH)
-    return templates.TemplateResponse(
-        request,
-        "pitches.html",
-        {"runs": group_pitches_by_run(pitches), "by_prompt": rate["by_prompt"]},
     )
 
 

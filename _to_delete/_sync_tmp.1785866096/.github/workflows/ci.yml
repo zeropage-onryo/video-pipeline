@@ -1,0 +1,94 @@
+name: CI
+
+"on":
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # openai-whisper pulls in torch, and torch's default GPU build
+          # drags in ~4GB of nvidia-* CUDA packages that runners have no
+          # GPU to use anyway -- installing the CPU-only build first
+          # satisfies whisper's dependency without pulling the GPU one in.
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+          pip install -r requirements.txt
+          pip install -e .
+
+      - name: Lint with ruff
+        run: ruff check .
+
+      - name: Test with pytest
+        run: pytest tests/ -q
+
+  # Everything in this job needs a real GEMINI_API_KEY -- it makes real
+  # embedding, generation, and judge-model calls, unlike the hermetic
+  # `test` job above (which conftest.py's no_network guard enforces).
+  # A fork's PR, or a repo where the secret hasn't been added yet, gets
+  # a clean skip instead of N confusing auth failures.
+  eval-gate:
+    needs: test
+    runs-on: ubuntu-latest
+    if: ${{ !github.event.pull_request.head.repo.fork }}
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      RAG_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/zeropage_ci
+    services:
+      postgres:
+        # pgvector's own maintained image -- matches what `brew install
+        # pgvector` gives you locally, so ingest/query behave the same
+        # in CI as on your machine.
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: zeropage_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Skip -- no GEMINI_API_KEY secret configured
+        if: ${{ env.GEMINI_API_KEY == '' }}
+        run: |
+          echo "::notice::GEMINI_API_KEY secret is not set on this repo, so the eval gate is" \
+               "skipped. Add it under Settings -> Secrets -> Actions to turn this job on."
+
+      - uses: actions/setup-python@v5
+        if: ${{ env.GEMINI_API_KEY != '' }}
+        with:
+          python-version: "3.9"
+
+      - name: Install dependencies
+        if: ${{ env.GEMINI_API_KEY != '' }}
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r evals/requirements.txt
+          pip install -e .
+
+      - name: Ingest the checked-in reference library into the ephemeral store
+        if: ${{ env.GEMINI_API_KEY != '' }}
+        run: python -m src.rag ingest-manifest evals/reference_library.json
+
+      - name: Retrieval regression gate (hit@k / MRR)
+        if: ${{ env.GEMINI_API_KEY != '' }}
+        run: python -m evals.check_retrieval_regression --k 5
+
+      - name: Generation quality gate (faithfulness / relevancy / contextual precision & recall)
+        if: ${{ env.GEMINI_API_KEY != '' }}
+        run: pytest evals/ -q
