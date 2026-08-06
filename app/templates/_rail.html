@@ -1,0 +1,27 @@
+{# app/templates/_rail.html — persistent left icon rail.
+   Pass active_nav from each route's context (defaults to "" if absent). #}
+{% set nav = active_nav | default('') %}
+<nav class="rail" aria-label="Primary">
+  <a class="rail-item {{ 'active' if nav == 'home' }}" href="/studio" aria-label="Home">
+    <span class="rail-ic"><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg></span><span class="rail-lb">Home</span>
+  </a>
+  <a class="rail-item {{ 'active' if nav == 'tools' }}" href="/concepts" aria-label="Tools">
+    <span class="rail-ic"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></span><span class="rail-lb">Tools</span>
+  </a>
+  <a class="rail-item {{ 'active' if nav == 'locations' }}" href="/locations" aria-label="Locations">
+    <span class="rail-ic"><svg viewBox="0 0 24 24"><path d="M20 10c0 6-8 12-8 12S4 16 4 10a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="2.6"/></svg></span><span class="rail-lb">Locations</span>
+  </a>
+  <a class="rail-item {{ 'active' if nav == 'characters' }}" href="/characters" aria-label="Characters">
+    <span class="rail-ic"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.6"/><path d="M5 20c0-3.6 3.1-6 7-6s7 2.4 7 6"/></svg></span><span class="rail-lb">Characters</span>
+  </a>
+  <a class="rail-item {{ 'active' if nav == 'props' }}" href="/props" aria-label="Props">
+    <span class="rail-ic"><svg viewBox="0 0 24 24"><path d="M21 8 12 3 3 8l9 5 9-5Z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg></span><span class="rail-lb">Props</span>
+  </a>
+  <span class="rail-div"></span>
+  <a class="rail-item {{ 'active' if nav == 'workflow' }}" href="/library" aria-label="Workflow">
+    <span class="rail-ic"><svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.4"/><circle cx="18" cy="6" r="2.4"/><circle cx="12" cy="18" r="2.4"/><path d="M8.2 6.6h7.6M6.7 8.2 11 15.9M17.3 8.2 13 15.9"/></svg></span><span class="rail-lb">Workflow</span>
+  </a>
+  <a class="rail-item {{ 'active' if nav == 'scoreboard' }}" href="/analytics" aria-label="Scoreboard">
+    <span class="rail-ic"><svg viewBox="0 0 24 24"><path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M20 20H3"/></svg></span><span class="rail-lb">Scoreboard</span>
+  </a>
+</nav>

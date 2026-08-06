@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from google import genai
 
-from src import db, instagram, locations, preprod, rag, shootgen, youtube
+from src import db, entities, instagram, locations, preprod, rag, shootgen, youtube
 from src import shot as shot_module
 
 from . import seo
@@ -33,6 +33,8 @@ load_dotenv()
 APP_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = APP_DIR.parent
 LOCATIONS_DIR = PROJECT_ROOT / "locations"
+CHARACTERS_DIR = PROJECT_ROOT / "characters"
+PROPS_DIR = PROJECT_ROOT / "props"
 THUMB_DIR = PROJECT_ROOT / "data" / "thumbs"
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
 
@@ -58,6 +60,7 @@ POSTED_WINDOWS = {"3": 90, "6": 180, "12": 365, "all": None}
 async def lifespan(app: FastAPI):
     db.init_db(path=db.DB_PATH)
     preprod.init(path=db.DB_PATH)
+    entities.init(path=db.DB_PATH)
     yield
 
 
@@ -292,7 +295,29 @@ def studio(request: Request, message: Optional[str] = None,
 
     spaces = preprod.list_locations(path=db.DB_PATH)
     for space in spaces:
-        space["photos"] = photos_for(space["name"])
+        space["photos"] = [f"{u}?thumb=1" for u in photos_for(space["name"])]
+
+    # Characters and props for the Workflow library, photos resolved the
+    # same way their own screens do it.
+    characters = entities.list_characters(path=db.DB_PATH)
+    for c in characters:
+        slug = safe_space_name(c["name"])
+        c["photos"] = [f"/characters/{slug}/photo/{fn}?thumb=1"
+                       for fn in _entity_photos(CHARACTERS_DIR, slug)]
+    props = entities.list_props(path=db.DB_PATH)
+    for p in props:
+        slug = safe_space_name(p["name"])
+        p["photos"] = [f"/props/{slug}/photo/{fn}?thumb=1"
+                       for fn in _entity_photos(PROPS_DIR, slug)]
+
+    # The film-still strip: real frames from the photographed rooms,
+    # labelled by room. Empty when nothing is photographed yet -- the
+    # template degrades to its placeholder tiles.
+    stills = [
+        {"src": photo, "label": space["name"]}
+        for space in spaces for photo in space["photos"]
+    ][:5]
+
     shoot_concepts = preprod.list_concepts(path=db.DB_PATH)
     # the AI shots of the most recent concept that has any -- a concept
     # can carry several now, so this is a list, not a single slot
@@ -309,6 +334,9 @@ def studio(request: Request, message: Optional[str] = None,
             "pitches": pitch_rows,
             "cut_count": len(concepts),
             "spaces": spaces,
+            "characters": characters,
+            "props": props,
+            "stills": stills,
             "shoot_concepts": shoot_concepts,
             "shortlist": preprod.shortlist_rate(path=db.DB_PATH),
             "rate": preprod.shoot_rate(path=db.DB_PATH),
@@ -321,6 +349,7 @@ def studio(request: Request, message: Optional[str] = None,
             "video_count": counts["videos"],
             "library": library_shelf(),
             "platforms": shot_module.TOOLS,
+            "active_nav": "home",
             "message": message,
         },
     )
@@ -527,7 +556,7 @@ def library(request: Request, q: Optional[str] = None,
     """
     context = {"available": False, "sources": [], "results": [],
                "domains": [], "q": q, "domain": domain,
-               "message": message, "error": None}
+               "message": message, "error": None, "active_nav": "workflow"}
     conn = None
     try:
         conn = rag.connect()
@@ -616,7 +645,7 @@ def analytics(request: Request, updated: Optional[int] = None, message: Optional
         request,
         "analytics.html",
         {"rows": rows, "bars": bars, "tiles": tiles,
-         "updated": updated, "message": message},
+         "updated": updated, "message": message, "active_nav": "scoreboard"},
     )
 
 
@@ -752,7 +781,7 @@ def locations_list(request: Request, message: Optional[str] = None):
     return templates.TemplateResponse(
         request,
         "locations.html",
-        {"locations": spaces, "message": message},
+        {"locations": spaces, "message": message, "active_nav": "locations"},
     )
 
 
@@ -826,6 +855,122 @@ async def locations_upload(name: str = Form(...), next: str = Form(""),
     return RedirectResponse(f"/locations?message={quote(message)}", status_code=303)
 
 
+# --- characters & props ----------------------------------------------------
+# Pre-production entities, same shape as locations: a name-slug directory of
+# photos plus a row in the shared DB. Photo serving reuses the locations
+# path-traversal guard exactly.
+
+def _entity_photos(base_dir, slug):
+    directory = base_dir / slug
+    if not directory.is_dir():
+        return []
+    return sorted(
+        p.name for p in directory.iterdir()
+        if p.is_file() and p.suffix.lower() in locations.IMAGE_EXTENSIONS
+    )
+
+
+async def _save_entity_photos(base_dir, slug, photos):
+    images = [p for p in photos if p.filename and (p.content_type or "").startswith("image/")]
+    if not images:
+        return "", 0
+    directory = base_dir / slug
+    directory.mkdir(parents=True, exist_ok=True)
+    for upload in images:
+        (directory / Path(upload.filename).name).write_bytes(await upload.read())
+    return Path(images[0].filename).name, len(images)
+
+
+def _entity_photo_response(base_dir, slug, filename, thumb):
+    target = (base_dir / slug / filename).resolve()
+    root = base_dir.resolve()
+    if root not in target.parents:
+        raise HTTPException(status_code=404, detail="not found")
+    if not target.is_file() or target.suffix.lower() not in locations.IMAGE_EXTENSIONS:
+        raise HTTPException(status_code=404, detail="not found")
+    return FileResponse(thumbnail_for(target) if thumb else target)
+
+
+@app.get("/characters")
+def characters_list(request: Request, message: Optional[str] = None):
+    items = entities.list_characters(path=db.DB_PATH)
+    for c in items:
+        slug = safe_space_name(c["name"])
+        c["photos"] = [f"/characters/{slug}/photo/{fn}?thumb=1"
+                       for fn in _entity_photos(CHARACTERS_DIR, slug)]
+    return templates.TemplateResponse(
+        request, "characters.html",
+        {"characters": items, "message": message, "active_nav": "characters"},
+    )
+
+
+@app.get("/characters/{slug}/photo/{filename}")
+def character_photo(slug: str, filename: str, thumb: Optional[int] = None):
+    return _entity_photo_response(CHARACTERS_DIR, slug, filename, thumb)
+
+
+@app.post("/characters/new")
+async def characters_new(name: str = Form(...), role: str = Form(""),
+                         notes: str = Form(""),
+                         photos: List[UploadFile] = File(default=[])):
+    slug = safe_space_name(name)
+    if not slug:
+        raise HTTPException(status_code=400, detail="a name is required")
+    ref, count = await _save_entity_photos(CHARACTERS_DIR, slug, photos)
+    entities.add_character(
+        name=name, role=role,
+        description={"notes": notes} if notes else None,
+        reference_image=ref, photo_count=count, notes=notes, path=db.DB_PATH,
+    )
+    return RedirectResponse(f"/characters?message={quote('Added ' + name)}", status_code=303)
+
+
+@app.post("/characters/{character_id}/delete")
+def characters_delete(character_id: int):
+    entities.delete_character(character_id, path=db.DB_PATH)
+    return RedirectResponse(f"/characters?message={quote('Deleted')}", status_code=303)
+
+
+@app.get("/props")
+def props_list(request: Request, message: Optional[str] = None):
+    items = entities.list_props(path=db.DB_PATH)
+    for p in items:
+        slug = safe_space_name(p["name"])
+        p["photos"] = [f"/props/{slug}/photo/{fn}?thumb=1"
+                       for fn in _entity_photos(PROPS_DIR, slug)]
+    return templates.TemplateResponse(
+        request, "props.html",
+        {"props": items, "message": message, "active_nav": "props"},
+    )
+
+
+@app.get("/props/{slug}/photo/{filename}")
+def prop_photo(slug: str, filename: str, thumb: Optional[int] = None):
+    return _entity_photo_response(PROPS_DIR, slug, filename, thumb)
+
+
+@app.post("/props/new")
+async def props_new(name: str = Form(...), category: str = Form(""),
+                    notes: str = Form(""),
+                    photos: List[UploadFile] = File(default=[])):
+    slug = safe_space_name(name)
+    if not slug:
+        raise HTTPException(status_code=400, detail="a name is required")
+    ref, count = await _save_entity_photos(PROPS_DIR, slug, photos)
+    entities.add_prop(
+        name=name, category=category,
+        description={"notes": notes} if notes else None,
+        reference_image=ref, photo_count=count, notes=notes, path=db.DB_PATH,
+    )
+    return RedirectResponse(f"/props?message={quote('Added ' + name)}", status_code=303)
+
+
+@app.post("/props/{prop_id}/delete")
+def props_delete(prop_id: int):
+    entities.delete_prop(prop_id, path=db.DB_PATH)
+    return RedirectResponse(f"/props?message={quote('Deleted')}", status_code=303)
+
+
 @app.get("/concepts")
 def concepts_list(request: Request, message: Optional[str] = None):
     spaces = preprod.list_locations(path=db.DB_PATH)
@@ -841,6 +986,7 @@ def concepts_list(request: Request, message: Optional[str] = None):
             "brands": preprod.BRANDS,
             "spaces": spaces,
             "has_locations": bool(spaces),
+            "active_nav": "tools",
             "message": message,
         },
     )

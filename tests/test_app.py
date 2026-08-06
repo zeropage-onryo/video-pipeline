@@ -51,8 +51,11 @@ def tmp_db(tmp_path, monkeypatch):
 
 @pytest.fixture
 def tmp_preprod_db(tmp_db):
-    """tmp_db plus the pre-production tables."""
+    """tmp_db plus the pre-production tables -- the same set the app's
+    lifespan creates (preprod + the characters/props entities)."""
+    from src import entities
     preprod.init(tmp_db)
+    entities.init(tmp_db)
     return tmp_db
 
 
@@ -70,12 +73,13 @@ def test_studio_returns_200(tmp_preprod_db):
     assert response.status_code == 200
 
 
-def test_studio_shows_counts(tmp_preprod_db):
-    """The dashboard's substance moved onto the canvas -- if these
-    disappear, the feedback loop silently stopped being visible."""
+def test_studio_is_the_zp_home(tmp_preprod_db):
+    """/studio is the Zero Page home: the composer posts into the
+    assistant, and the shared rail is present with Home active."""
     response = client.get("/studio")
-    assert "Pitch runs" in response.text
-    assert "Ideas" in response.text
+    assert "What do you want to create?" in response.text
+    assert 'action="/studio/assist"' in response.text
+    assert 'class="rail"' in response.text
 
 
 def test_dashboard_redirects_to_the_studio(tmp_preprod_db):
@@ -218,50 +222,33 @@ def test_benchmark_class_missing_data_is_neutral():
     assert benchmark_class(50, None) == ""
 
 
-# ---------- the performance strip on the canvas ----------
+# ---------- the performance data behind the home ----------
+# The ZP home doesn't render the strip; the numbers live in
+# performance_rows / db.benchmark, pinned directly so the analytics
+# discipline (same window for ranking and colouring) survives any skin.
 
-def test_studio_empty_state_links_to_add_video(tmp_preprod_db):
-    response = client.get("/studio")
-    assert "No videos yet" in response.text
-    assert "/videos/new" in response.text
-
-
-def test_studio_colours_rows_by_benchmark(tmp_preprod_db):
+def test_performance_rows_colours_against_the_same_window(tmp_preprod_db):
     v1 = db.add_video("Winner", "youtube", "2026-01-01", path=tmp_preprod_db)
     v2 = db.add_video("Loser", "youtube", "2026-01-01", path=tmp_preprod_db)
     db.record_metrics(v1, views=1000, captured_at="2026-01-08", path=tmp_preprod_db)
     db.record_metrics(v2, views=10, captured_at="2026-01-08", path=tmp_preprod_db)
 
-    response = client.get("/studio?posted_within=all")
-    assert response.status_code == 200
-    assert "Winner" in response.text and "Loser" in response.text
-    assert 'class="good"' in response.text
-    assert 'class="bad"' in response.text
+    result = app_main.performance_rows(posted_within="all")
+    classes = {r["title"]: r["css_class"] for r in result["rows"]}
+    assert classes["Winner"] == "good"
+    assert classes["Loser"] == "bad"
 
 
-def test_studio_benchmark_uses_same_window_as_top_performers(tmp_preprod_db):
+def test_performance_rows_respects_the_posted_window(tmp_preprod_db):
     old_date = (date.today() - timedelta(days=400)).isoformat()
     old_measured = (date.today() - timedelta(days=393)).isoformat()
     v_old = db.add_video("Old", "youtube", old_date, path=tmp_preprod_db)
     db.record_metrics(v_old, views=99999, captured_at=old_measured, path=tmp_preprod_db)
 
-    response = client.get("/studio")  # default: posted in the last 6 months
-    assert "Old" not in response.text
-
-    response_all = client.get("/studio?posted_within=all")
-    assert "Old" in response_all.text
-
-
-def test_studio_shows_pick_rate(tmp_preprod_db):
-    run_id = db.save_pitch_run(
-        [{"number": n, "title": f"S{n}", "logline": "l", "story_note": "n"} for n in range(1, 11)],
-        path=tmp_preprod_db,
-    )
-    db.mark_selected_by_number(run_id, [1, 2, 3], path=tmp_preprod_db)
-
-    response = client.get("/studio")
-    assert "Pick rate" in response.text
-    assert "30%" in response.text
+    titles = [r["title"] for r in app_main.performance_rows()["rows"]]
+    assert "Old" not in titles          # default window: last 6 months
+    titles_all = [r["title"] for r in app_main.performance_rows(posted_within="all")["rows"]]
+    assert "Old" in titles_all
 
 
 # ---------- /videos/{id} ----------
@@ -634,37 +621,39 @@ def test_concepts_page_no_shotlist_button_once_planned(tmp_preprod_db):
 # ---------- navigation ----------
 # Every screen was built and verified in isolation by typing its URL,
 # which is exactly how a site ends up with no way to get between pages.
+# Navigation is the shared rail now: every railed page must carry every
+# rail destination, and the pages the rail doesn't list must still be
+# reachable from somewhere (asserted below), or they quietly die.
 #
 # `/` is deliberately not in here: it's the marketing landing, served
-# outside the app shell, so it carries no nav bar. `/studio` isn't
-# either -- it's the workspace, has its own chrome, and is the thing
-# these deep screens link *back* to (asserted separately below).
+# outside the app shell, so it carries no rail.
 
-NAV_TARGETS = ["/concepts", "/locations", "/pitches", "/analytics",
-               "/library", "/videos/new"]
+RAILED_PAGES = ["/studio", "/concepts", "/locations", "/characters", "/props",
+                "/analytics", "/library"]
+RAIL_DESTINATIONS = ["/studio", "/concepts", "/locations", "/characters",
+                     "/props", "/library", "/analytics"]
 
 
-@pytest.mark.parametrize("page", NAV_TARGETS)
-def test_every_page_can_reach_every_other_page(page, tmp_preprod_db):
+@pytest.mark.parametrize("page", RAILED_PAGES)
+def test_every_railed_page_carries_the_whole_rail(page, tmp_preprod_db):
     response = client.get(page)
     assert response.status_code == 200
-    for target in NAV_TARGETS:
+    assert 'class="rail"' in response.text
+    for target in RAIL_DESTINATIONS:
         assert f'href="{target}"' in response.text, f"{page} has no link to {target}"
 
 
-def test_video_detail_also_has_nav(tmp_preprod_db):
+def test_pages_off_the_rail_are_still_reachable(tmp_preprod_db):
+    """/pitches and /videos/new aren't rail items; they must be linked
+    from somewhere on the railed surface or they become dead URLs."""
+    assert 'href="/pitches"' in client.get("/studio").text      # the pills
+    assert 'href="/videos/new"' in client.get("/analytics").text
+
+
+def test_video_detail_still_has_its_nav(tmp_preprod_db):
     vid = db.add_video("Night Run", "youtube", "2025-09-29", path=tmp_preprod_db)
     response = client.get(f"/videos/{vid}")
-    for target in NAV_TARGETS:
-        assert f'href="{target}"' in response.text
-
-
-@pytest.mark.parametrize("page", NAV_TARGETS)
-def test_every_deep_screen_links_back_to_the_studio(page, tmp_preprod_db):
-    """The workspace is the one page; a deep screen you can't get out of
-    is how the seven-screen cockpit grew back."""
-    response = client.get(page)
-    assert 'href="/studio"' in response.text
+    assert 'href="/analytics"' in response.text
 
 
 # ---------- photo upload ----------
@@ -893,21 +882,22 @@ def test_page_asks_for_thumbnails(tmp_preprod_db, tmp_path, monkeypatch):
 
 # ---------- one screen: photos, settings, generate, results ----------
 
-def test_concepts_page_has_the_upload_form(tmp_preprod_db):
-    """Everything on one screen, like the original generator."""
-    response = client.get("/concepts")
+def test_locations_page_has_the_upload_form(tmp_preprod_db):
+    """The new skin moved the upload into /locations' add dialog; the
+    concepts screen is generation-only now."""
+    response = client.get("/locations")
     assert 'action="/locations/upload"' in response.text
     assert 'enctype="multipart/form-data"' in response.text
 
 
-def test_concepts_page_shows_space_thumbnails(tmp_preprod_db, tmp_path, monkeypatch):
+def test_locations_page_shows_space_thumbnails(tmp_preprod_db, tmp_path, monkeypatch):
     monkeypatch.setattr(app_main, "LOCATIONS_DIR", tmp_path / "locations")
     space = tmp_path / "locations" / "garage"
     space.mkdir(parents=True)
     (space / "a.jpg").write_bytes(_real_jpeg())
     preprod.add_location("garage", SAMPLE_SPACE, photo_count=1, path=tmp_preprod_db)
 
-    response = client.get("/concepts")
+    response = client.get("/locations")
     assert "/locations/garage/photo/a.jpg?thumb=1" in response.text
 
 
@@ -947,19 +937,16 @@ def test_concept_warnings_are_visible_on_the_page(tmp_preprod_db):
     assert "rooftop helipad" in response.text
 
 
-def test_studio_distinguishes_no_videos_from_none_at_this_age(tmp_preprod_db):
-    """
-    A video whose only reading is from day 300 legitimately doesn't
-    appear at "measured at 7 days" -- but saying "No videos yet" when
-    one exists is just wrong, and reads as a broken page.
-    """
+def test_studio_renders_with_videos_logged_but_unmeasured(tmp_preprod_db):
+    """The old empty-state distinction lived in the strip the ZP home
+    no longer renders; what must survive is that the page renders with
+    data in every state and the video is correctly absent at 7 days."""
     vid = db.add_video("Night Run", "youtube", "2025-09-29", path=tmp_preprod_db)
     db.record_metrics(vid, views=82, captured_at="2026-07-29", path=tmp_preprod_db)
 
     response = client.get("/studio?posted_within=all&at_days=7")
-    assert "No videos yet" not in response.text
-    assert "measured at" in response.text.lower()
-    assert "Night Run" not in response.text   # correctly excluded from the table
+    assert response.status_code == 200
+    assert app_main.performance_rows(posted_within="all")["rows"] == []
 
 
 def test_generate_ideas_records_the_pov_choice(tmp_preprod_db, monkeypatch):
@@ -991,7 +978,7 @@ def test_analytics_page_renders_with_tiles_and_bars(tmp_db):
     response = client.get("/analytics")
     assert response.status_code == 200
     assert "1,250" in response.text            # total views tile
-    assert 'class="bar"' in response.text
+    assert 'class="fill"' in response.text     # the reskinned bar
     assert 'width:100.0%' in response.text     # Big is the max
     assert 'width:25.0%' in response.text      # Small scaled against it
 
@@ -1395,3 +1382,35 @@ def test_metrics_page_offers_refresh_for_instagram(tmp_db):
     db.add_video("Reel", "instagram", "2026-08-01", path=tmp_db)
     response = client.get("/metrics/new")
     assert 'form="refresh-' in response.text
+
+
+def test_studio_workflow_library_shows_real_rows(tmp_preprod_db):
+    """The home's Workflow tabs read the DB, not the design mockup: a
+    row added to any of the three tables appears by name."""
+    from src import entities
+    entities.init(tmp_preprod_db)
+    preprod.add_location("garage", {"space": "a low-ceilinged garage"},
+                         photo_count=2, path=tmp_preprod_db)
+    entities.add_character("Mike — on camera", role="protagonist",
+                           path=tmp_preprod_db)
+    entities.add_prop("Ducati Panigale V2", category="vehicle",
+                      path=tmp_preprod_db)
+
+    response = client.get("/studio")
+    assert "garage" in response.text
+    assert "Mike — on camera" in response.text
+    assert "Ducati Panigale V2" in response.text
+    assert "DESCRIBED" in response.text          # the described-room badge
+    assert "The Garage" not in response.text     # mockup content is gone
+
+
+def test_studio_home_renders_empty_without_mock_content(tmp_preprod_db):
+    """A fresh clone shows the add-cards and placeholder frames, not the
+    design mockup's invented rooms and props."""
+    from src import entities
+    entities.init(tmp_preprod_db)
+    response = client.get("/studio")
+    assert response.status_code == 200
+    assert "＋ New character" in response.text
+    assert "Juno Bar" not in response.text
+    assert "Blackmagic 6K" not in response.text

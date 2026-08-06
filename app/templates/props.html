@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Props — Zero Page{% endblock %}
+{% block content %}
+<div class="page">
+  <div class="vhead">
+    <div>
+      <h1>Props</h1>
+      <p class="vsub">Objects you shoot repeatedly. Naming them lets concepts and edits call them by name.</p>
+    </div>
+    <button class="btnw" onclick="document.getElementById('add-dlg').showModal()">＋ New Prop</button>
+  </div>
+
+  {% if message %}<div class="toast">{{ message }}</div>{% endif %}
+
+  <div class="agrid">
+    {% for p in props %}
+    <div class="acard">
+      <div class="im">
+        {% if p.photos %}<img src="{{ p.photos[0] }}" alt="{{ p.name }}">{% else %}<div class="im-ph"></div>{% endif %}
+        {% if p.category %}<span class="badge">{{ p.category|upper }}</span>{% endif %}
+      </div>
+      <div class="meta">
+        <h3>{{ p.name }}</h3>
+        <p>{{ p.description.notes or p.notes or (p.photo_count ~ ' still(s)') }}</p>
+      </div>
+      <form class="acard-del" method="post" action="/props/{{ p.id }}/delete"
+            onsubmit="return confirm('Delete {{ p.name }}?')">
+        <button title="Delete" aria-label="Delete">×</button>
+      </form>
+    </div>
+    {% endfor %}
+    <button class="acard add" onclick="document.getElementById('add-dlg').showModal()">＋ New prop</button>
+  </div>
+</div>
+
+<dialog id="add-dlg" class="add-dlg">
+  <form method="post" action="/props/new" enctype="multipart/form-data">
+    <h3>New prop</h3>
+    <label>Name<input name="name" required autocomplete="off"></label>
+    <label>Category<input name="category" placeholder="vehicle / wardrobe / set-dressing" autocomplete="off"></label>
+    <label>Notes<textarea name="notes" rows="2"></textarea></label>
+    <label>Reference photos<input type="file" name="photos" accept="image/*" multiple></label>
+    <div class="add-row">
+      <button type="button" onclick="this.closest('dialog').close()">Cancel</button>
+      <button class="primary" type="submit">Create</button>
+    </div>
+  </form>
+</dialog>
+{% endblock %}

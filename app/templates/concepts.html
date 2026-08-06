@@ -1,206 +1,134 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="robots" content="noindex,nofollow">
-  <title>Concepts — Zero Page Films</title>
-  <link rel="stylesheet" href="/static/style.css">
-</head>
-<body>
-  {% include "_nav.html" %}
-
-  <main>
-    <header class="page">
+{% extends "base.html" %}
+{% block title %}Concepts — Zero Page{% endblock %}
+{% block content %}
+<div class="sk"><div class="page">
+  <div class="vhead">
+    <div>
       <div class="rule">Solo unit // house shoots // 6 shots max</div>
-      <h1>SHOTLIST</h1>
-      <p class="dim">Ideas first. Pick the ones worth making, then get the shoot plan: character, b-roll, one AI shot, edit bay.</p>
-    </header>
+      <h1>Concepts</h1>
+      <p class="vsub">Ideas first. Pick the ones worth making, then get the shoot plan: character, b-roll, one AI shot, edit bay.</p>
+    </div>
+    <div class="kicker" style="text-align:right">
+      {% if shortlist.rate is not none %}Planned {{ shortlist.shortlisted }}/{{ shortlist.generated }} · Shot {{ rate.shot }}/{{ rate.generated }}{% else %}Nothing generated yet{% endif %}
+    </div>
+  </div>
 
-    {% if message %}
-    <p class="mono" style="color: var(--steel)">{{ message }}</p>
-    {% endif %}
+  {% if message %}<div class="toast">{{ message }}</div>{% endif %}
 
-    <section>
-      <div class="kicker">
-        {% if shortlist.rate is not none %}
-        Planned {{ shortlist.shortlisted }}/{{ shortlist.generated }}
-        · Shot {{ rate.shot }}/{{ rate.generated }}
-        {% else %}
-        Nothing generated yet
-        {% endif %}
-      </div>
-    </section>
-
-    <section>
-      <div class="kicker" style="margin-bottom:8px">
-        Location photos{% if spaces %} — {{ spaces|length }} space{{ "s" if spaces|length != 1 }}{% endif %}
-      </div>
-
-      {% if spaces %}
-      <div class="photo-grid">
-        {% for sp in spaces %}
-          {% for src in sp.photos %}
-          <figure class="shot-thumb">
-            <img class="thumb" src="{{ src }}?thumb=1" alt="{{ sp.name }}" loading="lazy">
-            <figcaption>{{ sp.name[:6]|upper }}</figcaption>
-          </figure>
-          {% endfor %}
-        {% endfor %}
-      </div>
-      {% endif %}
-
-      <form method="post" action="/locations/upload" enctype="multipart/form-data"
-            style="display:grid; gap:8px; margin-top:8px">
-        <input type="text" name="name" placeholder="New space — name it how you'd say it" required>
-        <input type="file" name="photos" accept="image/*" multiple required>
-        <button type="submit">Add this space</button>
-      </form>
-    </section>
-
-    <section>
-      <h2>Generate</h2>
+  <div class="panel">
+    <div class="panel-head"><span class="id">GENERATE</span><span class="m">GROUNDED IN YOUR ROOMS</span></div>
+    <div class="panel-body">
       {% if has_locations %}
       <form method="post" action="/concepts/generate">
-        <div class="brand-pick">
+        <div class="brandpick">
           {% for b in brands %}
-          <label>
-            <input type="radio" name="brand" value="{{ b }}" {{ "checked" if loop.first }}>
+          <label><input type="radio" name="brand" value="{{ b }}" {{ "checked" if loop.first }}>
             <div class="name">{{ "ANTIHERO" if b == "antihero" else "ZEROPAGE FILMS" }}</div>
             <div class="sub">{{ "personal brand" if b == "antihero" else "client work" }}</div>
           </label>
           {% endfor %}
         </div>
-        <label class="pov-toggle">
-          <input type="checkbox" name="use_pov" checked>
-          <span>POV cam (Action 5)</span>
-        </label>
-
-        <div style="display:grid; gap:10px; margin-bottom:12px">
+        <label class="pov"><input type="checkbox" name="use_pov" checked> <span>POV cam (Action 5)</span></label>
+        <div class="stack">
           <input type="text" name="client" placeholder="Spec/client type — e.g. cocktail bar, streetwear (zeropage only)">
           <input type="text" name="spark" placeholder="Spark an idea (optional) — e.g. gearing up ritual, 3am kitchen, someone knocked">
         </div>
         <button type="submit" class="primary">Generate shoot plan</button>
-        <button type="submit" name="mode" value="ideas" style="width:100%; margin-top:8px">
-          or give me 8 ideas to pick from first
-        </button>
+        <button type="submit" name="mode" value="ideas" style="margin-left:8px">or give me 8 ideas first</button>
       </form>
       {% else %}
-      <p class="dim">
-        No spaces described yet — a concept needs somewhere real to happen.
-        <a href="/locations">Upload photos of a spot first.</a>
-      </p>
+      <p class="dim">No spaces described yet — a concept needs somewhere real to happen. <a href="/locations" style="color:var(--steel)">Upload photos of a spot first.</a></p>
       {% endif %}
-    </section>
+    </div>
+  </div>
 
-    <h2>All concepts</h2>
+  <h2>All concepts</h2>
+  {% if concepts %}
+  {% for c in concepts %}
+  <article class="panel">
+    <div class="panel-head">
+      <span class="id">SHOOT-{{ "%02d"|format(c.id) }}</span>
+      <span class="m">{% if c.has_shot_list %}{{ c.shots|length }} SHOTS / {{ c.duration or "12s" }} / 9:16{% else %}IDEA — NOT PLANNED{% endif %}</span>
+    </div>
+    <div class="panel-body">
+      <h3>{{ c.title|upper }}{% if c.shot_done %} <span class="tag" style="color:var(--good);border-color:#264b36">◆ SHOT</span>{% endif %}</h3>
 
-    {% if concepts %}
-    {% for c in concepts %}
-    <article class="card">
-      <div class="card-head">
-        <span class="id">SHOOT-{{ "%02d"|format(c.id) }}</span>
-        <span class="meta">
-          {% if c.has_shot_list %}{{ c.shots|length }} SHOTS / {{ c.duration or "12s" }} / 9:16
-          {% else %}IDEA — NOT PLANNED{% endif %}
-        </span>
+      {% if c.warnings %}
+      <div class="warnings">
+        <div class="kicker" style="color:var(--red); margin-bottom:4px">{{ c.warnings|length }} warning{{ "s" if c.warnings|length != 1 }}</div>
+        {% for w in c.warnings %}<p style="margin:2px 0">{{ w }}</p>{% endfor %}
+      </div>
+      {% endif %}
+
+      {% if c.logline %}<p class="dim" style="margin-top:8px">{{ c.logline }}</p>{% endif %}
+      {% if c.hook %}<div style="margin-top:12px; display:flex; gap:8px; align-items:flex-start"><span class="tag red">HOOK / 0:01</span><p style="margin:0">{{ c.hook }}</p></div>{% endif %}
+
+      <div class="mono dim" style="margin-top:12px; font-size:12px">
+        {{ c.brand }}{% if c.client %} · {{ c.client }}{% endif %}{% if c.locations %} · {{ c.locations | map(attribute="name") | join(", ") }}{% endif %}
       </div>
 
-      <div class="card-body">
-        <h3>{{ c.title|upper }}{% if c.shot_done %} <span class="good" style="font-size:14px">◆ SHOT</span>{% endif %}</h3>
-
-        {% if c.warnings %}
-        <div class="warnings">
-          <div class="kicker" style="color:var(--red); margin-bottom:4px">
-            {{ c.warnings|length }} warning{{ "s" if c.warnings|length != 1 }}
+      {% if c.has_shot_list %}
+      <div style="margin-top:18px">
+        <div class="kicker" style="margin-bottom:8px">Shoot order — max 6, then edit bay</div>
+        {% for s in c.shots %}
+        <div class="shot {{ 'character' if s.type == 'CHARACTER' else '' }}">
+          <div class="shot-tags">
+            <span class="mono">{{ "%02d"|format(s.n or loop.index) }}</span>
+            <span class="tag {{ 'red' if s.type == 'CHARACTER' else 'bone' }}">{{ s.type }}</span>
+            {% if s.source == 'AI' %}<span class="tag steel">AI · {{ s.tool }}</span>
+            {% else %}<span class="tag {{ 'steel' if s.cam == 'ACTION5' else '' }}">{{ "ACTION 5" if s.cam == "ACTION5" else "BMPCC 6K" }}</span>{% endif %}
+            {% if s.location %}<span class="tag faint">{{ s.location|upper }}</span>{% endif %}
           </div>
-          {% for w in c.warnings %}<p style="margin:2px 0">{{ w }}</p>{% endfor %}
-        </div>
-        {% endif %}
-
-        {% if c.logline %}<p class="dim" style="margin-top:8px">{{ c.logline }}</p>{% endif %}
-
-        {% if c.hook %}
-        <div style="margin-top:12px; display:flex; gap:8px; align-items:flex-start">
-          <span class="tag red">HOOK / 0:01</span>
-          <p style="margin:0">{{ c.hook }}</p>
-        </div>
-        {% endif %}
-
-        <div class="mono" style="margin-top:12px">
-          {{ c.brand }}{% if c.client %} · {{ c.client }}{% endif %}
-          {% if c.locations %} · {{ c.locations | map(attribute="name") | join(", ") }}{% endif %}
-        </div>
-
-        {% if c.has_shot_list %}
-        <div style="margin-top:18px">
-          <div class="kicker" style="margin-bottom:8px">Shoot order — max 6, then edit bay</div>
-          {% for s in c.shots %}
-          <div class="shot {{ 'character' if s.type == 'CHARACTER' else '' }}">
-            <div class="shot-tags">
-              <span class="mono">{{ "%02d"|format(s.n or loop.index) }}</span>
-              <span class="tag {{ 'red' if s.type == 'CHARACTER' else 'bone' }}">{{ s.type }}</span>
-              <span class="tag {{ 'steel' if s.cam == 'ACTION5' else '' }}">{{ "ACTION 5" if s.cam == "ACTION5" else "BMPCC 6K" }}</span>
-              <span class="tag faint">{{ s.location|upper }}</span>
-            </div>
-            <p style="margin:0">{{ s.desc }}</p>
-            {% if s.light %}<p class="light">LIGHT: {{ s.light }}</p>{% endif %}
-          </div>
-          {% endfor %}
-        </div>
-
-        {% if c.ai %}
-        <div style="margin-top:16px">
-          <div class="kicker" style="margin-bottom:8px">AI enhancement — one generation</div>
-          <div class="ai-block">
-            <div class="shot-tags">
-              <span class="tag steel">{{ c.ai.tool }}</span>
-              <span class="dim">{{ c.ai.technique }}</span>
-            </div>
-            <div class="prompt-box" id="prompt-{{ c.id }}">{{ c.ai.prompt }}</div>
-            <div style="margin-top:8px">
-              <button type="button" class="copy" data-target="prompt-{{ c.id }}">Copy prompt</button>
-            </div>
-          </div>
-        </div>
-        {% endif %}
-
-        <div style="margin-top:16px; display:grid; gap:6px">
-          {% if c.edit_note %}<p class="mono" style="margin:0; line-height:1.6">EDIT / SOUND: <span style="color:var(--bone)">{{ c.edit_note }}</span></p>{% endif %}
-          {% if c.grade_note %}<p class="mono" style="margin:0; line-height:1.6">GRADE: <span style="color:var(--bone)">{{ c.grade_note }}</span></p>{% endif %}
-        </div>
-        {% endif %}
-
-        <div style="margin-top:16px; display:flex; gap:8px">
-          {% if not c.has_shot_list %}
-          <form method="post" action="/concepts/{{ c.id }}/shotlist">
-            <button type="submit">Plan the shoot</button>
-          </form>
-          {% else %}
-          <form method="post" action="/concepts/{{ c.id }}/shot">
-            <button type="submit">{{ "Mark unshot" if c.shot_done else "Mark shot" }}</button>
-          </form>
+          <p style="margin:0">{{ s.desc }}</p>
+          {% if s.light %}<p class="light">LIGHT: {{ s.light }}</p>{% endif %}
+          {% if s.source == 'AI' and s.prompt %}
+          <div class="promptbox" id="p-{{ c.id }}-{{ loop.index }}">{{ s.prompt }}</div>
+          <div style="margin-top:6px"><button type="button" class="copy" data-target="p-{{ c.id }}-{{ loop.index }}">Copy prompt</button></div>
           {% endif %}
         </div>
+        {% endfor %}
       </div>
-    </article>
-    {% endfor %}
-    {% else %}
-    <p class="dim">No concepts yet. Generate some above.</p>
-    {% endif %}
-  </main>
 
-  <script>
-    document.querySelectorAll("button.copy").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var el = document.getElementById(btn.dataset.target);
-        navigator.clipboard.writeText(el.innerText).then(function () {
-          var was = btn.textContent;
-          btn.textContent = "Copied";
-          setTimeout(function () { btn.textContent = was; }, 1500);
-        });
+      {% if c.ai and not (c.shots | selectattr("source", "equalto", "AI") | list) %}
+      <div style="margin-top:16px">
+        <div class="kicker" style="margin-bottom:8px">AI enhancement — one generation</div>
+        <div class="shot-tags"><span class="tag steel">{{ c.ai.tool }}</span><span class="dim">{{ c.ai.technique }}</span></div>
+        <div class="promptbox" id="prompt-{{ c.id }}">{{ c.ai.prompt }}</div>
+        <div style="margin-top:8px"><button type="button" class="copy" data-target="prompt-{{ c.id }}">Copy prompt</button></div>
+      </div>
+      {% endif %}
+
+      <div style="margin-top:16px; display:grid; gap:6px">
+        {% if c.edit_note %}<p class="mono" style="margin:0; font-size:12px">EDIT / SOUND: <span style="color:var(--ink)">{{ c.edit_note }}</span></p>{% endif %}
+        {% if c.grade_note %}<p class="mono" style="margin:0; font-size:12px">GRADE: <span style="color:var(--ink)">{{ c.grade_note }}</span></p>{% endif %}
+      </div>
+      {% endif %}
+
+      <div style="margin-top:16px; display:flex; gap:8px">
+        {% if not c.has_shot_list %}
+        <form method="post" action="/concepts/{{ c.id }}/shotlist"><button type="submit">Plan the shoot</button></form>
+        {% else %}
+        <form method="post" action="/concepts/{{ c.id }}/shot"><button type="submit">{{ "Mark unshot" if c.shot_done else "Mark shot" }}</button></form>
+        {% endif %}
+      </div>
+    </div>
+  </article>
+  {% endfor %}
+  {% else %}
+  <p class="dim">No concepts yet. Generate some above.</p>
+  {% endif %}
+</div></div>
+{% endblock %}
+{% block scripts %}
+<script>
+  document.querySelectorAll("button.copy").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var el = document.getElementById(btn.dataset.target);
+      navigator.clipboard.writeText(el.innerText).then(function () {
+        var was = btn.textContent; btn.textContent = "Copied";
+        setTimeout(function () { btn.textContent = was; }, 1500);
       });
     });
-  </script>
-</body>
-</html>
+  });
+</script>
+{% endblock %}

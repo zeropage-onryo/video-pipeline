@@ -1,118 +1,80 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="robots" content="noindex,nofollow">
-  <title>Analytics — Zero Page Films</title>
-  <link rel="stylesheet" href="/static/style.css">
-</head>
-<body>
-  {% include "_nav.html" %}
-
-  <main>
-    <header class="page">
+{% extends "base.html" %}
+{% block title %}Scoreboard — Zero Page{% endblock %}
+{% block content %}
+<div class="sk"><div class="page">
+  <div class="vhead">
+    <div>
       <div class="rule">Numbers // weekly check-in // compared at equal age</div>
-      <h1>ANALYTICS</h1>
-      <p class="dim">Latest reading per video. Refresh pulls YouTube's current numbers; the table below records this week's check-in.</p>
-    </header>
+      <h1>Scoreboard</h1>
+      <p class="vsub">Latest reading per video. Refresh pulls current numbers; the table below records this week's check-in.</p>
+    </div>
+  </div>
 
-    {% if updated is not none %}
-    <p class="mono" style="color: var(--steel)">{{ updated }} video{{ "s" if updated != 1 else "" }} updated.</p>
-    {% endif %}
-    {% if message %}
-    <p class="mono" style="color: var(--steel)">{{ message }}</p>
-    {% endif %}
+  {% if updated is not none %}<div class="toast">{{ updated }} video{{ "s" if updated != 1 else "" }} updated.</div>{% endif %}
+  {% if message %}<div class="toast">{{ message }}</div>{% endif %}
 
-    {% if rows %}
-    <section class="tiles">
-      <div class="tile"><div class="tile-num">{{ tiles.views }}</div><div class="kicker">Views</div></div>
-      <div class="tile"><div class="tile-num">{{ tiles.likes }}</div><div class="kicker">Likes</div></div>
-      <div class="tile"><div class="tile-num">{{ tiles.comments }}</div><div class="kicker">Comments</div></div>
-      <div class="tile"><div class="tile-num">{{ tiles.videos }}</div><div class="kicker">Videos</div></div>
-    </section>
+  {% if rows %}
+  <div class="tiles">
+    <div class="tile"><div class="k">Views</div><div class="v">{{ tiles.views }}</div></div>
+    <div class="tile"><div class="k">Likes</div><div class="v">{{ tiles.likes }}</div></div>
+    <div class="tile"><div class="k">Comments</div><div class="v">{{ tiles.comments }}</div></div>
+    <div class="tile"><div class="k">Videos</div><div class="v">{{ tiles.videos }}</div></div>
+  </div>
 
-    {% if bars %}
-    <section class="card">
-      <div class="card-head">
-        <span class="id">VIEWS BY VIDEO</span>
-        <span class="meta">LATEST READING</span>
+  {% if bars %}
+  <div class="panel">
+    <div class="panel-head"><span class="id">VIEWS BY VIDEO</span><span class="m">LATEST READING</span></div>
+    <div class="panel-body">
+      {% for b in bars %}
+      <div class="brow" title="{{ b.title | clean_title }} — {{ b.views_fmt }} views">
+        <span class="nm">{{ b.title | clean_title }}</span>
+        <span class="track"><span class="fill" style="width:{{ b.pct }}%"></span></span>
+        <span class="val">{{ b.views_fmt }}</span>
       </div>
-      <div class="card-body">
-        {% for b in bars %}
-        <div class="bar-row" title="{{ b.title | clean_title }} — {{ b.views_fmt }} views">
-          <span class="bar-label">{{ b.title | clean_title }}</span>
-          <span class="bar-track"><span class="bar" style="width:{{ b.pct }}%"></span></span>
-          <span class="bar-value num">{{ b.views_fmt }}</span>
-        </div>
-        {% endfor %}
-      </div>
-    </section>
-    {% endif %}
-
-    <section>
-      <h2>This week's numbers</h2>
-      <p class="dim">Previous value greyed behind each input. Empty means "no change", not zero. Tab across, Enter down.</p>
-      <form method="post" action="/metrics/new">
-        <table>
-          <thead>
-            <tr>
-              <th>Title</th><th>Platform</th>
-              <th>Views</th><th>Likes</th><th>Comments</th><th>Saves</th><th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for r in rows %}
-            <tr>
-              <td class="entry-title" title="{{ r.title | clean_title }}">{{ r.title | clean_title }}</td>
-              <td>{{ r.platform }}</td>
-              <td><input type="number" class="metric-input" data-row="{{ loop.index0 }}" data-col="0"
-                         name="views_{{ r.video_id }}"
-                         placeholder="{{ r.views if r.views is not none else '' }}"></td>
-              <td><input type="number" class="metric-input" data-row="{{ loop.index0 }}" data-col="1"
-                         name="likes_{{ r.video_id }}"
-                         placeholder="{{ r.likes if r.likes is not none else '' }}"></td>
-              <td><input type="number" class="metric-input" data-row="{{ loop.index0 }}" data-col="2"
-                         name="comments_{{ r.video_id }}"
-                         placeholder="{{ r.comments if r.comments is not none else '' }}"></td>
-              <td><input type="number" class="metric-input" data-row="{{ loop.index0 }}" data-col="3"
-                         name="saves_{{ r.video_id }}"
-                         placeholder="{{ r.saves if r.saves is not none else '' }}"></td>
-              <td>
-                {% if r.platform in ("youtube", "instagram") %}
-                <button type="submit" form="refresh-{{ r.video_id }}">Refresh</button>
-                {% endif %}
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-        <p><button type="submit" class="primary">Save this week's numbers</button></p>
-      </form>
-      {% for r in rows %}
-      {% if r.platform in ("youtube", "instagram") %}
-      <form id="refresh-{{ r.video_id }}" method="post" action="/metrics/refresh/{{ r.video_id }}"></form>
-      {% endif %}
       {% endfor %}
-    </section>
-    {% else %}
-    <p class="dim">No videos yet. <a href="/videos/new">Add your first one.</a></p>
-    {% endif %}
-  </main>
+    </div>
+  </div>
+  {% endif %}
 
-  <script>
-    document.querySelectorAll(".metric-input").forEach(function (input) {
-      input.addEventListener("keydown", function (e) {
-        if (e.key !== "Enter") return;
-        e.preventDefault();
-        var row = Number(input.dataset.row) + 1;
-        var col = input.dataset.col;
-        var next = document.querySelector(
-          '.metric-input[data-row="' + row + '"][data-col="' + col + '"]'
-        );
-        if (next) next.focus();
-      });
+  <h2>This week's numbers</h2>
+  <p class="dim">Previous value shown as placeholder. Empty means "no change", not zero. Tab across, Enter down.</p>
+  <form method="post" action="/metrics/new">
+    <table>
+      <thead>
+        <tr><th>Title</th><th>Platform</th><th>Views</th><th>Likes</th><th>Comments</th><th>Saves</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td title="{{ r.title | clean_title }}">{{ r.title | clean_title }}</td>
+          <td>{{ r.platform }}</td>
+          <td><input type="number" class="metric-input" data-row="{{ loop.index0 }}" data-col="0" name="views_{{ r.video_id }}" placeholder="{{ r.views if r.views is not none else '' }}"></td>
+          <td><input type="number" class="metric-input" data-row="{{ loop.index0 }}" data-col="1" name="likes_{{ r.video_id }}" placeholder="{{ r.likes if r.likes is not none else '' }}"></td>
+          <td><input type="number" class="metric-input" data-row="{{ loop.index0 }}" data-col="2" name="comments_{{ r.video_id }}" placeholder="{{ r.comments if r.comments is not none else '' }}"></td>
+          <td><input type="number" class="metric-input" data-row="{{ loop.index0 }}" data-col="3" name="saves_{{ r.video_id }}" placeholder="{{ r.saves if r.saves is not none else '' }}"></td>
+          <td>{% if r.platform in ("youtube", "instagram") %}<button type="submit" form="refresh-{{ r.video_id }}">Refresh</button>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p><button type="submit" class="primary">Save this week's numbers</button></p>
+  </form>
+  {% for r in rows %}{% if r.platform in ("youtube", "instagram") %}<form id="refresh-{{ r.video_id }}" method="post" action="/metrics/refresh/{{ r.video_id }}"></form>{% endif %}{% endfor %}
+  {% else %}
+  <p class="dim">No videos yet. <a href="/videos/new" style="color:var(--steel)">Add your first one.</a></p>
+  {% endif %}
+</div></div>
+{% endblock %}
+{% block scripts %}
+<script>
+  document.querySelectorAll(".metric-input").forEach(function (input) {
+    input.addEventListener("keydown", function (e) {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      var row = Number(input.dataset.row) + 1, col = input.dataset.col;
+      var next = document.querySelector('.metric-input[data-row="' + row + '"][data-col="' + col + '"]');
+      if (next) next.focus();
     });
-  </script>
-</body>
-</html>
+  });
+</script>
+{% endblock %}
