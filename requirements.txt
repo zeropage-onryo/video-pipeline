@@ -12,3 +12,4 @@ python-multipart
 Pillow
 psycopg[binary]
 pgvector
+langgraph
