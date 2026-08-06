@@ -4,13 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-An automated video production pipeline for Zero Page Films (a one-person brand), mixing real
-footage and AI and aimed at running more of itself over time. It generates concepts and shot
-lists from described real rooms, decides shot by shot what gets captured versus AI-generated,
-writes platform-native AI video prompts, plans cuts from ingested footage, and feeds
-posted-video analytics back into the next slate. The autonomy ladder: L1 assisted -> L2
+An AI pre-production studio for Zero Page Films (a one-person brand), aimed at running more of
+itself over time. It generates concepts and shot lists from described real rooms, decides shot
+by shot what gets captured versus AI-generated, writes platform-native AI video prompts, and
+feeds posted-video analytics back into the next slate. The autonomy ladder: L1 assisted -> L2
 grounded generation + measurement -> L3 self-improving ideation -> L4 supervised
 generate-and-post (gated, default off). Editing stays manual — an explicit L1 hold.
+Post-production (footage ingest -> pitches -> cut lists) was cut in Aug 2026: the product is
+the pre-production loop, and the edit happens by hand in Resolve.
 Experimental — the loop is structurally in place but needs weeks of real use to mean anything.
 
 ## Commands
@@ -30,15 +31,11 @@ venv/bin/python -m src.locations [--locations-dir locations] [--force]
 venv/bin/python -m src.shootgen [--brand antihero|zeropage] [--client ...] [--spark ...] [--count 8]
 venv/bin/python -m src.shootgen --shotlist <concept_id>
 
-# POST-PRODUCTION (footage exists)
-# 1. Ingest raw footage -> manifest.json (ffprobe metadata, Whisper transcript, Gemini vision description per clip)
-venv/bin/python -m src.ingest [--footage-dir footage] [--output manifest.json] [--model base] [--skip-transcription]
-
-# 2. Generate 10 story pitches from manifest.json -> pitches.json
-venv/bin/python -m src.pitch
-
-# 3. Generate full edit specs for chosen pitch numbers -> concepts.json
-venv/bin/python -m src.editgen <pitch_numbers...> [--print]
+# 0c. Or one concept through the evaluate-and-retry orchestrator (LangGraph).
+#     No CLI -- call it: ensure_locations -> shootgen -> evaluate -> finalize,
+#     retrying with the evaluator's issues folded into the spark. JUDGE=1 adds
+#     the LLM-judge; LANGSMITH_TRACING=true traces the graph.
+venv/bin/python -c "from src import orchestrator; print(orchestrator.run('gearing up ritual'))"
 
 # GENERATIVE CLIPS (for a shot the footage can't cover)
 venv/bin/python -m src.promptgen "<loose shot description>" [--idea-id N] [--slot-index N]
@@ -55,7 +52,7 @@ venv/bin/python -m src.autopilot plan|run|kill
 venv/bin/python -m src.scheduling list
 venv/bin/python -m src.scheduling run [--approve] [--live]
 
-# REFERENCE LIBRARY (RAG) — optional grounding for pitch.py
+# REFERENCE LIBRARY (RAG) — optional grounding for ideation
 venv/bin/python -m src.rag ingest <files...>        # (re-)build the pgvector library
 venv/bin/python -m src.rag query "<text>" [--k 5]
 venv/bin/python -m src.rag_eval <cases.json> [--k 5]   # hit@k + MRR over labeled cases
@@ -77,18 +74,16 @@ different one, the patch silently misses, and a real billed API call happens whi
 passes — the only symptom being a slower suite. If a test fails with `NetworkUseInTest`, it is
 patching something the code under test no longer calls.
 
-Requires `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) in `.env` for pitch/editgen/shootgen/promptgen and
-ingest's and locations' vision steps. `YOUTUBE_API_KEY` is optional — it enables auto-fetching
+Requires `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) in `.env` for shootgen/promptgen and
+locations' vision step. `YOUTUBE_API_KEY` is optional — it enables auto-fetching
 public view counts and importing a channel's videos; without it manual entry still works.
 
 ## Architecture
 
-Two phases either side of the shoot. Pre-production reasons about **spaces you have**;
-post-production reasons about **footage you shot**. Post-production stages communicate through
-JSON files on disk; pre-production and the feedback loop use SQLite (`data/pipeline.db`).
+One phase, before the shoot: everything reasons about **spaces you have**. State lives in
+SQLite (`data/pipeline.db`).
 
 ```
-PRE-PRODUCTION (nothing shot yet)
 locations/<name>/*.jpg  --locations.py-->  locations table (vision description per space)
                                                   |
                             shootgen.py ideas <---+  (+ brand, spark, POV on/off)
@@ -97,35 +92,25 @@ locations/<name>/*.jpg  --locations.py-->  locations table (vision description p
                                                   |
                             shootgen.py --shotlist <id>   (human picks: THE LABEL)
                                                   |
-                                    same row, now with <=6 shots, AI slot, edit, grade
+                                    same row, now with <=6 shots, AI shots, edit, grade
                                                   |
                                          [ you go shoot it ]  -> shot_done (SECOND LABEL)
-                                                  |
-POST-PRODUCTION (footage exists)                  v
-footage/*.mov  --ingest.py-->  manifest.json  --pitch.py-->  pitches.json
-                                     |                            |
-                                     +-------- editgen.py <-------+  (human picks pitch numbers)
-                                                    |
-                                              concepts.json
 ```
 
-**Both phases are two-stage for the same reason.** Generate cheap options, a human picks, and
-only the picks get expensive detail — `pitch.py`→`editgen.py` post-production,
-`generate_concept_ideas`→`generate_shot_list` pre-production. The pick is recorded either way
-(`ideas.selected`, `shoot_concepts.shots != []`), which is what makes a prompt change measurable
-rather than arguable. `shootgen` can still produce one full concept in a single call
-(`generate_concept`) — that's what the web app's main button does.
+**Two-stage on purpose.** Generate cheap options, a human picks, and only the picks get
+expensive detail — `generate_concept_ideas`→`generate_shot_list`. The pick is recorded
+(`shoot_concepts.shots != []`), which is what makes a prompt change measurable rather than
+arguable. `shootgen` can still produce one full concept in a single call (`generate_concept`)
+— that's what the web app's main button does — and `src/graph.py` wraps that single-call path
+in a LangGraph evaluate-and-retry loop.
 
-Post-production ends at `concepts.json` — a validated cut list you execute by hand in Resolve.
-Nothing in the pipeline writes to Resolve or needs it running.
-
-**Two names that sound alike and are not.** `concepts.json` (post-production, `editgen.py`) is a
-cut list for footage you *have*. The `shoot_concepts` table (pre-production, `shootgen.py`) is a
-shot list for footage you *need*. Don't merge them.
+Post-production (ingest -> pitch -> editgen, the manifest.json/pitches.json/concepts.json
+chain) was removed in Aug 2026. The pipeline's output is a shot plan you go shoot; the edit
+is yours, in Resolve, by hand.
 
 - **`src/locations.py`** — scans `locations/<name>/`, sends each space's photos to Gemini vision,
-  stores `{space, light_sources, textures, angles, constraints}` per location. Incremental like
-  `ingest.py`: a space already described is skipped unless `--force`.
+  stores `{space, light_sources, textures, angles, constraints}` per location. Incremental: a
+  space already described is skipped unless `--force`.
 - **`src/shootgen.py`** — three entry points over the same described locations plus a brand block
   from `prompts/brands.txt`: `generate_concept_ideas` (N cheap ideas in **one** call, so they're
   varied against each other rather than rolled independently), `generate_shot_list` (the shot plan
@@ -138,9 +123,10 @@ shot list for footage you *need*. Don't merge them.
   described locations degrades to an ungrounded run with a stderr note, same as a missing
   reference library. `apply_pov(template, use_pov)` is why the POV toggle is real: off rewrites
   the prompt so `ACTION5` is never offered *or* named as legal, and `validate_concept` flags it
-  if the model reaches for it anyway. Ideation is also reference-grounded, the same
-  way `pitch.py` is: `reference_block` (the *edge* helper — called from `main()` and the web
-  routes, never from inside the generators) queries the RAG library with the spark, client, and
+  if the model reaches for it anyway. Ideation is reference-grounded:
+  `reference_block` (the *edge* helper — called from `main()`, the web
+  routes, and the orchestrator, never from inside the generators) queries the RAG library
+  (scoped to `IDEATION_DOMAINS`, never `ai_prompting`) with the spark, client, and
   the mood of the described rooms, and the generators take the resulting `references` string as a
   plain argument defaulting to `""`. That split is what keeps the generators hermetic in tests.
 - **`src/preprod.py`** — `locations`, `shoot_concepts`, `concept_locations` tables. Extends
@@ -148,24 +134,16 @@ shot list for footage you *need*. Don't merge them.
   Two labels, not one: `shortlist_rate()` is which ideas were worth planning (derived from
   `shots != []`, never stored, so it can't drift), `shoot_rate()` is which ones actually got shot.
   Both break down per prompt hash.
-- **`src/ingest.py`** — scans `footage/`, runs `ffprobe` for duration/resolution, Whisper for
-  transcription (filtering low-confidence/repetitive segments via `is_repetitive`), and samples 3
-  frames (10%/50%/90% of duration) sent to Gemini vision for a per-clip `{beats, arc}`
-  description. Incremental: re-runs reuse a clip's existing `description` from the prior
-  manifest (matched by filename) and only regenerate the new `{beats, arc}` shape, skipping
-  old flat-string descriptions. Writes `manifest.json` after every clip, not just at the end.
-- **`src/pitch.py`** — loads `manifest.json` plus `prompts/brief.txt` (brand identity) and
-  `prompts/settings.txt` (locked runtime/tone/pacing constraints), fills `prompts/pitch_prompt.txt`,
-  and asks Gemini for 10 cheap story pitches. `validate_pitches` only warns (never blocks) if a
-  pitch's `story_note` doesn't reference a real clip filename.
-- **`src/editgen.py`** — takes pitch numbers selected by a human, loads the corresponding entries
-  from `pitches.json`, fills `prompts/edit_prompt.txt`, and asks Gemini for full edit specs
-  (ordered clip in/out points, grade notes, sound notes). `validate_edit` advises: unknown clips,
-  in/out points outside real clip duration, and total runtime outside `MIN_RUNTIME`/`MAX_RUNTIME`
-  (13-17s) all surface as visible warnings on a saved edit. Any number of edit_list entries may be
-  generative slots (`"source": "generate"` + description) — real and AI clips are co-inputs. `--print` renders each edit's cut list as plain text (clip, in,
-  out, duration, running total) via `format_edit_as_text`, to read beside Resolve without parsing
-  `concepts.json` by eye.
+- **`src/orchestrator.py`** — the LangGraph loop over pre-production:
+  `ensure_locations -> shootgen -> evaluate -> finalize`, with a corrective re-run edge. The
+  evaluator combines shootgen's code-enforced `warnings` with an optional LLM-judge (`JUDGE=1`)
+  that scores solo-shoot feasibility 0..1 against `JUDGE_MIN`; on a failed critique the issues
+  are folded into the spark and the concept is regenerated, up to `MAX_ATTEMPTS`. Each attempt
+  goes through `shootgen.generate_concept`, so every attempt is a saved concept row — the loop
+  is visible in the studio, not hidden in memory. `finalize` extracts the AI shots' paste-ready
+  prompts. The judge never blocks (any failure returns a passing score), and a judge-model
+  override rides `GEMINI_MODEL`. Tests patch `shootgen.generate_concept`/`reference_block` and
+  drive the compiled `GRAPH`, so the whole loop runs hermetically.
 - **`src/shot.py`** / **`src/promptgen.py`** / **`src/genlog.py`** / **`src/generative.py`** — the
   generative-clip side, for the one shot per edit the footage can't cover. `shot.py` is a `Shot`
   dataclass with a controlled camera/size vocabulary and one **pure** renderer per tool; no model
@@ -182,12 +160,11 @@ shot list for footage you *need*. Don't merge them.
   and `import_channel_videos` never raise: a missing key or failed call returns `{"ok": False}` so
   manual entry keeps working, per BUILD_SPEC.
 - **`app/main.py`** — the web app; every CLI step above is also doable in the browser. **The app
-  is one page.** `/studio` is the workspace: a left rail of what you have (media pool, rooms +
-  add-a-room, library shelves, escape-hatch tool links), a canvas of what you've made (concept
-  cards, cut lists, the performance strip), and an assistant on the right. The per-stage screens
-  (`/concepts`, `/locations`, `/library`, `/analytics`, `/pitches`) still exist as the engine and
-  each links back to `/studio`; `/dashboard` is gone (308 → `/studio`, since it was the front door
-  for months). Inline actions pass `next` so a decision made on the canvas lands back on the
+  is one page.** `/studio` is the workspace: the Workflow library of what you have (characters,
+  rooms, props — real DB rows), the canvas, and the assistant. The per-stage screens
+  (`/concepts`, `/locations`, `/library`, `/analytics`, `/characters`, `/props`) still exist as
+  the engine; `/pitches` went with post-production, and `/dashboard` is gone (308 → `/studio`,
+  since it was the front door for months). Inline actions pass `next` so a decision made on the canvas lands back on the
   canvas — `safe_next` refuses anything that isn't a site-relative path, or every button becomes
   an open redirect. `/locations` serves photos through `location_photo`, which resolves both path
   segments and refuses anything that escapes `locations/` — a space name becomes a directory name,
@@ -197,8 +174,7 @@ shot list for footage you *need*. Don't merge them.
 - **The assistant is keyword routing, not a model call.** `route_intent` matches typed text (or an
   explicit chip) against `INTENT_PHRASES` → one pipeline stage, falling back to `ideas`. Free and
   inspectable on purpose: the stages it dispatches each cost a billed generation, so an unclear
-  ask must not spend one on the wrong stage. Stages the browser can't run (a cut list needs
-  ingested footage and a pitch run) say what to run instead of pretending.
+  ask must not spend one on the wrong stage.
 - **`app/seo.py`** — the machine-readable growth surface, all pure functions so the exact bytes a
   crawler sees are testable without a server: `robots.txt` (the AI crawlers named explicitly and
   allowed; the app disallowed), `llms.txt` (what "grounded" means plus the hard specs — the part
@@ -219,8 +195,8 @@ shot list for footage you *need*. Don't merge them.
   its chunks, keyed by `source_key(path)` — the path relative to the project root, **not** the
   basename. That matters for a folder tree of references: keyed by basename,
   `references/editing/notes.txt` and `references/lighting/notes.txt` are one source that deletes
-  itself on every ingest. Two consumers inject into a prompt's `{references}` section: `pitch.py` queries with
-  the manifest's beats/arcs, `shootgen.py` with the spark plus the mood of the described rooms.
+  itself on every ingest. `shootgen.py` injects into a prompt's `{references}` section, querying
+  with the spark plus the mood of the described rooms.
   `retrieve_references` never raises, so no Postgres means an ungrounded run with a stderr note,
   not a dead one. The `rag` CLI fails loudly — there
   the store is the deliverable. `rag_eval.py` scores retrieval (hit@k, MRR) against a labeled
@@ -270,36 +246,30 @@ shot list for footage you *need*. Don't merge them.
 
 ### Key conventions to preserve
 
-- **Manifest is the interface, filenames are IDs.** Every stage after ingest keys off
-  `manifest.json`'s `filename` field. Renaming a clip after ingest breaks the chain — treat
-  ingested filenames as immutable. `pitch.py`'s regex assumes filenames follow the
-  `A037_..._C001.mov` (camera card) or `DJI_..._D.mov` (drone) patterns.
-- **Pipeline operates on proxies, not camera originals.** `footage/` holds Resolve proxy files,
-  not 6K Blackmagic RAW — ffmpeg/Whisper can't read `.braw` natively and don't need full image
-  quality. Camera originals are only touched by Resolve at final export.
 - **Prompts and brand brief are plain text in `prompts/`, not hardcoded strings.** They're the
-  highest-frequency edit surface in this system; treat `{brief}`, `{settings}`, `{manifest}`,
-  `{selected_pitches}`, `{locations}`, `{brand}`, `{client}`, `{spark}`, `{count}`,
+  highest-frequency edit surface in this system; treat `{brief}`, `{settings}`,
+  `{locations}`, `{cast}`, `{brand}`, `{client}`, `{spark}`, `{count}`, `{references}`,
   `{title}`/`{hook}`/`{logline}`, and `{pov}`/`{cam_rule}`/`{cam_values}` as the templating
   placeholders when changing prompt files.
 - **Prompts request, code advises.** Model output is always independently checked against
-  reality — real filenames and durations for edits, described location names for concepts — and
+  reality — described location names, the shot-source vocabulary, the tool registry — and
   every mismatch surfaces as a visible warning on a saved result. Nothing is rejected: the
-  checks exist because models hallucinate clip references, cut points and rooms, and the human
+  checks exist because models hallucinate rooms and vocabularies, and the human
   deciding needs to see that, not because output "doesn't count" until it validates.
+  (The orchestrator adds one twist: it *uses* the warnings to retry, but the saved result
+  still carries them.)
 - **Grounded in what exists — grounding shapes, it doesn't gate.** Every stage generates *from*
-  real material: concepts from photographed spaces, edits from the manifest, AI prompts from the
+  real material: concepts from photographed spaces, AI prompts from the
   named real room they extend, ideation from the reference library and proven winners. That is
   what keeps output shootable and on-brand. A mismatch is a warning, and a missing grounding
   source degrades to an ungrounded run with a note.
-- **The human choice is the label, and it gets recorded.** `pitch.py` generates 10 pitches and a
-  human picks a few (`ideas.selected`); `shootgen.py` generates ideas, a human plans some
-  (`shortlist_rate`), and shoots fewer still (`shoot_done`). All stored with the prompt's hash, so
-  a prompt change can be measured against the rate it produced rather than argued about. That
-  selection is also the only manual gate in each phase.
+- **The human choice is the label, and it gets recorded.** `shootgen.py` generates ideas, a human
+  plans some (`shortlist_rate`), and shoots fewer still (`shoot_done`). Stored with the prompt's
+  hash, so a prompt change can be measured against the rate it produced rather than argued about.
+  That selection is also the only manual gate.
 - **Anything that calls a model degrades instead of breaking.** A missing API key or a failed call
   returns a result the caller can report, not an exception that takes the page or the run with it
-  — `pitch.py` still writes `pitches.json`, `/metrics/new` still accepts typed numbers, `/concepts`
+  — `/metrics/new` still accepts typed numbers, `/concepts`
   still renders. The exceptions are deliberate: `promptgen` and `locations` fail loudly, because
   there the model call *is* the deliverable rather than bookkeeping on top of one.
 - **Verify by running it, not by reading it.** Every real bug this project has had — a `warnings`
@@ -312,23 +282,17 @@ shot list for footage you *need*. Don't merge them.
 
 Everything below is current as of the last commit on `main`. Update it when it stops being true.
 
-**Working and verified against real data:** both phases run end to end, including real Gemini
-calls. One location described from real photos, 23 concepts (5 with shot lists), 1 pitch run with
-10 ideas and 3 picked, 1 posted video with one metric snapshot. Reference-grounded ideation is
+**Working and verified against real data:** the pre-production loop runs end to end, including
+real Gemini calls. One location described from real photos, 50+ concepts (5+ with shot lists),
+1 posted video with one metric snapshot. Reference-grounded ideation is
 verified live both ways: `src.shootgen --spark "gearing up ritual"` printed "Grounding in 5
 retrieved reference(s)" against the real library, and the same command with the store pointed at
-a dead URL printed the ungrounded note and still produced ideas (exit 0). 411 tests, ruff clean,
-CI green on every push.
+a dead URL printed the ungrounded note and still produced ideas (exit 0). The evaluate-and-retry
+graph is verified live too: a `src.graph`-era run produced Concept 55, grounded in 5 references,
+clean on attempt 1. ~490 tests, ruff clean, CI green on every push.
 
-The one-page workspace was verified in the browser against the real database, not just by its
-tests: the rail's four panels (36 clips, the described room with thumbnails, the two live library
-chunks, the tool links), an idea card, a planned card with its 5 shots and AI slot, a cut list
-with real filenames and its three validation checks, the performance strip (2 pitch runs, 20
-ideas, 30% pick rate, 22% shortlist, 10 videos), and an assistant round trip. Three real defects
-only showed up there: the rail's radios were `opacity:0; pointer-events:none`, which took the
-tab controls out of the accessibility tree and off the keyboard entirely; `.wk-tool`'s title and
-description were inline spans, so every tool read as "ROOMSPhotograph and describe a space"; and
-the card and stat grids were sized for a wider canvas than the three-zone layout leaves.
+Post-production (ingest/pitch/editgen, `/pitches`, the assistant's `cut` intent) was removed in
+Aug 2026 — the DB keeps historical pitch-run rows, but nothing generates new ones.
 
 **Structurally complete, statistically empty:** the L2→L3 loop is built and verified live —
 `promote_winners propose` honestly reports nothing clears the bar (no videos measured at equal
@@ -348,8 +312,7 @@ default off, executors unwired.
 - `YOUTUBE_API_KEY` in `.env` is a placeholder, so channel import and metric refresh can't reach
   the API. Everything else works without it.
 - `import_channel_videos` can report success when the bulk stats call failed; `mark_kept` doesn't
-  clear other keepers on the same shot, which skews `attempts_to_keeper`; `ingest.py` reads only
-  `GEMINI_API_KEY` where every other module also accepts `GOOGLE_API_KEY`.
+  clear other keepers on the same shot, which skews `attempts_to_keeper`.
 - The RAG store runs live on this machine via **Homebrew `postgresql@17`** (auto-starts at
   login through `~/Library/LaunchAgents/homebrew.mxcl.postgresql@17.plist`; database `zeropage`,
   data directory `/usr/local/var/postgresql@17`). No `DATABASE_URL` is set in `.env` — connections
@@ -359,17 +322,14 @@ default off, executors unwired.
   `rag_documents`, since 768 floats exceed the inline threshold). Use `pg_dump zeropage`, or just
   re-run `python -m src.rag ingest` — the library is rebuildable from its sources by design.
   Ingest, scoped query, and the eval harness are all verified against it with real embeddings.
-  **The library is nearly empty and its eval scores are not yet evidence of anything.** It holds
-  two chunks — `prompts/brief.txt` and `prompts/settings.txt` — so `eval_cases.json`'s hit@3 1.00 /
-  MRR 1.00 over 2 queries is arithmetic, not retrieval quality: with 2 documents and k=3 every
-  query retrieves the whole store. `prompts/edit_prompt.txt` was ingested early and has been
-  removed: it is a prompt *template*, and retrieving `THE BRAND: {brief}` scaffolding as a
-  "reference" to inject into another prompt is worse than no grounding. Don't re-add prompt
+  The library currently holds 14 sources / 106 chunks across `ai_prompting` (79), `marketing`
+  (25), `personal_brand`, and `cinematography`. `prompts/edit_prompt.txt` was ingested early and
+  has been removed: it is a prompt *template*, and retrieving `THE BRAND: {brief}` scaffolding as
+  a "reference" to inject into another prompt is worse than no grounding. Don't re-add prompt
   templates; the library wants real reference material. Machines
   without a local Postgres can use the repo's `docker-compose.yml` instead. Note: Postgres.app
   is also installed but is an uninitialised PostgreSQL 18 that owns none of this data — do not
-  "Initialize" it, it would contend for port 5432 with the server that actually has the library. The grounded
-  `src.pitch` end-to-end run is still pending — next real pitch run exercises it.
+  "Initialize" it, it would contend for port 5432 with the server that actually has the library.
 - `/shots` and the tool scoreboard aren't built — they need real generation attempts logged
   through `genlog.py` first, and inventing that data would corrupt the only numbers that matter.
 
