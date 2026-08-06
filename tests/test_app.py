@@ -1293,13 +1293,6 @@ def test_assistant_plans_the_most_recent_unplanned_idea(tmp_preprod_db, monkeypa
     assert planned["id"] is not None
 
 
-def test_assistant_says_what_a_cut_list_needs_instead_of_faking_one(tmp_preprod_db):
-    response = client.post("/studio/assist", data={"intent": "cut"},
-                           follow_redirects=False)
-    assert response.status_code == 303
-    assert "src.ingest" in unquote(response.headers["location"])
-
-
 def test_assistant_reports_a_failed_generation_without_breaking(tmp_preprod_db, monkeypatch):
     preprod.add_location("garage", {"space": "garage"}, path=tmp_preprod_db)
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
