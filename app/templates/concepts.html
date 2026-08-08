@@ -29,6 +29,19 @@
           {% endfor %}
         </div>
         <label class="pov"><input type="checkbox" name="use_pov" checked> <span>POV cam (Action 5)</span></label>
+        {% if characters or props %}
+        <div class="pickrow">
+          <span class="kicker">Ground in (optional — none picked means everything on file)</span>
+          <div class="picks">
+            {% for c in characters %}
+            <label class="pick"><input type="checkbox" name="characters" value="{{ c.id }}"> {{ c.name }}</label>
+            {% endfor %}
+            {% for p in props %}
+            <label class="pick"><input type="checkbox" name="props" value="{{ p.id }}"> {{ p.name }}</label>
+            {% endfor %}
+          </div>
+        </div>
+        {% endif %}
         <div class="stack">
           <input type="text" name="client" placeholder="Spec/client type — e.g. cocktail bar, streetwear (zeropage only)">
           <input type="text" name="spark" placeholder="Spark an idea (optional) — e.g. gearing up ritual, 3am kitchen, someone knocked">

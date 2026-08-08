@@ -839,20 +839,43 @@ def concepts_list(request: Request, message: Optional[str] = None):
             "brands": preprod.BRANDS,
             "spaces": spaces,
             "has_locations": bool(spaces),
+            "characters": entities.list_characters(path=db.DB_PATH),
+            "props": entities.list_props(path=db.DB_PATH),
             "active_nav": "tools",
             "message": message,
         },
     )
 
 
+def cast_from_picks(char_ids: list, prop_ids: list):
+    """
+    The generate form's optional picker -> the {cast} block. Nothing
+    picked returns None, which generate_concept treats as "everything
+    on file" -- the behavior the form had before the picker existed.
+    Unknown ids are dropped rather than erroring: a row deleted between
+    page load and submit shouldn't kill the generation.
+    """
+    char_ids = [int(x) for x in char_ids if str(x).strip()]
+    prop_ids = [int(x) for x in prop_ids if str(x).strip()]
+    if not char_ids and not prop_ids:
+        return None
+    characters = [c for c in (entities.get_character(i, path=db.DB_PATH)
+                              for i in char_ids) if c]
+    props = [p for p in (entities.get_prop(i, path=db.DB_PATH)
+                         for i in prop_ids) if p]
+    return shootgen.format_cast(characters, props)
+
+
 @app.post("/concepts/generate")
 async def concepts_generate(request: Request):
-    form = dict(await request.form())
+    form_data = await request.form()
+    form = dict(form_data)
     brand = form.get("brand") or "antihero"
     spark = (form.get("spark") or "").strip() or None
     client_name = (form.get("client") or "").strip() or None
     # an unchecked checkbox submits nothing, so absence means off
     use_pov = bool(form.get("use_pov"))
+    cast = cast_from_picks(form_data.getlist("characters"), form_data.getlist("props"))
 
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
@@ -880,7 +903,7 @@ async def concepts_generate(request: Request):
             result = shootgen.generate_concept(
                 brand=brand, client=client_name, spark=spark,
                 gemini_client=gemini_client, use_pov=use_pov, db_path=db.DB_PATH,
-                references=references,
+                references=references, cast=cast,
             )
             message = f"Generated \"{result['concept']['title']}\""
             if result["warnings"]:

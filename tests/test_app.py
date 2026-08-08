@@ -749,6 +749,62 @@ def test_post_generate_returns_a_full_concept_by_default(tmp_preprod_db, monkeyp
     assert called.get("full") is True
 
 
+def test_generate_passes_only_the_picked_cast(tmp_preprod_db, monkeypatch):
+    """The picker: checked characters/props become the {cast} block; the
+    unchecked stay out of it."""
+    from src import entities
+    entities.init(tmp_preprod_db)
+    mike = entities.add_character("Mike — on camera", role="protagonist",
+                                  path=tmp_preprod_db)
+    entities.add_character("Guest — bartender", path=tmp_preprod_db)
+    preprod.add_location("hallway", SAMPLE_SPACE, path=tmp_preprod_db)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    seen = {}
+
+    def fake(**kw):
+        seen["cast"] = kw.get("cast")
+        return {"concept_id": 1, "concept": {"title": "X"}, "warnings": []}
+
+    monkeypatch.setattr(app_main.shootgen, "generate_concept", fake)
+
+    client.post("/concepts/generate",
+                data={"brand": "antihero", "characters": str(mike)},
+                follow_redirects=False)
+
+    assert "Mike — on camera" in seen["cast"]
+    assert "Guest — bartender" not in seen["cast"]
+
+
+def test_generate_with_nothing_picked_keeps_the_old_behavior(tmp_preprod_db, monkeypatch):
+    """No picks -> cast=None -> generate_concept's own 'everything on
+    file' default, exactly as before the picker existed."""
+    preprod.add_location("hallway", SAMPLE_SPACE, path=tmp_preprod_db)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    seen = {}
+
+    def fake(**kw):
+        seen["cast"] = kw.get("cast")
+        return {"concept_id": 1, "concept": {"title": "X"}, "warnings": []}
+
+    monkeypatch.setattr(app_main.shootgen, "generate_concept", fake)
+
+    client.post("/concepts/generate", data={"brand": "antihero"},
+                follow_redirects=False)
+
+    assert seen["cast"] is None
+
+
+def test_concepts_page_shows_the_picker_when_cast_exists(tmp_preprod_db):
+    from src import entities
+    entities.init(tmp_preprod_db)
+    entities.add_character("Mike — on camera", path=tmp_preprod_db)
+    preprod.add_location("hallway", SAMPLE_SPACE, path=tmp_preprod_db)
+
+    response = client.get("/concepts")
+    assert 'name="characters"' in response.text
+    assert "Mike — on camera" in response.text
+
+
 def test_post_generate_ideas_when_asked(tmp_preprod_db, monkeypatch):
     preprod.add_location("hallway", SAMPLE_SPACE, path=tmp_preprod_db)
     called = {}
