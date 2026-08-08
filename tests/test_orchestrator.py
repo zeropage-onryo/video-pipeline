@@ -195,6 +195,78 @@ def test_ground_rag_degrades_to_ungrounded(tmp_db, monkeypatch):
     assert calls[0]["references"] == ""
 
 
+# ---------- the render credit gate + qc ----------
+
+def test_render_stays_dry_without_the_credit_gate(tmp_db, monkeypatch):
+    monkeypatch.delenv("ZEROPAGE_RENDER", raising=False)
+    called = []
+    monkeypatch.setattr(orchestrator, "veo", None, raising=False)
+    stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    result = orchestrator.run("ritual")
+
+    assert all(c["ok"] is False and c["url"] is None for c in result["clips"])
+    assert called == []
+
+
+def test_render_gate_open_routes_veo_prompts_through_the_connector(tmp_db, monkeypatch, tmp_path):
+    monkeypatch.setenv("ZEROPAGE_RENDER", "1")
+    clip = tmp_path / "cand1.mp4"
+    clip.write_bytes(b"\x00" * 2048)
+    from src import veo as veo_module
+    calls = []
+    monkeypatch.setattr(
+        veo_module, "generate_candidates",
+        lambda prompt, out_dir, n=1, **k: calls.append(prompt) or
+        {"ok": True, "candidates": [{"path": str(clip)}], "error": None},
+    )
+    monkeypatch.setattr(orchestrator, "_clip_passes_qc", lambda url: bool(url))
+    veo_concept = make_concept(shots=[
+        {"n": 1, "type": "BROLL", "source": "AI", "tool": "VEO",
+         "location": "hallway", "desc": "x", "prompt": "a drawer closing"},
+    ])
+    stage_fakes(monkeypatch, [(veo_concept, [])])
+
+    result = orchestrator.run("ritual")
+
+    assert calls == ["a drawer closing"]
+    assert result["clips"][0]["ok"] is True
+    # with a clip through QC, the run reached publish and held in shadow
+    assert "shadow" in result["held_reason"]
+
+
+def test_render_gate_open_but_unadapted_tool_stays_dry(tmp_db, monkeypatch):
+    monkeypatch.setenv("ZEROPAGE_RENDER", "1")
+    stage_fakes(monkeypatch, [(make_concept(), [])])   # KLING shot
+
+    result = orchestrator.run("ritual")
+
+    assert result["clips"][0]["ok"] is False
+    assert "no adapter" in result["clips"][0]["error"]
+
+
+def test_qc_rejects_missing_and_tiny_files(tmp_path):
+    assert orchestrator._clip_passes_qc(None) is False
+    assert orchestrator._clip_passes_qc(str(tmp_path / "nope.mp4")) is False
+    tiny = tmp_path / "tiny.mp4"
+    tiny.write_bytes(b"x")
+    assert orchestrator._clip_passes_qc(str(tiny)) is False
+
+
+# ---------- human_note: corrections steer the next generation ----------
+
+def test_pending_corrections_fold_into_the_spark_once(tmp_db, monkeypatch):
+    autonomy.add_correction("less neon, more silence", path=tmp_db)
+    calls = stage_fakes(monkeypatch, [(make_concept(), []), (make_concept(), [])])
+
+    orchestrator.run("ritual")
+    assert "less neon, more silence" in calls[0]["spark"]
+    assert autonomy.pending_corrections(path=tmp_db) == []   # consumed
+
+    orchestrator.run("ritual")                               # next night
+    assert "less neon" not in (calls[1]["spark"] or "")      # steered once
+
+
 # ---------- the publish gates (driven directly; render stub blocks the wire) ----------
 
 def ready_state(tmp_db, channel="zeropage", **overrides):

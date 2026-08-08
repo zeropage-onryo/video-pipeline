@@ -46,13 +46,31 @@ def _unwired(kind: str) -> Callable[[dict], Any]:
     return executor
 
 
-# kind -> callable(action). The post adapter is real (Instagram via
-# instagram.execute_post_action) but only ever runs in live mode -- the
-# gate above it is unchanged, and the adapter itself refuses to run
-# without IG_USER_ID/IG_ACCESS_TOKEN. generate stays unwired until real
-# generation spend is authorized.
+def execute_generate_action(action: dict):
+    """
+    The headless half of the Veo connector: same core as the
+    interactive path (veo.generate_candidates -- daily cap, genlog
+    logging, never-raises), reached ONLY through the full gate above,
+    because every call costs real money. Nothing is auto-kept: the
+    clips land as candidates and the keeper is still a human pick.
+    """
+    from pathlib import Path
+
+    from . import veo
+    out_dir = (Path(__file__).resolve().parent.parent / "footage" / "generated"
+               / f"autopilot-{action.get('concept_id', 'x')}")
+    return veo.generate_candidates(
+        action.get("prompt", ""), out_dir,
+        n=int(action.get("candidates", 1)),
+    )
+
+
+# kind -> callable(action). Both adapters are real but only ever run in
+# live mode -- the gate above them is unchanged. post refuses without
+# IG_USER_ID/IG_ACCESS_TOKEN; generate goes through veo.py's daily cap
+# and logs every attempt through genlog.
 EXECUTORS: dict[str, Callable[[dict], Any]] = {
-    "generate": _unwired("generate"),
+    "generate": execute_generate_action,
     "post": instagram.execute_post_action,
 }
 
@@ -134,8 +152,14 @@ def execute(plan: dict, approve: bool = False, dry_run: bool = True) -> dict[str
         mode = "live"
 
     if mode != "live":
-        return {"mode": mode, "executed": 0, "skipped": [],
-                "would_execute": described}
+        # money reads as money before anyone approves: N generations ≈ $X
+        generate_count = sum(1 for a in actions if a.get("kind") == "generate")
+        preview = {"mode": mode, "executed": 0, "skipped": [],
+                   "would_execute": described}
+        if generate_count:
+            from . import veo
+            preview["estimated_generation_cost_usd"] = veo.estimate_cost(generate_count)
+        return preview
 
     executed = 0
     skipped: list[str] = []

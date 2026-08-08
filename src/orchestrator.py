@@ -40,7 +40,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 import sys
+from pathlib import Path
 from typing import Optional, TypedDict
 
 from google import genai
@@ -186,6 +189,16 @@ def gen_concept(state: GenState) -> GenState:
     if crit and not crit.get("ok"):
         spark = f"{spark or ''}\nFix these issues: {'; '.join(crit.get('issues', []))}".strip()
 
+    # human_note: standing corrections (dropped on /holds or via
+    # autonomy.add_correction) fold into the spark the same way the
+    # evaluator's do, and are consumed so each note steers once.
+    notes = autonomy.pending_corrections(path=db.DB_PATH)
+    if notes:
+        spark = (f"{spark or ''}\nNotes from the filmmaker: "
+                 + "; ".join(n["note"] for n in notes)).strip()
+        for n in notes:
+            autonomy.consume_correction(n["id"], path=db.DB_PATH)
+
     result = shootgen.generate_concept(
         brand=state.get("brand", "antihero"),
         client=state.get("client"),
@@ -235,20 +248,62 @@ def structure_prompt(state: GenState) -> GenState:
 
 
 def generate_render(state: GenState) -> GenState:
-    """BUILD stub -- the credit gate. No generation API is wired until
-    first-try prompt acceptance clears the bar; until then every clip
-    comes back url=None, ok=False, and the run parks downstream."""
-    return {"clips": [{**p, "url": None, "ok": False}
-                      for p in state.get("prompts", [])]}
+    """The credit gate, now explicit: ZEROPAGE_RENDER=1 turns on real
+    Veo generation (one candidate per AI shot, through veo.py's daily
+    cap and genlog logging). Anything else -- the default -- is the
+    dry-run stub: every clip comes back url=None, ok=False, and the run
+    parks downstream. Tools without an adapter (KLING/RUNWAY/...) stay
+    dry even when rendering is on, honestly marked."""
+    prompts = state.get("prompts", [])
+    if os.environ.get("ZEROPAGE_RENDER") != "1":
+        return {"clips": [{**p, "url": None, "ok": False} for p in prompts]}
+
+    from . import veo
+    out_root = (Path(db.DB_PATH).parent.parent / "footage" / "generated"
+                / f"concept-{state.get('concept_id', 'x')}")
+    clips = []
+    for index, p in enumerate(prompts, start=1):
+        if (p.get("tool") or "").upper() != "VEO":
+            clips.append({**p, "url": None, "ok": False,
+                          "error": f"no adapter wired for {p.get('tool')}"})
+            continue
+        result = veo.generate_candidates(
+            p["prompt"], out_root / f"shot{index}", n=1, db_path=db.DB_PATH)
+        if result["ok"] and result["candidates"]:
+            clips.append({**p, "url": result["candidates"][0]["path"], "ok": True})
+        else:
+            clips.append({**p, "url": None, "ok": False, "error": result.get("error")})
+    return {"clips": clips}
 
 
 def qc_clip(state: GenState) -> GenState:
-    """BUILD stub -- with no real clips there is nothing to QC. When
-    renders are real: duration, non-black frames, audio present."""
+    """A clip may post only if the file is really there and really a
+    video: exists, non-trivial size, and (when ffprobe is on the box) a
+    positive duration. Code, not a prompt."""
     clips = [dict(c) for c in state.get("clips", [])]
     for clip in clips:
-        clip["ok"] = bool(clip.get("url"))
+        clip["ok"] = _clip_passes_qc(clip.get("url"))
     return {"clips": clips}
+
+
+def _clip_passes_qc(url) -> bool:
+    if not url:
+        return False
+    path = Path(url)
+    if not path.is_file() or path.stat().st_size < 1024:
+        return False
+    ffprobe = shutil.which("ffprobe")
+    if ffprobe:
+        try:
+            out = subprocess.run(
+                [ffprobe, "-v", "quiet", "-show_entries", "format=duration",
+                 "-of", "csv=p=0", str(path)],
+                capture_output=True, text=True, timeout=30,
+            )
+            return float((out.stdout or "0").strip() or 0) > 0.5
+        except Exception:
+            return False
+    return True
 
 
 def route_after_qc(state: GenState) -> str:
