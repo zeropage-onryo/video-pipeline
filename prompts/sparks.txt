@@ -1,0 +1,12 @@
+# Standing sparks for the nightly shadow run -- one per line, edit freely.
+# The trigger rotates through these by day of year, so consecutive nights
+# get different directions without anyone typing anything. Lines starting
+# with # are ignored.
+gearing up ritual
+a moody garage opener
+3am and the house is awake
+the last check before leaving
+an object that means more than it should
+a routine performed wrong
+the room right before something happens
+maintenance as meditation
