@@ -31,11 +31,14 @@ venv/bin/python -m src.locations [--locations-dir locations] [--force]
 venv/bin/python -m src.shootgen [--brand antihero|zeropage] [--client ...] [--spark ...] [--count 8]
 venv/bin/python -m src.shootgen --shotlist <concept_id>
 
-# 0c. Or one concept through the evaluate-and-retry orchestrator (LangGraph).
-#     No CLI -- call it: ensure_locations -> shootgen -> evaluate -> finalize,
-#     retrying with the evaluator's issues folded into the spark. JUDGE=1 adds
-#     the LLM-judge; LANGSMITH_TRACING=true traces the graph.
+# 0c. Or one run through the autonomous content graph (LangGraph). No CLI --
+#     call it: grounds in cast+library (CRAG), generates, evaluates (JUDGE=1
+#     adds the LLM-judge), retries with issues folded into the spark, then
+#     PARKS in autonomy.hold_queue -- render/publish are stubs until the
+#     credit gate clears. LANGSMITH_TRACING=true traces; `langgraph dev`
+#     (venv-studio/) serves it to Studio as "zeropage".
 venv/bin/python -c "from src import orchestrator; print(orchestrator.run('gearing up ritual'))"
+venv/bin/python -c "from src import autonomy; print(autonomy.list_hold())"      # the dead-man log
 
 # GENERATIVE CLIPS (for a shot the footage can't cover)
 venv/bin/python -m src.promptgen "<loose shot description>" [--idea-id N] [--slot-index N]
@@ -134,16 +137,28 @@ is yours, in Resolve, by hand.
   Two labels, not one: `shortlist_rate()` is which ideas were worth planning (derived from
   `shots != []`, never stored, so it can't drift), `shoot_rate()` is which ones actually got shot.
   Both break down per prompt hash.
-- **`src/orchestrator.py`** — the LangGraph loop over pre-production:
-  `ensure_locations -> shootgen -> evaluate -> finalize`, with a corrective re-run edge. The
-  evaluator combines shootgen's code-enforced `warnings` with an optional LLM-judge (`JUDGE=1`)
-  that scores solo-shoot feasibility 0..1 against `JUDGE_MIN`; on a failed critique the issues
-  are folded into the spark and the concept is regenerated, up to `MAX_ATTEMPTS`. Each attempt
-  goes through `shootgen.generate_concept`, so every attempt is a saved concept row — the loop
-  is visible in the studio, not hidden in memory. `finalize` extracts the AI shots' paste-ready
-  prompts. The judge never blocks (any failure returns a passing score), and a judge-model
-  override rides `GEMINI_MODEL`. Tests patch `shootgen.generate_concept`/`reference_block` and
-  drive the compiled `GRAPH`, so the whole loop runs hermetically.
+- **`src/orchestrator.py`** — the autonomous content graph (LangGraph, registered as `zeropage`
+  in `langgraph.json`): `planner -> ensure_locations -> ground_entities -> ground_rag ->
+  gen_concept -> evaluate -> structure_prompt -> generate_render -> qc_clip -> caption ->
+  publish`, with the corrective `evaluate -> gen_concept` retry edge and a `hold` sink. The
+  left third is the original evaluate-and-retry loop unchanged: the evaluator combines
+  shootgen's code-enforced `warnings` with an optional LLM-judge (`JUDGE=1`, floor `JUDGE_MIN`,
+  never blocks); failed critiques fold into the spark and regenerate up to `MAX_ATTEMPTS`, and
+  every attempt is a saved concept row. `ground_entities` formats the picked (or all)
+  characters/props into `{cast}`; `ground_rag` is CRAG-graded retrieval (weak first pass gets
+  one query rewrite) that degrades to ungrounded. **The right two-thirds is deliberately
+  stubbed:** `generate_render` returns no clips until the credit gate is cleared (first-try
+  prompt acceptance), `publish` posts nowhere — every run ends as a row in
+  `autonomy.hold_queue` with its reason. Tests drive the compiled `GRAPH` hermetically and the
+  publish gates directly.
+- **`src/autonomy.py`** — channels / hold_queue / corrections / settings on the shared SQLite
+  DB (the preprod.py pattern). Autonomy is **per-channel** (`shadow` | `queue` | `auto`), both
+  channels seed as `shadow`, and promotion is a one-row `set_autonomy` change. The kill switch
+  is global (a `settings` row or `ZEROPAGE_KILL=1`) and forces every run to hold. `hold_queue`
+  doubles as the dead-man log — every graph run writes a row — and morning approve/reject via
+  `resolve_hold` feeds `evaluator_agreement`, the credit-gate number (~0.9 is the bar for
+  promoting a channel). `_post_gate` in the orchestrator is the last code-enforced check:
+  clips QC'd, caption non-empty, no warnings, under the channel's `rate_cap`.
 - **`src/shot.py`** / **`src/promptgen.py`** / **`src/genlog.py`** / **`src/generative.py`** — the
   generative-clip side, for the one shot per edit the footage can't cover. `shot.py` is a `Shot`
   dataclass with a controlled camera/size vocabulary and one **pure** renderer per tool; no model
