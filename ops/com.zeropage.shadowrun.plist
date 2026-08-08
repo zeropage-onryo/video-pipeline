@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The nightly shadow run (build-order step 5). Fires one run through
+  the content graph at 03:30; with render/publish stubbed and channels
+  in shadow, it can only ever add a row to the hold queue for morning
+  grading — it cannot post.
+
+  Install:   cp ops/com.zeropage.shadowrun.plist ~/Library/LaunchAgents/
+             launchctl load ~/Library/LaunchAgents/com.zeropage.shadowrun.plist
+  Uninstall: launchctl unload ~/Library/LaunchAgents/com.zeropage.shadowrun.plist
+             rm ~/Library/LaunchAgents/com.zeropage.shadowrun.plist
+  Logs:      data/trigger.log (gitignored with the rest of data/)
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.zeropage.shadowrun</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/iphone/Documents/Github Portfolio/venv/bin/python</string>
+    <string>-m</string>
+    <string>src.trigger</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/iphone/Documents/Github Portfolio</string>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>3</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/Users/iphone/Documents/Github Portfolio/data/trigger.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/iphone/Documents/Github Portfolio/data/trigger.log</string>
+</dict>
+</plist>
