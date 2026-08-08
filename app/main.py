@@ -545,6 +545,51 @@ async def holds_resolve(hold_id: int, request: Request):
     return RedirectResponse("/holds", status_code=303)
 
 
+@app.post("/holds/note")
+async def holds_note(request: Request):
+    """A standing correction for the next run -- the human_note channel.
+    The orchestrator folds pending notes into the next generation's
+    spark and consumes them, so each note steers exactly once."""
+    form = dict(await request.form())
+    note = (form.get("note") or "").strip()
+    if note:
+        autonomy.add_correction(note, path=db.DB_PATH)
+        message = "Noted — the next run folds it in."
+    else:
+        message = "An empty note steers nothing."
+    return RedirectResponse(f"/holds?message={quote(message)}", status_code=303)
+
+
+@app.post("/channels/{name}/autonomy")
+async def channels_autonomy(name: str, request: Request):
+    """The promotion (or demotion): one row change. shadow -> queue ->
+    auto is earned left to right by the agreement number; moving right
+    is a deliberate click, never a default."""
+    form = dict(await request.form())
+    level = (form.get("autonomy") or "").strip()
+    if autonomy.get_channel(name, path=db.DB_PATH) is None:
+        raise HTTPException(status_code=404, detail="no such channel")
+    try:
+        autonomy.set_autonomy(name, level, path=db.DB_PATH)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return RedirectResponse(
+        f"/holds?message={quote(f'{name} is now {level}')}", status_code=303)
+
+
+@app.post("/kill")
+async def kill_toggle():
+    """One place to pull the plug -- and to put it back. Global on
+    purpose: every channel holds while it's on."""
+    if autonomy.killed(path=db.DB_PATH):
+        autonomy.unkill(path=db.DB_PATH)
+        message = "Kill switch OFF — channels follow their own autonomy again."
+    else:
+        autonomy.kill("killed from /holds", path=db.DB_PATH)
+        message = "Kill switch ON — everything holds."
+    return RedirectResponse(f"/holds?message={quote(message)}", status_code=303)
+
+
 @app.get("/analytics")
 @app.get("/metrics/new")   # old URL, kept so bookmarks and habits still land
 def analytics(request: Request, updated: Optional[int] = None, message: Optional[str] = None):

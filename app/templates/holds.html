@@ -22,8 +22,28 @@
     <div class="tile">
       <div class="tile-num" style="text-transform:uppercase">{{ ch.autonomy }}</div>
       <div class="kicker">{{ ch.name }} · cap {{ ch.rate_cap }}/day</div>
+      <form method="post" action="/channels/{{ ch.name }}/autonomy" style="margin-top:8px; display:flex; gap:6px">
+        <select name="autonomy">
+          {% for level in ("shadow", "queue", "auto") %}
+          <option value="{{ level }}" {{ "selected" if ch.autonomy == level }}>{{ level }}</option>
+          {% endfor %}
+        </select>
+        <button type="submit" class="copy">Set</button>
+      </form>
     </div>
     {% endfor %}
+  </div>
+
+  <div style="display:flex; gap:10px; align-items:flex-start; margin:0 0 18px; flex-wrap:wrap">
+    <form method="post" action="/holds/note" style="flex:1; min-width:260px; display:flex; gap:8px">
+      <input type="text" name="note" placeholder="Note to the next run — e.g. less neon, more silence">
+      <button type="submit" class="copy">Send</button>
+    </form>
+    <form method="post" action="/kill">
+      <button type="submit" {% if not killed %}style="border-color:#4a2420; color:var(--red)"{% endif %}>
+        {{ "Turn kill switch OFF" if killed else "KILL — hold everything" }}
+      </button>
+    </form>
   </div>
 
   {% if held %}

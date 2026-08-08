@@ -646,6 +646,42 @@ def test_resolving_with_a_bad_status_is_a_400(tmp_autonomy_db):
     assert response.status_code == 400
 
 
+def test_promoting_a_channel_from_the_page(tmp_autonomy_db):
+    from src import autonomy
+    response = client.post("/channels/zeropage/autonomy", data={"autonomy": "queue"},
+                           follow_redirects=False)
+    assert response.status_code == 303
+    assert autonomy.get_channel("zeropage", path=tmp_autonomy_db)["autonomy"] == "queue"
+
+    assert client.post("/channels/zeropage/autonomy",
+                       data={"autonomy": "yolo"}).status_code == 400
+    assert client.post("/channels/nope/autonomy",
+                       data={"autonomy": "auto"}).status_code == 404
+
+
+def test_kill_toggle_round_trip(tmp_autonomy_db, monkeypatch):
+    from src import autonomy
+    monkeypatch.delenv("ZEROPAGE_KILL", raising=False)
+    client.post("/kill", follow_redirects=False)
+    assert autonomy.killed(path=tmp_autonomy_db) is True
+    assert "Kill switch is ON" in client.get("/holds").text
+
+    client.post("/kill", follow_redirects=False)
+    assert autonomy.killed(path=tmp_autonomy_db) is False
+
+
+def test_note_form_writes_a_pending_correction(tmp_autonomy_db):
+    from src import autonomy
+    response = client.post("/holds/note", data={"note": "less neon, more silence"},
+                           follow_redirects=False)
+    assert response.status_code == 303
+    [pending] = autonomy.pending_corrections(path=tmp_autonomy_db)
+    assert pending["note"] == "less neon, more silence"
+
+    client.post("/holds/note", data={"note": "  "}, follow_redirects=False)
+    assert len(autonomy.pending_corrections(path=tmp_autonomy_db)) == 1  # blanks dropped
+
+
 def test_video_detail_still_has_its_nav(tmp_preprod_db):
     vid = db.add_video("Night Run", "youtube", "2025-09-29", path=tmp_preprod_db)
     response = client.get(f"/videos/{vid}")
