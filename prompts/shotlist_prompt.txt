@@ -8,6 +8,13 @@ including the AI shots; name the location every shot happens in or
 extends):
 {locations}
 
+CAST & PROPS ON FILE (name these exactly instead of re-describing their
+appearance from scratch — reference photos carry the look, your prompt
+text should carry action/setting/what changes. Most shoots don't use
+any of these; an empty list below just means none are on file yet,
+not that anything is missing):
+{cast}
+
 BRAND:
 {brand}
 {client}
@@ -39,6 +46,10 @@ EVERY SHOT IS EITHER CAPTURED OR GENERATED — decide per shot:
   extension), SEEDANCE (multi-shot, reference-driven, audio),
   LTX (fast cinematic text/image-to-video), WAN (text/image-to-video,
   strong motion control).
+  If the shot uses a character or prop listed above that has reference
+  photos on file, name it exactly by name rather than redescribing its
+  appearance — the photo carries identity, the prompt carries what's
+  happening.
 
 GUIDANCE (advisory — break a rule only when the story demands it, and
 expect it to be flagged for review):

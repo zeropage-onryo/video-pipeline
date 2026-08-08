@@ -12,7 +12,7 @@ import json
 
 import pytest
 
-from src import db, preprod, shootgen
+from src import db, entities, preprod, shootgen
 
 
 @pytest.fixture
@@ -20,6 +20,7 @@ def tmp_db(tmp_path):
     path = tmp_path / "test.db"
     db.init_db(path)
     preprod.init(path)
+    entities.init(path)
     preprod.add_location("hallway", {"space": "narrow hallway"}, photo_count=2, path=path)
     preprod.add_location("garage", {"space": "cold garage"}, photo_count=3, path=path)
     return path
@@ -257,6 +258,7 @@ def test_generate_concept_degrades_without_locations(tmp_path, capsys):
     empty = tmp_path / "empty.db"
     db.init_db(empty)
     preprod.init(empty)
+    entities.init(empty)
 
     def fake_generate(*a, **kw):
         return response_for(make_concept())
