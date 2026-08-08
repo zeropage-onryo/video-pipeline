@@ -163,7 +163,20 @@ is yours, in Resolve, by hand.
   doubles as the dead-man log — every graph run writes a row — and morning approve/reject via
   `resolve_hold` feeds `evaluator_agreement`, the credit-gate number (~0.9 is the bar for
   promoting a channel). `_post_gate` in the orchestrator is the last code-enforced check:
-  clips QC'd, caption non-empty, no warnings, under the channel's `rate_cap`.
+  clips QC'd, caption non-empty, no warnings, under the channel's `rate_cap`. `/holds` is the
+  control room: grade runs, promote/demote channels, toggle the kill switch, and drop a note —
+  pending `corrections` fold into the next generation's spark and are consumed (each note
+  steers exactly once).
+- **`src/veo.py`** — the Veo connector (same SDK + key as everything else). `generate_video`
+  is the thin raising wrapper (submit → poll → download immediately; Google keeps files ~2
+  days); `generate_candidates` is the never-raises edge: N candidates, every attempt a
+  `generations` row (the data `attempts_to_keeper`/`tool_scoreboard` read), **nothing ever
+  auto-kept** — the pick is the label. Guardrails live in the module: a DB-enforced
+  `VEO_DAILY_CAP` (default 6/day) and `estimate_cost` so every dry-run preview prices the plan.
+  Reached two ways, both gated: the graph's `generate_render` only when `ZEROPAGE_RENDER=1`
+  (unadapted tools — KLING/RUNWAY/... — honestly stay dry), and `autopilot.EXECUTORS["generate"]`
+  only in live mode through the full L4 gate. Config verified against the *installed*
+  google-genai (2026-08): `duration_seconds`, not the docs snippet's `duration`.
 - **`src/shot.py`** / **`src/promptgen.py`** / **`src/genlog.py`** / **`src/generative.py`** — the
   generative-clip side, for the one shot per edit the footage can't cover. `shot.py` is a `Shot`
   dataclass with a controlled camera/size vocabulary and one **pure** renderer per tool; no model
@@ -350,8 +363,13 @@ default off, executors unwired.
   without a local Postgres can use the repo's `docker-compose.yml` instead. Note: Postgres.app
   is also installed but is an uninitialised PostgreSQL 18 that owns none of this data — do not
   "Initialize" it, it would contend for port 5432 with the server that actually has the library.
-- `/shots` and the tool scoreboard aren't built — they need real generation attempts logged
-  through `genlog.py` first, and inventing that data would corrupt the only numbers that matter.
+- `/shots` (the candidate review-and-keep screen) and the tool scoreboard surface aren't built —
+  the data path is ready (`veo.generate_candidates` logs every attempt; keeping stays a human
+  act through `genlog`), but the screens want real generation attempts to show, and the first
+  real Veo spend is a deliberate step (`ZEROPAGE_RENDER=1`, or the autopilot live gate) nobody
+  has taken yet. Same for posting: `publish` parks even on `auto` until an upload API + public
+  clip hosting exist — the IG path needs the rendered mp4 re-hosted at a public URL
+  (`storage.py` is the flagged follow-up), and YouTube needs OAuth.
 
 **The user's real data lives in `data/pipeline.db` (gitignored, ~128KB) and `locations/`
 (gitignored, photos).** A fresh clone gets the tool, empty. Never overwrite either without asking.
