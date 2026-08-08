@@ -22,7 +22,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
 
-from . import preprod, rag
+from . import entities, preprod, rag
 from . import shot as shot_module
 from .db import DB_PATH, init_db
 from .gemini_utils import generate_with_retry, strip_fences
@@ -47,6 +47,11 @@ NO_LOCATIONS_NOTE = (
 
 NO_REFERENCES_NOTE = (
     "(no reference library available -- generate from the rooms and brand alone)"
+)
+
+NO_CAST_NOTE = (
+    "(no characters or props on file yet -- describe appearance in the prompt "
+    "as needed)"
 )
 
 # Ideation grounds in brand/cinematography (what the concept has to look and
@@ -148,6 +153,33 @@ def format_locations(locations: list) -> str:
     return "\n".join(lines)
 
 
+def format_cast(characters: list, props: list) -> str:
+    """
+    Named characters and props that have reference stills on file --
+    one level down from the room to what's actually in it, same
+    reasoning as format_locations. Not every shoot has any (most
+    don't); an empty list here just means nothing is named yet, not
+    that the shoot is missing something.
+
+    A character/prop without photo_count still gets listed -- it's
+    still worth naming by name for continuity across shots -- but only
+    ones with photos are told to lean on the reference image instead
+    of prompt text for appearance.
+    """
+    lines = []
+    for c in characters:
+        ref = " (reference photos on file)" if c.get("photo_count") else ""
+        role = f" — {c['role']}" if c.get("role") else ""
+        notes = c.get("notes") or (c.get("description") or {}).get("notes")
+        lines.append(f"- {c['name']}{role}{ref}" + (f": {notes}" if notes else ""))
+    for p in props:
+        ref = " (reference photos on file)" if p.get("photo_count") else ""
+        category = f" — {p['category']}" if p.get("category") else ""
+        notes = p.get("notes") or (p.get("description") or {}).get("notes")
+        lines.append(f"- {p['name']}{category}{ref}" + (f": {notes}" if notes else ""))
+    return "\n".join(lines)
+
+
 POV_ON = ('- Camera B ("ACTION5"): DJI Osmo Action 5 Pro, for POV / body-mount\n'
           "  shots.")
 POV_OFF = "- No POV camera available this shoot — BMPCC only."
@@ -169,7 +201,8 @@ def apply_pov(template: str, use_pov: bool) -> str:
 
 
 def build_concept_prompt(locations: list, brand: str, client=None, spark=None,
-                         use_pov: bool = True, references: str = "") -> str:
+                         use_pov: bool = True, references: str = "",
+                         cast: str = "") -> str:
     template = apply_pov((PROMPTS_DIR / "concept_prompt.txt").read_text(), use_pov)
     return (
         template
@@ -178,6 +211,7 @@ def build_concept_prompt(locations: list, brand: str, client=None, spark=None,
         .replace("{client}", f"CLIENT / SPEC TYPE: {client}" if client else "")
         .replace("{spark}", f"CREATIVE SPARK FROM THE FILMMAKER: {spark}" if spark else "")
         .replace("{references}", references or NO_REFERENCES_NOTE)
+        .replace("{cast}", cast or NO_CAST_NOTE)
     )
 
 
@@ -208,7 +242,7 @@ def parse_ideas_response(text: str) -> list:
 
 
 def build_shotlist_prompt(locations: list, brand: str, client, concept: dict,
-                          use_pov: bool = True) -> str:
+                          use_pov: bool = True, cast: str = "") -> str:
     template = apply_pov((PROMPTS_DIR / "shotlist_prompt.txt").read_text(), use_pov)
     return (
         template
@@ -218,6 +252,7 @@ def build_shotlist_prompt(locations: list, brand: str, client, concept: dict,
         .replace("{title}", concept.get("title") or "")
         .replace("{hook}", concept.get("hook") or "")
         .replace("{logline}", concept.get("logline") or "")
+        .replace("{cast}", cast or NO_CAST_NOTE)
     )
 
 
@@ -283,8 +318,10 @@ def generate_shot_list(concept_id: int, gemini_client=None, model: str = MODEL,
     if not locations:
         print(NO_LOCATIONS_NOTE, file=sys.stderr)
 
+    cast = format_cast(entities.list_characters(**kwargs), entities.list_props(**kwargs))
+
     prompt = build_shotlist_prompt(locations, concept["brand"], concept.get("client"),
-                                   concept, use_pov=use_pov)
+                                   concept, use_pov=use_pov, cast=cast)
     plan = parse_plan_response(generate_with_retry(gemini_client, model, prompt))
 
     location_names = [loc["name"] for loc in locations]
@@ -364,21 +401,27 @@ def validate_concept(concept: dict, location_names: list, use_pov: bool = True) 
 
 def generate_concept(brand: str, client=None, spark=None, gemini_client=None,
                      model: str = MODEL, use_pov: bool = True, db_path=None,
-                     references: str = "") -> dict:
+                     references: str = "", cast=None) -> dict:
     """
     One concept, grounded in the described locations, validated and
     saved. Returns {"concept_id", "concept", "warnings"}.
 
     Like generate_concept_ideas, `references` arrives already retrieved
-    from the edge rather than being fetched here.
+    from the edge rather than being fetched here. `cast` follows the
+    same contract: None means "everything on file" (the default the CLI
+    keeps); a caller that picked specific characters/props passes the
+    already-formatted block, and "" explicitly means no cast.
     """
     kwargs = {"path": db_path} if db_path is not None else {}
     locations = preprod.list_locations(**kwargs)
     if not locations:
         print(NO_LOCATIONS_NOTE, file=sys.stderr)
 
+    if cast is None:
+        cast = format_cast(entities.list_characters(**kwargs), entities.list_props(**kwargs))
+
     prompt = build_concept_prompt(locations, brand, client, spark, use_pov=use_pov,
-                                  references=references)
+                                  references=references, cast=cast)
     concept = parse_concept_response(generate_with_retry(gemini_client, model, prompt))
 
     location_names = [loc["name"] for loc in locations]
@@ -449,6 +492,7 @@ def main(db_path=None):
     path = db_path if db_path is not None else DB_PATH
     init_db(path=path)
     preprod.init(path=path)
+    entities.init(path=path)
 
     gemini_client = genai.Client(api_key=api_key)
 

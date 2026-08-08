@@ -1,5 +1,5 @@
 {
   "dependencies": ["."],
-  "graphs": { "orchestrator": "src.orchestrator:GRAPH" },
+  "graphs": { "zeropage": "src.orchestrator:GRAPH" },
   "env": ".env"
 }

@@ -1,14 +1,18 @@
 """
-Tests for src/orchestrator.py -- the LangGraph loop over pre-production.
+Tests for src/orchestrator.py -- the autonomous content graph.
 
-Hermetic: the two stage calls the graph makes (shootgen.generate_concept,
-shootgen.reference_block) are patched at the shootgen module, so no
-Gemini, no RAG, no real DB writes. Every test drives the compiled GRAPH
-through run(), so the edges and both conditionals are exercised.
+Hermetic: the billed seams (shootgen.generate_concept, CRAG retrieval,
+scheduling.build_caption, the judge client) are patched at their
+modules; entities/locations/autonomy run against a throwaway SQLite
+file via db.DB_PATH. Every graph test drives the compiled GRAPH through
+run(), so the edges and all three conditionals are exercised. The
+publish gates are driven directly -- with generate_render a dry-run
+stub, the wired graph can't reach publish until renders are real, and
+the gate logic still has to be right before that day.
 """
 import pytest
 
-from src import db, orchestrator, preprod
+from src import autonomy, db, entities, orchestrator, preprod
 
 
 @pytest.fixture
@@ -18,14 +22,24 @@ def tmp_db(tmp_path, monkeypatch):
     path = tmp_path / "test.db"
     db.init_db(path)
     preprod.init(path)
+    entities.init(path)
+    autonomy.init(path)
     monkeypatch.setattr(db, "DB_PATH", path)
     preprod.add_location("hallway", {"space": "narrow hallway"}, photo_count=2, path=path)
+    # graph tests must not reach the real library or Gemini
+    monkeypatch.setattr(orchestrator.crag, "retrieve_with_crag",
+                        lambda *a, **k: {"ok": False, "references": [],
+                                         "error": "no store in tests"})
+    monkeypatch.setattr(orchestrator.scheduling, "build_caption",
+                        lambda fallback, db_path=None: fallback)
+    monkeypatch.setattr(orchestrator, "_client", lambda: None)
     return path
 
 
 def make_concept(**overrides):
     concept = {
         "title": "The Waiting",
+        "hook": "a hand already on the door handle",
         "logline": "He waits for someone who never knocks.",
         "shots": [
             {"n": 1, "type": "CHARACTER", "source": "CAMERA", "cam": "BMPCC",
@@ -40,50 +54,44 @@ def make_concept(**overrides):
 
 
 def stage_fakes(monkeypatch, results):
-    """Patch the two shootgen calls; record the spark each attempt used."""
+    """Patch generate_concept; record the kwargs of every attempt."""
     queue = list(results)
-    sparks = []
+    calls = []
 
     def fake_generate(brand, client=None, spark=None, gemini_client=None,
-                      model=None, use_pov=True, db_path=None, references=""):
-        sparks.append(spark)
+                      model=None, use_pov=True, db_path=None, references="",
+                      cast=None):
+        calls.append({"spark": spark, "references": references, "cast": cast})
         concept, warnings = queue.pop(0)
-        return {"concept_id": len(sparks), "concept": concept, "warnings": warnings}
+        return {"concept_id": len(calls), "concept": concept, "warnings": warnings}
 
     monkeypatch.setattr(orchestrator.shootgen, "generate_concept", fake_generate)
-    monkeypatch.setattr(orchestrator.shootgen, "reference_block", lambda **k: "")
-    monkeypatch.setattr(orchestrator, "_client", lambda: None)
-    return sparks
+    return calls
 
 
-# ---------- the happy path ----------
+# ---------- the left third: the original loop, preserved ----------
 
-def test_clean_first_attempt_passes(tmp_db, monkeypatch):
+def test_clean_run_parks_in_shadow_with_the_render_stub_reason(tmp_db, monkeypatch):
     stage_fakes(monkeypatch, [(make_concept(), [])])
 
     result = orchestrator.run("gearing up ritual")
 
     assert result["attempts"] == 1
     assert result["critique"]["ok"] is True
-    assert result["critique"]["issues"] == []
-    assert result.get("error") is None
+    # the AI shot's prompt was extracted...
+    assert result["prompts"] == [
+        {"tool": "KLING", "prompt": "a door handle turning in the dark, noir grain"}]
+    # ...but render is a stub, so the run parks instead of posting
+    assert "render is a dry-run stub" in result["held_reason"]
+    [row] = autonomy.list_hold(path=tmp_db)
+    assert row["status"] == "held"
+    assert row["concept_id"] == 1
+    assert row["payload"]["prompts"][0]["tool"] == "KLING"
 
-
-def test_finalize_extracts_only_ai_shot_prompts(tmp_db, monkeypatch):
-    stage_fakes(monkeypatch, [(make_concept(), [])])
-
-    result = orchestrator.run("ritual")
-
-    assert result["shot_prompts"] == [
-        {"tool": "KLING", "prompt": "a door handle turning in the dark, noir grain"},
-    ]
-
-
-# ---------- the corrective loop ----------
 
 def test_warnings_trigger_a_retry_with_feedback_in_the_spark(tmp_db, monkeypatch):
-    sparks = stage_fakes(monkeypatch, [
-        (make_concept(), ["shot 1: unknown location 'rooftop' -- not a described space"]),
+    calls = stage_fakes(monkeypatch, [
+        (make_concept(), ["shot 1: unknown location 'rooftop'"]),
         (make_concept(), []),
     ])
 
@@ -91,58 +99,162 @@ def test_warnings_trigger_a_retry_with_feedback_in_the_spark(tmp_db, monkeypatch
 
     assert result["attempts"] == 2
     assert result["critique"]["ok"] is True
-    assert "Fix these issues" in sparks[1]
-    assert "rooftop" in sparks[1]
-    assert "Fix these issues" not in (sparks[0] or "")
+    assert "Fix these issues" in calls[1]["spark"]
+    assert "rooftop" in calls[1]["spark"]
+    assert "Fix these issues" not in (calls[0]["spark"] or "")
 
 
-def test_never_clean_stops_at_max_attempts_and_still_finalizes(tmp_db, monkeypatch):
+def test_out_of_retries_parks_with_the_eval_reason(tmp_db, monkeypatch):
     bad = (make_concept(), ["concept has no shots"])
     stage_fakes(monkeypatch, [bad] * orchestrator.MAX_ATTEMPTS)
 
     result = orchestrator.run("ritual")
 
     assert result["attempts"] == orchestrator.MAX_ATTEMPTS
-    assert result["critique"]["ok"] is False
-    assert "concept has no shots" in result["critique"]["issues"]
-    # stop still routes through finalize -- the prompts are extractable
-    assert "shot_prompts" in result
+    assert "eval stop" in result["held_reason"]
+    assert "concept has no shots" in result["held_reason"]
+    [row] = autonomy.list_hold(path=tmp_db)
+    assert row["status"] == "held"
 
 
-# ---------- grounding + judge defaults ----------
-
-def test_no_locations_stops_before_any_generation(tmp_path, monkeypatch):
+def test_no_locations_parks_before_any_generation(tmp_path, monkeypatch):
     path = tmp_path / "empty.db"
     db.init_db(path)
     preprod.init(path)
+    entities.init(path)
+    autonomy.init(path)
     monkeypatch.setattr(db, "DB_PATH", path)
-    sparks = stage_fakes(monkeypatch, [])
+    monkeypatch.setattr(orchestrator.crag, "retrieve_with_crag",
+                        lambda *a, **k: {"ok": False, "references": [], "error": "x"})
+    calls = stage_fakes(monkeypatch, [])
 
     result = orchestrator.run("ritual")
 
-    assert "No described locations" in result["error"]
-    assert sparks == []                      # generate never ran
+    assert "No described locations" in result["held_reason"]
+    assert calls == []                       # generate never ran
+    [row] = autonomy.list_hold(path=path)    # even the failure is logged
+    assert "No described locations" in row["reason"]
 
 
-def test_judge_is_off_unless_asked_for(tmp_db, monkeypatch):
-    monkeypatch.delenv("JUDGE", raising=False)
-    called = []
-    monkeypatch.setattr(orchestrator, "_judge", lambda c: called.append(1) or (0.0, ["x"]))
-    stage_fakes(monkeypatch, [(make_concept(), [])])
-
-    result = orchestrator.run("ritual")
-
-    assert called == []                      # judge never invoked
-    assert result["critique"]["score"] == 1.0
-
-
-def test_judge_score_below_floor_fails_the_critique(tmp_db, monkeypatch):
-    monkeypatch.setenv("JUDGE", "1")
-    monkeypatch.setattr(orchestrator, "_judge",
-                        lambda c: (0.2, ["needs a crew to pull focus"]))
-    stage_fakes(monkeypatch, [(make_concept(), [])] * orchestrator.MAX_ATTEMPTS)
+def test_camera_only_concept_parks_with_its_own_reason(tmp_db, monkeypatch):
+    camera_only = make_concept(shots=[
+        {"n": 1, "type": "CHARACTER", "source": "CAMERA", "cam": "BMPCC",
+         "location": "hallway", "desc": "x"},
+    ])
+    stage_fakes(monkeypatch, [(camera_only, [])])
 
     result = orchestrator.run("ritual")
 
-    assert result["critique"]["ok"] is False
-    assert "needs a crew to pull focus" in result["critique"]["issues"]
+    assert result["prompts"] == []
+    assert "no AI shots" in result["held_reason"]
+
+
+# ---------- grounding ----------
+
+def test_ground_entities_uses_only_the_picked_character(tmp_db, monkeypatch):
+    mike = entities.add_character("Mike — on camera", role="protagonist", path=tmp_db)
+    entities.add_character("Guest — bartender", role="guest", path=tmp_db)
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    orchestrator.run("ritual", picked_characters=[mike])
+
+    assert "Mike — on camera" in calls[0]["cast"]
+    assert "Guest — bartender" not in calls[0]["cast"]
+
+
+def test_ground_entities_defaults_to_everything_on_file(tmp_db, monkeypatch):
+    entities.add_character("Mike — on camera", path=tmp_db)
+    entities.add_prop("Ducati Panigale V2", category="vehicle", path=tmp_db)
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    orchestrator.run("ritual")
+
+    assert "Mike — on camera" in calls[0]["cast"]
+    assert "Ducati Panigale V2" in calls[0]["cast"]
+
+
+def test_ground_rag_formats_crag_hits_into_references(tmp_db, monkeypatch):
+    monkeypatch.setattr(
+        orchestrator.crag, "retrieve_with_crag",
+        lambda *a, **k: {"ok": True, "rewritten_query": None, "references": [
+            {"source": "brief.txt", "chunk": "still, patient, one move"}]},
+    )
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    orchestrator.run("ritual")
+
+    assert "brief.txt" in calls[0]["references"]
+    assert "still, patient, one move" in calls[0]["references"]
+
+
+def test_ground_rag_degrades_to_ungrounded(tmp_db, monkeypatch):
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    orchestrator.run("ritual")           # tmp_db fixture stubs CRAG to fail
+
+    assert calls[0]["references"] == ""
+
+
+# ---------- the publish gates (driven directly; render stub blocks the wire) ----------
+
+def ready_state(tmp_db, channel="zeropage", **overrides):
+    state = {
+        "channel": channel,
+        "concept": make_concept(),
+        "concept_id": 1,
+        "prompts": [{"tool": "KLING", "prompt": "p"}],
+        "clips": [{"tool": "KLING", "prompt": "p", "url": "file:///clip.mp4", "ok": True}],
+        "caption": "a caption",
+    }
+    state.update(overrides)
+    return state
+
+
+def test_publish_holds_when_killed(tmp_db, monkeypatch):
+    monkeypatch.delenv("ZEROPAGE_KILL", raising=False)
+    autonomy.kill("bad night", path=tmp_db)
+
+    result = orchestrator.publish(ready_state(tmp_db))
+
+    assert "kill switch" in result["held_reason"]
+
+
+def test_publish_shadow_holds_for_grading(tmp_db, monkeypatch):
+    monkeypatch.delenv("ZEROPAGE_KILL", raising=False)
+    result = orchestrator.publish(ready_state(tmp_db))
+    assert "shadow" in result["held_reason"]
+
+
+def test_publish_queue_holds_for_approval(tmp_db, monkeypatch):
+    monkeypatch.delenv("ZEROPAGE_KILL", raising=False)
+    autonomy.set_autonomy("zeropage", "queue", path=tmp_db)
+    result = orchestrator.publish(ready_state(tmp_db))
+    assert "awaiting your approval" in result["held_reason"]
+
+
+def test_publish_auto_still_parks_because_no_api_is_wired(tmp_db, monkeypatch):
+    monkeypatch.delenv("ZEROPAGE_KILL", raising=False)
+    autonomy.set_autonomy("zeropage", "auto", path=tmp_db)
+    result = orchestrator.publish(ready_state(tmp_db))
+    assert "posting API not wired" in result["held_reason"]
+
+
+def test_post_gate_rejects_failed_qc_empty_caption_and_warnings(tmp_db, monkeypatch):
+    monkeypatch.delenv("ZEROPAGE_KILL", raising=False)
+    bad_clip = ready_state(tmp_db, clips=[{"ok": False, "url": None}])
+    assert "clip QC failed" in orchestrator.publish(bad_clip)["held_reason"]
+
+    no_caption = ready_state(tmp_db, caption="  ")
+    assert "caption is empty" in orchestrator.publish(no_caption)["held_reason"]
+
+    warned = ready_state(tmp_db, concept=make_concept(warnings=["shot 1: bad room"]))
+    assert "concept carries warnings" in orchestrator.publish(warned)["held_reason"]
+
+
+def test_post_gate_enforces_the_rate_cap(tmp_db, monkeypatch):
+    monkeypatch.delenv("ZEROPAGE_KILL", raising=False)
+    autonomy.to_hold("zeropage", "already posted", status="posted", path=tmp_db)
+
+    result = orchestrator.publish(ready_state(tmp_db))
+
+    assert "rate cap" in result["held_reason"]
