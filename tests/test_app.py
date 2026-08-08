@@ -587,9 +587,63 @@ def test_every_railed_page_carries_the_whole_rail(page, tmp_preprod_db):
 
 
 def test_pages_off_the_rail_are_still_reachable(tmp_preprod_db):
-    """/videos/new isn't a rail item; it must be linked from somewhere
-    on the railed surface or it becomes a dead URL."""
+    """/videos/new and /holds aren't rail items; they must be linked from
+    somewhere on the railed surface or they become dead URLs."""
     assert 'href="/videos/new"' in client.get("/analytics").text
+    assert 'href="/holds"' in client.get("/studio").text        # the pills
+
+
+# ---------- /holds: the shadow-mode grading queue ----------
+
+@pytest.fixture
+def tmp_autonomy_db(tmp_preprod_db):
+    from src import autonomy
+    autonomy.init(tmp_preprod_db)
+    return tmp_preprod_db
+
+
+def test_holds_page_empty_state(tmp_autonomy_db):
+    response = client.get("/holds")
+    assert response.status_code == 200
+    assert "Queue is clear" in response.text
+
+
+def test_holds_page_shows_a_held_run_with_its_concept(tmp_autonomy_db):
+    from src import autonomy
+    concept_id = preprod.save_concept(
+        {"title": "Terminal Ritual", "hook": "an eye, unblinking"},
+        brand="antihero", path=tmp_autonomy_db,
+    )
+    autonomy.to_hold("zeropage", "shadow — grading only", concept_id=concept_id,
+                     payload={"prompts": [{"tool": "KLING", "prompt": "the handle turns"}]},
+                     path=tmp_autonomy_db)
+
+    response = client.get("/holds")
+    assert "Terminal Ritual" in response.text
+    assert "shadow — grading only" in response.text
+    assert "the handle turns" in response.text
+    assert "Would have posted it" in response.text
+
+
+def test_resolving_a_hold_feeds_the_agreement_number(tmp_autonomy_db):
+    from src import autonomy
+    hold_id = autonomy.to_hold("zeropage", "shadow", path=tmp_autonomy_db)
+
+    response = client.post(f"/holds/{hold_id}/resolve", data={"status": "approved"},
+                           follow_redirects=False)
+    assert response.status_code == 303
+
+    assert autonomy.list_hold(status="held", path=tmp_autonomy_db) == []
+    assert autonomy.evaluator_agreement(path=tmp_autonomy_db)["agreement"] == 1.0
+    # and the page shows the number
+    assert "100%" in client.get("/holds").text
+
+
+def test_resolving_with_a_bad_status_is_a_400(tmp_autonomy_db):
+    from src import autonomy
+    hold_id = autonomy.to_hold("zeropage", "shadow", path=tmp_autonomy_db)
+    response = client.post(f"/holds/{hold_id}/resolve", data={"status": "maybe"})
+    assert response.status_code == 400
 
 
 def test_video_detail_still_has_its_nav(tmp_preprod_db):

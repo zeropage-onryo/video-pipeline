@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Hold queue — Zero Page{% endblock %}
+{% block content %}
+<div class="sk"><div class="page">
+  <div class="vhead">
+    <div>
+      <div class="rule">Shadow mode // grading the evaluator // nothing posts itself yet</div>
+      <h1>Hold queue</h1>
+      <p class="vsub">Every run parks here with its reason. Approve means "I would have posted this" — agreement is what earns a channel its promotion.</p>
+    </div>
+  </div>
+
+  {% if message %}<div class="toast">{{ message }}</div>{% endif %}
+  {% if killed %}<div class="warnings" style="margin-bottom:14px">Kill switch is ON — every channel holds regardless of autonomy.</div>{% endif %}
+
+  <div class="tiles" style="grid-template-columns:repeat(3,1fr)">
+    <div class="tile">
+      <div class="tile-num">{{ "%.0f%%"|format(agreement.agreement * 100) if agreement.agreement is not none else "—" }}</div>
+      <div class="kicker">Evaluator agreement ({{ agreement.graded }} graded)</div>
+    </div>
+    {% for ch in channels %}
+    <div class="tile">
+      <div class="tile-num" style="text-transform:uppercase">{{ ch.autonomy }}</div>
+      <div class="kicker">{{ ch.name }} · cap {{ ch.rate_cap }}/day</div>
+    </div>
+    {% endfor %}
+  </div>
+
+  {% if held %}
+  {% for h in held %}
+  <article class="card">
+    <div class="card-head">
+      <span class="id">HOLD-{{ "%03d"|format(h.id) }}</span>
+      <span class="meta">{{ h.channel|upper }} · {{ h.created_at[:16].replace("T", " ") }}</span>
+    </div>
+    <div class="card-body">
+      {% if h.concept %}
+      <h3>{{ h.concept.title }}</h3>
+      {% if h.concept.hook %}<p class="dim" style="margin-top:4px">{{ h.concept.hook }}</p>{% endif %}
+      {% endif %}
+      <p class="mono" style="margin-top:8px; color:var(--steel)">{{ h.reason }}</p>
+      {% if h.caption %}<p style="margin-top:8px">{{ h.caption }}</p>{% endif %}
+      {% if h.payload and h.payload.prompts %}
+      <div class="kicker" style="margin-top:10px">AI shots it would render</div>
+      {% for p in h.payload.prompts %}
+      <div class="prompt-box">[{{ p.tool }}] {{ p.prompt }}</div>
+      {% endfor %}
+      {% endif %}
+      <div style="display:flex; gap:10px; margin-top:14px">
+        <form method="post" action="/holds/{{ h.id }}/resolve">
+          <input type="hidden" name="status" value="approved">
+          <button type="submit" class="primary">Would have posted it</button>
+        </form>
+        <form method="post" action="/holds/{{ h.id }}/resolve">
+          <input type="hidden" name="status" value="rejected">
+          <button type="submit">Glad it held</button>
+        </form>
+      </div>
+    </div>
+  </article>
+  {% endfor %}
+  {% else %}
+  <p class="dim">Queue is clear. The nightly trigger refills it — or fire one now:
+    <span class="mono">venv/bin/python -m src.trigger</span></p>
+  {% endif %}
+</div></div>
+{% endblock %}

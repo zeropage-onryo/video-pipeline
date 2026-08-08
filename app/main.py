@@ -21,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from google import genai
 
-from src import db, entities, instagram, locations, preprod, rag, shootgen, youtube
+from src import autonomy, db, entities, instagram, locations, preprod, rag, shootgen, youtube
 
 from . import seo
 from .sparkline import render_sparkline
@@ -59,6 +59,7 @@ async def lifespan(app: FastAPI):
     db.init_db(path=db.DB_PATH)
     preprod.init(path=db.DB_PATH)
     entities.init(path=db.DB_PATH)
+    autonomy.init(path=db.DB_PATH)
     yield
 
 
@@ -502,6 +503,46 @@ def library_delete(source: str = Form(...)):
     except Exception as e:
         message = f"delete failed: {e}"
     return RedirectResponse("/library?message=" + quote(message), status_code=303)
+
+
+@app.get("/holds")
+def holds_list(request: Request, message: Optional[str] = None):
+    """
+    The morning ritual: what the graph wanted to post while you weren't
+    looking, and the approve/reject that grades the evaluator. The
+    agreement number is the credit gate -- ~0.9 over a real stretch is
+    what earns a channel its promotion to auto.
+    """
+    concepts_by_id = {c["id"]: c for c in preprod.list_concepts(path=db.DB_PATH)}
+    held = autonomy.list_hold(status="held", path=db.DB_PATH)
+    for row in held:
+        row["concept"] = concepts_by_id.get(row.get("concept_id"))
+    return templates.TemplateResponse(
+        request,
+        "holds.html",
+        {
+            "held": held,
+            "agreement": autonomy.evaluator_agreement(path=db.DB_PATH),
+            "channels": autonomy.list_channels(path=db.DB_PATH),
+            "killed": autonomy.killed(path=db.DB_PATH),
+            "active_nav": "home",
+            "message": message,
+        },
+    )
+
+
+@app.post("/holds/{hold_id}/resolve")
+async def holds_resolve(hold_id: int, request: Request):
+    """Approved = "I would have posted this" (the evaluator was right);
+    rejected = "glad it held". Either way the row leaves the queue and
+    feeds the agreement number."""
+    form = dict(await request.form())
+    status = (form.get("status") or "").strip()
+    try:
+        autonomy.resolve_hold(hold_id, status, path=db.DB_PATH)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return RedirectResponse("/holds", status_code=303)
 
 
 @app.get("/analytics")
