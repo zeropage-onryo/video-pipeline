@@ -40,6 +40,11 @@ venv/bin/python -m src.shootgen --shotlist <concept_id>
 venv/bin/python -c "from src import orchestrator; print(orchestrator.run('gearing up ritual'))"
 venv/bin/python -c "from src import autonomy; print(autonomy.list_hold())"      # the dead-man log
 
+# THE NIGHTLY TRIGGER — one shadow run, spark rotated from prompts/sparks.txt.
+# ops/com.zeropage.shadowrun.plist schedules it at 03:30 (see its header to
+# install); grading happens on /holds each morning.
+venv/bin/python -m src.trigger [--spark ...] [--channel zeropage]
+
 # GENERATIVE CLIPS (for a shot the footage can't cover)
 venv/bin/python -m src.promptgen "<loose shot description>" [--idea-id N] [--slot-index N]
 venv/bin/python -m src.genlog record|keep|reject ...
