@@ -144,8 +144,18 @@ is yours, in Resolve, by hand.
   Both break down per prompt hash.
 - **`src/orchestrator.py`** — the autonomous content graph (LangGraph, registered as `zeropage`
   in `langgraph.json`): `planner -> ensure_locations -> ground_entities -> ground_rag ->
-  gen_concept -> evaluate -> structure_prompt -> generate_render -> qc_clip -> caption ->
-  publish`, with the corrective `evaluate -> gen_concept` retry edge and a `hold` sink. The
+  gen_concept -> evaluate -> structure_prompt -> score_prompts -> generate_render ->
+  qc_clip -> caption -> publish`, with the corrective `evaluate -> gen_concept` retry edge and
+  a `hold` sink. `score_prompts` is the credit gate proper: a deterministic floor (thin /
+  over-stuffed / leftover template tokens, zero model calls) under a strict LLM judge
+  (subject/camera/motion/lighting/coherence, 0–2 each, bar `PROMPT_GATE_MIN`, default 7/10)
+  that **fails closed** — an unreadable verdict scores 0, so a credit is never spent on a
+  judgment nobody could read. One failing prompt holds the whole run, reason = the judge's own
+  one-liner. Every score is a `prompt_scores` row logged before any spend; grading a hold on
+  `/holds` writes the human verdict next to the gate's, and `autonomy.prompt_gate_agreement`
+  splits disagreement by cost (passed-but-rejected burns a credit; held-but-posted only costs
+  an approval — drive the first near zero before lowering the bar, on 20–30 graded rows, not a
+  handful). The
   left third is the original evaluate-and-retry loop unchanged: the evaluator combines
   shootgen's code-enforced `warnings` with an optional LLM-judge (`JUDGE=1`, floor `JUDGE_MIN`,
   never blocks); failed critiques fold into the spark and regenerate up to `MAX_ATTEMPTS`, and
