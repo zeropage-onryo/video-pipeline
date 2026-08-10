@@ -670,6 +670,24 @@ def test_kill_toggle_round_trip(tmp_autonomy_db, monkeypatch):
     assert autonomy.killed(path=tmp_autonomy_db) is False
 
 
+def test_grading_a_hold_writes_the_prompt_verdict_too(tmp_autonomy_db):
+    """One tap grades both trust numbers: the run's hold row AND the
+    credit gate's prompt_scores rows for that run."""
+    from src import autonomy
+    autonomy.log_prompt_scores("runX", [
+        {"prompt": "p", "score": 9, "pass": True, "reason": "", "dims": {}}],
+        path=tmp_autonomy_db)
+    hold_id = autonomy.to_hold("zeropage", "shadow", payload={"run_id": "runX"},
+                               path=tmp_autonomy_db)
+
+    client.post(f"/holds/{hold_id}/resolve", data={"status": "rejected"},
+                follow_redirects=False)
+
+    gate = autonomy.prompt_gate_agreement(path=tmp_autonomy_db)
+    assert gate["graded"] == 1
+    assert gate["passed_but_rejected"] == 1   # the expensive-error counter moved
+
+
 def test_note_form_writes_a_pending_correction(tmp_autonomy_db):
     from src import autonomy
     response = client.post("/holds/note", data={"note": "less neon, more silence"},

@@ -523,6 +523,8 @@ def holds_list(request: Request, message: Optional[str] = None):
         {
             "held": held,
             "agreement": autonomy.evaluator_agreement(path=db.DB_PATH),
+            "gate": autonomy.prompt_gate_agreement(path=db.DB_PATH),
+            "pass_rate": autonomy.first_try_pass_rate(path=db.DB_PATH),
             "channels": autonomy.list_channels(path=db.DB_PATH),
             "killed": autonomy.killed(path=db.DB_PATH),
             "active_nav": "home",
@@ -535,13 +537,21 @@ def holds_list(request: Request, message: Optional[str] = None):
 async def holds_resolve(hold_id: int, request: Request):
     """Approved = "I would have posted this" (the evaluator was right);
     rejected = "glad it held". Either way the row leaves the queue and
-    feeds the agreement number."""
+    feeds the agreement number -- and the same verdict lands next to the
+    run's prompt scores, so the credit gate is graded against you too."""
     form = dict(await request.form())
     status = (form.get("status") or "").strip()
+    row = next((h for h in autonomy.list_hold(status=None, path=db.DB_PATH)
+                if h["id"] == hold_id), None)
     try:
         autonomy.resolve_hold(hold_id, status, path=db.DB_PATH)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    run_id = ((row or {}).get("payload") or {}).get("run_id") \
+        if isinstance((row or {}).get("payload"), dict) else None
+    if run_id and status in ("approved", "rejected"):
+        autonomy.set_prompt_verdicts(
+            run_id, "post" if status == "approved" else "reject", path=db.DB_PATH)
     return RedirectResponse("/holds", status_code=303)
 
 

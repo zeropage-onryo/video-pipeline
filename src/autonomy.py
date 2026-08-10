@@ -68,6 +68,19 @@ CREATE TABLE IF NOT EXISTS settings (
     key        TEXT PRIMARY KEY,
     value      TEXT
 );
+
+CREATE TABLE IF NOT EXISTS prompt_scores (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at    TEXT NOT NULL,
+    run_id        TEXT,
+    prompt        TEXT,
+    score         INTEGER,
+    passed        INTEGER,
+    reason        TEXT,
+    dims          TEXT,           -- json {subject, camera, motion, lighting, coherence}
+    human_verdict TEXT            -- 'post' | 'reject' | NULL, filled when the hold is graded
+);
+CREATE INDEX IF NOT EXISTS idx_prompt_scores_run ON prompt_scores (run_id);
 """
 
 KILL_KEY = "kill_switch"
@@ -216,6 +229,74 @@ def evaluator_agreement(channel: Optional[str] = None, path=db.DB_PATH) -> dict:
         "approved": counts.get("approved", 0),
         "agreement": round(counts.get("approved", 0) / graded, 3) if graded else None,
     }
+
+
+# --- the prompt gate's log -------------------------------------------------
+
+def log_prompt_scores(run_id, scored: list, path=db.DB_PATH) -> None:
+    """One row per scored prompt per run -- the record the gate-vs-you
+    agreement number is computed from. Logged before any credit could
+    be spent, pass or fail."""
+    with db.connect(path) as conn:
+        for x in scored:
+            conn.execute(
+                "INSERT INTO prompt_scores (created_at, run_id, prompt, score, "
+                "passed, reason, dims) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (_now(), run_id, x.get("prompt"), x.get("score"),
+                 int(bool(x.get("pass"))), x.get("reason"),
+                 json.dumps(x.get("dims", {}))),
+            )
+
+
+def set_prompt_verdicts(run_id, verdict: str, path=db.DB_PATH) -> int:
+    """Your /holds grade written next to the gate's: approved -> 'post',
+    rejected -> 'reject'. Returns rows updated (0 when a run predates
+    the gate or had no AI shots)."""
+    if verdict not in ("post", "reject"):
+        raise ValueError(f"verdict must be post|reject, got {verdict!r}")
+    if not run_id:
+        return 0
+    with db.connect(path) as conn:
+        cursor = conn.execute(
+            "UPDATE prompt_scores SET human_verdict = ? WHERE run_id = ?",
+            (verdict, run_id),
+        )
+        return cursor.rowcount
+
+
+def prompt_gate_agreement(path=db.DB_PATH) -> dict:
+    """Gate vs. you, over the graded rows: (passed AND you'd post) OR
+    (held AND you'd reject). The two disagreement types cost
+    differently -- passed-but-reject burns a credit, held-but-post only
+    costs a manual approval -- so both are broken out."""
+    with db.connect(path) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*),"
+            " SUM((passed = 1 AND human_verdict = 'post') OR"
+            "     (passed = 0 AND human_verdict = 'reject')),"
+            " SUM(passed = 1 AND human_verdict = 'reject'),"
+            " SUM(passed = 0 AND human_verdict = 'post')"
+            " FROM prompt_scores WHERE human_verdict IS NOT NULL"
+        ).fetchone()
+    graded, agreed, expensive, cheap = (row[0], row[1] or 0, row[2] or 0, row[3] or 0)
+    return {
+        "graded": graded,
+        "agreement": round(agreed / graded, 3) if graded else None,
+        "passed_but_rejected": expensive,   # would have burned a credit
+        "held_but_posted": cheap,           # only cost an approval
+    }
+
+
+def first_try_pass_rate(path=db.DB_PATH) -> dict:
+    """Purely descriptive: how often the gate lets a render through.
+    Not the trust number -- that's prompt_gate_agreement."""
+    with db.connect(path) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*), SUM(passed) FROM prompt_scores"
+        ).fetchone()
+    total, passed = row[0], row[1] or 0
+    return {"total": total, "passed": passed,
+            "rate": round(passed / total, 3) if total else None}
 
 
 # --- corrections (for the human_note interrupt, when it lands) ------------

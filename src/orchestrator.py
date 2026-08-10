@@ -40,9 +40,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 from typing import Optional, TypedDict
 
@@ -50,10 +52,12 @@ from google import genai
 from langgraph.graph import END, START, StateGraph
 
 from . import autonomy, crag, db, entities, preprod, rag, scheduling, shootgen
+from .gemini_utils import generate_with_retry
 
 MAX_ATTEMPTS = 3
 JUDGE_MIN = 0.6
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", shootgen.MODEL)  # match the other stages
+PROMPT_GATE_MIN = int(os.environ.get("PROMPT_GATE_MIN", "7"))  # of 10; raise as you learn
 
 
 class GenState(TypedDict, total=False):
@@ -76,7 +80,9 @@ class GenState(TypedDict, total=False):
     critique: dict                  # {"ok": bool, "issues": [...], "score": float}
     attempts: int
     # the posting line
+    run_id: str
     prompts: list                   # [{"tool", "prompt"}] for the AI shots
+    prompt_scores: list             # [{prompt, score, pass, reason, dims}]
     clips: list                     # [{"tool", "prompt", "url", "ok"}]
     caption: str
     posted: list                    # [{"platform", "id", "url"}] once real posting exists
@@ -123,12 +129,14 @@ def _judge(concept: dict) -> tuple[float, list[str]]:
 
 def planner(state: GenState) -> GenState:
     """BUILD stub -- for now: straight to a full plan, autonomy read from
-    the channel row (defaulting to shadow if the table isn't seeded)."""
+    the channel row (defaulting to shadow if the table isn't seeded).
+    Also mints the run_id everything downstream logs against."""
     channel = state.get("channel") or "zeropage"
     row = autonomy.get_channel(channel, path=db.DB_PATH)
     return {
         "channel": channel,
         "autonomy": (row or {}).get("autonomy", "shadow"),
+        "run_id": state.get("run_id") or uuid.uuid4().hex,
     }
 
 
@@ -247,6 +255,91 @@ def structure_prompt(state: GenState) -> GenState:
     return {"prompts": [{"tool": s.get("tool"), "prompt": s["prompt"]} for s in shots]}
 
 
+# --- the prompt gate: nothing spends a credit until its prompt clears ------
+
+def _structural_check(text: str) -> tuple[bool, str]:
+    """Layer 1, deterministic, zero model calls -- the cheap failures:
+    empty, too thin, over-stuffed, leftover template tokens."""
+    t = (text or "").strip()
+    n = len(t.split())
+    if n < 15:
+        return False, "too thin — under 15 words"
+    if n > 130:
+        return False, "over-stuffed — 130+ words, the model will drop detail"
+    if re.search(r"\{.*?\}|\[.*?\]|TODO|TBD", t):
+        return False, "leftover placeholder / template token"
+    return True, ""
+
+
+_PROMPT_RUBRIC = """You grade AI VIDEO prompts (Veo/Runway/Kling). Score how likely THIS prompt
+yields a usable clip on the FIRST render. Be harsh — a paid credit is spent on your say-so.
+
+Rate each 0-2:
+- subject: main subject concrete and unambiguous?
+- camera: framing/lens/angle specified (close-up, 35mm, low angle)?
+- motion: ONE clear action, not several competing ones?
+- lighting: light / mood / time of day specified?
+- coherence: free of contradictions the model can't resolve?
+
+Return ONLY JSON:
+{"subject":0,"camera":0,"motion":0,"lighting":0,"coherence":0,"reason":"one clause naming the weakest part"}"""
+
+_PROMPT_DIMS = ("subject", "camera", "motion", "lighting", "coherence")
+
+
+def _extract_json(raw: str) -> str:
+    match = re.search(r"\{.*\}", raw, re.S)
+    return match.group(0) if match else raw
+
+
+def _judge_prompt(prompt: str) -> dict:
+    """Layer 2, the strict judge -- FAIL-CLOSED: a verdict that can't be
+    read scores 0, because a credit must never be spent on an unreadable
+    judgment. The model can only ever be stricter than the floor."""
+    try:
+        raw = generate_with_retry(_client(), GEMINI_MODEL,
+                                  _PROMPT_RUBRIC + "\n\nPROMPT:\n" + prompt)
+        data = json.loads(_extract_json(raw))
+        vals = {k: max(0, min(2, int(data.get(k, 0)))) for k in _PROMPT_DIMS}
+        return {"score": sum(vals.values()), "dims": vals,
+                "reason": str(data.get("reason", ""))[:200]}
+    except Exception as e:
+        return {"score": 0, "dims": {},
+                "reason": f"judge unreadable ({e}) — failed closed"}
+
+
+def score_prompts(state: GenState) -> GenState:
+    """The credit gate. Every extracted prompt gets the deterministic
+    floor, then the judge; every score is logged before any credit could
+    be spent, so the gate-vs-you agreement number accumulates from run
+    one -- long before rendering is even on."""
+    scored = []
+    for p in state.get("prompts", []):
+        text = p.get("prompt", "")
+        ok, why = _structural_check(text)
+        if not ok:
+            scored.append({"prompt": text, "tool": p.get("tool"), "score": 0,
+                           "pass": False, "reason": why, "dims": {}})
+            continue
+        verdict = _judge_prompt(text)
+        scored.append({"prompt": text, "tool": p.get("tool"),
+                       "score": verdict["score"],
+                       "pass": verdict["score"] >= PROMPT_GATE_MIN,
+                       "reason": verdict["reason"], "dims": verdict["dims"]})
+    autonomy.log_prompt_scores(state.get("run_id"), scored, path=db.DB_PATH)
+    return {"prompt_scores": scored}
+
+
+def route_after_score(state: GenState) -> str:
+    """Every AI shot must clear the bar or the whole run holds -- no
+    half-rendered credit burn. (Camera-only concepts have no scores and
+    hold too; render has nothing for them either.)"""
+    scores = state.get("prompt_scores", [])
+    if scores and all(x["pass"] for x in scores):
+        return "generate_render"
+    return "hold"
+
+
 def generate_render(state: GenState) -> GenState:
     """The credit gate, now explicit: ZEROPAGE_RENDER=1 turns on real
     Veo generation (one candidate per AI shot, through veo.py's daily
@@ -341,7 +434,9 @@ def _park(state: GenState, reason: str) -> GenState:
         state.get("channel", "zeropage"), reason,
         concept_id=state.get("concept_id"),
         caption=state.get("caption", ""),
-        payload={"prompts": state.get("prompts", []),
+        payload={"run_id": state.get("run_id"),
+                 "prompts": state.get("prompts", []),
+                 "prompt_scores": state.get("prompt_scores", []),
                  "critique": state.get("critique"),
                  "error": state.get("error")},
         path=db.DB_PATH,
@@ -373,17 +468,24 @@ def publish(state: GenState) -> GenState:
 
 def hold(state: GenState) -> GenState:
     """A run that failed a gate parks with its reason instead of posting."""
+    failed_scores = [x for x in state.get("prompt_scores", []) if not x.get("pass")]
     if state.get("error"):
         reason = state["error"]
+    elif not (state.get("critique", {}) or {}).get("ok") and \
+            (state.get("critique", {}) or {}).get("issues"):
+        reason = "eval stop: " + "; ".join(
+            str(i) for i in state["critique"]["issues"])
+    elif failed_scores:
+        # the judge's own one-liner, so /holds says why the credit
+        # wouldn't have been spent
+        reason = "prompt gate: " + "; ".join(
+            f"{x['reason']} ({x['score']}/10)" for x in failed_scores)
+    elif not state.get("prompts"):
+        reason = "no AI shots to render (camera-only concept)"
+    elif not state.get("clips"):
+        reason = "held before render"
     else:
-        crit = state.get("critique", {}) or {}
-        issues = crit.get("issues") or []
-        if not crit.get("ok") and issues:
-            reason = "eval stop: " + "; ".join(str(i) for i in issues)
-        elif not state.get("clips"):
-            reason = "no AI shots to render (camera-only concept)"
-        else:
-            reason = "no usable clips (render is a dry-run stub)"
+        reason = "no usable clips (render is a dry-run stub)"
     return _park(state, reason)
 
 
@@ -395,7 +497,8 @@ def _build():
         ("planner", planner), ("ensure_locations", ensure_locations),
         ("ground_entities", ground_entities), ("ground_rag", ground_rag),
         ("gen_concept", gen_concept), ("evaluate", evaluate),
-        ("structure_prompt", structure_prompt), ("generate_render", generate_render),
+        ("structure_prompt", structure_prompt), ("score_prompts", score_prompts),
+        ("generate_render", generate_render),
         ("qc_clip", qc_clip), ("caption", caption), ("publish", publish),
         ("hold", hold),
     ]:
@@ -415,7 +518,11 @@ def _build():
         "retry": "gen_concept",
         "hold": "hold",
     })
-    g.add_edge("structure_prompt", "generate_render")
+    g.add_edge("structure_prompt", "score_prompts")
+    g.add_conditional_edges("score_prompts", route_after_score, {
+        "generate_render": "generate_render",
+        "hold": "hold",
+    })
     g.add_edge("generate_render", "qc_clip")
     g.add_conditional_edges("qc_clip", route_after_qc, {
         "caption": "caption", "hold": "hold",

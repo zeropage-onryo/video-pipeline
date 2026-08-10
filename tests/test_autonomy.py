@@ -110,6 +110,49 @@ def test_evaluator_agreement_empty_is_none_not_zero(tmp_db):
     assert autonomy.evaluator_agreement(path=tmp_db)["agreement"] is None
 
 
+# ---------- the prompt gate's numbers ----------
+
+def test_prompt_scores_round_trip_and_verdict(tmp_db):
+    autonomy.log_prompt_scores("run1", [
+        {"prompt": "good one", "score": 9, "pass": True, "reason": "", "dims": {"camera": 2}},
+        {"prompt": "weak one", "score": 3, "pass": False, "reason": "no light", "dims": {}},
+    ], path=tmp_db)
+
+    assert autonomy.first_try_pass_rate(path=tmp_db) == {
+        "total": 2, "passed": 1, "rate": 0.5}
+    assert autonomy.set_prompt_verdicts("run1", "reject", path=tmp_db) == 2
+
+
+def test_prompt_gate_agreement_separates_the_two_error_costs(tmp_db):
+    # gate passed, you rejected -> the expensive error (credit burned)
+    autonomy.log_prompt_scores("r1", [
+        {"prompt": "a", "score": 9, "pass": True, "reason": "", "dims": {}}], path=tmp_db)
+    autonomy.set_prompt_verdicts("r1", "reject", path=tmp_db)
+    # gate held, you'd post -> the cheap error (manual approval)
+    autonomy.log_prompt_scores("r2", [
+        {"prompt": "b", "score": 3, "pass": False, "reason": "x", "dims": {}}], path=tmp_db)
+    autonomy.set_prompt_verdicts("r2", "post", path=tmp_db)
+    # two agreements
+    autonomy.log_prompt_scores("r3", [
+        {"prompt": "c", "score": 9, "pass": True, "reason": "", "dims": {}}], path=tmp_db)
+    autonomy.set_prompt_verdicts("r3", "post", path=tmp_db)
+    autonomy.log_prompt_scores("r4", [
+        {"prompt": "d", "score": 2, "pass": False, "reason": "y", "dims": {}}], path=tmp_db)
+    autonomy.set_prompt_verdicts("r4", "reject", path=tmp_db)
+
+    result = autonomy.prompt_gate_agreement(path=tmp_db)
+    assert result["graded"] == 4
+    assert result["agreement"] == 0.5
+    assert result["passed_but_rejected"] == 1
+    assert result["held_but_posted"] == 1
+
+
+def test_prompt_verdict_rejects_unknown_values(tmp_db):
+    with pytest.raises(ValueError):
+        autonomy.set_prompt_verdicts("r1", "maybe", path=tmp_db)
+    assert autonomy.set_prompt_verdicts(None, "post", path=tmp_db) == 0
+
+
 # ---------- corrections ----------
 
 def test_corrections_round_trip(tmp_db):

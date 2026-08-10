@@ -17,6 +17,11 @@
     <div class="tile">
       <div class="tile-num">{{ "%.0f%%"|format(agreement.agreement * 100) if agreement.agreement is not none else "—" }}</div>
       <div class="kicker">Evaluator agreement ({{ agreement.graded }} graded)</div>
+      <div class="kicker" style="margin-top:6px">
+        Prompt gate: {{ "%.0f%%"|format(gate.agreement * 100) if gate.agreement is not none else "—" }} agreement
+        · pass rate {{ "%.0f%%"|format(pass_rate.rate * 100) if pass_rate.rate is not none else "—" }}
+        {% if gate.passed_but_rejected %}· <span style="color:var(--red)">{{ gate.passed_but_rejected }} would-have-burned</span>{% endif %}
+      </div>
     </div>
     {% for ch in channels %}
     <div class="tile">
@@ -60,7 +65,13 @@
       {% endif %}
       <p class="mono" style="margin-top:8px; color:var(--steel)">{{ h.reason }}</p>
       {% if h.caption %}<p style="margin-top:8px">{{ h.caption }}</p>{% endif %}
-      {% if h.payload and h.payload.prompts %}
+      {% if h.payload and h.payload.prompt_scores %}
+      <div class="kicker" style="margin-top:10px">AI shots · the gate's score</div>
+      {% for p in h.payload.prompt_scores %}
+      <div class="prompt-box">[{{ p.tool }} · {{ p.score }}/10 {{ "PASS" if p.pass else "HELD" }}{% if p.reason %} — {{ p.reason }}{% endif %}]
+{{ p.prompt }}</div>
+      {% endfor %}
+      {% elif h.payload and h.payload.prompts %}
       <div class="kicker" style="margin-top:10px">AI shots it would render</div>
       {% for p in h.payload.prompts %}
       <div class="prompt-box">[{{ p.tool }}] {{ p.prompt }}</div>

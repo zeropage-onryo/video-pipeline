@@ -33,7 +33,22 @@ def tmp_db(tmp_path, monkeypatch):
     monkeypatch.setattr(orchestrator.scheduling, "build_caption",
                         lambda fallback, db_path=None: fallback)
     monkeypatch.setattr(orchestrator, "_client", lambda: None)
+    # the prompt judge is fail-closed and billed; default it to a clean
+    # pass so graph tests exercise the line past the gate. Gate tests
+    # override this stub themselves.
+    monkeypatch.setattr(orchestrator, "_judge_prompt",
+                        lambda prompt: {"score": 10, "reason": "",
+                                        "dims": {d: 2 for d in orchestrator._PROMPT_DIMS}})
     return path
+
+
+GOOD_PROMPT = ("Extreme macro close-up of a brass door handle slowly turning in a "
+               "dark hallway at night, one warm practical light spilling under the "
+               "door, heavy film grain, crushed shadows, noir mood, static camera")
+
+# captured at import, before any fixture stubs it -- for the tests that
+# need the real fail-closed judge back
+REAL_JUDGE_PROMPT = orchestrator._judge_prompt
 
 
 def make_concept(**overrides):
@@ -46,7 +61,7 @@ def make_concept(**overrides):
              "location": "hallway", "desc": "low angle, he steps into frame"},
             {"n": 2, "type": "BROLL", "source": "AI", "tool": "KLING",
              "location": "hallway", "desc": "the handle turns on its own",
-             "prompt": "a door handle turning in the dark, noir grain"},
+             "prompt": GOOD_PROMPT},
         ],
     }
     concept.update(overrides)
@@ -80,7 +95,7 @@ def test_clean_run_parks_in_shadow_with_the_render_stub_reason(tmp_db, monkeypat
     assert result["critique"]["ok"] is True
     # the AI shot's prompt was extracted...
     assert result["prompts"] == [
-        {"tool": "KLING", "prompt": "a door handle turning in the dark, noir grain"}]
+        {"tool": "KLING", "prompt": GOOD_PROMPT}]
     # ...but render is a stub, so the run parks instead of posting
     assert "render is a dry-run stub" in result["held_reason"]
     [row] = autonomy.list_hold(path=tmp_db)
@@ -223,13 +238,13 @@ def test_render_gate_open_routes_veo_prompts_through_the_connector(tmp_db, monke
     monkeypatch.setattr(orchestrator, "_clip_passes_qc", lambda url: bool(url))
     veo_concept = make_concept(shots=[
         {"n": 1, "type": "BROLL", "source": "AI", "tool": "VEO",
-         "location": "hallway", "desc": "x", "prompt": "a drawer closing"},
+         "location": "hallway", "desc": "x", "prompt": GOOD_PROMPT},
     ])
     stage_fakes(monkeypatch, [(veo_concept, [])])
 
     result = orchestrator.run("ritual")
 
-    assert calls == ["a drawer closing"]
+    assert calls == [GOOD_PROMPT]
     assert result["clips"][0]["ok"] is True
     # with a clip through QC, the run reached publish and held in shadow
     assert "shadow" in result["held_reason"]
@@ -265,6 +280,113 @@ def test_pending_corrections_fold_into_the_spark_once(tmp_db, monkeypatch):
 
     orchestrator.run("ritual")                               # next night
     assert "less neon" not in (calls[1]["spark"] or "")      # steered once
+
+
+# ---------- the prompt gate (the credit gate) ----------
+
+def test_structural_floor_catches_the_cheap_failures():
+    ok, why = orchestrator._structural_check("")
+    assert not ok and "too thin" in why
+    ok, why = orchestrator._structural_check("a door " * 70)
+    assert not ok and "over-stuffed" in why
+    ok, why = orchestrator._structural_check(
+        "a long enough prompt with a leftover {location} token in it "
+        "plus more words to clear the length floor easily today")
+    assert not ok and "placeholder" in why
+    ok, why = orchestrator._structural_check(GOOD_PROMPT)
+    assert ok
+
+
+def test_thin_prompt_fails_the_floor_without_a_judge_call(tmp_db, monkeypatch):
+    judged = []
+    monkeypatch.setattr(orchestrator, "_judge_prompt",
+                        lambda p: judged.append(p) or {"score": 10, "reason": "", "dims": {}})
+    thin = make_concept(shots=[
+        {"n": 1, "type": "BROLL", "source": "AI", "tool": "KLING",
+         "location": "hallway", "desc": "x", "prompt": "a door"},
+    ])
+    stage_fakes(monkeypatch, [(thin, [])])
+
+    result = orchestrator.run("ritual")
+
+    assert judged == []                       # layer 1 never billed layer 2
+    assert result["prompt_scores"][0]["pass"] is False
+    assert "prompt gate" in result["held_reason"]
+    assert "too thin" in result["held_reason"]
+
+
+def test_low_judge_score_holds_with_the_judges_reason(tmp_db, monkeypatch):
+    monkeypatch.setattr(orchestrator, "_judge_prompt",
+                        lambda p: {"score": 4, "reason": "no camera direction",
+                                   "dims": {"camera": 0}})
+    stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    result = orchestrator.run("ritual")
+
+    assert result["prompt_scores"][0]["pass"] is False
+    assert "prompt gate: no camera direction (4/10)" in result["held_reason"]
+
+
+def test_unreadable_judge_fails_closed(tmp_db, monkeypatch):
+    monkeypatch.setattr(orchestrator, "_judge_prompt", REAL_JUDGE_PROMPT)
+    monkeypatch.setattr(orchestrator, "generate_with_retry",
+                        lambda client, model, contents: "I think it's pretty good actually")
+    stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    result = orchestrator.run("ritual")
+
+    assert result["prompt_scores"][0]["score"] == 0
+    assert "failed closed" in result["prompt_scores"][0]["reason"]
+    assert "prompt gate" in result["held_reason"]
+
+
+def test_one_bad_prompt_holds_the_whole_run(tmp_db, monkeypatch):
+    scores = iter([{"score": 10, "reason": "", "dims": {}},
+                   {"score": 3, "reason": "competing motions", "dims": {}}])
+    monkeypatch.setattr(orchestrator, "_judge_prompt", lambda p: next(scores))
+    two_ai = make_concept(shots=[
+        {"n": 1, "type": "BROLL", "source": "AI", "tool": "KLING",
+         "location": "hallway", "desc": "x", "prompt": GOOD_PROMPT},
+        {"n": 2, "type": "BROLL", "source": "AI", "tool": "VEO",
+         "location": "hallway", "desc": "y", "prompt": GOOD_PROMPT},
+    ])
+    stage_fakes(monkeypatch, [(two_ai, [])])
+
+    result = orchestrator.run("ritual")
+
+    assert [x["pass"] for x in result["prompt_scores"]] == [True, False]
+    assert "competing motions" in result["held_reason"]   # no half-rendered credit burn
+
+
+def test_every_score_is_logged_before_any_credit(tmp_db, monkeypatch):
+    stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    result = orchestrator.run("ritual")
+
+    with db.connect(tmp_db) as conn:
+        [row] = conn.execute("SELECT * FROM prompt_scores").fetchall()
+    assert row["run_id"] == result["run_id"]
+    assert row["passed"] == 1
+    assert row["human_verdict"] is None       # yours comes later, on /holds
+    assert autonomy.first_try_pass_rate(path=tmp_db)["rate"] == 1.0
+
+
+def test_judge_parses_fenced_json_and_clamps_dims():
+    class FakeOK:
+        pass
+    def fake_retry(client, model, contents):
+        return 'sure thing:\n```json\n{"subject":2,"camera":9,"motion":-3,' \
+               '"lighting":2,"coherence":2,"reason":"camera overclaimed"}\n```'
+    import src.orchestrator as o
+    orig = o.generate_with_retry
+    o.generate_with_retry = fake_retry
+    try:
+        verdict = o._judge_prompt("x")
+    finally:
+        o.generate_with_retry = orig
+    assert verdict["dims"]["camera"] == 2      # clamped to 0..2
+    assert verdict["dims"]["motion"] == 0
+    assert verdict["score"] == 8
 
 
 # ---------- the publish gates (driven directly; render stub blocks the wire) ----------
