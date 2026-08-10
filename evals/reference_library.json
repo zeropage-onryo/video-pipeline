@@ -3,6 +3,7 @@
   {"path": "prompts/settings.txt", "domain": "cinematography"},
   {"path": ".claude/skills/video-prompting/references/models/veo3/prompting.md", "domain": "ai_prompting"},
   {"path": ".claude/skills/video-prompting/references/models/seedance2/prompting.md", "domain": "ai_prompting"},
+  {"path": ".claude/skills/video-prompting/references/models/seedance25/prompting.md", "domain": "ai_prompting", "source_ref": "https://www.youtube.com/watch?v=UxwV16jDglA"},
   {"path": ".claude/skills/video-prompting/references/models/sora/prompting.md", "domain": "ai_prompting"},
   {"path": ".claude/skills/video-prompting/references/models/wan22/prompting.md", "domain": "ai_prompting"},
   {"path": ".claude/skills/video-prompting/references/models/minimax-h3/prompting.md", "domain": "ai_prompting"},

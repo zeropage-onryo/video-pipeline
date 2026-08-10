@@ -20,6 +20,10 @@
     "relevant": [".claude/skills/video-prompting/references/models/seedance2/prompting.md"]
   },
   {
+    "query": "seedance reference limits and multi-angle distinct subject packs",
+    "relevant": [".claude/skills/video-prompting/references/models/seedance25/prompting.md"]
+  },
+  {
     "query": "good hook formulas for a short-form video on TikTok or Reels",
     "relevant": ["docs/marketing/_mine-for-frameworks/social/references/short-form-video.md"]
   },
