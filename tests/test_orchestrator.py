@@ -378,12 +378,19 @@ def test_judge_parses_fenced_json_and_clamps_dims():
         return 'sure thing:\n```json\n{"subject":2,"camera":9,"motion":-3,' \
                '"lighting":2,"coherence":2,"reason":"camera overclaimed"}\n```'
     import src.orchestrator as o
-    orig = o.generate_with_retry
+    orig_retry, orig_client = o.generate_with_retry, o._client
     o.generate_with_retry = fake_retry
+    # _judge_prompt builds a real genai.Client() before ever reaching the
+    # patched generate_with_retry call; with no GEMINI_API_KEY in the `test`
+    # job's env (only `eval-gate` sets one), that construction itself raises,
+    # _judge_prompt's fail-closed except swallows it, and dims comes back {}.
+    # Stub it out the same way the tmp_db fixture does for every other test.
+    o._client = lambda: None
     try:
         verdict = o._judge_prompt("x")
     finally:
-        o.generate_with_retry = orig
+        o.generate_with_retry = orig_retry
+        o._client = orig_client
     assert verdict["dims"]["camera"] == 2      # clamped to 0..2
     assert verdict["dims"]["motion"] == 0
     assert verdict["score"] == 8
