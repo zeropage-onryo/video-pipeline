@@ -2,16 +2,18 @@
 
 # Zero Page Films — production pipeline
 
-> **An automated video production machine for a solo filmmaker — real footage and AI, mixed.**
+> **An automated pre-production machine for a solo filmmaker — real footage and AI, mixed.**
 > It generates concepts and shot lists from your real rooms, writes platform-native AI video
-> prompts for the shots a camera can't get, plans the cut from your real footage, and learns from
-> what performs. Real material grounds everything; AI extends it.
+> prompts for the shots a camera can't get, and learns from what performs. Real material
+> grounds everything; AI extends it.
 
-A production pipeline for a one-person film operation, aimed at running more of itself over
-time: it helps decide what to make (concepts, shot lists), decides shot by shot what gets
-captured versus generated, writes the AI prompts across platforms, and feeds posted-video
-analytics back into the next slate. Editing stays by hand — the judgment worth automating is
-which shots and which moments, not the mechanical assembly.
+A pre-production pipeline for a one-person film operation, aimed at running more of itself
+over time: it helps decide what to make (concepts, shot lists), decides shot by shot what
+gets captured versus generated, writes the AI prompts across platforms, and feeds
+posted-video analytics back into the next slate. Post-production (footage ingest, story
+pitches, cut lists) was cut from the product entirely in August 2026 — see the Decisions
+Log. Editing stays by hand, in Resolve — the judgment worth automating is what to shoot and
+what to generate, not the mechanical assembly.
 
 Built for solo shoots — one operator who is also the on-screen subject, two cameras, a house,
 and six AI video platforms.
@@ -30,23 +32,22 @@ shot carries a paste-ready, platform-native prompt (Veo, Kling, Runway, Seedance
 controlled shot vocabulary, one renderer per platform). Attempts are logged per tool, so you
 learn which prompts land in two tries and which take nine.
 
-**After the shoot — footage to cut list.** Ingest catalogs and organizes raw clips: duration and
-resolution via ffprobe, a Whisper transcript, and a vision pass that timestamps what happens
-inside each shot. From that manifest it proposes story pitches, and for the ones you pick it
-writes full edit specs — ordered in/out points, sound notes, and per-shot grade notes on top of
-your existing LUT.
+**After the shoot.** What you actually shot gets marked (`shoot_done`), and once it's posted,
+its view counts feed straight back into the next slate — the loop closes at posting, not at a
+separate edit stage. Cutting the footage together happens by hand, in Resolve; the tool's job
+ends at a validated shot plan, not a rendered timeline.
 
-**It learns from your choices.** Which ideas you plan, which concepts you shoot, which pitches you
-cut — each decision is recorded against the hash of the prompt that produced it. So changing a
+**It learns from your choices.** Which ideas you plan and which concepts you actually shoot —
+each decision is recorded against the hash of the prompt that produced it. So changing a
 prompt becomes something you can measure against the rate it produced, rather than argue about.
 Posted videos and their view counts feed back in, compared at equal age so a year-old video can't
 beat last week's on accumulated totals alone.
 
 ## The rule the whole thing is built on
 
-**Grounded in what exists — grounding shapes, it doesn't gate.** Every idea, shot list, AI
-prompt and cut plan is generated from real material: photographed rooms, ingested footage, your
-own posted results. Checks still run — in/out points against real clip durations, locations
+**Grounded in what exists — grounding shapes, it doesn't gate.** Every idea, shot list, and AI
+prompt is generated from real material: photographed rooms, the reference library, your own
+posted results. Checks still run — shot vocabulary against the tool registry, locations
 against described spaces — but as visible advisories the filmmaker weighs, never rejections. A
 generated plan that breaks a rule is saved with its warnings, because it is worth looking at and
 deciding on, not silently discarded.
@@ -57,24 +58,24 @@ the thing, or noticing the test suite had quietly gotten slower.
 
 ## Pipeline
 
+One phase — everything reasons about spaces you have. Post-production (ingest, pitches, cut
+lists) doesn't exist in the pipeline anymore; the output is a shot plan, and the edit happens
+by hand.
+
 ```
-PRE-PRODUCTION                        POST-PRODUCTION
-photos of a room                      raw footage
-   |                                     |
-   | vision: light, texture,             | ffprobe + Whisper + vision:
-   | angles, constraints                 | duration, transcript, timestamped beats
-   v                                     v
-described spaces                      manifest
-   |                                     |
-   | + brand, spark, POV on/off          | story pitches (you pick a few)
-   v                                     v
-concepts  ->  shot list + AI slot     edit specs: in/out points, sound, grade notes
-   |             + edit & grade notes     |
-   | [ you shoot it ]  ------------------>|
-   |                                      v
-   |                                 execute by hand in Resolve
+photos of a room
+   |
+   | vision: light, texture, angles, constraints
    v
-what you actually shot  ---------->  posted videos + view counts  ---> informs the next prompt
+described spaces
+   |
+   | + brand, spark, POV on/off, reference library (RAG)
+   v
+concept ideas  ->  shot list + AI slot, edit & grade notes    (human picks: THE LABEL)
+   |
+   | [ you shoot it ]  ->  shot_done  (SECOND LABEL)
+   v
+posted video + view counts  ---> informs the next prompt
 ```
 
 ## Running it
@@ -84,32 +85,31 @@ venv/bin/pip install -r requirements.txt && venv/bin/pip install -e .
 venv/bin/uvicorn app.main:app --reload      # everything, in the browser
 ```
 
-Every step also has a CLI (`python -m src.locations`, `src.shootgen`, `src.ingest`, `src.pitch`,
-`src.editgen`, `src.promptgen`, `src.genlog`). See `CLAUDE.md` for the full command list and
-architecture notes.
+Every step also has a CLI (`python -m src.locations`, `src.shootgen`, `src.promptgen`,
+`src.genlog`, `src.orchestrator`, `src.trigger`, `src.autopilot`, `src.scheduling`). See
+`CLAUDE.md` for the full command list and architecture notes.
 
 Needs `GEMINI_API_KEY` in `.env`. `YOUTUBE_API_KEY` is optional — it enables pulling public view
 counts and importing a channel automatically; without it manual entry works exactly the same.
 
 ## Reference library (RAG)
 
-Pitches can be grounded in a retrieval library: text you want the writing to learn from —
+Concepts can be grounded in a retrieval library: text you want the writing to learn from —
 brand notes, past scripts, films-you-admire notes — chunked, embedded with
-`gemini-embedding-001`, and stored in **PostgreSQL + pgvector**. At pitch time the manifest's
-clip descriptions become the query, and the closest chunks are injected into the prompt as
-tone/structure references (with a hard rule: never pitch what a reference shows but the
-footage doesn't). No Postgres? The pitch run continues ungrounded and says so — the library
-is an enhancement, not a dependency.
+`gemini-embedding-001`, and stored in **PostgreSQL + pgvector**. At generation time the
+spark, client, and the mood of the described rooms become the query, and the closest chunks
+are injected into the prompt as tone/structure references. No Postgres? The run continues
+ungrounded and says so — the library is an enhancement, not a dependency.
 
 ```bash
 # one-time setup: EITHER a local Postgres (Postgres.app / brew) + `createdb zeropage`,
 # OR no local install at all:
 docker compose up -d     # Postgres + pgvector; set DATABASE_URL per docker-compose.yml
 
-# build the library, ask it questions, wire it into pitches automatically
+# build the library, ask it questions, wire it into concept generation automatically
 venv/bin/python -m src.rag ingest prompts/brief.txt --domain personal_brand
 venv/bin/python -m src.rag query "stillness broken once" --k 5 [--domain cinematography]
-venv/bin/python -m src.pitch                # picks up references on its own
+venv/bin/python -m src.shootgen --spark "gearing up ritual"    # picks up references on its own
 
 # measure retrieval quality against labeled cases (hit@k, MRR)
 venv/bin/python -m src.rag_eval eval_cases.json --k 5
@@ -120,11 +120,10 @@ the document level, because that's what a human can actually label.
 
 ## Tech Stack
 - **Python**, **FastAPI** + **Jinja2** — pipeline and a no-build-step web app
-- **SQLite** — spaces, concepts, pitches, videos, metric snapshots, generation attempts
-- **PostgreSQL + pgvector** — the retrieval library grounding pitch generation (optional; everything else runs without it)
-- **Google Gemini** — vision descriptions of rooms and clips, concept and edit-spec generation
-- **OpenAI Whisper** — clip transcription
-- **FFmpeg / ffprobe** — metadata and frame extraction
+- **SQLite** — spaces, concepts, videos, metric snapshots, generation attempts
+- **PostgreSQL + pgvector** — the retrieval library grounding concept generation (optional; everything else runs without it)
+- **Google Gemini** — vision descriptions of rooms, concept and shot-list generation
+- **ffprobe** — clip QC (duration check) before a generated clip can be captioned/published
 - **Veo / Kling / Runway / Seedance / LTX / Wan** — AI shots (prompts written here, generated in each tool's UI)
 - **pytest** + **ruff**, run in CI on every push
 
@@ -134,6 +133,49 @@ the document level, because that's what a human can actually label.
 - Instagram and TikTok stats stay manual until their developer approvals land; the screen
   doesn't change when they do
 - Case-study writeup with a demo video
+
+## Architecture — the LangGraph orchestrator
+
+`src/orchestrator.py` is the autonomous content graph, registered as `"zeropage"` in
+`langgraph.json` and traced to LangSmith. A rendered walkthrough of every node, edge, and
+gate lives in [`docs/architecture.html`](docs/architecture.html) — open it in a browser.
+
+```
+planner -> ensure_locations -> ground_entities -> ground_rag -> gen_concept -> evaluate
+                                                        ^______________|  (corrective retry)
+evaluate --pass--> structure_prompt -> score_prompts -> generate_render -> qc_clip -> caption -> publish
+        \                    \                              \                \
+         -> hold              -> hold                        -> hold          -> hold   (dead-man log)
+```
+
+**Left third — grounding and ideation, live.** `planner` mints a run id and reads the
+channel's autonomy setting; `ensure_locations` requires at least one described space on
+file; `ground_entities` formats the picked (or all) characters/props into the `{cast}`
+block; `ground_rag` queries the CRAG-graded reference library, degrading to an ungrounded
+run with a note rather than failing; `gen_concept` calls `shootgen.generate_concept` and
+folds any prior critique — plus any pending human corrections from `/holds` — into the
+spark before generating. `evaluate` combines shootgen's code-enforced `warnings` with an
+optional LLM-judge (`JUDGE=1`) and routes: pass moves on, fail retries `gen_concept` up to
+`MAX_ATTEMPTS` (3), and running out of retries parks the run.
+
+**The credit gate.** `structure_prompt` extracts each AI shot's paste-ready prompt;
+`score_prompts` runs every one through a two-layer judge — a zero-cost structural check,
+then a strict LLM rubric (subject/camera/motion/lighting/coherence, 0–2 each, bar
+`PROMPT_GATE_MIN`) that fails closed, so an unreadable verdict scores 0 rather than
+passing by default. Every score is logged before a credit could be spent. All prompts in a
+run must pass or the whole run holds — no partial renders.
+
+**The posting line — deliberately stubbed.** `generate_render` only calls real Veo when
+`ZEROPAGE_RENDER=1`; otherwise every clip returns `ok=False` by design. `qc_clip` checks
+the file is really there and really a video (size, `ffprobe` duration) before allowing a
+caption. `publish` reads the channel's autonomy (`shadow` | `queue` | `auto`, never a
+global flag) and the kill switch — no posting API is wired yet, so even an `auto` channel
+currently parks with an explicit reason rather than pretending to post.
+
+**The sink.** Five different failure points converge on one `hold` node, which inspects
+state to write a human-readable reason to `autonomy.hold_queue` — the dead-man log every
+run writes to, pass, fail, or crash. Grading a hold on `/holds` (approved/rejected) is what
+earns a channel promotion toward `auto`.
 
 ## Decisions Log
 
@@ -276,3 +318,24 @@ and the 2026-07-29 removal of the Resolve integration — **editing stays manual
 hold)**. Validators survive as advisories: visible warnings, never gates. Supersedes the
 rejection clause of "Concepts are grounded in photographed spaces" (2026-07-30) and
 BUILD_SPEC's "one generated clip per edit, maximum."
+
+**2026-08-11 — Documented the LangGraph orchestrator as a first-class architecture section.**
+The graph in `src/orchestrator.py` was previously explained only in `CLAUDE.md`, written for
+an assisting coding agent rather than a reader of this repo. Added an "Architecture — the
+LangGraph orchestrator" section to this README plus a rendered node/edge diagram at
+`docs/architecture.html`, describing the grounding-and-retry loop, the two-layer prompt
+credit gate, the deliberately stubbed posting line, and the shared hold sink. Reason: the
+graph's shape *is* the autonomy story — how much currently runs unattended versus what's
+still gated — and that was previously implicit in code rather than legible on its own.
+Nothing in the graph itself changed.
+
+**2026-08-11 — Synced this README to the post-production removal.**
+`CLAUDE.md` already documented that post-production (ingest → pitches → cut lists) was cut
+from the product in August 2026, but this README's intro, "What it does," Pipeline diagram,
+Running-it command list, and Reference-library section still described it as live —
+`src.ingest`/`src.pitch`/`src.editgen` commands that no longer exist, a two-column
+pre/post-production diagram, and RAG examples grounding "pitches" instead of concepts.
+Rewrote all of it to the current single-phase pipeline: photograph a space, generate a
+grounded concept and shot list, shoot it, post it, feed the metrics back. The edit still
+happens by hand in Resolve — that was already true, just no longer framed as one stage of
+two. No code changed; this brings the docs in line with what Aug 2026 already did.

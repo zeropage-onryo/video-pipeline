@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Zero Page — LangGraph Content Orchestrator</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js"></script>
+<style>
+  :root {
+    --bg: #0b0d12;
+    --panel: #12151c;
+    --border: #232838;
+    --text: #e7e9ee;
+    --muted: #9aa3b2;
+    --accent: #7dd3fc;
+    --good: #4ade80;
+    --warn: #fbbf24;
+    --hold: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    padding: 32px 24px 64px;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; }
+  h1 {
+    font-size: 22px;
+    font-weight: 650;
+    margin: 0 0 4px;
+    letter-spacing: -0.01em;
+  }
+  .subtitle {
+    color: var(--muted);
+    font-size: 14px;
+    margin: 0 0 28px;
+  }
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 18px;
+    margin: 18px 0 28px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .legend span {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+  }
+  .swatch {
+    width: 11px;
+    height: 11px;
+    border-radius: 3px;
+    display: inline-block;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px 8px 8px;
+    overflow-x: auto;
+  }
+  .mermaid { min-width: 760px; }
+  .notes {
+    margin-top: 28px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 14px;
+  }
+  .note {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 16px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--muted);
+  }
+  .note b { color: var(--text); }
+  code {
+    background: #1b2030;
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 12px;
+    color: var(--accent);
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>src/orchestrator.py — the "zeropage" content graph</h1>
+  <p class="subtitle">LangGraph StateGraph over GenState · registered in langgraph.json · traced to LangSmith</p>
+
+  <div class="legend">
+    <span><span class="swatch" style="background:var(--accent)"></span>grounding &amp; ideation (live)</span>
+    <span><span class="swatch" style="background:var(--warn)"></span>credit gate</span>
+    <span><span class="swatch" style="background:var(--good)"></span>posting line (stubbed)</span>
+    <span><span class="swatch" style="background:var(--hold)"></span>hold sink (dead-man log)</span>
+  </div>
+
+  <div class="panel">
+    <pre class="mermaid">
+flowchart TD
+    START([START]) --> planner[planner]
+    planner --> ensure[ensure_locations]
+    ensure -- "no locations" --> hold[[hold]]
+    ensure -- ok --> gent[ground_entities]
+    gent --> grag[ground_rag]
+    grag --> gconcept[gen_concept]
+    gconcept --> eval[evaluate]
+    eval -- "retry (< MAX_ATTEMPTS)" --> gconcept
+    eval -- "pass" --> sprompt[structure_prompt]
+    eval -- "out of retries" --> hold
+    sprompt --> score[score_prompts]
+    score -- "all prompts pass" --> render[generate_render]
+    score -- "any prompt fails" --> hold
+    render --> qc[qc_clip]
+    qc -- "usable clip" --> caption[caption]
+    qc -- "no usable clip" --> hold
+    caption --> publish[publish]
+    publish -- "gates clear + autonomy=auto" --> posted([posted])
+    publish -- "shadow / queue / gate fails / kill switch" --> hold
+    hold --> END([END])
+    posted --> END
+
+    classDef ground fill:#123047,stroke:#7dd3fc,color:#e7e9ee,rx:6,ry:6;
+    classDef gate fill:#3a2f12,stroke:#fbbf24,color:#e7e9ee,rx:6,ry:6;
+    classDef post fill:#123a20,stroke:#4ade80,color:#e7e9ee,rx:6,ry:6;
+    classDef sink fill:#3a1414,stroke:#f87171,color:#e7e9ee,rx:6,ry:6;
+    classDef term fill:#12151c,stroke:#9aa3b2,color:#9aa3b2,rx:20,ry:20;
+
+    class planner,ensure,gent,grag,gconcept,eval ground;
+    class sprompt,score gate;
+    class render,qc,caption,publish post;
+    class hold sink;
+    class START,END,posted term;
+    </pre>
+  </div>
+
+  <div class="notes">
+    <div class="note"><b>Left third — grounding &amp; ideation.</b> <code>planner → ensure_locations → ground_entities → ground_rag → gen_concept → evaluate</code>. Unchanged, live, and verified against real Gemini calls. The <code>evaluate → gen_concept</code> edge is the self-correcting retry loop: failed critique issues get folded into the next spark, up to <code>MAX_ATTEMPTS = 3</code>.</div>
+    <div class="note"><b>The credit gate.</b> <code>structure_prompt → score_prompts</code> extracts each AI shot's prompt and runs it through a two-layer judge (deterministic structural check, then a strict LLM rubric). Every score is logged before any spend. <b>All</b> prompts must pass, or the whole run holds — no partial renders.</div>
+    <div class="note"><b>The posting line — deliberately stubbed.</b> <code>generate_render</code> only calls real Veo when <code>ZEROPAGE_RENDER=1</code>; otherwise every clip returns <code>ok=False</code> by design. <code>publish</code> has no wired posting API yet — even an <code>auto</code>-autonomy channel currently parks with an explicit reason.</div>
+    <div class="note"><b>The sink.</b> Five different failure points converge on one <code>hold</code> node, which inspects state to write a human-readable reason to <code>hold_queue</code> — the dead-man log every run writes to, pass or fail.</div>
+  </div>
+</div>
+
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: 'dark', securityLevel: 'loose',
+    themeVariables: { fontFamily: '-apple-system, Segoe UI, Helvetica, Arial, sans-serif' } });
+</script>
+</body>
+</html>
