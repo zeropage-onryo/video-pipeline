@@ -9,6 +9,7 @@ landing and the only indexed URL.
 """
 import os
 import re
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import List, Optional
@@ -21,7 +22,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from google import genai
 
-from src import autonomy, db, entities, instagram, locations, preprod, rag, shootgen, youtube
+from src import (autonomy, autopilot, db, entities, format_feed, inspiration,
+                 instagram, locations, preprod, rag, shootgen, taste_judge,
+                 uncanny_judge, winners, youtube)
 
 from . import seo
 from .sparkline import render_sparkline
@@ -50,8 +53,84 @@ def clean_title(title: str) -> str:
 
 templates.env.filters["clean_title"] = clean_title
 
+# --- Brands: two separate concepts, one switchable "active brand" ----------
+# ANTIHERO = Michael's personal brand (he is the star); Zero Page = the viral
+# auto-posting engine (product/trend is the star). They must never blur, so
+# the active brand rides a cookie: it drives generation, filters which
+# channel's holds and which brand's analytics you see, and shows a distinct
+# label + accent everywhere.
+BRANDS = tuple(preprod.BRANDS)
+DEFAULT_BRAND = "antihero"
+BRAND_META = {
+    "antihero": {"label": "ANTIHERO", "accent": "#d64550",
+                 "note": "personal brand — Michael is the star"},
+    "zeropage": {"label": "Zero Page Films", "accent": "#8b5cf6",
+                 "note": "viral engine — the product / trend is the star"},
+}
+
+
+def active_brand(request: Request) -> str:
+    """The brand the studio is currently 'in', from the cookie. Validated
+    against the real brand set, defaulting to ANTIHERO."""
+    brand = request.cookies.get("brand", DEFAULT_BRAND)
+    return brand if brand in BRANDS else DEFAULT_BRAND
+
+
+# The two accounts have two POSTURES, not just two colours. ANTIHERO is
+# review-gated (Michael approves every post — his face, his name). Zero Page
+# runs on autopilot (faceless, gated by the uncanny judge + credit gate). The
+# toggle flips posture with the brand, so landing on a brand shows the right
+# relationship to the post button.
+def brand_posture(brand: str) -> str:
+    return "autopilot" if brand == "zeropage" else "review"
+
+
+def autopilot_state() -> dict:
+    """Live posture read for the UI: is the standing enable on, is the kill
+    switch down, is it actually live. Read-only; never raises."""
+    try:
+        enabled = autopilot.enabled()
+        killed = autopilot.killed()
+    except Exception:
+        enabled, killed = False, False
+    if killed:
+        label, tone = "PAUSED", "killed"
+    elif enabled:
+        label, tone = "LIVE", "live"
+    else:
+        label, tone = "STANDBY", "standby"
+    return {"enabled": enabled, "killed": killed, "live": enabled and not killed,
+            "label": label, "tone": tone}
+
+
+# Jinja globals so the switcher + accent render on every page without
+# threading the brand through each route's context.
+templates.env.globals["active_brand"] = active_brand
+templates.env.globals["BRAND_META"] = BRAND_META
+templates.env.globals["BRANDS"] = BRANDS
+templates.env.globals["brand_posture"] = brand_posture
+templates.env.globals["autopilot_state"] = autopilot_state
+
 # "Posted in the last" control -> posted_within_days. "all" -> no cutoff.
 POSTED_WINDOWS = {"3": 90, "6": 180, "12": 365, "all": None}
+
+
+def seed_gold_standard():
+    """Record the canonical example prompt (prompts/gold_standard.md) as a
+    winning prompt once, so the RAG loop reinforces it. Idempotent (keyed on
+    the note), best-effort ingest -- never blocks startup."""
+    text = shootgen.gold_standard_example()
+    if not text:
+        return
+    try:
+        already = any((w.get("note") or "").startswith("gold standard")
+                      for w in winners.list_all(path=db.DB_PATH))
+        if not already:
+            winners.record_and_learn(
+                "runway", text, note="gold standard structural exemplar",
+                verdict="worked", path=db.DB_PATH)
+    except Exception:
+        pass
 
 
 @asynccontextmanager
@@ -60,6 +139,9 @@ async def lifespan(app: FastAPI):
     preprod.init(path=db.DB_PATH)
     entities.init(path=db.DB_PATH)
     autonomy.init(path=db.DB_PATH)
+    winners.init(path=db.DB_PATH)
+    inspiration.init(path=db.DB_PATH)   # seeds the researched accounts if empty
+    seed_gold_standard()                # records the canonical example as a winner
     yield
 
 
@@ -203,6 +285,33 @@ def next_unplanned_concept(concepts: list) -> Optional[dict]:
     return next((c for c in concepts if not c.get("has_shot_list")), None)
 
 
+@app.post("/brand/{name}")
+def set_brand(name: str, next: str = Form("/studio")):
+    """Flip the active brand. Persists in a cookie so generation and the
+    holds / analytics views follow it until you switch back."""
+    brand = name if name in BRANDS else DEFAULT_BRAND
+    resp = RedirectResponse(safe_next(next, "/studio"), status_code=303)
+    resp.set_cookie("brand", brand, max_age=60 * 60 * 24 * 365, samesite="lax")
+    return resp
+
+
+@app.post("/autopilot/{action}")
+def autopilot_toggle(action: str, next: str = Form("/studio")):
+    """Zero Page's posture control: pause drops the kill switch (nothing
+    auto-posts until resumed); resume lifts it. This governs the file gate;
+    the standing ZEROPAGE_AUTOPILOT env enable stays where it is."""
+    try:
+        if action == "pause":
+            autopilot.KILL_SWITCH_PATH.parent.mkdir(parents=True, exist_ok=True)
+            autopilot.KILL_SWITCH_PATH.write_text(
+                "autopilot paused from the studio\n")
+        elif action == "resume" and autopilot.killed():
+            autopilot.KILL_SWITCH_PATH.unlink()
+    except Exception as e:
+        print(f"note: autopilot toggle failed: {e}", file=sys.stderr)
+    return RedirectResponse(safe_next(next, "/studio"), status_code=303)
+
+
 @app.get("/studio")
 def studio(request: Request, message: Optional[str] = None):
     """
@@ -298,7 +407,7 @@ async def studio_assist(request: Request):
     text = (form.get("text") or "").strip()
     intent = route_intent(text, (form.get("intent") or "").strip() or None)
 
-    brand = form.get("brand") or "antihero"
+    brand = form.get("brand") or active_brand(request)
     client_name = (form.get("client") or "").strip() or None
     use_pov = bool(form.get("use_pov"))
     # The typed text is the spark for a generation; for a chip pressed
@@ -385,6 +494,7 @@ def videos_new_form(request: Request):
 async def videos_new_submit(request: Request):
     form = dict(await request.form())
     parsed = parse_video_form(form)
+    parsed.setdefault("brand", active_brand(request))  # tag to the active brand
     try:
         db.add_video(**parsed, path=db.DB_PATH)
     except ValueError as e:
@@ -505,6 +615,144 @@ def library_delete(source: str = Form(...)):
     return RedirectResponse("/library?message=" + quote(message), status_code=303)
 
 
+@app.get("/post-image")
+def post_image_page(request: Request, url: Optional[str] = None,
+                    caption: Optional[str] = None, message: Optional[str] = None):
+    """A one-off publish surface: preview an image + caption, then post it
+    to Instagram through the pipeline's gated autopilot path. Prefilled
+    via ?url= & ?caption= so the trigger can hand it a hosted image."""
+    return templates.TemplateResponse(
+        request, "post_image.html",
+        {"url": url or "", "caption": caption or "", "message": message,
+         "active_nav": ""})
+
+
+@app.post("/post-image")
+async def post_image_fire(request: Request):
+    """Fire the post: one instagram post action through autopilot's
+    three-condition gate (ZEROPAGE_AUTOPILOT=1 + this approve + no
+    data/autopilot.off). instagram.execute_post_action posts an image
+    when the action carries image_url."""
+    form = dict(await request.form())
+    image_url = (form.get("image_url") or "").strip()
+    caption = (form.get("caption") or "").strip()
+
+    def back(msg):
+        return RedirectResponse(
+            f"/post-image?message={quote(msg)}&url={quote(image_url)}"
+            f"&caption={quote(caption)}", status_code=303)
+
+    if not image_url:
+        return back("Need a public image URL.")
+    action = {"kind": "post", "platform": "instagram",
+              "image_url": image_url, "caption": caption}
+    try:
+        result = autopilot.execute({"actions": [action]}, approve=True, dry_run=False)
+    except Exception as e:
+        return back(f"Post failed: {e}")
+    mode = result.get("mode")
+    if mode == "live" and result.get("executed"):
+        media = (action.get("result") or {}).get("media_id")
+        return back(f"Posted to Instagram ✅  (media id {media}).")
+    if mode == "disabled":
+        return back("Posting is OFF — set ZEROPAGE_AUTOPILOT=1 and restart.")
+    if mode == "killed":
+        return back("Autopilot kill switch is on (data/autopilot.off).")
+    return back(f"Not posted (mode: {mode}).")
+
+
+@app.post("/post-image/queue")
+async def post_image_queue(request: Request):
+    """Semi-auto Midjourney path (BACKLOG #6): take a generated still -- an
+    uploaded file or a public URL -- plus a caption, host it on R2 as a JPEG
+    if it's a file (Meta rejects PNG/HEIC), and QUEUE it as a held image post
+    on the Zero Page channel. You approve it on /holds and it publishes
+    through the same gate. One-tap, not fully auto."""
+    form = await request.form()
+    caption = (form.get("caption") or "").strip()
+    image_url = (form.get("image_url") or "").strip()
+    channel = (form.get("channel") or "zeropage").strip() or "zeropage"
+    upload = form.get("image_file")
+
+    def back(msg):
+        return RedirectResponse(
+            f"/post-image?message={quote(msg)}&caption={quote(caption)}"
+            f"&url={quote(image_url)}", status_code=303)
+
+    # An uploaded file wins over a pasted URL: convert to JPEG and push to R2.
+    if getattr(upload, "filename", ""):
+        try:
+            import io
+            import uuid
+
+            from PIL import Image
+
+            from src import storage
+            data = await upload.read()
+            jpeg = Image.open(io.BytesIO(data)).convert("RGB")
+            tmp = Path("/tmp") / f"mj-{uuid.uuid4().hex}.jpg"
+            jpeg.save(tmp, "JPEG", quality=92)
+            image_url = storage.upload_file(
+                tmp, key=f"images/{tmp.name}", content_type="image/jpeg")
+        except Exception as e:
+            return back(f"Upload failed: {e}")
+
+    if not image_url:
+        return back("Add a Midjourney image — upload a file or paste a public JPEG URL.")
+
+    hold_id = autonomy.to_hold(
+        channel, "Midjourney image queued for approval", caption=caption,
+        payload={"image_url": image_url}, status="held", path=db.DB_PATH)
+    return RedirectResponse(
+        "/holds?message=" + quote(f"Queued image post #{hold_id} for approval."),
+        status_code=303)
+
+
+@app.get("/winners")
+def winners_page(request: Request, prompt: Optional[str] = None,
+                 tool: Optional[str] = None, verdict: Optional[str] = None,
+                 message: Optional[str] = None):
+    """Your outcome loop: paste the final, edited prompt that actually
+    worked -- the one behind a finished piece you liked and that did well
+    -- and it is saved and taught to the pipeline via the RAG
+    'winning_prompts' shelf shootgen grounds on. Arrives prefilled when
+    you hand a prompt over from /holds (?prompt=...)."""
+    winners.init(path=db.DB_PATH)
+    return templates.TemplateResponse(
+        request, "winners.html",
+        {"winners": winners.list_all(path=db.DB_PATH),
+         "prefill_prompt": prompt or "",
+         "prefill_tool": (tool or "runway").lower(),
+         "prefill_verdict": (verdict or "worked").lower(),
+         "message": message, "active_nav": "winners"},
+    )
+
+
+@app.post("/winners")
+async def winners_add(request: Request):
+    """Save the winner durably, then teach it to the pipeline. Saving
+    always succeeds; the RAG ingest is best-effort so a down store never
+    loses the winner -- it just re-ingests later."""
+    winners.init(path=db.DB_PATH)
+    form = dict(await request.form())
+    prompt = (form.get("prompt") or "").strip()
+    if not prompt:
+        return RedirectResponse(
+            f"/winners?message={quote('A winning prompt cannot be empty.')}",
+            status_code=303)
+    result = winners.record_and_learn(
+        form.get("tool") or "runway", prompt,
+        note=form.get("note") or "", video_ref=form.get("video_ref") or "",
+        verdict=form.get("verdict") or "worked", path=db.DB_PATH)
+    verb = "avoid" if result.get("verdict") == "didnt_work" else "imitate"
+    if result.get("ingested"):
+        message = f"Saved and taught — future generations will {verb} it."
+    else:
+        message = ("Saved. Teaching is pending — start Postgres and re-save to "
+                   f"ingest it into RAG. ({result.get('error') or 'store unavailable'})")
+    return RedirectResponse(f"/winners?message={quote(message)}", status_code=303)
+
+
 @app.get("/holds")
 def holds_list(request: Request, message: Optional[str] = None):
     """
@@ -513,10 +761,19 @@ def holds_list(request: Request, message: Optional[str] = None):
     agreement number is the credit gate -- ~0.9 over a real stretch is
     what earns a channel its promotion to auto.
     """
+    # Full brand separation: show only the active brand's channel so the two
+    # queues never blur (brand name maps 1:1 to channel name).
+    brand = active_brand(request)
     concepts_by_id = {c["id"]: c for c in preprod.list_concepts(path=db.DB_PATH)}
-    held = autonomy.list_hold(status="held", path=db.DB_PATH)
+    held = [h for h in autonomy.list_hold(status="held", path=db.DB_PATH)
+            if h["channel"] == brand]
     for row in held:
         row["concept"] = concepts_by_id.get(row.get("concept_id"))
+    channels = autonomy.list_channels(path=db.DB_PATH)
+    # a channel is postable when it may post AND names where to
+    postable = {c["name"] for c in channels
+                if c.get("autonomy") in ("queue", "auto")
+                and (c.get("targets") or "").strip()}
     return templates.TemplateResponse(
         request,
         "holds.html",
@@ -525,7 +782,8 @@ def holds_list(request: Request, message: Optional[str] = None):
             "agreement": autonomy.evaluator_agreement(path=db.DB_PATH),
             "gate": autonomy.prompt_gate_agreement(path=db.DB_PATH),
             "pass_rate": autonomy.first_try_pass_rate(path=db.DB_PATH),
-            "channels": autonomy.list_channels(path=db.DB_PATH),
+            "channels": channels,
+            "postable": postable,
             "killed": autonomy.killed(path=db.DB_PATH),
             "active_nav": "home",
             "message": message,
@@ -553,6 +811,68 @@ async def holds_resolve(hold_id: int, request: Request):
         autonomy.set_prompt_verdicts(
             run_id, "post" if status == "approved" else "reject", path=db.DB_PATH)
     return RedirectResponse("/holds", status_code=303)
+
+
+@app.post("/holds/{hold_id}/post")
+async def holds_post(hold_id: int, request: Request):
+    """Your explicit 'post now' -- the approval to publish. Builds one
+    post action per channel target from the hold, then runs it through
+    autopilot's three-condition gate (ZEROPAGE_AUTOPILOT=1 + this approve
+    + no data/autopilot.off). Nothing uploads until real media and
+    platform credentials exist; until then it reports exactly what's
+    missing rather than pretending."""
+    row = next((h for h in autonomy.list_hold(status=None, path=db.DB_PATH)
+                if h["id"] == hold_id), None)
+    if row is None:
+        raise HTTPException(status_code=404, detail="no such hold")
+    channel = autonomy.get_channel(row.get("channel", ""), path=db.DB_PATH) or {}
+    targets = [t.strip() for t in (channel.get("targets") or "").split(",") if t.strip()]
+    if not targets:
+        return RedirectResponse(
+            f"/holds?message={quote('This channel has no post targets.')}",
+            status_code=303)
+
+    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    caption = row.get("caption") or ""
+    image_url = (payload.get("image_url") or "").strip()
+    if image_url:
+        # A queued Midjourney still: post it as an image, not a video.
+        actions = [{
+            "kind": "post", "platform": platform, "concept_id": row.get("concept_id"),
+            "caption": caption, "image_url": image_url,
+        } for platform in targets]
+    else:
+        clips = payload.get("clips") or []
+        media_url = next((c.get("url") for c in clips if c.get("url")), "") or ""
+        is_local = bool(media_url) and not media_url.startswith("http")
+        actions = [{
+            "kind": "post", "platform": platform, "concept_id": row.get("concept_id"),
+            "caption": caption,
+            "video_url": media_url,                       # instagram fetches a public URL
+            "video_path": media_url if is_local else "",  # youtube uploads a local file
+        } for platform in targets]
+
+    try:
+        result = autopilot.execute({"actions": actions}, approve=True, dry_run=False)
+    except Exception as e:
+        return RedirectResponse(
+            f"/holds?message={quote('Post failed: ' + str(e))}", status_code=303)
+
+    mode = result.get("mode")
+    if mode == "live" and result.get("executed"):
+        autonomy.resolve_hold(hold_id, "posted", path=db.DB_PATH)
+        msg = f"Posted to {', '.join(targets)}."
+    elif mode == "live":
+        msg = "Live, but nothing posted: " + "; ".join(
+            result.get("skipped") or ["no rendered media to post yet"])
+    elif mode == "disabled":
+        msg = ("Posting is OFF — set ZEROPAGE_AUTOPILOT=1 and the platform "
+               "credentials to go live.")
+    elif mode == "killed":
+        msg = "Autopilot kill switch is on (data/autopilot.off)."
+    else:
+        msg = f"Posting mode: {mode} — nothing was posted."
+    return RedirectResponse(f"/holds?message={quote(msg)}", status_code=303)
 
 
 @app.post("/holds/note")
@@ -603,7 +923,11 @@ async def kill_toggle():
 @app.get("/analytics")
 @app.get("/metrics/new")   # old URL, kept so bookmarks and habits still land
 def analytics(request: Request, updated: Optional[int] = None, message: Optional[str] = None):
-    rows = db.latest_metrics_by_video(path=db.DB_PATH)
+    # Scope to the active brand (NULL-inclusive: untagged legacy videos still
+    # show, so nothing disappears while the pipeline tags new posts).
+    brand = active_brand(request)
+    rows = [r for r in db.latest_metrics_by_video(path=db.DB_PATH)
+            if r.get("brand") in (None, brand)]
 
     # One measure (views) across named videos: a sorted bar list, each
     # bar scaled against the current best. Totals are headline numbers,
@@ -929,9 +1253,15 @@ def concepts_list(request: Request, message: Optional[str] = None):
         request,
         "concepts.html",
         {
-            "concepts": preprod.list_concepts(path=db.DB_PATH),
+            # Brand-scoped (BACKLOG #7): switching the active brand changes
+            # which concepts you see, so the switch is visible here too.
+            "concepts": [c for c in preprod.list_concepts(path=db.DB_PATH)
+                         if c["brand"] == active_brand(request)],
             "rate": preprod.shoot_rate(path=db.DB_PATH),
             "shortlist": preprod.shortlist_rate(path=db.DB_PATH),
+            "inspirations": inspiration.list_accounts(path=db.DB_PATH),
+            "scene_briefs": preprod.list_scene_briefs(brand=active_brand(request),
+                                                      path=db.DB_PATH),
             "brands": preprod.BRANDS,
             "spaces": spaces,
             "has_locations": bool(spaces),
@@ -941,6 +1271,90 @@ def concepts_list(request: Request, message: Optional[str] = None):
             "message": message,
         },
     )
+
+
+@app.post("/concepts/{concept_id}/grade")
+def concepts_grade(concept_id: int):
+    """Score one concept on taste fit + predicted performance (BACKLOG #5)
+    against your own history, and store it so the card shows it. One billed
+    model call, on your click -- never automatic."""
+    concept = preprod.get_concept(concept_id, path=db.DB_PATH)
+    if concept is None:
+        raise HTTPException(status_code=404, detail="no such concept")
+    judge = taste_judge.score_concept(concept, db_path=db.DB_PATH)
+    preprod.save_judge_score(concept_id, judge, path=db.DB_PATH)
+    if judge.get("graded"):
+        msg = (f"Graded SHOOT-{concept_id:02d}: {judge['overall']:.0f}/10 "
+               f"(taste {judge['taste_fit']:.0f}, perf {judge['performance']:.0f})")
+    else:
+        msg = f"SHOOT-{concept_id:02d}: " + (judge.get("reasons") or ["not graded"])[0]
+    return RedirectResponse(f"/concepts?message={quote(msg)}", status_code=303)
+
+
+@app.post("/concepts/{concept_id}/discard")
+def concepts_discard(concept_id: int):
+    """Discard a concept you don't want. Deletes it (locations cascade)."""
+    if preprod.get_concept(concept_id, path=db.DB_PATH) is None:
+        raise HTTPException(status_code=404, detail="no such concept")
+    preprod.delete_concept(concept_id, path=db.DB_PATH)
+    return RedirectResponse(
+        "/concepts?message=" + quote(f"Discarded SHOOT-{concept_id:02d}."),
+        status_code=303)
+
+
+@app.post("/concepts/discard-all")
+def concepts_discard_all(request: Request):
+    """Clear every concept for the active brand -- a fresh slate when the
+    generator's slate isn't landing."""
+    brand = active_brand(request)
+    n = preprod.delete_all_concepts(brand=brand, path=db.DB_PATH)
+    return RedirectResponse(
+        "/concepts?message=" + quote(f"Discarded all {n} {brand} concept(s)."),
+        status_code=303)
+
+
+@app.post("/concepts/grade-all")
+def concepts_grade_all():
+    """Grade every not-yet-graded concept against your history. Each is one
+    billed call, so this is an explicit button, not automatic. Signals are
+    gathered once and reused across the batch."""
+    concepts = preprod.list_concepts(path=db.DB_PATH)
+    signals = taste_judge.gather_signals(db_path=db.DB_PATH)
+    graded = 0
+    for c in concepts:
+        if c.get("judge_overall") is None:
+            judge = taste_judge.score_concept(c, signals=signals, db_path=db.DB_PATH)
+            preprod.save_judge_score(c["id"], judge, path=db.DB_PATH)
+            graded += 1
+    return RedirectResponse(
+        "/concepts?message=" + quote(f"Graded {graded} concept(s)."), status_code=303)
+
+
+@app.post("/concepts/scene-brief/{brief_id}/delete")
+def scene_brief_delete(brief_id: int):
+    preprod.delete_scene_brief(brief_id, path=db.DB_PATH)
+    return RedirectResponse(
+        "/concepts?message=" + quote(f"Discarded scene brief #{brief_id}."),
+        status_code=303)
+
+
+@app.post("/inspiration/add")
+def inspiration_add(handle: str = Form(...), note: str = Form(""), profile: str = Form(...)):
+    """Add or update an inspiration account -- e.g. once you've pasted posts
+    for an account I couldn't reach."""
+    try:
+        inspiration.add(handle, note, profile, path=db.DB_PATH)
+        msg = f"Saved inspiration @{handle.lstrip('@').strip().lower()}."
+    except ValueError as e:
+        msg = str(e)
+    return RedirectResponse("/concepts?message=" + quote(msg), status_code=303)
+
+
+@app.post("/inspiration/{handle}/delete")
+def inspiration_delete(handle: str):
+    inspiration.delete(handle, path=db.DB_PATH)
+    return RedirectResponse(
+        "/concepts?message=" + quote(f"Removed inspiration @{handle}."), status_code=303)
 
 
 def cast_from_picks(char_ids: list, prop_ids: list):
@@ -962,11 +1376,24 @@ def cast_from_picks(char_ids: list, prop_ids: list):
     return shootgen.format_cast(characters, props)
 
 
+def _run_uncanny_gate(id_concept_pairs, gemini_client) -> None:
+    """Run Zero Page's on-brand gate over freshly generated concepts and store
+    each verdict. Best-effort and fully isolated: the judge fails closed per
+    concept, and any failure here must never break the generation response."""
+    for concept_id, concept in id_concept_pairs:
+        try:
+            score = uncanny_judge.score_concept(concept, gemini_client=gemini_client)
+            preprod.save_uncanny_score(concept_id, score, path=db.DB_PATH)
+        except Exception as e:
+            print(f"note: uncanny gate skipped concept {concept_id}: {e}",
+                  file=sys.stderr)
+
+
 @app.post("/concepts/generate")
 async def concepts_generate(request: Request):
     form_data = await request.form()
     form = dict(form_data)
-    brand = form.get("brand") or "antihero"
+    brand = form.get("brand") or active_brand(request)
     spark = (form.get("spark") or "").strip() or None
     client_name = (form.get("client") or "").strip() or None
     # an unchecked checkbox submits nothing, so absence means off
@@ -984,26 +1411,60 @@ async def concepts_generate(request: Request):
     references = shootgen.reference_block(spark=spark, client=client_name,
                                           db_path=db.DB_PATH)
 
+    # Under the hood: ANTIHERO generations ground automatically on the
+    # inspiration accounts (no button). Zero Page gets none. Injected as
+    # reference grounding so it steers the ideas without polluting the stored
+    # spark.
+    if brand == "antihero":
+        insp = inspiration.combined_grounding(path=db.DB_PATH)
+        if insp:
+            references = insp + "\n\n" + (references or "")
+
+    # Zero Page rides FORMAT skeletons, ranked by what's actually winning, with
+    # the spark treated as today's-hot spice. An enhancement, never a gate:
+    # rank_formats degrades to the evergreen menu on any failure. Antihero
+    # ignores it (formats stays None).
+    formats = None
+    if brand == "zeropage":
+        spice = [spark] if spark else None
+        formats = format_feed.rank_formats(path=db.DB_PATH, spice=spice)
+
     # Generating is the deliverable, but a failed generation should leave
     # the screen usable rather than 500 -- same contract as the YouTube import.
     try:
         gemini_client = genai.Client(api_key=api_key)
-        if (form.get("mode") or "").strip() == "ideas":
+        mode = (form.get("mode") or "").strip()
+        if mode == "scene":
+            result = shootgen.generate_scene_brief(
+                brand=brand, spark=spark, gemini_client=gemini_client,
+                references=references, cast=cast,
+            )
+            preprod.save_scene_brief(brand, result["title"], result["brief"],
+                                     spark=spark, path=db.DB_PATH)
+            message = f'Wrote scene brief "{result["title"]}" — copy it into your video model'
+        elif mode == "ideas":
             result = shootgen.generate_concept_ideas(
                 brand=brand, client=client_name, spark=spark,
                 gemini_client=gemini_client, use_pov=use_pov, db_path=db.DB_PATH,
-                references=references,
+                references=references, formats=formats,
             )
             message = f"Generated {len(result['ideas'])} ideas — plan the ones worth shooting"
+            if brand == "zeropage":
+                _run_uncanny_gate(list(zip(result.get("concept_ids") or [],
+                                           result.get("ideas") or [])),
+                                  gemini_client)
         else:
             result = shootgen.generate_concept(
                 brand=brand, client=client_name, spark=spark,
                 gemini_client=gemini_client, use_pov=use_pov, db_path=db.DB_PATH,
-                references=references, cast=cast,
+                references=references, cast=cast, formats=formats,
             )
             message = f"Generated \"{result['concept']['title']}\""
             if result["warnings"]:
                 message += f" ({len(result['warnings'])} warning(s))"
+            if brand == "zeropage":
+                _run_uncanny_gate([(result["concept_id"], result["concept"])],
+                                  gemini_client)
     except Exception as e:
         message = f"Could not generate: {e}"
 

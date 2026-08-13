@@ -52,9 +52,10 @@ def tmp_db(tmp_path, monkeypatch):
 def tmp_preprod_db(tmp_db):
     """tmp_db plus the pre-production tables -- the same set the app's
     lifespan creates (preprod + the characters/props entities)."""
-    from src import entities
+    from src import entities, inspiration
     preprod.init(tmp_db)
     entities.init(tmp_db)
+    inspiration.init(tmp_db)
     return tmp_db
 
 
@@ -618,7 +619,10 @@ def test_holds_page_shows_a_held_run_with_its_concept(tmp_autonomy_db):
                      payload={"prompts": [{"tool": "KLING", "prompt": "the handle turns"}]},
                      path=tmp_autonomy_db)
 
+    # /holds is brand-scoped now (BACKLOG #7): view as the hold's brand.
+    client.cookies.set("brand", "zeropage")
     response = client.get("/holds")
+    client.cookies.clear()
     assert "Terminal Ritual" in response.text
     assert "shadow — grading only" in response.text
     assert "the handle turns" in response.text
@@ -1306,14 +1310,38 @@ def test_route_intent_reads_free_text():
     assert app_main.route_intent("give me a full concept for the garage") == "concept"
 
 
-def test_route_intent_falls_back_to_the_cheapest_stage():
+def test_route_intent_falls_back_to_one_concept():
     """An unparseable ask must not spend a generation on the wrong
-    stage; ideas is the cheap one and almost always what was meant."""
-    assert app_main.route_intent("") == "ideas"
-    assert app_main.route_intent("something about a wrench") == "ideas"
+    stage; concept is what "describe an idea, hit generate" means --
+    one fully-formed result for exactly what was typed, not a batch to
+    sift through."""
+    assert app_main.route_intent("") == "concept"
+    assert app_main.route_intent("something about a wrench") == "concept"
 
 
-def test_assistant_deals_ideas_from_typed_text(tmp_preprod_db, monkeypatch):
+def test_assistant_generates_one_concept_from_typed_text(tmp_preprod_db, monkeypatch):
+    preprod.add_location("garage", {"space": "garage"}, path=tmp_preprod_db)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(app_main.genai, "Client", lambda **k: object())
+
+    seen = {}
+
+    def fake_concept(**kwargs):
+        seen.update(kwargs)
+        return {"concept_id": 1, "concept": {"title": "Gearing Up"}, "warnings": []}
+
+    monkeypatch.setattr(app_main.shootgen, "generate_concept", fake_concept)
+    response = client.post("/studio/assist", data={"text": "gearing up ritual"},
+                           follow_redirects=False)
+    assert response.status_code == 303
+    assert seen["spark"] == "gearing up ritual"
+    assert 'Generated "Gearing Up"' in unquote(response.headers["location"])
+
+
+def test_assistant_deals_ideas_when_explicitly_asked(tmp_preprod_db, monkeypatch):
+    """The batch stage is still reachable -- either the chip's explicit
+    intent or plural phrasing ("ideas", "options", "slate") -- it's just
+    no longer where an unmarked ask lands by default."""
     preprod.add_location("garage", {"space": "garage"}, path=tmp_preprod_db)
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setattr(app_main.genai, "Client", lambda **k: object())
@@ -1325,8 +1353,11 @@ def test_assistant_deals_ideas_from_typed_text(tmp_preprod_db, monkeypatch):
         return {"ideas": [{"title": "A"}, {"title": "B"}]}
 
     monkeypatch.setattr(app_main.shootgen, "generate_concept_ideas", fake_ideas)
-    response = client.post("/studio/assist", data={"text": "gearing up ritual"},
-                           follow_redirects=False)
+    response = client.post(
+        "/studio/assist",
+        data={"text": "gearing up ritual", "intent": "ideas"},
+        follow_redirects=False,
+    )
     assert response.status_code == 303
     assert seen["spark"] == "gearing up ritual"
     assert "Dealt 2 ideas" in unquote(response.headers["location"])
@@ -1348,6 +1379,7 @@ def test_assistant_folds_ingredients_and_platforms_into_the_spark(tmp_preprod_db
     monkeypatch.setattr(app_main.shootgen, "generate_concept_ideas", fake_ideas)
     client.post("/studio/assist", data={
         "text": "night ritual",
+        "intent": "ideas",
         "ingredients": "room: garage, clip: A037_C004.mov",
         "platforms": "VEO, WAN",
     }, follow_redirects=False)
@@ -1370,7 +1402,7 @@ def test_assistant_ingredients_alone_still_make_a_spark(tmp_preprod_db, monkeypa
         return {"ideas": [{"title": "A"}]}
 
     monkeypatch.setattr(app_main.shootgen, "generate_concept_ideas", fake_ideas)
-    client.post("/studio/assist", data={"ingredients": "room: garage"},
+    client.post("/studio/assist", data={"intent": "ideas", "ingredients": "room: garage"},
                 follow_redirects=False)
     assert seen["spark"] == "Ground on: room: garage"
 
@@ -1407,7 +1439,7 @@ def test_assistant_reports_a_failed_generation_without_breaking(tmp_preprod_db, 
     def boom(**kwargs):
         raise RuntimeError("model down")
 
-    monkeypatch.setattr(app_main.shootgen, "generate_concept_ideas", boom)
+    monkeypatch.setattr(app_main.shootgen, "generate_concept", boom)
     response = client.post("/studio/assist", data={"text": "anything"},
                            follow_redirects=False)
     assert response.status_code == 303

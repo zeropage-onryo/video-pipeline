@@ -32,7 +32,7 @@ PROMPTS_DIR = PROJECT_ROOT / "prompts"
 
 MODEL = "gemini-3-flash-preview"
 
-DEFAULT_IDEA_COUNT = 8
+DEFAULT_IDEA_COUNT = 5
 SHOT_TYPES = ("CHARACTER", "BROLL")
 SHOT_SOURCES = ("CAMERA", "AI")
 CAMERAS = ("BMPCC", "ACTION5")
@@ -54,12 +54,46 @@ NO_CAST_NOTE = (
     "as needed)"
 )
 
+# Zero Page rides FORMAT skeletons, not rooms. These are evergreen vertical
+# short-form structures that travel -- the vehicle each faceless-uncanny beat
+# rides. They are the static seed; the format-trend feed (refresh_metrics /
+# RAG) can override this list with what's actually spiking, but Zero Page can
+# always generate from these alone. Kept here rather than a file because they
+# are structural, not brand wording -- a fixed vocabulary the trend feed ranks
+# against, not something edited per-run.
+ZEROPAGE_FORMATS = [
+    ("The Reveal", "Hold on an ordinary frame, then one element shifts or is "
+     "revealed to be wrong. The reveal is the whole video."),
+    ("Slow Push-In", "One continuous push toward a subject until the wrong "
+     "detail fills the frame. No cuts, escalating unease."),
+    ("Freeze on the Wrong Thing", "Motion, then a hard stop on a detail that "
+     "shouldn't be there. The freeze names the wrongness."),
+    ("POV Walk-In", "First-person entering a space and discovering the "
+     "uncanny thing. The viewer arrives at it with the camera."),
+    ("Seamless Loop", "The last frame flows into the first so it repeats "
+     "forever, the wrongness compounding on each pass."),
+    ("Satisfying, Then Broken", "A satisfying, tactile process (pouring, "
+     "stacking, cleaning) that turns wrong at the last beat."),
+    ("Text-Hook Cold Open", "An on-screen line poses a question in second 1; "
+     "the grounded visual answers it wrong."),
+    ("The Repetition Break", "A repeated action or pattern establishes a "
+     "rhythm, then one repetition breaks it in a way that shouldn't happen."),
+]
+
+
+def format_skeletons(formats=None) -> str:
+    """The hot-format menu Zero Page rides, as the model sees it. Defaults to
+    the evergreen ZEROPAGE_FORMATS; the trend feed passes a ranked live list
+    later. Never a gate -- an empty/failed feed falls back to the evergreens."""
+    formats = formats or ZEROPAGE_FORMATS
+    return "\n".join(f"- {name}: {how}" for name, how in formats)
+
 # Ideation grounds in brand/cinematography (what the concept has to look and
 # feel like), marketing (what actually earns a swipe/watch), and
 # proven_results (what actually worked for us, per promote_winners) -- but
 # never ai_prompting, which is AI-video-tool prompt syntax for a later stage
 # (promptgen.py), not "what should we shoot" material.
-IDEATION_DOMAINS = ("personal_brand", "cinematography", "marketing", "proven_results")
+IDEATION_DOMAINS = ("personal_brand", "cinematography", "marketing", "proven_results", "winning_prompts")
 
 
 def build_reference_query(locations: list, spark=None, client=None,
@@ -202,7 +236,19 @@ def apply_pov(template: str, use_pov: bool) -> str:
 
 def build_concept_prompt(locations: list, brand: str, client=None, spark=None,
                          use_pov: bool = True, references: str = "",
-                         cast: str = "") -> str:
+                         cast: str = "", formats=None) -> str:
+    # Zero Page runs its OWN engine -- faceless, fully-AI, format-driven, not
+    # grounded in his rooms. Antihero keeps the solo-filmmaker-at-home engine.
+    if brand == "zeropage":
+        template = (PROMPTS_DIR / "concept_zeropage.txt").read_text()
+        return (
+            template
+            .replace("{formats}", format_skeletons(formats))
+            .replace("{brand}", load_brand(brand))
+            .replace("{client}", f"CLIENT / SPEC TYPE: {client}" if client else "")
+            .replace("{spark}", f"TREND / SPARK: {spark}" if spark else "")
+            .replace("{references}", references or NO_REFERENCES_NOTE)
+        )
     template = apply_pov((PROMPTS_DIR / "concept_prompt.txt").read_text(), use_pov)
     return (
         template
@@ -216,7 +262,21 @@ def build_concept_prompt(locations: list, brand: str, client=None, spark=None,
 
 
 def build_ideas_prompt(locations: list, brand: str, client=None, spark=None,
-                       count: int = DEFAULT_IDEA_COUNT, references: str = "") -> str:
+                       count: int = DEFAULT_IDEA_COUNT, references: str = "",
+                       formats=None) -> str:
+    # Zero Page rides format skeletons + an uncanny beat, faceless and
+    # room-free; Antihero grounds ideas in his real spaces and recurring star.
+    if brand == "zeropage":
+        template = (PROMPTS_DIR / "concept_ideas_zeropage.txt").read_text()
+        return (
+            template
+            .replace("{formats}", format_skeletons(formats))
+            .replace("{brand}", load_brand(brand))
+            .replace("{client}", f"CLIENT / SPEC TYPE: {client}" if client else "")
+            .replace("{spark}", f"TREND / SPARK: {spark}" if spark else "")
+            .replace("{count}", str(count))
+            .replace("{references}", references or NO_REFERENCES_NOTE)
+        )
     template = (PROMPTS_DIR / "concept_ideas_prompt.txt").read_text()
     return (
         template
@@ -268,7 +328,7 @@ def parse_plan_response(text: str) -> dict:
 def generate_concept_ideas(brand: str, client=None, spark=None, gemini_client=None,
                            model: str = MODEL, count: int = DEFAULT_IDEA_COUNT,
                            use_pov: bool = True, db_path=None,
-                           references: str = "") -> dict:
+                           references: str = "", formats=None) -> dict:
     """
     Stage one: several cheap ideas in a single call, so they can be
     varied against each other rather than rolled independently. No shot
@@ -286,7 +346,7 @@ def generate_concept_ideas(brand: str, client=None, spark=None, gemini_client=No
         print(NO_LOCATIONS_NOTE, file=sys.stderr)
 
     prompt = build_ideas_prompt(locations, brand, client, spark, count,
-                                references=references)
+                                references=references, formats=formats)
     ideas = parse_ideas_response(generate_with_retry(gemini_client, model, prompt))
 
     concept_ids = preprod.save_concept_ideas(
@@ -294,6 +354,47 @@ def generate_concept_ideas(brand: str, client=None, spark=None, gemini_client=No
         prompt_template=prompt, use_pov=use_pov, **kwargs,
     )
     return {"concept_ids": concept_ids, "ideas": ideas}
+
+
+def gold_standard_example() -> str:
+    """The canonical proven prompt (prompts/gold_standard.md), injected as the
+    exemplar every scene brief is measured against. '' if the file is absent --
+    the exemplar is an enhancement, never a hard dependency."""
+    try:
+        return (PROMPTS_DIR / "gold_standard.md").read_text().strip()
+    except OSError:
+        return ""
+
+
+def build_scene_brief_prompt(brand: str, spark=None, references: str = "",
+                             cast=None) -> str:
+    """The winning skeleton: one cohesive whole-scene prompt (character refs
+    -> grounded style -> beats -> diegetic sound -> avoid-list), matched
+    against the gold-standard exemplar."""
+    template = (PROMPTS_DIR / "scene_brief_prompt.txt").read_text()
+    example = gold_standard_example() or "(no gold-standard example on file)"
+    return (template
+            .replace("{brand}", load_brand(brand))
+            .replace("{spark}", f"CREATIVE SPARK FROM THE FILMMAKER: {spark}" if spark else "")
+            .replace("{references}", references or NO_REFERENCES_NOTE)
+            .replace("{cast}", cast or NO_CAST_NOTE)
+            .replace("{example}", example))
+
+
+def parse_scene_brief_response(text: str) -> dict:
+    data = json.loads(strip_fences(text))
+    return {"title": (data.get("title") or "Untitled scene").strip(),
+            "brief": (data.get("brief") or "").strip()}
+
+
+def generate_scene_brief(brand: str, spark=None, gemini_client=None,
+                         model: str = MODEL, references: str = "", cast=None) -> dict:
+    """One cohesive whole-scene prompt in the proven skeleton -- for a video
+    model that renders a full scene from a single description (Veo / Sora /
+    Kling / OpenArt Director). Pure w.r.t. the reference library: `references`
+    arrives already retrieved by the caller."""
+    prompt = build_scene_brief_prompt(brand, spark=spark, references=references, cast=cast)
+    return parse_scene_brief_response(generate_with_retry(gemini_client, model, prompt))
 
 
 def generate_shot_list(concept_id: int, gemini_client=None, model: str = MODEL,
@@ -388,7 +489,11 @@ def validate_concept(concept: dict, location_names: list, use_pov: bool = True) 
                 )
 
         location = shot.get("location")
-        if location not in location_names:
+        # Camera shots must name a real room -- you can only film where you
+        # actually are. AI shots may invent or extend a space (the model
+        # generates the scene), so an unlisted location is allowed there and
+        # is not flagged. This is what lets concepts range beyond one room.
+        if source != "AI" and location not in location_names:
             warnings.append(f"shot {n}: unknown location {location!r} -- not a described space")
 
     # legacy shape: one concept-level ai dict instead of per-shot source
@@ -401,7 +506,7 @@ def validate_concept(concept: dict, location_names: list, use_pov: bool = True) 
 
 def generate_concept(brand: str, client=None, spark=None, gemini_client=None,
                      model: str = MODEL, use_pov: bool = True, db_path=None,
-                     references: str = "", cast=None) -> dict:
+                     references: str = "", cast=None, formats=None) -> dict:
     """
     One concept, grounded in the described locations, validated and
     saved. Returns {"concept_id", "concept", "warnings"}.
@@ -421,7 +526,7 @@ def generate_concept(brand: str, client=None, spark=None, gemini_client=None,
         cast = format_cast(entities.list_characters(**kwargs), entities.list_props(**kwargs))
 
     prompt = build_concept_prompt(locations, brand, client, spark, use_pov=use_pov,
-                                  references=references, cast=cast)
+                                  references=references, cast=cast, formats=formats)
     concept = parse_concept_response(generate_with_retry(gemini_client, model, prompt))
 
     location_names = [loc["name"] for loc in locations]

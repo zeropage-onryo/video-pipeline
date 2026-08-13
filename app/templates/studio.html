@@ -33,9 +33,16 @@
   .zp .tip{ display:inline-flex; align-items:center; gap:9px; background:#0e0e10; border:1px solid var(--line2); border-radius:10px; padding:7px 11px; font-size:12.5px; color:var(--dim); margin-bottom:10px; }
   .zp .tip .b{ border:1px solid var(--viob); color:var(--vio); border-radius:999px; font-size:10px; padding:1px 7px; font-family:var(--mono); }
   .zp .tip a{ color:var(--ink); }
-  .zp .refs{ display:flex; gap:8px; margin-bottom:12px; }
-  .zp .refslot{ width:66px; height:52px; border-radius:9px; box-shadow:inset 0 0 0 1px var(--line2); }
+  .zp .refs{ display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; }
+  .zp .refslot{ width:66px; height:52px; border-radius:9px; box-shadow:inset 0 0 0 1px var(--line2); position:relative; overflow:hidden; }
   .zp .refslot.g1{ background:linear-gradient(135deg,#3a2b20,#15100b); } .zp .refslot.g2{ background:linear-gradient(135deg,#20303a,#0c1216); }
+  .zp .refslot.refadd{ display:flex; align-items:center; justify-content:center; color:var(--dim); border:1px dashed var(--line2); box-shadow:none; cursor:pointer; background:transparent; }
+  .zp .refslot.refadd:hover{ color:var(--ink); border-color:var(--dim); }
+  .zp .refslot.refpick{ box-shadow:inset 0 0 0 1px var(--line2); background:var(--panel3); cursor:default; }
+  .zp .refslot.refpick img{ width:100%; height:100%; object-fit:cover; display:block; }
+  .zp .refslot.refpick .vidmark{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-family:var(--mono); font-size:9px; color:var(--dim); text-align:center; padding:4px; }
+  .zp .refslot.refpick .rm{ position:absolute; top:2px; right:2px; width:16px; height:16px; border-radius:50%; background:rgba(0,0,0,.7); color:#fff; font-size:11px; line-height:16px; text-align:center; cursor:pointer; border:none; padding:0; }
+  .zp .refslot.refpick .rm:hover{ background:rgba(0,0,0,.9); }
   .zp .cph{ width:100%; background:transparent; border:none; outline:none; resize:none; color:var(--ink); font-family:inherit; font-size:15px; line-height:1.4; padding:2px 4px 20px; }
   .zp .cph::placeholder{ color:var(--faint); }
   .zp .cbar{ display:flex; align-items:center; justify-content:space-between; padding-top:4px; }
@@ -112,30 +119,41 @@
   <div class="bgfx"><div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div><div class="veil"></div></div>
   <div class="content">
     <div class="topbar">
-      <div class="brand"><div class="logo">ZP</div><b>Zero Page Films</b><span class="sep">/</span><span class="crumb">Studio</span></div>
+      {% set ab = active_brand(request) %}
+      <div class="brand">
+        <div class="logo" style="box-shadow:inset 0 0 0 1px {{ BRAND_META[ab].accent }}">{{ 'AH' if ab == 'antihero' else 'ZP' }}</div>
+        <b style="color:{{ BRAND_META[ab].accent }}">{{ BRAND_META[ab].label }}</b>
+        <span class="sep">/</span><span class="crumb">Studio</span>
+        <span class="mono dim" style="font-size:11px;margin-left:8px">switch brand in the left rail →</span>
+      </div>
       <div class="avatar"></div>
     </div>
 
     <div class="hero">
       <h1>What do you want to create?</h1>
-      <form class="composer" method="post" action="/studio/assist">
+      <form class="composer" method="post" action="/studio/assist" enctype="multipart/form-data" id="composer-form">
         <div class="tip"><span class="b">TIP</span> Ground every shot in a real space. Type <a>@</a> to pull in a location, character, or prop.</div>
-        <div class="refs"><div class="refslot g1"></div><div class="refslot g2"></div></div>
-        <textarea class="cph" name="text" rows="1" placeholder="Describe your idea, or generate one from your Workflow…"></textarea>
+        <div class="refs" id="refs-row">
+          <label class="refslot refadd" for="ref-input" title="Attach reference images or video">
+            <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+          </label>
+        </div>
+        <input type="file" id="ref-input" name="references" accept="image/*,video/*" multiple hidden>
+        <textarea class="cph" name="text" rows="1" placeholder="Describe your idea, or attach a reference and describe what to do with it…"></textarea>
         <input type="hidden" name="intent" value="">
         <div class="cbar">
           <div class="lft">
-            <span class="cbtn"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span>
+            <span class="cbtn" id="add-ref-btn" title="Attach reference images or video"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span>
             <span class="cbtn"><svg viewBox="0 0 24 24"><path d="M6 3h9l3 3v15H6Z"/><path d="M9 8h6M9 12h6M9 16h4"/></svg></span>
           </div>
-          <div class="rgt"><span class="qual">Shot · Cinematic</span><button class="send" type="submit" aria-label="Generate"><svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button></div>
+          <div class="rgt"><span class="qual" id="composer-status">One concept · Cinematic</span><button class="send" type="submit" aria-label="Generate"><svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button></div>
         </div>
       </form>
       <div class="pills">
         <a class="pill" href="/locations"><span class="dot d1"></span>Describe a Location</a>
         <a class="pill" href="/concepts"><span class="dot d5"></span>Generate Concepts</a>
         <a class="pill" href="/concepts"><span class="dot d2"></span>Plan the Shoot</a>
-        <a class="pill" href="/concepts"><span class="dot d6"></span>AI Shot · Kling / Runway</a>
+        <a class="pill" href="/concepts"><span class="dot d6"></span>AI Shot · Runway</a>
         <a class="pill" href="/holds"><span class="dot d4"></span>Hold Queue</a>
       </div>
       <div class="cats">
@@ -154,7 +172,7 @@
 
     {% if latest_ai %}
     <div class="aisec">
-      <div class="aihead"><h2>Latest AI shots</h2><span class="aimeta">from your newest planned concept · paste into Kling / Runway</span></div>
+      <div class="aihead"><h2>Latest AI shots</h2><span class="aimeta">from your newest planned concept · Midjourney still → Runway</span></div>
       <div class="aigrid">
         {% for a in latest_ai %}
         <div class="aicard">
@@ -230,6 +248,76 @@
   });
   var ta=document.querySelector('.zp .cph');
   if(ta){ ta.addEventListener('input',function(){ this.style.height='auto'; this.style.height=Math.min(this.scrollHeight,160)+'px'; }); }
+
+  // Reference attachments: a picked file becomes a thumbnail tile next to
+  // the "+" tile, backed by a real DataTransfer so the file input still
+  // submits exactly what's shown (removals rebuild it, since a FileList
+  // itself can't be edited in place).
+  (function(){
+    var refInput = document.getElementById('ref-input');
+    var refsRow = document.getElementById('refs-row');
+    var addBtn = document.getElementById('add-ref-btn');
+    var status = document.getElementById('composer-status');
+    var addTile = refsRow ? refsRow.querySelector('.refadd') : null;
+    var picked = []; // File[]
+    if(!refInput || !refsRow || !addTile) return;
+
+    function syncInput(){
+      var dt = new DataTransfer();
+      picked.forEach(function(f){ dt.items.add(f); });
+      refInput.files = dt.files;
+    }
+    function renderStatus(){
+      if(!status) return;
+      status.textContent = picked.length
+        ? 'One concept · ' + picked.length + ' reference' + (picked.length > 1 ? 's' : '') + ' attached'
+        : 'One concept · Cinematic';
+    }
+    function renderTiles(){
+      refsRow.querySelectorAll('.refpick').forEach(function(t){ t.remove(); });
+      picked.forEach(function(file, idx){
+        var tile = document.createElement('div');
+        tile.className = 'refslot refpick';
+        if(file.type.indexOf('image/') === 0){
+          var img = document.createElement('img');
+          img.src = URL.createObjectURL(file);
+          tile.appendChild(img);
+        } else {
+          var mark = document.createElement('div');
+          mark.className = 'vidmark';
+          mark.textContent = 'VIDEO';
+          tile.appendChild(mark);
+        }
+        var rm = document.createElement('button');
+        rm.type = 'button'; rm.className = 'rm'; rm.textContent = '×';
+        rm.addEventListener('click', function(){ picked.splice(idx, 1); syncInput(); renderTiles(); renderStatus(); });
+        tile.appendChild(rm);
+        refsRow.insertBefore(tile, addTile);
+      });
+      renderStatus();
+    }
+    if(addBtn){ addBtn.addEventListener('click', function(){ refInput.click(); }); }
+    addTile.addEventListener('click', function(e){ e.preventDefault(); refInput.click(); });
+    refInput.addEventListener('change', function(){
+      Array.prototype.forEach.call(refInput.files, function(f){ picked.push(f); });
+      syncInput();
+      renderTiles();
+    });
+  })();
+
+  // One-click guard: this is a real form POST (full page navigation on
+  // success), so no fetch/JSON handling here -- just stop a second click
+  // from firing a duplicate (and costed) generation while the first is
+  // still in flight.
+  var composerForm = document.getElementById('composer-form');
+  if(composerForm){
+    composerForm.addEventListener('submit', function(){
+      var btn = composerForm.querySelector('.send');
+      var status = document.getElementById('composer-status');
+      if(btn) btn.disabled = true;
+      if(status) status.textContent = 'Generating…';
+    });
+  }
   document.querySelectorAll('.zp .copy').forEach(function(b){
     b.addEventListener('click',function(){
       var el=document.getElementById(b.dataset.target); if(!el) return;

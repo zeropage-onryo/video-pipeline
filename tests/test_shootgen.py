@@ -92,6 +92,25 @@ def test_build_concept_prompt_without_spark_or_client(tmp_db):
     assert "{spark}" not in prompt and "{client}" not in prompt
 
 
+def test_build_concept_prompt_notes_attached_images(tmp_db):
+    """Ad hoc references from the Studio composer get a plain-language
+    note in the prompt so the model treats the attached image parts as
+    grounding, not decoration -- separate from the Workflow library's
+    `{references}` block."""
+    locations = preprod.list_locations(path=tmp_db)
+    prompt = shootgen.build_concept_prompt(locations, "antihero", None, None,
+                                           image_ref_count=2)
+    assert "{visual_refs}" not in prompt
+    assert "2 images attached" in prompt
+
+
+def test_build_concept_prompt_omits_the_visual_note_by_default(tmp_db):
+    locations = preprod.list_locations(path=tmp_db)
+    prompt = shootgen.build_concept_prompt(locations, "antihero", None, None)
+    assert "{visual_refs}" not in prompt
+    assert "attached below this prompt" not in prompt
+
+
 # ---------- parsing ----------
 
 def test_parse_concept_response_reads_concept():
@@ -180,13 +199,28 @@ def test_validate_rejects_unknown_camera():
     assert any("cam" in w for w in warnings)
 
 
-def test_validate_rejects_invented_location():
-    """The whole point is grounding in real spaces -- a hallucinated
-    room defeats it."""
+def test_validate_warns_on_invented_location_for_a_camera_shot():
+    """A CAMERA shot must ground in a real room -- you can only film
+    where you actually are, so a hallucinated room is flagged."""
     concept = make_concept()
+    concept["shots"][0]["source"] = "CAMERA"
     concept["shots"][0]["location"] = "rooftop helipad"
     warnings = shootgen.validate_concept(concept, LOCATION_NAMES)
     assert any("rooftop helipad" in w for w in warnings)
+
+
+def test_validate_allows_an_invented_location_for_an_ai_shot():
+    """An AI shot invents/extends the scene, so an unlisted location is
+    legal there -- this is what lets concepts range beyond one room."""
+    concept = make_concept()
+    concept["shots"][0] = {
+        "n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
+        "location": "a rain-slicked alley at night",
+        "desc": "the bike rolls out into the wet street",
+        "prompt": "a superbike rolling into a neon-lit rain-slicked alley",
+    }
+    warnings = shootgen.validate_concept(concept, LOCATION_NAMES)
+    assert not any("location" in w for w in warnings), warnings
 
 
 def test_validate_warns_on_unknown_legacy_ai_tool():
@@ -249,6 +283,48 @@ def test_generate_concept_saves_even_with_warnings(tmp_db, monkeypatch):
 
     assert result["warnings"]
     assert preprod.get_concept(result["concept_id"], path=tmp_db) is not None
+
+
+def test_generate_concept_sends_attached_images_as_vision_parts(tmp_db, monkeypatch):
+    """image_refs (bytes, mime_type) pairs from the Studio composer must
+    actually reach the model as multimodal content, not just get
+    mentioned in the text -- otherwise "ground this in the photo I
+    attached" would silently do nothing."""
+    from google.genai import types
+
+    seen = {}
+
+    def fake_generate_with_retry(client, model, contents):
+        seen["contents"] = contents
+        return response_for(make_concept())
+
+    monkeypatch.setattr(shootgen, "generate_with_retry", fake_generate_with_retry)
+
+    shootgen.generate_concept(
+        brand="antihero", spark="someone at the door", client=None,
+        gemini_client=None, db_path=tmp_db,
+        image_refs=[(b"fake-jpeg-bytes", "image/jpeg")],
+    )
+
+    contents = seen["contents"]
+    assert isinstance(contents, list)
+    assert isinstance(contents[0], str)  # the text prompt comes first
+    assert "someone at the door" in contents[0]
+    assert isinstance(contents[1], types.Part)
+
+
+def test_generate_concept_without_images_sends_a_plain_string(tmp_db, monkeypatch):
+    """No attachments -- the call shape is unchanged from before this
+    feature existed (a bare prompt string, not a one-item list)."""
+    seen = {}
+
+    def fake_generate_with_retry(client, model, contents):
+        seen["contents"] = contents
+        return response_for(make_concept())
+
+    monkeypatch.setattr(shootgen, "generate_with_retry", fake_generate_with_retry)
+    shootgen.generate_concept(brand="antihero", client=None, gemini_client=None, db_path=tmp_db)
+    assert isinstance(seen["contents"], str)
 
 
 def test_generate_concept_degrades_without_locations(tmp_path, capsys):
