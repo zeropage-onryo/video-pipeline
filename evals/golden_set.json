@@ -81,7 +81,7 @@
     "id": "seedance2-clip-length-and-refs",
     "query": "How long can a Seedance 2.0 clip run, and how many reference assets can I combine?",
     "ideal_context": [
-      "Up to 15-second high-quality multi-shot audio-video output.",
+      "Seedance 2.0 is a unified multimodal audio-video model. Up to 15-second high-quality multi-shot audio-video output.",
       "The official blog also says users can combine up to: 9 images, 3 video clips, 3 audio clips, natural-language instructions"
     ],
     "expected_output": "Seedance 2.0 can output up to 15 seconds of high-quality multi-shot audio-video, and you can combine up to 9 images, 3 video clips, and 3 audio clips along with natural-language instructions as references."
