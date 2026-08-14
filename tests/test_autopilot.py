@@ -109,7 +109,8 @@ def test_build_plan_reads_ai_shots_without_touching_anything(tmp_path):
 
 def test_build_plan_emits_post_only_once_media_exists(tmp_path):
     """The plan never invents deliverables: a post action appears only
-    when a shot carries a rendered media_url for Meta to fetch."""
+    when a shot carries a rendered media_url for Meta to fetch -- and,
+    for Zero Page, only once the concept has cleared the uncanny gate."""
     from src import db, preprod
     path = tmp_path / "test.db"
     db.init_db(path)
@@ -120,16 +121,18 @@ def test_build_plan_emits_post_only_once_media_exists(tmp_path):
             {"n": 1, "type": "BROLL", "source": "AI", "tool": "VEO",
              "location": "garage", "desc": "d", "prompt": "p"},
         ]},
-        brand="antihero", path=path,
+        brand="zeropage", path=path,
     )
-    preprod.save_concept(
+    cid = preprod.save_concept(
         {"title": "Rendered", "hook": "the hook", "shots": [
             {"n": 1, "type": "BROLL", "source": "AI", "tool": "VEO",
              "location": "garage", "desc": "d", "prompt": "p",
              "media_url": "https://cdn.example/rendered.mp4"},
         ]},
-        brand="antihero", path=path,
+        brand="zeropage", path=path,
     )
+    preprod.save_uncanny_score(
+        cid, {"overall": 9, "passed": True, "reasons": []}, path=path)
     plan = autopilot.build_plan(db_path=path)
     posts = [a for a in plan["actions"] if a["kind"] == "post"]
     assert len(posts) == 1
@@ -141,8 +144,22 @@ def test_build_plan_emits_post_only_once_media_exists(tmp_path):
 # ---------- the real post adapter, still caged ----------
 
 def test_real_post_adapter_is_registered():
-    from src import instagram
-    assert autopilot.EXECUTORS["post"] is instagram.execute_post_action
+    assert autopilot.EXECUTORS["post"] is autopilot._post_dispatch
+
+
+def test_post_dispatch_routes_by_platform(monkeypatch):
+    from src import instagram, youtube
+    ig_calls = []
+    yt_calls = []
+    monkeypatch.setattr(instagram, "execute_post_action", lambda a: ig_calls.append(a))
+    monkeypatch.setattr(youtube, "execute_post_action", lambda a: yt_calls.append(a))
+
+    autopilot._post_dispatch({"platform": "instagram"})
+    autopilot._post_dispatch({})   # default -> instagram
+    autopilot._post_dispatch({"platform": "youtube"})
+
+    assert len(ig_calls) == 2
+    assert len(yt_calls) == 1
 
 
 def test_gate_modes_never_touch_instagram_with_real_adapter(tmp_path, monkeypatch):

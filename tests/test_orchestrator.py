@@ -95,7 +95,7 @@ def test_clean_run_parks_in_shadow_with_the_render_stub_reason(tmp_db, monkeypat
     assert result["critique"]["ok"] is True
     # the AI shot's prompt was extracted...
     assert result["prompts"] == [
-        {"tool": "KLING", "prompt": GOOD_PROMPT}]
+        {"tool": "KLING", "prompt": GOOD_PROMPT, "still": ""}]
     # ...but render is a stub, so the run parks instead of posting
     assert "render is a dry-run stub" in result["held_reason"]
     [row] = autonomy.list_hold(path=tmp_db)
@@ -246,8 +246,10 @@ def test_render_gate_open_routes_veo_prompts_through_the_connector(tmp_db, monke
 
     assert calls == [GOOD_PROMPT]
     assert result["clips"][0]["ok"] is True
-    # with a clip through QC, the run reached publish and held in shadow
-    assert "shadow" in result["held_reason"]
+    # with a clip through QC, the run reached publish and held for your
+    # queue approval -- Zero Page's default posture (DEFAULT_CHANNELS)
+    assert "awaiting your approval to post" in result["held_reason"]
+    assert "instagram + youtube" in result["held_reason"]
 
 
 def test_render_gate_open_but_unadapted_tool_stays_dry(tmp_db, monkeypatch):
@@ -422,7 +424,9 @@ def test_publish_holds_when_killed(tmp_db, monkeypatch):
 
 def test_publish_shadow_holds_for_grading(tmp_db, monkeypatch):
     monkeypatch.delenv("ZEROPAGE_KILL", raising=False)
-    result = orchestrator.publish(ready_state(tmp_db))
+    # antihero is the channel that defaults to shadow (zeropage now
+    # defaults to queue -- see DEFAULT_CHANNELS)
+    result = orchestrator.publish(ready_state(tmp_db, channel="antihero"))
     assert "shadow" in result["held_reason"]
 
 
@@ -437,7 +441,8 @@ def test_publish_auto_still_parks_because_no_api_is_wired(tmp_db, monkeypatch):
     monkeypatch.delenv("ZEROPAGE_KILL", raising=False)
     autonomy.set_autonomy("zeropage", "auto", path=tmp_db)
     result = orchestrator.publish(ready_state(tmp_db))
-    assert "posting API not wired" in result["held_reason"]
+    assert "posting adapter not wired" in result["held_reason"]
+    assert "instagram + youtube" in result["held_reason"]
 
 
 def test_post_gate_rejects_failed_qc_empty_caption_and_warnings(tmp_db, monkeypatch):

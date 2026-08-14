@@ -18,10 +18,11 @@ def tmp_db(tmp_path):
 
 # ---------- channels ----------
 
-def test_init_seeds_both_channels_as_shadow(tmp_db):
+def test_init_seeds_the_two_channels_with_their_postures(tmp_db):
     channels = {c["name"]: c for c in autonomy.list_channels(path=tmp_db)}
-    assert set(channels) == {"zeropage", "personal"}
-    assert all(c["autonomy"] == "shadow" for c in channels.values())
+    assert set(channels) == {"zeropage", "antihero"}
+    assert channels["zeropage"]["autonomy"] == "queue"    # auto-generates; approve to post
+    assert channels["antihero"]["autonomy"] == "shadow"   # personal brand -- review-gated
     assert all(c["rate_cap"] == 1 for c in channels.values())
 
 
@@ -32,9 +33,9 @@ def test_init_is_idempotent_and_keeps_promotions(tmp_db):
 
 
 def test_promotion_is_a_one_row_change(tmp_db):
-    autonomy.set_autonomy("personal", "queue", path=tmp_db)
-    assert autonomy.get_channel("personal", path=tmp_db)["autonomy"] == "queue"
-    assert autonomy.get_channel("zeropage", path=tmp_db)["autonomy"] == "shadow"
+    autonomy.set_autonomy("antihero", "auto", path=tmp_db)
+    assert autonomy.get_channel("antihero", path=tmp_db)["autonomy"] == "auto"
+    assert autonomy.get_channel("zeropage", path=tmp_db)["autonomy"] == "queue"   # untouched, still its own default
 
 
 def test_set_autonomy_rejects_unknown_levels(tmp_db):
