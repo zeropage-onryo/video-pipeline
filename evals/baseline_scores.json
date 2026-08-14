@@ -1,1 +1,86 @@
-{}
+{
+  "visual-style-grade": {
+    "contextual_precision": 1.0,
+    "contextual_recall": 1.0,
+    "faithfulness": 1.0,
+    "answer_relevancy": 1.0
+  },
+  "tone-and-avoid": {
+    "contextual_precision": 1.0,
+    "contextual_recall": 1.0,
+    "faithfulness": 1.0,
+    "answer_relevancy": 1.0
+  },
+  "runtime-and-pacing": {
+    "contextual_precision": 1.0,
+    "contextual_recall": 1.0,
+    "faithfulness": 1.0,
+    "answer_relevancy": 1.0
+  },
+  "camera-address": {
+    "contextual_precision": 1.0,
+    "contextual_recall": 1.0,
+    "faithfulness": 1.0,
+    "answer_relevancy": 1.0
+  },
+  "brand-identity": {
+    "contextual_precision": 1.0,
+    "contextual_recall": 1.0,
+    "faithfulness": 1.0,
+    "answer_relevancy": 1.0
+  },
+  "minimum-shot-length": {
+    "contextual_precision": 1.0,
+    "contextual_recall": 1.0,
+    "faithfulness": 1.0,
+    "answer_relevancy": 1.0
+  },
+  "mood-hopeful-not-dread": {
+    "contextual_precision": 1.0,
+    "contextual_recall": 1.0,
+    "faithfulness": 1.0,
+    "answer_relevancy": 1.0
+  },
+  "visual-references": {
+    "contextual_precision": 1.0,
+    "contextual_recall": 1.0,
+    "faithfulness": 1.0,
+    "answer_relevancy": 1.0
+  },
+  "veo3-prompt-formula": {
+    "contextual_precision": 1.0,
+    "contextual_recall": 1.0,
+    "faithfulness": 1.0,
+    "answer_relevancy": 1.0
+  },
+  "seedance2-clip-length-and-refs": {
+    "contextual_precision": 1.0,
+    "contextual_recall": 1.0,
+    "faithfulness": 1.0,
+    "answer_relevancy": 0.8333333333333334
+  },
+  "character-sheet-default-panels": {
+    "contextual_precision": 1.0,
+    "contextual_recall": 1.0,
+    "faithfulness": 1.0,
+    "answer_relevancy": 1.0
+  },
+  "short-form-hook-curiosity": {
+    "contextual_precision": 1.0,
+    "contextual_recall": 1.0,
+    "faithfulness": 1.0,
+    "answer_relevancy": 1.0
+  },
+  "platform-caption-limits": {
+    "contextual_precision": 1.0,
+    "contextual_recall": 1.0,
+    "faithfulness": 1.0,
+    "answer_relevancy": 1.0
+  },
+  "edit-anatomy-cuts-per-second": {
+    "contextual_precision": 1.0,
+    "contextual_recall": 1.0,
+    "faithfulness": 1.0,
+    "answer_relevancy": 1.0
+  }
+}
