@@ -289,14 +289,22 @@ def test_pending_corrections_fold_into_the_spark_once(tmp_db, monkeypatch):
 def test_structural_floor_catches_the_cheap_failures():
     ok, why = orchestrator._structural_check("")
     assert not ok and "too thin" in why
-    ok, why = orchestrator._structural_check("a door " * 70)
-    assert not ok and "over-stuffed" in why
     ok, why = orchestrator._structural_check(
         "a long enough prompt with a leftover {location} token in it "
         "plus more words to clear the length floor easily today")
     assert not ok and "placeholder" in why
     ok, why = orchestrator._structural_check(GOOD_PROMPT)
     assert ok
+
+
+def test_structural_floor_has_no_upper_length_bound():
+    """A long prompt is the judge's call, not the floor's. This layer
+    catches broken output; length is a quality judgment, and six of the
+    first eight judge failures were too LITTLE detail, not too much."""
+    ok, why = orchestrator._structural_check("a door " * 70)   # 140 words
+    assert ok and why == ""
+    ok, why = orchestrator._structural_check("a door " * 300)  # 600 words
+    assert ok and why == ""
 
 
 def test_thin_prompt_fails_the_floor_without_a_judge_call(tmp_db, monkeypatch):

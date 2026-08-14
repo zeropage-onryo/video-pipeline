@@ -294,13 +294,23 @@ def structure_prompt(state: GenState) -> GenState:
 
 def _structural_check(text: str) -> tuple[bool, str]:
     """Layer 1, deterministic, zero model calls -- the cheap failures:
-    empty, too thin, over-stuffed, leftover template tokens."""
+    empty, too thin, leftover template tokens.
+
+    NO UPPER LENGTH BOUND, deliberately (removed 2026-08-14). A ceiling
+    was here (130 words, "the model will drop detail") and it was the
+    wrong tool in the wrong layer: length is a quality judgment, not a
+    broken-output signal, and this layer exists to catch output that is
+    broken. The evidence said so too -- across the first 17 scored
+    prompts (33-75 words, median 46) the ceiling never once fired, while
+    six of eight judge failures were the OPPOSITE problem: missing
+    camera framing, missing lens, no specified motion. Detail is what
+    the gate is short of, so nothing here should push toward brevity.
+    Over-stuffing, if it ever shows up, is the judge's `coherence`
+    dimension to grade, not this function's to reject."""
     t = (text or "").strip()
     n = len(t.split())
     if n < 15:
         return False, "too thin — under 15 words"
-    if n > 130:
-        return False, "over-stuffed — 130+ words, the model will drop detail"
     if re.search(r"\{.*?\}|\[.*?\]|TODO|TBD", t):
         return False, "leftover placeholder / template token"
     return True, ""

@@ -147,7 +147,10 @@ is yours, in Resolve, by hand.
   gen_concept -> evaluate -> structure_prompt -> score_prompts -> generate_render ->
   qc_clip -> caption -> publish`, with the corrective `evaluate -> gen_concept` retry edge and
   a `hold` sink. `score_prompts` is the credit gate proper: a deterministic floor (thin /
-  over-stuffed / leftover template tokens, zero model calls) under a strict LLM judge
+  leftover template tokens, zero model calls — **no upper length bound**, removed 2026-08-14:
+  a 130-word ceiling never fired across the first 17 scored prompts while six of eight judge
+  failures were too *little* detail, and length is a quality judgment the judge's `coherence`
+  dimension owns, not a broken-output signal this layer should reject on) under a strict LLM judge
   (subject/camera/motion/lighting/coherence, 0–2 each, bar `PROMPT_GATE_MIN`, default 7/10)
   that **fails closed** — an unreadable verdict scores 0, so a credit is never spent on a
   judgment nobody could read. One failing prompt holds the whole run, reason = the judge's own
