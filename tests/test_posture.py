@@ -34,13 +34,13 @@ def tmp_killswitch(tmp_path, monkeypatch):
     return ks
 
 
-@pytest.mark.xfail(reason="brand_posture() helper not implemented yet -- the Studio posture UI is unbuilt", strict=False)
+@pytest.mark.xfail(reason="brand_posture() not implemented -- Studio posture UI unbuilt", strict=False)
 def test_brand_posture_maps_the_two_accounts():
     assert app_main.brand_posture("zeropage") == "autopilot"
     assert app_main.brand_posture("antihero") == "review"
 
 
-@pytest.mark.xfail(reason="autopilot_state() helper not implemented yet -- the Studio posture UI is unbuilt", strict=False)
+@pytest.mark.xfail(reason="autopilot_state() not implemented -- Studio posture UI unbuilt", strict=False)
 def test_autopilot_state_reads_live_standby_and_paused(monkeypatch, tmp_killswitch):
     monkeypatch.delenv("ZEROPAGE_AUTOPILOT", raising=False)
     st = app_main.autopilot_state()
@@ -55,7 +55,7 @@ def test_autopilot_state_reads_live_standby_and_paused(monkeypatch, tmp_killswit
     assert st["tone"] == "killed" and not st["live"]
 
 
-@pytest.mark.xfail(reason="/autopilot/pause route not implemented yet -- touches the kill switch, not building it blind", strict=False)
+@pytest.mark.xfail(reason="/autopilot/pause route not implemented -- touches the kill switch", strict=False)
 def test_pause_route_drops_the_kill_switch(tmp_killswitch):
     assert not tmp_killswitch.exists()
     r = client.post("/autopilot/pause", data={"next": "/studio"}, follow_redirects=False)
@@ -63,7 +63,7 @@ def test_pause_route_drops_the_kill_switch(tmp_killswitch):
     assert tmp_killswitch.exists()
 
 
-@pytest.mark.xfail(reason="/autopilot/resume route not implemented yet -- touches the kill switch, not building it blind", strict=False)
+@pytest.mark.xfail(reason="/autopilot/resume route not implemented -- touches the kill switch", strict=False)
 def test_resume_route_lifts_the_kill_switch(tmp_killswitch):
     tmp_killswitch.write_text("off")
     r = client.post("/autopilot/resume", data={"next": "/studio"}, follow_redirects=False)
