@@ -22,9 +22,9 @@
       <form method="post" action="/concepts/generate">
         <div class="brandpick">
           {% for b in brands %}
-          <label><input type="radio" name="brand" value="{{ b }}" {{ "checked" if loop.first }}>
+          <label><input type="radio" name="brand" value="{{ b }}" {{ "checked" if b == active_brand(request) }}>
             <div class="name">{{ "ANTIHERO" if b == "antihero" else "ZEROPAGE FILMS" }}</div>
-            <div class="sub">{{ "personal brand" if b == "antihero" else "client work" }}</div>
+            <div class="sub">{{ "personal brand" if b == "antihero" else "viral engine" }}</div>
           </label>
           {% endfor %}
         </div>
@@ -47,16 +47,76 @@
           <input type="text" name="spark" placeholder="Spark an idea (optional) — e.g. gearing up ritual, 3am kitchen, someone knocked">
         </div>
         <button type="submit" class="primary">Generate shoot plan</button>
-        <button type="submit" name="mode" value="ideas" style="margin-left:8px">or give me 8 ideas first</button>
+        <button type="submit" name="mode" value="ideas" style="margin-left:8px">or give me 5 ideas first</button>
+        <button type="submit" name="mode" value="scene" style="margin-left:8px">or a full scene brief</button>
       </form>
       {% else %}
-      <p class="dim">No spaces described yet — a concept needs somewhere real to happen. <a href="/locations" style="color:var(--steel)">Upload photos of a spot first.</a></p>
+      <p class="dim">No spaces described yet — a concept needs somewhere real to happen. <a href="/assets?tab=locations" style="color:var(--steel)">Upload photos of a spot first.</a></p>
       {% endif %}
     </div>
   </div>
 
+  {% if scene_briefs %}
+  <div class="panel">
+    <div class="panel-head"><span class="id">SCENE BRIEFS</span><span class="m">WHOLE-SCENE PROMPTS — PASTE INTO YOUR VIDEO MODEL</span></div>
+    <div class="panel-body" style="display:grid; gap:12px">
+      {% for b in scene_briefs %}
+      <div style="border:1px solid var(--line2,#303034); border-radius:10px; padding:10px">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px">
+          <b>{{ b.title }}</b>
+          <div style="display:flex; gap:8px; align-items:center">
+            <button type="button" class="copy" data-target="brief-{{ b.id }}">Copy prompt</button>
+            <form method="post" action="/concepts/scene-brief/{{ b.id }}/delete" onsubmit="return confirm('Discard this scene brief?')" style="margin:0"><button type="submit" style="color:var(--red,#d64550); font-size:12px">discard</button></form>
+          </div>
+        </div>
+        <div class="promptbox" id="brief-{{ b.id }}" style="margin-top:8px; white-space:pre-wrap">{{ b.brief }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if active_brand(request) == 'antihero' %}
+  <div class="panel">
+    <div class="panel-head"><span class="id">INSPIRATION</span><span class="m">GROUNDING YOUR ANTIHERO IDEAS AUTOMATICALLY</span></div>
+    <div class="panel-body">
+      <p class="mono dim" style="font-size:12px; margin:0 0 10px">These accounts quietly ground every ANTIHERO generation under the hood — no button needed. Reference notes:</p>
+      {% if inspirations %}
+      <div style="display:grid; gap:10px">
+        {% for a in inspirations %}
+        <div style="border:1px solid var(--line2,#303034); border-radius:10px; padding:10px">
+          <div><b>@{{ a.handle }}</b>{% if a.note %} <span class="mono dim" style="font-size:12px">— {{ a.note }}</span>{% endif %}</div>
+          <p class="dim" style="font-size:12px; margin:6px 0 0">{{ a.profile }}</p>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="dim">No inspiration accounts yet.</p>
+      {% endif %}
+      <details style="margin-top:12px">
+        <summary class="mono dim" style="cursor:pointer; font-size:12px">+ add or update an inspiration account</summary>
+        <form method="post" action="/inspiration/add" style="display:grid; gap:8px; margin-top:10px">
+          <input type="text" name="handle" placeholder="handle e.g. kaye.creatives" required>
+          <input type="text" name="note" placeholder="what you like about it">
+          <textarea name="profile" rows="4" placeholder="the pattern to riff on: hooks, formats, grade, what makes it travel" required></textarea>
+          <button type="submit">Save inspiration account</button>
+        </form>
+      </details>
+    </div>
+  </div>
+  {% endif %}
+
   <h2>All concepts</h2>
   {% if concepts %}
+  <div style="margin-bottom:14px; display:flex; gap:8px; flex-wrap:wrap; align-items:center">
+    <form method="post" action="/concepts/grade-all" style="margin:0">
+      <button type="submit">Grade all ungraded — taste + performance</button>
+    </form>
+    <form method="post" action="/concepts/discard-all" onsubmit="return confirm('Discard ALL concepts for this brand? This cannot be undone.')" style="margin:0">
+      <button type="submit" style="color:var(--red,#d64550)">Clear all — this brand</button>
+    </form>
+    <span class="mono dim" style="font-size:12px">grade scores against your history; clear wipes this brand's slate</span>
+  </div>
   {% for c in concepts %}
   <article class="panel">
     <div class="panel-head">
@@ -65,6 +125,28 @@
     </div>
     <div class="panel-body">
       <h3>{{ c.title|upper }}{% if c.shot_done %} <span class="tag" style="color:var(--good);border-color:#264b36">◆ SHOT</span>{% endif %}</h3>
+
+      {% if c.get('judge_overall') is not none %}
+      <div style="margin-top:6px; display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+        <span class="tag" style="color:#7ddba0;border-color:#264b36">JUDGE {{ "%.0f"|format(c.judge_overall) }}/10</span>
+        <span class="mono dim" style="font-size:12px">taste {{ "%.0f"|format(c.judge_taste) }} · perf {{ "%.0f"|format(c.judge_perf) }}</span>
+      </div>
+      {% if c.judge_reason %}<p class="dim" style="margin-top:4px; font-size:12px">{{ c.judge_reason }}</p>{% endif %}
+      {% endif %}
+
+      {# Zero Page's on-brand (uncanny) gate — the PASS/HOLD that decides
+         whether this may auto-post. Only meaningful for Zero Page concepts. #}
+      {% if c.brand == 'zeropage' and c.get('uncanny_overall') is not none %}
+      <div style="margin-top:6px; display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+        {% if c.uncanny_passed %}
+        <span class="tag" style="color:#3fb950;border-color:#264b36">✓ ON-BRAND {{ "%.0f"|format(c.uncanny_overall) }}/10 — clears autopilot</span>
+        {% else %}
+        <span class="tag" style="color:#d64550;border-color:#4b2630">⦿ HELD {{ "%.0f"|format(c.uncanny_overall) }}/10 — won't auto-post</span>
+        {% endif %}
+        {% if c.format %}<span class="mono dim" style="font-size:12px">rides: {{ c.format }}</span>{% endif %}
+      </div>
+      {% if c.uncanny_reason %}<p class="dim" style="margin-top:4px; font-size:12px">{{ c.uncanny_reason }}</p>{% endif %}
+      {% endif %}
 
       {% if c.warnings %}
       <div class="warnings">
@@ -117,12 +199,14 @@
       </div>
       {% endif %}
 
-      <div style="margin-top:16px; display:flex; gap:8px">
+      <div style="margin-top:16px; display:flex; gap:8px; flex-wrap:wrap">
         {% if not c.has_shot_list %}
         <form method="post" action="/concepts/{{ c.id }}/shotlist"><button type="submit">Plan the shoot</button></form>
         {% else %}
         <form method="post" action="/concepts/{{ c.id }}/shot"><button type="submit">{{ "Mark unshot" if c.shot_done else "Mark shot" }}</button></form>
         {% endif %}
+        <form method="post" action="/concepts/{{ c.id }}/grade"><button type="submit">{{ "Re-grade" if c.get('judge_overall') is not none else "Grade taste + perf" }}</button></form>
+        <form method="post" action="/concepts/{{ c.id }}/discard" onsubmit="return confirm('Discard SHOOT-{{ '%02d'|format(c.id) }}? This deletes it.')"><button type="submit" style="color:var(--red,#d64550)">Discard</button></form>
       </div>
     </div>
   </article>

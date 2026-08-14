@@ -38,9 +38,17 @@ EVERY SHOT IS EITHER CAPTURED OR GENERATED — decide per shot:
   achievable alone — self-timer, tripod, POV mount.
 - "source": "AI" — a video model generates it. Give it a "tool" and a
   paste-ready "prompt". Use AI for what the rooms and one pair of
-  hands can't give, and ground the prompt in the named real room —
-  its light, its textures — so the generated shot cuts against the
-  real footage without a seam.
+  hands can't give, including locations he doesn't have. When it extends
+  a real room, ground the prompt in that room's light and textures so it
+  cuts against the real footage without a seam; when it invents a space,
+  put a short scene label in "location" and describe that space fully in
+  the prompt, matching the grade.
+  WRITE EVERY AI "prompt" TO RENDER REAL, NOT GLOSSY — the recipe that
+  lands: name natural camera imperfection (handheld sway, slight shake,
+  imperfect framing), practical/motivated light, physically believable
+  motion, the diegetic sound of the moment (no music), and end with a short
+  negative clause: no glossy CGI, no plastic AI sheen, no dramatic slow
+  motion, no smooth commercial camera moves, no over-grading.
   Tools: VEO (text-to-video, generates audio), KLING (image-to-video
   from a still or last frame), RUNWAY (video-to-video restyle or
   extension), SEEDANCE (multi-shot, reference-driven, audio),
@@ -56,8 +64,15 @@ expect it to be flagged for review):
 - Fewer, stronger shots cut better than many.
 - Every shot's "type" is exactly CHARACTER or BROLL.
 {cam_rule}
-- Every shot's "location" is one of the location names listed above —
-  AI shots included, since they extend real rooms.
+- Camera shots: "location" is one of the room names listed above — you
+  can only film where you actually are. AI shots: a listed room when
+  extending one, or a short invented scene label when the idea needs a
+  space he doesn't have. Vary the setting across the piece.
+- Describe every look in cinematography and colour-grade terms only —
+  never name films, directors, brands, or real people. Named works trip
+  third-party content filters and don't render reliably; the grade above
+  is your whole vocabulary (crushed blacks, film grain, low saturation,
+  one hot accent, etc.).
 - Shot 1 must deliver the hook above.
 
 Output STRICT JSON ONLY in this exact shape:

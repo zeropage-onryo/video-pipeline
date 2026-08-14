@@ -1,0 +1,195 @@
+{% extends "base.html" %}
+{% block title %}Assets — Zero Page{% endblock %}
+{% block head %}
+<style>
+  /* Tab bar for the merged Locations/Characters/Props page. Scoped under
+     .sk like the rest of this template so it can't leak into other
+     screens that also use the shared skin. */
+  .sk .atabs{ display:flex; gap:6px; margin-bottom:20px; border-bottom:1px solid var(--line); }
+  .sk .atab{ font-size:13.5px; color:var(--dim); padding:10px 4px; margin-right:18px; cursor:pointer; border-bottom:2px solid transparent; background:none; border-left:none; border-right:none; border-top:none; font-family:inherit; }
+  .sk .atab:hover{ color:var(--ink); }
+  .sk .atab.active{ color:var(--ink); border-bottom-color:var(--red); font-weight:600; }
+  .sk .apanel.hide{ display:none; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="sk"><div class="page">
+  <div class="vhead">
+    <div>
+      <div class="rule">Solo unit // grounding &amp; cast // real spaces, real people, real objects</div>
+      <h1>Assets</h1>
+      <p class="vsub">Locations, characters, and props, in one place — everything a concept can be grounded in or cast with. Upload photos once here; every generation downstream can name them instead of re-describing them from scratch.</p>
+    </div>
+  </div>
+
+  {% if message %}<div class="toast">{{ message }}</div>{% endif %}
+
+  <div class="atabs" role="tablist">
+    <button type="button" class="atab {{ 'active' if active_tab == 'locations' }}" data-tab="locations">Locations</button>
+    <button type="button" class="atab {{ 'active' if active_tab == 'characters' }}" data-tab="characters">Characters</button>
+    <button type="button" class="atab {{ 'active' if active_tab == 'props' }}" data-tab="props">Props</button>
+  </div>
+
+  <!-- ---------------- Locations ---------------- -->
+  <div class="apanel {{ '' if active_tab == 'locations' else 'hide' }}" data-panel="locations">
+    <div class="vhead" style="margin-bottom:14px">
+      <p class="vsub" style="margin:0">Upload photos of a spot. It gets described once, then every concept is built around what's actually there.</p>
+      <button class="btnw" onclick="document.getElementById('loc-add').showModal()">＋ New Location</button>
+    </div>
+
+    {% if locations %}
+    <div class="agrid">
+      {% for loc in locations %}
+      <a class="acard" href="#" onclick="document.getElementById('locd-{{ loop.index }}').showModal();return false;">
+        <div class="im">
+          {% if loc.photos %}<img src="{{ loc.photos[0] }}?thumb=1" alt="{{ loc.name }}">{% else %}<div class="im-ph"></div>{% endif %}
+          {% if loc.description %}<span class="badge">DESCRIBED · {{ loc.photo_count or 0 }}</span>{% endif %}
+        </div>
+        <div class="meta"><h3>{{ loc.name|upper }}</h3><p>{{ loc.description.space if loc.description else 'Not described yet' }}</p></div>
+      </a>
+      {% endfor %}
+      <button class="acard add" onclick="document.getElementById('loc-add').showModal()">＋ New location</button>
+    </div>
+
+    {% for loc in locations %}
+    <dialog id="locd-{{ loop.index }}" class="sk-dlg" style="width:min(560px,94vw)">
+      <h3>{{ loc.name|upper }}</h3>
+      {% if loc.photos %}<div class="photo-grid" style="margin-top:10px">{% for src in loc.photos %}<figure><img class="thumb" src="{{ src }}?thumb=1" alt=""><figcaption>P{{ loop.index }}</figcaption></figure>{% endfor %}</div>{% endif %}
+      {% if loc.description %}
+      <p style="margin-top:12px">{{ loc.description.space }}</p>
+      {% if loc.description.light_sources %}<div class="kicker" style="margin-top:12px">Light</div><ul>{% for x in loc.description.light_sources %}<li>{{ x }}</li>{% endfor %}</ul>{% endif %}
+      {% if loc.description.textures %}<div class="kicker" style="margin-top:10px">Textures</div><ul>{% for x in loc.description.textures %}<li>{{ x }}</li>{% endfor %}</ul>{% endif %}
+      {% if loc.description.angles %}<div class="kicker" style="margin-top:10px">Workable angles</div><ul>{% for x in loc.description.angles %}<li>{{ x }}</li>{% endfor %}</ul>{% endif %}
+      {% if loc.description.constraints %}<div class="kicker" style="margin-top:10px">Constraints</div><p class="dim">{{ loc.description.constraints }}</p>{% endif %}
+      {% endif %}
+      <div class="sk-dlg-row"><button onclick="this.closest('dialog').close()">Close</button></div>
+    </dialog>
+    {% endfor %}
+    {% else %}
+    <p class="dim">No locations yet. Add one — a concept needs a real space to sit in.</p>
+    {% endif %}
+
+    <dialog id="loc-add" class="sk-dlg">
+      <form method="post" action="/locations/upload" enctype="multipart/form-data">
+        <h3>New location</h3>
+        <input type="hidden" name="next" value="/assets?tab=locations">
+        <label>Name<input name="name" placeholder="garage, hallway, studio-bedroom" required></label>
+        <label>Photos<input type="file" name="photos" accept="image/*" multiple required></label>
+        <p class="mono dim" style="font-size:11px">Tip: shoot it at night with practicals on. A couple of angles beats one wide.</p>
+        <div class="sk-dlg-row"><button type="button" onclick="this.closest('dialog').close()">Cancel</button><button class="primary" type="submit">Describe this space</button></div>
+      </form>
+    </dialog>
+  </div>
+
+  <!-- ---------------- Characters ---------------- -->
+  <div class="apanel {{ '' if active_tab == 'characters' else 'hide' }}" data-panel="characters">
+    <div class="vhead" style="margin-bottom:14px">
+      <p class="vsub" style="margin:0">On-screen identities and voices. Link reference stills so generated shots stay consistent.</p>
+      <button class="btnw" onclick="document.getElementById('char-add').showModal()">＋ New Character</button>
+    </div>
+
+    <div class="agrid">
+      {% for c in characters %}
+      <div class="acard">
+        <div class="im">
+          {% if c.photos %}<img src="{{ c.photos[0] }}" alt="{{ c.name }}">{% else %}<div class="im-ph"></div>{% endif %}
+          {% if c.role %}<span class="badge">{{ c.role|upper }}</span>{% endif %}
+        </div>
+        <div class="meta">
+          <h3>{{ c.name }}</h3>
+          <p>{{ c.description.notes or c.notes or (c.photo_count ~ ' still(s)') }}</p>
+        </div>
+        <form method="post" action="/characters/{{ c.id }}/delete" style="position:absolute;top:9px;right:9px"
+              onsubmit="return confirm('Delete {{ c.name }}?')">
+          <input type="hidden" name="next" value="/assets?tab=characters">
+          <button title="Delete" aria-label="Delete" style="width:24px;height:24px;padding:0;border-radius:50%;background:rgba(0,0,0,.62)">×</button>
+        </form>
+      </div>
+      {% endfor %}
+      <button class="acard add" onclick="document.getElementById('char-add').showModal()">＋ New character</button>
+    </div>
+
+    <dialog id="char-add" class="sk-dlg">
+      <form method="post" action="/characters/new" enctype="multipart/form-data">
+        <h3>New character</h3>
+        <input type="hidden" name="next" value="/assets?tab=characters">
+        <label>Name<input name="name" required autocomplete="off"></label>
+        <label>Role<input name="role" placeholder="protagonist / talent / voice" autocomplete="off"></label>
+        <label>Notes<textarea name="notes" rows="2"></textarea></label>
+        <label>Reference photos<input type="file" name="photos" accept="image/*" multiple></label>
+        <div class="sk-dlg-row">
+          <button type="button" onclick="this.closest('dialog').close()">Cancel</button>
+          <button class="primary" type="submit">Create</button>
+        </div>
+      </form>
+    </dialog>
+  </div>
+
+  <!-- ---------------- Props ---------------- -->
+  <div class="apanel {{ '' if active_tab == 'props' else 'hide' }}" data-panel="props">
+    <div class="vhead" style="margin-bottom:14px">
+      <p class="vsub" style="margin:0">Objects you shoot repeatedly. Naming them lets concepts and edits call them by name.</p>
+      <button class="btnw" onclick="document.getElementById('prop-add').showModal()">＋ New Prop</button>
+    </div>
+
+    <div class="agrid">
+      {% for p in props %}
+      <div class="acard">
+        <div class="im">
+          {% if p.photos %}<img src="{{ p.photos[0] }}" alt="{{ p.name }}">{% else %}<div class="im-ph"></div>{% endif %}
+          {% if p.category %}<span class="badge">{{ p.category|upper }}</span>{% endif %}
+        </div>
+        <div class="meta">
+          <h3>{{ p.name }}</h3>
+          <p>{{ p.description.notes or p.notes or (p.photo_count ~ ' still(s)') }}</p>
+        </div>
+        <form method="post" action="/props/{{ p.id }}/delete" style="position:absolute;top:9px;right:9px"
+              onsubmit="return confirm('Delete {{ p.name }}?')">
+          <input type="hidden" name="next" value="/assets?tab=props">
+          <button title="Delete" aria-label="Delete" style="width:24px;height:24px;padding:0;border-radius:50%;background:rgba(0,0,0,.62)">×</button>
+        </form>
+      </div>
+      {% endfor %}
+      <button class="acard add" onclick="document.getElementById('prop-add').showModal()">＋ New prop</button>
+    </div>
+
+    <dialog id="prop-add" class="sk-dlg">
+      <form method="post" action="/props/new" enctype="multipart/form-data">
+        <h3>New prop</h3>
+        <input type="hidden" name="next" value="/assets?tab=props">
+        <label>Name<input name="name" required autocomplete="off"></label>
+        <label>Category<input name="category" placeholder="vehicle / wardrobe / set-dressing" autocomplete="off"></label>
+        <label>Notes<textarea name="notes" rows="2"></textarea></label>
+        <label>Reference photos<input type="file" name="photos" accept="image/*" multiple></label>
+        <div class="sk-dlg-row">
+          <button type="button" onclick="this.closest('dialog').close()">Cancel</button>
+          <button class="primary" type="submit">Create</button>
+        </div>
+      </form>
+    </dialog>
+  </div>
+</div></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Client-side tab switching, with the URL kept in sync (?tab=...) so a
+  // reload, a bookmark, or a link from elsewhere in the app (the studio
+  // page's Workflow section, the redirect from the old /locations,
+  // /characters, /props URLs) lands on the right panel without a second
+  // click.
+  document.querySelectorAll('.sk .atab').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var tab = btn.getAttribute('data-tab');
+      document.querySelectorAll('.sk .atab').forEach(function(b){ b.classList.remove('active'); });
+      btn.classList.add('active');
+      document.querySelectorAll('.sk .apanel').forEach(function(p){
+        p.classList.toggle('hide', p.getAttribute('data-panel') !== tab);
+      });
+      var url = new URL(window.location);
+      url.searchParams.set('tab', tab);
+      window.history.replaceState({}, '', url);
+    });
+  });
+</script>
+{% endblock %}

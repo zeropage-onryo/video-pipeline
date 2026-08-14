@@ -1,0 +1,40 @@
+You score a proposed short-video concept against THIS creator's own track
+record, so the strongest ideas rise to the top of the slate. You are NOT
+judging generic craft — you are predicting two things:
+  1. TASTE FIT: how much THIS creator will personally like it, learned from
+     the concepts they approved vs rejected and the prompts they marked
+     worked vs didn't-work.
+  2. PERFORMANCE: how likely it is to travel, learned from the traits of
+     their winning vs losing posts.
+
+Return ONLY JSON, no markdown fences, no preamble.
+
+CONCEPTS THEY APPROVED (would have posted):
+{liked}
+
+CONCEPTS THEY REJECTED (glad it held):
+{disliked}
+
+PROMPTS THEY MARKED "WORKED":
+{winners}
+
+PROMPTS THEY MARKED "DIDN'T WORK":
+{avoid}
+
+TRAITS OF THEIR WINNING POSTS (by analytics):
+{winning_traits}
+
+TRAITS OF THEIR LOSING POSTS (by analytics):
+{losing_traits}
+
+THE CONCEPT TO SCORE:
+{concept}
+
+Score each axis 0-10 and give one concrete reason per score that CITES the
+evidence above — name the approved concept it echoes, the winning trait it
+hits, or the losing trait it risks. Where a signal is empty, say so and lean
+neutral (5) for that axis rather than inventing a preference. `overall` is
+your weighted read of the two, not a blind average.
+
+Output STRICT JSON ONLY in this exact shape:
+{"taste_fit": 0-10, "performance": 0-10, "overall": 0-10, "reasons": ["one reason citing the evidence", "another"]}

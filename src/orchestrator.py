@@ -51,7 +51,7 @@ from typing import Optional, TypedDict
 from google import genai
 from langgraph.graph import END, START, StateGraph
 
-from . import autonomy, crag, db, entities, preprod, rag, scheduling, shootgen
+from . import autonomy, crag, db, entities, preprod, rag, scheduling, shootgen, winners
 from .gemini_utils import generate_with_retry
 
 MAX_ATTEMPTS = 3
@@ -207,6 +207,12 @@ def gen_concept(state: GenState) -> GenState:
         for n in notes:
             autonomy.consume_correction(n["id"], path=db.DB_PATH)
 
+    # standing negative steer: patterns you've marked "didn't work" are
+    # folded in so the next batch avoids repeating them (winners.avoid_guidance).
+    avoid = winners.avoid_guidance(path=db.DB_PATH)
+    if avoid:
+        spark = f"{spark or ''}\n{avoid}".strip()
+
     result = shootgen.generate_concept(
         brand=state.get("brand", "antihero"),
         client=state.get("client"),
@@ -245,14 +251,43 @@ def route_after_eval(state: GenState) -> str:
 
 # --- nodes: the posting line ----------------------------------------------
 
+_STILL_RUBRIC = """Write a Midjourney prompt for a single STILL that will be the
+reference / first frame of this video shot. Describe ONLY what's in the frame --
+subject, composition, framing/lens, lighting, mood, style. NO motion, NO camera
+movement (the still is a frozen frame). One vivid sentence, then Midjourney flags.
+End with: --ar 9:16 --style raw
+Return ONLY the prompt line, nothing else."""
+
+
+def _midjourney_still(shot_prompt: str) -> str:
+    """The Midjourney still that anchors a Runway shot -- a motion-free
+    frame prompt derived from the video prompt. It is the reference frame
+    Runway builds from AND an image post in its own right. No gate:
+    stills cost nothing to prompt and, per policy, need no approval."""
+    try:
+        raw = generate_with_retry(_client(), GEMINI_MODEL,
+                                  _STILL_RUBRIC + "\n\nVIDEO SHOT:\n" + shot_prompt)
+        line = next((l.strip() for l in (raw or "").splitlines() if l.strip()), "")
+        if line and "--ar" not in line:
+            line = line + " --ar 9:16 --style raw"
+        return line
+    except Exception:
+        return ""
+
+
 def structure_prompt(state: GenState) -> GenState:
     """The AI shots' paste-ready prompts. shootgen already writes these
     into the concept (validate_concept flags an AI shot without one), so
     this extracts rather than re-billing promptgen per shot -- the
-    structured prompt already exists."""
+    structured prompt already exists.
+
+    Also drafts the Midjourney still that anchors each shot: the reference
+    frame Runway generates from, and an image post in its own right.
+    Stills need no approval, so this step is never gated."""
     shots = [s for s in (state.get("concept", {}) or {}).get("shots", [])
              if s.get("source") == "AI" and s.get("prompt")]
-    return {"prompts": [{"tool": s.get("tool"), "prompt": s["prompt"]} for s in shots]}
+    return {"prompts": [{"tool": s.get("tool"), "prompt": s["prompt"],
+                         "still": _midjourney_still(s["prompt"])} for s in shots]}
 
 
 # --- the prompt gate: nothing spends a credit until its prompt clears ------
@@ -271,7 +306,7 @@ def _structural_check(text: str) -> tuple[bool, str]:
     return True, ""
 
 
-_PROMPT_RUBRIC = """You grade AI VIDEO prompts (Veo/Runway/Kling). Score how likely THIS prompt
+_PROMPT_RUBRIC = """You grade AI VIDEO prompts (Runway). Score how likely THIS prompt
 yields a usable clip on the FIRST render. Be harsh — a paid credit is spent on your say-so.
 
 Rate each 0-2:
@@ -318,11 +353,13 @@ def score_prompts(state: GenState) -> GenState:
         text = p.get("prompt", "")
         ok, why = _structural_check(text)
         if not ok:
-            scored.append({"prompt": text, "tool": p.get("tool"), "score": 0,
+            scored.append({"prompt": text, "tool": p.get("tool"),
+                           "still": p.get("still"), "score": 0,
                            "pass": False, "reason": why, "dims": {}})
             continue
         verdict = _judge_prompt(text)
         scored.append({"prompt": text, "tool": p.get("tool"),
+                       "still": p.get("still"),
                        "score": verdict["score"],
                        "pass": verdict["score"] >= PROMPT_GATE_MIN,
                        "reason": verdict["reason"], "dims": verdict["dims"]})
@@ -341,26 +378,32 @@ def route_after_score(state: GenState) -> str:
 
 
 def generate_render(state: GenState) -> GenState:
-    """The credit gate, now explicit: ZEROPAGE_RENDER=1 turns on real
-    Veo generation (one candidate per AI shot, through veo.py's daily
-    cap and genlog logging). Anything else -- the default -- is the
-    dry-run stub: every clip comes back url=None, ok=False, and the run
-    parks downstream. Tools without an adapter (KLING/RUNWAY/...) stay
-    dry even when rendering is on, honestly marked."""
+    """The credit gate: rendering is dry by default (ZEROPAGE_RENDER != 1)
+    -- every clip comes back url=None, ok=False and the run parks
+    downstream, so no credits are ever spent. With ZEROPAGE_RENDER=1,
+    tool==RUNWAY routes through runway.py (wired 2026-08-12), which has
+    its own second gate: no RUNWAY_SPEND_OK=1 means the clip comes back
+    ok=False with "render it in the app" as the reason -- the Runway API
+    has no Explore Mode, so API credits are always a deliberate, per-run
+    human approval. tool==VEO keeps the legacy veo.py path for when Veo
+    returns to the registry; anything else is honestly "no adapter
+    wired"."""
     prompts = state.get("prompts", [])
     if os.environ.get("ZEROPAGE_RENDER") != "1":
         return {"clips": [{**p, "url": None, "ok": False} for p in prompts]}
 
-    from . import veo
+    from . import runway, veo
+    connectors = {"VEO": veo, "RUNWAY": runway}
     out_root = (Path(db.DB_PATH).parent.parent / "footage" / "generated"
                 / f"concept-{state.get('concept_id', 'x')}")
     clips = []
     for index, p in enumerate(prompts, start=1):
-        if (p.get("tool") or "").upper() != "VEO":
+        connector = connectors.get((p.get("tool") or "").upper())
+        if connector is None:
             clips.append({**p, "url": None, "ok": False,
                           "error": f"no adapter wired for {p.get('tool')}"})
             continue
-        result = veo.generate_candidates(
+        result = connector.generate_candidates(
             p["prompt"], out_root / f"shot{index}", n=1, db_path=db.DB_PATH)
         if result["ok"] and result["candidates"]:
             clips.append({**p, "url": result["candidates"][0]["path"], "ok": True})
@@ -459,10 +502,11 @@ def publish(state: GenState) -> GenState:
         return _park(state, f"failed post-gate: {why}")
 
     mode = channel_row.get("autonomy", "shadow")
+    dest = (channel_row.get("targets") or "").replace(",", " + ").strip()
     if mode == "auto":
-        return _park(state, "auto: posting API not wired yet")
+        return _park(state, f"auto: posting adapter not wired for {dest or 'this channel'} yet")
     if mode == "queue":
-        return _park(state, "awaiting your approval")
+        return _park(state, f"awaiting your approval to post → {dest or 'review'}")
     return _park(state, "shadow — grading only")
 
 
@@ -541,6 +585,7 @@ def run(goal: str, *, brand: str = "antihero", spark: Optional[str] = None,
         channel: str = "zeropage", picked_locations=None,
         picked_characters=None, picked_props=None) -> dict:
     autonomy.init(path=db.DB_PATH)
+    winners.init(path=db.DB_PATH)
     return GRAPH.invoke({
         "goal": goal, "brand": brand, "spark": spark or goal,
         "client": client, "use_pov": use_pov, "channel": channel,

@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Prompt feedback — Zero Page{% endblock %}
+{% block content %}
+<div class="sk"><div class="page">
+  <div class="vhead"><div>
+    <div class="rule">Outcome loop // what worked and what didn't // grounds every future run</div>
+    <h1>Prompt feedback</h1>
+    <p class="vsub">Tweak a prompt, run it in Runway, then tell the pipeline how it went. "Worked" is taught as a pattern to imitate; "Didn't work" is taught as a pattern to avoid. Both feed RAG, so the next batch is smarter.</p>
+  </div></div>
+
+  {% if message %}<div class="toast">{{ message }}</div>{% endif %}
+
+  <div class="panel">
+    <div class="panel-head"><span class="id">TEACH THE PIPELINE</span><span class="m">SAVED · THEN INGESTED TO RAG</span></div>
+    <div class="panel-body">
+      <form method="post" action="/winners">
+        <div class="field-grid">
+          <label>Verdict
+            <select name="verdict">
+              <option value="worked" {{ "selected" if prefill_verdict != "didnt_work" }}>✓ Worked — imitate this</option>
+              <option value="didnt_work" {{ "selected" if prefill_verdict == "didnt_work" }}>✗ Didn't work — avoid this</option>
+            </select>
+          </label>
+          <label>Tool
+            <select name="tool">
+              <option value="runway" {{ "selected" if prefill_tool == "runway" }}>Runway (video)</option>
+              <option value="midjourney" {{ "selected" if prefill_tool == "midjourney" }}>Midjourney (still)</option>
+            </select>
+          </label>
+        </div>
+        <label style="display:block;margin-top:10px">The final prompt (tweak it before saving)
+          <textarea name="prompt" rows="6" required placeholder="Paste the exact prompt you ran…">{{ prefill_prompt }}</textarea>
+        </label>
+        <label style="display:block;margin-top:10px">Why <span class="mono dim">what made it work, or what went wrong</span>
+          <input type="text" name="note" placeholder="e.g. clean single push-in landed first try  —  or  —  too much motion, morphed the face">
+        </label>
+        <label style="display:block;margin-top:10px">Finished piece <span class="mono dim">optional, for wins</span>
+          <input type="text" name="video_ref" placeholder="link or id of the clip that did well">
+        </label>
+        <div style="margin-top:12px"><button type="submit" class="primary">Save &amp; teach the pipeline</button></div>
+      </form>
+    </div>
+  </div>
+
+  <h2>Your feedback log</h2>
+  {% if winners %}
+  {% for w in winners %}
+  <article class="panel">
+    <div class="panel-head">
+      <span class="id">{{ "WIN" if w.verdict != "didnt_work" else "AVOID" }}-{{ "%03d"|format(w.id) }}</span>
+      <span class="m">{{ w.tool|upper }} · {{ w.created_at[:10] }} ·
+        {% if w.verdict == "didnt_work" %}<span style="color:var(--red)">DIDN'T WORK</span>{% else %}<span style="color:var(--good)">WORKED</span>{% endif %}
+        {% if w.ingested %}· TAUGHT{% else %}· <span style="color:var(--red)">not yet taught</span>{% endif %}</span>
+    </div>
+    <div class="panel-body">
+      {% if w.note %}<p class="dim" style="margin:0 0 8px">{{ w.note }}</p>{% endif %}
+      <div class="prompt-box">{{ w.prompt }}</div>
+      {% if w.video_ref %}<p class="mono dim" style="margin-top:6px">{{ w.video_ref }}</p>{% endif %}
+    </div>
+  </article>
+  {% endfor %}
+  {% else %}
+  <p class="dim">No feedback yet. Review a run on the <a href="/holds" style="color:var(--steel)">hold queue</a> and tag its prompts worked or didn't.</p>
+  {% endif %}
+</div></div>
+{% endblock %}

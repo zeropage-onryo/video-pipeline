@@ -409,15 +409,24 @@ CONCEPT_SHOTS = [
 ]
 
 
+def test_locations_url_redirects_to_the_assets_tab():
+    """The standalone /locations URL is old muscle memory, not the real
+    page anymore -- it has to land on Assets rather than 404 or render
+    stale content."""
+    response = client.get("/locations", follow_redirects=False)
+    assert response.status_code == 308
+    assert response.headers["location"] == "/assets?tab=locations"
+
+
 def test_locations_page_empty_state(tmp_preprod_db):
-    response = client.get("/locations")
+    response = client.get("/assets?tab=locations")
     assert response.status_code == 200
     assert "No locations yet" in response.text
 
 
 def test_locations_page_lists_described_spaces(tmp_preprod_db):
     preprod.add_location("hallway", SAMPLE_SPACE, photo_count=3, path=tmp_preprod_db)
-    response = client.get("/locations")
+    response = client.get("/assets?tab=locations")
     assert "hallway" in response.text
     assert "narrow hallway" in response.text
     assert "overhead practical" in response.text
@@ -572,10 +581,8 @@ def test_concepts_page_no_shotlist_button_once_planned(tmp_preprod_db):
 # `/` is deliberately not in here: it's the marketing landing, served
 # outside the app shell, so it carries no rail.
 
-RAILED_PAGES = ["/studio", "/concepts", "/locations", "/characters", "/props",
-                "/analytics", "/library"]
-RAIL_DESTINATIONS = ["/studio", "/concepts", "/locations", "/characters",
-                     "/props", "/library", "/analytics"]
+RAILED_PAGES = ["/studio", "/concepts", "/assets", "/analytics", "/library"]
+RAIL_DESTINATIONS = ["/studio", "/concepts", "/assets", "/library", "/analytics"]
 
 
 @pytest.mark.parametrize("page", RAILED_PAGES)
@@ -835,7 +842,7 @@ def test_location_photos_listed_on_the_page(tmp_preprod_db, tmp_path, monkeypatc
     (space / "b.png").write_bytes(TINY_PNG)
     preprod.add_location("garage", SAMPLE_SPACE, photo_count=2, path=tmp_preprod_db)
 
-    response = client.get("/locations")
+    response = client.get("/assets?tab=locations")
     assert "/locations/garage/photo/a.png" in response.text
     assert "/locations/garage/photo/b.png" in response.text
 
@@ -987,15 +994,15 @@ def test_page_asks_for_thumbnails(tmp_preprod_db, tmp_path, monkeypatch):
     (space / "a.jpg").write_bytes(_real_jpeg())
     preprod.add_location("garage", SAMPLE_SPACE, photo_count=1, path=tmp_preprod_db)
 
-    assert "?thumb=1" in client.get("/locations").text
+    assert "?thumb=1" in client.get("/assets?tab=locations").text
 
 
 # ---------- one screen: photos, settings, generate, results ----------
 
 def test_locations_page_has_the_upload_form(tmp_preprod_db):
-    """The new skin moved the upload into /locations' add dialog; the
+    """The upload lives in the Locations tab's add dialog on /assets; the
     concepts screen is generation-only now."""
-    response = client.get("/locations")
+    response = client.get("/assets?tab=locations")
     assert 'action="/locations/upload"' in response.text
     assert 'enctype="multipart/form-data"' in response.text
 
@@ -1007,7 +1014,7 @@ def test_locations_page_shows_space_thumbnails(tmp_preprod_db, tmp_path, monkeyp
     (space / "a.jpg").write_bytes(_real_jpeg())
     preprod.add_location("garage", SAMPLE_SPACE, photo_count=1, path=tmp_preprod_db)
 
-    response = client.get("/locations")
+    response = client.get("/assets?tab=locations")
     assert "/locations/garage/photo/a.jpg?thumb=1" in response.text
 
 

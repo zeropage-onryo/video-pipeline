@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS channels (
     name       TEXT PRIMARY KEY,
     autonomy   TEXT NOT NULL DEFAULT 'shadow',   -- shadow | queue | auto
     rate_cap   INTEGER NOT NULL DEFAULT 1,       -- hard max posts/day
+    targets    TEXT NOT NULL DEFAULT '',         -- comma list: instagram,youtube
     notes      TEXT
 );
 
@@ -85,9 +86,14 @@ CREATE INDEX IF NOT EXISTS idx_prompt_scores_run ON prompt_scores (run_id);
 
 KILL_KEY = "kill_switch"
 
+# name, autonomy, rate_cap, targets, notes.
+# Zero Page auto-generates and (once you approve) posts to IG + YouTube;
+# Antihero is the personal brand and stays under further review.
 DEFAULT_CHANNELS = (
-    ("zeropage", "shadow", 1, "the low-stakes sandbox; earns auto via the credit gate"),
-    ("personal", "shadow", 1, "stays gated until Zero Page's track record covers it"),
+    ("zeropage", "queue", 1, "instagram,youtube",
+     "auto-generates; approve to post; the pipeline posts to IG + YouTube"),
+    ("antihero", "shadow", 1, "",
+     "personal brand — further review; grade every run before it can post"),
 )
 
 
@@ -98,11 +104,29 @@ def _now() -> str:
 def init(path=db.DB_PATH) -> None:
     with db.connect(path) as conn:
         conn.executescript(SCHEMA)
-        for name, autonomy, cap, notes in DEFAULT_CHANNELS:
+        # migrate: add the targets column if this DB predates it
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(channels)")}
+        if "targets" not in cols:
+            conn.execute("ALTER TABLE channels ADD COLUMN targets TEXT NOT NULL DEFAULT ''")
+        # one-time migration: the personal channel is now Antihero, and
+        # Zero Page moves from shadow to queue (auto-generate, approve to post)
+        have = {r["name"] for r in conn.execute("SELECT name FROM channels")}
+        if "personal" in have and "antihero" not in have:
             conn.execute(
-                "INSERT OR IGNORE INTO channels (name, autonomy, rate_cap, notes) "
-                "VALUES (?, ?, ?, ?)",
-                (name, autonomy, cap, notes),
+                "UPDATE channels SET name='antihero', "
+                "notes='personal brand — further review; grade every run before it can post' "
+                "WHERE name='personal'")
+            conn.execute("UPDATE hold_queue SET channel='antihero' WHERE channel='personal'")
+            conn.execute(
+                "UPDATE channels SET autonomy='queue', targets='instagram,youtube', "
+                "notes='auto-generates; approve to post; the pipeline posts to IG + YouTube' "
+                "WHERE name='zeropage'")
+        # seed defaults (fresh installs only)
+        for name, autonomy, cap, targets, notes in DEFAULT_CHANNELS:
+            conn.execute(
+                "INSERT OR IGNORE INTO channels (name, autonomy, rate_cap, targets, notes) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (name, autonomy, cap, targets, notes),
             )
 
 

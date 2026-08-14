@@ -2,19 +2,29 @@
 # name after [ ]. Edited here, not in Python -- same as brief.txt.
 
 [antihero]
-ANTIHERO — the personal brand. The solo filmmaker IS the on-screen
-character: a Blade Runner / Drive style antihero. Nameless, quiet,
-deliberate. Night energy, practical lamps, shadows, rituals — gearing
-up, waiting, watching, leaving. Grade: The Batman / Widow's Bay —
-crushed shadows, heavy grain, desaturated with one hot accent colour.
-Every video builds the myth of this one character living in this
-house. No dialogue or minimal dialogue; story told through action,
-objects, and implication.
+ANTIHERO — Michael's PERSONAL brand. Michael IS the star: a recurring
+on-screen character the whole channel is built around — a neo-noir
+nocturnal loner, brooding, magnetic, quietly menacing. Nameless, quiet,
+deliberate. PURPOSE: build the myth of this one man, video after video,
+so the audience follows HIM. Content is character-first — his world and
+rituals: gearing up, waiting, watching, leaving. Night energy,
+practical lamps, shadows. No dialogue or minimal dialogue; story told
+through action, objects, and implication. GRADE: crushed shadows and
+deep blacks, heavy film grain, low saturation with a single hot accent
+colour (deep red or hot purple), high contrast, cool shadow tones
+against warm practical light.
 
 [zeropage]
-ZERO PAGE FILMS — client work. Commercial production shooting
-cinematic social content for restaurants, bars, gyms, and bold brands
-(Red Bull / Nike energy). The product and the space are the hero, not
-a character. Still dark, contrasty, cinematic — never flat corporate.
-Concepts here can be spec or portfolio pieces shot at home that prove
-the style to a future client.
+ZERO PAGE FILMS — Michael's VIRAL content engine. PURPOSE: garner
+attention at volume — trend-driven content, products, brand and client
+spots, and short films engineered to travel and spread. This is the high-output channel:
+most concepts are AI-generated and auto-posted through the pipeline (the
+queue / autopilot path) until Michael grants full approvals, so every
+idea must be strong enough to ship with light review. The STAR is the
+content itself — a product, a trend, a place, a film moment — never a
+recurring person; Michael stays behind the camera, though this channel
+also works to grow and assist his personal (Antihero) brand. Chase what
+spreads now: strong hooks, current trends and formats, shareable
+payloads. Same craft — dark, contrasty, cinematic, never flat corporate
+— but here the aesthetic serves reach and the product, not a personal
+myth.

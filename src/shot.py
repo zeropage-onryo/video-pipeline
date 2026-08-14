@@ -53,6 +53,13 @@ SHOT_SIZE = (
     "extreme_close",
 )
 
+# Runway is four sub-products with different prompt shapes (Gen-4 t2v/i2v,
+# Gen-4 References, Act-Two, Aleph). Only the two this repo actually renders
+# are modeled here: "generate" (Gen-4, from scratch) and "restyle" (Aleph,
+# video-to-video). References/Act-Two need an image/video attachment path
+# that doesn't exist in Shot yet -- see runway_parameters().
+RUNWAY_MODES = ("generate", "restyle")
+
 # Zero Page Films house style, from prompts/brief.txt and settings.txt.
 # Every rendered prompt carries this so generated clips cut against real
 # footage without a visible seam.
@@ -90,6 +97,9 @@ class Shot:
     notes: str = ""
     audio: str = ""      # ambient/SFX direction for models that generate sound (Veo). No dialogue by house style.
     tags: list[str] = field(default_factory=list)
+    # Which Runway product this shot targets. Other platforms ignore this
+    # field entirely -- it only changes what render_runway() does.
+    runway_mode: str = "generate"
 
     def __post_init__(self) -> None:
         if not self.subject.strip():
@@ -106,6 +116,10 @@ class Shot:
             raise ValueError(f"size must be one of {SHOT_SIZE}, got {self.size!r}")
         if not 0.5 <= self.duration_s <= 20:
             raise ValueError(f"duration_s out of range: {self.duration_s}")
+        if self.runway_mode not in RUNWAY_MODES:
+            raise ValueError(
+                f"runway_mode must be one of {RUNWAY_MODES}, got {self.runway_mode!r}"
+            )
 
     def as_dict(self) -> dict:
         return {
@@ -120,6 +134,7 @@ class Shot:
             "notes": self.notes,
             "audio": self.audio,
             "tags": list(self.tags),
+            "runway_mode": self.runway_mode,
         }
 
 
@@ -136,6 +151,15 @@ def _phrase(*parts: str) -> str:
 # renderers — one per tool, each a pure function of Shot -> str
 # --------------------------------------------------------------------------
 
+# NOT independently verified against Runway's own docs -- general pattern
+# only. task-runway-prompting-best-practices.md claims this was checked
+# against a vendored guide at
+# .claude/skills/video-prompting/references/models/runway/prompting.md,
+# fetched 2026-08-06 -- but that file does not exist in the repo (no
+# runway/ directory under references/models/, and Runway is absent from
+# video-prompting/SKILL.md's Model Index). Don't date this as verified
+# until that guide is actually fetched and vendored; the task doc's claim
+# appears to be aspirational, not something that happened.
 RUNWAY_CAMERA = {
     "static": "static camera",
     "pan_left": "camera pans left",
@@ -153,7 +177,14 @@ RUNWAY_CAMERA = {
 
 
 def render_runway(shot: Shot) -> str:
-    """Descriptive single paragraph, camera motion stated plainly."""
+    """
+    Dispatches on shot.runway_mode. "generate" (default) is the existing
+    Gen-4 t2v paragraph, for shots built from scratch. "restyle" hands off
+    to render_runway_restyle -- Aleph (video-to-video) wants a completely
+    different, much narrower shape and does not want the scene re-described.
+    """
+    if shot.runway_mode == "restyle":
+        return render_runway_restyle(shot)
     return _phrase(
         f"{_readable_size(shot.size)} shot of {shot.subject}",
         shot.action,
@@ -162,6 +193,34 @@ def render_runway(shot: Shot) -> str:
         RUNWAY_CAMERA[shot.camera],
         shot.look,
     )
+
+
+def render_runway_restyle(shot: Shot) -> str:
+    """
+    Aleph-shaped restyle prompt: [action verb] + [outcome], one
+    transformation at a time. Deliberately does NOT re-describe
+    subject/setting/camera -- Aleph already has the source clip, so
+    restating the scene is noise, not signal, per
+    task-runway-prompting-best-practices.md. `notes` is the one place to
+    say what must survive the restyle unchanged (anatomy/geometry/identity
+    are exactly the things Aleph is most prone to drifting on).
+    """
+    transformation = _phrase(shot.action, shot.look)
+    if shot.notes.strip():
+        transformation = _phrase(transformation, f"preserving {shot.notes.strip()}")
+    return transformation
+
+
+def runway_parameters(shot: Shot) -> dict:
+    """
+    Generation-time attachments, kept OUT of the prompt text -- same
+    pattern as veo_parameters(). Gen-4 References (up to 3 images) and
+    Act-Two both need an actual image/video attachment path that doesn't
+    exist on Shot yet, so this is a placeholder shape only: it exists so
+    the studio UI has somewhere to attach reference images per shot once
+    that lands, not a working feature yet.
+    """
+    return {"reference_images": []}
 
 
 # Veo 3.1 cinematography vocabulary — the standard camera terms Google Cloud's
@@ -374,6 +433,12 @@ class Platform:
     verified: str | None = None
 
 
+# The registry IS the legal tool set: everything downstream (shootgen
+# validation, promptgen choices, the UI, render_all) derives the tool
+# vocabulary from these keys, so adding or removing a generator is a
+# one-line edit here. Midjourney handles stills upstream and has no motion
+# renderer, so it is deliberately absent. `verified` dates the camera map
+# against the tool's own prompt guide (None = general pattern, not docs).
 PLATFORMS: dict[str, Platform] = {
     "runway": Platform("runway", RUNWAY_CAMERA, render_runway, verified=None),
     "veo": Platform("veo", VEO_CAMERA, render_veo, verified="2026-08-04"),

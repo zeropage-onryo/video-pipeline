@@ -8,6 +8,7 @@ Missing key or a failed call must not break the screen -- manual entry
 keeps working -- so refresh_metrics_for_video never raises; it always
 returns a result dict describing what happened.
 """
+import os
 from urllib.parse import parse_qs, urlparse
 
 import requests
@@ -240,3 +241,91 @@ def import_channel_videos(handle: str, api_key=None, db_path=None) -> dict:
             db.record_metrics(video_db_id, **stats[video["video_id"]], **kwargs)
 
     return {"ok": True, "added": added}
+
+
+# --------------------------------------------------------------------------
+# uploads -- OAuth2 + resumable insert (the posting half youtube lacked)
+# --------------------------------------------------------------------------
+# Uploading needs full OAuth (an API key only reads public stats). Creds
+# come from env, same dual-name convention as the rest of the app; the
+# refresh token is minted once by you, out of band -- this module never
+# runs an interactive consent flow and never sees a password.
+
+UPLOAD_SCOPES = ("https://www.googleapis.com/auth/youtube.upload",)
+
+
+def _oauth_env():
+    cid = os.environ.get("YT_CLIENT_ID") or os.environ.get("YOUTUBE_CLIENT_ID")
+    secret = os.environ.get("YT_CLIENT_SECRET") or os.environ.get("YOUTUBE_CLIENT_SECRET")
+    refresh = os.environ.get("YT_REFRESH_TOKEN") or os.environ.get("YOUTUBE_REFRESH_TOKEN")
+    return cid, secret, refresh
+
+
+def upload_video(file_path, title, description="", privacy_status="private",
+                 tags=None, category_id="22") -> dict:
+    """Resumable upload of a LOCAL video file to YouTube. Never raises:
+    returns {"ok", "video_id", "url", "error"}. Needs OAuth creds
+    (YT_CLIENT_ID / YT_CLIENT_SECRET / YT_REFRESH_TOKEN) and the google
+    api client libs -- both reported clearly when missing, because that
+    is exactly the setup a first live post is waiting on."""
+    if not file_path or not os.path.isfile(str(file_path)):
+        return {"ok": False, "video_id": None, "url": None,
+                "error": f"no video file at {file_path!r}"}
+    cid, secret, refresh = _oauth_env()
+    if not (cid and secret and refresh):
+        return {"ok": False, "video_id": None, "url": None,
+                "error": "YT_CLIENT_ID / YT_CLIENT_SECRET / YT_REFRESH_TOKEN not set"}
+    try:
+        from google.oauth2.credentials import Credentials
+        from google.auth.transport.requests import Request as _AuthRequest
+        from googleapiclient.discovery import build
+        from googleapiclient.http import MediaFileUpload
+    except Exception as e:
+        return {"ok": False, "video_id": None, "url": None,
+                "error": f"google api client not installed ({e}); "
+                         "pip install google-api-python-client google-auth"}
+    try:
+        creds = Credentials(
+            None, refresh_token=refresh, client_id=cid, client_secret=secret,
+            token_uri="https://oauth2.googleapis.com/token",
+            scopes=list(UPLOAD_SCOPES))
+        creds.refresh(_AuthRequest())
+        yt = build("youtube", "v3", credentials=creds, cache_discovery=False)
+        body = {
+            "snippet": {"title": title or "Untitled", "description": description or "",
+                        "tags": list(tags or []), "categoryId": category_id},
+            "status": {"privacyStatus": privacy_status, "selfDeclaredMadeForKids": False},
+        }
+        media = MediaFileUpload(str(file_path), chunksize=-1, resumable=True)
+        request = yt.videos().insert(part="snippet,status", body=body, media_body=media)
+        response = None
+        while response is None:
+            _status, response = request.next_chunk()
+        vid = response.get("id")
+        return {"ok": True, "video_id": vid,
+                "url": f"https://youtu.be/{vid}" if vid else None, "error": None}
+    except Exception as e:
+        return {"ok": False, "video_id": None, "url": None, "error": str(e)}
+
+
+def execute_post_action(action: dict) -> None:
+    """The YouTube half of autopilot's post dispatch, mirroring
+    instagram.execute_post_action: only ever reached in live mode, so it
+    raises on failure and writes the result back onto the action. Needs a
+    LOCAL file (video_path) -- YouTube uploads bytes, not a public URL
+    like Meta."""
+    cid, secret, refresh = _oauth_env()
+    if not (cid and secret and refresh):
+        raise RuntimeError("YT_CLIENT_ID / YT_CLIENT_SECRET / YT_REFRESH_TOKEN "
+                           "not set -- live YouTube posting needs all three")
+    path = (action.get("video_path") or "").strip()
+    if not path:
+        raise RuntimeError("youtube post action has no video_path (a local "
+                           "rendered file); YouTube uploads a file, not a URL")
+    result = upload_video(
+        path, action.get("title") or action.get("caption") or "Untitled",
+        description=action.get("caption") or "",
+        privacy_status=action.get("privacy") or "private")
+    if not result["ok"]:
+        raise RuntimeError(f"youtube upload failed: {result['error']}")
+    action["result"] = result

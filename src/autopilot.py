@@ -29,7 +29,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from . import instagram, preprod
+from . import instagram, preprod, youtube
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 KILL_SWITCH_PATH = PROJECT_ROOT / "data" / "autopilot.off"
@@ -69,9 +69,21 @@ def execute_generate_action(action: dict):
 # live mode -- the gate above them is unchanged. post refuses without
 # IG_USER_ID/IG_ACCESS_TOKEN; generate goes through veo.py's daily cap
 # and logs every attempt through genlog.
+def _post_dispatch(action: dict):
+    """Route a post action to its platform's executor. Defaults to
+    Instagram (the original behavior); 'youtube' uploads a local file.
+    Both are only ever reached in live mode, behind the same gate."""
+    platform = (action.get("platform") or "instagram").strip().lower()
+    if platform == "youtube":
+        return youtube.execute_post_action(action)
+    if platform == "instagram":
+        return instagram.execute_post_action(action)
+    raise NotImplementedError(f"no post adapter for platform {platform!r}")
+
+
 EXECUTORS: dict[str, Callable[[dict], Any]] = {
     "generate": execute_generate_action,
-    "post": instagram.execute_post_action,
+    "post": _post_dispatch,
 }
 
 
@@ -106,6 +118,18 @@ def build_plan(db_path=None) -> dict[str, Any]:
                 "tool": shot.get("tool"),
                 "prompt": prompt,
             })
+        # The two postures are enforced HERE, at the plan, so no configuration
+        # mistake downstream can auto-post the wrong thing:
+        #   ANTIHERO is review-gated forever -- it NEVER enters an auto-post
+        #     plan. Michael's face and name only post when he approves.
+        #   ZERO PAGE auto-posts, but ONLY concepts that cleared the on-brand
+        #     (uncanny) gate. A concept that wasn't judged, or was HELD, is not
+        #     post-eligible -- the gate fails closed, so "unjudged" == "held".
+        if concept.get("brand") != "zeropage":
+            continue
+        if not concept.get("uncanny_passed"):
+            continue
+
         # Posting enters the plan only once generated media exists: a
         # shot carrying a rendered public media_url (which is also what
         # Meta's API requires). One post per concept, first rendered

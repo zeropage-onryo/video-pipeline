@@ -9,7 +9,6 @@ landing and the only indexed URL.
 """
 import os
 import re
-import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import List, Optional
@@ -22,9 +21,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from google import genai
 
-from src import (autonomy, autopilot, db, entities, format_feed, inspiration,
-                 instagram, locations, preprod, rag, shootgen, taste_judge,
-                 uncanny_judge, winners, youtube)
+from src import (autonomy, autopilot, db, entities, inspiration, instagram,
+                 locations, preprod, rag, shootgen, taste_judge, winners, youtube)
 
 from . import seo
 from .sparkline import render_sparkline
@@ -76,40 +74,11 @@ def active_brand(request: Request) -> str:
     return brand if brand in BRANDS else DEFAULT_BRAND
 
 
-# The two accounts have two POSTURES, not just two colours. ANTIHERO is
-# review-gated (Michael approves every post — his face, his name). Zero Page
-# runs on autopilot (faceless, gated by the uncanny judge + credit gate). The
-# toggle flips posture with the brand, so landing on a brand shows the right
-# relationship to the post button.
-def brand_posture(brand: str) -> str:
-    return "autopilot" if brand == "zeropage" else "review"
-
-
-def autopilot_state() -> dict:
-    """Live posture read for the UI: is the standing enable on, is the kill
-    switch down, is it actually live. Read-only; never raises."""
-    try:
-        enabled = autopilot.enabled()
-        killed = autopilot.killed()
-    except Exception:
-        enabled, killed = False, False
-    if killed:
-        label, tone = "PAUSED", "killed"
-    elif enabled:
-        label, tone = "LIVE", "live"
-    else:
-        label, tone = "STANDBY", "standby"
-    return {"enabled": enabled, "killed": killed, "live": enabled and not killed,
-            "label": label, "tone": tone}
-
-
 # Jinja globals so the switcher + accent render on every page without
 # threading the brand through each route's context.
 templates.env.globals["active_brand"] = active_brand
 templates.env.globals["BRAND_META"] = BRAND_META
 templates.env.globals["BRANDS"] = BRANDS
-templates.env.globals["brand_posture"] = brand_posture
-templates.env.globals["autopilot_state"] = autopilot_state
 
 # "Posted in the last" control -> posted_within_days. "all" -> no cutoff.
 POSTED_WINDOWS = {"3": 90, "6": 180, "12": 365, "all": None}
@@ -244,15 +213,20 @@ def dashboard():
 # phrases are what a person actually types when they mean it. Order
 # matters -- the first intent with a matching phrase wins, so the more
 # specific stages are checked before the catch-all.
+#
+# "ideas" phrases are deliberately plural/explicit ("ideas", "options",
+# "slate") rather than the bare word "idea" -- someone describing one
+# idea in the box ("I have an idea for...") should land on DEFAULT_INTENT
+# (one concept for exactly that), not the multi-idea batch stage.
 INTENT_PHRASES = [
     ("room", ("room", "space", "location", "photograph", "photo of", "scout")),
     ("plan", ("plan", "shot list", "shotlist", "storyboard", "board it", "break it down")),
     ("concept", ("full concept", "one concept", "whole concept", "concept for",
                  "make one", "single idea")),
-    ("ideas", ("idea", "deal", "pitch", "options", "slate", "give me")),
+    ("ideas", ("ideas", "deal", "pitch me", "options", "slate", "give me some")),
 ]
 
-DEFAULT_INTENT = "ideas"
+DEFAULT_INTENT = "concept"
 
 
 def route_intent(text: str, explicit: Optional[str] = None) -> str:
@@ -263,9 +237,10 @@ def route_intent(text: str, explicit: Optional[str] = None) -> str:
     This is keyword routing, not a model call, and that is the point: the
     assistant orchestrates stages that each cost a real API call, so the
     routing itself has to be free, instant, and inspectable. A miss lands
-    on ideas -- the cheapest stage and the one an unclear request almost
-    always means -- rather than silently spending a generation on the
-    wrong thing.
+    on concept -- one fully-formed idea for exactly what was typed (and
+    whatever was attached), which is what "describe an idea, hit
+    generate" almost always means. Ask for a slate explicitly ("give me
+    some options") when a batch to sift through is actually wanted.
     """
     if explicit in {name for name, _ in INTENT_PHRASES}:
         return explicit
@@ -293,23 +268,6 @@ def set_brand(name: str, next: str = Form("/studio")):
     resp = RedirectResponse(safe_next(next, "/studio"), status_code=303)
     resp.set_cookie("brand", brand, max_age=60 * 60 * 24 * 365, samesite="lax")
     return resp
-
-
-@app.post("/autopilot/{action}")
-def autopilot_toggle(action: str, next: str = Form("/studio")):
-    """Zero Page's posture control: pause drops the kill switch (nothing
-    auto-posts until resumed); resume lifts it. This governs the file gate;
-    the standing ZEROPAGE_AUTOPILOT env enable stays where it is."""
-    try:
-        if action == "pause":
-            autopilot.KILL_SWITCH_PATH.parent.mkdir(parents=True, exist_ok=True)
-            autopilot.KILL_SWITCH_PATH.write_text(
-                "autopilot paused from the studio\n")
-        elif action == "resume" and autopilot.killed():
-            autopilot.KILL_SWITCH_PATH.unlink()
-    except Exception as e:
-        print(f"note: autopilot toggle failed: {e}", file=sys.stderr)
-    return RedirectResponse(safe_next(next, "/studio"), status_code=303)
 
 
 @app.get("/studio")
@@ -360,11 +318,18 @@ def studio(request: Request, message: Optional[str] = None):
     )
 
 
-def run_ideation(intent: str, *, brand: str, client_name, spark, use_pov: bool) -> str:
+def run_ideation(intent: str, *, brand: str, client_name, spark, use_pov: bool,
+                  image_refs=None) -> str:
     """
     The two stages that generate from rooms. Split out of the route so
     the intent routing above can be read without the API plumbing
     underneath it. Returns the line to show on the canvas.
+
+    `image_refs` (concept intent only) is a list of (bytes, mime_type)
+    pairs -- ad hoc images dropped into the composer for this one
+    generation. Dealing a slate of ideas is a batch operation; a photo
+    only makes sense as grounding for the single concept it was
+    attached to, so `ideas` never receives it.
     """
     references = shootgen.reference_block(spark=spark, client=client_name,
                                           db_path=db.DB_PATH)
@@ -375,7 +340,7 @@ def run_ideation(intent: str, *, brand: str, client_name, spark, use_pov: bool) 
         result = shootgen.generate_concept(
             brand=brand, client=client_name, spark=spark,
             gemini_client=gemini_client, use_pov=use_pov, db_path=db.DB_PATH,
-            references=references,
+            references=references, image_refs=image_refs,
         )
         message = f"Generated \"{result['concept']['title']}\""
         if result["warnings"]:
@@ -388,6 +353,55 @@ def run_ideation(intent: str, *, brand: str, client_name, spark, use_pov: bool) 
         references=references,
     )
     return f"Dealt {len(result['ideas'])} ideas — keep the ones worth planning"
+
+
+MAX_STUDIO_REFS = 6  # cap what a single composer submission sends to Gemini
+
+
+async def _split_studio_references(files: List[UploadFile]) -> tuple:
+    """
+    Ad hoc references dropped into the composer for one generation --
+    separate from the Workflow library's ingest-and-describe path.
+    Images come back as (jpeg_bytes, "image/jpeg") pairs, ready to ride
+    straight into the Gemini call as vision input. Video isn't fed to
+    the model frame-by-frame (that needs the Files API, a bigger
+    change than this composer warrants); instead each clip is pushed to
+    R2 and its URL is folded into the spark text as a named reference,
+    so it's still attached to the generation, just not literally seen.
+    """
+    import io
+    import uuid
+
+    from PIL import Image
+
+    from src import storage
+
+    image_refs = []
+    video_note_lines = []
+    for upload in files[:MAX_STUDIO_REFS]:
+        filename = getattr(upload, "filename", "") or ""
+        if not filename:
+            continue
+        content_type = (upload.content_type or "").lower()
+        data = await upload.read()
+        if content_type.startswith("image/"):
+            try:
+                jpeg = Image.open(io.BytesIO(data)).convert("RGB")
+                buf = io.BytesIO()
+                jpeg.save(buf, "JPEG", quality=90)
+                image_refs.append((buf.getvalue(), "image/jpeg"))
+            except Exception:
+                continue  # not a real image -- skip rather than fail the whole generation
+        elif content_type.startswith("video/") and storage.configured():
+            try:
+                tmp = Path("/tmp") / f"studio-ref-{uuid.uuid4().hex}{Path(filename).suffix}"
+                tmp.write_bytes(data)
+                url = storage.upload_file(
+                    tmp, key=f"studio-refs/{tmp.name}", content_type=content_type)
+                video_note_lines.append(f"Reference video ({filename}): {url}")
+            except Exception:
+                continue
+    return image_refs, video_note_lines
 
 
 @app.post("/studio/assist")
@@ -403,7 +417,9 @@ async def studio_assist(request: Request):
     Stages it can't run itself say so plainly instead of pretending: a
     cut list needs ingested footage and a pitch run, which are CLI steps.
     """
-    form = dict(await request.form())
+    raw_form = await request.form()
+    reference_files = [f for f in raw_form.getlist("references") if isinstance(f, UploadFile)]
+    form = dict(raw_form)
     text = (form.get("text") or "").strip()
     intent = route_intent(text, (form.get("intent") or "").strip() or None)
 
@@ -446,9 +462,17 @@ async def studio_assist(request: Request):
             message = plan_concept(target["id"])
         return RedirectResponse(f"/studio?message={quote(message)}", status_code=303)
 
+    image_refs = None
+    if reference_files:
+        image_refs, video_notes = await _split_studio_references(reference_files)
+        image_refs = image_refs or None
+        if video_notes:
+            spark = f"{spark or ''}\n" + "\n".join(video_notes)
+            spark = spark.strip()
+
     try:
         message = run_ideation(intent, brand=brand, client_name=client_name,
-                               spark=spark, use_pov=use_pov)
+                               spark=spark, use_pov=use_pov, image_refs=image_refs)
     except Exception as e:
         message = f"Could not generate: {e}"
     return RedirectResponse(f"/studio?message={quote(message)}", status_code=303)
@@ -1046,16 +1070,72 @@ def thumbnail_for(source: Path) -> Path:
         return source
 
 
-@app.get("/locations")
-def locations_list(request: Request, message: Optional[str] = None):
+def _redirect_with_message(destination: str, message: str) -> RedirectResponse:
+    """Every mutating route in this file ends with `?message=...` tacked
+    onto wherever it's sending the person next. Split out so the join
+    (`?` the first time, `&` after) is right regardless of whether
+    `destination` already carries a query string -- `/assets?tab=props`
+    plus a message needs `&`, a bare `/assets` needs `?`."""
+    sep = "&" if "?" in destination else "?"
+    return RedirectResponse(f"{destination}{sep}message={quote(message)}", status_code=303)
+
+
+ASSET_TABS = ("locations", "characters", "props")
+
+
+@app.get("/assets")
+def assets_list(request: Request, tab: Optional[str] = None, message: Optional[str] = None):
+    """
+    Locations, characters, and props were three separate rail items
+    pointing at three near-identical CRUD pages -- same grid, same
+    add-dialog, same "a name and some photos" shape. They're one
+    concept (what a concept can be grounded in or cast with), so they
+    live under one Assets item now, tab-switched client-side. The old
+    /locations, /characters, /props URLs still work below -- they just
+    redirect here on the matching tab, so nothing bookmarked breaks.
+    """
+    active_tab = tab if tab in ASSET_TABS else "locations"
+
     spaces = preprod.list_locations(path=db.DB_PATH)
     for space in spaces:
         space["photos"] = photos_for(space["name"])
+
+    characters = entities.list_characters(path=db.DB_PATH)
+    for c in characters:
+        slug = safe_space_name(c["name"])
+        c["photos"] = [f"/characters/{slug}/photo/{fn}?thumb=1"
+                       for fn in _entity_photos(CHARACTERS_DIR, slug)]
+
+    props = entities.list_props(path=db.DB_PATH)
+    for p in props:
+        slug = safe_space_name(p["name"])
+        p["photos"] = [f"/props/{slug}/photo/{fn}?thumb=1"
+                       for fn in _entity_photos(PROPS_DIR, slug)]
+
     return templates.TemplateResponse(
         request,
-        "locations.html",
-        {"locations": spaces, "message": message, "active_nav": "locations"},
+        "assets.html",
+        {
+            "locations": spaces,
+            "characters": characters,
+            "props": props,
+            "active_tab": active_tab,
+            "active_nav": "assets",
+            "message": message,
+        },
     )
+
+
+def _redirect_to_assets_tab(tab: str, message: Optional[str]) -> RedirectResponse:
+    url = f"/assets?tab={tab}"
+    if message:
+        url += f"&message={quote(message)}"
+    return RedirectResponse(url, status_code=308)
+
+
+@app.get("/locations")
+def locations_list(message: Optional[str] = None):
+    return _redirect_to_assets_tab("locations", message)
 
 
 @app.get("/locations/{space}/photo/{filename}")
@@ -1086,7 +1166,7 @@ def safe_space_name(name: str) -> str:
 @app.post("/locations/upload")
 async def locations_upload(name: str = Form(...), next: str = Form(""),
                            photos: List[UploadFile] = File(default=[])):
-    destination = safe_next(next, "/locations")
+    destination = safe_next(next, "/assets?tab=locations")
     space = safe_space_name(name)
     if not space:
         raise HTTPException(status_code=400, detail="a space name is required")
@@ -1106,9 +1186,9 @@ async def locations_upload(name: str = Form(...), next: str = Form(""),
 
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
-        return RedirectResponse(
-            f"{destination}?message={quote('Photos saved, but GEMINI_API_KEY is not set so they were not described')}",
-            status_code=303,
+        return _redirect_with_message(
+            destination,
+            "Photos saved, but GEMINI_API_KEY is not set so they were not described",
         )
 
     # Describing is the deliverable, but a failed vision call shouldn't
@@ -1125,7 +1205,10 @@ async def locations_upload(name: str = Form(...), next: str = Form(""),
     except Exception as e:
         message = f"Saved {len(saved)} photo(s) to {space} but could not describe it: {e}"
 
-    return RedirectResponse(f"/locations?message={quote(message)}", status_code=303)
+    # `destination` (not a hardcoded /locations) so a caller who passed a
+    # `next` -- the Studio composer, /assets?tab=locations -- actually
+    # lands back where they asked to, not on the old standalone page.
+    return _redirect_with_message(destination, message)
 
 
 # --- characters & props ----------------------------------------------------
@@ -1165,16 +1248,8 @@ def _entity_photo_response(base_dir, slug, filename, thumb):
 
 
 @app.get("/characters")
-def characters_list(request: Request, message: Optional[str] = None):
-    items = entities.list_characters(path=db.DB_PATH)
-    for c in items:
-        slug = safe_space_name(c["name"])
-        c["photos"] = [f"/characters/{slug}/photo/{fn}?thumb=1"
-                       for fn in _entity_photos(CHARACTERS_DIR, slug)]
-    return templates.TemplateResponse(
-        request, "characters.html",
-        {"characters": items, "message": message, "active_nav": "characters"},
-    )
+def characters_list(message: Optional[str] = None):
+    return _redirect_to_assets_tab("characters", message)
 
 
 @app.get("/characters/{slug}/photo/{filename}")
@@ -1184,7 +1259,7 @@ def character_photo(slug: str, filename: str, thumb: Optional[int] = None):
 
 @app.post("/characters/new")
 async def characters_new(name: str = Form(...), role: str = Form(""),
-                         notes: str = Form(""),
+                         notes: str = Form(""), next: str = Form(""),
                          photos: List[UploadFile] = File(default=[])):
     slug = safe_space_name(name)
     if not slug:
@@ -1195,26 +1270,20 @@ async def characters_new(name: str = Form(...), role: str = Form(""),
         description={"notes": notes} if notes else None,
         reference_image=ref, photo_count=count, notes=notes, path=db.DB_PATH,
     )
-    return RedirectResponse(f"/characters?message={quote('Added ' + name)}", status_code=303)
+    destination = safe_next(next, "/assets?tab=characters")
+    return _redirect_with_message(destination, "Added " + name)
 
 
 @app.post("/characters/{character_id}/delete")
-def characters_delete(character_id: int):
+def characters_delete(character_id: int, next: str = Form("")):
     entities.delete_character(character_id, path=db.DB_PATH)
-    return RedirectResponse(f"/characters?message={quote('Deleted')}", status_code=303)
+    destination = safe_next(next, "/assets?tab=characters")
+    return _redirect_with_message(destination, "Deleted")
 
 
 @app.get("/props")
-def props_list(request: Request, message: Optional[str] = None):
-    items = entities.list_props(path=db.DB_PATH)
-    for p in items:
-        slug = safe_space_name(p["name"])
-        p["photos"] = [f"/props/{slug}/photo/{fn}?thumb=1"
-                       for fn in _entity_photos(PROPS_DIR, slug)]
-    return templates.TemplateResponse(
-        request, "props.html",
-        {"props": items, "message": message, "active_nav": "props"},
-    )
+def props_list(message: Optional[str] = None):
+    return _redirect_to_assets_tab("props", message)
 
 
 @app.get("/props/{slug}/photo/{filename}")
@@ -1224,7 +1293,7 @@ def prop_photo(slug: str, filename: str, thumb: Optional[int] = None):
 
 @app.post("/props/new")
 async def props_new(name: str = Form(...), category: str = Form(""),
-                    notes: str = Form(""),
+                    notes: str = Form(""), next: str = Form(""),
                     photos: List[UploadFile] = File(default=[])):
     slug = safe_space_name(name)
     if not slug:
@@ -1235,13 +1304,15 @@ async def props_new(name: str = Form(...), category: str = Form(""),
         description={"notes": notes} if notes else None,
         reference_image=ref, photo_count=count, notes=notes, path=db.DB_PATH,
     )
-    return RedirectResponse(f"/props?message={quote('Added ' + name)}", status_code=303)
+    destination = safe_next(next, "/assets?tab=props")
+    return _redirect_with_message(destination, "Added " + name)
 
 
 @app.post("/props/{prop_id}/delete")
-def props_delete(prop_id: int):
+def props_delete(prop_id: int, next: str = Form("")):
     entities.delete_prop(prop_id, path=db.DB_PATH)
-    return RedirectResponse(f"/props?message={quote('Deleted')}", status_code=303)
+    destination = safe_next(next, "/assets?tab=props")
+    return _redirect_with_message(destination, "Deleted")
 
 
 @app.get("/concepts")
@@ -1376,19 +1447,6 @@ def cast_from_picks(char_ids: list, prop_ids: list):
     return shootgen.format_cast(characters, props)
 
 
-def _run_uncanny_gate(id_concept_pairs, gemini_client) -> None:
-    """Run Zero Page's on-brand gate over freshly generated concepts and store
-    each verdict. Best-effort and fully isolated: the judge fails closed per
-    concept, and any failure here must never break the generation response."""
-    for concept_id, concept in id_concept_pairs:
-        try:
-            score = uncanny_judge.score_concept(concept, gemini_client=gemini_client)
-            preprod.save_uncanny_score(concept_id, score, path=db.DB_PATH)
-        except Exception as e:
-            print(f"note: uncanny gate skipped concept {concept_id}: {e}",
-                  file=sys.stderr)
-
-
 @app.post("/concepts/generate")
 async def concepts_generate(request: Request):
     form_data = await request.form()
@@ -1420,15 +1478,6 @@ async def concepts_generate(request: Request):
         if insp:
             references = insp + "\n\n" + (references or "")
 
-    # Zero Page rides FORMAT skeletons, ranked by what's actually winning, with
-    # the spark treated as today's-hot spice. An enhancement, never a gate:
-    # rank_formats degrades to the evergreen menu on any failure. Antihero
-    # ignores it (formats stays None).
-    formats = None
-    if brand == "zeropage":
-        spice = [spark] if spark else None
-        formats = format_feed.rank_formats(path=db.DB_PATH, spice=spice)
-
     # Generating is the deliverable, but a failed generation should leave
     # the screen usable rather than 500 -- same contract as the YouTube import.
     try:
@@ -1446,25 +1495,18 @@ async def concepts_generate(request: Request):
             result = shootgen.generate_concept_ideas(
                 brand=brand, client=client_name, spark=spark,
                 gemini_client=gemini_client, use_pov=use_pov, db_path=db.DB_PATH,
-                references=references, formats=formats,
+                references=references,
             )
             message = f"Generated {len(result['ideas'])} ideas — plan the ones worth shooting"
-            if brand == "zeropage":
-                _run_uncanny_gate(list(zip(result.get("concept_ids") or [],
-                                           result.get("ideas") or [])),
-                                  gemini_client)
         else:
             result = shootgen.generate_concept(
                 brand=brand, client=client_name, spark=spark,
                 gemini_client=gemini_client, use_pov=use_pov, db_path=db.DB_PATH,
-                references=references, cast=cast, formats=formats,
+                references=references, cast=cast,
             )
             message = f"Generated \"{result['concept']['title']}\""
             if result["warnings"]:
                 message += f" ({len(result['warnings'])} warning(s))"
-            if brand == "zeropage":
-                _run_uncanny_gate([(result["concept_id"], result["concept"])],
-                                  gemini_client)
     except Exception as e:
         message = f"Could not generate: {e}"
 

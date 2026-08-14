@@ -26,7 +26,7 @@
     {% for ch in channels %}
     <div class="tile">
       <div class="tile-num" style="text-transform:uppercase">{{ ch.autonomy }}</div>
-      <div class="kicker">{{ ch.name }} · cap {{ ch.rate_cap }}/day</div>
+      <div class="kicker">{{ ch.name }} · cap {{ ch.rate_cap }}/day{% if ch.targets %} · → {{ ch.targets }}{% endif %}</div>
       <form method="post" action="/channels/{{ ch.name }}/autonomy" style="margin-top:8px; display:flex; gap:6px">
         <select name="autonomy">
           {% for level in ("shadow", "queue", "auto") %}
@@ -70,6 +70,12 @@
       {% for p in h.payload.prompt_scores %}
       <div class="prompt-box">[{{ p.tool }} · {{ p.score }}/10 {{ "PASS" if p.pass else "HELD" }}{% if p.reason %} — {{ p.reason }}{% endif %}]
 {{ p.prompt }}</div>
+      {% if p.still %}<div class="prompt-box" style="border-color:#26323f">Midjourney still — make this first; it anchors the Runway shot (and can post as an image):
+{{ p.still }}</div>{% endif %}
+      <div style="margin-top:4px; display:flex; gap:14px">
+        <a href="/winners?prompt={{ p.prompt|urlencode }}&tool={{ (p.tool or 'runway')|lower }}&verdict=worked" style="color:var(--good); font-size:12px">✓ Worked — teach it</a>
+        <a href="/winners?prompt={{ p.prompt|urlencode }}&tool={{ (p.tool or 'runway')|lower }}&verdict=didnt_work" style="color:var(--red); font-size:12px">✗ Didn't work</a>
+      </div>
       {% endfor %}
       {% elif h.payload and h.payload.prompts %}
       <div class="kicker" style="margin-top:10px">AI shots it would render</div>
@@ -86,6 +92,11 @@
           <input type="hidden" name="status" value="rejected">
           <button type="submit">Glad it held</button>
         </form>
+        {% if postable is defined and h.channel in postable %}
+        <form method="post" action="/holds/{{ h.id }}/post">
+          <button type="submit" class="primary" style="border-color:#2a4a30">Post now →</button>
+        </form>
+        {% endif %}
       </div>
     </div>
   </article>

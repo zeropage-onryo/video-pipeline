@@ -53,13 +53,30 @@ CREATE TABLE IF NOT EXISTS shoot_concepts (
     prompt_hash TEXT,
     warnings_json TEXT,
     use_pov     INTEGER NOT NULL DEFAULT 1,
-    notes       TEXT
+    notes       TEXT,
+    judge_overall REAL,
+    judge_taste   REAL,
+    judge_perf    REAL,
+    judge_reason  TEXT,
+    format        TEXT,
+    uncanny_overall REAL,
+    uncanny_passed  INTEGER,
+    uncanny_reason  TEXT
 );
 
 CREATE TABLE IF NOT EXISTS concept_locations (
     concept_id  INTEGER NOT NULL REFERENCES shoot_concepts(id) ON DELETE CASCADE,
     location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
     UNIQUE (concept_id, location_id)
+);
+
+CREATE TABLE IF NOT EXISTS scene_briefs (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    brand      TEXT NOT NULL,
+    spark      TEXT,
+    title      TEXT NOT NULL,
+    brief      TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_concepts_shot ON shoot_concepts (shot_done);
@@ -81,6 +98,94 @@ def init(path: Path | str = DB_PATH) -> None:
             conn.execute(
                 "ALTER TABLE shoot_concepts ADD COLUMN use_pov INTEGER NOT NULL DEFAULT 1"
             )
+        # taste + performance judge scores (BACKLOG #5), added later still
+        for col in ("judge_overall REAL", "judge_taste REAL",
+                    "judge_perf REAL", "judge_reason TEXT"):
+            if col.split()[0] not in existing:
+                conn.execute(f"ALTER TABLE shoot_concepts ADD COLUMN {col}")
+        # Zero Page's on-brand (uncanny) gate: a fixed-rubric pass/fail that
+        # decides whether a concept may auto-post. Separate from the taste
+        # judge above (history-based ranking) -- this one gates. `format` is
+        # the skeleton the concept rides (Zero Page).
+        for col in ("format TEXT", "uncanny_overall REAL",
+                    "uncanny_passed INTEGER", "uncanny_reason TEXT"):
+            if col.split()[0] not in existing:
+                conn.execute(f"ALTER TABLE shoot_concepts ADD COLUMN {col}")
+
+
+def save_judge_score(concept_id: int, judge: dict, path: Path | str = DB_PATH) -> None:
+    """Store the taste + performance judge's verdict on a concept so the UI
+    can show and rank by it. `judge` is taste_judge.score_concept()'s dict."""
+    with connect(path) as conn:
+        conn.execute(
+            "UPDATE shoot_concepts SET judge_overall=?, judge_taste=?, "
+            "judge_perf=?, judge_reason=? WHERE id=?",
+            (judge.get("overall"), judge.get("taste_fit"), judge.get("performance"),
+             " · ".join(judge.get("reasons") or [])[:500], concept_id),
+        )
+
+
+def save_uncanny_score(concept_id: int, score: dict, path: Path | str = DB_PATH) -> None:
+    """Store Zero Page's on-brand gate verdict on a concept so the UI can show
+    the PASS/HOLD and autopilot can check it. `score` is
+    uncanny_judge.score_concept()'s dict."""
+    with connect(path) as conn:
+        conn.execute(
+            "UPDATE shoot_concepts SET uncanny_overall=?, uncanny_passed=?, "
+            "uncanny_reason=? WHERE id=?",
+            (score.get("overall"), 1 if score.get("passed") else 0,
+             " · ".join(score.get("reasons") or [])[:500], concept_id),
+        )
+
+
+def delete_concept(concept_id: int, path: Path | str = DB_PATH) -> None:
+    """Discard a concept for good. concept_locations rows cascade via the
+    FK (connect() sets PRAGMA foreign_keys=ON)."""
+    with connect(path) as conn:
+        conn.execute("DELETE FROM shoot_concepts WHERE id = ?", (concept_id,))
+
+
+def delete_all_concepts(brand: Optional[str] = None, path: Path | str = DB_PATH) -> int:
+    """Clear the concept slate -- all of it, or just one brand's. Returns
+    how many were removed. concept_locations cascades via the FK."""
+    with connect(path) as conn:
+        if brand:
+            cur = conn.execute("DELETE FROM shoot_concepts WHERE brand = ?", (brand,))
+        else:
+            cur = conn.execute("DELETE FROM shoot_concepts")
+        return cur.rowcount
+
+
+# --------------------------------------------------------------------------
+# scene briefs -- one cohesive whole-scene prompt (the winning skeleton)
+# --------------------------------------------------------------------------
+def save_scene_brief(brand: str, title: str, brief: str,
+                     spark: Optional[str] = None, path: Path | str = DB_PATH) -> int:
+    with connect(path) as conn:
+        cur = conn.execute(
+            "INSERT INTO scene_briefs (created_at, brand, spark, title, brief) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (_now(), brand, (spark or "").strip() or None,
+             (title or "Untitled scene").strip(), brief.strip()),
+        )
+        return int(cur.lastrowid)
+
+
+def list_scene_briefs(brand: Optional[str] = None,
+                      path: Path | str = DB_PATH) -> list[dict[str, Any]]:
+    sql = "SELECT * FROM scene_briefs"
+    params: list[Any] = []
+    if brand:
+        sql += " WHERE brand = ?"
+        params.append(brand)
+    sql += " ORDER BY id DESC"
+    with connect(path) as conn:
+        return [dict(r) for r in conn.execute(sql, params)]
+
+
+def delete_scene_brief(brief_id: int, path: Path | str = DB_PATH) -> None:
+    with connect(path) as conn:
+        conn.execute("DELETE FROM scene_briefs WHERE id = ?", (brief_id,))
 
 
 # --------------------------------------------------------------------------
@@ -190,15 +295,16 @@ def save_concept(
             INSERT INTO shoot_concepts
                 (created_at, brand, client, spark, title, hook, logline,
                  duration, shots_json, ai_json, edit_note, grade_note, prompt_hash,
-                 warnings_json, use_pov)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 warnings_json, use_pov, format)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (_now(), brand, client, spark, title,
              concept.get("hook"), concept.get("logline"), concept.get("duration"),
              json.dumps(concept.get("shots") or []),
              json.dumps(concept["ai"]) if concept.get("ai") else None,
              concept.get("edit"), concept.get("grade"), _hash(prompt_template),
-             json.dumps(warnings) if warnings else None, 1 if use_pov else 0),
+             json.dumps(warnings) if warnings else None, 1 if use_pov else 0,
+             concept.get("format")),
         )
         concept_id = int(cur.lastrowid)
 
@@ -328,6 +434,43 @@ def update_concept_shots(
                 "INSERT OR IGNORE INTO concept_locations (concept_id, location_id) VALUES (?, ?)",
                 (concept_id, location_id),
             )
+
+
+def set_shot_media_url(concept_id: int, shot_n, media_url: str,
+                        path: Path | str = DB_PATH) -> None:
+    """
+    Attach a rendered clip's public URL to one shot in a concept's shot
+    list -- the one field autopilot.build_plan() checks before it will
+    ever emit a post action (see autopilot.py). Rewrites just the
+    matching shot's media_url in place; everything else in the shot
+    list -- other shots, prompts, camera notes -- is left untouched.
+
+    Raises if the concept or the shot (by its "n") doesn't exist,
+    rather than silently no-op'ing -- storage.publish_shot_media()
+    catches this and turns it into a result dict.
+    """
+    if not (media_url or "").strip():
+        raise ValueError("media_url is required")
+
+    with connect(path) as conn:
+        row = conn.execute(
+            "SELECT shots_json FROM shoot_concepts WHERE id = ?", (concept_id,)
+        ).fetchone()
+        if not row:
+            raise ValueError(f"no concept with id {concept_id}")
+
+        shots = json.loads(row["shots_json"] or "[]")
+        for shot in shots:
+            if shot.get("n") == shot_n:
+                shot["media_url"] = media_url.strip()
+                break
+        else:
+            raise ValueError(f"concept {concept_id} has no shot n={shot_n!r}")
+
+        conn.execute(
+            "UPDATE shoot_concepts SET shots_json = ? WHERE id = ?",
+            (json.dumps(shots), concept_id),
+        )
 
 
 def shortlist_rate(path: Path | str = DB_PATH) -> dict[str, Any]:

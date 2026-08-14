@@ -2,6 +2,6 @@ RUNTIME: 15 seconds (13-17 acceptable)
 TONE: quiet determination, calm rather than menacing — grit grounded
 in a sense of possibility, not dread.
 PACING: slow burn: 3-5 cuts, nothing shorter than 2.5 seconds
-GRADE: The Batman — gritty, dark, desaturated, crushed shadows,
+GRADE: gritty, dark, desaturated, crushed shadows,
 warmth only in practical light sources. Existing LUT applied in
 Resolve; grade notes should be per-shot adjustments on top of it.

@@ -44,7 +44,7 @@ For each approved story, produce the full edit:
   stay the spine of the cut — generated clips earn their place
   shot by shot.
 - grade_notes — per-shot adjustments on top of the existing
-  Batman LUT (what to lift, where to let it crush)
+  crushed-black noir LUT (what to lift, where to let it crush)
 - sound_note — one line: music energy, any moment that drops to
   natural sound
 

@@ -87,7 +87,8 @@ CREATE TABLE IF NOT EXISTS videos (
     topic      TEXT,
     hook_type  TEXT,
     duration_s REAL,
-    notes      TEXT
+    notes      TEXT,
+    brand      TEXT
 );
 
 CREATE TABLE IF NOT EXISTS metrics (
@@ -143,6 +144,10 @@ def init_db(path: Path | str = DB_PATH) -> None:
     """Create the tables. Safe to run repeatedly."""
     with connect(path) as conn:
         conn.executescript(SCHEMA)
+        # migrate: add videos.brand to a DB that predates per-brand tagging
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(videos)")}
+        if "brand" not in cols:
+            conn.execute("ALTER TABLE videos ADD COLUMN brand TEXT")
 
 
 # --------------------------------------------------------------------------
@@ -340,6 +345,7 @@ def add_video(
     hook_type: Optional[str] = None,
     duration_s: Optional[float] = None,
     notes: Optional[str] = None,
+    brand: Optional[str] = None,
     path: Path | str = DB_PATH,
 ) -> int:
     """
@@ -363,11 +369,11 @@ def add_video(
             """
             INSERT INTO videos
                 (idea_id, title, platform, posted_at, url, timeline,
-                 topic, hook_type, duration_s, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 topic, hook_type, duration_s, notes, brand)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (idea_id, title, platform, posted_at, url, timeline,
-             topic, hook_type, duration_s, notes),
+             topic, hook_type, duration_s, notes, brand),
         )
         return int(cur.lastrowid)
 
@@ -416,14 +422,24 @@ def record_metrics(
 def list_videos(
     platform: Optional[str] = None,
     limit: int = 200,
+    brand: Optional[str] = None,
     path: Path | str = DB_PATH,
 ) -> list[dict[str, Any]]:
-    """All videos, newest first, optionally filtered to one platform."""
+    """All videos, newest first, optionally filtered to one platform and/or
+    brand. A brand filter is NULL-inclusive -- videos tagged with that brand
+    OR not yet tagged at all -- so legacy posts still show while the pipeline
+    tags new ones."""
     sql = "SELECT * FROM videos"
+    clauses: list[str] = []
     params: list[Any] = []
     if platform:
-        sql += " WHERE platform = ?"
+        clauses.append("platform = ?")
         params.append(platform)
+    if brand:
+        clauses.append("(brand = ? OR brand IS NULL)")
+        params.append(brand)
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
     sql += " ORDER BY posted_at DESC LIMIT ?"
     params.append(limit)
     with connect(path) as conn:
@@ -653,7 +669,7 @@ def latest_metrics_by_video(path: Path | str = DB_PATH) -> list[dict[str, Any]]:
             for r in conn.execute(
                 """
                 SELECT v.id AS video_id, v.title, v.platform, v.posted_at,
-                       m.views, m.likes, m.comments, m.saves, m.captured_at
+                       v.brand, m.views, m.likes, m.comments, m.saves, m.captured_at
                 FROM videos v
                 LEFT JOIN metrics m ON m.id = (
                     SELECT id FROM metrics

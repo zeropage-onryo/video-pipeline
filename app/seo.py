@@ -160,9 +160,8 @@ advisories for the filmmaker, not silent rejections.
 ## Capabilities
 
 - Concepts mixing any number of real and AI shots.
-- Platform-native AI video prompts for Veo, Kling, Runway, Seedance,
-  LTX, and Wan — one controlled shot vocabulary, one renderer per
-  platform, so prompts stay reproducible.
+- AI video prompts for Runway, anchored by a Midjourney reference still
+  — one controlled shot vocabulary, so prompts stay reproducible.
 - Retrieval-grounded ideation over a PostgreSQL + pgvector reference
   library, including the filmmaker's own proven winners, so generated
   work inherits a house style and a performance record rather than a
@@ -233,7 +232,7 @@ def homepage_schema(base: Optional[str] = None) -> dict:
                 "featureList": [
                     "Vision-described shooting locations",
                     "Concepts mixing real and AI-generated shots",
-                    "Platform-native AI video prompts (Veo, Kling, Runway, Seedance, LTX, Wan)",
+                    "AI video prompts for Runway, anchored by Midjourney reference stills",
                     "Cut plans built from ingested real footage",
                     "Retrieval-grounded reference library",
                     "Performance analytics that ground the next slate",

@@ -150,7 +150,7 @@
         </div>
       </form>
       <div class="pills">
-        <a class="pill" href="/locations"><span class="dot d1"></span>Describe a Location</a>
+        <a class="pill" href="/assets?tab=locations"><span class="dot d1"></span>Describe a Location</a>
         <a class="pill" href="/concepts"><span class="dot d5"></span>Generate Concepts</a>
         <a class="pill" href="/concepts"><span class="dot d2"></span>Plan the Shoot</a>
         <a class="pill" href="/concepts"><span class="dot d6"></span>AI Shot · Runway</a>
@@ -203,30 +203,30 @@
       </div>
       <div class="agrid" data-panel="characters">
         {% for c in characters %}
-        <a class="acard" href="/characters">
+        <a class="acard" href="/assets?tab=characters">
           <div class="im">{% if c.photos %}<img src="{{ c.photos[0] }}" alt="{{ c.name }}">{% else %}<div class="im-ph"></div>{% endif %}</div>
           <div class="meta"><h3>{{ c.name }}</h3><p>{{ c.role or c.description or '' }}</p></div>
         </a>
         {% endfor %}
-        <a class="acard add" href="/characters">＋ New character</a>
+        <a class="acard add" href="/assets?tab=characters">＋ New character</a>
       </div>
       <div class="agrid hide" data-panel="locations">
         {% for s in spaces %}
-        <a class="acard" href="/locations">
+        <a class="acard" href="/assets?tab=locations">
           <div class="im">{% if s.photos %}<img src="{{ s.photos[0] }}" alt="{{ s.name }}">{% else %}<div class="im-ph"></div>{% endif %}{% if s.description %}<span class="badge">DESCRIBED</span>{% endif %}</div>
           <div class="meta"><h3>{{ s.name }}</h3><p>{{ s.description.space if s.description else 'Not yet described' }}</p></div>
         </a>
         {% endfor %}
-        <a class="acard add" href="/locations">＋ New location</a>
+        <a class="acard add" href="/assets?tab=locations">＋ New location</a>
       </div>
       <div class="agrid hide" data-panel="props">
         {% for p in props %}
-        <a class="acard" href="/props">
+        <a class="acard" href="/assets?tab=props">
           <div class="im">{% if p.photos %}<img src="{{ p.photos[0] }}" alt="{{ p.name }}">{% else %}<div class="im-ph"></div>{% endif %}</div>
           <div class="meta"><h3>{{ p.name }}</h3><p>{{ p.category or p.description or '' }}</p></div>
         </a>
         {% endfor %}
-        <a class="acard add" href="/props">＋ New prop</a>
+        <a class="acard add" href="/assets?tab=props">＋ New prop</a>
       </div>
     </div>
   </div>

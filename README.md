@@ -339,3 +339,15 @@ Rewrote all of it to the current single-phase pipeline: photograph a space, gene
 grounded concept and shot list, shoot it, post it, feed the metrics back. The edit still
 happens by hand in Resolve — that was already true, just no longer framed as one stage of
 two. No code changed; this brings the docs in line with what Aug 2026 already did.
+
+**2026-08-11 — Fixed a CI-only failure in `test_judge_parses_fenced_json_and_clamps_dims`.**
+The test mocked `generate_with_retry` but not `_client`, so `_judge_prompt` built a real
+`genai.Client()` before ever reaching the mock. That construction is harmless locally
+(`.env` has a real `GEMINI_API_KEY`) but raised in CI's `test` job, which deliberately has
+no key — only `eval-gate` gets one, gated behind a real secret. `_judge_prompt`'s fail-closed
+`except` swallowed the exception and returned `dims={}`, which the test's
+`verdict["dims"]["camera"]` lookup then hit as a `KeyError`. Every other orchestrator test
+avoids this by stubbing `_client` through the shared `tmp_db` fixture; this one test skipped
+that fixture entirely and needed its own stub. Passed locally, failed in CI — a genuine
+"trust the log, not the assumption" case, same spirit as the Verify-by-running-it rule
+above. No production code changed, only the test.

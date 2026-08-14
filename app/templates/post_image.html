@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Post to Instagram — Zero Page{% endblock %}
+{% block content %}
+<div class="sk"><div class="page">
+  <div class="vhead"><div>
+    <div class="rule">One-off publish // Zero Page Films // Instagram</div>
+    <h1>Post an image</h1>
+    <p class="vsub">Preview the image and caption, then publish to your Zero Page Films Instagram through the pipeline. Gated by ZEROPAGE_AUTOPILOT and your token — this is the real post.</p>
+  </div></div>
+  {% if message %}<div class="toast">{{ message }}</div>{% endif %}
+  <div class="panel"><div class="panel-body">
+    <form method="post" action="/post-image/queue" enctype="multipart/form-data">
+      {% if url %}<img src="{{ url }}" alt="preview" style="max-width:360px;width:100%;border-radius:12px;display:block;margin-bottom:14px;border:1px solid var(--line,#333)">{% endif %}
+      <label>Upload a Midjourney image <span class="mono dim">converted to JPEG, hosted on R2</span>
+        <input type="file" name="image_file" accept="image/*"></label>
+      <label style="display:block;margin-top:10px">…or paste a public image URL <span class="mono dim">JPEG Meta can fetch</span>
+        <input type="text" name="image_url" value="{{ url or '' }}" placeholder="https://…/image.jpg"></label>
+      <label style="display:block;margin-top:10px">Caption
+        <textarea name="caption" rows="6">{{ caption or '' }}</textarea></label>
+      <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
+        <button type="submit" formaction="/post-image/queue" class="primary">Queue for Zero Page approval</button>
+        <button type="submit" formaction="/post-image">Post now</button>
+      </div>
+      <p class="mono dim" style="margin-top:8px">Queue → lands in <a href="/holds">/holds</a> for one-tap approval. Post now → publishes immediately through the gate.</p>
+    </form>
+  </div></div>
+</div></div>
+{% endblock %}

@@ -1,0 +1,92 @@
+"""
+Scene-brief mode: one cohesive whole-scene prompt in the proven skeleton,
+stored per brand and pasteable into a video model. Generation is mocked;
+the prompt skeleton, storage, and the mode=scene route run for real.
+"""
+import pytest
+from fastapi.testclient import TestClient
+
+import app.main as app_main
+from app.main import app
+from src import db, inspiration, preprod, shootgen, winners
+
+client = TestClient(app)
+
+
+@pytest.fixture
+def tmp_db(tmp_path, monkeypatch):
+    path = tmp_path / "app.db"
+    db.init_db(path)
+    preprod.init(path)
+    inspiration.init(path)
+    winners.init(path)
+    monkeypatch.setattr(db, "DB_PATH", path)
+    return path
+
+
+def test_save_list_delete_scene_briefs(tmp_db):
+    a = preprod.save_scene_brief("antihero", "Portal Room", "the brief text",
+                                 spark="x", path=tmp_db)
+    preprod.save_scene_brief("zeropage", "Other", "zp brief", path=tmp_db)
+    ah = preprod.list_scene_briefs(brand="antihero", path=tmp_db)
+    assert len(ah) == 1 and ah[0]["title"] == "Portal Room"
+    assert ah[0]["brief"] == "the brief text"
+    preprod.delete_scene_brief(a, path=tmp_db)
+    assert preprod.list_scene_briefs(brand="antihero", path=tmp_db) == []
+
+
+def test_build_scene_brief_prompt_has_the_full_skeleton():
+    p = shootgen.build_scene_brief_prompt("antihero")
+    for marker in ("OPEN LINE", "STYLE", "BEATS", "SOUND", "AVOID", "9:16"):
+        assert marker in p
+
+
+def test_generate_scene_brief_parses_json(monkeypatch):
+    monkeypatch.setattr(
+        shootgen, "generate_with_retry",
+        lambda *a, **k: '{"title": "Portal Room", "brief": "Ultra-realistic grounded ..."}')
+    out = shootgen.generate_scene_brief("antihero", spark="s", gemini_client=object())
+    assert out["title"] == "Portal Room"
+    assert out["brief"].startswith("Ultra-realistic")
+
+
+def test_scene_mode_generates_and_stores_a_brief(tmp_db, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(app_main.genai, "Client", lambda **k: object())
+    monkeypatch.setattr(app_main.shootgen, "reference_block", lambda **k: "")
+    monkeypatch.setattr(app_main.shootgen, "generate_scene_brief",
+                        lambda **k: {"title": "Portal Room", "brief": "the scene prompt"})
+    client.cookies.set("brand", "antihero")
+    r = client.post("/concepts/generate",
+                    data={"mode": "scene", "spark": "portal room monster"},
+                    follow_redirects=False)
+    client.cookies.clear()
+    assert r.status_code == 303
+    briefs = preprod.list_scene_briefs(brand="antihero", path=tmp_db)
+    assert briefs and briefs[0]["title"] == "Portal Room"
+
+
+def test_gold_standard_is_injected_into_the_scene_brief_prompt():
+    p = shootgen.build_scene_brief_prompt("antihero")
+    assert "GOLD-STANDARD EXAMPLE" in p and "match the SHAPE" in p
+    assert "portal door" in p          # the exemplar itself is present
+    assert "reuse the scene" in p   # the shape-not-subject guardrail
+
+
+def test_seed_gold_standard_records_a_winner_once(tmp_db, monkeypatch):
+    monkeypatch.setattr(app_main.winners, "ingest_to_rag", lambda *a, **k: {"ok": False})
+    app_main.seed_gold_standard()
+    app_main.seed_gold_standard()   # idempotent
+    gs = [w for w in winners.list_all(path=tmp_db)
+          if (w.get("note") or "").startswith("gold standard")]
+    assert len(gs) == 1
+    assert "portal door" in gs[0]["prompt"]
+
+
+def test_realism_recipe_is_in_the_shot_prompts():
+    from pathlib import Path
+    prompts = Path(shootgen.PROMPTS_DIR)
+    for f in ("concept_prompt.txt", "shotlist_prompt.txt"):
+        text = (prompts / f).read_text()
+        assert "RENDER REAL, NOT GLOSSY" in text
+        assert "no glossy CGI" in text

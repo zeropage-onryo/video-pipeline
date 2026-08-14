@@ -123,7 +123,7 @@ def record_generation(
 ) -> int:
     """
     Log one attempt. Attempt number is assigned automatically, counting per
-    shot and tool, so runway attempt 3 and kling attempt 1 coexist.
+    shot and tool, so two runway attempts on the same shot coexist.
     """
     if tool not in TOOLS:
         raise ValueError(f"tool must be one of {TOOLS}, got {tool!r}")

@@ -2,17 +2,23 @@ You are a concept generator for a solo filmmaker/actor shooting quick
 viral videos at home. Return ONLY valid JSON, no markdown fences, no
 preamble.
 
-THE LOCATIONS AVAILABLE (the real spaces he can shoot in, already
-photographed and described — every idea must be shootable in these):
+THE LOCATIONS AVAILABLE (the real spaces he can physically shoot in,
+already photographed and described. Camera moments happen here — but
+ideas can reach beyond them with AI-generated shots. A location he
+doesn't have becomes an AI shot, not a reason to drop the idea):
 {locations}
 
 FILMMAKER PROFILE:
-- Works completely solo, no crew. He is also the on-screen character.
+- Works completely solo, no crew — one operator, no second pair of
+  hands. WHO is on screen is set by the BRAND below: Antihero centres
+  Michael as the recurring star; Zero Page keeps him behind the camera
+  with the product / space / trend as the hero.
 - Cameras: a rigged Blackmagic Pocket 6K Pro, and a DJI Osmo Action 5
   Pro for POV / body-mount shots.
 - Output: 8-15 second vertical (9:16), engineered so second 1 hooks.
-- Every idea must be achievable alone in under 6 shots. No idea that
-  needs a second pair of hands, a location he doesn't have, or a prop
+- Every idea is achievable solo in under 6 shots: real rooms for what
+  he films, AI-generated shots for a second presence, an impossible
+  camera move, or a location he doesn't have. No idea that needs a prop
   he'd have to buy.
 
 BRAND:
@@ -20,14 +26,23 @@ BRAND:
 {client}
 {spark}
 
-REFERENCE LIBRARY (tone and structure to echo — match the sensibility,
-but never call for something a reference shows that these rooms can't
-deliver):
+REFERENCE LIBRARY (tone and structure to echo — match the sensibility;
+if a reference shows something these rooms can't deliver on camera,
+that's an AI shot, not a reason to avoid the idea):
 {references}
 
 Generate exactly {count} DIFFERENT ideas. These are cheap options for
 him to choose between, so range matters more than polish — no shot
-lists yet, just the idea. Vary them deliberately:
+lists yet, just the idea.
+
+Every idea must earn the scroll AND the rewatch: a frame-1 hook (an
+image or motion that stops the thumb in the first half-second), one
+curiosity gap or tension the viewer needs resolved, and a reason to
+save or send it (a satisfying/tactile beat, a quiet flex, a recognised
+ritual, a "wait for it"). Loopable beats a clean ending — all of it
+inside the grade, viral in form and never louder than the mood.
+
+Vary them deliberately:
 
 - Vary the emotional register (dread, boredom, restraint, menace,
   tenderness, humour-as-threat).
@@ -43,4 +58,4 @@ yourself writing the same beat twice, replace it.
 Output STRICT JSON ONLY in this exact shape:
 {"ideas": [{"title": "2-4 word cinematic title", "hook": "what happens in second 1 that stops the scroll", "logline": "one sentence micro-story", "why": "one short line: which space this leans on and what makes it different from the others"}]}
 
-Exactly {count} ideas. Be specific to these real spaces. Never generic.
+Exactly {count} ideas. Be specific and concrete. Never generic.

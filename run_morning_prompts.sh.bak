@@ -1,0 +1,9 @@
+#!/bin/bash
+# Generates a morning batch of Runway prompt options (each with a
+# Midjourney reference prompt) for the ANTIHERO channel, parked in /holds.
+cd "/Users/iphone/Documents/Github Portfolio" || exit 1
+source venv/bin/activate
+mkdir -p data
+for i in 1 2 3 4 5; do
+  python -m src.trigger --channel antihero --brand antihero >> data/morning_prompts.log 2>&1
+done

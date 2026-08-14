@@ -189,6 +189,43 @@ def post_reel(user_id: str, video_url: str, caption: str, token: str,
     return {"ok": True, "media_id": media_id, "step": "publish", "error": None}
 
 
+def post_image(user_id: str, image_url: str, caption: str, token: str,
+               poll_tries: int = 5, poll_delay: float = 20,
+               sleep=time.sleep) -> dict:
+    """The image twin of post_reel: create an image container (JPEG only,
+    from a public URL Meta can fetch) -> poll until FINISHED -> publish.
+    Never raises; returns {"ok", "media_id", "step", "error"}."""
+    try:
+        container_id = create_image_container(user_id, image_url, caption, token)
+    except Exception as e:
+        return {"ok": False, "media_id": None, "step": "create",
+                "error": _safe_error(e, token)}
+    status = ""
+    try:
+        for attempt in range(poll_tries):
+            if attempt:
+                sleep(poll_delay)
+            status = container_status(container_id, token)
+            if status == CONTAINER_FINISHED:
+                break
+            if status in CONTAINER_FAILED:
+                return {"ok": False, "media_id": None, "step": "poll",
+                        "error": f"container reported {status}"}
+        else:
+            return {"ok": False, "media_id": None, "step": "poll",
+                    "error": f"container not FINISHED after {poll_tries} "
+                             f"poll(s) (last status: {status or 'unknown'})"}
+    except Exception as e:
+        return {"ok": False, "media_id": None, "step": "poll",
+                "error": _safe_error(e, token)}
+    try:
+        media_id = publish_container(user_id, container_id, token)
+    except Exception as e:
+        return {"ok": False, "media_id": None, "step": "publish",
+                "error": _safe_error(e, token)}
+    return {"ok": True, "media_id": media_id, "step": "publish", "error": None}
+
+
 def parse_media_id(url):
     """
     The numeric media id from what's stored in a video's url field: a
@@ -266,11 +303,15 @@ def execute_post_action(action: dict) -> None:
         raise RuntimeError("IG_USER_ID / IG_ACCESS_TOKEN not set -- live "
                            "posting needs both")
 
+    caption = action.get("caption") or ""
+    image_url = (action.get("image_url") or "").strip()
     video_url = (action.get("video_url") or "").strip()
-    if not video_url:
-        raise RuntimeError("post action has no video_url")
-
-    result = post_reel(user_id, video_url, action.get("caption") or "", token)
+    if image_url:
+        result = post_image(user_id, image_url, caption, token)
+    elif video_url:
+        result = post_reel(user_id, video_url, caption, token)
+    else:
+        raise RuntimeError("post action has neither image_url nor video_url")
     if not result["ok"]:
         raise RuntimeError(f"publish failed at {result['step']}: {result['error']}")
     action["result"] = result

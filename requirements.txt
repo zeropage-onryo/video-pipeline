@@ -3,6 +3,8 @@ numpy<2   # whisper's torch build fails against numpy 2.x (torch._C._ARRAY_API);
 google-genai
 python-dotenv
 requests
+boto3   # R2 speaks the S3 API; storage.py's client, no Cloudflare-specific SDK needed
+runwayml   # runway.py's client -- API credit spend, gated behind RUNWAY_SPEND_OK=1
 pytest
 ruff
 fastapi

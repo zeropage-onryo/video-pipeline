@@ -2,20 +2,24 @@
    Pass active_nav from each route's context (defaults to "" if absent). #}
 {% set nav = active_nav | default('') %}
 <nav class="rail" aria-label="Primary">
+  {% set ab = active_brand(request) %}
+  {% set other = 'zeropage' if ab == 'antihero' else 'antihero' %}
+  <form method="post" action="/brand/{{ other }}" style="margin:0">
+    <input type="hidden" name="next" value="{{ request.url.path }}">
+    <button type="submit" class="rail-item" title="Switch to {{ BRAND_META[other].label }} — currently {{ BRAND_META[ab].label }}" style="background:none;border:0;cursor:pointer;width:100%">
+      <span class="rail-ic" style="border:1.5px solid {{ BRAND_META[ab].accent }};border-radius:7px;color:{{ BRAND_META[ab].accent }};font-weight:700;font-size:10px;display:flex;align-items:center;justify-content:center">{{ 'AH' if ab == 'antihero' else 'ZP' }}</span>
+      <span class="rail-lb" style="color:{{ BRAND_META[ab].accent }}">{{ 'Antihero' if ab == 'antihero' else 'Zero Page' }}</span>
+    </button>
+  </form>
+  <span class="rail-div"></span>
   <a class="rail-item {{ 'active' if nav == 'home' }}" href="/studio" aria-label="Home">
     <span class="rail-ic"><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg></span><span class="rail-lb">Home</span>
   </a>
   <a class="rail-item {{ 'active' if nav == 'tools' }}" href="/concepts" aria-label="Tools">
     <span class="rail-ic"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></span><span class="rail-lb">Tools</span>
   </a>
-  <a class="rail-item {{ 'active' if nav == 'locations' }}" href="/locations" aria-label="Locations">
-    <span class="rail-ic"><svg viewBox="0 0 24 24"><path d="M20 10c0 6-8 12-8 12S4 16 4 10a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="2.6"/></svg></span><span class="rail-lb">Locations</span>
-  </a>
-  <a class="rail-item {{ 'active' if nav == 'characters' }}" href="/characters" aria-label="Characters">
-    <span class="rail-ic"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.6"/><path d="M5 20c0-3.6 3.1-6 7-6s7 2.4 7 6"/></svg></span><span class="rail-lb">Characters</span>
-  </a>
-  <a class="rail-item {{ 'active' if nav == 'props' }}" href="/props" aria-label="Props">
-    <span class="rail-ic"><svg viewBox="0 0 24 24"><path d="M21 8 12 3 3 8l9 5 9-5Z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg></span><span class="rail-lb">Props</span>
+  <a class="rail-item {{ 'active' if nav == 'assets' }}" href="/assets" aria-label="Assets">
+    <span class="rail-ic"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="1.6"/><rect x="13" y="3" width="8" height="8" rx="1.6"/><rect x="3" y="13" width="8" height="8" rx="1.6"/><circle cx="17" cy="17" r="4"/></svg></span><span class="rail-lb">Assets</span>
   </a>
   <span class="rail-div"></span>
   <a class="rail-item {{ 'active' if nav == 'workflow' }}" href="/library" aria-label="Workflow">
@@ -23,5 +27,11 @@
   </a>
   <a class="rail-item {{ 'active' if nav == 'scoreboard' }}" href="/analytics" aria-label="Scoreboard">
     <span class="rail-ic"><svg viewBox="0 0 24 24"><path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M20 20H3"/></svg></span><span class="rail-lb">Scoreboard</span>
+  </a>
+  <a class="rail-item {{ 'active' if nav == 'holds' }}" href="/holds" aria-label="Holds">
+    <span class="rail-ic"><svg viewBox="0 0 24 24"><path d="M4 13h4l2 3h4l2-3h4"/><path d="M5 5h14l1 8v6H4v-6l1-8Z"/></svg></span><span class="rail-lb">Holds</span>
+  </a>
+  <a class="rail-item {{ 'active' if nav == 'winners' }}" href="/winners" aria-label="Winners">
+    <span class="rail-ic"><svg viewBox="0 0 24 24"><path d="M7 4h10v3a5 5 0 0 1-10 0V4Z"/><path d="M5 5h2M17 5h2M9 21h6M12 17v4"/></svg></span><span class="rail-lb">Winners</span>
   </a>
 </nav>
