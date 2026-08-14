@@ -34,3 +34,7 @@ concepts.json
 data/promotion_queue.json
 data/autopilot.off
 venv-studio/
+
+# Personal reference photos -- not public yet
+/characters
+/props

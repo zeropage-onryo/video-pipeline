@@ -276,8 +276,8 @@ def upload_video(file_path, title, description="", privacy_status="private",
         return {"ok": False, "video_id": None, "url": None,
                 "error": "YT_CLIENT_ID / YT_CLIENT_SECRET / YT_REFRESH_TOKEN not set"}
     try:
-        from google.oauth2.credentials import Credentials
         from google.auth.transport.requests import Request as _AuthRequest
+        from google.oauth2.credentials import Credentials
         from googleapiclient.discovery import build
         from googleapiclient.http import MediaFileUpload
     except Exception as e:

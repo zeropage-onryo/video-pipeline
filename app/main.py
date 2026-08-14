@@ -21,8 +21,21 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from google import genai
 
-from src import (autonomy, autopilot, db, entities, inspiration, instagram,
-                 locations, preprod, rag, shootgen, taste_judge, winners, youtube)
+from src import (
+    autonomy,
+    autopilot,
+    db,
+    entities,
+    inspiration,
+    instagram,
+    locations,
+    preprod,
+    rag,
+    shootgen,
+    taste_judge,
+    winners,
+    youtube,
+)
 
 from . import seo
 from .sparkline import render_sparkline

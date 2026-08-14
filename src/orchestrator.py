@@ -267,7 +267,7 @@ def _midjourney_still(shot_prompt: str) -> str:
     try:
         raw = generate_with_retry(_client(), GEMINI_MODEL,
                                   _STILL_RUBRIC + "\n\nVIDEO SHOT:\n" + shot_prompt)
-        line = next((l.strip() for l in (raw or "").splitlines() if l.strip()), "")
+        line = next((ln.strip() for ln in (raw or "").splitlines() if ln.strip()), "")
         if line and "--ar" not in line:
             line = line + " --ar 9:16 --style raw"
         return line

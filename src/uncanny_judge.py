@@ -25,7 +25,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from . import db, preprod
+from . import preprod
 from .gemini_utils import generate_with_retry, strip_fences
 
 MODEL = os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview")
