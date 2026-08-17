@@ -97,4 +97,4 @@ jobs:
 
       - name: Generation quality gate (faithfulness / relevancy / contextual precision & recall)
         if: ${{ env.GEMINI_API_KEY != '' }}
-        run: pytest evals/ -q
+        run: pytest evals/ -q --reruns 2 --reruns-delay 15

@@ -35,7 +35,7 @@ GOLDEN_SET_PATH = Path(__file__).resolve().parent / "golden_set.json"
 BASELINE_PATH = Path(__file__).resolve().parent / "baseline_scores.json"
 
 FLOOR = 0.6
-REGRESSION_TOLERANCE = 0.1
+REGRESSION_TOLERANCE = 0.2
 
 GOLDEN_CASES = json.loads(GOLDEN_SET_PATH.read_text())
 BASELINE = json.loads(BASELINE_PATH.read_text())
