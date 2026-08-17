@@ -43,6 +43,12 @@ jobs:
     env:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       RAG_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/zeropage_ci
+      # Default per-attempt judge-model timeout (88.5s) has clipped real,
+      # still-in-flight Gemini calls under CI network conditions -- three
+      # different golden cases timed out across two separate runs. This
+      # doesn't relax the gate, it just stops a slow-but-fine response
+      # from being counted as a failure.
+      DEEPEVAL_PER_ATTEMPT_TIMEOUT_SECONDS_OVERRIDE: '180'
     services:
       postgres:
         # pgvector's own maintained image -- matches what `brew install
