@@ -43,6 +43,88 @@ export function initStudio(go) {
     const hrail = document.getElementById('hrail');
     hrail.scrollBy({ left: hrail.clientWidth * .8, behavior: 'smooth' });
   };
+
+  initUpload();
+}
+
+/* ── the + upload dropdown: rooms, characters, props — each posts to
+   the engine endpoint that already owns that asset type ── */
+
+const UPLOAD_KINDS = {
+  location: { action: '/locations/upload', label: 'Room name — e.g. garage, kitchen',
+              note: 'Photos are saved and the room is described by vision (needs the Gemini key).' },
+  character: { action: '/characters/new', label: 'Character name — e.g. Michael',
+               note: 'Reference photos for casting and prompt grounding.' },
+  prop: { action: '/props/new', label: 'Prop name — e.g. Ducati 959',
+          note: 'Reference photos so prompts name it instead of re-describing it.' },
+};
+let upKind = null;
+
+function initUpload() {
+  const plus = document.getElementById('up');
+  const menu = document.getElementById('upmenu');
+  const form = document.getElementById('upform');
+  const files = document.getElementById('upfiles');
+  const fileLabel = document.getElementById('upfilelabel');
+  const note = document.getElementById('upnote');
+
+  plus.onclick = () => {
+    const open = menu.hidden;
+    menu.hidden = !open;
+    plus.setAttribute('aria-expanded', String(open));
+    if (!open) { upKind = null; form.hidden = true; note.textContent = ''; resetKinds(); }
+  };
+
+  function resetKinds() {
+    document.querySelectorAll('#upkinds .chip').forEach(c =>
+      c.setAttribute('aria-pressed', 'false'));
+  }
+
+  document.querySelectorAll('#upkinds .chip').forEach(chip => chip.onclick = () => {
+    resetKinds();
+    chip.setAttribute('aria-pressed', 'true');
+    upKind = chip.dataset.k;
+    form.hidden = false;
+    document.getElementById('upname').placeholder = UPLOAD_KINDS[upKind].label;
+    note.textContent = UPLOAD_KINDS[upKind].note;
+    document.getElementById('upname').focus();
+  });
+
+  files.onchange = () => {
+    fileLabel.textContent = files.files.length
+      ? `${files.files.length} photo${files.files.length === 1 ? '' : 's'} selected`
+      : 'Choose photos…';
+  };
+
+  form.onsubmit = async e => {
+    e.preventDefault();
+    if (!upKind) return;
+    const name = document.getElementById('upname').value.trim();
+    if (!name) { note.textContent = 'a name is required'; return; }
+    if (!files.files.length) { note.textContent = 'pick at least one photo'; return; }
+    const go = document.getElementById('upgo');
+    go.disabled = true; go.textContent = 'Uploading…';
+    note.textContent = '';
+    try {
+      const body = new FormData();
+      body.append('name', name);
+      body.append('next', '/ui');
+      for (const f of files.files) body.append('photos', f);
+      const res = await fetch(UPLOAD_KINDS[upKind].action, { method: 'POST', body });
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      // the engine endpoints redirect with ?message= — surface it verbatim
+      const message = new URL(res.url, location.origin).searchParams.get('message');
+      note.textContent = message || 'Uploaded.';
+      form.reset();
+      fileLabel.textContent = 'Choose photos…';
+      await loadAssets(true);          // the carousel shows the new asset
+      renderStudio();
+    } catch (err) {
+      note.textContent = `Upload failed: ${err.message}`;
+    } finally {
+      go.disabled = false; go.textContent = 'Upload';
+    }
+  };
 }
 
 async function retrieve() {

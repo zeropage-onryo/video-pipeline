@@ -42,9 +42,27 @@
       <div class="glass" id="cbox">
         <textarea id="prompt" placeholder="Night ride, tank badge macro, low key garage…"></textarea>
         <div class="cfoot">
+          <button class="plus" id="up" data-label="Upload media" aria-label="Upload media" aria-expanded="false">
+            <svg viewBox="0 0 24 24" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
           <span class="spacer"></span>
           <button class="go" id="go" data-cap="pipeline.run" disabled>Create</button>
         </div>
+      </div>
+
+      <div class="glass upmenu" id="upmenu" hidden>
+        <div class="upkinds" id="upkinds">
+          <button class="chip" data-k="location" aria-pressed="false">Room · photos</button>
+          <button class="chip" data-k="character" aria-pressed="false">Character</button>
+          <button class="chip" data-k="prop" aria-pressed="false">Prop</button>
+        </div>
+        <form class="upform" id="upform" hidden>
+          <input class="search" id="upname" placeholder="Name" autocomplete="off">
+          <input type="file" id="upfiles" accept="image/*" multiple>
+          <label class="upfile btn" for="upfiles" id="upfilelabel">Choose photos…</label>
+          <button class="btn pri" id="upgo" type="submit">Upload</button>
+        </form>
+        <div class="upnote m" id="upnote"></div>
       </div>
 
       <div class="glass retr" id="retr" data-cap="retrieve">

@@ -489,3 +489,7 @@ def test_ui_page_serves_the_shell(tmp_db):
     assert response.status_code == 200
     assert "/static/zpf/app.js" in response.text
     assert "noindex" in response.text
+    # the composer's upload dropdown posts to the real engine endpoints
+    assert 'id="upmenu"' in response.text
+    for kind in ("location", "character", "prop"):
+        assert f'data-k="{kind}"' in response.text
