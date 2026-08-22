@@ -258,6 +258,51 @@ def test_shot_media_attach_roundtrip(tmp_db):
                        json={"url": "https://x.example/a.mp4"}).status_code == 404
 
 
+def test_shot_generate_gated_on_the_runway_key(tmp_db, monkeypatch):
+    concept_id = seed_concept(tmp_db)
+    monkeypatch.delenv("RUNWAYML_API_SECRET", raising=False)
+    caps = client.get("/api/capabilities").json()
+    assert caps["runway.generate"] is False
+    assert caps["runway.spend"] is False     # gate off unless set per run
+    response = client.post(f"/api/concepts/{concept_id}/shots/1/generate")
+    assert response.status_code == 503
+
+
+def test_concept_detail_carries_runway_availability(tmp_db, monkeypatch):
+    concept_id = seed_concept(tmp_db)
+    monkeypatch.delenv("RUNWAYML_API_SECRET", raising=False)
+    d = client.get(f"/api/concepts/{concept_id}").json()
+    assert d["runway"]["available"] is False
+    assert d["runway"]["estimate_usd"] > 0   # priced server-side either way
+
+
+def test_shot_generate_runs_the_render_as_a_job(tmp_db, monkeypatch):
+    concept_id = seed_concept(tmp_db)
+    monkeypatch.setattr(api_mod.runway, "has_key", lambda: True)
+    monkeypatch.setattr(
+        api_mod.runway, "generate_for_shot",
+        lambda cid, n, db_path=None: {"ok": True, "media_url": "/renders/runway/x.mp4",
+                                      "generation_id": 1, "error": None})
+    job_id = client.post(
+        f"/api/concepts/{concept_id}/shots/1/generate").json()["job_id"]
+    job = wait_for_job(job_id)
+    assert job["status"] == "done"
+    assert "shot 1" in job["detail"]
+
+
+def test_shot_generate_surfaces_render_failure(tmp_db, monkeypatch):
+    concept_id = seed_concept(tmp_db)
+    monkeypatch.setattr(api_mod.runway, "has_key", lambda: True)
+    monkeypatch.setattr(
+        api_mod.runway, "generate_for_shot",
+        lambda cid, n, db_path=None: {"ok": False, "error": "daily cap: 6/6"})
+    job_id = client.post(
+        f"/api/concepts/{concept_id}/shots/1/generate").json()["job_id"]
+    job = wait_for_job(job_id)
+    assert job["status"] == "failed"
+    assert "daily cap" in job["error"]
+
+
 # --- holds ------------------------------------------------------------------
 
 def test_holds_resolve_roundtrip(tmp_db):

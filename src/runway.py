@@ -217,3 +217,86 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *, shot_id: Optional[i
                 "error": "; ".join(errors) if errors else None}
     except Exception as e:
         return {"ok": False, "candidates": [], "error": _safe_error(e)}
+
+
+# --- the scene board's one-click render (added 2026-08-21) -----------------
+
+RENDER_DIR = Path(__file__).resolve().parent.parent / "data" / "renders" / "runway"
+
+
+def has_key() -> bool:
+    return bool(os.environ.get("RUNWAYML_API_SECRET"))
+
+
+def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
+                      model: str = DEFAULT_MODEL, client=None) -> dict:
+    """
+    Never raises: {"ok", "media_url", "generation_id", "error"}. One
+    render for one concept shot, through every wall this module already
+    has -- the spend gate lives inside generate_video, so this layer
+    cannot spend around it; the cap is checked before any call; the
+    attempt is a generations row either way the pick later goes.
+
+    Reads the shot's stored prompt, anchors on its reference_image when
+    that's a public URL (what the reference is FOR), downloads the clip
+    to data/renders/runway/, uploads to R2 when configured (Instagram
+    needs a public URL), else leaves it served from the app's /renders
+    mount -- and attaches the result via preprod.set_shot_media_url,
+    the field autopilot.build_plan requires before it will ever emit a
+    post action.
+    """
+    from . import preprod, storage
+    kwargs = {"path": db_path} if db_path is not None else {}
+
+    try:
+        used = generations_today(db_path=db_path)
+        if used >= DAILY_CAP:
+            return {"ok": False,
+                    "error": f"daily cap: {used}/{DAILY_CAP} generations used "
+                             f"today (RUNWAY_DAILY_CAP to raise)"}
+
+        concept = preprod.get_concept(concept_id, **kwargs)
+        if concept is None:
+            return {"ok": False, "error": f"no concept {concept_id}"}
+        shot = next((s for s in concept.get("shots") or []
+                     if s.get("n") == shot_n), None)
+        if shot is None:
+            return {"ok": False, "error": f"concept {concept_id} has no shot {shot_n}"}
+        prompt = (shot.get("prompt") or "").strip()
+        if not prompt:
+            return {"ok": False,
+                    "error": f"shot {shot_n} has no AI prompt to render from"}
+
+        reference = (shot.get("reference_image") or "").strip()
+        prompt_image = reference if reference.startswith(("http://", "https://")) else None
+
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        out_path = RENDER_DIR / f"c{concept_id}-s{shot_n}-{stamp}.mp4"
+        generate_video(prompt, out_path, model=model,
+                       prompt_image=prompt_image, client=client)
+
+        shot_row_id = _shot_row_for_prompt(prompt, db_path)
+        generation_id = generative.record_generation(
+            shot_row_id, "runway", prompt,
+            params={"model": model, "ratio": DEFAULT_RATIO,
+                    "duration": DEFAULT_DURATION,
+                    "concept_id": concept_id, "shot_n": shot_n,
+                    "prompt_image": bool(prompt_image)},
+            output_path=str(out_path),
+            cost_usd=estimate_cost(1, model=model),
+            **kwargs,
+        )
+
+        if storage.configured():
+            media_url = storage.upload_file(
+                out_path, key=f"renders/runway/{out_path.name}",
+                content_type="video/mp4")
+        else:
+            media_url = f"/renders/runway/{out_path.name}"
+
+        preprod.set_shot_media_url(concept_id, shot_n, media_url, **kwargs)
+        return {"ok": True, "media_url": media_url,
+                "generation_id": generation_id, "path": str(out_path),
+                "error": None}
+    except Exception as e:
+        return {"ok": False, "error": _safe_error(e)}

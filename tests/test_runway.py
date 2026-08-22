@@ -170,3 +170,93 @@ def test_estimate_cost_prices_by_model_and_duration():
     assert runway.estimate_cost(2, model="gen4.5", duration=10) == 2.40
     # an unknown model prices at the most expensive known rate, never free
     assert runway.estimate_cost(1, model="mystery", duration=5) == 0.60
+
+
+# ---------- generate_for_shot: the scene board's one-click render ----------
+
+@pytest.fixture
+def scene_db(tmp_db):
+    from src import preprod
+    preprod.init(tmp_db)
+    return tmp_db
+
+
+def seed_scene(path, reference=""):
+    from src import preprod
+    shot = {"n": 1, "type": "BROLL", "source": "AI", "location": "garage",
+            "tool": "RUNWAY", "prompt": "low key garage, single bulb"}
+    if reference:
+        shot["reference_image"] = reference
+    return preprod.save_concept(
+        {"title": "Vault", "shots": [shot]}, brand="antihero", path=path)
+
+
+def test_for_shot_respects_the_spend_gate(scene_db, monkeypatch, tmp_path):
+    monkeypatch.delenv(runway.SPEND_ENV, raising=False)
+    monkeypatch.setattr(runway, "RENDER_DIR", tmp_path / "renders")
+    concept_id = seed_scene(scene_db)
+    result = runway.generate_for_shot(concept_id, 1, db_path=scene_db,
+                                      client=FakeClient())
+    assert result["ok"] is False
+    assert "Runway app" in result["error"]     # points at the free path
+    with generative.connect(scene_db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM generations").fetchone()[0] == 0
+
+
+def test_for_shot_renders_logs_and_attaches(scene_db, approved, fake_download,
+                                            monkeypatch, tmp_path):
+    import src.storage as storage
+    from src import preprod
+    monkeypatch.setattr(runway, "RENDER_DIR", tmp_path / "renders")
+    monkeypatch.setattr(storage, "configured", lambda: False)
+    concept_id = seed_scene(scene_db)
+    client = FakeClient()
+
+    result = runway.generate_for_shot(concept_id, 1, db_path=scene_db, client=client)
+    assert result["ok"], result["error"]
+    assert client.calls[0]["prompt_text"] == "low key garage, single bulb"
+    assert "prompt_image" not in client.calls[0]     # no reference -> text-to-video
+    # served from /renders, logged, and attached to the shot
+    assert result["media_url"].startswith("/renders/runway/")
+    concept = preprod.get_concept(concept_id, path=scene_db)
+    assert concept["shots"][0]["media_url"] == result["media_url"]
+    assert runway.generations_today(db_path=scene_db) == 1
+
+
+def test_for_shot_anchors_on_the_reference_image(scene_db, approved, fake_download,
+                                                 monkeypatch, tmp_path):
+    import src.storage as storage
+    monkeypatch.setattr(runway, "RENDER_DIR", tmp_path / "renders")
+    monkeypatch.setattr(storage, "configured", lambda: False)
+    concept_id = seed_scene(scene_db, reference="https://cdn.example/plate.jpg")
+    client = FakeClient()
+    result = runway.generate_for_shot(concept_id, 1, db_path=scene_db, client=client)
+    assert result["ok"], result["error"]
+    assert client.calls[0]["prompt_image"] == "https://cdn.example/plate.jpg"
+
+
+def test_for_shot_missing_pieces_are_results(scene_db, approved, monkeypatch, tmp_path):
+    from src import preprod
+    monkeypatch.setattr(runway, "RENDER_DIR", tmp_path / "renders")
+    assert "no concept" in runway.generate_for_shot(
+        999, 1, db_path=scene_db, client=FakeClient())["error"]
+    concept_id = preprod.save_concept(
+        {"title": "Cam only",
+         "shots": [{"n": 1, "type": "CHARACTER", "source": "CAMERA",
+                    "cam": "BMPCC", "location": "garage"}]},
+        brand="antihero", path=scene_db)
+    assert "no shot 9" in runway.generate_for_shot(
+        concept_id, 9, db_path=scene_db, client=FakeClient())["error"]
+    assert "no AI prompt" in runway.generate_for_shot(
+        concept_id, 1, db_path=scene_db, client=FakeClient())["error"]
+
+
+def test_for_shot_cap_blocks_before_any_call(scene_db, approved, monkeypatch, tmp_path):
+    monkeypatch.setattr(runway, "RENDER_DIR", tmp_path / "renders")
+    monkeypatch.setattr(runway, "DAILY_CAP", 0)
+    concept_id = seed_scene(scene_db)
+    client = FakeClient()
+    result = runway.generate_for_shot(concept_id, 1, db_path=scene_db, client=client)
+    assert result["ok"] is False
+    assert "daily cap" in result["error"]
+    assert client.calls == []

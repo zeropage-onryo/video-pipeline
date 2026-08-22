@@ -25,7 +25,18 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from src import autonomy, db, entities, evalstore, instagram, preprod, rag, rag_eval, youtube
+from src import (
+    autonomy,
+    db,
+    entities,
+    evalstore,
+    instagram,
+    preprod,
+    rag,
+    rag_eval,
+    runway,
+    youtube,
+)
 from src.locations import IMAGE_EXTENSIONS
 
 from . import jobs
@@ -89,6 +100,8 @@ def compute_capabilities() -> dict:
         "analytics": True,
         "analytics.youtube": bool(os.environ.get("YOUTUBE_API_KEY")),
         "analytics.instagram": bool(instagram.access_token()),
+        "runway.generate": runway.has_key(),
+        "runway.spend": runway.spend_approved(),
         "jobs": True,
     }
 
@@ -300,7 +313,13 @@ def concept_detail(concept_id: int):
     card = _concept_card(concept)
     return {**card, "duration": concept.get("duration"),
             "edit_note": concept.get("edit_note") or concept.get("edit"),
-            "shots": shots}
+            "shots": shots,
+            # the render button's copy is server-sourced: availability,
+            # the spend gate's state, and what one clip would cost
+            "runway": {"available": runway.has_key(),
+                       "spend_ok": runway.spend_approved(),
+                       "model": runway.DEFAULT_MODEL,
+                       "estimate_usd": runway.estimate_cost(1)}}
 
 
 class ShotMediaBody(BaseModel):
@@ -321,6 +340,32 @@ def shot_media_attach(concept_id: int, shot_n: int, body: ShotMediaBody):
     except ValueError as e:
         return _error(404, "not_found", str(e))
     return {"concept_id": concept_id, "shot_n": shot_n, "media_url": url}
+
+
+@router.post("/concepts/{concept_id}/shots/{shot_n}/generate")
+def shot_generate(concept_id: int, shot_n: int):
+    """One click, one render: the shot's stored prompt through the
+    Runway API (anchored on its reference_image when set), the clip
+    downloaded, logged as a generations row, and attached to the shot.
+    Billed, capped, and spend-gated -- generate_video refuses without
+    RUNWAY_SPEND_OK=1 on the server's run, so nothing here can spend
+    around the module's own gate."""
+    if not runway.has_key():
+        return _error(503, "runway_unavailable", "RUNWAYML_API_SECRET is not set")
+    concept = preprod.get_concept(concept_id, path=db.DB_PATH)
+    if concept is None:
+        return _error(404, "not_found", "no such concept")
+
+    def work(job):
+        jobs.progress(job, 0.2, "rendering via Runway")
+        result = runway.generate_for_shot(concept_id, shot_n, db_path=db.DB_PATH)
+        if not result.get("ok"):
+            raise RuntimeError(result.get("error") or "render failed")
+        return {"ref_id": concept_id,
+                "detail": f"clip attached to shot {shot_n}"}
+
+    job = jobs.start("render", f"runway · {concept['title']} shot {shot_n}", work)
+    return {"job_id": job["id"]}
 
 
 class RunBody(BaseModel):

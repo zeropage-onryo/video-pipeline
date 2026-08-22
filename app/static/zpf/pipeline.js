@@ -45,7 +45,7 @@ export function initPipeline() {
   bus.addEventListener('job', e => {
     const job = e.detail;
     if (document.documentElement.dataset.v === 'pipeline'
-        && ['concept', 'plan'].includes(job.kind)
+        && ['concept', 'plan', 'render'].includes(job.kind)
         && ['done', 'failed'].includes(job.status)) {
       if (job.status === 'done' && job.ref_id) openSceneId = job.ref_id;
       renderPipeline();
@@ -165,7 +165,7 @@ async function openScene(id, scroll = true) {
           ? `<video src="${esc(s.media_url)}" muted preload="metadata"></video>`
           : `clip ${s.n}`}</div>`
       : `<div class="ftile pending">shot ${esc(String(s.n))}</div>`).join('')}</div>
-    <div class="shotrows">${d.shots.map(s => shotRow(s)).join('')}</div>
+    <div class="shotrows">${d.shots.map(s => shotRow(s, d.runway)).join('')}</div>
   </div>`;
 
   document.getElementById('sbclose').onclick = () => {
@@ -186,6 +186,20 @@ async function openScene(id, scroll = true) {
     blk.hidden = !blk.hidden;
     b.textContent = blk.hidden ? '▸ director prompt (openart)' : '▾ director prompt (openart)';
   });
+  board.querySelectorAll('.rgen').forEach(b => b.onclick = async () => {
+    const label = b.textContent;
+    b.disabled = true; b.textContent = 'Rendering…';
+    try {
+      await api(`/api/concepts/${id}/shots/${b.dataset.m}/generate`,
+        { method: 'POST', body: {} });
+      b.textContent = 'Rendering — watch the job rail';
+      // the render job's completion re-opens the board via the job bus
+    } catch (e) {
+      b.disabled = false;
+      b.textContent = label;
+      stateline(document.getElementById('cstate'), 'error', e.message);
+    }
+  });
   board.querySelectorAll('.attach').forEach(b => b.onclick = async () => {
     const input = board.querySelector(`input[data-m="${b.dataset.m}"]`);
     const url = input.value.trim();
@@ -204,7 +218,7 @@ async function openScene(id, scroll = true) {
   if (scroll) board.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-function shotRow(s) {
+function shotRow(s, rw) {
   const isAI = s.source === 'AI';
   const isClip = /\.(mp4|mov|webm|m4v)(\?|$)/i.test(s.media_url || '');
   return `<div class="shotrow">
@@ -222,7 +236,15 @@ function shotRow(s) {
         <div class="plabel">${esc(s.tool || 'ai')} prompt — paste into the tool</div>
         <pre data-p="t${esc(String(s.n))}">${esc(s.prompt)}</pre>
         <button class="copybtn" data-p="t${esc(String(s.n))}">Copy</button>
-      </div>` : ''}
+      </div>
+      ${rw && rw.available ? `
+        <div class="mediarow" style="margin-top:10px">
+          <button class="btn pri rgen" data-m="${esc(String(s.n))}" ${rw.spend_ok ? '' : 'disabled'}>
+            Render via Runway API · ${esc(rw.model)} · ~$${rw.estimate_usd.toFixed(2)}</button>
+          <span class="m">${rw.spend_ok
+            ? (s.reference_image ? 'anchors on the attached reference' : 'text-to-video · no reference attached')
+            : 'spend gate off — restart the server with RUNWAY_SPEND_OK=1, or render free in the Runway app'}</span>
+        </div>` : ''}` : ''}
     <button class="dirtoggle" data-d="d${esc(String(s.n))}">▸ director prompt (openart)</button>
     <div class="promptblk" data-d="d${esc(String(s.n))}" hidden>
       <pre data-p="d${esc(String(s.n))}">${esc(s.director_prompt || '')}</pre>

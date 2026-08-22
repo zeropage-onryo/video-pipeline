@@ -234,6 +234,18 @@ is yours, in Resolve, by hand.
   `--timeout-graceful-shutdown 3` (`.claude/launch.json`): without it, `--reload` waits
   forever on the open SSE socket and the dev server wedges on every code change. `/studio`
   and the per-stage screens are unchanged underneath — `/ui` sits beside them until parity.
+  The Pipeline view's scene board closes the render loop two ways: copy a shot's stored
+  tool prompt / Director rendering, render free in the tool's own app, and paste the
+  finished clip's URL back (`set_shot_media_url`) — the default path — or one click
+  through `src/runway.py`'s `generate_for_shot` (added 2026-08-21 on the existing
+  connector), which only fires when `RUNWAYML_API_SECRET` is set AND the per-run spend
+  gate `RUNWAY_SPEND_OK=1` is on: API calls always burn API credits even on the
+  Unlimited plan, so the module's own gate inside `generate_video` is the wall, the
+  button shows the priced estimate, and refusal points at the free app path. Every
+  attempt is a generations row under `RUNWAY_DAILY_CAP`; the shot's `reference_image`
+  (public URL) anchors as `prompt_image`; the clip downloads immediately (Runway URLs
+  are ephemeral) to `data/renders/`, uploaded to R2 when configured, else served via
+  the app's `/renders` mount.
 - **The assistant is keyword routing, not a model call.** `route_intent` matches typed text (or an
   explicit chip) against `INTENT_PHRASES` → one pipeline stage, falling back to `ideas`. Free and
   inspectable on purpose: the stages it dispatches each cost a billed generation, so an unclear

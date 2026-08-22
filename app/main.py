@@ -144,6 +144,11 @@ class NoCacheStaticFiles(StaticFiles):
 
 app = FastAPI(lifespan=lifespan)
 app.mount("/static", NoCacheStaticFiles(directory=str(APP_DIR / "static")), name="static")
+# Rendered clips (data/renders/, gitignored with the rest of data/) --
+# what the scene board plays when no public R2 URL exists yet.
+RENDERS_DIR = PROJECT_ROOT / "data" / "renders"
+RENDERS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/renders", NoCacheStaticFiles(directory=str(RENDERS_DIR)), name="renders")
 app.include_router(api.router)
 
 
