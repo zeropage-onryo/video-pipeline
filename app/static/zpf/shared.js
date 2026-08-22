@@ -15,7 +15,8 @@ export const bus = new EventTarget();
 
 export async function api(path, opts = {}) {
   const init = { headers: {}, ...opts };
-  if (init.body !== undefined && typeof init.body !== 'string') {
+  if (init.body !== undefined && typeof init.body !== 'string'
+      && !(init.body instanceof FormData)) {
     init.body = JSON.stringify(init.body);
     init.headers['Content-Type'] = 'application/json';
   }

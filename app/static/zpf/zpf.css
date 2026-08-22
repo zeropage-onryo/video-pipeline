@@ -165,14 +165,76 @@ h1{
 }
 .plus:hover::after{opacity:1;transform:translateX(-30%) translateY(0)}
 .upmenu{margin-top:12px;padding:16px 18px;animation:vin .3s cubic-bezier(.16,.8,.3,1)}
-.upkinds{display:flex;gap:8px;flex-wrap:wrap}
-.upform{display:flex;gap:10px;align-items:center;margin-top:14px;flex-wrap:wrap}
-.upform .search{flex:1;min-width:180px;max-width:none}
-.upform input[type="file"]{display:none}
-.upfile{flex:0 0 auto;padding:10px 18px;font-size:12.5px;cursor:pointer}
-.upform .btn.pri{flex:0 0 auto;padding:10px 20px}
+.mhead{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+.mgrid{
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(108px,1fr));gap:8px;
+  max-height:340px;overflow-y:auto;padding-bottom:2px;
+}
+.mtile{
+  aspect-ratio:1/1;border-radius:12px;border:1px solid var(--line);cursor:pointer;
+  background-size:cover;background-position:center;background-color:#0a0a0c;
+  position:relative;overflow:hidden;padding:0;transition:border-color var(--t),transform var(--t);
+}
+.mtile:hover{border-color:var(--line-hi);transform:translateY(-2px)}
+.mtile[aria-pressed="true"]{border-color:var(--signal);box-shadow:0 0 0 1px var(--signal)}
+.mtile[aria-pressed="true"]::after{
+  content:'✓';position:absolute;top:6px;right:6px;width:20px;height:20px;
+  display:grid;place-items:center;border-radius:var(--rp);
+  background:var(--signal);color:#fff;font-size:11px;
+}
+.mtile .mname{
+  position:absolute;left:0;right:0;bottom:0;padding:14px 8px 6px;
+  font-family:var(--mono);font-size:8px;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--dim);background:linear-gradient(180deg,transparent,rgb(0 0 0 / .85));
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:left;
+}
+.mdrop{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
+  border-style:dashed;color:var(--dim);font-family:var(--body);font-size:11.5px;
+  background:rgb(255 255 255 / .02);
+}
+.mdrop:hover{color:var(--text)}
+.mdrop svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.6}
+.mdrop small{font-family:var(--mono);font-size:8px;letter-spacing:.1em;text-transform:uppercase;color:var(--dimmer)}
 .upnote{margin-top:12px}
 .upnote:empty{display:none}
+
+/* attached previews inside the composer, OpenArt-style */
+.attachbar{display:flex;gap:8px;flex-wrap:wrap;padding:16px 28px 0}
+.attachbar:empty{display:none}
+.attach{
+  width:52px;height:52px;border-radius:10px;border:1px solid var(--line-hi);
+  background-size:cover;background-position:center;position:relative;flex:none;
+}
+.attach .ax{
+  position:absolute;top:-7px;right:-7px;width:18px;height:18px;border-radius:var(--rp);
+  background:rgb(16 16 20 / .95);border:1px solid var(--line-hi);color:var(--dim);
+  font-size:9px;display:grid;place-items:center;cursor:pointer;
+}
+.attach .ax:hover{color:var(--text);border-color:var(--signal)}
+
+/* ── ASSETS GALLERY (date-grouped) ──────────────────── */
+.gallery{max-width:1680px;margin:0 auto;padding:0 42px}
+.gdate{
+  font-family:var(--body);font-size:14.5px;font-weight:500;color:var(--text);
+  margin:26px 0 14px;display:flex;align-items:center;gap:10px;
+}
+.gdate .m{font-size:9px}
+.gphotos{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px}
+.gph{
+  aspect-ratio:1/1;border-radius:var(--r1);border:1px solid var(--line);cursor:pointer;
+  background-size:cover;background-position:center;background-color:#0a0a0c;
+  position:relative;overflow:hidden;padding:0;transition:border-color var(--t),transform var(--t);
+}
+.gph:hover{border-color:var(--line-hi);transform:translateY(-2px)}
+.gph .mname{
+  position:absolute;left:0;right:0;bottom:0;padding:18px 10px 8px;
+  font-family:var(--mono);font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--dim);background:linear-gradient(180deg,transparent,rgb(0 0 0 / .85));
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:left;
+  opacity:0;transition:opacity var(--t);
+}
+.gph:hover .mname{opacity:1}
 
 /* retrieval — opens only when there's a query */
 .retr{

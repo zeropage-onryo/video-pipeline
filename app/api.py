@@ -209,6 +209,43 @@ def assets_list(q: Optional[str] = None, category: Optional[str] = None,
     return {"items": items[:limit], "total": len(items), "counts": counts}
 
 
+@router.get("/media")
+def media_list(q: Optional[str] = None, category: Optional[str] = None,
+               limit: int = 500):
+    """Every saved photo as one flat, newest-first list with its REAL
+    file date -- what the media panel's picker grid and the Assets
+    gallery group by. Dates come from the file on disk, not a guess."""
+    from datetime import datetime, timezone
+
+    items = []
+    for asset in _assets_all():
+        for url in asset["photos"]:
+            target = _resolve_asset_photo(url)
+            if target is None:
+                continue
+            mtime = datetime.fromtimestamp(target.stat().st_mtime, tz=timezone.utc)
+            items.append({
+                "url": url, "asset_id": asset["id"],
+                "asset_name": asset["name"], "category": asset["category"],
+                "haystack": (asset["name"] + " " + (asset["text"] or "")).lower(),
+                "date": mtime.date().isoformat(),
+                "ts": mtime.timestamp(),
+            })
+    items.sort(key=lambda x: x["ts"], reverse=True)
+    # counts are set totals, before any filter -- same rule as /api/assets
+    counts = {"all": len(items)}
+    for cat in ("location", "character", "prop"):
+        counts[cat] = sum(1 for i in items if i["category"] == cat)
+    if category in ("location", "character", "prop"):
+        items = [i for i in items if i["category"] == category]
+    if q:
+        needle = q.lower().strip()
+        items = [i for i in items if needle in i["haystack"]]
+    for item in items:
+        item.pop("haystack", None)
+    return {"items": items[:limit], "counts": counts}
+
+
 @router.get("/assets/{category}/{item_id}")
 def asset_detail(category: str, item_id: int):
     asset = next((i for i in _assets_all()
@@ -437,26 +474,87 @@ def shot_generate(concept_id: int, shot_n: int):
     return {"job_id": job["id"]}
 
 
-class RunBody(BaseModel):
-    prompt: str
-    brand: Optional[str] = None
+MAX_IMAGE_REFS = 6   # cap what one Create sends to Gemini, same as /studio
+
+_PHOTO_ROOTS = {
+    "locations": LOCATIONS_DIR,
+    "characters": CHARACTERS_DIR,
+    "props": PROPS_DIR,
+}
+
+
+def _resolve_asset_photo(url_path: str) -> Optional[Path]:
+    """A picked media-panel thumbnail arrives as its site-relative photo
+    URL (/locations/<space>/photo/<file>, ?thumb stripped). Resolve it
+    against the real photo roots with the same traversal guard the
+    photo routes use -- anything that escapes is silently dropped, an
+    attachment is an enhancement."""
+    clean = (url_path or "").split("?")[0].strip("/")
+    parts = clean.split("/")
+    if len(parts) != 4 or parts[2] != "photo":
+        return None
+    root = _PHOTO_ROOTS.get(parts[0])
+    if root is None:
+        return None
+    target = (root / parts[1] / parts[3]).resolve()
+    if root.resolve() not in target.parents:
+        return None
+    if not target.is_file() or target.suffix.lower() not in IMAGE_EXTENSIONS:
+        return None
+    return target
+
+
+def _to_jpeg(data: bytes) -> Optional[bytes]:
+    import io
+
+    from PIL import Image
+    try:
+        image = Image.open(io.BytesIO(data)).convert("RGB")
+        buf = io.BytesIO()
+        image.save(buf, "JPEG", quality=90)
+        return buf.getvalue()
+    except Exception:
+        return None   # not a readable image -- skip, never fail the run
 
 
 @router.post("/pipeline/run")
-def pipeline_run(body: RunBody, request: Request):
+async def pipeline_run(request: Request):
     """The Create button: one full concept from the composer's prompt,
     grounded exactly the way /concepts/generate grounds -- reference
-    block first, then the generator. Billed, so it only exists when the
-    key does."""
-    prompt = body.prompt.strip()
+    block first, then the generator. Multipart: `prompt` plus optional
+    attached media (`files` uploads and `asset_photos` picked from the
+    media panel), which ride into the generation as vision input.
+    Billed, so it only exists when the key does."""
+    form = await request.form()
+    prompt = (form.get("prompt") or "").strip()
     if not prompt:
         return _error(400, "empty_prompt", "a prompt is required")
     api_key = _gemini_key()
     if not api_key:
         return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
-    brand = body.brand if body.brand in preprod.BRANDS else (
+    brand_raw = form.get("brand")
+    brand = brand_raw if brand_raw in preprod.BRANDS else (
         request.cookies.get("brand") if request.cookies.get("brand") in preprod.BRANDS
         else "antihero")
+
+    image_refs = []
+    for upload in form.getlist("files"):
+        if len(image_refs) >= MAX_IMAGE_REFS:
+            break
+        if not getattr(upload, "filename", ""):
+            continue
+        jpeg = _to_jpeg(await upload.read())
+        if jpeg:
+            image_refs.append((jpeg, "image/jpeg"))
+    for picked in form.getlist("asset_photos"):
+        if len(image_refs) >= MAX_IMAGE_REFS:
+            break
+        target = _resolve_asset_photo(str(picked))
+        if target is None:
+            continue
+        jpeg = _to_jpeg(target.read_bytes())
+        if jpeg:
+            image_refs.append((jpeg, "image/jpeg"))
 
     def work(job):
         from google import genai
@@ -465,11 +563,14 @@ def pipeline_run(body: RunBody, request: Request):
         jobs.progress(job, 0.15, "grounding in references")
         references = shootgen.reference_block(spark=prompt, client=None,
                                               db_path=db.DB_PATH)
-        jobs.progress(job, 0.35, "generating concept")
+        jobs.progress(job, 0.35,
+                      "generating concept"
+                      + (f" · {len(image_refs)} image ref(s)" if image_refs else ""))
         result = shootgen.generate_concept(
             brand=brand, spark=prompt,
             gemini_client=genai.Client(api_key=api_key),
             use_pov=True, db_path=db.DB_PATH, references=references,
+            image_refs=image_refs or None,
         )
         title = (result.get("concept") or {}).get("title") or "untitled"
         warnings = result.get("warnings") or []
@@ -479,7 +580,7 @@ def pipeline_run(body: RunBody, request: Request):
         return {"ref_id": result.get("concept_id"), "detail": detail}
 
     job = jobs.start("concept", f"concept · {prompt[:60]}", work)
-    return {"job_id": job["id"]}
+    return {"job_id": job["id"], "image_refs": len(image_refs)}
 
 
 @router.post("/concepts/{concept_id}/approve")

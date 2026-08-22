@@ -174,7 +174,7 @@ def test_pipeline_run_generates_through_a_job(tmp_db, monkeypatch):
     monkeypatch.setattr(api_mod, "_gemini_key", lambda: "k")
 
     job_id = client.post("/api/pipeline/run",
-                         json={"prompt": "night ride"}).json()["job_id"]
+                         data={"prompt": "night ride"}).json()["job_id"]
     job = wait_for_job(job_id)
     assert job["status"] == "done"
     assert job["ref_id"] == 7
@@ -183,8 +183,60 @@ def test_pipeline_run_generates_through_a_job(tmp_db, monkeypatch):
 
 def test_pipeline_run_refuses_without_key(tmp_db, monkeypatch):
     monkeypatch.setattr(api_mod, "_gemini_key", lambda: None)
-    response = client.post("/api/pipeline/run", json={"prompt": "x"})
+    response = client.post("/api/pipeline/run", data={"prompt": "x"})
     assert response.status_code == 503
+
+
+@pytest.fixture
+def photo_root(tmp_path, monkeypatch):
+    """A throwaway locations dir with one real photo, wired into the API's
+    photo roots so /api/media and picked-attachment resolution see it."""
+    import io
+
+    from PIL import Image
+    root = tmp_path / "locations"
+    (root / "garage").mkdir(parents=True)
+    buf = io.BytesIO()
+    Image.new("RGB", (8, 8), (200, 30, 40)).save(buf, "JPEG")
+    (root / "garage" / "plate.jpg").write_bytes(buf.getvalue())
+    monkeypatch.setattr(api_mod, "LOCATIONS_DIR", root)
+    monkeypatch.setattr(api_mod, "_PHOTO_ROOTS", {"locations": root})
+    return root
+
+
+def test_media_lists_photos_with_real_dates(tmp_db, photo_root):
+    preprod.add_location("garage", {"space": "the garage"}, path=tmp_db)
+    media = client.get("/api/media").json()
+    assert media["counts"] == {"all": 1, "location": 1, "character": 0, "prop": 0}
+    item = media["items"][0]
+    assert item["asset_name"] == "garage"
+    assert item["url"].startswith("/locations/garage/photo/plate.jpg")
+    assert len(item["date"]) == 10   # a real ISO date from the file's mtime
+
+
+def test_pipeline_run_carries_picked_media_as_image_refs(tmp_db, photo_root,
+                                                         monkeypatch):
+    preprod.add_location("garage", {"space": "the garage"}, path=tmp_db)
+    seen = {}
+    import src.shootgen as shootgen
+    monkeypatch.setattr(shootgen, "reference_block", lambda **k: "")
+
+    def fake_generate(**kwargs):
+        seen.update(kwargs)
+        return {"concept_id": 1, "concept": {"title": "T"}, "warnings": []}
+
+    monkeypatch.setattr(shootgen, "generate_concept", fake_generate)
+    monkeypatch.setattr(api_mod, "_gemini_key", lambda: "k")
+
+    response = client.post("/api/pipeline/run", data={
+        "prompt": "night ride",
+        "asset_photos": ["/locations/garage/photo/plate.jpg?thumb=1",
+                         "/locations/../../etc/photo/passwd"],   # traversal: dropped
+    })
+    assert response.json()["image_refs"] == 1
+    wait_for_job(response.json()["job_id"])
+    refs = seen["image_refs"]
+    assert len(refs) == 1 and refs[0][1] == "image/jpeg"
 
 
 def test_deny_records_correction_and_deletes_even_when_store_is_down(tmp_db):
@@ -489,7 +541,7 @@ def test_ui_page_serves_the_shell(tmp_db):
     assert response.status_code == 200
     assert "/static/zpf/app.js" in response.text
     assert "noindex" in response.text
-    # the composer's upload dropdown posts to the real engine endpoints
+    # the composer's + opens the media panel; picks land in the attach bar
     assert 'id="upmenu"' in response.text
-    for kind in ("location", "character", "prop"):
-        assert f'data-k="{kind}"' in response.text
+    assert 'id="mgrid"' in response.text
+    assert 'id="attachbar"' in response.text

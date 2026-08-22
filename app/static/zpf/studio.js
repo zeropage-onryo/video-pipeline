@@ -26,8 +26,11 @@ export function initStudio(go) {
     goBtn.disabled = true;
     goBtn.textContent = 'Creating…';
     try {
-      await api('/api/pipeline/run', { method: 'POST', body: { prompt: text } });
+      await api('/api/pipeline/run', { method: 'POST', body: collectRunForm(text) });
       prompt.value = '';
+      clearAttachments();
+      document.getElementById('upmenu').hidden = true;
+      document.getElementById('up').setAttribute('aria-expanded', 'false');
       go('pipeline');
     } catch (e) {
       const hits = document.getElementById('hits');
@@ -47,84 +50,130 @@ export function initStudio(go) {
   initUpload();
 }
 
-/* ── the + upload dropdown: rooms, characters, props — each posts to
-   the engine endpoint that already owns that asset type ── */
+/* ── the + media panel: previously saved photos to pick from, plus a
+   drop-or-upload tile. Selections attach to THIS generation as image
+   references (the same image_refs path the engine composer uses). ── */
 
-const UPLOAD_KINDS = {
-  location: { action: '/locations/upload', label: 'Room name — e.g. garage, kitchen',
-              note: 'Photos are saved and the room is described by vision (needs the Gemini key).' },
-  character: { action: '/characters/new', label: 'Character name — e.g. Michael',
-               note: 'Reference photos for casting and prompt grounding.' },
-  prop: { action: '/props/new', label: 'Prop name — e.g. Ducati 959',
-          note: 'Reference photos so prompts name it instead of re-describing it.' },
-};
-let upKind = null;
+const MAX_ATTACH = 6;
+const attachments = [];   // {kind:'asset', url} | {kind:'file', file, url(objectURL)}
 
 function initUpload() {
   const plus = document.getElementById('up');
   const menu = document.getElementById('upmenu');
-  const form = document.getElementById('upform');
   const files = document.getElementById('upfiles');
-  const fileLabel = document.getElementById('upfilelabel');
   const note = document.getElementById('upnote');
+  const cbox = document.getElementById('cbox');
 
-  plus.onclick = () => {
+  plus.onclick = async () => {
     const open = menu.hidden;
     menu.hidden = !open;
     plus.setAttribute('aria-expanded', String(open));
-    if (!open) { upKind = null; form.hidden = true; note.textContent = ''; resetKinds(); }
+    if (open) await renderMediaGrid();
+    else note.textContent = '';
   };
-
-  function resetKinds() {
-    document.querySelectorAll('#upkinds .chip').forEach(c =>
-      c.setAttribute('aria-pressed', 'false'));
-  }
-
-  document.querySelectorAll('#upkinds .chip').forEach(chip => chip.onclick = () => {
-    resetKinds();
-    chip.setAttribute('aria-pressed', 'true');
-    upKind = chip.dataset.k;
-    form.hidden = false;
-    document.getElementById('upname').placeholder = UPLOAD_KINDS[upKind].label;
-    note.textContent = UPLOAD_KINDS[upKind].note;
-    document.getElementById('upname').focus();
-  });
 
   files.onchange = () => {
-    fileLabel.textContent = files.files.length
-      ? `${files.files.length} photo${files.files.length === 1 ? '' : 's'} selected`
-      : 'Choose photos…';
+    for (const f of files.files) addAttachment({ kind: 'file', file: f,
+                                                 url: URL.createObjectURL(f) });
+    files.value = '';
   };
 
-  form.onsubmit = async e => {
+  // drag & drop straight onto the composer
+  ['dragover', 'drop'].forEach(evt => cbox.addEventListener(evt, e => {
     e.preventDefault();
-    if (!upKind) return;
-    const name = document.getElementById('upname').value.trim();
-    if (!name) { note.textContent = 'a name is required'; return; }
-    if (!files.files.length) { note.textContent = 'pick at least one photo'; return; }
-    const go = document.getElementById('upgo');
-    go.disabled = true; go.textContent = 'Uploading…';
-    note.textContent = '';
-    try {
-      const body = new FormData();
-      body.append('name', name);
-      body.append('next', '/ui');
-      for (const f of files.files) body.append('photos', f);
-      const res = await fetch(UPLOAD_KINDS[upKind].action, { method: 'POST', body });
-      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-      // the engine endpoints redirect with ?message= — surface it verbatim
-      const message = new URL(res.url, location.origin).searchParams.get('message');
-      note.textContent = message || 'Uploaded.';
-      form.reset();
-      fileLabel.textContent = 'Choose photos…';
-      await loadAssets(true);          // the carousel shows the new asset
-      renderStudio();
-    } catch (err) {
-      note.textContent = `Upload failed: ${err.message}`;
-    } finally {
-      go.disabled = false; go.textContent = 'Upload';
+    if (evt === 'drop') {
+      for (const f of e.dataTransfer.files) {
+        if (f.type.startsWith('image/')) {
+          addAttachment({ kind: 'file', file: f, url: URL.createObjectURL(f) });
+        }
+      }
     }
-  };
+  }));
+}
+
+function addAttachment(item) {
+  const note = document.getElementById('upnote');
+  if (attachments.length >= MAX_ATTACH) {
+    note.textContent = `at most ${MAX_ATTACH} references per generation`;
+    return false;
+  }
+  attachments.push(item);
+  renderAttachments();
+  return true;
+}
+
+function removeAttachment(index) {
+  const [gone] = attachments.splice(index, 1);
+  if (gone && gone.kind === 'file') URL.revokeObjectURL(gone.url);
+  renderAttachments();
+  const tile = document.querySelector(`.mtile[data-u="${CSS.escape(gone?.url || '')}"]`);
+  if (tile) tile.setAttribute('aria-pressed', 'false');
+}
+
+function renderAttachments() {
+  const bar = document.getElementById('attachbar');
+  bar.innerHTML = attachments.map((a, i) =>
+    `<div class="attach" style="background-image:url('${a.url}')" title="${esc(a.kind)}">
+       <button class="ax" data-i="${i}" aria-label="Remove">✕</button>
+     </div>`).join('');
+  bar.querySelectorAll('.ax').forEach(b => b.onclick = () => removeAttachment(+b.dataset.i));
+}
+
+async function renderMediaGrid() {
+  const grid = document.getElementById('mgrid');
+  const count = document.getElementById('mcount');
+  grid.innerHTML = '<div class="probeblank">Loading media…</div>';
+  let media;
+  try {
+    media = await api('/api/media');
+  } catch (e) {
+    grid.innerHTML = `<div class="probeblank" style="color:var(--signal)">${esc(e.message)}</div>`;
+    return;
+  }
+  count.textContent = `${media.counts.all} saved`;
+  const selected = new Set(attachments.filter(a => a.kind === 'asset').map(a => a.url));
+  grid.innerHTML = `
+    <button class="mtile mdrop" id="mdrop" type="button">
+      <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4m0 0 4 4m-4-4-4 4M4 20h16"/></svg>
+      Drop or upload files
+      <small>image · this generation only</small>
+    </button>` +
+    media.items.map(m => `
+      <button class="mtile" type="button" data-u="${esc(m.url)}"
+              aria-pressed="${selected.has(m.url)}"
+              style="background-image:url('${m.url}')">
+        <span class="mname">${esc(m.asset_name)}</span>
+      </button>`).join('');
+  if (!media.items.length) {
+    grid.insertAdjacentHTML('beforeend',
+      '<div class="probeblank">No saved media yet — photos added on /assets appear here</div>');
+  }
+  document.getElementById('mdrop').onclick = () =>
+    document.getElementById('upfiles').click();
+  grid.querySelectorAll('.mtile[data-u]').forEach(tile => tile.onclick = () => {
+    const url = tile.dataset.u;
+    const existing = attachments.findIndex(a => a.kind === 'asset' && a.url === url);
+    if (existing >= 0) {
+      removeAttachment(existing);
+      tile.setAttribute('aria-pressed', 'false');
+    } else if (addAttachment({ kind: 'asset', url })) {
+      tile.setAttribute('aria-pressed', 'true');
+    }
+  });
+}
+
+export function collectRunForm(prompt) {
+  const body = new FormData();
+  body.append('prompt', prompt);
+  for (const a of attachments) {
+    if (a.kind === 'file') body.append('files', a.file);
+    else body.append('asset_photos', a.url);
+  }
+  return body;
+}
+
+export function clearAttachments() {
+  while (attachments.length) removeAttachment(0);
 }
 
 async function retrieve() {

@@ -27,7 +27,9 @@ export function initPipeline() {
     if (!text) return;
     sceneGo.disabled = true; sceneGo.textContent = 'Generating…';
     try {
-      await api('/api/pipeline/run', { method: 'POST', body: { prompt: text } });
+      const body = new FormData();
+      body.append('prompt', text);
+      await api('/api/pipeline/run', { method: 'POST', body });
       scenePrompt.value = '';
       stateline(document.getElementById('cstate'), 'empty',
         'Scene generating — it lands below when the job finishes');
