@@ -281,6 +281,48 @@ def pipeline_concepts(brand: Optional[str] = None, status: Optional[str] = None)
     }
 
 
+@router.get("/concepts/{concept_id}")
+def concept_detail(concept_id: int):
+    """The scene board's data: the full shot list, each shot carrying its
+    stored per-tool AI prompt plus the OpenArt Director rendering
+    (pure text composition, zero model calls). This is the surface the
+    plug-into-Runway loop works from: copy a shot's prompt, generate in
+    the tool's own UI, paste the rendered clip's URL back onto the shot."""
+    from src import shootgen
+
+    concept = preprod.get_concept(concept_id, path=db.DB_PATH)
+    if concept is None:
+        return _error(404, "not_found", "no such concept")
+    shots = []
+    for shot in concept.get("shots") or []:
+        shots.append({**shot,
+                      "director_prompt": shootgen.director_prompt(shot, concept)})
+    card = _concept_card(concept)
+    return {**card, "duration": concept.get("duration"),
+            "edit_note": concept.get("edit_note") or concept.get("edit"),
+            "shots": shots}
+
+
+class ShotMediaBody(BaseModel):
+    url: str
+
+
+@router.post("/concepts/{concept_id}/shots/{shot_n}/media")
+def shot_media_attach(concept_id: int, shot_n: int, body: ShotMediaBody):
+    """Attach the rendered clip's URL to one shot -- the paste-back half
+    of the Runway loop, and the field autopilot.build_plan() requires
+    before it will ever emit a post action."""
+    url = body.url.strip()
+    if not url.startswith(("http://", "https://")):
+        return _error(400, "invalid_url",
+                      "paste the clip's public http(s) URL")
+    try:
+        preprod.set_shot_media_url(concept_id, shot_n, url, path=db.DB_PATH)
+    except ValueError as e:
+        return _error(404, "not_found", str(e))
+    return {"concept_id": concept_id, "shot_n": shot_n, "media_url": url}
+
+
 class RunBody(BaseModel):
     prompt: str
     brand: Optional[str] = None

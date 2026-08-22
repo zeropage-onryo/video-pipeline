@@ -499,6 +499,65 @@ html[data-v="studio"] #gl{opacity:1;transition:opacity .5s}
 .dot.ok{background:#2f7d4f}.dot.run{background:var(--signal);animation:pulse 2.1s ease-in-out infinite}
 .dot.idle{background:var(--dimmer)}
 
+/* ── SCENE BOARD ────────────────────────────────────── */
+.scomposer{max-width:1680px;margin:0 auto 22px;padding:0 42px}
+.sbar2{display:flex;gap:12px;align-items:center;padding:12px 14px 12px 22px}
+.sbar2 .search{max-width:none}
+.sboard{
+  max-width:1680px;margin:0 auto 26px;padding:26px;
+  background:var(--glass);backdrop-filter:blur(28px) saturate(1.25);
+  border:1px solid rgb(228 0 43 / .30);border-top-color:rgb(228 0 43 / .45);border-radius:var(--r3);
+}
+.sbhead{display:flex;align-items:center;gap:16px;margin-bottom:6px}
+.sbhead h3{font-family:var(--display);text-transform:uppercase;font-size:22px;letter-spacing:-.008em;flex:1}
+.sbsub{font-size:13px;color:var(--dim);font-weight:300;margin-bottom:18px}
+.filmstrip{display:flex;gap:8px;margin-bottom:22px;overflow-x:auto;padding-bottom:4px}
+.ftile{
+  flex:0 0 118px;aspect-ratio:16/9;border-radius:10px;border:1px solid var(--line);
+  background:#0a0a0c;display:grid;place-items:center;position:relative;overflow:hidden;
+  font-family:var(--mono);font-size:9px;letter-spacing:.1em;color:var(--dimmer);text-transform:uppercase;
+}
+.ftile video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.ftile.has{border-color:rgb(47 125 79 / .6)}
+.ftile.pending{border-style:dashed}
+.shotrows{display:flex;flex-direction:column;gap:14px}
+.shotrow{border:1px solid var(--line);border-radius:var(--r2);padding:18px 20px;background:rgb(255 255 255 / .02)}
+.shothead{display:flex;align-items:center;gap:12px;margin-bottom:8px;flex-wrap:wrap}
+.shothead .sn2{font-family:var(--display);text-transform:uppercase;font-size:15px;letter-spacing:.02em}
+.pill{
+  font-family:var(--mono);font-size:8.5px;letter-spacing:.13em;text-transform:uppercase;
+  padding:4px 11px;border-radius:var(--rp);border:1px solid var(--line);color:var(--dim);
+}
+.pill.ai{border-color:rgb(228 0 43 / .5);color:var(--signal)}
+.pill.clip{border-color:rgb(47 125 79 / .6);color:#6cc491}
+.shotdesc{font-size:13px;color:var(--dim);font-weight:300;line-height:1.65;margin-bottom:4px}
+.shotlight{font-family:var(--mono);font-size:10px;letter-spacing:.04em;color:var(--dimmer);margin-bottom:10px}
+.promptblk{position:relative;margin-top:10px}
+.promptblk pre{
+  font-family:var(--mono);font-size:11.5px;line-height:1.7;color:var(--text);
+  background:rgb(0 0 0 / .40);border:1px solid var(--line);border-radius:var(--r1);
+  padding:14px 92px 14px 16px;white-space:pre-wrap;word-break:break-word;
+}
+.promptblk .plabel{font-family:var(--mono);font-size:8.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--dimmer);margin-bottom:6px}
+.copybtn{
+  position:absolute;top:26px;right:10px;font-family:var(--mono);font-size:9px;letter-spacing:.1em;
+  text-transform:uppercase;background:rgb(255 255 255 / .05);border:1px solid var(--line);
+  border-radius:var(--rp);color:var(--dim);padding:6px 13px;cursor:pointer;transition:color var(--t),border-color var(--t);
+}
+.copybtn:hover{color:var(--text);border-color:var(--line-hi)}
+.copybtn.ok{color:#6cc491;border-color:rgb(47 125 79 / .6)}
+.dirtoggle{
+  font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;
+  background:0;border:0;color:var(--dimmer);cursor:pointer;padding:8px 0 0;display:block;
+}
+.dirtoggle:hover{color:var(--dim)}
+.mediarow{display:flex;gap:10px;align-items:center;margin-top:12px}
+.mediarow .search{max-width:none;flex:1;padding:9px 16px;font-size:12.5px}
+.mediarow .btn{flex:0 0 auto;padding:9px 18px;font-size:12px}
+.clipview{margin-top:12px}
+.clipview video{width:100%;max-width:420px;border-radius:var(--r1);border:1px solid var(--line);display:block}
+.clipview a{font-family:var(--mono);font-size:9.5px;color:var(--dim);letter-spacing:.06em;word-break:break-all}
+
 /* ── DENY SCREEN ────────────────────────────────────── */
 .deny{
   position:fixed;z-index:95;top:50%;left:50%;transform:translate(-50%,-48%) scale(.98);

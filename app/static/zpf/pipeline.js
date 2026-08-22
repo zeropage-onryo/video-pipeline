@@ -8,6 +8,7 @@ import { api, bus, esc, pct, state, stateline } from './shared.js';
 let denyTarget = null;
 let denyReasons = new Set();
 let wired = false;
+let openSceneId = null;   // which concept's scene board is open
 
 export function initPipeline() {
   if (wired) return;
@@ -17,12 +18,36 @@ export function initPipeline() {
   document.getElementById('dnback').onclick = closeDeny;
   dscrim.onclick = closeDeny;
   document.getElementById('dnsave').onclick = saveDeny;
-  // re-render when a generate/plan job lands while the view is open
+
+  // the scene composer — same billed path as Studio's Create
+  const scenePrompt = document.getElementById('sceneprompt');
+  const sceneGo = document.getElementById('scenego');
+  const fire = async () => {
+    const text = scenePrompt.value.trim();
+    if (!text) return;
+    sceneGo.disabled = true; sceneGo.textContent = 'Generating…';
+    try {
+      await api('/api/pipeline/run', { method: 'POST', body: { prompt: text } });
+      scenePrompt.value = '';
+      stateline(document.getElementById('cstate'), 'empty',
+        'Scene generating — it lands below when the job finishes');
+    } catch (e) {
+      stateline(document.getElementById('cstate'), 'error', e.message);
+    } finally {
+      sceneGo.disabled = false; sceneGo.textContent = 'Generate scene';
+    }
+  };
+  sceneGo.onclick = fire;
+  scenePrompt.addEventListener('keydown', e => { if (e.key === 'Enter') fire(); });
+
+  // re-render when a generate/plan job lands while the view is open;
+  // a finished plan opens its scene board so the prompts are right there
   bus.addEventListener('job', e => {
     const job = e.detail;
     if (document.documentElement.dataset.v === 'pipeline'
         && ['concept', 'plan'].includes(job.kind)
         && ['done', 'failed'].includes(job.status)) {
+      if (job.status === 'done' && job.ref_id) openSceneId = job.ref_id;
       renderPipeline();
     }
   });
@@ -80,13 +105,26 @@ async function renderConcepts() {
              ${canPlan ? `<button class="approve" data-a="ok" data-id="${c.id}">Approve · plan shots</button>` : ''}
              <button class="denybtn" data-a="no" data-id="${c.id}">Deny</button>
            </div>`
-        : `<div class="cstate"><span class="dot ${c.status === 'shot' ? 'ok' : 'run'}"></span>${
-             c.status === 'shot' ? 'Shot' : 'Planned · ready to shoot'}</div>`}
+        : `<div class="cact">
+             <button class="approve" data-a="scene" data-id="${c.id}">Open scene · ${c.shot_count} shots</button>
+           </div>`}
     </div>`).join('');
 
   box.querySelectorAll('[data-a]').forEach(b => {
-    b.onclick = () => b.dataset.a === 'ok' ? approve(+b.dataset.id) : openDeny(+b.dataset.id, data.items);
+    b.onclick = () => {
+      if (b.dataset.a === 'ok') return approve(+b.dataset.id);
+      if (b.dataset.a === 'scene') return openScene(+b.dataset.id);
+      openDeny(+b.dataset.id, data.items);
+    };
   });
+
+  // a board that was open (or just planned) re-opens after re-render
+  if (openSceneId && data.items.some(c => c.id === openSceneId && c.status !== 'idea')) {
+    openScene(openSceneId, false);
+  } else if (openSceneId) {
+    openSceneId = null;
+    document.getElementById('sceneboard').innerHTML = '';
+  }
 
   // planned shortlist panel
   const planned = data.items.filter(c => c.status !== 'idea');
@@ -98,6 +136,109 @@ async function renderConcepts() {
           <span class="v">${c.status === 'shot' ? 'shot ✓' : 'planned'}</span>
         </div>`).join('')
     : '<div class="probeblank">Nothing planned yet</div>';
+}
+
+/* ── the scene board: shot-by-shot prompts out, clip URLs back in ── */
+
+async function openScene(id, scroll = true) {
+  const board = document.getElementById('sceneboard');
+  openSceneId = id;
+  let d;
+  try {
+    d = await api(`/api/concepts/${id}`);
+  } catch (e) {
+    board.innerHTML = `<div class="stateline err">${esc(e.message)}</div>`;
+    return;
+  }
+  const clips = d.shots.filter(s => s.media_url).length;
+  const isClip = u => /\.(mp4|mov|webm|m4v)(\?|$)/i.test(u || '');
+
+  board.innerHTML = `<div class="sboard">
+    <div class="sbhead">
+      <h3>${esc(d.title)}</h3>
+      <span class="m">${esc(d.n)}${d.duration ? ' · ' + esc(d.duration) : ''} · ${clips}/${d.shots.length} clips attached</span>
+      <button class="x" id="sbclose">✕</button>
+    </div>
+    <div class="sbsub">${esc(d.logline || '')}${d.edit_note ? ' — ' + esc(d.edit_note) : ''}</div>
+    <div class="filmstrip">${d.shots.map(s => s.media_url
+      ? `<div class="ftile has">${isClip(s.media_url)
+          ? `<video src="${esc(s.media_url)}" muted preload="metadata"></video>`
+          : `clip ${s.n}`}</div>`
+      : `<div class="ftile pending">shot ${esc(String(s.n))}</div>`).join('')}</div>
+    <div class="shotrows">${d.shots.map(s => shotRow(s)).join('')}</div>
+  </div>`;
+
+  document.getElementById('sbclose').onclick = () => {
+    openSceneId = null;
+    board.innerHTML = '';
+  };
+
+  board.querySelectorAll('.copybtn').forEach(b => b.onclick = async () => {
+    const pre = board.querySelector(`pre[data-p="${b.dataset.p}"]`);
+    try {
+      await navigator.clipboard.writeText(pre.textContent);
+      b.textContent = 'Copied'; b.classList.add('ok');
+      setTimeout(() => { b.textContent = 'Copy'; b.classList.remove('ok'); }, 1600);
+    } catch { b.textContent = 'select + ⌘C'; }
+  });
+  board.querySelectorAll('.dirtoggle').forEach(b => b.onclick = () => {
+    const blk = board.querySelector(`.promptblk[data-d="${b.dataset.d}"]`);
+    blk.hidden = !blk.hidden;
+    b.textContent = blk.hidden ? '▸ director prompt (openart)' : '▾ director prompt (openart)';
+  });
+  board.querySelectorAll('.attach').forEach(b => b.onclick = async () => {
+    const input = board.querySelector(`input[data-m="${b.dataset.m}"]`);
+    const url = input.value.trim();
+    if (!url) return;
+    b.disabled = true; b.textContent = '…';
+    try {
+      await api(`/api/concepts/${id}/shots/${b.dataset.m}/media`,
+        { method: 'POST', body: { url } });
+      openScene(id, false);           // re-read: server truth, never optimistic
+      renderConcepts();
+    } catch (e) {
+      b.disabled = false; b.textContent = 'Attach';
+      input.value = ''; input.placeholder = e.message;
+    }
+  });
+  if (scroll) board.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function shotRow(s) {
+  const isAI = s.source === 'AI';
+  const isClip = /\.(mp4|mov|webm|m4v)(\?|$)/i.test(s.media_url || '');
+  return `<div class="shotrow">
+    <div class="shothead">
+      <span class="sn2">Shot ${esc(String(s.n))}</span>
+      <span class="pill">${esc(s.type || '')}</span>
+      <span class="pill${isAI ? ' ai' : ''}">${isAI ? 'AI · ' + esc(s.tool || '?') : 'camera · ' + esc(s.cam || '?')}</span>
+      ${s.location ? `<span class="pill">${esc(s.location)}</span>` : ''}
+      ${s.media_url ? '<span class="pill clip">clip attached</span>' : ''}
+    </div>
+    ${s.desc ? `<div class="shotdesc">${esc(s.desc)}</div>` : ''}
+    ${s.light ? `<div class="shotlight">light · ${esc(s.light)}</div>` : ''}
+    ${isAI && s.prompt ? `
+      <div class="promptblk">
+        <div class="plabel">${esc(s.tool || 'ai')} prompt — paste into the tool</div>
+        <pre data-p="t${esc(String(s.n))}">${esc(s.prompt)}</pre>
+        <button class="copybtn" data-p="t${esc(String(s.n))}">Copy</button>
+      </div>` : ''}
+    <button class="dirtoggle" data-d="d${esc(String(s.n))}">▸ director prompt (openart)</button>
+    <div class="promptblk" data-d="d${esc(String(s.n))}" hidden>
+      <pre data-p="d${esc(String(s.n))}">${esc(s.director_prompt || '')}</pre>
+      <button class="copybtn" data-p="d${esc(String(s.n))}" style="top:10px">Copy</button>
+    </div>
+    ${s.media_url ? `
+      <div class="clipview">
+        ${isClip ? `<video src="${esc(s.media_url)}" controls preload="metadata"></video>` : ''}
+        <a href="${esc(s.media_url)}" target="_blank" rel="noopener">${esc(s.media_url)}</a>
+      </div>` : ''}
+    <div class="mediarow">
+      <input class="search" data-m="${esc(String(s.n))}"
+             placeholder="${s.media_url ? 'Replace the clip — paste a new public URL' : 'Paste the rendered clip’s public URL (Runway export, R2…)'}">
+      <button class="btn attach" data-m="${esc(String(s.n))}">Attach</button>
+    </div>
+  </div>`;
 }
 
 async function approve(id) {

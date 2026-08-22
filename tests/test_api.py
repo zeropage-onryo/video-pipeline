@@ -223,6 +223,41 @@ def test_approve_plans_shot_list_via_job(tmp_db, monkeypatch):
     assert "3 shots" in job["detail"]
 
 
+def test_concept_detail_carries_prompts_for_the_scene_board(tmp_db):
+    concept_id = seed_concept(
+        tmp_db, "Vault",
+        shots=[{"n": 1, "type": "BROLL", "source": "AI", "location": "garage",
+                "tool": "RUNWAY", "prompt": "low key garage, single bulb",
+                "desc": "the bike revealed", "light": "one overhead"},
+               {"n": 2, "type": "CHARACTER", "source": "CAMERA", "cam": "BMPCC",
+                "location": "garage", "desc": "hands on the wrench"}])
+    d = client.get(f"/api/concepts/{concept_id}").json()
+    assert d["title"] == "Vault"
+    assert len(d["shots"]) == 2
+    ai_shot = d["shots"][0]
+    assert ai_shot["prompt"] == "low key garage, single bulb"
+    # every shot carries the Director rendering, composed pure
+    assert all(s["director_prompt"] for s in d["shots"])
+    assert client.get("/api/concepts/999").status_code == 404
+
+
+def test_shot_media_attach_roundtrip(tmp_db):
+    concept_id = seed_concept(
+        tmp_db, "Vault",
+        shots=[{"n": 1, "type": "BROLL", "source": "AI", "location": "garage",
+                "tool": "RUNWAY", "prompt": "x"}])
+    response = client.post(f"/api/concepts/{concept_id}/shots/1/media",
+                           json={"url": "https://cdn.example/clip.mp4"})
+    assert response.status_code == 200
+    d = client.get(f"/api/concepts/{concept_id}").json()
+    assert d["shots"][0]["media_url"] == "https://cdn.example/clip.mp4"
+    # a non-URL is refused, a missing shot 404s
+    assert client.post(f"/api/concepts/{concept_id}/shots/1/media",
+                       json={"url": "clip.mp4"}).status_code == 400
+    assert client.post(f"/api/concepts/{concept_id}/shots/9/media",
+                       json={"url": "https://x.example/a.mp4"}).status_code == 404
+
+
 # --- holds ------------------------------------------------------------------
 
 def test_holds_resolve_roundtrip(tmp_db):
