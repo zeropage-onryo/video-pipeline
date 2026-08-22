@@ -245,11 +245,12 @@ function shotRow(s, rw) {
             ? (s.reference_image ? 'anchors on the attached reference' : 'text-to-video · no reference attached')
             : 'spend gate off — restart the server with RUNWAY_SPEND_OK=1, or render free in the Runway app'}</span>
         </div>` : ''}` : ''}
+    ${s.director_prompt ? `
     <button class="dirtoggle" data-d="d${esc(String(s.n))}">▸ director prompt (openart)</button>
     <div class="promptblk" data-d="d${esc(String(s.n))}" hidden>
-      <pre data-p="d${esc(String(s.n))}">${esc(s.director_prompt || '')}</pre>
+      <pre data-p="d${esc(String(s.n))}">${esc(s.director_prompt)}</pre>
       <button class="copybtn" data-p="d${esc(String(s.n))}" style="top:10px">Copy</button>
-    </div>
+    </div>` : ''}
     ${s.media_url ? `
       <div class="clipview">
         ${isClip ? `<video src="${esc(s.media_url)}" controls preload="metadata"></video>` : ''}

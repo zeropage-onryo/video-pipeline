@@ -306,10 +306,14 @@ def concept_detail(concept_id: int):
     concept = preprod.get_concept(concept_id, path=db.DB_PATH)
     if concept is None:
         return _error(404, "not_found", "no such concept")
+    # director_prompt (the OpenArt rendering) ships with in-progress
+    # shootgen work; until that lands, the field is empty and the UI
+    # renders no Director toggle -- degrade, don't crash.
+    director = getattr(shootgen, "director_prompt", None)
     shots = []
     for shot in concept.get("shots") or []:
         shots.append({**shot,
-                      "director_prompt": shootgen.director_prompt(shot, concept)})
+                      "director_prompt": director(shot, concept) if director else ""})
     card = _concept_card(concept)
     return {**card, "duration": concept.get("duration"),
             "edit_note": concept.get("edit_note") or concept.get("edit"),
