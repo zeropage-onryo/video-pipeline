@@ -4,7 +4,7 @@
     {
       "name": "studio",
       "runtimeExecutable": "venv/bin/uvicorn",
-      "runtimeArgs": ["app.main:app", "--reload"],
+      "runtimeArgs": ["app.main:app", "--reload", "--timeout-graceful-shutdown", "3"],
       "port": 8000
     }
   ]

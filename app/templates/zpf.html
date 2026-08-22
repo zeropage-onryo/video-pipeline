@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en" data-v="studio">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>ZPF / Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@300;400;500;600&family=Inter:wght@300;400;500&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/zpf/zpf.css">
+</head>
+<body data-brand="{{ brand }}">
+
+<canvas id="gl"></canvas><div class="fb"></div>
+
+<nav class="rail">
+  <a class="mark" href="/studio" title="Back to /studio">ZP</a>
+  <div class="rnav">
+    <a data-view="studio" data-label="Studio" aria-current="page"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5V21H3z"/></svg></a>
+    <a data-view="assets" data-label="Assets"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="3"/><path d="M3 9h18M9 9v9"/></svg></a>
+    <a data-view="pipeline" data-label="Pipeline"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="18" cy="18" r="2.4"/><path d="M8.4 6H16a2 2 0 0 1 2 2v7.6"/></svg></a>
+    <a data-view="evals" data-label="Evals"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V9M10 19V4M16 19v-7M22 19H2"/></svg></a>
+    <a data-view="analytics" data-label="Analytics"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v8.5h8.5"/></svg></a>
+    <a data-view="queue" data-label="Queue"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 14h5l2 3h4l2-3h5"/></svg></a>
+  </div>
+  <div class="rfoot"><kbd>⌘K</kbd></div>
+</nav>
+
+<div class="shell">
+  <div class="bar">
+    <span class="brand" id="brandname">ZPF</span><span class="sep">/</span><span class="cur">Studio</span>
+    <div class="spacer"></div>
+    <button class="tag" id="brandpill" title="Switch active brand">—</button>
+  </div>
+
+  <div class="view on" id="v-studio">
+  <section class="hero">
+    <h1 class="rise d1">What do you<br>want to create?</h1>
+
+    <div class="stack rise d2">
+      <div class="glass" id="cbox">
+        <textarea id="prompt" placeholder="Night ride, tank badge macro, low key garage…"></textarea>
+        <div class="cfoot">
+          <span class="spacer"></span>
+          <button class="go" id="go" data-cap="pipeline.run" disabled>Create</button>
+        </div>
+      </div>
+
+      <div class="glass retr" id="retr" data-cap="retrieve">
+        <div class="rhead">
+          <span class="live"></span>
+          <span class="m" style="flex:1">Grounding · pgvector</span>
+          <span class="m" id="lat">—</span>
+        </div>
+        <div class="hits" id="hits"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="row" id="platesrow">
+    <div class="rowfilters" id="rowfilters"></div>
+    <div class="railwrap">
+      <div class="hrail" id="hrail"></div>
+      <button class="arrow" id="arrow" aria-label="Next"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="m9 5 7 7-7 7"/></svg></button>
+    </div>
+    <div class="stateline" id="railstate" hidden></div>
+  </section>
+  </div><!-- /v-studio -->
+
+  <!-- ══ ASSETS ══ -->
+  <div class="view" id="v-assets">
+    <div class="vhead">
+      <h2>Assets</h2>
+      <input class="search" id="asearch" placeholder="Search names and descriptions…">
+      <span class="m" id="lcount">—</span>
+    </div>
+    <div class="cats" id="cats"></div>
+    <div class="stateline" id="astate" hidden></div>
+    <div class="grid" id="grid"></div>
+  </div>
+
+  <!-- ══ PIPELINE ══ -->
+  <div class="view" id="v-pipeline">
+    <div class="vhead"><h2>Pipeline</h2><span class="spacer"></span><span class="m" id="pbrand"></span></div>
+    <div class="metrics" id="pmetrics"></div>
+
+    <div class="chead">
+      <h3>Concepts</h3>
+      <span class="m" id="ccount">—</span>
+      <span class="spacer"></span>
+      <span class="m">Approve plans the shot list · deny records to rag</span>
+    </div>
+    <div class="stateline" id="cstate" hidden></div>
+    <div class="concepts" id="concepts"></div>
+
+    <div class="twocol">
+      <div class="glass panel">
+        <div class="ptitle">Hold queue · the dead-man log</div>
+        <div class="stateline" id="hstate" hidden></div>
+        <div class="tbl" id="holds"></div>
+      </div>
+      <div class="glass panel" id="fbpanel">
+        <div class="ptitle">Planned · the shortlist label</div>
+        <div class="tbl" id="planned"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ EVALS ══ -->
+  <div class="view" id="v-evals">
+    <div class="vhead">
+      <h2>Evals</h2>
+      <span class="spacer"></span>
+      <span class="m" id="runlabel">—</span>
+      <button class="go" id="runeval" data-cap="evals.run">Run eval</button>
+    </div>
+    <div class="stateline" id="estate" hidden></div>
+    <div class="metrics" id="emetrics"></div>
+
+    <div class="twocol">
+      <div class="glass panel">
+        <div class="ptitle">Hit rate across runs · click to inspect</div>
+        <div class="bars" id="bars"></div>
+        <div class="probeblank" id="barsblank" hidden>No runs yet — run the eval to start the history</div>
+      </div>
+      <div class="glass panel" data-cap="retrieve">
+        <div class="ptitle">Probe retrieval</div>
+        <input class="search probe" id="probe" placeholder="Type a query and mark what should have come back…">
+        <div class="probeout" id="probeout"></div>
+        <div class="probefoot" id="probefoot" hidden>
+          <span class="m" id="probemeta">—</span>
+          <span class="spacer"></span>
+          <button class="btn pri" id="probesave">Add to golden set</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="glass panel" style="margin-inline:42px">
+      <div class="ptitle">Golden set · click a query to see what the selected run retrieved</div>
+      <div class="tbl" id="golden"></div>
+    </div>
+  </div>
+
+  <!-- ══ ANALYTICS ══ -->
+  <div class="view" id="v-analytics">
+    <div class="vhead">
+      <h2>Analytics</h2>
+      <div class="auds" id="auds"></div>
+      <span class="spacer"></span>
+      <span class="stamp m" id="stamp"></span>
+    </div>
+    <div class="cats" id="plats"></div>
+    <div class="stateline" id="anstate" hidden></div>
+    <div class="metrics" id="akpis"></div>
+
+    <div class="glass panel" style="margin-inline:42px">
+      <div class="ptitle">Posts · latest snapshot per video</div>
+      <div class="posts" id="posts"></div>
+    </div>
+
+    <div class="glass panel" style="margin-inline:42px">
+      <div class="ptitle">Connections</div>
+      <div class="conns" id="conns"></div>
+    </div>
+  </div>
+
+  <!-- ══ QUEUE ══ -->
+  <div class="view" id="v-queue">
+    <div class="vhead"><h2>Queue</h2><span class="spacer"></span><span class="m" id="qcount">—</span></div>
+    <div class="stateline" id="qstate" hidden></div>
+    <div class="qlist" id="qlist"></div>
+  </div>
+</div>
+
+<aside class="detail" id="detail">
+  <div class="dhead"><h3 id="dn">—</h3><button class="x" id="dx">✕</button></div>
+  <div class="dbody">
+    <div id="df"></div>
+    <div class="dstrip" id="dstrip"></div>
+    <div class="dblk"><dl id="dmeta"></dl></div>
+    <div class="dblk"><p class="tr" id="dtr">—</p></div>
+  </div>
+</aside>
+
+<div class="jobs" id="jobs"></div>
+<div class="scrim" id="scrim"></div>
+<div class="scrim" id="dscrim"></div>
+<div class="deny" id="deny">
+  <div class="dnhead">
+    <h3 id="dntitle">—</h3>
+    <button class="x" id="dncancel" aria-label="Close">✕</button>
+  </div>
+  <div class="dnbody">
+    <div class="dnlabel">What was wrong</div>
+    <div class="reasons" id="reasons"></div>
+    <div class="dnlabel">Note for the next run</div>
+    <textarea id="dnnote" class="dnta short" placeholder="Optional — what should have happened instead. Folds into the next generation's spark."></textarea>
+  </div>
+  <div class="dnfoot">
+    <span class="m" id="dnmeta">—</span>
+    <span class="spacer"></span>
+    <button class="btn" id="dnback">Cancel</button>
+    <button class="btn pri" id="dnsave">Record &amp; remove</button>
+  </div>
+</div>
+<div class="pal" id="pal"><input id="pq" placeholder="Run a command or jump to an asset…" autocomplete="off"><div class="plist" id="plist"></div></div>
+
+<script type="module" src="/static/zpf/app.js"></script>
+</body>
+</html>

@@ -217,6 +217,23 @@ is yours, in Resolve, by hand.
   so it's sanitised on the way in too. `?thumb=1` serves a cached 480px JPEG rather than the
   multi-megabyte original. Routes that call a model wrap it and redirect with a message rather
   than 500ing.
+- **`app/api.py` + `/ui`** — the ZPF Studio skin (added 2026-08-21): the visual system from
+  `prototype/studio.html` (spec: `docs/ZPF_STUDIO_SPEC.md`) ported onto a JSON API over the
+  existing modules. One rule governs it: **every control is backed by a working endpoint and
+  gated by `GET /api/capabilities`**, which is derived live (key presence, a real
+  `rag.connect()`), never a static dict. Views: Studio (composer with live `/api/retrieve`
+  grounding + asset carousel), Assets (locations/characters/props unified), Pipeline (adapted
+  to pre-production: approve = queue the shot list, deny = reasons-enum + note → an
+  `autonomy` correction always, a RAG `denials` chunk best-effort, then the concept is
+  deleted; plus the hold queue and the agreement numbers), Evals (golden set in SQLite via
+  `src/evalstore.py`, seeded once from `eval_cases.json`; Hit@k/MRR computed server-side by
+  `rag_eval` and stored per run with config), Analytics (real metric snapshots, two brands
+  never averaged), Queue. Billed work runs through `app/jobs.py` — an in-process,
+  deliberately non-persistent job registry whose one push channel is the
+  `/api/jobs/stream` SSE feed. That feed is why uvicorn runs with
+  `--timeout-graceful-shutdown 3` (`.claude/launch.json`): without it, `--reload` waits
+  forever on the open SSE socket and the dev server wedges on every code change. `/studio`
+  and the per-stage screens are unchanged underneath — `/ui` sits beside them until parity.
 - **The assistant is keyword routing, not a model call.** `route_intent` matches typed text (or an
   explicit chip) against `INTENT_PHRASES` → one pipeline stage, falling back to `ideas`. Free and
   inspectable on purpose: the stages it dispatches each cost a billed generation, so an unclear

@@ -26,6 +26,7 @@ from src import (
     autopilot,
     db,
     entities,
+    evalstore,
     inspiration,
     instagram,
     locations,
@@ -37,7 +38,7 @@ from src import (
     youtube,
 )
 
-from . import seo
+from . import api, seo
 from .sparkline import render_sparkline
 
 load_dotenv()
@@ -123,12 +124,25 @@ async def lifespan(app: FastAPI):
     autonomy.init(path=db.DB_PATH)
     winners.init(path=db.DB_PATH)
     inspiration.init(path=db.DB_PATH)   # seeds the researched accounts if empty
+    evalstore.init(path=db.DB_PATH)     # golden set seeded from eval_cases.json
     seed_gold_standard()                # records the canonical example as a winner
     yield
 
 
 app = FastAPI(lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
+app.include_router(api.router)
+
+
+@app.get("/ui")
+def ui(request: Request):
+    """
+    The ported ZPF Studio skin (prototype/studio.html made real): one
+    shell, client-side views, every control backed by /api and gated by
+    /api/capabilities. Lives beside /studio until it reaches parity.
+    """
+    return templates.TemplateResponse(
+        request, "zpf.html", {"brand": active_brand(request)})
 
 
 def benchmark_class(score, median) -> str:
