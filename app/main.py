@@ -129,8 +129,21 @@ async def lifespan(app: FastAPI):
     yield
 
 
+class NoCacheStaticFiles(StaticFiles):
+    """Static assets revalidate on every load (ETag round-trip, cheap on
+    localhost). Without a Cache-Control header the browser applies
+    heuristic freshness and serves stale JS modules for minutes after an
+    edit -- on a single-operator dev tool, correctness beats the saved
+    round-trip."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 app = FastAPI(lifespan=lifespan)
-app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
+app.mount("/static", NoCacheStaticFiles(directory=str(APP_DIR / "static")), name="static")
 app.include_router(api.router)
 
 

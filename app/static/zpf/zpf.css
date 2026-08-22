@@ -63,8 +63,16 @@ body{background:var(--void);color:var(--text);font-family:var(--body);font-size:
   width:38px;height:38px;border-radius:var(--r1);border:1px solid var(--signal);color:var(--signal);
   display:grid;place-items:center;font-family:var(--mono);font-size:11px;letter-spacing:.08em;
   margin-bottom:34px;transition:box-shadow var(--t);text-decoration:none;
+  background:transparent;cursor:pointer;
 }
 .mark:hover{box-shadow:0 0 26px -4px rgb(228 0 43 / .55)}
+.rfoot{display:flex;flex-direction:column;align-items:center;gap:8px}
+.legacy{
+  font-family:var(--mono);font-size:8.5px;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--dimmer);text-decoration:none;padding:5px 9px;border:1px solid var(--line);
+  border-radius:var(--rp);transition:color var(--t),border-color var(--t);
+}
+.legacy:hover{color:var(--dim);border-color:var(--line-hi)}
 .rnav{display:flex;flex-direction:column;gap:6px;width:100%;align-items:center}
 .rnav a{
   width:52px;height:52px;border-radius:var(--r1);

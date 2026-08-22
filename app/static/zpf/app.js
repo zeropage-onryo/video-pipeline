@@ -155,6 +155,7 @@ initEvals();
 initQueue();
 paintBrand();
 document.getElementById('brandpill').onclick = toggleBrand;
+document.getElementById('mark').onclick = () => go('studio');
 document.querySelectorAll('.rnav a').forEach(a => a.onclick = () => go(a.dataset.view));
 document.getElementById('dx').onclick = closeDetail;
 document.getElementById('scrim').onclick = palClose;
