@@ -245,7 +245,15 @@ is yours, in Resolve, by hand.
   attempt is a generations row under `RUNWAY_DAILY_CAP`; the shot's `reference_image`
   (public URL) anchors as `prompt_image`; the clip downloads immediately (Runway URLs
   are ephemeral) to `data/renders/`, uploaded to R2 when configured, else served via
-  the app's `/renders` mount.
+  the app's `/renders` mount. **`src/director.py`** is the board's director mode (the
+  conversational half OpenArt's Director has): one note per call revises the stored
+  shot plan in place through `update_concept_shots` — never the picked title/hook/
+  logline — re-validated by `validate_concept`, with attached `media_url`/
+  `reference_image` carried over by shot `n` and broken revisions (unparseable, empty,
+  or silently shrunken without cut-language in the note) refused so the stored scene
+  survives. `refine_shot_prompt` is per-shot technique polish via `promptgen.
+  refine_prompt` against the `ai_prompting` shelf; the template is
+  `prompts/direct_prompt.txt`.
 - **The assistant is keyword routing, not a model call.** `route_intent` matches typed text (or an
   explicit chip) against `INTENT_PHRASES` → one pipeline stage, falling back to `ideas`. Free and
   inspectable on purpose: the stages it dispatches each cost a billed generation, so an unclear

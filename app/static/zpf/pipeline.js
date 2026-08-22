@@ -45,7 +45,7 @@ export function initPipeline() {
   bus.addEventListener('job', e => {
     const job = e.detail;
     if (document.documentElement.dataset.v === 'pipeline'
-        && ['concept', 'plan', 'render'].includes(job.kind)
+        && ['concept', 'plan', 'render', 'direct', 'refine'].includes(job.kind)
         && ['done', 'failed'].includes(job.status)) {
       if (job.status === 'done' && job.ref_id) openSceneId = job.ref_id;
       renderPipeline();
@@ -160,6 +160,12 @@ async function openScene(id, scroll = true) {
       <button class="x" id="sbclose">✕</button>
     </div>
     <div class="sbsub">${esc(d.logline || '')}${d.edit_note ? ' — ' + esc(d.edit_note) : ''}</div>
+    ${state.caps['pipeline.run'] ? `
+    <div class="mediarow" style="margin:0 0 18px">
+      <input class="search" id="directnote"
+             placeholder="Direct the scene — e.g. shot 2 slower and darker · hold the reveal a beat longer · move it to the bedroom">
+      <button class="btn pri" id="directgo">Direct</button>
+    </div>` : ''}
     <div class="filmstrip">${d.shots.map(s => s.media_url
       ? `<div class="ftile has">${isClip(s.media_url)
           ? `<video src="${esc(s.media_url)}" muted preload="metadata"></video>`
@@ -172,6 +178,39 @@ async function openScene(id, scroll = true) {
     openSceneId = null;
     board.innerHTML = '';
   };
+
+  const directGo = board.querySelector('#directgo');
+  if (directGo) {
+    const directNote = board.querySelector('#directnote');
+    const direct = async () => {
+      const note = directNote.value.trim();
+      if (!note) return;
+      directGo.disabled = true; directGo.textContent = 'Directing…';
+      try {
+        await api(`/api/concepts/${id}/direct`, { method: 'POST', body: { note } });
+        directNote.value = '';
+        directGo.textContent = 'Revising — watch the job rail';
+        // the direct job's completion re-opens the board via the job bus
+      } catch (e) {
+        directGo.disabled = false; directGo.textContent = 'Direct';
+        directNote.placeholder = e.message;
+      }
+    };
+    directGo.onclick = direct;
+    directNote.addEventListener('keydown', e => { if (e.key === 'Enter') direct(); });
+  }
+
+  board.querySelectorAll('.polish').forEach(b => b.onclick = async () => {
+    b.disabled = true; b.textContent = 'Polishing…';
+    try {
+      await api(`/api/concepts/${id}/shots/${b.dataset.m}/refine`,
+        { method: 'POST', body: {} });
+      b.textContent = 'Polishing — watch the job rail';
+    } catch (e) {
+      b.disabled = false; b.textContent = 'Polish prompt';
+      stateline(document.getElementById('cstate'), 'error', e.message);
+    }
+  });
 
   board.querySelectorAll('.copybtn').forEach(b => b.onclick = async () => {
     const pre = board.querySelector(`pre[data-p="${b.dataset.p}"]`);
@@ -237,6 +276,8 @@ function shotRow(s, rw) {
         <pre data-p="t${esc(String(s.n))}">${esc(s.prompt)}</pre>
         <button class="copybtn" data-p="t${esc(String(s.n))}">Copy</button>
       </div>
+      ${state.caps['pipeline.run'] && state.caps['retrieve'] ? `
+        <button class="dirtoggle polish" data-m="${esc(String(s.n))}" style="color:var(--dim)">Polish prompt</button>` : ''}
       ${rw && rw.available ? `
         <div class="mediarow" style="margin-top:10px">
           <button class="btn pri rgen" data-m="${esc(String(s.n))}" ${rw.spend_ok ? '' : 'disabled'}>

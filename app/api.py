@@ -346,6 +346,71 @@ def shot_media_attach(concept_id: int, shot_n: int, body: ShotMediaBody):
     return {"concept_id": concept_id, "shot_n": shot_n, "media_url": url}
 
 
+class DirectBody(BaseModel):
+    note: str
+
+
+@router.post("/concepts/{concept_id}/direct")
+def concept_direct(concept_id: int, body: DirectBody):
+    """Director mode: one note revises the stored scene in place --
+    validated, attachments carried over, refused when the revision
+    comes back broken. One billed call per note."""
+    api_key = _gemini_key()
+    if not api_key:
+        return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
+    note = body.note.strip()
+    if not note:
+        return _error(400, "empty_note", "an empty note directs nothing")
+    concept = preprod.get_concept(concept_id, path=db.DB_PATH)
+    if concept is None:
+        return _error(404, "not_found", "no such concept")
+
+    def work(job):
+        from google import genai
+
+        from src import director
+        jobs.progress(job, 0.3, "revising the scene")
+        result = director.direct_scene(
+            concept_id, note, gemini_client=genai.Client(api_key=api_key),
+            db_path=db.DB_PATH)
+        if not result.get("ok"):
+            raise RuntimeError(result.get("error") or "direction failed")
+        detail = result.get("summary") or "revised"
+        if result.get("warnings"):
+            detail += f" · {len(result['warnings'])} warning(s)"
+        return {"ref_id": concept_id, "detail": detail}
+
+    job = jobs.start("direct", f"direct · {note[:60]}", work)
+    return {"job_id": job["id"]}
+
+
+@router.post("/concepts/{concept_id}/shots/{shot_n}/refine")
+def shot_refine(concept_id: int, shot_n: int):
+    """Technique-aware polish for one shot's AI prompt, grounded in the
+    ai_prompting shelf. Falls back to unchanged on anything broken."""
+    api_key = _gemini_key()
+    if not api_key:
+        return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
+    concept = preprod.get_concept(concept_id, path=db.DB_PATH)
+    if concept is None:
+        return _error(404, "not_found", "no such concept")
+
+    def work(job):
+        from google import genai
+
+        from src import director
+        jobs.progress(job, 0.3, "polishing against technique references")
+        result = director.refine_shot_prompt(
+            concept_id, shot_n, gemini_client=genai.Client(api_key=api_key),
+            db_path=db.DB_PATH)
+        if not result.get("ok"):
+            raise RuntimeError(result.get("error") or "polish failed")
+        return {"ref_id": concept_id, "detail": result.get("summary") or "polished"}
+
+    job = jobs.start("refine", f"polish · shot {shot_n}", work)
+    return {"job_id": job["id"]}
+
+
 @router.post("/concepts/{concept_id}/shots/{shot_n}/generate")
 def shot_generate(concept_id: int, shot_n: int):
     """One click, one render: the shot's stored prompt through the

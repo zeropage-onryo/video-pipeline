@@ -277,6 +277,39 @@ def test_shot_media_attach_roundtrip(tmp_db):
                        json={"url": "https://x.example/a.mp4"}).status_code == 404
 
 
+def test_direct_endpoint_revises_through_a_job(tmp_db, monkeypatch):
+    concept_id = seed_concept(tmp_db)
+    monkeypatch.setattr(api_mod, "_gemini_key", lambda: "k")
+    import src.director as director
+    monkeypatch.setattr(
+        director, "direct_scene",
+        lambda cid, note, gemini_client=None, db_path=None:
+            {"ok": True, "summary": "revised shot(s) 1", "warnings": [], "error": None})
+    job_id = client.post(f"/api/concepts/{concept_id}/direct",
+                         json={"note": "shot 1 slower"}).json()["job_id"]
+    job = wait_for_job(job_id)
+    assert job["status"] == "done"
+    assert "revised" in job["detail"]
+    # an empty note is refused before any job exists
+    assert client.post(f"/api/concepts/{concept_id}/direct",
+                       json={"note": "  "}).status_code == 400
+
+
+def test_refine_endpoint_surfaces_failure(tmp_db, monkeypatch):
+    concept_id = seed_concept(tmp_db)
+    monkeypatch.setattr(api_mod, "_gemini_key", lambda: "k")
+    import src.director as director
+    monkeypatch.setattr(
+        director, "refine_shot_prompt",
+        lambda cid, n, gemini_client=None, db_path=None:
+            {"ok": False, "error": "no technique references reachable"})
+    job_id = client.post(
+        f"/api/concepts/{concept_id}/shots/1/refine").json()["job_id"]
+    job = wait_for_job(job_id)
+    assert job["status"] == "failed"
+    assert "technique references" in job["error"]
+
+
 def test_shot_generate_gated_on_the_runway_key(tmp_db, monkeypatch):
     concept_id = seed_concept(tmp_db)
     monkeypatch.delenv("RUNWAYML_API_SECRET", raising=False)
