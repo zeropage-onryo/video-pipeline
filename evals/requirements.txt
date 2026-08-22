@@ -1,1 +1,4 @@
-deepeval
+# deepeval 4.1.10 (2026-08) dropped Python 3.9: module-level `X | Y` unions
+# in deepeval/templates/resolver.py crash at import on CI's 3.9 runner.
+# Pinned to the last release that imports there; unpin when CI moves off 3.9.
+deepeval==4.1.8
