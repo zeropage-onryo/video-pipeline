@@ -86,9 +86,14 @@ def _rag_reachable() -> bool:
 
 
 def compute_capabilities() -> dict:
+    from src import promptgen
+
     gemini = bool(_gemini_key())
     store = _rag_reachable()
     return {
+        # per-shot polish needs the in-flight promptgen.refine_prompt to
+        # have landed, plus the shelf and the key it refines with
+        "polish": gemini and store and hasattr(promptgen, "refine_prompt"),
         "assets.list": True,
         "retrieve": store and gemini,          # query embeds with Gemini
         "pipeline.concepts": True,

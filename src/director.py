@@ -146,6 +146,16 @@ def refine_shot_prompt(concept_id: int, shot_n, gemini_client=None,
     """
     from . import promptgen, rag, shootgen
 
+    # promptgen.refine_prompt ships with in-progress work; until it
+    # lands, polish reports itself unavailable rather than crashing --
+    # the same degrade contract as director_prompt in the API.
+    refine = getattr(promptgen, "refine_prompt", None)
+    refine_domain = getattr(promptgen, "REFINE_DOMAIN", ("ai_prompting",))
+    if refine is None:
+        return {"ok": False,
+                "error": "prompt polish (promptgen.refine_prompt) hasn't "
+                         "landed in this build yet"}
+
     kwargs = {"path": db_path} if db_path is not None else {}
     try:
         concept = preprod.get_concept(concept_id, **kwargs)
@@ -162,7 +172,7 @@ def refine_shot_prompt(concept_id: int, shot_n, gemini_client=None,
         tool = shot.get("tool") or ""
         query = (f"{tool} prompting technique for photorealistic AI video generation"
                  if tool else "AI video prompting technique")
-        retrieval = rag.retrieve_references(query, k=5, domain=promptgen.REFINE_DOMAIN)
+        retrieval = rag.retrieve_references(query, k=5, domain=refine_domain)
         references = rag.format_references(retrieval["references"]) \
             if retrieval.get("ok") and retrieval.get("references") else ""
         if not references:
@@ -170,8 +180,8 @@ def refine_shot_prompt(concept_id: int, shot_n, gemini_client=None,
                     "error": "no technique references reachable — "
                              "polish needs the ai_prompting shelf"}
 
-        refined = promptgen.refine_prompt(raw, tool, gemini_client,
-                                          model=model, references=references)
+        refined = refine(raw, tool, gemini_client,
+                         model=model, references=references)
         if refined.strip() == raw:
             return {"ok": True, "changed": False,
                     "summary": "already technique-clean — kept as is", "error": None}

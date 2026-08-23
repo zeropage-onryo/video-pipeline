@@ -278,7 +278,7 @@ function shotRow(s, rw) {
         <pre data-p="t${esc(String(s.n))}">${esc(s.prompt)}</pre>
         <button class="copybtn" data-p="t${esc(String(s.n))}">Copy</button>
       </div>
-      ${state.caps['pipeline.run'] && state.caps['retrieve'] ? `
+      ${state.caps['polish'] ? `
         <button class="dirtoggle polish" data-m="${esc(String(s.n))}" style="color:var(--dim)">Polish prompt</button>` : ''}
       ${rw && rw.available ? `
         <div class="mediarow" style="margin-top:10px">
