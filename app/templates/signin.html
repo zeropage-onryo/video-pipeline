@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>ZPF / Sign in</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@300;400;500;600&family=Inter:wght@300;400;500&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/zpf/zpf.css">
+<style>
+/* The sign-in modal: the reference screenshot's rounded-modal-on-blurred-
+   backdrop, translated into this shell's glass/panel system. One page,
+   one card, nothing else competes with it. */
+.authwrap{position:relative;z-index:1;min-height:100vh;display:grid;place-items:center;padding:24px}
+.authcard{width:min(400px,94vw);padding:34px 32px 28px}
+.authcard h1{font-family:var(--display);text-transform:uppercase;font-weight:500;
+  letter-spacing:.06em;font-size:24px;margin:0 0 6px}
+.authsub{color:var(--dim);font-size:13px;margin:0 0 22px}
+.oauthbtn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;
+  padding:12px;margin-bottom:10px;font-family:var(--body);font-size:13.5px;color:var(--text);
+  background:rgb(255 255 255 / .05);border:1px solid var(--line);border-radius:var(--rp);
+  cursor:pointer;text-decoration:none;transition:border-color var(--t)}
+.oauthbtn:hover{border-color:var(--line-hi)}
+.oauthbtn svg{width:17px;height:17px;flex:none}
+.oauthbtn.discord svg{fill:#5865F2}
+.authdiv{display:flex;align-items:center;gap:12px;margin:18px 0 14px;color:var(--dimmer);
+  font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase}
+.authdiv::before,.authdiv::after{content:"";flex:1;height:1px;background:var(--line)}
+.authform{display:grid;gap:10px}
+.authform input{background:rgb(255 255 255 / .04);border:1px solid var(--line);
+  border-radius:var(--rp);color:var(--text);font-family:var(--body);font-size:13.5px;
+  padding:12px 16px;width:100%}
+.authform input:focus{outline:0;border-color:var(--line-hi)}
+.autherr{background:var(--signal-soft);border:1px solid rgb(228 0 43 / .35);
+  border-radius:var(--r1);color:var(--text);font-size:12.5px;padding:10px 13px;margin-bottom:14px}
+.authswap{margin-top:18px;text-align:center;font-size:12.5px;color:var(--dim)}
+.authswap a{color:var(--text);cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+.authfoot{margin-top:26px;text-align:center}
+.authcard .go{width:100%;padding:13px}
+[data-mode="signin"] .only-signup{display:none}
+[data-mode="signup"] .only-signin{display:none}
+</style>
+</head>
+<body data-mode="{{ mode or 'signin' }}">
+
+<canvas id="gl"></canvas><div class="fb"></div>
+
+<div class="authwrap">
+  <div class="glass authcard">
+    <h1>Zero Page</h1>
+    <p class="authsub only-signin">Sign in to enter the studio.</p>
+    <p class="authsub only-signup">Create an account to get started.</p>
+
+    {% if error %}<div class="autherr">{{ error }}</div>{% endif %}
+
+    <a class="oauthbtn" href="/auth/google/login">
+      <svg viewBox="0 0 24 24"><path fill="#4285F4" d="M23.5 12.27c0-.85-.08-1.66-.22-2.45H12v4.64h6.46a5.53 5.53 0 0 1-2.4 3.62v3h3.87c2.27-2.09 3.57-5.17 3.57-8.81Z"/><path fill="#34A853" d="M12 24c3.24 0 5.96-1.07 7.94-2.91l-3.87-3.01c-1.08.72-2.45 1.15-4.07 1.15-3.13 0-5.78-2.11-6.73-4.96H1.29v3.1A12 12 0 0 0 12 24Z"/><path fill="#FBBC05" d="M5.27 14.27a7.2 7.2 0 0 1 0-4.54v-3.1H1.29a12 12 0 0 0 0 10.74l3.98-3.1Z"/><path fill="#EA4335" d="M12 4.77c1.76 0 3.34.6 4.59 1.79l3.44-3.44A11.98 11.98 0 0 0 1.29 6.63l3.98 3.1c.95-2.85 3.6-4.96 6.73-4.96Z"/></svg>
+      Continue with Google
+    </a>
+    <a class="oauthbtn discord" href="/auth/discord/login">
+      <svg viewBox="0 0 24 24"><path d="M20.32 4.37a19.8 19.8 0 0 0-4.89-1.52.07.07 0 0 0-.08.04c-.21.38-.44.87-.6 1.25a18.27 18.27 0 0 0-5.5 0 12.6 12.6 0 0 0-.61-1.25.08.08 0 0 0-.08-.04 19.74 19.74 0 0 0-4.88 1.52.07.07 0 0 0-.04.03C.53 9.05-.32 13.58.1 18.06a.08.08 0 0 0 .03.05 19.9 19.9 0 0 0 6 3.03.08.08 0 0 0 .08-.02c.46-.63.87-1.3 1.22-2a.08.08 0 0 0-.04-.11 13.1 13.1 0 0 1-1.87-.9.08.08 0 0 1-.01-.12c.13-.1.25-.2.37-.29a.07.07 0 0 1 .08-.01c3.93 1.79 8.18 1.79 12.06 0a.07.07 0 0 1 .08 0c.12.11.25.21.37.3a.08.08 0 0 1 0 .12c-.6.35-1.22.64-1.87.9a.08.08 0 0 0-.04.1c.36.7.77 1.37 1.22 2a.08.08 0 0 0 .08.03 19.84 19.84 0 0 0 6.02-3.03.08.08 0 0 0 .03-.05c.5-5.18-.84-9.68-3.55-13.66a.06.06 0 0 0-.03-.03ZM8.02 15.33c-1.18 0-2.16-1.08-2.16-2.42 0-1.33.96-2.42 2.16-2.42 1.21 0 2.18 1.1 2.16 2.42 0 1.34-.96 2.42-2.16 2.42Zm7.97 0c-1.18 0-2.15-1.08-2.15-2.42 0-1.33.95-2.42 2.15-2.42 1.21 0 2.18 1.1 2.16 2.42 0 1.34-.95 2.42-2.16 2.42Z"/></svg>
+      Continue with Discord
+    </a>
+
+    <div class="authdiv">Or use email</div>
+
+    <form class="authform only-signin" method="post" action="/auth/login">
+      <input type="email" name="email" placeholder="Email" required autocomplete="email"
+             value="{{ email or '' }}">
+      <input type="password" name="password" placeholder="Password" required
+             autocomplete="current-password">
+      <button class="go" type="submit">Sign in</button>
+    </form>
+    <form class="authform only-signup" method="post" action="/auth/signup">
+      <input type="email" name="email" placeholder="Email" required autocomplete="email"
+             value="{{ email or '' }}">
+      <input type="password" name="password" placeholder="Password (8+ characters)"
+             required minlength="8" autocomplete="new-password">
+      <button class="go" type="submit">Sign up</button>
+    </form>
+
+    <p class="authswap only-signin">Don't have an account? <a data-swap="signup">Sign up</a></p>
+    <p class="authswap only-signup">Already have an account? <a data-swap="signin">Sign in</a></p>
+  </div>
+</div>
+
+<script type="module">
+import { initField } from '/static/zpf/field.js';
+initField();
+document.querySelectorAll('[data-swap]').forEach(a =>
+  a.onclick = () => { document.body.dataset.mode = a.dataset.swap; });
+</script>
+</body>
+</html>

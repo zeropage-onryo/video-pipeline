@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>ZPF / Accounts</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@300;400;500;600&family=Inter:wght@300;400;500&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/zpf/zpf.css">
+<style>
+.pickwrap{position:relative;z-index:1;min-height:100vh;display:grid;place-items:center;padding:24px}
+.pickcard{width:min(560px,94vw);padding:34px 32px 26px}
+.pickcard h1{font-family:var(--display);text-transform:uppercase;font-weight:500;
+  letter-spacing:.06em;font-size:22px;margin:0 0 4px}
+.picksub{color:var(--dim);font-size:13px;margin:0 0 24px}
+.picks{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:560px){.picks{grid-template-columns:1fr}}
+.pick{display:flex;flex-direction:column;gap:8px;padding:22px 20px;text-align:left;
+  background:rgb(255 255 255 / .04);border:1px solid var(--line);border-radius:var(--r1);
+  color:var(--text);cursor:pointer;font-family:var(--body);transition:border-color var(--t)}
+.pick:hover{border-color:var(--line-hi)}
+.pick .sw{width:26px;height:26px;border-radius:7px}
+.pick .nm{font-family:var(--display);text-transform:uppercase;letter-spacing:.07em;font-size:15px}
+.pick .rl{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--dim)}
+.pick.ghost{border-style:dashed;color:var(--dimmer);align-items:center;
+  justify-content:center;cursor:default}
+.noaccess{background:rgb(255 255 255 / .03);border:1px solid var(--line);
+  border-radius:var(--r1);padding:18px;color:var(--dim);font-size:13.5px;line-height:1.6}
+.pickfoot{display:flex;align-items:center;margin-top:24px}
+.pickfoot .who{color:var(--dimmer);font-size:12px}
+.pickfoot form{margin-left:auto}
+.pickfoot .btn{padding:9px 16px}
+</style>
+</head>
+<body>
+
+<canvas id="gl"></canvas><div class="fb"></div>
+
+<div class="pickwrap">
+  <div class="glass pickcard">
+    {% if member_of %}
+    <h1>Choose an account</h1>
+    <p class="picksub">Which brand are you working in?</p>
+    <div class="picks">
+      {% for a in member_of %}
+      <form method="post" action="/brand/{{ a.slug }}">
+        <input type="hidden" name="next" value="/ui">
+        <button class="pick" type="submit" style="width:100%">
+          <span class="sw" style="background:{{ a.accent_color or 'var(--signal)' }}"></span>
+          <span class="nm">{{ a.display_name }}</span>
+          <span class="rl">{{ a.role }}</span>
+        </button>
+      </form>
+      {% endfor %}
+      <div class="pick ghost">＋ Invite a collaborator</div>
+    </div>
+    {% else %}
+    <h1>No account access yet</h1>
+    <div class="noaccess">
+      You're signed in as <b>{{ user.email }}</b>, but you don't have access
+      to any account yet. Ask an existing member to invite you — access is
+      granted by members, not by signing up.
+    </div>
+    {% endif %}
+    <div class="pickfoot">
+      <span class="who">{{ user.email }}</span>
+      <form method="post" action="/auth/logout"><button class="btn" type="submit">Sign out</button></form>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { initField } from '/static/zpf/field.js';
+initField();
+</script>
+</body>
+</html>

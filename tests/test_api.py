@@ -26,6 +26,19 @@ def no_real_rag_store(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def signed_in(monkeypatch):
+    """Every /api route now sits behind the session gate (app/auth.py).
+    These tests exercise API behaviour, not the gate -- the gate has its
+    own suite in test_auth.py -- so a stub session is welded on here."""
+    from app import auth
+    stub = {"id": 1, "email": "test@example.com", "display_name": "Test"}
+    monkeypatch.setattr(auth, "current_user", lambda request: stub)
+    monkeypatch.setattr(
+        auth, "current_account",
+        lambda request, user=None: {"slug": "antihero", "display_name": "ANTIHERO"})
+
+
+@pytest.fixture(autouse=True)
 def fresh_jobs():
     jobs.clear_all_for_tests()
     yield

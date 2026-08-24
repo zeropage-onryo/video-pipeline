@@ -1,5 +1,6 @@
-openai-whisper
-numpy<2   # whisper's torch build fails against numpy 2.x (torch._C._ARRAY_API); unpinning breaks transcription
+# whisper/torch disabled 2026-08-19: no code in app/ or src/ imports whisper or numpy (transcription was never wired up), and torch has no pip wheel for Intel macOS + Python 3.13. Re-enable only after building on a Python <=3.12 venv, or once torch resumes shipping Intel Mac wheels.
+# openai-whisper>=20250625   # pin off the old 20240930 release -- its legacy setup.py imports pkg_resources directly, which current setuptools no longer bundles, breaking the whole batch install
+# numpy<2   # whisper's torch build fails against numpy 2.x (torch._C._ARRAY_API); unpinning breaks transcription
 google-genai
 python-dotenv
 requests
@@ -16,3 +17,6 @@ psycopg[binary]
 pgvector
 langgraph
 langsmith
+authlib
+itsdangerous
+argon2-cffi

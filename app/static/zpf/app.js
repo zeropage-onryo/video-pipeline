@@ -30,7 +30,9 @@ export function go(view) {
   scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-/* ── brand pill — the real audience switch, rides the app cookie ── */
+/* ── brand pill — opens the real account switcher. Which accounts a
+   person can enter is a membership question now, so the picker is a
+   server page; choosing one still posts /brand/{slug} under the hood. ── */
 const BRAND_LABEL = { antihero: 'ANTIHERO', zeropage: 'Zero Page Films' };
 
 function paintBrand() {
@@ -38,14 +40,13 @@ function paintBrand() {
     `${BRAND_LABEL[state.brand] || state.brand} · switch`;
 }
 
-async function toggleBrand() {
-  const next = state.brand === 'antihero' ? 'zeropage' : 'antihero';
-  const body = new URLSearchParams({ next: '/ui' });
-  await fetch(`/brand/${next}`, { method: 'POST', body });
-  state.brand = next;
-  paintBrand();
-  const view = document.documentElement.dataset.v || 'studio';
-  VIEWS[view].render();
+function openAccountPicker() {
+  location.href = '/ui/accounts';
+}
+
+async function signOut() {
+  await fetch('/auth/logout', { method: 'POST' });
+  location.href = '/signin';
 }
 
 /* ── jobs: one SSE feed drives the rail, the queue view, and the
@@ -100,7 +101,8 @@ function palCommands() {
       go('queue');
     }});
   }
-  cmds.push({ l: 'Switch brand', k: 'Action', run: toggleBrand });
+  cmds.push({ l: 'Switch account', k: 'Action', run: openAccountPicker });
+  cmds.push({ l: 'Sign out', k: 'Action', run: signOut });
   return cmds;
 }
 
@@ -154,7 +156,7 @@ initPipeline();
 initEvals();
 initQueue();
 paintBrand();
-document.getElementById('brandpill').onclick = toggleBrand;
+document.getElementById('brandpill').onclick = openAccountPicker;
 document.getElementById('mark').onclick = () => go('studio');
 document.querySelectorAll('.rnav a').forEach(a => a.onclick = () => go(a.dataset.view));
 document.getElementById('dx').onclick = closeDetail;

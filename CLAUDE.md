@@ -5,9 +5,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Overview
 
 An AI pre-production studio for Zero Page Films (a one-person brand), aimed at running more of
-itself over time. It generates concepts and shot lists from described real rooms, decides shot
-by shot what gets captured versus AI-generated, writes platform-native AI video prompts, and
-feeds posted-video analytics back into the next slate. The autonomy ladder: L1 assisted -> L2
+itself over time. It generates concepts and shot lists from described real rooms, writes
+platform-native AI video prompts for every shot, and feeds posted-video analytics back into the
+next slate. Since 2026-08-20 every shot is AI-generated: a shot's `source` says whether Michael
+captures real reference material (an acting take, a room plate) that anchors the generation via
+the shot's `reference_image`, not whether the shot escapes the pipeline — a reference is an
+enhancement, never a gate, same as RAG grounding. Prompts are also rendered in OpenArt Director's
+conversational natural-language shape (`shot.render_openart`, `shootgen.director_prompt`) for
+hand-pasting into Director, which has no public API (checked 2026-08-20). The autonomy ladder: L1 assisted -> L2
 grounded generation + measurement -> L3 self-improving ideation -> L4 supervised
 generate-and-post (gated, default off). Editing stays manual — an explicit L1 hold.
 Post-production (footage ingest -> pitches -> cut lists) was cut in Aug 2026: the product is
@@ -65,6 +70,9 @@ venv/bin/python -m src.rag ingest <files...>        # (re-)build the pgvector li
 venv/bin/python -m src.rag query "<text>" [--k 5]
 venv/bin/python -m src.rag_eval <cases.json> [--k 5]   # hit@k + MRR over labeled cases
 
+# SIGN-IN — seed the auth tables once (idempotent); real login guards /ui + /api
+venv/bin/python -m src.accounts seed you@example.com [--password '...']
+
 # WEB APP — one page at 127.0.0.1:8000/studio does everything above.
 # 127.0.0.1:8000 is the public landing (the only indexed URL).
 venv/bin/uvicorn app.main:app --reload
@@ -85,6 +93,26 @@ patching something the code under test no longer calls.
 Requires `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) in `.env` for shootgen/promptgen and
 locations' vision step. `YOUTUBE_API_KEY` is optional — it enables auto-fetching
 public view counts and importing a channel's videos; without it manual entry still works.
+
+**Sign-in (`app/auth.py` + `src/accounts.py`).** `/ui` and every `/api/*` route
+require a session; `/signin` offers Google OAuth, Discord OAuth, and
+email/password (argon2). The session is one signed httpOnly cookie
+(`zp_session`, itsdangerous, 30 days) — no server-side session table.
+`users` / `auth_identities` / `accounts` / `account_members` are the schema:
+identities keep providers decoupled from users (adding Apple/X later is a
+provider registration, not a migration). **The gate:** a fresh signup gets
+zero `account_members` rows and sees "no account access yet" — membership is
+granted by members (manual INSERT for v1), never by signing up.
+`auth.current_account` resolves the active brand from real membership; the
+`brand` cookie is only a preference among accounts you belong to, and
+`POST /brand/{name}` still flips it exactly as before. The legacy `/studio`
+pages deliberately stay open as the dev console. OAuth email-collision rule:
+same email, different method = "sign in the way you first signed up," never a
+silent merge — except the seeded passwordless bootstrap user, which the first
+provider sign-in claims. Env: `SESSION_SECRET`, `GOOGLE_CLIENT_ID/SECRET`,
+`DISCORD_CLIENT_ID/SECRET` (see .env.example; ephemeral dev secret with a
+stderr note when unset). Not built yet, deliberately: password reset (needs
+email infra), email verification, invite UI, sign-out-everywhere.
 
 ## Architecture
 

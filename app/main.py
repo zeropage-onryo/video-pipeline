@@ -15,12 +15,14 @@ from typing import List, Optional
 from urllib.parse import quote
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from google import genai
+from starlette.middleware.sessions import SessionMiddleware
 
+from src import accounts as accounts_mod
 from src import (
     autonomy,
     autopilot,
@@ -38,7 +40,7 @@ from src import (
     youtube,
 )
 
-from . import api, seo
+from . import api, auth, seo
 from .sparkline import render_sparkline
 
 load_dotenv()
@@ -125,6 +127,7 @@ async def lifespan(app: FastAPI):
     winners.init(path=db.DB_PATH)
     inspiration.init(path=db.DB_PATH)   # seeds the researched accounts if empty
     evalstore.init(path=db.DB_PATH)     # golden set seeded from eval_cases.json
+    accounts_mod.init(path=db.DB_PATH)  # users / identities / accounts / members
     seed_gold_standard()                # records the canonical example as a winner
     yield
 
@@ -143,13 +146,48 @@ class NoCacheStaticFiles(StaticFiles):
 
 
 app = FastAPI(lifespan=lifespan)
+# Starlette session middleware: used ONLY for the OAuth state/nonce dance
+# (Authlib stores its CSRF state here). The login session itself is the
+# separate signed zp_session cookie in app/auth.py.
+app.add_middleware(SessionMiddleware, secret_key=auth._session_secret(),
+                   same_site="lax", https_only=False)
 app.mount("/static", NoCacheStaticFiles(directory=str(APP_DIR / "static")), name="static")
 # Rendered clips (data/renders/, gitignored with the rest of data/) --
 # what the scene board plays when no public R2 URL exists yet.
 RENDERS_DIR = PROJECT_ROOT / "data" / "renders"
 RENDERS_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/renders", NoCacheStaticFiles(directory=str(RENDERS_DIR)), name="renders")
-app.include_router(api.router)
+# Every /api route now requires a session -- the /ui shell is gated, so
+# its backing endpoints are too (401 JSON, which shared.js surfaces as a
+# stateline). The legacy /studio pages stay open as the dev console.
+app.include_router(api.router, dependencies=[Depends(auth.require_user_api)])
+app.include_router(auth.router)
+
+
+@app.get("/signin")
+def signin(request: Request, error: Optional[str] = None,
+           mode: Optional[str] = None, email: Optional[str] = None):
+    """The sign-in screen: Google + Discord + email/password. Already
+    signed in -> straight to the shell."""
+    if auth.current_user(request):
+        return RedirectResponse("/ui", status_code=303)
+    return templates.TemplateResponse(
+        request, "signin.html",
+        {"error": error, "mode": mode if mode in ("signin", "signup") else "signin",
+         "email": email})
+
+
+@app.get("/ui/accounts")
+def ui_accounts(request: Request):
+    """The account picker -- or, for a signed-in user with no
+    account_members row, the explicit no-access state. Membership is
+    granted by members, never by signing up (the gate)."""
+    user = auth.current_user(request)
+    if user is None:
+        return RedirectResponse("/signin", status_code=303)
+    member_of = accounts_mod.memberships(user["id"], path=db.DB_PATH)
+    return templates.TemplateResponse(
+        request, "accounts.html", {"user": user, "member_of": member_of})
 
 
 @app.get("/ui")
@@ -157,10 +195,19 @@ def ui(request: Request):
     """
     The ported ZPF Studio skin (prototype/studio.html made real): one
     shell, client-side views, every control backed by /api and gated by
-    /api/capabilities. Lives beside /studio until it reaches parity.
+    /api/capabilities. Requires a session; the active brand comes from
+    real membership (current_account), not the raw cookie.
     """
+    user = auth.current_user(request)
+    if user is None:
+        return RedirectResponse("/signin", status_code=303)
+    account = auth.current_account(request, user)
+    if account is None:
+        # signed in, zero memberships: the no-access state, never a
+        # silent grant into the real accounts
+        return RedirectResponse("/ui/accounts", status_code=303)
     return templates.TemplateResponse(
-        request, "zpf.html", {"brand": active_brand(request)})
+        request, "zpf.html", {"brand": account["slug"], "user": user})
 
 
 def benchmark_class(score, median) -> str:
@@ -315,14 +362,17 @@ def set_brand(name: str, next: str = Form("/studio")):
     return resp
 
 
+STUDIO_TABS = ("characters", "locations", "props", "director")
+
+
 @app.get("/studio")
-def studio(request: Request, message: Optional[str] = None):
+def studio(request: Request, message: Optional[str] = None, tab: Optional[str] = None):
     """
     The workspace. Pre-production only now: the Workflow library
-    (characters, rooms, props) reads the DB, the canvas shows the
-    latest AI shots, and the assistant runs the ideation stages under
-    the hood. Reading is free of model calls and renders even when
-    every source is absent.
+    (characters, rooms, props, and Director-ready AI shots) reads the
+    DB, the canvas shows the latest AI shots, and the assistant runs the
+    ideation stages under the hood. Reading is free of model calls and
+    renders even when every source is absent.
     """
     spaces = preprod.list_locations(path=db.DB_PATH)
     for space in spaces:
@@ -348,6 +398,29 @@ def studio(request: Request, message: Optional[str] = None):
         (c["ai_shots"] for c in shoot_concepts if c.get("ai_shots")), []
     )
 
+    # Director tab: every planned AI shot for the ACTIVE BRAND only, with
+    # its Director-ready prompt attached -- the same pure text composition
+    # _with_director_prompts already does for /concepts (zero model calls,
+    # so doing this on every page load costs nothing). Pulled out of the
+    # dense per-concept storyboard into its own list, per Michael's call
+    # that Director mode belongs under the Workflow tab rather than
+    # buried in each concept card. ai_shots entries are the SAME dict
+    # objects as in each concept's shots list (see preprod._concept_row),
+    # so stamping director_prompt via _with_director_prompts also lands
+    # on the ai_shots copies below -- one pass, not two.
+    brand = active_brand(request)
+    director_concepts = _with_director_prompts(
+        [c for c in shoot_concepts if c.get("brand") == brand]
+    )
+    director_shots = []
+    for c in director_concepts:
+        for s in c.get("ai_shots") or []:
+            s["concept_id"] = c["id"]
+            s["concept_title"] = c.get("title")
+            director_shots.append(s)
+
+    active_tab = tab if tab in STUDIO_TABS else "characters"
+
     return templates.TemplateResponse(
         request,
         "studio.html",
@@ -357,6 +430,8 @@ def studio(request: Request, message: Optional[str] = None):
             "props": props,
             "shoot_concepts": shoot_concepts,
             "latest_ai": latest_ai,
+            "director_shots": director_shots,
+            "active_tab": active_tab,
             "active_nav": "home",
             "message": message,
         },
@@ -364,7 +439,7 @@ def studio(request: Request, message: Optional[str] = None):
 
 
 def run_ideation(intent: str, *, brand: str, client_name, spark, use_pov: bool,
-                  image_refs=None) -> str:
+                  image_refs=None, picked_sources=None) -> str:
     """
     The two stages that generate from rooms. Split out of the route so
     the intent routing above can be read without the API plumbing
@@ -375,9 +450,13 @@ def run_ideation(intent: str, *, brand: str, client_name, spark, use_pov: bool,
     generation. Dealing a slate of ideas is a batch operation; a photo
     only makes sense as grounding for the single concept it was
     attached to, so `ideas` never receives it.
+
+    `picked_sources` names exact RAG source identifiers -- from the
+    references picker (/references/pick) -- to ground this run on top
+    of the automatic craft-advice layer. See shootgen.reference_block.
     """
     references = shootgen.reference_block(spark=spark, client=client_name,
-                                          db_path=db.DB_PATH)
+                                          db_path=db.DB_PATH, picked_sources=picked_sources)
     gemini_client = genai.Client(
         api_key=os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     )
@@ -464,6 +543,10 @@ async def studio_assist(request: Request):
     """
     raw_form = await request.form()
     reference_files = [f for f in raw_form.getlist("references") if isinstance(f, UploadFile)]
+    # exact RAG source names picked off /references/pick (a popup opened
+    # from the composer's References button) -- the opt-in asset layer,
+    # separate from the ad hoc image/video attachments above.
+    picked_references = [s for s in raw_form.getlist("picked_references") if s.strip()]
     form = dict(raw_form)
     text = (form.get("text") or "").strip()
     intent = route_intent(text, (form.get("intent") or "").strip() or None)
@@ -517,7 +600,8 @@ async def studio_assist(request: Request):
 
     try:
         message = run_ideation(intent, brand=brand, client_name=client_name,
-                               spark=spark, use_pov=use_pov, image_refs=image_refs)
+                               spark=spark, use_pov=use_pov, image_refs=image_refs,
+                               picked_sources=picked_references or None)
     except Exception as e:
         message = f"Could not generate: {e}"
     return RedirectResponse(f"/studio?message={quote(message)}", status_code=303)
@@ -684,6 +768,99 @@ def library_delete(source: str = Form(...)):
     return RedirectResponse("/library?message=" + quote(message), status_code=303)
 
 
+@app.get("/references/pick")
+def references_pick(request: Request, message: Optional[str] = None):
+    """
+    The references picker: a focused page, opened as a popup from the
+    Studio composer's or the Concepts form's References button, for
+    grounding ONE generation on named assets from the RAG library --
+    the opt-in counterpart to the always-on marketing/ai_prompting
+    craft-advice layer (see shootgen.AUTO_IDEATION_DOMAINS /
+    ASSET_IDEATION_DOMAINS). Selecting sources here never touches
+    generation by itself; the page posts the selection back to the
+    opener window (postMessage) and the opener rides it along as
+    picked_references on its next Generate.
+    """
+    context = {"available": False, "sources": [], "domains": [],
+              "message": message, "error": None, "active_nav": "workflow"}
+    conn = None
+    try:
+        conn = rag.connect()
+        context["sources"] = rag.list_sources(conn)
+        context["domains"] = sorted({s["domain"] for s in context["sources"]})
+        context["available"] = True
+    except Exception as e:
+        context["error"] = f"library unavailable: {e}"
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    # informational grouping only, so the picker can show "these already
+    # ground automatically" -- picking one anyway is harmless, just
+    # redundant, since fetch_by_sources and the automatic query would
+    # both surface it.
+    context["auto_domains"] = set(shootgen.AUTO_IDEATION_DOMAINS) | {"ai_prompting"}
+
+    # Cast & props: the checkbox row that used to live directly on the
+    # Concepts form now lives here instead, right next to the media
+    # upload form -- one picker for everything a generation can be
+    # grounded on, not two separate systems. Photo resolution mirrors
+    # /studio's Workflow library exactly.
+    characters = entities.list_characters(path=db.DB_PATH)
+    for c in characters:
+        slug = safe_space_name(c["name"])
+        c["photos"] = [f"/characters/{slug}/photo/{fn}?thumb=1"
+                       for fn in _entity_photos(CHARACTERS_DIR, slug)]
+    props = entities.list_props(path=db.DB_PATH)
+    for p in props:
+        slug = safe_space_name(p["name"])
+        p["photos"] = [f"/props/{slug}/photo/{fn}?thumb=1"
+                       for fn in _entity_photos(PROPS_DIR, slug)]
+    context["characters"] = characters
+    context["props"] = props
+
+    return templates.TemplateResponse(request, "references_pick.html", context)
+
+
+@app.post("/references/pick/upload")
+async def references_pick_upload(file: Optional[UploadFile] = File(None), domain: str = Form(""),
+                                 project: str = Form(""), source_ref: str = Form("")):
+    """
+    Add a file straight from your computer to the RAG library, from the
+    picker page -- the file-upload counterpart to /library/ingest's
+    paste-text form. The uploaded bytes are never written into the repo;
+    the file's own name becomes the source identifier, same as a manual
+    /library entry lets you type any source name you like. Stays on the
+    picker page (not /library) so you can immediately check the box for
+    what you just added.
+    """
+    filename = (file.filename or "").strip() if file is not None else ""
+    if not (filename and domain.strip()):
+        return RedirectResponse(
+            "/references/pick?message=" + quote("a file and a shelf (domain) are both required"),
+            status_code=303,
+        )
+    try:
+        raw = await file.read()
+        text = raw.decode("utf-8", errors="replace")
+        if not text.strip():
+            raise ValueError("file has no readable text")
+        conn = rag.connect()
+        rag.init_store(conn)
+        written = rag.ingest_records(
+            [{"source": filename, "text": text, "domain": domain.strip(),
+              "project": project.strip() or None, "source_ref": source_ref.strip() or None}],
+            rag.make_client(), conn,
+        )
+        conn.close()
+        message = f"stored {written} chunk(s) from '{filename}' under '{domain.strip()}'"
+    except Exception as e:
+        message = f"upload failed: {e}"
+    return RedirectResponse("/references/pick?message=" + quote(message), status_code=303)
+
+
 @app.get("/post-image")
 def post_image_page(request: Request, url: Optional[str] = None,
                     caption: Optional[str] = None, message: Optional[str] = None):
@@ -833,7 +1010,8 @@ def holds_list(request: Request, message: Optional[str] = None):
     # Full brand separation: show only the active brand's channel so the two
     # queues never blur (brand name maps 1:1 to channel name).
     brand = active_brand(request)
-    concepts_by_id = {c["id"]: c for c in preprod.list_concepts(path=db.DB_PATH)}
+    concepts_by_id = {c["id"]: c for c in _with_director_prompts(
+        preprod.list_concepts(path=db.DB_PATH))}
     held = [h for h in autonomy.list_hold(status="held", path=db.DB_PATH)
             if h["channel"] == brand]
     for row in held:
@@ -1360,6 +1538,111 @@ def props_delete(prop_id: int, next: str = Form("")):
     return _redirect_with_message(destination, "Deleted")
 
 
+def _with_director_prompts(concepts: list) -> list:
+    """Attach the OpenArt Director rendering to every planned shot --
+    pure text composition (shootgen.director_prompt), zero model calls,
+    so doing it for every card on every page load costs nothing. Jinja
+    can't call functions, so the route computes what the template shows."""
+    for c in concepts:
+        for s in c.get("shots") or []:
+            s["director_prompt"] = shootgen.director_prompt(s, c)
+    return concepts
+
+
+@app.post("/concepts/{concept_id}/shots/{shot_n}/reference")
+async def concept_shot_reference(concept_id: int, shot_n: int, request: Request):
+    """Attach (or clear) the real capture behind one shot -- the acting
+    take or room plate its AI generation anchors on. A file is hosted on
+    R2 as a JPEG (the /post-image/queue shape exactly); a pasted public
+    URL is stored as-is. Every shot is AI-generated now -- a capture is
+    reference material feeding the generation, not the delivered shot."""
+    form = await request.form()
+    destination = safe_next(form.get("next") or "", "/concepts")
+
+    def back(msg):
+        return _redirect_with_message(destination, msg)
+
+    try:
+        if form.get("remove"):
+            preprod.set_shot_reference_image(concept_id, shot_n, "", path=db.DB_PATH)
+            return back(f"Reference cleared from shot {shot_n}.")
+
+        image_url = (form.get("reference_url") or "").strip()
+        upload = form.get("reference_file")
+        if getattr(upload, "filename", ""):
+            try:
+                import io
+                import uuid
+
+                from PIL import Image
+
+                from src import storage
+                data = await upload.read()
+                jpeg = Image.open(io.BytesIO(data)).convert("RGB")
+                tmp = Path("/tmp") / f"ref-{uuid.uuid4().hex}.jpg"
+                jpeg.save(tmp, "JPEG", quality=92)
+                image_url = storage.upload_file(
+                    tmp, key=f"references/{tmp.name}", content_type="image/jpeg")
+            except Exception as e:
+                return back(f"Reference upload failed: {e}")
+        if not image_url:
+            return back("Attach a capture — a file, or a public image URL.")
+        preprod.set_shot_reference_image(concept_id, shot_n, image_url, path=db.DB_PATH)
+    except ValueError as e:
+        return back(str(e))
+    return back(f"Reference attached to shot {shot_n} — the AI generation anchors on it.")
+
+
+@app.post("/concepts/{concept_id}/verdict")
+async def concept_verdict(concept_id: int, request: Request):
+    """Subtle approve/deny on a whole concept or idea, with the idea text
+    editable right there -- records straight through winners.py's existing
+    teaching loop (the same one /winners already exposes as its own page),
+    so a click on the card is a click on /winners without leaving it. Worked
+    -> winning_prompts (future ideation imitates it); Didn't work ->
+    avoid_prompts (future ideation is told to steer away from it)."""
+    form = dict(await request.form())
+    destination = safe_next(form.get("next") or "", "/concepts")
+    text = (form.get("text") or "").strip()
+    if not text:
+        return _redirect_with_message(destination, "Nothing to record — the text was empty.")
+    verdict = "didnt_work" if (form.get("verdict") or "worked") == "didnt_work" else "worked"
+    result = winners.record_and_learn(
+        "concept", text, note=form.get("note") or "",
+        video_ref=f"concept-{concept_id}", verdict=verdict, path=db.DB_PATH)
+    verb = "steer away from" if verdict == "didnt_work" else "imitate"
+    if result.get("ingested"):
+        message = f"Recorded SHOOT-{concept_id:02d} — future ideation will {verb} it."
+    else:
+        message = ("Saved. Teaching is pending — start Postgres and try again to "
+                   f"ingest it into RAG. ({result.get('error') or 'store unavailable'})")
+    return _redirect_with_message(destination, message)
+
+
+@app.post("/concepts/{concept_id}/shots/{shot_n}/verdict")
+async def concept_shot_verdict(concept_id: int, shot_n: int, request: Request):
+    """Subtle approve/deny on one AI shot's render prompt, with the prompt
+    text editable right there before it's taught -- same winners.py loop as
+    above, scoped to the exact prompt that would go to Runway/Higgsfield."""
+    form = dict(await request.form())
+    destination = safe_next(form.get("next") or "", "/concepts")
+    text = (form.get("text") or "").strip()
+    if not text:
+        return _redirect_with_message(destination, "Nothing to record — the prompt was empty.")
+    verdict = "didnt_work" if (form.get("verdict") or "worked") == "didnt_work" else "worked"
+    tool = (form.get("tool") or "runway").strip().lower()
+    result = winners.record_and_learn(
+        tool, text, note=form.get("note") or "",
+        video_ref=f"concept-{concept_id}-shot-{shot_n}", verdict=verdict, path=db.DB_PATH)
+    verb = "avoid" if verdict == "didnt_work" else "imitate"
+    if result.get("ingested"):
+        message = f"Recorded shot {shot_n} — future generations will {verb} it."
+    else:
+        message = ("Saved. Teaching is pending — start Postgres and try again to "
+                   f"ingest it into RAG. ({result.get('error') or 'store unavailable'})")
+    return _redirect_with_message(destination, message)
+
+
 @app.get("/concepts")
 def concepts_list(request: Request, message: Optional[str] = None):
     spaces = preprod.list_locations(path=db.DB_PATH)
@@ -1371,8 +1654,9 @@ def concepts_list(request: Request, message: Optional[str] = None):
         {
             # Brand-scoped (BACKLOG #7): switching the active brand changes
             # which concepts you see, so the switch is visible here too.
-            "concepts": [c for c in preprod.list_concepts(path=db.DB_PATH)
-                         if c["brand"] == active_brand(request)],
+            "concepts": _with_director_prompts(
+                [c for c in preprod.list_concepts(path=db.DB_PATH)
+                 if c["brand"] == active_brand(request)]),
             "rate": preprod.shoot_rate(path=db.DB_PATH),
             "shortlist": preprod.shortlist_rate(path=db.DB_PATH),
             "inspirations": inspiration.list_accounts(path=db.DB_PATH),
@@ -1502,6 +1786,13 @@ async def concepts_generate(request: Request):
     # an unchecked checkbox submits nothing, so absence means off
     use_pov = bool(form.get("use_pov"))
     cast = cast_from_picks(form_data.getlist("characters"), form_data.getlist("props"))
+    # None picked means every room on file (unchanged default); picking one
+    # or more is a deliberate "shoot here" for this run, not a shortage --
+    # see shootgen._apply_location_lock.
+    only_locations = form_data.getlist("locations") or None
+    # exact RAG source names picked off /references/pick -- the opt-in
+    # asset layer, on top of reference_block's automatic craft-advice one.
+    picked_references = [s for s in form_data.getlist("picked_references") if s.strip()]
 
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
@@ -1512,16 +1803,17 @@ async def concepts_generate(request: Request):
     # Grounding is an enhancement, never a dependency: reference_block
     # degrades to "" (with a stderr note) if the library is unreachable.
     references = shootgen.reference_block(spark=spark, client=client_name,
-                                          db_path=db.DB_PATH)
+                                          db_path=db.DB_PATH,
+                                          picked_sources=picked_references or None)
 
-    # Under the hood: ANTIHERO generations ground automatically on the
-    # inspiration accounts (no button). Zero Page gets none. Injected as
-    # reference grounding so it steers the ideas without polluting the stored
-    # spark.
-    if brand == "antihero":
-        insp = inspiration.combined_grounding(path=db.DB_PATH)
-        if insp:
-            references = insp + "\n\n" + (references or "")
+    # Under the hood: every brand grounds automatically on its own
+    # inspiration accounts (no button) -- brand-scoped so ANTIHERO's
+    # moto/noir personal-brand riffs never leak into Zero Page's
+    # faceless/uncanny ideation, and vice versa. Injected as reference
+    # grounding so it steers the ideas without polluting the stored spark.
+    insp = inspiration.combined_grounding(brand=brand, path=db.DB_PATH)
+    if insp:
+        references = insp + "\n\n" + (references or "")
 
     # Generating is the deliverable, but a failed generation should leave
     # the screen usable rather than 500 -- same contract as the YouTube import.
@@ -1540,14 +1832,14 @@ async def concepts_generate(request: Request):
             result = shootgen.generate_concept_ideas(
                 brand=brand, client=client_name, spark=spark,
                 gemini_client=gemini_client, use_pov=use_pov, db_path=db.DB_PATH,
-                references=references,
+                references=references, only_locations=only_locations,
             )
             message = f"Generated {len(result['ideas'])} ideas — plan the ones worth shooting"
         else:
             result = shootgen.generate_concept(
                 brand=brand, client=client_name, spark=spark,
                 gemini_client=gemini_client, use_pov=use_pov, db_path=db.DB_PATH,
-                references=references, cast=cast,
+                references=references, cast=cast, only_locations=only_locations,
             )
             message = f"Generated \"{result['concept']['title']}\""
             if result["warnings"]:
