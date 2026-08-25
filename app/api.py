@@ -108,6 +108,11 @@ def compute_capabilities() -> dict:
         "runway.generate": runway.has_key(),
         "runway.spend": runway.spend_approved(),
         "jobs": True,
+        # deployment posture (app/main.py's DEV_TOOLS, read live like the
+        # keys above): gates /ui elements that point into the dev console,
+        # e.g. the rail's "legacy" link -- on a public deployment there is
+        # no /studio to link to
+        "dev_tools": os.environ.get("DEV_TOOLS") == "1",
     }
 
 

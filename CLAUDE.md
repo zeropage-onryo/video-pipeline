@@ -244,7 +244,17 @@ is yours, in Resolve, by hand.
   segments and refuses anything that escapes `locations/` — a space name becomes a directory name,
   so it's sanitised on the way in too. `?thumb=1` serves a cached 480px JPEG rather than the
   multi-megabyte original. Routes that call a model wrap it and redirect with a message rather
-  than 500ing.
+  than 500ing. **Two deployment postures (added 2026-08-25):** `DEV_TOOLS=1` (the local `.env`)
+  registers the whole dev console — `/studio`, `/dashboard`, and every per-stage screen live on
+  the module's `dev = APIRouter()`, included only when the flag is set, read once at startup.
+  Unset (a public deployment) those routes are never registered, so `/studio` 404s like any
+  undefined path — omission, not a second session check. Only `/`, the SEO files, `/signin` +
+  auth, `/ui`, `/api/*`, and `/brand/{name}` are unconditional; the rule for a new legacy-style
+  page is "register it on `dev`". The landing CTA follows the posture (`/studio` vs `/ui`),
+  `/api/capabilities` reports `dev_tools` live, and `/ui`'s "legacy" rail link is gated on it
+  via the existing `data-cap` convention. The test suite pins `DEV_TOOLS=1` in
+  `tests/conftest.py`; `tests/test_dev_tools.py` reloads `app.main` under `DEV_TOOLS=0` to lock
+  the public posture.
 - **`app/api.py` + `/ui`** — the ZPF Studio skin (added 2026-08-21): the visual system from
   `prototype/studio.html` (spec: `docs/ZPF_STUDIO_SPEC.md`) ported onto a JSON API over the
   existing modules. One rule governs it: **every control is backed by a working endpoint and

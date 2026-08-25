@@ -11,9 +11,17 @@ So: no test may reach the network. Anything that wants to talk to
 Gemini or YouTube has to patch the function it actually calls, and
 gets a loud, immediate failure naming the offender if it doesn't.
 """
+import os
 import socket
 
 import pytest
+
+# The suite runs in the dev posture: the dev-console pages only register
+# when DEV_TOOLS=1 (app/main.py), and the page tests hit them. CI has no
+# .env, so pin it here -- conftest imports before any test module pulls
+# in app.main. The public posture has its own tests (test_dev_tools.py),
+# which reload app.main under DEV_TOOLS=0.
+os.environ["DEV_TOOLS"] = "1"
 
 
 class NetworkUseInTest(RuntimeError):

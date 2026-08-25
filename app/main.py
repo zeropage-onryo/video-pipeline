@@ -15,7 +15,7 @@ from typing import List, Optional
 from urllib.parse import quote
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -44,6 +44,15 @@ from . import api, auth, seo
 from .sparkline import render_sparkline
 
 load_dotenv()
+
+# Deployment posture. DEV_TOOLS=1 (the local .env) is the dev machine:
+# the legacy dev-console pages -- /studio and every per-stage screen --
+# register on top of /ui. Unset is a public deployment: those routes are
+# never registered at all, so /studio 404s the same as any undefined
+# path rather than being a page someone could find by guessing the URL.
+# Read once at startup; /api/capabilities reports the same flag live so
+# /ui can hide its "legacy" link (data-cap="dev_tools").
+DEV_TOOLS = os.environ.get("DEV_TOOLS") == "1"
 
 APP_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = APP_DIR.parent
@@ -266,10 +275,14 @@ def landing(request: Request):
     a canonical tag ends up pointing at localhost in production. The
     workspace lives at /studio.
     """
+    # The CTA points at whichever workspace exists on this deployment:
+    # /studio on the dev machine, /ui (behind sign-in) everywhere else --
+    # a public front door must not link into a 404.
     return templates.TemplateResponse(
         request,
         "landing.html",
-        {"site_url": seo.site_url(), "schema_json": seo.homepage_schema_json()},
+        {"site_url": seo.site_url(), "schema_json": seo.homepage_schema_json(),
+         "studio_href": "/studio" if DEV_TOOLS else "/ui"},
     )
 
 
@@ -291,18 +304,6 @@ def llms_txt():
 @app.get("/sitemap.xml")
 def sitemap_xml():
     return Response(content=seo.sitemap_xml(), media_type="application/xml")
-
-
-@app.get("/dashboard")
-def dashboard():
-    """
-    Gone. The app is one page now: what the dashboard showed -- counts,
-    pick rate, top performers at equal age -- lives on the studio canvas,
-    where it sits next to the work that produced it instead of on a
-    screen you had to remember to visit. Kept as a redirect because it
-    was the app's front door for months and is in muscle memory.
-    """
-    return RedirectResponse("/studio", status_code=308)
 
 
 # The assistant's vocabulary. Each intent is one pipeline stage; the
@@ -366,10 +367,32 @@ def set_brand(name: str, next: str = Form("/studio")):
     return resp
 
 
+# --- the dev console --------------------------------------------------------
+# Every route from here to the end of the file registers on `dev`, not
+# `app`: /studio and the per-stage screens are the operator's engine
+# room, and they exist only in the dev posture (the conditional
+# include_router at the bottom of the file). The rule is "anything that
+# isn't /ui, /api, auth, or the public landing surface is dev-only" --
+# a new legacy-style page belongs on this router, not on `app`.
+dev = APIRouter()
+
+
+@dev.get("/dashboard")
+def dashboard():
+    """
+    Gone. The app is one page now: what the dashboard showed -- counts,
+    pick rate, top performers at equal age -- lives on the studio canvas,
+    where it sits next to the work that produced it instead of on a
+    screen you had to remember to visit. Kept as a redirect because it
+    was the app's front door for months and is in muscle memory.
+    """
+    return RedirectResponse("/studio", status_code=308)
+
+
 STUDIO_TABS = ("characters", "locations", "props", "director")
 
 
-@app.get("/studio")
+@dev.get("/studio")
 def studio(request: Request, message: Optional[str] = None, tab: Optional[str] = None):
     """
     The workspace. Pre-production only now: the Workflow library
@@ -532,7 +555,7 @@ async def _split_studio_references(files: List[UploadFile]) -> tuple:
     return image_refs, video_note_lines
 
 
-@app.post("/studio/assist")
+@dev.post("/studio/assist")
 async def studio_assist(request: Request):
     """
     The assistant. One box and a row of chips stand in for the whole
@@ -634,7 +657,7 @@ def parse_video_form(form: dict) -> dict:
     }
 
 
-@app.get("/videos/new")
+@dev.get("/videos/new")
 def videos_new_form(request: Request):
     return templates.TemplateResponse(
         request,
@@ -647,7 +670,7 @@ def videos_new_form(request: Request):
     )
 
 
-@app.post("/videos/new")
+@dev.post("/videos/new")
 async def videos_new_submit(request: Request):
     form = dict(await request.form())
     parsed = parse_video_form(form)
@@ -659,7 +682,7 @@ async def videos_new_submit(request: Request):
     return RedirectResponse("/studio", status_code=303)
 
 
-@app.post("/videos/import/youtube")
+@dev.post("/videos/import/youtube")
 async def videos_import_youtube(request: Request):
     form = dict(await request.form())
     handle = (form.get("handle") or "").strip()
@@ -699,7 +722,7 @@ def parse_metrics_form(form: dict, video_ids: list) -> dict:
     return changed
 
 
-@app.get("/library")
+@dev.get("/library")
 def library(request: Request, q: Optional[str] = None,
             domain: Optional[str] = None, message: Optional[str] = None):
     """
@@ -735,7 +758,7 @@ def library(request: Request, q: Optional[str] = None,
     return templates.TemplateResponse(request, "library.html", context)
 
 
-@app.post("/library/ingest")
+@dev.post("/library/ingest")
 def library_ingest(source: str = Form(""), domain: str = Form(""),
                    project: str = Form(""), source_ref: str = Form(""),
                    text: str = Form("")):
@@ -760,7 +783,7 @@ def library_ingest(source: str = Form(""), domain: str = Form(""),
     return RedirectResponse("/library?message=" + quote(message), status_code=303)
 
 
-@app.post("/library/delete")
+@dev.post("/library/delete")
 def library_delete(source: str = Form(...)):
     try:
         conn = rag.connect()
@@ -772,7 +795,7 @@ def library_delete(source: str = Form(...)):
     return RedirectResponse("/library?message=" + quote(message), status_code=303)
 
 
-@app.get("/references/pick")
+@dev.get("/references/pick")
 def references_pick(request: Request, message: Optional[str] = None):
     """
     The references picker: a focused page, opened as a popup from the
@@ -828,7 +851,7 @@ def references_pick(request: Request, message: Optional[str] = None):
     return templates.TemplateResponse(request, "references_pick.html", context)
 
 
-@app.post("/references/pick/upload")
+@dev.post("/references/pick/upload")
 async def references_pick_upload(file: Optional[UploadFile] = File(None), domain: str = Form(""),
                                  project: str = Form(""), source_ref: str = Form("")):
     """
@@ -865,7 +888,7 @@ async def references_pick_upload(file: Optional[UploadFile] = File(None), domain
     return RedirectResponse("/references/pick?message=" + quote(message), status_code=303)
 
 
-@app.get("/post-image")
+@dev.get("/post-image")
 def post_image_page(request: Request, url: Optional[str] = None,
                     caption: Optional[str] = None, message: Optional[str] = None):
     """A one-off publish surface: preview an image + caption, then post it
@@ -877,7 +900,7 @@ def post_image_page(request: Request, url: Optional[str] = None,
          "active_nav": ""})
 
 
-@app.post("/post-image")
+@dev.post("/post-image")
 async def post_image_fire(request: Request):
     """Fire the post: one instagram post action through autopilot's
     three-condition gate (ZEROPAGE_AUTOPILOT=1 + this approve + no
@@ -911,7 +934,7 @@ async def post_image_fire(request: Request):
     return back(f"Not posted (mode: {mode}).")
 
 
-@app.post("/post-image/queue")
+@dev.post("/post-image/queue")
 async def post_image_queue(request: Request):
     """Semi-auto Midjourney path (BACKLOG #6): take a generated still -- an
     uploaded file or a public URL -- plus a caption, host it on R2 as a JPEG
@@ -958,7 +981,7 @@ async def post_image_queue(request: Request):
         status_code=303)
 
 
-@app.get("/winners")
+@dev.get("/winners")
 def winners_page(request: Request, prompt: Optional[str] = None,
                  tool: Optional[str] = None, verdict: Optional[str] = None,
                  message: Optional[str] = None):
@@ -978,7 +1001,7 @@ def winners_page(request: Request, prompt: Optional[str] = None,
     )
 
 
-@app.post("/winners")
+@dev.post("/winners")
 async def winners_add(request: Request):
     """Save the winner durably, then teach it to the pipeline. Saving
     always succeeds; the RAG ingest is best-effort so a down store never
@@ -1003,7 +1026,7 @@ async def winners_add(request: Request):
     return RedirectResponse(f"/winners?message={quote(message)}", status_code=303)
 
 
-@app.get("/holds")
+@dev.get("/holds")
 def holds_list(request: Request, message: Optional[str] = None):
     """
     The morning ritual: what the graph wanted to post while you weren't
@@ -1042,7 +1065,7 @@ def holds_list(request: Request, message: Optional[str] = None):
     )
 
 
-@app.post("/holds/{hold_id}/resolve")
+@dev.post("/holds/{hold_id}/resolve")
 async def holds_resolve(hold_id: int, request: Request):
     """Approved = "I would have posted this" (the evaluator was right);
     rejected = "glad it held". Either way the row leaves the queue and
@@ -1064,7 +1087,7 @@ async def holds_resolve(hold_id: int, request: Request):
     return RedirectResponse("/holds", status_code=303)
 
 
-@app.post("/holds/{hold_id}/post")
+@dev.post("/holds/{hold_id}/post")
 async def holds_post(hold_id: int, request: Request):
     """Your explicit 'post now' -- the approval to publish. Builds one
     post action per channel target from the hold, then runs it through
@@ -1126,7 +1149,7 @@ async def holds_post(hold_id: int, request: Request):
     return RedirectResponse(f"/holds?message={quote(msg)}", status_code=303)
 
 
-@app.post("/holds/note")
+@dev.post("/holds/note")
 async def holds_note(request: Request):
     """A standing correction for the next run -- the human_note channel.
     The orchestrator folds pending notes into the next generation's
@@ -1141,7 +1164,7 @@ async def holds_note(request: Request):
     return RedirectResponse(f"/holds?message={quote(message)}", status_code=303)
 
 
-@app.post("/channels/{name}/autonomy")
+@dev.post("/channels/{name}/autonomy")
 async def channels_autonomy(name: str, request: Request):
     """The promotion (or demotion): one row change. shadow -> queue ->
     auto is earned left to right by the agreement number; moving right
@@ -1158,7 +1181,7 @@ async def channels_autonomy(name: str, request: Request):
         f"/holds?message={quote(f'{name} is now {level}')}", status_code=303)
 
 
-@app.post("/kill")
+@dev.post("/kill")
 async def kill_toggle():
     """One place to pull the plug -- and to put it back. Global on
     purpose: every channel holds while it's on."""
@@ -1171,8 +1194,8 @@ async def kill_toggle():
     return RedirectResponse(f"/holds?message={quote(message)}", status_code=303)
 
 
-@app.get("/analytics")
-@app.get("/metrics/new")   # old URL, kept so bookmarks and habits still land
+@dev.get("/analytics")
+@dev.get("/metrics/new")   # old URL, kept so bookmarks and habits still land
 def analytics(request: Request, updated: Optional[int] = None, message: Optional[str] = None):
     # Scope to the active brand (NULL-inclusive: untagged legacy videos still
     # show, so nothing disappears while the pipeline tags new posts).
@@ -1206,7 +1229,7 @@ def analytics(request: Request, updated: Optional[int] = None, message: Optional
     )
 
 
-@app.post("/metrics/new")
+@dev.post("/metrics/new")
 async def metrics_new_submit(request: Request):
     form = dict(await request.form())
     video_ids = [r["video_id"] for r in db.latest_metrics_by_video(path=db.DB_PATH)]
@@ -1216,7 +1239,7 @@ async def metrics_new_submit(request: Request):
     return RedirectResponse(f"/analytics?updated={len(changed)}", status_code=303)
 
 
-@app.post("/metrics/refresh/{video_id}")
+@dev.post("/metrics/refresh/{video_id}")
 def metrics_refresh(video_id: int):
     """One dispatch on the video's platform; every branch returns a
     result dict, so a missing key or failed call is a message on the
@@ -1242,7 +1265,7 @@ def metrics_refresh(video_id: int):
     return RedirectResponse(f"/analytics?message={quote(message)}", status_code=303)
 
 
-@app.get("/videos/{video_id}")
+@dev.get("/videos/{video_id}")
 def video_detail(request: Request, video_id: int):
     video = db.get_video(video_id, path=db.DB_PATH)
     if video is None:
@@ -1310,7 +1333,7 @@ def _redirect_with_message(destination: str, message: str) -> RedirectResponse:
 ASSET_TABS = ("locations", "characters", "props")
 
 
-@app.get("/assets")
+@dev.get("/assets")
 def assets_list(request: Request, tab: Optional[str] = None, message: Optional[str] = None):
     """
     Locations, characters, and props were three separate rail items
@@ -1360,12 +1383,12 @@ def _redirect_to_assets_tab(tab: str, message: Optional[str]) -> RedirectRespons
     return RedirectResponse(url, status_code=308)
 
 
-@app.get("/locations")
+@dev.get("/locations")
 def locations_list(message: Optional[str] = None):
     return _redirect_to_assets_tab("locations", message)
 
 
-@app.get("/locations/{space}/photo/{filename}")
+@dev.get("/locations/{space}/photo/{filename}")
 def location_photo(space: str, filename: str, thumb: Optional[int] = None):
     """
     Serve one photo. Both segments are resolved and checked against the
@@ -1390,7 +1413,7 @@ def safe_space_name(name: str) -> str:
     return cleaned.strip("-.")
 
 
-@app.post("/locations/upload")
+@dev.post("/locations/upload")
 async def locations_upload(name: str = Form(...), next: str = Form(""),
                            photos: List[UploadFile] = File(default=[])):
     destination = safe_next(next, "/assets?tab=locations")
@@ -1474,17 +1497,17 @@ def _entity_photo_response(base_dir, slug, filename, thumb):
     return FileResponse(thumbnail_for(target) if thumb else target)
 
 
-@app.get("/characters")
+@dev.get("/characters")
 def characters_list(message: Optional[str] = None):
     return _redirect_to_assets_tab("characters", message)
 
 
-@app.get("/characters/{slug}/photo/{filename}")
+@dev.get("/characters/{slug}/photo/{filename}")
 def character_photo(slug: str, filename: str, thumb: Optional[int] = None):
     return _entity_photo_response(CHARACTERS_DIR, slug, filename, thumb)
 
 
-@app.post("/characters/new")
+@dev.post("/characters/new")
 async def characters_new(name: str = Form(...), role: str = Form(""),
                          notes: str = Form(""), next: str = Form(""),
                          photos: List[UploadFile] = File(default=[])):
@@ -1501,24 +1524,24 @@ async def characters_new(name: str = Form(...), role: str = Form(""),
     return _redirect_with_message(destination, "Added " + name)
 
 
-@app.post("/characters/{character_id}/delete")
+@dev.post("/characters/{character_id}/delete")
 def characters_delete(character_id: int, next: str = Form("")):
     entities.delete_character(character_id, path=db.DB_PATH)
     destination = safe_next(next, "/assets?tab=characters")
     return _redirect_with_message(destination, "Deleted")
 
 
-@app.get("/props")
+@dev.get("/props")
 def props_list(message: Optional[str] = None):
     return _redirect_to_assets_tab("props", message)
 
 
-@app.get("/props/{slug}/photo/{filename}")
+@dev.get("/props/{slug}/photo/{filename}")
 def prop_photo(slug: str, filename: str, thumb: Optional[int] = None):
     return _entity_photo_response(PROPS_DIR, slug, filename, thumb)
 
 
-@app.post("/props/new")
+@dev.post("/props/new")
 async def props_new(name: str = Form(...), category: str = Form(""),
                     notes: str = Form(""), next: str = Form(""),
                     photos: List[UploadFile] = File(default=[])):
@@ -1535,7 +1558,7 @@ async def props_new(name: str = Form(...), category: str = Form(""),
     return _redirect_with_message(destination, "Added " + name)
 
 
-@app.post("/props/{prop_id}/delete")
+@dev.post("/props/{prop_id}/delete")
 def props_delete(prop_id: int, next: str = Form("")):
     entities.delete_prop(prop_id, path=db.DB_PATH)
     destination = safe_next(next, "/assets?tab=props")
@@ -1553,7 +1576,7 @@ def _with_director_prompts(concepts: list) -> list:
     return concepts
 
 
-@app.post("/concepts/{concept_id}/shots/{shot_n}/reference")
+@dev.post("/concepts/{concept_id}/shots/{shot_n}/reference")
 async def concept_shot_reference(concept_id: int, shot_n: int, request: Request):
     """Attach (or clear) the real capture behind one shot -- the acting
     take or room plate its AI generation anchors on. A file is hosted on
@@ -1597,7 +1620,7 @@ async def concept_shot_reference(concept_id: int, shot_n: int, request: Request)
     return back(f"Reference attached to shot {shot_n} — the AI generation anchors on it.")
 
 
-@app.post("/concepts/{concept_id}/verdict")
+@dev.post("/concepts/{concept_id}/verdict")
 async def concept_verdict(concept_id: int, request: Request):
     """Subtle approve/deny on a whole concept or idea, with the idea text
     editable right there -- records straight through winners.py's existing
@@ -1623,7 +1646,7 @@ async def concept_verdict(concept_id: int, request: Request):
     return _redirect_with_message(destination, message)
 
 
-@app.post("/concepts/{concept_id}/shots/{shot_n}/verdict")
+@dev.post("/concepts/{concept_id}/shots/{shot_n}/verdict")
 async def concept_shot_verdict(concept_id: int, shot_n: int, request: Request):
     """Subtle approve/deny on one AI shot's render prompt, with the prompt
     text editable right there before it's taught -- same winners.py loop as
@@ -1647,7 +1670,7 @@ async def concept_shot_verdict(concept_id: int, shot_n: int, request: Request):
     return _redirect_with_message(destination, message)
 
 
-@app.get("/concepts")
+@dev.get("/concepts")
 def concepts_list(request: Request, message: Optional[str] = None):
     spaces = preprod.list_locations(path=db.DB_PATH)
     for space in spaces:
@@ -1677,7 +1700,7 @@ def concepts_list(request: Request, message: Optional[str] = None):
     )
 
 
-@app.post("/concepts/{concept_id}/grade")
+@dev.post("/concepts/{concept_id}/grade")
 def concepts_grade(concept_id: int):
     """Score one concept on taste fit + predicted performance (BACKLOG #5)
     against your own history, and store it so the card shows it. One billed
@@ -1695,7 +1718,7 @@ def concepts_grade(concept_id: int):
     return RedirectResponse(f"/concepts?message={quote(msg)}", status_code=303)
 
 
-@app.post("/concepts/{concept_id}/discard")
+@dev.post("/concepts/{concept_id}/discard")
 def concepts_discard(concept_id: int):
     """Discard a concept you don't want. Deletes it (locations cascade)."""
     if preprod.get_concept(concept_id, path=db.DB_PATH) is None:
@@ -1706,7 +1729,7 @@ def concepts_discard(concept_id: int):
         status_code=303)
 
 
-@app.post("/concepts/discard-all")
+@dev.post("/concepts/discard-all")
 def concepts_discard_all(request: Request):
     """Clear every concept for the active brand -- a fresh slate when the
     generator's slate isn't landing."""
@@ -1717,7 +1740,7 @@ def concepts_discard_all(request: Request):
         status_code=303)
 
 
-@app.post("/concepts/grade-all")
+@dev.post("/concepts/grade-all")
 def concepts_grade_all():
     """Grade every not-yet-graded concept against your history. Each is one
     billed call, so this is an explicit button, not automatic. Signals are
@@ -1734,7 +1757,7 @@ def concepts_grade_all():
         "/concepts?message=" + quote(f"Graded {graded} concept(s)."), status_code=303)
 
 
-@app.post("/concepts/scene-brief/{brief_id}/delete")
+@dev.post("/concepts/scene-brief/{brief_id}/delete")
 def scene_brief_delete(brief_id: int):
     preprod.delete_scene_brief(brief_id, path=db.DB_PATH)
     return RedirectResponse(
@@ -1742,7 +1765,7 @@ def scene_brief_delete(brief_id: int):
         status_code=303)
 
 
-@app.post("/inspiration/add")
+@dev.post("/inspiration/add")
 def inspiration_add(handle: str = Form(...), note: str = Form(""), profile: str = Form(...)):
     """Add or update an inspiration account -- e.g. once you've pasted posts
     for an account I couldn't reach."""
@@ -1754,7 +1777,7 @@ def inspiration_add(handle: str = Form(...), note: str = Form(""), profile: str 
     return RedirectResponse("/concepts?message=" + quote(msg), status_code=303)
 
 
-@app.post("/inspiration/{handle}/delete")
+@dev.post("/inspiration/{handle}/delete")
 def inspiration_delete(handle: str):
     inspiration.delete(handle, path=db.DB_PATH)
     return RedirectResponse(
@@ -1780,7 +1803,7 @@ def cast_from_picks(char_ids: list, prop_ids: list):
     return shootgen.format_cast(characters, props)
 
 
-@app.post("/concepts/generate")
+@dev.post("/concepts/generate")
 async def concepts_generate(request: Request):
     form_data = await request.form()
     form = dict(form_data)
@@ -1891,7 +1914,7 @@ def safe_next(value: Optional[str], default: str) -> str:
     return default
 
 
-@app.post("/concepts/{concept_id}/shotlist")
+@dev.post("/concepts/{concept_id}/shotlist")
 def concepts_shotlist(concept_id: int, next: str = Form("")):
     """Stage two. Bothering to plan a shoot for an idea is the pick
     shortlist_rate measures."""
@@ -1910,7 +1933,7 @@ def concepts_shotlist(concept_id: int, next: str = Form("")):
     return RedirectResponse(f"{destination}?message={quote(message)}", status_code=303)
 
 
-@app.post("/concepts/{concept_id}/shot")
+@dev.post("/concepts/{concept_id}/shot")
 def concepts_mark_shot(concept_id: int, next: str = Form("")):
     concept = preprod.get_concept(concept_id, path=db.DB_PATH)
     if concept is None:
@@ -1918,3 +1941,11 @@ def concepts_mark_shot(concept_id: int, next: str = Form("")):
 
     preprod.mark_shot(concept_id, shot=not concept["shot_done"], path=db.DB_PATH)
     return RedirectResponse(safe_next(next, "/concepts"), status_code=303)
+
+
+# The posture switch (see DEV_TOOLS at the top): on a public deployment
+# this include never runs, so the dev console isn't hidden -- it doesn't
+# exist. This must stay the last statement so every @dev route above is
+# already registered on the router when it lands on the app.
+if DEV_TOOLS:
+    app.include_router(dev)
