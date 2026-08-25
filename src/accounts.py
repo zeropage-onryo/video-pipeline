@@ -18,6 +18,8 @@ Extends db.py in its own module (own SCHEMA, own init()), the
 preprod.py pattern. No password hashing here -- that's the web layer's
 job (app/auth.py); this module never sees a plaintext password.
 """
+from __future__ import annotations
+
 import argparse
 import sys
 from datetime import datetime, timezone
