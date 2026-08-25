@@ -39,9 +39,17 @@ MODEL = "gemini-3-flash-preview"
 
 DEFAULT_COUNT = 6
 
-# Rework grounds on the same shelves ideation does, with proven_results
-# first -- the whole point is drawing on our own record.
-REWORK_DOMAINS = ("proven_results", "personal_brand", "marketing", "cinematography")
+# Rework's automatic layer (2026-08-20, same split as shootgen's):
+# craft/structuring advice -- always queried, no selection needed.
+AUTO_REWORK_DOMAINS = ("marketing",)
+
+# The brand's own assets. proven_results is rework's whole reason to
+# exist (drawing on our own record), but it's still one of the brand's
+# own assets, not generic craft advice -- so it's opt-in only, same as
+# shootgen's ASSET_IDEATION_DOMAINS: pulled by exact name via
+# rag.fetch_by_sources when evidence_block's picked_sources names it,
+# never by background search.
+ASSET_REWORK_DOMAINS = ("proven_results", "personal_brand", "cinematography")
 
 NO_SIGNALS_NOTE = (
     "note: no performance data yet -- proposing without evidence. Post videos "
@@ -97,37 +105,58 @@ def parse_slate_response(text: str) -> list:
     return ideas
 
 
-def evidence_block(signals: dict, gemini_client=None, db_path=None) -> str:
+def evidence_block(signals: dict, gemini_client=None, db_path=None,
+                   picked_sources=None) -> str:
     """
     Edge helper, like shootgen.reference_block: retrieve the reference
-    material rework grounds on -- proven winners first -- using the
-    winning patterns as the query. CRAG-graded when a client is
-    available (a weak retrieval gets one query rewrite); plain
-    retrieval otherwise. Never raises.
+    material rework grounds on. Never raises. Same two-layer split as
+    shootgen (2026-08-20): AUTO_REWORK_DOMAINS (craft/structuring
+    advice) is always queried -- CRAG-graded when a client is available
+    (a weak retrieval gets one query rewrite), plain retrieval
+    otherwise, using the winning patterns as the query. ASSET_REWORK_
+    DOMAINS (proven_results included -- your own performance record) is
+    opt-in only: pulled by exact source name via rag.fetch_by_sources
+    when picked_sources names them, never by background search.
     """
     parts = []
     for key in ("winning_topics", "winning_hooks", "winning_title_words"):
         parts.extend((signals.get(key) or {}).keys())
     query = " ".join(parts) or "proven winning short-form video concepts"
 
+    references = []
+
+    if picked_sources:
+        try:
+            picked = rag.fetch_by_sources(picked_sources)
+        except Exception as e:  # pragma: no cover - belt over fetch_by_sources' own braces
+            picked = {"ok": False, "references": [], "error": str(e)}
+        if picked.get("ok") and picked.get("references"):
+            print(f"Grounding rework in {len(picked['references'])} selected asset reference(s)",
+                  file=sys.stderr)
+            references.extend(picked["references"])
+        elif not picked.get("ok"):
+            print(f"note: reworking without selected assets: {picked.get('error')}",
+                  file=sys.stderr)
+
     try:
         if gemini_client is not None:
             retrieval = crag.retrieve_with_crag(
-                query, gemini_client, MODEL, domain=REWORK_DOMAINS,
+                query, gemini_client, MODEL, domain=AUTO_REWORK_DOMAINS,
             )
         else:
-            retrieval = rag.retrieve_references(query, domain=REWORK_DOMAINS)
+            retrieval = rag.retrieve_references(query, domain=AUTO_REWORK_DOMAINS)
     except Exception as e:  # pragma: no cover - belt over crag's own braces
         retrieval = {"ok": False, "references": [], "error": str(e)}
 
     if retrieval.get("ok") and retrieval.get("references"):
-        print(f"Grounding rework in {len(retrieval['references'])} reference(s)",
+        print(f"Grounding rework in {len(retrieval['references'])} craft reference(s)",
               file=sys.stderr)
-        return rag.format_references(retrieval["references"])
+        references.extend(retrieval["references"])
+    elif not retrieval.get("ok"):
+        reason = retrieval.get("error", "reference library is empty")
+        print(f"note: reworking without craft references: {reason}", file=sys.stderr)
 
-    reason = retrieval.get("error", "reference library is empty")
-    print(f"note: reworking without references: {reason}", file=sys.stderr)
-    return ""
+    return rag.format_references(references)
 
 
 def propose_slate(brand: str, signals: Optional[dict] = None, gemini_client=None,

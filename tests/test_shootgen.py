@@ -35,8 +35,8 @@ def make_concept(**overrides):
         "shots": [
             {"n": 1, "type": "CHARACTER", "cam": "BMPCC", "location": "hallway",
              "desc": "low angle, he steps into frame", "light": "overhead practical"},
-            {"n": 2, "type": "BROLL", "cam": "ACTION5", "location": "garage",
-             "desc": "POV of the handle turning", "light": "spill under the door"},
+            {"n": 2, "type": "BROLL", "cam": "BMPCC", "location": "garage",
+             "desc": "the handle turning, held close", "light": "spill under the door"},
         ],
         "ai": {"tool": "KLING", "technique": "image-to-video off shot 2",
                "prompt": "a door handle turning in the dark"},
@@ -111,6 +111,72 @@ def test_build_concept_prompt_omits_the_visual_note_by_default(tmp_db):
     prompt = shootgen.build_concept_prompt(locations, "antihero", None, None)
     assert "{visual_refs}" not in prompt
     assert "attached below this prompt" not in prompt
+
+
+# ---------- location lock: a deliberate single-location run vs a shortage ----------
+
+def test_location_variety_note_pushes_variety_by_default_with_few_rooms():
+    note = shootgen.location_variety_note([{"name": "garage"}])
+    assert "VARIETY NOTE" in note
+    assert "LOCATION LOCK" not in note
+
+
+def test_location_variety_note_locked_stops_pushing_variety():
+    note = shootgen.location_variety_note([{"name": "garage"}], lock=True)
+    assert "LOCATION LOCK" in note
+    assert "VARIETY NOTE" not in note
+    assert "deliberate choice" in note
+
+
+def test_location_variety_note_locked_wins_even_with_plenty_of_rooms():
+    """Lock is an explicit override, not just a fallback for scarcity -- it
+    should say its piece regardless of how many rooms are on file."""
+    many = [{"name": f"room{i}"} for i in range(5)]
+    assert shootgen.location_variety_note(many) == ""
+    assert "LOCATION LOCK" in shootgen.location_variety_note(many, lock=True)
+
+
+def test_apply_location_lock_filters_to_the_named_location(tmp_db):
+    locations = preprod.list_locations(path=tmp_db)
+    filtered, locked = shootgen._apply_location_lock(locations, ["garage"])
+    assert locked is True
+    assert [loc["name"] for loc in filtered] == ["garage"]
+
+
+def test_apply_location_lock_is_case_insensitive(tmp_db):
+    locations = preprod.list_locations(path=tmp_db)
+    filtered, locked = shootgen._apply_location_lock(locations, ["GARAGE"])
+    assert locked is True
+    assert [loc["name"] for loc in filtered] == ["garage"]
+
+
+def test_apply_location_lock_none_means_use_everything(tmp_db):
+    locations = preprod.list_locations(path=tmp_db)
+    filtered, locked = shootgen._apply_location_lock(locations, None)
+    assert locked is False
+    assert filtered == locations
+
+
+def test_apply_location_lock_falls_back_to_everything_on_no_match(tmp_db, capsys):
+    locations = preprod.list_locations(path=tmp_db)
+    filtered, locked = shootgen._apply_location_lock(locations, ["basement"])
+    assert locked is False
+    assert filtered == locations
+    assert "none of" in capsys.readouterr().err
+
+
+def test_build_concept_prompt_lock_location_reaches_the_prompt(tmp_db):
+    locations = [loc for loc in preprod.list_locations(path=tmp_db) if loc["name"] == "garage"]
+    prompt = shootgen.build_concept_prompt(locations, "antihero", None, None,
+                                           lock_location=True)
+    assert "LOCATION LOCK" in prompt
+
+
+def test_build_ideas_prompt_lock_location_reaches_the_prompt(tmp_db):
+    locations = [loc for loc in preprod.list_locations(path=tmp_db) if loc["name"] == "garage"]
+    prompt = shootgen.build_ideas_prompt(locations, "antihero", None, None,
+                                         lock_location=True)
+    assert "LOCATION LOCK" in prompt
 
 
 # ---------- parsing ----------
@@ -267,6 +333,85 @@ def test_generate_concept_saves_and_links_locations(tmp_db, monkeypatch):
     assert saved["title"] == "The Waiting"
     assert saved["brand"] == "antihero"
     assert {loc["name"] for loc in saved["locations"]} == {"hallway", "garage"}
+
+
+def test_generate_concept_only_locations_locks_prompt_and_linked_rooms(tmp_db, monkeypatch):
+    seen = {}
+
+    def fake_generate(client, model, prompt):
+        seen["prompt"] = prompt
+        return response_for(make_concept())
+
+    monkeypatch.setattr(shootgen, "generate_with_retry", fake_generate)
+
+    result = shootgen.generate_concept(
+        brand="antihero", client=None, gemini_client=None, db_path=tmp_db,
+        only_locations=["garage"],
+    )
+
+    assert "LOCATION LOCK" in seen["prompt"]
+    # format_locations renders each room as "- name: ..." -- check the
+    # described-rooms block specifically, since the gold-standard exemplar
+    # text elsewhere in the prompt is free to say "hallway" as scene-setting.
+    assert "- garage:" in seen["prompt"]
+    assert "- hallway:" not in seen["prompt"]
+    saved = preprod.get_concept(result["concept_id"], path=tmp_db)
+    assert {loc["name"] for loc in saved["locations"]} == {"garage"}
+
+
+# ---------- scene bible: cross-shot consistency for independently-rendered AI shots ----------
+
+def test_derive_scene_bible_combines_title_logline_grade():
+    bible = shootgen.derive_scene_bible("The Waiting", "He waits for someone.", "crushed shadows")
+    assert bible == "Scene: The Waiting -- He waits for someone. -- Grade: crushed shadows"
+
+
+def test_derive_scene_bible_skips_missing_parts():
+    assert shootgen.derive_scene_bible(None, None, None) == ""
+    assert shootgen.derive_scene_bible("Only Title") == "Scene: Only Title"
+
+
+def test_apply_scene_bible_prepends_only_to_ai_shots():
+    shots = [
+        {"source": "CAMERA", "prompt": "irrelevant"},
+        {"source": "AI", "prompt": "a door handle turning in the dark"},
+    ]
+    result = shootgen.apply_scene_bible(shots, "Scene: The Waiting")
+    assert result[0]["prompt"] == "irrelevant"  # CAMERA shot untouched
+    assert result[1]["prompt"] == "Scene: The Waiting. a door handle turning in the dark"
+
+
+def test_apply_scene_bible_does_not_double_prepend():
+    shots = [{"source": "AI", "prompt": "Scene: The Waiting. already anchored"}]
+    result = shootgen.apply_scene_bible(shots, "Scene: The Waiting")
+    assert result[0]["prompt"] == "Scene: The Waiting. already anchored"
+
+
+def test_apply_scene_bible_is_a_noop_without_a_bible():
+    shots = [{"source": "AI", "prompt": "unchanged"}]
+    assert shootgen.apply_scene_bible(shots, "")[0]["prompt"] == "unchanged"
+
+
+def test_generate_concept_anchors_every_ai_shot_to_the_scene_bible(tmp_db, monkeypatch):
+    concept = make_concept(shots=[
+        {"n": 1, "type": "CHARACTER", "source": "CAMERA", "cam": "BMPCC",
+         "location": "hallway", "desc": "he steps into frame"},
+        {"n": 2, "type": "BROLL", "source": "AI", "tool": "KLING",
+         "location": "garage", "desc": "the handle turns on its own",
+         "prompt": "a brass door handle turning slowly in the dark"},
+    ], grade="crushed shadows, one warm accent")
+    monkeypatch.setattr(shootgen, "generate_with_retry", lambda *a, **kw: response_for(concept))
+
+    result = shootgen.generate_concept(
+        brand="antihero", client=None, gemini_client=None, db_path=tmp_db,
+    )
+
+    ai_prompt = result["concept"]["shots"][1]["prompt"]
+    assert ai_prompt.startswith("Scene: The Waiting")
+    assert "crushed shadows, one warm accent" in ai_prompt
+    assert ai_prompt.endswith("a brass door handle turning slowly in the dark")
+    # the CAMERA shot never gets a generation prompt in the first place
+    assert "prompt" not in result["concept"]["shots"][0]
 
 
 def test_generate_concept_saves_even_with_warnings(tmp_db, monkeypatch):
@@ -437,6 +582,38 @@ def test_generate_concept_ideas_degrades_without_locations(tmp_path, capsys, mon
     assert "ungrounded" in capsys.readouterr().err
 
 
+def test_generate_concept_ideas_only_locations_locks_the_prompt(tmp_db, monkeypatch):
+    seen = {}
+
+    def fake_generate(client, model, prompt):
+        seen["prompt"] = prompt
+        return IDEAS_RESPONSE
+
+    monkeypatch.setattr(shootgen, "generate_with_retry", fake_generate)
+    shootgen.generate_concept_ideas(
+        brand="antihero", client=None, gemini_client=None, db_path=tmp_db,
+        only_locations=["garage"],
+    )
+    assert "LOCATION LOCK" in seen["prompt"]
+    assert "hallway" not in seen["prompt"]
+    assert "garage" in seen["prompt"]
+
+
+def test_generate_concept_ideas_without_only_locations_uses_everything(tmp_db, monkeypatch):
+    seen = {}
+
+    def fake_generate(client, model, prompt):
+        seen["prompt"] = prompt
+        return IDEAS_RESPONSE
+
+    monkeypatch.setattr(shootgen, "generate_with_retry", fake_generate)
+    shootgen.generate_concept_ideas(
+        brand="antihero", client=None, gemini_client=None, db_path=tmp_db,
+    )
+    assert "hallway" in seen["prompt"] and "garage" in seen["prompt"]
+    assert "LOCATION LOCK" not in seen["prompt"]
+
+
 # ---------- stage two: the shot list for a chosen idea ----------
 
 PLAN_RESPONSE = json.dumps({"plan": {
@@ -491,6 +668,36 @@ def test_generate_shot_list_fills_in_a_chosen_idea(tmp_db, monkeypatch):
     assert [loc["name"] for loc in saved["locations"]] == ["hallway"]
 
 
+def test_generate_shot_list_anchors_ai_shots_to_the_scene_bible(tmp_db, monkeypatch):
+    """The plan carries the grade note but not title/logline -- those live
+    on the concept saved at the idea stage -- so the bible has to draw
+    from both to anchor every AI shot in the finished shoot."""
+    concept_id = preprod.save_concept(
+        {"title": "Void Signal", "hook": "h", "logline": "he waits"},
+        brand="antihero", path=tmp_db,
+    )
+    plan_with_ai_shot = json.dumps({"plan": {
+        "duration": "12s",
+        "shots": [
+            {"n": 1, "type": "CHARACTER", "cam": "BMPCC", "location": "hallway",
+             "desc": "low angle", "light": "practical"},
+            {"n": 2, "type": "BROLL", "source": "AI", "tool": "KLING",
+             "location": "garage", "desc": "the handle turns",
+             "prompt": "a door handle turning slowly in the dark"},
+        ],
+        "edit": "hard cuts",
+        "grade": "crushed shadows",
+    }})
+    monkeypatch.setattr(shootgen, "generate_with_retry", lambda *a, **kw: plan_with_ai_shot)
+
+    shootgen.generate_shot_list(concept_id, gemini_client=None, db_path=tmp_db)
+
+    saved = preprod.get_concept(concept_id, path=tmp_db)
+    ai_shot = next(s for s in saved["shots"] if s.get("source") == "AI")
+    assert ai_shot["prompt"].startswith("Scene: Void Signal -- he waits -- Grade: crushed shadows")
+    assert ai_shot["prompt"].endswith("a door handle turning slowly in the dark")
+
+
 def test_generate_shot_list_validates_the_plan(tmp_db, monkeypatch):
     concept_id = preprod.save_concept({"title": "T"}, brand="antihero", path=tmp_db)
     bad = json.loads(PLAN_RESPONSE)
@@ -534,15 +741,33 @@ def test_shotlist_prompt_respects_the_pov_toggle(tmp_db):
     assert "ACTION5" in on
 
 
+def make_pov_concept():
+    """make_concept with shot 2 on the action cam -- only legal when
+    the POV toggle is on."""
+    concept = make_concept()
+    concept["shots"][1]["cam"] = "ACTION5"
+    concept["shots"][1]["desc"] = "POV of the handle turning"
+    return concept
+
+
 def test_validate_rejects_the_pov_camera_when_it_is_off():
     """Prompts request, code enforces -- turning the camera off has to
     mean the shot list can't quietly use it anyway."""
-    warnings = shootgen.validate_concept(make_concept(), LOCATION_NAMES, use_pov=False)
+    warnings = shootgen.validate_concept(make_pov_concept(), LOCATION_NAMES,
+                                         use_pov=False)
+    assert any("ACTION5" in w for w in warnings)
+
+
+def test_validate_rejects_the_pov_camera_by_default():
+    """POV is off unless asked for: with no use_pov argument the
+    validator treats ACTION5 as an unavailable camera."""
+    warnings = shootgen.validate_concept(make_pov_concept(), LOCATION_NAMES)
     assert any("ACTION5" in w for w in warnings)
 
 
 def test_validate_allows_the_pov_camera_when_it_is_on():
-    assert shootgen.validate_concept(make_concept(), LOCATION_NAMES, use_pov=True) == []
+    assert shootgen.validate_concept(make_pov_concept(), LOCATION_NAMES,
+                                     use_pov=True) == []
 
 
 def test_generate_concept_threads_the_pov_setting_through(tmp_db, monkeypatch):
@@ -605,3 +830,43 @@ def test_shot_list_inherits_the_concepts_pov_setting(tmp_db, monkeypatch):
     monkeypatch.setattr(shootgen, "generate_with_retry", fake)
     shootgen.generate_shot_list(concept_id, gemini_client=None, db_path=tmp_db)
     assert "ACTION5" not in seen["prompt"]
+
+
+# ---------- director_prompt: the OpenArt Director rendering ----------
+# Pure text composition -- no model call, so these run in microseconds.
+
+def test_director_prompt_weaves_shot_and_story_into_prose():
+    concept = make_concept()
+    text = shootgen.director_prompt(concept["shots"][0], concept)
+    assert "low angle, he steps into frame" in text
+    assert "The scene is hallway." in text
+    assert "Light: overhead practical." in text
+    assert "The Waiting — He waits for someone who never knocks." in text
+    assert "Grade: crushed shadows, one warm accent." in text
+
+
+def test_director_prompt_gives_shot_one_the_hook():
+    """Shot 1's whole job is landing the hook; later shots don't repeat it."""
+    concept = make_concept()
+    first = shootgen.director_prompt(concept["shots"][0], concept)
+    second = shootgen.director_prompt(concept["shots"][1], concept)
+    assert "a hand already on the door handle" in first
+    assert "a hand already on the door handle" not in second
+
+
+def test_director_prompt_falls_back_to_the_ai_prompt_when_no_desc():
+    text = shootgen.director_prompt(
+        {"n": 2, "prompt": "a door handle turning in the dark"}, {})
+    assert text.startswith("a door handle turning in the dark.")
+
+
+def test_director_prompt_reads_saved_rows_too():
+    """Saved concepts carry grade_note, generation-time dicts carry
+    grade -- both sides of save render the same."""
+    text = shootgen.director_prompt(
+        {"n": 1, "desc": "d"}, {"grade_note": "one warm accent"})
+    assert "Grade: one warm accent." in text
+
+
+def test_director_prompt_skips_what_the_shot_does_not_carry():
+    assert shootgen.director_prompt({"n": 3, "desc": "just this"}, {}) == "just this."

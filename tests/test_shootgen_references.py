@@ -73,11 +73,16 @@ def test_reference_block_empty_when_no_locations(monkeypatch):
     assert shootgen.reference_block(spark="ritual") == ""
 
 
-def test_reference_block_scopes_to_the_ideation_domains(monkeypatch):
+def test_reference_block_auto_grounds_only_in_craft_and_learned_domains(monkeypatch):
     """
-    Ideation grounds in brand/cinematography/marketing/proven_results,
-    never ai_prompting -- that shelf is AI-video prompt syntax for
-    promptgen.py's stage, not "what should we shoot" material.
+    Ideation's automatic layers are craft/structuring advice (the
+    marketing shelf: platform mechanics, edit anatomy) and -- since
+    2026-08-24 -- the learned shelves (your own approve/deny verdicts:
+    winning_prompts/avoid_prompts/denials). Never ai_prompting (that's
+    AI-video prompt syntax for promptgen.py's stage) and never the
+    brand's own asset shelves by semantic search (personal_brand,
+    cinematography, proven_results), which are opt-in only via
+    picked_sources (2026-08-20).
     """
     monkeypatch.setattr(shootgen.preprod, "list_locations",
                         lambda **k: [{"name": "shop", "description": {"space": "garage"}}])
@@ -91,7 +96,67 @@ def test_reference_block_scopes_to_the_ideation_domains(monkeypatch):
 
     shootgen.reference_block(spark="ritual")
 
-    assert len(calls) == 1
-    assert calls[0]["domain"] == shootgen.IDEATION_DOMAINS
-    assert "ai_prompting" not in shootgen.IDEATION_DOMAINS
-    assert "proven_results" in shootgen.IDEATION_DOMAINS
+    assert [c["domain"] for c in calls] == [shootgen.AUTO_IDEATION_DOMAINS,
+                                            shootgen.LEARNED_IDEATION_DOMAINS]
+    assert shootgen.AUTO_IDEATION_DOMAINS == ("marketing",)
+    for domains in (shootgen.AUTO_IDEATION_DOMAINS, shootgen.LEARNED_IDEATION_DOMAINS):
+        assert "ai_prompting" not in domains
+        assert "personal_brand" not in domains
+        assert "proven_results" not in domains
+
+
+def test_reference_block_never_touches_asset_shelves_without_picked_sources(monkeypatch):
+    monkeypatch.setattr(shootgen.preprod, "list_locations",
+                        lambda **k: [{"name": "shop", "description": {"space": "garage"}}])
+    monkeypatch.setattr(shootgen.rag, "retrieve_references",
+                        lambda *a, **k: {"ok": False, "references": [], "error": "x"})
+    called = []
+    monkeypatch.setattr(
+        shootgen.rag, "fetch_by_sources",
+        lambda sources, **k: called.append(sources) or {"ok": True, "references": [
+            {"source": "brief.txt", "chunk": "should never surface"}]},
+    )
+
+    block = shootgen.reference_block(spark="ritual")
+
+    assert called == []
+    assert "brief.txt" not in block
+
+
+def test_reference_block_pulls_picked_assets_by_exact_name(monkeypatch):
+    monkeypatch.setattr(shootgen.preprod, "list_locations",
+                        lambda **k: [{"name": "shop", "description": {"space": "garage"}}])
+    monkeypatch.setattr(shootgen.rag, "retrieve_references",
+                        lambda *a, **k: {"ok": False, "references": [], "error": "x"})
+    monkeypatch.setattr(
+        shootgen.rag, "fetch_by_sources",
+        lambda sources, **k: (
+            {"ok": True, "references": [
+                {"source": "brief.txt", "chunk": "still, patient, one move"}]}
+            if sources == ["brief.txt"] else {"ok": True, "references": []}
+        ),
+    )
+
+    block = shootgen.reference_block(spark="ritual", picked_sources=["brief.txt"])
+
+    assert "brief.txt" in block and "still, patient, one move" in block
+
+
+def test_reference_block_combines_picked_assets_with_auto_craft_advice(monkeypatch):
+    monkeypatch.setattr(shootgen.preprod, "list_locations",
+                        lambda **k: [{"name": "shop", "description": {"space": "garage"}}])
+    monkeypatch.setattr(
+        shootgen.rag, "retrieve_references",
+        lambda *a, **k: {"ok": True, "references": [
+            {"source": "short-form-video.md", "chunk": "hook in the first second"}]},
+    )
+    monkeypatch.setattr(
+        shootgen.rag, "fetch_by_sources",
+        lambda sources, **k: {"ok": True, "references": [
+            {"source": "brief.txt", "chunk": "still, patient, one move"}]},
+    )
+
+    block = shootgen.reference_block(spark="ritual", picked_sources=["brief.txt"])
+
+    assert "brief.txt" in block and "still, patient, one move" in block
+    assert "short-form-video.md" in block and "hook in the first second" in block

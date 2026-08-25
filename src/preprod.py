@@ -269,7 +269,7 @@ def save_concept(
     location_ids: Optional[list] = None,
     prompt_template: Optional[str] = None,
     warnings: Optional[list] = None,
-    use_pov: bool = True,
+    use_pov: bool = False,
     path: Path | str = DB_PATH,
 ) -> int:
     """
@@ -373,7 +373,7 @@ def save_concept_ideas(
     client: Optional[str] = None,
     spark: Optional[str] = None,
     prompt_template: Optional[str] = None,
-    use_pov: bool = True,
+    use_pov: bool = False,
     path: Path | str = DB_PATH,
 ) -> list:
     """
@@ -463,6 +463,47 @@ def set_shot_media_url(concept_id: int, shot_n, media_url: str,
         for shot in shots:
             if shot.get("n") == shot_n:
                 shot["media_url"] = media_url.strip()
+                break
+        else:
+            raise ValueError(f"concept {concept_id} has no shot n={shot_n!r}")
+
+        conn.execute(
+            "UPDATE shoot_concepts SET shots_json = ? WHERE id = ?",
+            (json.dumps(shots), concept_id),
+        )
+
+
+def set_shot_reference_image(concept_id: int, shot_n, reference_url,
+                             path: Path | str = DB_PATH) -> None:
+    """
+    Attach a real capture -- the acting take or room plate Michael
+    filmed -- to one shot as the reference image its AI generation
+    anchors on. Shots live as dicts inside shots_json, so this rewrites
+    just the matching shot's reference_image in place, exactly the
+    set_shot_media_url() shape above.
+
+    Unlike media_url, empty is legal here and CLEARS the reference: a
+    reference is an enhancement to a shot, never a gate on it, so
+    detaching one must be as easy as attaching it. Raises if the
+    concept or the shot (by its "n") doesn't exist.
+    """
+    with connect(path) as conn:
+        row = conn.execute(
+            "SELECT shots_json FROM shoot_concepts WHERE id = ?", (concept_id,)
+        ).fetchone()
+        if not row:
+            raise ValueError(f"no concept with id {concept_id}")
+
+        shots = json.loads(row["shots_json"] or "[]")
+        for shot in shots:
+            if shot.get("n") == shot_n:
+                cleaned = (reference_url or "").strip()
+                if cleaned:
+                    shot["reference_image"] = cleaned
+                else:
+                    # absent, not empty-string: a shot carries the key
+                    # only while a reference is actually attached
+                    shot.pop("reference_image", None)
                 break
         else:
             raise ValueError(f"concept {concept_id} has no shot n={shot_n!r}")

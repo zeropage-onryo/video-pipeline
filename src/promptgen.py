@@ -15,6 +15,7 @@ it impossible to tell which broke.
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -32,6 +33,62 @@ PROMPTS_DIR = PROJECT_ROOT / "prompts"
 MODEL = "gemini-3-flash-preview"
 
 SHOT_FIELDS = ("subject", "action", "camera", "size", "setting", "lighting", "audio", "duration_s")
+
+# The ai_prompting RAG shelf: tool-specific prompting technique guidance
+# (Seedance/Runway/Veo/etc. cheat codes) -- deliberately never queried
+# during ideation (see shootgen.IDEATION_DOMAINS' test), only here, at
+# the "how do we phrase it for this tool" stage.
+REFINE_DOMAIN = ("ai_prompting",)
+
+
+def build_refine_prompt(raw_prompt: str, tool: str, references: str) -> str:
+    template = (PROMPTS_DIR / "refine_prompt.txt").read_text()
+    return (
+        template
+        .replace("{tool}", tool or "the target tool")
+        .replace("{raw_prompt}", raw_prompt)
+        .replace("{references}", references or "(no tool-specific technique references on file)")
+    )
+
+
+def _sane_refinement(raw: str, refined: str) -> tuple[bool, str]:
+    """Cheap, deterministic guard before a refined prompt replaces a
+    perfectly good one -- same spirit as orchestrator._structural_check.
+    Not a quality judgment, just catching broken output: empty, much
+    shorter than the original, or a leftover instruction/placeholder."""
+    r = (refined or "").strip()
+    if not r:
+        return False, "empty"
+    if len(r.split()) < max(8, len(raw.split()) // 3):
+        return False, "much shorter than the original"
+    if re.search(r"\{.*?\}|\[.*?\]|TODO|TBD", r):
+        return False, "leftover placeholder/template token"
+    return True, ""
+
+
+def refine_prompt(raw_prompt: str, tool: str, gemini_client, model: str = MODEL,
+                  references: str = "") -> str:
+    """Polish an already-valid shot prompt against real tool-specific
+    prompting technique guidance pulled from the ai_prompting RAG shelf.
+    Refinement is an enhancement, never a gate -- same contract
+    shootgen's reference_block keeps: no references, no client, a
+    failed call, or output that fails the sanity guard all fall back to
+    the original prompt untouched. It never blocks and never returns
+    something worse than what came in."""
+    if not references:
+        return raw_prompt
+    prompt = build_refine_prompt(raw_prompt, tool, references)
+    try:
+        refined = generate_with_retry(gemini_client, model, prompt).strip()
+    except Exception as e:
+        print(f"note: prompt refinement failed, keeping original: {e}", file=sys.stderr)
+        return raw_prompt
+    ok, reason = _sane_refinement(raw_prompt, refined)
+    if not ok:
+        print(f"note: refinement rejected ({reason}), keeping original", file=sys.stderr)
+        return raw_prompt
+    return refined
+
 
 
 def format_examples(entries: list[dict]) -> str:

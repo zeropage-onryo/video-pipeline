@@ -63,6 +63,26 @@ def test_main_fires_the_rotated_spark(tmp_db, monkeypatch):
     assert calls["spark"] in trigger.load_sparks()   # rotation, not a constant
 
 
+def test_main_omits_brand_by_default_letting_it_follow_channel(tmp_db, monkeypatch):
+    """--brand has no hardcoded default anymore -- it's None unless passed
+    explicitly, so orchestrator.run() is the one place brand-follows-channel
+    is decided. A --brand default here that disagreed with --channel's is
+    exactly what produced hold_queue row 13 / concept 111 on 2026-08-14."""
+    from src import orchestrator
+    calls = {}
+
+    def fake_run(spark, brand=None, channel="zeropage", **kw):
+        calls.update(brand=brand, channel=channel)
+        return {"attempts": 1, "concept_id": 9, "hold_id": 3,
+                "held_reason": "shadow — grading only"}
+
+    monkeypatch.setattr(orchestrator, "run", fake_run)
+
+    trigger.main([])
+    assert calls["brand"] is None
+    assert calls["channel"] == "zeropage"
+
+
 def test_main_explicit_spark_wins(tmp_db, monkeypatch):
     from src import orchestrator
     calls = {}

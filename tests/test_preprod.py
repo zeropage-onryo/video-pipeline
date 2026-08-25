@@ -316,12 +316,13 @@ def test_list_concepts_includes_warnings(tmp_db):
 
 
 def test_use_pov_is_remembered_on_the_concept(tmp_db):
-    """The shot list is generated later, so the choice has to persist."""
-    off = preprod.save_concept({"title": "A"}, brand="antihero",
-                               use_pov=False, path=tmp_db)
-    on = preprod.save_concept({"title": "B"}, brand="antihero", path=tmp_db)
-    assert preprod.get_concept(off, path=tmp_db)["use_pov"] is False
+    """The shot list is generated later, so the choice has to persist.
+    POV is off unless explicitly asked for."""
+    on = preprod.save_concept({"title": "A"}, brand="antihero",
+                              use_pov=True, path=tmp_db)
+    off = preprod.save_concept({"title": "B"}, brand="antihero", path=tmp_db)
     assert preprod.get_concept(on, path=tmp_db)["use_pov"] is True
+    assert preprod.get_concept(off, path=tmp_db)["use_pov"] is False
 
 
 # ---------- ai_shots: real + AI as co-inputs ----------
@@ -367,3 +368,37 @@ def test_shots_without_source_default_to_camera(tmp_db):
         brand="antihero", path=tmp_db,
     )
     assert preprod.get_concept(cid, path=tmp_db)["ai_shots"] == []
+
+
+# ---------- reference captures: the real take behind an AI shot ----------
+
+def test_set_shot_reference_image_attaches_to_the_matching_shot(tmp_db):
+    cid = preprod.save_concept(
+        {"title": "T", "shots": SAMPLE_SHOTS}, brand="antihero", path=tmp_db)
+    preprod.set_shot_reference_image(cid, 2, "https://cdn.example/take.jpg",
+                                     path=tmp_db)
+    shots = preprod.get_concept(cid, path=tmp_db)["shots"]
+    assert shots[1]["reference_image"] == "https://cdn.example/take.jpg"
+    # the other shot is untouched and carries no key at all
+    assert "reference_image" not in shots[0]
+
+
+def test_set_shot_reference_image_empty_clears_it(tmp_db):
+    """Unlike media_url, empty is legal and detaches: a reference is an
+    enhancement to a shot, never a gate on it."""
+    cid = preprod.save_concept(
+        {"title": "T", "shots": SAMPLE_SHOTS}, brand="antihero", path=tmp_db)
+    preprod.set_shot_reference_image(cid, 1, "https://cdn.example/take.jpg",
+                                     path=tmp_db)
+    preprod.set_shot_reference_image(cid, 1, "", path=tmp_db)
+    shots = preprod.get_concept(cid, path=tmp_db)["shots"]
+    assert "reference_image" not in shots[0]
+
+
+def test_set_shot_reference_image_raises_on_missing_concept_or_shot(tmp_db):
+    with pytest.raises(ValueError, match="no concept"):
+        preprod.set_shot_reference_image(999, 1, "u", path=tmp_db)
+    cid = preprod.save_concept(
+        {"title": "T", "shots": SAMPLE_SHOTS}, brand="antihero", path=tmp_db)
+    with pytest.raises(ValueError, match="no shot"):
+        preprod.set_shot_reference_image(cid, 9, "u", path=tmp_db)

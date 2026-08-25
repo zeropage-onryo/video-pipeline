@@ -9,6 +9,7 @@ happen in one of them. AI shots can extend a real room OR invent a
 fitting environment the story wants that he doesn't have — don't feel
 trapped in one room):
 {locations}
+{location_variety_note}
 
 CAST & PROPS ON FILE (name these exactly instead of re-describing their
 appearance from scratch — reference photos carry the look, your prompt
@@ -38,6 +39,12 @@ if a reference shows something these rooms can't deliver on camera,
 that's a candidate for an AI shot, not a reason to call for a room he
 doesn't have):
 {references}
+
+GOLD-STANDARD EXAMPLE — a proven prompt from this same house style. Match its
+SHAPE and craft: the frame-1 hook, the raw-handheld style block, the
+sequential escalating beats, the diegetic-sound line, the hard avoid-list at
+the end. Never reuse its exact scene, story, or specific content:
+{example}
 
 MAKE IT TRAVEL (engineer every concept to be watched twice and shared —
 all of it INSIDE the grade above, never at the cost of the mood):

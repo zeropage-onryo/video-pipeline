@@ -31,8 +31,9 @@ SHOT = Shot(
 
 # ---------- the registry is the single source ----------
 
-def test_registry_carries_all_six_platforms():
-    assert set(PLATFORMS) == {"runway", "veo", "kling", "seedance", "ltx", "wan"}
+def test_registry_carries_all_eight_platforms():
+    assert set(PLATFORMS) == {"runway", "veo", "kling", "seedance", "ltx", "wan",
+                              "openart", "higgsfield"}
 
 
 def test_tools_tuple_derives_from_the_registry():
@@ -110,6 +111,62 @@ def test_wan_keeps_model_and_params_out_of_the_text():
     prompt = render(SHOT, "wan")
     assert "Wan" not in prompt
     assert "9:16" not in prompt
+
+
+# ---------- openart: Director reads language, not shorthand ----------
+
+def test_openart_is_flowing_sentences_not_shorthand():
+    """Director is conversational (Story → Scenes → Shots, directed in
+    plain language) -- the render must read as prose a director would
+    hear, not a comma list of camera codes."""
+    prompt = render(SHOT, "openart")
+    assert "the camera slowly pushes in" in prompt
+    assert "push_in" not in prompt
+    assert prompt.count(".") >= 3          # actual sentences, not one clause
+
+
+def test_openart_camera_map_is_full_prose_clauses():
+    for phrase in shot_mod.CAMERA_PROSE.values():
+        assert phrase.startswith("the camera"), phrase
+
+
+def test_openart_keeps_generation_params_out_of_the_text():
+    prompt = render(SHOT, "openart")
+    assert "9:16" not in prompt
+    assert "4.0" not in prompt
+
+
+def test_openart_carries_story_notes_when_present():
+    noted = Shot(subject="a gloved hand", action="closes a steel drawer",
+                 notes="this beat is the reveal — the drawer is already empty")
+    assert "already empty" in render(noted, "openart")
+
+
+# ---------- reference_image: the real capture behind an AI shot ----------
+
+def test_reference_image_defaults_to_none_attached():
+    assert SHOT.reference_image == ""
+    assert SHOT.as_dict()["reference_image"] == ""
+
+
+def test_openart_parameters_attach_the_capture_not_the_prompt():
+    """The reference travels beside the description, never inside it --
+    same contract as veo_parameters()."""
+    anchored = Shot(subject="a gloved hand", action="closes a steel drawer",
+                    reference_image="https://cdn.example/ref.jpg")
+    assert shot_mod.openart_parameters(anchored) == {
+        "reference_images": ["https://cdn.example/ref.jpg"]}
+    assert shot_mod.openart_parameters(SHOT) == {"reference_images": []}
+    assert "cdn.example" not in render(anchored, "openart")
+
+
+def test_runway_parameters_now_carry_the_capture_too():
+    """runway_parameters() was a placeholder shape waiting for exactly
+    this field -- with a reference attached it stops being empty."""
+    anchored = Shot(subject="a gloved hand", action="closes a steel drawer",
+                    reference_image="https://cdn.example/ref.jpg")
+    assert shot_mod.runway_parameters(anchored) == {
+        "reference_images": ["https://cdn.example/ref.jpg"]}
 
 
 # ---------- existing platforms keep their dialects ----------

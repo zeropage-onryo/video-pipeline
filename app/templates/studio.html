@@ -43,6 +43,8 @@
   .zp .refslot.refpick .vidmark{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-family:var(--mono); font-size:9px; color:var(--dim); text-align:center; padding:4px; }
   .zp .refslot.refpick .rm{ position:absolute; top:2px; right:2px; width:16px; height:16px; border-radius:50%; background:rgba(0,0,0,.7); color:#fff; font-size:11px; line-height:16px; text-align:center; cursor:pointer; border:none; padding:0; }
   .zp .refslot.refpick .rm:hover{ background:rgba(0,0,0,.9); }
+  .zp .refslot.refassetpick{ background:var(--panel3); display:flex; align-items:center; justify-content:center; padding:4px; text-align:center; }
+  .zp .refslot.refassetpick .rn{ font-family:var(--mono); font-size:9px; color:var(--vio); line-height:1.25; overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; }
   .zp .cph{ width:100%; background:transparent; border:none; outline:none; resize:none; color:var(--ink); font-family:inherit; font-size:15px; line-height:1.4; padding:2px 4px 20px; }
   .zp .cph::placeholder{ color:var(--faint); }
   .zp .cbar{ display:flex; align-items:center; justify-content:space-between; padding-top:4px; }
@@ -82,6 +84,9 @@
   .zp .lt:hover{ color:var(--ink); } .zp .lt.active{ color:var(--white); background:var(--panel); border-color:var(--line2); }
   .zp .agrid{ display:grid; grid-template-columns:repeat(4,1fr); gap:16px; }
   .zp .agrid.hide{ display:none; }
+  .zp [data-panel].hide{ display:none; }
+  .zp .dirhead{ grid-column:1/-1; font-size:13px; font-weight:600; color:var(--ink); }
+  .zp .direflink{ color:var(--vio); text-decoration:none; }
   .zp .acard{ background:var(--panel); border:1px solid var(--line); border-radius:14px; overflow:hidden; cursor:pointer; }
   .zp .acard:hover{ border-color:var(--line2); }
   .zp .acard .im{ aspect-ratio:4/3; position:relative; }
@@ -139,12 +144,13 @@
           </label>
         </div>
         <input type="file" id="ref-input" name="references" accept="image/*,video/*" multiple hidden>
+        <div id="picked-refs-inputs"></div>
         <textarea class="cph" name="text" rows="1" placeholder="Describe your idea, or attach a reference and describe what to do with it…"></textarea>
         <input type="hidden" name="intent" value="">
         <div class="cbar">
           <div class="lft">
             <span class="cbtn" id="add-ref-btn" title="Attach reference images or video"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span>
-            <span class="cbtn"><svg viewBox="0 0 24 24"><path d="M6 3h9l3 3v15H6Z"/><path d="M9 8h6M9 12h6M9 16h4"/></svg></span>
+            <span class="cbtn" id="lib-ref-btn" title="Pick from your reference library"><svg viewBox="0 0 24 24"><path d="M6 3h9l3 3v15H6Z"/><path d="M9 8h6M9 12h6M9 16h4"/></svg></span>
           </div>
           <div class="rgt"><span class="qual" id="composer-status">One concept · Cinematic</span><button class="send" type="submit" aria-label="Generate"><svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button></div>
         </div>
@@ -197,11 +203,12 @@
         <div><a class="btnv" href="/library"><svg viewBox="0 0 24 24"><path d="m12 2 2.2 5.6L20 9.8l-5.8 2.2L12 18l-2.2-6L4 9.8l5.8-2.2L12 2Z"/></svg>Generate</a></div>
       </div>
       <div class="libtabs" style="margin-bottom:16px">
-        <div class="lt active" data-tab="characters">Characters</div>
-        <div class="lt" data-tab="locations">Locations</div>
-        <div class="lt" data-tab="props">Props</div>
+        <div class="lt {{ 'active' if active_tab == 'characters' else '' }}" data-tab="characters">Characters</div>
+        <div class="lt {{ 'active' if active_tab == 'locations' else '' }}" data-tab="locations">Locations</div>
+        <div class="lt {{ 'active' if active_tab == 'props' else '' }}" data-tab="props">Props</div>
+        <div class="lt {{ 'active' if active_tab == 'director' else '' }}" data-tab="director">Director{% if director_shots %} · {{ director_shots|length }}{% endif %}</div>
       </div>
-      <div class="agrid" data-panel="characters">
+      <div class="agrid {{ '' if active_tab == 'characters' else 'hide' }}" data-panel="characters">
         {% for c in characters %}
         <a class="acard" href="/assets?tab=characters">
           <div class="im">{% if c.photos %}<img src="{{ c.photos[0] }}" alt="{{ c.name }}">{% else %}<div class="im-ph"></div>{% endif %}</div>
@@ -210,7 +217,7 @@
         {% endfor %}
         <a class="acard add" href="/assets?tab=characters">＋ New character</a>
       </div>
-      <div class="agrid hide" data-panel="locations">
+      <div class="agrid {{ '' if active_tab == 'locations' else 'hide' }}" data-panel="locations">
         {% for s in spaces %}
         <a class="acard" href="/assets?tab=locations">
           <div class="im">{% if s.photos %}<img src="{{ s.photos[0] }}" alt="{{ s.name }}">{% else %}<div class="im-ph"></div>{% endif %}{% if s.description %}<span class="badge">DESCRIBED</span>{% endif %}</div>
@@ -219,7 +226,7 @@
         {% endfor %}
         <a class="acard add" href="/assets?tab=locations">＋ New location</a>
       </div>
-      <div class="agrid hide" data-panel="props">
+      <div class="agrid {{ '' if active_tab == 'props' else 'hide' }}" data-panel="props">
         {% for p in props %}
         <a class="acard" href="/assets?tab=props">
           <div class="im">{% if p.photos %}<img src="{{ p.photos[0] }}" alt="{{ p.name }}">{% else %}<div class="im-ph"></div>{% endif %}</div>
@@ -227,6 +234,58 @@
         </a>
         {% endfor %}
         <a class="acard add" href="/assets?tab=props">＋ New prop</a>
+      </div>
+      <div class="{{ '' if active_tab == 'director' else 'hide' }}" data-panel="director">
+        {% if director_shots %}
+        <div class="aigrid">
+          {% set ns = namespace(prev_concept=None) %}
+          {% for s in director_shots %}
+            {% if s.concept_id != ns.prev_concept %}
+            <div class="dirhead" style="margin:{{ '0' if loop.first else '22px 0 0' }}">
+              SHOOT-{{ "%02d"|format(s.concept_id) }} — {{ s.concept_title or 'Untitled concept' }}
+              <a class="direflink" href="/concepts" style="font-size:11px; margin-left:8px">open in /concepts →</a>
+            </div>
+            {% set ns.prev_concept = s.concept_id %}
+            {% endif %}
+            <div class="aicard">
+              <div class="shot-tags">
+                <span style="font-family:var(--mono); font-size:11px; color:var(--dim)">{{ "%02d"|format(s.n or loop.index) }}</span>
+                {% if s.tool %}<span class="tag steel">{{ s.tool }}</span>{% endif %}
+                {% if s.location %}<span class="tag faint">{{ s.location|upper }}</span>{% endif %}
+              </div>
+              {% if s.desc %}<p class="aidesc">{{ s.desc }}</p>{% endif %}
+              {% if s.reference_image %}
+              <img src="{{ s.reference_image }}" alt="Reference capture anchoring this shot"
+                   style="max-width:100%; max-height:160px; border-radius:8px; margin-top:8px; display:block; border:1px solid var(--line2)">
+              {% endif %}
+              {% if s.director_prompt %}
+              <div class="promptbox" id="dir-{{ s.concept_id }}-{{ s.n or loop.index }}">{{ s.director_prompt }}</div>
+              <div style="margin-top:8px"><button type="button" class="copy" data-target="dir-{{ s.concept_id }}-{{ s.n or loop.index }}">Copy for Director</button></div>
+              {% elif s.prompt %}
+              <div class="promptbox" id="dir-{{ s.concept_id }}-{{ s.n or loop.index }}">{{ s.prompt }}</div>
+              <div style="margin-top:8px"><button type="button" class="copy" data-target="dir-{{ s.concept_id }}-{{ s.n or loop.index }}">Copy prompt</button></div>
+              {% endif %}
+              <details style="margin-top:10px">
+                <summary style="font-family:var(--mono); font-size:11px; cursor:pointer; color:var(--dim)">
+                  {{ "REFERENCE ATTACHED — change / clear" if s.reference_image else "ATTACH REFERENCE CAPTURE" }}
+                </summary>
+                <form method="post" action="/concepts/{{ s.concept_id }}/shots/{{ s.n or loop.index }}/reference"
+                      enctype="multipart/form-data" style="display:grid; gap:6px; margin-top:8px">
+                  <input type="hidden" name="next" value="/studio?tab=director">
+                  <input type="file" name="reference_file" accept="image/*">
+                  <input type="text" name="reference_url" placeholder="or a public image URL">
+                  <div style="display:flex; gap:8px">
+                    <button type="submit" class="copy">{{ "Replace" if s.reference_image else "Attach" }}</button>
+                    {% if s.reference_image %}<button type="submit" name="remove" value="1" class="copy">Clear</button>{% endif %}
+                  </div>
+                </form>
+              </details>
+            </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <p style="color:var(--dim); font-size:13px">No AI shots planned yet. Generate a concept with a shot list to see Director-ready prompts here.</p>
+        {% endif %}
       </div>
     </div>
   </div>
@@ -269,8 +328,9 @@
     }
     function renderStatus(){
       if(!status) return;
-      status.textContent = picked.length
-        ? 'One concept · ' + picked.length + ' reference' + (picked.length > 1 ? 's' : '') + ' attached'
+      var total = picked.length + (typeof pickedRefs !== 'undefined' ? pickedRefs.length : 0);
+      status.textContent = total
+        ? 'One concept · ' + total + ' reference' + (total > 1 ? 's' : '') + ' attached'
         : 'One concept · Cinematic';
     }
     function renderTiles(){
@@ -298,6 +358,55 @@
     }
     if(addBtn){ addBtn.addEventListener('click', function(){ refInput.click(); }); }
     addTile.addEventListener('click', function(e){ e.preventDefault(); refInput.click(); });
+
+    // Reference library picker: opens /references/pick as a popup; the
+    // popup posts its selection back here (postMessage) rather than a
+    // full page navigation, so the composer's typed text and ad hoc
+    // attachments above survive the round trip untouched.
+    var libBtn = document.getElementById('lib-ref-btn');
+    var pickedInputsBox = document.getElementById('picked-refs-inputs');
+    var pickedRefs = []; // string[] of RAG source names
+
+    function renderPickedRefs(){
+      refsRow.querySelectorAll('.refassetpick').forEach(function(t){ t.remove(); });
+      pickedInputsBox.innerHTML = '';
+      pickedRefs.forEach(function(name){
+        var tile = document.createElement('div');
+        tile.className = 'refslot refassetpick';
+        var label = document.createElement('div');
+        label.className = 'rn';
+        label.textContent = name;
+        tile.appendChild(label);
+        var rm = document.createElement('button');
+        rm.type = 'button'; rm.className = 'rm'; rm.textContent = '×';
+        rm.addEventListener('click', function(){
+          pickedRefs = pickedRefs.filter(function(n){ return n !== name; });
+          renderPickedRefs();
+        });
+        tile.appendChild(rm);
+        refsRow.insertBefore(tile, addTile);
+
+        var hidden = document.createElement('input');
+        hidden.type = 'hidden'; hidden.name = 'picked_references'; hidden.value = name;
+        pickedInputsBox.appendChild(hidden);
+      });
+      renderStatus();
+    }
+
+    window.addEventListener('message', function(e){
+      if(e.origin !== window.location.origin) return;
+      if(!e.data || e.data.type !== 'zp-references-picked') return;
+      (e.data.sources || []).forEach(function(name){
+        if(pickedRefs.indexOf(name) === -1) pickedRefs.push(name);
+      });
+      renderPickedRefs();
+    });
+
+    if(libBtn){
+      libBtn.addEventListener('click', function(){
+        window.open('/references/pick', 'zp-ref-picker', 'width=760,height=820');
+      });
+    }
     refInput.addEventListener('change', function(){
       Array.prototype.forEach.call(refInput.files, function(f){ picked.push(f); });
       syncInput();

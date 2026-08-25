@@ -913,15 +913,16 @@ def test_generate_with_nothing_picked_keeps_the_old_behavior(tmp_preprod_db, mon
     assert seen["cast"] is None
 
 
-def test_concepts_page_shows_the_picker_when_cast_exists(tmp_preprod_db):
-    from src import entities
-    entities.init(tmp_preprod_db)
-    entities.add_character("Mike — on camera", path=tmp_preprod_db)
+def test_concepts_page_shows_the_pickers_when_spaces_exist(tmp_preprod_db):
+    # The generate form's grounding controls (the inline character/prop
+    # checkboxes were replaced 2026-08: cast now rides the References &
+    # media picker, and the per-space checkboxes are the location lock).
     preprod.add_location("hallway", SAMPLE_SPACE, path=tmp_preprod_db)
 
     response = client.get("/concepts")
-    assert 'name="characters"' in response.text
-    assert "Mike — on camera" in response.text
+    assert 'name="locations"' in response.text
+    assert "hallway" in response.text
+    assert 'id="ref-pick-btn"' in response.text
 
 
 def test_post_generate_ideas_when_asked(tmp_preprod_db, monkeypatch):
@@ -1018,10 +1019,12 @@ def test_locations_page_shows_space_thumbnails(tmp_preprod_db, tmp_path, monkeyp
     assert "/locations/garage/photo/a.jpg?thumb=1" in response.text
 
 
-def test_concepts_page_has_a_pov_toggle(tmp_preprod_db):
+def test_concepts_page_has_no_pov_toggle(tmp_preprod_db):
+    """The POV checkbox is gone from the page: generation defaults to
+    POV off, and nothing on /concepts should submit use_pov."""
     preprod.add_location("garage", SAMPLE_SPACE, path=tmp_preprod_db)
     response = client.get("/concepts")
-    assert 'name="use_pov"' in response.text
+    assert 'name="use_pov"' not in response.text
 
 
 def test_generate_honours_pov_off(tmp_preprod_db, monkeypatch):
@@ -1203,6 +1206,166 @@ def test_library_delete_removes_one_source(monkeypatch):
     assert response.status_code == 303
     deletes = [p for s, p in conn.executed if s.startswith("DELETE")]
     assert ("old-notes.txt",) in deletes
+
+
+# ---------- /references/pick -- the opt-in asset-grounding picker ----------
+
+def test_references_pick_lists_sources_split_by_auto_vs_asset(tmp_preprod_db, monkeypatch):
+    # tmp_preprod_db matters: the route also lists characters/props, and
+    # without the redirected DB it reads the dev machine's real
+    # data/pipeline.db -- green here, broken on a clean clone.
+    conn = LibraryFakeConn(rows=[
+        ("brief.txt", "personal_brand", None, 1, "2026-07-31"),
+        ("short-form-video.md", "marketing", None, 1, "2026-07-31"),
+    ])
+    monkeypatch.setattr(app_main.rag, "connect", lambda db_url=None: conn)
+    response = client.get("/references/pick")
+    assert response.status_code == 200
+    assert "brief.txt" in response.text
+    assert "short-form-video.md" in response.text
+    assert "YOUR ASSETS" in response.text
+    assert "ALREADY AUTOMATIC" in response.text
+    assert conn.closed
+
+
+def test_references_pick_degrades_when_store_is_down(tmp_preprod_db):
+    # autouse fixture already makes connect() raise; tmp_preprod_db keeps
+    # the cast/props lookup off the dev machine's real data/pipeline.db
+    response = client.get("/references/pick")
+    assert response.status_code == 200
+    assert "unavailable" in response.text.lower()
+
+
+def test_references_pick_upload_posts_to_the_store(monkeypatch):
+    conn = LibraryFakeConn()
+    recorded = {}
+    monkeypatch.setattr(app_main.rag, "connect", lambda db_url=None: conn)
+    monkeypatch.setattr(app_main.rag, "init_store", lambda c: None)
+    monkeypatch.setattr(app_main.rag, "make_client", lambda: object())
+
+    def fake_ingest(records, client, c):
+        recorded.update(records[0])
+        return 2
+
+    monkeypatch.setattr(app_main.rag, "ingest_records", fake_ingest)
+    response = client.post(
+        "/references/pick/upload",
+        data={"domain": "personal_brand"},
+        files={"file": ("brief.txt", b"cool calm inspiring", "text/plain")},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert "brief.txt" in response.headers["location"]
+    assert recorded["source"] == "brief.txt"
+    assert recorded["domain"] == "personal_brand"
+    assert recorded["text"] == "cool calm inspiring"
+
+
+def test_references_pick_upload_requires_a_domain():
+    response = client.post(
+        "/references/pick/upload",
+        files={"file": ("brief.txt", b"text", "text/plain")},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert "required" in response.headers["location"].lower()
+
+
+def test_references_pick_upload_requires_a_file():
+    response = client.post(
+        "/references/pick/upload",
+        data={"domain": "personal_brand"},
+        files={"file": ("", b"", "text/plain")},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert "required" in response.headers["location"].lower()
+
+
+# ---------- picked_references threads through to reference_block ----------
+
+def test_studio_assist_threads_picked_references_into_reference_block(tmp_preprod_db, monkeypatch):
+    preprod.add_location("garage", {"space": "garage"}, path=tmp_preprod_db)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(app_main.genai, "Client", lambda **k: object())
+
+    seen = {}
+
+    def fake_reference_block(**kw):
+        seen.update(kw)
+        return ""
+
+    monkeypatch.setattr(app_main.shootgen, "reference_block", fake_reference_block)
+    monkeypatch.setattr(app_main.shootgen, "generate_concept_ideas",
+                        lambda **kw: {"ideas": [{"title": "A"}]})
+
+    client.post("/studio/assist", data={
+        "text": "night ritual", "intent": "ideas",
+        "picked_references": ["brief.txt", "settings.txt"],
+    }, follow_redirects=False)
+
+    assert seen["picked_sources"] == ["brief.txt", "settings.txt"]
+
+
+def test_studio_assist_with_nothing_picked_passes_none(tmp_preprod_db, monkeypatch):
+    preprod.add_location("garage", {"space": "garage"}, path=tmp_preprod_db)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(app_main.genai, "Client", lambda **k: object())
+
+    seen = {}
+
+    def fake_reference_block(**kw):
+        seen.update(kw)
+        return ""
+
+    monkeypatch.setattr(app_main.shootgen, "reference_block", fake_reference_block)
+    monkeypatch.setattr(app_main.shootgen, "generate_concept_ideas",
+                        lambda **kw: {"ideas": [{"title": "A"}]})
+
+    client.post("/studio/assist", data={"text": "night ritual", "intent": "ideas"},
+                follow_redirects=False)
+
+    assert seen["picked_sources"] is None
+
+
+def test_concepts_generate_threads_picked_references_into_reference_block(tmp_preprod_db, monkeypatch):
+    preprod.add_location("hallway", SAMPLE_SPACE, path=tmp_preprod_db)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+
+    seen = {}
+
+    def fake_reference_block(**kw):
+        seen.update(kw)
+        return ""
+
+    monkeypatch.setattr(app_main.shootgen, "reference_block", fake_reference_block)
+    monkeypatch.setattr(app_main.shootgen, "generate_concept",
+                        lambda **kw: {"concept_id": 1, "concept": {"title": "X"}, "warnings": []})
+
+    client.post("/concepts/generate",
+                data={"brand": "antihero", "picked_references": ["brief.txt"]},
+                follow_redirects=False)
+
+    assert seen["picked_sources"] == ["brief.txt"]
+
+
+def test_concepts_generate_with_nothing_picked_passes_none(tmp_preprod_db, monkeypatch):
+    preprod.add_location("hallway", SAMPLE_SPACE, path=tmp_preprod_db)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+
+    seen = {}
+
+    def fake_reference_block(**kw):
+        seen.update(kw)
+        return ""
+
+    monkeypatch.setattr(app_main.shootgen, "reference_block", fake_reference_block)
+    monkeypatch.setattr(app_main.shootgen, "generate_concept",
+                        lambda **kw: {"concept_id": 1, "concept": {"title": "X"}, "warnings": []})
+
+    client.post("/concepts/generate", data={"brand": "antihero"}, follow_redirects=False)
+
+    assert seen["picked_sources"] is None
 
 
 def test_clean_title_strips_hashtags():
@@ -1552,3 +1715,56 @@ def test_studio_home_renders_empty_without_mock_content(tmp_preprod_db):
     assert "＋ New character" in response.text
     assert "Juno Bar" not in response.text
     assert "Blackmagic 6K" not in response.text
+
+
+# ---------- reference captures + Director-ready prompts ----------
+
+def _planned_concept(path):
+    return preprod.save_concept(
+        {"title": "The Waiting", "hook": "a hand on the handle",
+         "logline": "He waits.",
+         "shots": [{"n": 1, "type": "BROLL", "source": "AI", "tool": "KLING",
+                    "location": "hallway", "desc": "the handle turns",
+                    "light": "spill", "prompt": "a handle turning in the dark"}]},
+        brand="antihero", path=path)
+
+
+def test_attach_reference_by_url_lands_on_the_shot(tmp_preprod_db):
+    cid = _planned_concept(tmp_preprod_db)
+    response = client.post(
+        f"/concepts/{cid}/shots/1/reference",
+        data={"reference_url": "https://cdn.example/take.jpg", "next": "/concepts"},
+        follow_redirects=False)
+    assert response.status_code == 303
+    shots = preprod.get_concept(cid, path=tmp_preprod_db)["shots"]
+    assert shots[0]["reference_image"] == "https://cdn.example/take.jpg"
+
+
+def test_clear_reference_detaches_it(tmp_preprod_db):
+    cid = _planned_concept(tmp_preprod_db)
+    preprod.set_shot_reference_image(cid, 1, "https://cdn.example/take.jpg",
+                                     path=tmp_preprod_db)
+    client.post(f"/concepts/{cid}/shots/1/reference",
+                data={"remove": "1"}, follow_redirects=False)
+    shots = preprod.get_concept(cid, path=tmp_preprod_db)["shots"]
+    assert "reference_image" not in shots[0]
+
+
+def test_attach_reference_to_a_missing_shot_redirects_with_the_reason(tmp_preprod_db):
+    cid = _planned_concept(tmp_preprod_db)
+    response = client.post(
+        f"/concepts/{cid}/shots/9/reference",
+        data={"reference_url": "https://cdn.example/take.jpg"},
+        follow_redirects=False)
+    # degrade, don't 500: the message rides the redirect
+    assert response.status_code == 303
+    assert "no%20shot" in response.headers["location"].replace("+", "%20")
+
+
+def test_concepts_page_renders_the_director_version_of_each_shot(tmp_preprod_db):
+    """Every planned shot gets a copyable natural-language rendering for
+    OpenArt Director next to its per-tool prompt."""
+    _planned_concept(tmp_preprod_db)
+    response = client.get("/concepts")
+    assert "Copy for Director" in response.text
+    assert "Story context: The Waiting — He waits." in response.text

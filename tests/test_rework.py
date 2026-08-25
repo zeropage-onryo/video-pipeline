@@ -82,3 +82,56 @@ def test_propose_slate_degrades_without_performance_data(tmp_db, monkeypatch, ca
     )
     assert len(result["ideas"]) == 2
     assert "no performance data" in capsys.readouterr().err.lower()
+
+
+# ---------- evidence_block grounding: craft advice auto, assets opt-in ----------
+
+def test_evidence_block_auto_grounds_only_craft_domains(monkeypatch):
+    calls = []
+
+    def fake_retrieve(*a, **k):
+        calls.append(k)
+        return {"ok": False, "references": [], "error": "not exercised"}
+
+    monkeypatch.setattr(rework.rag, "retrieve_references", fake_retrieve)
+
+    rework.evidence_block(SIGNALS, gemini_client=None)
+
+    assert len(calls) == 1
+    assert calls[0]["domain"] == rework.AUTO_REWORK_DOMAINS
+    assert rework.AUTO_REWORK_DOMAINS == ("marketing",)
+    assert "proven_results" not in rework.AUTO_REWORK_DOMAINS
+
+
+def test_evidence_block_never_touches_asset_shelves_without_picked_sources(monkeypatch):
+    monkeypatch.setattr(rework.rag, "retrieve_references",
+                        lambda *a, **k: {"ok": False, "references": [], "error": "x"})
+    called = []
+    monkeypatch.setattr(
+        rework.rag, "fetch_by_sources",
+        lambda sources, **k: called.append(sources) or {"ok": True, "references": [
+            {"source": "proven_results/video-1.txt", "chunk": "should never surface"}]},
+    )
+
+    block = rework.evidence_block(SIGNALS, gemini_client=None)
+
+    assert called == []
+    assert "proven_results/video-1.txt" not in block
+
+
+def test_evidence_block_pulls_picked_assets_by_exact_name(monkeypatch):
+    monkeypatch.setattr(rework.rag, "retrieve_references",
+                        lambda *a, **k: {"ok": False, "references": [], "error": "x"})
+    monkeypatch.setattr(
+        rework.rag, "fetch_by_sources",
+        lambda sources, **k: (
+            {"ok": True, "references": [
+                {"source": "proven_results/video-1.txt", "chunk": "cold open won"}]}
+            if sources == ["proven_results/video-1.txt"] else {"ok": True, "references": []}
+        ),
+    )
+
+    block = rework.evidence_block(SIGNALS, gemini_client=None,
+                                  picked_sources=["proven_results/video-1.txt"])
+
+    assert "proven_results/video-1.txt" in block and "cold open won" in block

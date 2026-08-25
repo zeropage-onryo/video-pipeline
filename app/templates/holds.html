@@ -63,6 +63,10 @@
       <h3>{{ h.concept.title }}</h3>
       {% if h.concept.hook %}<p class="dim" style="margin-top:4px">{{ h.concept.hook }}</p>{% endif %}
       {% endif %}
+      {% if h.payload and h.payload.image_url %}
+      <img src="{{ h.payload.image_url }}" alt="Queued image post"
+           style="max-width:100%; max-height:520px; border-radius:8px; margin-top:8px; display:block; border:1px solid #26323f">
+      {% endif %}
       <p class="mono" style="margin-top:8px; color:var(--steel)">{{ h.reason }}</p>
       {% if h.caption %}<p style="margin-top:8px">{{ h.caption }}</p>{% endif %}
       {% if h.payload and h.payload.prompt_scores %}
@@ -70,6 +74,11 @@
       {% for p in h.payload.prompt_scores %}
       <div class="prompt-box">[{{ p.tool }} · {{ p.score }}/10 {{ "PASS" if p.pass else "HELD" }}{% if p.reason %} — {{ p.reason }}{% endif %}]
 {{ p.prompt }}</div>
+      {% if p.reference_image %}
+      <img src="{{ p.reference_image }}" alt="Reference capture anchoring this shot"
+           style="max-width:100%; max-height:220px; border-radius:6px; margin-top:4px; display:block; border:1px solid #26323f">
+      <p class="mono dim" style="font-size:11px; margin-top:2px">Anchored on a real capture — generate against this frame.</p>
+      {% endif %}
       {% if p.still %}<div class="prompt-box" style="border-color:#26323f">Midjourney still — make this first; it anchors the Runway shot (and can post as an image):
 {{ p.still }}</div>{% endif %}
       <div style="margin-top:4px; display:flex; gap:14px">
@@ -82,6 +91,15 @@
       {% for p in h.payload.prompts %}
       <div class="prompt-box">[{{ p.tool }}] {{ p.prompt }}</div>
       {% endfor %}
+      {% endif %}
+      {% if h.concept and h.concept.shots %}
+      <details style="margin-top:10px">
+        <summary class="kicker" style="cursor:pointer; display:inline-block">Director-ready — paste into OpenArt Director</summary>
+        {% for s in h.concept.shots %}{% if s.director_prompt %}
+        <div class="prompt-box" id="dir-{{ h.id }}-{{ loop.index }}" style="border-color:#26323f">{{ "%02d"|format(s.n or loop.index) }} · {{ s.director_prompt }}</div>
+        <div style="margin-top:4px"><button type="button" class="copy" data-target="dir-{{ h.id }}-{{ loop.index }}">Copy shot {{ s.n or loop.index }}</button></div>
+        {% endif %}{% endfor %}
+      </details>
       {% endif %}
       <div style="display:flex; gap:10px; margin-top:14px">
         <form method="post" action="/holds/{{ h.id }}/resolve">
@@ -106,4 +124,17 @@
     <span class="mono">venv/bin/python -m src.trigger</span></p>
   {% endif %}
 </div></div>
+<script>
+  // Only buttons carrying data-target are clipboard buttons; the other
+  // .copy buttons on this page are styled form submits.
+  document.querySelectorAll("button.copy[data-target]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var el = document.getElementById(btn.dataset.target);
+      navigator.clipboard.writeText(el.innerText).then(function () {
+        var was = btn.textContent; btn.textContent = "Copied";
+        setTimeout(function () { btn.textContent = was; }, 1500);
+      });
+    });
+  });
+</script>
 {% endblock %}

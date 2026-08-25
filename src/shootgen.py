@@ -21,6 +21,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from google import genai
+from google.genai import types
 
 from . import entities, preprod, rag
 from . import shot as shot_module
@@ -40,6 +41,15 @@ CAMERAS = ("BMPCC", "ACTION5")
 # match how concepts name tools. One registry, no second list to drift.
 AI_TOOLS = tuple(t.upper() for t in shot_module.TOOLS)
 
+# Zero Page's real, currently-usable tool set -- deliberately narrower than
+# AI_TOOLS above. Everything else in the shot.py registry (Veo/Kling/
+# Seedance/LTX/Wan) is real infrastructure for other brands and stays in
+# AI_TOOLS for them, but Michael only actually generates Zero Page's AI
+# shots on these two, so the shot-plan prompt and its validation are
+# scoped to just these. Filtered from AI_TOOLS rather than hardcoded a
+# second time, so it can never name a tool the registry doesn't have.
+ZEROPAGE_AI_TOOLS = tuple(t for t in AI_TOOLS if t in ("HIGGSFIELD", "RUNWAY"))
+
 NO_LOCATIONS_NOTE = (
     "note: no described locations -- generating ungrounded. Photograph and "
     "describe a space to ground concepts in real rooms."
@@ -52,6 +62,18 @@ NO_REFERENCES_NOTE = (
 NO_CAST_NOTE = (
     "(no characters or props on file yet -- describe appearance in the prompt "
     "as needed)"
+)
+
+NO_EXAMPLE_NOTE = "(no gold-standard example on file)"
+
+# Appended to the text prompt only when image_refs is non-empty (see
+# generate_concept) -- without this, nothing in the prompt tells the
+# model that images were attached at all, since the templates were
+# written before vision input existed on this path.
+IMAGE_REFS_NOTE = (
+    "\n\n(One or more reference images are attached above -- ground this "
+    "concept in what they actually show: the space, the object, the "
+    "subject, the light. Don't ignore them and write a generic idea.)"
 )
 
 # Zero Page rides FORMAT skeletons, not rooms. These are evergreen vertical
@@ -81,6 +103,22 @@ ZEROPAGE_FORMATS = [
 ]
 
 
+def ranked_formats(**kwargs):
+    # -> list of (name, how) tuples, or None on failure (CI pins Python 3.9,
+    # so no bare `X | None` return annotation here -- that needs 3.10+).
+    """format_feed.rank_formats(), wired into the actual generation calls.
+    None on any failure -- build_ideas_prompt/build_concept_prompt already
+    fall back to the static evergreen ZEROPAGE_FORMATS order when formats is
+    None, so this stays an enhancement, never a gate, same contract as
+    reference_block / ground_rag."""
+    try:
+        from . import format_feed  # local import -- see docstring above
+        return format_feed.rank_formats(**kwargs)
+    except Exception as e:
+        print(f"note: format feed degraded to evergreens: {e}", file=sys.stderr)
+        return None
+
+
 def format_skeletons(formats=None) -> str:
     """The hot-format menu Zero Page rides, as the model sees it. Defaults to
     the evergreen ZEROPAGE_FORMATS; the trend feed passes a ranked live list
@@ -88,12 +126,37 @@ def format_skeletons(formats=None) -> str:
     formats = formats or ZEROPAGE_FORMATS
     return "\n".join(f"- {name}: {how}" for name, how in formats)
 
-# Ideation grounds in brand/cinematography (what the concept has to look and
-# feel like), marketing (what actually earns a swipe/watch), and
-# proven_results (what actually worked for us, per promote_winners) -- but
-# never ai_prompting, which is AI-video-tool prompt syntax for a later stage
-# (promptgen.py), not "what should we shoot" material.
-IDEATION_DOMAINS = ("personal_brand", "cinematography", "marketing", "proven_results", "winning_prompts")
+# Ideation's automatic layer (changed 2026-08-20, narrowed further from
+# the first opt-in-everything pass): craft/structuring advice -- platform
+# mechanics, edit anatomy, what earns a swipe/watch -- not the brand's own
+# assets. Always pulled by background search, same as it always was.
+# Never ai_prompting, which is AI-video-tool prompt syntax for a later
+# stage (promptgen.py), not "what should we shoot" material.
+AUTO_IDEATION_DOMAINS = ("marketing",)
+
+# The brand's own assets: voice (personal_brand), look (cinematography),
+# and performance history (proven_results, winning_prompts). Opt-in only
+# -- pulled by EXACT name via rag.fetch_by_sources when reference_block's
+# picked_sources names them, never by background semantic search. Nothing
+# picked means nothing from these shelves, not even an attempt. See
+# reference_block's docstring.
+ASSET_IDEATION_DOMAINS = ("personal_brand", "cinematography", "proven_results", "winning_prompts")
+
+# What you (or /ui) directly taught the pipeline about its OWN output --
+# approve/deny + edited-prompt verdicts (winners.py's winning_prompts /
+# avoid_prompts, written from both the dev page's per-concept and per-shot
+# "TEACH THIS..." controls) and /ui's concept-denial notes (api.py's
+# 'denials' shelf). This is human judgment on prior generations, not brand
+# voice/look -- closer to the craft-advice shelf than to ASSET_IDEATION_DOMAINS
+# -- so unlike those, it's auto-queried by background semantic search the
+# same way AUTO_IDEATION_DOMAINS is. Every chunk here is already
+# self-labeled at ingest time (winners._render_doc's "WINNING ... PROMPT"
+# vs "AVOID -- a ... prompt that DID NOT work"; api.py's "DENIED CONCEPT"),
+# so the retrieved text itself tells the model which way to read it --
+# nothing extra to frame here. Whatever gets taught on the dev page (or
+# denied on /ui) now actually shapes the next generation on BOTH surfaces,
+# since both call this same function.
+LEARNED_IDEATION_DOMAINS = ("winning_prompts", "avoid_prompts", "denials")
 
 
 def build_reference_query(locations: list, spark=None, client=None,
@@ -124,29 +187,84 @@ def build_reference_query(locations: list, spark=None, client=None,
     return " ".join(str(p) for p in parts)[:max_chars]
 
 
-def reference_block(spark=None, client=None, db_path=None) -> str:
+def reference_block(spark=None, client=None, db_path=None, picked_sources=None) -> str:
     """
     Retrieve grounding references for an ideation run and return the
-    formatted block, or "" if the library is unavailable. Never raises --
-    the same enhancement-not-dependency contract pitch.py keeps. This is
-    the *edge* helper: call it from entry points (CLI, web routes), not
-    from inside the tested generate functions, so those stay hermetic.
+    formatted block, or "" if nothing applies. Never raises -- the same
+    enhancement-not-dependency contract pitch.py keeps. This is the
+    *edge* helper: call it from entry points (CLI, web routes), not from
+    inside the tested generate functions, so those stay hermetic.
+
+    Three layers (split 2026-08-20 so ideas don't quietly ground on the
+    brand's own assets; the learned layer added 2026-08-24):
+
+    - AUTO_IDEATION_DOMAINS (craft/structuring advice, not personal
+      assets) is always queried by background semantic search, same as
+      it always was.
+    - LEARNED_IDEATION_DOMAINS (your own approve/deny + edited-prompt
+      verdicts, from either UI) is ALSO always queried by background
+      semantic search, right alongside the craft shelf -- added
+      2026-08-24 so teaching a prompt on the dev page (or denying a
+      concept on /ui) actually changes what gets generated next,
+      instead of just sitting in the store unread.
+    - ASSET_IDEATION_DOMAINS (the brand's own voice/look/performance
+      history) is opt-in only: pulled by EXACT source name via
+      rag.fetch_by_sources when the caller names them in
+      picked_sources -- no embedding call, no similarity ranking,
+      because that selection already happened. Nothing in
+      picked_sources means nothing from these shelves, not even an
+      attempt.
+
+    References are de-duplicated by (source, chunk) before formatting,
+    since an opt-in pick from ASSET_IDEATION_DOMAINS (winning_prompts)
+    can otherwise show up twice -- once picked exactly, once surfaced
+    again by the new LEARNED_IDEATION_DOMAINS semantic search.
     """
     kwargs = {"path": db_path} if db_path is not None else {}
     locations = preprod.list_locations(**kwargs)
     query = build_reference_query(locations, spark=spark, client=client)
-    if not query.strip():
-        return ""
 
-    retrieval = rag.retrieve_references(query, domain=IDEATION_DOMAINS)
-    if retrieval["ok"] and retrieval["references"]:
-        print(f"Grounding in {len(retrieval['references'])} retrieved reference(s)",
-              file=sys.stderr)
-        return rag.format_references(retrieval["references"])
+    references = []
 
-    reason = retrieval.get("error", "reference library is empty")
-    print(f"note: generating without references: {reason}", file=sys.stderr)
-    return ""
+    if picked_sources:
+        picked = rag.fetch_by_sources(picked_sources)
+        if picked["ok"] and picked["references"]:
+            print(f"Grounding in {len(picked['references'])} selected asset reference(s)",
+                  file=sys.stderr)
+            references.extend(picked["references"])
+        elif not picked["ok"]:
+            print(f"note: generating without selected assets: {picked.get('error')}",
+                  file=sys.stderr)
+
+    if query.strip():
+        retrieval = rag.retrieve_references(query, domain=AUTO_IDEATION_DOMAINS)
+        if retrieval["ok"] and retrieval["references"]:
+            print(f"Grounding in {len(retrieval['references'])} craft reference(s)",
+                  file=sys.stderr)
+            references.extend(retrieval["references"])
+        elif not retrieval["ok"]:
+            reason = retrieval.get("error", "reference library is empty")
+            print(f"note: generating without craft references: {reason}", file=sys.stderr)
+
+        learned = rag.retrieve_references(query, domain=LEARNED_IDEATION_DOMAINS)
+        if learned["ok"] and learned["references"]:
+            print(f"Grounding in {len(learned['references'])} taught reference(s) "
+                  "-- your own approve/deny history", file=sys.stderr)
+            references.extend(learned["references"])
+        elif not learned["ok"]:
+            reason = learned.get("error", "nothing taught yet")
+            print(f"note: generating without taught references: {reason}", file=sys.stderr)
+
+    seen = set()
+    deduped = []
+    for ref in references:
+        key = (ref.get("source"), ref.get("chunk"))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(ref)
+
+    return rag.format_references(deduped)
 
 
 def load_brand(brand: str) -> str:
@@ -170,6 +288,39 @@ def load_brand(brand: str) -> str:
             block = block.split(line, 1)[0]
             break
     return block.strip()
+
+
+def location_variety_note(locations: list, lock: bool = False) -> str:
+    """When few real rooms are on file, camera shots are necessarily stuck
+    there -- but AI shots never have to be. Without this, ideas quietly
+    reuse the one photographed room concept after concept, because the
+    model has nowhere else it's been told it CAN go. '' once there's
+    enough real variety on file that this stops being the bottleneck.
+
+    `lock=True` means the filmmaker deliberately picked this location (or
+    these locations) for this run -- not a shortage. That's the opposite
+    instruction: stop pushing toward AI-invented environments and lean
+    into the one space instead. Set by generate_concept/generate_concept_ideas
+    whenever the caller passes `only_locations`."""
+    if lock:
+        return (
+            f"\nLOCATION LOCK: this run is intentionally anchored to "
+            f"{'this location' if len(locations) == 1 else 'these locations'} -- "
+            "that's a deliberate choice for this shoot, not a shortage. Don't "
+            "invent alternate AI environments to manufacture variety; build the "
+            "idea to make full, specific use of the space that's actually being shot."
+        )
+    if len(locations) > 2:
+        return ""
+    have = len(locations)
+    return (
+        f"\nVARIETY NOTE: only {have} real location{'s' if have != 1 else ''} "
+        "on file right now, so leaning on AI-invented environments for most AI "
+        "shots -- rather than always extending the same real room -- is what "
+        "keeps ideas from feeling repetitive. Don't set every idea in the one "
+        "room just because it's the one that's photographed; invent the space "
+        "the story actually wants and match it to the grade."
+    )
 
 
 def format_locations(locations: list) -> str:
@@ -235,8 +386,9 @@ def apply_pov(template: str, use_pov: bool) -> str:
 
 
 def build_concept_prompt(locations: list, brand: str, client=None, spark=None,
-                         use_pov: bool = True, references: str = "",
-                         cast: str = "", formats=None) -> str:
+                         use_pov: bool = False, references: str = "",
+                         cast: str = "", formats=None,
+                         lock_location: bool = False) -> str:
     # Zero Page runs its OWN engine -- faceless, fully-AI, format-driven, not
     # grounded in his rooms. Antihero keeps the solo-filmmaker-at-home engine.
     if brand == "zeropage":
@@ -248,6 +400,7 @@ def build_concept_prompt(locations: list, brand: str, client=None, spark=None,
             .replace("{client}", f"CLIENT / SPEC TYPE: {client}" if client else "")
             .replace("{spark}", f"TREND / SPARK: {spark}" if spark else "")
             .replace("{references}", references or NO_REFERENCES_NOTE)
+            .replace("{example}", gold_standard_example() or NO_EXAMPLE_NOTE)
         )
     template = apply_pov((PROMPTS_DIR / "concept_prompt.txt").read_text(), use_pov)
     return (
@@ -258,12 +411,14 @@ def build_concept_prompt(locations: list, brand: str, client=None, spark=None,
         .replace("{spark}", f"CREATIVE SPARK FROM THE FILMMAKER: {spark}" if spark else "")
         .replace("{references}", references or NO_REFERENCES_NOTE)
         .replace("{cast}", cast or NO_CAST_NOTE)
+        .replace("{example}", gold_standard_example() or NO_EXAMPLE_NOTE)
+        .replace("{location_variety_note}", location_variety_note(locations, lock=lock_location))
     )
 
 
 def build_ideas_prompt(locations: list, brand: str, client=None, spark=None,
                        count: int = DEFAULT_IDEA_COUNT, references: str = "",
-                       formats=None) -> str:
+                       formats=None, lock_location: bool = False) -> str:
     # Zero Page rides format skeletons + an uncanny beat, faceless and
     # room-free; Antihero grounds ideas in his real spaces and recurring star.
     if brand == "zeropage":
@@ -286,6 +441,7 @@ def build_ideas_prompt(locations: list, brand: str, client=None, spark=None,
         .replace("{spark}", f"CREATIVE SPARK FROM THE FILMMAKER: {spark}" if spark else "")
         .replace("{count}", str(count))
         .replace("{references}", references or NO_REFERENCES_NOTE)
+        .replace("{location_variety_note}", location_variety_note(locations, lock=lock_location))
     )
 
 
@@ -302,7 +458,25 @@ def parse_ideas_response(text: str) -> list:
 
 
 def build_shotlist_prompt(locations: list, brand: str, client, concept: dict,
-                          use_pov: bool = True, cast: str = "") -> str:
+                          use_pov: bool = False, cast: str = "") -> str:
+    # Zero Page ships without a shoot -- every shot is AI-generated and
+    # faceless, so stage two has to run the same zeropage engine as stage
+    # one (build_concept_prompt / build_ideas_prompt) instead of the
+    # solo-filmmaker-at-home template. Without this branch, the real cast
+    # and locations on file (a named recurring character, his actual
+    # vehicle/room) leak straight into a Zero Page AI shot prompt.
+    if brand == "zeropage":
+        template = (PROMPTS_DIR / "shotlist_prompt_zeropage.txt").read_text()
+        return (
+            template
+            .replace("{brand}", load_brand(brand))
+            .replace("{client}", f"CLIENT / SPEC TYPE: {client}" if client else "")
+            .replace("{title}", concept.get("title") or "")
+            .replace("{format}", concept.get("format") or "")
+            .replace("{hook}", concept.get("hook") or "")
+            .replace("{logline}", concept.get("logline") or "")
+            .replace("{example}", gold_standard_example() or NO_EXAMPLE_NOTE)
+        )
     template = apply_pov((PROMPTS_DIR / "shotlist_prompt.txt").read_text(), use_pov)
     return (
         template
@@ -313,22 +487,136 @@ def build_shotlist_prompt(locations: list, brand: str, client, concept: dict,
         .replace("{hook}", concept.get("hook") or "")
         .replace("{logline}", concept.get("logline") or "")
         .replace("{cast}", cast or NO_CAST_NOTE)
+        .replace("{example}", gold_standard_example() or NO_EXAMPLE_NOTE)
     )
 
 
 def parse_plan_response(text: str) -> dict:
-    """Stage two's testable seam: raw model text -> the shot plan."""
+    """
+    Stage two's testable seam: raw model text -> the shot plan. Zero
+    Page's plan is a scene concept -- "scenes" (Scene -> Shots, see
+    prompts/shotlist_prompt_zeropage.txt) -- instead of a flat "shots"
+    array, so a plan is valid with either shape; generate_shot_list is
+    what flattens scenes into shots for storage.
+    """
     data = json.loads(strip_fences(text))
     plan = data.get("plan", data)
-    if not plan.get("shots"):
+    if not plan.get("shots") and not plan.get("scenes"):
         raise ValueError("plan has no shots")
     return plan
 
 
+def _flatten_zeropage_scenes(scenes: list) -> list:
+    """
+    Zero Page's shot-plan schema is Scene -> Shots -- a scene concept with
+    shot ideas and prompts per scene, not a flat shot list, so it folds
+    directly into OpenArt Director's own Story -> Scenes -> Shots model
+    later (see prompts/shotlist_prompt_zeropage.txt).
+
+    Storage stays flat: every existing consumer of a concept's shots --
+    preprod.set_shot_media_url, preprod.set_shot_reference_image, the
+    /concepts/.../shots/{shot_n}/reference route, autopilot's posting
+    gate, format_concept_as_text -- addresses a shot by one global "n"
+    and reads "location" straight off the shot. Rather than teach all of
+    those about nesting, this renumbers shots 1..N across every scene and
+    stamps each with the scene it came from (scene_n, scene_title) and
+    the scene's location, so nothing downstream needs to know scenes
+    exist -- concepts.html groups by scene_title purely for display.
+    """
+    flat = []
+    n = 1
+    for scene in scenes or []:
+        location = (scene.get("location") or "").strip()
+        scene_title = (scene.get("title") or "").strip()
+        scene_n = scene.get("n")
+        for shot in scene.get("shots") or []:
+            shot = dict(shot)
+            shot["n"] = n
+            shot.setdefault("location", location)
+            if scene_title:
+                shot["scene_title"] = scene_title
+            if scene_n is not None:
+                shot["scene_n"] = scene_n
+            flat.append(shot)
+            n += 1
+    return flat
+
+
+def _apply_location_lock(locations: list, only_locations) -> tuple:
+    """
+    Every generation call defaults to every real room on file -- that's
+    the right default so ideas range across the whole space you've
+    photographed. `only_locations` (a list of location names) is the
+    per-run override: "I'm choosing to shoot in just this room today,"
+    not "I only have one room." Returns (locations, lock) -- the
+    filtered list (unfiltered if nothing matched or nothing was asked
+    for) and whether to tell the model this was a deliberate choice
+    rather than a shortage.
+
+    A name that doesn't match anything on file is a caller mistake, not
+    a reason to silently generate against every room -- same
+    never-silently-wrong instinct as the rest of this module -- so it's
+    logged and the full set is used instead of guessing.
+    """
+    if not only_locations:
+        return locations, False
+    wanted = {str(n).strip().lower() for n in only_locations}
+    filtered = [loc for loc in locations if loc["name"].strip().lower() in wanted]
+    if not filtered:
+        print(f"note: none of {list(only_locations)} matched locations on file "
+              "-- using every location instead", file=sys.stderr)
+        return locations, False
+    return filtered, True
+
+
+def derive_scene_bible(title=None, logline=None, grade=None) -> str:
+    """
+    A short, code-owned consistency anchor built from data already on
+    the concept -- no extra API call. Exists because a concept's AI
+    shots are each rendered independently by an external video tool
+    (Kling, Veo, Runway...) that never sees the other shots; without
+    something forcing the same character/scene/grade language into
+    every one of them, two shots from the same concept can come back
+    looking like they're from different scenes even though the model
+    wrote both prompts in the same call.
+    """
+    parts = []
+    if title:
+        parts.append(f"Scene: {title}")
+    if logline:
+        parts.append(str(logline).strip())
+    if grade:
+        parts.append(f"Grade: {grade}")
+    return " -- ".join(p for p in parts if p)
+
+
+def apply_scene_bible(shots: list, bible: str) -> list:
+    """
+    Prepend the scene bible to every AI shot's own generation prompt, in
+    place. Code-enforced, not model-requested -- "prompts request, code
+    enforces," the same discipline validate_concept keeps -- because a
+    template asking the model to "stay consistent" is a request it can
+    silently ignore for any one shot, and that shot is the one that
+    renders wrong. A no-op without a bible or without AI shots; never
+    double-prepends a shot whose prompt already opens with it (rework
+    passes re-run this).
+    """
+    if not bible:
+        return shots
+    for shot in shots or []:
+        if shot.get("source") != "AI":
+            continue
+        prompt = (shot.get("prompt") or "").strip()
+        if prompt and not prompt.startswith(bible):
+            shot["prompt"] = f"{bible}. {prompt}"
+    return shots
+
+
 def generate_concept_ideas(brand: str, client=None, spark=None, gemini_client=None,
                            model: str = MODEL, count: int = DEFAULT_IDEA_COUNT,
-                           use_pov: bool = True, db_path=None,
-                           references: str = "", formats=None) -> dict:
+                           use_pov: bool = False, db_path=None,
+                           references: str = "", formats=None,
+                           only_locations=None) -> dict:
     """
     Stage one: several cheap ideas in a single call, so they can be
     varied against each other rather than rolled independently. No shot
@@ -337,6 +625,10 @@ def generate_concept_ideas(brand: str, client=None, spark=None, gemini_client=No
     `references` is passed in already retrieved, by the caller at the
     edge (reference_block), so this stays pure with respect to the
     reference library and testable without a store.
+
+    `only_locations` pins this one run to a subset of locations on file
+    (see _apply_location_lock) -- omit it and every location applies,
+    same as before this existed.
     """
     kwargs = {"path": db_path} if db_path is not None else {}
     locations = preprod.list_locations(**kwargs)
@@ -345,8 +637,14 @@ def generate_concept_ideas(brand: str, client=None, spark=None, gemini_client=No
         # contract reference_block keeps when the library is down.
         print(NO_LOCATIONS_NOTE, file=sys.stderr)
 
+    locations, lock_location = _apply_location_lock(locations, only_locations)
+
+    if formats is None:
+        formats = ranked_formats(**kwargs)
+
     prompt = build_ideas_prompt(locations, brand, client, spark, count,
-                                references=references, formats=formats)
+                                references=references, formats=formats,
+                                lock_location=lock_location)
     ideas = parse_ideas_response(generate_with_retry(gemini_client, model, prompt))
 
     concept_ids = preprod.save_concept_ideas(
@@ -413,7 +711,7 @@ def generate_shot_list(concept_id: int, gemini_client=None, model: str = MODEL,
     # happens later, so it has to come from the concept rather than a
     # default that quietly turns the camera back on.
     if use_pov is None:
-        use_pov = concept.get("use_pov", True)
+        use_pov = concept.get("use_pov", False)
 
     locations = preprod.list_locations(**kwargs)
     if not locations:
@@ -425,8 +723,24 @@ def generate_shot_list(concept_id: int, gemini_client=None, model: str = MODEL,
                                    concept, use_pov=use_pov, cast=cast)
     plan = parse_plan_response(generate_with_retry(gemini_client, model, prompt))
 
+    is_zeropage = concept["brand"] == "zeropage"
+    if is_zeropage:
+        # Zero Page plans a scene concept, not a flat shot list -- flatten
+        # Scene -> Shots into plan["shots"] so storage and every existing
+        # shot-by-n consumer stay unchanged (see _flatten_zeropage_scenes).
+        # plan["scenes"] stays on the in-memory plan too, for any caller
+        # that wants the scene grouping directly.
+        plan["shots"] = _flatten_zeropage_scenes(plan.get("scenes"))
+
+    # The plan carries its own grade note but not title/logline (those live
+    # on the concept saved at the idea stage) -- the bible draws from both
+    # so every AI shot in this shoot stays anchored to the same scene.
+    bible = derive_scene_bible(concept.get("title"), concept.get("logline"), plan.get("grade"))
+    plan["shots"] = apply_scene_bible(plan.get("shots"), bible)
+
     location_names = [loc["name"] for loc in locations]
-    warnings = validate_concept(plan, location_names, use_pov=use_pov)
+    allowed_tools = ZEROPAGE_AI_TOOLS if is_zeropage else None
+    warnings = validate_concept(plan, location_names, use_pov=use_pov, allowed_tools=allowed_tools)
 
     used = {shot.get("location") for shot in plan.get("shots") or []}
     location_ids = [loc["id"] for loc in locations if loc["name"] in used]
@@ -445,7 +759,8 @@ def parse_concept_response(text: str) -> dict:
     return concept
 
 
-def validate_concept(concept: dict, location_names: list, use_pov: bool = True) -> list:
+def validate_concept(concept: dict, location_names: list, use_pov: bool = False,
+                     allowed_tools=None) -> list:
     """
     Check the model's output against what the prompt asked for and
     return visible warnings. Nothing here blocks: a concept that breaks
@@ -456,7 +771,13 @@ def validate_concept(concept: dict, location_names: list, use_pov: bool = True) 
     A shot's source is CAMERA (you capture it; `cam` names the body) or
     AI (a platform generates it; `tool` + `prompt` say how). No source
     means CAMERA -- every concept written before the de-cap.
+
+    `allowed_tools` narrows which AI tool names pass -- Zero Page's plans
+    should be checked against ZEROPAGE_AI_TOOLS (Higgsfield/Runway only),
+    not every tool in the shot.py registry; omit it and every registered
+    tool is legal, same as before this existed.
     """
+    allowed_tools = allowed_tools or AI_TOOLS
     warnings = []
     shots = concept.get("shots") or []
 
@@ -475,9 +796,9 @@ def validate_concept(concept: dict, location_names: list, use_pov: bool = True) 
             )
         elif source == "AI":
             # cam names a physical body; an AI shot doesn't have one.
-            if shot.get("tool") not in AI_TOOLS:
+            if shot.get("tool") not in allowed_tools:
                 warnings.append(
-                    f"shot {n}: AI tool must be one of {AI_TOOLS}, got {shot.get('tool')!r}"
+                    f"shot {n}: AI tool must be one of {allowed_tools}, got {shot.get('tool')!r}"
                 )
             if not (shot.get("prompt") or "").strip():
                 warnings.append(f"shot {n}: AI shot has no generation prompt")
@@ -498,15 +819,70 @@ def validate_concept(concept: dict, location_names: list, use_pov: bool = True) 
 
     # legacy shape: one concept-level ai dict instead of per-shot source
     ai = concept.get("ai")
-    if ai and ai.get("tool") not in AI_TOOLS:
-        warnings.append(f"ai tool must be one of {AI_TOOLS}, got {ai.get('tool')!r}")
+    if ai and ai.get("tool") not in allowed_tools:
+        warnings.append(f"ai tool must be one of {allowed_tools}, got {ai.get('tool')!r}")
 
     return warnings
 
 
+def _sentence(text: str) -> str:
+    text = text.strip()
+    return text if text[-1:] in ".!?…" else text + "."
+
+
+def director_prompt(shot: dict, concept=None) -> str:
+    # concept: dict or None (CI pins Python 3.9, so no `dict | None`
+    # annotation here -- same constraint ranked_formats notes above).
+    """
+    The OpenArt Director version of one planned shot: flowing natural
+    language with the story context the terse per-tool prompts drop --
+    subject, setting, mood, what happens, why it matters to the beat --
+    the way you'd actually describe a shot to a director. Director is
+    conversational (checked 2026-08-20; see shot.CAMERA_PROSE's note),
+    so readability is the format, and there's no API: this text exists
+    to be pasted into Director's chat by hand.
+
+    Pure -- composed from what the shot row already carries, no model
+    call, so a hundred of these cost nothing. A shot's reference_image
+    is deliberately NOT mentioned here: attachments travel next to the
+    description (the UI shows the capture beside this text), never
+    inside it, same contract as veo_parameters().
+    """
+    concept = concept or {}
+    sentences = []
+
+    body = (shot.get("desc") or "").strip() or (shot.get("prompt") or "").strip()
+    if body:
+        sentences.append(_sentence(body))
+    location = (shot.get("location") or "").strip()
+    if location:
+        sentences.append(_sentence(f"The scene is {location}"))
+    light = (shot.get("light") or "").strip()
+    if light:
+        sentences.append(_sentence(f"Light: {light}"))
+
+    title = (concept.get("title") or "").strip()
+    logline = (concept.get("logline") or "").strip()
+    if title or logline:
+        story = " — ".join(p for p in (title, logline) if p)
+        sentences.append(_sentence(f"Story context: {story}"))
+    hook = (concept.get("hook") or "").strip()
+    if hook and shot.get("n") == 1:
+        sentences.append(_sentence(
+            f"This shot opens the piece and has to land the hook: {hook}"))
+    # concept dicts at generation time say "grade"; saved rows say
+    # "grade_note" -- accept both so this works on either side of save
+    grade = (concept.get("grade") or concept.get("grade_note") or "").strip()
+    if grade:
+        sentences.append(_sentence(f"Grade: {grade}"))
+
+    return " ".join(sentences)
+
+
 def generate_concept(brand: str, client=None, spark=None, gemini_client=None,
-                     model: str = MODEL, use_pov: bool = True, db_path=None,
-                     references: str = "", cast=None, formats=None) -> dict:
+                     model: str = MODEL, use_pov: bool = False, db_path=None,
+                     references: str = "", cast=None, formats=None,
+                     only_locations=None, image_refs=None) -> dict:
     """
     One concept, grounded in the described locations, validated and
     saved. Returns {"concept_id", "concept", "warnings"}.
@@ -516,21 +892,52 @@ def generate_concept(brand: str, client=None, spark=None, gemini_client=None,
     same contract: None means "everything on file" (the default the CLI
     keeps); a caller that picked specific characters/props passes the
     already-formatted block, and "" explicitly means no cast.
+
+    `only_locations` pins this one run to a subset of locations on file
+    (see _apply_location_lock) -- omit it and every location applies,
+    same as before this existed.
+
+    `image_refs` is an optional list of (image_bytes, mime_type) pairs --
+    ad hoc reference photos attached for this one generation (see
+    app/main.py's studio composer / _split_studio_references). When
+    present they ride into the same Gemini call as real vision input --
+    the model actually sees them, not just a text description -- using
+    the same Part.from_bytes-then-text-last shape
+    locations.describe_location already uses elsewhere in this codebase.
+    None/empty means text-only, exactly as before this parameter existed.
     """
     kwargs = {"path": db_path} if db_path is not None else {}
     locations = preprod.list_locations(**kwargs)
     if not locations:
         print(NO_LOCATIONS_NOTE, file=sys.stderr)
 
+    locations, lock_location = _apply_location_lock(locations, only_locations)
+
     if cast is None:
         cast = format_cast(entities.list_characters(**kwargs), entities.list_props(**kwargs))
 
+    if formats is None:
+        formats = ranked_formats(**kwargs)
+
     prompt = build_concept_prompt(locations, brand, client, spark, use_pov=use_pov,
-                                  references=references, cast=cast, formats=formats)
-    concept = parse_concept_response(generate_with_retry(gemini_client, model, prompt))
+                                  references=references, cast=cast, formats=formats,
+                                  lock_location=lock_location)
+
+    contents = prompt
+    if image_refs:
+        contents = [
+            types.Part.from_bytes(data=data, mime_type=mime_type)
+            for data, mime_type in image_refs
+        ] + [prompt + IMAGE_REFS_NOTE]
+
+    concept = parse_concept_response(generate_with_retry(gemini_client, model, contents))
+
+    bible = derive_scene_bible(concept.get("title"), concept.get("logline"), concept.get("grade"))
+    concept["shots"] = apply_scene_bible(concept.get("shots"), bible)
 
     location_names = [loc["name"] for loc in locations]
-    warnings = validate_concept(concept, location_names, use_pov=use_pov)
+    allowed_tools = ZEROPAGE_AI_TOOLS if brand == "zeropage" else None
+    warnings = validate_concept(concept, location_names, use_pov=use_pov, allowed_tools=allowed_tools)
 
     used = {shot.get("location") for shot in concept.get("shots") or []}
     location_ids = [loc["id"] for loc in locations if loc["name"] in used]
@@ -587,6 +994,10 @@ def main(db_path=None):
                         help="how many ideas to generate (one call regardless)")
     parser.add_argument("--shotlist", type=int, default=None, metavar="CONCEPT_ID",
                         help="skip idea generation and plan the shoot for this concept id")
+    parser.add_argument("--only-location", action="append", default=None, metavar="NAME",
+                        help="pin this run to one location on file (repeatable for more "
+                             "than one) -- a deliberate choice, so the variety nudge "
+                             "toward AI-invented environments is skipped")
     args = parser.parse_args()
 
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
@@ -620,7 +1031,7 @@ def main(db_path=None):
         result = generate_concept_ideas(
             brand=args.brand, client=args.client, spark=args.spark,
             gemini_client=gemini_client, count=args.count, db_path=path,
-            references=references,
+            references=references, only_locations=args.only_location,
         )
     except ValueError as e:
         print(e, file=sys.stderr)

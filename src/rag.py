@@ -290,6 +290,48 @@ def delete_source(conn, source: str) -> int:
     return cursor.rowcount
 
 
+def fetch_by_sources(sources: list, db_url: Optional[str] = None) -> dict:
+    """
+    Exact-selection retrieval: every chunk of the given sources, in
+    order -- no embedding call, no similarity ranking, because the
+    selection already happened (a human picked these sources by name,
+    e.g. off the /library list). This is the opt-in counterpart to
+    query(): nothing grounds a run just by existing on a shelf anymore,
+    only what's explicitly picked does.
+
+    Never raises -- same contract as retrieve_references: a missing
+    key, package, or database degrades to an ungrounded run, not a
+    crash. Unknown/typo'd source names are silently absent from the
+    result (not an error) -- the caller can't tell "wrong name" from
+    "nothing on that shelf yet" without listing sources itself.
+    """
+    if not sources:
+        return {"ok": True, "references": []}
+    conn = None
+    try:
+        conn = connect(db_url)
+        cursor = conn.execute(
+            "SELECT source, chunk, domain, project, source_ref "
+            "FROM rag_documents WHERE source = ANY(%s) "
+            "ORDER BY source, chunk_index",
+            (list(sources),),
+        )
+        references = [
+            {"source": source, "chunk": chunk, "domain": domain,
+             "project": project, "source_ref": source_ref}
+            for source, chunk, domain, project, source_ref in cursor.fetchall()
+        ]
+        return {"ok": True, "references": references}
+    except Exception as e:
+        return {"ok": False, "references": [], "error": str(e)}
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 def format_references(references: list) -> str:
     """The numbered block pitch prompts embed. Empty in, empty out."""
     lines = []

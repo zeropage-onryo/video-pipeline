@@ -24,10 +24,16 @@ python3 -m src.refresh_metrics >> data/morning_prompts.log 2>&1
 # 2) For each brand, walk the whole sparks list so consecutive holds get
 # varied directions instead of one pick. Passing --spark explicitly
 # overrides the trigger's day-of-year rotation. Blank lines and # comments
-# in sparks.txt are skipped. IMPORTANT: --channel and --brand are always
-# passed together and matched -- src.trigger's own CLI defaults
-# (--channel zeropage, --brand antihero) are mismatched on purpose only to
-# support manual one-off overrides; never invoke it here without both flags.
+# in sparks.txt are skipped. --channel and --brand are passed together and
+# matched here, same as always -- src.trigger's own CLI now defaults an
+# omitted --brand to whatever --channel is (orchestrator.run() does the
+# same), so this explicit pairing is belt-and-suspenders, not load-bearing
+# the way it used to be. A manual one-off `src.trigger --channel zeropage`
+# with no --brand used to silently generate full Antihero content (real
+# cast/locations) filed under the Zero Page channel -- that's what produced
+# hold_queue row 13 / concept 111 on 2026-08-14 -- and can no longer happen
+# by omission; it now takes an explicit --brand that disagrees with
+# --channel to get a mismatch on purpose.
 for PAIR in "antihero antihero" "zeropage zeropage"; do
   read -r CHANNEL BRAND <<< "$PAIR"
   while IFS= read -r spark || [ -n "$spark" ]; do
