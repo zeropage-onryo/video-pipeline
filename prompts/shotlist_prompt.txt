@@ -24,6 +24,12 @@ Title: {title}
 Hook (second 1): {hook}
 Logline: {logline}
 
+GOLD-STANDARD EXAMPLE — a proven prompt from this same house style. Match its
+SHAPE and craft: the frame-1 hook, the raw-handheld style block, the
+sequential escalating beats, the diegetic-sound line, the hard avoid-list at
+the end. Never reuse its exact scene, story, or specific content:
+{example}
+
 FILMMAKER PROFILE:
 - Works completely solo, no crew. He is also the on-screen character.
 - Camera A ("BMPCC"): Blackmagic Pocket 6K Pro, rigged — handheld,

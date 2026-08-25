@@ -177,7 +177,7 @@ def ground_rag(state: GenState) -> GenState:
         return {"references": ""}
 
     result = crag.retrieve_with_crag(
-        query, _client(), GEMINI_MODEL, domain=shootgen.IDEATION_DOMAINS)
+        query, _client(), GEMINI_MODEL, domain=shootgen.AUTO_IDEATION_DOMAINS)
     if result["ok"] and result["references"]:
         note = f"Grounding in {len(result['references'])} retrieved reference(s)"
         if result.get("rewritten_query"):
