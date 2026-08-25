@@ -38,3 +38,9 @@ venv-studio/
 # Personal reference photos -- not public yet
 /characters
 /props
+
+# Runtime state the app/scheduler writes
+.langgraph_api/
+data/morning_prompts.*
+data/renders/
+data/_scratch_*
