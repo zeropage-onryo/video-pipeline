@@ -173,13 +173,28 @@ def test_ui_without_session_redirects_to_signin(clean_slate):
     assert response.headers["location"] == "/signin"
 
 
-def test_signin_page_shows_all_three_methods(clean_slate):
+def test_signin_page_shows_configured_methods(clean_slate, monkeypatch):
+    """Provider buttons follow live key presence -- the /api/capabilities
+    rule applied to the modal. Email/password is always there."""
+    for name in ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"):
+        monkeypatch.setenv(name, "x")
+    for name in ("DISCORD_CLIENT_ID", "DISCORD_CLIENT_SECRET"):
+        monkeypatch.delenv(name, raising=False)
     page = client.get("/signin")
     assert "Continue with Google" in page.text
-    assert "Continue with Discord" in page.text
+    assert "Continue with Discord" not in page.text        # unconfigured: hidden
     assert 'action="/auth/login"' in page.text
     assert 'action="/auth/signup"' in page.text
     assert 'type="password"' in page.text
+
+
+def test_signin_page_shows_both_when_both_configured(clean_slate, monkeypatch):
+    for name in ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET",
+                 "DISCORD_CLIENT_ID", "DISCORD_CLIENT_SECRET"):
+        monkeypatch.setenv(name, "x")
+    page = client.get("/signin")
+    assert "Continue with Google" in page.text
+    assert "Continue with Discord" in page.text
 
 
 def test_api_without_session_is_401(clean_slate):

@@ -174,7 +174,11 @@ def signin(request: Request, error: Optional[str] = None,
     return templates.TemplateResponse(
         request, "signin.html",
         {"error": error, "mode": mode if mode in ("signin", "signup") else "signin",
-         "email": email})
+         "email": email,
+         # live key presence, the /api/capabilities rule applied to the
+         # modal: a provider button only renders when it can actually work
+         "providers": {"google": auth._provider_configured("google"),
+                       "discord": auth._provider_configured("discord")}})
 
 
 @app.get("/ui/accounts")
