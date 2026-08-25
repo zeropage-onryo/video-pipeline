@@ -5,7 +5,7 @@ import { initField } from './field.js';
 import { initStudio, renderStudio } from './studio.js';
 import { renderAssets } from './assets.js';
 import { initPipeline, renderPipeline, closeDeny } from './pipeline.js';
-import { initEvals, renderEvals } from './evals.js';
+import { initWorkflows, renderWorkflows, closeWorkflowModal } from './workflows.js';
 import { renderAnalytics } from './analytics.js';
 import { initQueue, renderQueue } from './queue.js';
 
@@ -13,7 +13,7 @@ const VIEWS = {
   studio: { label: 'Studio', render: renderStudio },
   assets: { label: 'Assets', render: renderAssets },
   pipeline: { label: 'Pipeline', render: renderPipeline },
-  evals: { label: 'Evals', render: renderEvals },
+  workflows: { label: 'Workflows', render: renderWorkflows },
   analytics: { label: 'Analytics', render: renderAnalytics },
   queue: { label: 'Queue', render: renderQueue },
 };
@@ -95,12 +95,6 @@ function palCommands() {
       go('studio'); setTimeout(() => document.getElementById('prompt').focus(), 60);
     }});
   }
-  if (state.caps['evals.run']) {
-    cmds.push({ l: 'Run retrieval eval', k: 'Action', run: async () => {
-      await api('/api/evals/run', { method: 'POST', body: {} }).catch(() => {});
-      go('queue');
-    }});
-  }
   cmds.push({ l: 'Switch account', k: 'Action', run: openAccountPicker });
   cmds.push({ l: 'Sign out', k: 'Action', run: signOut });
   return cmds;
@@ -153,7 +147,7 @@ async function palFilter(text) {
 initField();
 initStudio(go);
 initPipeline();
-initEvals();
+initWorkflows();
 initQueue();
 paintBrand();
 document.getElementById('brandpill').onclick = openAccountPicker;
@@ -175,7 +169,7 @@ pq.addEventListener('keydown', e => {
 
 addEventListener('keydown', e => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); palOpen(); return; }
-  if (e.key === 'Escape') { palClose(); closeDeny(); closeDetail(); }
+  if (e.key === 'Escape') { palClose(); closeDeny(); closeWorkflowModal(); closeDetail(); }
 });
 
 /* hero parallax, straight from the prototype */

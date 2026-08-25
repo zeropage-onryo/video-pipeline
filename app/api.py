@@ -35,11 +35,12 @@ from src import (
     rag,
     rag_eval,
     runway,
+    workflows,
     youtube,
 )
 from src.locations import IMAGE_EXTENSIONS
 
-from . import jobs
+from . import jobs, workflow_runner
 
 router = APIRouter(prefix="/api")
 
@@ -107,6 +108,7 @@ def compute_capabilities() -> dict:
         "analytics.instagram": bool(instagram.access_token()),
         "runway.generate": runway.has_key(),
         "runway.spend": runway.spend_approved(),
+        "workflows": True,
         "jobs": True,
     }
 
@@ -893,6 +895,175 @@ def video_refresh(video_id: int):
     if not result.get("ok"):
         return _error(502, "refresh_failed", str(result.get("error")))
     return result
+
+
+# --- workflows --------------------------------------------------------------
+# The node-graph canvas. A workflow row is LiteGraph's serialize() JSON
+# stored whole; execution (Run all) walks it server-side in topological
+# order through app/workflow_runner.py, one node at a time -- billed
+# calls are sequential on purpose. The Generate node goes through
+# runway.generate_from_prompt, whose spend gate (RUNWAY_SPEND_OK inside
+# generate_video) means this surface cannot become a second, ungated
+# route to spend.
+
+class WorkflowBody(BaseModel):
+    name: Optional[str] = None
+    graph: Optional[dict] = None
+    brand: Optional[str] = None
+
+
+@router.get("/workflows")
+def workflows_list(brand: Optional[str] = None):
+    return {"items": workflows.list_workflows(brand=brand or None, path=db.DB_PATH)}
+
+
+@router.post("/workflows")
+def workflows_create(body: WorkflowBody, request: Request):
+    brand = body.brand if body.brand in preprod.BRANDS else (
+        request.cookies.get("brand")
+        if request.cookies.get("brand") in preprod.BRANDS else "antihero")
+    workflow_id = workflows.create_workflow(
+        body.name or "Untitled workflow", body.graph or {},
+        brand=brand, path=db.DB_PATH)
+    return {"id": workflow_id}
+
+
+# the exec routes sit above /workflows/{workflow_id} so "exec" is never
+# read as an id -- the /jobs/stream registration-order rule.
+
+class GroundBody(BaseModel):
+    spark: str = ""
+
+
+@router.post("/workflows/exec/ground")
+def workflow_exec_ground(body: GroundBody):
+    """The Ground in References node: the existing RAG-grounding step
+    (shootgen.reference_block) as a visible, wireable call. Degrades to
+    "" with the store down, same as everywhere else."""
+    from src import shootgen
+
+    references = shootgen.reference_block(
+        spark=body.spark.strip() or None, db_path=db.DB_PATH)
+    return {"references": references}
+
+
+class EnhanceBody(BaseModel):
+    system: str = ""
+    user: str = ""
+    images: list[str] = []
+
+
+@router.post("/workflows/exec/enhance")
+def workflow_exec_enhance(body: EnhanceBody):
+    """The LLM Enhance node's own Run: one billed Gemini call through
+    generate_with_retry, images riding as vision input. A job, so the
+    canvas lights the node from the same SSE feed everything uses."""
+    api_key = _gemini_key()
+    if not api_key:
+        return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
+
+    def work(job):
+        from google import genai
+        jobs.progress(job, 0.3, "enhancing prompt")
+        text = workflow_runner.enhance(
+            body.system, body.user, images=body.images or None,
+            gemini_client=genai.Client(api_key=api_key),
+            resolve_photo=_resolve_asset_photo)
+        return {"detail": text[:80], "output": text}
+
+    job = jobs.start("enhance", f"enhance · {(body.user or body.system)[:50]}", work)
+    return {"job_id": job["id"]}
+
+
+class WfGenerateBody(BaseModel):
+    prompt: str
+    image: Optional[str] = None
+
+
+@router.post("/workflows/exec/generate")
+def workflow_exec_generate(body: WfGenerateBody):
+    """The Generate node's own Run: one Runway render from a free-
+    standing prompt + optional reference. Billed, capped, and
+    spend-gated -- generate_video refuses without RUNWAY_SPEND_OK=1 on
+    the server's run, exactly as the scene board's render button."""
+    if not runway.has_key():
+        return _error(503, "runway_unavailable", "RUNWAYML_API_SECRET is not set")
+
+    def work(job):
+        jobs.progress(job, 0.2, "rendering via Runway")
+        reference = workflow_runner.image_for_runway(
+            body.image, resolve_photo=_resolve_asset_photo)
+        result = runway.generate_from_prompt(
+            body.prompt, reference_image=reference, db_path=db.DB_PATH)
+        if not result.get("ok"):
+            raise RuntimeError(result.get("error") or "render failed")
+        return {"detail": "clip rendered", "output": result["media_url"]}
+
+    job = jobs.start("render", f"runway · {body.prompt[:50]}", work)
+    return {"job_id": job["id"]}
+
+
+@router.get("/workflows/{workflow_id}")
+def workflows_get(workflow_id: int):
+    workflow = workflows.get_workflow(workflow_id, path=db.DB_PATH)
+    if workflow is None:
+        return _error(404, "not_found", "no such workflow")
+    return workflow
+
+
+@router.put("/workflows/{workflow_id}")
+def workflows_update(workflow_id: int, body: WorkflowBody):
+    if not workflows.update_workflow(workflow_id, name=body.name,
+                                     graph=body.graph, path=db.DB_PATH):
+        return _error(404, "not_found", "no such workflow")
+    return {"id": workflow_id}
+
+
+@router.delete("/workflows/{workflow_id}")
+def workflows_delete(workflow_id: int):
+    if not workflows.delete_workflow(workflow_id, path=db.DB_PATH):
+        return _error(404, "not_found", "no such workflow")
+    return {"deleted": workflow_id}
+
+
+@router.post("/workflows/{workflow_id}/run")
+def workflows_run(workflow_id: int):
+    """Run all: topological order over the SAVED graph (the client saves
+    before it runs), sequential, every node's state pushed over the jobs
+    SSE feed so the canvas lights up as nodes complete."""
+    workflow = workflows.get_workflow(workflow_id, path=db.DB_PATH)
+    if workflow is None:
+        return _error(404, "not_found", "no such workflow")
+    graph = workflow.get("graph") or {}
+    if not graph.get("nodes"):
+        return _error(400, "empty_graph", "the workflow has no nodes to run")
+    api_key = _gemini_key()
+
+    def work(job):
+        gemini_client = None
+        if api_key:
+            from google import genai
+            gemini_client = genai.Client(api_key=api_key)
+
+        def emit(states, fraction, detail):
+            jobs.update(job["id"], node_states=states)
+            jobs.progress(job, fraction, detail)
+
+        result = workflow_runner.execute_graph(
+            graph, gemini_client=gemini_client,
+            resolve_photo=_resolve_asset_photo, db_path=db.DB_PATH,
+            emit=emit, check_cancelled=lambda: jobs.check_cancelled(job))
+        jobs.update(job["id"], node_states=result["nodes"])
+        failed = [s for s in result["nodes"].values() if s["status"] == "failed"]
+        if failed:
+            raise RuntimeError(f"{len(failed)} node(s) failed — "
+                               + (failed[0].get("error") or "see the board"))
+        done = sum(1 for s in result["nodes"].values() if s["status"] == "done")
+        return {"ref_id": workflow_id, "detail": f"{done} node(s) executed"}
+
+    job = jobs.start("workflow", f"workflow · {workflow['name']}", work,
+                     cancellable=True)
+    return {"job_id": job["id"]}
 
 
 # --- jobs -------------------------------------------------------------------

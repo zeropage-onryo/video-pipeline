@@ -444,54 +444,38 @@ html[data-v="studio"] #gl{opacity:1;transition:opacity .5s}
 }
 .plate:hover .badge{opacity:1}
 
+/* ── WORKFLOWS ──────────────────────────────────────── */
+.wfwrap{max-width:1680px;margin:0 auto;padding:0 42px;height:calc(100vh - 290px);min-height:440px}
+#wfcanvas{
+  width:100%;height:100%;display:block;border:1px solid var(--line);
+  border-top-color:var(--line-hi);border-radius:var(--r2);background:#050506;
+}
+.wfhint{max-width:1680px;margin:10px auto 0;padding:0 42px;text-align:center}
+.wfname{max-width:280px}
+.wfselect{
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);
+  border:1px solid var(--line);border-radius:var(--rp);padding:8px 14px;cursor:pointer;
+  background:rgb(8 8 10 / .4);max-width:230px;
+}
+.wfselect:focus{outline:0;border-color:var(--line-hi)}
+.wfselect option{background:#141417;color:var(--text);text-transform:none;letter-spacing:normal}
+#wfmodal .mgrid{max-height:260px;margin-bottom:6px}
+#wfmodal .dnta{min-height:180px;font-family:var(--mono);font-size:12.5px}
+/* litegraph's own popups (search box, dialogs) onto the palette */
+.litegraph.litesearchbox,.graphdialog{background:rgb(10 10 13 / .94)!important;border:1px solid var(--line-hi);border-radius:var(--r1)}
+.litegraph.litesearchbox input,.graphdialog input{background:rgb(255 255 255 / .06);color:var(--text)}
+.litegraph.lite-search-item{color:var(--dim);font-family:var(--body)}
+
 /* ── STATES (loading / empty / error) ───────────────── */
 .stateline{padding:26px 42px;font-family:var(--mono);font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--dimmer);max-width:1680px;margin:0 auto}
 .stateline.err{color:var(--signal)}
 .stateline button{margin-left:12px;font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;background:0;border:1px solid var(--line);border-radius:var(--rp);color:var(--dim);padding:6px 14px;cursor:pointer}
 .stateline button:hover{color:var(--text);border-color:var(--line-hi)}
 
-/* ── EVALS ──────────────────────────────────────────── */
-.probe{width:100%;max-width:none;margin-bottom:14px}
-.probeout{display:flex;flex-direction:column;gap:2px;min-height:40px}
-.pr{
-  display:grid;grid-template-columns:26px 1fr auto auto;gap:12px;align-items:center;
-  padding:9px 12px;border-radius:var(--r1);transition:background var(--t);
-}
-.pr:hover{background:rgb(255 255 255 / .04)}
-.pr .rank{font-family:var(--mono);font-size:11px;color:var(--dimmer);font-variant-numeric:tabular-nums}
-.pr .rn{font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.pr .rs{font-family:var(--mono);font-size:11.5px;color:var(--dim);font-variant-numeric:tabular-nums}
-.mk{
-  width:30px;height:30px;border-radius:var(--rp);cursor:pointer;flex:none;
-  background:rgb(255 255 255 / .04);border:1px solid var(--line);color:var(--dimmer);
-  display:grid;place-items:center;font-size:13px;transition:all var(--t);
-}
-.mk:hover{color:var(--text);border-color:var(--line-hi)}
-.mk[aria-pressed="true"]{background:rgb(47 125 79 / .20);border-color:rgb(47 125 79 / .7);color:#6cc491}
-.probefoot{display:flex;align-items:center;gap:12px;margin-top:14px}
-.probefoot .spacer{flex:1}
-.probefoot .btn{flex:0 0 auto;padding:11px 20px}
+/* the small "nothing here / can't load" line panels share — named for
+   the Evals probe it debuted on; that view moved to /evals (2026-08-25)
+   but the class stayed the shared blank-state everywhere */
 .probeblank{padding:22px 12px;font-family:var(--mono);font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--dimmer)}
-.bars{display:flex;align-items:flex-end;gap:10px;height:150px}
-.bar2{flex:1;border-radius:var(--r1) var(--r1) 6px 6px;background:rgb(255 255 255 / .08);position:relative;transition:background var(--t);cursor:pointer}
-.bar2:hover{background:rgb(255 255 255 / .14)}
-.bar2.sel{background:var(--signal);box-shadow:0 0 0 1px rgb(228 0 43 / .5)}
-.bar2::after{
-  content:attr(data-v);position:absolute;top:-20px;left:50%;transform:translateX(-50%);
-  font-family:var(--mono);font-size:9.5px;color:var(--dim);
-}
-.gq{display:grid;grid-template-columns:1fr 150px 70px 58px 40px 22px;gap:14px;align-items:center;padding:12px 14px;border-radius:var(--r1);cursor:pointer;font-size:13px;transition:background var(--t)}
-.gq:hover{background:rgb(255 255 255 / .04)}
-.gq .v{font-family:var(--mono);font-size:11.5px;color:var(--dim);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.gq .v.miss{color:var(--signal)}
-.gq .v.ok{color:#4c9a6c}
-.gq .chev{color:var(--dimmer);transition:transform var(--t);font-size:11px}
-.gq[aria-expanded="true"] .chev{transform:rotate(90deg)}
-.gq .del{background:0;border:0;color:var(--dimmer);cursor:pointer;font-size:12px;border-radius:var(--rp);padding:4px 8px}
-.gq .del:hover{color:var(--signal)}
-.gdetail{display:none;padding:4px 14px 16px}
-.gdetail[data-open]{display:block;animation:vin .3s cubic-bezier(.16,.8,.3,1)}
-.pr.gold{background:rgb(47 125 79 / .12);box-shadow:inset 2px 0 0 #2f7d4f}
 
 /* ── METRICS ────────────────────────────────────────── */
 .metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:16px;max-width:1680px;margin:0 auto 16px;padding:0 42px}

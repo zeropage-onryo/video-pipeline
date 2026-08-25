@@ -36,6 +36,7 @@ SDK bump -- Runway versions these.
 """
 from __future__ import annotations
 
+import base64
 import os
 import re
 import urllib.request
@@ -295,6 +296,79 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
             media_url = f"/renders/runway/{out_path.name}"
 
         preprod.set_shot_media_url(concept_id, shot_n, media_url, **kwargs)
+        return {"ok": True, "media_url": media_url,
+                "generation_id": generation_id, "path": str(out_path),
+                "error": None}
+    except Exception as e:
+        return {"ok": False, "error": _safe_error(e)}
+
+
+def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
+                         model: str = DEFAULT_MODEL, client=None) -> dict:
+    """
+    Never raises: {"ok", "media_url", "generation_id", "path", "error"}.
+    The free-standing render behind the Workflows canvas's Generate
+    node: a prompt plus an optional reference, no concept/shot row
+    required -- generate_for_shot's walls without its coupling. The
+    spend gate lives inside generate_video, so this layer cannot spend
+    around it either; the cap is checked first; the attempt is a
+    generations row via the same synthesized-shot path the graph uses.
+
+    `reference_image` anchors the render: a public http(s) URL or a
+    data: URI passes straight through as prompt_image; raw image bytes
+    (a picked local asset photo, which Runway could never fetch) become
+    a data URI. Anything else is dropped -- a reference is an
+    enhancement, never a gate.
+    """
+    from . import storage
+    kwargs = {"path": db_path} if db_path is not None else {}
+
+    try:
+        prompt = (prompt or "").strip()
+        if not prompt:
+            return {"ok": False, "error": "an empty prompt renders nothing"}
+
+        # a fresh DB has no generations table until something inits it;
+        # the cap count below must not be the thing that discovers that
+        generative.init(**kwargs)
+        used = generations_today(db_path=db_path)
+        if used >= DAILY_CAP:
+            return {"ok": False,
+                    "error": f"daily cap: {used}/{DAILY_CAP} generations used "
+                             f"today (RUNWAY_DAILY_CAP to raise)"}
+
+        prompt_image = None
+        if isinstance(reference_image, (bytes, bytearray)):
+            prompt_image = ("data:image/jpeg;base64,"
+                            + base64.b64encode(bytes(reference_image)).decode("ascii"))
+        elif isinstance(reference_image, str) and reference_image.startswith(
+                ("http://", "https://", "data:image/")):
+            prompt_image = reference_image
+
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        out_path = RENDER_DIR / f"wf-{stamp}.mp4"
+        generate_video(prompt, out_path, model=model,
+                       prompt_image=prompt_image, client=client)
+
+        shot_row_id = _shot_row_for_prompt(prompt, db_path)
+        generation_id = generative.record_generation(
+            shot_row_id, "runway", prompt,
+            params={"model": model, "ratio": DEFAULT_RATIO,
+                    "duration": DEFAULT_DURATION,
+                    "source": "workflow",
+                    "prompt_image": bool(prompt_image)},
+            output_path=str(out_path),
+            cost_usd=estimate_cost(1, model=model),
+            **kwargs,
+        )
+
+        if storage.configured():
+            media_url = storage.upload_file(
+                out_path, key=f"renders/runway/{out_path.name}",
+                content_type="video/mp4")
+        else:
+            media_url = f"/renders/runway/{out_path.name}"
+
         return {"ok": True, "media_url": media_url,
                 "generation_id": generation_id, "path": str(out_path),
                 "error": None}
