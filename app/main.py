@@ -29,6 +29,7 @@ from src import (
     db,
     entities,
     evalstore,
+    generative,
     inspiration,
     instagram,
     locations,
@@ -37,6 +38,7 @@ from src import (
     shootgen,
     taste_judge,
     winners,
+    workflows,
     youtube,
 )
 
@@ -136,6 +138,8 @@ async def lifespan(app: FastAPI):
     winners.init(path=db.DB_PATH)
     inspiration.init(path=db.DB_PATH)   # seeds the researched accounts if empty
     evalstore.init(path=db.DB_PATH)     # golden set seeded from eval_cases.json
+    workflows.init(path=db.DB_PATH)     # saved node graphs for /ui Workflows
+    generative.init(path=db.DB_PATH)    # generations log the render caps count
     accounts_mod.init(path=db.DB_PATH)  # users / identities / accounts / members
     seed_gold_standard()                # records the canonical example as a winner
     yield
@@ -793,6 +797,23 @@ def library_delete(source: str = Form(...)):
     except Exception as e:
         message = f"delete failed: {e}"
     return RedirectResponse("/library?message=" + quote(message), status_code=303)
+
+
+@dev.get("/evals")
+def evals_page(request: Request):
+    """
+    The retrieval-eval harness, dev-console edition: hit-rate history,
+    the golden set, and the probe tool, on the legacy skin. Moved out of
+    /ui (2026-08-25) -- evals are a developer instrument, not part of
+    the signed-in product surface, which is also why it registers on
+    `dev`: a public deployment has no /evals at all. The page is a
+    shell; its data and actions come from the same /api/evals/* and
+    /api/retrieve endpoints the old view used, so nothing is
+    reimplemented here. Those routes require a session, and the page
+    says so when it gets a 401 rather than pretending to be empty.
+    """
+    return templates.TemplateResponse(
+        request, "evals.html", {"active_nav": "evals"})
 
 
 @dev.get("/references/pick")

@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@300;400;500;600&family=Inter:wght@300;400;500&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/zpf/vendor/litegraph.css">
 <link rel="stylesheet" href="/static/zpf/zpf.css">
 </head>
 <body data-brand="{{ brand }}">
@@ -20,7 +21,7 @@
     <a data-view="studio" data-label="Studio" aria-current="page"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5V21H3z"/></svg></a>
     <a data-view="assets" data-label="Assets"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="3"/><path d="M3 9h18M9 9v9"/></svg></a>
     <a data-view="pipeline" data-label="Pipeline"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="18" cy="18" r="2.4"/><path d="M8.4 6H16a2 2 0 0 1 2 2v7.6"/></svg></a>
-    <a data-view="evals" data-label="Evals"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V9M10 19V4M16 19v-7M22 19H2"/></svg></a>
+    <a data-view="workflows" data-label="Workflows"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="18" cy="6" r="2.4"/><circle cx="12" cy="18" r="2.4"/><path d="M8.4 6h7.2M6.8 8.2 11 15.8M17.2 8.2 13 15.8"/></svg></a>
     <a data-view="analytics" data-label="Analytics"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v8.5h8.5"/></svg></a>
     <a data-view="queue" data-label="Queue"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 14h5l2 3h4l2-3h5"/></svg></a>
   </div>
@@ -132,39 +133,30 @@
     </div>
   </div>
 
-  <!-- ══ EVALS ══ -->
-  <div class="view" id="v-evals">
+  <!-- ══ WORKFLOWS ══ -->
+  <div class="view" id="v-workflows">
     <div class="vhead">
-      <h2>Evals</h2>
+      <h2>Workflows</h2>
+      <input class="search wfname" id="wfname" placeholder="Untitled workflow">
       <span class="spacer"></span>
-      <span class="m" id="runlabel">—</span>
-      <button class="go" id="runeval" data-cap="evals.run">Run eval</button>
+      <select class="wfselect" id="wfadd">
+        <option value="">+ Add node…</option>
+        <option value="zpf/system_prompt">System Prompt</option>
+        <option value="zpf/user_prompt">User Prompt</option>
+        <option value="zpf/reference_image">Reference Image</option>
+        <option value="zpf/ground">Ground in References</option>
+        <option value="zpf/enhance">LLM Enhance</option>
+        <option value="zpf/generate">Generate</option>
+      </select>
+      <select class="wfselect" id="wfpick"><option value="">Open…</option></select>
+      <button class="tag" id="wfnew">New</button>
+      <button class="tag" id="wfdel">Delete</button>
+      <button class="tag" id="wfsave">Save</button>
+      <button class="go" id="wfrunall">Run all</button>
     </div>
-    <div class="stateline" id="estate" hidden></div>
-    <div class="metrics" id="emetrics"></div>
-
-    <div class="twocol">
-      <div class="glass panel">
-        <div class="ptitle">Hit rate across runs · click to inspect</div>
-        <div class="bars" id="bars"></div>
-        <div class="probeblank" id="barsblank" hidden>No runs yet — run the eval to start the history</div>
-      </div>
-      <div class="glass panel" data-cap="retrieve">
-        <div class="ptitle">Probe retrieval</div>
-        <input class="search probe" id="probe" placeholder="Type a query and mark what should have come back…">
-        <div class="probeout" id="probeout"></div>
-        <div class="probefoot" id="probefoot" hidden>
-          <span class="m" id="probemeta">—</span>
-          <span class="spacer"></span>
-          <button class="btn pri" id="probesave">Add to golden set</button>
-        </div>
-      </div>
-    </div>
-
-    <div class="glass panel" style="margin-inline:42px">
-      <div class="ptitle">Golden set · click a query to see what the selected run retrieved</div>
-      <div class="tbl" id="golden"></div>
-    </div>
+    <div class="stateline" id="wfstate" hidden></div>
+    <div class="wfwrap"><canvas id="wfcanvas"></canvas></div>
+    <div class="wfhint m">Right-click the canvas (or use + Add node) to add · drag from a port dot to wire · double-click a node to edit it</div>
   </div>
 
   <!-- ══ ANALYTICS ══ -->
@@ -231,6 +223,34 @@
 </div>
 <div class="pal" id="pal"><input id="pq" placeholder="Run a command or jump to an asset…" autocomplete="off"><div class="plist" id="plist"></div></div>
 
+<!-- workflows: node editor modal — text for prompt nodes, media picker
+     for the Reference Image node, read-only for node outputs -->
+<div class="deny" id="wfmodal">
+  <div class="dnhead">
+    <h3 id="wfmtitle">—</h3>
+    <button class="x" id="wfmclose" aria-label="Close">✕</button>
+  </div>
+  <div class="dnbody">
+    <div id="wfmtextwrap">
+      <div class="dnlabel" id="wfmlabel">Text</div>
+      <textarea id="wfmtext" class="dnta"></textarea>
+    </div>
+    <div id="wfmmediawrap" hidden>
+      <div class="dnlabel">Pick from saved media — or paste a public image URL below</div>
+      <div class="mgrid" id="wfmgrid"></div>
+      <div class="dnlabel">Image URL</div>
+      <input class="search" id="wfmurl" style="max-width:none" placeholder="https://… or a picked photo">
+    </div>
+  </div>
+  <div class="dnfoot">
+    <span class="m" id="wfmmeta"></span>
+    <span class="spacer"></span>
+    <button class="btn" id="wfmcancel">Cancel</button>
+    <button class="btn pri" id="wfmsave">Apply</button>
+  </div>
+</div>
+
+<script src="/static/zpf/vendor/litegraph.js"></script>
 <script type="module" src="/static/zpf/app.js"></script>
 </body>
 </html>
