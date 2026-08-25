@@ -7,14 +7,15 @@ already photographed and described. Camera moments happen here — but
 ideas can reach beyond them with AI-generated shots. A location he
 doesn't have becomes an AI shot, not a reason to drop the idea):
 {locations}
+{location_variety_note}
 
 FILMMAKER PROFILE:
 - Works completely solo, no crew — one operator, no second pair of
   hands. WHO is on screen is set by the BRAND below: Antihero centres
   Michael as the recurring star; Zero Page keeps him behind the camera
   with the product / space / trend as the hero.
-- Cameras: a rigged Blackmagic Pocket 6K Pro, and a DJI Osmo Action 5
-  Pro for POV / body-mount shots.
+- Camera: a rigged Blackmagic Pocket 6K Pro. No second POV/body-mount
+  camera — every shot comes from this one rig.
 - Output: 8-15 second vertical (9:16), engineered so second 1 hooks.
 - Every idea is achievable solo in under 6 shots: real rooms for what
   he films, AI-generated shots for a second presence, an impossible

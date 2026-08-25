@@ -1,0 +1,22 @@
+You are polishing an already-good AI video shot prompt using proven
+prompting techniques for {tool}. Do not change what the shot IS --
+same subject, same action, same setting, same mood, same duration.
+Only apply phrasing/structure techniques from the reference material
+below to make it read like a technique-aware, tool-native prompt.
+
+ORIGINAL PROMPT:
+{raw_prompt}
+
+TOOL-SPECIFIC PROMPTING TECHNIQUES ON FILE:
+{references}
+
+Rewrite the prompt applying whichever techniques above genuinely fit
+this particular shot -- prompt ordering, costume/identity
+disambiguation, style/texture blocks, avoiding static bookending,
+explicit blocking, continuity phrasing, or anything else that applies.
+Skip any technique that doesn't fit rather than forcing it in. If
+nothing above meaningfully improves this prompt, return it close to
+unchanged rather than padding it for its own sake.
+
+Output ONLY the rewritten prompt text, nothing else -- no preamble,
+no explanation, no markdown fences, no restating these instructions.

@@ -1,0 +1,193 @@
+{% extends "base.html" %}
+{% block title %}Pick References — Zero Page{% endblock %}
+{% block content %}
+<div class="sk"><div class="page">
+  <div class="vhead">
+    <div>
+      <div class="rule">Reference library // opt-in grounding for this generation</div>
+      <h1>Pick references</h1>
+      <p class="vsub">Check the assets you want THIS generation grounded on. Marketing &amp; prompting-technique guidance already grounds automatically — everything under "your assets" is your own brand voice, look, and performance history, which only grounds when you pick it here.</p>
+    </div>
+  </div>
+
+  {% if message %}<div class="toast">{{ message }}</div>{% endif %}
+
+  {% if not available %}
+  <div class="panel"><div class="panel-head"><span class="id">STORE UNAVAILABLE</span></div>
+    <div class="panel-body"><p class="dim">The library database isn't reachable. Start Postgres.app (or <span class="mono">docker compose up -d</span>) and reload.</p>
+    {% if error %}<p class="mono dim">{{ error }}</p>{% endif %}</div>
+  </div>
+  {% else %}
+
+  {% set assets = sources | rejectattr("domain", "in", auto_domains) | list %}
+  {% set auto = sources | selectattr("domain", "in", auto_domains) | list %}
+
+  <div class="panel">
+    <div class="panel-head"><span class="id">YOUR ASSETS</span><span class="m" id="pick-count">0 selected</span></div>
+    <div class="panel-body">
+      {% if assets %}
+      <table>
+        <thead><tr><th></th><th>Source</th><th>Shelf</th><th>Project</th><th>Chunks</th></tr></thead>
+        <tbody>
+          {% for s in assets %}
+          <tr>
+            <td><input type="checkbox" name="picked" value="{{ s.source }}" class="pick-box"></td>
+            <td>{{ s.source }}</td>
+            <td><span class="tag steel">{{ s.domain }}</span></td>
+            <td>{{ s.project or "—" }}</td>
+            <td class="num">{{ s.chunks }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="dim">Nothing on these shelves yet — add one below, or from the terminal: <span class="mono">python -m src.rag ingest &lt;file&gt; --domain personal_brand</span></p>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if auto %}
+  <div class="panel">
+    <div class="panel-head"><span class="id">ALREADY AUTOMATIC</span><span class="m">MARKETING // AI_PROMPTING</span></div>
+    <div class="panel-body">
+      <p class="dim" style="margin-top:0">These already ground every generation in the background — craft/structuring advice, not your own assets. Picking one here doesn't change anything; it's just here if you want to force it in explicitly.</p>
+      <table>
+        <thead><tr><th></th><th>Source</th><th>Shelf</th><th>Chunks</th></tr></thead>
+        <tbody>
+          {% for s in auto %}
+          <tr>
+            <td><input type="checkbox" name="picked" value="{{ s.source }}" class="pick-box"></td>
+            <td>{{ s.source }}</td>
+            <td><span class="tag faint">{{ s.domain }}</span></td>
+            <td class="num">{{ s.chunks }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="panel">
+    <div class="panel-head"><span class="id">UPLOAD FROM YOUR COMPUTER</span><span class="m">CHUNK // EMBED // STORE</span></div>
+    <div class="panel-body">
+      <form method="post" action="/references/pick/upload" enctype="multipart/form-data">
+        <div class="field-grid">
+          <label>File<input type="file" name="file" required></label>
+          <label>Shelf (domain)<input type="text" name="domain" list="domains-dl" placeholder="personal_brand" required><datalist id="domains-dl">{% for d in domains %}<option value="{{ d }}">{% endfor %}</datalist></label>
+          <label>Project <span class="mono dim">optional</span><input type="text" name="project" placeholder="juno_promo"></label>
+          <label>Link / ref <span class="mono dim">optional</span><input type="text" name="source_ref" placeholder="https://... or a note"></label>
+        </div>
+        <div style="margin-top:12px"><button type="submit" class="primary">Add &amp; keep picking</button></div>
+      </form>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><span class="id">CAST &amp; PROPS</span><span class="m" id="cast-count">0 selected</span></div>
+    <div class="panel-body">
+      <p class="dim" style="margin-top:0">Ground this generation on specific people or objects on file — none picked means every character/prop stays fair game, same as before.</p>
+      {% if characters or props %}
+      <div class="agrid">
+        {% for c in characters %}
+        <label class="acard pick-media">
+          <input type="checkbox" class="cast-box" name="picked_char" value="{{ c.id }}" data-name="{{ c.name }}">
+          <div class="im">{% if c.photos %}<img src="{{ c.photos[0] }}" alt="{{ c.name }}">{% else %}<div class="im-ph"></div>{% endif %}</div>
+          <div class="meta"><h3>{{ c.name }}</h3><p class="dim">character</p></div>
+        </label>
+        {% endfor %}
+        {% for p in props %}
+        <label class="acard pick-media">
+          <input type="checkbox" class="cast-box" name="picked_prop" value="{{ p.id }}" data-name="{{ p.name }}">
+          <div class="im">{% if p.photos %}<img src="{{ p.photos[0] }}" alt="{{ p.name }}">{% else %}<div class="im-ph"></div>{% endif %}</div>
+          <div class="meta"><h3>{{ p.name }}</h3><p class="dim">prop</p></div>
+        </label>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="dim">No characters or props yet — add one below.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><span class="id">UPLOAD MEDIA</span><span class="m">NEW CHARACTER OR PROP</span></div>
+    <div class="panel-body">
+      <p class="dim" style="margin-top:0">Adds straight to your Assets library (same as the Characters/Props tab there) and drops you back here so you can pick it right away.</p>
+      <form method="post" id="media-upload-form" enctype="multipart/form-data" style="display:grid; gap:10px">
+        <input type="hidden" name="next" value="/references/pick">
+        <div class="field-grid">
+          <label>Kind
+            <select name="kind" id="media-kind">
+              <option value="character">Character</option>
+              <option value="prop">Prop</option>
+            </select>
+          </label>
+          <label>Name<input type="text" name="name" required autocomplete="off"></label>
+          <label>Photo<input type="file" name="photos" accept="image/*" multiple required></label>
+        </div>
+        <div><button type="submit" class="primary">Add &amp; keep picking</button></div>
+      </form>
+    </div>
+  </div>
+
+  <div style="margin:18px 0"><button type="button" id="use-selected-btn" class="primary" disabled>Use 0 selected</button></div>
+
+  <p class="dim" style="font-size:12.5px">Need to search by meaning, paste text instead of a file, or remove something for good? <a href="/library" style="color:var(--steel)">Open the full library →</a></p>
+  {% endif %}
+</div></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  var useBtn = document.getElementById('use-selected-btn');
+  var countEl = document.getElementById('pick-count');
+  var castCountEl = document.getElementById('cast-count');
+  function refreshCount(){
+    var n = document.querySelectorAll('.pick-box:checked').length;
+    var m = document.querySelectorAll('.cast-box:checked').length;
+    if(useBtn){ useBtn.textContent = 'Use ' + (n + m) + ' selected'; useBtn.disabled = (n + m) === 0; }
+    if(countEl){ countEl.textContent = n + ' selected'; }
+    if(castCountEl){ castCountEl.textContent = m + ' selected'; }
+  }
+  document.querySelectorAll('.pick-box, .cast-box').forEach(function(box){
+    box.addEventListener('change', refreshCount);
+  });
+  refreshCount();
+
+  if(useBtn){
+    useBtn.addEventListener('click', function(){
+      var sources = Array.from(document.querySelectorAll('.pick-box:checked')).map(function(el){ return el.value; });
+      var characters = Array.from(document.querySelectorAll('input[name="picked_char"]:checked'))
+        .map(function(el){ return {id: el.value, name: el.dataset.name}; });
+      var props = Array.from(document.querySelectorAll('input[name="picked_prop"]:checked'))
+        .map(function(el){ return {id: el.value, name: el.dataset.name}; });
+      if(window.opener){
+        window.opener.postMessage(
+          {type: 'zp-references-picked', sources: sources, characters: characters, props: props},
+          window.location.origin
+        );
+        window.close();
+      } else {
+        var names = sources.concat(characters.map(function(c){ return c.name; }))
+                            .concat(props.map(function(p){ return p.name; }));
+        alert('Selected: ' + names.join(', ') + '\n\nOpen this page from the References button in Studio or Concepts so picks are sent back automatically.');
+      }
+    });
+  }
+
+  // The upload form posts to /characters/new or /props/new -- the same
+  // routes assets.html uses -- picked by the Kind dropdown, since those
+  // two routes take different field names (role vs category) and this
+  // popup only needs name + photo either way.
+  var mediaForm = document.getElementById('media-upload-form');
+  var kindSel = document.getElementById('media-kind');
+  function syncMediaAction(){
+    if(mediaForm) mediaForm.action = (kindSel && kindSel.value === 'prop') ? '/props/new' : '/characters/new';
+  }
+  if(mediaForm && kindSel){
+    kindSel.addEventListener('change', syncMediaAction);
+    syncMediaAction();
+  }
+</script>
+{% endblock %}

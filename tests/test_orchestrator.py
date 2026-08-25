@@ -46,6 +46,11 @@ GOOD_PROMPT = ("Extreme macro close-up of a brass door handle slowly turning in 
                "dark hallway at night, one warm practical light spilling under the "
                "door, heavy film grain, crushed shadows, noir mood, static camera")
 
+REWORKED_PROMPT = ("Extreme macro close-up of a brass door handle slowly turning on its "
+                   "own in a dark hallway at night, one warm practical light spilling "
+                   "under the door, heavy film grain, crushed shadows, noir mood, "
+                   "static locked-off camera, no other motion in frame")
+
 # captured at import, before any fixture stubs it -- for the tests that
 # need the real fail-closed judge back
 REAL_JUDGE_PROMPT = orchestrator._judge_prompt
@@ -76,12 +81,42 @@ def stage_fakes(monkeypatch, results):
     def fake_generate(brand, client=None, spark=None, gemini_client=None,
                       model=None, use_pov=True, db_path=None, references="",
                       cast=None):
-        calls.append({"spark": spark, "references": references, "cast": cast})
+        calls.append({"brand": brand, "spark": spark, "references": references, "cast": cast})
         concept, warnings = queue.pop(0)
         return {"concept_id": len(calls), "concept": concept, "warnings": warnings}
 
     monkeypatch.setattr(orchestrator.shootgen, "generate_concept", fake_generate)
     return calls
+
+
+# ---------- brand defaults to channel: the hold_queue-13 regression ----------
+#
+# channel decides where a run gets FILED (hold_queue row, autonomy/rate-cap
+# row); brand decides which engine actually GENERATES (real cast/locations
+# for Antihero, faceless format-driven for Zero Page). These used to default
+# independently -- channel="zeropage", brand="antihero" -- so run(goal) or
+# run(goal, channel="zeropage") with nothing else silently generated a full
+# Antihero concept (real names, real gear) filed under a card labeled
+# ZEROPAGE. That's exactly what produced hold_queue row 13 / concept 111 on
+# 2026-08-14 -- a manual trigger invocation set --channel without --brand.
+
+def test_run_with_nothing_specified_generates_and_files_under_the_same_brand(tmp_db, monkeypatch):
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])])
+    orchestrator.run("gearing up ritual")
+    assert calls[0]["brand"] == "zeropage"  # matches the default channel, not "antihero"
+
+
+def test_run_channel_only_still_generates_the_matching_brand(tmp_db, monkeypatch):
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])])
+    orchestrator.run("gearing up ritual", channel="antihero")
+    assert calls[0]["brand"] == "antihero"
+
+
+def test_run_explicit_brand_can_still_disagree_with_channel_on_purpose(tmp_db, monkeypatch, capsys):
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])])
+    orchestrator.run("gearing up ritual", channel="zeropage", brand="antihero")
+    assert calls[0]["brand"] == "antihero"
+    assert "note:" in capsys.readouterr().err  # the mismatch is logged, not silent
 
 
 # ---------- the left third: the original loop, preserved ----------
@@ -102,6 +137,42 @@ def test_clean_run_parks_in_shadow_with_the_render_stub_reason(tmp_db, monkeypat
     assert row["status"] == "held"
     assert row["concept_id"] == 1
     assert row["payload"]["prompts"][0]["tool"] == "KLING"
+
+
+def test_structure_prompt_refines_against_technique_references(tmp_db, monkeypatch):
+    """The ai_prompting shelf is a separate retrieval from ground_rag's
+    (see orchestrator._technique_references) -- give it its own client
+    and its own crag stub, keyed off which domain was asked for, so the
+    ideation call and the refinement call can't be confused for each other."""
+    monkeypatch.setattr(orchestrator, "_client", lambda: object())
+
+    def fake_crag(query, client, model, domain=None, **kwargs):
+        if domain == orchestrator.promptgen.REFINE_DOMAIN:
+            return {"ok": True, "references": [
+                {"source": "cheat-codes.md", "chunk": "start mid-motion, avoid static bookending"}]}
+        return {"ok": False, "references": [], "error": "no store in tests"}
+
+    monkeypatch.setattr(orchestrator.crag, "retrieve_with_crag", fake_crag)
+    monkeypatch.setattr(orchestrator.promptgen, "generate_with_retry",
+                        lambda client, model, prompt: "REFINED: " + GOOD_PROMPT + ", mid-motion start")
+    monkeypatch.setattr(orchestrator, "generate_with_retry", lambda *a, **k: "")  # keep stills harmless
+    stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    result = orchestrator.run("gearing up ritual")
+
+    assert result["prompts"] == [
+        {"tool": "KLING", "prompt": "REFINED: " + GOOD_PROMPT + ", mid-motion start", "still": ""}]
+
+
+def test_structure_prompt_keeps_the_original_when_the_shelf_is_empty(tmp_db, monkeypatch):
+    # default tmp_db fixture stubs crag.retrieve_with_crag to {"ok": False, ...}
+    # for every domain, ai_prompting included -- refinement should no-op.
+    stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    result = orchestrator.run("gearing up ritual")
+
+    assert result["prompts"] == [
+        {"tool": "KLING", "prompt": GOOD_PROMPT, "still": ""}]
 
 
 def test_warnings_trigger_a_retry_with_feedback_in_the_spark(tmp_db, monkeypatch):
@@ -188,26 +259,90 @@ def test_ground_entities_defaults_to_everything_on_file(tmp_db, monkeypatch):
     assert "Ducati Panigale V2" in calls[0]["cast"]
 
 
-def test_ground_rag_formats_crag_hits_into_references(tmp_db, monkeypatch):
+def test_ground_rag_auto_grounds_only_in_craft_advice_domains(tmp_db, monkeypatch):
+    """
+    The marketing shelf (platform mechanics, structuring advice) is the
+    automatic layer -- never the brand's own assets (personal_brand,
+    cinematography, proven_results, winning_prompts), which stay
+    opt-in via picked_references (narrowed 2026-08-20).
+    """
+    calls = []
+
+    def fake_crag(query, client, model, domain=None, **kwargs):
+        calls.append(domain)
+        return {"ok": False, "references": [], "error": "not exercised"}
+
+    monkeypatch.setattr(orchestrator.crag, "retrieve_with_crag", fake_crag)
+    stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    orchestrator.run("gearing up ritual")
+
+    assert orchestrator.shootgen.AUTO_IDEATION_DOMAINS in calls
+    assert orchestrator.shootgen.AUTO_IDEATION_DOMAINS == ("marketing",)
+
+
+def test_ground_rag_auto_pulls_craft_advice_with_nothing_picked(tmp_db, monkeypatch):
+    def fake_crag(query, client, model, domain=None, **kwargs):
+        if domain == orchestrator.shootgen.AUTO_IDEATION_DOMAINS:
+            return {"ok": True, "references": [
+                {"source": "short-form-video.md", "chunk": "hook in the first second"}]}
+        return {"ok": False, "references": [], "error": "not exercised"}
+
+    monkeypatch.setattr(orchestrator.crag, "retrieve_with_crag", fake_crag)
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    orchestrator.run("gearing up ritual")
+
+    assert "short-form-video.md" in calls[0]["references"]
+    assert "hook in the first second" in calls[0]["references"]
+
+
+def test_ground_rag_pulls_only_the_selected_asset_sources(tmp_db, monkeypatch):
     monkeypatch.setattr(
-        orchestrator.crag, "retrieve_with_crag",
-        lambda *a, **k: {"ok": True, "rewritten_query": None, "references": [
-            {"source": "brief.txt", "chunk": "still, patient, one move"}]},
+        orchestrator.rag, "fetch_by_sources",
+        lambda sources, **k: (
+            {"ok": True, "references": [
+                {"source": "brief.txt", "chunk": "still, patient, one move"}]}
+            if sources == ["brief.txt"] else {"ok": True, "references": []}
+        ),
     )
     calls = stage_fakes(monkeypatch, [(make_concept(), [])])
 
-    orchestrator.run("ritual")
+    orchestrator.run("ritual", picked_references=["brief.txt"])
 
     assert "brief.txt" in calls[0]["references"]
     assert "still, patient, one move" in calls[0]["references"]
 
 
-def test_ground_rag_degrades_to_ungrounded(tmp_db, monkeypatch):
+def test_ground_rag_never_touches_asset_shelves_with_nothing_picked(tmp_db, monkeypatch):
+    # asset grounding is opt-in (2026-08-20): nothing picked means
+    # fetch_by_sources is never even called, not just that its result
+    # gets discarded. The default tmp_db fixture already fails the
+    # crag stub closed, so this also proves no asset text leaks in.
+    called = []
+    monkeypatch.setattr(
+        orchestrator.rag, "fetch_by_sources",
+        lambda sources, **k: called.append(sources) or {"ok": True, "references": [
+            {"source": "brief.txt", "chunk": "should never surface"}]},
+    )
     calls = stage_fakes(monkeypatch, [(make_concept(), [])])
 
-    orchestrator.run("ritual")           # tmp_db fixture stubs CRAG to fail
+    orchestrator.run("ritual")
 
-    assert calls[0]["references"] == ""
+    assert "brief.txt" not in calls[0]["references"]
+    assert called == []
+
+
+def test_ground_rag_degrades_when_the_asset_store_is_unreachable(tmp_db, monkeypatch):
+    monkeypatch.setattr(
+        orchestrator.rag, "fetch_by_sources",
+        lambda sources, **k: {"ok": False, "references": [], "error": "no store in tests"},
+    )
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    orchestrator.run("ritual", picked_references=["brief.txt"])
+
+    assert "brief.txt" not in calls[0]["references"]
 
 
 # ---------- the render credit gate + qc ----------
@@ -339,8 +474,13 @@ def test_low_judge_score_holds_with_the_judges_reason(tmp_db, monkeypatch):
 
 def test_unreadable_judge_fails_closed(tmp_db, monkeypatch):
     monkeypatch.setattr(orchestrator, "_judge_prompt", REAL_JUDGE_PROMPT)
+    # Long enough to clear the structural floor on the rework pass too, but
+    # still not JSON -- proves fail-closed survives a rework attempt rather
+    # than being masked by the structural check short-circuiting it.
     monkeypatch.setattr(orchestrator, "generate_with_retry",
-                        lambda client, model, contents: "I think it's pretty good actually")
+                        lambda client, model, contents: (
+                            "I think it's pretty good actually, no notes, ship it "
+                            "as-is, looks totally fine to me honestly"))
     stage_fakes(monkeypatch, [(make_concept(), [])])
 
     result = orchestrator.run("ritual")
@@ -350,10 +490,20 @@ def test_unreadable_judge_fails_closed(tmp_db, monkeypatch):
     assert "prompt gate" in result["held_reason"]
 
 
-def test_one_bad_prompt_holds_the_whole_run(tmp_db, monkeypatch):
-    scores = iter([{"score": 10, "reason": "", "dims": {}},
-                   {"score": 3, "reason": "competing motions", "dims": {}}])
+def test_a_failed_shot_gets_one_rework_pass_before_holding(tmp_db, monkeypatch):
+    """A bad score isn't an automatic hold: the judge already names what's
+    weak, so the failing shot earns one rewrite pass against that exact
+    diagnosis before the whole concept -- including the shot that already
+    passed -- gets thrown away over one fixable line. If the rework still
+    doesn't clear the bar, THEN it holds (bounded, not infinite)."""
+    scores = iter([
+        {"score": 10, "reason": "", "dims": {}},                             # shot 1, first pass
+        {"score": 3, "reason": "competing motions", "dims": {"motion": 0}},  # shot 2, first pass
+        {"score": 4, "reason": "still ambiguous", "dims": {"motion": 0}},    # shot 2, after rework
+    ])
     monkeypatch.setattr(orchestrator, "_judge_prompt", lambda p: next(scores))
+    monkeypatch.setattr(orchestrator, "generate_with_retry",
+                        lambda client, model, contents: REWORKED_PROMPT)
     two_ai = make_concept(shots=[
         {"n": 1, "type": "BROLL", "source": "AI", "tool": "KLING",
          "location": "hallway", "desc": "x", "prompt": GOOD_PROMPT},
@@ -365,7 +515,69 @@ def test_one_bad_prompt_holds_the_whole_run(tmp_db, monkeypatch):
     result = orchestrator.run("ritual")
 
     assert [x["pass"] for x in result["prompt_scores"]] == [True, False]
-    assert "competing motions" in result["held_reason"]   # no half-rendered credit burn
+    # it really got rewritten -- and the scene bible (title/logline/grade)
+    # is re-anchored onto it, same as generate_concept prepends up front,
+    # so a rework can't quietly drift the shot out of the concept's scene.
+    bible = orchestrator.shootgen.derive_scene_bible(
+        two_ai["title"], two_ai["logline"], two_ai.get("grade"))
+    assert result["prompt_scores"][1]["prompt"] == f"{bible}. {REWORKED_PROMPT}"
+    assert result["prompt_rework_attempts"] == 1          # exactly one bounded attempt, not infinite
+    assert "still ambiguous" in result["held_reason"]      # no half-rendered credit burn
+
+
+def test_a_successful_rework_rescues_the_run(tmp_db, monkeypatch):
+    """When the rewrite actually fixes the named weakness, the run
+    proceeds past the gate instead of holding over a since-fixed
+    problem."""
+    scores = iter([
+        {"score": 10, "reason": "", "dims": {}},
+        {"score": 3, "reason": "competing motions", "dims": {"motion": 0}},
+        {"score": 8, "reason": "", "dims": {"motion": 2}},   # rework fixed it
+    ])
+    monkeypatch.setattr(orchestrator, "_judge_prompt", lambda p: next(scores))
+    monkeypatch.setattr(orchestrator, "generate_with_retry",
+                        lambda client, model, contents: REWORKED_PROMPT)
+    two_ai = make_concept(shots=[
+        {"n": 1, "type": "BROLL", "source": "AI", "tool": "KLING",
+         "location": "hallway", "desc": "x", "prompt": GOOD_PROMPT},
+        {"n": 2, "type": "BROLL", "source": "AI", "tool": "VEO",
+         "location": "hallway", "desc": "y", "prompt": GOOD_PROMPT},
+    ])
+    stage_fakes(monkeypatch, [(two_ai, [])])
+
+    result = orchestrator.run("ritual")
+
+    assert all(x["pass"] for x in result["prompt_scores"])
+    bible = orchestrator.shootgen.derive_scene_bible(
+        two_ai["title"], two_ai["logline"], two_ai.get("grade"))
+    assert result["prompts"][1]["prompt"] == f"{bible}. {REWORKED_PROMPT}"
+    # cleared the gate -- now parked only because render is the dry-run
+    # stub, not because of the prompt gate
+    assert "render is a dry-run stub" in result["held_reason"]
+
+
+def test_rework_that_errors_keeps_the_original_score_and_still_holds(tmp_db, monkeypatch):
+    """A rework call that blows up (bad JSON, network error, whatever)
+    must not crash the run -- it degrades to the original failing score,
+    same as every other best-effort seam in this pipeline."""
+    scores = iter([{"score": 10, "reason": "", "dims": {}},
+                   {"score": 3, "reason": "competing motions", "dims": {"motion": 0}}])
+    monkeypatch.setattr(orchestrator, "_judge_prompt", lambda p: next(scores))
+    def broken_retry(client, model, contents):
+        raise RuntimeError("upstream 503")
+    monkeypatch.setattr(orchestrator, "generate_with_retry", broken_retry)
+    two_ai = make_concept(shots=[
+        {"n": 1, "type": "BROLL", "source": "AI", "tool": "KLING",
+         "location": "hallway", "desc": "x", "prompt": GOOD_PROMPT},
+        {"n": 2, "type": "BROLL", "source": "AI", "tool": "VEO",
+         "location": "hallway", "desc": "y", "prompt": GOOD_PROMPT},
+    ])
+    stage_fakes(monkeypatch, [(two_ai, [])])
+
+    result = orchestrator.run("ritual")
+
+    assert result["prompt_scores"][1]["prompt"] == GOOD_PROMPT  # unchanged, rework failed
+    assert "competing motions" in result["held_reason"]
 
 
 def test_every_score_is_logged_before_any_credit(tmp_db, monkeypatch):
@@ -472,3 +684,43 @@ def test_post_gate_enforces_the_rate_cap(tmp_db, monkeypatch):
     result = orchestrator.publish(ready_state(tmp_db))
 
     assert "rate cap" in result["held_reason"]
+
+
+def test_every_shot_with_a_prompt_is_ai_eligible(tmp_db, monkeypatch):
+    """The all-AI move (2026-08-20): source == "CAMERA" now means Michael
+    captures reference material that anchors the generation, not that the
+    shot escapes the pipeline. A camera-source shot carrying a prompt is
+    structured and scored like any other; its real capture rides along to
+    the hold card, and the Midjourney still is skipped -- the capture IS
+    the anchor frame a still would otherwise have to invent."""
+    concept = make_concept()
+    concept["shots"][0]["prompt"] = GOOD_PROMPT
+    concept["shots"][0]["tool"] = "SEEDANCE"
+    concept["shots"][0]["reference_image"] = "https://cdn.example/take.jpg"
+    stage_fakes(monkeypatch, [(concept, [])])
+
+    result = orchestrator.run("gearing up ritual")
+
+    assert [p["tool"] for p in result["prompts"]] == ["SEEDANCE", "KLING"]
+    anchored, plain = result["prompts"]
+    assert anchored["reference_image"] == "https://cdn.example/take.jpg"
+    assert anchored["still"] == ""
+    # a shot with no capture carries no key at all, same as the shot dict
+    assert "reference_image" not in plain
+    # the capture reaches the hold card next to the prompt it anchors
+    [row] = autonomy.list_hold(path=tmp_db)
+    assert row["payload"]["prompts"][0]["reference_image"] == "https://cdn.example/take.jpg"
+    scores = row["payload"].get("prompt_scores") or []
+    if scores:
+        assert scores[0].get("reference_image") == "https://cdn.example/take.jpg"
+
+
+def test_a_shot_with_no_prompt_still_drops_out(tmp_db, monkeypatch):
+    """No prompt means there is nothing to structure -- the default
+    make_concept camera shot has no prompt yet, so only the AI shot
+    lands in prompts (this is the old filter's surviving half)."""
+    stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    result = orchestrator.run("gearing up ritual")
+
+    assert [p["tool"] for p in result["prompts"]] == ["KLING"]

@@ -96,6 +96,12 @@ class Shot:
     negative: str = HOUSE_NEGATIVE
     notes: str = ""
     audio: str = ""      # ambient/SFX direction for models that generate sound (Veo). No dialogue by house style.
+    # URL or path to a real camera capture this AI shot is generated
+    # from/against -- the acting take or room plate that anchors the
+    # generation. Empty means none; a reference is an enhancement to a
+    # shot, never a gate on it. Travels as a generation parameter
+    # (openart_parameters / runway_parameters), never in the prompt text.
+    reference_image: str = ""
     tags: list[str] = field(default_factory=list)
     # Which Runway product this shot targets. Other platforms ignore this
     # field entirely -- it only changes what render_runway() does.
@@ -133,6 +139,7 @@ class Shot:
             "aspect": self.aspect,
             "notes": self.notes,
             "audio": self.audio,
+            "reference_image": self.reference_image,
             "tags": list(self.tags),
             "runway_mode": self.runway_mode,
         }
@@ -214,13 +221,12 @@ def render_runway_restyle(shot: Shot) -> str:
 def runway_parameters(shot: Shot) -> dict:
     """
     Generation-time attachments, kept OUT of the prompt text -- same
-    pattern as veo_parameters(). Gen-4 References (up to 3 images) and
-    Act-Two both need an actual image/video attachment path that doesn't
-    exist on Shot yet, so this is a placeholder shape only: it exists so
-    the studio UI has somewhere to attach reference images per shot once
-    that lands, not a working feature yet.
+    pattern as veo_parameters(). Gen-4 References takes up to 3 images;
+    this supplies the one the pipeline tracks: the real capture behind
+    the shot (Shot.reference_image, landed 2026-08-20 -- this was a
+    placeholder shape waiting for exactly that field).
     """
-    return {"reference_images": []}
+    return {"reference_images": [shot.reference_image] if shot.reference_image else []}
 
 
 # Veo 3.1 cinematography vocabulary — the standard camera terms Google Cloud's
@@ -421,6 +427,115 @@ def render_wan(shot: Shot) -> str:
     )
 
 
+# OpenArt Director — conversational, not a prompt syntax. Checked
+# 2026-08-20 against OpenArt's own blog and the Director user manual
+# (director-user-manual.vercel.app): Director organizes Story → Scenes →
+# Shots and is directed in plain language ("make the second shot
+# darker"), NOT the bracket-tag camera codes some other Hailuo/MiniMax
+# "Director Mode" integrations use. So the camera map is full prose
+# clauses meant to be read as language, and the renderer weaves them
+# into sentences instead of listing shorthand. No public API exists
+# (their help center says so) — this output is pasted into Director's
+# chat by hand, which is why readability IS the format.
+CAMERA_PROSE = {
+    "static": "the camera holds perfectly still",
+    "pan_left": "the camera pans gently to the left",
+    "pan_right": "the camera pans gently to the right",
+    "tilt_up": "the camera tilts up",
+    "tilt_down": "the camera tilts down",
+    "push_in": "the camera slowly pushes in closer",
+    "pull_out": "the camera slowly pulls back",
+    "tracking": "the camera tracks alongside, keeping pace",
+    "handheld": "the camera drifts with a handheld sway",
+    "crane_up": "the camera rises as if on a crane",
+    "crane_down": "the camera descends as if on a crane",
+    "orbit": "the camera circles around the subject",
+}
+
+
+def render_openart(shot: Shot) -> str:
+    """
+    Director wants a shot described the way you'd say it to a director:
+    flowing sentences carrying enough context to stand alone, not the
+    terse camera-vocabulary lines the other renderers compile. Duration
+    and aspect stay out of the text (Director manages those per shot),
+    and the reference capture travels via openart_parameters(), not
+    the prose.
+    """
+    audio = shot.audio.strip() or "only the natural sound of the moment, no dialogue"
+    sentences = [
+        _phrase(
+            f"A {_readable_size(shot.size)} shot of {shot.subject}",
+            f"in {shot.setting}" if shot.setting else "",
+            shot.lighting,
+        )
+        + ".",
+        f"{shot.subject[:1].upper()}{shot.subject[1:]} {shot.action} while {CAMERA_PROSE[shot.camera]}.",
+        f"The look is {shot.look}.",
+    ]
+    if shot.notes.strip():
+        sentences.append(f"What matters in this shot: {shot.notes.strip()}.")
+    sentences.append(f"For sound, {audio}.")
+    sentences.append(f"Keep the frame clean: {shot.negative}.")
+    return " ".join(sentences)
+
+
+def openart_parameters(shot: Shot) -> dict:
+    """The attachment Director takes alongside the description -- the
+    real capture (acting take, room plate) this shot is generated
+    from/against. Same keep-it-out-of-the-prompt contract as
+    veo_parameters()/runway_parameters()."""
+    return {"reference_images": [shot.reference_image] if shot.reference_image else []}
+
+
+# Higgsfield -- checked 2026-08-25 against higgsfield.ai/camera-controls:
+# Higgsfield is preset-driven (named camera-motion presets: Static, Pan
+# Left/Right, Tilt Up/Down, Dolly In/Out, Crane Up, Jib Down, 360 Orbit,
+# Handheld...), so this map speaks the preset names rather than generic
+# "the camera does X" prose -- which is also what keeps its output
+# distinct from Runway's map above (test_renderers_disagree guards
+# that). crane_down maps to their Jib Down preset (no Crane Down preset
+# is listed). Added 2026-08-21: Zero Page's real, currently-usable tool
+# set is HIGGSFIELD and RUNWAY only (see shootgen.ZEROPAGE_AI_TOOLS) --
+# everything else in this registry stays real infrastructure for other
+# brands, but this is the platform Zero Page's shot-plan prompt names
+# first.
+HIGGSFIELD_CAMERA = {
+    "static": "static shot, locked-off camera",
+    "pan_left": "pan left",
+    "pan_right": "pan right",
+    "tilt_up": "tilt up",
+    "tilt_down": "tilt down",
+    "push_in": "dolly in",
+    "pull_out": "dolly out",
+    "tracking": "tracking shot following the subject",
+    "handheld": "handheld",
+    "crane_up": "crane up",
+    "crane_down": "jib down",
+    "orbit": "360 orbit",
+}
+
+
+def render_higgsfield(shot: Shot) -> str:
+    """Compact single-paragraph prompt -- subject/action first, then
+    setting, camera, and look. Negatives travel as their own field (see
+    negative_prompt()), same shape as Kling's renderer."""
+    return _phrase(
+        f"{_readable_size(shot.size)} shot of {shot.subject}",
+        shot.action,
+        shot.setting,
+        shot.lighting,
+        HIGGSFIELD_CAMERA[shot.camera],
+        shot.look,
+    )
+
+
+def higgsfield_parameters(shot: Shot) -> dict:
+    """Generation-time attachments kept OUT of the prompt text -- same
+    contract as veo_parameters()/runway_parameters()."""
+    return {"reference_images": [shot.reference_image] if shot.reference_image else []}
+
+
 @dataclass(frozen=True)
 class Platform:
     """One generation tool: its camera vocabulary and its renderer."""
@@ -446,6 +561,8 @@ PLATFORMS: dict[str, Platform] = {
     "seedance": Platform("seedance", SEEDANCE_CAMERA, render_seedance, verified="2026-08-04"),
     "ltx": Platform("ltx", LTX_CAMERA, render_ltx, verified="2026-08-04"),
     "wan": Platform("wan", WAN_CAMERA, render_wan, verified="2026-08-04"),
+    "openart": Platform("openart", CAMERA_PROSE, render_openart, verified="2026-08-20"),
+    "higgsfield": Platform("higgsfield", HIGGSFIELD_CAMERA, render_higgsfield, verified=None),
 }
 
 # Derived, never written by hand: the legal tool set everywhere else

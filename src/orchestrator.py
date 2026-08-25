@@ -51,13 +51,14 @@ from typing import Optional, TypedDict
 from google import genai
 from langgraph.graph import END, START, StateGraph
 
-from . import autonomy, crag, db, entities, preprod, rag, scheduling, shootgen, winners
+from . import autonomy, crag, db, entities, preprod, promptgen, rag, scheduling, shootgen, winners
 from .gemini_utils import generate_with_retry
 
 MAX_ATTEMPTS = 3
 JUDGE_MIN = 0.6
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", shootgen.MODEL)  # match the other stages
 PROMPT_GATE_MIN = int(os.environ.get("PROMPT_GATE_MIN", "7"))  # of 10; raise as you learn
+MAX_PROMPT_REWORKS = 1  # one targeted rewrite per failing shot before it holds
 
 
 class GenState(TypedDict, total=False):
@@ -71,6 +72,9 @@ class GenState(TypedDict, total=False):
     picked_locations: list          # ids; empty/absent = all on file
     picked_characters: list
     picked_props: list
+    picked_references: list         # asset-shelf source identifiers; empty/absent = no asset
+                                    # grounding (craft/structuring advice still auto-grounds
+                                    # -- see ground_rag)
     # grounding
     cast: str                       # formatted characters/props block
     references: str                 # CRAG-graded library block
@@ -83,6 +87,7 @@ class GenState(TypedDict, total=False):
     run_id: str
     prompts: list                   # [{"tool", "prompt"}] for the AI shots
     prompt_scores: list             # [{prompt, score, pass, reason, dims}]
+    prompt_rework_attempts: int     # bounded per-shot rewrite passes, not concept retries
     clips: list                     # [{"tool", "prompt", "url", "ok"}]
     caption: str
     posted: list                    # [{"platform", "id", "url"}] once real posting exists
@@ -166,28 +171,51 @@ def ground_entities(state: GenState) -> GenState:
 
 
 def ground_rag(state: GenState) -> GenState:
-    """The library block, CRAG-graded: weak retrieval gets one query
-    rewrite before it's allowed to ground a run. Never raises -- an
-    unreachable store degrades to an ungrounded run with a note, the
-    same contract reference_block keeps."""
-    locations = preprod.list_locations(path=db.DB_PATH)
-    query = shootgen.build_reference_query(
-        locations, spark=state.get("spark"), client=state.get("client"))
-    if not query.strip():
-        return {"references": ""}
+    """Two layers (narrowed again 2026-08-20 from the first
+    opt-in-everything pass, once it was clear that threw out craft
+    guidance along with the brand's own assets):
 
-    result = crag.retrieve_with_crag(
-        query, _client(), GEMINI_MODEL, domain=shootgen.IDEATION_DOMAINS)
-    if result["ok"] and result["references"]:
-        note = f"Grounding in {len(result['references'])} retrieved reference(s)"
-        if result.get("rewritten_query"):
-            note += " (query rewritten after a weak first pass)"
-        print(note, file=sys.stderr)
-        return {"references": rag.format_references(result["references"])}
+    - Craft/structuring advice (shootgen.AUTO_IDEATION_DOMAINS -- the
+      marketing shelf: platform mechanics, edit anatomy, what earns a
+      swipe) stays automatic, CRAG-graded off the spark, same as it
+      always was. This isn't the brand's own material, so there's
+      nothing to leak by grounding on it every run.
+    - The brand's own assets (personal_brand voice, cinematography
+      look, proven_results/winning_prompts performance history) stay
+      opt-in only: picked_references names exact source identifiers
+      (as shown on /library or rag.list_sources), pulled verbatim with
+      rag.fetch_by_sources -- no embedding call, no similarity
+      ranking, because the selection already happened. Nothing picked
+      means nothing from these shelves, not even an attempt.
 
-    reason = result.get("error", "reference library is empty")
-    print(f"note: generating without references: {reason}", file=sys.stderr)
-    return {"references": ""}
+    Never raises on either layer: an unreachable store, an empty
+    spark, or picks that don't match anything all degrade to that
+    layer contributing nothing, never a crash."""
+    references = []
+
+    query = (state.get("spark") or state.get("goal") or "").strip()
+    if query:
+        craft = crag.retrieve_with_crag(query, _client(), GEMINI_MODEL,
+                                        domain=shootgen.AUTO_IDEATION_DOMAINS)
+        if craft.get("ok") and craft.get("references"):
+            print(f"Grounding in {len(craft['references'])} craft reference(s)", file=sys.stderr)
+            references.extend(craft["references"])
+        elif not craft.get("ok"):
+            print(f"note: no craft-advice grounding: {craft.get('error', 'unavailable')}",
+                  file=sys.stderr)
+
+    picked = state.get("picked_references") or []
+    if picked:
+        result = rag.fetch_by_sources(picked)
+        if result["ok"] and result["references"]:
+            print(f"Grounding in {len(result['references'])} selected asset reference(s)",
+                  file=sys.stderr)
+            references.extend(result["references"])
+        elif not result["ok"]:
+            reason = result.get("error", "none of the selected sources were found")
+            print(f"note: generating without selected assets: {reason}", file=sys.stderr)
+
+    return {"references": rag.format_references(references)}
 
 
 def gen_concept(state: GenState) -> GenState:
@@ -218,7 +246,7 @@ def gen_concept(state: GenState) -> GenState:
         client=state.get("client"),
         spark=spark,
         gemini_client=_client(),
-        use_pov=state.get("use_pov", True),
+        use_pov=state.get("use_pov", False),
         db_path=db.DB_PATH,
         references=state.get("references", ""),
         cast=state.get("cast"),
@@ -275,19 +303,62 @@ def _midjourney_still(shot_prompt: str) -> str:
         return ""
 
 
+def _technique_references(tool: str) -> str:
+    """AI-video prompt-syntax guidance for this shot's tool, CRAG-graded
+    off the ai_prompting shelf -- the same never-raises degrade contract
+    ground_rag keeps. Its own retrieval, separate from ground_rag's:
+    ground_rag answers "what should we shoot," this answers "how do we
+    phrase it for this specific tool." An unreachable store or a weak
+    match just means no refinement happens, same as an ungrounded run."""
+    query = (f"{tool} prompting technique for photorealistic AI video generation"
+             if tool else "AI video prompting technique for photorealistic generation")
+    result = crag.retrieve_with_crag(query, _client(), GEMINI_MODEL, domain=promptgen.REFINE_DOMAIN)
+    if result.get("ok") and result.get("references"):
+        return rag.format_references(result["references"])
+    return ""
+
+
 def structure_prompt(state: GenState) -> GenState:
-    """The AI shots' paste-ready prompts. shootgen already writes these
-    into the concept (validate_concept flags an AI shot without one), so
-    this extracts rather than re-billing promptgen per shot -- the
-    structured prompt already exists.
+    """The AI shots' paste-ready prompts. shootgen already writes a
+    first draft into the concept (validate_concept flags an AI shot
+    without one); each draft is then run through promptgen.refine_prompt,
+    which polishes it against real tool-specific prompting technique
+    guidance (Seedance/Runway/Veo/etc. cheat codes on the ai_prompting
+    RAG shelf) before it's scored. Refinement is an enhancement, never
+    a gate -- a missing store, a bad client, or a rejected refinement
+    all fall back to the original prompt untouched, same contract as
+    ground_rag.
 
     Also drafts the Midjourney still that anchors each shot: the reference
     frame Runway generates from, and an image post in its own right.
-    Stills need no approval, so this step is never gated."""
+    Stills need no approval, so this step is never gated.
+
+    Every shot with a prompt is AI-eligible (the all-AI move,
+    2026-08-20): source == "CAMERA" now means Michael captures reference
+    material -- an acting take, a room plate -- that anchors the
+    generation via the shot's reference_image, not that the shot escapes
+    the pipeline. Until a reference exists the shot generates from its
+    text prompt alone, same as any other; a reference is an enhancement,
+    never a gate, exactly like RAG grounding. A shot with no prompt at
+    all still drops out -- there is nothing to structure. When a shot
+    carries a real capture, the Midjourney still is skipped: the still's
+    whole job is being the anchor frame, and the capture IS one."""
     shots = [s for s in (state.get("concept", {}) or {}).get("shots", [])
-             if s.get("source") == "AI" and s.get("prompt")]
-    return {"prompts": [{"tool": s.get("tool"), "prompt": s["prompt"],
-                         "still": _midjourney_still(s["prompt"])} for s in shots]}
+             if s.get("prompt")]
+    prompts = []
+    for s in shots:
+        tool = s.get("tool") or ""
+        references = _technique_references(tool)
+        refined = promptgen.refine_prompt(s["prompt"], tool, _client(),
+                                          model=GEMINI_MODEL, references=references)
+        reference_image = (s.get("reference_image") or "").strip()
+        entry = {"tool": s.get("tool"), "prompt": refined,
+                 "still": "" if reference_image else _midjourney_still(refined)}
+        # carried only when attached, same as on the shot dict itself
+        if reference_image:
+            entry["reference_image"] = reference_image
+        prompts.append(entry)
+    return {"prompts": prompts}
 
 
 # --- the prompt gate: nothing spends a credit until its prompt clears ------
@@ -361,29 +432,135 @@ def score_prompts(state: GenState) -> GenState:
     scored = []
     for p in state.get("prompts", []):
         text = p.get("prompt", "")
+        # rides along so the hold card can show the capture beside the
+        # prompt it anchors; present only when the shot carries one
+        ref = ({"reference_image": p["reference_image"]}
+               if p.get("reference_image") else {})
         ok, why = _structural_check(text)
         if not ok:
             scored.append({"prompt": text, "tool": p.get("tool"),
                            "still": p.get("still"), "score": 0,
-                           "pass": False, "reason": why, "dims": {}})
+                           "pass": False, "reason": why, "dims": {}, **ref})
             continue
         verdict = _judge_prompt(text)
         scored.append({"prompt": text, "tool": p.get("tool"),
                        "still": p.get("still"),
                        "score": verdict["score"],
                        "pass": verdict["score"] >= PROMPT_GATE_MIN,
-                       "reason": verdict["reason"], "dims": verdict["dims"]})
+                       "reason": verdict["reason"], "dims": verdict["dims"],
+                       **ref})
     autonomy.log_prompt_scores(state.get("run_id"), scored, path=db.DB_PATH)
     return {"prompt_scores": scored}
 
 
-def route_after_score(state: GenState) -> str:
-    """Every AI shot must clear the bar or the whole run holds -- no
-    half-rendered credit burn. (Camera-only concepts have no scores and
-    hold too; render has nothing for them either.)"""
+def _rework_shot_prompt(original_prompt: str, verdict: dict) -> str:
+    """Rewrite ONE AI shot prompt to fix exactly what the judge flagged --
+    the named weak dimension(s) and its reason -- rather than regenerating
+    the concept from scratch. Keeps the fix as small and targeted as the
+    diagnosis it's based on."""
+    weak = [d for d, v in (verdict.get("dims") or {}).items() if v < 2]
+    weakness = f"{', '.join(weak) or 'unspecified'} -- {verdict.get('reason', '')}".strip(" -")
+    instruction = (
+        "Rewrite the following AI video generation prompt to fix EXACTLY the "
+        "weakness named below. Keep the same subject, setting, tool, and "
+        "grade -- change only how precisely it's specified (add the missing "
+        "camera/lens/framing, resolve the competing actions into one clear "
+        "action, add the missing light/mood, whatever the weakness names). "
+        "Keep the same grounded-realism recipe: handheld imperfection, "
+        "practical light, diegetic sound, and the negative clause at the end "
+        "(no glossy CGI, no plastic AI sheen, no dramatic slow motion, no "
+        "smooth commercial camera moves, no over-grading).\n\n"
+        f"WEAKNESS TO FIX: {weakness}\n\n"
+        f"ORIGINAL PROMPT:\n{original_prompt}\n\n"
+        "Return ONLY the rewritten prompt text -- no preamble, no quotes, no "
+        "markdown fences."
+    )
+    return generate_with_retry(_client(), GEMINI_MODEL, instruction).strip()
+
+
+def revise_prompts(state: GenState) -> GenState:
+    """One bounded rework pass over score_prompts' output: shots that
+    already passed are left untouched; shots that failed get rewritten
+    against the judge's own diagnosis and re-scored. Keeps `prompts` and
+    the saved `concept`'s shots in sync with whatever text actually
+    cleared the gate, so render (and the concept a human eventually
+    reviews) reflect the reworked prompt, not the original weak one."""
     scores = state.get("prompt_scores", [])
-    if scores and all(x["pass"] for x in scores):
+    prompts = list(state.get("prompts", []))
+    concept = dict(state.get("concept", {}))
+    shots = list(concept.get("shots") or [])
+    # MUST mirror structure_prompt's filter exactly -- these indices map
+    # score entries back onto concept shots, and every shot with a
+    # prompt is AI-eligible now, whatever its source (see structure_prompt)
+    ai_shot_indices = [i for i, s in enumerate(shots) if s.get("prompt")]
+    # Same scene-consistency anchor generate_concept/generate_shot_list
+    # prepend up front -- reapplied here because the rework instruction
+    # only *asks* the model to keep the same subject/setting/grade; a
+    # rewrite is free to drop the exact bible wording, and this shot
+    # still has to match every other shot in the concept when it renders.
+    bible = shootgen.derive_scene_bible(concept.get("title"), concept.get("logline"),
+                                        concept.get("grade"))
+
+    revised = []
+    for i, entry in enumerate(scores):
+        if entry["pass"]:
+            revised.append(entry)
+            continue
+        try:
+            new_text = _rework_shot_prompt(entry["prompt"], entry)
+            if bible and not new_text.startswith(bible):
+                new_text = f"{bible}. {new_text}"
+        except Exception as e:
+            # couldn't get a rewrite -- leave the original score as-is,
+            # route_after_score will hold once the attempt is spent
+            revised.append(entry)
+            print(f"note: prompt rework failed, keeping original: {e}", file=sys.stderr)
+            continue
+
+        ok, why = _structural_check(new_text)
+        if not ok:
+            new_entry = {**entry, "prompt": new_text, "pass": False, "reason": why}
+        else:
+            verdict = _judge_prompt(new_text)
+            new_entry = {"prompt": new_text, "tool": entry.get("tool"),
+                        "still": entry.get("still"), "score": verdict["score"],
+                        "pass": verdict["score"] >= PROMPT_GATE_MIN,
+                        "reason": verdict["reason"], "dims": verdict["dims"],
+                        **({"reference_image": entry["reference_image"]}
+                           if entry.get("reference_image") else {})}
+        revised.append(new_entry)
+
+        if i < len(prompts):
+            prompts[i] = {**prompts[i], "prompt": new_entry["prompt"]}
+        if i < len(ai_shot_indices):
+            shots[ai_shot_indices[i]]["prompt"] = new_entry["prompt"]
+
+    concept["shots"] = shots
+    autonomy.log_prompt_scores(state.get("run_id"), revised, path=db.DB_PATH)
+    return {
+        "prompt_scores": revised,
+        "prompts": prompts,
+        "concept": concept,
+        "prompt_rework_attempts": state.get("prompt_rework_attempts", 0) + 1,
+    }
+
+
+def route_after_score(state: GenState) -> str:
+    """Every AI shot must clear the bar before it renders -- no
+    half-rendered credit burn. Unlike a plain gate, a failing shot isn't
+    an automatic hold: the judge already names exactly what's weak
+    (dims + reason), so one bounded rewrite pass gets to fix that
+    specific thing before the whole concept -- including whatever shots
+    already passed -- is thrown away over one fixable line. (Camera-only
+    concepts have no scores and hold too; render has nothing for them
+    either.)"""
+    scores = state.get("prompt_scores", [])
+    if not scores:
+        return "hold"
+    if all(x["pass"] for x in scores):
         return "generate_render"
+    if state.get("prompt_rework_attempts", 0) < MAX_PROMPT_REWORKS:
+        return "rework"
     return "hold"
 
 
@@ -552,6 +729,7 @@ def _build():
         ("ground_entities", ground_entities), ("ground_rag", ground_rag),
         ("gen_concept", gen_concept), ("evaluate", evaluate),
         ("structure_prompt", structure_prompt), ("score_prompts", score_prompts),
+        ("revise_prompts", revise_prompts),
         ("generate_render", generate_render),
         ("qc_clip", qc_clip), ("caption", caption), ("publish", publish),
         ("hold", hold),
@@ -573,8 +751,19 @@ def _build():
         "hold": "hold",
     })
     g.add_edge("structure_prompt", "score_prompts")
+    # revise_prompts re-scores only the shots it rewrote (leaving shots that
+    # already passed untouched), so it routes back through the SAME judge --
+    # never back through score_prompts, which would re-bill every already-
+    # passing shot's judge call for nothing.
     g.add_conditional_edges("score_prompts", route_after_score, {
         "generate_render": "generate_render",
+        "rework": "revise_prompts",
+        "hold": "hold",
+    })
+    g.add_conditional_edges("revise_prompts", route_after_score, {
+        "generate_render": "generate_render",
+        "rework": "revise_prompts",  # unreachable while MAX_PROMPT_REWORKS == 1;
+                                      # kept so raising that constant later just works
         "hold": "hold",
     })
     g.add_edge("generate_render", "qc_clip")
@@ -590,10 +779,33 @@ def _build():
 GRAPH = _build()
 
 
-def run(goal: str, *, brand: str = "antihero", spark: Optional[str] = None,
-        client: Optional[str] = None, use_pov: bool = True,
+def run(goal: str, *, brand: Optional[str] = None, spark: Optional[str] = None,
+        client: Optional[str] = None, use_pov: bool = False,
         channel: str = "zeropage", picked_locations=None,
-        picked_characters=None, picked_props=None) -> dict:
+        picked_characters=None, picked_props=None, picked_references=None) -> dict:
+    """
+    `brand` defaults to `channel` rather than a hardcoded value on
+    purpose: `channel` decides where the run gets FILED (which
+    hold_queue row, which autonomy/rate-cap row), `brand` decides which
+    engine actually GENERATES (real cast/locations for Antihero,
+    faceless format-driven for Zero Page). They used to default
+    independently (channel="zeropage", brand="antihero") -- call `run(x)`
+    or `run(x, channel="zeropage")` with nothing else and you'd silently
+    get a full Antihero concept (real names, real gear) filed and
+    displayed under a card labeled ZEROPAGE. That's exactly what
+    happened to hold_queue row 13 / concept 111 on 2026-08-14: a manual
+    trigger invocation set --channel without --brand and got bitten by
+    it. Passing brand explicitly (as run_morning_prompts.sh always does)
+    still lets channel and brand differ on purpose when that's really
+    what's wanted -- this only changes what happens when brand is
+    omitted.
+    """
+    if brand is None:
+        brand = channel
+    elif brand != channel:
+        print(f"note: channel={channel!r} but brand={brand!r} -- filing under "
+              f"one channel, generating with the other engine, on purpose",
+              file=sys.stderr)
     autonomy.init(path=db.DB_PATH)
     winners.init(path=db.DB_PATH)
     return GRAPH.invoke({
@@ -602,5 +814,6 @@ def run(goal: str, *, brand: str = "antihero", spark: Optional[str] = None,
         "picked_locations": picked_locations or [],
         "picked_characters": picked_characters or [],
         "picked_props": picked_props or [],
+        "picked_references": picked_references or [],
         "attempts": 0,
     })

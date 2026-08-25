@@ -124,3 +124,73 @@ def test_generate_prompts_for_slot_links_idea_and_slot(tmp_db, monkeypatch):
     stored = gen.get_shot(result["shot_id"], tmp_db)
     assert stored["idea_id"] == idea_id
     assert stored["slot_index"] == 2
+
+# ---------- refine_prompt (network mocked) ----------
+
+GOOD_SHOT_PROMPT = ("Extreme macro close-up of a brass door handle slowly "
+                    "turning in a dark hallway at night, one warm practical "
+                    "light spilling under the door, heavy film grain, "
+                    "crushed shadows, noir mood, static camera")
+
+
+def test_refine_prompt_passes_through_with_no_references():
+    # no references retrieved -> nothing to refine against, never bill a call
+    out = promptgen.refine_prompt(GOOD_SHOT_PROMPT, "KLING", gemini_client=None, references="")
+    assert out == GOOD_SHOT_PROMPT
+
+
+def test_refine_prompt_returns_the_model_rewrite(monkeypatch):
+    monkeypatch.setattr(promptgen, "generate_with_retry",
+                        lambda *a, **kw: "  Refined: " + GOOD_SHOT_PROMPT + ", start mid-motion  ")
+    out = promptgen.refine_prompt(
+        GOOD_SHOT_PROMPT, "KLING", gemini_client=object(),
+        references="1. [cheat-codes.md] start mid-motion, avoid static bookending",
+    )
+    assert out == "Refined: " + GOOD_SHOT_PROMPT + ", start mid-motion"
+
+
+def test_refine_prompt_falls_back_when_the_call_raises(monkeypatch):
+    def boom(*a, **kw):
+        raise RuntimeError("network is down")
+    monkeypatch.setattr(promptgen, "generate_with_retry", boom)
+    out = promptgen.refine_prompt(
+        GOOD_SHOT_PROMPT, "KLING", gemini_client=object(), references="some technique notes",
+    )
+    assert out == GOOD_SHOT_PROMPT
+
+
+def test_refine_prompt_falls_back_on_empty_rewrite(monkeypatch):
+    monkeypatch.setattr(promptgen, "generate_with_retry", lambda *a, **kw: "   ")
+    out = promptgen.refine_prompt(
+        GOOD_SHOT_PROMPT, "KLING", gemini_client=object(), references="some technique notes",
+    )
+    assert out == GOOD_SHOT_PROMPT
+
+
+def test_refine_prompt_falls_back_on_a_much_shorter_rewrite(monkeypatch):
+    monkeypatch.setattr(promptgen, "generate_with_retry", lambda *a, **kw: "a door")
+    out = promptgen.refine_prompt(
+        GOOD_SHOT_PROMPT, "KLING", gemini_client=object(), references="some technique notes",
+    )
+    assert out == GOOD_SHOT_PROMPT
+
+
+def test_refine_prompt_falls_back_on_a_leftover_placeholder(monkeypatch):
+    monkeypatch.setattr(
+        promptgen, "generate_with_retry",
+        lambda *a, **kw: GOOD_SHOT_PROMPT + " {still missing detail here}",
+    )
+    out = promptgen.refine_prompt(
+        GOOD_SHOT_PROMPT, "KLING", gemini_client=object(), references="some technique notes",
+    )
+    assert out == GOOD_SHOT_PROMPT
+
+
+def test_build_refine_prompt_injects_tool_prompt_and_references():
+    out = promptgen.build_refine_prompt(
+        GOOD_SHOT_PROMPT, "KLING", "1. [cheat-codes.md] start mid-motion",
+    )
+    assert "KLING" in out
+    assert GOOD_SHOT_PROMPT in out
+    assert "start mid-motion" in out
+    assert "{tool}" not in out and "{raw_prompt}" not in out and "{references}" not in out

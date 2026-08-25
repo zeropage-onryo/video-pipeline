@@ -54,7 +54,13 @@ def main(argv=None) -> int:
     parser.add_argument("--spark", default=None,
                         help="explicit direction; default rotates prompts/sparks.txt")
     parser.add_argument("--channel", default="zeropage")
-    parser.add_argument("--brand", default="antihero")
+    # No hardcoded default here on purpose -- orchestrator.run() defaults an
+    # omitted brand to match --channel, so "channel set, brand not" can no
+    # longer silently generate the wrong brand's content under the other
+    # channel's label (see run()'s docstring; this is what produced
+    # hold_queue row 13 / concept 111 on 2026-08-14). Pass --brand
+    # explicitly only when you actually want it to differ from --channel.
+    parser.add_argument("--brand", default=None)
     args = parser.parse_args(argv)
 
     spark = args.spark or pick_spark(load_sparks(), date.today().timetuple().tm_yday)

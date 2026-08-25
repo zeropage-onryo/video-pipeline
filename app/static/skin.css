@@ -78,6 +78,14 @@
 .sk .shot{ padding:12px 0; border-bottom:1px solid var(--line); }
 .sk .shot.character{ border-left:2px solid var(--red); padding-left:12px; }
 .sk .shot-tags{ display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:6px; }
+
+/* storyboard — all shots in a concept laid out at a glance, side by side
+   on wide screens instead of one long stacked list, closer to how a
+   real storyboard reads. Collapses to a single column on narrow
+   viewports (auto-fill), so nothing breaks on mobile. */
+.sk .storyboard{ display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:14px; align-items:start; }
+.sk .storyboard .shot{ background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; margin:0; }
+.sk .storyboard .shot.character{ border-left:2px solid var(--red); padding-left:13px; }
 .sk .light{ font-family:var(--mono); font-size:12px; color:var(--steel); margin:6px 0 0; }
 .sk .promptbox{ background:#0b0b0d; border:1px solid var(--line2); border-radius:10px; padding:12px; font-family:var(--mono); font-size:12.5px; color:#cfe6dd; white-space:pre-wrap; margin-top:8px; }
 .sk .warnings{ background:#1a0f0e; border:1px solid #4a2420; border-radius:10px; padding:10px 12px; margin-top:10px; }
