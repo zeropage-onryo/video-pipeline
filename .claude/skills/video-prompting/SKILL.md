@@ -29,6 +29,7 @@ This file is the entry point: route to the right path, ask the minimum clarifyin
 ## Workflow Index
 
 - Character sheets for consistent characters: `references/workflows/character-sheets.md`
+- Multi-shot sequences via Extend Video chaining (chase sequences, walk-and-talks, arrivals — anything where later shots continue or cover an earlier one): `references/workflows/extend-video-sequences.md`
 
 To add a new model later: create `references/models/<model>/prompting.md`, then add it to this index.
 
@@ -59,6 +60,8 @@ If the user is asking for both, do them in this order:
 1. Character sheet
 2. Scene still / anchor frame
 3. Video prompt
+
+If the user wants more than one connected shot in a continuing sequence (not a single isolated clip) — a chase, a walk-and-talk, an arrival, coverage of an existing clip — also read `references/workflows/extend-video-sequences.md` alongside the model's `prompting.md` before drafting.
 
 ### Step 2 — If it is a video prompt, identify the model and input mode
 
