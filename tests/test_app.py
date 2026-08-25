@@ -1210,7 +1210,10 @@ def test_library_delete_removes_one_source(monkeypatch):
 
 # ---------- /references/pick -- the opt-in asset-grounding picker ----------
 
-def test_references_pick_lists_sources_split_by_auto_vs_asset(monkeypatch):
+def test_references_pick_lists_sources_split_by_auto_vs_asset(tmp_preprod_db, monkeypatch):
+    # tmp_preprod_db matters: the route also lists characters/props, and
+    # without the redirected DB it reads the dev machine's real
+    # data/pipeline.db -- green here, broken on a clean clone.
     conn = LibraryFakeConn(rows=[
         ("brief.txt", "personal_brand", None, 1, "2026-07-31"),
         ("short-form-video.md", "marketing", None, 1, "2026-07-31"),
@@ -1225,8 +1228,9 @@ def test_references_pick_lists_sources_split_by_auto_vs_asset(monkeypatch):
     assert conn.closed
 
 
-def test_references_pick_degrades_when_store_is_down():
-    # autouse fixture already makes connect() raise
+def test_references_pick_degrades_when_store_is_down(tmp_preprod_db):
+    # autouse fixture already makes connect() raise; tmp_preprod_db keeps
+    # the cast/props lookup off the dev machine's real data/pipeline.db
     response = client.get("/references/pick")
     assert response.status_code == 200
     assert "unavailable" in response.text.lower()
