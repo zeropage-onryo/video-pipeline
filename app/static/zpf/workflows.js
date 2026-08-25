@@ -1,13 +1,16 @@
 /* Workflows view: a real node-graph editor (LiteGraph, vendored) for
    wiring custom generation pipelines — prompts → grounding/enhance →
-   generate — the Runway-workflows shape. Five node types for v1, each
-   mapped onto a backend that already exists (reference_block, Gemini
-   via generate_with_retry, runway.generate_from_prompt). Per-node Run
-   calls the exec endpoints; Run all saves, then executes server-side
-   in topological order, and the canvas lights nodes up from the same
-   jobs SSE feed everything else uses. A Generate render sits behind
-   the module's own spend gate (RUNWAY_SPEND_OK) — this canvas cannot
-   spend around it. */
+   generate — the Runway-workflows shape. Each node type maps onto a
+   backend that already exists (reference_block, Gemini via
+   generate_with_retry, nano_banana.generate_from_prompt for images,
+   runway.generate_from_prompt for video). Per-node Run calls the exec
+   endpoints; Run all saves, then executes server-side in topological
+   order, and the canvas lights nodes up from the same jobs SSE feed
+   everything else uses. A Runway render sits behind the module's own
+   spend gate (RUNWAY_SPEND_OK) — this canvas cannot spend around it;
+   Nano Banana rides the already-billed Gemini key under NANO_DAILY_CAP.
+   The view opens onto the newest saved graph (the seeded "Prompt
+   enhancement" template on a fresh DB), never a blank grid. */
 import { api, bus, esc, state, stateline } from './shared.js';
 
 const LG = window.LiteGraph;
@@ -219,6 +222,14 @@ async function runNode(node) {
                 image: inputVal(node, 'image') || null },
       });
       nodeJobs.set(res.job_id, node.id);
+    } else if (node.type === 'zpf/nano_banana') {
+      setNodeState(node, 'running');
+      const res = await api('/api/workflows/exec/nano', {
+        method: 'POST',
+        body: { prompt: inputVal(node, 'prompt') || '',
+                image: inputVal(node, 'image') || null },
+      });
+      nodeJobs.set(res.job_id, node.id);
     }
   } catch (e) {
     setNodeState(node, 'failed', e.message);
@@ -339,12 +350,51 @@ function registerNodes() {
   }
   Generate.title = 'Generate';
 
+  function NanoBanana() {
+    this.addInput('prompt', 'text');
+    this.addInput('image', 'image');
+    this.addOutput('image', 'image');
+    this.properties = {};
+    this.size = [300, 260];
+    const self = this;
+    this.addWidget('button', '▶ Run · billed', null, () => runNode(self));
+    this.addWidget('button', '👁 View output', null, () => openModal(self, 'view'));
+    this.onDrawForeground = function(ctx) {
+      if (this.flags.collapsed) return;
+      const top = 8 + this.widgets.length * 24 + 8;
+      if (this._out && this._state !== 'failed') {
+        const img = thumbFor(this._out);
+        if (img) {
+          const h = this.size[1] - top - 12;
+          const w = this.size[0] - 24;
+          const scale = Math.min(w / img.naturalWidth, h / img.naturalHeight);
+          ctx.drawImage(img, 12, top, img.naturalWidth * scale, img.naturalHeight * scale);
+        } else {
+          drawBody(this, ctx, ['loading preview…'], '#8e8c8a');
+        }
+        return;
+      }
+      const gate = state.caps['nano.generate']
+        ? 'gemini image — output will appear here'
+        : 'GEMINI_API_KEY not set';
+      const shown = this._state === 'failed' ? ('✕ ' + (this._note || 'failed')) : gate;
+      drawBody(this, ctx, wrapLines(shown, Math.floor(this.size[0] / 7), 6),
+        this._state === 'failed' ? '#c9a227' : '#55534f');
+    };
+    this.onDblClick = () => {
+      if (this._out) window.open(this._out, '_blank');
+      else openModal(self, 'view');
+    };
+  }
+  NanoBanana.title = 'Nano Banana';
+
   LG.registerNodeType('zpf/system_prompt', SystemPrompt);
   LG.registerNodeType('zpf/user_prompt', UserPrompt);
   LG.registerNodeType('zpf/reference_image', ReferenceImage);
   LG.registerNodeType('zpf/ground', Ground);
   LG.registerNodeType('zpf/enhance', Enhance);
   LG.registerNodeType('zpf/generate', Generate);
+  LG.registerNodeType('zpf/nano_banana', NanoBanana);
 }
 
 /* ── theming: the zpf palette instead of LiteGraph's default look ── */
@@ -579,4 +629,14 @@ export async function renderWorkflows() {
   // the view was display:none until now — size the canvas to reality
   requestAnimationFrame(() => { resizeCanvas(); canvas.setDirty(true, true); });
   await loadList();
+  // arrive on the typical workflow, not a blank grid: open the newest
+  // saved graph (the seeded "Prompt enhancement" template on a fresh
+  // DB) whenever nothing is on the canvas yet
+  if (!currentId && !(graph._nodes || []).length) {
+    const first = $('wfpick').querySelector('option[value]:not([value=""])');
+    if (first) {
+      $('wfpick').value = first.value;
+      await openWorkflow(Number(first.value));
+    }
+  }
 }

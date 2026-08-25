@@ -34,9 +34,10 @@ REFERENCE_TYPE = "zpf/reference_image"
 GROUND_TYPE = "zpf/ground"
 ENHANCE_TYPE = "zpf/enhance"
 GENERATE_TYPE = "zpf/generate"
+NANO_TYPE = "zpf/nano_banana"
 
 NODE_TYPES = PURE_TEXT_TYPES + (REFERENCE_TYPE, GROUND_TYPE,
-                                ENHANCE_TYPE, GENERATE_TYPE)
+                                ENHANCE_TYPE, GENERATE_TYPE, NANO_TYPE)
 
 
 def _link_row(link) -> Optional[dict]:
@@ -90,6 +91,32 @@ def _input_value(node: dict, name: str, links: dict, outputs: dict):
         upstream = outputs.get(link["origin_id"])
         return upstream["value"] if upstream else None
     return None
+
+
+def image_bytes_for_gemini(value, resolve_photo=None):
+    """A Nano Banana node's reference input -> raw bytes Gemini can take
+    as vision input (it never fetches URLs). A picked asset photo
+    resolves through resolve_photo; an upstream render's /renders/ URL
+    resolves against data/renders/; a data URI decodes. A remote http(s)
+    URL is dropped -- a reference is an enhancement, never a gate."""
+    import base64
+    from pathlib import Path
+
+    if not value or not isinstance(value, str):
+        return None
+    if value.startswith("data:image/"):
+        try:
+            return base64.b64decode(value.split(",", 1)[1])
+        except Exception:
+            return None
+    if value.startswith("/renders/"):
+        root = Path(__file__).resolve().parent.parent / "data" / "renders"
+        target = (root / value[len("/renders/"):]).resolve()
+        if str(target).startswith(str(root)) and target.is_file():
+            return target.read_bytes()
+        return None
+    target = resolve_photo(value) if resolve_photo else None
+    return target.read_bytes() if target is not None else None
 
 
 def image_for_runway(value, resolve_photo=None):
@@ -213,6 +240,17 @@ def execute_graph(graph: dict, *, gemini_client=None, resolve_photo=None,
                     _input_value(node, "user", links, outputs) or "",
                     images=[image] if image else None,
                     gemini_client=gemini_client, resolve_photo=resolve_photo)
+            elif node_type == NANO_TYPE:
+                from src import nano_banana
+                prompt = _input_value(node, "prompt", links, outputs) or ""
+                reference = image_bytes_for_gemini(
+                    _input_value(node, "image", links, outputs),
+                    resolve_photo=resolve_photo)
+                result = nano_banana.generate_from_prompt(
+                    prompt, reference_image=reference, db_path=db_path)
+                if not result["ok"]:
+                    raise RuntimeError(result["error"] or "render failed")
+                kind, value = "image", result["media_url"]
             elif node_type == GENERATE_TYPE:
                 prompt = _input_value(node, "prompt", links, outputs) or ""
                 reference = image_for_runway(

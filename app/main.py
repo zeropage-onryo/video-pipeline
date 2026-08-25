@@ -139,6 +139,7 @@ async def lifespan(app: FastAPI):
     inspiration.init(path=db.DB_PATH)   # seeds the researched accounts if empty
     evalstore.init(path=db.DB_PATH)     # golden set seeded from eval_cases.json
     workflows.init(path=db.DB_PATH)     # saved node graphs for /ui Workflows
+    workflows.seed_default(path=db.DB_PATH)  # "Prompt enhancement" starter canvas
     generative.init(path=db.DB_PATH)    # generations log the render caps count
     accounts_mod.init(path=db.DB_PATH)  # users / identities / accounts / members
     seed_gold_standard()                # records the canonical example as a winner

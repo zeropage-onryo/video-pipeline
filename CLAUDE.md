@@ -263,10 +263,18 @@ is yours, in Resolve, by hand.
   grounding + asset carousel), Assets (locations/characters/props unified), Pipeline (adapted
   to pre-production: approve = queue the shot list, deny = reasons-enum + note → an
   `autonomy` correction always, a RAG `denials` chunk best-effort, then the concept is
-  deleted; plus the hold queue and the agreement numbers), Evals (golden set in SQLite via
-  `src/evalstore.py`, seeded once from `eval_cases.json`; Hit@k/MRR computed server-side by
-  `rag_eval` and stored per run with config), Analytics (real metric snapshots, two brands
-  never averaged), Queue. Billed work runs through `app/jobs.py` — an in-process,
+  deleted; plus the hold queue and the agreement numbers), Workflows (a LiteGraph node
+  canvas, the Runway-workflows shape: prompts → Ground/Enhance → Nano Banana image or
+  Runway video, per-node Run + Run all through `app/workflow_runner.py`, graphs saved in
+  `src/workflows.py`, and a seeded brandless "Prompt enhancement" template the view opens
+  onto so arrival is never a blank grid — `src/nano_banana.py` is the image connector,
+  runway.py's never-raises gated shape on the existing Gemini key under `NANO_DAILY_CAP`,
+  no separate spend gate since an image costs cents), Analytics (real metric snapshots,
+  two brands never averaged), Queue. Evals moved OFF `/ui` (2026-08-25) to the dev-console
+  `/evals` page — golden set still in SQLite via `src/evalstore.py`, seeded once from
+  `eval_cases.json`, Hit@k/MRR computed server-side by `rag_eval` and stored per run; the
+  page is a shell over the same session-gated `/api/evals/*` endpoints, and it registers on
+  the `dev` router so a public deployment has no `/evals` at all. Billed work runs through `app/jobs.py` — an in-process,
   deliberately non-persistent job registry whose one push channel is the
   `/api/jobs/stream` SSE feed. That feed is why uvicorn runs with
   `--timeout-graceful-shutdown 3` (`.claude/launch.json`): without it, `--reload` waits

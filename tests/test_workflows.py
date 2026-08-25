@@ -413,3 +413,188 @@ def test_evals_dev_page_renders_open(tmp_db, monkeypatch):
     assert res.status_code == 200
     assert "evals_dev.js" in res.text
     assert "GOLDEN SET" in res.text
+
+
+# --- the seeded default template --------------------------------------------
+
+def test_seed_default_plants_the_template_once(tmp_db):
+    wf_id = workflows.seed_default(path=tmp_db)
+    assert wf_id is not None
+    assert workflows.seed_default(path=tmp_db) is None   # idempotent
+
+    template = workflows.get_workflow(wf_id, path=tmp_db)
+    assert template["name"] == "Prompt enhancement"
+    assert template["brand"] is None                     # shared across brands
+    types = [n["type"] for n in template["graph"]["nodes"]]
+    assert types == ["zpf/system_prompt", "zpf/user_prompt",
+                     "zpf/enhance", "zpf/nano_banana"]
+    # pre-wired: system+user feed enhance, enhance feeds the image node
+    assert [(link[1], link[3]) for link in template["graph"]["links"]] \
+        == [(1, 3), (2, 3), (3, 4)]
+    # the System Prompt ships with the prompts/ text, not empty
+    assert "enhance" in template["graph"]["nodes"][0]["properties"]["text"].lower()
+
+
+def test_seed_default_respects_an_intentionally_emptied_slate(tmp_db):
+    wf_id = workflows.seed_default(path=tmp_db)
+    workflows.create_workflow("mine", {}, brand="antihero", path=tmp_db)
+    workflows.delete_workflow(wf_id, path=tmp_db)
+    # other workflows exist -> the deleted template stays deleted
+    assert workflows.seed_default(path=tmp_db) is None
+
+
+def test_brandless_template_shows_up_under_every_brand(tmp_db):
+    workflows.seed_default(path=tmp_db)
+    workflows.create_workflow("z", {}, brand="zeropage", path=tmp_db)
+    for brand in ("antihero", "zeropage"):
+        names = [w["name"] for w in workflows.list_workflows(brand=brand, path=tmp_db)]
+        assert "Prompt enhancement" in names
+
+
+def test_default_template_executes_end_to_end(tmp_db, monkeypatch):
+    """The seeded graph is a runnable drawing, not a picture of one:
+    walk it through the real executor with both model calls stubbed."""
+    from src import nano_banana
+
+    monkeypatch.setattr(workflow_runner, "enhance",
+                        lambda system, user, **kw: f"ENHANCED[{user}]")
+    calls = {}
+
+    def fake_generate(prompt, **kwargs):
+        calls["prompt"] = prompt
+        return {"ok": True, "media_url": "/renders/nano/wf-test.png",
+                "generation_id": 1, "path": "x", "error": None}
+
+    monkeypatch.setattr(nano_banana, "generate_from_prompt", fake_generate)
+
+    graph = workflows.default_template()
+    graph["nodes"][1]["properties"]["text"] = "a red bike"
+    result = workflow_runner.execute_graph(graph, gemini_client=object(),
+                                           db_path=tmp_db)
+    assert result["ok"]
+    assert calls["prompt"] == "ENHANCED[a red bike]"
+    assert result["nodes"]["4"]["output"] == "/renders/nano/wf-test.png"
+
+
+# --- nano_banana.generate_from_prompt ---------------------------------------
+
+class FakeGeminiImageClient:
+    """The google-genai response shape for an image model: parts with
+    inline_data bytes."""
+    def __init__(self, image=b"\x89PNG fake"):
+        inline = SimpleNamespace(data=image, mime_type="image/png")
+        part = SimpleNamespace(inline_data=inline)
+        content = SimpleNamespace(parts=[part])
+        candidate = SimpleNamespace(content=content)
+        response = SimpleNamespace(candidates=[candidate], text=None)
+        self.calls = []
+
+        def generate_content(model, contents):
+            self.calls.append({"model": model, "contents": contents})
+            return response
+
+        self.models = SimpleNamespace(generate_content=generate_content)
+
+
+def test_nano_generate_renders_and_logs(tmp_db, tmp_path, monkeypatch):
+    from src import nano_banana
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(nano_banana, "RENDER_DIR", tmp_path / "nano")
+    monkeypatch.setattr("src.storage.configured", lambda: False)
+    fake = FakeGeminiImageClient()
+    result = nano_banana.generate_from_prompt("a red bike", db_path=tmp_db,
+                                              client=fake)
+    assert result["ok"], result["error"]
+    assert result["media_url"].startswith("/renders/nano/")
+    assert (tmp_path / "nano" / result["media_url"].split("/")[-1]).read_bytes() \
+        == b"\x89PNG fake"
+    with generative.connect(tmp_db) as conn:
+        rows = conn.execute("SELECT tool FROM generations").fetchall()
+    assert [r[0] for r in rows] == ["nano"]
+    assert nano_banana.generations_today(db_path=tmp_db) == 1
+
+
+def test_nano_generate_honours_the_daily_cap(tmp_db, tmp_path, monkeypatch):
+    from src import nano_banana
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(nano_banana, "RENDER_DIR", tmp_path / "nano")
+    monkeypatch.setattr("src.storage.configured", lambda: False)
+    monkeypatch.setattr(nano_banana, "DAILY_CAP", 1)
+    fake = FakeGeminiImageClient()
+    assert nano_banana.generate_from_prompt("one", db_path=tmp_db, client=fake)["ok"]
+    second = nano_banana.generate_from_prompt("two", db_path=tmp_db, client=fake)
+    assert not second["ok"] and "daily cap" in second["error"]
+    assert len(fake.calls) == 1                          # capped before the call
+
+
+def test_nano_generate_refuses_an_empty_prompt_and_missing_key(tmp_db, monkeypatch):
+    from src import nano_banana
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    assert not nano_banana.generate_from_prompt("  ", db_path=tmp_db)["ok"]
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    result = nano_banana.generate_from_prompt("a bike", db_path=tmp_db)
+    assert not result["ok"] and "GEMINI_API_KEY" in result["error"]
+
+
+def test_nano_generate_surfaces_a_textonly_refusal(tmp_db, tmp_path, monkeypatch):
+    from src import nano_banana
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(nano_banana, "RENDER_DIR", tmp_path / "nano")
+    fake = FakeGeminiImageClient()
+    fake.models = SimpleNamespace(generate_content=lambda model, contents:
+                                  SimpleNamespace(candidates=[], text="no can do"))
+    result = nano_banana.generate_from_prompt("a bike", db_path=tmp_db, client=fake)
+    assert not result["ok"] and "no image" in result["error"]
+
+
+# --- the nano node in the executor and the API ------------------------------
+
+def test_image_bytes_for_gemini_resolves_renders_and_data_uris(tmp_path):
+    import base64
+    assert workflow_runner.image_bytes_for_gemini(
+        "data:image/png;base64," + base64.b64encode(b"PIX").decode()) == b"PIX"
+    photo = tmp_path / "p.jpg"
+    photo.write_bytes(b"JPEGBYTES")
+    assert workflow_runner.image_bytes_for_gemini(
+        "/assets/antihero/p.jpg", resolve_photo=lambda v: photo) == b"JPEGBYTES"
+    assert workflow_runner.image_bytes_for_gemini("https://x/y.png") is None
+
+
+def test_api_exec_nano_needs_the_key(tmp_db, monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    response = client.post("/api/workflows/exec/nano",
+                           json={"prompt": "a bike"})
+    assert response.status_code == 503
+
+
+def test_api_exec_nano_runs_as_a_job(tmp_db, monkeypatch):
+    from src import nano_banana
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(nano_banana, "generate_from_prompt",
+                        lambda prompt, **kw: {"ok": True,
+                                              "media_url": "/renders/nano/x.png",
+                                              "generation_id": 1, "path": "x",
+                                              "error": None})
+    response = client.post("/api/workflows/exec/nano", json={"prompt": "a bike"})
+    assert response.status_code == 200
+    job = wait_for_job(response.json()["job_id"])
+    assert job["status"] == "done" and job["output"] == "/renders/nano/x.png"
+
+
+def test_capabilities_report_nano(tmp_db, monkeypatch):
+    from app import api as api_mod
+
+    monkeypatch.setattr(api_mod.rag, "connect",
+                        lambda db_url=None: (_ for _ in ()).throw(ConnectionError()))
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    assert client.get("/api/capabilities").json()["nano.generate"] is True
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    assert client.get("/api/capabilities").json()["nano.generate"] is False

@@ -108,6 +108,7 @@ def compute_capabilities() -> dict:
         "analytics.instagram": bool(instagram.access_token()),
         "runway.generate": runway.has_key(),
         "runway.spend": runway.spend_approved(),
+        "nano.generate": gemini,               # Nano Banana rides the Gemini key
         "workflows": True,
         "jobs": True,
         # deployment posture (app/main.py's DEV_TOOLS, read live like the
@@ -1005,6 +1006,32 @@ def workflow_exec_generate(body: WfGenerateBody):
         return {"detail": "clip rendered", "output": result["media_url"]}
 
     job = jobs.start("render", f"runway · {body.prompt[:50]}", work)
+    return {"job_id": job["id"]}
+
+
+@router.post("/workflows/exec/nano")
+def workflow_exec_nano(body: WfGenerateBody):
+    """The Nano Banana node's own Run: one Gemini image render from a
+    free-standing prompt + optional reference. Billed on the same
+    GEMINI_API_KEY as everything else, capped by NANO_DAILY_CAP inside
+    generate_from_prompt -- no separate spend gate, an image costs
+    cents where a Runway render burns credits."""
+    from src import nano_banana
+
+    if not nano_banana.has_key():
+        return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
+
+    def work(job):
+        jobs.progress(job, 0.2, "rendering via Nano Banana")
+        reference = workflow_runner.image_bytes_for_gemini(
+            body.image, resolve_photo=_resolve_asset_photo)
+        result = nano_banana.generate_from_prompt(
+            body.prompt, reference_image=reference, db_path=db.DB_PATH)
+        if not result.get("ok"):
+            raise RuntimeError(result.get("error") or "render failed")
+        return {"detail": "image rendered", "output": result["media_url"]}
+
+    job = jobs.start("render", f"nano · {body.prompt[:50]}", work)
     return {"job_id": job["id"]}
 
 

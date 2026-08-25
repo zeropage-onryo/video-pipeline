@@ -28,6 +28,14 @@ from typing import Any, Optional
 from .db import DB_PATH, _now, connect
 from .shot import TOOLS, Shot
 
+# The generations-log vocabulary: every video tool from the Shot
+# registry, plus the still-image connectors (midjourney.py,
+# nano_banana.py) that log attempts here but never render a Shot --
+# they must not join shot.PLATFORMS or they'd be offered as AI-shot
+# video tools in concepts.
+IMAGE_TOOLS = ("midjourney", "nano")
+LOG_TOOLS = TOOLS + IMAGE_TOOLS
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS shots (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -125,8 +133,8 @@ def record_generation(
     Log one attempt. Attempt number is assigned automatically, counting per
     shot and tool, so two runway attempts on the same shot coexist.
     """
-    if tool not in TOOLS:
-        raise ValueError(f"tool must be one of {TOOLS}, got {tool!r}")
+    if tool not in LOG_TOOLS:
+        raise ValueError(f"tool must be one of {LOG_TOOLS}, got {tool!r}")
     if not prompt.strip():
         raise ValueError("prompt cannot be empty")
 
