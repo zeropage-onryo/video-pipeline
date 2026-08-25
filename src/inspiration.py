@@ -8,6 +8,14 @@ Own table, own init(), one shared SQLite file -- same shape as
 autonomy.py / winners.py. Seeded once (init auto-loads the researched
 defaults when the table is empty); add more by hand as you profile them.
 
+Brand-scoped (added once Zero Page got its own inspiration lane): every
+account carries a `brand` -- "antihero", "zeropage", or "both" -- so
+ANTIHERO's moto/noir personal-brand riffs never leak into Zero Page's
+faceless/uncanny ideation and vice versa. combined_grounding(brand=...)
+filters to the brand asking; legacy rows created before this column
+existed backfill to "antihero" on migration (that's who they were
+seeded for).
+
 This deliberately does NOT use the RAG store: it's a small, explicit set
 the user points at ("spin off ideas from @x"), so a plain SQLite table +
 direct prompt injection is simpler, hermetic in tests, and needs no
@@ -30,16 +38,22 @@ CREATE TABLE IF NOT EXISTS inspiration_accounts (
     created_at TEXT NOT NULL,
     handle     TEXT NOT NULL UNIQUE,
     note       TEXT,
-    profile    TEXT NOT NULL
+    profile    TEXT NOT NULL,
+    brand      TEXT
 );
 """
 
+BRANDS = ("antihero", "zeropage", "both")
+
 # The three verified profiles from 2026-08-12 research. Distilled to the
 # transferable formula, not the whole write-up. Seeded when the table is
-# empty, so a fresh install has them without a manual step.
+# empty, so a fresh install has them without a manual step. All three were
+# researched for ANTIHERO (moto/noir personal-brand riffs) -- tagged
+# accordingly so they never bleed into Zero Page ideation.
 DEFAULT_ACCOUNTS = [
     {
         "handle": "layed_black",
+        "brand": "antihero",
         "note": "moto / all-black noir aesthetic (Sony-featured, black Ducati Panigale V4)",
         "profile": (
             "One hero machine as a recurring character, obsessively re-shot in new "
@@ -53,6 +67,7 @@ DEFAULT_ACCOUNTS = [
     },
     {
         "handle": "manny.walkerrr",
+        "brand": "antihero",
         "note": "viral emotion-over-engine hook (Miami moto/muscle, film-noir)",
         "profile": (
             "Emotion-over-engine hook: cold-open on a static moody night image with a "
@@ -66,6 +81,7 @@ DEFAULT_ACCOUNTS = [
     },
     {
         "handle": "alexisglere",
+        "brand": "antihero",
         "note": "adrenaline subject shot as fine art (B&W, poetic one-line captions)",
         "profile": (
             "Collision of a kinetic subject (sportbike, speed, training) with a "
@@ -78,6 +94,13 @@ DEFAULT_ACCOUNTS = [
     },
 ]
 
+# Zero Page's own inspiration lane -- deliberately empty by default. Unlike
+# the ANTIHERO defaults above, these weren't hand-researched and verified
+# against real accounts, so nothing is auto-seeded here rather than guessing.
+# Add real faceless/uncanny-format creators you track with:
+#   venv/bin/python -m src.inspiration add <handle> "<profile>" --brand zeropage --note "..."
+DEFAULT_ZEROPAGE_ACCOUNTS: list[dict] = []
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -86,28 +109,52 @@ def _now() -> str:
 def init(path=db.DB_PATH) -> None:
     with db.connect(path) as conn:
         conn.executescript(SCHEMA)
+        # CREATE TABLE IF NOT EXISTS won't add `brand` to a table that
+        # already exists -- databases created before brand-scoping need it
+        # added explicitly, same pattern as preprod.init().
+        existing = {r[1] for r in conn.execute("PRAGMA table_info(inspiration_accounts)")}
+        if "brand" not in existing:
+            conn.execute("ALTER TABLE inspiration_accounts ADD COLUMN brand TEXT")
+        # Backfill: every row that predates brand-scoping was seeded for
+        # ANTIHERO specifically (Zero Page's lane didn't exist yet), so a
+        # NULL brand means "antihero", not "both" -- pin it explicitly
+        # rather than leave it ambiguous for combined_grounding's filter.
+        conn.execute(
+            "UPDATE inspiration_accounts SET brand = 'antihero' WHERE brand IS NULL")
         empty = conn.execute("SELECT COUNT(*) FROM inspiration_accounts").fetchone()[0] == 0
     if empty:
         for a in DEFAULT_ACCOUNTS:
-            add(a["handle"], a["note"], a["profile"], path=path)
+            add(a["handle"], a["note"], a["profile"], brand=a["brand"], path=path)
+
+
+def seed_zeropage(path=db.DB_PATH) -> int:
+    """Load DEFAULT_ZEROPAGE_ACCOUNTS (idempotent by handle via add()'s
+    upsert) -- separate from init()'s empty-table gate so it can run any
+    time without touching what's already there or clobbering hand edits."""
+    for a in DEFAULT_ZEROPAGE_ACCOUNTS:
+        add(a["handle"], a["note"], a["profile"], brand="zeropage", path=path)
+    return len(DEFAULT_ZEROPAGE_ACCOUNTS)
 
 
 def _clean_handle(handle: str) -> str:
     return (handle or "").strip().lstrip("@").lower()
 
 
-def add(handle: str, note: str, profile: str, path=db.DB_PATH) -> int:
+def add(handle: str, note: str, profile: str, brand: str = "antihero",
+        path=db.DB_PATH) -> int:
     handle = _clean_handle(handle)
     if not handle:
         raise ValueError("handle cannot be empty")
     if not (profile or "").strip():
         raise ValueError("an inspiration account needs a profile to riff on")
+    if brand not in BRANDS:
+        raise ValueError(f"brand must be one of {BRANDS}, got {brand!r}")
     with db.connect(path) as conn:
         cur = conn.execute(
-            "INSERT INTO inspiration_accounts (created_at, handle, note, profile) "
-            "VALUES (?, ?, ?, ?) ON CONFLICT(handle) DO UPDATE SET "
-            "note=excluded.note, profile=excluded.profile",
-            (_now(), handle, (note or "").strip(), profile.strip()),
+            "INSERT INTO inspiration_accounts (created_at, handle, note, profile, brand) "
+            "VALUES (?, ?, ?, ?, ?) ON CONFLICT(handle) DO UPDATE SET "
+            "note=excluded.note, profile=excluded.profile, brand=excluded.brand",
+            (_now(), handle, (note or "").strip(), profile.strip(), brand),
         )
         return cur.lastrowid
 
@@ -132,16 +179,22 @@ def delete(handle: str, path=db.DB_PATH) -> None:
                      (_clean_handle(handle),))
 
 
-def combined_grounding(path=db.DB_PATH) -> str:
-    """Every account's formula folded into one grounding block, so the
-    generator can ground on them AUTOMATICALLY (no per-account button).
+def combined_grounding(brand: Optional[str] = None, path=db.DB_PATH) -> str:
+    """Every matching account's formula folded into one grounding block, so
+    the generator can ground on them AUTOMATICALLY (no per-account button).
     '' when there are none. Injected as reference grounding, not the stored
     spark, so it steers the ideas without polluting what's saved. Never
-    raises -- grounding is an enhancement, never a dependency."""
+    raises -- grounding is an enhancement, never a dependency.
+
+    `brand` filters to that brand's own accounts plus any tagged "both";
+    omit it (None) to get everything on file, unfiltered -- kept for any
+    caller that predates brand-scoping."""
     try:
         accounts = list_accounts(path=path)
     except Exception:
         return ""
+    if brand:
+        accounts = [a for a in accounts if a.get("brand") in (brand, "both")]
     if not accounts:
         return ""
     lines = ["INSPIRATION GROUNDING — riff on these reference creators' proven "
@@ -171,24 +224,36 @@ def main(argv=None) -> int:
     load_dotenv()
     parser = argparse.ArgumentParser(description="Inspiration accounts for the generator.")
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("seed", help="load the researched default accounts (if table empty)")
-    sub.add_parser("list", help="show stored accounts")
+    sub.add_parser("seed", help="load the researched ANTIHERO default accounts (if table empty)")
+    sub.add_parser("seed-zeropage", help="load DEFAULT_ZEROPAGE_ACCOUNTS (idempotent, any time)")
+    p_list = sub.add_parser("list", help="show stored accounts")
+    p_list.add_argument("--brand", choices=BRANDS, default=None,
+                        help="only show this brand's accounts")
     p_add = sub.add_parser("add", help="add/update an account")
     p_add.add_argument("handle")
     p_add.add_argument("profile")
     p_add.add_argument("--note", default="")
+    p_add.add_argument("--brand", choices=BRANDS, default="antihero",
+                       help="which brand's ideation this grounds (default: antihero)")
     args = parser.parse_args(argv)
 
     if args.command == "seed":
         init()
         for a in list_accounts():
-            print(f"@{a['handle']} — {a['note']}")
+            print(f"@{a['handle']} [{a.get('brand')}] — {a['note']}")
+    elif args.command == "seed-zeropage":
+        n = seed_zeropage()
+        print(f"seeded {n} zeropage account(s)" if n else
+              "DEFAULT_ZEROPAGE_ACCOUNTS is empty -- add real accounts by hand with "
+              "`inspiration add <handle> <profile> --brand zeropage`")
     elif args.command == "list":
         for a in list_accounts():
-            print(f"@{a['handle']} — {a['note']}\n    {a['profile'][:100]}...")
+            if args.brand and a.get("brand") not in (args.brand, "both"):
+                continue
+            print(f"@{a['handle']} [{a.get('brand')}] — {a['note']}\n    {a['profile'][:100]}...")
     elif args.command == "add":
-        add(args.handle, args.note, args.profile)
-        print(f"saved @{_clean_handle(args.handle)}")
+        add(args.handle, args.note, args.profile, brand=args.brand)
+        print(f"saved @{_clean_handle(args.handle)} [{args.brand}]")
     return 0
 
 
