@@ -103,14 +103,58 @@
     <div class="vhead">
       <h2>Pipeline</h2>
       <div class="cats ptabs" id="ptabs" style="margin:0;padding:0">
-        <button class="cat" data-ptab="concept" aria-pressed="true">Concept</button>
+        <button class="cat" data-ptab="scenes" aria-pressed="true">Scenes</button>
+        <button class="cat" data-ptab="concept" aria-pressed="false">Concept</button>
         <button class="cat" data-ptab="generate" aria-pressed="false">Generate</button>
       </div>
       <span class="spacer"></span><span class="m" id="pbrand"></span>
     </div>
 
+    <!-- ── Scenes tab: an idea in, several standalone scenes out;
+         pick the ones worth rendering and take them to Director ── -->
+    <div class="ptab" id="ptab-scenes">
+      <div class="scomposer" data-cap="pipeline.run">
+        <div class="glass gencomposer">
+          <div class="dirhead">
+            <h3>What's the idea?</h3>
+            <span class="m">one idea in · several standalone scenes out · pick the ones worth rendering</span>
+          </div>
+          <div class="mentionwrap">
+            <textarea id="sceneidea" rows="3" placeholder="A rider suits up in a dark garage and something is already wrong…"></textarea>
+            <div class="mentiondrop" id="scmentions" hidden></div>
+          </div>
+          <div class="attachbar" id="scattach"></div>
+          <div class="cfoot">
+            <button class="plus" id="scup" data-label="Attach reference" aria-label="Attach reference">
+              <svg viewBox="0 0 24 24" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+            </button>
+            <span class="m">references ride into every node — prompt, Flash, keyframe and clip</span>
+            <span class="spacer"></span>
+            <select class="wfselect" id="sccount">
+              <option value="3">3 scenes</option>
+              <option value="4" selected>4 scenes</option>
+              <option value="6">6 scenes</option>
+            </select>
+            <button class="go" id="scgo" data-cap="pipeline.run">Write the scenes</button>
+          </div>
+        </div>
+      </div>
+      <div class="stateline" id="scstate" hidden></div>
+      <div class="chead">
+        <h3>Scenes</h3>
+        <span class="m" id="sccount2">—</span>
+        <span class="spacer"></span>
+        <div class="cats" id="scfilters" style="margin:0;padding:0">
+          <button class="cat" data-scf="" aria-pressed="true">All</button>
+          <button class="cat" data-scf="idea" aria-pressed="false">Unjudged</button>
+          <button class="cat" data-scf="picked" aria-pressed="false">Picked</button>
+        </div>
+      </div>
+      <div class="scenegrid" id="scenelist"></div>
+    </div><!-- /ptab-scenes --><!-- /ptab-scenes -->
+
     <!-- ── Concept tab: the existing loop, unchanged ── -->
-    <div class="ptab" id="ptab-concept">
+    <div class="ptab" id="ptab-concept" hidden>
     <div class="scomposer" data-cap="pipeline.run">
       <div class="glass sbar2">
         <input class="search" id="sceneprompt" placeholder="Describe the scene — a spark, a mood, a beat…">

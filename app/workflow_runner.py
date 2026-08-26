@@ -270,6 +270,26 @@ def enhance(system: str, user: str, images=None, *, gemini_client,
     return generate_with_retry(gemini_client, model or shootgen.MODEL, parts)
 
 
+def node_reference_urls(node, properties, links, outputs, port="image") -> list:
+    """Every reference image this node should ground on, in priority
+    order: whatever is wired into its image port, then the scene's own
+    references (ref_urls), then the single image_url fallback.
+
+    One list for all three billed nodes, because the same references
+    have to inform the enhance, the keyframe AND the clip -- a scene's
+    face and wardrobe are not a property of one step. Deduplicated, so
+    wiring the keyframe in does not send it twice."""
+    urls, seen = [], set()
+    candidates = [_input_value(node, port, links, outputs)]
+    candidates.extend(properties.get("ref_urls") or [])
+    candidates.append(properties.get("image_url"))
+    for url in candidates:
+        if isinstance(url, str) and url and url not in seen:
+            seen.add(url)
+            urls.append(url)
+    return urls
+
+
 def execute_graph(graph: dict, *, gemini_client=None, resolve_photo=None,
                   db_path=None, emit: Optional[Callable] = None,
                   check_cancelled: Optional[Callable] = None) -> dict:
@@ -343,11 +363,11 @@ def execute_graph(graph: dict, *, gemini_client=None, resolve_photo=None,
                 if gemini_client is None:
                     raise RuntimeError("GEMINI_API_KEY not set")
                 user = _input_value(node, "user", links, outputs) or ""
-                # image: a wired port, or the shot's own reference riding
-                # invisibly via the node's image_url property (the
-                # Director chain keeps grounding on the backend)
-                image = _input_value(node, "image", links, outputs) \
-                    or properties.get("image_url")
+                # references: the wired port, plus the scene's own
+                # reference images riding invisibly via ref_urls /
+                # image_url (the Director chain keeps grounding on the
+                # backend). All of them inform the enhance.
+                images = node_reference_urls(node, properties, links, outputs)
                 kind = "text"
                 # references passed only when present, so older graphs
                 # (and tests patching enhance without the param) run
@@ -365,18 +385,21 @@ def execute_graph(graph: dict, *, gemini_client=None, resolve_photo=None,
                 value = enhance(
                     _input_value(node, "system", links, outputs) or "",
                     user,
-                    images=[image] if image else None,
+                    images=images or None,
                     gemini_client=gemini_client, resolve_photo=resolve_photo,
                     **extra)
             elif node_type == NANO_TYPE:
                 from src import nano_banana
                 prompt = _input_value(node, "prompt", links, outputs) or ""
-                reference = image_bytes_for_gemini(
-                    _input_value(node, "image", links, outputs)
-                    or properties.get("image_url"),
-                    resolve_photo=resolve_photo)
+                # every reference, not just one: the face AND the jacket
+                references = [
+                    data for data in (
+                        image_bytes_for_gemini(url, resolve_photo=resolve_photo)
+                        for url in node_reference_urls(node, properties, links, outputs))
+                    if data
+                ]
                 result = nano_banana.generate_from_prompt(
-                    prompt, reference_image=reference, db_path=db_path)
+                    prompt, reference_image=references, db_path=db_path)
                 if not result["ok"]:
                     raise RuntimeError(result["error"] or "render failed")
                 kind, value = "image", result["media_url"]
@@ -396,15 +419,15 @@ def execute_graph(graph: dict, *, gemini_client=None, resolve_photo=None,
                     push((index + 1) / total, f"{title} skipped")
                     continue
                 prompt = _input_value(node, "prompt", links, outputs) or ""
-                # the wired port, else the shot's own reference riding on
-                # the property -- the same fallback enhance and nano
-                # already honour, and the same one this node's per-node
-                # Run sends. Without it one graph rendered two different
-                # clips depending on which button was pressed.
+                # Runway anchors a clip on exactly ONE frame (its API
+                # takes a single prompt_image), so of the references this
+                # node carries only the first is usable -- the wired
+                # keyframe when there is one, else the scene's own
+                # reference. The rest already informed the prompt that
+                # got here, which is how they reach the clip at all.
+                urls = node_reference_urls(node, properties, links, outputs)
                 reference = image_for_runway(
-                    _input_value(node, "image", links, outputs)
-                    or properties.get("image_url"),
-                    resolve_photo=resolve_photo)
+                    urls[0] if urls else None, resolve_photo=resolve_photo)
                 result = runway.generate_from_prompt(
                     prompt, reference_image=reference, db_path=db_path)
                 if not result["ok"]:

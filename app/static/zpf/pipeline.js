@@ -5,13 +5,14 @@
    — Director (workflows.js) — reached from a card's Director button. */
 import { api, bus, esc, state, stateline } from './shared.js';
 import { initGenerate, renderGenerate } from './generate.js';
+import { initScenes, renderScenes } from './scenes.js';
 import { openConceptInDirector } from './workflows.js';
 
 let denyTarget = null;
 let denyReasons = new Set();
 let wired = false;
 let openSceneId = null;   // which concept's scene board is open
-let activeTab = 'concept';
+let activeTab = 'scenes';
 
 export function showTab(tab, conceptId) {
   activeTab = tab;
@@ -27,6 +28,7 @@ export function initPipeline() {
   if (wired) return;
   wired = true;
   initGenerate();
+  initScenes();
   document.querySelectorAll('#ptabs .cat').forEach(b =>
     b.onclick = () => showTab(b.dataset.ptab));
   const dscrim = document.getElementById('dscrim');
@@ -75,6 +77,7 @@ export function initPipeline() {
 
 export async function renderPipeline() {
   document.getElementById('pbrand').textContent = `brand · ${state.brand}`;
+  if (activeTab === 'scenes') return renderScenes();
   if (activeTab === 'generate') return renderGenerate();
   await Promise.all([renderConcepts(), renderHolds()]);
 }

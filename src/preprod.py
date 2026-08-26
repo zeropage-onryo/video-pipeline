@@ -111,6 +111,11 @@ def init(path: Path | str = DB_PATH) -> None:
                     "uncanny_passed INTEGER", "uncanny_reason TEXT"):
             if col.split()[0] not in existing:
                 conn.execute(f"ALTER TABLE shoot_concepts ADD COLUMN {col}")
+        # the pick: which of the several scenes one idea produced is
+        # worth rendering (see set_picked / pick_rate). Additive, so an
+        # existing database gains it without touching a single row.
+        if "picked_at" not in existing:
+            conn.execute("ALTER TABLE shoot_concepts ADD COLUMN picked_at TEXT")
 
 
 def save_judge_score(concept_id: int, judge: dict, path: Path | str = DB_PATH) -> None:
@@ -334,6 +339,15 @@ def _concept_row(row, conn) -> dict[str, Any]:
     if not data["ai_shots"] and data["ai"]:
         data["ai_shots"] = [data["ai"]]
     data["use_pov"] = bool(data.get("use_pov", 1))
+    # Derived for the same reason: a concept IS one scene when it holds
+    # exactly one shot, and it is picked when it carries a pick time.
+    # Two stored flags could disagree with the rows they describe.
+    data["is_scene"] = len(data["shots"]) == 1
+    data["picked"] = bool(data.get("picked_at"))
+    # the reference photos this scene was written against, carried on
+    # the shot itself -- shots_json was always one flexible JSON column,
+    # so plural references cost no schema change
+    data["refs"] = (data["shots"][0].get("refs") or []) if data["shots"] else []
     data["locations"] = [
         dict(r)
         for r in conn.execute(
@@ -512,6 +526,69 @@ def set_shot_reference_image(concept_id: int, shot_n, reference_url,
             "UPDATE shoot_concepts SET shots_json = ? WHERE id = ?",
             (json.dumps(shots), concept_id),
         )
+
+
+def set_picked(concept_id: int, picked: bool = True,
+               path: Path | str = DB_PATH) -> None:
+    """The label, moved to fit the unit (2026-08-26).
+
+    shortlist_rate asked "was this idea worth planning a shot list for",
+    derived from `shots != []`. Now that a concept IS one scene with one
+    shot, every concept has shots the moment it exists and that question
+    has no answer left in it. The decision actually being made is "is
+    this scene worth rendering", so THAT is what gets recorded -- picking
+    one of the several a single idea produced.
+
+    Timestamped rather than a flag: a rate you cannot window by date
+    stops being useful the moment the prompt changes.
+    """
+    with connect(path) as conn:
+        cur = conn.execute(
+            "UPDATE shoot_concepts SET picked_at = ? WHERE id = ?",
+            (_now() if picked else None, concept_id),
+        )
+        if cur.rowcount == 0:
+            raise ValueError(f"no concept {concept_id}")
+
+
+def pick_rate(path: Path | str = DB_PATH) -> dict[str, Any]:
+    """Of the scenes generated, how many were worth rendering.
+
+    shortlist_rate's successor, same shape and same per-prompt-hash
+    breakdown -- derived from the rows rather than stored, so it cannot
+    drift from what it describes. Counts only ONE-SHOT concepts: a
+    legacy multi-shot concept was never a single scene to pick, and
+    mixing the two would compare different decisions.
+    """
+    with connect(path) as conn:
+        rows = conn.execute(
+            """
+            SELECT prompt_hash,
+                   COUNT(*) AS generated,
+                   SUM(CASE WHEN picked_at IS NOT NULL THEN 1 ELSE 0 END) AS picked
+            FROM shoot_concepts
+            WHERE json_array_length(shots_json) = 1
+            GROUP BY prompt_hash
+            """
+        ).fetchall()
+
+    by_prompt = [
+        {
+            "prompt_hash": r["prompt_hash"],
+            "generated": r["generated"],
+            "picked": r["picked"] or 0,
+            "rate": round((r["picked"] or 0) / r["generated"], 3),
+        }
+        for r in rows
+    ]
+    generated = sum(b["generated"] for b in by_prompt)
+    picked = sum(b["picked"] for b in by_prompt)
+    return {
+        "generated": generated,
+        "picked": picked,
+        "rate": round(picked / generated, 3) if generated else None,
+        "by_prompt": by_prompt,
+    }
 
 
 def shortlist_rate(path: Path | str = DB_PATH) -> dict[str, Any]:

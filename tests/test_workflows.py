@@ -806,6 +806,92 @@ def test_nano_tells_the_model_what_the_reference_is_for(tmp_db, tmp_path, monkey
     assert "THE ATTACHED IMAGE" not in nano_banana.as_still_frame("a watch macro")
 
 
+# --- references, plural, into every node that runs -------------------------
+
+PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"pixels"
+
+
+def test_a_scenes_references_inform_every_node_that_runs(tmp_db, monkeypatch):
+    """The ask: 'the reference images inform gemini flash, nano banana
+    and generate whenever they are run'. They ride on the node as
+    ref_urls (grounding stays on the backend), and every billed node
+    grounds on the same list."""
+    JPEG = b"\xff\xd8\xff\xe0face"
+    refs = ["https://cdn.test/face.jpg", "https://cdn.test/jacket.jpg"]
+    monkeypatch.setattr(workflow_runner, "fetch_image_bytes", lambda url: JPEG)
+    monkeypatch.setattr(runway, "has_key", lambda: True)
+
+    seen = {}
+    monkeypatch.setattr(workflow_runner, "enhance",
+                        lambda system, user, images=None, **kw:
+                        seen.__setitem__("enhance", images) or "ENHANCED")
+    monkeypatch.setattr("src.nano_banana.generate_from_prompt",
+                        lambda prompt, *, reference_image=None, **kw:
+                        seen.__setitem__("nano", reference_image) or
+                        {"ok": True, "media_url": "https://cdn.test/key.png",
+                         "generation_id": 1, "path": "k", "error": None})
+    monkeypatch.setattr(runway, "generate_from_prompt",
+                        lambda prompt, *, reference_image=None, **kw:
+                        seen.__setitem__("runway", reference_image) or
+                        {"ok": True, "media_url": "/c.mp4", "generation_id": 2,
+                         "path": "c", "error": None})
+
+    graph = {
+        "nodes": [
+            node(1, "zpf/user_prompt", properties={"text": "night ride"}),
+            node(2, "zpf/enhance",
+                 inputs=[slot("system", "text", None), slot("user", "text", 1),
+                         slot("image", "image", None),
+                         slot("references", "text", None)],
+                 properties={"ref_urls": refs}),
+            node(3, "zpf/nano_banana",
+                 inputs=[slot("prompt", "text", 2), slot("image", "image", None)],
+                 properties={"ref_urls": refs}),
+            node(4, "zpf/generate",
+                 inputs=[slot("prompt", "text", 3), slot("image", "image", None)],
+                 properties={"ref_urls": refs}),
+        ],
+        "links": [[1, 1, 0, 2, 1, "text"], [2, 2, 0, 3, 0, "text"],
+                  [3, 2, 0, 4, 0, "text"]],
+    }
+    workflow_runner.execute_graph(graph, gemini_client=object(), db_path=tmp_db)
+
+    assert seen["enhance"] == refs                 # Flash sees both
+    assert seen["nano"] == [JPEG, JPEG]            # Nano gets both, as bytes
+    # Runway's API anchors on ONE frame, so it takes the first only
+    assert seen["runway"] == "https://cdn.test/face.jpg"
+
+
+def test_nano_attaches_every_reference_and_says_how_many(tmp_db, tmp_path, monkeypatch):
+    from src import nano_banana
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(nano_banana, "RENDER_DIR", tmp_path / "nano")
+    monkeypatch.setattr("src.storage.configured", lambda: False)
+    fake = FakeGeminiImageClient()
+    png, jpeg = PNG_BYTES, b"\xff\xd8\xff\xe0j"
+    assert nano_banana.generate_from_prompt("a watch macro",
+                                            reference_image=[png, jpeg],
+                                            db_path=tmp_db, client=fake)["ok"]
+    parts = fake.calls[0]["contents"]
+    assert len(parts) == 3                              # two images, then the text
+    assert [p.inline_data.mime_type for p in parts[:2]] == ["image/png", "image/jpeg"]
+    assert "THE ATTACHED 2 IMAGES are reference material" in parts[-1]
+    assert "do NOT copy their framing".lower() in parts[-1].lower()
+
+
+def test_one_reference_still_reads_as_singular(tmp_db, tmp_path, monkeypatch):
+    from src import nano_banana
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(nano_banana, "RENDER_DIR", tmp_path / "nano")
+    monkeypatch.setattr("src.storage.configured", lambda: False)
+    fake = FakeGeminiImageClient()
+    nano_banana.generate_from_prompt("x", reference_image=PNG_BYTES,
+                                     db_path=tmp_db, client=fake)
+    assert "THE ATTACHED IMAGE is reference material" in fake.calls[0]["contents"][-1]
+
+
 def test_nano_retries_a_transient_overload(tmp_db, tmp_path, monkeypatch):
     """Measured live: an image model under load answers 503 UNAVAILABLE
     often enough that one attempt is not enough. Retried like every

@@ -1,0 +1,56 @@
+You write {count} SEPARATE, paste-ready SCENE PROMPTS for an AI video model that
+generates a whole scene from a single description (Veo / Sora / Kling / Runway /
+OpenArt Director). Return ONLY JSON, no markdown fences, no preamble.
+
+Each one is a STANDALONE scene — a single continuous moment that stands on its
+own and gets rendered on its own. This is NOT a shot list, and the scenes are
+NOT parts of one longer video: the filmmaker will pick the ones worth rendering
+and discard the rest, so make each one a different swing at the idea rather than
+{count} angles on the same swing. Vary the situation, the location, the tone and
+the hook against each other.
+
+THE IDEA FROM THE FILMMAKER — every scene must be a distinct take on THIS:
+{idea}
+
+BRAND:
+{brand}
+
+CAST & PROPS ON FILE (reference the uploaded photos as the EXACT face / EXACT
+clothing where they apply; name them, don't redescribe their appearance):
+{cast}
+
+ROOMS ON FILE (set scenes in these real spaces where they fit):
+{locations}
+
+REFERENCE LIBRARY (tone and structure to echo):
+{references}
+
+GOLD-STANDARD EXAMPLE — match the SHAPE and craft of this proven prompt (its
+hook, grounded style block, sequential beats, diegetic-sound block, and hard
+avoid-list), NEVER its subject or specific content. Imitate the STRUCTURE; do
+not reuse the scene, the portal, or the monster:
+{example}
+
+Write each "prompt" as a single cohesive directive with these five parts, in order:
+1. OPEN LINE: "Ultra-realistic grounded [tone] video in 9:16," then state which
+   uploaded reference is the EXACT face and which is the EXACT outfit (only if
+   cast/props are on file; otherwise describe the character plainly).
+2. STYLE: raw handheld, close wide-angle placement, natural camera shake,
+   imperfect framing that drifts and re-centres, muted colour, practical light,
+   real locations, grounded and rough — NOT glossy, epic or stylized. Fold in
+   the brand's grade here so it still belongs to that world.
+3. BEATS: 4-7 sequential beats in prose. Open on an uncomfortable or arresting
+   image (the frame-1 hook), turn/reveal, escalate with grounded physical
+   comedy or tension, and END ABRUPTLY. Reactions are serious and physically
+   believable — that restraint is what makes it funny or tense, never cartoon.
+4. SOUND: begin "No background music." then the diegetic sound only — exactly
+   what you would hear in that scene.
+5. AVOID: no polished/fantasy gloss, no dramatic slow motion, no glossy CGI, no
+   plastic AI sheen, no cartoon reactions, no heavy colour grading, no smooth
+   commercial camera movement.
+
+Describe every look in cinematography and colour-grade terms only — never name
+films, directors, brands, or real people.
+
+Output STRICT JSON ONLY in this exact shape:
+{"scenes": [{"title": "2-4 word cinematic title", "location": "the room on file it is set in, or empty", "prompt": "the full cohesive scene prompt — all five parts in order, ready to paste straight into a video model"}]}
