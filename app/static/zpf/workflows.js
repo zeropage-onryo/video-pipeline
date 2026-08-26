@@ -541,7 +541,7 @@ function registerNodes() {
     this.properties = {};
     this.size = [320, 280];
     this.onDrawTitleBox = drawTitleChip;
-    this._caption = { color: T.accentRed, text: 'Generates a clip from the enhanced prompt' };
+    this._caption = { color: T.accentRed, text: 'Renders the clip from the prompt and keyframe' };
     const self = this;
     this.onDrawForeground = function(ctx) {
       if (this.flags.collapsed) return;
@@ -558,7 +558,8 @@ function registerNodes() {
           ? (state.caps['runway.spend'] ? 'Output will appear here'
                                         : 'Runway · gated — RUNWAY_SPEND_OK=1 to arm')
           : 'Runway · RUNWAYML_API_SECRET not set';
-        drawEmptyWell(this, ctx, gate);
+        // a skipped node carries the server's own reason — show that
+        drawEmptyWell(this, ctx, this._note || gate);
       }
       drawPill(this, ctx, 'Run · $');
     };
@@ -577,7 +578,7 @@ function registerNodes() {
     this.properties = {};
     this.size = [320, 300];
     this.onDrawTitleBox = drawTitleChip;
-    this._caption = { color: T.accentRed, text: 'Generates an image from the enhanced prompt' };
+    this._caption = { color: T.accentRed, text: 'Renders the keyframe the clip starts from' };
     const self = this;
     this.onDrawForeground = function(ctx) {
       if (this.flags.collapsed) return;
@@ -807,8 +808,14 @@ function showCanvas() {
   canvasOpen = true;
   $('dirlanding').hidden = true;
   $('dircanvas').hidden = false;
-  // size first, then centre the graph — arrival shows the whole chain
-  requestAnimationFrame(() => { resizeCanvas(); fitView(); canvas.setDirty(true, true); });
+  // arrival shows the whole chain; if the view isn't measurable yet the
+  // ResizeObserver runs the fit as soon as it is
+  pendingFit = true;
+  requestAnimationFrame(() => {
+    resizeCanvas();
+    fitWhenSized();
+    canvas.setDirty(true, true);
+  });
 }
 
 async function openWorkflow(id) {
@@ -1016,10 +1023,13 @@ function fitView() {
   }
   const rect = $('wfcanvas').getBoundingClientRect();
   const pad = 80;
+  const rail = 120;               // the + and the floating rail sit over this strip
   const scale = Math.max(0.2, Math.min(1.2,
-    (rect.width - pad) / (x1 - x0), (rect.height - pad) / (y1 - y0)));
+    (rect.width - pad - rail) / (x1 - x0), (rect.height - pad) / (y1 - y0)));
   canvas.ds.scale = scale;
-  canvas.ds.offset[0] = rect.width / (2 * scale) - (x0 + x1) / 2;
+  // centre in the clear area to the RIGHT of the rail, so the first
+  // node never lands underneath it
+  canvas.ds.offset[0] = (rail + (rect.width - rail) / 2) / scale - (x0 + x1) / 2;
   canvas.ds.offset[1] = rect.height / (2 * scale) - (y0 + y1) / 2;
   canvas.setDirty(true, true);
 }
@@ -1030,6 +1040,32 @@ function resizeCanvas() {
   const el = $('wfcanvas');
   const rect = el.getBoundingClientRect();
   if (rect.width && rect.height) canvas.resize(rect.width, rect.height);
+}
+
+/* The canvas is built while the Director view is still hidden, so it
+   starts at zero size — and LiteGraph's render loop draws nothing at
+   all on a zero-sized canvas. Guessing when the view becomes visible
+   with a rAF is a race (it lost, intermittently, and the canvas came
+   up blank until something else forced a redraw). A ResizeObserver
+   waits for a real size instead of guessing, and the deferred fit runs
+   the moment there is a viewport to fit into. */
+let pendingFit = false;
+
+function fitWhenSized() {
+  const rect = $('wfcanvas').getBoundingClientRect();
+  if (!rect.width || !rect.height) return;    // still hidden — the observer will call back
+  if (!pendingFit) return;
+  pendingFit = false;
+  fitView();
+}
+
+function watchCanvasSize() {
+  if (typeof ResizeObserver !== 'function') return;
+  new ResizeObserver(() => {
+    resizeCanvas();
+    fitWhenSized();
+    canvas.setDirty(true, true);
+  }).observe($('wfcanvas').parentElement);
 }
 
 export function initWorkflows() {
@@ -1045,6 +1081,7 @@ export function initWorkflows() {
   canvas = new window.LGraphCanvas('#wfcanvas', graph);
   canvas.allow_searchbox = true;
   themeCanvas(canvas);
+  watchCanvasSize();
 
   $('wfsave').onclick = () => saveWorkflow();
   $('wfnew').onclick = newWorkflow;
@@ -1209,11 +1246,14 @@ let enhanceSystem = '';        // prompts/enhance_system.txt, fetched once
 
 function shotChainGraph(d, s) {
   // Hand-built in LiteGraph's own serialize() shape (the
-  // default_template pattern). Exactly the reference screenshot's four
-  // nodes: the shot's short prompt → the enhancement Instructions →
-  // Gemini 2.5 Flash → Nano Banana image. The shot's reference image
-  // and the RAG retrieval ride on the BACKEND (the enhance node's
-  // image_url / auto_ground properties), not as extra nodes.
+  // default_template pattern). The shot's short prompt → the
+  // enhancement Instructions → Gemini 2.5 Flash → Nano Banana keyframe
+  // → Runway clip. The keyframe is not a side branch: it feeds
+  // Generate's image port, so the clip is anchored on the still we
+  // just approved rather than starting from text alone. The shot's own
+  // reference image and the RAG retrieval still ride on the BACKEND
+  // (the enhance node's image_url / auto_ground properties), not as
+  // extra nodes.
   const text = s.desc || s.prompt || '';
   seededTexts.set(`${d.id}·${s.n}`, text);
 
@@ -1232,21 +1272,31 @@ function shotChainGraph(d, s) {
                { name: 'user', type: 'text', link: 1 },
                { name: 'image', type: 'image', link: null },
                { name: 'references', type: 'text', link: null }],
-      outputs: [{ name: 'text', type: 'text', links: [3] }],
+      // one enhanced prompt, two consumers: the keyframe and the clip
+      outputs: [{ name: 'text', type: 'text', links: [3, 4] }],
       properties: { auto_ground: true,
                     image_url: s.reference_image || '' } },
     { id: 4, type: 'zpf/nano_banana', title: 'Nano Banana',
       pos: [900, 300], size: [320, 300], flags: {}, order: 3, mode: 0,
       inputs: [{ name: 'prompt', type: 'text', link: 3 },
                { name: 'image', type: 'image', link: null }],
-      outputs: [{ name: 'image', type: 'image', links: null }],
+      outputs: [{ name: 'image', type: 'image', links: [5] }],
       properties: { concept_id: d.id, shot_n: s.n,
                     image_url: s.reference_image || '' } },
+    { id: 5, type: 'zpf/generate', title: 'Generate',
+      pos: [1330, 320], size: [320, 280], flags: {}, order: 4, mode: 0,
+      // the enhanced prompt AND the keyframe Nano just rendered
+      inputs: [{ name: 'prompt', type: 'text', link: 4 },
+               { name: 'image', type: 'image', link: 5 }],
+      outputs: [{ name: 'media', type: 'media', links: null }],
+      properties: { concept_id: d.id, shot_n: s.n } },
   ];
   const links = [[1, 1, 0, 3, 1, 'text'],
                  [2, 2, 0, 3, 0, 'text'],
-                 [3, 3, 0, 4, 0, 'text']];
-  return { last_node_id: 4, last_link_id: 3, nodes, links,
+                 [3, 3, 0, 4, 0, 'text'],
+                 [4, 3, 0, 5, 0, 'text'],
+                 [5, 4, 0, 5, 1, 'image']];
+  return { last_node_id: 5, last_link_id: 5, nodes, links,
            groups: [], config: {}, version: 0.4 };
 }
 
@@ -1285,7 +1335,8 @@ function activateShot(n) {
   graph.configure(shotGraphs.get(n) || shotChainGraph(directorConcept, shot));
   clearRunState();
   renderShotDock();
-  if (!$('dircanvas').hidden) fitView();
+  pendingFit = true;
+  fitWhenSized();
   canvas.setDirty(true, true);
 }
 

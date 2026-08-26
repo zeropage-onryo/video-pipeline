@@ -290,10 +290,13 @@ is yours, in Resolve, by hand.
   explicit "← Brief" away. Any concept opens directly from its card's Director button —
   **no approval gate**, approval/teaching stays a dev-console background loop. The canvas
   edits ONE shot at a time (Mike's call, 2026-08-26, matching his Runway-workflows
-  reference): the active shot's chain is exactly four nodes — the shot's short prompt →
+  reference): the active shot's chain is five nodes — the shot's short prompt →
   an Instructions node seeded from `prompts/enhance_system.txt` → Gemini 2.5 Flash →
-  Nano Banana image — while every other shot waits in a dock under the canvas, grouped by
-  scene, one click to pull its nodes up (edits are pocketed per shot when switching).
+  Nano Banana keyframe → Runway clip — while every other shot waits in a dock under the
+  canvas, grouped by scene, one click to pull its nodes up (edits are pocketed per shot
+  when switching). **The keyframe is not a side branch** (wired 2026-08-26): the enhanced
+  prompt feeds BOTH render nodes, and Nano's image feeds Generate's `image` port, so the
+  clip starts from the still you just approved instead of from text alone.
   The shot's reference image and the RAG retrieval ride on the BACKEND, not as extra
   nodes: the enhance node's `auto_ground`/`image_url` properties make the server pull
   `reference_block` and attach the shot's reference itself, and an unwired `system` port
@@ -302,7 +305,14 @@ is yours, in Resolve, by hand.
   text changed, title/hook/logline never touched); a shot node's finished render
   auto-attaches to its shot (clip → media_url, Nano image → `/shots/{n}/reference`). `src/nano_banana.py` is the image connector, runway.py's
   never-raises gated shape on the existing Gemini key under `NANO_DAILY_CAP`, no separate
-  spend gate since an image costs cents. Evals moved OFF `/ui` (2026-08-25) to the dev-console
+  spend gate since an image costs cents. **Every prompt this pipeline writes describes
+  video**, so `generate_from_prompt` runs it through the pure `as_still_frame()` first:
+  handed camera moves and a 9:16 duration, an image model answers in prose ("Understood,
+  I will apply these guidelines…") and spends a call returning no image — verified live
+  2026-08-26, and verified fixed by the same prompt rendering a real keyframe. The image
+  call carries its own retry on `RESOURCE_EXHAUSTED`/`UNAVAILABLE` (two of four live calls
+  were 503s) — on the SAME model, deliberately not `gemini_utils.generate_with_retry`,
+  whose `FALLBACK_MODELS` are text models that cannot draw. Evals moved OFF `/ui` (2026-08-25) to the dev-console
   `/evals` page — golden set still in SQLite via `src/evalstore.py`, seeded once from
   `eval_cases.json`, Hit@k/MRR computed server-side by `rag_eval` and stored per run; the
   page is a shell over the same session-gated `/api/evals/*` endpoints, and it registers on
@@ -495,9 +505,12 @@ default off, executors unwired.
   the data path is ready (`veo.generate_candidates` logs every attempt; keeping stays a human
   act through `genlog`), but the screens want real generation attempts to show, and the first
   real Veo spend is a deliberate step (`ZEROPAGE_RENDER=1`, or the autopilot live gate) nobody
-  has taken yet. Same for posting: `publish` parks even on `auto` until an upload API + public
-  clip hosting exist — the IG path needs the rendered mp4 re-hosted at a public URL
-  (`storage.py` is the flagged follow-up), and YouTube needs OAuth.
+  has taken yet. Same for posting: `publish` parks even on `auto` until an upload API exists —
+  YouTube needs OAuth. Public clip hosting is no longer the blocker it was: R2 **is**
+  configured on this machine and `storage.configured()` is live, so renders come back as
+  public `*.r2.dev` URLs (verified 2026-08-26 by a real Nano render). That is also what
+  lets a Nano keyframe anchor a Runway clip by URL; `workflow_runner.render_bytes` is the
+  fallback for a machine where R2 is off, since a `/renders/` path is local to the app.
 
 **The user's real data lives in `data/pipeline.db` (gitignored, ~128KB) and `locations/`
 (gitignored, photos).** A fresh clone gets the tool, empty. Never overwrite either without asking.

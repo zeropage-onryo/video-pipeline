@@ -17,7 +17,12 @@ ungated route to spend.
 
 A failed node fails, its dependents are skipped, and everything else
 still runs -- partial results are results. The caller decides whether
-a run with failures is a failed job.
+a run with failures is a failed job. A connector that was never
+configured (Runway with no API secret) is SKIPPED rather than failed --
+an unadapted tool honestly staying dry is the designed behaviour, not a
+break. The spend gate is different and still fails loudly: a configured
+Runway without this run's approval must refuse where everyone can see
+it.
 """
 from __future__ import annotations
 
@@ -93,6 +98,20 @@ def _input_value(node: dict, name: str, links: dict, outputs: dict):
     return None
 
 
+def render_bytes(value):
+    """An upstream node's /renders/ URL -> that file's bytes, or None.
+    Shared by both reference resolvers: a render is a local file no
+    model provider can fetch by URL, and the path is user-influenced,
+    so anything escaping data/renders/ is refused."""
+    from pathlib import Path
+
+    root = (Path(__file__).resolve().parent.parent / "data" / "renders").resolve()
+    target = (root / value[len("/renders/"):]).resolve()
+    if root in target.parents and target.is_file():
+        return target.read_bytes()
+    return None
+
+
 def image_bytes_for_gemini(value, resolve_photo=None):
     """A Nano Banana node's reference input -> raw bytes Gemini can take
     as vision input (it never fetches URLs). A picked asset photo
@@ -100,7 +119,6 @@ def image_bytes_for_gemini(value, resolve_photo=None):
     resolves against data/renders/; a data URI decodes. A remote http(s)
     URL is dropped -- a reference is an enhancement, never a gate."""
     import base64
-    from pathlib import Path
 
     if not value or not isinstance(value, str):
         return None
@@ -110,11 +128,7 @@ def image_bytes_for_gemini(value, resolve_photo=None):
         except Exception:
             return None
     if value.startswith("/renders/"):
-        root = Path(__file__).resolve().parent.parent / "data" / "renders"
-        target = (root / value[len("/renders/"):]).resolve()
-        if str(target).startswith(str(root)) and target.is_file():
-            return target.read_bytes()
-        return None
+        return render_bytes(value)
     target = resolve_photo(value) if resolve_photo else None
     return target.read_bytes() if target is not None else None
 
@@ -123,11 +137,18 @@ def image_for_runway(value, resolve_photo=None):
     """A Generate node's reference input -> something Runway can anchor
     on. A picked asset photo is a site-relative URL Runway could never
     fetch, so it becomes bytes here (runway.generate_from_prompt turns
-    bytes into a data URI); public URLs and data URIs pass through."""
+    bytes into a data URI); public URLs and data URIs pass through.
+
+    An upstream Nano Banana keyframe is the same problem: /renders/ is
+    local until R2 is configured, so it becomes bytes too -- otherwise
+    the keyframe silently stops anchoring the clip the moment it is
+    wired in, which is the whole point of the chain."""
     if not value or not isinstance(value, str):
         return None
     if value.startswith(("http://", "https://", "data:image/")):
         return value
+    if value.startswith("/renders/"):
+        return render_bytes(value)
     target = resolve_photo(value) if resolve_photo else None
     return target.read_bytes() if target is not None else None
 
@@ -289,6 +310,20 @@ def execute_graph(graph: dict, *, gemini_client=None, resolve_photo=None,
                     raise RuntimeError(result["error"] or "render failed")
                 kind, value = "image", result["media_url"]
             elif node_type == GENERATE_TYPE:
+                # A connector that was never configured is not a broken
+                # graph -- an unadapted tool honestly stays dry. Skipping
+                # (not failing) keeps a chain whose keyframe rendered
+                # from reporting itself as a failure on every run.
+                # Deliberately NOT extended to the spend gate: a
+                # configured Runway with no per-run approval must still
+                # refuse loudly, through the module's own wall.
+                if not runway.has_key():
+                    states[node_id] = {
+                        "status": "skipped", "kind": None, "output": None,
+                        "error": "Runway not configured — RUNWAYML_API_SECRET is unset"}
+                    mark_downstream_skipped(node_id, f"upstream skipped: {title}")
+                    push((index + 1) / total, f"{title} skipped")
+                    continue
                 prompt = _input_value(node, "prompt", links, outputs) or ""
                 reference = image_for_runway(
                     _input_value(node, "image", links, outputs),

@@ -19,6 +19,8 @@ bytes on the response parts -- there is no file URL to download.
 """
 import base64
 import os
+import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -29,9 +31,39 @@ from .shot import Shot
 
 MODEL = os.environ.get("NANO_BANANA_MODEL", "gemini-2.5-flash-image")
 DAILY_CAP = int(os.environ.get("NANO_DAILY_CAP", "20"))
+RETRIES = int(os.environ.get("NANO_RETRIES", "3"))
+RETRY_DELAY = 4.0
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 RENDER_DIR = PROJECT_ROOT / "data" / "renders" / "nano"
+
+# Every prompt this pipeline writes is a VIDEO prompt -- "9:16", "the
+# camera follows", "handheld drift". Handed to an image model those read
+# as instructions it cannot carry out, and it answers in prose instead
+# of rendering ("Understood. I will apply these guidelines...") -- a
+# billed call that returns no image. Re-framing the same words as a
+# description of ONE frame keeps every detail and drops the impossible
+# instruction. Pure and constant, so what was sent is always
+# reconstructable from the logged prompt.
+STILL_FRAME_TEMPLATE = (
+    "Render a single photorealistic still image: one frame lifted out of "
+    "the shot described below.\n\n"
+    "Treat camera, lens, motion and duration language as a description of "
+    "how this one frame is composed and where the movement is caught "
+    "mid-move -- never as a sequence to play out. Output the image itself, "
+    "with no commentary.\n\n"
+    "THE SHOT\n{prompt}"
+)
+
+
+def as_still_frame(prompt: str) -> str:
+    """The video prompt, re-framed as a single-frame brief. Pure -- no
+    model call goes near it, so a refusal is either a bad framing
+    (visible here) or a bad prompt, never both at once."""
+    prompt = (prompt or "").strip()
+    if not prompt:
+        return ""
+    return STILL_FRAME_TEMPLATE.format(prompt=prompt)
 
 
 def has_key() -> bool:
@@ -67,13 +99,40 @@ def _shot_row_for_prompt(prompt: str, db_path) -> int:
                                **kwargs)
 
 
+def _generate_content(client, model: str, parts):
+    """The image call, retried on the two transient statuses the rest of
+    the project already retries (gemini_utils.generate_with_retry).
+    Its own helper rather than that one because that returns
+    response.text and falls through to FALLBACK_MODELS -- both wrong
+    here: the deliverable is inline image bytes, and the text models it
+    falls back to cannot draw. No model fallback for the same reason;
+    NANO_BANANA_MODEL is a deliberate choice, not a substitutable one.
+
+    Measured 2026-08-26: two of four live calls came back 503
+    UNAVAILABLE ("high demand... usually temporary") -- without this a
+    spike reads to the person on the canvas as a hard failure."""
+    last = None
+    for attempt in range(RETRIES):
+        try:
+            return client.models.generate_content(model=model, contents=parts)
+        except Exception as e:
+            if not ("RESOURCE_EXHAUSTED" in str(e) or "UNAVAILABLE" in str(e)):
+                raise
+            last = e
+            if attempt < RETRIES - 1:
+                match = re.search(r"retry in ([\d.]+)s", str(e))
+                time.sleep(float(match.group(1)) + 2 if match else RETRY_DELAY)
+    raise last
+
+
 def generate_image(prompt: str, out_path: Path, *, model: str = MODEL,
                    reference_bytes: Optional[bytes] = None,
                    reference_mime: str = "image/jpeg", client=None) -> Path:
-    """The thin raising wrapper: one generate_content call, first image
-    part written to out_path. Raises when the model returns no image --
-    here the image IS the deliverable (the promptgen contract), and a
-    text-only refusal must surface, not save an empty file."""
+    """The thin raising wrapper: one generate_content call (retried on a
+    transient overload), first image part written to out_path. Raises
+    when the model returns no image -- here the image IS the deliverable
+    (the promptgen contract), and a text-only refusal must surface, not
+    save an empty file."""
     from google.genai import types
 
     client = client or _client()
@@ -82,7 +141,7 @@ def generate_image(prompt: str, out_path: Path, *, model: str = MODEL,
         parts.append(types.Part.from_bytes(data=reference_bytes,
                                            mime_type=reference_mime))
     parts.append(prompt)
-    response = client.models.generate_content(model=model, contents=parts)
+    response = _generate_content(client, model, parts)
     for candidate in response.candidates or []:
         for part in (candidate.content.parts or []) if candidate.content else []:
             inline = getattr(part, "inline_data", None)
@@ -107,6 +166,11 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
     may be raw bytes (a picked asset photo or an upstream render) --
     anything else is dropped, a reference is an enhancement, never a
     gate.
+
+    The prompt goes through as_still_frame first: this pipeline's
+    prompts describe video, and an image model handed camera moves
+    answers in prose instead of rendering. The thin generate_image
+    wrapper stays literal for callers who mean exactly what they typed.
     """
     from . import storage
     kwargs = {"path": db_path} if db_path is not None else {}
@@ -130,14 +194,16 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"wf-{stamp}.png"
-        generate_image(prompt, out_path, model=model,
+        generate_image(as_still_frame(prompt), out_path, model=model,
                        reference_bytes=reference_bytes, client=client)
 
+        # the row logs the prompt the person wrote, not the constant
+        # wrapper around it -- the flag says which framing was applied
         shot_row_id = _shot_row_for_prompt(prompt, db_path)
         generation_id = generative.record_generation(
             shot_row_id, "nano", prompt,
             params={"model": model, "source": "workflow",
-                    "reference": bool(reference_bytes)},
+                    "framing": "still", "reference": bool(reference_bytes)},
             output_path=str(out_path),
             **kwargs,
         )
