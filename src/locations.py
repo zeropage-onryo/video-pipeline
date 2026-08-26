@@ -100,6 +100,62 @@ def describe_location(client, name: str, photos: list) -> dict:
     return parse_description(generate_with_retry(client, VISION_MODEL, parts))
 
 
+# --- cast & props ----------------------------------------------------------
+# The same vision step, pointed at a character or a prop instead of a
+# room (added 2026-08-26). It lives here rather than in entities.py so
+# every vision-describe in the project shares one model, one mime map,
+# and one parse seam -- entities.py stays pure DB. What it produces is
+# what makes an asset *searchable*: the RAG library is text-only, so
+# without a description the only thing retrievable about a character is
+# whatever name and notes were typed, never how they actually look.
+
+ENTITY_KINDS = ("character", "prop")
+
+
+def build_entity_prompt(kind: str, name: str, photo_count: int) -> str:
+    subject = ("a person who appears on camera" if kind == "character"
+               else "an object used on camera")
+    return (
+        f"These {photo_count} photo(s) show {subject}, referred to as \"{name}\".\n\n"
+        "Describe it for later visual reference, not as a picture. What does it "
+        "look like in concrete, physical terms someone could match in another "
+        "shot? What specific features would a viewer recognise it by? What "
+        "colours, materials, wear, or condition are visible? What has to stay "
+        "consistent from shot to shot for it to read as the same "
+        f"{'person' if kind == 'character' else 'object'}?\n\n"
+        "Describe only what is actually visible. Do not guess at names, brands, "
+        "or backstory.\n\n"
+        "Output STRICT JSON ONLY, no markdown fences, in this exact shape:\n"
+        '{"look": <one or two sentences>, "features": [<recognisable detail>, ...], '
+        '"materials": [<colour / fabric / material / finish>, ...], '
+        '"continuity": <what must stay the same across shots>}'
+    )
+
+
+def parse_entity_description(text: str) -> dict:
+    """Same seam as parse_description: a description with no "look" is
+    useless for grounding, so it's rejected here rather than stored and
+    discovered later."""
+    data = json.loads(strip_fences(text))
+    if not data.get("look"):
+        raise ValueError("entity description is missing 'look'")
+    return data
+
+
+def describe_entity(client, kind: str, name: str, photos: list) -> dict:
+    if kind not in ENTITY_KINDS:
+        raise ValueError(f"kind must be one of {ENTITY_KINDS}, got {kind!r}")
+    parts = [
+        types.Part.from_bytes(
+            data=Path(photo).read_bytes(),
+            mime_type=MIME_TYPES.get(Path(photo).suffix.lower(), "image/jpeg"),
+        )
+        for photo in photos
+    ]
+    parts.append(build_entity_prompt(kind, name, len(photos)))
+    return parse_entity_description(generate_with_retry(client, VISION_MODEL, parts))
+
+
 def describe_locations(root: Path, client=None, db_path=None, force: bool = False) -> dict:
     """
     Describe every space under `root` and save it. Returns counts of

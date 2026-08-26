@@ -26,6 +26,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from src import (
+    asset_shelf,
     autonomy,
     autopilot,
     db,
@@ -304,57 +305,36 @@ def asset_detail(category: str, item_id: int):
 # the upload IS the grounding source, closing the gap where the memory
 # bank and the vector library sat side by side without talking.
 
-ASSETS_DOMAIN = "assets"
+ASSETS_DOMAIN = asset_shelf.DOMAIN
+
+# The shelf's format and source keys live in src/asset_shelf.py so this
+# route and the backfill there write identical chunks -- two formats on
+# one shelf means a re-ingest duplicates instead of replacing.
+ingest_asset_chunk = asset_shelf.ingest_one
+_drop_asset_chunk = asset_shelf.drop_one
 
 
-def _asset_source_key(kind: str, slug: str) -> str:
-    return f"assets/{kind}-{slug}"
+def describe_entity_photos(kind: str, name: str, photos: list) -> dict:
+    """The vision step for a character or prop, mirroring what a
+    location has always got on upload. This is what makes the asset
+    *searchable*: the RAG library is text-only, so an undescribed
+    character retrieves on its typed name alone, never on how it looks.
 
-
-def ingest_asset_chunk(kind: str, slug: str, name: str, fields: dict) -> dict:
-    """One searchable chunk per saved entity: name plus whatever text the
-    save carried (role/category/notes/description). Best-effort by the
-    standing degrade contract -- a down store must never lose the asset,
-    it just isn't retrievable until re-saved."""
-    lines = [f"{kind.upper()}: {name}"]
-    for label, value in fields.items():
-        text = (str(value) if value is not None else "").strip()
-        if text:
-            lines.append(f"{label}: {text}")
+    Never raises -- a failed vision call must not lose the photos or
+    the entity row, exactly the locations contract."""
+    api_key = _gemini_key()
+    if not (api_key and photos):
+        return {"ok": False, "description": None,
+                "error": "no photos" if api_key else "GEMINI_API_KEY not set"}
     try:
-        conn = rag.connect()
-        try:
-            rag.init_store(conn)
-            written = rag.ingest_records(
-                [{"source": _asset_source_key(kind, slug),
-                  "text": "\n".join(lines), "domain": ASSETS_DOMAIN,
-                  "project": None, "source_ref": None}],
-                rag.make_client(), conn,
-            )
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
-        return {"ok": True, "chunks": written, "error": None}
+        from google import genai
+
+        from src import locations as locations_mod
+        description = locations_mod.describe_entity(
+            genai.Client(api_key=api_key), kind, name, photos)
+        return {"ok": True, "description": description, "error": None}
     except Exception as e:
-        return {"ok": False, "chunks": 0, "error": str(e)}
-
-
-def _drop_asset_chunk(kind: str, slug: str) -> None:
-    """Deleting an entity also drops its shelf chunk -- best-effort,
-    same contract as the ingest above."""
-    try:
-        conn = rag.connect()
-        try:
-            rag.delete_source(conn, _asset_source_key(kind, slug))
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
-    except Exception:
-        pass
+        return {"ok": False, "description": None, "error": str(e)}
 
 
 async def _save_uploaded_photos(base_dir: Path, slug: str, photos) -> tuple:
@@ -415,50 +395,92 @@ async def asset_create_location(request: Request):
         except Exception as e:
             note = f"saved {len(saved)} photo(s) but could not describe the space: {e}"
 
-    chunk = ingest_asset_chunk("location", slug, slug, {
-        "description": _description_text(description) if description else "",
-    })
+    chunk = ingest_asset_chunk("location", slug, slug,
+                               {"description": description or {}})
     return {"ok": True, "slug": slug, "described": described,
             "photos": len(saved), "note": note, "rag": chunk}
 
 
-@router.post("/assets/characters")
-async def asset_create_character(request: Request):
+async def _create_entity(kind: str, request: Request):
+    """Characters and props are the same shape: name + one labelled
+    field + notes + photos. Save the photos, describe them (vision, so
+    appearance is retrievable), store the row, put it on the shelf."""
+    base_dir = CHARACTERS_DIR if kind == "character" else PROPS_DIR
+    label = "role" if kind == "character" else "category"
+
     form = await request.form()
     name = (form.get("name") or "").strip()
     slug = _slug(name)
     if not slug:
         return _error(400, "invalid_name", "a name is required")
-    role = (form.get("role") or "").strip()
+    field = (form.get(label) or "").strip()
     notes = (form.get("notes") or "").strip()
-    ref, count = await _save_uploaded_photos(
-        CHARACTERS_DIR, slug, form.getlist("photos"))
-    entities.add_character(
-        name=name, role=role,
-        description={"notes": notes} if notes else None,
+    ref, count = await _save_uploaded_photos(base_dir, slug, form.getlist("photos"))
+
+    # resolved against THIS route's base_dir, not asset_shelf's module
+    # constant -- they're the same in production, but the photos that
+    # were just written are the ones to describe.
+    saved_photos = [base_dir / slug / n for n in _photo_names(base_dir, slug)]
+    vision = describe_entity_photos(kind, name, saved_photos)
+    description = dict(vision["description"] or {})
+    if notes:
+        description["notes"] = notes
+
+    add = entities.add_character if kind == "character" else entities.add_prop
+    add(name=name, **{label: field},
+        description=description or None,
         reference_image=ref, photo_count=count, notes=notes, path=db.DB_PATH)
-    chunk = ingest_asset_chunk("character", slug, name,
-                               {"role": role, "notes": notes})
-    return {"ok": True, "slug": slug, "photos": count, "rag": chunk}
+
+    chunk = ingest_asset_chunk(kind, slug, name, {
+        label: field, "notes": notes, "description": description})
+    note = None if vision["ok"] else (
+        f"photos saved but not described: {vision['error']}" if count
+        else "no photos to describe")
+    return {"ok": True, "slug": slug, "photos": count,
+            "described": vision["ok"], "note": note, "rag": chunk}
+
+
+@router.post("/assets/characters")
+async def asset_create_character(request: Request):
+    return await _create_entity("character", request)
 
 
 @router.post("/assets/props")
 async def asset_create_prop(request: Request):
-    form = await request.form()
-    name = (form.get("name") or "").strip()
-    slug = _slug(name)
-    if not slug:
-        return _error(400, "invalid_name", "a name is required")
-    category = (form.get("category") or "").strip()
-    notes = (form.get("notes") or "").strip()
-    ref, count = await _save_uploaded_photos(PROPS_DIR, slug, form.getlist("photos"))
-    entities.add_prop(
-        name=name, category=category,
-        description={"notes": notes} if notes else None,
-        reference_image=ref, photo_count=count, notes=notes, path=db.DB_PATH)
-    chunk = ingest_asset_chunk("prop", slug, name,
-                               {"category": category, "notes": notes})
-    return {"ok": True, "slug": slug, "photos": count, "rag": chunk}
+    return await _create_entity("prop", request)
+
+
+class BackfillBody(BaseModel):
+    describe: bool = False
+
+
+@router.post("/assets/backfill")
+def assets_backfill(body: BackfillBody):
+    """Put everything already on disk onto the shelf -- the catch-up for
+    assets created before the shelf existed. `describe` also runs the
+    vision step on undescribed cast/props: one billed call each, opt-in,
+    and already-described assets are skipped rather than re-described.
+    Runs as a job because a real library takes a while."""
+    if body.describe and not _gemini_key():
+        return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
+
+    def work(job):
+        client = None
+        if body.describe:
+            from google import genai
+            client = genai.Client(api_key=_gemini_key())
+        jobs.progress(job, 0.1, "walking assets")
+        result = asset_shelf.backfill(db_path=db.DB_PATH, describe=body.describe,
+                                      gemini_client=client)
+        detail = f"{result['ingested']} on the shelf"
+        if result["described"]:
+            detail += f" · {result['described']} described"
+        if result["failed"]:
+            detail += f" · {result['failed']} failed"
+        return {"detail": detail, "output": json.dumps(result)}
+
+    job = jobs.start("backfill", "assets → rag shelf", work)
+    return {"job_id": job["id"]}
 
 
 @router.delete("/assets/characters/{character_id}")

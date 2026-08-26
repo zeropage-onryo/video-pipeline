@@ -35,6 +35,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from src import accounts as accounts_mod
 from src import (
+    asset_shelf,
     autonomy,
     autopilot,
     db,
@@ -911,6 +912,35 @@ async def library_ingest(source: str = Form(""), domain: str = Form(""),
         message = f"stored {written} chunk(s) under '{domain.strip()}'"
     except Exception as e:
         message = f"ingest failed: {e}"
+    return RedirectResponse("/studio?tab=library&message=" + quote(message),
+                            status_code=303)
+
+
+@dev.post("/library/backfill-assets")
+def library_backfill_assets(describe: str = Form("")):
+    """The catch-up: put every asset already on disk onto the shelf.
+    Runs inline (not as a job) because this page has no SSE feed --
+    it's a one-off operator action, and the count is the whole point.
+    Describing is billed, so it rides an explicit checkbox."""
+    want_describe = bool(describe)
+    client = None
+    if want_describe:
+        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        if not api_key:
+            return RedirectResponse(
+                "/studio?tab=library&message="
+                + quote("GEMINI_API_KEY not set — untick describe to ingest text only"),
+                status_code=303)
+        client = genai.Client(api_key=api_key)
+    result = asset_shelf.backfill(db_path=db.DB_PATH, describe=want_describe,
+                                  gemini_client=client)
+    message = f"{result['ingested']} asset(s) on the shelf"
+    if result["described"]:
+        message += f", {result['described']} newly described"
+    if result["skipped_no_photos"]:
+        message += f", {result['skipped_no_photos']} had no photos to describe"
+    if result["failed"]:
+        message += f", {result['failed']} failed — {'; '.join(result['errors'][:2])}"
     return RedirectResponse("/studio?tab=library&message=" + quote(message),
                             status_code=303)
 

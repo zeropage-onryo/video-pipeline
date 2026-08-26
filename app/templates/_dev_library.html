@@ -59,6 +59,24 @@
   </div>
 </div>
 
+<div class="panel">
+  <div class="panel-head"><span class="id">ASSETS SHELF</span><span class="m">CATCH UP WHAT PREDATES THE SHELF</span></div>
+  <div class="panel-body">
+    <p class="dim" style="margin:0 0 10px">Puts every location, character, and prop already on
+      disk onto the <span class="mono">assets</span> shelf. The library is text-only — a
+      reference photo can't be a row — so what makes an asset findable is its
+      <em>description</em>. Describing runs one billed vision call per undescribed
+      character/prop; assets that already carry a description are skipped.</p>
+    <form method="post" action="/library/backfill-assets" style="display:flex; gap:12px; align-items:center; flex-wrap:wrap">
+      <label style="display:flex; gap:6px; align-items:center; margin:0">
+        <input type="checkbox" name="describe" value="1" checked style="width:auto">
+        describe photos of cast &amp; props <span class="mono dim">billed</span>
+      </label>
+      <button type="submit" class="primary">Backfill the shelf</button>
+    </form>
+  </div>
+</div>
+
 <h2>On the shelves</h2>
 {% if lib.sources %}
 <table>

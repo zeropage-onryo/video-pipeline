@@ -585,6 +585,8 @@ def rag_recorder(monkeypatch):
     """A reachable fake store: every ingest_records call is recorded so
     the tests can assert what actually landed on the shelf."""
     records = []
+    # api_mod.rag and asset_shelf.rag are the same module object, so one
+    # patch covers the route and the shelf writer underneath it.
     monkeypatch.setattr(api_mod.rag, "connect", lambda db_url=None: _RagConn())
     monkeypatch.setattr(api_mod.rag, "init_store", lambda c: None)
     monkeypatch.setattr(api_mod.rag, "make_client", lambda: object())
@@ -593,8 +595,36 @@ def rag_recorder(monkeypatch):
     return records
 
 
-def test_create_character_saves_and_teaches_the_assets_shelf(
-        tmp_db, tmp_path, monkeypatch, rag_recorder):
+ENTITY_VISION = {
+    "look": "a man in a cracked black leather jacket",
+    "features": ["scar through the left eyebrow"],
+    "materials": ["black leather"],
+    "continuity": "jacket zipped to mid-chest",
+}
+
+
+@pytest.fixture
+def fake_vision(monkeypatch):
+    """The cast/prop vision step, patched at the function the route
+    actually calls. Without this the route builds a real Gemini client
+    and the network guard fires inside a try/except that swallows it --
+    green, but proving nothing."""
+    import src.locations as locations_mod
+    seen = []
+
+    def fake(client, kind, name, photos):
+        seen.append({"kind": kind, "name": name, "photos": len(photos)})
+        return ENTITY_VISION
+
+    monkeypatch.setattr(locations_mod, "describe_entity", fake)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    return seen
+
+
+def test_create_character_describes_its_photos_and_shelves_the_look(
+        tmp_db, tmp_path, monkeypatch, rag_recorder, fake_vision):
+    """The photos are the point: an undescribed character retrieves on
+    its typed name alone, never on how it looks."""
     monkeypatch.setattr(api_mod, "CHARACTERS_DIR", tmp_path / "characters")
     res = client.post("/api/assets/characters",
                       data={"name": "Mike", "role": "protagonist",
@@ -602,26 +632,83 @@ def test_create_character_saves_and_teaches_the_assets_shelf(
                       files=[("photos", ("a.png", TINY_PNG, "image/png"))])
     assert res.status_code == 200
     body = res.json()
-    assert body["ok"] and body["rag"]["ok"] and body["rag"]["chunks"] == 1
+    assert body["ok"] and body["described"] is True and body["rag"]["ok"]
     assert (tmp_path / "characters" / "mike" / "a.png").exists()
+    # the vision step saw the photo that was just written
+    assert fake_vision == [{"kind": "character", "name": "Mike", "photos": 1}]
+
     [row] = entities.list_characters(path=tmp_db)
     assert row["name"] == "Mike" and row["photo_count"] == 1
+    assert row["description"]["look"].startswith("a man in a cracked")
+    assert row["description"]["notes"] == "leather jacket, deadpan"
+
     [record] = rag_recorder
     assert record["domain"] == "assets"
     assert record["source"] == "assets/character-mike"
-    assert "protagonist" in record["text"] and "leather jacket" in record["text"]
+    assert "protagonist" in record["text"]
+    assert "scar through the left eyebrow" in record["text"]   # searchable
+
+
+def test_create_character_survives_a_failed_vision_call(
+        tmp_db, tmp_path, monkeypatch, rag_recorder):
+    """Degrade, don't break: the photos and the row must survive a dead
+    vision call -- the locations contract, applied to cast."""
+    import src.locations as locations_mod
+    monkeypatch.setattr(api_mod, "CHARACTERS_DIR", tmp_path / "characters")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+
+    def boom(client, kind, name, photos):
+        raise RuntimeError("vision unavailable")
+
+    monkeypatch.setattr(locations_mod, "describe_entity", boom)
+    res = client.post("/api/assets/characters",
+                      data={"name": "Mike", "role": "protagonist"},
+                      files=[("photos", ("a.png", TINY_PNG, "image/png"))])
+    body = res.json()
+    assert body["ok"] is True and body["described"] is False
+    assert "vision unavailable" in body["note"]
+    assert (tmp_path / "characters" / "mike" / "a.png").exists()
+    assert entities.list_characters(path=tmp_db)[0]["name"] == "Mike"
+    assert rag_recorder                       # still shelved, just thinner
 
 
 def test_create_prop_saves_and_teaches_the_assets_shelf(
-        tmp_db, tmp_path, monkeypatch, rag_recorder):
+        tmp_db, tmp_path, monkeypatch, rag_recorder, fake_vision):
     monkeypatch.setattr(api_mod, "PROPS_DIR", tmp_path / "props")
     res = client.post("/api/assets/props",
                       data={"name": "Ducati Panigale", "category": "vehicle",
                             "notes": "red, scuffed left fairing"})
-    assert res.json()["ok"]
+    body = res.json()
+    assert body["ok"]
+    assert body["described"] is False and body["note"] == "no photos to describe"
+    assert fake_vision == []                  # nothing to look at, no billed call
     [record] = rag_recorder
     assert record["source"] == "assets/prop-ducati-panigale"
     assert "vehicle" in record["text"] and "scuffed" in record["text"]
+
+
+def test_assets_backfill_runs_as_a_job(tmp_db, monkeypatch):
+    """The catch-up for assets created before the shelf existed."""
+    calls = {}
+
+    def fake_backfill(db_path=None, describe=False, gemini_client=None):
+        calls.update(describe=describe, client=gemini_client)
+        return {"ingested": 3, "described": 0, "failed": 0,
+                "skipped_no_photos": 0, "errors": []}
+
+    monkeypatch.setattr(api_mod.asset_shelf, "backfill", fake_backfill)
+    job_id = client.post("/api/assets/backfill", json={}).json()["job_id"]
+    job = wait_for_job(job_id)
+    assert job["status"] == "done"
+    assert "3 on the shelf" in job["detail"]
+    assert calls["describe"] is False and calls["client"] is None
+
+
+def test_assets_backfill_describe_needs_a_key(tmp_db, monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    res = client.post("/api/assets/backfill", json={"describe": True})
+    assert res.status_code == 503
 
 
 def test_create_location_describes_and_teaches(tmp_db, tmp_path, monkeypatch,
@@ -644,6 +731,7 @@ def test_create_location_describes_and_teaches(tmp_db, tmp_path, monkeypatch,
     [record] = rag_recorder
     assert record["source"] == "assets/location-garage"
     assert "described from 2" in record["text"]
+    assert record["domain"] == "assets"
 
 
 def test_create_location_without_a_key_keeps_the_photos(tmp_db, tmp_path,

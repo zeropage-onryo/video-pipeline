@@ -1663,3 +1663,53 @@ def test_stats_tab_points_the_script_at_the_dev_router(tmp_dev_db):
     page = client.get("/studio?tab=stats").text
     assert 'window.ZP_API_BASE = "/studio"' in page
     assert "evals_dev.js" in page
+
+
+# ---------- the Dev Studio's assets-shelf backfill ----------
+
+def test_backfill_button_is_on_the_library_tab(tmp_dev_db, monkeypatch):
+    conn = LibraryFakeConn(rows=[])
+    monkeypatch.setattr(app_main.rag, "connect", lambda db_url=None: conn)
+    page = client.get("/studio?tab=library").text
+    assert 'action="/library/backfill-assets"' in page
+    assert 'name="describe"' in page
+
+
+def test_backfill_route_reports_what_landed(tmp_dev_db, monkeypatch):
+    calls = {}
+
+    def fake(db_path=None, describe=False, gemini_client=None):
+        calls.update(describe=describe)
+        return {"ingested": 4, "described": 2, "failed": 0,
+                "skipped_no_photos": 1, "errors": []}
+
+    monkeypatch.setattr(app_main.asset_shelf, "backfill", fake)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(app_main.genai, "Client", lambda **k: object())
+    response = client.post("/library/backfill-assets", data={"describe": "1"},
+                           follow_redirects=False)
+    assert response.status_code == 303
+    message = unquote(response.headers["location"])
+    assert message.startswith("/studio?tab=library")
+    assert "4 asset(s) on the shelf" in message
+    assert "2 newly described" in message
+    assert "1 had no photos" in message
+    assert calls["describe"] is True
+
+
+def test_backfill_without_describe_needs_no_key(tmp_dev_db, monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setattr(app_main.asset_shelf, "backfill",
+                        lambda **k: {"ingested": 2, "described": 0, "failed": 0,
+                                     "skipped_no_photos": 0, "errors": []})
+    response = client.post("/library/backfill-assets", follow_redirects=False)
+    assert "2 asset(s) on the shelf" in unquote(response.headers["location"])
+
+
+def test_backfill_with_describe_and_no_key_says_so(tmp_dev_db, monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    response = client.post("/library/backfill-assets", data={"describe": "1"},
+                           follow_redirects=False)
+    assert "GEMINI_API_KEY not set" in unquote(response.headers["location"])

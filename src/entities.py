@@ -136,6 +136,31 @@ def delete_prop(prop_id: int, path=db.DB_PATH) -> None:
         conn.execute("DELETE FROM props WHERE id = ?", (prop_id,))
 
 
+# --- descriptions ----------------------------------------------------------
+
+TABLES = {"character": "characters", "prop": "props"}
+
+
+def set_description(kind: str, entity_id: int, description: dict,
+                    path=db.DB_PATH) -> None:
+    """Attach (or replace) the vision description on one entity --
+    what `locations.describe_entity` produced from its photos. Merged
+    over whatever the row already carried, so the typed `notes` a
+    person entered survive a later re-describe."""
+    if kind not in TABLES:
+        raise ValueError(f"kind must be one of {tuple(TABLES)}, got {kind!r}")
+    getter = get_character if kind == "character" else get_prop
+    row = getter(entity_id, path=path)
+    if row is None:
+        raise ValueError(f"no such {kind}: {entity_id}")
+    merged = {**(row.get("description") or {}), **(description or {})}
+    with db.connect(path) as conn:
+        conn.execute(
+            f"UPDATE {TABLES[kind]} SET description = ? WHERE id = ?",
+            (json.dumps(merged), entity_id),
+        )
+
+
 def summary(path=db.DB_PATH) -> dict:
     """Counts for the Scoreboard, mirroring db.summary()'s shape."""
     with db.connect(path) as conn:
