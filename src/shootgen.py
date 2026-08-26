@@ -695,6 +695,57 @@ def generate_scene_brief(brand: str, spark=None, gemini_client=None,
     return parse_scene_brief_response(generate_with_retry(gemini_client, model, prompt))
 
 
+DEFAULT_SCENE_TOOL = "RUNWAY"
+
+
+def generate_scene_concept(brand: str, spark=None, gemini_client=None,
+                           model: str = MODEL, references: str = "", cast=None,
+                           db_path=None, tool: str = DEFAULT_SCENE_TOOL,
+                           image_refs=None) -> dict:
+    """
+    A concept IS one scene, and the scene IS one prompt (2026-08-26).
+
+    The two-stage idea -> shot-list shape split a concept across up to six
+    independently-rendered prompts, which is what the scene bible existed
+    to paper over. One paste-ready whole-scene prompt is what the video
+    models actually want, so the concept carries exactly one shot and that
+    shot's prompt is the deliverable -- the thing generated, graded, and
+    rendered.
+
+    Reuses build_scene_brief_prompt: the proven gold-standard skeleton
+    (grounded style -> beats -> diegetic sound -> avoid-list) rather than
+    a second template that would drift from it. Saved as an ordinary
+    shoot_concepts row with a one-element shots list, so the scene board,
+    Director, render, and autopilot all keep working unmodified.
+
+    No scene bible is prepended: it exists to hold SEPARATE shots to one
+    look, and there are no separate shots to hold.
+    """
+    kwargs = {"path": db_path} if db_path is not None else {}
+    prompt = build_scene_brief_prompt(brand, spark=spark, references=references,
+                                      cast=cast)
+    contents = prompt
+    if image_refs:
+        from google.genai import types
+        contents = [types.Part.from_bytes(data=data, mime_type=mime)
+                    for data, mime in image_refs] + [prompt]
+    parsed = parse_scene_brief_response(
+        generate_with_retry(gemini_client, model, contents))
+
+    shot = {"n": 1, "type": "BROLL", "source": "AI",
+            "tool": (tool or DEFAULT_SCENE_TOOL).upper(),
+            "desc": parsed["title"], "prompt": parsed["brief"]}
+    concept = {"title": parsed["title"], "hook": "", "logline": "",
+               "shots": [shot]}
+    location_names = [loc["name"] for loc in preprod.list_locations(**kwargs)]
+    allowed = ZEROPAGE_AI_TOOLS if brand == "zeropage" else None
+    warnings = validate_concept(concept, location_names, allowed_tools=allowed)
+    concept_id = preprod.save_concept(
+        concept, brand=brand, spark=spark, prompt_template=prompt,
+        warnings=warnings, **kwargs)
+    return {"concept_id": concept_id, "concept": concept, "warnings": warnings}
+
+
 def generate_shot_list(concept_id: int, gemini_client=None, model: str = MODEL,
                        use_pov=None, db_path=None) -> dict:
     """

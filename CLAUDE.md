@@ -121,6 +121,21 @@ email infra), email verification, invite UI, sign-out-everywhere.
 One phase, before the shoot: everything reasons about **spaces you have**. State lives in
 SQLite (`data/pipeline.db`).
 
+**A concept is ONE scene and ONE prompt (2026-08-26, Mike's call.)** The two-stage
+idea -> shot-list shape split a concept across up to six independently-rendered prompts,
+which is exactly what the scene bible existed to paper over; one paste-ready whole-scene
+prompt is what the video models actually take. `shootgen.generate_scene_concept` is the
+path every Create button uses (`/api/pipeline/run` — Studio's composer, Pipeline's
+"Generate scene", the Director brief): it reuses the proven gold-standard skeleton
+(`prompts/scene_brief_prompt.txt`, grounded style -> beats -> diegetic sound ->
+avoid-list), saves an ordinary `shoot_concepts` row whose `shots` is a ONE-element list,
+and deliberately does **not** prepend the scene bible — that anchor holds separate shots
+to one look, and there are none. No schema change: `shots` was always one JSON column, so
+the scene board, Director, render, and autopilot all keep working, and the older
+multi-shot concepts stay readable. The two-stage `generate_concept_ideas` ->
+`generate_shot_list` path still exists but nothing in the product calls it any more —
+retiring it (and the `shortlist_rate` label built on it) is a separate decision.
+
 ```
 locations/<name>/*.jpg  --locations.py-->  locations table (vision description per space)
                                                   |
@@ -240,11 +255,19 @@ is yours, in Resolve, by hand.
   `.sk` skin: *Stats* (the five pipeline numbers — shortlist/shoot rates, evaluator/gate
   agreement, first-try pass — server-rendered, plus the whole retrieval-eval surface via
   `evals_dev.js`), *Grade* (a
-  randomized grading queue: `/grade/draw?mode=shot|golden|any` deals a random ungraded concept
-  (`judge_overall IS NULL`) or golden query, `POST /grade/fresh` generates one throwaway idea
-  for grading that is **never saved** as a `shoot_concepts` row — verdicts post to the existing
-  `/concepts/.../verdict`, `/grade`, `/discard`, and `winners.record_and_learn` teach routes,
-  with `next` chaining straight into the next draw), *RAG Library* (the old `/library` content;
+  randomized grading queue: `/grade/draw?mode=shot|golden|any` deals a random ungraded
+  concept (`judge_overall IS NULL`) or golden query, `POST /grade/fresh` generates one
+  throwaway idea for grading that is **never saved** as a `shoot_concepts` row. **The
+  prompt is the grading surface** and it takes three verdicts: *approve* teaches it as
+  written (`winning_prompts`), *teach it* takes the better prompt you write and records
+  the PAIR — yours on the winning shelf as the fix, the model's on `avoid_prompts` —
+  and *deny* steers away. The pair is linked by `winning_prompts.pair_id` and each
+  document names the other, because the lesson is the contrast and a chunk holding one
+  side can't carry it; teaching with an empty box records nothing rather than quietly
+  filing the model's own prompt as the winner. All three post to the existing
+  `/concepts/.../verdict` routes through one `teach_verdict` helper, with `next` chaining
+  into the next draw. Legacy multi-prompt concepts additionally keep an idea-level
+  verdict, since there the idea is a thing apart from any one prompt), *RAG Library* (the old `/library` content;
   `/library/ingest` also takes a txt/md/pdf **file upload**, extracted server-side — pypdf for
   PDFs — before `rag.ingest_records`), *Settings* (the `src/settings.py` tunables + the channel
   autonomy/kill-switch/standing-note controls that lived on `/holds`), and *Dataset* (golden

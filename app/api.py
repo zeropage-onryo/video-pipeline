@@ -858,12 +858,15 @@ async def pipeline_run(request: Request):
         references = shootgen.reference_block(spark=prompt, client=None,
                                               db_path=db.DB_PATH)
         jobs.progress(job, 0.35,
-                      "generating concept"
+                      "writing the scene prompt"
                       + (f" · {len(image_refs)} image ref(s)" if image_refs else ""))
-        result = shootgen.generate_concept(
+        # One concept = one scene = one paste-ready prompt (2026-08-26).
+        # The old idea -> shot-list split is still reachable through the
+        # two-stage path; this button no longer produces it.
+        result = shootgen.generate_scene_concept(
             brand=brand, spark=prompt,
             gemini_client=genai.Client(api_key=api_key),
-            use_pov=True, db_path=db.DB_PATH, references=references,
+            db_path=db.DB_PATH, references=references,
             image_refs=image_refs or None,
         )
         title = (result.get("concept") or {}).get("title") or "untitled"

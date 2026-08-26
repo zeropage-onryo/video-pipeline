@@ -90,3 +90,64 @@ def test_realism_recipe_is_in_the_shot_prompts():
         text = (prompts / f).read_text()
         assert "RENDER REAL, NOT GLOSSY" in text
         assert "no glossy CGI" in text
+
+
+# ---------- a concept IS one scene and one prompt (2026-08-26) ----------
+
+def test_scene_concept_saves_exactly_one_prompt(tmp_path, monkeypatch):
+    """The whole point of the restructure: one concept, one shot, one
+    paste-ready prompt -- the thing generated, graded, and rendered."""
+    from src import db, preprod, shootgen
+    path = tmp_path / "scene.db"
+    db.init_db(path)
+    preprod.init(path)
+    monkeypatch.setattr(
+        shootgen, "generate_with_retry",
+        lambda client, model, contents:
+        '{"title": "Concrete Camouflage", "brief": "Ultra-realistic grounded video in 9:16…"}')
+
+    result = shootgen.generate_scene_concept(
+        brand="antihero", spark="a breathing pillar", gemini_client=object(),
+        db_path=path)
+
+    saved = preprod.get_concept(result["concept_id"], path=path)
+    assert saved["title"] == "Concrete Camouflage"
+    assert len(saved["shots"]) == 1
+    shot = saved["shots"][0]
+    assert shot["source"] == "AI" and shot["n"] == 1
+    assert shot["prompt"].startswith("Ultra-realistic grounded video")
+
+
+def test_scene_concept_does_not_prepend_the_scene_bible(tmp_path, monkeypatch):
+    """The bible holds SEPARATE shots to one look. With one shot there is
+    nothing to hold, and it would just be noise in the paste."""
+    from src import db, preprod, shootgen
+    path = tmp_path / "scene.db"
+    db.init_db(path)
+    preprod.init(path)
+    monkeypatch.setattr(
+        shootgen, "generate_with_retry",
+        lambda client, model, contents: '{"title": "T", "brief": "the prompt text"}')
+
+    result = shootgen.generate_scene_concept(
+        brand="antihero", gemini_client=object(), db_path=path)
+    prompt = preprod.get_concept(result["concept_id"], path=path)["shots"][0]["prompt"]
+    assert prompt == "the prompt text"
+    assert not prompt.startswith("Scene:")
+
+
+def test_scene_concept_validates_the_tool_per_brand(tmp_path, monkeypatch):
+    """Zero Page's tool allow-list still applies -- warnings advise, as
+    everywhere else, and never block the save."""
+    from src import db, preprod, shootgen
+    path = tmp_path / "scene.db"
+    db.init_db(path)
+    preprod.init(path)
+    monkeypatch.setattr(
+        shootgen, "generate_with_retry",
+        lambda client, model, contents: '{"title": "T", "brief": "b"}')
+
+    result = shootgen.generate_scene_concept(
+        brand="zeropage", gemini_client=object(), db_path=path, tool="VEO")
+    assert result["warnings"]                       # VEO is not a Zero Page tool
+    assert preprod.get_concept(result["concept_id"], path=path) is not None

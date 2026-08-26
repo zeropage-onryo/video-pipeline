@@ -574,32 +574,52 @@ async def grade_fresh(request: Request):
         status_code=303)
 
 
+# The three verdicts a graded prompt can get.
+#   approve  -- it's good as written        -> winning_prompts
+#   teach    -- here is a better one        -> the pair (see below)
+#   deny     -- it's bad                    -> avoid_prompts
+VERDICTS = ("approve", "teach", "deny")
+
+
 def teach_verdict(tool, text, form, *, video_ref, subject, path):
     """
-    One teaching submission from any of the three grade forms.
+    One teaching submission from any grade form. Returns the message.
 
-    "Didn't work" with a replacement filled in is the shape worth having:
-    it records BOTH halves, linked -- the failure on the avoid shelf, the
-    fix on the winning one, each naming the other. Without the pairing a
-    person who edits the box to the working prompt and hits deny teaches
-    the pipeline to avoid the good prompt, which is exactly backwards.
-    Returns the message to show.
+    "Teach it" is the valuable one: the model's prompt and the better one
+    you wrote are recorded as a linked PAIR -- yours on the winning shelf
+    as the fix, the model's on the avoid shelf -- each document naming
+    the other, because the lesson is the contrast and a chunk holding one
+    side alone can't carry it.
+
+    Deny still accepts an optional replacement (same pairing), which is
+    what "teach" is underneath. Without the pairing, editing the box to
+    the good prompt and hitting deny would file the GOOD prompt as
+    something to avoid -- exactly backwards, and silent.
     """
-    verdict = "didnt_work" if (form.get("verdict") or "worked") == "didnt_work" else "worked"
+    raw = (form.get("verdict") or "approve").strip().lower()
+    # legacy form values still post worked/didnt_work
+    verdict = {"worked": "approve", "didnt_work": "deny"}.get(raw, raw)
+    if verdict not in VERDICTS:
+        verdict = "approve"
     replacement = (form.get("replacement") or "").strip()
     note = form.get("note") or ""
 
-    if verdict == "didnt_work" and replacement:
+    if verdict == "teach" and not replacement:
+        return ("Nothing taught — 'Teach it' needs the better prompt. "
+                "Write it in the box, or use Approve / Deny.")
+
+    if replacement and verdict in ("teach", "deny"):
         result = winners.record_pair(
             tool, text, replacement, note=note, video_ref=video_ref, path=path)
         if result.get("ingested"):
-            return (f"Recorded both for {subject} — future generations avoid the "
-                    "first and imitate the fix.")
+            return (f"Taught {subject} — future generations imitate your version "
+                    "and avoid the one it wrote.")
     else:
         result = winners.record_and_learn(
-            tool, text, note=note, video_ref=video_ref, verdict=verdict, path=path)
+            tool, text, note=note, video_ref=video_ref,
+            verdict="didnt_work" if verdict == "deny" else "worked", path=path)
         if result.get("ingested"):
-            verb = "steer away from" if verdict == "didnt_work" else "imitate"
+            verb = "steer away from" if verdict == "deny" else "imitate"
             return f"Recorded {subject} — future generations will {verb} it."
     return ("Saved. Teaching is pending — start Postgres and try again to "
             f"ingest it into RAG. ({result.get('error') or 'store unavailable'})")

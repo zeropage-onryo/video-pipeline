@@ -458,16 +458,47 @@ def test_concepts_redirect_forwards_the_message():
     assert response.headers["location"] == "/studio?tab=grade&message=Recorded"
 
 
-def test_grade_tab_shows_a_drawn_concept(tmp_dev_db):
+SCENE_SHOT = [{"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
+               "desc": "The Waiting", "prompt": "Ultra-realistic grounded video in 9:16…"}]
+
+
+def test_grade_tab_grades_the_one_scene_prompt(tmp_dev_db):
+    """A concept is one scene and one prompt, so the prompt IS the
+    grading surface -- no separate idea form, three verdicts on it."""
     cid = preprod.save_concept(
-        {"title": "The Waiting", "hook": "a hand on the handle", "shots": CONCEPT_SHOTS},
+        {"title": "The Waiting", "hook": "", "shots": SCENE_SHOT},
         brand="antihero", path=tmp_dev_db,
     )
     text = client.get(f"/studio?tab=grade&mode=shot&concept_id={cid}").text
     assert "The Waiting" in text
-    assert "a hand on the handle" in text
-    assert "TEACH THIS IDEA" in text
+    assert "THE SCENE PROMPT" in text
+    assert "Ultra-realistic grounded video" in text
+    for value in ('value="approve"', 'value="teach"', 'value="deny"'):
+        assert value in text, value
+    assert "TEACH THE IDEA ITSELF" not in text     # nothing to grade apart from it
     assert "Grade taste + perf" in text
+
+
+def test_grade_tab_keeps_the_idea_form_for_legacy_shot_lists(tmp_dev_db):
+    """Concepts written before the change carry several prompts; there
+    the idea is a distinct thing and keeps its own verdict."""
+    cid = preprod.save_concept(
+        {"title": "Old", "hook": "h", "shots": [
+            dict(SCENE_SHOT[0]),
+            {"n": 2, "type": "BROLL", "source": "AI", "tool": "KLING",
+             "desc": "d", "prompt": "second prompt"}]},
+        brand="antihero", path=tmp_dev_db)
+    text = client.get(f"/studio?tab=grade&mode=shot&concept_id={cid}").text
+    assert "LEGACY SHOT LIST" in text
+    assert "TEACH THE IDEA ITSELF" in text
+    assert "second prompt" in text
+
+
+def test_grade_tab_says_so_when_a_concept_has_no_prompt(tmp_dev_db):
+    cid = preprod.save_concept({"title": "Bare", "shots": CONCEPT_SHOTS},
+                               brand="antihero", path=tmp_dev_db)
+    text = client.get(f"/studio?tab=grade&mode=shot&concept_id={cid}").text
+    assert "no prompt yet" in text
 
 
 def test_stats_tab_shows_shoot_rate(tmp_dev_db):
@@ -1717,7 +1748,7 @@ def test_backfill_with_describe_and_no_key_says_so(tmp_dev_db, monkeypatch):
 
 # ---------- "didn't work" can carry the prompt that did ----------
 
-def test_deny_with_a_replacement_records_both_halves(tmp_dev_db, monkeypatch):
+def test_teach_it_records_both_halves(tmp_dev_db, monkeypatch):
     from src import winners
     winners.init(tmp_dev_db)
     cid = preprod.save_concept({"title": "T", "shots": CONCEPT_SHOTS},
@@ -1728,11 +1759,11 @@ def test_deny_with_a_replacement_records_both_halves(tmp_dev_db, monkeypatch):
     response = client.post(
         f"/concepts/{cid}/shots/1/verdict",
         data={"text": "vague prompt", "replacement": "the fixed prompt",
-              "verdict": "didnt_work", "tool": "runway",
+              "verdict": "teach", "tool": "runway",
               "next": "/studio?tab=grade"},
         follow_redirects=False)
     assert response.status_code == 303
-    assert "Recorded both" in unquote(response.headers["location"])
+    assert "Taught" in unquote(response.headers["location"])
 
     rows = {w["verdict"]: w for w in winners.list_all(path=tmp_dev_db)}
     assert rows["didnt_work"]["prompt"] == "vague prompt"
@@ -1771,7 +1802,7 @@ def test_approve_ignores_a_stray_replacement(tmp_dev_db, monkeypatch):
     assert row["prompt"] == "good prompt" and row["verdict"] == "worked"
 
 
-def test_grade_tab_offers_the_replacement_field(tmp_dev_db):
+def test_grade_tab_offers_the_better_prompt_field(tmp_dev_db):
     cid = preprod.save_concept(
         {"title": "T", "shots": [{"n": 1, "type": "BROLL", "source": "AI",
                                   "tool": "RUNWAY", "desc": "d",
@@ -1779,4 +1810,82 @@ def test_grade_tab_offers_the_replacement_field(tmp_dev_db):
         brand="antihero", path=tmp_dev_db)
     page = client.get(f"/studio?tab=grade&mode=shot&concept_id={cid}").text
     assert 'name="replacement"' in page
-    assert "ACTUALLY WORKED" in page
+    assert "A BETTER PROMPT" in page
+
+
+# ---------- the three verdicts ----------
+
+def _scene_concept(path):
+    return preprod.save_concept(
+        {"title": "T", "shots": [{"n": 1, "type": "BROLL", "source": "AI",
+                                  "tool": "RUNWAY", "desc": "d",
+                                  "prompt": "the model's prompt"}]},
+        brand="antihero", path=path)
+
+
+@pytest.fixture
+def teachable(tmp_dev_db, monkeypatch):
+    from src import winners
+    winners.init(tmp_dev_db)
+    monkeypatch.setattr(app_main.winners, "ingest_to_rag",
+                        lambda entry_id, path=None: {"ok": True, "chunks": 1})
+    return tmp_dev_db
+
+
+def test_approve_teaches_the_prompt_as_written(teachable):
+    from src import winners
+    cid = _scene_concept(teachable)
+    response = client.post(f"/concepts/{cid}/shots/1/verdict",
+                           data={"text": "the model's prompt", "verdict": "approve"},
+                           follow_redirects=False)
+    assert "imitate it" in unquote(response.headers["location"])
+    [row] = winners.list_all(path=teachable)
+    assert row["verdict"] == "worked" and row["pair_id"] is None
+
+
+def test_teach_it_swaps_in_my_version_and_avoids_the_model_s(teachable):
+    from src import winners
+    cid = _scene_concept(teachable)
+    response = client.post(
+        f"/concepts/{cid}/shots/1/verdict",
+        data={"text": "the model's prompt", "replacement": "my better prompt",
+              "verdict": "teach"},
+        follow_redirects=False)
+    assert "Taught" in unquote(response.headers["location"])
+    rows = {w["verdict"]: w for w in winners.list_all(path=teachable)}
+    assert rows["worked"]["prompt"] == "my better prompt"
+    assert rows["didnt_work"]["prompt"] == "the model's prompt"
+    assert rows["worked"]["pair_id"] == rows["didnt_work"]["id"]
+
+
+def test_teach_it_without_a_better_prompt_records_nothing(teachable):
+    """Teaching nothing must not quietly file the model's own prompt as
+    the winner -- that would teach the opposite of the intent."""
+    from src import winners
+    cid = _scene_concept(teachable)
+    response = client.post(f"/concepts/{cid}/shots/1/verdict",
+                           data={"text": "the model's prompt", "verdict": "teach",
+                                 "replacement": "   "},
+                           follow_redirects=False)
+    assert "needs the better prompt" in unquote(response.headers["location"])
+    assert winners.list_all(path=teachable) == []
+
+
+def test_deny_steers_away(teachable):
+    from src import winners
+    cid = _scene_concept(teachable)
+    response = client.post(f"/concepts/{cid}/shots/1/verdict",
+                           data={"text": "the model's prompt", "verdict": "deny"},
+                           follow_redirects=False)
+    assert "steer away" in unquote(response.headers["location"])
+    [row] = winners.list_all(path=teachable)
+    assert row["verdict"] == "didnt_work"
+
+
+def test_legacy_verdict_values_still_work(teachable):
+    """Anything still posting worked/didnt_work keeps working."""
+    from src import winners
+    cid = _scene_concept(teachable)
+    client.post(f"/concepts/{cid}/shots/1/verdict",
+                data={"text": "p", "verdict": "worked"}, follow_redirects=False)
+    assert winners.list_all(path=teachable)[0]["verdict"] == "worked"

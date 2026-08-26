@@ -181,8 +181,9 @@ def test_pipeline_run_generates_through_a_job(tmp_db, monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     import src.shootgen as shootgen
     monkeypatch.setattr(shootgen, "reference_block", lambda **k: "")
+    # the Create button writes ONE scene prompt per concept now
     monkeypatch.setattr(
-        shootgen, "generate_concept",
+        shootgen, "generate_scene_concept",
         lambda **k: {"concept_id": 7, "concept": {"title": "Generated"}, "warnings": []})
     monkeypatch.setattr(api_mod, "_gemini_key", lambda: "k")
 
@@ -238,7 +239,7 @@ def test_pipeline_run_carries_picked_media_as_image_refs(tmp_db, photo_root,
         seen.update(kwargs)
         return {"concept_id": 1, "concept": {"title": "T"}, "warnings": []}
 
-    monkeypatch.setattr(shootgen, "generate_concept", fake_generate)
+    monkeypatch.setattr(shootgen, "generate_scene_concept", fake_generate)
     monkeypatch.setattr(api_mod, "_gemini_key", lambda: "k")
 
     response = client.post("/api/pipeline/run", data={

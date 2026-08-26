@@ -1,10 +1,23 @@
 {# The Grade tab: a randomized grading queue -- draw one prompt, grade
-   it, get the next one. Three sources: a random ungraded concept (the
-   /concepts affordances reshuffled into a queue), a random golden
-   query run through live retrieval, and a fresh throwaway prompt that
-   is generated but never saved. All the verdict forms post to the
-   EXISTING teach/judge routes; `next` chains straight into the next
-   draw so grading flows without going back through a list. #}
+   it, get the next one. Three sources: a random ungraded concept, a
+   random golden query run through live retrieval, and a fresh throwaway
+   prompt that is generated but never saved.
+
+   A concept is ONE scene and one prompt now (2026-08-26), so the prompt
+   IS the grading surface: approve it, teach a better one, or deny it.
+   Concepts written before the change carry several prompts; each gets
+   the same three actions, and only those older ones still show the
+   separate idea-level form -- with one prompt there is no "idea" apart
+   from it. Every form posts to the EXISTING teach routes, and `next`
+   chains into the following draw so grading flows. #}
+
+{% macro verdict_actions(indent) -%}
+<div style="display:flex; gap:8px; flex-wrap:wrap">
+  <button type="submit" name="verdict" value="approve" class="copy">✓ Approve — teach it as written</button>
+  <button type="submit" name="verdict" value="teach" class="copy">✎ Teach it — use my version</button>
+  <button type="submit" name="verdict" value="deny" class="copy">✗ Deny — steer away</button>
+</div>
+{%- endmacro %}
 
 <div class="drawrow">
   <a class="btnw" href="/grade/draw?mode=shot">Draw ungraded concept ({{ grade.ungraded_count }})</a>
@@ -18,9 +31,11 @@
 
 {% if grade.mode == "shot" and grade.concept %}
 {% set c = grade.concept %}
+{% set prompts = (c.shots or []) | selectattr("prompt") | list %}
+{% set one_scene = prompts | length == 1 %}
 <div class="panel">
   <div class="panel-head"><span class="id">SHOOT-{{ "%02d"|format(c.id) }} · {{ c.brand }}</span>
-    <span class="m">{{ "UNGRADED" if c.judge_overall is none else "JUDGE %.0f/10"|format(c.judge_overall) }}</span></div>
+    <span class="m">{{ "UNGRADED" if c.judge_overall is none else "JUDGE %.0f/10"|format(c.judge_overall) }}{% if not one_scene %} · {{ prompts | length }} PROMPTS (LEGACY SHOT LIST){% endif %}</span></div>
   <div class="panel-body">
     <h2 style="margin-top:0">{{ c.title }}</h2>
     {% if c.hook %}<div style="display:flex; gap:8px; align-items:flex-start"><span class="tag red">HOOK / 0:01</span><p style="margin:0">{{ c.hook }}</p></div>{% endif %}
@@ -31,59 +46,60 @@
     </div>
     {% endif %}
 
-    <div class="kicker" style="margin-top:16px">TEACH THIS IDEA — approve / deny, edit first if you want</div>
-    <form method="post" action="/concepts/{{ c.id }}/verdict" style="display:grid; gap:6px; margin-top:6px">
-      <input type="hidden" name="next" value="/grade/draw?mode=shot">
-      <textarea name="text" rows="3" style="width:100%">{{ c.title }}{% if c.hook %}
-HOOK: {{ c.hook }}{% endif %}{% if c.logline %}
-{{ c.logline }}{% endif %}</textarea>
-      <input type="text" name="note" placeholder="why (optional) — shown next to it in RAG">
-      <details>
-        <summary class="mono dim" style="font-size:11px; cursor:pointer">
-          …AND THE ONE THAT ACTUALLY WORKED (OPTIONAL — PAIRS THEM)</summary>
-        <textarea name="replacement" rows="3" style="width:100%; margin-top:6px"
-                  placeholder="Paste the version that worked. Deny then records both — this one taught as the fix, the one above as what to avoid — each naming the other."></textarea>
-      </details>
-      <div style="display:flex; gap:8px">
-        <button type="submit" name="verdict" value="worked" class="copy">✓ Approve — teach it</button>
-        <button type="submit" name="verdict" value="didnt_work" class="copy">✗ Deny — steer away</button>
-      </div>
-    </form>
+    {% if not prompts %}
+    <p class="dim" style="margin-top:14px">This concept carries no prompt yet — nothing to grade.
+      Plan it or discard it below.</p>
+    {% endif %}
 
-    {% for s in c.shots or [] %}
-    {% if s.source == "AI" and s.prompt %}
+    {% for s in prompts %}
     <div class="shot" style="margin-top:14px">
       <div class="shot-tags">
-        <span class="mono">{{ "%02d"|format(s.n or loop.index) }}</span>
-        <span class="tag steel">AI · {{ s.tool }}</span>
+        {% if not one_scene %}<span class="mono">{{ "%02d"|format(s.n or loop.index) }}</span>{% endif %}
+        <span class="tag steel">{{ s.tool or "AI" }}</span>
+        <span class="tag bone">{{ "THE SCENE PROMPT" if one_scene else s.type }}</span>
         {% if s.location %}<span class="tag faint">{{ s.location|upper }}</span>{% endif %}
+        {% if s.media_url %}<span class="tag">CLIP ATTACHED</span>{% endif %}
       </div>
-      {% if s.desc %}<p style="margin:0 0 6px">{{ s.desc }}</p>{% endif %}
-      <form method="post" action="/concepts/{{ c.id }}/shots/{{ s.n or loop.index }}/verdict" style="display:grid; gap:6px">
-        <input type="hidden" name="next" value="/studio?tab=grade&mode=shot&concept_id={{ c.id }}">
+      {% if s.reference_image %}
+      <img src="{{ s.reference_image }}" alt="Reference anchoring this scene"
+           style="max-width:100%; max-height:200px; border-radius:6px; margin:8px 0; display:block; border:1px solid #26323f">
+      {% endif %}
+      <form method="post" action="/concepts/{{ c.id }}/shots/{{ s.n or loop.index }}/verdict"
+            style="display:grid; gap:8px; margin-top:8px">
+        <input type="hidden" name="next" value="/grade/draw?mode=shot">
         <input type="hidden" name="tool" value="{{ s.tool or 'runway' }}">
-        <textarea name="text" rows="4" style="width:100%">{{ s.prompt }}</textarea>
+        <div class="kicker">THE PROMPT — edit it here only to fix a typo before approving</div>
+        <textarea name="text" rows="{{ 12 if one_scene else 6 }}" style="width:100%">{{ s.prompt }}</textarea>
+        <div class="kicker">A BETTER PROMPT — required for “Teach it”</div>
+        <textarea name="replacement" rows="{{ 12 if one_scene else 6 }}" style="width:100%"
+                  placeholder="Write the version that actually works. Teach it records yours on the winning shelf as the fix and the one above on the avoid shelf, each naming the other — so the next generation learns the difference, not just the target."></textarea>
         <input type="text" name="note" placeholder="why (optional) — shown next to it in RAG">
-        <details>
-          <summary class="mono dim" style="font-size:11px; cursor:pointer">
-            …AND THE PROMPT THAT ACTUALLY WORKED (OPTIONAL — PAIRS THEM)</summary>
-          <textarea name="replacement" rows="4" style="width:100%; margin-top:6px"
-                    placeholder="Paste the version that worked. Didn't-work then records both — this one on the winning shelf as the fix, the one above on the avoid shelf — each naming the other, so the contrast is what gets retrieved."></textarea>
-        </details>
-        <div style="display:flex; gap:8px">
-          <button type="submit" name="verdict" value="worked" class="copy">✓ Worked — teach it</button>
-          <button type="submit" name="verdict" value="didnt_work" class="copy">✗ Didn't work — steer away</button>
-        </div>
+        {{ verdict_actions(0) }}
       </form>
-      {% if s.director_prompt %}
+      {% if s.director_prompt and not one_scene %}
       <details style="margin-top:8px">
         <summary class="mono dim" style="font-size:11px; cursor:pointer">DIRECTOR PROMPT (OPENART)</summary>
         <p class="mono dim" style="font-size:12px; white-space:pre-wrap">{{ s.director_prompt }}</p>
       </details>
       {% endif %}
     </div>
-    {% endif %}
     {% endfor %}
+
+    {% if not one_scene %}
+    {# legacy multi-prompt concepts only: the idea is a separate thing
+       from any single prompt, so it keeps its own verdict #}
+    <div class="kicker" style="margin-top:18px">TEACH THE IDEA ITSELF — legacy shot-list concept</div>
+    <form method="post" action="/concepts/{{ c.id }}/verdict" style="display:grid; gap:8px; margin-top:6px">
+      <input type="hidden" name="next" value="/grade/draw?mode=shot">
+      <textarea name="text" rows="3" style="width:100%">{{ c.title }}{% if c.hook %}
+HOOK: {{ c.hook }}{% endif %}{% if c.logline %}
+{{ c.logline }}{% endif %}</textarea>
+      <textarea name="replacement" rows="3" style="width:100%"
+                placeholder="A better version of the idea — required for “Teach it”."></textarea>
+      <input type="text" name="note" placeholder="why (optional) — shown next to it in RAG">
+      {{ verdict_actions(0) }}
+    </form>
+    {% endif %}
 
     <div style="margin-top:16px; display:flex; gap:8px; flex-wrap:wrap">
       <form method="post" action="/concepts/{{ c.id }}/grade">
@@ -146,23 +162,17 @@ HOOK: {{ c.hook }}{% endif %}{% if c.logline %}
   <div class="panel-head"><span class="id">FRESH PROMPT · {{ f.brand }}</span><span class="m">THROWAWAY — GRADED, NEVER SAVED AS A CONCEPT</span></div>
   <div class="panel-body">
     {% if f.spark %}<p class="mono dim" style="font-size:12px">spark: {{ f.spark }}</p>{% endif %}
-    <form method="post" action="/grade/fresh/verdict" style="display:grid; gap:6px">
-      <textarea name="text" rows="5" style="width:100%">{{ f.title }}{% if f.hook %}
+    <form method="post" action="/grade/fresh/verdict" style="display:grid; gap:8px">
+      <textarea name="text" rows="6" style="width:100%">{{ f.title }}{% if f.hook %}
 HOOK: {{ f.hook }}{% endif %}{% if f.logline %}
 {{ f.logline }}{% endif %}</textarea>
+      <div class="kicker">A BETTER PROMPT — required for “Teach it”</div>
+      <textarea name="replacement" rows="6" style="width:100%"
+                placeholder="Write the version that works. Teach it records yours as the fix and the one above as what to avoid."></textarea>
       <input type="text" name="note" placeholder="why (optional) — shown next to it in RAG">
-      <details>
-        <summary class="mono dim" style="font-size:11px; cursor:pointer">
-          …AND THE ONE THAT ACTUALLY WORKED (OPTIONAL — PAIRS THEM)</summary>
-        <textarea name="replacement" rows="3" style="width:100%; margin-top:6px"
-                  placeholder="Paste the version that worked. Deny then records both — this one taught as the fix, the one above as what to avoid — each naming the other."></textarea>
-      </details>
-      <div style="display:flex; gap:8px">
-        <button type="submit" name="verdict" value="worked" class="copy">✓ Approve — teach it</button>
-        <button type="submit" name="verdict" value="didnt_work" class="copy">✗ Deny — steer away</button>
-      </div>
+      {{ verdict_actions(0) }}
     </form>
-    <p class="dim" style="margin-top:10px; font-size:12px">Approve/deny feeds the same
+    <p class="dim" style="margin-top:10px; font-size:12px">Approve/teach/deny feeds the same
       winners + RAG teaching loop a real concept does; nothing lands in shoot_concepts.</p>
   </div>
 </div>
@@ -174,8 +184,8 @@ HOOK: {{ f.hook }}{% endif %}{% if f.logline %}
     <p class="dim">Draw something to grade: a random ungraded concept
       ({{ grade.ungraded_count }} waiting), a random golden query
       ({{ grade.golden_count }} in the set), or generate a fresh throwaway
-      prompt above. Verdicts teach the RAG shelves; taste grades store on
-      the concept.</p>
+      prompt above. Approve teaches the prompt as written, Teach it swaps in
+      your version and files the model's as what to avoid, Deny steers away.</p>
   </div>
 </div>
 {% endif %}
