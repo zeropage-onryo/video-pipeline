@@ -32,6 +32,7 @@ from src import (
     db,
     entities,
     evalstore,
+    inspiration,
     instagram,
     preprod,
     presets,
@@ -574,7 +575,6 @@ def pipeline_concepts(brand: Optional[str] = None, status: Optional[str] = None)
     return {
         "items": cards,
         "deny_reasons": list(DENY_REASONS),
-        "shortlist": preprod.shortlist_rate(path=db.DB_PATH),
         "shoot": preprod.shoot_rate(path=db.DB_PATH),
     }
 
@@ -811,6 +811,31 @@ def _to_jpeg(data: bytes) -> Optional[bytes]:
         return None   # not a readable image -- skip, never fail the run
 
 
+def scene_grounding(brand: str, spark) -> str:
+    """
+    Everything a scene generation grounds on, composed at the edge (the
+    reference_block contract: generators stay hermetic).
+
+    The brand's own inspiration accounts ride in front of the retrieved
+    references, brand-scoped so ANTIHERO's moto/noir riffs never leak
+    into Zero Page's faceless ideation. This used to live on the dev
+    console's /concepts/generate; that route went with the page, and
+    without it here the accounts would quietly stop steering anything.
+    Both halves degrade to "" rather than failing a generation.
+    """
+    from src import shootgen
+
+    references = shootgen.reference_block(spark=spark, client=None,
+                                          db_path=db.DB_PATH)
+    try:
+        insp = inspiration.combined_grounding(brand=brand, path=db.DB_PATH)
+    except Exception:
+        insp = ""
+    if insp:
+        return insp + "\n\n" + (references or "")
+    return references
+
+
 @router.post("/pipeline/run")
 async def pipeline_run(request: Request):
     """The Create button: one full concept from the composer's prompt,
@@ -855,8 +880,7 @@ async def pipeline_run(request: Request):
 
         from src import shootgen
         jobs.progress(job, 0.15, "grounding in references")
-        references = shootgen.reference_block(spark=prompt, client=None,
-                                              db_path=db.DB_PATH)
+        references = scene_grounding(brand, prompt)
         jobs.progress(job, 0.35,
                       "writing the scene prompt"
                       + (f" · {len(image_refs)} image ref(s)" if image_refs else ""))
@@ -1162,11 +1186,16 @@ def shot_reference_attach(concept_id: int, shot_n: int, body: ShotReferenceBody)
 
 @router.post("/concepts/{concept_id}/approve")
 def concept_approve(concept_id: int):
-    """Approve = worth planning. Queues stage two (the shot list), which
-    is exactly the pick shortlist_rate measures."""
+    """Approve an idea = write ITS scene prompt (2026-08-26). Stage two
+    used to explode an idea into a shot list; a concept is one scene now,
+    so this fills in that one prompt. Only an idea needs it -- a concept
+    that already carries its scene has nothing to write."""
     concept = preprod.get_concept(concept_id, path=db.DB_PATH)
     if concept is None:
         return _error(404, "not_found", "no such concept")
+    if concept.get("shots"):
+        return _error(409, "already_written",
+                      "this concept already has its scene prompt")
     api_key = _gemini_key()
     if not api_key:
         return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
@@ -1175,18 +1204,21 @@ def concept_approve(concept_id: int):
         from google import genai
 
         from src import shootgen
-        jobs.progress(job, 0.3, "planning shot list")
-        result = shootgen.generate_shot_list(
+        jobs.progress(job, 0.2, "grounding in references")
+        references = shootgen.reference_block(
+            spark=concept.get("title"), db_path=db.DB_PATH)
+        jobs.progress(job, 0.4, "writing the scene prompt")
+        result = shootgen.write_scene_for_concept(
             concept_id, gemini_client=genai.Client(api_key=api_key),
-            db_path=db.DB_PATH,
+            references=references, db_path=db.DB_PATH,
         )
         warnings = result.get("warnings") or []
-        detail = f"{len((result.get('plan') or {}).get('shots', []))} shots"
+        detail = "scene written"
         if warnings:
             detail += f" · {len(warnings)} warning(s)"
         return {"ref_id": concept_id, "detail": detail}
 
-    job = jobs.start("plan", f"shot list · {concept['title']}", work)
+    job = jobs.start("plan", f"scene · {concept['title']}", work)
     return {"job_id": job["id"], "concept_id": concept_id}
 
 

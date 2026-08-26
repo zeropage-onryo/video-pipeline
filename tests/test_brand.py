@@ -3,10 +3,11 @@ Brand switcher / full separation (BACKLOG #7): the active brand rides a
 cookie, drives generation, and filters holds + analytics so ANTIHERO and
 Zero Page never blur.
 """
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 
-import app.main as app_main
 from app.main import DEFAULT_BRAND, active_brand, app
 from src import autonomy, db, preprod
 
@@ -63,20 +64,32 @@ def test_holds_are_filtered_to_the_active_brand(tmp_db, monkeypatch):
     assert reasons == ["ZEROPAGE-REASON-XYZ"]
 
 
-def test_concepts_generate_uses_the_active_brand(tmp_db, monkeypatch):
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    monkeypatch.setattr(app_main.genai, "Client", lambda **k: object())
-    monkeypatch.setattr(app_main.shootgen, "reference_block", lambda **k: "")
+def test_generation_uses_the_active_brand(tmp_db, monkeypatch):
+    """The brand cookie drives which brand a scene is written for --
+    through /api/pipeline/run now that /concepts/generate is gone."""
+    import src.shootgen as shootgen
+    from app import api as api_mod
+    from app import auth, jobs
+
+    stub = {"id": 1, "email": "t@example.com", "display_name": "T"}
+    monkeypatch.setattr(auth, "current_user", lambda request: stub)
+    monkeypatch.setattr(api_mod, "_gemini_key", lambda: "k")
+    monkeypatch.setattr(api_mod, "scene_grounding", lambda brand, spark: "")
+    monkeypatch.setattr("google.genai.Client", lambda **k: object())
     captured = {}
 
     def fake_gen(brand, **k):
         captured["brand"] = brand
         return {"concept": {"title": "X"}, "warnings": [], "concept_id": 1}
 
-    monkeypatch.setattr(app_main.shootgen, "generate_concept", fake_gen)
+    monkeypatch.setattr(shootgen, "generate_scene_concept", fake_gen)
     client.cookies.set("brand", "zeropage")
-    client.post("/concepts/generate", data={"spark": "s"}, follow_redirects=False)
+    job_id = client.post("/api/pipeline/run", data={"prompt": "s"}).json()["job_id"]
     client.cookies.clear()
+    for _ in range(200):
+        if jobs.get(job_id)["status"] in ("done", "failed"):
+            break
+        time.sleep(0.02)
     assert captured["brand"] == "zeropage"
 
 

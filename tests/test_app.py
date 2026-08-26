@@ -96,13 +96,16 @@ def test_studio_is_the_dev_studio_shell(tmp_dev_db):
     assert 'action="/studio/assist"' not in response.text
 
 
-def test_stats_tab_shows_the_five_pipeline_metrics(tmp_dev_db):
-    """The five numbers that used to live on /ui's Concept tab render
-    here now, server-side, next to the retrieval-eval instruments."""
+def test_stats_tab_shows_the_pipeline_metrics(tmp_dev_db):
+    """The numbers that used to live on /ui's Concept tab render here,
+    server-side, next to the retrieval-eval instruments. Shortlist rate
+    went with the shot-list stage — with one scene per concept there is
+    no planning step to measure."""
     text = client.get("/studio?tab=stats").text
-    for label in ("Shortlist rate", "Shoot rate", "Evaluator agreement",
+    for label in ("Shoot rate", "Evaluator agreement",
                   "Gate agreement", "First-try pass"):
         assert label in text, label
+    assert "Shortlist rate" not in text
     assert "evals_dev.js" in text
     assert "GOLDEN SET" in text
 
@@ -529,80 +532,18 @@ def test_post_mark_concept_shot_404s_for_missing_concept(tmp_preprod_db):
     assert client.post("/concepts/999/shot").status_code == 404
 
 
-def test_post_generate_concept_creates_ideas(tmp_preprod_db, monkeypatch):
-    preprod.add_location("hallway", SAMPLE_SPACE, path=tmp_preprod_db)
-    monkeypatch.setattr(
-        app_main.shootgen, "generate_concept_ideas",
-        lambda **kw: {"concept_ids": [1], "ideas": [{"title": "X"}]},
-    )
-    response = client.post("/concepts/generate",
-                           data={"brand": "antihero", "spark": "a door", "mode": "ideas"},
-                           follow_redirects=False)
-    assert response.status_code in (302, 303, 307)
-    assert "message=" in response.headers["location"]
 
 
-def test_post_generate_concept_reports_failure_without_breaking(tmp_preprod_db, monkeypatch):
-    def boom(**kw):
-        raise ValueError("no locations described yet")
-
-    monkeypatch.setattr(app_main.shootgen, "generate_concept_ideas", boom)
-    response = client.post("/concepts/generate",
-                           data={"brand": "antihero", "mode": "ideas"},
-                           follow_redirects=False)
-    assert response.status_code in (302, 303, 307)
-    assert "message=" in response.headers["location"]
 
 
 # ---------- two-stage concepts in the UI ----------
 
-def test_post_generate_makes_ideas_not_one_concept(tmp_preprod_db, monkeypatch):
-    preprod.add_location("hallway", SAMPLE_SPACE, path=tmp_preprod_db)
-    monkeypatch.setattr(
-        app_main.shootgen, "generate_concept_ideas",
-        lambda **kw: {"concept_ids": [1, 2, 3], "ideas": [{"title": "A"}] * 3},
-    )
-    response = client.post("/concepts/generate",
-                           data={"brand": "antihero", "mode": "ideas"},
-                           follow_redirects=False)
-    assert response.status_code in (302, 303, 307)
-    assert "message=" in response.headers["location"]
 
 
-def test_post_shotlist_plans_a_chosen_idea(tmp_preprod_db, monkeypatch):
-    concept_id = preprod.save_concept({"title": "Void Signal"}, brand="antihero",
-                                      path=tmp_preprod_db)
-    monkeypatch.setattr(
-        app_main.shootgen, "generate_shot_list",
-        lambda cid, **kw: {"concept_id": cid, "plan": {}, "warnings": []},
-    )
-    response = client.post(f"/concepts/{concept_id}/shotlist", follow_redirects=False)
-    assert response.status_code in (302, 303, 307)
-    assert "message=" in response.headers["location"]
 
 
-def test_post_shotlist_404s_for_missing_concept(tmp_preprod_db):
-    assert client.post("/concepts/999/shotlist").status_code == 404
 
 
-def test_post_shotlist_reports_failure_without_breaking(tmp_preprod_db, monkeypatch):
-    concept_id = preprod.save_concept({"title": "T"}, brand="antihero", path=tmp_preprod_db)
-
-    def boom(cid, **kw):
-        raise Exception("model unavailable")
-
-    monkeypatch.setattr(app_main.shootgen, "generate_shot_list", boom)
-    response = client.post(f"/concepts/{concept_id}/shotlist", follow_redirects=False)
-    assert response.status_code in (302, 303, 307)
-
-
-def test_stats_tab_shows_shortlist_rate(tmp_dev_db):
-    ids = preprod.save_concept_ideas(
-        [{"title": f"Idea {n}"} for n in range(4)], brand="antihero", path=tmp_dev_db,
-    )
-    preprod.update_concept_shots(ids[0], {"shots": CONCEPT_SHOTS}, path=tmp_dev_db)
-    response = client.get("/studio?tab=stats")
-    assert "Shortlist rate · 1/4" in response.text
 
 
 # ---------- navigation ----------
@@ -746,87 +687,12 @@ def test_location_photo_refuses_to_escape_the_locations_dir(tmp_preprod_db, tmp_
 
 # ---------- generate: full concept vs ideas ----------
 
-def test_post_generate_returns_a_full_concept_by_default(tmp_preprod_db, monkeypatch):
-    """The main button behaves like the original generator: one
-    complete concept, shot list included, in one go."""
-    preprod.add_location("hallway", SAMPLE_SPACE, path=tmp_preprod_db)
-    called = {}
-
-    def fake(**kw):
-        called["full"] = True
-        return {"concept_id": 1, "concept": {"title": "Void Signal"}, "warnings": []}
-
-    monkeypatch.setattr(app_main.shootgen, "generate_concept", fake)
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-
-    response = client.post("/concepts/generate", data={"brand": "antihero"},
-                           follow_redirects=False)
-    assert response.status_code in (302, 303, 307)
-    assert called.get("full") is True
-
-
-def test_generate_passes_only_the_picked_cast(tmp_preprod_db, monkeypatch):
-    """The picker: checked characters/props become the {cast} block; the
-    unchecked stay out of it."""
-    from src import entities
-    entities.init(tmp_preprod_db)
-    mike = entities.add_character("Mike — on camera", role="protagonist",
-                                  path=tmp_preprod_db)
-    entities.add_character("Guest — bartender", path=tmp_preprod_db)
-    preprod.add_location("hallway", SAMPLE_SPACE, path=tmp_preprod_db)
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    seen = {}
-
-    def fake(**kw):
-        seen["cast"] = kw.get("cast")
-        return {"concept_id": 1, "concept": {"title": "X"}, "warnings": []}
-
-    monkeypatch.setattr(app_main.shootgen, "generate_concept", fake)
-
-    client.post("/concepts/generate",
-                data={"brand": "antihero", "characters": str(mike)},
-                follow_redirects=False)
-
-    assert "Mike — on camera" in seen["cast"]
-    assert "Guest — bartender" not in seen["cast"]
-
-
-def test_generate_with_nothing_picked_keeps_the_old_behavior(tmp_preprod_db, monkeypatch):
-    """No picks -> cast=None -> generate_concept's own 'everything on
-    file' default, exactly as before the picker existed."""
-    preprod.add_location("hallway", SAMPLE_SPACE, path=tmp_preprod_db)
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    seen = {}
-
-    def fake(**kw):
-        seen["cast"] = kw.get("cast")
-        return {"concept_id": 1, "concept": {"title": "X"}, "warnings": []}
-
-    monkeypatch.setattr(app_main.shootgen, "generate_concept", fake)
-
-    client.post("/concepts/generate", data={"brand": "antihero"},
-                follow_redirects=False)
-
-    assert seen["cast"] is None
 
 
 
 
-def test_post_generate_ideas_when_asked(tmp_preprod_db, monkeypatch):
-    preprod.add_location("hallway", SAMPLE_SPACE, path=tmp_preprod_db)
-    called = {}
 
-    def fake(**kw):
-        called["ideas"] = True
-        return {"concept_ids": [1, 2], "ideas": [{"title": "A"}, {"title": "B"}]}
 
-    monkeypatch.setattr(app_main.shootgen, "generate_concept_ideas", fake)
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-
-    response = client.post("/concepts/generate", data={"brand": "antihero", "mode": "ideas"},
-                           follow_redirects=False)
-    assert response.status_code in (302, 303, 307)
-    assert called.get("ideas") is True
 
 
 # ---------- thumbnails ----------
@@ -885,25 +751,6 @@ def test_thumbnail_falls_back_to_the_original_if_it_cannot_be_made(tmp_preprod_d
 
 
 
-def test_generate_honours_pov_off(tmp_preprod_db, monkeypatch):
-    preprod.add_location("hallway", SAMPLE_SPACE, path=tmp_preprod_db)
-    seen = {}
-
-    def fake(**kw):
-        seen["use_pov"] = kw.get("use_pov")
-        return {"concept_id": 1, "concept": {"title": "X"}, "warnings": []}
-
-    monkeypatch.setattr(app_main.shootgen, "generate_concept", fake)
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-
-    client.post("/concepts/generate", data={"brand": "antihero"}, follow_redirects=False)
-    assert seen["use_pov"] is False, "unchecked box must mean the camera is off"
-
-    client.post("/concepts/generate", data={"brand": "antihero", "use_pov": "on"},
-                follow_redirects=False)
-    assert seen["use_pov"] is True
-
-
 
 
 def test_studio_renders_with_videos_logged_but_unmeasured(tmp_dev_db):
@@ -918,22 +765,6 @@ def test_studio_renders_with_videos_logged_but_unmeasured(tmp_dev_db):
     assert app_main.performance_rows(posted_within="all")["rows"] == []
 
 
-def test_generate_ideas_records_the_pov_choice(tmp_preprod_db, monkeypatch):
-    """
-    The camera choice is made at idea time but needed at shot-list time,
-    so it has to be stored on the concept rather than re-defaulted.
-    """
-    preprod.add_location("hallway", SAMPLE_SPACE, path=tmp_preprod_db)
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    seen = {}
-    monkeypatch.setattr(
-        app_main.shootgen, "generate_concept_ideas",
-        lambda **kw: seen.update(use_pov=kw.get("use_pov")) or
-        {"concept_ids": [1], "ideas": [{"title": "Idea"}]},
-    )
-    client.post("/concepts/generate", data={"brand": "antihero", "mode": "ideas"},
-                follow_redirects=False)   # checkbox absent -> POV off
-    assert seen["use_pov"] is False
 
 
 # ---------- /analytics ----------
@@ -1151,44 +982,8 @@ def test_references_pick_upload_requires_a_file():
 
 
 
-def test_concepts_generate_threads_picked_references_into_reference_block(tmp_preprod_db, monkeypatch):
-    preprod.add_location("hallway", SAMPLE_SPACE, path=tmp_preprod_db)
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-
-    seen = {}
-
-    def fake_reference_block(**kw):
-        seen.update(kw)
-        return ""
-
-    monkeypatch.setattr(app_main.shootgen, "reference_block", fake_reference_block)
-    monkeypatch.setattr(app_main.shootgen, "generate_concept",
-                        lambda **kw: {"concept_id": 1, "concept": {"title": "X"}, "warnings": []})
-
-    client.post("/concepts/generate",
-                data={"brand": "antihero", "picked_references": ["brief.txt"]},
-                follow_redirects=False)
-
-    assert seen["picked_sources"] == ["brief.txt"]
 
 
-def test_concepts_generate_with_nothing_picked_passes_none(tmp_preprod_db, monkeypatch):
-    preprod.add_location("hallway", SAMPLE_SPACE, path=tmp_preprod_db)
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-
-    seen = {}
-
-    def fake_reference_block(**kw):
-        seen.update(kw)
-        return ""
-
-    monkeypatch.setattr(app_main.shootgen, "reference_block", fake_reference_block)
-    monkeypatch.setattr(app_main.shootgen, "generate_concept",
-                        lambda **kw: {"concept_id": 1, "concept": {"title": "X"}, "warnings": []})
-
-    client.post("/concepts/generate", data={"brand": "antihero"}, follow_redirects=False)
-
-    assert seen["picked_sources"] is None
 
 
 def test_clean_title_strips_hashtags():

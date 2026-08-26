@@ -50,20 +50,6 @@ def test_generate_scene_brief_parses_json(monkeypatch):
     assert out["brief"].startswith("Ultra-realistic")
 
 
-def test_scene_mode_generates_and_stores_a_brief(tmp_db, monkeypatch):
-    monkeypatch.setenv("GEMINI_API_KEY", "k")
-    monkeypatch.setattr(app_main.genai, "Client", lambda **k: object())
-    monkeypatch.setattr(app_main.shootgen, "reference_block", lambda **k: "")
-    monkeypatch.setattr(app_main.shootgen, "generate_scene_brief",
-                        lambda **k: {"title": "Portal Room", "brief": "the scene prompt"})
-    client.cookies.set("brand", "antihero")
-    r = client.post("/concepts/generate",
-                    data={"mode": "scene", "spark": "portal room monster"},
-                    follow_redirects=False)
-    client.cookies.clear()
-    assert r.status_code == 303
-    briefs = preprod.list_scene_briefs(brand="antihero", path=tmp_db)
-    assert briefs and briefs[0]["title"] == "Portal Room"
 
 
 def test_gold_standard_is_injected_into_the_scene_brief_prompt():
@@ -97,10 +83,11 @@ def test_realism_recipe_is_in_the_shot_prompts():
 def test_scene_concept_saves_exactly_one_prompt(tmp_path, monkeypatch):
     """The whole point of the restructure: one concept, one shot, one
     paste-ready prompt -- the thing generated, graded, and rendered."""
-    from src import db, preprod, shootgen
+    from src import db, entities, preprod, shootgen
     path = tmp_path / "scene.db"
     db.init_db(path)
     preprod.init(path)
+    entities.init(path)
     monkeypatch.setattr(
         shootgen, "generate_with_retry",
         lambda client, model, contents:
@@ -121,10 +108,11 @@ def test_scene_concept_saves_exactly_one_prompt(tmp_path, monkeypatch):
 def test_scene_concept_does_not_prepend_the_scene_bible(tmp_path, monkeypatch):
     """The bible holds SEPARATE shots to one look. With one shot there is
     nothing to hold, and it would just be noise in the paste."""
-    from src import db, preprod, shootgen
+    from src import db, entities, preprod, shootgen
     path = tmp_path / "scene.db"
     db.init_db(path)
     preprod.init(path)
+    entities.init(path)
     monkeypatch.setattr(
         shootgen, "generate_with_retry",
         lambda client, model, contents: '{"title": "T", "brief": "the prompt text"}')
@@ -139,10 +127,11 @@ def test_scene_concept_does_not_prepend_the_scene_bible(tmp_path, monkeypatch):
 def test_scene_concept_validates_the_tool_per_brand(tmp_path, monkeypatch):
     """Zero Page's tool allow-list still applies -- warnings advise, as
     everywhere else, and never block the save."""
-    from src import db, preprod, shootgen
+    from src import db, entities, preprod, shootgen
     path = tmp_path / "scene.db"
     db.init_db(path)
     preprod.init(path)
+    entities.init(path)
     monkeypatch.setattr(
         shootgen, "generate_with_retry",
         lambda client, model, contents: '{"title": "T", "brief": "b"}')

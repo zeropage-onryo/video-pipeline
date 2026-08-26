@@ -130,7 +130,7 @@ def test_generate_concept_degrades_to_no_cast_note_when_nothing_on_file(tmp_db, 
     assert shootgen.NO_CAST_NOTE in captured["prompt"]
 
 
-def test_generate_shot_list_grounds_in_named_cast(tmp_db, monkeypatch):
+def test_write_scene_grounds_in_named_cast(tmp_db, monkeypatch):
     entities.add_character("Mike", role="protagonist", photo_count=5, path=tmp_db)
     concept_id = preprod.save_concept(
         {"title": "Void Signal", "hook": "h", "logline": "l"},
@@ -148,6 +148,6 @@ def test_generate_shot_list_grounds_in_named_cast(tmp_db, monkeypatch):
 
     monkeypatch.setattr(shootgen, "generate_with_retry", fake_generate)
 
-    shootgen.generate_shot_list(concept_id, gemini_client=None, db_path=tmp_db)
+    shootgen.write_scene_for_concept(concept_id, gemini_client=None, db_path=tmp_db)
 
     assert "Mike" in captured["prompt"]

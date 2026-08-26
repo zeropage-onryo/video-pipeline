@@ -6,7 +6,6 @@ Generation itself is mocked -- only the seeding, grounding, and routing run.
 import pytest
 from fastapi.testclient import TestClient
 
-import app.main as app_main
 from app.main import app
 from src import db, inspiration
 
@@ -15,8 +14,10 @@ client = TestClient(app)
 
 @pytest.fixture
 def tmp_db(tmp_path, monkeypatch):
+    from src import preprod
     path = tmp_path / "app.db"
     db.init_db(path)
+    preprod.init(path)              # reference_block reads the described rooms
     inspiration.init(path)          # seeds the three researched defaults
     monkeypatch.setattr(db, "DB_PATH", path)
     return path
@@ -52,39 +53,39 @@ def test_combined_grounding_lists_every_account(tmp_db):
 
 
 def test_antihero_generation_auto_grounds_on_inspiration(tmp_db, monkeypatch):
-    monkeypatch.setenv("GEMINI_API_KEY", "k")
-    monkeypatch.setattr(app_main.genai, "Client", lambda **k: object())
-    monkeypatch.setattr(app_main.shootgen, "reference_block", lambda **k: "")
-    captured = {}
-
-    def fake_ideas(brand, references, **k):
-        captured["brand"], captured["references"] = brand, references
-        return {"ideas": []}
-
-    monkeypatch.setattr(app_main.shootgen, "generate_concept_ideas", fake_ideas)
-    client.cookies.set("brand", "antihero")
-    client.post("/concepts/generate", data={"mode": "ideas"}, follow_redirects=False)
-    client.cookies.clear()
-    assert captured["brand"] == "antihero"
-    assert "INSPIRATION GROUNDING" in captured["references"]
-    assert "layed_black" in captured["references"]
+    """The accounts steer every real generation. This grounding used to
+    live on the dev console's /concepts/generate; it moved to the live
+    path (api.scene_grounding) when that route went with its page, and
+    without a test here it would have died silently."""
+    from app import api as api_mod
+    monkeypatch.setattr(api_mod.rag, "connect",
+                        lambda db_url=None: (_ for _ in ()).throw(ConnectionError("no store")))
+    references = api_mod.scene_grounding("antihero", "a night ride")
+    assert "INSPIRATION GROUNDING" in references
+    assert "layed_black" in references
 
 
 def test_zeropage_generation_does_not_auto_ground(tmp_db, monkeypatch):
-    monkeypatch.setenv("GEMINI_API_KEY", "k")
-    monkeypatch.setattr(app_main.genai, "Client", lambda **k: object())
-    monkeypatch.setattr(app_main.shootgen, "reference_block", lambda **k: "")
-    captured = {}
+    """Brand-scoped: ANTIHERO's moto/noir riffs must never leak into
+    Zero Page's faceless ideation."""
+    from app import api as api_mod
+    monkeypatch.setattr(api_mod.rag, "connect",
+                        lambda db_url=None: (_ for _ in ()).throw(ConnectionError("no store")))
+    references = api_mod.scene_grounding("zeropage", "a night ride")
+    assert "layed_black" not in references
 
-    def fake_ideas(brand, references, **k):
-        captured["references"] = references
-        return {"ideas": []}
 
-    monkeypatch.setattr(app_main.shootgen, "generate_concept_ideas", fake_ideas)
-    client.cookies.set("brand", "zeropage")
-    client.post("/concepts/generate", data={"mode": "ideas"}, follow_redirects=False)
-    client.cookies.clear()
-    assert "INSPIRATION GROUNDING" not in captured["references"]
+def test_scene_grounding_survives_a_dead_inspiration_store(tmp_db, monkeypatch):
+    """Grounding is an enhancement, never a gate."""
+    from app import api as api_mod
+    monkeypatch.setattr(api_mod.rag, "connect",
+                        lambda db_url=None: (_ for _ in ()).throw(ConnectionError("no store")))
+
+    def boom(**kwargs):
+        raise RuntimeError("inspiration table missing")
+
+    monkeypatch.setattr(api_mod.inspiration, "combined_grounding", boom)
+    assert api_mod.scene_grounding("antihero", "spark") == ""
 
 
 def test_add_and_delete_routes(tmp_db):

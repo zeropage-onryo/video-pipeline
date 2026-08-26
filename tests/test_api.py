@@ -275,19 +275,37 @@ def test_deny_validates_reasons(tmp_db):
     assert preprod.get_concept(concept_id, path=tmp_db) is not None
 
 
-def test_approve_plans_shot_list_via_job(tmp_db, monkeypatch):
-    concept_id = seed_concept(tmp_db)
+def test_approve_writes_the_scene_via_job(tmp_db, monkeypatch):
+    """Approve on an idea writes ITS one scene prompt (2026-08-26) --
+    stage two used to explode it into a shot list."""
     import src.shootgen as shootgen
+    monkeypatch.setattr(shootgen, "reference_block", lambda **k: "")
+    seen = {}
+
+    def fake(concept_id, **kwargs):
+        seen["concept_id"] = concept_id
+        return {"concept_id": concept_id, "shots": [{"n": 1}], "warnings": []}
+
+    monkeypatch.setattr(shootgen, "write_scene_for_concept", fake)
     monkeypatch.setattr(api_mod, "_gemini_key", lambda: "k")
-    monkeypatch.setattr(
-        shootgen, "generate_shot_list",
-        lambda cid, gemini_client=None, db_path=None:
-            {"concept_id": cid, "plan": {"shots": [1, 2, 3]}, "warnings": []})
+    monkeypatch.setattr("google.genai.Client", lambda **k: object())
+    concept_id = seed_concept(tmp_db, "An Idea")      # no shots yet
+
     job_id = client.post(f"/api/concepts/{concept_id}/approve").json()["job_id"]
     job = wait_for_job(job_id)
     assert job["status"] == "done"
-    assert "3 shots" in job["detail"]
+    assert seen["concept_id"] == concept_id
+    assert "scene written" in job["detail"]
 
+
+def test_approve_refuses_a_concept_that_already_has_its_scene(tmp_db):
+    """Nothing to write, and re-writing would silently replace the
+    prompt someone may already have graded."""
+    concept_id = seed_concept(tmp_db, "Done", shots=[
+        {"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY", "prompt": "p"}])
+    response = client.post(f"/api/concepts/{concept_id}/approve")
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "already_written"
 
 def test_concept_detail_carries_prompts_for_the_scene_board(tmp_db):
     concept_id = seed_concept(

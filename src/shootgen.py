@@ -680,8 +680,13 @@ def build_scene_brief_prompt(brand: str, spark=None, references: str = "",
 
 
 def parse_scene_brief_response(text: str) -> dict:
+    """`hook` and `logline` are the human-readable summary a card shows;
+    they're optional so an older response (or a model that skips them)
+    still parses -- the `brief` is the deliverable, they're the label."""
     data = json.loads(strip_fences(text))
     return {"title": (data.get("title") or "Untitled scene").strip(),
+            "hook": (data.get("hook") or "").strip(),
+            "logline": (data.get("logline") or "").strip(),
             "brief": (data.get("brief") or "").strip()}
 
 
@@ -722,6 +727,11 @@ def generate_scene_concept(brand: str, spark=None, gemini_client=None,
     look, and there are no separate shots to hold.
     """
     kwargs = {"path": db_path} if db_path is not None else {}
+    # cast=None means "everything on file", "" means explicitly none --
+    # the same convention generate_concept keeps.
+    if cast is None:
+        cast = format_cast(entities.list_characters(**kwargs),
+                           entities.list_props(**kwargs))
     prompt = build_scene_brief_prompt(brand, spark=spark, references=references,
                                       cast=cast)
     contents = prompt
@@ -734,9 +744,10 @@ def generate_scene_concept(brand: str, spark=None, gemini_client=None,
 
     shot = {"n": 1, "type": "BROLL", "source": "AI",
             "tool": (tool or DEFAULT_SCENE_TOOL).upper(),
-            "desc": parsed["title"], "prompt": parsed["brief"]}
-    concept = {"title": parsed["title"], "hook": "", "logline": "",
-               "shots": [shot]}
+            "desc": parsed["logline"] or parsed["title"],
+            "prompt": parsed["brief"]}
+    concept = {"title": parsed["title"], "hook": parsed["hook"],
+               "logline": parsed["logline"], "shots": [shot]}
     location_names = [loc["name"] for loc in preprod.list_locations(**kwargs)]
     allowed = ZEROPAGE_AI_TOOLS if brand == "zeropage" else None
     warnings = validate_concept(concept, location_names, allowed_tools=allowed)
@@ -746,60 +757,51 @@ def generate_scene_concept(brand: str, spark=None, gemini_client=None,
     return {"concept_id": concept_id, "concept": concept, "warnings": warnings}
 
 
-def generate_shot_list(concept_id: int, gemini_client=None, model: str = MODEL,
-                       use_pov=None, db_path=None) -> dict:
+def write_scene_for_concept(concept_id: int, gemini_client=None,
+                            model: str = MODEL, references: str = "", cast=None,
+                            db_path=None, tool: str = DEFAULT_SCENE_TOOL) -> dict:
     """
-    Stage two: the shot list for an idea you chose. This call is the
-    pick -- bothering to plan a shoot for an idea is the signal
-    shortlist_rate measures.
+    Stage two, for an idea you chose: write ITS scene prompt.
+
+    Replaces generate_shot_list (deleted 2026-08-26). The old stage two
+    exploded one idea into up to six independently-rendered prompts; now
+    an idea becomes exactly one scene, the same artifact
+    generate_scene_concept writes from scratch -- so an idea that arrives
+    from anywhere (the ideas stage, rework's evidence-grounded slate) has
+    a path to a real prompt instead of being a dead end.
+
+    The picked title/hook/logline are the LABEL and are never rewritten;
+    this fills in the shots only, through update_concept_shots.
     """
     kwargs = {"path": db_path} if db_path is not None else {}
     concept = preprod.get_concept(concept_id, **kwargs)
     if concept is None:
-        raise ValueError(f"no concept with id {concept_id}")
+        raise ValueError(f"no concept {concept_id}")
 
-    # The camera choice was made when the idea was generated; planning
-    # happens later, so it has to come from the concept rather than a
-    # default that quietly turns the camera back on.
-    if use_pov is None:
-        use_pov = concept.get("use_pov", False)
+    # the idea itself is the spark for its scene
+    spark = " -- ".join(str(part) for part in (
+        concept.get("title"), concept.get("hook"), concept.get("logline"),
+        concept.get("spark")) if part)
+    if cast is None:
+        cast = format_cast(entities.list_characters(**kwargs),
+                           entities.list_props(**kwargs))
+    prompt = build_scene_brief_prompt(concept.get("brand") or "antihero",
+                                      spark=spark, references=references, cast=cast)
+    parsed = parse_scene_brief_response(
+        generate_with_retry(gemini_client, model, prompt))
 
-    locations = preprod.list_locations(**kwargs)
-    if not locations:
-        print(NO_LOCATIONS_NOTE, file=sys.stderr)
-
-    cast = format_cast(entities.list_characters(**kwargs), entities.list_props(**kwargs))
-
-    prompt = build_shotlist_prompt(locations, concept["brand"], concept.get("client"),
-                                   concept, use_pov=use_pov, cast=cast)
-    plan = parse_plan_response(generate_with_retry(gemini_client, model, prompt))
-
-    is_zeropage = concept["brand"] == "zeropage"
-    if is_zeropage:
-        # Zero Page plans a scene concept, not a flat shot list -- flatten
-        # Scene -> Shots into plan["shots"] so storage and every existing
-        # shot-by-n consumer stay unchanged (see _flatten_zeropage_scenes).
-        # plan["scenes"] stays on the in-memory plan too, for any caller
-        # that wants the scene grouping directly.
-        plan["shots"] = _flatten_zeropage_scenes(plan.get("scenes"))
-
-    # The plan carries its own grade note but not title/logline (those live
-    # on the concept saved at the idea stage) -- the bible draws from both
-    # so every AI shot in this shoot stays anchored to the same scene.
-    bible = derive_scene_bible(concept.get("title"), concept.get("logline"), plan.get("grade"))
-    plan["shots"] = apply_scene_bible(plan.get("shots"), bible)
-
-    location_names = [loc["name"] for loc in locations]
-    allowed_tools = ZEROPAGE_AI_TOOLS if is_zeropage else None
-    warnings = validate_concept(plan, location_names, use_pov=use_pov, allowed_tools=allowed_tools)
-
-    used = {shot.get("location") for shot in plan.get("shots") or []}
-    location_ids = [loc["id"] for loc in locations if loc["name"] in used]
-
-    preprod.update_concept_shots(concept_id, plan, location_ids=location_ids,
+    shot = {"n": 1, "type": "BROLL", "source": "AI",
+            "tool": (tool or DEFAULT_SCENE_TOOL).upper(),
+            "desc": concept.get("logline") or concept.get("title") or "",
+            "prompt": parsed["brief"]}
+    location_names = [loc["name"] for loc in preprod.list_locations(**kwargs)]
+    allowed = ZEROPAGE_AI_TOOLS if concept.get("brand") == "zeropage" else None
+    warnings = validate_concept({**concept, "shots": [shot]}, location_names,
+                                use_pov=bool(concept.get("use_pov")),
+                                allowed_tools=allowed)
+    preprod.update_concept_shots(concept_id, {"shots": [shot]},
                                  warnings=warnings, **kwargs)
-    return {"concept_id": concept_id, "plan": plan, "warnings": warnings}
-
+    return {"concept_id": concept_id, "shots": [shot], "warnings": warnings}
 
 def parse_concept_response(text: str) -> dict:
     """The testable seam: raw model text -> the concept dict."""
@@ -1043,8 +1045,9 @@ def main(db_path=None):
     parser.add_argument("--spark", default=None, help="a direction to build the ideas around")
     parser.add_argument("--count", type=int, default=DEFAULT_IDEA_COUNT,
                         help="how many ideas to generate (one call regardless)")
-    parser.add_argument("--shotlist", type=int, default=None, metavar="CONCEPT_ID",
-                        help="skip idea generation and plan the shoot for this concept id")
+    parser.add_argument("--scene", type=int, default=None, metavar="CONCEPT_ID",
+                        help="skip idea generation and write the scene prompt "
+                             "for this concept id")
     parser.add_argument("--only-location", action="append", default=None, metavar="NAME",
                         help="pin this run to one location on file (repeatable for more "
                              "than one) -- a deliberate choice, so the variety nudge "
@@ -1063,17 +1066,20 @@ def main(db_path=None):
 
     gemini_client = genai.Client(api_key=api_key)
 
-    if args.shotlist is not None:
+    if args.scene is not None:
         try:
-            result = generate_shot_list(
-                args.shotlist, gemini_client=gemini_client, db_path=path,
+            result = write_scene_for_concept(
+                args.scene, gemini_client=gemini_client,
+                references=reference_block(spark=args.spark, client=args.client,
+                                           db_path=path),
+                db_path=path,
             )
         except ValueError as e:
             print(e, file=sys.stderr)
             sys.exit(1)
 
-        concept = preprod.get_concept(args.shotlist, path=path)
-        print(f"\nConcept {args.shotlist}")
+        concept = preprod.get_concept(args.scene, path=path)
+        print(f"\nConcept {args.scene}")
         print(format_concept_as_text(concept, result["warnings"]))
         return
 
@@ -1098,7 +1104,7 @@ def main(db_path=None):
         print()
 
     print("Plan a shoot for one:")
-    print(f"  venv/bin/python -m src.shootgen --shotlist {result['concept_ids'][0]}")
+    print(f"  venv/bin/python -m src.shootgen --scene {result['concept_ids'][0]}")
 
 
 if __name__ == "__main__":

@@ -373,11 +373,12 @@ GRADE_EMPTY = ("Nothing to grade right now — every concept is scored and "
 
 
 def _pipeline_metrics() -> dict:
-    """The five numbers (plus the kill state) that used to sit on /ui's
-    Concept tab -- computed server-side from the same calcs, because
-    Dev Studio is where the numbers about the system live now."""
+    """The numbers about how well the system is working, computed
+    server-side. shortlist_rate went with the shot-list stage
+    (2026-08-26): it measured "was this idea worth planning", and with
+    one scene written per concept there is no planning step to measure --
+    it would have read 100% forever."""
     return {
-        "shortlist": preprod.shortlist_rate(path=db.DB_PATH),
         "shoot": preprod.shoot_rate(path=db.DB_PATH),
         "agreement": autonomy.evaluator_agreement(path=db.DB_PATH),
         "gate": autonomy.prompt_gate_agreement(path=db.DB_PATH),
@@ -1690,124 +1691,6 @@ def inspiration_delete(handle: str):
         "/concepts?message=" + quote(f"Removed inspiration @{handle}."), status_code=303)
 
 
-def cast_from_picks(char_ids: list, prop_ids: list):
-    """
-    The generate form's optional picker -> the {cast} block. Nothing
-    picked returns None, which generate_concept treats as "everything
-    on file" -- the behavior the form had before the picker existed.
-    Unknown ids are dropped rather than erroring: a row deleted between
-    page load and submit shouldn't kill the generation.
-    """
-    char_ids = [int(x) for x in char_ids if str(x).strip()]
-    prop_ids = [int(x) for x in prop_ids if str(x).strip()]
-    if not char_ids and not prop_ids:
-        return None
-    characters = [c for c in (entities.get_character(i, path=db.DB_PATH)
-                              for i in char_ids) if c]
-    props = [p for p in (entities.get_prop(i, path=db.DB_PATH)
-                         for i in prop_ids) if p]
-    return shootgen.format_cast(characters, props)
-
-
-@dev.post("/concepts/generate")
-async def concepts_generate(request: Request):
-    form_data = await request.form()
-    form = dict(form_data)
-    brand = form.get("brand") or active_brand(request)
-    spark = (form.get("spark") or "").strip() or None
-    client_name = (form.get("client") or "").strip() or None
-    # an unchecked checkbox submits nothing, so absence means off
-    use_pov = bool(form.get("use_pov"))
-    cast = cast_from_picks(form_data.getlist("characters"), form_data.getlist("props"))
-    # None picked means every room on file (unchanged default); picking one
-    # or more is a deliberate "shoot here" for this run, not a shortage --
-    # see shootgen._apply_location_lock.
-    only_locations = form_data.getlist("locations") or None
-    # exact RAG source names picked off /references/pick -- the opt-in
-    # asset layer, on top of reference_block's automatic craft-advice one.
-    picked_references = [s for s in form_data.getlist("picked_references") if s.strip()]
-
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-    if not api_key:
-        return RedirectResponse(
-            f"/concepts?message={quote('GEMINI_API_KEY not set')}", status_code=303,
-        )
-
-    # Grounding is an enhancement, never a dependency: reference_block
-    # degrades to "" (with a stderr note) if the library is unreachable.
-    references = shootgen.reference_block(spark=spark, client=client_name,
-                                          db_path=db.DB_PATH,
-                                          picked_sources=picked_references or None)
-
-    # Under the hood: every brand grounds automatically on its own
-    # inspiration accounts (no button) -- brand-scoped so ANTIHERO's
-    # moto/noir personal-brand riffs never leak into Zero Page's
-    # faceless/uncanny ideation, and vice versa. Injected as reference
-    # grounding so it steers the ideas without polluting the stored spark.
-    insp = inspiration.combined_grounding(brand=brand, path=db.DB_PATH)
-    if insp:
-        references = insp + "\n\n" + (references or "")
-
-    # Generating is the deliverable, but a failed generation should leave
-    # the screen usable rather than 500 -- same contract as the YouTube import.
-    try:
-        gemini_client = genai.Client(api_key=api_key)
-        mode = (form.get("mode") or "").strip()
-        if mode == "scene":
-            result = shootgen.generate_scene_brief(
-                brand=brand, spark=spark, gemini_client=gemini_client,
-                references=references, cast=cast,
-            )
-            preprod.save_scene_brief(brand, result["title"], result["brief"],
-                                     spark=spark, path=db.DB_PATH)
-            message = f'Wrote scene brief "{result["title"]}" — copy it into your video model'
-        elif mode == "ideas":
-            result = shootgen.generate_concept_ideas(
-                brand=brand, client=client_name, spark=spark,
-                gemini_client=gemini_client, use_pov=use_pov, db_path=db.DB_PATH,
-                references=references, only_locations=only_locations,
-            )
-            message = f"Generated {len(result['ideas'])} ideas — plan the ones worth shooting"
-        else:
-            result = shootgen.generate_concept(
-                brand=brand, client=client_name, spark=spark,
-                gemini_client=gemini_client, use_pov=use_pov, db_path=db.DB_PATH,
-                references=references, cast=cast, only_locations=only_locations,
-            )
-            message = f"Generated \"{result['concept']['title']}\""
-            if result["warnings"]:
-                message += f" ({len(result['warnings'])} warning(s))"
-    except Exception as e:
-        message = f"Could not generate: {e}"
-
-    return RedirectResponse(f"/concepts?message={quote(message)}", status_code=303)
-
-
-def plan_concept(concept_id: int) -> str:
-    """
-    Stage two for one idea, as a message. Shared by the concepts screen
-    and the studio assistant so both record the same pick the same way --
-    the shortlist label can't depend on which screen you were standing on
-    when you decided.
-    """
-    concept = preprod.get_concept(concept_id, path=db.DB_PATH)
-    if concept is None:
-        return "That concept no longer exists."
-    try:
-        gemini_client = genai.Client(
-            api_key=os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-        )
-        result = shootgen.generate_shot_list(
-            concept_id, gemini_client=gemini_client, db_path=db.DB_PATH,
-        )
-        message = f"Planned \"{concept['title']}\""
-        if result["warnings"]:
-            message += f" ({len(result['warnings'])} warning(s))"
-        return message
-    except Exception as e:
-        return f"Could not plan {concept['title']}: {e}"
-
-
 def safe_next(value: Optional[str], default: str) -> str:
     """
     Which screen a form wants to land on. Only a site-relative path is
@@ -1818,25 +1701,6 @@ def safe_next(value: Optional[str], default: str) -> str:
     if candidate.startswith("/") and not candidate.startswith("//"):
         return candidate
     return default
-
-
-@dev.post("/concepts/{concept_id}/shotlist")
-def concepts_shotlist(concept_id: int, next: str = Form("")):
-    """Stage two. Bothering to plan a shoot for an idea is the pick
-    shortlist_rate measures."""
-    concept = preprod.get_concept(concept_id, path=db.DB_PATH)
-    if concept is None:
-        raise HTTPException(status_code=404, detail="concept not found")
-
-    destination = safe_next(next, "/concepts")
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-    if not api_key:
-        return RedirectResponse(
-            f"{destination}?message={quote('GEMINI_API_KEY not set')}", status_code=303,
-        )
-
-    message = plan_concept(concept_id)
-    return RedirectResponse(f"{destination}?message={quote(message)}", status_code=303)
 
 
 @dev.post("/concepts/{concept_id}/shot")

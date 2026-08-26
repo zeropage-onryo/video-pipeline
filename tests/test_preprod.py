@@ -254,24 +254,8 @@ def test_save_concept_ideas_saves_a_batch(tmp_db):
     assert all(c["has_shot_list"] is False for c in preprod.list_concepts(path=tmp_db))
 
 
-def test_shortlist_rate_measures_which_ideas_got_a_shot_list(tmp_db):
-    """
-    The pick: of the ideas generated, which were worth planning. Same
-    shape as pitch selection, one stage earlier than actually shooting.
-    """
-    ids = preprod.save_concept_ideas(
-        [{"title": f"Idea {n}"} for n in range(4)], brand="antihero", path=tmp_db,
-    )
-    preprod.update_concept_shots(ids[0], {"shots": SAMPLE_SHOTS}, path=tmp_db)
-
-    rate = preprod.shortlist_rate(path=tmp_db)
-    assert rate["generated"] == 4
-    assert rate["shortlisted"] == 1
-    assert rate["rate"] == 0.25
 
 
-def test_shortlist_rate_empty_is_safe(tmp_db):
-    assert preprod.shortlist_rate(path=tmp_db)["rate"] is None
 
 
 # ---------- warnings are kept, not just counted ----------

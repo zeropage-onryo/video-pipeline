@@ -46,4 +46,8 @@ Describe every look in cinematography and colour-grade terms only — never name
 films, directors, brands, or real people.
 
 Output STRICT JSON ONLY in this exact shape:
-{"title": "2-4 word cinematic title", "brief": "the full cohesive scene prompt — all five parts in order, ready to paste straight into a video model"}
+{"title": "2-4 word cinematic title", "hook": "the frame-1 image in one line — literally what fills the screen in the first second", "logline": "one plain sentence: what happens in this scene", "brief": "the full cohesive scene prompt — all five parts in order, ready to paste straight into a video model"}
+
+"hook" and "logline" are for a human scanning a list of scenes. They are NOT
+part of the prompt, must not repeat its style block, and must not be written in
+prompt language — plain sentences only.

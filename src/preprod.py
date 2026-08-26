@@ -514,42 +514,6 @@ def set_shot_reference_image(concept_id: int, shot_n, reference_url,
         )
 
 
-def shortlist_rate(path: Path | str = DB_PATH) -> dict[str, Any]:
-    """
-    Of the ideas generated, how many were worth planning a shoot for.
-    The earlier of the two labels -- shoot_rate answers what actually
-    got made, this answers what was worth the next ten minutes.
-    """
-    with connect(path) as conn:
-        rows = conn.execute(
-            """
-            SELECT prompt_hash,
-                   COUNT(*) AS generated,
-                   SUM(CASE WHEN shots_json != '[]' THEN 1 ELSE 0 END) AS shortlisted
-            FROM shoot_concepts
-            GROUP BY prompt_hash
-            """
-        ).fetchall()
-
-    by_prompt = [
-        {
-            "prompt_hash": r["prompt_hash"],
-            "generated": r["generated"],
-            "shortlisted": r["shortlisted"] or 0,
-            "rate": round((r["shortlisted"] or 0) / r["generated"], 3),
-        }
-        for r in rows
-    ]
-    generated = sum(b["generated"] for b in by_prompt)
-    shortlisted = sum(b["shortlisted"] for b in by_prompt)
-    return {
-        "generated": generated,
-        "shortlisted": shortlisted,
-        "rate": round(shortlisted / generated, 3) if generated else None,
-        "by_prompt": by_prompt,
-    }
-
-
 def mark_shot(concept_id: int, shot: bool = True, path: Path | str = DB_PATH) -> None:
     """Record that you actually went and shot this one -- the label."""
     with connect(path) as conn:

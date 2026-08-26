@@ -32,9 +32,9 @@ venv/bin/pip install -e .
 venv/bin/python -m src.locations [--locations-dir locations] [--force]
 
 # 0b. Generate concepts grounded in those spaces -> shoot_concepts table.
-#     Two stages: cheap ideas first, then a shot list for the ones you pick.
+#     Two stages: cheap ideas first, then ONE scene prompt for the ones you pick.
 venv/bin/python -m src.shootgen [--brand antihero|zeropage] [--client ...] [--spark ...] [--count 8]
-venv/bin/python -m src.shootgen --shotlist <concept_id>
+venv/bin/python -m src.shootgen --scene <concept_id>   # write THAT idea's scene prompt
 
 # 0c. Or one run through the autonomous content graph (LangGraph). No CLI --
 #     call it: grounds in cast+library (CRAG), generates, evaluates (JUDGE=1
@@ -134,7 +134,19 @@ to one look, and there are none. No schema change: `shots` was always one JSON c
 the scene board, Director, render, and autopilot all keep working, and the older
 multi-shot concepts stay readable. The two-stage `generate_concept_ideas` ->
 `generate_shot_list` path still exists but nothing in the product calls it any more —
-retiring it (and the `shortlist_rate` label built on it) is a separate decision.
+the shot-list stage itself is gone: `generate_shot_list` became
+`write_scene_for_concept` (approve an idea -> write ITS one scene prompt), so an idea
+from anywhere — the ideas stage, `rework`'s evidence-grounded slate — still has a path
+to a real prompt instead of being a dead end. **`shortlist_rate` was deleted with it**:
+it measured "was this idea worth planning a shot list for", and with one scene written
+per concept there is no planning step to measure — it would have read 100% forever.
+`shoot_rate` is the surviving label. The dev console's `/concepts/generate` went too
+(its page was already a redirect), taking the POV toggle, the location lock, the cast
+picker, and `picked_references` with it — all four had been unreachable from the product
+since `/studio/assist` and `/concepts` were retired. **Inspiration grounding did NOT go
+with it:** it only lived on that route, so it moved to `api.scene_grounding`, which
+composes `reference_block` + the brand's inspiration accounts for every real
+generation.
 
 ```
 locations/<name>/*.jpg  --locations.py-->  locations table (vision description per space)

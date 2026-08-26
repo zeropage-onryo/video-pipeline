@@ -111,7 +111,7 @@ async function renderConcepts() {
   const canPlan = state.caps['pipeline.run'];
   box.innerHTML = data.items.slice(0, 12).map(c => `
     <div class="concept${c.status !== 'idea' ? ' approved' : ''}" data-id="${c.id}">
-      <div class="cn">${esc(c.n)} · ${c.status === 'idea' ? 'idea' : c.shot_count + ' shots'}${c.ai_shot_count ? ' · ' + c.ai_shot_count + ' ai' : ''}</div>
+      <div class="cn">${esc(c.n)} · ${c.status === 'idea' ? 'idea — no scene yet' : (c.shot_count === 1 ? 'scene' : c.shot_count + ' shots · legacy')}</div>
       <h4>${esc(c.title)}</h4>
       <div class="clog">${esc(c.logline || c.hook || '')}</div>
       ${c.grounded.length ? `<div class="cplates">${c.grounded.map(g =>
@@ -120,12 +120,12 @@ async function renderConcepts() {
       ${c.warnings.length ? `<div class="cwarn">${c.warnings.map(w => '⚠ ' + esc(w)).join('<br>')}</div>` : ''}
       ${c.status === 'idea'
         ? `<div class="cact">
-             ${canPlan ? `<button class="approve" data-a="ok" data-id="${c.id}">Approve · plan shots</button>` : ''}
+             ${canPlan ? `<button class="approve" data-a="ok" data-id="${c.id}">Approve · write the scene</button>` : ''}
              <button class="denybtn" data-a="no" data-id="${c.id}">Deny</button>
              ${canPlan ? `<button class="denybtn" data-a="dir" data-id="${c.id}">Director</button>` : ''}
            </div>`
         : `<div class="cact">
-             <button class="approve" data-a="scene" data-id="${c.id}">Open scene · ${c.shot_count} shots</button>
+             <button class="approve" data-a="scene" data-id="${c.id}">Open scene${c.shot_count > 1 ? ' · ' + c.shot_count + ' shots' : ''}</button>
              <button class="denybtn" data-a="dir" data-id="${c.id}">Director</button>
            </div>`}
     </div>`).join('');
@@ -332,7 +332,7 @@ async function approve(id) {
     const card = document.querySelector(`.concept[data-id="${id}"]`);
     if (card) {
       const act = card.querySelector('.cact');
-      if (act) act.outerHTML = '<div class="cstate"><span class="dot run"></span>Planning shot list…</div>';
+      if (act) act.outerHTML = '<div class="cstate"><span class="dot run"></span>Writing the scene…</div>';
     }
   } catch (e) {
     stateline(document.getElementById('cstate'), 'error', e.message, renderConcepts);

@@ -650,70 +650,67 @@ def test_parse_plan_response_rejects_a_plan_with_no_shots():
         shootgen.parse_plan_response(json.dumps({"plan": {"shots": []}}))
 
 
-def test_generate_shot_list_fills_in_a_chosen_idea(tmp_db, monkeypatch):
+SCENE_RESPONSE = ('{"title": "Rewritten", "hook": "a hand", "logline": "he waits", '
+                  '"brief": "Ultra-realistic grounded video in 9:16. The scene."}')
+
+
+def test_write_scene_fills_in_a_chosen_idea(tmp_db, monkeypatch):
+    """Stage two writes the idea's ONE scene prompt (2026-08-26). The
+    picked title/hook/logline are the label and must survive intact."""
     concept_id = preprod.save_concept(
         {"title": "Void Signal", "hook": "h", "logline": "l"},
         brand="antihero", path=tmp_db,
     )
-    monkeypatch.setattr(shootgen, "generate_with_retry", lambda *a, **kw: PLAN_RESPONSE)
+    monkeypatch.setattr(shootgen, "generate_with_retry", lambda *a, **kw: SCENE_RESPONSE)
 
-    result = shootgen.generate_shot_list(
+    result = shootgen.write_scene_for_concept(
         concept_id, gemini_client=None, db_path=tmp_db,
     )
 
     assert result["warnings"] == []
     saved = preprod.get_concept(concept_id, path=tmp_db)
     assert saved["has_shot_list"] is True
-    assert saved["title"] == "Void Signal"  # the idea survived
-    assert [loc["name"] for loc in saved["locations"]] == ["hallway"]
+    assert len(saved["shots"]) == 1
+    assert saved["shots"][0]["prompt"].startswith("Ultra-realistic grounded")
+    assert saved["title"] == "Void Signal"      # the pick survived
+    assert saved["hook"] == "h" and saved["logline"] == "l"
 
 
-def test_generate_shot_list_anchors_ai_shots_to_the_scene_bible(tmp_db, monkeypatch):
-    """The plan carries the grade note but not title/logline -- those live
-    on the concept saved at the idea stage -- so the bible has to draw
-    from both to anchor every AI shot in the finished shoot."""
+def test_write_scene_seeds_the_prompt_with_the_idea(tmp_db, monkeypatch):
+    """The idea is the spark for its own scene, or stage two would write
+    something unrelated to what was picked."""
     concept_id = preprod.save_concept(
-        {"title": "Void Signal", "hook": "h", "logline": "he waits"},
-        brand="antihero", path=tmp_db,
-    )
-    plan_with_ai_shot = json.dumps({"plan": {
-        "duration": "12s",
-        "shots": [
-            {"n": 1, "type": "CHARACTER", "cam": "BMPCC", "location": "hallway",
-             "desc": "low angle", "light": "practical"},
-            {"n": 2, "type": "BROLL", "source": "AI", "tool": "KLING",
-             "location": "garage", "desc": "the handle turns",
-             "prompt": "a door handle turning slowly in the dark"},
-        ],
-        "edit": "hard cuts",
-        "grade": "crushed shadows",
-    }})
-    monkeypatch.setattr(shootgen, "generate_with_retry", lambda *a, **kw: plan_with_ai_shot)
+        {"title": "Void Signal", "hook": "a hand on the handle", "logline": "he waits"},
+        brand="antihero", path=tmp_db)
+    seen = {}
 
-    shootgen.generate_shot_list(concept_id, gemini_client=None, db_path=tmp_db)
+    def fake(client, model, contents):
+        seen["prompt"] = contents
+        return SCENE_RESPONSE
 
-    saved = preprod.get_concept(concept_id, path=tmp_db)
-    ai_shot = next(s for s in saved["shots"] if s.get("source") == "AI")
-    assert ai_shot["prompt"].startswith("Scene: Void Signal -- he waits -- Grade: crushed shadows")
-    assert ai_shot["prompt"].endswith("a door handle turning slowly in the dark")
+    monkeypatch.setattr(shootgen, "generate_with_retry", fake)
+    shootgen.write_scene_for_concept(concept_id, gemini_client=None, db_path=tmp_db)
+    assert "Void Signal" in seen["prompt"]
+    assert "a hand on the handle" in seen["prompt"]
 
 
-def test_generate_shot_list_validates_the_plan(tmp_db, monkeypatch):
-    concept_id = preprod.save_concept({"title": "T"}, brand="antihero", path=tmp_db)
-    bad = json.loads(PLAN_RESPONSE)
-    bad["plan"]["shots"][0]["location"] = "rooftop helipad"
-    monkeypatch.setattr(shootgen, "generate_with_retry", lambda *a, **kw: json.dumps(bad))
 
-    result = shootgen.generate_shot_list(concept_id, gemini_client=None, db_path=tmp_db)
 
-    assert any("rooftop helipad" in w for w in result["warnings"])
+def test_write_scene_validates_and_still_saves(tmp_db, monkeypatch):
+    """Prompts request, code advises: a warning never loses the scene."""
+    concept_id = preprod.save_concept({"title": "T"}, brand="zeropage", path=tmp_db)
+    monkeypatch.setattr(shootgen, "generate_with_retry", lambda *a, **kw: SCENE_RESPONSE)
+
+    result = shootgen.write_scene_for_concept(
+        concept_id, gemini_client=None, db_path=tmp_db, tool="VEO")
+
+    assert any("VEO" in w for w in result["warnings"])   # not a Zero Page tool
     assert preprod.get_concept(concept_id, path=tmp_db)["has_shot_list"] is True
 
 
-def test_generate_shot_list_rejects_missing_concept(tmp_db):
-    with pytest.raises(ValueError, match="no concept"):
-        shootgen.generate_shot_list(999, gemini_client=None, db_path=tmp_db)
-
+def test_write_scene_rejects_a_missing_concept(tmp_db):
+    with pytest.raises(ValueError):
+        shootgen.write_scene_for_concept(999, gemini_client=None, db_path=tmp_db)
 
 # ---------- POV camera toggle ----------
 
@@ -800,37 +797,13 @@ def test_generated_concept_keeps_its_warnings_in_the_database(tmp_db, monkeypatc
     assert any("rooftop helipad" in w for w in stored)
 
 
-def test_shot_list_warnings_survive_too(tmp_db, monkeypatch):
-    concept_id = preprod.save_concept({"title": "T"}, brand="antihero", path=tmp_db)
-    bad = json.loads(PLAN_RESPONSE)
-    bad["plan"]["shots"][0]["location"] = "rooftop helipad"
-    monkeypatch.setattr(shootgen, "generate_with_retry", lambda *a, **kw: json.dumps(bad))
-
-    shootgen.generate_shot_list(concept_id, gemini_client=None, db_path=tmp_db)
-    stored = preprod.get_concept(concept_id, path=tmp_db)["warnings"]
-    assert any("rooftop helipad" in w for w in stored)
-
-
-def test_shot_list_inherits_the_concepts_pov_setting(tmp_db, monkeypatch):
-    """
-    Planning happens after generating, so the shot list must take the
-    camera choice from the concept rather than defaulting it back on --
-    otherwise you get ACTION5 shots for a shoot with no action cam, and
-    validate_concept won't flag them either.
-    """
-    concept_id = preprod.save_concept(
-        {"title": "T"}, brand="antihero", use_pov=False, path=tmp_db,
-    )
-    seen = {}
-
-    def fake(client, model, prompt):
-        seen["prompt"] = prompt
-        return PLAN_RESPONSE
-
-    monkeypatch.setattr(shootgen, "generate_with_retry", fake)
-    shootgen.generate_shot_list(concept_id, gemini_client=None, db_path=tmp_db)
-    assert "ACTION5" not in seen["prompt"]
-
+def test_scene_warnings_survive_on_the_row(tmp_db, monkeypatch):
+    """Warnings are stored on the concept, not just returned."""
+    concept_id = preprod.save_concept({"title": "T"}, brand="zeropage", path=tmp_db)
+    monkeypatch.setattr(shootgen, "generate_with_retry", lambda *a, **kw: SCENE_RESPONSE)
+    shootgen.write_scene_for_concept(concept_id, gemini_client=None,
+                                     db_path=tmp_db, tool="VEO")
+    assert preprod.get_concept(concept_id, path=tmp_db)["warnings"]
 
 # ---------- director_prompt: the OpenArt Director rendering ----------
 # Pure text composition -- no model call, so these run in microseconds.
