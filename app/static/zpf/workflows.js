@@ -18,8 +18,31 @@ import { api, bus, enhanceSystemText, esc, fillPresetSelect, loadPresets, state,
 
 const LG = window.LiteGraph;
 
-const PORT = { text: '#4c9a6c', image: '#5a8fd6', media: '#E4002B' };
-const STATE_BOX = { idle: '#55534f', running: '#E4002B', done: '#2f7d4f', failed: '#c9a227' };
+/* The Runway-style canvas palette. One source of truth for everything
+   drawn on the <canvas>; the DOM chrome reads the same values from the
+   #v-director CSS custom properties in zpf.css — keep the two in sync. */
+const T = {
+  canvasBg: '#0a0a0a',
+  canvasDot: '#1f1f1f',
+  nodeBg: '#18181b',
+  nodeBorder: '#2a2a2e',
+  nodeBorderHover: '#3a3a40',
+  headerIconBg: '#27272a',
+  textPrimary: '#f4f4f5',
+  textSecondary: '#8a8a92',
+  accentPurple: '#a78bfa',
+  accentGreen: '#4ade80',
+  accentRed: '#f87171',
+  accentBlue: '#60a5fa',
+  buttonGhostBg: '#1c1c1f',
+  divider: '#26262a',
+};
+
+// connected ports and their edges are green; an unconnected port is a
+// hollow blue ring (drawn in the drawNode patch below)
+const PORT = { text: T.accentGreen, image: T.accentGreen, media: T.accentGreen };
+const STATE_BOX = { idle: T.textSecondary, running: T.accentBlue, done: T.accentGreen, failed: T.accentRed };
+const UI_FONT = '-apple-system, "Segoe UI", Inter, sans-serif';
 
 let graph = null;
 let canvas = null;
@@ -83,23 +106,60 @@ function wrapLines(text, maxChars, maxLines) {
   return lines.slice(0, maxLines);
 }
 
-function bodyTop(node) {
-  // clear the port labels: LiteGraph draws a slot row roughly every
-  // 20px from the top of the body
-  const slots = Math.max((node.inputs || []).length, (node.outputs || []).length);
-  return 12 + slots * 20 + 10;
+function bodyTop() {
+  // ports sit ON the card edge with no labeled rows (see the drawNode
+  // patch in theme()), so the body starts right under the header
+  return 18;
 }
 
 function drawBody(node, ctx, lines, color) {
   const top = bodyTop(node);
-  ctx.font = '11px "JetBrains Mono", monospace';
+  ctx.font = `13px ${UI_FONT}`;
   ctx.fillStyle = color;
-  lines.forEach((l, i) => ctx.fillText(l, 12, top + i * 15, node.size[0] - 24));
+  lines.forEach((l, i) => ctx.fillText(l, 14, top + i * 18, node.size[0] - 28));
+}
+
+// the empty-output well: "Output will appear here", centered
+function drawEmptyWell(node, ctx, text) {
+  ctx.font = `13px ${UI_FONT}`;
+  ctx.fillStyle = T.textSecondary;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const lines = wrapLines(text, Math.floor(node.size[0] / 7.5), 4);
+  const y0 = (node.size[1] - 36) / 2 - (lines.length - 1) * 9;
+  lines.forEach((l, i) =>
+    ctx.fillText(l, node.size[0] / 2, y0 + i * 18, node.size[0] - 28));
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
 }
 
 function bodyLines(node) {
-  // how many preview lines fit between the ports and the action pill
-  return Math.max(2, Math.floor((node.size[1] - bodyTop(node) - 36) / 15));
+  // how many preview lines fit between the header and the action pill
+  return Math.max(2, Math.floor((node.size[1] - bodyTop() - 40) / 18));
+}
+
+/* the floating caption above a node — a Runway-style annotation box,
+   never wired to anything. Set node._caption = {text, color} once. */
+function drawCaption(node, ctx) {
+  const cap = node._caption;
+  if (!cap || node.flags.collapsed) return;
+  ctx.font = `13px ${UI_FONT}`;
+  const lines = wrapLines(cap.text, 26, 3);
+  const padX = 14, padY = 10, lineH = 18;
+  const w = Math.min(208, Math.max(...lines.map(l => ctx.measureText(l).width)) + padX * 2);
+  const h = lines.length * lineH + padY * 2;
+  const x = 0;
+  const y = -LG.NODE_TITLE_HEIGHT - h - 16;
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, 10);
+  ctx.fillStyle = 'rgba(24,24,27,.9)';
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = cap.color;
+  ctx.stroke();
+  ctx.lineWidth = 1;
+  ctx.fillStyle = T.textPrimary;
+  lines.forEach((l, i) => ctx.fillText(l, x + padX, y + padY + 13 + i * lineH));
 }
 
 function previewDrawer(placeholder) {
@@ -109,10 +169,13 @@ function previewDrawer(placeholder) {
     const shown = failed ? ('✕ ' + (this._note || 'failed'))
       : this._out != null && this._out !== '' ? this._out
       : (this.properties.text || this.properties.url || '');
-    const dim = !shown;
-    const lines = wrapLines(shown || placeholder, Math.floor(this.size[0] / 7), bodyLines(this));
+    if (!shown) {
+      drawEmptyWell(this, ctx, placeholder);
+      return;
+    }
+    const lines = wrapLines(shown, Math.floor(this.size[0] / 7), bodyLines(this));
     drawBody(this, ctx, lines,
-      failed ? '#c9a227' : this._out != null && this._out !== '' ? '#f4f3f2' : dim ? '#55534f' : '#8e8c8a');
+      failed ? T.accentRed : this._out != null && this._out !== '' ? T.textPrimary : T.textSecondary);
   };
 }
 
@@ -273,24 +336,37 @@ async function runNode(node) {
    (or the rendered file) for the rest. ── */
 
 function drawPill(node, ctx, label) {
-  ctx.font = '10px "JetBrains Mono", monospace';
-  const w = Math.max(54, ctx.measureText(label).width + 24);
-  const h = 24;
-  const x = node.size[0] - w - 10;
-  const y = node.size[1] - h - 8;
+  ctx.font = `12px ${UI_FONT}`;
+  const w = Math.max(60, ctx.measureText(label).width + 26);
+  const h = 26;
+  const x = node.size[0] - w - 12;
+  const y = node.size[1] - h - 10;
   ctx.beginPath();
-  ctx.roundRect(x, y, w, h, 12);
-  ctx.fillStyle = '#1d1d22';
+  ctx.roundRect(x, y, w, h, 13);
+  ctx.fillStyle = T.buttonGhostBg;
   ctx.fill();
-  ctx.strokeStyle = 'rgba(255,255,255,.22)';
+  ctx.strokeStyle = T.nodeBorder;
   ctx.stroke();
-  ctx.fillStyle = '#f4f3f2';
+  ctx.fillStyle = T.textSecondary;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(label, x + w / 2, y + h / 2 + 0.5);
   ctx.textAlign = 'left';
   ctx.textBaseline = 'alphabetic';
   node._pill = { x, y, w, h };
+}
+
+/* the raw text node's bottom-right "N characters" counter — it doubles
+   as the click target that opens the editor (same _pill hit zone) */
+function drawCharCount(node, ctx) {
+  const label = `${(node.properties.text || '').length} characters`;
+  ctx.font = `11px ${UI_FONT}`;
+  const w = ctx.measureText(label).width;
+  const x = node.size[0] - w - 14;
+  const y = node.size[1] - 14;
+  ctx.fillStyle = T.textSecondary;
+  ctx.fillText(label, x, y);
+  node._pill = { x: x - 8, y: y - 16, w: w + 16, h: 24 };
 }
 
 function wirePill(node, action) {
@@ -306,6 +382,45 @@ function wirePill(node, action) {
 
 /* ── node type definitions ── */
 
+/* the 24px rounded-square icon chip in a model node's header; the
+   sparkle doubles as the run-state light (idle/running/done/failed) */
+function drawTitleChip(ctx, titleHeight) {
+  const s = 22;
+  const x = 8, y = -titleHeight + (titleHeight - s) / 2;
+  ctx.beginPath();
+  ctx.roundRect(x, y, s, s, 6);
+  ctx.fillStyle = T.headerIconBg;
+  ctx.fill();
+  ctx.font = `12px ${UI_FONT}`;
+  ctx.fillStyle = this.boxcolor || T.textSecondary;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('✦', x + s / 2, y + s / 2 + 0.5);
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+}
+
+// pure input nodes get the stripped-down chrome: no icon chip at all
+function noTitleBox() {}
+
+/* the "no image yet" checkerboard — signals image output specifically */
+function drawCheckerboard(node, ctx) {
+  const top = bodyTop(), sq = 12;
+  const w = node.size[0] - 28, h = node.size[1] - top - 44;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(14, top, w, h);
+  ctx.clip();
+  ctx.fillStyle = T.nodeBorder;
+  ctx.globalAlpha = 0.35;
+  for (let y = 0; y * sq < h; y++) {
+    for (let x = y % 2; x * sq < w; x += 2) {
+      ctx.fillRect(14 + x * sq, top + y * sq, sq, sq);
+    }
+  }
+  ctx.restore();
+}
+
 function registerNodes() {
   // only the v1 types in the add menu — the stock library would
   // drown them
@@ -314,12 +429,17 @@ function registerNodes() {
   function textNode(self, placeholder) {
     self.addOutput('text', 'text');
     self.properties = { text: '' };
-    self.size = [280, 190];
-    const drawer = previewDrawer(placeholder);
+    self.size = [300, 190];
+    self.onDrawTitleBox = noTitleBox;
     self.onDrawForeground = function(ctx) {
       if (this.flags.collapsed) return;
-      drawer.call(this, ctx);
-      drawPill(this, ctx, '✎ Edit');
+      drawCaption(this, ctx);
+      // a borderless-textarea look: the text (or its placeholder)
+      // top-left, a character counter bottom-right
+      const text = this.properties.text || '';
+      const lines = wrapLines(text || placeholder, Math.floor(this.size[0] / 7), bodyLines(this));
+      drawBody(this, ctx, lines, text ? T.textPrimary : T.textSecondary);
+      drawCharCount(this, ctx);
     };
     wirePill(self, n => openModal(n, 'text'));
     self.onDblClick = () => openModal(self, 'text');
@@ -327,6 +447,7 @@ function registerNodes() {
 
   function SystemPrompt() {
     textNode(this, 'Instructions for how the model should behave…');
+    this._caption = { color: T.accentPurple, text: 'Instructions for how to write the prompt' };
   }
   SystemPrompt.title = 'System Prompt';
 
@@ -341,28 +462,31 @@ function registerNodes() {
   function ReferenceImage() {
     this.addOutput('image', 'image');
     this.properties = { url: '' };
-    this.size = [240, 200];
+    this.size = [260, 210];
+    this.onDrawTitleBox = noTitleBox;
     const self = this;
     this.onDblClick = () => openModal(self, 'media');
     this.onDrawForeground = function(ctx) {
       if (this.flags.collapsed) return;
+      drawCaption(this, ctx);
       const url = this.properties.url;
-      const top = bodyTop(this);
+      const top = bodyTop();
       if (!url) {
-        drawBody(this, ctx, ['no image picked'], '#55534f');
+        drawCheckerboard(this, ctx);
+        drawEmptyWell(this, ctx, 'No image picked');
       } else {
         const img = thumbFor(url);
         if (img) {
-          const h = this.size[1] - top - 40;
-          const w = this.size[0] - 24;
+          const h = this.size[1] - top - 44;
+          const w = this.size[0] - 28;
           const scale = Math.min(w / img.naturalWidth, h / img.naturalHeight);
-          ctx.drawImage(img, 12, top, img.naturalWidth * scale, img.naturalHeight * scale);
+          ctx.drawImage(img, 14, top, img.naturalWidth * scale, img.naturalHeight * scale);
         }
-        ctx.font = '9px "JetBrains Mono", monospace';
-        ctx.fillStyle = '#8e8c8a';
-        ctx.fillText(url.split('/').pop().split('?')[0], 12, this.size[1] - 14, this.size[0] - 100);
+        ctx.font = `11px ${UI_FONT}`;
+        ctx.fillStyle = T.textSecondary;
+        ctx.fillText(url.split('/').pop().split('?')[0], 14, this.size[1] - 16, this.size[0] - 110);
       }
-      drawPill(this, ctx, '🖼 Pick');
+      drawPill(this, ctx, 'Pick image');
     };
     wirePill(this, n => openModal(n, 'media'));
   }
@@ -372,13 +496,15 @@ function registerNodes() {
     this.addInput('spark', 'text');
     this.addOutput('references', 'text');
     this.properties = { text: '' };
-    this.size = [260, 180];
+    this.size = [280, 200];
+    this.onDrawTitleBox = drawTitleChip;
     const self = this;
-    const drawer = previewDrawer('Retrieves reference-library grounding for the spark');
+    const drawer = previewDrawer('Output will appear here');
     this.onDrawForeground = function(ctx) {
       if (this.flags.collapsed) return;
+      drawCaption(this, ctx);
       drawer.call(this, ctx);
-      drawPill(this, ctx, '▶ Run');
+      drawPill(this, ctx, 'Run ⓘ');
     };
     wirePill(this, runNode);
     this.onDblClick = () => openModal(self, 'view');
@@ -392,13 +518,16 @@ function registerNodes() {
     this.addInput('references', 'text');
     this.addOutput('text', 'text');
     this.properties = {};
-    this.size = [280, 210];
+    this.size = [320, 280];
+    this.onDrawTitleBox = drawTitleChip;
+    this._caption = { color: T.accentGreen, text: 'Enhances your prompt with vivid details' };
     const self = this;
-    const drawer = previewDrawer('Enhances your prompt with vivid details using Gemini Flash');
+    const drawer = previewDrawer('Output will appear here');
     this.onDrawForeground = function(ctx) {
       if (this.flags.collapsed) return;
+      drawCaption(this, ctx);
       drawer.call(this, ctx);
-      drawPill(this, ctx, '▶ Run');
+      drawPill(this, ctx, 'Run ⓘ');
     };
     wirePill(this, runNode);
     this.onDblClick = () => openModal(self, 'view');
@@ -410,19 +539,28 @@ function registerNodes() {
     this.addInput('image', 'image');
     this.addOutput('media', 'media');
     this.properties = {};
-    this.size = [280, 200];
+    this.size = [320, 280];
+    this.onDrawTitleBox = drawTitleChip;
+    this._caption = { color: T.accentRed, text: 'Generates a clip from the enhanced prompt' };
     const self = this;
     this.onDrawForeground = function(ctx) {
       if (this.flags.collapsed) return;
-      const gate = state.caps['runway.generate']
-        ? (state.caps['runway.spend'] ? 'Generates a clip from the enhanced prompt · Runway'
-                                      : 'runway · gated — RUNWAY_SPEND_OK=1 to arm')
-        : 'runway · RUNWAYML_API_SECRET not set';
-      const shown = this._state === 'failed' ? ('✕ ' + (this._note || 'failed'))
-        : this._out ? this._out : gate;
-      drawBody(this, ctx, wrapLines(shown, Math.floor(this.size[0] / 7), bodyLines(this)),
-        this._state === 'failed' ? '#c9a227' : this._out ? '#f4f3f2' : '#55534f');
-      drawPill(this, ctx, '▶ Run · $');
+      drawCaption(this, ctx);
+      if (this._state === 'failed') {
+        drawBody(this, ctx,
+          wrapLines('✕ ' + (this._note || 'failed'), Math.floor(this.size[0] / 7), bodyLines(this)),
+          T.accentRed);
+      } else if (this._out) {
+        drawBody(this, ctx, wrapLines(this._out, Math.floor(this.size[0] / 7), bodyLines(this)),
+          T.textPrimary);
+      } else {
+        const gate = state.caps['runway.generate']
+          ? (state.caps['runway.spend'] ? 'Output will appear here'
+                                        : 'Runway · gated — RUNWAY_SPEND_OK=1 to arm')
+          : 'Runway · RUNWAYML_API_SECRET not set';
+        drawEmptyWell(this, ctx, gate);
+      }
+      drawPill(this, ctx, 'Run · $');
     };
     wirePill(this, runNode);
     this.onDblClick = () => {
@@ -437,30 +575,34 @@ function registerNodes() {
     this.addInput('image', 'image');
     this.addOutput('image', 'image');
     this.properties = {};
-    this.size = [300, 260];
+    this.size = [320, 300];
+    this.onDrawTitleBox = drawTitleChip;
+    this._caption = { color: T.accentRed, text: 'Generates an image from the enhanced prompt' };
     const self = this;
     this.onDrawForeground = function(ctx) {
       if (this.flags.collapsed) return;
-      const top = bodyTop(this);
+      drawCaption(this, ctx);
+      const top = bodyTop();
       if (this._out && this._state !== 'failed') {
         const img = thumbFor(this._out);
         if (img) {
-          const h = this.size[1] - top - 40;
-          const w = this.size[0] - 24;
+          const h = this.size[1] - top - 44;
+          const w = this.size[0] - 28;
           const scale = Math.min(w / img.naturalWidth, h / img.naturalHeight);
-          ctx.drawImage(img, 12, top, img.naturalWidth * scale, img.naturalHeight * scale);
+          ctx.drawImage(img, 14, top, img.naturalWidth * scale, img.naturalHeight * scale);
         } else {
-          drawBody(this, ctx, ['loading preview…'], '#8e8c8a');
+          drawBody(this, ctx, ['loading preview…'], T.textSecondary);
         }
+      } else if (this._state === 'failed') {
+        drawBody(this, ctx,
+          wrapLines('✕ ' + (this._note || 'failed'), Math.floor(this.size[0] / 7), bodyLines(this)),
+          T.accentRed);
       } else {
-        const gate = state.caps['nano.generate']
-          ? 'Generates an image from the enhanced prompt'
-          : 'GEMINI_API_KEY not set';
-        const shown = this._state === 'failed' ? ('✕ ' + (this._note || 'failed')) : gate;
-        drawBody(this, ctx, wrapLines(shown, Math.floor(this.size[0] / 7), bodyLines(this)),
-          this._state === 'failed' ? '#c9a227' : '#55534f');
+        // the transparent-checkerboard placeholder: image output, none yet
+        drawCheckerboard(this, ctx);
+        if (!state.caps['nano.generate']) drawEmptyWell(this, ctx, 'GEMINI_API_KEY not set');
       }
-      drawPill(this, ctx, '▶ Run');
+      drawPill(this, ctx, 'Run ⓘ');
     };
     wirePill(this, runNode);
     this.onDblClick = () => {
@@ -479,33 +621,118 @@ function registerNodes() {
   LG.registerNodeType('zpf/nano_banana', NanoBanana);
 }
 
-/* ── theming: the zpf palette instead of LiteGraph's default look ── */
+/* ── theming: the Runway-style dark canvas instead of LiteGraph's
+   default look. Cards are one #18181b surface with a 1px border and a
+   hairline header divider; ports are unlabeled dots sitting ON the card
+   edges — hollow blue when unconnected, solid green when wired. ── */
+
+// a 24px-tile 1px dot grid, generated once — LiteGraph tiles
+// background_image as the canvas pattern
+function dotGridURI() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 24;
+  const x = c.getContext('2d');
+  x.fillStyle = T.canvasDot;
+  x.fillRect(0, 0, 2, 2);
+  return c.toDataURL();
+}
+
+let protoPatched = false;
+function patchNodeChrome() {
+  if (protoPatched) return;
+  protoPatched = true;
+  const proto = window.LGraphCanvas.prototype;
+
+  const origShape = proto.drawNodeShape;
+  proto.drawNodeShape = function(node, ctx, size, fgcolor, bgcolor, selected, mouseOver) {
+    origShape.call(this, node, ctx, size, fgcolor, bgcolor, selected, mouseOver);
+    if (node.flags.collapsed) return;
+    // repaint the stock header separator as a token hairline
+    ctx.fillStyle = bgcolor || T.nodeBg;
+    ctx.fillRect(0, -1, size[0] + 1, 2);
+    ctx.fillStyle = T.divider;
+    ctx.fillRect(0, -1, size[0] + 1, 1);
+    // the 1px card border (stock LiteGraph only outlines selection)
+    ctx.beginPath();
+    ctx.roundRect(0, -LG.NODE_TITLE_HEIGHT, size[0] + 1, size[1] + LG.NODE_TITLE_HEIGHT,
+      this.round_radius);
+    ctx.strokeStyle = (selected || mouseOver) ? T.nodeBorderHover : T.nodeBorder;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  };
+
+  const origDrawNode = proto.drawNode;
+  proto.drawNode = function(node, ctx) {
+    if (!node.flags.collapsed) {
+      // ports live ON the card edge, unlabeled — pin each slot's pos
+      // every frame so resizes track, and blank the row labels
+      (node.inputs || []).forEach((s, i) => {
+        s.label = '';
+        s.pos = [0, 26 + i * 22];
+      });
+      (node.outputs || []).forEach((s, i) => {
+        s.label = '';
+        s.pos = [node.size[0], 26 + i * 22];
+      });
+    }
+    origDrawNode.call(this, node, ctx);
+    if (node.flags.collapsed) return;
+    // overdraw the stock dots: solid green when wired, hollow blue ring
+    // when waiting for a connection
+    const dot = (x, y, connected) => {
+      ctx.beginPath();
+      ctx.arc(x, y, 4.5, 0, Math.PI * 2);
+      if (connected) {
+        ctx.fillStyle = T.accentGreen;
+        ctx.fill();
+      } else {
+        ctx.fillStyle = T.nodeBg;
+        ctx.fill();
+        ctx.strokeStyle = T.accentBlue;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.lineWidth = 1;
+      }
+    };
+    (node.inputs || []).forEach(s => dot(s.pos[0], s.pos[1], s.link != null));
+    (node.outputs || []).forEach(s => dot(s.pos[0], s.pos[1], !!(s.links && s.links.length)));
+  };
+}
 
 function theme() {
-  LG.NODE_DEFAULT_COLOR = '#151518';
-  LG.NODE_DEFAULT_BGCOLOR = '#0c0c0f';
-  LG.NODE_DEFAULT_BOXCOLOR = '#55534f';
-  LG.NODE_TITLE_COLOR = '#f4f3f2';
-  LG.NODE_SELECTED_TITLE_COLOR = '#ffffff';
-  LG.NODE_TEXT_COLOR = '#8e8c8a';
-  LG.NODE_DEFAULT_SHAPE = 'box';
-  LG.WIDGET_BGCOLOR = '#17171b';
-  LG.WIDGET_OUTLINE_COLOR = '#2a2a2e';
-  LG.WIDGET_TEXT_COLOR = '#f4f3f2';
-  LG.WIDGET_SECONDARY_TEXT_COLOR = '#8e8c8a';
+  LG.NODE_DEFAULT_COLOR = T.nodeBg;      // header
+  LG.NODE_DEFAULT_BGCOLOR = T.nodeBg;    // body — one surface, divider drawn in the patch
+  LG.NODE_DEFAULT_BOXCOLOR = T.textSecondary;
+  LG.NODE_BOX_OUTLINE_COLOR = T.nodeBorderHover;
+  LG.NODE_TITLE_COLOR = T.textPrimary;
+  LG.NODE_SELECTED_TITLE_COLOR = T.textPrimary;
+  LG.NODE_TEXT_COLOR = T.textSecondary;
+  LG.WIDGET_BGCOLOR = T.buttonGhostBg;
+  LG.WIDGET_OUTLINE_COLOR = T.nodeBorder;
+  LG.WIDGET_TEXT_COLOR = T.textPrimary;
+  LG.WIDGET_SECONDARY_TEXT_COLOR = T.textSecondary;
   window.LGraphCanvas.link_type_colors = Object.assign(
     {}, window.LGraphCanvas.link_type_colors, PORT);
+  patchNodeChrome();
 }
 
 function themeCanvas(c) {
-  c.clear_background_color = '#050506';
-  c.background_image = null;
+  c.clear_background_color = T.canvasBg;
+  c.background_image = dotGridURI();
+  c.zoom_modify_alpha = false;           // the dot grid holds steady across zoom
+  c.render_canvas_border = false;        // no stray origin rectangle on the grid
   c.show_info = false;
   c.render_shadows = false;
   c.render_connection_arrows = false;
+  c.render_curved_connections = true;    // slight bezier between ports
   c.connections_width = 2;
+  c.round_radius = 14;
+  c.title_text_font = `600 14px ${UI_FONT}`;
+  c.inner_text_font = `12px ${UI_FONT}`;
   c.default_connection_color_byType = Object.assign({}, PORT);
-  c.default_connection_color_byTypeOff = Object.assign({}, PORT);
+  c.default_connection_color_byTypeOff = {
+    text: T.accentBlue, image: T.accentBlue, media: T.accentBlue,
+  };
   c.highquality_render = true;
 }
 
@@ -539,6 +766,7 @@ async function saveWorkflow(quiet = false) {
     wfStateline('error', `Save failed: ${e.message}`);
     throw e;
   }
+  $('wfsaved').textContent = 'Saved just now';
   if (!quiet) wfStateline('empty', `Saved "${name}"`);
   await loadList();
   return currentId;
@@ -563,9 +791,10 @@ function setConceptScope(concept) {
   $('wfsaveconcept').hidden = !concept;
   // concept mode keeps the toolbar clean: the workflow-library controls
   // (open/new/delete/save-as-workflow) only matter for generic graphs
-  for (const id of ['wfpick', 'wfnew', 'wfdel', 'wfsave']) {
+  for (const id of ['wfpick', 'wfnew', 'wfdel', 'wfsave', 'wfmore']) {
     $(id).hidden = !!concept;
   }
+  $('wfmore').open = false;
   if (!concept) {
     directorConcept = null;
     activeShotN = null;
@@ -578,7 +807,8 @@ function showCanvas() {
   canvasOpen = true;
   $('dirlanding').hidden = true;
   $('dircanvas').hidden = false;
-  requestAnimationFrame(() => { resizeCanvas(); canvas.setDirty(true, true); });
+  // size first, then centre the graph — arrival shows the whole chain
+  requestAnimationFrame(() => { resizeCanvas(); fitView(); canvas.setDirty(true, true); });
 }
 
 async function openWorkflow(id) {
@@ -689,6 +919,111 @@ function maybeAttachShotOutput(node) {
   }
 }
 
+/* ── the node search palette (the left rail's "+") ── */
+
+const NODE_CATALOG = [
+  { type: 'zpf/user_prompt', title: 'User Prompt', sub: 'The raw prompt — the start of the chain',
+    cat: 'Text', glyph: 'T', grad: 'linear-gradient(135deg,#6d5bd0,#a78bfa)' },
+  { type: 'zpf/system_prompt', title: 'System Prompt', sub: 'Instructions for how the model behaves',
+    cat: 'Text', glyph: 'S', grad: 'linear-gradient(135deg,#7c3aed,#c4b5fd)' },
+  { type: 'zpf/ground', title: 'Ground in References', sub: 'Reference-library grounding for a spark',
+    cat: 'Text', glyph: '¶', grad: 'linear-gradient(135deg,#166534,#4ade80)' },
+  { type: 'zpf/enhance', title: 'Gemini 2.5 Flash', sub: 'Text to enhanced prompt',
+    cat: 'Text', glyph: '✦', grad: 'linear-gradient(135deg,#1d4ed8,#60a5fa)' },
+  { type: 'zpf/reference_image', title: 'Reference Image', sub: 'A saved photo from Assets, as grounding',
+    cat: 'Image', glyph: '▣', grad: 'linear-gradient(135deg,#0e7490,#67e8f9)' },
+  { type: 'zpf/nano_banana', title: 'Nano Banana', sub: 'Text/Image to Image',
+    cat: 'Image', glyph: '✦', grad: 'linear-gradient(135deg,#b45309,#fbbf24)' },
+  { type: 'zpf/generate', title: 'Generate', sub: 'Text/Image to Video · Runway',
+    cat: 'Video', glyph: '▶', grad: 'linear-gradient(135deg,#9f1239,#f87171)' },
+];
+const PALETTE_CATS = ['All', 'Text', 'Image', 'Video'];
+let paletteCat = 'All';
+let paletteKeep = false;   // the footer toggle: stay open to add several
+
+function addNodeAtCenter(type) {
+  const node = LG.createNode(type);
+  if (!node) return;
+  // drop it near the centre of the current view
+  const rect = $('wfcanvas').getBoundingClientRect();
+  const w = (node.size && node.size[0]) || 260;
+  const h = (node.size && node.size[1]) || 160;
+  node.pos = canvas.convertCanvasToOffset([rect.width / 2 - w / 2, rect.height / 2 - h / 2]);
+  graph.add(node);
+  canvas.setDirty(true, true);
+}
+
+function renderPalette() {
+  const q = $('wfpsearch').value.trim().toLowerCase();
+  $('wfpcats').innerHTML = PALETTE_CATS.map(c =>
+    `<button class="wfpcat${c === paletteCat ? ' on' : ''}" data-c="${c}">${c === 'All' ? 'All nodes' : c}</button>`).join('');
+  $('wfpcats').querySelectorAll('.wfpcat').forEach(b =>
+    b.onclick = () => { paletteCat = b.dataset.c; renderPalette(); });
+  const rows = NODE_CATALOG.filter(e =>
+    (paletteCat === 'All' || e.cat === paletteCat)
+    && (!q || `${e.title} ${e.sub} ${e.cat}`.toLowerCase().includes(q)));
+  $('wfplist').innerHTML = rows.map(e => `
+    <button class="wfprow" data-t="${e.type}">
+      <span class="wfpicon" style="background:${e.grad}">${e.glyph}</span>
+      <span class="wfpname">${esc(e.title)}<small>${esc(e.sub)}</small></span>
+      <span class="wfpchev">›</span>
+    </button>`).join('') || '<div class="wfpempty">No nodes match</div>';
+  $('wfplist').querySelectorAll('.wfprow').forEach(b => b.onclick = () => {
+    addNodeAtCenter(b.dataset.t);
+    if (!paletteKeep) closePalette();
+  });
+}
+
+function openPalette() {
+  $('wfpalette').hidden = false;
+  $('wfaddbtn').setAttribute('aria-expanded', 'true');
+  renderPalette();
+  setTimeout(() => $('wfpsearch').focus(), 40);
+}
+
+function closePalette() {
+  $('wfpalette').hidden = true;
+  $('wfaddbtn').setAttribute('aria-expanded', 'false');
+}
+
+function wirePalette() {
+  $('wfaddbtn').onclick = () =>
+    $('wfpalette').hidden ? openPalette() : closePalette();
+  $('wfpsearch').oninput = renderPalette;
+  $('wfpkeep').onclick = () => {
+    paletteKeep = !paletteKeep;
+    $('wfpkeep').setAttribute('aria-checked', String(paletteKeep));
+  };
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !$('wfpalette').hidden) closePalette();
+  });
+  document.addEventListener('pointerdown', e => {
+    if ($('wfpalette').hidden) return;
+    if (!$('wfpalette').contains(e.target) && !$('wfaddbtn').contains(e.target)) closePalette();
+  });
+}
+
+// centre the whole graph in the viewport (the rail's grid button)
+function fitView() {
+  const ns = (graph && graph._nodes) || [];
+  if (!ns.length) return;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const n of ns) {
+    x0 = Math.min(x0, n.pos[0]);
+    y0 = Math.min(y0, n.pos[1] - LG.NODE_TITLE_HEIGHT - 90);  // caption headroom
+    x1 = Math.max(x1, n.pos[0] + n.size[0]);
+    y1 = Math.max(y1, n.pos[1] + n.size[1]);
+  }
+  const rect = $('wfcanvas').getBoundingClientRect();
+  const pad = 80;
+  const scale = Math.max(0.2, Math.min(1.2,
+    (rect.width - pad) / (x1 - x0), (rect.height - pad) / (y1 - y0)));
+  canvas.ds.scale = scale;
+  canvas.ds.offset[0] = rect.width / (2 * scale) - (x0 + x1) / 2;
+  canvas.ds.offset[1] = rect.height / (2 * scale) - (y0 + y1) / 2;
+  canvas.setDirty(true, true);
+}
+
 /* ── boot ── */
 
 function resizeCanvas() {
@@ -719,17 +1054,11 @@ export function initWorkflows() {
     const id = Number($('wfpick').value);
     if (id) openWorkflow(id);
   };
-  $('wfadd').onchange = () => {
-    const type = $('wfadd').value;
-    $('wfadd').value = '';
-    if (!type) return;
-    const node = LG.createNode(type);
-    if (!node) return;
-    // drop it near the centre of the current view
-    const rect = $('wfcanvas').getBoundingClientRect();
-    node.pos = canvas.convertCanvasToOffset([rect.width / 2 - 130, rect.height / 2 - 80]);
-    graph.add(node);
-    canvas.setDirty(true, true);
+  wirePalette();
+  $('wffit').onclick = fitView;
+  $('wffolder').onclick = () => {
+    const more = $('wfmore');
+    if (!more.hidden) more.open = !more.open;
   };
 
   $('wfmclose').onclick = closeWorkflowModal;
@@ -890,15 +1219,15 @@ function shotChainGraph(d, s) {
 
   const nodes = [
     { id: 1, type: 'zpf/user_prompt', title: `Shot ${s.n} · prompt`,
-      pos: [50, 100], size: [300, 200], flags: {}, order: 0, mode: 0,
+      pos: [60, 200], size: [300, 200], flags: {}, order: 0, mode: 0,
       outputs: [{ name: 'text', type: 'text', links: [1] }],
       properties: { text, concept_id: d.id, shot_n: s.n } },
     { id: 2, type: 'zpf/system_prompt', title: 'Instructions',
-      pos: [50, 360], size: [300, 210], flags: {}, order: 1, mode: 0,
+      pos: [60, 540], size: [300, 210], flags: {}, order: 1, mode: 0,
       outputs: [{ name: 'text', type: 'text', links: [2] }],
       properties: { text: enhanceSystem } },
     { id: 3, type: 'zpf/enhance', title: 'Gemini 2.5 Flash',
-      pos: [440, 210], size: [290, 210], flags: {}, order: 2, mode: 0,
+      pos: [470, 330], size: [320, 280], flags: {}, order: 2, mode: 0,
       inputs: [{ name: 'system', type: 'text', link: 2 },
                { name: 'user', type: 'text', link: 1 },
                { name: 'image', type: 'image', link: null },
@@ -907,7 +1236,7 @@ function shotChainGraph(d, s) {
       properties: { auto_ground: true,
                     image_url: s.reference_image || '' } },
     { id: 4, type: 'zpf/nano_banana', title: 'Nano Banana',
-      pos: [820, 180], size: [300, 260], flags: {}, order: 3, mode: 0,
+      pos: [900, 300], size: [320, 300], flags: {}, order: 3, mode: 0,
       inputs: [{ name: 'prompt', type: 'text', link: 3 },
                { name: 'image', type: 'image', link: null }],
       outputs: [{ name: 'image', type: 'image', links: null }],
@@ -956,6 +1285,7 @@ function activateShot(n) {
   graph.configure(shotGraphs.get(n) || shotChainGraph(directorConcept, shot));
   clearRunState();
   renderShotDock();
+  if (!$('dircanvas').hidden) fitView();
   canvas.setDirty(true, true);
 }
 
@@ -1055,6 +1385,7 @@ async function saveToConcept() {
       saved += 1;
       warnings = (res.warnings || []).length;
     }
+    if (saved) $('wfsaved').textContent = 'Saved just now';
     wfStateline('empty', saved
       ? `Saved ${saved} shot prompt(s) to the concept`
         + (warnings ? ` · ${warnings} warning(s)` : '')

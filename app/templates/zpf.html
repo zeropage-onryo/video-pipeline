@@ -208,32 +208,60 @@
       </div>
 
       <div id="dircanvas" hidden>
-        <div class="vhead" style="padding-top:0">
-          <button class="tag" id="wfback">← Brief</button>
-          <input class="search wfname" id="wfname" placeholder="Untitled workflow">
-          <span class="m" id="wfconcept"></span>
+        <div class="wftopbar">
+          <button class="wtbicon" id="wfback" title="Back to the brief" aria-label="Back to the brief">
+            <svg viewBox="0 0 24 24"><path d="M14 6l-6 6 6 6"/></svg>
+          </button>
+          <span class="wtbpriv">
+            <svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+            Private
+          </span>
+          <span class="wtbsep">/</span>
+          <input class="wtbtitle" id="wfname" placeholder="Untitled workflow">
+          <span class="wtbmeta" id="wfconcept"></span>
+          <details class="wfmore" id="wfmore">
+            <summary aria-label="Workflow library">…</summary>
+            <div class="wfmenu">
+              <select class="wfselect" id="wfpick"><option value="">Open…</option></select>
+              <button class="wtbpill" id="wfnew">New</button>
+              <button class="wtbpill" id="wfdel">Delete</button>
+            </div>
+          </details>
           <span class="spacer"></span>
-          <select class="wfselect" id="wfadd">
-            <option value="">+ Add node…</option>
-            <option value="zpf/system_prompt">System Prompt</option>
-            <option value="zpf/user_prompt">User Prompt</option>
-            <option value="zpf/reference_image">Reference Image</option>
-            <option value="zpf/ground">Ground in References</option>
-            <option value="zpf/enhance">Gemini 2.5 Flash (enhance)</option>
-            <option value="zpf/nano_banana">Nano Banana (image)</option>
-            <option value="zpf/generate">Generate (Runway video)</option>
-          </select>
-          <select class="wfselect" id="wfpick"><option value="">Open…</option></select>
-          <button class="tag" id="wfnew">New</button>
-          <button class="tag" id="wfdel">Delete</button>
-          <button class="tag" id="wfsave">Save</button>
-          <button class="tag" id="wfsaveconcept" hidden>Save to concept</button>
-          <button class="go" id="wfrunall">Run all</button>
+          <span class="wtbsaved" id="wfsaved"></span>
+          <button class="wtbpill" id="wfsave">Save</button>
+          <button class="wtbpill" id="wfsaveconcept" hidden>Save to concept</button>
+          <button class="wtbrun" id="wfrunall">Run all <i>ⓘ</i></button>
         </div>
         <div class="stateline" id="wfstate" hidden></div>
-        <div class="wfwrap"><canvas id="wfcanvas"></canvas></div>
+        <div class="wfwrap">
+          <canvas id="wfcanvas"></canvas>
+          <button class="railplus" id="wfaddbtn" title="Add a node" aria-label="Add a node" aria-expanded="false">+</button>
+          <div class="wfrail">
+            <button class="railbtn" id="wffit" title="Fit the graph in view" aria-label="Fit the graph in view">
+              <svg viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg>
+            </button>
+            <button class="railbtn" id="wffolder" title="Workflow library" aria-label="Workflow library">
+              <svg viewBox="0 0 24 24"><path d="M4 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/></svg>
+            </button>
+          </div>
+          <div class="wfpalette" id="wfpalette" hidden>
+            <div class="wfpsearch">
+              <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+              <input id="wfpsearch" placeholder="Search by name or type" autocomplete="off">
+            </div>
+            <div class="wfpbody">
+              <div class="wfpcats" id="wfpcats"></div>
+              <div class="wfplist" id="wfplist"></div>
+            </div>
+            <div class="wfpfoot">
+              <span>Keep open to add multiple nodes</span>
+              <button class="wfptoggle" id="wfpkeep" role="switch" aria-checked="false" aria-label="Keep open to add multiple nodes"><i></i></button>
+            </div>
+          </div>
+        </div>
         <div class="shotdock" id="shotdock" hidden></div>
-        <div class="wfhint m">Right-click the canvas (or use + Add node) to add · drag from a port dot to wire · double-click a node to edit it</div>
+        <div class="wfhint m">The + adds a node · right-click the canvas also works · drag from a port dot to wire · double-click a node to edit it</div>
       </div>
   </div><!-- /v-director -->
 
