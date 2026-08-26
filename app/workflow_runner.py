@@ -133,20 +133,37 @@ def image_for_runway(value, resolve_photo=None):
 
 
 def enhance(system: str, user: str, images=None, *, gemini_client,
-            resolve_photo=None, model: Optional[str] = None) -> str:
-    """The LLM Enhance call: system + user prompt (both optional, empty
-    falls back to empty) plus optional reference images as vision input
-    -- the same generate_with_retry path director.py and shootgen.py
-    already use. Raises on an empty prompt or a dead model: here the
-    model call IS the deliverable, the promptgen contract."""
+            resolve_photo=None, model: Optional[str] = None,
+            references: str = "") -> str:
+    """The Gemini 2.5 Flash enhance call: system + user prompt plus
+    optional reference images as vision input -- the same
+    generate_with_retry path director.py and shootgen.py already use.
+    An empty system falls back to the prompt-enhancement instruction
+    (prompts/enhance_system.txt via workflows._enhance_system_text), so
+    a bare user prompt is still ENHANCED with vivid detail rather than
+    echoed to an uninstructed model. `references` is the optional RAG
+    grounding block (the Ground node's output) folded in as its own
+    labelled section -- grounding material, not the instruction.
+    Raises on an empty prompt or a dead model: here the model call IS
+    the deliverable, the promptgen contract."""
     from google.genai import types
 
-    from src import shootgen
+    from src import shootgen, workflows
     from src.gemini_utils import generate_with_retry
 
-    text = "\n\n".join(t for t in [(system or "").strip(), (user or "").strip()] if t)
-    if not text:
+    system = (system or "").strip()
+    user = (user or "").strip()
+    references = (references or "").strip()
+    if not (system or user or references):
         raise ValueError("nothing to enhance — connect or type a prompt first")
+    if not system:
+        system = workflows._enhance_system_text()
+    blocks = [system]
+    if references:
+        blocks.append("REFERENCES — ground the prompt in these:\n" + references)
+    if user:
+        blocks.append(user)
+    text = "\n\n".join(blocks)
     parts = []
     for image in images or []:
         target = resolve_photo(image) if resolve_photo else None
@@ -235,11 +252,18 @@ def execute_graph(graph: dict, *, gemini_client=None, resolve_photo=None,
                     raise RuntimeError("GEMINI_API_KEY not set")
                 image = _input_value(node, "image", links, outputs)
                 kind = "text"
+                # references passed only when wired, so older graphs (and
+                # tests patching enhance without the param) run unchanged
+                extra = {}
+                refs = _input_value(node, "references", links, outputs)
+                if refs:
+                    extra["references"] = refs
                 value = enhance(
                     _input_value(node, "system", links, outputs) or "",
                     _input_value(node, "user", links, outputs) or "",
                     images=[image] if image else None,
-                    gemini_client=gemini_client, resolve_photo=resolve_photo)
+                    gemini_client=gemini_client, resolve_photo=resolve_photo,
+                    **extra)
             elif node_type == NANO_TYPE:
                 from src import nano_banana
                 prompt = _input_value(node, "prompt", links, outputs) or ""

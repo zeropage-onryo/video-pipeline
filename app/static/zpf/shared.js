@@ -77,6 +77,84 @@ export async function loadAssets(force = false) {
   return state.assets;
 }
 
+/* Presets: prompts/presets.json via /api/presets, cached once. */
+let presetsCache = null;
+export async function loadPresets() {
+  if (presetsCache) return presetsCache;
+  try {
+    presetsCache = (await api('/api/presets')).items;
+  } catch { presetsCache = []; }
+  return presetsCache;
+}
+
+export function fillPresetSelect(select, presets) {
+  const keep = select.querySelector('option').outerHTML;
+  select.innerHTML = keep + presets.map(p =>
+    `<option value="${esc(p.id)}">${esc(p.label)}</option>`).join('');
+}
+
+/* `@` mentions: typing @word in a textarea autocompletes against
+   /api/assets/search (characters + props + locations in one list).
+   Picking one replaces the @word with the asset's name and calls
+   onPick(item) so the caller can auto-attach its reference photo. */
+export function wireMentions(textarea, dropdown, onPick) {
+  let items = [];
+  let cursor = 0;
+  let token = null;   // {start, end} of the active @word, or null
+
+  const close = () => { dropdown.hidden = true; items = []; token = null; };
+
+  const paint = () => {
+    if (!items.length) { close(); return; }
+    dropdown.hidden = false;
+    dropdown.innerHTML = items.map((it, i) => `
+      <button type="button" class="mention${i === cursor ? ' cur' : ''}" data-i="${i}">
+        ${it.thumb ? `<span class="mth" style="background-image:url('${it.thumb}')"></span>` : '<span class="mth"></span>'}
+        <span>${esc(it.name)}</span><span class="mcat">${esc(it.category)}</span>
+      </button>`).join('');
+    dropdown.querySelectorAll('.mention').forEach(b => {
+      b.onmousedown = e => { e.preventDefault(); pick(items[+b.dataset.i]); };
+    });
+  };
+
+  const pick = item => {
+    if (!token) return close();
+    const value = textarea.value;
+    textarea.value = value.slice(0, token.start) + item.name + value.slice(token.end);
+    const at = token.start + item.name.length;
+    textarea.setSelectionRange(at, at);
+    textarea.focus();
+    close();
+    if (onPick) onPick(item);
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+
+  let timer = null;
+  textarea.addEventListener('input', () => {
+    const pos = textarea.selectionStart;
+    const before = textarea.value.slice(0, pos);
+    const match = before.match(/@([\w -]{0,40})$/);
+    if (!match) { close(); return; }
+    token = { start: pos - match[0].length, end: pos };
+    const q = match[1].trim();
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      try {
+        const res = await api('/api/assets/search?q=' + encodeURIComponent(q));
+        items = res.items; cursor = 0; paint();
+      } catch { close(); }
+    }, 120);
+  });
+  textarea.addEventListener('keydown', e => {
+    if (dropdown.hidden) return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); cursor = Math.min(items.length - 1, cursor + 1); paint(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); cursor = Math.max(0, cursor - 1); paint(); }
+    else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pick(items[cursor]); }
+    else if (e.key === 'Escape') { e.stopPropagation(); close(); }
+  });
+  textarea.addEventListener('blur', () => setTimeout(close, 150));
+}
+
 /* Multi-photo hover scrub: real photos stand in for sprite frames. */
 export function wireScrub(frameEl, photos, slEl) {
   if (!photos || photos.length < 2) { if (slEl) slEl.classList.add('off'); return; }

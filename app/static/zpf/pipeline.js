@@ -1,18 +1,34 @@
-/* Pipeline view — the real pre-production loop. Concepts awaiting a
-   decision (approve = plan the shot list, the shortlist label; deny =
-   reasons + note recorded as a correction and a RAG feedback chunk),
-   the hold queue underneath, and the agreement numbers that gate
-   autonomy. */
+/* Pipeline view — two tabs onto one engine. Concept: the real
+   pre-production loop, unchanged (approve = plan the shot list, deny =
+   correction + RAG chunk, holds underneath). Generate: Higgsfield-style
+   single generation (generate.js). The node canvas is its OWN rail view
+   — Director (workflows.js) — reached from a card's Director button. */
 import { api, bus, esc, pct, state, stateline } from './shared.js';
+import { initGenerate, renderGenerate } from './generate.js';
+import { openConceptInDirector } from './workflows.js';
 
 let denyTarget = null;
 let denyReasons = new Set();
 let wired = false;
 let openSceneId = null;   // which concept's scene board is open
+let activeTab = 'concept';
+
+export function showTab(tab, conceptId) {
+  activeTab = tab;
+  document.querySelectorAll('#ptabs .cat').forEach(b =>
+    b.setAttribute('aria-pressed', String(b.dataset.ptab === tab)));
+  document.querySelectorAll('#v-pipeline > .ptab').forEach(el =>
+    el.hidden = el.id !== 'ptab-' + tab);
+  if (tab === 'concept' && conceptId) openSceneId = conceptId;
+  renderPipeline();
+}
 
 export function initPipeline() {
   if (wired) return;
   wired = true;
+  initGenerate();
+  document.querySelectorAll('#ptabs .cat').forEach(b =>
+    b.onclick = () => showTab(b.dataset.ptab));
   const dscrim = document.getElementById('dscrim');
   document.getElementById('dncancel').onclick = closeDeny;
   document.getElementById('dnback').onclick = closeDeny;
@@ -42,11 +58,13 @@ export function initPipeline() {
   sceneGo.onclick = fire;
   scenePrompt.addEventListener('keydown', e => { if (e.key === 'Enter') fire(); });
 
-  // re-render when a generate/plan job lands while the view is open;
-  // a finished plan opens its scene board so the prompts are right there
+  // re-render when a generate/plan job lands while the Concept tab is
+  // open; a finished plan opens its scene board so the prompts are
+  // right there
   bus.addEventListener('job', e => {
     const job = e.detail;
     if (document.documentElement.dataset.v === 'pipeline'
+        && activeTab === 'concept'
         && ['concept', 'plan', 'render', 'direct', 'refine'].includes(job.kind)
         && ['done', 'failed'].includes(job.status)) {
       if (job.status === 'done' && job.ref_id) openSceneId = job.ref_id;
@@ -57,6 +75,7 @@ export function initPipeline() {
 
 export async function renderPipeline() {
   document.getElementById('pbrand').textContent = `brand · ${state.brand}`;
+  if (activeTab === 'generate') return renderGenerate();
   await Promise.all([renderConcepts(), renderHolds()]);
 }
 
@@ -106,9 +125,11 @@ async function renderConcepts() {
         ? `<div class="cact">
              ${canPlan ? `<button class="approve" data-a="ok" data-id="${c.id}">Approve · plan shots</button>` : ''}
              <button class="denybtn" data-a="no" data-id="${c.id}">Deny</button>
+             ${canPlan ? `<button class="denybtn" data-a="dir" data-id="${c.id}">Director</button>` : ''}
            </div>`
         : `<div class="cact">
              <button class="approve" data-a="scene" data-id="${c.id}">Open scene · ${c.shot_count} shots</button>
+             <button class="denybtn" data-a="dir" data-id="${c.id}">Director</button>
            </div>`}
     </div>`).join('');
 
@@ -116,6 +137,7 @@ async function renderConcepts() {
     b.onclick = () => {
       if (b.dataset.a === 'ok') return approve(+b.dataset.id);
       if (b.dataset.a === 'scene') return openScene(+b.dataset.id);
+      if (b.dataset.a === 'dir') return openConceptInDirector(+b.dataset.id);
       openDeny(+b.dataset.id, data.items);
     };
   });

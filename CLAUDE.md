@@ -260,17 +260,43 @@ is yours, in Resolve, by hand.
   existing modules. One rule governs it: **every control is backed by a working endpoint and
   gated by `GET /api/capabilities`**, which is derived live (key presence, a real
   `rag.connect()`), never a static dict. Views: Studio (composer with live `/api/retrieve`
-  grounding + asset carousel), Assets (locations/characters/props unified), Pipeline (adapted
-  to pre-production: approve = queue the shot list, deny = reasons-enum + note → an
-  `autonomy` correction always, a RAG `denials` chunk best-effort, then the concept is
-  deleted; plus the hold queue and the agreement numbers), Workflows (a LiteGraph node
-  canvas, the Runway-workflows shape: prompts → Ground/Enhance → Nano Banana image or
-  Runway video, per-node Run + Run all through `app/workflow_runner.py`, graphs saved in
-  `src/workflows.py`, and a seeded brandless "Prompt enhancement" template the view opens
-  onto so arrival is never a blank grid — `src/nano_banana.py` is the image connector,
-  runway.py's never-raises gated shape on the existing Gemini key under `NANO_DAILY_CAP`,
-  no separate spend gate since an image costs cents), Analytics (real metric snapshots,
-  two brands never averaged), Queue. Evals moved OFF `/ui` (2026-08-25) to the dev-console
+  grounding + asset carousel), Assets (locations/characters/props unified), Pipeline
+  (restructured 2026-08-25 into two tabs over one engine), Director (the node canvas as its
+  own rail view — Mike's explicit call, same day: the nodes must never be buried behind a
+  tab), Analytics (real metric snapshots, two brands never averaged), Queue. **Pipeline's
+  two tabs:** *Concept* is the
+  original pre-production loop unchanged (approve = queue the shot list, deny =
+  reasons-enum + note → an `autonomy` correction always, a RAG `denials` chunk best-effort,
+  then the concept is deleted; plus the hold queue and the agreement numbers). *Generate* is
+  Higgsfield-style single generation: a camera-preset picker (`prompts/presets.json` via
+  `src/presets.py` — data, not code, sourced from the repo's video-prompting references),
+  `@` mentions autocompleting against `GET /api/assets/search` (cross-category name search;
+  picking one names the asset in the prompt AND attaches its photo), image *and video*
+  references (video rides a Gemini call inline under ~19MB, else through the Files API —
+  `api.video_part`), and `POST /api/generate/run`: Ground (`reference_block`) → Enhance
+  (preset + references folded into one Gemini call) → saved as a REAL one-shot
+  `shoot_concepts` row (or appended to an existing concept via `concept_id`) → best-effort
+  gated render (image via Nano Banana lands as the shot's `reference_image`; video via
+  Runway's spend gate lands as `media_url`; refusal still leaves the saved concept).
+  *Director* — its own rail view — is what the old Workflows view actually was: the
+  LiteGraph canvas (`app/workflow_runner.py` executes, `src/workflows.py` stores, per-node
+  Run + Run all, the seeded "Prompt enhancement" template still opens from the toolbar),
+  scoped to holding a concept's scenes together shot to shot for continuity. **Arrival is
+  the nodes, never a composer:** the view opens onto the newest planned concept's scene
+  graph; the chat-first brief composer (pre-filled with `gold_standard_example()`'s opening
+  blocks + quick-start chips from `ZEROPAGE_FORMATS` for Zero Page, served by
+  `GET /api/director/landing`; submitting runs the same `/api/pipeline/run` engine and
+  lands the result on the canvas) is the fallback when nothing is planned yet, or an
+  explicit "← Brief" away. Any concept opens directly from its card's Director button —
+  **no approval gate**, approval/teaching stays a dev-console background loop. A concept
+  opens as one node chain per shot (User Prompt seeded with `director_prompt()`'s text →
+  Ground → Enhance → Generate, plus a Reference node when the shot carries one), grouped
+  per scene. Edits save back through `POST /api/concepts/{id}/shots/{n}/prompt`
+  (→ `update_concept_shots`, only nodes whose text changed, title/hook/logline never
+  touched); a shot node's finished render auto-attaches to its shot (clip → media_url,
+  Nano image → `/shots/{n}/reference`). `src/nano_banana.py` is the image connector, runway.py's
+  never-raises gated shape on the existing Gemini key under `NANO_DAILY_CAP`, no separate
+  spend gate since an image costs cents. Evals moved OFF `/ui` (2026-08-25) to the dev-console
   `/evals` page — golden set still in SQLite via `src/evalstore.py`, seeded once from
   `eval_cases.json`, Hit@k/MRR computed server-side by `rag_eval` and stored per run; the
   page is a shell over the same session-gated `/api/evals/*` endpoints, and it registers on

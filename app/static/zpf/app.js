@@ -5,7 +5,7 @@ import { initField } from './field.js';
 import { initStudio, renderStudio } from './studio.js';
 import { renderAssets } from './assets.js';
 import { initPipeline, renderPipeline, closeDeny } from './pipeline.js';
-import { initWorkflows, renderWorkflows, closeWorkflowModal } from './workflows.js';
+import { initWorkflows, renderDirectorTab, closeWorkflowModal } from './workflows.js';
 import { renderAnalytics } from './analytics.js';
 import { initQueue, renderQueue } from './queue.js';
 
@@ -13,7 +13,7 @@ const VIEWS = {
   studio: { label: 'Studio', render: renderStudio },
   assets: { label: 'Assets', render: renderAssets },
   pipeline: { label: 'Pipeline', render: renderPipeline },
-  workflows: { label: 'Workflows', render: renderWorkflows },
+  director: { label: 'Director', render: renderDirectorTab },
   analytics: { label: 'Analytics', render: renderAnalytics },
   queue: { label: 'Queue', render: renderQueue },
 };

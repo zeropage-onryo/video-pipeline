@@ -714,3 +714,90 @@ html[data-v="studio"] #gl{opacity:1;transition:opacity .5s}
   .bar{padding:14px 20px}
   .detail{width:auto;left:14px}.jobs{max-width:calc(100vw - 90px)}
 }
+
+/* ── PIPELINE TABS (Concept / Generate / Director) ──── */
+.ptabs .cat{text-transform:none;letter-spacing:.02em}
+.ptab[hidden]{display:none}
+
+/* the Generate / Director composers — the #cbox shape, reused */
+.gencomposer{padding:0 0 0}
+.gencomposer .genrow{display:flex;gap:10px;align-items:center;padding:16px 20px 0 24px;flex-wrap:wrap}
+.genrow .m{font-size:10px}
+.gencomposer textarea{
+  width:100%;min-height:96px;resize:vertical;border:0;background:transparent;color:var(--text);
+  font-family:var(--body);font-size:16px;font-weight:300;line-height:1.6;padding:18px 24px 6px;
+}
+.gencomposer textarea:focus{outline:0}
+.gencomposer textarea::placeholder{color:var(--dimmer)}
+#dirbrief{font-size:14px;min-height:180px}
+.dirhead{display:flex;align-items:baseline;gap:14px;padding:20px 24px 0;flex-wrap:wrap}
+.dirhead h3{font-family:var(--display);font-size:20px;font-weight:500;letter-spacing:.02em}
+.dirchips{display:flex;gap:7px;flex-wrap:wrap;padding:12px 24px 0}
+.dirchips:empty{display:none}
+
+/* attached reference chips on the Generate composer */
+.gatt{
+  width:52px;height:52px;border-radius:10px;border:1px solid var(--line-hi);
+  background-size:cover;background-position:center;position:relative;flex:none;
+}
+.gatt.file{
+  width:auto;max-width:220px;height:auto;padding:8px 26px 8px 12px;border-radius:var(--rp);
+  background:rgb(255 255 255 / .04);
+}
+.gatt .an{font-family:var(--mono);font-size:10px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+.gatt .ax{
+  position:absolute;top:-7px;right:-7px;width:18px;height:18px;border-radius:var(--rp);
+  background:rgb(16 16 20 / .95);border:1px solid var(--line-hi);color:var(--dim);
+  font-size:9px;display:grid;place-items:center;cursor:pointer;
+}
+.gatt.file .ax{top:50%;right:6px;transform:translateY(-50%);border:0;background:transparent}
+.gatt .ax:hover{color:var(--text)}
+
+/* @ mention autocomplete */
+.mentionwrap{position:relative}
+.mentiondrop{
+  position:absolute;left:24px;bottom:6px;z-index:40;min-width:280px;max-width:380px;
+  background:rgb(16 16 20 / .97);border:1px solid var(--line-hi);border-radius:var(--r1);
+  padding:6px;display:flex;flex-direction:column;gap:2px;box-shadow:0 18px 60px -20px rgb(0 0 0 / .8);
+}
+.mention{
+  display:flex;align-items:center;gap:10px;padding:7px 10px;border:0;border-radius:10px;
+  background:transparent;color:var(--dim);font-family:var(--body);font-size:13px;
+  cursor:pointer;text-align:left;
+}
+.mention:hover,.mention.cur{background:rgb(255 255 255 / .06);color:var(--text)}
+.mention .mth{
+  width:26px;height:26px;border-radius:7px;flex:none;background-size:cover;
+  background-position:center;background-color:#141417;border:1px solid var(--line);
+}
+.mention .mcat{margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--dimmer);text-transform:uppercase;letter-spacing:.08em}
+.mentiondrop[hidden]{display:none}
+#dircanvas .vhead{flex-wrap:wrap;row-gap:10px}
+
+/* ── DIRECTOR shot dock — one shot on the canvas, the rest wait here ── */
+.shotdock{
+  display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:center;
+  max-width:1680px;margin:-58px auto 0;padding:10px 16px;position:relative;z-index:5;
+  width:fit-content;border-radius:var(--rp);
+  background:rgb(14 14 17 / .78);backdrop-filter:blur(24px) saturate(1.2);
+  border:1px solid var(--line);border-top-color:var(--line-hi);
+  box-shadow:0 18px 60px -24px rgb(0 0 0 / .8);
+}
+.shotdock[hidden]{display:none}
+.dockscene{
+  font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--dimmer);padding:0 6px 0 10px;white-space:nowrap;
+}
+.dockscene:not(:first-child){border-left:1px solid var(--line);margin-left:4px}
+.dockshot{
+  font-family:var(--body);font-size:12px;padding:7px 14px;cursor:pointer;color:var(--dim);
+  background:rgb(255 255 255 / .03);border:1px solid var(--line);border-radius:var(--rp);
+  transition:color var(--t),border-color var(--t),background var(--t);white-space:nowrap;
+}
+.dockshot:hover{color:var(--text);border-color:var(--line-hi)}
+.dockshot.on{color:var(--text);border-color:var(--signal);background:var(--signal-soft)}
+.dockshot .dot{font-style:normal;color:#2f7d4f;font-size:9px;vertical-align:1px}
+
+/* cleaner canvas chrome */
+#dircanvas .wfwrap{height:calc(100vh - 320px)}
+#dircanvas .wfhint{margin-top:14px}

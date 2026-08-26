@@ -142,7 +142,7 @@ def default_template() -> dict:
              "mode": 0,
              "outputs": [{"name": "text", "type": "text", "links": [2]}],
              "properties": {"text": ""}},
-            {"id": 3, "type": "zpf/enhance", "title": "Gemini Flash",
+            {"id": 3, "type": "zpf/enhance", "title": "Gemini 2.5 Flash",
              "pos": [450, 200], "size": [300, 220], "flags": {}, "order": 2,
              "mode": 0,
              "inputs": [{"name": "system", "type": "text", "link": 1},

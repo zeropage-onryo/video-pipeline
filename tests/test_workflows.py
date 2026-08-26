@@ -380,6 +380,75 @@ def test_api_exec_enhance_runs_as_a_job(tmp_db, monkeypatch):
     assert job["output"] == "E[night ride]"
 
 
+def test_enhance_defaults_to_the_enhancement_instruction(monkeypatch):
+    """No wired system prompt no longer means an uninstructed model:
+    the vivid-details instruction (prompts/enhance_system.txt) is the
+    default, so a bare user prompt is actually ENHANCED."""
+    captured = {}
+
+    def fake_generate(client, model, parts):
+        captured["text"] = parts[-1]
+        return "OUT"
+
+    monkeypatch.setattr("src.gemini_utils.generate_with_retry", fake_generate)
+    out = workflow_runner.enhance("", "night ride", gemini_client=object())
+    assert out == "OUT"
+    assert captured["text"].startswith(workflows._enhance_system_text())
+    assert "night ride" in captured["text"]
+
+
+def test_enhance_folds_references_as_grounding_not_instruction(monkeypatch):
+    captured = {}
+
+    def fake_generate(client, model, parts):
+        captured["text"] = parts[-1]
+        return "OUT"
+
+    monkeypatch.setattr("src.gemini_utils.generate_with_retry", fake_generate)
+    workflow_runner.enhance("SYS", "USER", references="THE SHELF",
+                            gemini_client=object())
+    assert captured["text"].startswith("SYS")
+    assert "REFERENCES — ground the prompt in these:\nTHE SHELF" in captured["text"]
+    assert captured["text"].endswith("USER")
+
+
+def test_enhance_still_refuses_nothing_at_all():
+    with pytest.raises(ValueError):
+        workflow_runner.enhance("", "", gemini_client=object())
+
+
+def test_execute_graph_wires_ground_into_enhance_references(tmp_db, monkeypatch):
+    """The Director shot chain's shape: Ground's output feeds the
+    enhance node's references port, not its system port."""
+    calls = []
+
+    def fake_enhance(system, user, images=None, *, gemini_client,
+                     resolve_photo=None, model=None, references=""):
+        calls.append((system, user, references))
+        return "E"
+
+    monkeypatch.setattr(workflow_runner, "enhance", fake_enhance)
+    monkeypatch.setattr("src.shootgen.reference_block",
+                        lambda spark=None, client=None, db_path=None: "REFS")
+    graph = {
+        "nodes": [
+            node(1, "zpf/user_prompt", properties={"text": "night ride"}),
+            node(2, "zpf/ground", inputs=[slot("spark", "text", 1)]),
+            node(3, "zpf/enhance",
+                 inputs=[slot("system", "text", None),
+                         slot("user", "text", 2),
+                         slot("image", "image", None),
+                         slot("references", "text", 3)]),
+        ],
+        "links": [[1, 1, 0, 2, 0, "text"], [2, 1, 0, 3, 1, "text"],
+                  [3, 2, 0, 3, 3, "text"]],
+    }
+    result = workflow_runner.execute_graph(graph, gemini_client=object(),
+                                           db_path=tmp_db)
+    assert result["ok"] is True
+    assert calls == [("", "night ride", "REFS")]
+
+
 def test_api_exec_generate_needs_the_runway_key(tmp_db, monkeypatch):
     monkeypatch.delenv("RUNWAYML_API_SECRET", raising=False)
     res = client.post("/api/workflows/exec/generate", json={"prompt": "x"})
@@ -397,9 +466,17 @@ def test_api_exec_generate_respects_the_spend_gate(tmp_db, monkeypatch):
 
 # --- the shell + the dev page ----------------------------------------------
 
-def test_ui_shell_has_workflows_and_no_evals(tmp_db):
+def test_ui_shell_has_pipeline_tabs_and_a_director_view(tmp_db):
+    """The 2026-08-25 restructure, corrected same day: Pipeline is two
+    tabs (Concept / Generate); the node canvas is its OWN rail view,
+    Director -- the nodes must never be buried behind a tab. The canvas
+    (LiteGraph) still ships with the shell."""
     html = client.get("/ui").text
-    assert 'data-view="workflows"' in html
+    assert 'data-view="workflows"' not in html
+    assert 'data-view="director"' in html
+    assert 'data-ptab="concept"' in html
+    assert 'data-ptab="generate"' in html
+    assert 'data-ptab="director"' not in html
     assert 'data-view="evals"' not in html
     assert "vendor/litegraph.js" in html
 

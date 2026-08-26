@@ -32,6 +32,7 @@ from src import (
     evalstore,
     instagram,
     preprod,
+    presets,
     rag,
     rag_eval,
     runway,
@@ -257,6 +258,25 @@ def media_list(q: Optional[str] = None, category: Optional[str] = None,
     for item in items:
         item.pop("haystack", None)
     return {"items": items[:limit], "counts": counts}
+
+
+@router.get("/assets/search")
+def assets_search(q: str = "", limit: int = 8):
+    """Cross-category name search over characters/props/locations -- the
+    `@` mention autocomplete's endpoint. Name-prefix matches rank first,
+    substring matches after; slim rows (name, category, thumb) because
+    the dropdown needs nothing heavier."""
+    needle = q.lower().strip()
+    items = _assets_all()
+    if needle:
+        starts = [i for i in items if i["name"].lower().startswith(needle)]
+        start_ids = {i["id"] for i in starts}
+        contains = [i for i in items
+                    if needle in i["name"].lower() and i["id"] not in start_ids]
+        items = starts + contains
+    return {"items": [{"name": i["name"], "category": i["category"],
+                       "thumb": i["poster"]}
+                      for i in items[:max(1, min(limit, 20))]]}
 
 
 @router.get("/assets/{category}/{item_id}")
@@ -517,6 +537,52 @@ def _resolve_asset_photo(url_path: str) -> Optional[Path]:
     return target
 
 
+MAX_VIDEO_REFS = 2   # a video ref is heavy; two is plenty of grounding
+
+# Under this, a clip rides inline as Part.from_bytes -- the same shape
+# image refs use, just a video mime. Over it, the Gemini Files API is
+# the documented path (inline requests cap out around 20MB total).
+INLINE_VIDEO_LIMIT = 19_000_000
+
+VIDEO_MIMES = {
+    ".mp4": "video/mp4", ".mov": "video/quicktime",
+    ".webm": "video/webm", ".m4v": "video/x-m4v",
+}
+
+
+def _video_mime(filename: str) -> Optional[str]:
+    from pathlib import PurePosixPath
+    return VIDEO_MIMES.get(PurePosixPath(filename or "").suffix.lower())
+
+
+def video_part(client, data: bytes, mime: str):
+    """One video reference -> something a Gemini call can take as vision
+    input. Small clips ride inline as bytes; anything bigger goes
+    through the Files API (upload, poll until ACTIVE, hand back the file
+    handle -- the SDK accepts it directly in contents). None on any
+    failure: a reference is an enhancement, never a gate."""
+    import io
+    import time as _time
+
+    from google.genai import types
+
+    try:
+        if len(data) <= INLINE_VIDEO_LIMIT:
+            return types.Part.from_bytes(data=data, mime_type=mime)
+        handle = client.files.upload(file=io.BytesIO(data),
+                                     config={"mime_type": mime})
+        deadline = _time.time() + 120
+        while getattr(handle.state, "name", str(handle.state)) == "PROCESSING" \
+                and _time.time() < deadline:
+            _time.sleep(2)
+            handle = client.files.get(name=handle.name)
+        if getattr(handle.state, "name", str(handle.state)) != "ACTIVE":
+            return None
+        return handle
+    except Exception:
+        return None
+
+
 def _to_jpeg(data: bytes) -> Optional[bytes]:
     import io
 
@@ -594,6 +660,283 @@ async def pipeline_run(request: Request):
 
     job = jobs.start("concept", f"concept · {prompt[:60]}", work)
     return {"job_id": job["id"], "image_refs": len(image_refs)}
+
+
+# --- generate tab (Higgsfield-style one-shot generation) --------------------
+# One run through the same four primitives Concept uses -- Reference /
+# Ground / Enhance / Generate -- for a single image or clip. The result
+# is NOT a second data model: it saves as an ordinary shoot_concepts
+# row with exactly one shot (or appends a shot to an existing concept),
+# so teach-to-RAG, generation history, and the scene board all keep
+# working unmodified.
+
+GENERATE_OUTPUTS = ("image", "video", "prompt")
+
+
+@router.get("/presets")
+def presets_list():
+    """The curated camera/framing scaffolds (prompts/presets.json) the
+    Generate tab and Director nodes fold into the Enhance step."""
+    return {"items": presets.load_presets()}
+
+
+@router.get("/director/landing")
+def director_landing(request: Request, brand: Optional[str] = None):
+    """Director tab's chat-first entry: a real pre-filled sample brief
+    (the gold-standard exemplar, shortened to its style + action blocks)
+    plus quick-start chips. Zero Page's chips are its real format
+    skeletons (ZEROPAGE_FORMATS); Antihero has no equivalent fixed list
+    yet, so it leads with the sample composer alone."""
+    from src import shootgen
+
+    brand = brand if brand in preprod.BRANDS else (
+        request.cookies.get("brand")
+        if request.cookies.get("brand") in preprod.BRANDS else "antihero")
+    sample = shootgen.gold_standard_example()
+    if sample:
+        paragraphs = [p for p in sample.split("\n\n") if p.strip()]
+        sample = "\n\n".join(paragraphs[:2])
+    chips = []
+    if brand == "zeropage":
+        chips = [{"label": name, "text": how}
+                 for name, how in shootgen.ZEROPAGE_FORMATS[:4]]
+    return {"brand": brand, "sample_prompt": sample, "chips": chips}
+
+
+def _enhance_generate_prompt(gemini_client, prompt: str, *, preset=None,
+                             references: str = "", image_refs=None,
+                             video_refs=None) -> str:
+    """The Enhance primitive for one Generate-tab run: the typed prompt,
+    the picked preset's scaffold, and the RAG references folded into one
+    billed Gemini call, with image/video references riding as real
+    vision input. Raises on failure -- here the model call IS the
+    deliverable, the promptgen contract."""
+    from google.genai import types
+
+    from src import shootgen
+    from src import workflows as _workflows
+    from src.gemini_utils import generate_with_retry
+
+    blocks = [_workflows._enhance_system_text()]
+    if preset:
+        blocks.append("CAMERA / FRAMING SCAFFOLD -- build the prompt around "
+                      f"this move:\n{preset['label']}: {preset['how']}")
+    if references:
+        blocks.append("REFERENCES -- ground the prompt in these:\n" + references)
+    if image_refs or video_refs:
+        blocks.append("(Reference media is attached above -- ground the prompt "
+                      "in what it actually shows, don't ignore it.)")
+    blocks.append("PROMPT TO ENHANCE:\n" + prompt)
+
+    parts: list = [types.Part.from_bytes(data=data, mime_type=mime)
+                   for data, mime in image_refs or []]
+    for data, mime in video_refs or []:
+        part = video_part(gemini_client, data, mime)
+        if part is not None:
+            parts.append(part)
+    parts.append("\n\n".join(blocks))
+    return generate_with_retry(gemini_client, shootgen.MODEL, parts).strip()
+
+
+def _generate_title(prompt: str) -> str:
+    words = prompt.split()
+    title = " ".join(words[:8])
+    return title + ("…" if len(words) > 8 else "")
+
+
+@router.post("/generate/run")
+async def generate_run(request: Request):
+    """The Generate button: preset + prompt (+ attached image/video
+    references) -> Ground -> Enhance -> saved one-shot concept -> the
+    render. The render is best-effort and honestly gated: an image goes
+    through Nano Banana (cheap, capped) and lands as the shot's
+    reference_image; a video goes through Runway's spend gate and lands
+    as media_url; a refusal still leaves the saved concept + prompt."""
+    form = await request.form()
+    prompt = (form.get("prompt") or "").strip()
+    if not prompt:
+        return _error(400, "empty_prompt", "a prompt is required")
+    api_key = _gemini_key()
+    if not api_key:
+        return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
+    brand_raw = form.get("brand")
+    brand = brand_raw if brand_raw in preprod.BRANDS else (
+        request.cookies.get("brand") if request.cookies.get("brand") in preprod.BRANDS
+        else "antihero")
+    output = form.get("output")
+    if output not in GENERATE_OUTPUTS:
+        output = "image"
+    preset = presets.get_preset(form.get("preset"))
+    concept_id_raw = (form.get("concept_id") or "").strip()
+    attach_to = int(concept_id_raw) if concept_id_raw.isdigit() else None
+    if attach_to is not None and preprod.get_concept(attach_to, path=db.DB_PATH) is None:
+        return _error(404, "not_found", "no such concept to attach to")
+
+    image_refs: list = []
+    video_refs: list = []
+    for upload in form.getlist("files"):
+        filename = getattr(upload, "filename", "")
+        if not filename:
+            continue
+        mime = _video_mime(filename)
+        if mime:
+            if len(video_refs) < MAX_VIDEO_REFS:
+                video_refs.append((await upload.read(), mime))
+            continue
+        if len(image_refs) >= MAX_IMAGE_REFS:
+            continue
+        jpeg = _to_jpeg(await upload.read())
+        if jpeg:
+            image_refs.append((jpeg, "image/jpeg"))
+    for picked in form.getlist("asset_photos"):
+        if len(image_refs) >= MAX_IMAGE_REFS:
+            break
+        target = _resolve_asset_photo(str(picked))
+        if target is None:
+            continue
+        jpeg = _to_jpeg(target.read_bytes())
+        if jpeg:
+            image_refs.append((jpeg, "image/jpeg"))
+
+    def work(job):
+        from google import genai
+
+        from src import nano_banana, shootgen
+        gemini_client = genai.Client(api_key=api_key)
+
+        jobs.progress(job, 0.1, "grounding in references")
+        references = shootgen.reference_block(spark=prompt, db_path=db.DB_PATH)
+
+        refs_note = ""
+        if image_refs or video_refs:
+            refs_note = f" · {len(image_refs) + len(video_refs)} ref(s)"
+        jobs.progress(job, 0.3, "enhancing prompt" + refs_note)
+        enhanced = _enhance_generate_prompt(
+            gemini_client, prompt, preset=preset, references=references,
+            image_refs=image_refs, video_refs=video_refs)
+        if not enhanced:
+            raise RuntimeError("enhancement came back empty")
+
+        jobs.progress(job, 0.55, "saving concept")
+        shot = {"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
+                "desc": prompt, "prompt": enhanced}
+        allowed = shootgen.ZEROPAGE_AI_TOOLS if brand == "zeropage" else None
+        location_names = [loc["name"]
+                          for loc in preprod.list_locations(path=db.DB_PATH)]
+        if attach_to is not None:
+            concept = preprod.get_concept(attach_to, path=db.DB_PATH)
+            shots = list(concept.get("shots") or [])
+            shot["n"] = max((s.get("n") or 0 for s in shots), default=0) + 1
+            shots.append(shot)
+            warnings = shootgen.validate_concept(
+                {**concept, "shots": shots}, location_names,
+                use_pov=bool(concept.get("use_pov")), allowed_tools=allowed)
+            preprod.update_concept_shots(attach_to, {"shots": shots},
+                                         warnings=warnings, path=db.DB_PATH)
+            concept_id = attach_to
+        else:
+            concept_dict = {"title": _generate_title(prompt), "hook": "",
+                            "logline": prompt, "shots": [shot]}
+            warnings = shootgen.validate_concept(
+                concept_dict, location_names, allowed_tools=allowed)
+            concept_id = preprod.save_concept(
+                concept_dict, brand=brand, spark=prompt,
+                warnings=warnings, path=db.DB_PATH)
+
+        notes = []
+        if output == "image":
+            jobs.progress(job, 0.7, "rendering image via Nano Banana")
+            result = nano_banana.generate_from_prompt(
+                enhanced, reference_image=image_refs[0][0] if image_refs else None,
+                db_path=db.DB_PATH)
+            if result.get("ok"):
+                preprod.set_shot_reference_image(
+                    concept_id, shot["n"], result["media_url"], path=db.DB_PATH)
+                notes.append("image rendered → shot reference")
+            else:
+                notes.append(f"image render skipped: {result.get('error')}")
+        elif output == "video":
+            if runway.has_key():
+                jobs.progress(job, 0.7, "rendering via Runway")
+                result = runway.generate_from_prompt(
+                    enhanced,
+                    reference_image=image_refs[0][0] if image_refs else None,
+                    db_path=db.DB_PATH)
+                if result.get("ok"):
+                    preprod.set_shot_media_url(
+                        concept_id, shot["n"], result["media_url"], path=db.DB_PATH)
+                    notes.append("clip rendered and attached")
+                else:
+                    notes.append(f"render skipped: {result.get('error')}")
+            else:
+                notes.append("render skipped: RUNWAYML_API_SECRET not set")
+
+        detail = "prompt saved" if output == "prompt" else (notes[0] if notes else "saved")
+        if warnings:
+            detail += f" · {len(warnings)} warning(s)"
+        return {"ref_id": concept_id, "detail": detail, "output": enhanced,
+                "shot_n": shot["n"]}
+
+    job = jobs.start("generate", f"generate · {prompt[:60]}", work)
+    return {"job_id": job["id"],
+            "image_refs": len(image_refs), "video_refs": len(video_refs)}
+
+
+# --- director mode: per-shot save-back --------------------------------------
+
+class ShotPromptBody(BaseModel):
+    prompt: str
+
+
+@router.post("/concepts/{concept_id}/shots/{shot_n}/prompt")
+def shot_prompt_update(concept_id: int, shot_n: int, body: ShotPromptBody):
+    """Persist one shot's edited prompt from the Director canvas --
+    through update_concept_shots (so the picked title/hook/logline are
+    never touched), re-validated the same way a fresh plan is. The
+    other shots ride along unchanged."""
+    from src import shootgen
+
+    text = body.prompt.strip()
+    if not text:
+        return _error(400, "empty_prompt", "an empty prompt renders nothing")
+    concept = preprod.get_concept(concept_id, path=db.DB_PATH)
+    if concept is None:
+        return _error(404, "not_found", "no such concept")
+    shots = concept.get("shots") or []
+    shot = next((s for s in shots if s.get("n") == shot_n), None)
+    if shot is None:
+        return _error(404, "not_found", f"no shot {shot_n}")
+    shot["prompt"] = text
+    warnings = shootgen.validate_concept(
+        {**concept, "shots": shots},
+        [loc["name"] for loc in preprod.list_locations(path=db.DB_PATH)],
+        use_pov=bool(concept.get("use_pov")),
+        allowed_tools=shootgen.ZEROPAGE_AI_TOOLS
+        if concept.get("brand") == "zeropage" else None)
+    preprod.update_concept_shots(concept_id, {"shots": shots},
+                                 warnings=warnings, path=db.DB_PATH)
+    return {"concept_id": concept_id, "shot_n": shot_n, "warnings": warnings}
+
+
+class ShotReferenceBody(BaseModel):
+    url: str
+
+
+@router.post("/concepts/{concept_id}/shots/{shot_n}/reference")
+def shot_reference_attach(concept_id: int, shot_n: int, body: ShotReferenceBody):
+    """Attach (or clear, with "") an image URL as one shot's reference
+    anchor -- how a Director-canvas Nano render lands back on the shot.
+    The /ui JSON twin of the dev console's form route."""
+    url = body.url.strip()
+    if url and not url.startswith(("http://", "https://", "/")):
+        return _error(400, "invalid_url",
+                      "paste a public http(s) URL or a site-relative path")
+    try:
+        preprod.set_shot_reference_image(concept_id, shot_n, url, path=db.DB_PATH)
+    except ValueError as e:
+        return _error(404, "not_found", str(e))
+    return {"concept_id": concept_id, "shot_n": shot_n,
+            "reference_image": url or None}
 
 
 @router.post("/concepts/{concept_id}/approve")
@@ -957,12 +1300,14 @@ class EnhanceBody(BaseModel):
     system: str = ""
     user: str = ""
     images: list[str] = []
+    references: str = ""
 
 
 @router.post("/workflows/exec/enhance")
 def workflow_exec_enhance(body: EnhanceBody):
-    """The LLM Enhance node's own Run: one billed Gemini call through
-    generate_with_retry, images riding as vision input. A job, so the
+    """The Gemini 2.5 Flash enhance node's own Run: one billed Gemini
+    call through generate_with_retry, images riding as vision input and
+    the Ground node's references folded in as grounding. A job, so the
     canvas lights the node from the same SSE feed everything uses."""
     api_key = _gemini_key()
     if not api_key:
@@ -973,6 +1318,7 @@ def workflow_exec_enhance(body: EnhanceBody):
         jobs.progress(job, 0.3, "enhancing prompt")
         text = workflow_runner.enhance(
             body.system, body.user, images=body.images or None,
+            references=body.references,
             gemini_client=genai.Client(api_key=api_key),
             resolve_photo=_resolve_asset_photo)
         return {"detail": text[:80], "output": text}

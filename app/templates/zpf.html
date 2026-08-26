@@ -21,7 +21,7 @@
     <a data-view="studio" data-label="Studio" aria-current="page"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5V21H3z"/></svg></a>
     <a data-view="assets" data-label="Assets"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="3"/><path d="M3 9h18M9 9v9"/></svg></a>
     <a data-view="pipeline" data-label="Pipeline"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="18" cy="18" r="2.4"/><path d="M8.4 6H16a2 2 0 0 1 2 2v7.6"/></svg></a>
-    <a data-view="workflows" data-label="Workflows"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="18" cy="6" r="2.4"/><circle cx="12" cy="18" r="2.4"/><path d="M8.4 6h7.2M6.8 8.2 11 15.8M17.2 8.2 13 15.8"/></svg></a>
+    <a data-view="director" data-label="Director"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="18" cy="6" r="2.4"/><circle cx="12" cy="18" r="2.4"/><path d="M8.4 6h7.2M6.8 8.2 11 15.8M17.2 8.2 13 15.8"/></svg></a>
     <a data-view="analytics" data-label="Analytics"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v8.5h8.5"/></svg></a>
     <a data-view="queue" data-label="Queue"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 14h5l2 3h4l2-3h5"/></svg></a>
   </div>
@@ -96,10 +96,19 @@
     <div class="gallery" id="gallery"></div>
   </div>
 
-  <!-- ══ PIPELINE ══ -->
+  <!-- ══ PIPELINE · Concept / Generate / Director ══ -->
   <div class="view" id="v-pipeline">
-    <div class="vhead"><h2>Pipeline</h2><span class="spacer"></span><span class="m" id="pbrand"></span></div>
+    <div class="vhead">
+      <h2>Pipeline</h2>
+      <div class="cats ptabs" id="ptabs" style="margin:0;padding:0">
+        <button class="cat" data-ptab="concept" aria-pressed="true">Concept</button>
+        <button class="cat" data-ptab="generate" aria-pressed="false">Generate</button>
+      </div>
+      <span class="spacer"></span><span class="m" id="pbrand"></span>
+    </div>
 
+    <!-- ── Concept tab: the existing loop, unchanged ── -->
+    <div class="ptab" id="ptab-concept">
     <div class="scomposer" data-cap="pipeline.run">
       <div class="glass sbar2">
         <input class="search" id="sceneprompt" placeholder="Describe the scene — a spark, a mood, a beat…">
@@ -131,34 +140,102 @@
         <div class="tbl" id="planned"></div>
       </div>
     </div>
-  </div>
+    </div><!-- /ptab-concept -->
 
-  <!-- ══ WORKFLOWS ══ -->
-  <div class="view" id="v-workflows">
+    <!-- ── Generate tab: one image/video, Higgsfield-simple ── -->
+    <div class="ptab" id="ptab-generate" hidden>
+      <div class="scomposer">
+        <div class="glass gencomposer">
+          <div class="genrow">
+            <select class="wfselect" id="genpreset"><option value="">Camera preset…</option></select>
+            <select class="wfselect" id="genout">
+              <option value="image">Image · Nano Banana</option>
+              <option value="video">Video · Runway</option>
+              <option value="prompt">Prompt only</option>
+            </select>
+            <span class="spacer"></span>
+            <select class="wfselect" id="genconcept"><option value="">Save as new concept</option></select>
+          </div>
+          <div class="attachbar" id="genattach"></div>
+          <div class="mentionwrap">
+            <textarea id="genprompt" placeholder="Describe the shot — type @ to pull a character, prop, or room from the memory bank…"></textarea>
+            <div class="mentiondrop" id="genmentions" hidden></div>
+          </div>
+          <div class="cfoot">
+            <button class="plus" id="genup" data-label="Attach reference" aria-label="Attach reference">
+              <svg viewBox="0 0 24 24" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+            </button>
+            <span class="m">reference images and video ground the generation</span>
+            <span class="spacer"></span>
+            <button class="go" id="gengo" data-cap="pipeline.run" disabled>Generate</button>
+          </div>
+          <input type="file" id="genfiles" accept="image/*,video/*" multiple hidden>
+        </div>
+      </div>
+      <div class="stateline" id="genstate" hidden></div>
+      <div id="genresult"></div>
+    </div><!-- /ptab-generate -->
+
+  </div><!-- /v-pipeline -->
+
+  <!-- ══ DIRECTOR · the node canvas, scene to scene for continuity ══ -->
+  <div class="view" id="v-director">
     <div class="vhead">
-      <h2>Workflows</h2>
-      <input class="search wfname" id="wfname" placeholder="Untitled workflow">
+      <h2>Director</h2>
+      <span class="m">scene to scene · the graph holds the shots to one look</span>
       <span class="spacer"></span>
-      <select class="wfselect" id="wfadd">
-        <option value="">+ Add node…</option>
-        <option value="zpf/system_prompt">System Prompt</option>
-        <option value="zpf/user_prompt">User Prompt</option>
-        <option value="zpf/reference_image">Reference Image</option>
-        <option value="zpf/ground">Ground in References</option>
-        <option value="zpf/enhance">LLM Enhance (Gemini Flash)</option>
-        <option value="zpf/nano_banana">Nano Banana (image)</option>
-        <option value="zpf/generate">Generate (Runway video)</option>
-      </select>
-      <select class="wfselect" id="wfpick"><option value="">Open…</option></select>
-      <button class="tag" id="wfnew">New</button>
-      <button class="tag" id="wfdel">Delete</button>
-      <button class="tag" id="wfsave">Save</button>
-      <button class="go" id="wfrunall">Run all</button>
     </div>
-    <div class="stateline" id="wfstate" hidden></div>
-    <div class="wfwrap"><canvas id="wfcanvas"></canvas></div>
-    <div class="wfhint m">Right-click the canvas (or use + Add node) to add · drag from a port dot to wire · double-click a node to edit it</div>
-  </div>
+      <div id="dirlanding">
+        <div class="scomposer">
+          <div class="glass gencomposer">
+            <div class="dirhead">
+              <h3>Direct your next video</h3>
+              <span class="m">the brief runs the same engine as Concept — the scene lands straight on the canvas</span>
+            </div>
+            <div class="mentionwrap">
+              <textarea id="dirbrief" rows="9"></textarea>
+              <div class="mentiondrop" id="dirmentions" hidden></div>
+            </div>
+            <div class="dirchips" id="dirchips"></div>
+            <div class="cfoot">
+              <span class="m" id="dirnote"></span>
+              <span class="spacer"></span>
+              <button class="go" id="dirgo" data-cap="pipeline.run">Build the scene</button>
+            </div>
+          </div>
+        </div>
+        <div class="stateline" id="dirstate" hidden></div>
+      </div>
+
+      <div id="dircanvas" hidden>
+        <div class="vhead" style="padding-top:0">
+          <button class="tag" id="wfback">← Brief</button>
+          <input class="search wfname" id="wfname" placeholder="Untitled workflow">
+          <span class="m" id="wfconcept"></span>
+          <span class="spacer"></span>
+          <select class="wfselect" id="wfadd">
+            <option value="">+ Add node…</option>
+            <option value="zpf/system_prompt">System Prompt</option>
+            <option value="zpf/user_prompt">User Prompt</option>
+            <option value="zpf/reference_image">Reference Image</option>
+            <option value="zpf/ground">Ground in References</option>
+            <option value="zpf/enhance">Gemini 2.5 Flash (enhance)</option>
+            <option value="zpf/nano_banana">Nano Banana (image)</option>
+            <option value="zpf/generate">Generate (Runway video)</option>
+          </select>
+          <select class="wfselect" id="wfpick"><option value="">Open…</option></select>
+          <button class="tag" id="wfnew">New</button>
+          <button class="tag" id="wfdel">Delete</button>
+          <button class="tag" id="wfsave">Save</button>
+          <button class="tag" id="wfsaveconcept" hidden>Save to concept</button>
+          <button class="go" id="wfrunall">Run all</button>
+        </div>
+        <div class="stateline" id="wfstate" hidden></div>
+        <div class="wfwrap"><canvas id="wfcanvas"></canvas></div>
+        <div class="shotdock" id="shotdock" hidden></div>
+        <div class="wfhint m">Right-click the canvas (or use + Add node) to add · drag from a port dot to wire · double-click a node to edit it</div>
+      </div>
+  </div><!-- /v-director -->
 
   <!-- ══ ANALYTICS ══ -->
   <div class="view" id="v-analytics">
@@ -234,7 +311,14 @@
   <div class="dnbody">
     <div id="wfmtextwrap">
       <div class="dnlabel" id="wfmlabel">Text</div>
-      <textarea id="wfmtext" class="dnta"></textarea>
+      <div class="genrow" id="wfmpresetrow">
+        <select class="wfselect" id="wfmpreset"><option value="">Fold in a camera preset…</option></select>
+        <span class="m">type @ to mention a character, prop, or room</span>
+      </div>
+      <div class="mentionwrap">
+        <textarea id="wfmtext" class="dnta"></textarea>
+        <div class="mentiondrop" id="wfmmentions" hidden></div>
+      </div>
     </div>
     <div id="wfmmediawrap" hidden>
       <div class="dnlabel">Pick from saved media — or paste a public image URL below</div>

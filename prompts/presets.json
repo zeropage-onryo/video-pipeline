@@ -1,0 +1,45 @@
+{
+  "_comment": "Generate-tab / Director-node camera + framing scaffolds. Data, not code (the brands.txt philosophy): each preset's `how` folds into the Enhance step's system prompt as the move to build the shot around. Sourced 2026-08-25 from the video-prompting references in this repo (.claude/skills/video-prompting -- Seedance 2.0 camera verbs, Higgsfield's named presets via shot.py's HIGGSFIELD_CAMERA map) and the grounded-handheld style block of prompts/gold_standard.md -- real camera language, not invented.",
+  "presets": [
+    {
+      "id": "slow_push_in",
+      "label": "Slow Push-In",
+      "how": "One continuous slow push-in toward the subject until the telling detail fills the frame. No cuts. Start the move already in progress -- mid-motion, never from a standstill -- and let the unease escalate as the detail grows."
+    },
+    {
+      "id": "pov_walk_in",
+      "label": "POV Walk-In",
+      "how": "First-person camera entering the space and discovering the subject -- slight handheld head-bob sway, doorframes and edges passing close, the viewer arrives at the subject with the camera. Natural walking rhythm, no cuts."
+    },
+    {
+      "id": "macro_push",
+      "label": "Macro Push",
+      "how": "Extreme close-up macro push across the surface of the subject -- name the texture (grain, wear, dust, machining marks) and how the practical light rakes across it. Shallow depth of field, focus travelling with the move."
+    },
+    {
+      "id": "orbit",
+      "label": "360 Orbit",
+      "how": "Slow 360 orbit around the subject, background parallax sliding behind it. Keep the subject locked in frame while the space wheels past; one continuous move, constant speed."
+    },
+    {
+      "id": "tracking_follow",
+      "label": "Low-Angle Follow",
+      "how": "Low-angle tracking shot following the subject through the space -- describe the motion in chronological beats and the visible physical outcomes (fabric drag, footfall, dust kicked into the light)."
+    },
+    {
+      "id": "handheld_rough",
+      "label": "Handheld Run-and-Gun",
+      "how": "Raw handheld run-and-gun style: close wide-angle placement, natural camera shake, imperfect framing that drifts and re-centres, muted colour, practical light, real lived-in location. Grounded and rough -- NOT glossy, epic, or stylized."
+    },
+    {
+      "id": "locked_off_reveal",
+      "label": "Locked-Off Reveal",
+      "how": "Static locked-off camera on an ordinary frame; the frame never moves. One element shifts or is revealed to be wrong -- the reveal is the whole shot. Hold well past comfortable."
+    },
+    {
+      "id": "crane_up",
+      "label": "Crane Up",
+      "how": "Slow crane up from a tight detail to the whole space, the geography of the scene assembling as the camera rises. One continuous move; end holding the wide."
+    }
+  ]
+}
