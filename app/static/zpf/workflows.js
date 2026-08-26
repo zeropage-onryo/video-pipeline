@@ -1289,7 +1289,11 @@ function shotChainGraph(d, s) {
       inputs: [{ name: 'prompt', type: 'text', link: 4 },
                { name: 'image', type: 'image', link: 5 }],
       outputs: [{ name: 'media', type: 'media', links: null }],
-      properties: { concept_id: d.id, shot_n: s.n } },
+      // image_url is the fallback for an UNWIRED image port: unplug the
+      // keyframe and the clip still anchors on the shot's own reference,
+      // exactly like the enhance and Nano nodes above
+      properties: { concept_id: d.id, shot_n: s.n,
+                    image_url: s.reference_image || '' } },
   ];
   const links = [[1, 1, 0, 3, 1, 'text'],
                  [2, 2, 0, 3, 0, 'text'],

@@ -879,6 +879,30 @@ def test_render_bytes_refuses_a_path_that_escapes_the_render_dir():
     assert workflow_runner.render_bytes("/renders/../../pyproject.toml") is None
 
 
+def test_generate_falls_back_to_the_shots_reference_like_the_other_nodes(
+        tmp_db, monkeypatch):
+    """One graph must not render two different clips depending on which
+    button was pressed: the per-node Run sends properties.image_url, so
+    Run all has to honour the same fallback enhance and nano already do."""
+    seen = {}
+    monkeypatch.setattr(runway, "has_key", lambda: True)
+    monkeypatch.setattr(runway, "generate_from_prompt",
+                        lambda prompt, *, reference_image=None, **kw:
+                        seen.__setitem__("ref", reference_image) or
+                        {"ok": True, "media_url": "/x.mp4", "generation_id": 1,
+                         "path": "p", "error": None})
+    graph = {
+        "nodes": [node(1, "zpf/user_prompt", properties={"text": "night ride"}),
+                  node(2, "zpf/generate",
+                       inputs=[slot("prompt", "text", 1),
+                               slot("image", "image", None)],   # unwired
+                       properties={"image_url": "https://cdn.test/plate.jpg"})],
+        "links": [[1, 1, 0, 2, 0, "text"]],
+    }
+    workflow_runner.execute_graph(graph, gemini_client=object(), db_path=tmp_db)
+    assert seen["ref"] == "https://cdn.test/plate.jpg"
+
+
 def test_an_unconfigured_runway_node_is_skipped_not_failed(tmp_db, monkeypatch):
     """A chain whose keyframe rendered must not report itself failed
     just because Runway was never set up. The spend gate is the

@@ -396,8 +396,14 @@ def execute_graph(graph: dict, *, gemini_client=None, resolve_photo=None,
                     push((index + 1) / total, f"{title} skipped")
                     continue
                 prompt = _input_value(node, "prompt", links, outputs) or ""
+                # the wired port, else the shot's own reference riding on
+                # the property -- the same fallback enhance and nano
+                # already honour, and the same one this node's per-node
+                # Run sends. Without it one graph rendered two different
+                # clips depending on which button was pressed.
                 reference = image_for_runway(
-                    _input_value(node, "image", links, outputs),
+                    _input_value(node, "image", links, outputs)
+                    or properties.get("image_url"),
                     resolve_photo=resolve_photo)
                 result = runway.generate_from_prompt(
                     prompt, reference_image=reference, db_path=db_path)
