@@ -10,6 +10,7 @@ the default, exactly as production), and jobs are polled to completion
 so a silently-dead thread fails loudly.
 """
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -245,6 +246,9 @@ def test_execute_graph_flows_values_through_the_reference_shape(tmp_db, monkeypa
 
     monkeypatch.setattr(workflow_runner, "enhance", fake_enhance)
     monkeypatch.setattr(runway, "generate_from_prompt", fake_generate)
+    # this test is "a CONFIGURED Runway renders" -- an unconfigured one
+    # is skipped, not run (see the unarmed-connector test below)
+    monkeypatch.setenv("RUNWAYML_API_SECRET", "k")
 
     emitted = []
     result = workflow_runner.execute_graph(
@@ -676,6 +680,244 @@ def test_image_bytes_for_gemini_resolves_renders_and_data_uris(tmp_path):
     assert workflow_runner.image_bytes_for_gemini(
         "/assets/antihero/p.jpg", resolve_photo=lambda v: photo) == b"JPEGBYTES"
     assert workflow_runner.image_bytes_for_gemini("https://x/y.png") is None
+
+
+# --- the keyframe -> clip chain ---------------------------------------------
+
+def test_still_framing_keeps_the_prompt_and_drops_the_motion_instruction():
+    """The bug this exists for: a video prompt handed to an image model
+    gets answered in prose ("Understood, I will apply these
+    guidelines...") instead of rendered. Pure, so it is checkable
+    without spending a call."""
+    from src import nano_banana
+
+    framed = nano_banana.as_still_frame(
+        "Vertical 9:16 video — the camera follows the subject, handheld drift")
+    # every word of the original survives -- the detail is the value
+    assert "the camera follows the subject, handheld drift" in framed
+    # ...under an instruction that makes one frame the deliverable
+    assert "single photorealistic still image" in framed
+    assert "never as a sequence" in framed
+    assert nano_banana.as_still_frame("   ") == ""
+
+
+def test_nano_sends_the_framed_prompt_but_logs_what_the_person_wrote(
+        tmp_db, tmp_path, monkeypatch):
+    import json
+
+    from src import nano_banana
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(nano_banana, "RENDER_DIR", tmp_path / "nano")
+    monkeypatch.setattr("src.storage.configured", lambda: False)
+    fake = FakeGeminiImageClient()
+    assert nano_banana.generate_from_prompt("a red bike, camera pushes in",
+                                            db_path=tmp_db, client=fake)["ok"]
+    sent = fake.calls[0]["contents"][-1]
+    assert "single photorealistic still image" in sent
+    assert "a red bike, camera pushes in" in sent
+    with generative.connect(tmp_db) as conn:
+        prompt, params = conn.execute(
+            "SELECT prompt, params_json FROM generations").fetchone()
+    assert prompt == "a red bike, camera pushes in"       # not the wrapper
+    assert json.loads(params)["framing"] == "still"
+
+
+# --- references actually reaching the models --------------------------------
+
+PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"pixels"
+R2_URL = "https://cdn.example/renders/nano/wf-1.png"
+
+
+def test_a_remote_reference_reaches_gemini_as_vision_not_as_a_url(monkeypatch):
+    """The regression this exists for: once R2 was configured every
+    reference image became an https URL, and Gemini cannot fetch a URL.
+    The reference looked attached on the canvas and reached no model --
+    silently dropped for Nano, and reduced to a line of TEXT naming the
+    URL for enhance, which is indistinguishable from no reference."""
+    monkeypatch.setattr(workflow_runner, "fetch_image_bytes",
+                        lambda url: PNG_BYTES if url == R2_URL else None)
+    captured = {}
+    monkeypatch.setattr("src.gemini_utils.generate_with_retry",
+                        lambda client, model, contents:
+                        captured.setdefault("parts", contents) and "ENHANCED")
+
+    workflow_runner.enhance("SYS", "a watch macro", images=[R2_URL],
+                            gemini_client=object(), resolve_photo=lambda v: None)
+    parts = captured["parts"]
+    assert len(parts) == 2                       # an image Part, then the text
+    assert parts[0].inline_data.data == PNG_BYTES
+    assert parts[0].inline_data.mime_type == "image/png"   # sniffed, not assumed
+    assert R2_URL not in parts[-1]               # no longer a URL the model can't use
+
+
+def test_an_unreachable_reference_says_so_instead_of_pretending(monkeypatch):
+    monkeypatch.setattr(workflow_runner, "fetch_image_bytes", lambda url: None)
+    captured = {}
+    monkeypatch.setattr("src.gemini_utils.generate_with_retry",
+                        lambda client, model, contents:
+                        captured.setdefault("parts", contents) and "E")
+    workflow_runner.enhance("SYS", "a watch macro", images=[R2_URL],
+                            gemini_client=object(), resolve_photo=lambda v: None)
+    assert "could not be loaded" in captured["parts"][-1]
+
+
+def test_image_bytes_for_gemini_fetches_a_public_url(monkeypatch):
+    monkeypatch.setattr(workflow_runner, "fetch_image_bytes",
+                        lambda url: PNG_BYTES)
+    assert workflow_runner.image_bytes_for_gemini(R2_URL) == PNG_BYTES
+
+
+def test_the_reference_fetch_refuses_private_addresses():
+    """The URL comes out of user-controlled graph JSON and the fetch runs
+    server-side, so the SSRF guard is the wall. Literal IPs, so no DNS
+    (and no network) is needed to check it."""
+    for host in ("127.0.0.1", "10.0.0.5", "169.254.169.254", "192.168.1.1"):
+        assert workflow_runner._public_host(host) is False
+    assert workflow_runner.fetch_image_bytes("http://169.254.169.254/latest/meta-data") is None
+    assert workflow_runner.fetch_image_bytes("file:///etc/passwd") is None
+
+
+def test_sniff_mime_reads_the_magic_number():
+    from src.gemini_utils import sniff_mime
+
+    assert sniff_mime(PNG_BYTES) == "image/png"
+    assert sniff_mime(b"\xff\xd8\xff\xe0stuff") == "image/jpeg"
+    assert sniff_mime(b"RIFF1234WEBPmore") == "image/webp"
+    assert sniff_mime(b"") == "image/jpeg"          # a safe default, never a crash
+
+
+def test_nano_tells_the_model_what_the_reference_is_for(tmp_db, tmp_path, monkeypatch):
+    """Bytes with no instruction leave the model guessing between copy
+    this / continue this / ignore this."""
+    from src import nano_banana
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(nano_banana, "RENDER_DIR", tmp_path / "nano")
+    monkeypatch.setattr("src.storage.configured", lambda: False)
+    fake = FakeGeminiImageClient()
+    assert nano_banana.generate_from_prompt("a watch macro", reference_image=PNG_BYTES,
+                                            db_path=tmp_db, client=fake)["ok"]
+    parts = fake.calls[0]["contents"]
+    assert parts[0].inline_data.mime_type == "image/png"   # not the old blanket jpeg
+    assert "THE ATTACHED IMAGE is reference material" in parts[-1]
+    assert "Do NOT copy its framing" in parts[-1]
+    # ...and no reference means no note about one
+    assert "THE ATTACHED IMAGE" not in nano_banana.as_still_frame("a watch macro")
+
+
+def test_nano_retries_a_transient_overload(tmp_db, tmp_path, monkeypatch):
+    """Measured live: an image model under load answers 503 UNAVAILABLE
+    often enough that one attempt is not enough. Retried like every
+    other Gemini call in the project -- but on the SAME model, since the
+    text fallbacks in gemini_utils cannot draw."""
+    from src import nano_banana
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(nano_banana, "RENDER_DIR", tmp_path / "nano")
+    monkeypatch.setattr(nano_banana.time, "sleep", lambda s: None)
+    monkeypatch.setattr("src.storage.configured", lambda: False)
+
+    fake = FakeGeminiImageClient()
+    good = fake.models.generate_content
+    attempts = []
+
+    def flaky(model, contents):
+        attempts.append(model)
+        if len(attempts) < 3:
+            raise RuntimeError("503 UNAVAILABLE. high demand")
+        return good(model=model, contents=contents)
+
+    fake.models = SimpleNamespace(generate_content=flaky)
+    result = nano_banana.generate_from_prompt("a bike", db_path=tmp_db, client=fake)
+    assert result["ok"], result["error"]
+    assert len(attempts) == 3
+    assert set(attempts) == {nano_banana.MODEL}      # never a text fallback
+
+
+def test_nano_does_not_retry_a_real_refusal(tmp_db, tmp_path, monkeypatch):
+    """A refusal is an answer, not a blip -- retrying it would spend
+    twice to be told no twice."""
+    from src import nano_banana
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(nano_banana, "RENDER_DIR", tmp_path / "nano")
+    calls = []
+
+    def refuse(model, contents):
+        calls.append(model)
+        raise RuntimeError("400 INVALID_ARGUMENT")
+
+    fake = FakeGeminiImageClient()
+    fake.models = SimpleNamespace(generate_content=refuse)
+    result = nano_banana.generate_from_prompt("a bike", db_path=tmp_db, client=fake)
+    assert not result["ok"] and len(calls) == 1
+
+
+def test_image_for_runway_carries_an_upstream_keyframe(tmp_path, monkeypatch):
+    """The Nano keyframe feeds Generate's image port, but /renders/ is
+    local until R2 is configured -- Runway could never fetch it, so it
+    must arrive as bytes or the anchor is silently lost."""
+    renders = tmp_path / "data" / "renders" / "nano"
+    renders.mkdir(parents=True)
+    (renders / "wf-1.png").write_bytes(b"KEYFRAME")
+    monkeypatch.setattr(workflow_runner, "render_bytes",
+                        lambda v: (tmp_path / "data" / "renders"
+                                   / v[len("/renders/"):]).read_bytes())
+    assert workflow_runner.image_for_runway("/renders/nano/wf-1.png") == b"KEYFRAME"
+    # public URLs still pass straight through as prompt_image
+    assert workflow_runner.image_for_runway(
+        "https://cdn.test/a.jpg") == "https://cdn.test/a.jpg"
+
+
+def test_render_bytes_refuses_a_path_that_escapes_the_render_dir():
+    # pyproject.toml is tracked, so it definitely exists -- the guard is
+    # what refuses it, not a missing file
+    assert (Path(__file__).resolve().parent.parent / "pyproject.toml").is_file()
+    assert workflow_runner.render_bytes("/renders/../../pyproject.toml") is None
+
+
+def test_generate_falls_back_to_the_shots_reference_like_the_other_nodes(
+        tmp_db, monkeypatch):
+    """One graph must not render two different clips depending on which
+    button was pressed: the per-node Run sends properties.image_url, so
+    Run all has to honour the same fallback enhance and nano already do."""
+    seen = {}
+    monkeypatch.setattr(runway, "has_key", lambda: True)
+    monkeypatch.setattr(runway, "generate_from_prompt",
+                        lambda prompt, *, reference_image=None, **kw:
+                        seen.__setitem__("ref", reference_image) or
+                        {"ok": True, "media_url": "/x.mp4", "generation_id": 1,
+                         "path": "p", "error": None})
+    graph = {
+        "nodes": [node(1, "zpf/user_prompt", properties={"text": "night ride"}),
+                  node(2, "zpf/generate",
+                       inputs=[slot("prompt", "text", 1),
+                               slot("image", "image", None)],   # unwired
+                       properties={"image_url": "https://cdn.test/plate.jpg"})],
+        "links": [[1, 1, 0, 2, 0, "text"]],
+    }
+    workflow_runner.execute_graph(graph, gemini_client=object(), db_path=tmp_db)
+    assert seen["ref"] == "https://cdn.test/plate.jpg"
+
+
+def test_an_unconfigured_runway_node_is_skipped_not_failed(tmp_db, monkeypatch):
+    """A chain whose keyframe rendered must not report itself failed
+    just because Runway was never set up. The spend gate is the
+    opposite case and still fails loudly -- see
+    test_api_run_generate_node_hits_the_spend_gate."""
+    monkeypatch.delenv("RUNWAYML_API_SECRET", raising=False)
+    graph = {
+        "nodes": [node(1, "zpf/user_prompt", properties={"text": "night ride"}),
+                  node(2, "zpf/generate", inputs=[slot("prompt", "text", 1),
+                                                  slot("image", "image", None)])],
+        "links": [[1, 1, 0, 2, 0, "text"]],
+    }
+    result = workflow_runner.execute_graph(graph, gemini_client=object(),
+                                           db_path=tmp_db)
+    assert result["nodes"]["2"]["status"] == "skipped"
+    assert "RUNWAYML_API_SECRET" in result["nodes"]["2"]["error"]
+    assert result["nodes"]["1"]["status"] == "done"       # the rest still ran
 
 
 def test_api_exec_nano_needs_the_key(tmp_db, monkeypatch):

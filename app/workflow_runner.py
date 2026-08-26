@@ -17,14 +17,19 @@ ungated route to spend.
 
 A failed node fails, its dependents are skipped, and everything else
 still runs -- partial results are results. The caller decides whether
-a run with failures is a failed job.
+a run with failures is a failed job. A connector that was never
+configured (Runway with no API secret) is SKIPPED rather than failed --
+an unadapted tool honestly staying dry is the designed behaviour, not a
+break. The spend gate is different and still fails loudly: a configured
+Runway without this run's approval must refuse where everyone can see
+it.
 """
 from __future__ import annotations
 
 from typing import Callable, Optional
 
 from src import db, runway
-from src.locations import MIME_TYPES
+from src.gemini_utils import sniff_mime
 
 # The v1 catalogue. Text-source nodes carry their value in properties;
 # the other three call a backend function. Resist growing this list
@@ -93,14 +98,92 @@ def _input_value(node: dict, name: str, links: dict, outputs: dict):
     return None
 
 
-def image_bytes_for_gemini(value, resolve_photo=None):
-    """A Nano Banana node's reference input -> raw bytes Gemini can take
-    as vision input (it never fetches URLs). A picked asset photo
-    resolves through resolve_photo; an upstream render's /renders/ URL
-    resolves against data/renders/; a data URI decodes. A remote http(s)
-    URL is dropped -- a reference is an enhancement, never a gate."""
-    import base64
+def render_bytes(value):
+    """An upstream node's /renders/ URL -> that file's bytes, or None.
+    Shared by both reference resolvers: a render is a local file no
+    model provider can fetch by URL, and the path is user-influenced,
+    so anything escaping data/renders/ is refused."""
     from pathlib import Path
+
+    root = (Path(__file__).resolve().parent.parent / "data" / "renders").resolve()
+    target = (root / value[len("/renders/"):]).resolve()
+    if root in target.parents and target.is_file():
+        return target.read_bytes()
+    return None
+
+
+MAX_FETCH_BYTES = 15 * 1024 * 1024      # Gemini's inline request budget is ~20MB
+FETCH_TIMEOUT = 10
+
+
+def _public_host(host) -> bool:
+    """SSRF guard: reference URLs come out of the graph JSON, which is
+    user-controlled, and this fetch runs on the server. Only addresses
+    outside the private ranges are allowed, so a pasted URL can never
+    make the app read its own network."""
+    import ipaddress
+    import socket
+
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except Exception:
+        return False
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return False
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            return False
+    return bool(infos)
+
+
+def fetch_image_bytes(url):
+    """A public image URL -> its bytes, or None. Never raises.
+
+    This exists because R2 went live: once storage is configured every
+    stored reference image and every keyframe is an https URL, and
+    NEITHER model can fetch one. Gemini takes inline bytes only, so
+    before this an https reference was silently dropped (Nano) or
+    degraded to a line of text naming the URL (enhance) -- the reference
+    looked attached on the canvas and reached no model at all."""
+    from urllib.parse import urlparse
+
+    import requests
+
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return None
+    if not _public_host(parsed.hostname):
+        return None
+    try:
+        with requests.get(url, stream=True, timeout=FETCH_TIMEOUT) as response:
+            response.raise_for_status()
+            kind = (response.headers.get("content-type") or "").split(";")[0].strip()
+            if kind and not kind.startswith("image/"):
+                return None
+            data = b""
+            for chunk in response.iter_content(64 * 1024):
+                data += chunk
+                if len(data) > MAX_FETCH_BYTES:
+                    return None            # too big to ride inline; drop it
+        return data or None
+    except Exception:
+        return None                        # a reference is an enhancement, never a gate
+
+
+
+
+def image_bytes_for_gemini(value, resolve_photo=None):
+    """Any reference input -> raw bytes Gemini can take as vision input
+    (it never fetches URLs itself). A data URI decodes; an upstream
+    render's /renders/ URL resolves against data/renders/; a picked
+    asset photo resolves through resolve_photo; a public http(s) URL is
+    fetched. Local resolution is tried first -- a file on this disk
+    beats a round trip. None when nothing resolves: a reference is an
+    enhancement, never a gate."""
+    import base64
 
     if not value or not isinstance(value, str):
         return None
@@ -110,11 +193,9 @@ def image_bytes_for_gemini(value, resolve_photo=None):
         except Exception:
             return None
     if value.startswith("/renders/"):
-        root = Path(__file__).resolve().parent.parent / "data" / "renders"
-        target = (root / value[len("/renders/"):]).resolve()
-        if str(target).startswith(str(root)) and target.is_file():
-            return target.read_bytes()
-        return None
+        return render_bytes(value)
+    if value.startswith(("http://", "https://")):
+        return fetch_image_bytes(value)
     target = resolve_photo(value) if resolve_photo else None
     return target.read_bytes() if target is not None else None
 
@@ -123,11 +204,18 @@ def image_for_runway(value, resolve_photo=None):
     """A Generate node's reference input -> something Runway can anchor
     on. A picked asset photo is a site-relative URL Runway could never
     fetch, so it becomes bytes here (runway.generate_from_prompt turns
-    bytes into a data URI); public URLs and data URIs pass through."""
+    bytes into a data URI); public URLs and data URIs pass through.
+
+    An upstream Nano Banana keyframe is the same problem: /renders/ is
+    local until R2 is configured, so it becomes bytes too -- otherwise
+    the keyframe silently stops anchoring the clip the moment it is
+    wired in, which is the whole point of the chain."""
     if not value or not isinstance(value, str):
         return None
     if value.startswith(("http://", "https://", "data:image/")):
         return value
+    if value.startswith("/renders/"):
+        return render_bytes(value)
     target = resolve_photo(value) if resolve_photo else None
     return target.read_bytes() if target is not None else None
 
@@ -166,14 +254,18 @@ def enhance(system: str, user: str, images=None, *, gemini_client,
     text = "\n\n".join(blocks)
     parts = []
     for image in images or []:
-        target = resolve_photo(image) if resolve_photo else None
-        if target is not None:
+        # every reference the same way, local file or public URL -- the
+        # model must SEE it. Naming a URL in the text (what this did
+        # before) tells a model that cannot fetch URLs that one exists,
+        # which is indistinguishable from no reference at all.
+        data = image_bytes_for_gemini(image, resolve_photo=resolve_photo)
+        if data:
             parts.append(types.Part.from_bytes(
-                data=target.read_bytes(),
-                mime_type=MIME_TYPES.get(target.suffix.lower(), "image/jpeg")))
+                data=data, mime_type=sniff_mime(data)))
         elif isinstance(image, str) and image.startswith(("http://", "https://")):
-            # not fetched server-side; named so the model still knows of it
-            text += f"\nReference image: {image}"
+            # unreachable (private host, too big, dead link): say so,
+            # rather than pretending the reference landed
+            text += f"\nReference image (could not be loaded): {image}"
     parts.append(text)
     return generate_with_retry(gemini_client, model or shootgen.MODEL, parts)
 
@@ -289,9 +381,29 @@ def execute_graph(graph: dict, *, gemini_client=None, resolve_photo=None,
                     raise RuntimeError(result["error"] or "render failed")
                 kind, value = "image", result["media_url"]
             elif node_type == GENERATE_TYPE:
+                # A connector that was never configured is not a broken
+                # graph -- an unadapted tool honestly stays dry. Skipping
+                # (not failing) keeps a chain whose keyframe rendered
+                # from reporting itself as a failure on every run.
+                # Deliberately NOT extended to the spend gate: a
+                # configured Runway with no per-run approval must still
+                # refuse loudly, through the module's own wall.
+                if not runway.has_key():
+                    states[node_id] = {
+                        "status": "skipped", "kind": None, "output": None,
+                        "error": "Runway not configured — RUNWAYML_API_SECRET is unset"}
+                    mark_downstream_skipped(node_id, f"upstream skipped: {title}")
+                    push((index + 1) / total, f"{title} skipped")
+                    continue
                 prompt = _input_value(node, "prompt", links, outputs) or ""
+                # the wired port, else the shot's own reference riding on
+                # the property -- the same fallback enhance and nano
+                # already honour, and the same one this node's per-node
+                # Run sends. Without it one graph rendered two different
+                # clips depending on which button was pressed.
                 reference = image_for_runway(
-                    _input_value(node, "image", links, outputs),
+                    _input_value(node, "image", links, outputs)
+                    or properties.get("image_url"),
                     resolve_photo=resolve_photo)
                 result = runway.generate_from_prompt(
                     prompt, reference_image=reference, db_path=db_path)
