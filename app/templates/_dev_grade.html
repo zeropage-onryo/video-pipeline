@@ -38,6 +38,12 @@
 HOOK: {{ c.hook }}{% endif %}{% if c.logline %}
 {{ c.logline }}{% endif %}</textarea>
       <input type="text" name="note" placeholder="why (optional) — shown next to it in RAG">
+      <details>
+        <summary class="mono dim" style="font-size:11px; cursor:pointer">
+          …AND THE ONE THAT ACTUALLY WORKED (OPTIONAL — PAIRS THEM)</summary>
+        <textarea name="replacement" rows="3" style="width:100%; margin-top:6px"
+                  placeholder="Paste the version that worked. Deny then records both — this one taught as the fix, the one above as what to avoid — each naming the other."></textarea>
+      </details>
       <div style="display:flex; gap:8px">
         <button type="submit" name="verdict" value="worked" class="copy">✓ Approve — teach it</button>
         <button type="submit" name="verdict" value="didnt_work" class="copy">✗ Deny — steer away</button>
@@ -58,6 +64,12 @@ HOOK: {{ c.hook }}{% endif %}{% if c.logline %}
         <input type="hidden" name="tool" value="{{ s.tool or 'runway' }}">
         <textarea name="text" rows="4" style="width:100%">{{ s.prompt }}</textarea>
         <input type="text" name="note" placeholder="why (optional) — shown next to it in RAG">
+        <details>
+          <summary class="mono dim" style="font-size:11px; cursor:pointer">
+            …AND THE PROMPT THAT ACTUALLY WORKED (OPTIONAL — PAIRS THEM)</summary>
+          <textarea name="replacement" rows="4" style="width:100%; margin-top:6px"
+                    placeholder="Paste the version that worked. Didn't-work then records both — this one on the winning shelf as the fix, the one above on the avoid shelf — each naming the other, so the contrast is what gets retrieved."></textarea>
+        </details>
         <div style="display:flex; gap:8px">
           <button type="submit" name="verdict" value="worked" class="copy">✓ Worked — teach it</button>
           <button type="submit" name="verdict" value="didnt_work" class="copy">✗ Didn't work — steer away</button>
@@ -139,6 +151,12 @@ HOOK: {{ c.hook }}{% endif %}{% if c.logline %}
 HOOK: {{ f.hook }}{% endif %}{% if f.logline %}
 {{ f.logline }}{% endif %}</textarea>
       <input type="text" name="note" placeholder="why (optional) — shown next to it in RAG">
+      <details>
+        <summary class="mono dim" style="font-size:11px; cursor:pointer">
+          …AND THE ONE THAT ACTUALLY WORKED (OPTIONAL — PAIRS THEM)</summary>
+        <textarea name="replacement" rows="3" style="width:100%; margin-top:6px"
+                  placeholder="Paste the version that worked. Deny then records both — this one taught as the fix, the one above as what to avoid — each naming the other."></textarea>
+      </details>
       <div style="display:flex; gap:8px">
         <button type="submit" name="verdict" value="worked" class="copy">✓ Approve — teach it</button>
         <button type="submit" name="verdict" value="didnt_work" class="copy">✗ Deny — steer away</button>

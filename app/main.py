@@ -574,6 +574,37 @@ async def grade_fresh(request: Request):
         status_code=303)
 
 
+def teach_verdict(tool, text, form, *, video_ref, subject, path):
+    """
+    One teaching submission from any of the three grade forms.
+
+    "Didn't work" with a replacement filled in is the shape worth having:
+    it records BOTH halves, linked -- the failure on the avoid shelf, the
+    fix on the winning one, each naming the other. Without the pairing a
+    person who edits the box to the working prompt and hits deny teaches
+    the pipeline to avoid the good prompt, which is exactly backwards.
+    Returns the message to show.
+    """
+    verdict = "didnt_work" if (form.get("verdict") or "worked") == "didnt_work" else "worked"
+    replacement = (form.get("replacement") or "").strip()
+    note = form.get("note") or ""
+
+    if verdict == "didnt_work" and replacement:
+        result = winners.record_pair(
+            tool, text, replacement, note=note, video_ref=video_ref, path=path)
+        if result.get("ingested"):
+            return (f"Recorded both for {subject} — future generations avoid the "
+                    "first and imitate the fix.")
+    else:
+        result = winners.record_and_learn(
+            tool, text, note=note, video_ref=video_ref, verdict=verdict, path=path)
+        if result.get("ingested"):
+            verb = "steer away from" if verdict == "didnt_work" else "imitate"
+            return f"Recorded {subject} — future generations will {verb} it."
+    return ("Saved. Teaching is pending — start Postgres and try again to "
+            f"ingest it into RAG. ({result.get('error') or 'store unavailable'})")
+
+
 @dev.post("/grade/fresh/verdict")
 async def grade_fresh_verdict(request: Request):
     """The fresh prompt's approve/deny -- straight through the same
@@ -585,16 +616,8 @@ async def grade_fresh_verdict(request: Request):
         return RedirectResponse(
             "/studio?tab=grade&message="
             + quote("Nothing to record — the text was empty."), status_code=303)
-    verdict = "didnt_work" if (form.get("verdict") or "worked") == "didnt_work" else "worked"
-    result = winners.record_and_learn(
-        "concept", text, note=form.get("note") or "",
-        video_ref="fresh-grade", verdict=verdict, path=db.DB_PATH)
-    verb = "steer away from" if verdict == "didnt_work" else "imitate"
-    if result.get("ingested"):
-        message = f"Recorded — future ideation will {verb} it."
-    else:
-        message = ("Saved. Teaching is pending — start Postgres and try again. "
-                   f"({result.get('error') or 'store unavailable'})")
+    message = teach_verdict("concept", text, form, video_ref="fresh-grade",
+                            subject="the throwaway", path=db.DB_PATH)
     return RedirectResponse(
         f"/studio?tab=grade&message={quote(message)}", status_code=303)
 
@@ -1529,16 +1552,9 @@ async def concept_verdict(concept_id: int, request: Request):
     text = (form.get("text") or "").strip()
     if not text:
         return _redirect_with_message(destination, "Nothing to record — the text was empty.")
-    verdict = "didnt_work" if (form.get("verdict") or "worked") == "didnt_work" else "worked"
-    result = winners.record_and_learn(
-        "concept", text, note=form.get("note") or "",
-        video_ref=f"concept-{concept_id}", verdict=verdict, path=db.DB_PATH)
-    verb = "steer away from" if verdict == "didnt_work" else "imitate"
-    if result.get("ingested"):
-        message = f"Recorded SHOOT-{concept_id:02d} — future ideation will {verb} it."
-    else:
-        message = ("Saved. Teaching is pending — start Postgres and try again to "
-                   f"ingest it into RAG. ({result.get('error') or 'store unavailable'})")
+    message = teach_verdict("concept", text, form,
+                            video_ref=f"concept-{concept_id}",
+                            subject=f"SHOOT-{concept_id:02d}", path=db.DB_PATH)
     return _redirect_with_message(destination, message)
 
 
@@ -1552,17 +1568,10 @@ async def concept_shot_verdict(concept_id: int, shot_n: int, request: Request):
     text = (form.get("text") or "").strip()
     if not text:
         return _redirect_with_message(destination, "Nothing to record — the prompt was empty.")
-    verdict = "didnt_work" if (form.get("verdict") or "worked") == "didnt_work" else "worked"
     tool = (form.get("tool") or "runway").strip().lower()
-    result = winners.record_and_learn(
-        tool, text, note=form.get("note") or "",
-        video_ref=f"concept-{concept_id}-shot-{shot_n}", verdict=verdict, path=db.DB_PATH)
-    verb = "avoid" if verdict == "didnt_work" else "imitate"
-    if result.get("ingested"):
-        message = f"Recorded shot {shot_n} — future generations will {verb} it."
-    else:
-        message = ("Saved. Teaching is pending — start Postgres and try again to "
-                   f"ingest it into RAG. ({result.get('error') or 'store unavailable'})")
+    message = teach_verdict(tool, text, form,
+                            video_ref=f"concept-{concept_id}-shot-{shot_n}",
+                            subject=f"shot {shot_n}", path=db.DB_PATH)
     return _redirect_with_message(destination, message)
 
 

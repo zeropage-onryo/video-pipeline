@@ -270,3 +270,94 @@ def test_set_description_rejects_unknown_kinds_and_ids(tmp_db):
         entities.set_description("spaceship", 1, {}, path=tmp_db)
     with pytest.raises(ValueError):
         entities.set_description("character", 999, {}, path=tmp_db)
+
+
+# ---------- "this failed, THIS is what worked" ----------
+# The pairing exists because the obvious alternative teaches backwards:
+# edit the box to the working prompt, hit deny, and the good prompt lands
+# on the avoid shelf.
+
+FAILED = "a bike in a garage, cinematic, 8k"
+WORKED = "handheld, 35mm, a Ducati idling in a low-key garage; practical light"
+
+
+@pytest.fixture
+def winners_db(tmp_path, monkeypatch):
+    from src import winners
+    path = tmp_path / "winners.db"
+    db.init_db(path)
+    winners.init(path)
+    monkeypatch.setattr(db, "DB_PATH", path)
+    return path
+
+
+@pytest.fixture
+def rag_docs(monkeypatch):
+    """Capture what each shelf actually receives."""
+    from src import rag as rag_mod
+
+    class Conn:
+        def close(self):
+            pass
+
+    docs = []
+    monkeypatch.setattr(rag_mod, "connect", lambda db_url=None: Conn())
+    monkeypatch.setattr(rag_mod, "init_store", lambda c: None)
+    monkeypatch.setattr(rag_mod, "make_client", lambda: object())
+    monkeypatch.setattr(rag_mod, "ingest_records",
+                        lambda recs, client, conn: docs.extend(recs) or len(recs))
+    return docs
+
+
+def test_record_pair_writes_both_halves_to_both_shelves(winners_db, rag_docs):
+    from src import winners
+    result = winners.record_pair("runway", FAILED, WORKED, note="too vague",
+                                 path=winners_db)
+    assert result["paired"] and result["ingested"]
+
+    rows = {w["verdict"]: w for w in winners.list_all(path=winners_db)}
+    assert rows["didnt_work"]["prompt"] == FAILED
+    assert rows["worked"]["prompt"] == WORKED
+    # linked both ways, so either half can render the other
+    assert rows["didnt_work"]["pair_id"] == rows["worked"]["id"]
+    assert rows["worked"]["pair_id"] == rows["didnt_work"]["id"]
+
+    shelves = {d["domain"] for d in rag_docs}
+    assert shelves == {"avoid_prompts", "winning_prompts"}
+
+
+def test_each_paired_doc_names_the_other(winners_db, rag_docs):
+    """The lesson is the contrast; a doc holding one side can't teach it."""
+    from src import winners
+    winners.record_pair("runway", FAILED, WORKED, path=winners_db)
+    avoid = next(d for d in rag_docs if d["domain"] == "avoid_prompts")
+    winning = next(d for d in rag_docs if d["domain"] == "winning_prompts")
+
+    assert FAILED in avoid["text"] and WORKED in avoid["text"]
+    assert "DID work" in avoid["text"]
+    assert WORKED in winning["text"] and FAILED in winning["text"]
+    assert "failed" in winning["text"].lower()
+
+
+def test_unpaired_entries_are_unchanged(winners_db, rag_docs):
+    """A plain verdict must render exactly as before the pairing existed."""
+    from src import winners
+    winners.record_and_learn("runway", FAILED, verdict="didnt_work",
+                             path=winners_db)
+    [doc] = rag_docs
+    assert doc["domain"] == "avoid_prompts"
+    assert "What was written instead" not in doc["text"]
+
+
+def test_record_pair_requires_the_working_prompt(winners_db):
+    from src import winners
+    with pytest.raises(ValueError):
+        winners.record_pair("runway", FAILED, "   ", path=winners_db)
+
+
+def test_record_pair_survives_a_down_store(winners_db):
+    """Both rows must persist even when neither can be embedded."""
+    from src import winners
+    result = winners.record_pair("runway", FAILED, WORKED, path=winners_db)
+    assert result["ingested"] is False and result["error"]
+    assert len(winners.list_all(path=winners_db)) == 2

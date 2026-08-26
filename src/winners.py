@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS winning_prompts (
     note       TEXT,                              -- why it worked / why it failed
     video_ref  TEXT,                              -- link/id of the finished piece
     verdict    TEXT NOT NULL DEFAULT 'worked',    -- worked | didnt_work
+    pair_id    INTEGER,                           -- the other half of a fix pair
     rag_source TEXT,
     ingested   INTEGER NOT NULL DEFAULT 0
 );
@@ -54,6 +55,8 @@ def init(path=db.DB_PATH) -> None:
         if "verdict" not in cols:
             conn.execute("ALTER TABLE winning_prompts ADD COLUMN "
                          "verdict TEXT NOT NULL DEFAULT 'worked'")
+        if "pair_id" not in cols:
+            conn.execute("ALTER TABLE winning_prompts ADD COLUMN pair_id INTEGER")
 
 
 def add(tool, prompt, note="", video_ref="", verdict="worked", path=db.DB_PATH) -> int:
@@ -82,13 +85,20 @@ def list_all(path=db.DB_PATH) -> list:
             "SELECT * FROM winning_prompts ORDER BY created_at DESC")]
 
 
-def _render_doc(w: dict) -> str:
+def _render_doc(w: dict, pair: dict | None = None) -> str:
+    """One entry as the text that gets embedded. A paired entry carries
+    the OTHER half in its own document: the lesson in "this failed, this
+    worked instead" is the contrast between them, and a doc holding only
+    one side can't teach it -- retrieval hits one chunk, not both."""
     if w.get("verdict") == "didnt_work":
         lines = [f"AVOID -- a {w['tool'].upper()} prompt that DID NOT work. "
                  "Do not imitate this; steer away from what made it fail."]
         if w.get("note"):
             lines.append(f"Why it failed: {w['note']}")
         lines.append(f"Failed prompt: {w['prompt']}")
+        if pair:
+            lines.append("What was written instead, and DID work -- prefer this "
+                         f"shape: {pair['prompt']}")
         return "\n".join(lines)
     lines = [f"WINNING {w['tool'].upper()} PROMPT -- your own proven record; "
              "match this phrasing and style when it fits the shot."]
@@ -97,6 +107,9 @@ def _render_doc(w: dict) -> str:
     if w.get("video_ref"):
         lines.append(f"Finished piece: {w['video_ref']}")
     lines.append(f"Prompt: {w['prompt']}")
+    if pair:
+        lines.append("This was the FIX for an attempt that failed. The failed "
+                     f"version, for contrast: {pair['prompt']}")
     return "\n".join(lines)
 
 
@@ -107,6 +120,7 @@ def ingest_to_rag(entry_id, path=db.DB_PATH) -> dict:
     w = get(entry_id, path=path)
     if not w:
         return {"ok": False, "error": "no such entry"}
+    pair = get(w["pair_id"], path=path) if w.get("pair_id") else None
     domain = AVOID_DOMAIN if w.get("verdict") == "didnt_work" else DOMAIN
     try:
         from . import rag
@@ -116,7 +130,7 @@ def ingest_to_rag(entry_id, path=db.DB_PATH) -> dict:
         try:
             rag.init_store(conn)
             written = rag.ingest_records(
-                [{"source": source, "text": _render_doc(w), "domain": domain,
+                [{"source": source, "text": _render_doc(w, pair), "domain": domain,
                   "source_ref": w.get("video_ref") or None}], client, conn)
         finally:
             conn.close()
@@ -135,6 +149,45 @@ def record_and_learn(tool, prompt, note="", video_ref="", verdict="worked",
     result = ingest_to_rag(entry_id, path=path)
     return {"id": entry_id, "verdict": _norm_verdict(verdict),
             "ingested": result.get("ok", False), "error": result.get("error")}
+
+
+def record_pair(tool, failed_prompt, working_prompt, note="", video_ref="",
+                path=db.DB_PATH) -> dict:
+    """
+    The strongest feedback shape there is: "this one failed, and THIS is
+    what I wrote instead that worked."
+
+    Two rows, linked both ways, landing on both shelves -- the failure on
+    avoid_prompts and the fix on winning_prompts -- with each document
+    naming the other. Recording only the failure teaches what to run from
+    without saying where to run to; recording only the fix throws away the
+    contrast that makes it legible.
+
+    Ingest is best-effort per half, the standing contract: a store that
+    dies between the two writes leaves both rows saved and re-ingestable
+    rather than losing the label.
+    """
+    failed_prompt = (failed_prompt or "").strip()
+    working_prompt = (working_prompt or "").strip()
+    if not working_prompt:
+        raise ValueError("record_pair needs the prompt that actually worked")
+    failed_id = add(tool, failed_prompt, note=note, video_ref=video_ref,
+                    verdict="didnt_work", path=path)
+    worked_id = add(tool, working_prompt, note=note, video_ref=video_ref,
+                    verdict="worked", path=path)
+    with db.connect(path) as conn:
+        conn.execute("UPDATE winning_prompts SET pair_id = ? WHERE id = ?",
+                     (worked_id, failed_id))
+        conn.execute("UPDATE winning_prompts SET pair_id = ? WHERE id = ?",
+                     (failed_id, worked_id))
+    failed_result = ingest_to_rag(failed_id, path=path)
+    worked_result = ingest_to_rag(worked_id, path=path)
+    return {
+        "id": worked_id, "failed_id": failed_id, "worked_id": worked_id,
+        "verdict": "pair", "paired": True,
+        "ingested": bool(failed_result.get("ok") and worked_result.get("ok")),
+        "error": failed_result.get("error") or worked_result.get("error"),
+    }
 
 
 def avoid_guidance(limit=8, path=db.DB_PATH) -> str:

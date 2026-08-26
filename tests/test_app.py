@@ -1713,3 +1713,70 @@ def test_backfill_with_describe_and_no_key_says_so(tmp_dev_db, monkeypatch):
     response = client.post("/library/backfill-assets", data={"describe": "1"},
                            follow_redirects=False)
     assert "GEMINI_API_KEY not set" in unquote(response.headers["location"])
+
+
+# ---------- "didn't work" can carry the prompt that did ----------
+
+def test_deny_with_a_replacement_records_both_halves(tmp_dev_db, monkeypatch):
+    from src import winners
+    winners.init(tmp_dev_db)
+    cid = preprod.save_concept({"title": "T", "shots": CONCEPT_SHOTS},
+                               brand="antihero", path=tmp_dev_db)
+    monkeypatch.setattr(app_main.winners, "ingest_to_rag",
+                        lambda entry_id, path=None: {"ok": True, "chunks": 1})
+
+    response = client.post(
+        f"/concepts/{cid}/shots/1/verdict",
+        data={"text": "vague prompt", "replacement": "the fixed prompt",
+              "verdict": "didnt_work", "tool": "runway",
+              "next": "/studio?tab=grade"},
+        follow_redirects=False)
+    assert response.status_code == 303
+    assert "Recorded both" in unquote(response.headers["location"])
+
+    rows = {w["verdict"]: w for w in winners.list_all(path=tmp_dev_db)}
+    assert rows["didnt_work"]["prompt"] == "vague prompt"
+    assert rows["worked"]["prompt"] == "the fixed prompt"
+    assert rows["didnt_work"]["pair_id"] == rows["worked"]["id"]
+
+
+def test_deny_without_a_replacement_is_unchanged(tmp_dev_db, monkeypatch):
+    from src import winners
+    winners.init(tmp_dev_db)
+    cid = preprod.save_concept({"title": "T", "shots": CONCEPT_SHOTS},
+                               brand="antihero", path=tmp_dev_db)
+    monkeypatch.setattr(app_main.winners, "ingest_to_rag",
+                        lambda entry_id, path=None: {"ok": True, "chunks": 1})
+    client.post(f"/concepts/{cid}/shots/1/verdict",
+                data={"text": "vague prompt", "verdict": "didnt_work"},
+                follow_redirects=False)
+    [row] = winners.list_all(path=tmp_dev_db)
+    assert row["verdict"] == "didnt_work" and row["pair_id"] is None
+
+
+def test_approve_ignores_a_stray_replacement(tmp_dev_db, monkeypatch):
+    """A replacement only means anything alongside a denial -- approving
+    must never quietly file a second entry."""
+    from src import winners
+    winners.init(tmp_dev_db)
+    cid = preprod.save_concept({"title": "T", "shots": CONCEPT_SHOTS},
+                               brand="antihero", path=tmp_dev_db)
+    monkeypatch.setattr(app_main.winners, "ingest_to_rag",
+                        lambda entry_id, path=None: {"ok": True, "chunks": 1})
+    client.post(f"/concepts/{cid}/shots/1/verdict",
+                data={"text": "good prompt", "replacement": "ignored",
+                      "verdict": "worked"},
+                follow_redirects=False)
+    [row] = winners.list_all(path=tmp_dev_db)
+    assert row["prompt"] == "good prompt" and row["verdict"] == "worked"
+
+
+def test_grade_tab_offers_the_replacement_field(tmp_dev_db):
+    cid = preprod.save_concept(
+        {"title": "T", "shots": [{"n": 1, "type": "BROLL", "source": "AI",
+                                  "tool": "RUNWAY", "desc": "d",
+                                  "prompt": "a prompt"}]},
+        brand="antihero", path=tmp_dev_db)
+    page = client.get(f"/studio?tab=grade&mode=shot&concept_id={cid}").text
+    assert 'name="replacement"' in page
+    assert "ACTUALLY WORKED" in page
