@@ -250,17 +250,29 @@ def execute_graph(graph: dict, *, gemini_client=None, resolve_photo=None,
             elif node_type == ENHANCE_TYPE:
                 if gemini_client is None:
                     raise RuntimeError("GEMINI_API_KEY not set")
-                image = _input_value(node, "image", links, outputs)
+                user = _input_value(node, "user", links, outputs) or ""
+                # image: a wired port, or the shot's own reference riding
+                # invisibly via the node's image_url property (the
+                # Director chain keeps grounding on the backend)
+                image = _input_value(node, "image", links, outputs) \
+                    or properties.get("image_url")
                 kind = "text"
-                # references passed only when wired, so older graphs (and
-                # tests patching enhance without the param) run unchanged
+                # references passed only when present, so older graphs
+                # (and tests patching enhance without the param) run
+                # unchanged. auto_ground pulls the RAG block server-side
+                # -- same degrade contract as everywhere: "" on failure.
                 extra = {}
                 refs = _input_value(node, "references", links, outputs)
+                if not refs and properties.get("auto_ground"):
+                    from src import shootgen
+                    refs = shootgen.reference_block(
+                        spark=user.strip() or None,
+                        db_path=db_path if db_path is not None else db.DB_PATH)
                 if refs:
                     extra["references"] = refs
                 value = enhance(
                     _input_value(node, "system", links, outputs) or "",
-                    _input_value(node, "user", links, outputs) or "",
+                    user,
                     images=[image] if image else None,
                     gemini_client=gemini_client, resolve_photo=resolve_photo,
                     **extra)
@@ -268,7 +280,8 @@ def execute_graph(graph: dict, *, gemini_client=None, resolve_photo=None,
                 from src import nano_banana
                 prompt = _input_value(node, "prompt", links, outputs) or ""
                 reference = image_bytes_for_gemini(
-                    _input_value(node, "image", links, outputs),
+                    _input_value(node, "image", links, outputs)
+                    or properties.get("image_url"),
                     resolve_photo=resolve_photo)
                 result = nano_banana.generate_from_prompt(
                     prompt, reference_image=reference, db_path=db_path)

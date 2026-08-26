@@ -676,8 +676,11 @@ GENERATE_OUTPUTS = ("image", "video", "prompt")
 @router.get("/presets")
 def presets_list():
     """The curated camera/framing scaffolds (prompts/presets.json) the
-    Generate tab and Director nodes fold into the Enhance step."""
-    return {"items": presets.load_presets()}
+    Generate tab and Director nodes fold into the Enhance step, plus
+    the enhancement instruction (prompts/enhance_system.txt) the
+    Director chain seeds its Instructions node with."""
+    return {"items": presets.load_presets(),
+            "enhance_system": workflows._enhance_system_text()}
 
 
 @router.get("/director/landing")
@@ -1301,6 +1304,7 @@ class EnhanceBody(BaseModel):
     user: str = ""
     images: list[str] = []
     references: str = ""
+    ground: bool = False   # pull the RAG block server-side (Director chain)
 
 
 @router.post("/workflows/exec/enhance")
@@ -1315,10 +1319,17 @@ def workflow_exec_enhance(body: EnhanceBody):
 
     def work(job):
         from google import genai
+
+        from src import shootgen
+        references = body.references
+        if body.ground and not references:
+            jobs.progress(job, 0.15, "grounding in references")
+            references = shootgen.reference_block(
+                spark=body.user.strip() or None, db_path=db.DB_PATH)
         jobs.progress(job, 0.3, "enhancing prompt")
         text = workflow_runner.enhance(
             body.system, body.user, images=body.images or None,
-            references=body.references,
+            references=references,
             gemini_client=genai.Client(api_key=api_key),
             resolve_photo=_resolve_asset_photo)
         return {"detail": text[:80], "output": text}

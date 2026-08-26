@@ -417,6 +417,44 @@ def test_enhance_still_refuses_nothing_at_all():
         workflow_runner.enhance("", "", gemini_client=object())
 
 
+def test_execute_graph_enhance_auto_grounds_on_the_backend(tmp_db, monkeypatch):
+    """The Director shot chain's shape: no Ground node on the canvas --
+    the enhance node's auto_ground property pulls the RAG block
+    server-side, and image_url carries the shot's reference invisibly."""
+    calls = []
+
+    def fake_enhance(system, user, images=None, *, gemini_client,
+                     resolve_photo=None, model=None, references=""):
+        calls.append((system, user, images, references))
+        return "E"
+
+    monkeypatch.setattr(workflow_runner, "enhance", fake_enhance)
+    monkeypatch.setattr("src.shootgen.reference_block",
+                        lambda spark=None, client=None, db_path=None: "REFS")
+    graph = {
+        "nodes": [
+            node(1, "zpf/user_prompt", properties={"text": "night ride"}),
+            node(3, "zpf/enhance",
+                 inputs=[slot("system", "text", None),
+                         slot("user", "text", 2),
+                         slot("image", "image", None),
+                         slot("references", "text", None)],
+                 properties={"auto_ground": True,
+                             "image_url": "https://example.com/ref.jpg"}),
+        ],
+        "links": [[2, 1, 0, 3, 1, "text"]],
+    }
+    result = workflow_runner.execute_graph(graph, gemini_client=object(),
+                                           db_path=tmp_db)
+    assert result["ok"] is True
+    assert calls == [("", "night ride", ["https://example.com/ref.jpg"], "REFS")]
+
+
+def test_api_presets_carries_the_enhance_instruction(tmp_db):
+    res = client.get("/api/presets").json()
+    assert "prompt enhancement assistant" in res["enhance_system"]
+
+
 def test_execute_graph_wires_ground_into_enhance_references(tmp_db, monkeypatch):
     """The Director shot chain's shape: Ground's output feeds the
     enhance node's references port, not its system port."""

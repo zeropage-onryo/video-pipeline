@@ -14,7 +14,7 @@
    open from the same toolbar. Every billed node stays behind its
    module's own gate (RUNWAY_SPEND_OK, NANO_DAILY_CAP) — this canvas
    cannot spend around them. */
-import { api, bus, esc, fillPresetSelect, loadPresets, state, stateline, wireMentions } from './shared.js';
+import { api, bus, enhanceSystemText, esc, fillPresetSelect, loadPresets, state, stateline, wireMentions } from './shared.js';
 
 const LG = window.LiteGraph;
 
@@ -83,11 +83,23 @@ function wrapLines(text, maxChars, maxLines) {
   return lines.slice(0, maxLines);
 }
 
+function bodyTop(node) {
+  // clear the port labels: LiteGraph draws a slot row roughly every
+  // 20px from the top of the body
+  const slots = Math.max((node.inputs || []).length, (node.outputs || []).length);
+  return 12 + slots * 20 + 10;
+}
+
 function drawBody(node, ctx, lines, color) {
-  const top = 8 + (node.widgets ? node.widgets.length : 0) * 24 + 16;
+  const top = bodyTop(node);
   ctx.font = '11px "JetBrains Mono", monospace';
   ctx.fillStyle = color;
   lines.forEach((l, i) => ctx.fillText(l, 12, top + i * 15, node.size[0] - 24));
+}
+
+function bodyLines(node) {
+  // how many preview lines fit between the ports and the action pill
+  return Math.max(2, Math.floor((node.size[1] - bodyTop(node) - 36) / 15));
 }
 
 function previewDrawer(placeholder) {
@@ -98,7 +110,7 @@ function previewDrawer(placeholder) {
       : this._out != null && this._out !== '' ? this._out
       : (this.properties.text || this.properties.url || '');
     const dim = !shown;
-    const lines = wrapLines(shown || placeholder, Math.floor(this.size[0] / 7), 7);
+    const lines = wrapLines(shown || placeholder, Math.floor(this.size[0] / 7), bodyLines(this));
     drawBody(this, ctx, lines,
       failed ? '#c9a227' : this._out != null && this._out !== '' ? '#f4f3f2' : dim ? '#55534f' : '#8e8c8a');
   };
@@ -217,13 +229,18 @@ async function runNode(node) {
         res.references ? '' : 'no references — library empty or store down');
     } else if (node.type === 'zpf/enhance') {
       setNodeState(node, 'running');
-      const image = inputVal(node, 'image');
+      // the shot's own reference and the RAG grounding ride invisibly
+      // (image_url / auto_ground properties) — the Director chain keeps
+      // grounding on the backend, no extra nodes on the canvas
+      const image = inputVal(node, 'image') || node.properties.image_url;
+      const references = inputVal(node, 'references') || '';
       const res = await api('/api/workflows/exec/enhance', {
         method: 'POST',
         body: {
           system: inputVal(node, 'system') || '',
           user: inputVal(node, 'user') || '',
-          references: inputVal(node, 'references') || '',
+          references,
+          ground: !references && !!node.properties.auto_ground,
           images: image ? [image] : [],
         },
       });
@@ -233,7 +250,7 @@ async function runNode(node) {
       const res = await api('/api/workflows/exec/generate', {
         method: 'POST',
         body: { prompt: inputVal(node, 'prompt') || '',
-                image: inputVal(node, 'image') || null },
+                image: inputVal(node, 'image') || node.properties.image_url || null },
       });
       nodeJobs.set(res.job_id, node.id);
     } else if (node.type === 'zpf/nano_banana') {
@@ -241,7 +258,7 @@ async function runNode(node) {
       const res = await api('/api/workflows/exec/nano', {
         method: 'POST',
         body: { prompt: inputVal(node, 'prompt') || '',
-                image: inputVal(node, 'image') || null },
+                image: inputVal(node, 'image') || node.properties.image_url || null },
       });
       nodeJobs.set(res.job_id, node.id);
     }
@@ -250,19 +267,61 @@ async function runNode(node) {
   }
 }
 
+/* ── node chrome: one action pill in the bottom-right corner (the
+   reference screenshot's shape) instead of stacked widget rows.
+   Double-click stays the inspector: edit for text nodes, output view
+   (or the rendered file) for the rest. ── */
+
+function drawPill(node, ctx, label) {
+  ctx.font = '10px "JetBrains Mono", monospace';
+  const w = Math.max(54, ctx.measureText(label).width + 24);
+  const h = 24;
+  const x = node.size[0] - w - 10;
+  const y = node.size[1] - h - 8;
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, 12);
+  ctx.fillStyle = '#1d1d22';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,.22)';
+  ctx.stroke();
+  ctx.fillStyle = '#f4f3f2';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, x + w / 2, y + h / 2 + 0.5);
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  node._pill = { x, y, w, h };
+}
+
+function wirePill(node, action) {
+  node.onMouseDown = function(e, local) {
+    const p = this._pill;
+    if (p && local[0] >= p.x && local[0] <= p.x + p.w
+        && local[1] >= p.y && local[1] <= p.y + p.h) {
+      action(this);
+      return true;
+    }
+  };
+}
+
 /* ── node type definitions ── */
 
 function registerNodes() {
-  // only the five v1 types in the add menu — the stock library would
+  // only the v1 types in the add menu — the stock library would
   // drown them
   if (LG.clearRegisteredTypes) LG.clearRegisteredTypes();
 
   function textNode(self, placeholder) {
     self.addOutput('text', 'text');
     self.properties = { text: '' };
-    self.size = [260, 170];
-    self.addWidget('button', '✎ Edit text', null, () => openModal(self, 'text'));
-    self.onDrawForeground = previewDrawer(placeholder);
+    self.size = [280, 190];
+    const drawer = previewDrawer(placeholder);
+    self.onDrawForeground = function(ctx) {
+      if (this.flags.collapsed) return;
+      drawer.call(this, ctx);
+      drawPill(this, ctx, '✎ Edit');
+    };
+    wirePill(self, n => openModal(n, 'text'));
     self.onDblClick = () => openModal(self, 'text');
   }
 
@@ -282,29 +341,30 @@ function registerNodes() {
   function ReferenceImage() {
     this.addOutput('image', 'image');
     this.properties = { url: '' };
-    this.size = [240, 190];
+    this.size = [240, 200];
     const self = this;
-    this.addWidget('button', '🖼 Pick image', null, () => openModal(self, 'media'));
     this.onDblClick = () => openModal(self, 'media');
     this.onDrawForeground = function(ctx) {
       if (this.flags.collapsed) return;
       const url = this.properties.url;
-      const top = 8 + this.widgets.length * 24 + 8;
+      const top = bodyTop(this);
       if (!url) {
         drawBody(this, ctx, ['no image picked'], '#55534f');
-        return;
+      } else {
+        const img = thumbFor(url);
+        if (img) {
+          const h = this.size[1] - top - 40;
+          const w = this.size[0] - 24;
+          const scale = Math.min(w / img.naturalWidth, h / img.naturalHeight);
+          ctx.drawImage(img, 12, top, img.naturalWidth * scale, img.naturalHeight * scale);
+        }
+        ctx.font = '9px "JetBrains Mono", monospace';
+        ctx.fillStyle = '#8e8c8a';
+        ctx.fillText(url.split('/').pop().split('?')[0], 12, this.size[1] - 14, this.size[0] - 100);
       }
-      const img = thumbFor(url);
-      if (img) {
-        const h = this.size[1] - top - 26;
-        const w = this.size[0] - 24;
-        const scale = Math.min(w / img.naturalWidth, h / img.naturalHeight);
-        ctx.drawImage(img, 12, top, img.naturalWidth * scale, img.naturalHeight * scale);
-      }
-      ctx.font = '9px "JetBrains Mono", monospace';
-      ctx.fillStyle = '#8e8c8a';
-      ctx.fillText(url.split('/').pop().split('?')[0], 12, this.size[1] - 8, this.size[0] - 24);
+      drawPill(this, ctx, '🖼 Pick');
     };
+    wirePill(this, n => openModal(n, 'media'));
   }
   ReferenceImage.title = 'Reference Image';
 
@@ -312,12 +372,15 @@ function registerNodes() {
     this.addInput('spark', 'text');
     this.addOutput('references', 'text');
     this.properties = { text: '' };
-    this.size = [260, 170];
+    this.size = [260, 180];
     const self = this;
-    this.addWidget('button', '▶ Run', null, () => runNode(self));
-    this.addWidget('button', '✎ Fallback spark', null, () => openModal(self, 'text'));
-    this.addWidget('button', '👁 View output', null, () => openModal(self, 'view'));
-    this.onDrawForeground = previewDrawer('Retrieves reference-library grounding for the spark');
+    const drawer = previewDrawer('Retrieves reference-library grounding for the spark');
+    this.onDrawForeground = function(ctx) {
+      if (this.flags.collapsed) return;
+      drawer.call(this, ctx);
+      drawPill(this, ctx, '▶ Run');
+    };
+    wirePill(this, runNode);
     this.onDblClick = () => openModal(self, 'view');
   }
   Ground.title = 'Ground in References';
@@ -329,11 +392,15 @@ function registerNodes() {
     this.addInput('references', 'text');
     this.addOutput('text', 'text');
     this.properties = {};
-    this.size = [280, 200];
+    this.size = [280, 210];
     const self = this;
-    this.addWidget('button', '▶ Run', null, () => runNode(self));
-    this.addWidget('button', '👁 View output', null, () => openModal(self, 'view'));
-    this.onDrawForeground = previewDrawer('Enhances your prompt with vivid details — references ground it');
+    const drawer = previewDrawer('Enhances your prompt with vivid details using Gemini Flash');
+    this.onDrawForeground = function(ctx) {
+      if (this.flags.collapsed) return;
+      drawer.call(this, ctx);
+      drawPill(this, ctx, '▶ Run');
+    };
+    wirePill(this, runNode);
     this.onDblClick = () => openModal(self, 'view');
   }
   Enhance.title = 'Gemini 2.5 Flash';
@@ -343,21 +410,21 @@ function registerNodes() {
     this.addInput('image', 'image');
     this.addOutput('media', 'media');
     this.properties = {};
-    this.size = [280, 190];
+    this.size = [280, 200];
     const self = this;
-    this.addWidget('button', '▶ Run · billed', null, () => runNode(self));
-    this.addWidget('button', '👁 View output', null, () => openModal(self, 'view'));
     this.onDrawForeground = function(ctx) {
       if (this.flags.collapsed) return;
       const gate = state.caps['runway.generate']
-        ? (state.caps['runway.spend'] ? 'runway · spend approved'
+        ? (state.caps['runway.spend'] ? 'Generates a clip from the enhanced prompt · Runway'
                                       : 'runway · gated — RUNWAY_SPEND_OK=1 to arm')
         : 'runway · RUNWAYML_API_SECRET not set';
       const shown = this._state === 'failed' ? ('✕ ' + (this._note || 'failed'))
         : this._out ? this._out : gate;
-      drawBody(this, ctx, wrapLines(shown, Math.floor(this.size[0] / 7), 6),
+      drawBody(this, ctx, wrapLines(shown, Math.floor(this.size[0] / 7), bodyLines(this)),
         this._state === 'failed' ? '#c9a227' : this._out ? '#f4f3f2' : '#55534f');
+      drawPill(this, ctx, '▶ Run · $');
     };
+    wirePill(this, runNode);
     this.onDblClick = () => {
       if (this._out) window.open(this._out, '_blank');
       else openModal(self, 'view');
@@ -372,30 +439,30 @@ function registerNodes() {
     this.properties = {};
     this.size = [300, 260];
     const self = this;
-    this.addWidget('button', '▶ Run · billed', null, () => runNode(self));
-    this.addWidget('button', '👁 View output', null, () => openModal(self, 'view'));
     this.onDrawForeground = function(ctx) {
       if (this.flags.collapsed) return;
-      const top = 8 + this.widgets.length * 24 + 8;
+      const top = bodyTop(this);
       if (this._out && this._state !== 'failed') {
         const img = thumbFor(this._out);
         if (img) {
-          const h = this.size[1] - top - 12;
+          const h = this.size[1] - top - 40;
           const w = this.size[0] - 24;
           const scale = Math.min(w / img.naturalWidth, h / img.naturalHeight);
           ctx.drawImage(img, 12, top, img.naturalWidth * scale, img.naturalHeight * scale);
         } else {
           drawBody(this, ctx, ['loading preview…'], '#8e8c8a');
         }
-        return;
+      } else {
+        const gate = state.caps['nano.generate']
+          ? 'Generates an image from the enhanced prompt'
+          : 'GEMINI_API_KEY not set';
+        const shown = this._state === 'failed' ? ('✕ ' + (this._note || 'failed')) : gate;
+        drawBody(this, ctx, wrapLines(shown, Math.floor(this.size[0] / 7), bodyLines(this)),
+          this._state === 'failed' ? '#c9a227' : '#55534f');
       }
-      const gate = state.caps['nano.generate']
-        ? 'gemini image — output will appear here'
-        : 'GEMINI_API_KEY not set';
-      const shown = this._state === 'failed' ? ('✕ ' + (this._note || 'failed')) : gate;
-      drawBody(this, ctx, wrapLines(shown, Math.floor(this.size[0] / 7), 6),
-        this._state === 'failed' ? '#c9a227' : '#55534f');
+      drawPill(this, ctx, '▶ Run');
     };
+    wirePill(this, runNode);
     this.onDblClick = () => {
       if (this._out) window.open(this._out, '_blank');
       else openModal(self, 'view');
@@ -809,57 +876,48 @@ const seededTexts = new Map();
 let directorConcept = null;    // the /api/concepts/{id} payload on the canvas
 let activeShotN = null;        // which shot's chain is up right now
 const shotGraphs = new Map();  // shot n -> serialized graph with local edits
+let enhanceSystem = '';        // prompts/enhance_system.txt, fetched once
 
 function shotChainGraph(d, s) {
   // Hand-built in LiteGraph's own serialize() shape (the
-  // default_template pattern): User Prompt (the editable start of the
-  // idea — director_prompt()'s story-aware text) → Ground → Gemini 2.5
-  // Flash (references grounding it, the vivid-details instruction as
-  // its default system) → Generate, plus a Reference Image node when
-  // the shot already carries one. One clean row per the reference
-  // screenshot — each node takes what came in and makes it better.
-  const hasRef = !!s.reference_image;
-  const text = s.director_prompt || s.prompt || s.desc || '';
+  // default_template pattern). Exactly the reference screenshot's four
+  // nodes: the shot's short prompt → the enhancement Instructions →
+  // Gemini 2.5 Flash → Nano Banana image. The shot's reference image
+  // and the RAG retrieval ride on the BACKEND (the enhance node's
+  // image_url / auto_ground properties), not as extra nodes.
+  const text = s.desc || s.prompt || '';
   seededTexts.set(`${d.id}·${s.n}`, text);
 
   const nodes = [
     { id: 1, type: 'zpf/user_prompt', title: `Shot ${s.n} · prompt`,
-      pos: [40, 140], size: [300, 230], flags: {}, order: 0, mode: 0,
-      outputs: [{ name: 'text', type: 'text', links: [1, 2] }],
+      pos: [50, 100], size: [300, 200], flags: {}, order: 0, mode: 0,
+      outputs: [{ name: 'text', type: 'text', links: [1] }],
       properties: { text, concept_id: d.id, shot_n: s.n } },
-    { id: 2, type: 'zpf/ground', title: 'Ground in References',
-      pos: [400, 140], size: [260, 170], flags: {}, order: 1, mode: 0,
-      inputs: [{ name: 'spark', type: 'text', link: 1 }],
-      outputs: [{ name: 'references', type: 'text', links: [3] }],
-      properties: { text: '' } },
+    { id: 2, type: 'zpf/system_prompt', title: 'Instructions',
+      pos: [50, 360], size: [300, 210], flags: {}, order: 1, mode: 0,
+      outputs: [{ name: 'text', type: 'text', links: [2] }],
+      properties: { text: enhanceSystem } },
     { id: 3, type: 'zpf/enhance', title: 'Gemini 2.5 Flash',
-      pos: [720, 140], size: [280, 200], flags: {}, order: 2, mode: 0,
-      inputs: [{ name: 'system', type: 'text', link: null },
-               { name: 'user', type: 'text', link: 2 },
-               { name: 'image', type: 'image', link: hasRef ? 5 : null },
-               { name: 'references', type: 'text', link: 3 }],
-      outputs: [{ name: 'text', type: 'text', links: [4] }],
-      properties: {} },
-    { id: 4, type: 'zpf/generate', title: `Generate · shot ${s.n}`,
-      pos: [1060, 140], size: [280, 190], flags: {}, order: 3, mode: 0,
-      inputs: [{ name: 'prompt', type: 'text', link: 4 },
-               { name: 'image', type: 'image', link: hasRef ? 6 : null }],
-      outputs: [{ name: 'media', type: 'media', links: null }],
-      properties: { concept_id: d.id, shot_n: s.n } },
+      pos: [440, 210], size: [290, 210], flags: {}, order: 2, mode: 0,
+      inputs: [{ name: 'system', type: 'text', link: 2 },
+               { name: 'user', type: 'text', link: 1 },
+               { name: 'image', type: 'image', link: null },
+               { name: 'references', type: 'text', link: null }],
+      outputs: [{ name: 'text', type: 'text', links: [3] }],
+      properties: { auto_ground: true,
+                    image_url: s.reference_image || '' } },
+    { id: 4, type: 'zpf/nano_banana', title: 'Nano Banana',
+      pos: [820, 180], size: [300, 260], flags: {}, order: 3, mode: 0,
+      inputs: [{ name: 'prompt', type: 'text', link: 3 },
+               { name: 'image', type: 'image', link: null }],
+      outputs: [{ name: 'image', type: 'image', links: null }],
+      properties: { concept_id: d.id, shot_n: s.n,
+                    image_url: s.reference_image || '' } },
   ];
-  const links = [[1, 1, 0, 2, 0, 'text'],
-                 [2, 1, 0, 3, 1, 'text'],
-                 [3, 2, 0, 3, 3, 'text'],
-                 [4, 3, 0, 4, 0, 'text']];
-  if (hasRef) {
-    nodes.push({ id: 5, type: 'zpf/reference_image',
-      title: `Reference · shot ${s.n}`,
-      pos: [400, 380], size: [240, 190], flags: {}, order: 0, mode: 0,
-      outputs: [{ name: 'image', type: 'image', links: [5, 6] }],
-      properties: { url: s.reference_image } });
-    links.push([5, 5, 0, 3, 2, 'image'], [6, 5, 0, 4, 1, 'image']);
-  }
-  return { last_node_id: 6, last_link_id: 6, nodes, links,
+  const links = [[1, 1, 0, 3, 1, 'text'],
+                 [2, 2, 0, 3, 0, 'text'],
+                 [3, 3, 0, 4, 0, 'text']];
+  return { last_node_id: 4, last_link_id: 3, nodes, links,
            groups: [], config: {}, version: 0.4 };
 }
 
@@ -954,6 +1012,7 @@ export async function openConceptInDirector(id) {
   $('wfpick').value = '';
   $('wfname').value = d.title;
   attached.clear();
+  enhanceSystem = await enhanceSystemText();
   directorConcept = d;
   activeShotN = null;
   shotGraphs.clear();

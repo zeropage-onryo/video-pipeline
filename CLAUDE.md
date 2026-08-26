@@ -288,13 +288,19 @@ is yours, in Resolve, by hand.
   `GET /api/director/landing`; submitting runs the same `/api/pipeline/run` engine and
   lands the result on the canvas) is the fallback when nothing is planned yet, or an
   explicit "← Brief" away. Any concept opens directly from its card's Director button —
-  **no approval gate**, approval/teaching stays a dev-console background loop. A concept
-  opens as one node chain per shot (User Prompt seeded with `director_prompt()`'s text →
-  Ground → Enhance → Generate, plus a Reference node when the shot carries one), grouped
-  per scene. Edits save back through `POST /api/concepts/{id}/shots/{n}/prompt`
-  (→ `update_concept_shots`, only nodes whose text changed, title/hook/logline never
-  touched); a shot node's finished render auto-attaches to its shot (clip → media_url,
-  Nano image → `/shots/{n}/reference`). `src/nano_banana.py` is the image connector, runway.py's
+  **no approval gate**, approval/teaching stays a dev-console background loop. The canvas
+  edits ONE shot at a time (Mike's call, 2026-08-26, matching his Runway-workflows
+  reference): the active shot's chain is exactly four nodes — the shot's short prompt →
+  an Instructions node seeded from `prompts/enhance_system.txt` → Gemini 2.5 Flash →
+  Nano Banana image — while every other shot waits in a dock under the canvas, grouped by
+  scene, one click to pull its nodes up (edits are pocketed per shot when switching).
+  The shot's reference image and the RAG retrieval ride on the BACKEND, not as extra
+  nodes: the enhance node's `auto_ground`/`image_url` properties make the server pull
+  `reference_block` and attach the shot's reference itself, and an unwired `system` port
+  defaults to the enhancement instruction. Edits save back through
+  `POST /api/concepts/{id}/shots/{n}/prompt` (→ `update_concept_shots`, only shots whose
+  text changed, title/hook/logline never touched); a shot node's finished render
+  auto-attaches to its shot (clip → media_url, Nano image → `/shots/{n}/reference`). `src/nano_banana.py` is the image connector, runway.py's
   never-raises gated shape on the existing Gemini key under `NANO_DAILY_CAP`, no separate
   spend gate since an image costs cents. Evals moved OFF `/ui` (2026-08-25) to the dev-console
   `/evals` page — golden set still in SQLite via `src/evalstore.py`, seeded once from

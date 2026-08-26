@@ -77,14 +77,22 @@ export async function loadAssets(force = false) {
   return state.assets;
 }
 
-/* Presets: prompts/presets.json via /api/presets, cached once. */
+/* Presets: prompts/presets.json via /api/presets, cached once. The
+   same payload carries the enhancement instruction the Director
+   chain's Instructions node seeds with. */
 let presetsCache = null;
-export async function loadPresets() {
+async function presetsPayload() {
   if (presetsCache) return presetsCache;
   try {
-    presetsCache = (await api('/api/presets')).items;
-  } catch { presetsCache = []; }
+    presetsCache = await api('/api/presets');
+  } catch { presetsCache = { items: [], enhance_system: '' }; }
   return presetsCache;
+}
+export async function loadPresets() {
+  return (await presetsPayload()).items;
+}
+export async function enhanceSystemText() {
+  return (await presetsPayload()).enhance_system || '';
 }
 
 export function fillPresetSelect(select, presets) {
