@@ -243,5 +243,11 @@
 </div></div>
 {% endblock %}
 {% block scripts %}
-{% if active_tab == "stats" %}<script src="/static/evals_dev.js" defer></script>{% endif %}
+{% if active_tab == "stats" %}
+{# the eval calls go to the dev router's own delegations, not the
+   session-gated /api twins -- the console reads every stat without a
+   login. Set before the deferred script runs. #}
+<script>window.ZP_API_BASE = "/studio";</script>
+<script src="/static/evals_dev.js" defer></script>
+{% endif %}
 {% endblock %}

@@ -1619,3 +1619,47 @@ def test_library_ingest_file_with_no_text_is_a_message_not_a_500(monkeypatch):
     )
     assert response.status_code == 303
     assert "no readable text" in unquote(response.headers["location"])
+
+
+# ---------- the Dev Studio reads every stat without a session ----------
+# The Stats tab's eval half is a client-side shell; pointed at the
+# session-gated /api twins it 401'd next to server-rendered metrics that
+# worked fine. The console is the operator's own surface -- it reads the
+# whole project's stats with no login, and DEV_TOOLS is the gate.
+
+DEV_API_READS = ("/studio/api/evals/runs", "/studio/api/evals/golden")
+
+
+@pytest.mark.parametrize("path", DEV_API_READS)
+def test_dev_studio_api_reads_need_no_session(path, tmp_dev_db, monkeypatch):
+    from app import auth
+    monkeypatch.setattr(auth, "current_user", lambda request: None)
+    response = client.get(path)
+    assert response.status_code == 200, path
+    assert "items" in response.json()
+
+
+def test_dev_studio_api_delegates_to_the_same_functions(tmp_dev_db, monkeypatch):
+    """Thin delegation, not a second implementation -- the console's
+    numbers can't drift from /ui's."""
+    from app import api as api_mod
+    from app import auth
+    monkeypatch.setattr(auth, "current_user", lambda request: None)
+    from src import evalstore
+    evalstore.save_run("delegated", {"k": 5, "n": 1, "hit_rate": 1.0,
+                                     "mrr": 1.0, "per_query": []},
+                       path=tmp_dev_db)
+    assert client.get("/studio/api/evals/runs").json() == api_mod.evals_runs()
+
+
+def test_the_gated_api_twin_still_requires_a_session(tmp_dev_db, monkeypatch):
+    """Opening the dev console must not open /api itself."""
+    from app import auth
+    monkeypatch.setattr(auth, "current_user", lambda request: None)
+    assert client.get("/api/evals/runs").status_code == 401
+
+
+def test_stats_tab_points_the_script_at_the_dev_router(tmp_dev_db):
+    page = client.get("/studio?tab=stats").text
+    assert 'window.ZP_API_BASE = "/studio"' in page
+    assert "evals_dev.js" in page

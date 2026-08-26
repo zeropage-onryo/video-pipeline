@@ -75,8 +75,8 @@ venv/bin/python -m src.accounts seed you@example.com [--password '...']
 
 # WEB APP — /ui (behind sign-in) is the product; 127.0.0.1:8000/studio is
 # the Dev Studio (dev posture only): one page of Stats / Grade / RAG
-# Library / Settings / Dataset tabs. 127.0.0.1:8000 is the public
-# landing (the only indexed URL).
+# Library / Settings / Dataset tabs, no sign-in — it reads every stat in
+# the project. 127.0.0.1:8000 is the public landing (the only indexed URL).
 venv/bin/uvicorn app.main:app --reload
 ```
 
@@ -238,8 +238,8 @@ is yours, in Resolve, by hand.
 - **`app/main.py`** — the web app. **The dev surface is one page** (consolidated 2026-08-26):
   `/studio` is the **Dev Studio**, strictly stats + system improvement, five tabs on the legacy
   `.sk` skin: *Stats* (the five pipeline numbers — shortlist/shoot rates, evaluator/gate
-  agreement, first-try pass — server-rendered, plus the whole retrieval-eval surface via the
-  same `/api/evals/*` endpoints and `evals_dev.js` the old `/evals` page used), *Grade* (a
+  agreement, first-try pass — server-rendered, plus the whole retrieval-eval surface via
+  `evals_dev.js`), *Grade* (a
   randomized grading queue: `/grade/draw?mode=shot|golden|any` deals a random ungraded concept
   (`judge_overall IS NULL`) or golden query, `POST /grade/fresh` generates one throwaway idea
   for grading that is **never saved** as a `shoot_concepts` row — verdicts post to the existing
@@ -272,6 +272,15 @@ is yours, in Resolve, by hand.
   via the existing `data-cap` convention. The test suite pins `DEV_TOOLS=1` in
   `tests/conftest.py`; `tests/test_dev_tools.py` reloads `app.main` under `DEV_TOOLS=0` to lock
   the public posture.
+  **The console needs no login.** `/studio` and the rest of the `dev` router are open (the
+  established dev-console posture), but the Stats tab's eval instruments are a client-side
+  shell, and pointing them at the session-gated `/api/evals/*` left half the tab 401'ing
+  ("sign in first") beside server-rendered metrics that worked — so `dev` carries its own
+  `/studio/api/*` delegations to the SAME `app/api.py` functions (never a second
+  implementation, so the numbers can't drift), and `evals_dev.js` prefixes its calls with
+  `window.ZP_API_BASE`, which the page sets to `/studio`. `/api/*` itself stays gated;
+  `DEV_TOOLS` is the only gate on the console, so with the flag unset these routes don't
+  exist at all.
 - **`src/settings.py`** — the Dev Studio tunables, in the same SQLite `settings` table as
   autonomy's kill switch. Three keys, resolved **per call** (stored value > env var > shipped
   default, reads never raise): `prompt_gate_min` (orchestrator's credit-gate bar, was

@@ -1,17 +1,23 @@
-/* /evals — the dev-console eval page. A port of the old /ui Evals
-   view's behaviour onto the legacy skin: metrics from stored runs
-   (computed server-side), the probe via the same /api/retrieve the
+/* The Dev Studio Stats tab's eval instruments: metrics from stored runs
+   (computed server-side), the probe via the same retrieve endpoint the
    composer uses, marking a probe result correct adds a golden query.
    The client never calculates a metric.
 
-   The /api routes require a session; a 401 here becomes one plain
-   banner pointing at /signin instead of a wall of failed fetches. */
+   Endpoints are prefixed with window.ZP_API_BASE — the Dev Studio sets
+   it to "/studio", pointing these calls at the dev router's own
+   delegations (app/main.py) rather than the session-gated /api twins.
+   The console reads every stat in the project without a login; the
+   posture flag DEV_TOOLS is what gates the whole surface. Unset it and
+   these routes don't exist. A 401 is still handled below in case the
+   base is ever pointed back at /api. */
 (() => {
   const $ = id => document.getElementById(id);
+  const BASE = window.ZP_API_BASE || '';
   const esc = s => String(s ?? '').replace(/[&<>"']/g,
     c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   async function api(path, opts = {}) {
+    path = BASE + path;
     const init = { headers: {}, ...opts };
     if (init.body !== undefined && typeof init.body !== 'string') {
       init.body = JSON.stringify(init.body);

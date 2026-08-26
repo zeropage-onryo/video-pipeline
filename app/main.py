@@ -695,6 +695,62 @@ def dataset_export(what: str = "golden", fmt: str = "json"):
         "Content-Disposition": f'attachment; filename="{filename}"'})
 
 
+# --- the Dev Studio's own JSON surface --------------------------------------
+# The Stats tab's eval instruments are a client-side shell, and every
+# /api/* route sits behind the session gate -- which left half the tab
+# ("evals unavailable, sign in first") locked while the pipeline metrics
+# beside it rendered fine, purely because those come from the server.
+# The Dev Studio is the operator's own console: it reads every stat in
+# the project without a login, same as the rest of the dev router.
+#
+# These are thin delegations to the SAME app/api.py functions, not a
+# second implementation -- the numbers cannot drift from /ui's. They
+# register on `dev`, so a public deployment has no ungated eval surface
+# at all: the routes simply don't exist there.
+
+@dev.get("/studio/api/evals/runs")
+def dev_evals_runs():
+    return api.evals_runs()
+
+
+@dev.get("/studio/api/evals/runs/{run_id}")
+def dev_evals_run_detail(run_id: int):
+    return api.evals_run_detail(run_id)
+
+
+@dev.get("/studio/api/evals/golden")
+def dev_evals_golden():
+    return api.evals_golden()
+
+
+@dev.post("/studio/api/evals/golden")
+def dev_evals_golden_add(body: api.GoldenBody):
+    return api.evals_golden_add(body)
+
+
+@dev.delete("/studio/api/evals/golden/{golden_id}")
+def dev_evals_golden_delete(golden_id: int):
+    return api.evals_golden_delete(golden_id)
+
+
+@dev.post("/studio/api/evals/run")
+def dev_evals_run(body: api.EvalRunBody):
+    """Billed (embeddings per golden query), like every other model-
+    touching button on the dev console -- the gate that matters is
+    DEV_TOOLS, which is what makes this router exist."""
+    return api.evals_run(body)
+
+
+@dev.post("/studio/api/retrieve")
+def dev_retrieve(body: api.RetrieveBody):
+    return api.retrieve(body)
+
+
+@dev.get("/studio/api/jobs/{job_id}")
+def dev_job_detail(job_id: int):
+    return api.job_detail(job_id)
+
+
 def parse_video_form(form: dict) -> dict:
     """
     Raw form strings -> db.add_video kwargs. Blank optional fields become

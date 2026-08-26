@@ -27,6 +27,9 @@ DEV_PAGES = (
     "/dashboard", "/studio", "/concepts", "/assets", "/holds",
     "/winners", "/library", "/analytics", "/locations", "/characters",
     "/props", "/references/pick", "/post-image", "/videos/new",
+    # the Dev Studio's own ungated JSON surface: it reads every stat
+    # without a session, so a public deployment must not register it
+    "/studio/api/evals/runs",
 )
 
 
