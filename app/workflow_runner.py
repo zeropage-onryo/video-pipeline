@@ -29,7 +29,7 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 from src import db, runway
-from src.locations import MIME_TYPES
+from src.gemini_utils import sniff_mime
 
 # The v1 catalogue. Text-source nodes carry their value in properties;
 # the other three call a backend function. Resist growing this list
@@ -112,12 +112,77 @@ def render_bytes(value):
     return None
 
 
+MAX_FETCH_BYTES = 15 * 1024 * 1024      # Gemini's inline request budget is ~20MB
+FETCH_TIMEOUT = 10
+
+
+def _public_host(host) -> bool:
+    """SSRF guard: reference URLs come out of the graph JSON, which is
+    user-controlled, and this fetch runs on the server. Only addresses
+    outside the private ranges are allowed, so a pasted URL can never
+    make the app read its own network."""
+    import ipaddress
+    import socket
+
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except Exception:
+        return False
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return False
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            return False
+    return bool(infos)
+
+
+def fetch_image_bytes(url):
+    """A public image URL -> its bytes, or None. Never raises.
+
+    This exists because R2 went live: once storage is configured every
+    stored reference image and every keyframe is an https URL, and
+    NEITHER model can fetch one. Gemini takes inline bytes only, so
+    before this an https reference was silently dropped (Nano) or
+    degraded to a line of text naming the URL (enhance) -- the reference
+    looked attached on the canvas and reached no model at all."""
+    from urllib.parse import urlparse
+
+    import requests
+
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return None
+    if not _public_host(parsed.hostname):
+        return None
+    try:
+        with requests.get(url, stream=True, timeout=FETCH_TIMEOUT) as response:
+            response.raise_for_status()
+            kind = (response.headers.get("content-type") or "").split(";")[0].strip()
+            if kind and not kind.startswith("image/"):
+                return None
+            data = b""
+            for chunk in response.iter_content(64 * 1024):
+                data += chunk
+                if len(data) > MAX_FETCH_BYTES:
+                    return None            # too big to ride inline; drop it
+        return data or None
+    except Exception:
+        return None                        # a reference is an enhancement, never a gate
+
+
+
+
 def image_bytes_for_gemini(value, resolve_photo=None):
-    """A Nano Banana node's reference input -> raw bytes Gemini can take
-    as vision input (it never fetches URLs). A picked asset photo
-    resolves through resolve_photo; an upstream render's /renders/ URL
-    resolves against data/renders/; a data URI decodes. A remote http(s)
-    URL is dropped -- a reference is an enhancement, never a gate."""
+    """Any reference input -> raw bytes Gemini can take as vision input
+    (it never fetches URLs itself). A data URI decodes; an upstream
+    render's /renders/ URL resolves against data/renders/; a picked
+    asset photo resolves through resolve_photo; a public http(s) URL is
+    fetched. Local resolution is tried first -- a file on this disk
+    beats a round trip. None when nothing resolves: a reference is an
+    enhancement, never a gate."""
     import base64
 
     if not value or not isinstance(value, str):
@@ -129,6 +194,8 @@ def image_bytes_for_gemini(value, resolve_photo=None):
             return None
     if value.startswith("/renders/"):
         return render_bytes(value)
+    if value.startswith(("http://", "https://")):
+        return fetch_image_bytes(value)
     target = resolve_photo(value) if resolve_photo else None
     return target.read_bytes() if target is not None else None
 
@@ -187,14 +254,18 @@ def enhance(system: str, user: str, images=None, *, gemini_client,
     text = "\n\n".join(blocks)
     parts = []
     for image in images or []:
-        target = resolve_photo(image) if resolve_photo else None
-        if target is not None:
+        # every reference the same way, local file or public URL -- the
+        # model must SEE it. Naming a URL in the text (what this did
+        # before) tells a model that cannot fetch URLs that one exists,
+        # which is indistinguishable from no reference at all.
+        data = image_bytes_for_gemini(image, resolve_photo=resolve_photo)
+        if data:
             parts.append(types.Part.from_bytes(
-                data=target.read_bytes(),
-                mime_type=MIME_TYPES.get(target.suffix.lower(), "image/jpeg")))
+                data=data, mime_type=sniff_mime(data)))
         elif isinstance(image, str) and image.startswith(("http://", "https://")):
-            # not fetched server-side; named so the model still knows of it
-            text += f"\nReference image: {image}"
+            # unreachable (private host, too big, dead link): say so,
+            # rather than pretending the reference landed
+            text += f"\nReference image (could not be loaded): {image}"
     parts.append(text)
     return generate_with_retry(gemini_client, model or shootgen.MODEL, parts)
 

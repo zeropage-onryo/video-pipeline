@@ -27,6 +27,7 @@ from typing import Optional
 
 from . import generative
 from .db import DB_PATH
+from .gemini_utils import sniff_mime
 from .shot import Shot
 
 MODEL = os.environ.get("NANO_BANANA_MODEL", "gemini-2.5-flash-image")
@@ -52,18 +53,30 @@ STILL_FRAME_TEMPLATE = (
     "how this one frame is composed and where the movement is caught "
     "mid-move -- never as a sequence to play out. Output the image itself, "
     "with no commentary.\n\n"
-    "THE SHOT\n{prompt}"
+    "{reference}THE SHOT\n{prompt}"
+)
+
+# Attaching a reference is not the same as saying what it is FOR. Bytes
+# with no instruction leave the model to guess between "copy this",
+# "continue this" and "ignore this" -- so the shot's own description
+# gets overridden as often as it gets matched.
+REFERENCE_NOTE = (
+    "THE ATTACHED IMAGE is reference material for this shot: match the "
+    "subject's face, wardrobe, props and location exactly as they appear "
+    "in it. Do NOT copy its framing, crop or camera angle -- those come "
+    "from the shot description below.\n\n"
 )
 
 
-def as_still_frame(prompt: str) -> str:
+def as_still_frame(prompt: str, *, has_reference: bool = False) -> str:
     """The video prompt, re-framed as a single-frame brief. Pure -- no
     model call goes near it, so a refusal is either a bad framing
     (visible here) or a bad prompt, never both at once."""
     prompt = (prompt or "").strip()
     if not prompt:
         return ""
-    return STILL_FRAME_TEMPLATE.format(prompt=prompt)
+    return STILL_FRAME_TEMPLATE.format(
+        prompt=prompt, reference=REFERENCE_NOTE if has_reference else "")
 
 
 def has_key() -> bool:
@@ -194,8 +207,11 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"wf-{stamp}.png"
-        generate_image(as_still_frame(prompt), out_path, model=model,
-                       reference_bytes=reference_bytes, client=client)
+        generate_image(as_still_frame(prompt, has_reference=bool(reference_bytes)),
+                       out_path, model=model,
+                       reference_bytes=reference_bytes,
+                       reference_mime=sniff_mime(reference_bytes),
+                       client=client)
 
         # the row logs the prompt the person wrote, not the constant
         # wrapper around it -- the flag says which framing was applied

@@ -312,7 +312,21 @@ is yours, in Resolve, by hand.
   2026-08-26, and verified fixed by the same prompt rendering a real keyframe. The image
   call carries its own retry on `RESOURCE_EXHAUSTED`/`UNAVAILABLE` (two of four live calls
   were 503s) — on the SAME model, deliberately not `gemini_utils.generate_with_retry`,
-  whose `FALLBACK_MODELS` are text models that cannot draw. Evals moved OFF `/ui` (2026-08-25) to the dev-console
+  whose `FALLBACK_MODELS` are text models that cannot draw.
+  **Reference images must be FETCHED, never named** (fixed 2026-08-26): neither Gemini
+  model can retrieve a URL, so once R2 was configured — and every stored reference and
+  keyframe became an `https://…r2.dev/…` URL — grounding silently died. Nano dropped the
+  reference outright; enhance degraded it to a line of text (`Reference image: <url>`),
+  which is indistinguishable from no reference. `workflow_runner.fetch_image_bytes` now
+  pulls it server-side (SSRF-guarded against private/loopback/link-local addresses,
+  `image/*` only, 15MB cap, never raises) and both paths attach real inline bytes with the
+  mime read from the magic number (`gemini_utils.sniff_mime`) rather than a blanket
+  `image/jpeg`. Attaching bytes is only half of it: `REFERENCE_NOTE` tells the model what
+  the reference is FOR — match subject/wardrobe/props/location, do NOT copy its framing —
+  since bytes with no instruction leave it guessing between copy/continue/ignore. Verified
+  live: Flash asked what it can see answered "a man in a workshop looks at a weathered
+  watch", and a keyframe fed back in produced the same man in the same jacket and garage
+  under a new camera setup. Evals moved OFF `/ui` (2026-08-25) to the dev-console
   `/evals` page — golden set still in SQLite via `src/evalstore.py`, seeded once from
   `eval_cases.json`, Hit@k/MRR computed server-side by `rag_eval` and stored per run; the
   page is a shell over the same session-gated `/api/evals/*` endpoints, and it registers on

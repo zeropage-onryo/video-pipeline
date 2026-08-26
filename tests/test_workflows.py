@@ -725,6 +725,89 @@ def test_nano_sends_the_framed_prompt_but_logs_what_the_person_wrote(
     assert json.loads(params)["framing"] == "still"
 
 
+# --- references actually reaching the models --------------------------------
+
+PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"pixels"
+R2_URL = "https://cdn.example/renders/nano/wf-1.png"
+
+
+def test_a_remote_reference_reaches_gemini_as_vision_not_as_a_url(monkeypatch):
+    """The regression this exists for: once R2 was configured every
+    reference image became an https URL, and Gemini cannot fetch a URL.
+    The reference looked attached on the canvas and reached no model --
+    silently dropped for Nano, and reduced to a line of TEXT naming the
+    URL for enhance, which is indistinguishable from no reference."""
+    monkeypatch.setattr(workflow_runner, "fetch_image_bytes",
+                        lambda url: PNG_BYTES if url == R2_URL else None)
+    captured = {}
+    monkeypatch.setattr("src.gemini_utils.generate_with_retry",
+                        lambda client, model, contents:
+                        captured.setdefault("parts", contents) and "ENHANCED")
+
+    workflow_runner.enhance("SYS", "a watch macro", images=[R2_URL],
+                            gemini_client=object(), resolve_photo=lambda v: None)
+    parts = captured["parts"]
+    assert len(parts) == 2                       # an image Part, then the text
+    assert parts[0].inline_data.data == PNG_BYTES
+    assert parts[0].inline_data.mime_type == "image/png"   # sniffed, not assumed
+    assert R2_URL not in parts[-1]               # no longer a URL the model can't use
+
+
+def test_an_unreachable_reference_says_so_instead_of_pretending(monkeypatch):
+    monkeypatch.setattr(workflow_runner, "fetch_image_bytes", lambda url: None)
+    captured = {}
+    monkeypatch.setattr("src.gemini_utils.generate_with_retry",
+                        lambda client, model, contents:
+                        captured.setdefault("parts", contents) and "E")
+    workflow_runner.enhance("SYS", "a watch macro", images=[R2_URL],
+                            gemini_client=object(), resolve_photo=lambda v: None)
+    assert "could not be loaded" in captured["parts"][-1]
+
+
+def test_image_bytes_for_gemini_fetches_a_public_url(monkeypatch):
+    monkeypatch.setattr(workflow_runner, "fetch_image_bytes",
+                        lambda url: PNG_BYTES)
+    assert workflow_runner.image_bytes_for_gemini(R2_URL) == PNG_BYTES
+
+
+def test_the_reference_fetch_refuses_private_addresses():
+    """The URL comes out of user-controlled graph JSON and the fetch runs
+    server-side, so the SSRF guard is the wall. Literal IPs, so no DNS
+    (and no network) is needed to check it."""
+    for host in ("127.0.0.1", "10.0.0.5", "169.254.169.254", "192.168.1.1"):
+        assert workflow_runner._public_host(host) is False
+    assert workflow_runner.fetch_image_bytes("http://169.254.169.254/latest/meta-data") is None
+    assert workflow_runner.fetch_image_bytes("file:///etc/passwd") is None
+
+
+def test_sniff_mime_reads_the_magic_number():
+    from src.gemini_utils import sniff_mime
+
+    assert sniff_mime(PNG_BYTES) == "image/png"
+    assert sniff_mime(b"\xff\xd8\xff\xe0stuff") == "image/jpeg"
+    assert sniff_mime(b"RIFF1234WEBPmore") == "image/webp"
+    assert sniff_mime(b"") == "image/jpeg"          # a safe default, never a crash
+
+
+def test_nano_tells_the_model_what_the_reference_is_for(tmp_db, tmp_path, monkeypatch):
+    """Bytes with no instruction leave the model guessing between copy
+    this / continue this / ignore this."""
+    from src import nano_banana
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(nano_banana, "RENDER_DIR", tmp_path / "nano")
+    monkeypatch.setattr("src.storage.configured", lambda: False)
+    fake = FakeGeminiImageClient()
+    assert nano_banana.generate_from_prompt("a watch macro", reference_image=PNG_BYTES,
+                                            db_path=tmp_db, client=fake)["ok"]
+    parts = fake.calls[0]["contents"]
+    assert parts[0].inline_data.mime_type == "image/png"   # not the old blanket jpeg
+    assert "THE ATTACHED IMAGE is reference material" in parts[-1]
+    assert "Do NOT copy its framing" in parts[-1]
+    # ...and no reference means no note about one
+    assert "THE ATTACHED IMAGE" not in nano_banana.as_still_frame("a watch macro")
+
+
 def test_nano_retries_a_transient_overload(tmp_db, tmp_path, monkeypatch):
     """Measured live: an image model under load answers 503 UNAVAILABLE
     often enough that one attempt is not enough. Retried like every

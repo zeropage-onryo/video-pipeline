@@ -16,6 +16,25 @@ def strip_fences(text: str) -> str:
     return text.strip()
 
 
+def sniff_mime(data) -> str:
+    """The mime type for inline image bytes, read from the magic number
+    rather than a filename. Reference bytes reach us from a fetch or a
+    render file, neither carrying a trustworthy extension, and handing
+    a model a PNG labelled image/jpeg is a needless way to lose a
+    reference."""
+    if not data:
+        return "image/jpeg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:2] == b"\xff\xd8":
+        return "image/jpeg"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    return "image/jpeg"
+
+
 FALLBACK_MODELS = ["gemini-3.1-flash-lite", "gemini-pro-latest"]
 
 
