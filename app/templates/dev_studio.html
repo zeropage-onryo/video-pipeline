@@ -1,0 +1,247 @@
+{% extends "base.html" %}
+{% block title %}Dev Studio — Zero Page{% endblock %}
+{% block head %}
+<style>
+  /* the tab bar + page-local pieces the skin doesn't carry. The evals
+     styles are carried over verbatim from the old /evals page. */
+  .sk .devtabs{ display:flex; gap:8px; margin:18px 0 22px; flex-wrap:wrap; }
+  .sk .devtab{ display:inline-block; padding:8px 16px; border:1px solid var(--line2);
+               border-radius:8px; font-family:var(--mono); font-size:12px; color:var(--dim);
+               text-decoration:none; letter-spacing:.4px; }
+  .sk .devtab:hover{ color:var(--ink); border-color:var(--steel); }
+  .sk .devtab[aria-current="page"]{ background:var(--red); border-color:var(--red); color:#fff; }
+  .sk .ebars{ display:flex; align-items:flex-end; gap:10px; height:140px; padding-top:22px; }
+  .sk .ebar{ flex:1; min-width:18px; max-width:64px; border:0; border-radius:6px 6px 3px 3px;
+             background:#26262c; position:relative; cursor:pointer; padding:0; }
+  .sk .ebar:hover{ background:#303038; }
+  .sk .ebar.sel{ background:var(--red); }
+  .sk .ebar::after{ content:attr(data-v); position:absolute; top:-19px; left:50%;
+                    transform:translateX(-50%); font-family:var(--mono); font-size:10px; color:var(--dim); }
+  .sk .prow{ display:grid; grid-template-columns:26px 1fr auto auto; gap:12px; align-items:center;
+             padding:8px 10px; border-bottom:1px solid var(--line); font-size:13px; }
+  .sk .prow:last-child{ border-bottom:none; }
+  .sk .prow .rank{ font-family:var(--mono); font-size:11px; color:var(--faint); }
+  .sk .prow .rn{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .sk .prow .rs{ font-family:var(--mono); font-size:12px; color:var(--dim); }
+  .sk .prow.gold{ background:#101a14; box-shadow:inset 2px 0 0 var(--good); }
+  .sk .mk{ width:28px; height:28px; border-radius:8px; border:1px solid var(--line2);
+           background:transparent; color:var(--faint); cursor:pointer; font-size:13px; padding:0; }
+  .sk .mk[aria-pressed="true"]{ background:#12241a; border-color:var(--good); color:var(--good); }
+  .sk .gq{ display:grid; grid-template-columns:1fr 170px 78px 58px 34px; gap:12px; align-items:center;
+           padding:10px; border-bottom:1px solid var(--line); font-size:13px; cursor:pointer; }
+  .sk .gq:hover{ background:var(--panel2); }
+  .sk .gq .v{ font-family:var(--mono); font-size:11.5px; color:var(--dim);
+              white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .sk .gq .v.ok{ color:var(--good); } .sk .gq .v.miss{ color:var(--red); }
+  .sk .gq .del{ border:0; background:transparent; color:var(--faint); cursor:pointer; font-size:12px; }
+  .sk .gq .del:hover{ color:var(--red); }
+  .sk .gdetail{ display:none; padding:2px 10px 12px; }
+  .sk .gdetail[data-open]{ display:block; }
+  .sk .blank{ padding:16px 4px; font-family:var(--mono); font-size:11px; color:var(--faint); }
+  .sk .delta{ font-family:var(--mono); font-size:11px; margin-left:8px; }
+  .sk #probefoot{ display:flex; align-items:center; gap:12px; margin-top:12px; }
+  .sk #probefoot[hidden]{ display:none; }
+  .sk .drawrow{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:18px; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="sk"><div class="page">
+  <div class="vhead">
+    <div>
+      <div class="rule">Dev Studio // stats + system improvement // nothing here ships to users</div>
+      <h1>Dev Studio</h1>
+      <p class="vsub">Grading, RAG teaching, and threshold tuning done here change what
+        <span class="mono">/ui</span>'s next generation does — the improvement shows up in the
+        product's output, never as a dev-only number surfaced to a user.</p>
+    </div>
+    <div style="text-align:right"><a class="btnw" href="/ui">Open the studio →</a></div>
+  </div>
+
+  <nav class="devtabs">
+    {% for t, label in [("stats", "Stats"), ("grade", "Grade"), ("library", "RAG Library"),
+                        ("settings", "Settings"), ("dataset", "Dataset")] %}
+    <a class="devtab" href="/studio?tab={{ t }}" {{ 'aria-current=page' if active_tab == t }}>{{ label }}</a>
+    {% endfor %}
+  </nav>
+
+  {% if message %}<div class="toast">{{ message }}</div>{% endif %}
+
+  {% if active_tab == "stats" %}
+  {# ── the five pipeline numbers, computed server-side ── #}
+  {% if metrics.killed %}<div class="warnings" style="margin-bottom:14px">Kill switch is ON — every channel holds regardless of autonomy.</div>{% endif %}
+  <div class="panel">
+    <div class="panel-head"><span class="id">PIPELINE</span><span class="m">THE TWO LABELS + THE THREE AGREEMENT NUMBERS</span></div>
+    <div class="panel-body">
+      <div class="tiles">
+        <div class="tile"><div class="k">Shortlist rate · {{ metrics.shortlist.shortlisted }}/{{ metrics.shortlist.generated }}</div>
+          <div class="v">{{ "%.0f%%"|format(metrics.shortlist.rate * 100) if metrics.shortlist.rate is not none else "—" }}</div></div>
+        <div class="tile"><div class="k">Shoot rate · {{ metrics.shoot.shot }}/{{ metrics.shoot.generated }}</div>
+          <div class="v">{{ "%.0f%%"|format(metrics.shoot.rate * 100) if metrics.shoot.rate is not none else "—" }}</div></div>
+        <div class="tile"><div class="k">Evaluator agreement · {{ metrics.agreement.graded }} graded</div>
+          <div class="v">{{ "%.0f%%"|format(metrics.agreement.agreement * 100) if metrics.agreement.agreement is not none else "—" }}</div></div>
+        <div class="tile"><div class="k">Gate agreement · {{ metrics.gate.graded }} graded</div>
+          <div class="v">{{ "%.0f%%"|format(metrics.gate.agreement * 100) if metrics.gate.agreement is not none else "—" }}</div></div>
+        <div class="tile"><div class="k">First-try pass · {{ metrics.pass_rate.passed }}/{{ metrics.pass_rate.total }}</div>
+          <div class="v">{{ "%.0f%%"|format(metrics.pass_rate.rate * 100) if metrics.pass_rate.rate is not none else "—" }}</div></div>
+      </div>
+    </div>
+  </div>
+
+  {# ── the retrieval eval, same /api/evals endpoints via evals_dev.js ── #}
+  <div class="vhead" style="margin-top:26px">
+    <div><div class="rule">Retrieval harness // hit@k + MRR // golden set</div></div>
+    <div style="text-align:right">
+      <div class="kicker" id="runlabel">—</div>
+      <button class="btnw" id="runeval" style="margin-top:8px">Run eval</button>
+    </div>
+  </div>
+  <div class="toast" id="estate" hidden></div>
+  <div class="tiles" id="emetrics"></div>
+  <div class="panel">
+    <div class="panel-head"><span class="id">HIT RATE ACROSS RUNS</span><span class="m">CLICK A BAR TO INSPECT</span></div>
+    <div class="panel-body">
+      <div class="ebars" id="bars"></div>
+      <div class="blank" id="barsblank" hidden>No runs yet — run the eval to start the history</div>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="panel-head"><span class="id">PROBE RETRIEVAL</span><span class="m">MARK WHAT SHOULD HAVE COME BACK</span></div>
+    <div class="panel-body">
+      <input type="text" id="probe" placeholder="Type a query and mark which results are correct…">
+      <div id="probeout" class="blank">Enter a query to see what retrieval returns</div>
+      <div id="probefoot" hidden>
+        <span class="mono dim" id="probemeta" style="font-size:11px">—</span>
+        <span style="flex:1"></span>
+        <button class="primary" id="probesave">Add to golden set</button>
+      </div>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="panel-head"><span class="id">GOLDEN SET</span><span class="m">CLICK A QUERY FOR THE SELECTED RUN'S RETRIEVAL</span></div>
+    <div class="panel-body" id="golden"></div>
+  </div>
+
+  {% elif active_tab == "grade" %}
+  {% include "_dev_grade.html" %}
+
+  {% elif active_tab == "library" %}
+  {% include "_dev_library.html" %}
+
+  {% elif active_tab == "settings" %}
+  <div class="panel">
+    <div class="panel-head"><span class="id">TUNABLES</span><span class="m">TAKES EFFECT ON THE NEXT RUN — NO RESTART</span></div>
+    <div class="panel-body">
+      <form method="post" action="/studio/settings">
+        <div class="field-grid">
+          {% for row in settings_rows %}
+          <label>{{ row.label }} <span class="mono dim">{{ row.lo }}–{{ row.hi }} · now from {{ row.source }}</span>
+            <input type="number" name="{{ row.key }}" value="{{ row.value }}"
+                   min="{{ row.lo }}" max="{{ row.hi }}" step="{{ '0.01' if row.default is number and row.default != row.default|int else '1' }}">
+            <span class="dim" style="font-size:12px">{{ row.help }} Default {{ row.default }}; clear the field to fall back to env/default.</span>
+          </label>
+          {% endfor %}
+        </div>
+        <div style="margin-top:12px"><button type="submit" class="primary">Save settings</button></div>
+      </form>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><span class="id">AUTONOMY</span><span class="m">CHANNELS // KILL SWITCH // STANDING NOTE</span></div>
+    <div class="panel-body">
+      {% if killed %}<div class="warnings" style="margin-bottom:12px">Kill switch is ON — every channel holds regardless of autonomy.</div>{% endif %}
+      <div class="tiles">
+        {% for ch in channels %}
+        <div class="tile">
+          <div class="k">{{ ch.name }}</div>
+          <div class="v" style="text-transform:uppercase">{{ ch.autonomy }}</div>
+          <form method="post" action="/channels/{{ ch.name }}/autonomy" style="margin-top:8px; display:flex; gap:6px">
+            <select name="autonomy">
+              {% for level in ["shadow", "queue", "auto"] %}
+              <option value="{{ level }}" {{ "selected" if ch.autonomy == level }}>{{ level }}</option>
+              {% endfor %}
+            </select>
+            <button type="submit">Set</button>
+          </form>
+        </div>
+        {% endfor %}
+      </div>
+      <div style="display:flex; gap:12px; flex-wrap:wrap; margin-top:14px; align-items:flex-start">
+        <form method="post" action="/holds/note" style="flex:1; min-width:260px; display:flex; gap:8px">
+          <input type="text" name="note" placeholder="Standing note — folds into the next run's spark, steers exactly once" style="flex:1">
+          <button type="submit">Note</button>
+        </form>
+        <form method="post" action="/kill">
+          <button type="submit" class="btnw">{{ "Kill switch OFF" if killed else "Kill switch ON" }}</button>
+        </form>
+      </div>
+      <p class="dim" style="margin-top:10px; font-size:12px">The hold queue itself is graded on
+        <a href="/ui">/ui</a>'s Pipeline view — approvals there feed the agreement numbers on Stats.</p>
+    </div>
+  </div>
+
+  {% elif active_tab == "dataset" %}
+  <div class="panel">
+    <div class="panel-head"><span class="id">GOLDEN SET</span>
+      <span class="m">
+        <a class="mono" href="/dataset/export?what=golden&fmt=csv">CSV</a> ·
+        <a class="mono" href="/dataset/export?what=golden&fmt=json">JSON</a>
+      </span>
+    </div>
+    <div class="panel-body">
+      {% if golden %}
+      <table>
+        <thead><tr><th>Query</th><th>Relevant sources</th><th>Source</th><th>Added</th></tr></thead>
+        <tbody>
+          {% for g in golden %}
+          <tr>
+            <td>{{ g.query }}</td>
+            <td class="mono dim">{{ g.relevant | join(", ") }}</td>
+            <td><span class="tag steel">{{ g.source }}</span></td>
+            <td class="mono dim">{{ g.created_at | string | truncate(10, True, "") }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="dim">The golden set is empty — add queries from the Stats tab's probe.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><span class="id">RUN HISTORY</span>
+      <span class="m">
+        <a class="mono" href="/dataset/export?what=runs&fmt=csv">CSV</a> ·
+        <a class="mono" href="/dataset/export?what=runs&fmt=json">JSON</a>
+      </span>
+    </div>
+    <div class="panel-body">
+      {% if runs %}
+      <table>
+        <thead><tr><th>Run</th><th>k</th><th>Queries</th><th>Hit rate</th><th>MRR</th><th>p50</th><th>When</th></tr></thead>
+        <tbody>
+          {% for r in runs %}
+          <tr>
+            <td>{{ r.label }}</td>
+            <td class="num">{{ r.k }}</td>
+            <td class="num">{{ r.n }}</td>
+            <td class="num">{{ "%.2f"|format(r.hit_rate) }}</td>
+            <td class="num">{{ "%.2f"|format(r.mrr) }}</td>
+            <td class="num">{{ r.p50_ms ~ " ms" if r.p50_ms is not none else "—" }}</td>
+            <td class="mono dim">{{ r.created_at | string | truncate(16, True, "") }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="dim">No eval runs yet — run one from the Stats tab.</p>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+</div></div>
+{% endblock %}
+{% block scripts %}
+{% if active_tab == "stats" %}<script src="/static/evals_dev.js" defer></script>{% endif %}
+{% endblock %}

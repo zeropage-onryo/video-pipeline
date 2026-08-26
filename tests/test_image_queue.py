@@ -7,7 +7,6 @@ and isn't exercised here; the pasted-URL branch and the action shape are.
 import pytest
 from fastapi.testclient import TestClient
 
-import app.main as app_main
 from app.main import app
 from src import autonomy, db
 
@@ -42,6 +41,12 @@ def test_queue_without_an_image_is_rejected(tmp_db):
 
 
 def test_approving_an_image_hold_builds_an_image_action(tmp_db, monkeypatch):
+    """'Post now' lives on /api/holds/{id}/post since the /holds page
+    retired (2026-08-26) -- same action shape through the same gate."""
+    from app import api as api_mod
+    from app import auth
+    stub = {"id": 1, "email": "t@example.com", "display_name": "T"}
+    monkeypatch.setattr(auth, "current_user", lambda request: stub)
     hid = autonomy.to_hold("zeropage", "queued", caption="cap",
                            payload={"image_url": "https://cdn.example/x.jpg"},
                            status="held", path=tmp_db)
@@ -51,8 +56,10 @@ def test_approving_an_image_hold_builds_an_image_action(tmp_db, monkeypatch):
         captured["actions"] = plan["actions"]
         return {"mode": "dry-run", "executed": 0, "skipped": []}
 
-    monkeypatch.setattr(app_main.autopilot, "execute", fake_execute)
-    client.post(f"/holds/{hid}/post", follow_redirects=False)
+    monkeypatch.setattr(api_mod.autopilot, "execute", fake_execute)
+    res = client.post(f"/api/holds/{hid}/post")
+    assert res.status_code == 200
+    assert res.json()["posted"] is False        # dry-run mode posts nothing
 
     actions = captured["actions"]
     assert actions, "holds_post built no actions for an image hold"

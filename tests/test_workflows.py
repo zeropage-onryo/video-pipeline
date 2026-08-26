@@ -519,15 +519,13 @@ def test_ui_shell_has_pipeline_tabs_and_a_director_view(tmp_db):
     assert "vendor/litegraph.js" in html
 
 
-def test_evals_dev_page_renders_open(tmp_db, monkeypatch):
-    """The dev page is a legacy page: no session required for the shell
-    itself (its API calls surface the 401 with a pointer to /signin)."""
-    from app import auth
-    monkeypatch.setattr(auth, "current_user", lambda request: None)
-    res = client.get("/evals")
-    assert res.status_code == 200
-    assert "evals_dev.js" in res.text
-    assert "GOLDEN SET" in res.text
+def test_evals_url_redirects_into_the_dev_studio(tmp_db):
+    """Evals folded into the Dev Studio's Stats tab (2026-08-26); the
+    old URL keeps working as a redirect. The tab's own rendering (same
+    evals_dev.js + /api/evals endpoints) is asserted in test_app.py."""
+    res = client.get("/evals", follow_redirects=False)
+    assert res.status_code == 308
+    assert res.headers["location"] == "/studio?tab=stats"
 
 
 # --- the seeded default template --------------------------------------------

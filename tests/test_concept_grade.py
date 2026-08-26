@@ -47,7 +47,7 @@ def test_grade_route_scores_and_stores(tmp_db, monkeypatch):
         lambda concept, **k: {"overall": 8.0, "taste_fit": 9.0, "performance": 7.0,
                               "reasons": ["echoes The Last Check"], "graded": True})
     r = client.post(f"/concepts/{cid}/grade", follow_redirects=False)
-    assert r.status_code == 303 and "/concepts" in r.headers["location"]
+    assert r.status_code == 303 and "/studio?tab=grade" in r.headers["location"]
     assert preprod.get_concept(cid, path=tmp_db)["judge_overall"] == 8.0
 
 
@@ -71,7 +71,7 @@ def test_grade_all_scores_only_ungraded(tmp_db, monkeypatch):
 def test_discard_deletes_the_concept(tmp_db):
     cid = preprod.save_concept(_concept("gone"), "antihero", path=tmp_db)
     r = client.post(f"/concepts/{cid}/discard", follow_redirects=False)
-    assert r.status_code == 303 and "/concepts" in r.headers["location"]
+    assert r.status_code == 303 and "/studio?tab=grade" in r.headers["location"]
     assert preprod.get_concept(cid, path=tmp_db) is None
 
 
@@ -86,14 +86,15 @@ def test_discard_all_clears_only_the_active_brand(tmp_db):
     assert preprod.get_concept(z, path=tmp_db) is not None   # other brand untouched
 
 
-def test_concepts_are_brand_scoped_and_rail_switches(tmp_db):
+def test_concepts_are_brand_scoped_in_the_api(tmp_db, monkeypatch):
+    """The concepts list is /ui's Pipeline view now; brand scoping rides
+    the API's ?brand filter (the old /concepts page is a redirect)."""
+    from app import auth
+    stub = {"id": 1, "email": "t@example.com", "display_name": "T"}
+    monkeypatch.setattr(auth, "current_user", lambda request: stub)
     preprod.save_concept(_concept("AH ONLY ONE"), "antihero", path=tmp_db)
     preprod.save_concept(_concept("ZP ONLY ONE"), "zeropage", path=tmp_db)
-    client.cookies.set("brand", "zeropage")
-    r = client.get("/concepts")
-    client.cookies.clear()
-    # switching to zeropage shows only its concepts...
-    assert "ZP ONLY ONE" in r.text
-    assert "AH ONLY ONE" not in r.text
-    # ...and the rail carries a switch to the other brand
-    assert "/brand/antihero" in r.text
+    titles = [c["title"] for c in
+              client.get("/api/pipeline/concepts?brand=zeropage").json()["items"]]
+    assert "ZP ONLY ONE" in titles
+    assert "AH ONLY ONE" not in titles

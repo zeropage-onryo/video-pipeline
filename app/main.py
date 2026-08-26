@@ -2,21 +2,32 @@
 The web app: reads the same database the pipeline writes to. No build
 step, no framework, no component library -- vanilla Jinja2 and CSS.
 
-The app is one page: /studio is the workspace, and the older
-per-stage screens (/concepts, /locations, /library, /analytics,
-/pitches) stay reachable as the engine behind it. /  is the public
-landing and the only indexed URL.
+/ui (behind sign-in) is the product; / is the public landing and the
+only indexed URL. /studio is the Dev Studio -- one dev-only page of
+tabs (Stats, Grade, RAG Library, Settings, Dataset) that is strictly
+stats and system improvement: what happens there (grading, RAG
+teaching, threshold tuning) changes what the next real generation on
+/ui does, and none of it is shown to end users.
 """
+import csv
+import io
+import json
 import os
+import random
 import re
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 from urllib.parse import quote
 
 from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse, Response
+from fastapi.responses import (
+    FileResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from google import genai
@@ -40,6 +51,9 @@ from src import (
     winners,
     workflows,
     youtube,
+)
+from src import (
+    settings as settings_mod,
 )
 
 from . import api, auth, seo
@@ -142,6 +156,7 @@ async def lifespan(app: FastAPI):
     workflows.seed_default(path=db.DB_PATH)  # "Prompt enhancement" starter canvas
     generative.init(path=db.DB_PATH)    # generations log the render caps count
     accounts_mod.init(path=db.DB_PATH)  # users / identities / accounts / members
+    settings_mod.init(path=db.DB_PATH)  # the Dev Studio tunables (gate/threshold/k)
     seed_gold_standard()                # records the canonical example as a winner
     yield
 
@@ -311,57 +326,6 @@ def sitemap_xml():
     return Response(content=seo.sitemap_xml(), media_type="application/xml")
 
 
-# The assistant's vocabulary. Each intent is one pipeline stage; the
-# phrases are what a person actually types when they mean it. Order
-# matters -- the first intent with a matching phrase wins, so the more
-# specific stages are checked before the catch-all.
-#
-# "ideas" phrases are deliberately plural/explicit ("ideas", "options",
-# "slate") rather than the bare word "idea" -- someone describing one
-# idea in the box ("I have an idea for...") should land on DEFAULT_INTENT
-# (one concept for exactly that), not the multi-idea batch stage.
-INTENT_PHRASES = [
-    ("room", ("room", "space", "location", "photograph", "photo of", "scout")),
-    ("plan", ("plan", "shot list", "shotlist", "storyboard", "board it", "break it down")),
-    ("concept", ("full concept", "one concept", "whole concept", "concept for",
-                 "make one", "single idea")),
-    ("ideas", ("ideas", "deal", "pitch me", "options", "slate", "give me some")),
-]
-
-DEFAULT_INTENT = "concept"
-
-
-def route_intent(text: str, explicit: Optional[str] = None) -> str:
-    """
-    What did the person just ask for? A chip sends its intent outright;
-    free text is matched against INTENT_PHRASES.
-
-    This is keyword routing, not a model call, and that is the point: the
-    assistant orchestrates stages that each cost a real API call, so the
-    routing itself has to be free, instant, and inspectable. A miss lands
-    on concept -- one fully-formed idea for exactly what was typed (and
-    whatever was attached), which is what "describe an idea, hit
-    generate" almost always means. Ask for a slate explicitly ("give me
-    some options") when a batch to sift through is actually wanted.
-    """
-    if explicit in {name for name, _ in INTENT_PHRASES}:
-        return explicit
-    lowered = (text or "").lower()
-    for intent, phrases in INTENT_PHRASES:
-        if any(phrase in lowered for phrase in phrases):
-            return intent
-    return DEFAULT_INTENT
-
-
-def next_unplanned_concept(concepts: list) -> Optional[dict]:
-    """
-    The idea "plan that one" means when no card was clicked: the most
-    recent one that is still just an idea. list_concepts returns newest
-    first, so the first match is the right one.
-    """
-    return next((c for c in concepts if not c.get("has_shot_list")), None)
-
-
 @app.post("/brand/{name}")
 def set_brand(name: str, next: str = Form("/studio")):
     """Flip the active brand. Persists in a cookie so generation and the
@@ -394,249 +358,341 @@ def dashboard():
     return RedirectResponse("/studio", status_code=308)
 
 
-STUDIO_TABS = ("characters", "locations", "props", "director")
+# --- the Dev Studio ---------------------------------------------------------
+# One page (this route), five tabs. Strictly stats and system
+# improvement: the numbers about how well the pipeline works, a
+# randomized grading queue, the RAG library, the tunables, and the
+# eval dataset. Everything an end user creates with lives on /ui; what
+# happens here only changes what /ui's next generation does.
+
+DEV_TABS = ("stats", "grade", "library", "settings", "dataset")
+
+GRADE_EMPTY = ("Nothing to grade right now — every concept is scored and "
+               "the golden set is empty.")
+
+
+def _pipeline_metrics() -> dict:
+    """The five numbers (plus the kill state) that used to sit on /ui's
+    Concept tab -- computed server-side from the same calcs, because
+    Dev Studio is where the numbers about the system live now."""
+    return {
+        "shortlist": preprod.shortlist_rate(path=db.DB_PATH),
+        "shoot": preprod.shoot_rate(path=db.DB_PATH),
+        "agreement": autonomy.evaluator_agreement(path=db.DB_PATH),
+        "gate": autonomy.prompt_gate_agreement(path=db.DB_PATH),
+        "pass_rate": autonomy.first_try_pass_rate(path=db.DB_PATH),
+        "killed": autonomy.killed(path=db.DB_PATH),
+    }
+
+
+def _library_context(q: Optional[str], domain: Optional[str]) -> dict:
+    """The RAG Library tab's data -- the old /library page's context
+    unchanged: must render with Postgres down, search errors surface as
+    a line, never a 500."""
+    context = {"available": False, "sources": [], "results": [],
+               "domains": [], "q": q, "domain": domain, "error": None}
+    conn = None
+    try:
+        conn = rag.connect()
+        context["sources"] = rag.list_sources(conn)
+        # "assets" always offered even before the first asset lands on
+        # the shelf -- it's where entity uploads ingest to.
+        context["domains"] = sorted(
+            {s["domain"] for s in context["sources"]} | {"assets"})
+        context["available"] = True
+        if q:
+            try:
+                context["results"] = rag.query(
+                    q, rag.make_client(), conn, k=5, domain=domain or None
+                )
+            except Exception as e:
+                context["error"] = f"search failed: {e}"
+    except Exception as e:
+        context["error"] = f"library unavailable: {e}"
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    return context
+
+
+def _golden_probe(query: str) -> dict:
+    """Run one golden query against the live store for the Grade tab --
+    the /evals inspect interaction, server-rendered. Degrades to an
+    error line, never a dead tab."""
+    out = {"available": False, "hits": [], "error": None}
+    try:
+        conn = rag.connect()
+        try:
+            out["hits"] = rag.query(query, rag.make_client(), conn,
+                                    k=settings_mod.eval_k(path=db.DB_PATH))
+            out["available"] = True
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    except Exception as e:
+        out["error"] = str(e)
+    return out
+
+
+def _grade_context(mode: Optional[str], concept_id: Optional[int],
+                   golden_id: Optional[int], fresh: Optional[str]) -> dict:
+    """What the Grade tab shows: one drawn item (or nothing yet). The
+    id/payload arrives in the query string so a refresh re-renders the
+    same item without re-drawing -- and, for fresh, without re-billing."""
+    context = {"mode": mode, "concept": None, "golden": None,
+               "probe": None, "fresh": None,
+               "ungraded_count": sum(
+                   1 for c in preprod.list_concepts(path=db.DB_PATH)
+                   if c.get("judge_overall") is None),
+               "golden_count": len(evalstore.list_golden(path=db.DB_PATH))}
+    if mode == "shot" and concept_id is not None:
+        concept = preprod.get_concept(concept_id, path=db.DB_PATH)
+        if concept is not None:
+            context["concept"] = _with_director_prompts([concept])[0]
+    elif mode == "golden" and golden_id is not None:
+        golden = next((g for g in evalstore.list_golden(path=db.DB_PATH)
+                       if g["id"] == golden_id), None)
+        if golden is not None:
+            context["golden"] = golden
+            context["probe"] = _golden_probe(golden["query"])
+    elif mode == "fresh" and fresh:
+        try:
+            payload = json.loads(fresh)
+            if isinstance(payload, dict) and (payload.get("title")
+                                              or payload.get("logline")):
+                context["fresh"] = payload
+        except (ValueError, TypeError):
+            pass
+    return context
 
 
 @dev.get("/studio")
-def studio(request: Request, message: Optional[str] = None, tab: Optional[str] = None):
-    """
-    The workspace. Pre-production only now: the Workflow library
-    (characters, rooms, props, and Director-ready AI shots) reads the
-    DB, the canvas shows the latest AI shots, and the assistant runs the
-    ideation stages under the hood. Reading is free of model calls and
-    renders even when every source is absent.
-    """
-    spaces = preprod.list_locations(path=db.DB_PATH)
-    for space in spaces:
-        space["photos"] = [f"{u}?thumb=1" for u in photos_for(space["name"])]
-
-    # Characters and props for the Workflow library, photos resolved the
-    # same way their own screens do it.
-    characters = entities.list_characters(path=db.DB_PATH)
-    for c in characters:
-        slug = safe_space_name(c["name"])
-        c["photos"] = [f"/characters/{slug}/photo/{fn}?thumb=1"
-                       for fn in _entity_photos(CHARACTERS_DIR, slug)]
-    props = entities.list_props(path=db.DB_PATH)
-    for p in props:
-        slug = safe_space_name(p["name"])
-        p["photos"] = [f"/props/{slug}/photo/{fn}?thumb=1"
-                       for fn in _entity_photos(PROPS_DIR, slug)]
-
-    shoot_concepts = preprod.list_concepts(path=db.DB_PATH)
-    # the AI shots of the most recent concept that has any -- a concept
-    # can carry several now, so this is a list, not a single slot
-    latest_ai = next(
-        (c["ai_shots"] for c in shoot_concepts if c.get("ai_shots")), []
-    )
-
-    # Director tab: every planned AI shot for the ACTIVE BRAND only, with
-    # its Director-ready prompt attached -- the same pure text composition
-    # _with_director_prompts already does for /concepts (zero model calls,
-    # so doing this on every page load costs nothing). Pulled out of the
-    # dense per-concept storyboard into its own list, per Michael's call
-    # that Director mode belongs under the Workflow tab rather than
-    # buried in each concept card. ai_shots entries are the SAME dict
-    # objects as in each concept's shots list (see preprod._concept_row),
-    # so stamping director_prompt via _with_director_prompts also lands
-    # on the ai_shots copies below -- one pass, not two.
-    brand = active_brand(request)
-    director_concepts = _with_director_prompts(
-        [c for c in shoot_concepts if c.get("brand") == brand]
-    )
-    director_shots = []
-    for c in director_concepts:
-        for s in c.get("ai_shots") or []:
-            s["concept_id"] = c["id"]
-            s["concept_title"] = c.get("title")
-            director_shots.append(s)
-
-    active_tab = tab if tab in STUDIO_TABS else "characters"
-
-    return templates.TemplateResponse(
-        request,
-        "studio.html",
-        {
-            "spaces": spaces,
-            "characters": characters,
-            "props": props,
-            "shoot_concepts": shoot_concepts,
-            "latest_ai": latest_ai,
-            "director_shots": director_shots,
-            "active_tab": active_tab,
-            "active_nav": "home",
-            "message": message,
-        },
-    )
+def studio(request: Request, tab: Optional[str] = None, message: Optional[str] = None,
+           q: Optional[str] = None, domain: Optional[str] = None,
+           mode: Optional[str] = None, concept_id: Optional[int] = None,
+           golden_id: Optional[int] = None, fresh: Optional[str] = None):
+    """The Dev Studio shell. Each tab reuses the existing backend --
+    preprod/autonomy calcs, the /api/evals endpoints (via the same
+    evals_dev.js the old /evals page used), the rag module, the
+    settings table, the evalstore -- nothing is reimplemented."""
+    active_tab = tab if tab in DEV_TABS else "stats"
+    context = {"active_tab": active_tab, "active_nav": "home",
+               "message": message}
+    if active_tab == "stats":
+        context["metrics"] = _pipeline_metrics()
+    elif active_tab == "grade":
+        context["grade"] = _grade_context(mode, concept_id, golden_id, fresh)
+    elif active_tab == "library":
+        context["library"] = _library_context(q, domain)
+    elif active_tab == "settings":
+        context["settings_rows"] = settings_mod.describe(path=db.DB_PATH)
+        context["channels"] = autonomy.list_channels(path=db.DB_PATH)
+        context["killed"] = autonomy.killed(path=db.DB_PATH)
+    elif active_tab == "dataset":
+        context["golden"] = evalstore.list_golden(path=db.DB_PATH)
+        context["runs"] = list(reversed(evalstore.list_runs(path=db.DB_PATH)))
+    return templates.TemplateResponse(request, "dev_studio.html", context)
 
 
-def run_ideation(intent: str, *, brand: str, client_name, spark, use_pov: bool,
-                  image_refs=None, picked_sources=None) -> str:
-    """
-    The two stages that generate from rooms. Split out of the route so
-    the intent routing above can be read without the API plumbing
-    underneath it. Returns the line to show on the canvas.
-
-    `image_refs` (concept intent only) is a list of (bytes, mime_type)
-    pairs -- ad hoc images dropped into the composer for this one
-    generation. Dealing a slate of ideas is a batch operation; a photo
-    only makes sense as grounding for the single concept it was
-    attached to, so `ideas` never receives it.
-
-    `picked_sources` names exact RAG source identifiers -- from the
-    references picker (/references/pick) -- to ground this run on top
-    of the automatic craft-advice layer. See shootgen.reference_block.
-    """
-    references = shootgen.reference_block(spark=spark, client=client_name,
-                                          db_path=db.DB_PATH, picked_sources=picked_sources)
-    gemini_client = genai.Client(
-        api_key=os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-    )
-    if intent == "concept":
-        result = shootgen.generate_concept(
-            brand=brand, client=client_name, spark=spark,
-            gemini_client=gemini_client, use_pov=use_pov, db_path=db.DB_PATH,
-            references=references, image_refs=image_refs,
-        )
-        message = f"Generated \"{result['concept']['title']}\""
-        if result["warnings"]:
-            message += f" ({len(result['warnings'])} warning(s))"
-        return message
-
-    result = shootgen.generate_concept_ideas(
-        brand=brand, client=client_name, spark=spark,
-        gemini_client=gemini_client, use_pov=use_pov, db_path=db.DB_PATH,
-        references=references,
-    )
-    return f"Dealt {len(result['ideas'])} ideas — keep the ones worth planning"
-
-
-MAX_STUDIO_REFS = 6  # cap what a single composer submission sends to Gemini
-
-
-async def _split_studio_references(files: List[UploadFile]) -> tuple:
-    """
-    Ad hoc references dropped into the composer for one generation --
-    separate from the Workflow library's ingest-and-describe path.
-    Images come back as (jpeg_bytes, "image/jpeg") pairs, ready to ride
-    straight into the Gemini call as vision input. Video isn't fed to
-    the model frame-by-frame (that needs the Files API, a bigger
-    change than this composer warrants); instead each clip is pushed to
-    R2 and its URL is folded into the spark text as a named reference,
-    so it's still attached to the generation, just not literally seen.
-    """
-    import io
-    import uuid
-
-    from PIL import Image
-
-    from src import storage
-
-    image_refs = []
-    video_note_lines = []
-    for upload in files[:MAX_STUDIO_REFS]:
-        filename = getattr(upload, "filename", "") or ""
-        if not filename:
-            continue
-        content_type = (upload.content_type or "").lower()
-        data = await upload.read()
-        if content_type.startswith("image/"):
-            try:
-                jpeg = Image.open(io.BytesIO(data)).convert("RGB")
-                buf = io.BytesIO()
-                jpeg.save(buf, "JPEG", quality=90)
-                image_refs.append((buf.getvalue(), "image/jpeg"))
-            except Exception:
-                continue  # not a real image -- skip rather than fail the whole generation
-        elif content_type.startswith("video/") and storage.configured():
-            try:
-                tmp = Path("/tmp") / f"studio-ref-{uuid.uuid4().hex}{Path(filename).suffix}"
-                tmp.write_bytes(data)
-                url = storage.upload_file(
-                    tmp, key=f"studio-refs/{tmp.name}", content_type=content_type)
-                video_note_lines.append(f"Reference video ({filename}): {url}")
-            except Exception:
-                continue
-    return image_refs, video_note_lines
-
-
-@dev.post("/studio/assist")
-async def studio_assist(request: Request):
-    """
-    The assistant. One box and a row of chips stand in for the whole
-    pipeline: this reads the intent, runs the stage it names, and lands
-    back on the canvas with the result. Same contract as every other
-    model-touching route -- a missing key or a failed call becomes a
-    message, never a 500 -- and validation still happens inside
-    shootgen.validate_concept, because prompts request and code enforces.
-
-    Stages it can't run itself say so plainly instead of pretending: a
-    cut list needs ingested footage and a pitch run, which are CLI steps.
-    """
-    raw_form = await request.form()
-    reference_files = [f for f in raw_form.getlist("references") if isinstance(f, UploadFile)]
-    # exact RAG source names picked off /references/pick (a popup opened
-    # from the composer's References button) -- the opt-in asset layer,
-    # separate from the ad hoc image/video attachments above.
-    picked_references = [s for s in raw_form.getlist("picked_references") if s.strip()]
-    form = dict(raw_form)
-    text = (form.get("text") or "").strip()
-    intent = route_intent(text, (form.get("intent") or "").strip() or None)
-
-    brand = form.get("brand") or active_brand(request)
-    client_name = (form.get("client") or "").strip() or None
-    use_pov = bool(form.get("use_pov"))
-    # The typed text is the spark for a generation; for a chip pressed
-    # with an empty box there simply isn't one. Selected ingredients
-    # (rooms, clips, references from the tray) and preferred platforms
-    # ride along as extra spark lines — they steer both the RAG query
-    # and the prompt's creative-spark section through the existing
-    # grounding path, with no generator signature changes.
-    spark = text or None
-    ingredients = (form.get("ingredients") or "").strip()
-    if ingredients:
-        spark = f"{spark or ''}\nGround on: {ingredients}".strip()
-    platforms = (form.get("platforms") or "").strip()
-    if platforms:
-        spark = f"{spark or ''}\nPreferred AI platforms: {platforms}".strip()
-
-    if intent == "room":
+@dev.get("/grade/draw")
+def grade_draw(mode: str = "any", message: Optional[str] = None):
+    """Deal the next random thing to grade. `shot` draws an ungraded
+    concept (judge_overall IS NULL -- the same filter grade-all uses,
+    randomized instead of exhaustive); `golden` draws a golden query;
+    `any` round-robins whatever has items. Fresh prompts are a billed
+    POST, never drawn implicitly."""
+    if mode not in ("shot", "golden", "any"):
+        mode = "any"
+    pools = []
+    if mode in ("shot", "any"):
+        ungraded = [c["id"] for c in preprod.list_concepts(path=db.DB_PATH)
+                    if c.get("judge_overall") is None]
+        if ungraded:
+            pools.append(("shot", ungraded))
+    if mode in ("golden", "any"):
+        golden_ids = [g["id"] for g in evalstore.list_golden(path=db.DB_PATH)]
+        if golden_ids:
+            pools.append(("golden", golden_ids))
+    if not pools:
+        note = message or GRADE_EMPTY
         return RedirectResponse(
-            "/studio?message=" + quote(
-                "Open the ingredients tray — photograph the space and it gets described."
-            ),
-            status_code=303,
-        )
+            f"/studio?tab=grade&message={quote(note)}", status_code=303)
+    kind, ids = random.choice(pools)
+    param = "concept_id" if kind == "shot" else "golden_id"
+    url = f"/studio?tab=grade&mode={kind}&{param}={random.choice(ids)}"
+    if message:
+        url += f"&message={quote(message)}"
+    return RedirectResponse(url, status_code=303)
 
+
+@dev.post("/grade/fresh")
+async def grade_fresh(request: Request):
+    """A brand-new throwaway prompt, purely for grading: one idea via
+    the same generator shootgen uses -- grounded the same way -- but
+    parsed and shown WITHOUT saving a shoot_concepts row. Approving or
+    denying it teaches winners/RAG exactly like a real concept; nothing
+    else persists. One billed call per click, and the result rides the
+    redirect so a refresh never re-bills."""
+    form = dict(await request.form())
+    brand = form.get("brand") or active_brand(request)
+    spark = (form.get("spark") or "").strip() or None
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
         return RedirectResponse(
-            f"/studio?message={quote('GEMINI_API_KEY not set')}", status_code=303,
-        )
-
-    if intent == "plan":
-        target = next_unplanned_concept(preprod.list_concepts(path=db.DB_PATH))
-        if target is None:
-            message = "Nothing left to plan — deal some ideas first."
-        else:
-            message = plan_concept(target["id"])
-        return RedirectResponse(f"/studio?message={quote(message)}", status_code=303)
-
-    image_refs = None
-    if reference_files:
-        image_refs, video_notes = await _split_studio_references(reference_files)
-        image_refs = image_refs or None
-        if video_notes:
-            spark = f"{spark or ''}\n" + "\n".join(video_notes)
-            spark = spark.strip()
-
+            f"/studio?tab=grade&message={quote('GEMINI_API_KEY not set')}",
+            status_code=303)
     try:
-        message = run_ideation(intent, brand=brand, client_name=client_name,
-                               spark=spark, use_pov=use_pov, image_refs=image_refs,
-                               picked_sources=picked_references or None)
+        from src.gemini_utils import generate_with_retry
+
+        references = shootgen.reference_block(spark=spark, db_path=db.DB_PATH)
+        prompt = shootgen.build_ideas_prompt(
+            preprod.list_locations(path=db.DB_PATH), brand, None, spark, 1,
+            references=references,
+            formats=shootgen.ranked_formats(path=db.DB_PATH))
+        ideas = shootgen.parse_ideas_response(
+            generate_with_retry(genai.Client(api_key=api_key),
+                                shootgen.MODEL, prompt))
+        if not ideas:
+            raise ValueError("the model returned no ideas")
+        idea = ideas[0]
+        payload = {"brand": brand, "spark": spark,
+                   "title": idea.get("title") or "",
+                   "hook": idea.get("hook") or "",
+                   "logline": idea.get("logline") or ""}
     except Exception as e:
-        message = f"Could not generate: {e}"
-    return RedirectResponse(f"/studio?message={quote(message)}", status_code=303)
+        return RedirectResponse(
+            f"/studio?tab=grade&message={quote(f'Could not generate: {e}')}",
+            status_code=303)
+    return RedirectResponse(
+        f"/studio?tab=grade&mode=fresh&fresh={quote(json.dumps(payload))}",
+        status_code=303)
+
+
+@dev.post("/grade/fresh/verdict")
+async def grade_fresh_verdict(request: Request):
+    """The fresh prompt's approve/deny -- straight through the same
+    winners.record_and_learn teaching loop a real concept's verdict
+    uses, video_ref marking it as a throwaway grade."""
+    form = dict(await request.form())
+    text = (form.get("text") or "").strip()
+    if not text:
+        return RedirectResponse(
+            "/studio?tab=grade&message="
+            + quote("Nothing to record — the text was empty."), status_code=303)
+    verdict = "didnt_work" if (form.get("verdict") or "worked") == "didnt_work" else "worked"
+    result = winners.record_and_learn(
+        "concept", text, note=form.get("note") or "",
+        video_ref="fresh-grade", verdict=verdict, path=db.DB_PATH)
+    verb = "steer away from" if verdict == "didnt_work" else "imitate"
+    if result.get("ingested"):
+        message = f"Recorded — future ideation will {verb} it."
+    else:
+        message = ("Saved. Teaching is pending — start Postgres and try again. "
+                   f"({result.get('error') or 'store unavailable'})")
+    return RedirectResponse(
+        f"/studio?tab=grade&message={quote(message)}", status_code=303)
+
+
+@dev.post("/grade/golden/{golden_id}/mark")
+async def grade_golden_mark(golden_id: int, request: Request):
+    """Mark one retrieved source right/wrong for a golden query -- the
+    label edit behind 'was that retrieval correct'. Adding keeps the
+    query's other labels; removing the last one is refused because a
+    golden query with no relevant source scores nothing."""
+    form = dict(await request.form())
+    source = (form.get("source") or "").strip()
+    action = (form.get("action") or "add").strip()
+    row = next((g for g in evalstore.list_golden(path=db.DB_PATH)
+                if g["id"] == golden_id), None)
+    back = f"/studio?tab=grade&mode=golden&golden_id={golden_id}"
+    if row is None or not source:
+        return RedirectResponse(
+            f"/studio?tab=grade&message={quote('No such golden query.')}",
+            status_code=303)
+    relevant = list(dict.fromkeys(row["relevant"]))
+    if action == "remove":
+        relevant = [r for r in relevant if r != source]
+    elif source not in relevant:
+        relevant.append(source)
+    try:
+        evalstore.add_golden(row["query"], relevant,
+                             source=row.get("source") or "manual", path=db.DB_PATH)
+        message = ("Marked wrong — label removed." if action == "remove"
+                   else "Marked right — label added.")
+    except ValueError as e:
+        message = str(e)
+    return RedirectResponse(f"{back}&message={quote(message)}", status_code=303)
+
+
+@dev.post("/grade/golden/{golden_id}/delete")
+def grade_golden_delete(golden_id: int):
+    evalstore.delete_golden(golden_id, path=db.DB_PATH)
+    return RedirectResponse(
+        "/grade/draw?mode=golden&message=" + quote("Removed from the golden set."),
+        status_code=303)
+
+
+@dev.post("/studio/settings")
+async def studio_settings(request: Request):
+    """Save the tunables. Each key validates independently; an empty
+    field clears the stored value so env/default takes over. Values
+    take effect on the next run -- every call site reads them live."""
+    form = dict(await request.form())
+    errors = []
+    for key in settings_mod.TUNABLES:
+        if key in form:
+            try:
+                settings_mod.set_value(key, form.get(key) or "", path=db.DB_PATH)
+            except ValueError as e:
+                errors.append(str(e))
+    message = ("; ".join(errors) if errors
+               else "Saved — takes effect on the next generation/eval run.")
+    return RedirectResponse(
+        f"/studio?tab=settings&message={quote(message)}", status_code=303)
+
+
+DATASET_EXPORTS = {
+    ("golden", "csv"), ("golden", "json"), ("runs", "csv"), ("runs", "json"),
+}
+
+
+@dev.get("/dataset/export")
+def dataset_export(what: str = "golden", fmt: str = "json"):
+    """The dataset, portable: the golden set or the run history as a
+    plain CSV/JSON download over evalstore's tables."""
+    if (what, fmt) not in DATASET_EXPORTS:
+        raise HTTPException(status_code=400,
+                            detail="what must be golden|runs, fmt csv|json")
+    if what == "golden":
+        rows = [{"id": g["id"], "created_at": g["created_at"],
+                 "query": g["query"], "relevant": g["relevant"],
+                 "source": g["source"]}
+                for g in evalstore.list_golden(path=db.DB_PATH)]
+    else:
+        rows = [{**r, "config": r.get("config")}
+                for r in evalstore.list_runs(path=db.DB_PATH)]
+    filename = f"zeropage-{what}.{fmt}"
+    if fmt == "json":
+        body = json.dumps(rows, indent=2)
+        media = "application/json"
+    else:
+        buf = io.StringIO()
+        if rows:
+            writer = csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({k: (json.dumps(v) if isinstance(v, (list, dict))
+                                     else v)
+                                 for k, v in row.items()})
+        body = buf.getvalue()
+        media = "text/csv"
+    return Response(content=body, media_type=media, headers={
+        "Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 def parse_video_form(form: dict) -> dict:
@@ -728,55 +784,69 @@ def parse_metrics_form(form: dict, video_ids: list) -> dict:
 
 
 @dev.get("/library")
-def library(request: Request, q: Optional[str] = None,
-            domain: Optional[str] = None, message: Optional[str] = None):
-    """
-    The reference library: what's on the shelves, semantic search over
-    it, and a form to add to it. The whole page must render when
-    Postgres is down -- the library is optional everywhere else, so it
-    can't be the one screen that 500s.
-    """
-    context = {"available": False, "sources": [], "results": [],
-               "domains": [], "q": q, "domain": domain,
-               "message": message, "error": None, "active_nav": "workflow"}
-    conn = None
-    try:
-        conn = rag.connect()
-        context["sources"] = rag.list_sources(conn)
-        context["domains"] = sorted({s["domain"] for s in context["sources"]})
-        context["available"] = True
-        if q:
-            try:
-                context["results"] = rag.query(
-                    q, rag.make_client(), conn, k=5, domain=domain or None
-                )
-            except Exception as e:
-                context["error"] = f"search failed: {e}"
-    except Exception as e:
-        context["error"] = f"library unavailable: {e}"
-    finally:
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
-    return templates.TemplateResponse(request, "library.html", context)
+def library(q: Optional[str] = None, domain: Optional[str] = None,
+            message: Optional[str] = None):
+    """The library is the Dev Studio's RAG Library tab now (2026-08-26);
+    the old URL keeps working as a redirect, search params intact."""
+    url = "/studio?tab=library"
+    for key, value in (("q", q), ("domain", domain), ("message", message)):
+        if value:
+            url += f"&{key}={quote(value)}"
+    return RedirectResponse(url, status_code=308)
+
+
+def _uploaded_reference_text(filename: str, raw: bytes) -> str:
+    """One uploaded reference file -> plain text for chunking. txt/md
+    decode; a PDF extracts per-page through pypdf. Raises ValueError
+    with a plain reason on anything unreadable -- the route turns it
+    into a message, not a 500."""
+    suffix = Path(filename).suffix.lower()
+    if suffix == ".pdf":
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            raise ValueError("PDF support needs pypdf (venv/bin/pip install pypdf)")
+        try:
+            reader = PdfReader(io.BytesIO(raw))
+            text = "\n\n".join((page.extract_text() or "") for page in reader.pages)
+        except Exception as e:
+            raise ValueError(f"could not read the PDF: {e}")
+    else:
+        text = raw.decode("utf-8", errors="replace")
+    if not text.strip():
+        raise ValueError("the file has no readable text")
+    return text
 
 
 @dev.post("/library/ingest")
-def library_ingest(source: str = Form(""), domain: str = Form(""),
-                   project: str = Form(""), source_ref: str = Form(""),
-                   text: str = Form("")):
-    if not (source.strip() and domain.strip() and text.strip()):
+async def library_ingest(source: str = Form(""), domain: str = Form(""),
+                         project: str = Form(""), source_ref: str = Form(""),
+                         text: str = Form(""),
+                         file: Optional[UploadFile] = File(None)):
+    """Add to the library: pasted text, or an uploaded file (txt/md/pdf)
+    read and chunked server-side -- same rag.ingest_records path either
+    way. An uploaded file's own name becomes the source when none is
+    typed, mirroring the references-picker upload."""
+    filename = (file.filename or "").strip() if file is not None else ""
+    body = text
+    source_name = source.strip() or filename
+    if filename and not text.strip():
+        try:
+            body = _uploaded_reference_text(filename, await file.read())
+        except ValueError as e:
+            return RedirectResponse(
+                "/studio?tab=library&message=" + quote(str(e)), status_code=303)
+    if not (source_name and domain.strip() and body.strip()):
         return RedirectResponse(
-            "/library?message=" + quote("source, domain, and text are all required"),
+            "/studio?tab=library&message="
+            + quote("a source name, a shelf (domain), and text (or a file) are all required"),
             status_code=303,
         )
     try:
         conn = rag.connect()
         rag.init_store(conn)
         written = rag.ingest_records(
-            [{"source": source.strip(), "text": text,
+            [{"source": source_name, "text": body,
               "domain": domain.strip(), "project": project.strip() or None,
               "source_ref": source_ref.strip() or None}],
             rag.make_client(), conn,
@@ -785,7 +855,8 @@ def library_ingest(source: str = Form(""), domain: str = Form(""),
         message = f"stored {written} chunk(s) under '{domain.strip()}'"
     except Exception as e:
         message = f"ingest failed: {e}"
-    return RedirectResponse("/library?message=" + quote(message), status_code=303)
+    return RedirectResponse("/studio?tab=library&message=" + quote(message),
+                            status_code=303)
 
 
 @dev.post("/library/delete")
@@ -797,24 +868,15 @@ def library_delete(source: str = Form(...)):
         message = f"removed '{source}' ({removed} chunk(s))"
     except Exception as e:
         message = f"delete failed: {e}"
-    return RedirectResponse("/library?message=" + quote(message), status_code=303)
+    return RedirectResponse("/studio?tab=library&message=" + quote(message),
+                            status_code=303)
 
 
 @dev.get("/evals")
-def evals_page(request: Request):
-    """
-    The retrieval-eval harness, dev-console edition: hit-rate history,
-    the golden set, and the probe tool, on the legacy skin. Moved out of
-    /ui (2026-08-25) -- evals are a developer instrument, not part of
-    the signed-in product surface, which is also why it registers on
-    `dev`: a public deployment has no /evals at all. The page is a
-    shell; its data and actions come from the same /api/evals/* and
-    /api/retrieve endpoints the old view used, so nothing is
-    reimplemented here. Those routes require a session, and the page
-    says so when it gets a 401 rather than pretending to be empty.
-    """
-    return templates.TemplateResponse(
-        request, "evals.html", {"active_nav": "evals"})
+def evals_page():
+    """Evals are the Dev Studio's Stats tab now (2026-08-26) -- same
+    /api/evals/* endpoints, folded into the one dev page."""
+    return RedirectResponse("/studio?tab=stats", status_code=308)
 
 
 @dev.get("/references/pick")
@@ -1049,133 +1111,20 @@ async def winners_add(request: Request):
 
 
 @dev.get("/holds")
-def holds_list(request: Request, message: Optional[str] = None):
-    """
-    The morning ritual: what the graph wanted to post while you weren't
-    looking, and the approve/reject that grades the evaluator. The
-    agreement number is the credit gate -- ~0.9 over a real stretch is
-    what earns a channel its promotion to auto.
-    """
-    # Full brand separation: show only the active brand's channel so the two
-    # queues never blur (brand name maps 1:1 to channel name).
-    brand = active_brand(request)
-    concepts_by_id = {c["id"]: c for c in _with_director_prompts(
-        preprod.list_concepts(path=db.DB_PATH))}
-    held = [h for h in autonomy.list_hold(status="held", path=db.DB_PATH)
-            if h["channel"] == brand]
-    for row in held:
-        row["concept"] = concepts_by_id.get(row.get("concept_id"))
-    channels = autonomy.list_channels(path=db.DB_PATH)
-    # a channel is postable when it may post AND names where to
-    postable = {c["name"] for c in channels
-                if c.get("autonomy") in ("queue", "auto")
-                and (c.get("targets") or "").strip()}
-    return templates.TemplateResponse(
-        request,
-        "holds.html",
-        {
-            "held": held,
-            "agreement": autonomy.evaluator_agreement(path=db.DB_PATH),
-            "gate": autonomy.prompt_gate_agreement(path=db.DB_PATH),
-            "pass_rate": autonomy.first_try_pass_rate(path=db.DB_PATH),
-            "channels": channels,
-            "postable": postable,
-            "killed": autonomy.killed(path=db.DB_PATH),
-            "active_nav": "home",
-            "message": message,
-        },
-    )
-
-
-@dev.post("/holds/{hold_id}/resolve")
-async def holds_resolve(hold_id: int, request: Request):
-    """Approved = "I would have posted this" (the evaluator was right);
-    rejected = "glad it held". Either way the row leaves the queue and
-    feeds the agreement number -- and the same verdict lands next to the
-    run's prompt scores, so the credit gate is graded against you too."""
-    form = dict(await request.form())
-    status = (form.get("status") or "").strip()
-    row = next((h for h in autonomy.list_hold(status=None, path=db.DB_PATH)
-                if h["id"] == hold_id), None)
-    try:
-        autonomy.resolve_hold(hold_id, status, path=db.DB_PATH)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    run_id = ((row or {}).get("payload") or {}).get("run_id") \
-        if isinstance((row or {}).get("payload"), dict) else None
-    if run_id and status in ("approved", "rejected"):
-        autonomy.set_prompt_verdicts(
-            run_id, "post" if status == "approved" else "reject", path=db.DB_PATH)
-    return RedirectResponse("/holds", status_code=303)
-
-
-@dev.post("/holds/{hold_id}/post")
-async def holds_post(hold_id: int, request: Request):
-    """Your explicit 'post now' -- the approval to publish. Builds one
-    post action per channel target from the hold, then runs it through
-    autopilot's three-condition gate (ZEROPAGE_AUTOPILOT=1 + this approve
-    + no data/autopilot.off). Nothing uploads until real media and
-    platform credentials exist; until then it reports exactly what's
-    missing rather than pretending."""
-    row = next((h for h in autonomy.list_hold(status=None, path=db.DB_PATH)
-                if h["id"] == hold_id), None)
-    if row is None:
-        raise HTTPException(status_code=404, detail="no such hold")
-    channel = autonomy.get_channel(row.get("channel", ""), path=db.DB_PATH) or {}
-    targets = [t.strip() for t in (channel.get("targets") or "").split(",") if t.strip()]
-    if not targets:
-        return RedirectResponse(
-            f"/holds?message={quote('This channel has no post targets.')}",
-            status_code=303)
-
-    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
-    caption = row.get("caption") or ""
-    image_url = (payload.get("image_url") or "").strip()
-    if image_url:
-        # A queued Midjourney still: post it as an image, not a video.
-        actions = [{
-            "kind": "post", "platform": platform, "concept_id": row.get("concept_id"),
-            "caption": caption, "image_url": image_url,
-        } for platform in targets]
-    else:
-        clips = payload.get("clips") or []
-        media_url = next((c.get("url") for c in clips if c.get("url")), "") or ""
-        is_local = bool(media_url) and not media_url.startswith("http")
-        actions = [{
-            "kind": "post", "platform": platform, "concept_id": row.get("concept_id"),
-            "caption": caption,
-            "video_url": media_url,                       # instagram fetches a public URL
-            "video_path": media_url if is_local else "",  # youtube uploads a local file
-        } for platform in targets]
-
-    try:
-        result = autopilot.execute({"actions": actions}, approve=True, dry_run=False)
-    except Exception as e:
-        return RedirectResponse(
-            f"/holds?message={quote('Post failed: ' + str(e))}", status_code=303)
-
-    mode = result.get("mode")
-    if mode == "live" and result.get("executed"):
-        autonomy.resolve_hold(hold_id, "posted", path=db.DB_PATH)
-        msg = f"Posted to {', '.join(targets)}."
-    elif mode == "live":
-        msg = "Live, but nothing posted: " + "; ".join(
-            result.get("skipped") or ["no rendered media to post yet"])
-    elif mode == "disabled":
-        msg = ("Posting is OFF — set ZEROPAGE_AUTOPILOT=1 and the platform "
-               "credentials to go live.")
-    elif mode == "killed":
-        msg = "Autopilot kill switch is on (data/autopilot.off)."
-    else:
-        msg = f"Posting mode: {mode} — nothing was posted."
-    return RedirectResponse(f"/holds?message={quote(msg)}", status_code=303)
+def holds_list():
+    """The hold queue's grading UI is /ui's Pipeline view now
+    (2026-08-26): approve/reject/post ride the /api/holds endpoints,
+    and the agreement numbers live on Dev Studio's Stats tab. The old
+    URL keeps working -- morning muscle memory lands on /ui."""
+    return RedirectResponse("/ui", status_code=308)
 
 
 @dev.post("/holds/note")
 async def holds_note(request: Request):
     """A standing correction for the next run -- the human_note channel.
     The orchestrator folds pending notes into the next generation's
-    spark and consumes them, so each note steers exactly once."""
+    spark and consumes them, so each note steers exactly once. Lives on
+    the Dev Studio Settings tab now."""
     form = dict(await request.form())
     note = (form.get("note") or "").strip()
     if note:
@@ -1183,7 +1132,8 @@ async def holds_note(request: Request):
         message = "Noted — the next run folds it in."
     else:
         message = "An empty note steers nothing."
-    return RedirectResponse(f"/holds?message={quote(message)}", status_code=303)
+    return RedirectResponse(
+        f"/studio?tab=settings&message={quote(message)}", status_code=303)
 
 
 @dev.post("/channels/{name}/autonomy")
@@ -1200,7 +1150,8 @@ async def channels_autonomy(name: str, request: Request):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return RedirectResponse(
-        f"/holds?message={quote(f'{name} is now {level}')}", status_code=303)
+        f"/studio?tab=settings&message={quote(f'{name} is now {level}')}",
+        status_code=303)
 
 
 @dev.post("/kill")
@@ -1211,9 +1162,10 @@ async def kill_toggle():
         autonomy.unkill(path=db.DB_PATH)
         message = "Kill switch OFF — channels follow their own autonomy again."
     else:
-        autonomy.kill("killed from /holds", path=db.DB_PATH)
+        autonomy.kill("killed from the dev studio", path=db.DB_PATH)
         message = "Kill switch ON — everything holds."
-    return RedirectResponse(f"/holds?message={quote(message)}", status_code=303)
+    return RedirectResponse(
+        f"/studio?tab=settings&message={quote(message)}", status_code=303)
 
 
 @dev.get("/analytics")
@@ -1304,19 +1256,6 @@ def video_detail(request: Request, video_id: int):
     )
 
 
-def photos_for(space: str) -> list:
-    """Web paths for a space's photos, so the page can actually show
-    them rather than just naming a count."""
-    space_dir = LOCATIONS_DIR / space
-    if not space_dir.is_dir():
-        return []
-    return [
-        f"/locations/{space}/photo/{p.name}"
-        for p in sorted(space_dir.iterdir())
-        if p.is_file() and p.suffix.lower() in locations.IMAGE_EXTENSIONS
-    ]
-
-
 def thumbnail_for(source: Path) -> Path:
     """
     A cached small copy. Camera originals are multi-megabyte; sending
@@ -1352,65 +1291,35 @@ def _redirect_with_message(destination: str, message: str) -> RedirectResponse:
     return RedirectResponse(f"{destination}{sep}message={quote(message)}", status_code=303)
 
 
-ASSET_TABS = ("locations", "characters", "props")
-
+# Asset building lives on /ui's Assets view now (2026-08-26): creation
+# and deletion are always-on JSON routes in app/api.py (which also
+# ingest each save onto the RAG "assets" shelf), so a public deploy
+# keeps a working create path. The old console URLs redirect.
 
 @dev.get("/assets")
-def assets_list(request: Request, tab: Optional[str] = None, message: Optional[str] = None):
-    """
-    Locations, characters, and props were three separate rail items
-    pointing at three near-identical CRUD pages -- same grid, same
-    add-dialog, same "a name and some photos" shape. They're one
-    concept (what a concept can be grounded in or cast with), so they
-    live under one Assets item now, tab-switched client-side. The old
-    /locations, /characters, /props URLs still work below -- they just
-    redirect here on the matching tab, so nothing bookmarked breaks.
-    """
-    active_tab = tab if tab in ASSET_TABS else "locations"
-
-    spaces = preprod.list_locations(path=db.DB_PATH)
-    for space in spaces:
-        space["photos"] = photos_for(space["name"])
-
-    characters = entities.list_characters(path=db.DB_PATH)
-    for c in characters:
-        slug = safe_space_name(c["name"])
-        c["photos"] = [f"/characters/{slug}/photo/{fn}?thumb=1"
-                       for fn in _entity_photos(CHARACTERS_DIR, slug)]
-
-    props = entities.list_props(path=db.DB_PATH)
-    for p in props:
-        slug = safe_space_name(p["name"])
-        p["photos"] = [f"/props/{slug}/photo/{fn}?thumb=1"
-                       for fn in _entity_photos(PROPS_DIR, slug)]
-
-    return templates.TemplateResponse(
-        request,
-        "assets.html",
-        {
-            "locations": spaces,
-            "characters": characters,
-            "props": props,
-            "active_tab": active_tab,
-            "active_nav": "assets",
-            "message": message,
-        },
-    )
-
-
-def _redirect_to_assets_tab(tab: str, message: Optional[str]) -> RedirectResponse:
-    url = f"/assets?tab={tab}"
-    if message:
-        url += f"&message={quote(message)}"
-    return RedirectResponse(url, status_code=308)
+def assets_list():
+    return RedirectResponse("/ui", status_code=308)
 
 
 @dev.get("/locations")
-def locations_list(message: Optional[str] = None):
-    return _redirect_to_assets_tab("locations", message)
+def locations_list():
+    return RedirectResponse("/ui", status_code=308)
 
 
-@dev.get("/locations/{space}/photo/{filename}")
+def safe_space_name(name: str) -> str:
+    """
+    A space name becomes a directory name, so it can't be allowed to
+    contain separators or climb out of the locations dir.
+    """
+    cleaned = re.sub(r"[^A-Za-z0-9 _-]", "", name).strip().replace(" ", "-").lower()
+    return cleaned.strip("-.")
+
+
+# Photo serving registers on `app`, not `dev` (moved 2026-08-26): /ui's
+# galleries and the API's asset payloads reference these URLs, so on a
+# public deployment they must exist even though the console doesn't.
+
+@app.get("/locations/{space}/photo/{filename}")
 def location_photo(space: str, filename: str, thumb: Optional[int] = None):
     """
     Serve one photo. Both segments are resolved and checked against the
@@ -1426,68 +1335,6 @@ def location_photo(space: str, filename: str, thumb: Optional[int] = None):
     return FileResponse(thumbnail_for(target) if thumb else target)
 
 
-def safe_space_name(name: str) -> str:
-    """
-    A space name becomes a directory name, so it can't be allowed to
-    contain separators or climb out of the locations dir.
-    """
-    cleaned = re.sub(r"[^A-Za-z0-9 _-]", "", name).strip().replace(" ", "-").lower()
-    return cleaned.strip("-.")
-
-
-@dev.post("/locations/upload")
-async def locations_upload(name: str = Form(...), next: str = Form(""),
-                           photos: List[UploadFile] = File(default=[])):
-    destination = safe_next(next, "/assets?tab=locations")
-    space = safe_space_name(name)
-    if not space:
-        raise HTTPException(status_code=400, detail="a space name is required")
-
-    images = [p for p in photos if p.filename and (p.content_type or "").startswith("image/")]
-    if not images:
-        raise HTTPException(status_code=400, detail="at least one photo is required")
-
-    space_dir = LOCATIONS_DIR / space
-    space_dir.mkdir(parents=True, exist_ok=True)
-
-    saved = []
-    for upload in images:
-        target = space_dir / Path(upload.filename).name
-        target.write_bytes(await upload.read())
-        saved.append(target)
-
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-    if not api_key:
-        return _redirect_with_message(
-            destination,
-            "Photos saved, but GEMINI_API_KEY is not set so they were not described",
-        )
-
-    # Describing is the deliverable, but a failed vision call shouldn't
-    # lose the photos or 500 the page -- they stay on disk to retry.
-    try:
-        gemini_client = genai.Client(api_key=api_key)
-        description = locations.describe_location(gemini_client, space, saved)
-        all_photos = sorted(
-            p for p in space_dir.iterdir()
-            if p.is_file() and p.suffix.lower() in locations.IMAGE_EXTENSIONS
-        )
-        preprod.add_location(space, description, photo_count=len(all_photos), path=db.DB_PATH)
-        message = f"Described {space} from {len(all_photos)} photo(s)"
-    except Exception as e:
-        message = f"Saved {len(saved)} photo(s) to {space} but could not describe it: {e}"
-
-    # `destination` (not a hardcoded /locations) so a caller who passed a
-    # `next` -- the Studio composer, /assets?tab=locations -- actually
-    # lands back where they asked to, not on the old standalone page.
-    return _redirect_with_message(destination, message)
-
-
-# --- characters & props ----------------------------------------------------
-# Pre-production entities, same shape as locations: a name-slug directory of
-# photos plus a row in the shared DB. Photo serving reuses the locations
-# path-traversal guard exactly.
-
 def _entity_photos(base_dir, slug):
     directory = base_dir / slug
     if not directory.is_dir():
@@ -1496,17 +1343,6 @@ def _entity_photos(base_dir, slug):
         p.name for p in directory.iterdir()
         if p.is_file() and p.suffix.lower() in locations.IMAGE_EXTENSIONS
     )
-
-
-async def _save_entity_photos(base_dir, slug, photos):
-    images = [p for p in photos if p.filename and (p.content_type or "").startswith("image/")]
-    if not images:
-        return "", 0
-    directory = base_dir / slug
-    directory.mkdir(parents=True, exist_ok=True)
-    for upload in images:
-        (directory / Path(upload.filename).name).write_bytes(await upload.read())
-    return Path(images[0].filename).name, len(images)
 
 
 def _entity_photo_response(base_dir, slug, filename, thumb):
@@ -1520,71 +1356,23 @@ def _entity_photo_response(base_dir, slug, filename, thumb):
 
 
 @dev.get("/characters")
-def characters_list(message: Optional[str] = None):
-    return _redirect_to_assets_tab("characters", message)
+def characters_list():
+    return RedirectResponse("/ui", status_code=308)
 
 
-@dev.get("/characters/{slug}/photo/{filename}")
+@app.get("/characters/{slug}/photo/{filename}")
 def character_photo(slug: str, filename: str, thumb: Optional[int] = None):
     return _entity_photo_response(CHARACTERS_DIR, slug, filename, thumb)
 
 
-@dev.post("/characters/new")
-async def characters_new(name: str = Form(...), role: str = Form(""),
-                         notes: str = Form(""), next: str = Form(""),
-                         photos: List[UploadFile] = File(default=[])):
-    slug = safe_space_name(name)
-    if not slug:
-        raise HTTPException(status_code=400, detail="a name is required")
-    ref, count = await _save_entity_photos(CHARACTERS_DIR, slug, photos)
-    entities.add_character(
-        name=name, role=role,
-        description={"notes": notes} if notes else None,
-        reference_image=ref, photo_count=count, notes=notes, path=db.DB_PATH,
-    )
-    destination = safe_next(next, "/assets?tab=characters")
-    return _redirect_with_message(destination, "Added " + name)
-
-
-@dev.post("/characters/{character_id}/delete")
-def characters_delete(character_id: int, next: str = Form("")):
-    entities.delete_character(character_id, path=db.DB_PATH)
-    destination = safe_next(next, "/assets?tab=characters")
-    return _redirect_with_message(destination, "Deleted")
-
-
 @dev.get("/props")
-def props_list(message: Optional[str] = None):
-    return _redirect_to_assets_tab("props", message)
+def props_list():
+    return RedirectResponse("/ui", status_code=308)
 
 
-@dev.get("/props/{slug}/photo/{filename}")
+@app.get("/props/{slug}/photo/{filename}")
 def prop_photo(slug: str, filename: str, thumb: Optional[int] = None):
     return _entity_photo_response(PROPS_DIR, slug, filename, thumb)
-
-
-@dev.post("/props/new")
-async def props_new(name: str = Form(...), category: str = Form(""),
-                    notes: str = Form(""), next: str = Form(""),
-                    photos: List[UploadFile] = File(default=[])):
-    slug = safe_space_name(name)
-    if not slug:
-        raise HTTPException(status_code=400, detail="a name is required")
-    ref, count = await _save_entity_photos(PROPS_DIR, slug, photos)
-    entities.add_prop(
-        name=name, category=category,
-        description={"notes": notes} if notes else None,
-        reference_image=ref, photo_count=count, notes=notes, path=db.DB_PATH,
-    )
-    destination = safe_next(next, "/assets?tab=props")
-    return _redirect_with_message(destination, "Added " + name)
-
-
-@dev.post("/props/{prop_id}/delete")
-def props_delete(prop_id: int, next: str = Form("")):
-    entities.delete_prop(prop_id, path=db.DB_PATH)
-    destination = safe_next(next, "/assets?tab=props")
-    return _redirect_with_message(destination, "Deleted")
 
 
 def _with_director_prompts(concepts: list) -> list:
@@ -1693,37 +1481,19 @@ async def concept_shot_verdict(concept_id: int, shot_n: int, request: Request):
 
 
 @dev.get("/concepts")
-def concepts_list(request: Request, message: Optional[str] = None):
-    spaces = preprod.list_locations(path=db.DB_PATH)
-    for space in spaces:
-        space["photos"] = photos_for(space["name"])
-    return templates.TemplateResponse(
-        request,
-        "concepts.html",
-        {
-            # Brand-scoped (BACKLOG #7): switching the active brand changes
-            # which concepts you see, so the switch is visible here too.
-            "concepts": _with_director_prompts(
-                [c for c in preprod.list_concepts(path=db.DB_PATH)
-                 if c["brand"] == active_brand(request)]),
-            "rate": preprod.shoot_rate(path=db.DB_PATH),
-            "shortlist": preprod.shortlist_rate(path=db.DB_PATH),
-            "inspirations": inspiration.list_accounts(path=db.DB_PATH),
-            "scene_briefs": preprod.list_scene_briefs(brand=active_brand(request),
-                                                      path=db.DB_PATH),
-            "brands": preprod.BRANDS,
-            "spaces": spaces,
-            "has_locations": bool(spaces),
-            "characters": entities.list_characters(path=db.DB_PATH),
-            "props": entities.list_props(path=db.DB_PATH),
-            "active_nav": "tools",
-            "message": message,
-        },
-    )
+def concepts_list(message: Optional[str] = None):
+    """Concept management is /ui's Pipeline view; the grading affordances
+    live on Dev Studio's Grade tab (2026-08-26). The old URL redirects
+    there, forwarding any message a POST route sent along -- every
+    legacy `next=/concepts` keeps landing somewhere real."""
+    url = "/studio?tab=grade"
+    if message:
+        url += f"&message={quote(message)}"
+    return RedirectResponse(url, status_code=308)
 
 
 @dev.post("/concepts/{concept_id}/grade")
-def concepts_grade(concept_id: int):
+def concepts_grade(concept_id: int, next: str = Form("")):
     """Score one concept on taste fit + predicted performance (BACKLOG #5)
     against your own history, and store it so the card shows it. One billed
     model call, on your click -- never automatic."""
@@ -1737,18 +1507,17 @@ def concepts_grade(concept_id: int):
                f"(taste {judge['taste_fit']:.0f}, perf {judge['performance']:.0f})")
     else:
         msg = f"SHOOT-{concept_id:02d}: " + (judge.get("reasons") or ["not graded"])[0]
-    return RedirectResponse(f"/concepts?message={quote(msg)}", status_code=303)
+    return _redirect_with_message(safe_next(next, "/studio?tab=grade"), msg)
 
 
 @dev.post("/concepts/{concept_id}/discard")
-def concepts_discard(concept_id: int):
+def concepts_discard(concept_id: int, next: str = Form("")):
     """Discard a concept you don't want. Deletes it (locations cascade)."""
     if preprod.get_concept(concept_id, path=db.DB_PATH) is None:
         raise HTTPException(status_code=404, detail="no such concept")
     preprod.delete_concept(concept_id, path=db.DB_PATH)
-    return RedirectResponse(
-        "/concepts?message=" + quote(f"Discarded SHOOT-{concept_id:02d}."),
-        status_code=303)
+    return _redirect_with_message(safe_next(next, "/studio?tab=grade"),
+                                  f"Discarded SHOOT-{concept_id:02d}.")
 
 
 @dev.post("/concepts/discard-all")

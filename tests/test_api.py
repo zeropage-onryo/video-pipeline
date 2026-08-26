@@ -483,7 +483,7 @@ def test_eval_run_computes_and_stores_metrics(tmp_db, monkeypatch):
     assert runs[0]["hit_rate"] == 0.5      # one hit, one miss
     detail = client.get(f"/api/evals/runs/{runs[0]['id']}").json()
     assert len(detail["per_query"]) == 2
-    assert detail["config"]["k"] == api_mod.EVAL_K
+    assert detail["config"]["k"] == api_mod._eval_k()
 
 
 def test_eval_run_refuses_empty_golden_set(tmp_db):
@@ -558,3 +558,163 @@ def test_ui_page_serves_the_shell(tmp_db):
     assert 'id="upmenu"' in response.text
     assert 'id="mgrid"' in response.text
     assert 'id="attachbar"' in response.text
+
+
+# --- asset creation + the RAG assets shelf ----------------------------------
+# The always-on create path: /ui's Assets view posts here, and every
+# save also lands a chunk on the "assets" shelf so the new entity is
+# retrievable through the same grounding path reference_block uses.
+
+TINY_PNG = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06"
+    b"\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05"
+    b"\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+
+
+class _RagConn:
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+@pytest.fixture
+def rag_recorder(monkeypatch):
+    """A reachable fake store: every ingest_records call is recorded so
+    the tests can assert what actually landed on the shelf."""
+    records = []
+    monkeypatch.setattr(api_mod.rag, "connect", lambda db_url=None: _RagConn())
+    monkeypatch.setattr(api_mod.rag, "init_store", lambda c: None)
+    monkeypatch.setattr(api_mod.rag, "make_client", lambda: object())
+    monkeypatch.setattr(api_mod.rag, "ingest_records",
+                        lambda recs, client_, conn: records.extend(recs) or len(recs))
+    return records
+
+
+def test_create_character_saves_and_teaches_the_assets_shelf(
+        tmp_db, tmp_path, monkeypatch, rag_recorder):
+    monkeypatch.setattr(api_mod, "CHARACTERS_DIR", tmp_path / "characters")
+    res = client.post("/api/assets/characters",
+                      data={"name": "Mike", "role": "protagonist",
+                            "notes": "leather jacket, deadpan"},
+                      files=[("photos", ("a.png", TINY_PNG, "image/png"))])
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] and body["rag"]["ok"] and body["rag"]["chunks"] == 1
+    assert (tmp_path / "characters" / "mike" / "a.png").exists()
+    [row] = entities.list_characters(path=tmp_db)
+    assert row["name"] == "Mike" and row["photo_count"] == 1
+    [record] = rag_recorder
+    assert record["domain"] == "assets"
+    assert record["source"] == "assets/character-mike"
+    assert "protagonist" in record["text"] and "leather jacket" in record["text"]
+
+
+def test_create_prop_saves_and_teaches_the_assets_shelf(
+        tmp_db, tmp_path, monkeypatch, rag_recorder):
+    monkeypatch.setattr(api_mod, "PROPS_DIR", tmp_path / "props")
+    res = client.post("/api/assets/props",
+                      data={"name": "Ducati Panigale", "category": "vehicle",
+                            "notes": "red, scuffed left fairing"})
+    assert res.json()["ok"]
+    [record] = rag_recorder
+    assert record["source"] == "assets/prop-ducati-panigale"
+    assert "vehicle" in record["text"] and "scuffed" in record["text"]
+
+
+def test_create_location_describes_and_teaches(tmp_db, tmp_path, monkeypatch,
+                                               rag_recorder):
+    import src.locations as locations_mod
+    monkeypatch.setattr(api_mod, "LOCATIONS_DIR", tmp_path / "locations")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(locations_mod, "describe_location",
+                        lambda client_, name, photos:
+                        {"space": f"{name} described from {len(photos)}"})
+    res = client.post("/api/assets/locations",
+                      data={"name": "garage"},
+                      files=[("photos", ("a.png", TINY_PNG, "image/png")),
+                             ("photos", ("b.png", TINY_PNG, "image/png"))])
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] and body["described"] is True
+    saved = preprod.get_location_by_name("garage", path=tmp_db)
+    assert saved is not None and saved["photo_count"] == 2
+    [record] = rag_recorder
+    assert record["source"] == "assets/location-garage"
+    assert "described from 2" in record["text"]
+
+
+def test_create_location_without_a_key_keeps_the_photos(tmp_db, tmp_path,
+                                                        monkeypatch, rag_recorder):
+    monkeypatch.setattr(api_mod, "LOCATIONS_DIR", tmp_path / "locations")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    res = client.post("/api/assets/locations",
+                      data={"name": "garage"},
+                      files=[("photos", ("a.png", TINY_PNG, "image/png"))])
+    body = res.json()
+    assert body["ok"] and body["described"] is False
+    assert "GEMINI_API_KEY" in body["note"]
+    assert (tmp_path / "locations" / "garage" / "a.png").exists()
+
+
+def test_create_location_requires_name_and_photo(tmp_db, tmp_path, monkeypatch):
+    monkeypatch.setattr(api_mod, "LOCATIONS_DIR", tmp_path / "locations")
+    no_name = client.post("/api/assets/locations", data={"name": "  "},
+                          files=[("photos", ("a.png", TINY_PNG, "image/png"))])
+    assert no_name.status_code == 400
+    no_photo = client.post("/api/assets/locations", data={"name": "garage"})
+    assert no_photo.status_code == 400
+
+
+def test_create_location_sanitises_the_name(tmp_db, tmp_path, monkeypatch,
+                                            rag_recorder):
+    monkeypatch.setattr(api_mod, "LOCATIONS_DIR", tmp_path / "locations")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    client.post("/api/assets/locations", data={"name": "../../etc/evil"},
+                files=[("photos", ("a.png", TINY_PNG, "image/png"))])
+    assert not (tmp_path / "etc").exists()
+    assert not (tmp_path.parent / "etc").exists()
+
+
+def test_delete_character_drops_the_shelf_chunk(tmp_db, monkeypatch):
+    dropped = []
+    monkeypatch.setattr(api_mod.rag, "connect", lambda db_url=None: _RagConn())
+    monkeypatch.setattr(api_mod.rag, "delete_source",
+                        lambda conn, source: dropped.append(source) or 1)
+    cid = entities.add_character("Mike", role="protagonist", path=tmp_db)
+    res = client.delete(f"/api/assets/characters/{cid}")
+    assert res.json()["deleted"] == cid
+    assert entities.list_characters(path=tmp_db) == []
+    assert dropped == ["assets/character-mike"]
+    assert client.delete(f"/api/assets/characters/{cid}").status_code == 404
+
+
+def test_create_asset_survives_a_down_store(tmp_db, tmp_path, monkeypatch):
+    """The degrade contract: the save always lands; the shelf chunk is
+    best-effort and its failure is reported, not raised."""
+    monkeypatch.setattr(api_mod, "PROPS_DIR", tmp_path / "props")
+    # autouse fixture already makes rag.connect raise
+    res = client.post("/api/assets/props", data={"name": "Helmet"})
+    body = res.json()
+    assert body["ok"] is True
+    assert body["rag"]["ok"] is False
+    assert entities.list_props(path=tmp_db)[0]["name"] == "Helmet"
+
+
+def test_holds_resolve_writes_the_prompt_verdict(tmp_db):
+    """One tap grades both trust numbers: the hold row AND the credit
+    gate's prompt_scores for the run (moved from the retired /holds
+    page's route to the API twin)."""
+    autonomy.log_prompt_scores("runX", [
+        {"prompt": "p", "score": 9, "pass": True, "reason": "", "dims": {}}],
+        path=tmp_db)
+    hold_id = autonomy.to_hold("zeropage", "shadow", payload={"run_id": "runX"},
+                               path=tmp_db)
+    client.post(f"/api/holds/{hold_id}/resolve", json={"status": "rejected"})
+    gate = autonomy.prompt_gate_agreement(path=tmp_db)
+    assert gate["graded"] == 1
+    assert gate["passed_but_rejected"] == 1

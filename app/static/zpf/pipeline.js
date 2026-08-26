@@ -3,7 +3,7 @@
    correction + RAG chunk, holds underneath). Generate: Higgsfield-style
    single generation (generate.js). The node canvas is its OWN rail view
    — Director (workflows.js) — reached from a card's Director button. */
-import { api, bus, esc, pct, state, stateline } from './shared.js';
+import { api, bus, esc, state, stateline } from './shared.js';
 import { initGenerate, renderGenerate } from './generate.js';
 import { openConceptInDirector } from './workflows.js';
 
@@ -98,12 +98,9 @@ async function renderConcepts() {
   document.getElementById('ccount').textContent =
     `${ideas.length} awaiting review · ${data.items.length} total`;
 
-  // shortlist / shoot rates — the two labels, straight from the API
-  const sl = data.shortlist, sh = data.shoot;
-  document.getElementById('pmetrics').innerHTML = [
-    [sl.rate === null ? '—' : pct(sl.rate), `Shortlist rate · ${sl.shortlisted}/${sl.generated}`],
-    [sh.rate === null ? '—' : pct(sh.rate), `Shoot rate · ${sh.shot}/${sh.generated}`],
-  ].map(([v, l]) => `<div class="metric"><div class="mv">${v}</div><div class="md">${esc(l)}</div></div>`).join('');
+  // the shortlist/shoot/agreement metrics live on the Dev Studio's
+  // Stats tab now (2026-08-26) — /ui is the tool people create with,
+  // the numbers about how well it works are a dev surface.
 
   if (!data.items.length) {
     box.innerHTML = '';
@@ -406,18 +403,12 @@ async function renderHolds() {
   }
   stateline(hstate, null);
 
-  // agreement metrics join the two shortlist cards
-  const ag = data.agreement, gate = data.gate, pr = data.pass_rate;
-  const extra = [
-    [ag.agreement === null ? '—' : pct(ag.agreement), `Evaluator agreement · ${ag.graded} graded`],
-    [gate.agreement === null ? '—' : pct(gate.agreement), `Gate agreement · ${gate.graded} graded`],
-    [pr.rate === null ? '—' : pct(pr.rate), `First-try pass · ${pr.passed}/${pr.total}`],
-  ].map(([v, l]) => `<div class="metric"><div class="mv">${v}</div><div class="md">${esc(l)}</div></div>`).join('');
-  document.getElementById('pmetrics').insertAdjacentHTML('beforeend', extra);
-  if (data.killed) {
-    document.getElementById('pmetrics').insertAdjacentHTML('beforeend',
-      '<div class="metric"><div class="mv" style="color:var(--signal)">KILL</div><div class="md">Global kill switch is ON</div></div>');
-  }
+  // (the agreement metrics moved to the Dev Studio's Stats tab)
+  // a channel can post now when it's promoted AND names targets — the
+  // Post button (the old /holds "post now") only renders then
+  const postable = new Set((data.channels || [])
+    .filter(c => ['queue', 'auto'].includes(c.autonomy) && (c.targets || '').trim())
+    .map(c => c.name));
 
   box.innerHTML = data.items.length
     ? data.items.map(h => `
@@ -430,17 +421,35 @@ async function renderHolds() {
           <div class="hact">
             <button class="hbtn ok" data-s="approved">Approve</button>
             <button class="hbtn no" data-s="rejected">Reject</button>
+            ${postable.has(h.channel) ? '<button class="hbtn ok hpost">Post</button>' : ''}
           </div>
           <span></span>
         </div>`).join('')
     : '<div class="probeblank">Nothing held — the queue is clear</div>';
-  box.querySelectorAll('.hbtn').forEach(b => b.onclick = async () => {
+  box.querySelectorAll('.hbtn:not(.hpost)').forEach(b => b.onclick = async () => {
     const row = b.closest('.holdrow');
     try {
       await api(`/api/holds/${row.dataset.id}/resolve`,
         { method: 'POST', body: { status: b.dataset.s } });
       renderPipeline();
     } catch (e) {
+      stateline(hstate, 'error', e.message, renderHolds);
+    }
+  });
+  box.querySelectorAll('.hpost').forEach(b => b.onclick = async () => {
+    const row = b.closest('.holdrow');
+    b.disabled = true; b.textContent = 'Posting…';
+    try {
+      const res = await api(`/api/holds/${row.dataset.id}/post`, { method: 'POST', body: {} });
+      if (res.posted) {
+        stateline(hstate, 'empty', `Posted to ${res.targets.join(', ')}.`);
+        renderPipeline();
+      } else {
+        b.disabled = false; b.textContent = 'Post';
+        stateline(hstate, 'error', `Not posted — ${res.detail}`);
+      }
+    } catch (e) {
+      b.disabled = false; b.textContent = 'Post';
       stateline(hstate, 'error', e.message, renderHolds);
     }
   });

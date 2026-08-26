@@ -73,8 +73,10 @@ venv/bin/python -m src.rag_eval <cases.json> [--k 5]   # hit@k + MRR over labele
 # SIGN-IN — seed the auth tables once (idempotent); real login guards /ui + /api
 venv/bin/python -m src.accounts seed you@example.com [--password '...']
 
-# WEB APP — one page at 127.0.0.1:8000/studio does everything above.
-# 127.0.0.1:8000 is the public landing (the only indexed URL).
+# WEB APP — /ui (behind sign-in) is the product; 127.0.0.1:8000/studio is
+# the Dev Studio (dev posture only): one page of Stats / Grade / RAG
+# Library / Settings / Dataset tabs. 127.0.0.1:8000 is the public
+# landing (the only indexed URL).
 venv/bin/uvicorn app.main:app --reload
 ```
 
@@ -233,28 +235,50 @@ is yours, in Resolve, by hand.
   actually breaks), public stats via the Data API v3, and channel import. `refresh_metrics_for_video`
   and `import_channel_videos` never raise: a missing key or failed call returns `{"ok": False}` so
   manual entry keeps working, per BUILD_SPEC.
-- **`app/main.py`** — the web app; every CLI step above is also doable in the browser. **The app
-  is one page.** `/studio` is the workspace: the Workflow library of what you have (characters,
-  rooms, props — real DB rows), the canvas, and the assistant. The per-stage screens
-  (`/concepts`, `/locations`, `/library`, `/analytics`, `/characters`, `/props`) still exist as
-  the engine; `/pitches` went with post-production, and `/dashboard` is gone (308 → `/studio`,
-  since it was the front door for months). Inline actions pass `next` so a decision made on the canvas lands back on the
-  canvas — `safe_next` refuses anything that isn't a site-relative path, or every button becomes
-  an open redirect. `/locations` serves photos through `location_photo`, which resolves both path
-  segments and refuses anything that escapes `locations/` — a space name becomes a directory name,
-  so it's sanitised on the way in too. `?thumb=1` serves a cached 480px JPEG rather than the
-  multi-megabyte original. Routes that call a model wrap it and redirect with a message rather
+- **`app/main.py`** — the web app. **The dev surface is one page** (consolidated 2026-08-26):
+  `/studio` is the **Dev Studio**, strictly stats + system improvement, five tabs on the legacy
+  `.sk` skin: *Stats* (the five pipeline numbers — shortlist/shoot rates, evaluator/gate
+  agreement, first-try pass — server-rendered, plus the whole retrieval-eval surface via the
+  same `/api/evals/*` endpoints and `evals_dev.js` the old `/evals` page used), *Grade* (a
+  randomized grading queue: `/grade/draw?mode=shot|golden|any` deals a random ungraded concept
+  (`judge_overall IS NULL`) or golden query, `POST /grade/fresh` generates one throwaway idea
+  for grading that is **never saved** as a `shoot_concepts` row — verdicts post to the existing
+  `/concepts/.../verdict`, `/grade`, `/discard`, and `winners.record_and_learn` teach routes,
+  with `next` chaining straight into the next draw), *RAG Library* (the old `/library` content;
+  `/library/ingest` also takes a txt/md/pdf **file upload**, extracted server-side — pypdf for
+  PDFs — before `rag.ingest_records`), *Settings* (the `src/settings.py` tunables + the channel
+  autonomy/kill-switch/standing-note controls that lived on `/holds`), and *Dataset* (golden
+  set + run history tables with CSV/JSON export at `/dataset/export`). The old page URLs
+  survive as redirects: `/dashboard`, `/evals`→ stats tab, `/library`→ library tab,
+  `/concepts`→ grade tab (forwarding `?message=`, so every legacy `next=/concepts` still lands
+  its message), and `/holds`, `/assets`, `/locations`, `/characters`, `/props` → `/ui`, where
+  that work lives now. The old workspace composer/assistant (`/studio/assist`, `route_intent`)
+  was removed with it — `/ui`'s Studio composer is the creation surface. Inline actions still
+  pass `next` (`safe_next` refuses anything not site-relative, or every button becomes an open
+  redirect). Photo serving (`/locations/{space}/photo/...` and the character/prop twins)
+  registers on `app`, not `dev` — `/ui`'s galleries need it on a public deployment — and still
+  resolves + refuses anything escaping its root; `?thumb=1` serves a cached 480px JPEG.
+  Routes that call a model wrap it and redirect with a message rather
   than 500ing. **Two deployment postures (added 2026-08-25):** `DEV_TOOLS=1` (the local `.env`)
-  registers the whole dev console — `/studio`, `/dashboard`, and every per-stage screen live on
+  registers the whole dev console — the Dev Studio and the surviving standalone dev pages
+  (`/analytics`, `/winners`, `/videos/*`, `/post-image`, `/references/pick`) live on
   the module's `dev = APIRouter()`, included only when the flag is set, read once at startup.
   Unset (a public deployment) those routes are never registered, so `/studio` 404s like any
   undefined path — omission, not a second session check. Only `/`, the SEO files, `/signin` +
-  auth, `/ui`, `/api/*`, and `/brand/{name}` are unconditional; the rule for a new legacy-style
-  page is "register it on `dev`". The landing CTA follows the posture (`/studio` vs `/ui`),
+  auth, `/ui`, `/api/*`, photo serving, and `/brand/{name}` are unconditional; the rule for a
+  new legacy-style page is "register it on `dev`". The landing CTA follows the posture
+  (`/studio` vs `/ui`),
   `/api/capabilities` reports `dev_tools` live, and `/ui`'s "legacy" rail link is gated on it
   via the existing `data-cap` convention. The test suite pins `DEV_TOOLS=1` in
   `tests/conftest.py`; `tests/test_dev_tools.py` reloads `app.main` under `DEV_TOOLS=0` to lock
   the public posture.
+- **`src/settings.py`** — the Dev Studio tunables, in the same SQLite `settings` table as
+  autonomy's kill switch. Three keys, resolved **per call** (stored value > env var > shipped
+  default, reads never raise): `prompt_gate_min` (orchestrator's credit-gate bar, was
+  `PROMPT_GATE_MIN`), `grade_threshold` (CRAG's weak-retrieval floor, was hardcoded 0.55 in
+  `src/crag.py`), `eval_k` (the eval harness's k, was hardcoded 5 in `app/api.py`). Saving on
+  the Settings tab takes effect on the next run with no restart; clearing a field falls back
+  to env/default rather than zeroing.
 - **`app/api.py` + `/ui`** — the ZPF Studio skin (added 2026-08-21): the visual system from
   `prototype/studio.html` (spec: `docs/ZPF_STUDIO_SPEC.md`) ported onto a JSON API over the
   existing modules. One rule governs it: **every control is backed by a working endpoint and
@@ -302,16 +326,26 @@ is yours, in Resolve, by hand.
   text changed, title/hook/logline never touched); a shot node's finished render
   auto-attaches to its shot (clip → media_url, Nano image → `/shots/{n}/reference`). `src/nano_banana.py` is the image connector, runway.py's
   never-raises gated shape on the existing Gemini key under `NANO_DAILY_CAP`, no separate
-  spend gate since an image costs cents. Evals moved OFF `/ui` (2026-08-25) to the dev-console
-  `/evals` page — golden set still in SQLite via `src/evalstore.py`, seeded once from
+  spend gate since an image costs cents. Evals moved OFF `/ui` (2026-08-25) into the dev
+  console — now the Dev Studio's Stats tab (`/evals` redirects there) — golden set still in
+  SQLite via `src/evalstore.py`, seeded once from
   `eval_cases.json`, Hit@k/MRR computed server-side by `rag_eval` and stored per run; the
-  page is a shell over the same session-gated `/api/evals/*` endpoints, and it registers on
-  the `dev` router so a public deployment has no `/evals` at all. Billed work runs through `app/jobs.py` — an in-process,
+  tab is a shell over the same session-gated `/api/evals/*` endpoints, and it registers on
+  the `dev` router so a public deployment has no eval surface at all. **Asset creation is
+  always-on** (2026-08-26): `POST /api/assets/locations|characters|props` (+ DELETE for
+  characters/props) are the create path `/ui`'s "+ Add asset" modal posts to — they had to
+  leave the dev router or a public deploy silently loses "add a character" — and every save
+  also ingests a small chunk onto the RAG **`assets` shelf** (`assets/{kind}-{slug}`,
+  best-effort, dropped again on delete), so the memory bank and the vector library stop being
+  two stores that sit next to each other. The five pipeline metrics left `/ui` entirely
+  (the old `#pmetrics` block) for the Dev Studio Stats tab; `/api/holds/{id}/post` is the
+  "post now" that used to live on the retired `/holds` page, surfaced as a Post button on
+  postable channels' hold rows. Billed work runs through `app/jobs.py` — an in-process,
   deliberately non-persistent job registry whose one push channel is the
   `/api/jobs/stream` SSE feed. That feed is why uvicorn runs with
   `--timeout-graceful-shutdown 3` (`.claude/launch.json`): without it, `--reload` waits
-  forever on the open SSE socket and the dev server wedges on every code change. `/studio`
-  and the per-stage screens are unchanged underneath — `/ui` sits beside them until parity.
+  forever on the open SSE socket and the dev server wedges on every code change. `/ui` is
+  the product surface; `/studio` beside it is stats + system improvement only (2026-08-26).
   The Pipeline view's scene board closes the render loop two ways: copy a shot's stored
   tool prompt / Director rendering, render free in the tool's own app, and paste the
   finished clip's URL back (`set_shot_media_url`) — the default path — or one click
@@ -332,10 +366,6 @@ is yours, in Resolve, by hand.
   survives. `refine_shot_prompt` is per-shot technique polish via `promptgen.
   refine_prompt` against the `ai_prompting` shelf; the template is
   `prompts/direct_prompt.txt`.
-- **The assistant is keyword routing, not a model call.** `route_intent` matches typed text (or an
-  explicit chip) against `INTENT_PHRASES` → one pipeline stage, falling back to `ideas`. Free and
-  inspectable on purpose: the stages it dispatches each cost a billed generation, so an unclear
-  ask must not spend one on the wrong stage.
 - **`app/seo.py`** — the machine-readable growth surface, all pure functions so the exact bytes a
   crawler sees are testable without a server: `robots.txt` (the AI crawlers named explicitly and
   allowed; the app disallowed), `llms.txt` (what "grounded" means plus the hard specs — the part

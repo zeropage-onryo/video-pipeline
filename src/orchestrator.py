@@ -51,13 +51,19 @@ from typing import Optional, TypedDict
 from google import genai
 from langgraph.graph import END, START, StateGraph
 
-from . import autonomy, crag, db, entities, preprod, promptgen, rag, scheduling, shootgen, winners
+from . import autonomy, crag, db, entities, preprod, promptgen, rag, scheduling, settings, shootgen, winners
 from .gemini_utils import generate_with_retry
 
 MAX_ATTEMPTS = 3
 JUDGE_MIN = 0.6
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", shootgen.MODEL)  # match the other stages
-PROMPT_GATE_MIN = int(os.environ.get("PROMPT_GATE_MIN", "7"))  # of 10; raise as you learn
+
+
+def prompt_gate_min() -> int:
+    """The gate's bar (of 10), read per run: the Dev Studio Settings tab
+    (settings table) wins, then PROMPT_GATE_MIN in the env, then 7 --
+    so raising the bar no longer needs a restart."""
+    return settings.prompt_gate_min(path=db.DB_PATH)
 MAX_PROMPT_REWORKS = 1  # one targeted rewrite per failing shot before it holds
 
 
@@ -446,7 +452,7 @@ def score_prompts(state: GenState) -> GenState:
         scored.append({"prompt": text, "tool": p.get("tool"),
                        "still": p.get("still"),
                        "score": verdict["score"],
-                       "pass": verdict["score"] >= PROMPT_GATE_MIN,
+                       "pass": verdict["score"] >= prompt_gate_min(),
                        "reason": verdict["reason"], "dims": verdict["dims"],
                        **ref})
     autonomy.log_prompt_scores(state.get("run_id"), scored, path=db.DB_PATH)
@@ -524,7 +530,7 @@ def revise_prompts(state: GenState) -> GenState:
             verdict = _judge_prompt(new_text)
             new_entry = {"prompt": new_text, "tool": entry.get("tool"),
                         "still": entry.get("still"), "score": verdict["score"],
-                        "pass": verdict["score"] >= PROMPT_GATE_MIN,
+                        "pass": verdict["score"] >= prompt_gate_min(),
                         "reason": verdict["reason"], "dims": verdict["dims"],
                         **({"reference_image": entry["reference_image"]}
                            if entry.get("reference_image") else {})}

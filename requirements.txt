@@ -15,6 +15,7 @@ python-multipart
 Pillow
 psycopg[binary]
 pgvector
+pypdf   # /library/ingest's PDF file upload -- text extraction before chunking
 langgraph
 langsmith
 authlib

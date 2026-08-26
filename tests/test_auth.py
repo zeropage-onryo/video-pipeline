@@ -209,9 +209,12 @@ def test_api_with_session_works(clean_slate):
 
 
 def test_legacy_studio_stays_open(clean_slate):
-    from src import entities, preprod
+    from src import autonomy, entities, evalstore, preprod, settings
     preprod.init(clean_slate)
     entities.init(clean_slate)
+    autonomy.init(clean_slate)
+    evalstore.init(clean_slate)
+    settings.init(clean_slate)
     assert client.get("/studio").status_code == 200
 
 

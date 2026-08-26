@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 
 from src import (
     autonomy,
+    autopilot,
     db,
     entities,
     evalstore,
@@ -36,6 +37,7 @@ from src import (
     rag,
     rag_eval,
     runway,
+    settings,
     workflows,
     youtube,
 )
@@ -58,7 +60,12 @@ DENY_REASONS = (
     "pacing", "retrieval missed", "too generic",
 )
 
-EVAL_K = 5
+
+def _eval_k() -> int:
+    """How many results the eval scores per query -- a Dev Studio
+    tunable (settings -> EVAL_K env -> 5), resolved per run so a
+    change takes effect on the next run, no restart."""
+    return settings.eval_k(path=db.DB_PATH)
 
 
 def _error(status: int, code: str, message: str) -> JSONResponse:
@@ -97,6 +104,7 @@ def compute_capabilities() -> dict:
         # have landed, plus the shelf and the key it refines with
         "polish": gemini and store and hasattr(promptgen, "refine_prompt"),
         "assets.list": True,
+        "assets.create": True,
         "retrieve": store and gemini,          # query embeds with Gemini
         "pipeline.concepts": True,
         "pipeline.run": gemini,
@@ -286,6 +294,191 @@ def asset_detail(category: str, item_id: int):
     if asset is None:
         return _error(404, "not_found", "no such asset")
     return asset
+
+
+# --- asset creation ----------------------------------------------------------
+# The always-on create path (2026-08-26): /ui's Assets view creates
+# entities through these, so asset creation survives a public deploy
+# where the dev console (and its old form routes) is never registered.
+# Every save also lands a small text chunk on the RAG "assets" shelf --
+# the upload IS the grounding source, closing the gap where the memory
+# bank and the vector library sat side by side without talking.
+
+ASSETS_DOMAIN = "assets"
+
+
+def _asset_source_key(kind: str, slug: str) -> str:
+    return f"assets/{kind}-{slug}"
+
+
+def ingest_asset_chunk(kind: str, slug: str, name: str, fields: dict) -> dict:
+    """One searchable chunk per saved entity: name plus whatever text the
+    save carried (role/category/notes/description). Best-effort by the
+    standing degrade contract -- a down store must never lose the asset,
+    it just isn't retrievable until re-saved."""
+    lines = [f"{kind.upper()}: {name}"]
+    for label, value in fields.items():
+        text = (str(value) if value is not None else "").strip()
+        if text:
+            lines.append(f"{label}: {text}")
+    try:
+        conn = rag.connect()
+        try:
+            rag.init_store(conn)
+            written = rag.ingest_records(
+                [{"source": _asset_source_key(kind, slug),
+                  "text": "\n".join(lines), "domain": ASSETS_DOMAIN,
+                  "project": None, "source_ref": None}],
+                rag.make_client(), conn,
+            )
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return {"ok": True, "chunks": written, "error": None}
+    except Exception as e:
+        return {"ok": False, "chunks": 0, "error": str(e)}
+
+
+def _drop_asset_chunk(kind: str, slug: str) -> None:
+    """Deleting an entity also drops its shelf chunk -- best-effort,
+    same contract as the ingest above."""
+    try:
+        conn = rag.connect()
+        try:
+            rag.delete_source(conn, _asset_source_key(kind, slug))
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+async def _save_uploaded_photos(base_dir: Path, slug: str, photos) -> tuple:
+    """(first filename, count) -- mirrors the old dev-console handler."""
+    images = [p for p in photos
+              if getattr(p, "filename", "") and (p.content_type or "").startswith("image/")]
+    if not images:
+        return "", 0
+    directory = base_dir / slug
+    directory.mkdir(parents=True, exist_ok=True)
+    for upload in images:
+        (directory / Path(upload.filename).name).write_bytes(await upload.read())
+    return Path(images[0].filename).name, len(images)
+
+
+@router.post("/assets/locations")
+async def asset_create_location(request: Request):
+    """Save a space's photos and describe it (vision) -- the describe is
+    best-effort so a failed model call keeps the photos on disk to
+    retry, exactly the old /locations/upload contract."""
+    form = await request.form()
+    name = (form.get("name") or "").strip()
+    slug = _slug(name)
+    if not slug:
+        return _error(400, "invalid_name", "a space name is required")
+    photos = [p for p in form.getlist("photos") if getattr(p, "filename", "")]
+    images = [p for p in photos if (p.content_type or "").startswith("image/")]
+    if not images:
+        return _error(400, "no_photos", "at least one photo is required")
+
+    space_dir = LOCATIONS_DIR / slug
+    space_dir.mkdir(parents=True, exist_ok=True)
+    saved = []
+    for upload in images:
+        target = space_dir / Path(upload.filename).name
+        target.write_bytes(await upload.read())
+        saved.append(target)
+
+    described = False
+    note = None
+    description = None
+    api_key = _gemini_key()
+    if not api_key:
+        note = "GEMINI_API_KEY is not set, so the photos were not described"
+    else:
+        try:
+            from google import genai
+
+            from src import locations as locations_mod
+            description = locations_mod.describe_location(
+                genai.Client(api_key=api_key), slug, saved)
+            all_photos = sorted(
+                p for p in space_dir.iterdir()
+                if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS)
+            preprod.add_location(slug, description,
+                                 photo_count=len(all_photos), path=db.DB_PATH)
+            described = True
+        except Exception as e:
+            note = f"saved {len(saved)} photo(s) but could not describe the space: {e}"
+
+    chunk = ingest_asset_chunk("location", slug, slug, {
+        "description": _description_text(description) if description else "",
+    })
+    return {"ok": True, "slug": slug, "described": described,
+            "photos": len(saved), "note": note, "rag": chunk}
+
+
+@router.post("/assets/characters")
+async def asset_create_character(request: Request):
+    form = await request.form()
+    name = (form.get("name") or "").strip()
+    slug = _slug(name)
+    if not slug:
+        return _error(400, "invalid_name", "a name is required")
+    role = (form.get("role") or "").strip()
+    notes = (form.get("notes") or "").strip()
+    ref, count = await _save_uploaded_photos(
+        CHARACTERS_DIR, slug, form.getlist("photos"))
+    entities.add_character(
+        name=name, role=role,
+        description={"notes": notes} if notes else None,
+        reference_image=ref, photo_count=count, notes=notes, path=db.DB_PATH)
+    chunk = ingest_asset_chunk("character", slug, name,
+                               {"role": role, "notes": notes})
+    return {"ok": True, "slug": slug, "photos": count, "rag": chunk}
+
+
+@router.post("/assets/props")
+async def asset_create_prop(request: Request):
+    form = await request.form()
+    name = (form.get("name") or "").strip()
+    slug = _slug(name)
+    if not slug:
+        return _error(400, "invalid_name", "a name is required")
+    category = (form.get("category") or "").strip()
+    notes = (form.get("notes") or "").strip()
+    ref, count = await _save_uploaded_photos(PROPS_DIR, slug, form.getlist("photos"))
+    entities.add_prop(
+        name=name, category=category,
+        description={"notes": notes} if notes else None,
+        reference_image=ref, photo_count=count, notes=notes, path=db.DB_PATH)
+    chunk = ingest_asset_chunk("prop", slug, name,
+                               {"category": category, "notes": notes})
+    return {"ok": True, "slug": slug, "photos": count, "rag": chunk}
+
+
+@router.delete("/assets/characters/{character_id}")
+def asset_delete_character(character_id: int):
+    row = entities.get_character(character_id, path=db.DB_PATH)
+    if row is None:
+        return _error(404, "not_found", "no such character")
+    entities.delete_character(character_id, path=db.DB_PATH)
+    _drop_asset_chunk("character", _slug(row["name"]))
+    return {"deleted": character_id}
+
+
+@router.delete("/assets/props/{prop_id}")
+def asset_delete_prop(prop_id: int):
+    row = entities.get_prop(prop_id, path=db.DB_PATH)
+    if row is None:
+        return _error(404, "not_found", "no such prop")
+    entities.delete_prop(prop_id, path=db.DB_PATH)
+    _drop_asset_chunk("prop", _slug(row["name"]))
+    return {"deleted": prop_id}
 
 
 # --- retrieval --------------------------------------------------------------
@@ -1076,6 +1269,61 @@ def holds_resolve(hold_id: int, body: ResolveBody):
     return {"id": hold_id, "status": body.status}
 
 
+@router.post("/holds/{hold_id}/post")
+def holds_post(hold_id: int):
+    """The explicit 'post now' -- moved here from the retired /holds dev
+    page (2026-08-26) so /ui's hold queue keeps the whole ritual. One
+    post action per channel target, through autopilot's unchanged
+    three-condition gate; until credentials and real media exist it
+    reports exactly what's missing rather than pretending."""
+    row = next((h for h in autonomy.list_hold(status=None, path=db.DB_PATH)
+                if h["id"] == hold_id), None)
+    if row is None:
+        return _error(404, "not_found", "no such hold")
+    channel = autonomy.get_channel(row.get("channel", ""), path=db.DB_PATH) or {}
+    targets = [t.strip() for t in (channel.get("targets") or "").split(",") if t.strip()]
+    if not targets:
+        return _error(400, "no_targets", "this channel has no post targets")
+
+    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    caption = row.get("caption") or ""
+    image_url = (payload.get("image_url") or "").strip()
+    if image_url:
+        actions = [{
+            "kind": "post", "platform": platform, "concept_id": row.get("concept_id"),
+            "caption": caption, "image_url": image_url,
+        } for platform in targets]
+    else:
+        clips = payload.get("clips") or []
+        media_url = next((c.get("url") for c in clips if c.get("url")), "") or ""
+        is_local = bool(media_url) and not media_url.startswith("http")
+        actions = [{
+            "kind": "post", "platform": platform, "concept_id": row.get("concept_id"),
+            "caption": caption,
+            "video_url": media_url,
+            "video_path": media_url if is_local else "",
+        } for platform in targets]
+
+    try:
+        result = autopilot.execute({"actions": actions}, approve=True, dry_run=False)
+    except Exception as e:
+        return _error(502, "post_failed", str(e))
+
+    mode = result.get("mode")
+    if mode == "live" and result.get("executed"):
+        autonomy.resolve_hold(hold_id, "posted", path=db.DB_PATH)
+        return {"id": hold_id, "posted": True, "targets": targets, "mode": mode}
+    if mode == "live":
+        detail = "; ".join(result.get("skipped") or ["no rendered media to post yet"])
+    elif mode == "disabled":
+        detail = "posting is OFF — set ZEROPAGE_AUTOPILOT=1 and the platform credentials"
+    elif mode == "killed":
+        detail = "autopilot kill switch is on (data/autopilot.off)"
+    else:
+        detail = f"posting mode: {mode}"
+    return {"id": hold_id, "posted": False, "mode": mode, "detail": detail}
+
+
 # --- evals ------------------------------------------------------------------
 
 @router.get("/evals/golden")
@@ -1138,6 +1386,7 @@ def evals_run(body: EvalRunBody):
     # the view already appends "· n queries · k=…", so the default label
     # stays bare to avoid stuttering
     label = (body.label or "").strip() or "run"
+    k = _eval_k()
 
     def work(job):
         conn = rag.connect()
@@ -1156,7 +1405,7 @@ def evals_run(body: EvalRunBody):
                               f"{done['n']}/{len(cases)} queries")
                 return hits
 
-            result = rag_eval.evaluate(cases, retrieve_fn, k=EVAL_K)
+            result = rag_eval.evaluate(cases, retrieve_fn, k=k)
         finally:
             try:
                 conn.close()
@@ -1165,10 +1414,10 @@ def evals_run(body: EvalRunBody):
         p50 = int(statistics.median(times)) if times else None
         run_id = evalstore.save_run(
             label, result, p50_ms=p50,
-            config={"k": EVAL_K, "model": rag.EMBED_MODEL},
+            config={"k": k, "model": rag.EMBED_MODEL},
             path=db.DB_PATH)
         return {"ref_id": run_id,
-                "detail": f"hit@{EVAL_K} {result['hit_rate']:.2f} · MRR {result['mrr']:.2f}"}
+                "detail": f"hit@{k} {result['hit_rate']:.2f} · MRR {result['mrr']:.2f}"}
 
     job = jobs.start("eval", f"eval · {len(cases)} queries", work,
                      cancellable=True)

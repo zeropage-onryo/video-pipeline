@@ -24,7 +24,18 @@ from typing import Optional
 from . import rag
 from .gemini_utils import generate_with_retry, strip_fences
 
+# The shipped default. The effective threshold is resolved per call via
+# src/settings.py (Dev Studio Settings tab -> GRADE_THRESHOLD env ->
+# this constant), so tuning it no longer needs a code change.
 GRADE_THRESHOLD = 0.55
+
+
+def _effective_threshold() -> float:
+    try:
+        from . import settings
+        return settings.grade_threshold()
+    except Exception:
+        return GRADE_THRESHOLD
 
 REWRITE_PROMPT = """The following search query returned weak results from a reference library \
 (best match score: {score:.2f} out of 1.0). Rewrite it as a single, more specific search query \
@@ -34,13 +45,16 @@ specificity. Return ONLY the rewritten query text, nothing else.
 Original query: {query}"""
 
 
-def grade_retrieval(references: list, threshold: float = GRADE_THRESHOLD) -> dict:
+def grade_retrieval(references: list, threshold: Optional[float] = None) -> dict:
     """
     references: rag.query()-shaped list (each item has a "score").
     "strong" if there's at least one reference and its best score
     clears threshold; "weak" otherwise -- including nothing coming
-    back at all, which is the weakest case there is.
+    back at all, which is the weakest case there is. threshold=None
+    resolves the tunable (settings -> env -> GRADE_THRESHOLD).
     """
+    if threshold is None:
+        threshold = _effective_threshold()
     if not references:
         return {"strong": False, "best_score": 0.0, "reason": "no references retrieved"}
     best_score = max(r.get("score", 0.0) for r in references)
@@ -65,7 +79,7 @@ def retrieve_with_crag(
     domain=None,
     project: Optional[str] = None,
     db_url: Optional[str] = None,
-    threshold: float = GRADE_THRESHOLD,
+    threshold: Optional[float] = None,
 ) -> dict:
     """
     Never raises -- same contract as rag.retrieve_references, since

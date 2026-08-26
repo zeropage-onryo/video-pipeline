@@ -1,5 +1,8 @@
 {# app/templates/_rail.html — persistent left icon rail.
-   Pass active_nav from each route's context (defaults to "" if absent). #}
+   Pass active_nav from each route's context (defaults to "" if absent).
+   The dev console is one page now (/studio, the Dev Studio) — the rail
+   carries it, the product (/ui), and the few standalone dev surfaces
+   that survived the consolidation (scoreboard, winners). #}
 {% set nav = active_nav | default('') %}
 <nav class="rail" aria-label="Primary">
   {% set ab = active_brand(request) %}
@@ -12,29 +15,17 @@
     </button>
   </form>
   <span class="rail-div"></span>
-  <a class="rail-item {{ 'active' if nav == 'home' }}" href="/studio" aria-label="Home">
-    <span class="rail-ic"><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg></span><span class="rail-lb">Home</span>
+  <a class="rail-item {{ 'active' if nav == 'home' }}" href="/studio" aria-label="Dev Studio">
+    <span class="rail-ic"><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg></span><span class="rail-lb">Dev Studio</span>
   </a>
-  <a class="rail-item {{ 'active' if nav == 'tools' }}" href="/concepts" aria-label="Tools">
-    <span class="rail-ic"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></span><span class="rail-lb">Tools</span>
-  </a>
-  <a class="rail-item {{ 'active' if nav == 'assets' }}" href="/assets" aria-label="Assets">
-    <span class="rail-ic"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="1.6"/><rect x="13" y="3" width="8" height="8" rx="1.6"/><rect x="3" y="13" width="8" height="8" rx="1.6"/><circle cx="17" cy="17" r="4"/></svg></span><span class="rail-lb">Assets</span>
+  <a class="rail-item" href="/ui" aria-label="Studio">
+    <span class="rail-ic"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M9 8.5v7l6-3.5Z"/></svg></span><span class="rail-lb">Studio</span>
   </a>
   <span class="rail-div"></span>
-  <a class="rail-item {{ 'active' if nav == 'workflow' }}" href="/library" aria-label="Workflow">
-    <span class="rail-ic"><svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.4"/><circle cx="18" cy="6" r="2.4"/><circle cx="12" cy="18" r="2.4"/><path d="M8.2 6.6h7.6M6.7 8.2 11 15.9M17.3 8.2 13 15.9"/></svg></span><span class="rail-lb">Workflow</span>
-  </a>
   <a class="rail-item {{ 'active' if nav == 'scoreboard' }}" href="/analytics" aria-label="Scoreboard">
     <span class="rail-ic"><svg viewBox="0 0 24 24"><path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M20 20H3"/></svg></span><span class="rail-lb">Scoreboard</span>
   </a>
-  <a class="rail-item {{ 'active' if nav == 'holds' }}" href="/holds" aria-label="Holds">
-    <span class="rail-ic"><svg viewBox="0 0 24 24"><path d="M4 13h4l2 3h4l2-3h4"/><path d="M5 5h14l1 8v6H4v-6l1-8Z"/></svg></span><span class="rail-lb">Holds</span>
-  </a>
   <a class="rail-item {{ 'active' if nav == 'winners' }}" href="/winners" aria-label="Winners">
     <span class="rail-ic"><svg viewBox="0 0 24 24"><path d="M7 4h10v3a5 5 0 0 1-10 0V4Z"/><path d="M5 5h2M17 5h2M9 21h6M12 17v4"/></svg></span><span class="rail-lb">Winners</span>
-  </a>
-  <a class="rail-item {{ 'active' if nav == 'evals' }}" href="/evals" aria-label="Evals">
-    <span class="rail-ic"><svg viewBox="0 0 24 24"><path d="M4 19V9"/><path d="M10 19V4"/><path d="M16 19v-7"/><path d="M22 19H2"/></svg></span><span class="rail-lb">Evals</span>
   </a>
 </nav>

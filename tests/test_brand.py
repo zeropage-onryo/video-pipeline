@@ -49,14 +49,18 @@ def tmp_db(tmp_path, monkeypatch):
     return path
 
 
-def test_holds_are_filtered_to_the_active_brand(tmp_db):
+def test_holds_are_filtered_to_the_active_brand(tmp_db, monkeypatch):
+    """The hold queue is /ui's Pipeline view now (the /holds page is a
+    redirect); brand scoping rides /api/holds' ?channel filter, which
+    the view passes from the active brand."""
+    from app import auth
+    stub = {"id": 1, "email": "t@example.com", "display_name": "T"}
+    monkeypatch.setattr(auth, "current_user", lambda request: stub)
     autonomy.to_hold("antihero", "ANTIHERO-REASON-XYZ", status="held", path=tmp_db)
     autonomy.to_hold("zeropage", "ZEROPAGE-REASON-XYZ", status="held", path=tmp_db)
-    client.cookies.set("brand", "zeropage")
-    r = client.get("/holds")
-    client.cookies.clear()
-    assert "ZEROPAGE-REASON-XYZ" in r.text
-    assert "ANTIHERO-REASON-XYZ" not in r.text
+    reasons = [h["reason"] for h in
+               client.get("/api/holds?channel=zeropage").json()["items"]]
+    assert reasons == ["ZEROPAGE-REASON-XYZ"]
 
 
 def test_concepts_generate_uses_the_active_brand(tmp_db, monkeypatch):

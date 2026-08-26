@@ -1,0 +1,163 @@
+{# The Grade tab: a randomized grading queue -- draw one prompt, grade
+   it, get the next one. Three sources: a random ungraded concept (the
+   /concepts affordances reshuffled into a queue), a random golden
+   query run through live retrieval, and a fresh throwaway prompt that
+   is generated but never saved. All the verdict forms post to the
+   EXISTING teach/judge routes; `next` chains straight into the next
+   draw so grading flows without going back through a list. #}
+
+<div class="drawrow">
+  <a class="btnw" href="/grade/draw?mode=shot">Draw ungraded concept ({{ grade.ungraded_count }})</a>
+  <a class="btnw" href="/grade/draw?mode=golden">Draw golden query ({{ grade.golden_count }})</a>
+  <a class="btnw" href="/grade/draw?mode=any">Grade anything</a>
+  <form method="post" action="/grade/fresh" style="display:flex; gap:8px; flex:1; min-width:280px">
+    <input type="text" name="spark" placeholder="Optional spark for a fresh throwaway prompt…" style="flex:1">
+    <button type="submit" class="primary">Fresh prompt · billed</button>
+  </form>
+</div>
+
+{% if grade.mode == "shot" and grade.concept %}
+{% set c = grade.concept %}
+<div class="panel">
+  <div class="panel-head"><span class="id">SHOOT-{{ "%02d"|format(c.id) }} · {{ c.brand }}</span>
+    <span class="m">{{ "UNGRADED" if c.judge_overall is none else "JUDGE %.0f/10"|format(c.judge_overall) }}</span></div>
+  <div class="panel-body">
+    <h2 style="margin-top:0">{{ c.title }}</h2>
+    {% if c.hook %}<div style="display:flex; gap:8px; align-items:flex-start"><span class="tag red">HOOK / 0:01</span><p style="margin:0">{{ c.hook }}</p></div>{% endif %}
+    {% if c.logline %}<p class="dim" style="margin-top:8px">{{ c.logline }}</p>{% endif %}
+    {% if c.warnings %}
+    <div class="warnings" style="margin-top:10px">
+      {% for w in c.warnings %}<p style="margin:2px 0">{{ w }}</p>{% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="kicker" style="margin-top:16px">TEACH THIS IDEA — approve / deny, edit first if you want</div>
+    <form method="post" action="/concepts/{{ c.id }}/verdict" style="display:grid; gap:6px; margin-top:6px">
+      <input type="hidden" name="next" value="/grade/draw?mode=shot">
+      <textarea name="text" rows="3" style="width:100%">{{ c.title }}{% if c.hook %}
+HOOK: {{ c.hook }}{% endif %}{% if c.logline %}
+{{ c.logline }}{% endif %}</textarea>
+      <input type="text" name="note" placeholder="why (optional) — shown next to it in RAG">
+      <div style="display:flex; gap:8px">
+        <button type="submit" name="verdict" value="worked" class="copy">✓ Approve — teach it</button>
+        <button type="submit" name="verdict" value="didnt_work" class="copy">✗ Deny — steer away</button>
+      </div>
+    </form>
+
+    {% for s in c.shots or [] %}
+    {% if s.source == "AI" and s.prompt %}
+    <div class="shot" style="margin-top:14px">
+      <div class="shot-tags">
+        <span class="mono">{{ "%02d"|format(s.n or loop.index) }}</span>
+        <span class="tag steel">AI · {{ s.tool }}</span>
+        {% if s.location %}<span class="tag faint">{{ s.location|upper }}</span>{% endif %}
+      </div>
+      {% if s.desc %}<p style="margin:0 0 6px">{{ s.desc }}</p>{% endif %}
+      <form method="post" action="/concepts/{{ c.id }}/shots/{{ s.n or loop.index }}/verdict" style="display:grid; gap:6px">
+        <input type="hidden" name="next" value="/studio?tab=grade&mode=shot&concept_id={{ c.id }}">
+        <input type="hidden" name="tool" value="{{ s.tool or 'runway' }}">
+        <textarea name="text" rows="4" style="width:100%">{{ s.prompt }}</textarea>
+        <input type="text" name="note" placeholder="why (optional) — shown next to it in RAG">
+        <div style="display:flex; gap:8px">
+          <button type="submit" name="verdict" value="worked" class="copy">✓ Worked — teach it</button>
+          <button type="submit" name="verdict" value="didnt_work" class="copy">✗ Didn't work — steer away</button>
+        </div>
+      </form>
+      {% if s.director_prompt %}
+      <details style="margin-top:8px">
+        <summary class="mono dim" style="font-size:11px; cursor:pointer">DIRECTOR PROMPT (OPENART)</summary>
+        <p class="mono dim" style="font-size:12px; white-space:pre-wrap">{{ s.director_prompt }}</p>
+      </details>
+      {% endif %}
+    </div>
+    {% endif %}
+    {% endfor %}
+
+    <div style="margin-top:16px; display:flex; gap:8px; flex-wrap:wrap">
+      <form method="post" action="/concepts/{{ c.id }}/grade">
+        <input type="hidden" name="next" value="/grade/draw?mode=shot">
+        <button type="submit" class="primary">Grade taste + perf · billed</button>
+      </form>
+      <form method="post" action="/concepts/{{ c.id }}/discard"
+            onsubmit="return confirm('Discard SHOOT-{{ '%02d'|format(c.id) }}? This deletes it.')">
+        <input type="hidden" name="next" value="/grade/draw?mode=shot">
+        <button type="submit" style="color:var(--red,#d64550)">Discard</button>
+      </form>
+      <a class="btnw" href="/grade/draw?mode=shot">Skip → next</a>
+    </div>
+  </div>
+</div>
+
+{% elif grade.mode == "golden" and grade.golden %}
+{% set g = grade.golden %}
+<div class="panel">
+  <div class="panel-head"><span class="id">GOLDEN QUERY #{{ g.id }}</span><span class="m">LIVE RETRIEVAL — MARK RIGHT / WRONG</span></div>
+  <div class="panel-body">
+    <h2 style="margin-top:0">{{ g.query }}</h2>
+    <p class="mono dim" style="font-size:12px">expected: {{ g.relevant | join(", ") }}</p>
+    {% if grade.probe.error %}
+    <p class="mono" style="color:var(--red)">retrieval unavailable: {{ grade.probe.error }}</p>
+    {% elif not grade.probe.hits %}
+    <p class="dim">Nothing retrieved for this query.</p>
+    {% else %}
+    {% for h in grade.probe.hits %}
+    <div class="prow{{ ' gold' if h.source in g.relevant }}" style="grid-template-columns:26px 1fr auto auto">
+      <span class="rank">{{ loop.index }}</span>
+      <span class="rn" title="{{ h.chunk | truncate(200, True) }}">{{ h.source }} <span class="dim">· {{ h.domain }}</span></span>
+      <span class="rs">{{ "%.2f"|format(h.score) }}</span>
+      <form method="post" action="/grade/golden/{{ g.id }}/mark" style="margin:0">
+        <input type="hidden" name="source" value="{{ h.source }}">
+        {% if h.source in g.relevant %}
+        <input type="hidden" name="action" value="remove">
+        <button type="submit" class="mk" aria-pressed="true" title="Marked relevant — click to remove the label">✓</button>
+        {% else %}
+        <input type="hidden" name="action" value="add">
+        <button type="submit" class="mk" title="Mark this result as relevant">✓</button>
+        {% endif %}
+      </form>
+    </div>
+    {% endfor %}
+    {% endif %}
+    <div style="margin-top:16px; display:flex; gap:8px; flex-wrap:wrap">
+      <a class="btnw" href="/grade/draw?mode=golden">Looks right → next</a>
+      <form method="post" action="/grade/golden/{{ g.id }}/delete"
+            onsubmit="return confirm('Remove this query from the golden set?')">
+        <button type="submit" style="color:var(--red,#d64550)">Remove from golden set</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+{% elif grade.mode == "fresh" and grade.fresh %}
+{% set f = grade.fresh %}
+<div class="panel">
+  <div class="panel-head"><span class="id">FRESH PROMPT · {{ f.brand }}</span><span class="m">THROWAWAY — GRADED, NEVER SAVED AS A CONCEPT</span></div>
+  <div class="panel-body">
+    {% if f.spark %}<p class="mono dim" style="font-size:12px">spark: {{ f.spark }}</p>{% endif %}
+    <form method="post" action="/grade/fresh/verdict" style="display:grid; gap:6px">
+      <textarea name="text" rows="5" style="width:100%">{{ f.title }}{% if f.hook %}
+HOOK: {{ f.hook }}{% endif %}{% if f.logline %}
+{{ f.logline }}{% endif %}</textarea>
+      <input type="text" name="note" placeholder="why (optional) — shown next to it in RAG">
+      <div style="display:flex; gap:8px">
+        <button type="submit" name="verdict" value="worked" class="copy">✓ Approve — teach it</button>
+        <button type="submit" name="verdict" value="didnt_work" class="copy">✗ Deny — steer away</button>
+      </div>
+    </form>
+    <p class="dim" style="margin-top:10px; font-size:12px">Approve/deny feeds the same
+      winners + RAG teaching loop a real concept does; nothing lands in shoot_concepts.</p>
+  </div>
+</div>
+
+{% else %}
+<div class="panel">
+  <div class="panel-head"><span class="id">THE QUEUE</span></div>
+  <div class="panel-body">
+    <p class="dim">Draw something to grade: a random ungraded concept
+      ({{ grade.ungraded_count }} waiting), a random golden query
+      ({{ grade.golden_count }} in the set), or generate a fresh throwaway
+      prompt above. Verdicts teach the RAG shelves; taste grades store on
+      the concept.</p>
+  </div>
+</div>
+{% endif %}

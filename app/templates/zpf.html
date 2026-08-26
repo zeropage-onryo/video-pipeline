@@ -90,6 +90,8 @@
       <h2>Assets</h2>
       <input class="search" id="asearch" placeholder="Search names and descriptions…">
       <span class="m" id="lcount">—</span>
+      <span class="spacer"></span>
+      <button class="go" id="addasset" data-cap="assets.create">+ Add asset</button>
     </div>
     <div class="cats" id="cats"></div>
     <div class="stateline" id="astate" hidden></div>
@@ -115,8 +117,6 @@
         <button class="go" id="scenego">Generate scene</button>
       </div>
     </div>
-
-    <div class="metrics" id="pmetrics"></div>
 
     <div id="sceneboard"></div>
 
@@ -300,6 +300,39 @@
   </div>
 </div>
 <div class="pal" id="pal"><input id="pq" placeholder="Run a command or jump to an asset…" autocomplete="off"><div class="plist" id="plist"></div></div>
+
+<!-- assets: the add-asset modal. Creation posts to the always-on
+     /api/assets/* routes (which also teach the RAG assets shelf), so
+     adding a character/location/prop works on a public deploy too. -->
+<div class="deny" id="addmodal">
+  <div class="dnhead">
+    <h3>Add asset</h3>
+    <button class="x" id="addclose" aria-label="Close">✕</button>
+  </div>
+  <div class="dnbody">
+    <div class="dnlabel">What is it</div>
+    <div class="genrow">
+      <select class="wfselect" id="addcat">
+        <option value="characters">Character</option>
+        <option value="locations">Location · photos get described</option>
+        <option value="props">Prop</option>
+      </select>
+      <input class="search" id="adddetail" placeholder="Role (e.g. the rider)" style="flex:1">
+    </div>
+    <div class="dnlabel">Name</div>
+    <input class="search" id="addname" style="max-width:none" placeholder="Name…">
+    <div class="dnlabel" id="addnoteslabel">Notes</div>
+    <textarea id="addnotes" class="dnta short" placeholder="Look, wardrobe, quirks — becomes a searchable chunk on the RAG assets shelf"></textarea>
+    <div class="dnlabel">Photos</div>
+    <input type="file" id="addphotos" accept="image/*" multiple>
+  </div>
+  <div class="dnfoot">
+    <span class="m" id="addmeta">saves the asset + teaches the RAG assets shelf</span>
+    <span class="spacer"></span>
+    <button class="btn" id="addcancel">Cancel</button>
+    <button class="btn pri" id="addsave">Add</button>
+  </div>
+</div>
 
 <!-- workflows: node editor modal — text for prompt nodes, media picker
      for the Reference Image node, read-only for node outputs -->

@@ -59,6 +59,17 @@ def tmp_preprod_db(tmp_db):
     return tmp_db
 
 
+@pytest.fixture
+def tmp_dev_db(tmp_preprod_db):
+    """tmp_preprod_db plus what the Dev Studio tabs read: the autonomy
+    tables (Stats/Settings) and the eval store (Grade/Dataset)."""
+    from src import autonomy, evalstore, settings
+    autonomy.init(tmp_preprod_db)
+    evalstore.init(tmp_preprod_db)
+    settings.init(tmp_preprod_db)
+    return tmp_preprod_db
+
+
 def test_root_serves_the_landing_page_not_the_workspace(tmp_db):
     """`/` is the marketing front door and the only indexed page; the
     workspace is /studio."""
@@ -68,18 +79,32 @@ def test_root_serves_the_landing_page_not_the_workspace(tmp_db):
     assert "/studio" in response.text             # the landing's call to action
 
 
-def test_studio_returns_200(tmp_preprod_db):
+def test_studio_returns_200(tmp_dev_db):
     response = client.get("/studio")
     assert response.status_code == 200
 
 
-def test_studio_is_the_zp_home(tmp_preprod_db):
-    """/studio is the Zero Page home: the composer posts into the
-    assistant, and the shared rail is present with Home active."""
+def test_studio_is_the_dev_studio_shell(tmp_dev_db):
+    """/studio is the one consolidated dev page now: a tab bar over
+    Stats / Grade / RAG Library / Settings / Dataset, on the legacy
+    rail. Strictly stats + system improvement -- no composer."""
     response = client.get("/studio")
-    assert "What do you want to create?" in response.text
-    assert 'action="/studio/assist"' in response.text
+    assert "Dev Studio" in response.text
+    for tab in ("stats", "grade", "library", "settings", "dataset"):
+        assert f"/studio?tab={tab}" in response.text, tab
     assert 'class="rail"' in response.text
+    assert 'action="/studio/assist"' not in response.text
+
+
+def test_stats_tab_shows_the_five_pipeline_metrics(tmp_dev_db):
+    """The five numbers that used to live on /ui's Concept tab render
+    here now, server-side, next to the retrieval-eval instruments."""
+    text = client.get("/studio?tab=stats").text
+    for label in ("Shortlist rate", "Shoot rate", "Evaluator agreement",
+                  "Gate agreement", "First-try pass"):
+        assert label in text, label
+    assert "evals_dev.js" in text
+    assert "GOLDEN SET" in text
 
 
 def test_dashboard_redirects_to_the_studio(tmp_preprod_db):
@@ -409,59 +434,51 @@ CONCEPT_SHOTS = [
 ]
 
 
-def test_locations_url_redirects_to_the_assets_tab():
-    """The standalone /locations URL is old muscle memory, not the real
-    page anymore -- it has to land on Assets rather than 404 or render
-    stale content."""
-    response = client.get("/locations", follow_redirects=False)
+def test_asset_pages_redirect_to_ui():
+    """Asset building lives on /ui's Assets view now; the old console
+    URLs land there rather than 404ing or rendering stale content."""
+    for page in ("/assets", "/locations", "/characters", "/props"):
+        response = client.get(page, follow_redirects=False)
+        assert response.status_code == 308, page
+        assert response.headers["location"] == "/ui", page
+
+
+# ---------- /concepts (redirect) + the Grade tab ----------
+
+def test_concepts_url_redirects_to_the_grade_tab():
+    response = client.get("/concepts", follow_redirects=False)
     assert response.status_code == 308
-    assert response.headers["location"] == "/assets?tab=locations"
+    assert response.headers["location"] == "/studio?tab=grade"
 
 
-def test_locations_page_empty_state(tmp_preprod_db):
-    response = client.get("/assets?tab=locations")
-    assert response.status_code == 200
-    assert "No locations yet" in response.text
+def test_concepts_redirect_forwards_the_message():
+    """Every legacy `next=/concepts` POST route still lands its message
+    somewhere visible."""
+    response = client.get("/concepts?message=Recorded", follow_redirects=False)
+    assert response.headers["location"] == "/studio?tab=grade&message=Recorded"
 
 
-def test_locations_page_lists_described_spaces(tmp_preprod_db):
-    preprod.add_location("hallway", SAMPLE_SPACE, photo_count=3, path=tmp_preprod_db)
-    response = client.get("/assets?tab=locations")
-    assert "hallway" in response.text
-    assert "narrow hallway" in response.text
-    assert "overhead practical" in response.text
-
-
-# ---------- /concepts ----------
-
-def test_concepts_page_empty_state(tmp_preprod_db):
-    response = client.get("/concepts")
-    assert response.status_code == 200
-    assert "No concepts yet" in response.text
-
-
-def test_concepts_page_lists_concepts_with_shots(tmp_preprod_db):
-    preprod.save_concept(
+def test_grade_tab_shows_a_drawn_concept(tmp_dev_db):
+    cid = preprod.save_concept(
         {"title": "The Waiting", "hook": "a hand on the handle", "shots": CONCEPT_SHOTS},
-        brand="antihero", path=tmp_preprod_db,
+        brand="antihero", path=tmp_dev_db,
     )
-    response = client.get("/concepts")
-    # case-insensitive: the design uppercases titles, which isn't the
-    # thing this test is about
-    assert "the waiting" in response.text.lower()
-    assert "a hand on the handle" in response.text
-    assert "he steps into frame" in response.text
+    text = client.get(f"/studio?tab=grade&mode=shot&concept_id={cid}").text
+    assert "The Waiting" in text
+    assert "a hand on the handle" in text
+    assert "TEACH THIS IDEA" in text
+    assert "Grade taste + perf" in text
 
 
-def test_concepts_page_shows_shoot_rate(tmp_preprod_db):
+def test_stats_tab_shows_shoot_rate(tmp_dev_db):
     ids = [
         preprod.save_concept({"title": f"C{n}", "shots": CONCEPT_SHOTS},
-                             brand="antihero", path=tmp_preprod_db)
+                             brand="antihero", path=tmp_dev_db)
         for n in range(4)
     ]
-    preprod.mark_shot(ids[0], path=tmp_preprod_db)
-    response = client.get("/concepts")
-    assert "Shot 1/4" in response.text
+    preprod.mark_shot(ids[0], path=tmp_dev_db)
+    response = client.get("/studio?tab=stats")
+    assert "Shoot rate · 1/4" in response.text
 
 
 def test_post_mark_concept_shot_toggles_and_redirects(tmp_preprod_db):
@@ -548,27 +565,13 @@ def test_post_shotlist_reports_failure_without_breaking(tmp_preprod_db, monkeypa
     assert response.status_code in (302, 303, 307)
 
 
-def test_concepts_page_shows_shortlist_rate(tmp_preprod_db):
+def test_stats_tab_shows_shortlist_rate(tmp_dev_db):
     ids = preprod.save_concept_ideas(
-        [{"title": f"Idea {n}"} for n in range(4)], brand="antihero", path=tmp_preprod_db,
+        [{"title": f"Idea {n}"} for n in range(4)], brand="antihero", path=tmp_dev_db,
     )
-    preprod.update_concept_shots(ids[0], {"shots": CONCEPT_SHOTS}, path=tmp_preprod_db)
-    response = client.get("/concepts")
-    assert "Planned 1/4" in response.text
-
-
-def test_concepts_page_offers_shotlist_button_for_an_idea(tmp_preprod_db):
-    preprod.save_concept({"title": "Void Signal"}, brand="antihero", path=tmp_preprod_db)
-    response = client.get("/concepts")
-    assert "Plan the shoot" in response.text
-
-
-def test_concepts_page_no_shotlist_button_once_planned(tmp_preprod_db):
-    concept_id = preprod.save_concept({"title": "Void Signal"}, brand="antihero",
-                                      path=tmp_preprod_db)
-    preprod.update_concept_shots(concept_id, {"shots": CONCEPT_SHOTS}, path=tmp_preprod_db)
-    response = client.get("/concepts")
-    assert "Plan the shoot" not in response.text
+    preprod.update_concept_shots(ids[0], {"shots": CONCEPT_SHOTS}, path=tmp_dev_db)
+    response = client.get("/studio?tab=stats")
+    assert "Shortlist rate · 1/4" in response.text
 
 
 # ---------- navigation ----------
@@ -581,12 +584,12 @@ def test_concepts_page_no_shotlist_button_once_planned(tmp_preprod_db):
 # `/` is deliberately not in here: it's the marketing landing, served
 # outside the app shell, so it carries no rail.
 
-RAILED_PAGES = ["/studio", "/concepts", "/assets", "/analytics", "/library"]
-RAIL_DESTINATIONS = ["/studio", "/concepts", "/assets", "/library", "/analytics"]
+RAILED_PAGES = ["/studio", "/analytics", "/winners"]
+RAIL_DESTINATIONS = ["/studio", "/ui", "/analytics", "/winners"]
 
 
 @pytest.mark.parametrize("page", RAILED_PAGES)
-def test_every_railed_page_carries_the_whole_rail(page, tmp_preprod_db):
+def test_every_railed_page_carries_the_whole_rail(page, tmp_dev_db):
     response = client.get(page)
     assert response.status_code == 200
     assert 'class="rail"' in response.text
@@ -594,67 +597,36 @@ def test_every_railed_page_carries_the_whole_rail(page, tmp_preprod_db):
         assert f'href="{target}"' in response.text, f"{page} has no link to {target}"
 
 
-def test_pages_off_the_rail_are_still_reachable(tmp_preprod_db):
-    """/videos/new and /holds aren't rail items; they must be linked from
-    somewhere on the railed surface or they become dead URLs."""
+def test_pages_off_the_rail_are_still_reachable(tmp_dev_db):
+    """/videos/new isn't a rail item; it must be linked from somewhere
+    on the railed surface or it becomes a dead URL."""
     assert 'href="/videos/new"' in client.get("/analytics").text
-    assert 'href="/holds"' in client.get("/studio").text        # the pills
 
 
-# ---------- /holds: the shadow-mode grading queue ----------
+# ---------- /holds: retired page; the controls live elsewhere ----------
+# Grading (approve/reject/post) is /ui's Pipeline view via /api/holds;
+# the channel/kill/note controls are the Dev Studio's Settings tab.
 
 @pytest.fixture
 def tmp_autonomy_db(tmp_preprod_db):
-    from src import autonomy
+    from src import autonomy, settings
     autonomy.init(tmp_preprod_db)
+    settings.init(tmp_preprod_db)
     return tmp_preprod_db
 
 
-def test_holds_page_empty_state(tmp_autonomy_db):
-    response = client.get("/holds")
-    assert response.status_code == 200
-    assert "Queue is clear" in response.text
+def test_holds_page_redirects_to_ui():
+    response = client.get("/holds", follow_redirects=False)
+    assert response.status_code == 308
+    assert response.headers["location"] == "/ui"
 
 
-def test_holds_page_shows_a_held_run_with_its_concept(tmp_autonomy_db):
-    from src import autonomy
-    concept_id = preprod.save_concept(
-        {"title": "Terminal Ritual", "hook": "an eye, unblinking"},
-        brand="antihero", path=tmp_autonomy_db,
-    )
-    autonomy.to_hold("zeropage", "shadow — grading only", concept_id=concept_id,
-                     payload={"prompts": [{"tool": "KLING", "prompt": "the handle turns"}]},
-                     path=tmp_autonomy_db)
-
-    # /holds is brand-scoped now (BACKLOG #7): view as the hold's brand.
-    client.cookies.set("brand", "zeropage")
-    response = client.get("/holds")
-    client.cookies.clear()
-    assert "Terminal Ritual" in response.text
-    assert "shadow — grading only" in response.text
-    assert "the handle turns" in response.text
-    assert "Would have posted it" in response.text
-
-
-def test_resolving_a_hold_feeds_the_agreement_number(tmp_autonomy_db):
-    from src import autonomy
-    hold_id = autonomy.to_hold("zeropage", "shadow", path=tmp_autonomy_db)
-
-    response = client.post(f"/holds/{hold_id}/resolve", data={"status": "approved"},
-                           follow_redirects=False)
-    assert response.status_code == 303
-
-    assert autonomy.list_hold(status="held", path=tmp_autonomy_db) == []
-    assert autonomy.evaluator_agreement(path=tmp_autonomy_db)["agreement"] == 1.0
-    # and the page shows the number
-    assert "100%" in client.get("/holds").text
-
-
-def test_resolving_with_a_bad_status_is_a_400(tmp_autonomy_db):
-    from src import autonomy
-    hold_id = autonomy.to_hold("zeropage", "shadow", path=tmp_autonomy_db)
-    response = client.post(f"/holds/{hold_id}/resolve", data={"status": "maybe"})
-    assert response.status_code == 400
+def test_settings_tab_carries_the_autonomy_controls(tmp_autonomy_db):
+    text = client.get("/studio?tab=settings").text
+    assert 'action="/kill"' in text
+    assert 'action="/holds/note"' in text
+    assert 'action="/channels/zeropage/autonomy"' in text
+    assert 'action="/channels/antihero/autonomy"' in text
 
 
 def test_promoting_a_channel_from_the_page(tmp_autonomy_db):
@@ -673,30 +645,13 @@ def test_promoting_a_channel_from_the_page(tmp_autonomy_db):
 def test_kill_toggle_round_trip(tmp_autonomy_db, monkeypatch):
     from src import autonomy
     monkeypatch.delenv("ZEROPAGE_KILL", raising=False)
-    client.post("/kill", follow_redirects=False)
+    response = client.post("/kill", follow_redirects=False)
+    assert response.headers["location"].startswith("/studio?tab=settings")
     assert autonomy.killed(path=tmp_autonomy_db) is True
-    assert "Kill switch is ON" in client.get("/holds").text
+    assert "Kill switch is ON" in client.get("/studio?tab=settings").text
 
     client.post("/kill", follow_redirects=False)
     assert autonomy.killed(path=tmp_autonomy_db) is False
-
-
-def test_grading_a_hold_writes_the_prompt_verdict_too(tmp_autonomy_db):
-    """One tap grades both trust numbers: the run's hold row AND the
-    credit gate's prompt_scores rows for that run."""
-    from src import autonomy
-    autonomy.log_prompt_scores("runX", [
-        {"prompt": "p", "score": 9, "pass": True, "reason": "", "dims": {}}],
-        path=tmp_autonomy_db)
-    hold_id = autonomy.to_hold("zeropage", "shadow", payload={"run_id": "runX"},
-                               path=tmp_autonomy_db)
-
-    client.post(f"/holds/{hold_id}/resolve", data={"status": "rejected"},
-                follow_redirects=False)
-
-    gate = autonomy.prompt_gate_agreement(path=tmp_autonomy_db)
-    assert gate["graded"] == 1
-    assert gate["passed_but_rejected"] == 1   # the expensive-error counter moved
 
 
 def test_note_form_writes_a_pending_correction(tmp_autonomy_db):
@@ -718,92 +673,14 @@ def test_video_detail_still_has_its_nav(tmp_preprod_db):
 
 
 # ---------- photo upload ----------
-# The pipeline gap: without this, photos only get in by dropping files
-# into locations/<name>/ and running the CLI.
+# Creation moved to the always-on /api/assets/* routes (tested in
+# test_api.py); what stays here is the photo-serving surface.
 
 TINY_PNG = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06"
     b"\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05"
     b"\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
 )
-
-
-def test_post_location_upload_saves_photos_and_describes(tmp_preprod_db, tmp_path, monkeypatch):
-    monkeypatch.setattr(app_main, "LOCATIONS_DIR", tmp_path / "locations")
-    monkeypatch.setattr(
-        app_main.locations, "describe_location",
-        lambda client, name, photos: {"space": f"{name} described from {len(photos)}"},
-    )
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-
-    response = client.post(
-        "/locations/upload",
-        data={"name": "garage"},
-        files=[("photos", ("a.png", TINY_PNG, "image/png")),
-               ("photos", ("b.png", TINY_PNG, "image/png"))],
-        follow_redirects=False,
-    )
-
-    assert response.status_code in (302, 303, 307)
-    saved = preprod.get_location_by_name("garage", path=tmp_preprod_db)
-    assert saved is not None
-    assert saved["photo_count"] == 2
-    assert "described from 2" in saved["description"]["space"]
-    assert (tmp_path / "locations" / "garage" / "a.png").exists()
-
-
-def test_post_location_upload_requires_a_name(tmp_preprod_db, tmp_path, monkeypatch):
-    monkeypatch.setattr(app_main, "LOCATIONS_DIR", tmp_path / "locations")
-    response = client.post(
-        "/locations/upload",
-        data={"name": "   "},
-        files=[("photos", ("a.png", TINY_PNG, "image/png"))],
-    )
-    assert response.status_code == 400
-
-
-def test_post_location_upload_requires_a_photo(tmp_preprod_db, tmp_path, monkeypatch):
-    monkeypatch.setattr(app_main, "LOCATIONS_DIR", tmp_path / "locations")
-    response = client.post("/locations/upload", data={"name": "garage"})
-    assert response.status_code == 400
-
-
-def test_post_location_upload_reports_failure_without_breaking(tmp_preprod_db, tmp_path, monkeypatch):
-    monkeypatch.setattr(app_main, "LOCATIONS_DIR", tmp_path / "locations")
-
-    def boom(client, name, photos):
-        raise Exception("vision unavailable")
-
-    monkeypatch.setattr(app_main.locations, "describe_location", boom)
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-
-    response = client.post(
-        "/locations/upload",
-        data={"name": "garage"},
-        files=[("photos", ("a.png", TINY_PNG, "image/png"))],
-        follow_redirects=False,
-    )
-    assert response.status_code in (302, 303, 307)
-    assert preprod.get_location_by_name("garage", path=tmp_preprod_db) is None
-
-
-def test_post_location_upload_sanitises_the_space_name(tmp_preprod_db, tmp_path, monkeypatch):
-    """A name becomes a directory, so it can't escape the locations dir."""
-    monkeypatch.setattr(app_main, "LOCATIONS_DIR", tmp_path / "locations")
-    monkeypatch.setattr(
-        app_main.locations, "describe_location",
-        lambda client, name, photos: {"space": "x"},
-    )
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-
-    client.post(
-        "/locations/upload",
-        data={"name": "../../etc/evil"},
-        files=[("photos", ("a.png", TINY_PNG, "image/png"))],
-        follow_redirects=False,
-    )
-    assert not (tmp_path / "etc").exists()
-    assert not (tmp_path.parent / "etc").exists()
 
 
 # ---------- serving location photos ----------
@@ -834,17 +711,6 @@ def test_location_photo_refuses_to_escape_the_locations_dir(tmp_preprod_db, tmp_
         assert client.get(attempt).status_code in (400, 404)
 
 
-def test_location_photos_listed_on_the_page(tmp_preprod_db, tmp_path, monkeypatch):
-    monkeypatch.setattr(app_main, "LOCATIONS_DIR", tmp_path / "locations")
-    space = tmp_path / "locations" / "garage"
-    space.mkdir(parents=True)
-    (space / "a.png").write_bytes(TINY_PNG)
-    (space / "b.png").write_bytes(TINY_PNG)
-    preprod.add_location("garage", SAMPLE_SPACE, photo_count=2, path=tmp_preprod_db)
-
-    response = client.get("/assets?tab=locations")
-    assert "/locations/garage/photo/a.png" in response.text
-    assert "/locations/garage/photo/b.png" in response.text
 
 
 # ---------- generate: full concept vs ideas ----------
@@ -913,16 +779,6 @@ def test_generate_with_nothing_picked_keeps_the_old_behavior(tmp_preprod_db, mon
     assert seen["cast"] is None
 
 
-def test_concepts_page_shows_the_pickers_when_spaces_exist(tmp_preprod_db):
-    # The generate form's grounding controls (the inline character/prop
-    # checkboxes were replaced 2026-08: cast now rides the References &
-    # media picker, and the per-space checkboxes are the location lock).
-    preprod.add_location("hallway", SAMPLE_SPACE, path=tmp_preprod_db)
-
-    response = client.get("/concepts")
-    assert 'name="locations"' in response.text
-    assert "hallway" in response.text
-    assert 'id="ref-pick-btn"' in response.text
 
 
 def test_post_generate_ideas_when_asked(tmp_preprod_db, monkeypatch):
@@ -988,43 +844,14 @@ def test_thumbnail_falls_back_to_the_original_if_it_cannot_be_made(tmp_preprod_d
     assert client.get("/locations/garage/photo/broken.jpg?thumb=1").status_code == 200
 
 
-def test_page_asks_for_thumbnails(tmp_preprod_db, tmp_path, monkeypatch):
-    monkeypatch.setattr(app_main, "LOCATIONS_DIR", tmp_path / "locations")
-    space = tmp_path / "locations" / "garage"
-    space.mkdir(parents=True)
-    (space / "a.jpg").write_bytes(_real_jpeg())
-    preprod.add_location("garage", SAMPLE_SPACE, photo_count=1, path=tmp_preprod_db)
-
-    assert "?thumb=1" in client.get("/assets?tab=locations").text
 
 
 # ---------- one screen: photos, settings, generate, results ----------
 
-def test_locations_page_has_the_upload_form(tmp_preprod_db):
-    """The upload lives in the Locations tab's add dialog on /assets; the
-    concepts screen is generation-only now."""
-    response = client.get("/assets?tab=locations")
-    assert 'action="/locations/upload"' in response.text
-    assert 'enctype="multipart/form-data"' in response.text
 
 
-def test_locations_page_shows_space_thumbnails(tmp_preprod_db, tmp_path, monkeypatch):
-    monkeypatch.setattr(app_main, "LOCATIONS_DIR", tmp_path / "locations")
-    space = tmp_path / "locations" / "garage"
-    space.mkdir(parents=True)
-    (space / "a.jpg").write_bytes(_real_jpeg())
-    preprod.add_location("garage", SAMPLE_SPACE, photo_count=1, path=tmp_preprod_db)
-
-    response = client.get("/assets?tab=locations")
-    assert "/locations/garage/photo/a.jpg?thumb=1" in response.text
 
 
-def test_concepts_page_has_no_pov_toggle(tmp_preprod_db):
-    """The POV checkbox is gone from the page: generation defaults to
-    POV off, and nothing on /concepts should submit use_pov."""
-    preprod.add_location("garage", SAMPLE_SPACE, path=tmp_preprod_db)
-    response = client.get("/concepts")
-    assert 'name="use_pov"' not in response.text
 
 
 def test_generate_honours_pov_off(tmp_preprod_db, monkeypatch):
@@ -1046,25 +873,16 @@ def test_generate_honours_pov_off(tmp_preprod_db, monkeypatch):
     assert seen["use_pov"] is True
 
 
-def test_concept_warnings_are_visible_on_the_page(tmp_preprod_db):
-    """Stored isn't enough -- you have to be able to see it."""
-    preprod.save_concept(
-        {"title": "Void Signal", "shots": CONCEPT_SHOTS}, brand="antihero",
-        warnings=["shot 1: location 'rooftop helipad' is not a described space"],
-        path=tmp_preprod_db,
-    )
-    response = client.get("/concepts")
-    assert "rooftop helipad" in response.text
 
 
-def test_studio_renders_with_videos_logged_but_unmeasured(tmp_preprod_db):
+def test_studio_renders_with_videos_logged_but_unmeasured(tmp_dev_db):
     """The old empty-state distinction lived in the strip the ZP home
     no longer renders; what must survive is that the page renders with
     data in every state and the video is correctly absent at 7 days."""
-    vid = db.add_video("Night Run", "youtube", "2025-09-29", path=tmp_preprod_db)
-    db.record_metrics(vid, views=82, captured_at="2026-07-29", path=tmp_preprod_db)
+    vid = db.add_video("Night Run", "youtube", "2025-09-29", path=tmp_dev_db)
+    db.record_metrics(vid, views=82, captured_at="2026-07-29", path=tmp_dev_db)
 
-    response = client.get("/studio?posted_within=all&at_days=7")
+    response = client.get("/studio")
     assert response.status_code == 200
     assert app_main.performance_rows(posted_within="all")["rows"] == []
 
@@ -1132,19 +950,33 @@ class LibraryFakeConn:
         self.closed = True
 
 
-def test_library_page_lists_sources(monkeypatch):
+def test_library_url_redirects_into_the_tab():
+    response = client.get("/library?q=light&domain=cinematography", follow_redirects=False)
+    assert response.status_code == 308
+    assert response.headers["location"] == "/studio?tab=library&q=light&domain=cinematography"
+
+
+def test_library_tab_lists_sources(monkeypatch):
     conn = LibraryFakeConn(rows=[("brief.txt", "personal_brand", None, 1, "2026-07-31")])
     monkeypatch.setattr(app_main.rag, "connect", lambda db_url=None: conn)
-    response = client.get("/library")
+    response = client.get("/studio?tab=library")
     assert response.status_code == 200
     assert "brief.txt" in response.text
     assert "personal_brand" in response.text
     assert conn.closed        # no route may leak a connection
 
 
-def test_library_page_degrades_when_store_is_down():
+def test_library_tab_always_offers_the_assets_shelf(monkeypatch):
+    """Entity uploads ingest under "assets"; the search filter offers
+    the shelf even before the first asset lands on it."""
+    conn = LibraryFakeConn(rows=[])
+    monkeypatch.setattr(app_main.rag, "connect", lambda db_url=None: conn)
+    assert 'value="assets"' in client.get("/studio?tab=library").text
+
+
+def test_library_tab_degrades_when_store_is_down():
     # autouse fixture already makes connect() raise
-    response = client.get("/library")
+    response = client.get("/studio?tab=library")
     assert response.status_code == 200
     assert "unavailable" in response.text.lower()
 
@@ -1162,7 +994,7 @@ def test_library_search_renders_scored_results(monkeypatch):
                         [{"source": "notes.md", "chunk": "one image, one turn",
                           "domain": "cinematography", "project": None,
                           "source_ref": None, "score": 0.8}])
-    response = client.get("/library?q=structure")
+    response = client.get("/studio?tab=library&q=structure")
     assert response.status_code == 200
     assert "one image, one turn" in response.text
     assert "0.8" in response.text
@@ -1284,48 +1116,8 @@ def test_references_pick_upload_requires_a_file():
 
 # ---------- picked_references threads through to reference_block ----------
 
-def test_studio_assist_threads_picked_references_into_reference_block(tmp_preprod_db, monkeypatch):
-    preprod.add_location("garage", {"space": "garage"}, path=tmp_preprod_db)
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    monkeypatch.setattr(app_main.genai, "Client", lambda **k: object())
-
-    seen = {}
-
-    def fake_reference_block(**kw):
-        seen.update(kw)
-        return ""
-
-    monkeypatch.setattr(app_main.shootgen, "reference_block", fake_reference_block)
-    monkeypatch.setattr(app_main.shootgen, "generate_concept_ideas",
-                        lambda **kw: {"ideas": [{"title": "A"}]})
-
-    client.post("/studio/assist", data={
-        "text": "night ritual", "intent": "ideas",
-        "picked_references": ["brief.txt", "settings.txt"],
-    }, follow_redirects=False)
-
-    assert seen["picked_sources"] == ["brief.txt", "settings.txt"]
 
 
-def test_studio_assist_with_nothing_picked_passes_none(tmp_preprod_db, monkeypatch):
-    preprod.add_location("garage", {"space": "garage"}, path=tmp_preprod_db)
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    monkeypatch.setattr(app_main.genai, "Client", lambda **k: object())
-
-    seen = {}
-
-    def fake_reference_block(**kw):
-        seen.update(kw)
-        return ""
-
-    monkeypatch.setattr(app_main.shootgen, "reference_block", fake_reference_block)
-    monkeypatch.setattr(app_main.shootgen, "generate_concept_ideas",
-                        lambda **kw: {"ideas": [{"title": "A"}]})
-
-    client.post("/studio/assist", data={"text": "night ritual", "intent": "ideas"},
-                follow_redirects=False)
-
-    assert seen["picked_sources"] is None
 
 
 def test_concepts_generate_threads_picked_references_into_reference_block(tmp_preprod_db, monkeypatch):
@@ -1453,10 +1245,10 @@ def test_landing_has_a_canonical_and_a_description():
     assert 'name="description"' in response.text
 
 
-def test_app_pages_are_noindex(tmp_preprod_db):
+def test_app_pages_are_noindex(tmp_dev_db):
     """The workspace is the product, not content. Indexing it splits the
     ranking signal off the one page that should carry it."""
-    for page in ("/studio", "/concepts", "/analytics", "/library"):
+    for page in ("/studio", "/analytics", "/winners"):
         assert "noindex" in client.get(page).text, page
 
 
@@ -1469,160 +1261,24 @@ def test_schema_uses_the_configured_site_url(monkeypatch):
 
 # ---------- the assistant ----------
 
-def test_route_intent_prefers_an_explicit_chip():
-    assert app_main.route_intent("cut it now", explicit="ideas") == "ideas"
 
 
-def test_route_intent_reads_free_text():
-    assert app_main.route_intent("plan that one") == "plan"
-    assert app_main.route_intent("storyboard this") == "plan"
-    assert app_main.route_intent("add a room") == "room"
-    assert app_main.route_intent("give me a full concept for the garage") == "concept"
 
 
-def test_route_intent_falls_back_to_one_concept():
-    """An unparseable ask must not spend a generation on the wrong
-    stage; concept is what "describe an idea, hit generate" means --
-    one fully-formed result for exactly what was typed, not a batch to
-    sift through."""
-    assert app_main.route_intent("") == "concept"
-    assert app_main.route_intent("something about a wrench") == "concept"
 
 
-def test_assistant_generates_one_concept_from_typed_text(tmp_preprod_db, monkeypatch):
-    preprod.add_location("garage", {"space": "garage"}, path=tmp_preprod_db)
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    monkeypatch.setattr(app_main.genai, "Client", lambda **k: object())
-
-    seen = {}
-
-    def fake_concept(**kwargs):
-        seen.update(kwargs)
-        return {"concept_id": 1, "concept": {"title": "Gearing Up"}, "warnings": []}
-
-    monkeypatch.setattr(app_main.shootgen, "generate_concept", fake_concept)
-    response = client.post("/studio/assist", data={"text": "gearing up ritual"},
-                           follow_redirects=False)
-    assert response.status_code == 303
-    assert seen["spark"] == "gearing up ritual"
-    assert 'Generated "Gearing Up"' in unquote(response.headers["location"])
 
 
-def test_assistant_deals_ideas_when_explicitly_asked(tmp_preprod_db, monkeypatch):
-    """The batch stage is still reachable -- either the chip's explicit
-    intent or plural phrasing ("ideas", "options", "slate") -- it's just
-    no longer where an unmarked ask lands by default."""
-    preprod.add_location("garage", {"space": "garage"}, path=tmp_preprod_db)
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    monkeypatch.setattr(app_main.genai, "Client", lambda **k: object())
-
-    seen = {}
-
-    def fake_ideas(**kwargs):
-        seen.update(kwargs)
-        return {"ideas": [{"title": "A"}, {"title": "B"}]}
-
-    monkeypatch.setattr(app_main.shootgen, "generate_concept_ideas", fake_ideas)
-    response = client.post(
-        "/studio/assist",
-        data={"text": "gearing up ritual", "intent": "ideas"},
-        follow_redirects=False,
-    )
-    assert response.status_code == 303
-    assert seen["spark"] == "gearing up ritual"
-    assert "Dealt 2 ideas" in unquote(response.headers["location"])
 
 
-def test_assistant_folds_ingredients_and_platforms_into_the_spark(tmp_preprod_db, monkeypatch):
-    """Tray chips genuinely steer the generation: their labels ride into
-    the spark, which reaches both the RAG query and the prompt."""
-    preprod.add_location("garage", {"space": "garage"}, path=tmp_preprod_db)
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    monkeypatch.setattr(app_main.genai, "Client", lambda **k: object())
-
-    seen = {}
-
-    def fake_ideas(**kwargs):
-        seen.update(kwargs)
-        return {"ideas": [{"title": "A"}]}
-
-    monkeypatch.setattr(app_main.shootgen, "generate_concept_ideas", fake_ideas)
-    client.post("/studio/assist", data={
-        "text": "night ritual",
-        "intent": "ideas",
-        "ingredients": "room: garage, clip: A037_C004.mov",
-        "platforms": "VEO, WAN",
-    }, follow_redirects=False)
-    assert "night ritual" in seen["spark"]
-    assert "Ground on: room: garage, clip: A037_C004.mov" in seen["spark"]
-    assert "Preferred AI platforms: VEO, WAN" in seen["spark"]
 
 
-def test_assistant_ingredients_alone_still_make_a_spark(tmp_preprod_db, monkeypatch):
-    """Chips selected with an empty text box are still a real spark --
-    not None with the grounding silently dropped."""
-    preprod.add_location("garage", {"space": "garage"}, path=tmp_preprod_db)
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    monkeypatch.setattr(app_main.genai, "Client", lambda **k: object())
-
-    seen = {}
-
-    def fake_ideas(**kwargs):
-        seen.update(kwargs)
-        return {"ideas": [{"title": "A"}]}
-
-    monkeypatch.setattr(app_main.shootgen, "generate_concept_ideas", fake_ideas)
-    client.post("/studio/assist", data={"intent": "ideas", "ingredients": "room: garage"},
-                follow_redirects=False)
-    assert seen["spark"] == "Ground on: room: garage"
 
 
-def test_assistant_plans_the_most_recent_unplanned_idea(tmp_preprod_db, monkeypatch):
-    preprod.add_location("garage", {"space": "garage"}, path=tmp_preprod_db)
-    preprod.save_concept_ideas(
-        [{"title": "Older", "hook": "h", "logline": "l"},
-         {"title": "Newer", "hook": "h", "logline": "l"}],
-        brand="antihero", path=tmp_preprod_db,
-    )
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    monkeypatch.setattr(app_main.genai, "Client", lambda **k: object())
-
-    planned = {}
-
-    def fake_shot_list(concept_id, **kwargs):
-        planned["id"] = concept_id
-        return {"warnings": []}
-
-    monkeypatch.setattr(app_main.shootgen, "generate_shot_list", fake_shot_list)
-    response = client.post("/studio/assist", data={"intent": "plan"},
-                           follow_redirects=False)
-    assert response.status_code == 303
-    assert "Planned" in unquote(response.headers["location"])
-    assert planned["id"] is not None
 
 
-def test_assistant_reports_a_failed_generation_without_breaking(tmp_preprod_db, monkeypatch):
-    preprod.add_location("garage", {"space": "garage"}, path=tmp_preprod_db)
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    monkeypatch.setattr(app_main.genai, "Client", lambda **k: object())
-
-    def boom(**kwargs):
-        raise RuntimeError("model down")
-
-    monkeypatch.setattr(app_main.shootgen, "generate_concept", boom)
-    response = client.post("/studio/assist", data={"text": "anything"},
-                           follow_redirects=False)
-    assert response.status_code == 303
-    assert "Could not generate" in unquote(response.headers["location"])
-    assert client.get("/studio").status_code == 200
 
 
-def test_assistant_without_an_api_key_says_so(tmp_preprod_db, monkeypatch):
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
-    response = client.post("/studio/assist", data={"text": "ideas please"},
-                           follow_redirects=False)
-    assert "GEMINI_API_KEY" in response.headers["location"]
 
 
 # ---------- inline actions land back on the canvas ----------
@@ -1685,36 +1341,8 @@ def test_metrics_page_offers_refresh_for_instagram(tmp_db):
     assert 'form="refresh-' in response.text
 
 
-def test_studio_workflow_library_shows_real_rows(tmp_preprod_db):
-    """The home's Workflow tabs read the DB, not the design mockup: a
-    row added to any of the three tables appears by name."""
-    from src import entities
-    entities.init(tmp_preprod_db)
-    preprod.add_location("garage", {"space": "a low-ceilinged garage"},
-                         photo_count=2, path=tmp_preprod_db)
-    entities.add_character("Mike — on camera", role="protagonist",
-                           path=tmp_preprod_db)
-    entities.add_prop("Ducati Panigale V2", category="vehicle",
-                      path=tmp_preprod_db)
-
-    response = client.get("/studio")
-    assert "garage" in response.text
-    assert "Mike — on camera" in response.text
-    assert "Ducati Panigale V2" in response.text
-    assert "DESCRIBED" in response.text          # the described-room badge
-    assert "The Garage" not in response.text     # mockup content is gone
 
 
-def test_studio_home_renders_empty_without_mock_content(tmp_preprod_db):
-    """A fresh clone shows the add-cards and placeholder frames, not the
-    design mockup's invented rooms and props."""
-    from src import entities
-    entities.init(tmp_preprod_db)
-    response = client.get("/studio")
-    assert response.status_code == 200
-    assert "＋ New character" in response.text
-    assert "Juno Bar" not in response.text
-    assert "Blackmagic 6K" not in response.text
 
 
 # ---------- reference captures + Director-ready prompts ----------
@@ -1761,10 +1389,233 @@ def test_attach_reference_to_a_missing_shot_redirects_with_the_reason(tmp_prepro
     assert "no%20shot" in response.headers["location"].replace("+", "%20")
 
 
-def test_concepts_page_renders_the_director_version_of_each_shot(tmp_preprod_db):
-    """Every planned shot gets a copyable natural-language rendering for
-    OpenArt Director next to its per-tool prompt."""
-    _planned_concept(tmp_preprod_db)
-    response = client.get("/concepts")
-    assert "Copy for Director" in response.text
-    assert "Story context: The Waiting — He waits." in response.text
+
+
+# ---------- the Dev Studio: settings tab ----------
+
+def test_settings_tab_lists_the_three_tunables(tmp_dev_db):
+    text = client.get("/studio?tab=settings").text
+    for key in ("prompt_gate_min", "grade_threshold", "eval_k"):
+        assert f'name="{key}"' in text, key
+
+
+def test_settings_post_saves_and_takes_effect(tmp_dev_db):
+    from src import settings
+    response = client.post("/studio/settings",
+                           data={"prompt_gate_min": "9", "grade_threshold": "0.7",
+                                 "eval_k": "8"},
+                           follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/studio?tab=settings")
+    assert settings.get("prompt_gate_min", path=tmp_dev_db) == 9
+    assert settings.get("grade_threshold", path=tmp_dev_db) == 0.7
+    assert settings.get("eval_k", path=tmp_dev_db) == 8
+
+
+def test_settings_post_rejects_out_of_range_without_saving(tmp_dev_db):
+    from src import settings
+    response = client.post("/studio/settings", data={"prompt_gate_min": "42"},
+                           follow_redirects=False)
+    assert "between" in unquote(response.headers["location"])
+    assert settings.get("prompt_gate_min", path=tmp_dev_db) == 7
+
+
+# ---------- the Dev Studio: the Grade queue ----------
+
+def _drain_golden(path):
+    from src import evalstore
+    for g in evalstore.list_golden(path=path):
+        evalstore.delete_golden(g["id"], path=path)
+
+
+def test_grade_draw_shot_picks_only_ungraded_concepts(tmp_dev_db):
+    graded = preprod.save_concept({"title": "Graded"}, brand="antihero",
+                                  path=tmp_dev_db)
+    preprod.save_judge_score(graded, {"overall": 8, "taste_fit": 8,
+                                      "performance": 8, "reasons": []},
+                             path=tmp_dev_db)
+    ungraded = preprod.save_concept({"title": "Fresh meat"}, brand="antihero",
+                                    path=tmp_dev_db)
+    response = client.get("/grade/draw?mode=shot", follow_redirects=False)
+    assert response.status_code == 303
+    assert f"concept_id={ungraded}" in response.headers["location"]
+    assert "mode=shot" in response.headers["location"]
+
+
+def test_grade_draw_golden_picks_a_golden_query(tmp_dev_db):
+    from src import evalstore
+    _drain_golden(tmp_dev_db)
+    gid = evalstore.add_golden("night lighting", ["notes.md"], path=tmp_dev_db)
+    response = client.get("/grade/draw?mode=golden", follow_redirects=False)
+    assert f"golden_id={gid}" in response.headers["location"]
+
+
+def test_grade_draw_with_nothing_to_grade_says_so(tmp_dev_db):
+    _drain_golden(tmp_dev_db)
+    response = client.get("/grade/draw?mode=any", follow_redirects=False)
+    location = unquote(response.headers["location"])
+    assert location.startswith("/studio?tab=grade")
+    assert "Nothing to grade" in location
+
+
+def test_grade_tab_surfaces_concept_warnings(tmp_dev_db):
+    cid = preprod.save_concept(
+        {"title": "W", "shots": CONCEPT_SHOTS}, brand="antihero",
+        warnings=["shot 1: location 'rooftop helipad' is not a described space"],
+        path=tmp_dev_db)
+    assert "rooftop helipad" in client.get(
+        f"/studio?tab=grade&mode=shot&concept_id={cid}").text
+
+
+def test_grade_fresh_generates_without_saving_a_concept(tmp_dev_db, monkeypatch):
+    """The throwaway mode: one idea via the same generator, shown for
+    grading, and NOT persisted as a shoot_concepts row."""
+    import src.gemini_utils as gemini_utils
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(app_main.genai, "Client", lambda **k: object())
+    monkeypatch.setattr(
+        gemini_utils, "generate_with_retry",
+        lambda client_, model, prompt: '{"ideas": [{"title": "Throwaway", "hook": "H", "logline": "L"}]}')
+
+    response = client.post("/grade/fresh", data={"spark": "night ritual"},
+                           follow_redirects=False)
+    assert response.status_code == 303
+    location = unquote(response.headers["location"])
+    assert "mode=fresh" in location and "Throwaway" in location
+    assert preprod.list_concepts(path=tmp_dev_db) == []   # nothing saved
+
+    # the redirect renders the item for grading
+    follow = client.get(response.headers["location"]).text
+    assert "Throwaway" in follow
+    assert "never saved" in follow.lower()
+
+
+def test_grade_fresh_without_a_key_says_so(tmp_dev_db, monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    response = client.post("/grade/fresh", follow_redirects=False)
+    assert "GEMINI_API_KEY" in response.headers["location"]
+
+
+def test_grade_fresh_verdict_teaches_winners(tmp_dev_db):
+    from src import winners
+    winners.init(tmp_dev_db)
+    response = client.post("/grade/fresh/verdict",
+                           data={"text": "Throwaway idea", "verdict": "worked"},
+                           follow_redirects=False)
+    assert response.status_code == 303
+    [row] = winners.list_all(path=tmp_dev_db)
+    assert row["video_ref"] == "fresh-grade"
+    assert row["prompt"] == "Throwaway idea"
+    assert preprod.list_concepts(path=tmp_dev_db) == []
+
+
+def test_grade_golden_mark_adds_and_removes_a_label(tmp_dev_db):
+    from src import evalstore
+    gid = evalstore.add_golden("night lighting", ["a.md"], path=tmp_dev_db)
+    client.post(f"/grade/golden/{gid}/mark",
+                data={"source": "b.md", "action": "add"}, follow_redirects=False)
+    golden = {g["id"]: g for g in evalstore.list_golden(path=tmp_dev_db)}
+    assert set(golden[gid]["relevant"]) == {"a.md", "b.md"}
+
+    client.post(f"/grade/golden/{gid}/mark",
+                data={"source": "b.md", "action": "remove"}, follow_redirects=False)
+    golden = {g["id"]: g for g in evalstore.list_golden(path=tmp_dev_db)}
+    assert golden[gid]["relevant"] == ["a.md"]
+
+    # removing the last label is refused -- a golden query with no
+    # relevant source scores nothing
+    response = client.post(f"/grade/golden/{gid}/mark",
+                           data={"source": "a.md", "action": "remove"},
+                           follow_redirects=False)
+    assert "relevant" in unquote(response.headers["location"])
+    golden = {g["id"]: g for g in evalstore.list_golden(path=tmp_dev_db)}
+    assert golden[gid]["relevant"] == ["a.md"]
+
+
+def test_grade_golden_delete_removes_and_draws_next(tmp_dev_db):
+    from src import evalstore
+    _drain_golden(tmp_dev_db)
+    gid = evalstore.add_golden("gone soon", ["x.md"], path=tmp_dev_db)
+    response = client.post(f"/grade/golden/{gid}/delete", follow_redirects=False)
+    assert response.headers["location"].startswith("/grade/draw?mode=golden")
+    assert evalstore.list_golden(path=tmp_dev_db) == []
+
+
+# ---------- the Dev Studio: dataset export ----------
+
+def test_dataset_export_golden_json_and_csv(tmp_dev_db):
+    from src import evalstore
+    _drain_golden(tmp_dev_db)
+    evalstore.add_golden("night lighting", ["notes.md"], path=tmp_dev_db)
+
+    as_json = client.get("/dataset/export?what=golden&fmt=json")
+    assert as_json.status_code == 200
+    assert as_json.headers["content-type"].startswith("application/json")
+    assert "attachment" in as_json.headers["content-disposition"]
+    assert "night lighting" in as_json.text
+
+    as_csv = client.get("/dataset/export?what=golden&fmt=csv")
+    assert as_csv.headers["content-type"].startswith("text/csv")
+    assert "night lighting" in as_csv.text
+    assert as_csv.text.splitlines()[0].startswith("id,")
+
+
+def test_dataset_export_runs_and_rejects_garbage(tmp_dev_db):
+    from src import evalstore
+    evalstore.save_run("r1", {"k": 5, "n": 2, "hit_rate": 0.5, "mrr": 0.4,
+                              "per_query": []}, p50_ms=12, path=tmp_dev_db)
+    as_csv = client.get("/dataset/export?what=runs&fmt=csv")
+    assert "r1" in as_csv.text
+    assert client.get("/dataset/export?what=bogus&fmt=json").status_code == 400
+
+
+def test_dataset_tab_lists_golden_and_runs(tmp_dev_db):
+    from src import evalstore
+    evalstore.add_golden("tab query", ["notes.md"], path=tmp_dev_db)
+    evalstore.save_run("tab run", {"k": 5, "n": 1, "hit_rate": 1.0, "mrr": 1.0,
+                                   "per_query": []}, path=tmp_dev_db)
+    text = client.get("/studio?tab=dataset").text
+    assert "tab query" in text
+    assert "tab run" in text
+    assert "/dataset/export?what=golden" in text
+    assert "/dataset/export?what=runs" in text
+
+
+# ---------- the Dev Studio: library file upload ----------
+
+def test_library_ingest_accepts_a_file_upload(monkeypatch):
+    conn = LibraryFakeConn()
+    recorded = {}
+    monkeypatch.setattr(app_main.rag, "connect", lambda db_url=None: conn)
+    monkeypatch.setattr(app_main.rag, "init_store", lambda c: None)
+    monkeypatch.setattr(app_main.rag, "make_client", lambda: object())
+
+    def fake_ingest(records, client_, c):
+        recorded.update(records[0])
+        return 2
+
+    monkeypatch.setattr(app_main.rag, "ingest_records", fake_ingest)
+    response = client.post(
+        "/library/ingest",
+        data={"domain": "cinematography"},
+        files={"file": ("night-notes.txt", b"night exteriors want practicals",
+                        "text/plain")},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/studio?tab=library")
+    assert recorded["source"] == "night-notes.txt"   # filename becomes the source
+    assert recorded["text"] == "night exteriors want practicals"
+    assert recorded["domain"] == "cinematography"
+
+
+def test_library_ingest_file_with_no_text_is_a_message_not_a_500(monkeypatch):
+    response = client.post(
+        "/library/ingest",
+        data={"domain": "cinematography"},
+        files={"file": ("empty.txt", b"   ", "text/plain")},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert "no readable text" in unquote(response.headers["location"])
