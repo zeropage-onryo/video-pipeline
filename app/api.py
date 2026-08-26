@@ -562,6 +562,17 @@ def _concept_card(c: dict) -> dict:
         "grounded": grounded,
         "judge_overall": c.get("judge_overall"),
         "created_at": c.get("created_at"),
+        # a one-shot concept IS a scene: its single prompt, the photos
+        # it was written against, and whether it was picked to render
+        "is_scene": c.get("is_scene", False),
+        "picked": c.get("picked", False),
+        "refs": c.get("refs") or [],
+        "prompt": ((c.get("shots") or [{}])[0].get("prompt") or "")
+                  if c.get("is_scene") else "",
+        "media_url": ((c.get("shots") or [{}])[0].get("media_url") or "")
+                     if c.get("is_scene") else "",
+        "reference_image": ((c.get("shots") or [{}])[0].get("reference_image") or "")
+                           if c.get("is_scene") else "",
     }
 
 
@@ -576,7 +587,118 @@ def pipeline_concepts(brand: Optional[str] = None, status: Optional[str] = None)
         "items": cards,
         "deny_reasons": list(DENY_REASONS),
         "shoot": preprod.shoot_rate(path=db.DB_PATH),
+        "pick": preprod.pick_rate(path=db.DB_PATH),
     }
+
+
+# --- scenes to pick between --------------------------------------------------
+# One idea in, N one-shot concepts out. Not a second data model: each is
+# exactly the row generate_scene_concept writes, so the scene board,
+# Director, render and autopilot keep working unmodified. What is new is
+# that you get SEVERAL and the pick is recorded (preprod.pick_rate).
+
+SCENE_COUNT_MAX = 8
+
+
+class ScenesRunBody(BaseModel):
+    idea: str
+    count: int = 4
+    refs: list[str] = []       # asset photos this batch is written against
+    brand: Optional[str] = None
+
+
+@router.post("/scenes/run")
+def scenes_run(request: Request, body: ScenesRunBody):
+    """Several takes on one idea, to pick between. The references you
+    attach are stored ON each scene's shot, which is what carries them
+    into every node once it reaches Director."""
+    idea = (body.idea or "").strip()
+    if not idea:
+        return _error(400, "empty_idea", "type an idea first")
+    api_key = _gemini_key()
+    if not api_key:
+        return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
+    brand_raw = body.brand
+    brand = brand_raw if brand_raw in preprod.BRANDS else (
+        request.cookies.get("brand") if request.cookies.get("brand") in preprod.BRANDS
+        else "antihero")
+    count = max(1, min(SCENE_COUNT_MAX, body.count))
+    refs = [r for r in body.refs if isinstance(r, str) and r][:MAX_IMAGE_REFS]
+
+    # the same photos as bytes, so THIS call sees what it is writing for
+    image_refs = []
+    for picked in refs:
+        target = _resolve_asset_photo(picked)
+        if target is None:
+            continue
+        jpeg = _to_jpeg(target.read_bytes())
+        if jpeg:
+            image_refs.append((jpeg, "image/jpeg"))
+
+    def work(job):
+        from google import genai
+
+        from src import shootgen
+
+        jobs.progress(job, 0.15, "grounding in references")
+        references = shootgen.reference_block(spark=idea, db_path=db.DB_PATH)
+        try:
+            cast = shootgen.format_cast(
+                entities.list_characters(path=db.DB_PATH),
+                entities.list_props(path=db.DB_PATH))
+        except Exception:
+            cast = None        # naming the cast is grounding, never a gate
+        jobs.progress(job, 0.4, f"writing {count} scene(s)")
+        result = shootgen.generate_scene_concepts(
+            idea, brand, count=count,
+            gemini_client=genai.Client(api_key=api_key),
+            references=references, cast=cast, db_path=db.DB_PATH,
+            refs=refs, image_refs=image_refs or None)
+        saved = result["scenes"]
+        return {"detail": f"{len(saved)} scene(s)",
+                "ref_id": saved[0]["concept_id"] if saved else None}
+
+    job = jobs.start("scenes", f"scenes · {idea[:60]}", work)
+    return {"job_id": job["id"], "image_refs": len(image_refs)}
+
+
+class PickBody(BaseModel):
+    picked: bool = True
+
+
+@router.post("/concepts/{concept_id}/pick")
+def concept_pick(concept_id: int, body: PickBody):
+    """The label: this scene is worth rendering."""
+    try:
+        preprod.set_picked(concept_id, body.picked, path=db.DB_PATH)
+    except ValueError as e:
+        return _error(404, "not_found", str(e))
+    return {"ok": True, "picked": body.picked,
+            "pick": preprod.pick_rate(path=db.DB_PATH)}
+
+
+class ConceptRefsBody(BaseModel):
+    refs: list[str] = []
+
+
+@router.post("/concepts/{concept_id}/refs")
+def concept_refs(concept_id: int, body: ConceptRefsBody):
+    """The reference photos a scene grounds on -- a LIST, because a face
+    and a jacket are two references. Stored on the shot itself, so they
+    ride into the enhance, the keyframe and the clip."""
+    concept = preprod.get_concept(concept_id, path=db.DB_PATH)
+    if concept is None or not concept["shots"]:
+        return _error(404, "not_found", "no such scene")
+    shots = [dict(s) for s in concept["shots"]]
+    shots[0]["refs"] = [r for r in body.refs if r][:MAX_IMAGE_REFS]
+    # a plan dict, not a bare list: update_concept_shots re-validates the
+    # whole plan, and carrying the existing warnings/duration through
+    # keeps attaching a reference from rewriting anything else
+    preprod.update_concept_shots(
+        concept_id,
+        {"shots": shots, "duration": concept.get("duration")},
+        warnings=concept.get("warnings") or [], path=db.DB_PATH)
+    return {"ok": True, "refs": shots[0]["refs"]}
 
 
 @router.get("/concepts/{concept_id}")

@@ -757,9 +757,108 @@ def generate_scene_concept(brand: str, spark=None, gemini_client=None,
     return {"concept_id": concept_id, "concept": concept, "warnings": warnings}
 
 
+def build_scenes_prompt(idea: str, brand: str, count: int, locations: list,
+                        references: str = "", cast=None) -> str:
+    """N standalone scene prompts off ONE idea, in the same proven
+    skeleton build_scene_brief_prompt uses -- the difference is plural
+    and independent: these are competing takes to pick between, not
+    parts of one video."""
+    template = (PROMPTS_DIR / "scenes_prompt.txt").read_text()
+    example = gold_standard_example() or "(no gold-standard example on file)"
+    return (template
+            .replace("{count}", str(count))
+            .replace("{idea}", (idea or "").strip() or "(no idea given — surprise me)")
+            .replace("{brand}", load_brand(brand))
+            .replace("{cast}", cast or NO_CAST_NOTE)
+            .replace("{locations}", format_locations(locations))
+            .replace("{references}", references or NO_REFERENCES_NOTE)
+            .replace("{example}", example))
+
+
+def parse_scenes_response(text: str) -> list:
+    """Tolerant of the two shapes a model reaches for: the documented
+    {"scenes": [...]} and a bare array. Anything without a prompt is
+    dropped here rather than saved as an unrenderable row."""
+    data = json.loads(strip_fences(text))
+    raw = data.get("scenes") if isinstance(data, dict) else data
+    scenes = []
+    for item in raw or []:
+        if not isinstance(item, dict):
+            continue
+        prompt = (item.get("prompt") or item.get("brief") or "").strip()
+        if not prompt:
+            continue
+        scenes.append({
+            "title": (item.get("title") or "Untitled scene").strip(),
+            "location": (item.get("location") or "").strip(),
+            "prompt": prompt,
+        })
+    return scenes
+
+
+def generate_scene_concepts(idea: str, brand: str, count: int = 4,
+                            gemini_client=None, model: str = MODEL,
+                            references: str = "", cast=None, db_path=None,
+                            tool: str = DEFAULT_SCENE_TOOL,
+                            refs=None, image_refs=None) -> dict:
+    """
+    One idea -> N scenes to PICK BETWEEN (2026-08-26).
+
+    generate_scene_concept writes the one scene a Create button asks
+    for. This writes several in a single call, so they are varied
+    against each other rather than rolled independently (the
+    generate_concept_ideas reasoning), and the human picks -- which is
+    the label preprod.pick_rate counts.
+
+    Each scene is saved in exactly the shape generate_scene_concept
+    uses: an ordinary shoot_concepts row with a ONE-element shots list.
+    No second data model, so the scene board, Director, render and
+    autopilot keep working unmodified.
+
+    `refs` are the asset-photo URLs this batch was written against; they
+    ride ON the shot so they reach every node of the Director chain
+    later. `image_refs` are those same photos as bytes for THIS call's
+    vision input.
+    """
+    kwargs = {"path": db_path} if db_path is not None else {}
+    locations = preprod.list_locations(**kwargs)
+    if not locations:
+        print(NO_LOCATIONS_NOTE, file=sys.stderr)
+    prompt = build_scenes_prompt(idea, brand, count, locations,
+                                 references=references, cast=cast)
+    contents = prompt
+    if image_refs:
+        from google.genai import types
+        contents = [types.Part.from_bytes(data=data, mime_type=mime)
+                    for data, mime in image_refs] + [prompt]
+    scenes = parse_scenes_response(generate_with_retry(gemini_client, model, contents))
+
+    location_names = [loc["name"] for loc in locations]
+    allowed = ZEROPAGE_AI_TOOLS if brand == "zeropage" else None
+    saved = []
+    for scene in scenes:
+        shot = {"n": 1, "type": "BROLL", "source": "AI",
+                "tool": (tool or DEFAULT_SCENE_TOOL).upper(),
+                "desc": scene["title"], "prompt": scene["prompt"],
+                "refs": list(refs or [])}
+        if scene.get("location"):
+            shot["location"] = scene["location"]
+        concept = {"title": scene["title"], "hook": "", "logline": "",
+                   "shots": [shot]}
+        warnings = validate_concept(concept, location_names, allowed_tools=allowed)
+        concept_id = preprod.save_concept(
+            concept, brand=brand, spark=idea, prompt_template=prompt,
+            warnings=warnings, **kwargs)
+        saved.append({"concept_id": concept_id, "title": scene["title"],
+                      "warnings": warnings})
+    return {"scenes": saved, "prompt_template": prompt}
+
+
 def write_scene_for_concept(concept_id: int, gemini_client=None,
                             model: str = MODEL, references: str = "", cast=None,
                             db_path=None, tool: str = DEFAULT_SCENE_TOOL) -> dict:
+
+
     """
     Stage two, for an idea you chose: write ITS scene prompt.
 

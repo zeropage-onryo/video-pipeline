@@ -61,22 +61,26 @@ STILL_FRAME_TEMPLATE = (
 # "continue this" and "ignore this" -- so the shot's own description
 # gets overridden as often as it gets matched.
 REFERENCE_NOTE = (
-    "THE ATTACHED IMAGE is reference material for this shot: match the "
+    "THE ATTACHED {subject} reference material for this shot: match the "
     "subject's face, wardrobe, props and location exactly as they appear "
-    "in it. Do NOT copy its framing, crop or camera angle -- those come "
-    "from the shot description below.\n\n"
+    "in {them}. Do NOT copy {their} framing, crop or camera angle -- those "
+    "come from the shot description below.\n\n"
 )
 
 
-def as_still_frame(prompt: str, *, has_reference: bool = False) -> str:
+def as_still_frame(prompt: str, *, has_reference=False) -> str:
     """The video prompt, re-framed as a single-frame brief. Pure -- no
     model call goes near it, so a refusal is either a bad framing
     (visible here) or a bad prompt, never both at once."""
     prompt = (prompt or "").strip()
     if not prompt:
         return ""
-    return STILL_FRAME_TEMPLATE.format(
-        prompt=prompt, reference=REFERENCE_NOTE if has_reference else "")
+    count = int(has_reference)          # a bool counts as one
+    note = "" if not count else REFERENCE_NOTE.format(
+        subject="IMAGE is" if count == 1 else f"{count} IMAGES are",
+        them="it" if count == 1 else "them",
+        their="its" if count == 1 else "their")
+    return STILL_FRAME_TEMPLATE.format(prompt=prompt, reference=note)
 
 
 def has_key() -> bool:
@@ -138,21 +142,44 @@ def _generate_content(client, model: str, parts):
     raise last
 
 
+def as_reference_list(reference) -> list:
+    """One reference or several, normalised to a list of byte strings.
+
+    Plural on purpose: a character's face and their wardrobe are two
+    references, not one, and the whole point of naming assets is that
+    several of them describe one shot. Anything that isn't bytes is
+    dropped -- a reference is an enhancement, never a gate."""
+    if reference is None:
+        return []
+    items = reference if isinstance(reference, (list, tuple)) else [reference]
+    return [bytes(i) for i in items if isinstance(i, (bytes, bytearray)) and i]
+
+
 def generate_image(prompt: str, out_path: Path, *, model: str = MODEL,
-                   reference_bytes: Optional[bytes] = None,
-                   reference_mime: str = "image/jpeg", client=None) -> Path:
+                   reference_bytes=None,
+                   reference_mime: Optional[str] = None, client=None) -> Path:
     """The thin raising wrapper: one generate_content call (retried on a
     transient overload), first image part written to out_path. Raises
     when the model returns no image -- here the image IS the deliverable
     (the promptgen contract), and a text-only refusal must surface, not
-    save an empty file."""
+    save an empty file.
+
+    `reference_bytes` takes one image or a list of them; each rides as
+    its own inline part, mime sniffed per image. reference_mime is
+    honoured for a single reference so existing callers keep their
+    behaviour, and ignored for a list, where per-image sniffing is the
+    only thing that can be right."""
     from google.genai import types
 
     client = client or _client()
-    parts = []
-    if reference_bytes:
-        parts.append(types.Part.from_bytes(data=reference_bytes,
-                                           mime_type=reference_mime))
+    references = as_reference_list(reference_bytes)
+    parts = [
+        types.Part.from_bytes(
+            data=data,
+            mime_type=(reference_mime if reference_mime and len(references) == 1
+                       else sniff_mime(data)))
+        for data in references
+    ]
     parts.append(prompt)
     response = _generate_content(client, model, parts)
     for candidate in response.candidates or []:
@@ -202,16 +229,13 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
                     "error": f"daily cap: {used}/{DAILY_CAP} images generated "
                              f"today (NANO_DAILY_CAP to raise)"}
 
-        reference_bytes = (bytes(reference_image)
-                           if isinstance(reference_image, (bytes, bytearray)) else None)
+        references = as_reference_list(reference_image)
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"wf-{stamp}.png"
-        generate_image(as_still_frame(prompt, has_reference=bool(reference_bytes)),
+        generate_image(as_still_frame(prompt, has_reference=len(references)),
                        out_path, model=model,
-                       reference_bytes=reference_bytes,
-                       reference_mime=sniff_mime(reference_bytes),
-                       client=client)
+                       reference_bytes=references, client=client)
 
         # the row logs the prompt the person wrote, not the constant
         # wrapper around it -- the flag says which framing was applied
@@ -219,7 +243,7 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
         generation_id = generative.record_generation(
             shot_row_id, "nano", prompt,
             params={"model": model, "source": "workflow",
-                    "framing": "still", "reference": bool(reference_bytes)},
+                    "framing": "still", "references": len(references)},
             output_path=str(out_path),
             **kwargs,
         )

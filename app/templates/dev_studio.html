@@ -70,9 +70,11 @@
   {# ── the five pipeline numbers, computed server-side ── #}
   {% if metrics.killed %}<div class="warnings" style="margin-bottom:14px">Kill switch is ON — every channel holds regardless of autonomy.</div>{% endif %}
   <div class="panel">
-    <div class="panel-head"><span class="id">PIPELINE</span><span class="m">THE SHOOT LABEL + THE THREE AGREEMENT NUMBERS</span></div>
+    <div class="panel-head"><span class="id">PIPELINE</span><span class="m">THE TWO LABELS + THE THREE AGREEMENT NUMBERS</span></div>
     <div class="panel-body">
       <div class="tiles">
+        <div class="tile"><div class="k">Pick rate · {{ metrics.pick.picked }}/{{ metrics.pick.generated }}</div>
+          <div class="v">{{ "%.0f%%"|format(metrics.pick.rate * 100) if metrics.pick.rate is not none else "—" }}</div></div>
         <div class="tile"><div class="k">Shoot rate · {{ metrics.shoot.shot }}/{{ metrics.shoot.generated }}</div>
           <div class="v">{{ "%.0f%%"|format(metrics.shoot.rate * 100) if metrics.shoot.rate is not none else "—" }}</div></div>
         <div class="tile"><div class="k">Evaluator agreement · {{ metrics.agreement.graded }} graded</div>

@@ -376,9 +376,12 @@ def _pipeline_metrics() -> dict:
     """The numbers about how well the system is working, computed
     server-side. shortlist_rate went with the shot-list stage
     (2026-08-26): it measured "was this idea worth planning", and with
-    one scene written per concept there is no planning step to measure --
-    it would have read 100% forever."""
+    one scene written per concept there is no planning step left to
+    measure. pick_rate is its successor -- how many of the generated
+    scenes were worth rendering, which is the decision actually being
+    made now."""
     return {
+        "pick": preprod.pick_rate(path=db.DB_PATH),
         "shoot": preprod.shoot_rate(path=db.DB_PATH),
         "agreement": autonomy.evaluator_agreement(path=db.DB_PATH),
         "gate": autonomy.prompt_gate_agreement(path=db.DB_PATH),

@@ -148,6 +148,25 @@ with it:** it only lived on that route, so it moved to `api.scene_grounding`, wh
 composes `reference_block` + the brand's inspiration accounts for every real
 generation.
 
+**You get SEVERAL scenes and pick between them** (same day, same shape).
+`shootgen.generate_scene_concepts` writes N of those one-shot rows off ONE idea in a
+single call, so the takes are varied against each other rather than rolled independently
+(the `generate_concept_ideas` reasoning) — `POST /api/scenes/run`, behind Pipeline's
+**Scenes** tab, which is the default. A card is laid out as Mike specified: the
+references it was written against ABOVE, the scene, then the returned prompt BELOW.
+**The label moved with the unit:** `shortlist_rate` asked "was this idea worth planning
+a shot list for", derived from `shots != []` — a question with no answer left once every
+concept has exactly one shot. `preprod.pick_rate` asks how many generated scenes were
+worth rendering, derived from a new `picked_at` column (additive ALTER, timestamped so a
+rate can be windowed) and counting **only one-shot concepts**, since a legacy six-shot
+concept was never a single scene to pick. **`shortlist_rate` was then deleted**
+(2026-08-26, Mike's call, same day): `pick_rate` is its whole replacement and shipping
+both would have meant one tile that could only ever read 100%. `pick_rate` and
+`shoot_rate` are the two surviving labels, both on the Dev Studio's Stats tab.
+**A scene's references are plural and live ON its shot** (`shot["refs"]` — no schema
+change, `shots_json` was always flexible), which is what carries them into the enhance,
+the keyframe and the clip when it opens in Director.
+
 ```
 locations/<name>/*.jpg  --locations.py-->  locations table (vision description per space)
                                                   |
@@ -329,7 +348,7 @@ is yours, in Resolve, by hand.
   gated by `GET /api/capabilities`**, which is derived live (key presence, a real
   `rag.connect()`), never a static dict. Views: Studio (composer with live `/api/retrieve`
   grounding + asset carousel), Assets (locations/characters/props unified), Pipeline
-  (restructured 2026-08-25 into two tabs over one engine), Director (the node canvas as its
+  (restructured 2026-08-25 into tabs over one engine; **Scenes** is the default since 2026-08-26), Director (the node canvas as its
   own rail view — Mike's explicit call, same day: the nodes must never be buried behind a
   tab), Analytics (real metric snapshots, two brands never averaged), Queue. **Pipeline's
   two tabs:** *Concept* is the

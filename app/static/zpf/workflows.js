@@ -79,6 +79,20 @@ function inputVal(node, name) {
   return src ? nodeValue(src) : null;
 }
 
+/* Every reference image a node should ground on, in the same priority
+   order the server builds (workflow_runner.node_reference_urls): the
+   wired image port, then the scene's own references, then the single
+   image_url fallback. Deduplicated, so a wired keyframe that is also
+   in the scene's refs is not sent twice. */
+function referenceUrls(node) {
+  const out = [];
+  const push = u => { if (u && !out.includes(u)) out.push(u); };
+  push(inputVal(node, 'image'));
+  (node.properties.ref_urls || []).forEach(push);
+  push(node.properties.image_url);
+  return out;
+}
+
 function setNodeState(node, st, note) {
   node._state = st;
   node.boxcolor = STATE_BOX[st] || STATE_BOX.idle;
@@ -292,10 +306,9 @@ async function runNode(node) {
         res.references ? '' : 'no references — library empty or store down');
     } else if (node.type === 'zpf/enhance') {
       setNodeState(node, 'running');
-      // the shot's own reference and the RAG grounding ride invisibly
-      // (image_url / auto_ground properties) — the Director chain keeps
-      // grounding on the backend, no extra nodes on the canvas
-      const image = inputVal(node, 'image') || node.properties.image_url;
+      // the scene's references and the RAG grounding ride invisibly
+      // (ref_urls / image_url / auto_ground properties) — the Director
+      // chain keeps grounding on the backend, no extra nodes on canvas
       const references = inputVal(node, 'references') || '';
       const res = await api('/api/workflows/exec/enhance', {
         method: 'POST',
@@ -304,7 +317,7 @@ async function runNode(node) {
           user: inputVal(node, 'user') || '',
           references,
           ground: !references && !!node.properties.auto_ground,
-          images: image ? [image] : [],
+          images: referenceUrls(node),
         },
       });
       nodeJobs.set(res.job_id, node.id);
@@ -313,7 +326,7 @@ async function runNode(node) {
       const res = await api('/api/workflows/exec/generate', {
         method: 'POST',
         body: { prompt: inputVal(node, 'prompt') || '',
-                image: inputVal(node, 'image') || node.properties.image_url || null },
+                images: referenceUrls(node) },
       });
       nodeJobs.set(res.job_id, node.id);
     } else if (node.type === 'zpf/nano_banana') {
@@ -321,7 +334,7 @@ async function runNode(node) {
       const res = await api('/api/workflows/exec/nano', {
         method: 'POST',
         body: { prompt: inputVal(node, 'prompt') || '',
-                image: inputVal(node, 'image') || node.properties.image_url || null },
+                images: referenceUrls(node) },
       });
       nodeJobs.set(res.job_id, node.id);
     }
@@ -903,8 +916,10 @@ function applyNodeStates(states) {
 const attached = new Set();   // node.id + url, so re-renders don't re-post
 function maybeAttachShotOutput(node) {
   const p = node.properties || {};
-  if (!directorConceptId || !p.shot_n || !node._out) return;
+  if (!node._out) return;
   const key = `${node.id}·${node._out}`;
+
+  if (!directorConceptId || !p.shot_n) return;
   if (attached.has(key)) return;
   attached.add(key);
   const url = new URL(node._out, location.origin).href;
@@ -1243,7 +1258,6 @@ let directorConcept = null;    // the /api/concepts/{id} payload on the canvas
 let activeShotN = null;        // which shot's chain is up right now
 const shotGraphs = new Map();  // shot n -> serialized graph with local edits
 let enhanceSystem = '';        // prompts/enhance_system.txt, fetched once
-
 function shotChainGraph(d, s) {
   // Hand-built in LiteGraph's own serialize() shape (the
   // default_template pattern). The shot's short prompt → the
@@ -1254,6 +1268,12 @@ function shotChainGraph(d, s) {
   // reference image and the RAG retrieval still ride on the BACKEND
   // (the enhance node's image_url / auto_ground properties), not as
   // extra nodes.
+  //
+  // A shot's REFERENCES (s.refs — the asset photos this scene was
+  // written against, a face and a jacket being two) ride the same way,
+  // as ref_urls on all three billed nodes, so the enhance, the keyframe
+  // and the clip all ground on the same material.
+  const refs = s.refs || [];
   const text = s.desc || s.prompt || '';
   seededTexts.set(`${d.id}·${s.n}`, text);
 
@@ -1274,14 +1294,14 @@ function shotChainGraph(d, s) {
                { name: 'references', type: 'text', link: null }],
       // one enhanced prompt, two consumers: the keyframe and the clip
       outputs: [{ name: 'text', type: 'text', links: [3, 4] }],
-      properties: { auto_ground: true,
+      properties: { auto_ground: true, ref_urls: refs,
                     image_url: s.reference_image || '' } },
     { id: 4, type: 'zpf/nano_banana', title: 'Nano Banana',
       pos: [900, 300], size: [320, 300], flags: {}, order: 3, mode: 0,
       inputs: [{ name: 'prompt', type: 'text', link: 3 },
                { name: 'image', type: 'image', link: null }],
       outputs: [{ name: 'image', type: 'image', links: [5] }],
-      properties: { concept_id: d.id, shot_n: s.n,
+      properties: { concept_id: d.id, shot_n: s.n, ref_urls: refs,
                     image_url: s.reference_image || '' } },
     { id: 5, type: 'zpf/generate', title: 'Generate',
       pos: [1330, 320], size: [320, 280], flags: {}, order: 4, mode: 0,
@@ -1292,7 +1312,7 @@ function shotChainGraph(d, s) {
       // image_url is the fallback for an UNWIRED image port: unplug the
       // keyframe and the clip still anchors on the shot's own reference,
       // exactly like the enhance and Nano nodes above
-      properties: { concept_id: d.id, shot_n: s.n,
+      properties: { concept_id: d.id, shot_n: s.n, ref_urls: refs,
                     image_url: s.reference_image || '' } },
   ];
   const links = [[1, 1, 0, 3, 1, 'text'],

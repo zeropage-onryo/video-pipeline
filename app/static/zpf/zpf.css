@@ -444,6 +444,37 @@ html[data-v="studio"] #gl{opacity:1;transition:opacity .5s}
 }
 .plate:hover .badge{opacity:1}
 
+/* ── SCENES · the unit you pick between ──────────────
+   Card order is the ask: the references it was grounded in ABOVE, then
+   the scene, then the prompt that came back BELOW. */
+.scenegrid{
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:16px;
+  max-width:1680px;margin:0 auto;padding:0 42px 40px;
+}
+.scene{padding:16px 18px 14px;display:flex;flex-direction:column;gap:12px;border-radius:var(--r2)}
+.scene.on{border-color:var(--signal);box-shadow:0 0 0 1px var(--signal-soft)}
+.screfs{display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding-bottom:11px;border-bottom:1px solid var(--line)}
+.scref{
+  width:38px;height:38px;flex:none;border-radius:9px;border:1px solid var(--line-hi);
+  background-size:cover;background-position:center;
+}
+.screfs .m{max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.schead{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.schead h4{font-family:var(--display);font-size:17px;font-weight:500;letter-spacing:.02em}
+.scshot{width:100%;border-radius:var(--r1);border:1px solid var(--line);display:block}
+.scprompt{
+  font-size:13px;line-height:1.62;color:var(--dim);max-height:210px;overflow-y:auto;
+  white-space:pre-wrap;padding:12px 14px;border-radius:var(--r1);
+  background:rgb(255 255 255 / .03);border:1px solid var(--line);
+}
+.scfoot{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+#sceneidea{
+  width:100%;min-height:74px;resize:vertical;border:0;background:transparent;color:var(--text);
+  font-family:var(--body);font-size:15px;font-weight:300;line-height:1.6;padding:14px 24px 4px;
+}
+#sceneidea:focus{outline:0}
+#sceneidea::placeholder{color:var(--dimmer)}
+
 /* ── DIRECTOR · Runway-style dark canvas ─────────────
    Token table for the whole Director view — the canvas drawing code in
    workflows.js (its `T` object) mirrors these values; keep in sync. */
