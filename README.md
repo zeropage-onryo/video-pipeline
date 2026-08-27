@@ -1,181 +1,245 @@
-[![CI](https://github.com/zeropage-onryo/video-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/zeropage-onryo/video-pipeline/actions/workflows/ci.yml)
+# ZPF Studio — an idea spark to a finished video
 
-# Zero Page Films — production pipeline
+Give it an idea. It generates several scenes to choose between, you shape the one you picked with
+director notes until it's right, and it renders a finished video or image. One studio across six
+generation platforms instead of six tabs and a notes app.
 
-> **An automated pre-production machine for a solo filmmaker — real footage and AI, mixed.**
-> It generates concepts and shot lists from your real rooms, writes platform-native AI video
-> prompts for the shots a camera can't get, and learns from what performs. Real material
-> grounds everything; AI extends it.
+```
+idea spark
+    │
+    ▼
+several scenes generated off that one idea  ──── you pick one  (pick_rate)
+    │
+    ▼
+director mode — one note at a time: "shot slower", "hold the reveal a beat longer"
+    │
+    ▼
+prompt enhanced (Gemini 3 Flash)
+    │
+    ├──▶ Nano Banana Pro ──▶ keyframe you approve ──┐
+    │                                               │
+    └───────────────────────────────────────────────┴──▶ Runway ──▶ finished clip
+                                                                        │
+                                                                        ▼
+                                                          posted ──▶ view counts
+                                                                        │
+                                                     feeds the next spark ┘
+```
 
-A pre-production pipeline for a one-person film operation, aimed at running more of itself
-over time: it helps decide what to make (concepts, shot lists), decides shot by shot what
-gets captured versus generated, writes the AI prompts across platforms, and feeds
-posted-video analytics back into the next slate. Post-production (footage ingest, story
-pitches, cut lists) was cut from the product entirely in August 2026 — see the Decisions
-Log. Editing stays by hand, in Resolve — the judgment worth automating is what to shoot and
-what to generate, not the mechanical assembly.
+The keyframe is not a side branch: the enhanced prompt feeds both render nodes, and the approved
+still feeds Runway's image port, so the clip starts from an image you already said yes to rather
+than from text alone. A scene is one prompt and one shot — the render *is* the deliverable.
 
-Built for solo shoots — one operator who is also the on-screen subject, two cameras, a house,
-and six AI video platforms.
+Every platform speaks a slightly different dialect — Veo wants one thing, Kling another, Seedance
+another. Moving an idea between them by hand is where the time goes, and none of it is creative
+work. This aggregates that: one controlled shot vocabulary in, platform-native prompts out, renders
+dispatched through per-platform connectors, and every attempt logged so you learn which prompts land
+in two tries and which take nine.
+
+Ideas come from wherever they work best. **Zero Page** rides format skeletons — the structure that
+travels — ranked by what's actually performing. **Antihero** grounds in real photographed rooms with
+a recurring star. Either can draw on inspiration accounts, a retrieval library of your own writing,
+or evidence from your own posted results. Grounding in your own material is a toggle, not a gate.
+
+**Status: pre-launch.** Sign-in, accounts and capability gating work; it isn't open to other people
+yet. See *Where this actually is*.
 
 ## What it does
 
-**Before the shoot — idea to shot list.** Photograph a space and the tool describes it: geometry,
-light sources, textures, workable camera positions, and what the room *won't* allow. Concepts are
-then generated against those real rooms — 8 cheap ideas to choose between, or one complete shoot
-plan: a shot-by-shot list with camera, framing, movement, and lighting drawn from what's genuinely
-in the space, plus edit rhythm and grade notes.
+**Spark → scenes you choose between.** From an idea and a brand, several scenes are generated in a
+single call — so the options are varied *against each other* rather than rolled independently — each
+one a complete, paste-ready scene prompt with camera, framing, movement, lighting and diegetic
+sound. Which one you pick is recorded (`pick_rate`), against the hash of the prompt that wrote it.
 
-**Real and AI shots, mixed.** Every plan decides shot by shot what you capture and what a model
-generates — both grounded in the same photographed rooms, so the mix cuts as one piece. Each AI
-shot carries a paste-ready, platform-native prompt (Veo, Kling, Runway, Seedance, LTX, Wan; one
-controlled shot vocabulary, one renderer per platform). Attempts are logged per tool, so you
-learn which prompts land in two tries and which take nine.
+**Director mode — where a scene becomes video.** Two halves. The conversational half takes one note
+in plain language — "shot 2 slower", "hold the reveal a beat longer", "move it to the bedroom" — and
+revises the stored scene in place via Gemini 3 Flash, never regenerating it and never touching the
+picked title, hook or logline. The canvas half renders it: the shot's prompt is enhanced, that
+enhanced prompt feeds **Nano Banana Pro** for a keyframe, and the keyframe feeds **Runway** so the
+clip starts from a still you already approved rather than from text alone. The reference image and
+RAG retrieval ride on the backend rather than as extra nodes.
 
-**After the shoot.** What you actually shot gets marked (`shoot_done`), and once it's posted,
-its view counts feed straight back into the next slate — the loop closes at posting, not at a
-separate edit stage. Cutting the footage together happens by hand, in Resolve; the tool's job
-ends at a validated shot plan, not a rendered timeline.
+Two protections keep a note from destroying work: attached material survives a revision (a shot
+keeps its `reference_image` and `media_url` unless the model explicitly returns new ones, so a
+wording change can't detach a clip you already rendered), and broken output never lands — an
+unparseable response, an empty shot list, or a plan that lost more than half its shots is an error,
+and the stored scene stays exactly as it was.
 
-**It learns from your choices.** Which ideas you plan and which concepts you actually shoot —
-each decision is recorded against the hash of the prompt that produced it. So changing a
-prompt becomes something you can measure against the rate it produced, rather than argue about.
-Posted videos and their view counts feed back in, compared at equal age so a year-old video can't
-beat last week's on accumulated totals alone.
+**One vocabulary, six platforms.** Each shot carries a paste-ready, platform-native prompt — Veo,
+Kling, Runway, Seedance, LTX, Wan — written from one controlled shot vocabulary, one renderer per
+platform. Reference grounding and Extend Video sequence-chaining where the platform supports them.
 
-## The rule the whole thing is built on
+**Renders, dispatched.** `runway.py`, `veo.py`, `midjourney.py` and `nano_banana.py` are gated
+connectors sharing one shape: a daily cap, a cost estimate before the call, every attempt logged,
+and a connector that isn't configured degrading with a stated reason rather than failing the run.
+One click from the scene board.
 
-**Grounded in what exists — grounding shapes, it doesn't gate.** Every idea, shot list, and AI
-prompt is generated from real material: photographed rooms, the reference library, your own
-posted results. Checks still run — shot vocabulary against the tool registry, locations
-against described spaces — but as visible advisories the filmmaker weighs, never rejections. A
-generated plan that breaks a rule is saved with its warnings, because it is worth looking at and
-deciding on, not silently discarded.
+**Every shot is generated.** There is no camera path any more. A shot's `source` records whether
+real reference material anchors the generation — an acting take, a room plate, feeding the shot's
+`reference_image` — not whether the shot escapes the pipeline. A reference is an enhancement, never
+a gate, the same way RAG grounding is.
 
-The second rule, learned the hard way: **verify by running it.** Every real defect this project has
-had passed code review and passed its own tests. They were caught by starting the server, clicking
-the thing, or noticing the test suite had quietly gotten slower.
+**It learns from your choices.** Which concepts you plan and which you actually make, each recorded
+against the hash of the prompt that produced it — so a prompt change becomes something you measure
+rather than argue about. Posted videos and their view counts feed back in, compared **at equal age**
+so a year-old video can't win on accumulated totals. `rework.py` then ideates the next slate from
+that evidence rather than from scratch.
 
-## Pipeline
+**Brand-scoped.** Inspiration lanes are scoped per brand so grounding never leaks across them.
 
-One phase — everything reasons about spaces you have. Post-production (ingest, pitches, cut
-lists) doesn't exist in the pipeline anymore; the output is a shot plan, and the edit happens
-by hand.
+## The Studio
 
-```
-photos of a room
-   |
-   | vision: light, texture, angles, constraints
-   v
-described spaces
-   |
-   | + brand, spark, POV on/off, reference library (RAG)
-   v
-concept ideas  ->  shot list + AI slot, edit & grade notes    (human picks: THE LABEL)
-   |
-   | [ you shoot it ]  ->  shot_done  (SECOND LABEL)
-   v
-posted video + view counts  ---> informs the next prompt
-```
+`/ui` is the product in a browser — FastAPI + Jinja2, no build step.
+
+- **Composer** — upload references, pick rooms, characters and props from the front page, generate.
+- **Scene board** — generate a scene, copy per-shot prompts, fire a render, attach clips back.
+- **Assets gallery** — date-grouped media panel.
+- **Holds** — every parked run with a human-readable reason, graded approved / rejected.
+- **Jobs** — long-running work streamed over SSE rather than polled.
+- **Sign-in** — **Google OAuth (just added)**, Discord OAuth, and email/password with argon2. The
+  modal renders only the providers actually configured, so a missing client secret hides a button
+  instead of breaking the page.
+
+The JSON API behind it is capability-gated and derived live from real key presence, never a static
+dict — a control only appears if the endpoint behind it can actually run.
+
+## The rules the whole thing is built on
+
+**Nothing spends a credit unscored.** Every generated prompt runs a two-layer judge: a zero-cost
+structural check, then a strict LLM rubric that **fails closed**, so an unreadable verdict scores 0
+rather than passing by default. All prompts in a run must pass or the run holds — no partial renders.
+
+**Degrade, don't break.** A missing Postgres, an unconfigured connector, an absent described
+location, a feature that hasn't landed — each degrades to a run that continues and says so. The
+exceptions are deliberate: `promptgen` and `locations` fail loudly, because there the model call *is*
+the deliverable rather than bookkeeping on top of one.
+
+**Prompts request, code enforces.** Model output is checked against reality — described locations,
+the shot vocabulary, the tool registry — and every mismatch surfaces as a visible warning on a saved
+result. Nothing is rejected. Models hallucinate rooms and vocabularies, and the human deciding needs
+to see that.
+
+**Verify by running it.** Every real defect this project has had passed code review and passed its
+own tests. They were caught by starting the server, clicking the thing, or noticing the suite had
+quietly gotten slower.
+
+## Judging quality
+
+Four scorers, deliberately separate:
+
+| Module | Judges |
+|---|---|
+| prompt gate (`orchestrator`) | Is this prompt well-formed enough to spend a credit on? Subject / camera / motion / lighting / coherence, 0–2 each, against `PROMPT_GATE_MIN`. Fails closed. |
+| `uncanny_judge.py` | The on-brand gate. A **fixed** rubric, so it works from day one — before there's any history to learn from. This is what would make a channel safe on autopilot. |
+| `taste_judge.py` | Scores against **this creator's own record** — what they approved and rejected on `/holds`, what they marked worked, the traits of their winning versus losing posts. Predicts "they'll like this." |
+| `quality.py` | Faithfulness and answer relevancy over retrieved context, via DeepEval's LLM-judge metrics on the same Gemini models the pipeline already uses. |
+
+Kept separate because a prompt can be structurally excellent and tonally wrong, or perfectly
+on-brand and generically bad. One collapsed score makes failures non-diagnostic. `evalstore.py`
+persists them, so quality is a trend rather than a vibe.
 
 ## Running it
 
 ```bash
 venv/bin/pip install -r requirements.txt && venv/bin/pip install -e .
-venv/bin/uvicorn app.main:app --reload      # everything, in the browser
+venv/bin/uvicorn app.main:app --reload   # the Studio, in the browser
 ```
 
-Every step also has a CLI (`python -m src.locations`, `src.shootgen`, `src.promptgen`,
-`src.genlog`, `src.orchestrator`, `src.trigger`, `src.autopilot`, `src.scheduling`). See
-`CLAUDE.md` for the full command list and architecture notes.
+Needs `GEMINI_API_KEY` in `.env`. Optional: `YOUTUBE_API_KEY` (public view counts, channel import),
+OAuth client credentials for sign-in, and per-platform render keys. Each absent key disables its
+feature with a stated reason rather than breaking startup.
 
-Needs `GEMINI_API_KEY` in `.env`. `YOUTUBE_API_KEY` is optional — it enables pulling public view
-counts and importing a channel automatically; without it manual entry works exactly the same.
+Every step also has a CLI — `python -m src.locations`, `src.shootgen`, `src.promptgen`,
+`src.director`, `src.genlog`, `src.orchestrator`, `src.trigger`, `src.rework`, `src.autopilot`,
+`src.scheduling`, `src.accounts`. See `CLAUDE.md` for the full list.
 
 ## Reference library (RAG)
 
-Concepts can be grounded in a retrieval library: text you want the writing to learn from —
-brand notes, past scripts, films-you-admire notes — chunked, embedded with
-`gemini-embedding-001`, and stored in **PostgreSQL + pgvector**. At generation time the
-spark, client, and the mood of the described rooms become the query, and the closest chunks
-are injected into the prompt as tone/structure references. No Postgres? The run continues
-ungrounded and says so — the library is an enhancement, not a dependency.
+Text you want the writing to learn from — brand notes, past scripts, films-you-admire notes,
+platform prompting references — chunked, embedded with `gemini-embedding-001` (documents and queries
+embedded with different task types, because the model is asymmetric), and stored in PostgreSQL +
+pgvector. At generation time the spark, brand and mood become the query, and the closest chunks are
+injected as tone and structure references. Retrieval is CRAG-graded (`crag.py`): a weak first pass
+earns one query rewrite rather than being silently used. No Postgres? The run continues ungrounded
+and says so.
 
 ```bash
-# one-time setup: EITHER a local Postgres (Postgres.app / brew) + `createdb zeropage`,
-# OR no local install at all:
-docker compose up -d     # Postgres + pgvector; set DATABASE_URL per docker-compose.yml
+docker compose up -d                       # Postgres + pgvector
 
-# build the library, ask it questions, wire it into concept generation automatically
 venv/bin/python -m src.rag ingest prompts/brief.txt --domain personal_brand
-venv/bin/python -m src.rag query "stillness broken once" --k 5 [--domain cinematography]
-venv/bin/python -m src.shootgen --spark "gearing up ritual"    # picks up references on its own
+venv/bin/python -m src.rag query "stillness broken once" --k 5
+venv/bin/python -m src.shootgen --spark "gearing up ritual"   # picks up references on its own
 
-# measure retrieval quality against labeled cases (hit@k, MRR)
-venv/bin/python -m src.rag_eval eval_cases.json --k 5
+venv/bin/python -m src.rag_eval eval_cases.json --k 5         # hit@k, MRR against labeled cases
 ```
 
-An eval case file is plain JSON — `[{"query": "...", "relevant": ["brief.txt"]}]` — judged at
-the document level, because that's what a human can actually label.
+Every chunk carries a required `domain` shelf label, so queries can scope semantically and by hard
+SQL filter in one pass. Re-ingesting a source replaces its chunks, keyed by path relative to the
+project root — not basename, or `editing/notes.txt` and `lighting/notes.txt` would delete each other.
 
-## Tech Stack
-- **Python**, **FastAPI** + **Jinja2** — pipeline and a no-build-step web app
-- **SQLite** — spaces, concepts, videos, metric snapshots, generation attempts
-- **PostgreSQL + pgvector** — the retrieval library grounding concept generation (optional; everything else runs without it)
-- **Google Gemini** — vision descriptions of rooms, concept and shot-list generation
-- **ffprobe** — clip QC (duration check) before a generated clip can be captioned/published
-- **Veo / Kling / Runway / Seedance / LTX / Wan** — AI shots (prompts written here, generated in each tool's UI)
-- **pytest** + **ruff**, run in CI on every push
+## Tested in CI
+
+Every push runs `pytest` and `ruff`, then an eval gate that stands up an ephemeral Postgres +
+pgvector, re-ingests the library, and runs two gates kept separate so each failure is diagnostic:
+
+- **Retrieval regression** — hit@5 and MRR against floors.
+- **Generation quality** — a 14-case golden set scored on faithfulness, answer relevancy, contextual
+  precision and recall, each against an absolute floor *and* a regression band versus recorded
+  baselines.
+
+`tests/conftest.py` blocks all network access during tests, because the same bug landed four times:
+a test patches one generator, the route changes to call a different one, the patch silently misses,
+and a real billed API call happens while the test still passes.
+
+The run history is public in the Actions tab, failures included — a judge-model timeout that clipped
+three golden cases, a `deepeval` pin after 4.1.10 dropped Python 3.9, a CI-only failure from an
+unstubbed client.
+
+## Tech stack
+
+Python · FastAPI + Jinja2 · SQLite (spaces, concepts, scenes, videos, metric snapshots, generation
+attempts) · PostgreSQL + pgvector (retrieval library) · Google Gemini — vision, structured
+generation, embeddings, **Gemini 3 Flash** for enhancement and director notes, **Nano Banana Pro**
+(`gemini-3-pro-image-preview`) for keyframes · LangGraph + LangSmith (orchestration and tracing) ·
+DeepEval (judge metrics) · Runway / Veo / Midjourney connectors · Instagram + YouTube metrics ·
+Cloudflare R2 · ffprobe · argon2 + OAuth · pytest + ruff in CI · Docker Compose
+
+## Where this actually is
+
+Being straight about the state, because the code will tell you anyway:
+
+- **Not launched.** Sign-in and capability gating work, but a fresh signup gets zero membership rows
+  and sees "no account access yet" — membership is granted by hand for v1. Nobody outside has an
+  account.
+- **No tenancy yet.** Owned tables have no `account_id`, and the render caps are global rather than
+  per-account. That's the actual blocker to a pilot, scoped in `docs/tasks/task-account-tenancy.md`.
+- **The posting line is deliberately stubbed.** `generate_render` only calls a real renderer when
+  explicitly enabled; no posting API is wired, so even a channel set to `auto` parks with an explicit
+  reason rather than pretending to post. Instagram and TikTok stats stay manual until developer
+  approvals land.
+- **A scene is the unit, not a cut.** One scene is one prompt and one shot, so its render is a
+  finished deliverable. Stringing several scenes into a longer edit is still done by hand in Resolve
+  — the timeline assembly was removed deliberately, see the Decisions Log.
+- **The measurement loop is structurally complete and statistically empty.** The rates and signals
+  are correct and currently meaningless; they need weeks of real posting before a prompt change can
+  be measured rather than argued about.
 
 ## Roadmap
-- `/shots` queue and the tool scoreboard — waiting on real generation attempts to measure
-- Verify the per-tool camera vocabulary against each platform's current prompt guide
-- Instagram and TikTok stats stay manual until their developer approvals land; the screen
-  doesn't change when they do
+
+- Account tenancy, then a closed pilot — `docs/tasks/task-account-tenancy.md`
+- Open sign-ups
+- The tool scoreboard — which platform lands which shot type, once enough attempts are logged
+- Verify per-tool camera vocabulary against each platform's current prompt guide
 - Case-study writeup with a demo video
 
-## Architecture — the LangGraph orchestrator
+## Architecture
 
-`src/orchestrator.py` is the autonomous content graph, registered as `"zeropage"` in
-`langgraph.json` and traced to LangSmith. A rendered walkthrough of every node, edge, and
-gate lives in [`docs/architecture.html`](docs/architecture.html) — open it in a browser.
+Two paths, deliberately different. The **request path** is what runs when you press Create — a
+straight line, because a person is standing there waiting for it. The **autonomous path** is the
+unattended nightly run, with gates the request path doesn't need.
 
-```
-planner -> ensure_locations -> ground_entities -> ground_rag -> gen_concept -> evaluate
-                                                        ^______________|  (corrective retry)
-evaluate --pass--> structure_prompt -> score_prompts -> generate_render -> qc_clip -> caption -> publish
-        \                    \                              \                \
-         -> hold              -> hold                        -> hold          -> hold   (dead-man log)
-```
-
-**Left third — grounding and ideation, live.** `planner` mints a run id and reads the
-channel's autonomy setting; `ensure_locations` requires at least one described space on
-file; `ground_entities` formats the picked (or all) characters/props into the `{cast}`
-block; `ground_rag` queries the CRAG-graded reference library, degrading to an ungrounded
-run with a note rather than failing; `gen_concept` calls `shootgen.generate_concept` and
-folds any prior critique — plus any pending human corrections from `/holds` — into the
-spark before generating. `evaluate` combines shootgen's code-enforced `warnings` with an
-optional LLM-judge (`JUDGE=1`) and routes: pass moves on, fail retries `gen_concept` up to
-`MAX_ATTEMPTS` (3), and running out of retries parks the run.
-
-**The credit gate.** `structure_prompt` extracts each AI shot's paste-ready prompt;
-`score_prompts` runs every one through a two-layer judge — a zero-cost structural check,
-then a strict LLM rubric (subject/camera/motion/lighting/coherence, 0–2 each, bar
-`PROMPT_GATE_MIN`) that fails closed, so an unreadable verdict scores 0 rather than
-passing by default. Every score is logged before a credit could be spent. All prompts in a
-run must pass or the whole run holds — no partial renders.
-
-**The posting line — deliberately stubbed.** `generate_render` only calls real Veo when
-`ZEROPAGE_RENDER=1`; otherwise every clip returns `ok=False` by design. `qc_clip` checks
-the file is really there and really a video (size, `ffprobe` duration) before allowing a
-caption. `publish` reads the channel's autonomy (`shadow` | `queue` | `auto`, never a
-global flag) and the kill switch — no posting API is wired yet, so even an `auto` channel
-currently parks with an explicit reason rather than pretending to post.
-
-**The sink.** Five different failure points converge on one `hold` node, which inspects
-state to write a human-readable reason to `autonomy.hold_queue` — the dead-man log every
-run writes to, pass, fail, or crash. Grading a hold on `/holds` (approved/rejected) is what
-earns a channel promotion toward `auto`.
+Both are documented in **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**, along with the two known
+divergences between them.
 
 ## Decisions Log
 
@@ -351,3 +415,44 @@ avoids this by stubbing `_client` through the shared `tmp_db` fixture; this one 
 that fixture entirely and needed its own stub. Passed locally, failed in CI — a genuine
 "trust the log, not the assumption" case, same spirit as the Verify-by-running-it rule
 above. No production code changed, only the test.
+
+**2026-08-20 — Every shot is generated; the camera path is gone.** The pipeline was built on real
+and AI shots as co-inputs, each shot carrying `source: CAMERA | AI` to say which one it was. That
+mix is retired. Every shot is now AI-generated, and `source` was repurposed rather than removed: it
+records whether real reference material anchors the generation — an acting take, a room plate,
+feeding the shot's `reference_image` — not whether the shot escapes the pipeline. A reference is an
+enhancement, never a gate, exactly as RAG grounding is. Reason: the mix was the last thing forcing
+the product to be about one operator with two cameras and a house. Cutting it is what let the
+identity become an aggregator for generating concepts and video, which is the shape someone other
+than me could use. Cost: the "real material grounds everything, AI extends it" story, which was
+distinctive and is now simply untrue. Accepted. Direct consequence: Director mode grew a rendering
+half — enhance the shot prompt with Gemini 3 Flash, generate a Nano Banana Pro keyframe, feed that
+keyframe to Runway so the clip starts from an approved still instead of from text.
+
+**2026-08-27 — From "a solo filmmaker's grounded pipeline" to a multi-platform generation studio.**
+This README described a one-operator, CLI-first pre-production tool whose central rule was that
+everything is grounded in photographed rooms. Twenty commits since 2026-08-11 made that wrong in
+both halves. What shipped meanwhile: the **ZPF Studio** UI (`/ui`, capability-gated JSON API, jobs
+over SSE, an eval store), **real sign-in** (Google and Discord OAuth plus argon2 email/password) and
+an accounts model, **gated render connectors** for Runway, Veo, Midjourney and Nano Banana, the
+**scene board** and **director mode**, **brand-scoped inspiration lanes**, and **opt-in asset
+grounding** — which demoted grounding from the thesis of the product to a toggle on it. The clearest
+evidence the old framing had expired is `format_feed.py`, which states outright that Zero Page rides
+format skeletons, *not* rooms. The identity that replaced it: an aggregator for generating content
+concepts and videos across platforms, where grounding in your own material is one available input
+rather than the precondition. Also newly documented: the four separate scorers (prompt gate,
+`uncanny_judge`'s fixed on-brand rubric, `taste_judge`'s learned-from-history rubric, `quality.py`'s
+DeepEval metrics), which were doing significant work while going unmentioned entirely. Cost: the
+grounding story was the sharpest thing about the old README, and the new framing is broader and
+therefore less pointed. Accepted, because a sharp description of the wrong product is worse than an
+accurate description of the right one. No code changed.
+
+**2026-08-27 — Recorded the tenancy gap rather than quietly shipping around it.** Adding sign-in
+made it read as though the product were multi-user. It isn't: `list_concepts` and `get_concept` carry
+no owner predicate, `shoot_concepts` has no `account_id`, and the render caps count globally rather
+than per account — so a second user would see the first's work and exhaust their daily budget.
+Written up as `docs/tasks/task-account-tenancy.md` and stated plainly in the README's "Where this
+actually is" instead of being left for a reader to discover. Reason: the repo is public and linked
+in job applications; an OAuth flow and an SEO module imply a live product, and being first to say it
+isn't costs nothing while buying credibility for everything else on the page. Same instinct as
+logging removals — the honest state of a thing is more useful than the flattering one.

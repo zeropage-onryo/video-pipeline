@@ -45,3 +45,4 @@ data/morning_prompts.*
 data/renders/
 data/_scratch_*
 data/*.log
+data/*.db*
