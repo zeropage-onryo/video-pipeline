@@ -46,6 +46,9 @@ yet. See *Where this actually is*.
 
 ## What it does
 
+https://github.com/user-attachments/assets/967a5d87-b345-404c-8d84-d72477798b9b
+
+
 **Spark → scenes you choose between.** From an idea and a brand, several scenes are generated in a
 single call — so the options are varied *against each other* rather than rolled independently — each
 one a complete, paste-ready scene prompt with camera, framing, movement, lighting and diegetic
