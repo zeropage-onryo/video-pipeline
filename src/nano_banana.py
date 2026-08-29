@@ -143,16 +143,41 @@ def _generate_content(client, model: str, parts):
 
 
 def as_reference_list(reference) -> list:
-    """One reference or several, normalised to a list of byte strings.
+    """One reference or several, normalised to a list of
+    (label, bytes) pairs -- label may be "" when nothing named it.
 
     Plural on purpose: a character's face and their wardrobe are two
     references, not one, and the whole point of naming assets is that
-    several of them describe one shot. Anything that isn't bytes is
-    dropped -- a reference is an enhancement, never a gate."""
+    several of them describe one shot.
+
+    LABELS, because four bare pictures is not four references. Both
+    platforms this project targets bind an image to a NAME the prompt
+    then uses -- Runway takes `{uri, tag}` and documents the tag as
+    "used to reference the image in prompt text", Higgsfield rewrites
+    `<<<element>>>` to `@element_name`. Gemini has no tag field, so the
+    same binding is made the way its own multi-image convention does
+    it: a caption part immediately before each image. Without it a
+    scene with two characters and two props leaves the model guessing
+    which photo is the face (2026-08-28).
+
+    Accepts a bare bytes, a list of bytes, or a list of (label, bytes)
+    -- old callers keep working and simply pass no names. Anything that
+    isn't bytes is dropped: a reference is an enhancement, never a
+    gate."""
     if reference is None:
         return []
     items = reference if isinstance(reference, (list, tuple)) else [reference]
-    return [bytes(i) for i in items if isinstance(i, (bytes, bytearray)) and i]
+    if isinstance(reference, tuple) and len(reference) == 2 \
+            and isinstance(reference[0], str):
+        items = [reference]           # a single (label, bytes) pair
+    out = []
+    for item in items:
+        label, data = "", item
+        if isinstance(item, tuple) and len(item) == 2:
+            label, data = item[0] or "", item[1]
+        if isinstance(data, (bytes, bytearray)) and data:
+            out.append((str(label), bytes(data)))
+    return out
 
 
 def generate_image(prompt: str, out_path: Path, *, model: str = MODEL,
@@ -173,13 +198,14 @@ def generate_image(prompt: str, out_path: Path, *, model: str = MODEL,
 
     client = client or _client()
     references = as_reference_list(reference_bytes)
-    parts = [
-        types.Part.from_bytes(
+    parts: list = []
+    for label, data in references:
+        if label:
+            parts.append(label)      # names the image that follows
+        parts.append(types.Part.from_bytes(
             data=data,
             mime_type=(reference_mime if reference_mime and len(references) == 1
-                       else sniff_mime(data)))
-        for data in references
-    ]
+                       else sniff_mime(data))))
     parts.append(prompt)
     response = _generate_content(client, model, parts)
     for candidate in response.candidates or []:

@@ -197,7 +197,56 @@ def image_bytes_for_gemini(value, resolve_photo=None):
     if value.startswith(("http://", "https://")):
         return fetch_image_bytes(value)
     target = resolve_photo(value) if resolve_photo else None
-    return target.read_bytes() if target is not None else None
+    return upright(target.read_bytes()) if target is not None else None
+
+
+VISION_MAX_EDGE = 1536   # these models tile an image at ~1k px anyway
+
+
+def upright(data):
+    """A reference photo as the renderers should receive it: rotation
+    baked in, and not absurdly larger than the model will look at.
+
+    Two things, because both are about the same journey from disk to
+    request body:
+
+    ROTATION. Every photo off Mike's iPhone is stored landscape with
+    EXIF orientation 6 -- a portrait only because a tag says to turn
+    it. We hand the renderers raw bytes, and a model fed a face lying
+    on its side grounds badly on it (2026-08-28).
+
+    SIZE. These models tile an image down to about a thousand pixels
+    regardless, so a 5712x4284 still costs megabytes of request body
+    and buys nothing with them. Three untouched references came to
+    ~10MB against an inline ceiling around 20MB, and a request that
+    heavy is also the first thing shed when the model is busy. Capping
+    the long edge takes the same three to a few hundred KB.
+
+    A photo already upright and already small comes back as the very
+    same object -- no re-encode, no generation loss. Never a gate:
+    bytes we cannot read pass through to fail where they did before.
+    """
+    if not data:
+        return data
+    try:
+        import io
+
+        from PIL import Image, ImageOps
+        with Image.open(io.BytesIO(data)) as im:
+            turned = (im.getexif() or {}).get(274, 1) not in (1, None)
+            oversized = max(im.size) > VISION_MAX_EDGE
+            if not (turned or oversized):
+                return data
+            fixed = ImageOps.exif_transpose(im) if turned else im
+            if oversized:
+                fixed.thumbnail((VISION_MAX_EDGE, VISION_MAX_EDGE),
+                                Image.LANCZOS)
+            out = io.BytesIO()
+            fixed.convert("RGB").save(out, format="JPEG", quality=88,
+                                      optimize=True)
+            return out.getvalue()
+    except Exception:
+        return data
 
 
 def image_for_runway(value, resolve_photo=None):
@@ -217,7 +266,7 @@ def image_for_runway(value, resolve_photo=None):
     if value.startswith("/renders/"):
         return render_bytes(value)
     target = resolve_photo(value) if resolve_photo else None
-    return target.read_bytes() if target is not None else None
+    return upright(target.read_bytes()) if target is not None else None
 
 
 def enhance(system: str, user: str, images=None, *, gemini_client,
@@ -260,6 +309,12 @@ def enhance(system: str, user: str, images=None, *, gemini_client,
         # which is indistinguishable from no reference at all.
         data = image_bytes_for_gemini(image, resolve_photo=resolve_photo)
         if data:
+            # caption first, image second -- the binding between a photo
+            # and the name the prompt uses for it
+            label = (shootgen.reference_label(image)
+                     if isinstance(image, str) else "")
+            if label:
+                parts.append(label)
             parts.append(types.Part.from_bytes(
                 data=data, mime_type=sniff_mime(data)))
         elif isinstance(image, str) and image.startswith(("http://", "https://")):
@@ -270,7 +325,39 @@ def enhance(system: str, user: str, images=None, *, gemini_client,
     return generate_with_retry(gemini_client, model or shootgen.MODEL, parts)
 
 
-def node_reference_urls(node, properties, links, outputs, port="image") -> list:
+def shot_reference_urls(properties, db_path=None) -> list:
+    """The references stored on the shot this node belongs to, read at
+    RUN time rather than trusted from the drawing.
+
+    A Director chain is built with the shot's refs frozen into every
+    billed node's ref_urls, and a SAVED canvas wins over a rebuild --
+    so a graph drawn before its scene had any references stayed blind
+    for good, and attaching photos afterwards changed nothing on a
+    re-run (2026-08-28: a shot with a face and a bike on file rendered
+    a stranger). A frozen list that HAS something in it still wins; an
+    empty one is no longer read as a promise that there is nothing.
+
+    Grounding shapes, it never gates: anything unreadable is no refs.
+    """
+    concept_id = properties.get("concept_id")
+    shot_n = properties.get("shot_n")
+    if not concept_id or not shot_n:
+        return []
+    try:
+        from src import preprod
+        concept = preprod.get_concept(int(concept_id),
+                                      path=db_path or db.DB_PATH)
+    except Exception:
+        return []
+    for shot in (concept or {}).get("shots") or []:
+        if shot.get("n") == shot_n:
+            return [url for url in (shot.get("refs") or [])
+                    if isinstance(url, str) and url]
+    return []
+
+
+def node_reference_urls(node, properties, links, outputs, port="image",
+                       db_path=None) -> list:
     """Every reference image this node should ground on, in priority
     order: whatever is wired into its image port, then the scene's own
     references (ref_urls), then the single image_url fallback.
@@ -281,7 +368,11 @@ def node_reference_urls(node, properties, links, outputs, port="image") -> list:
     wiring the keyframe in does not send it twice."""
     urls, seen = [], set()
     candidates = [_input_value(node, port, links, outputs)]
-    candidates.extend(properties.get("ref_urls") or [])
+    # the drawing's own list first; only when it is EMPTY is the shot
+    # read back (see shot_reference_urls) -- a graph that carries
+    # references is never second-guessed
+    refs = list(properties.get("ref_urls") or [])
+    candidates.extend(refs or shot_reference_urls(properties, db_path))
     candidates.append(properties.get("image_url"))
     for url in candidates:
         if isinstance(url, str) and url and url not in seen:
@@ -367,7 +458,8 @@ def execute_graph(graph: dict, *, gemini_client=None, resolve_photo=None,
                 # reference images riding invisibly via ref_urls /
                 # image_url (the Director chain keeps grounding on the
                 # backend). All of them inform the enhance.
-                images = node_reference_urls(node, properties, links, outputs)
+                images = node_reference_urls(node, properties, links, outputs,
+                                             db_path=db_path)
                 kind = "text"
                 # references passed only when present, so older graphs
                 # (and tests patching enhance without the param) run
@@ -392,10 +484,18 @@ def execute_graph(graph: dict, *, gemini_client=None, resolve_photo=None,
                 from src import nano_banana
                 prompt = _input_value(node, "prompt", links, outputs) or ""
                 # every reference, not just one: the face AND the jacket
+                urls = node_reference_urls(node, properties, links,
+                                           outputs, db_path=db_path)
+                # (label, bytes): the caption names the asset the photo
+                # belongs to, so four references are four NAMED things
+                # rather than four pictures the model has to sort out
+                from src import shootgen
                 references = [
-                    data for data in (
-                        image_bytes_for_gemini(url, resolve_photo=resolve_photo)
-                        for url in node_reference_urls(node, properties, links, outputs))
+                    (shootgen.reference_label(url), data)
+                    for url, data in (
+                        (url, image_bytes_for_gemini(
+                            url, resolve_photo=resolve_photo))
+                        for url in urls)
                     if data
                 ]
                 result = nano_banana.generate_from_prompt(
@@ -425,7 +525,8 @@ def execute_graph(graph: dict, *, gemini_client=None, resolve_photo=None,
                 # keyframe when there is one, else the scene's own
                 # reference. The rest already informed the prompt that
                 # got here, which is how they reach the clip at all.
-                urls = node_reference_urls(node, properties, links, outputs)
+                urls = node_reference_urls(node, properties, links, outputs,
+                                           db_path=db_path)
                 reference = image_for_runway(
                     urls[0] if urls else None, resolve_photo=resolve_photo)
                 result = runway.generate_from_prompt(

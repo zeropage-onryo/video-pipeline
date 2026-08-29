@@ -455,8 +455,20 @@ def test_execute_graph_enhance_auto_grounds_on_the_backend(tmp_db, monkeypatch):
 
 
 def test_api_presets_carries_the_enhance_instruction(tmp_db):
+    """The enhance instruction is asserted on what it PROTECTS, not on
+    its wording (2026-08-28). The original told the model to "expand the
+    user's simple prompt", which on a finished director's prompt made it
+    summarise: a real run dropped every "(reference photos on file)"
+    lock, the whole Avoid list, the beat order and the no-music rule,
+    and handed the renderer a paraphrase. Those four are the contract."""
     res = client.get("/api/presets").json()
-    assert "prompt enhancement assistant" in res["enhance_system"]
+    text = res["enhance_system"].lower()
+    assert "output only the prompt" in text
+    for protected in ("reference photos on file", "avoid", "order", "music"):
+        assert protected in text, f"the instruction no longer protects {protected!r}"
+    # and it must steer AWAY from the glossy render, not toward it
+    assert "do not add" in text
+    assert "cinematic" in text.split("do not add", 1)[1]
 
 
 def test_execute_graph_wires_ground_into_enhance_references(tmp_db, monkeypatch):
@@ -508,19 +520,39 @@ def test_api_exec_generate_respects_the_spend_gate(tmp_db, monkeypatch):
 
 # --- the shell + the dev page ----------------------------------------------
 
-def test_ui_shell_has_pipeline_tabs_and_a_director_view(tmp_db):
-    """The 2026-08-25 restructure, corrected same day: Pipeline is two
-    tabs (Concept / Generate); the node canvas is its OWN rail view,
-    Director -- the nodes must never be buried behind a tab. The canvas
-    (LiteGraph) still ships with the shell."""
+def test_ui_shell_is_one_board_per_rail_view(tmp_db):
+    """The 2026-08-28 merge: Pipeline has no tabs left. Scenes and
+    concepts were always the same row, so they are one board; the idea
+    is typed on Studio and the spend is approved in Queue. The node
+    canvas stays its OWN rail view, Director -- the nodes must never be
+    buried behind a tab -- and the canvas (LiteGraph) still ships with
+    the shell."""
     html = client.get("/ui").text
     assert 'data-view="workflows"' not in html
     assert 'data-view="director"' in html
-    assert 'data-ptab="concept"' in html
-    assert 'data-ptab="generate"' in html
-    assert 'data-ptab="director"' not in html
+    assert 'data-view="queue"' in html
+    assert "data-ptab=" not in html            # the tab strip is gone entirely
     assert 'data-view="evals"' not in html
     assert "vendor/litegraph.js" in html
+
+
+def test_the_idea_composer_lives_only_on_studio(tmp_db):
+    """One place to type an idea. The Pipeline composer is gone, and
+    Studio's Create carries the 1-4 count that replaced it."""
+    html = client.get("/ui").text
+    assert html.count('id="ccount"') == 1
+    assert 'id="sceneidea"' not in html        # the Pipeline composer
+    assert 'id="genprompt"' not in html        # the Generate tab composer
+    assert '<option value="4" selected>4 concepts</option>' in html
+    assert '<option value="5"' not in html     # 4 is the cap the API enforces
+
+
+def test_the_queue_is_the_approval_gate(tmp_db):
+    """Rendering is the only step that spends, so it is the only one
+    with a gate -- and the gate is in Queue, not on the board."""
+    html = client.get("/ui").text
+    assert 'id="pendlist"' in html
+    assert "Awaiting approval" in html
 
 
 def test_evals_url_redirects_into_the_dev_studio(tmp_db):
@@ -549,7 +581,9 @@ def test_seed_default_plants_the_template_once(tmp_db):
     assert [(link[1], link[3]) for link in template["graph"]["links"]] \
         == [(1, 3), (2, 3), (3, 4)]
     # the System Prompt ships with the prompts/ text, not empty
-    assert "enhance" in template["graph"]["nodes"][0]["properties"]["text"].lower()
+    seeded = template["graph"]["nodes"][0]["properties"]["text"]
+    assert "output only the prompt" in seeded.lower()
+    assert len(seeded) > 200
 
 
 def test_seed_default_respects_an_intentionally_emptied_slate(tmp_db):
@@ -857,7 +891,11 @@ def test_a_scenes_references_inform_every_node_that_runs(tmp_db, monkeypatch):
     workflow_runner.execute_graph(graph, gemini_client=object(), db_path=tmp_db)
 
     assert seen["enhance"] == refs                 # Flash sees both
-    assert seen["nano"] == [JPEG, JPEG]            # Nano gets both, as bytes
+    # Nano gets both, as (label, bytes). These two are plain CDN URLs
+    # rather than asset-bank paths, so there is no asset to name and the
+    # caption is empty -- see test_a_reference_url_names_its_asset for
+    # the /characters/... case that carries a name.
+    assert seen["nano"] == [("", JPEG), ("", JPEG)]
     # Runway's API anchors on ONE frame, so it takes the first only
     assert seen["runway"] == "https://cdn.test/face.jpg"
 
@@ -1027,6 +1065,58 @@ def test_api_exec_nano_runs_as_a_job(tmp_db, monkeypatch):
     assert response.status_code == 200
     job = wait_for_job(response.json()["job_id"])
     assert job["status"] == "done" and job["output"] == "/renders/nano/x.png"
+
+
+def test_api_exec_nano_sends_every_reference_the_canvas_posted(
+        tmp_db, monkeypatch):
+    """The canvas posts a node's whole reference list as `images`
+    (workflows.js referenceUrls), but the body model declared only
+    `image` -- so pydantic dropped the field without a word and a
+    per-node Run on Nano Banana rendered with NO references at all.
+    The face, the jacket and the bike arrived as a sentence and never
+    as pixels (2026-08-28)."""
+    from src import nano_banana
+
+    seen = {}
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(nano_banana, "generate_from_prompt",
+                        lambda prompt, **kw: seen.update(kw) or {
+                            "ok": True, "media_url": "/renders/nano/x.png",
+                            "generation_id": 1, "path": "x", "error": None})
+    monkeypatch.setattr("app.workflow_runner.image_bytes_for_gemini",
+                        lambda url, resolve_photo=None: url.encode())
+
+    response = client.post("/api/workflows/exec/nano", json={
+        "prompt": "a bike",
+        "images": ["/characters/michael/photo/a.jpg",
+                   "/props/motorcycle/photo/b.jpg"]})
+    assert response.status_code == 200
+    assert wait_for_job(response.json()["job_id"])["status"] == "done"
+    assert seen["reference_image"] == [b"/characters/michael/photo/a.jpg",
+                                       b"/props/motorcycle/photo/b.jpg"]
+
+
+def test_api_exec_generate_anchors_on_the_first_reference(tmp_db, monkeypatch):
+    """Runway takes exactly one prompt_image, so of the list the canvas
+    posts only the first is usable -- the same rule the graph runner's
+    Generate branch follows."""
+    seen = {}
+
+    monkeypatch.setattr(runway, "has_key", lambda: True)
+    monkeypatch.setattr(runway, "generate_from_prompt",
+                        lambda prompt, **kw: seen.update(kw) or {
+                            "ok": True, "media_url": "/renders/clip.mp4"})
+    monkeypatch.setattr("app.workflow_runner.image_for_runway",
+                        lambda url, resolve_photo=None: url)
+
+    response = client.post("/api/workflows/exec/generate", json={
+        "prompt": "a ride",
+        "images": ["/characters/michael/photo/a.jpg",
+                   "/props/motorcycle/photo/b.jpg"]})
+    assert response.status_code == 200
+    assert wait_for_job(response.json()["job_id"])["status"] == "done"
+    assert seen["reference_image"] == "/characters/michael/photo/a.jpg"
 
 
 def test_capabilities_report_nano(tmp_db, monkeypatch):

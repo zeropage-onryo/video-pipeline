@@ -16,6 +16,7 @@ and deciding on rather than silently discarding.
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -336,6 +337,128 @@ def format_locations(locations: list) -> str:
         if description.get("constraints"):
             lines.append(f"    constraints: {description['constraints']}")
     return "\n".join(lines)
+
+
+# The other half of format_cast (below). format_cast tells the model
+# which assets exist and marks the ones carrying "(reference photos on
+# file)"; this reads the finished scene back and says WHICH of them it
+# actually used, so their photos can be attached to the shot.
+#
+# Without it the loop is open in the worst possible way: the prompt
+# says "Michael (reference photos on file)" because format_cast told it
+# to, the photos sit right there in characters/michael, and nothing
+# ever hands them to the renderer -- the model is told a reference
+# exists and then never shown it.
+
+_ALIAS_STOP = {"The", "A", "An", "This", "That", "These", "Those", "His",
+               "Her", "Its", "Their", "My", "Our", "Shots", "Stills"}
+
+
+def asset_aliases(asset: dict) -> list[str]:
+    """The names this asset can be recognised by in a written scene: its
+    own name, plus any multi-word proper noun in its notes.
+
+    Two consecutive capitalised words, deliberately -- a prop named
+    "Motorcycle" whose notes say "A Ducati Panigale 959" has to be
+    findable when the scene calls it a Ducati, and "Ducati Panigale" is
+    a safe thing to match on where a lone capitalised word is not
+    (every sentence starts with one). Conservative on purpose: a missed
+    alias costs one un-attached photo, a false one attaches a reference
+    the shot was never supposed to resemble.
+    """
+    aliases = []
+    name = (asset.get("name") or "").strip()
+    if name:
+        aliases.append(name)
+    # Punctuation and digits are TOKENS here, not skipped: without them
+    # "A Ducati Panigale 959. Michael's personal vehicle" reads as one
+    # unbroken run and yields the alias "Ducati Panigale Michael",
+    # which matches nothing and belongs to nobody.
+    tokens = re.findall(r"[A-Za-z][A-Za-z'\-]*|[^A-Za-z\s]+",
+                        asset.get("text") or "")
+    run: list[str] = []
+    for token in tokens:
+        if token[0].isalpha() and token[0].isupper() and token not in _ALIAS_STOP:
+            run.append(token.split("'")[0])
+            continue
+        if len(run) >= 2:
+            aliases.append(" ".join(run))
+        run = []
+    if len(run) >= 2:
+        aliases.append(" ".join(run))
+    return aliases
+
+
+_LABEL_ROLE = {
+    "characters": "the EXACT face and likeness",
+    "props": "the EXACT object",
+    "locations": "the location",
+}
+
+
+def reference_label(url: str) -> str:
+    """A one-line caption naming the asset a reference photo belongs to.
+
+    Four bare pictures is not four references. Both platforms this
+    project targets bind an image to a NAME the prompt then uses --
+    Runway takes `{uri, tag}` and documents the tag as "used to
+    reference the image in prompt text"; Higgsfield rewrites
+    `<<<element>>>` into `@element_name`. Gemini has no tag field, so
+    the binding is made its own way: a caption immediately before the
+    image. A shot with two characters and two props otherwise leaves
+    the model to guess which photo is the face (2026-08-28).
+
+    The name comes off the URL, not the database: the slug IS the
+    asset's name run through _slug, so reversing it cannot disagree
+    with the row, needs no query, and still works for an asset that has
+    since been renamed. "" for anything unrecognised -- an unlabelled
+    reference is the old behaviour, never an error.
+    """
+    parts = (url or "").split("?")[0].strip("/").split("/")
+    if len(parts) == 2 and parts[0] == "refs":
+        return "Reference photo supplied with this prompt:"
+    if len(parts) != 4 or parts[2] != "photo":
+        return ""
+    role = _LABEL_ROLE.get(parts[0])
+    if role is None:
+        return ""
+    name = parts[1].replace("-", " ").replace("_", " ").strip().title()
+    return f"Reference photo — {name}, {role}:"
+
+
+def named_assets(text: str, assets: list) -> list[dict]:
+    """Which of these assets the scene actually names, identity first.
+
+    Order is the point, not a detail. Runway anchors a clip on exactly
+    ONE frame, so whatever lands first is what the clip will look like:
+    a character, then the prop they are handling, and a location LAST --
+    a full-room photo in that slot makes the model reproduce that room
+    instead of the scene, which is the documented way to waste a
+    generation.
+    """
+    haystack = " " + re.sub(r"\s+", " ", text or "").lower() + " "
+    rank = {"character": 0, "prop": 1, "location": 2}
+    hits = []
+    for asset in assets:
+        if not asset.get("photos"):
+            continue          # nothing to attach; naming it is not enough
+        at = None
+        for alias in asset_aliases(asset):
+            if len(alias) < 3:
+                continue
+            found = re.search(r"(?<![\w])" + re.escape(alias.lower()) + r"(?![\w])",
+                              haystack)
+            if found and (at is None or found.start() < at):
+                at = found.start()
+        if at is not None:
+            hits.append((rank.get(asset.get("category"), 3), at, asset))
+    # category first, then WHO THE SCENE OPENS ON. Two characters are
+    # not interchangeable in the anchor slot: the scene that begins on
+    # Michael's hand should anchor on Michael, not on the monster he
+    # meets later, and alphabetical or table order gets that wrong half
+    # the time.
+    hits.sort(key=lambda h: (h[0], h[1]))
+    return [asset for _, _, asset in hits]
 
 
 def format_cast(characters: list, props: list) -> str:
@@ -737,8 +860,19 @@ def generate_scene_concept(brand: str, spark=None, gemini_client=None,
     contents = prompt
     if image_refs:
         from google.genai import types
-        contents = [types.Part.from_bytes(data=data, mime_type=mime)
-                    for data, mime in image_refs] + [prompt]
+        # A caption before each photo, same binding the keyframe uses.
+        # This step WRITES the scene, and the scene text is what
+        # named_assets later reads back to decide which assets get
+        # attached -- so a photo misread here propagates all the way to
+        # the render. Refs may be (data, mime) or (data, mime, label).
+        contents = []
+        for ref in image_refs:
+            data, mime = ref[0], ref[1]
+            label = ref[2] if len(ref) > 2 else ""
+            if label:
+                contents.append(label)
+            contents.append(types.Part.from_bytes(data=data, mime_type=mime))
+        contents.append(prompt)
     parsed = parse_scene_brief_response(
         generate_with_retry(gemini_client, model, contents))
 
@@ -829,8 +963,19 @@ def generate_scene_concepts(idea: str, brand: str, count: int = 4,
     contents = prompt
     if image_refs:
         from google.genai import types
-        contents = [types.Part.from_bytes(data=data, mime_type=mime)
-                    for data, mime in image_refs] + [prompt]
+        # A caption before each photo, same binding the keyframe uses.
+        # This step WRITES the scene, and the scene text is what
+        # named_assets later reads back to decide which assets get
+        # attached -- so a photo misread here propagates all the way to
+        # the render. Refs may be (data, mime) or (data, mime, label).
+        contents = []
+        for ref in image_refs:
+            data, mime = ref[0], ref[1]
+            label = ref[2] if len(ref) > 2 else ""
+            if label:
+                contents.append(label)
+            contents.append(types.Part.from_bytes(data=data, mime_type=mime))
+        contents.append(prompt)
     scenes = parse_scenes_response(generate_with_retry(gemini_client, model, contents))
 
     location_names = [loc["name"] for loc in locations]

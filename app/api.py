@@ -13,6 +13,7 @@ grounding entities (locations, characters, props); footage ingest is a
 later phase. Analytics reads the real metrics snapshots -- no daily
 rollups exist yet, so no daily chart is served.
 """
+import hashlib
 import json
 import os
 import re
@@ -566,6 +567,8 @@ def _concept_card(c: dict) -> dict:
         # it was written against, and whether it was picked to render
         "is_scene": c.get("is_scene", False),
         "picked": c.get("picked", False),
+        "archived": c.get("archived", False),
+        "graded": c.get("graded", False),
         "refs": c.get("refs") or [],
         "prompt": ((c.get("shots") or [{}])[0].get("prompt") or "")
                   if c.get("is_scene") else "",
@@ -577,12 +580,19 @@ def _concept_card(c: dict) -> dict:
 
 
 @router.get("/pipeline/concepts")
-def pipeline_concepts(brand: Optional[str] = None, status: Optional[str] = None):
+def pipeline_concepts(brand: Optional[str] = None, status: Optional[str] = None,
+                      archived: bool = False):
+    """The board. Archived concepts are hidden by default -- they are
+    decided about, and the board is for what is still open. They are
+    still here (`?archived=true`) and still counted in pick_rate, which
+    reads the rows rather than this endpoint."""
     cards = [_concept_card(c) for c in preprod.list_concepts(path=db.DB_PATH)]
     if brand in preprod.BRANDS:
         cards = [c for c in cards if c["brand"] == brand]
     if status in ("idea", "planned", "shot"):
         cards = [c for c in cards if c["status"] == status]
+    if not archived:
+        cards = [c for c in cards if not c["archived"]]
     return {
         "items": cards,
         "deny_reasons": list(DENY_REASONS),
@@ -597,43 +607,155 @@ def pipeline_concepts(brand: Optional[str] = None, status: Optional[str] = None)
 # Director, render and autopilot keep working unmodified. What is new is
 # that you get SEVERAL and the pick is recorded (preprod.pick_rate).
 
-SCENE_COUNT_MAX = 8
+async def _collect_refs(form, want_video: bool = False):
+    """Every reference one composer submission carries, in both the
+    forms the pipeline needs: BYTES for the Gemini call happening now,
+    and URLS to store on the shot so the keyframe and the clip get them
+    too.
+
+    One function because there are three routes that write a concept --
+    /scenes/run, /pipeline/run and /generate/run -- and three copies of
+    this is exactly how two of them ended up silently discarding the
+    URLs (2026-08-28). Returns (image_refs, ref_urls, video_refs).
+    """
+    # local, like every other shootgen use here -- the module pulls in
+    # google.genai and this file must stay cheap to import
+    from src import shootgen
+
+    image_refs: list = []
+    ref_urls: list = []
+    video_refs: list = []
+    for upload in form.getlist("files"):
+        filename = getattr(upload, "filename", "")
+        if not filename:
+            continue
+        mime = _video_mime(filename) if want_video else None
+        if mime:
+            if len(video_refs) < MAX_VIDEO_REFS:
+                video_refs.append((await upload.read(), mime))
+            continue
+        if len(image_refs) >= MAX_IMAGE_REFS:
+            continue
+        jpeg = _to_jpeg(await upload.read())
+        if not jpeg:
+            continue
+        saved = _save_upload_ref(jpeg)
+        if saved and saved not in ref_urls:
+            ref_urls.append(saved)
+        image_refs.append((jpeg, "image/jpeg",
+                           shootgen.reference_label(saved or "")))
+    for picked in form.getlist("asset_photos"):
+        picked = str(picked).split("?")[0]
+        if not picked or picked in ref_urls or len(ref_urls) >= MAX_IMAGE_REFS:
+            continue
+        ref_urls.append(picked)
+        target = _resolve_asset_photo(picked)
+        if target is None or len(image_refs) >= MAX_IMAGE_REFS:
+            continue
+        jpeg = _to_jpeg(target.read_bytes())
+        if jpeg:
+            image_refs.append((jpeg, "image/jpeg",
+                               shootgen.reference_label(picked)))
+    return image_refs, ref_urls, video_refs
 
 
-class ScenesRunBody(BaseModel):
-    idea: str
-    count: int = 4
-    refs: list[str] = []       # asset photos this batch is written against
-    brand: Optional[str] = None
+def _auto_refs(text: str, already: list) -> list:
+    """The photos of the assets this scene actually names.
+
+    `format_cast` tells the generator that Michael and the Ducati have
+    "(reference photos on file)", and the scene it writes says so in as
+    many words -- but nothing was ever attaching those files, so the
+    renderer got the sentence and not the face (2026-08-28). This
+    closes that loop: read the finished scene back, find the assets it
+    named, take ONE photo each (a face and a bike, not twelve angles of
+    the same bike), and let them ride on the shot.
+
+    Grounding shapes, it doesn't gate: no match, or no assets at all,
+    just means the scene renders on its text like it did before.
+    """
+    try:
+        from src import shootgen
+        assets = _assets_all()
+    except Exception:
+        return []
+    picked = list(already)
+    for asset in shootgen.named_assets(text, assets):
+        if len(picked) >= MAX_IMAGE_REFS:
+            break
+        photo = _best_photo(asset["photos"])
+        if photo and photo not in picked:
+            picked.append(photo)
+    return picked
+
+
+def _best_photo(photos: list) -> Optional[str]:
+    """One photo per asset -- a face and a bike, not twelve angles of
+    the bike -- preferring one the renderer can actually decode."""
+    urls = [p.split("?")[0] for p in photos if p]
+    for url in urls:
+        if Path(url).suffix.lower() in _DECODES_NATIVELY:
+            return url
+    return urls[0] if urls else None
+
+
+def _attach_scene_refs(concept_id: int, manual: list) -> list:
+    """Store a scene's references on its shot, manual picks first.
+
+    On the shot rather than on the concept because that is what the
+    Director graph reads (`ref_urls` on the enhance, keyframe and clip
+    nodes), and manual first because an explicit pick outranks anything
+    inferred -- and because Runway anchors on whichever one is first.
+    """
+    concept = preprod.get_concept(concept_id, path=db.DB_PATH)
+    if concept is None or not concept["shots"]:
+        return []
+    shots = [dict(sh) for sh in concept["shots"]]
+    text = " ".join(str(shots[0].get(k) or "")
+                    for k in ("desc", "prompt", "location"))
+    refs = _auto_refs(text, manual)[:MAX_IMAGE_REFS]
+    if not refs:
+        return []
+    shots[0]["refs"] = refs
+    preprod.update_concept_shots(
+        concept_id, {"shots": shots, "duration": concept.get("duration")},
+        warnings=concept.get("warnings") or [], path=db.DB_PATH)
+    return refs
+
+
+SCENE_COUNT_MAX = 4        # the composer offers 1-4
+SCENE_COUNT_DEFAULT = 4
 
 
 @router.post("/scenes/run")
-def scenes_run(request: Request, body: ScenesRunBody):
-    """Several takes on one idea, to pick between. The references you
-    attach are stored ON each scene's shot, which is what carries them
-    into every node once it reaches Director."""
-    idea = (body.idea or "").strip()
+async def scenes_run(request: Request):
+    """Several takes on one idea, to pick between -- the Studio Create
+    button (2026-08-28).
+
+    Multipart, the same shape /pipeline/run takes, because the composer
+    that fires it can attach BOTH freshly uploaded photos and ones
+    picked out of the asset bank. `asset_photos` are stored ON each
+    concept's shot as well as sent as vision input, which is what
+    carries them into every node once it reaches Director; an uploaded
+    file grounds this call only, since it has no URL to ride on.
+    """
+    form = await request.form()
+    idea = (form.get("idea") or form.get("prompt") or "").strip()
     if not idea:
         return _error(400, "empty_idea", "type an idea first")
     api_key = _gemini_key()
     if not api_key:
         return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
-    brand_raw = body.brand
+    brand_raw = form.get("brand")
     brand = brand_raw if brand_raw in preprod.BRANDS else (
         request.cookies.get("brand") if request.cookies.get("brand") in preprod.BRANDS
         else "antihero")
-    count = max(1, min(SCENE_COUNT_MAX, body.count))
-    refs = [r for r in body.refs if isinstance(r, str) and r][:MAX_IMAGE_REFS]
+    try:
+        count = int(form.get("count") or SCENE_COUNT_DEFAULT)
+    except (TypeError, ValueError):
+        count = SCENE_COUNT_DEFAULT
+    count = max(1, min(SCENE_COUNT_MAX, count))
 
-    # the same photos as bytes, so THIS call sees what it is writing for
-    image_refs = []
-    for picked in refs:
-        target = _resolve_asset_photo(picked)
-        if target is None:
-            continue
-        jpeg = _to_jpeg(target.read_bytes())
-        if jpeg:
-            image_refs.append((jpeg, "image/jpeg"))
+    image_refs, refs, _ = await _collect_refs(form)
 
     def work(job):
         from google import genai
@@ -648,17 +770,29 @@ def scenes_run(request: Request, body: ScenesRunBody):
                 entities.list_props(path=db.DB_PATH))
         except Exception:
             cast = None        # naming the cast is grounding, never a gate
-        jobs.progress(job, 0.4, f"writing {count} scene(s)")
+        jobs.progress(job, 0.4, f"writing {count} concept(s)")
         result = shootgen.generate_scene_concepts(
             idea, brand, count=count,
             gemini_client=genai.Client(api_key=api_key),
             references=references, cast=cast, db_path=db.DB_PATH,
             refs=refs, image_refs=image_refs or None)
         saved = result["scenes"]
-        return {"detail": f"{len(saved)} scene(s)",
+        # the assets each scene NAMED, attached to it -- the loop
+        # format_cast opens and nothing used to close
+        grounded = 0
+        for scene in saved:
+            try:
+                if _attach_scene_refs(scene["concept_id"], refs):
+                    grounded += 1
+            except Exception:
+                pass          # a missing photo never fails a written scene
+        detail = f"{len(saved)} concept(s)"
+        if grounded:
+            detail += f" · {grounded} grounded in references"
+        return {"detail": detail,
                 "ref_id": saved[0]["concept_id"] if saved else None}
 
-    job = jobs.start("scenes", f"scenes · {idea[:60]}", work)
+    job = jobs.start("scenes", f"concepts · {idea[:60]}", work)
     return {"job_id": job["id"], "image_refs": len(image_refs)}
 
 
@@ -675,6 +809,122 @@ def concept_pick(concept_id: int, body: PickBody):
         return _error(404, "not_found", str(e))
     return {"ok": True, "picked": body.picked,
             "pick": preprod.pick_rate(path=db.DB_PATH)}
+
+
+class ArchiveBody(BaseModel):
+    archived: bool = True
+
+
+@router.post("/concepts/{concept_id}/archive")
+def concept_archive(concept_id: int, body: ArchiveBody):
+    """Take a concept off the board. Not a delete: the row stays for
+    pick_rate and stays in the Dev Studio's ungraded pool."""
+    try:
+        preprod.set_archived(concept_id, body.archived, path=db.DB_PATH)
+    except ValueError as e:
+        return _error(404, "not_found", str(e))
+    return {"ok": True, "archived": body.archived}
+
+
+# --- the approval gate ------------------------------------------------------
+# A picked concept is not rendered yet -- rendering costs money, so the
+# pick and the spend are two different decisions. Everything picked and
+# not yet rendered waits in the Queue, and approving one there is what
+# actually calls Runway.
+
+
+def _runway_state() -> dict:
+    """What approving one of these would cost and whether it can even
+    happen. The daily count reads the generations log, which a database
+    that has never rendered anything does not have yet -- a queue that
+    500s because nothing has been billed on it is the wrong failure, so
+    the count degrades to None and the gate is still reported."""
+    try:
+        today = runway.generations_today(db_path=db.DB_PATH)
+    except Exception:
+        today = None
+    return {"available": runway.has_key(),
+            "spend_ok": runway.spend_approved(),
+            "model": runway.DEFAULT_MODEL,
+            "estimate_usd": runway.estimate_cost(1),
+            "today": today}
+
+
+@router.get("/queue/pending")
+def queue_pending(brand: Optional[str] = None):
+    """What is waiting on you to spend: picked, not archived, no clip
+    yet. Derived from the rows, so it survives a restart -- the jobs
+    registry does not, and an approval that vanished on restart would be
+    a queue that lies."""
+    cards = [_concept_card(c) for c in preprod.list_concepts(path=db.DB_PATH)]
+    if brand in preprod.BRANDS:
+        cards = [c for c in cards if c["brand"] == brand]
+    pending = [c for c in cards
+               if c["picked"] and not c["archived"]
+               and c["is_scene"] and not c["media_url"]]
+    return {"items": pending, "runway": _runway_state()}
+
+
+@router.post("/queue/{concept_id}/approve")
+def queue_approve(concept_id: int):
+    """Approve = render. The concept's stored prompt goes through the
+    Runway API (anchored on its reference image when it has one), and
+    the clip comes back attached to the shot.
+
+    Approving also resolves the batch: every other concept written from
+    the same idea that you did NOT pick is archived, because you have
+    now answered the question those cards were asking.
+    """
+    if not runway.has_key():
+        return _error(503, "runway_unavailable", "RUNWAYML_API_SECRET is not set")
+    concept = preprod.get_concept(concept_id, path=db.DB_PATH)
+    if concept is None:
+        return _error(404, "not_found", "no such concept")
+    if not concept["shots"]:
+        return _error(400, "no_prompt", "this concept carries no prompt to render")
+    if not concept.get("picked"):
+        return _error(400, "not_picked", "pick it on the board before approving")
+
+    shot_n = concept["shots"][0].get("n", 1)
+
+    def work(job):
+        jobs.progress(job, 0.2, "rendering via Runway")
+        result = runway.generate_for_shot(concept_id, shot_n, db_path=db.DB_PATH)
+        if not result.get("ok"):
+            raise RuntimeError(result.get("error") or "render failed")
+        # the batch is answered: keep this one, archive the siblings it
+        # was picked over. Best-effort -- a clip that rendered is not
+        # un-rendered because the tidy-up failed.
+        archived = 0
+        try:
+            if concept.get("spark"):
+                picked_ids = [c["id"] for c in preprod.list_concepts(path=db.DB_PATH)
+                              if c.get("spark") == concept["spark"] and c.get("picked")]
+                archived = preprod.archive_batch(
+                    concept["spark"], keep_ids=picked_ids,
+                    brand=concept.get("brand"), path=db.DB_PATH)
+        except Exception:
+            pass
+        detail = "clip attached"
+        if archived:
+            detail += f" · {archived} unpicked archived"
+        return {"ref_id": concept_id, "detail": detail}
+
+    job = jobs.start("render", f"approved · {concept['title']}", work)
+    return {"job_id": job["id"]}
+
+
+@router.post("/queue/{concept_id}/reject")
+def queue_reject(concept_id: int):
+    """Rejected here means: not worth the spend. The pick comes off and
+    the concept archives, so it reads as generated-but-not-picked in
+    pick_rate -- which is the truth about it."""
+    concept = preprod.get_concept(concept_id, path=db.DB_PATH)
+    if concept is None:
+        return _error(404, "not_found", "no such concept")
+    preprod.set_picked(concept_id, False, path=db.DB_PATH)
+    preprod.set_archived(concept_id, True, path=db.DB_PATH)
+    return {"ok": True, "pick": preprod.pick_rate(path=db.DB_PATH)}
 
 
 class ConceptRefsBody(BaseModel):
@@ -853,14 +1103,49 @@ _PHOTO_ROOTS = {
 }
 
 
+# Composer uploads. A photo dragged onto the composer is a reference
+# in exactly the sense a picked asset photo is -- it just had nowhere to
+# live, so it grounded one Gemini call and vanished. It lives here now,
+# beside the rendered clips, under the same gitignored data/ roof.
+UPLOAD_REFS_DIR = PROJECT_ROOT / "data" / "refs"
+
+
+def _save_upload_ref(jpeg: bytes) -> Optional[str]:
+    """Persist one uploaded reference, return the URL it rides on.
+
+    Content-addressed, so attaching the same photo to six scenes stores
+    it once. Best-effort: a full disk costs the reference, never the
+    scene that was being written."""
+    try:
+        UPLOAD_REFS_DIR.mkdir(parents=True, exist_ok=True)
+        name = hashlib.sha256(jpeg).hexdigest()[:24] + ".jpg"
+        target = UPLOAD_REFS_DIR / name
+        if not target.exists():
+            target.write_bytes(jpeg)
+        return f"/refs/{name}"
+    except Exception:
+        return None
+
+
 def _resolve_asset_photo(url_path: str) -> Optional[Path]:
     """A picked media-panel thumbnail arrives as its site-relative photo
     URL (/locations/<space>/photo/<file>, ?thumb stripped). Resolve it
     against the real photo roots with the same traversal guard the
     photo routes use -- anything that escapes is silently dropped, an
-    attachment is an enhancement."""
+    attachment is an enhancement.
+
+    Composer uploads (/refs/<name>.jpg) resolve here too, because every
+    caller that turns a reference URL into bytes -- the scene writer,
+    the Director graph's enhance/keyframe/clip nodes -- goes through
+    this one function. Teaching it the new shape is what makes an
+    uploaded photo reach the render at all."""
     clean = (url_path or "").split("?")[0].strip("/")
     parts = clean.split("/")
+    if len(parts) == 2 and parts[0] == "refs":
+        target = (UPLOAD_REFS_DIR / parts[1]).resolve()
+        if UPLOAD_REFS_DIR.resolve() != target.parent:
+            return None
+        return target if target.is_file() else None
     if len(parts) != 4 or parts[2] != "photo":
         return None
     root = _PHOTO_ROOTS.get(parts[0])
@@ -920,12 +1205,34 @@ def video_part(client, data: bytes, mime: str):
         return None
 
 
+# Photo formats Pillow reads out of the box. IMAGE_EXTENSIONS also
+# lists .heic -- correctly, an iPhone export IS a photo and belongs in
+# the gallery -- but Pillow only decodes it with pillow-heif present,
+# and a reference that fails to decode is dropped SILENTLY, which is
+# the worst way for a reference to fail. Preferring a sibling the
+# renderer can definitely read costs nothing when there is one.
+_DECODES_NATIVELY = {".jpg", ".jpeg", ".png", ".webp"}
+
+
 def _to_jpeg(data: bytes) -> Optional[bytes]:
     import io
 
     from PIL import Image
     try:
-        image = Image.open(io.BytesIO(data)).convert("RGB")
+        import pillow_heif  # iPhone photos, when it is installed
+        pillow_heif.register_heif_opener()
+    except Exception:
+        pass                         # degrade: .heic simply stays unreadable
+    try:
+        from PIL import ImageOps
+        image = Image.open(io.BytesIO(data))
+        # BEFORE convert("RGB"), which drops the EXIF this reads. Every
+        # still off an iPhone is stored landscape with orientation 6 --
+        # a portrait only because a tag says so. Converting first threw
+        # the tag away and baked the photo in sideways, and
+        # _save_upload_ref then wrote that sideways file to data/refs
+        # where nothing downstream could ever recover it (2026-08-28).
+        image = ImageOps.exif_transpose(image).convert("RGB")
         buf = io.BytesIO()
         image.save(buf, "JPEG", quality=90)
         return buf.getvalue()
@@ -978,24 +1285,7 @@ async def pipeline_run(request: Request):
         request.cookies.get("brand") if request.cookies.get("brand") in preprod.BRANDS
         else "antihero")
 
-    image_refs = []
-    for upload in form.getlist("files"):
-        if len(image_refs) >= MAX_IMAGE_REFS:
-            break
-        if not getattr(upload, "filename", ""):
-            continue
-        jpeg = _to_jpeg(await upload.read())
-        if jpeg:
-            image_refs.append((jpeg, "image/jpeg"))
-    for picked in form.getlist("asset_photos"):
-        if len(image_refs) >= MAX_IMAGE_REFS:
-            break
-        target = _resolve_asset_photo(str(picked))
-        if target is None:
-            continue
-        jpeg = _to_jpeg(target.read_bytes())
-        if jpeg:
-            image_refs.append((jpeg, "image/jpeg"))
+    image_refs, refs, _ = await _collect_refs(form)
 
     def work(job):
         from google import genai
@@ -1020,6 +1310,16 @@ async def pipeline_run(request: Request):
         detail = f'"{title}"'
         if warnings:
             detail += f" · {len(warnings)} warning(s)"
+        # the same grounding /scenes/run does: this concept goes to
+        # Director too, and a brief-written scene needs its face as
+        # much as a Create-written one
+        try:
+            if result.get("concept_id"):
+                attached = _attach_scene_refs(result["concept_id"], refs)
+                if attached:
+                    detail += f" · {len(attached)} reference(s)"
+        except Exception:
+            pass
         return {"ref_id": result.get("concept_id"), "detail": detail}
 
     job = jobs.start("concept", f"concept · {prompt[:60]}", work)
@@ -1095,8 +1395,13 @@ def _enhance_generate_prompt(gemini_client, prompt: str, *, preset=None,
                       "in what it actually shows, don't ignore it.)")
     blocks.append("PROMPT TO ENHANCE:\n" + prompt)
 
-    parts: list = [types.Part.from_bytes(data=data, mime_type=mime)
-                   for data, mime in image_refs or []]
+    # caption then image, so the model is told which photo is the face
+    # and which is the jacket rather than inferring it from the prose
+    parts: list = []
+    for ref in image_refs or []:
+        if len(ref) > 2 and ref[2]:
+            parts.append(ref[2])
+        parts.append(types.Part.from_bytes(data=ref[0], mime_type=ref[1]))
     for data, mime in video_refs or []:
         part = video_part(gemini_client, data, mime)
         if part is not None:
@@ -1139,31 +1444,7 @@ async def generate_run(request: Request):
     if attach_to is not None and preprod.get_concept(attach_to, path=db.DB_PATH) is None:
         return _error(404, "not_found", "no such concept to attach to")
 
-    image_refs: list = []
-    video_refs: list = []
-    for upload in form.getlist("files"):
-        filename = getattr(upload, "filename", "")
-        if not filename:
-            continue
-        mime = _video_mime(filename)
-        if mime:
-            if len(video_refs) < MAX_VIDEO_REFS:
-                video_refs.append((await upload.read(), mime))
-            continue
-        if len(image_refs) >= MAX_IMAGE_REFS:
-            continue
-        jpeg = _to_jpeg(await upload.read())
-        if jpeg:
-            image_refs.append((jpeg, "image/jpeg"))
-    for picked in form.getlist("asset_photos"):
-        if len(image_refs) >= MAX_IMAGE_REFS:
-            break
-        target = _resolve_asset_photo(str(picked))
-        if target is None:
-            continue
-        jpeg = _to_jpeg(target.read_bytes())
-        if jpeg:
-            image_refs.append((jpeg, "image/jpeg"))
+    image_refs, ref_urls, video_refs = await _collect_refs(form, want_video=True)
 
     def work(job):
         from google import genai
@@ -1209,6 +1490,13 @@ async def generate_run(request: Request):
             concept_id = preprod.save_concept(
                 concept_dict, brand=brand, spark=prompt,
                 warnings=warnings, path=db.DB_PATH)
+            # a one-shot generation is a concept like any other and
+            # opens in Director like any other, so it grounds like any
+            # other -- best-effort, never fails the generation
+            try:
+                _attach_scene_refs(concept_id, ref_urls)
+            except Exception:
+                pass
 
         notes = []
         if output == "image":
@@ -1253,6 +1541,77 @@ async def generate_run(request: Request):
 
 class ShotPromptBody(BaseModel):
     prompt: str
+
+
+class ShotGraphBody(BaseModel):
+    graph: dict
+    states: Optional[dict] = None
+    name: Optional[str] = None
+
+
+@router.put("/concepts/{concept_id}/shots/{shot_n}/graph")
+def shot_graph_save(concept_id: int, shot_n: int, body: ShotGraphBody):
+    """Keep a shot's canvas — the node tree AND what each node produced.
+
+    Run all used to save the graph to a throwaway workflow row purely so
+    the runner had something to execute, and reopening the concept
+    rebuilt the canvas from the shot and cleared every output. That made
+    re-running a paid Gemini enhance the only way to see the enhanced
+    prompt again (2026-08-28)."""
+    concept = preprod.get_concept(concept_id, path=db.DB_PATH)
+    if concept is None:
+        return _error(404, "not_found", "no such concept")
+    if not body.graph.get("nodes"):
+        return _error(400, "empty_graph", "nothing to save")
+    workflow_id = workflows.save_shot_graph(
+        concept_id, shot_n, body.graph, states=body.states,
+        name=body.name or concept.get("title"), brand=concept.get("brand"),
+        seed_hash=_shot_seed_hash(concept, shot_n), path=db.DB_PATH)
+    return {"ok": True, "id": workflow_id}
+
+
+def _shot_seed_hash(concept: dict, shot_n: int) -> Optional[str]:
+    """What the canvas was drawn against. A saved graph carries a copy
+    of the shot's prompt in its User Prompt node, so if the shot's
+    prompt changes underneath it -- a Direct revision, a Polish, a
+    replan -- the stored drawing is of a shot that no longer says that.
+    """
+    shot = next((s for s in (concept.get("shots") or [])
+                 if s.get("n") == shot_n), None)
+    if shot is None:
+        return None
+    return hashlib.sha256((shot.get("prompt") or "").encode()).hexdigest()
+
+
+@router.get("/concepts/{concept_id}/shots/{shot_n}/graph")
+def shot_graph_get(concept_id: int, shot_n: int):
+    """The saved canvas, or `graph: null` meaning build a fresh one.
+
+    Staleness is checked HERE rather than invalidated from the handful
+    of routes that can rewrite a prompt (direct, refine, approve, the
+    canvas's own save). Comparing on read is self-healing: a route
+    added later that rewrites a prompt cannot forget to call anything.
+    """
+    saved = workflows.get_shot_graph(concept_id, shot_n, path=db.DB_PATH)
+    if saved is None:
+        return {"graph": None, "states": None, "updated_at": None, "stale": False}
+    concept = preprod.get_concept(concept_id, path=db.DB_PATH)
+    if concept is None:
+        return _error(404, "not_found", "no such concept")
+    current = _shot_seed_hash(concept, shot_n)
+    if saved.get("seed_hash") and current and saved["seed_hash"] != current:
+        return {"graph": None, "states": None,
+                "updated_at": saved["updated_at"], "stale": True}
+    saved["stale"] = False
+    return saved
+
+
+@router.delete("/concepts/{concept_id}/graph")
+def shot_graph_reset(concept_id: int):
+    """Throw the saved canvases away and rebuild from the shots — the
+    escape hatch for a graph that has gone stale against its prompt."""
+    removed = workflows.delete_shot_graphs(concept_id, path=db.DB_PATH)
+    return {"ok": True, "removed": removed}
 
 
 @router.post("/concepts/{concept_id}/shots/{shot_n}/prompt")
@@ -1769,6 +2128,22 @@ def workflow_exec_enhance(body: EnhanceBody):
 class WfGenerateBody(BaseModel):
     prompt: str
     image: Optional[str] = None
+    # The canvas posts the node's WHOLE reference list as `images`
+    # (workflows.js referenceUrls), the same shape the enhance node
+    # sends. Declaring only `image` meant pydantic dropped it without a
+    # word, so a per-node Run on Nano Banana or Generate rendered with
+    # no references at all -- the face, the jacket and the bike arrived
+    # as a sentence and never as pixels (2026-08-28). `image` stays for
+    # any caller that sends one.
+    images: Optional[list[str]] = None
+
+    def reference_urls(self) -> list[str]:
+        urls, seen = [], set()
+        for url in [*(self.images or []), self.image]:
+            if isinstance(url, str) and url and url not in seen:
+                seen.add(url)
+                urls.append(url)
+        return urls
 
 
 @router.post("/workflows/exec/generate")
@@ -1782,8 +2157,12 @@ def workflow_exec_generate(body: WfGenerateBody):
 
     def work(job):
         jobs.progress(job, 0.2, "rendering via Runway")
+        # Runway anchors on exactly ONE frame, so of the references the
+        # node carries only the first is usable -- same rule as the
+        # graph runner's Generate branch.
+        urls = body.reference_urls()
         reference = workflow_runner.image_for_runway(
-            body.image, resolve_photo=_resolve_asset_photo)
+            urls[0] if urls else None, resolve_photo=_resolve_asset_photo)
         result = runway.generate_from_prompt(
             body.prompt, reference_image=reference, db_path=db.DB_PATH)
         if not result.get("ok"):
@@ -1808,8 +2187,15 @@ def workflow_exec_nano(body: WfGenerateBody):
 
     def work(job):
         jobs.progress(job, 0.2, "rendering via Nano Banana")
-        reference = workflow_runner.image_bytes_for_gemini(
-            body.image, resolve_photo=_resolve_asset_photo)
+        # every reference, not just one: the face AND the jacket AND the
+        # bike, matching the graph runner's Nano branch
+        reference = [
+            data for data in (
+                workflow_runner.image_bytes_for_gemini(
+                    url, resolve_photo=_resolve_asset_photo)
+                for url in body.reference_urls())
+            if data
+        ]
         result = nano_banana.generate_from_prompt(
             body.prompt, reference_image=reference, db_path=db.DB_PATH)
         if not result.get("ok"):
