@@ -344,11 +344,22 @@ POST /api/evals/run   {label?:str} -> {job_id}        # SSE reports progress
 GET  /api/evals/golden            -> [{id, query, expected:[Asset], source}]
 POST /api/evals/golden {query:str, expected:[uuid], source:'probe'} -> GoldenQuery
 DELETE /api/evals/golden/{id}
+
+# DEV_TOOLS only; production CRAG behavior observed from the shared /ui path
+GET /studio/api/evals/requeries
+     -> {total, retried, requery_rate, requery_success_rate,
+         requery_adoption_rate, avg_score_improvement}
 ```
 
-The harness computes Hit@k and MRR server-side from `eval_results`. The client never calculates a metric.
+The harness runs the same golden set against both one-shot retrieval and the complete CRAG rewrite
+path. It computes base/CRAG Hit@k and MRR plus re-query, score-improvement, adoption, and
+expected-source rates server-side. The client never calculates a metric. The `/studio` telemetry
+surface is dev-only; `/ui` uses the instrumented shared retrieval path but does not render internal
+metrics or controls.
 
-Every `eval_runs` row records `set_version` and `config`. A score is meaningless without knowing which query set and which retrieval config produced it.
+Every `eval_runs` row records query-set and reference-library fingerprints plus the retrieval
+configuration and threshold. A score is meaningless without knowing which query set, library, and
+retrieval configuration produced it; the UI only shows deltas for comparable runs.
 
 ### Analytics
 ```

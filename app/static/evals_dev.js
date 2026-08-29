@@ -47,12 +47,17 @@
 
   let runs = [];
   let selectedRun = null;
+  let productionRequeries = null;
   let probeQuery = '';
   let probeMarks = new Set();
 
   async function load() {
     try {
-      runs = (await api('/api/evals/runs')).items;
+      const loaded = await Promise.all([
+        api('/api/evals/runs'), api('/api/evals/requeries')
+      ]);
+      runs = loaded[0].items;
+      productionRequeries = loaded[1];
       if (runs.length) {
         const targetId = selectedRun && runs.some(r => r.id === selectedRun.id)
           ? selectedRun.id : runs[runs.length - 1].id;
@@ -66,6 +71,7 @@
       return;
     }
     renderMetrics();
+    renderProductionRequeries();
     renderBars();
     await renderGolden();
   }
@@ -80,19 +86,54 @@
     }
     const r = selectedRun;
     const idx = runs.findIndex(x => x.id === r.id);
-    const prev = idx > 0 ? runs[idx - 1] : null;
-    label.textContent = `${r.label} · ${r.n} queries · k=${r.k}${idx === runs.length - 1 ? ' · latest' : ''}`;
+    const candidate = idx > 0 ? runs[idx - 1] : null;
+    const comparable = (a, b) => a && b && a.k === b.k &&
+      a.set_fingerprint === b.set_fingerprint &&
+      a.library_fingerprint === b.library_fingerprint &&
+      a.config?.model === b.config?.model &&
+      a.config?.threshold === b.config?.threshold;
+    const prev = comparable(r, candidate) ? candidate : null;
+    label.textContent = `${r.label} · ${r.n} queries · k=${r.k}` +
+      `${r.library_count !== null ? ` · ${r.library_count} refs` : ''}` +
+      `${idx === runs.length - 1 ? ' · latest' : ''}`;
     const delta = (v, p, dp = 2) => {
       if (p === null || p === undefined || v === null || v === undefined) return '';
       const d = v - p, sign = d > 0 ? '+' : '';
       return `<span class="delta" style="color:${d >= 0 ? 'var(--good)' : 'var(--red)'}">${sign}${d.toFixed(dp)}</span>`;
     };
+    const number = value => value === null || value === undefined ? '—' : value.toFixed(2);
+    const percent = value => value === null || value === undefined ? '—' : `${(value * 100).toFixed(0)}%`;
     box.innerHTML = [
-      [r.hit_rate.toFixed(2), `Hit@${r.k}`, delta(r.hit_rate, prev?.hit_rate)],
-      [r.mrr.toFixed(2), 'MRR', delta(r.mrr, prev?.mrr)],
+      [number(r.hit_rate), `CRAG Hit@${r.k}`, delta(r.hit_rate, prev?.hit_rate)],
+      [number(r.base_hit_rate), `Base Hit@${r.k}`, delta(r.base_hit_rate, prev?.base_hit_rate)],
+      [number(r.mrr), 'CRAG MRR', delta(r.mrr, prev?.mrr)],
+      [number(r.base_mrr), 'Base MRR', delta(r.base_mrr, prev?.base_mrr)],
+      [percent(r.requery_rate), 'Re-query rate', ''],
+      [percent(r.requery_success_rate), 'Score improved', ''],
+      [number(r.avg_score_improvement), 'Average score change', ''],
+      [percent(r.requery_expected_source_rate), 'Retry found expected source', ''],
       [r.p50_ms !== null ? r.p50_ms + ' ms' : '—', 'p50 latency', delta(r.p50_ms, prev?.p50_ms, 0)],
       [String(r.n), 'Queries', ''],
     ].map(m => `<div class="tile"><div class="k">${m[1]}</div><div class="v">${m[0]}${m[2]}</div></div>`).join('');
+  }
+
+  function renderProductionRequeries() {
+    const box = $('live-requeries');
+    if (!box) return;
+    const r = productionRequeries;
+    if (!r || !r.total) {
+      box.innerHTML = '<div class="blank">No production CRAG retrievals logged yet</div>';
+      return;
+    }
+    const pct = value => value === null ? '—' : `${(value * 100).toFixed(0)}%`;
+    const score = value => value === null ? '—' : value.toFixed(2);
+    box.innerHTML = [
+      [String(r.total), 'Product retrievals'],
+      [pct(r.requery_rate), 'Re-query rate'],
+      [pct(r.requery_success_rate), 'Score improved'],
+      [pct(r.requery_adoption_rate), 'Retry adopted'],
+      [score(r.avg_score_improvement), 'Average score change'],
+    ].map(m => `<div class="tile"><div class="k">${m[1]}</div><div class="v">${m[0]}</div></div>`).join('');
   }
 
   function renderBars() {
@@ -129,17 +170,18 @@
     box.innerHTML = golden.map((g, i) => {
       const pq = byQuery[g.query];
       const rank = pq ? (pq.retrieved.findIndex(s => g.relevant.includes(s)) + 1) : null;
+      const baseRank = pq ? (pq.base_retrieved || []).findIndex(s => g.relevant.includes(s)) + 1 : null;
       const rankCls = pq ? (rank === 1 ? 'ok' : rank ? '' : 'miss') : '';
       return `<div>
         <div class="gq" data-i="${i}" aria-expanded="false">
           <span>${esc(g.query)}</span>
           <span class="v" title="${esc(g.relevant.join(', '))}">${esc(g.relevant.map(r => r.split('/').pop()).join(', '))}</span>
-          <span class="v ${rankCls}">${pq ? (rank ? 'rank ' + rank : 'miss') : 'not in run'}</span>
+          <span class="v ${rankCls}">${pq ? `base ${baseRank || 'miss'} → CRAG ${rank || 'miss'}${pq.requery_triggered ? ' · retried' : ''}` : 'not in run'}</span>
           <span class="v">${pq ? pq.reciprocal_rank.toFixed(2) : '—'}</span>
           <button class="del" data-id="${g.id}" title="Remove from golden set">✕</button>
         </div>
         <div class="gdetail" data-i="${i}">
-          ${pq ? pq.retrieved.map((s, j) => `
+          ${pq ? `<div class="blank">Initial ${pq.initial_score ?? '—'} · retry ${pq.retry_score ?? '—'} · final ${pq.final_score ?? '—'} · ${pq.rewrite_adopted ? 'retry adopted' : pq.requery_triggered ? 'retry kept out' : 'no retry'}</div>` + pq.retrieved.map((s, j) => `
             <div class="prow${g.relevant.includes(s) ? ' gold' : ''}" style="grid-template-columns:26px 1fr">
               <span class="rank">${j + 1}</span>
               <span class="rn">${esc(s)}</span>

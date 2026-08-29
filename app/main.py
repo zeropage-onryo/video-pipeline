@@ -766,6 +766,13 @@ def dev_evals_run_detail(run_id: int):
     return api.evals_run_detail(run_id)
 
 
+@dev.get("/studio/api/evals/requeries")
+def dev_evals_requeries():
+    """Production CRAG telemetry is dev-only even though it observes the
+    shared retrieval path used by the product at /ui."""
+    return evalstore.crag_summary(path=db.DB_PATH)
+
+
 @dev.get("/studio/api/evals/golden")
 def dev_evals_golden():
     return api.evals_golden()

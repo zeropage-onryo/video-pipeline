@@ -30,6 +30,7 @@ DEV_PAGES = (
     # the Dev Studio's own ungated JSON surface: it reads every stat
     # without a session, so a public deployment must not register it
     "/studio/api/evals/runs",
+    "/studio/api/evals/requeries",
 )
 
 

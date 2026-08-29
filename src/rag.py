@@ -20,6 +20,7 @@ library is an enhancement, and a missing Postgres must not stop a
 pitch run.
 """
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -35,6 +36,7 @@ EMBED_BATCH = 100
 DEFAULT_DB_URL = "postgresql://localhost/zeropage"
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+REFERENCE_MANIFEST = PROJECT_ROOT / "evals" / "reference_library.json"
 
 SCHEMA = f"""
 CREATE EXTENSION IF NOT EXISTS vector;
@@ -279,6 +281,39 @@ def list_sources(conn) -> list:
          "chunks": chunks, "added": added}
         for source, domain, project, chunks, added in cursor.fetchall()
     ]
+
+
+def reference_library_identity(manifest_path: Optional[Path] = None) -> dict:
+    """Stable, cheap identity for the versioned reference library.
+
+    The fingerprint includes manifest metadata and each referenced file's
+    bytes, so edits change the identity even when the document count does
+    not. Runtime/user-uploaded media is deliberately outside this manifest;
+    those assets are tracked by their project systems, not this eval corpus.
+    """
+    manifest_path = Path(manifest_path or REFERENCE_MANIFEST)
+    try:
+        entries = json.loads(manifest_path.read_text())
+    except (OSError, ValueError, TypeError):
+        return {"count": None, "fingerprint": None}
+    digest_entries = []
+    for entry in entries:
+        normalized = dict(entry)
+        source_path = Path(entry.get("path", ""))
+        if not source_path.is_absolute():
+            source_path = PROJECT_ROOT / source_path
+        try:
+            normalized["content_sha256"] = hashlib.sha256(
+                source_path.read_bytes()).hexdigest()
+        except OSError:
+            normalized["content_sha256"] = None
+        digest_entries.append(normalized)
+    payload = json.dumps(digest_entries, sort_keys=True,
+                         separators=(",", ":")).encode()
+    return {
+        "count": len(entries),
+        "fingerprint": hashlib.sha256(payload).hexdigest()[:16],
+    }
 
 
 def delete_source(conn, source: str) -> int:

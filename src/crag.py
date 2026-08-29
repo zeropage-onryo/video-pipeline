@@ -21,7 +21,7 @@ honest outcome is "the library doesn't have this," not "keep trying."
 """
 from typing import Optional
 
-from . import rag
+from . import evalstore, rag
 from .gemini_utils import generate_with_retry, strip_fences
 
 # The shipped default. The effective threshold is resolved per call via
@@ -80,6 +80,8 @@ def retrieve_with_crag(
     project: Optional[str] = None,
     db_url: Optional[str] = None,
     threshold: Optional[float] = None,
+    record_telemetry: bool = True,
+    telemetry_path=None,
 ) -> dict:
     """
     Never raises -- same contract as rag.retrieve_references, since
@@ -88,33 +90,81 @@ def retrieve_with_crag(
 
     Returns retrieve_references' normal shape plus:
       "grade": the grade_retrieval() verdict for the references actually returned
-      "rewritten_query": the query that was actually used, if a rewrite happened and helped; else None
+      "rewritten_query": the proposed retry query, when rewrite succeeded
+      "telemetry": scores and decisions for observability/evaluation
     """
+    if threshold is None:
+        threshold = _effective_threshold()
+    library = rag.reference_library_identity()
+    event = {
+        "original_query": query,
+        "rewritten_query": None,
+        "initial_score": None,
+        "retry_score": None,
+        "final_score": None,
+        "score_change": None,
+        "rewrite_attempted": False,
+        "requery_triggered": False,
+        "score_improved": False,
+        "rewrite_adopted": False,
+        "threshold": threshold,
+        "domain": domain,
+        "project": project,
+        "library_count": library["count"],
+        "library_fingerprint": library["fingerprint"],
+        "error": None,
+    }
+
+    def finish(response: dict) -> dict:
+        if record_telemetry:
+            try:
+                evalstore.log_crag_retrieval(event, path=telemetry_path)
+            except Exception:
+                # Observability must never turn a usable retrieval into a
+                # failed generation. The returned telemetry still exposes it.
+                pass
+        return {**response, "telemetry": dict(event)}
+
     result = rag.retrieve_references(query, k=k, db_url=db_url, domain=domain, project=project)
     if not result["ok"]:
-        return {**result, "grade": None, "rewritten_query": None}
+        event["error"] = result.get("error")
+        return finish({**result, "grade": None, "rewritten_query": None})
 
     grade = grade_retrieval(result["references"], threshold=threshold)
+    event["initial_score"] = grade["best_score"]
+    event["final_score"] = grade["best_score"]
     if grade["strong"]:
-        return {**result, "grade": grade, "rewritten_query": None}
+        return finish({**result, "grade": grade, "rewritten_query": None})
 
+    event["rewrite_attempted"] = True
     try:
         rewritten = rewrite_query(query, grade["best_score"], client, model)
-    except Exception:
+        event["rewritten_query"] = rewritten
+    except Exception as exc:
         # a failed rewrite call falls back to the original (weak) result
         # rather than losing it -- something grounded beats nothing.
-        return {**result, "grade": grade, "rewritten_query": None}
+        event["error"] = f"rewrite failed: {exc}"
+        return finish({**result, "grade": grade, "rewritten_query": None})
 
+    event["requery_triggered"] = True
     retried = rag.retrieve_references(rewritten, k=k, db_url=db_url, domain=domain, project=project)
     if not retried["ok"] or not retried["references"]:
         # the rewrite came back empty or the connection broke -- keep
         # whatever the original weak attempt found rather than nothing.
-        return {**result, "grade": grade, "rewritten_query": rewritten}
+        event["error"] = retried.get("error") or "re-query returned no references"
+        return finish({**result, "grade": grade, "rewritten_query": rewritten})
 
     retried_grade = grade_retrieval(retried["references"], threshold=threshold)
+    event["retry_score"] = retried_grade["best_score"]
+    event["score_change"] = round(
+        retried_grade["best_score"] - grade["best_score"], 4)
+    event["score_improved"] = event["score_change"] > 0
     # only adopt the rewrite's results if they actually graded better --
     # a rewrite that finds a different but equally weak set of chunks
     # isn't worth silently swapping in for the original.
     if retried_grade["best_score"] > grade["best_score"]:
-        return {**retried, "grade": retried_grade, "rewritten_query": rewritten}
-    return {**result, "grade": grade, "rewritten_query": rewritten}
+        event["rewrite_adopted"] = True
+        event["final_score"] = retried_grade["best_score"]
+        return finish({**retried, "grade": retried_grade,
+                       "rewritten_query": rewritten})
+    return finish({**result, "grade": grade, "rewritten_query": rewritten})

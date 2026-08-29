@@ -4,9 +4,8 @@ Reference grounding for ideation.
 Retrieval lives at the edges (the CLI and the web routes) via
 reference_block; the generate functions take an already-retrieved
 `references` string. That split is what makes these tests hermetic --
-patching shootgen.rag.retrieve_references is enough, nothing here can
-reach Postgres through rag.connect (which sits below conftest's socket
-guard) or Gemini.
+The no-client fallback patches raw retrieval; the production/client path
+patches CRAG. Nothing here can reach Postgres or Gemini.
 """
 from src import shootgen
 
@@ -55,6 +54,27 @@ def test_reference_block_formats_hits(monkeypatch):
     )
     block = shootgen.reference_block(spark="ritual")
     assert "brief.txt" in block and "still, patient, one move" in block
+
+
+def test_reference_block_uses_instrumented_crag_when_client_is_available(monkeypatch):
+    monkeypatch.setattr(shootgen.preprod, "list_locations",
+                        lambda **k: [{"name": "shop", "description": {"space": "garage"}}])
+    calls = []
+
+    def fake_crag(query, client, model, **kwargs):
+        calls.append({"client": client, "model": model, "domain": kwargs["domain"]})
+        return {"ok": True, "references": [
+            {"source": "craft.md", "chunk": "hold the frame"}],
+                "telemetry": {"requery_triggered": False}}
+
+    monkeypatch.setattr(shootgen.crag, "retrieve_with_crag", fake_crag)
+    client = object()
+    block = shootgen.reference_block(spark="ritual", client=client)
+
+    assert "craft.md" in block
+    assert [c["domain"] for c in calls] == [shootgen.AUTO_IDEATION_DOMAINS,
+                                             shootgen.LEARNED_IDEATION_DOMAINS]
+    assert all(c["client"] is client for c in calls)
 
 
 def test_reference_block_degrades_to_empty(monkeypatch):

@@ -29,6 +29,7 @@ from src import (
     asset_shelf,
     autonomy,
     autopilot,
+    crag,
     db,
     entities,
     evalstore,
@@ -54,6 +55,7 @@ PROJECT_ROOT = APP_DIR.parent
 LOCATIONS_DIR = PROJECT_ROOT / "locations"
 CHARACTERS_DIR = PROJECT_ROOT / "characters"
 PROPS_DIR = PROJECT_ROOT / "props"
+CRAG_REWRITE_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview")
 
 # The deny screen's vocabulary. An enum, not free text, so denial
 # reasons aggregate instead of fragmenting into synonyms.
@@ -933,7 +935,7 @@ def _to_jpeg(data: bytes) -> Optional[bytes]:
         return None   # not a readable image -- skip, never fail the run
 
 
-def scene_grounding(brand: str, spark) -> str:
+def scene_grounding(brand: str, spark, client=None) -> str:
     """
     Everything a scene generation grounds on, composed at the edge (the
     reference_block contract: generators stay hermetic).
@@ -947,7 +949,7 @@ def scene_grounding(brand: str, spark) -> str:
     """
     from src import shootgen
 
-    references = shootgen.reference_block(spark=spark, client=None,
+    references = shootgen.reference_block(spark=spark, client=client,
                                           db_path=db.DB_PATH)
     try:
         insp = inspiration.combined_grounding(brand=brand, path=db.DB_PATH)
@@ -1001,8 +1003,9 @@ async def pipeline_run(request: Request):
         from google import genai
 
         from src import shootgen
+        gemini_client = genai.Client(api_key=api_key)
         jobs.progress(job, 0.15, "grounding in references")
-        references = scene_grounding(brand, prompt)
+        references = scene_grounding(brand, prompt, client=gemini_client)
         jobs.progress(job, 0.35,
                       "writing the scene prompt"
                       + (f" · {len(image_refs)} image ref(s)" if image_refs else ""))
@@ -1011,7 +1014,7 @@ async def pipeline_run(request: Request):
         # two-stage path; this button no longer produces it.
         result = shootgen.generate_scene_concept(
             brand=brand, spark=prompt,
-            gemini_client=genai.Client(api_key=api_key),
+            gemini_client=gemini_client,
             db_path=db.DB_PATH, references=references,
             image_refs=image_refs or None,
         )
@@ -1551,9 +1554,11 @@ class EvalRunBody(BaseModel):
 
 @router.post("/evals/run")
 def evals_run(body: EvalRunBody):
-    """The harness: every golden query against the live store, Hit@k and
-    MRR computed server-side (rag_eval), the run stored with its config.
-    The client never calculates a metric."""
+    """Compare one-shot retrieval with the complete CRAG retry path.
+
+    Every metric is computed server-side and stored with the exact golden
+    set, model, threshold, and reference-library identity that produced it.
+    """
     golden = evalstore.list_golden(path=db.DB_PATH)
     if not golden:
         return _error(400, "empty_golden", "the golden set is empty")
@@ -1574,29 +1579,64 @@ def evals_run(body: EvalRunBody):
             times: list[float] = []
             done = {"n": 0}
 
-            def retrieve_fn(query_text, k):
+            total_steps = len(cases) * 2
+
+            def base_retrieve(query_text, k):
                 jobs.check_cancelled(job)
                 started = time.perf_counter()
                 hits = rag.query(query_text, client, conn, k=k)
                 times.append((time.perf_counter() - started) * 1000)
                 done["n"] += 1
-                jobs.progress(job, done["n"] / len(cases),
-                              f"{done['n']}/{len(cases)} queries")
+                jobs.progress(job, done["n"] / total_steps,
+                              f"{done['n']}/{total_steps} retrieval checks")
                 return hits
 
-            result = rag_eval.evaluate(cases, retrieve_fn, k=k)
+            def crag_retrieve(query_text, k):
+                jobs.check_cancelled(job)
+                started = time.perf_counter()
+                outcome = crag.retrieve_with_crag(
+                    query_text, client, CRAG_REWRITE_MODEL, k=k,
+                    threshold=settings.grade_threshold(path=db.DB_PATH),
+                    record_telemetry=False,
+                )
+                times.append((time.perf_counter() - started) * 1000)
+                done["n"] += 1
+                jobs.progress(job, done["n"] / total_steps,
+                              f"{done['n']}/{total_steps} retrieval checks")
+                return outcome
+
+            result = rag_eval.evaluate_comparison(
+                cases, base_retrieve, crag_retrieve, k=k)
         finally:
             try:
                 conn.close()
             except Exception:
                 pass
         p50 = int(statistics.median(times)) if times else None
+        library = rag.reference_library_identity()
+        set_fingerprint = rag_eval.case_set_fingerprint(cases)
+        result.update({
+            "mode": "comparison",
+            "library_count": library["count"],
+            "library_fingerprint": library["fingerprint"],
+            "set_fingerprint": set_fingerprint,
+        })
+        threshold = settings.grade_threshold(path=db.DB_PATH)
         run_id = evalstore.save_run(
             label, result, p50_ms=p50,
-            config={"k": k, "model": rag.EMBED_MODEL},
+            config={
+                "k": k, "model": rag.EMBED_MODEL,
+                "rewrite_model": CRAG_REWRITE_MODEL, "mode": "comparison",
+                "threshold": threshold,
+                "library_count": library["count"],
+                "library_fingerprint": library["fingerprint"],
+                "set_fingerprint": set_fingerprint,
+            },
             path=db.DB_PATH)
         return {"ref_id": run_id,
-                "detail": f"hit@{k} {result['hit_rate']:.2f} · MRR {result['mrr']:.2f}"}
+                "detail": f"CRAG hit@{k} {result['hit_rate']:.2f} · "
+                          f"base {result['base_hit_rate']:.2f} · "
+                          f"re-query {result['requery_rate']:.0%}"}
 
     job = jobs.start("eval", f"eval · {len(cases)} queries", work,
                      cancellable=True)

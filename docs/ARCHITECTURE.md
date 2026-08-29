@@ -81,11 +81,21 @@ directly; see [The request path](#the-request-path) above.
 channel's autonomy setting; `ensure_locations` requires at least one described space on
 file; `ground_entities` formats the picked (or all) characters/props into the `{cast}`
 block; `ground_rag` queries the CRAG-graded reference library, degrading to an ungrounded
-run with a note rather than failing; `gen_concept` calls `shootgen.generate_concept` and
+run with a note rather than failing. That shared CRAG function records score-only telemetry in
+SQLite (never retrieved document text): first score, retry score, threshold, rewrite/re-query/adoption
+decisions, and the versioned library fingerprint. `/studio` displays those private diagnostics while
+`/ui` only consumes the resulting retrieval behavior. `gen_concept` calls `shootgen.generate_concept` and
 folds any prior critique — plus any pending human corrections from `/holds` — into the
 spark before generating. `evaluate` combines shootgen's code-enforced `warnings` with an
 optional LLM-judge (`JUDGE=1`) and routes: pass moves on, fail retries `gen_concept` up to
 `MAX_ATTEMPTS` (3), and running out of retries parks the run.
+
+**Retrieval evaluation.** The Dev Studio runs every labelled golden query through both the base
+one-shot retriever and the full CRAG path. It keeps score improvement separate from correctness:
+a rewritten query may have a higher cosine score and still miss the expected source. Stored runs
+therefore include base/CRAG Hit@k and MRR, re-query/adoption/success rates, expected-source rate,
+and fingerprints for the golden set, configuration, and reference library. Deltas are only shown
+when those identities match.
 
 **The credit gate.** `structure_prompt` extracts each AI shot's paste-ready prompt;
 `score_prompts` runs every one through a two-layer judge — a zero-cost structural check,

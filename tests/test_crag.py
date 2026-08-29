@@ -6,7 +6,17 @@ gemini_utils.generate_with_retry are patched out here -- this suite
 exercises crag.py's own control flow, not a real embedding or
 generation call.
 """
-from src import crag
+import pytest
+
+from src import crag, db, evalstore
+
+
+@pytest.fixture(autouse=True)
+def telemetry_db(tmp_path, monkeypatch):
+    path = tmp_path / "telemetry.db"
+    evalstore.init(path=path)
+    monkeypatch.setattr(db, "DB_PATH", path)
+    return path
 
 
 def make_refs(*scores):
@@ -37,7 +47,8 @@ def test_grade_retrieval_weak_on_empty_references():
 
 # ---------- retrieve_with_crag ----------
 
-def test_retrieve_with_crag_skips_rewrite_when_retrieval_is_strong(monkeypatch):
+def test_retrieve_with_crag_skips_rewrite_when_retrieval_is_strong(monkeypatch,
+                                                                   telemetry_db):
     calls = {"retrieve": 0, "rewrite": 0}
 
     def fake_retrieve(query, k=5, db_url=None, domain=None, project=None):
@@ -53,9 +64,14 @@ def test_retrieve_with_crag_skips_rewrite_when_retrieval_is_strong(monkeypatch):
     assert calls["rewrite"] == 0
     assert result["rewritten_query"] is None
     assert result["grade"]["strong"] is True
+    assert result["telemetry"]["requery_triggered"] is False
+    summary = evalstore.crag_summary(path=telemetry_db)
+    assert summary["total"] == 1
+    assert summary["requery_rate"] == 0.0
 
 
-def test_retrieve_with_crag_rewrites_and_adopts_a_better_result(monkeypatch):
+def test_retrieve_with_crag_rewrites_and_adopts_a_better_result(monkeypatch,
+                                                                telemetry_db):
     retrieve_calls = []
 
     def fake_retrieve(query, k=5, db_url=None, domain=None, project=None):
@@ -73,6 +89,13 @@ def test_retrieve_with_crag_rewrites_and_adopts_a_better_result(monkeypatch):
     assert result["rewritten_query"] == "rewritten"
     assert result["grade"]["best_score"] == 0.9
     assert result["references"][0]["score"] == 0.9
+    assert result["telemetry"]["requery_triggered"] is True
+    assert result["telemetry"]["score_improved"] is True
+    assert result["telemetry"]["rewrite_adopted"] is True
+    assert result["telemetry"]["score_change"] == pytest.approx(0.7)
+    summary = evalstore.crag_summary(path=telemetry_db)
+    assert summary["requery_rate"] == 1.0
+    assert summary["requery_success_rate"] == 1.0
 
 
 def test_retrieve_with_crag_keeps_original_when_rewrite_does_not_improve(monkeypatch):
@@ -88,6 +111,8 @@ def test_retrieve_with_crag_keeps_original_when_rewrite_does_not_improve(monkeyp
     # the rewrite was attempted (recorded) but its result wasn't adopted
     assert result["rewritten_query"] == "rewritten"
     assert result["grade"]["best_score"] == 0.3
+    assert result["telemetry"]["score_improved"] is False
+    assert result["telemetry"]["rewrite_adopted"] is False
 
 
 def test_retrieve_with_crag_falls_back_to_original_when_rewrite_fails(monkeypatch):
@@ -105,6 +130,9 @@ def test_retrieve_with_crag_falls_back_to_original_when_rewrite_fails(monkeypatc
     assert result["rewritten_query"] is None
     assert result["grade"]["best_score"] == 0.2
     assert result["ok"] is True  # a failed rewrite degrades, it doesn't raise
+    assert result["telemetry"]["rewrite_attempted"] is True
+    assert result["telemetry"]["requery_triggered"] is False
+    assert "rewrite failed" in result["telemetry"]["error"]
 
 
 def test_retrieve_with_crag_passes_through_a_failed_retrieval_untouched(monkeypatch):
@@ -131,3 +159,10 @@ def test_retrieve_with_crag_forwards_k_domain_and_project(monkeypatch):
                             domain=("personal_brand",), project="zpf")
 
     assert calls[0] == {"k": 3, "domain": ("personal_brand",), "project": "zpf"}
+
+
+def test_telemetry_logging_does_not_reseed_an_emptied_golden_set(telemetry_db):
+    for row in evalstore.list_golden(path=telemetry_db):
+        evalstore.delete_golden(row["id"], path=telemetry_db)
+    evalstore.log_crag_retrieval({"original_query": "q"}, path=telemetry_db)
+    assert evalstore.list_golden(path=telemetry_db) == []

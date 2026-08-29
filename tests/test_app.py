@@ -1478,6 +1478,23 @@ def test_dev_studio_api_delegates_to_the_same_functions(tmp_dev_db, monkeypatch)
     assert client.get("/studio/api/evals/runs").json() == api_mod.evals_runs()
 
 
+def test_dev_studio_exposes_shared_crag_telemetry_only_on_dev_route(
+        tmp_dev_db, monkeypatch):
+    from app import auth
+    from src import evalstore
+    monkeypatch.setattr(auth, "current_user", lambda request: None)
+    evalstore.log_crag_retrieval({
+        "original_query": "night ride", "initial_score": 0.2,
+        "retry_score": 0.8, "final_score": 0.8, "score_change": 0.6,
+        "rewrite_attempted": True, "requery_triggered": True,
+        "score_improved": True, "rewrite_adopted": True,
+        "threshold": 0.55,
+    }, path=tmp_dev_db)
+    response = client.get("/studio/api/evals/requeries")
+    assert response.status_code == 200
+    assert response.json()["requery_rate"] == 1.0
+
+
 def test_the_gated_api_twin_still_requires_a_session(tmp_dev_db, monkeypatch):
     """Opening the dev console must not open /api itself."""
     from app import auth
@@ -1489,6 +1506,8 @@ def test_stats_tab_points_the_script_at_the_dev_router(tmp_dev_db):
     page = client.get("/studio?tab=stats").text
     assert 'window.ZP_API_BASE = "/studio"' in page
     assert "evals_dev.js" in page
+    assert 'id="live-requeries"' in page
+    assert "SHARED CRAG PATH USED BY /ui" in page
 
 
 # ---------- the Dev Studio's assets-shelf backfill ----------

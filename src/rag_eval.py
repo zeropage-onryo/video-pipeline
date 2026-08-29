@@ -19,6 +19,7 @@ Run against the live store:
     venv/bin/python -m src.rag_eval cases.json [--k 5]
 """
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -72,6 +73,81 @@ def evaluate(cases: list, retrieve_fn, k: int = 5) -> dict:
         "k": k,
         "hit_rate": round(sum(q["hit"] for q in per_query) / len(cases), 4),
         "mrr": round(sum(q["reciprocal_rank"] for q in per_query) / len(cases), 4),
+        "per_query": per_query,
+    }
+
+
+def case_set_fingerprint(cases: list) -> str:
+    """Stable identity for the exact labels used by an eval run."""
+    payload = json.dumps(cases, sort_keys=True,
+                         separators=(",", ":")).encode()
+    return hashlib.sha256(payload).hexdigest()[:16]
+
+
+def evaluate_comparison(cases: list, base_retrieve_fn, crag_retrieve_fn,
+                        k: int = 5) -> dict:
+    """Compare one-shot retrieval with the complete CRAG retry path.
+
+    crag_retrieve_fn(query, k) returns retrieve_with_crag's result. The
+    scorer keeps similarity improvement separate from correctness: a retry
+    can score higher without retrieving a human-labelled relevant source.
+    """
+    if not cases:
+        raise ValueError("no eval cases -- an empty eval can't say anything")
+
+    per_query = []
+    for case in cases:
+        base_hits = base_retrieve_fn(case["query"], k)
+        crag_result = crag_retrieve_fn(case["query"], k)
+        crag_hits = crag_result.get("references", []) if crag_result.get("ok") else []
+        telemetry = crag_result.get("telemetry") or {}
+        base_hit = hit_at_k(base_hits, case["relevant"], k)
+        crag_hit = hit_at_k(crag_hits, case["relevant"], k)
+        requery = bool(telemetry.get("requery_triggered"))
+        per_query.append({
+            "query": case["query"],
+            "relevant": case["relevant"],
+            "retrieved": _source_ranking(crag_hits)[:k],
+            "base_retrieved": _source_ranking(base_hits)[:k],
+            "hit": crag_hit,
+            "base_hit": base_hit,
+            "reciprocal_rank": round(reciprocal_rank(crag_hits, case["relevant"]), 4),
+            "base_reciprocal_rank": round(
+                reciprocal_rank(base_hits, case["relevant"]), 4),
+            "requery_triggered": requery,
+            "score_improved": bool(telemetry.get("score_improved")),
+            "rewrite_adopted": bool(telemetry.get("rewrite_adopted")),
+            "initial_score": telemetry.get("initial_score"),
+            "retry_score": telemetry.get("retry_score"),
+            "final_score": telemetry.get("final_score"),
+            "score_change": telemetry.get("score_change"),
+            "requery_retrieved_expected": bool(requery and crag_hit),
+            "requery_corrected_miss": bool(requery and not base_hit and crag_hit),
+        })
+
+    n = len(per_query)
+    retried = [row for row in per_query if row["requery_triggered"]]
+    changes = [row["score_change"] for row in retried
+               if row["score_change"] is not None]
+    return {
+        "n": n,
+        "k": k,
+        "hit_rate": round(sum(row["hit"] for row in per_query) / n, 4),
+        "mrr": round(sum(row["reciprocal_rank"] for row in per_query) / n, 4),
+        "base_hit_rate": round(sum(row["base_hit"] for row in per_query) / n, 4),
+        "base_mrr": round(sum(row["base_reciprocal_rank"] for row in per_query) / n, 4),
+        "requery_rate": round(len(retried) / n, 4),
+        "requery_success_rate": round(
+            sum(row["score_improved"] for row in retried) / len(retried), 4
+        ) if retried else 0.0,
+        "avg_score_improvement": round(sum(changes) / len(changes), 4)
+        if changes else 0.0,
+        "requery_adoption_rate": round(
+            sum(row["rewrite_adopted"] for row in retried) / len(retried), 4
+        ) if retried else 0.0,
+        "requery_expected_source_rate": round(
+            sum(row["requery_retrieved_expected"] for row in retried) / len(retried), 4
+        ) if retried else 0.0,
         "per_query": per_query,
     }
 

@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
-from . import entities, preprod, rag
+from . import crag, entities, preprod, rag
 from . import shot as shot_module
 from .db import DB_PATH, init_db
 from .gemini_utils import generate_with_retry, strip_fences
@@ -237,7 +237,12 @@ def reference_block(spark=None, client=None, db_path=None, picked_sources=None) 
                   file=sys.stderr)
 
     if query.strip():
-        retrieval = rag.retrieve_references(query, domain=AUTO_IDEATION_DOMAINS)
+        retrieval = (
+            crag.retrieve_with_crag(
+                query, client, MODEL, domain=AUTO_IDEATION_DOMAINS,
+            ) if client is not None else
+            rag.retrieve_references(query, domain=AUTO_IDEATION_DOMAINS)
+        )
         if retrieval["ok"] and retrieval["references"]:
             print(f"Grounding in {len(retrieval['references'])} craft reference(s)",
                   file=sys.stderr)
@@ -246,7 +251,12 @@ def reference_block(spark=None, client=None, db_path=None, picked_sources=None) 
             reason = retrieval.get("error", "reference library is empty")
             print(f"note: generating without craft references: {reason}", file=sys.stderr)
 
-        learned = rag.retrieve_references(query, domain=LEARNED_IDEATION_DOMAINS)
+        learned = (
+            crag.retrieve_with_crag(
+                query, client, MODEL, domain=LEARNED_IDEATION_DOMAINS,
+            ) if client is not None else
+            rag.retrieve_references(query, domain=LEARNED_IDEATION_DOMAINS)
+        )
         if learned["ok"] and learned["references"]:
             print(f"Grounding in {len(learned['references'])} taught reference(s) "
                   "-- your own approve/deny history", file=sys.stderr)

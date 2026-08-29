@@ -166,6 +166,11 @@ injected as tone and structure references. Retrieval is CRAG-graded (`crag.py`):
 earns one query rewrite rather than being silently used. No Postgres? The run continues ungrounded
 and says so.
 
+Every production CRAG decision is logged without storing reference text: initial and retry scores,
+whether a retry ran, whether it improved the score, whether it was adopted, and the threshold plus
+reference-library fingerprint used at the time. The private `/studio` Stats view shows that product
+telemetry; `/ui` uses the same retrieval path but never exposes the internal diagnostics.
+
 ```bash
 docker compose up -d                       # Postgres + pgvector
 
@@ -175,6 +180,14 @@ venv/bin/python -m src.shootgen --spark "gearing up ritual"   # picks up referen
 
 venv/bin/python -m src.rag_eval eval_cases.json --k 5         # hit@k, MRR against labeled cases
 ```
+
+The Dev Studio eval run uses the same golden questions twice: once with one-shot retrieval and once
+through the complete CRAG rewrite path. It reports base versus CRAG Hit@k/MRR, re-query rate, how
+often retry scores improve, how often retries are adopted, and whether retries actually return a
+human-labelled expected source. A lower re-query rate is not treated as success by itself: it must
+hold or improve retrieval accuracy. Runs record the query-set fingerprint, embedding/rewrite model,
+threshold, and reference-library count/fingerprint so unlike configurations are not presented as
+equivalent comparisons.
 
 Every chunk carries a required `domain` shelf label, so queries can scope semantically and by hard
 SQL filter in one pass. Re-ingesting a source replaces its chunks, keyed by path relative to the

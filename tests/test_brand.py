@@ -74,7 +74,8 @@ def test_generation_uses_the_active_brand(tmp_db, monkeypatch):
     stub = {"id": 1, "email": "t@example.com", "display_name": "T"}
     monkeypatch.setattr(auth, "current_user", lambda request: stub)
     monkeypatch.setattr(api_mod, "_gemini_key", lambda: "k")
-    monkeypatch.setattr(api_mod, "scene_grounding", lambda brand, spark: "")
+    monkeypatch.setattr(api_mod, "scene_grounding",
+                        lambda brand, spark, client=None: "")
     monkeypatch.setattr("google.genai.Client", lambda **k: object())
     captured = {}
 

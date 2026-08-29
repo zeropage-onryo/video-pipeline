@@ -87,9 +87,18 @@
     </div>
   </div>
 
+  {# ── shared production CRAG telemetry, private to the Dev Studio ── #}
+  <div class="panel" style="margin-top:26px">
+    <div class="panel-head"><span class="id">PRODUCT RE-QUERY TELEMETRY</span>
+      <span class="m">SHARED CRAG PATH USED BY /ui · DEV-ONLY VIEW</span></div>
+    <div class="panel-body">
+      <div class="tiles" id="live-requeries"></div>
+    </div>
+  </div>
+
   {# ── the retrieval eval, same /api/evals endpoints via evals_dev.js ── #}
   <div class="vhead" style="margin-top:26px">
-    <div><div class="rule">Retrieval harness // hit@k + MRR // golden set</div></div>
+    <div><div class="rule">Retrieval harness // base vs CRAG // hit@k + MRR // golden set</div></div>
     <div style="text-align:right">
       <div class="kicker" id="runlabel">—</div>
       <button class="btnw" id="runeval" style="margin-top:8px">Run eval</button>
@@ -98,7 +107,7 @@
   <div class="toast" id="estate" hidden></div>
   <div class="tiles" id="emetrics"></div>
   <div class="panel">
-    <div class="panel-head"><span class="id">HIT RATE ACROSS RUNS</span><span class="m">CLICK A BAR TO INSPECT</span></div>
+    <div class="panel-head"><span class="id">CRAG HIT RATE ACROSS RUNS</span><span class="m">DELTAS ONLY APPEAR FOR MATCHING CONFIG + LIBRARY + GOLDEN SET</span></div>
     <div class="panel-body">
       <div class="ebars" id="bars"></div>
       <div class="blank" id="barsblank" hidden>No runs yet — run the eval to start the history</div>
@@ -219,15 +228,18 @@
     <div class="panel-body">
       {% if runs %}
       <table>
-        <thead><tr><th>Run</th><th>k</th><th>Queries</th><th>Hit rate</th><th>MRR</th><th>p50</th><th>When</th></tr></thead>
+        <thead><tr><th>Run</th><th>k</th><th>Queries</th><th>Base hit</th><th>CRAG hit</th><th>Re-query</th><th>MRR</th><th>Refs</th><th>p50</th><th>When</th></tr></thead>
         <tbody>
           {% for r in runs %}
           <tr>
             <td>{{ r.label }}</td>
             <td class="num">{{ r.k }}</td>
             <td class="num">{{ r.n }}</td>
+            <td class="num">{{ "%.2f"|format(r.base_hit_rate) if r.base_hit_rate is not none else "—" }}</td>
             <td class="num">{{ "%.2f"|format(r.hit_rate) }}</td>
+            <td class="num">{{ "%.0f%%"|format(r.requery_rate * 100) if r.requery_rate is not none else "—" }}</td>
             <td class="num">{{ "%.2f"|format(r.mrr) }}</td>
+            <td class="num">{{ r.library_count if r.library_count is not none else "—" }}</td>
             <td class="num">{{ r.p50_ms ~ " ms" if r.p50_ms is not none else "—" }}</td>
             <td class="mono dim">{{ r.created_at | string | truncate(16, True, "") }}</td>
           </tr>

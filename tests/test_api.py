@@ -492,6 +492,20 @@ def test_eval_run_computes_and_stores_metrics(tmp_db, monkeypatch):
         lambda text, client_, conn, k=5, domain=None:
             [{"source": "prompts/brief.txt", "chunk": "x", "domain": "d",
               "project": None, "source_ref": None, "score": 0.9}])
+    monkeypatch.setattr(
+        api_mod.crag, "retrieve_with_crag",
+        lambda text, client_, model, **kwargs: {
+            "ok": True,
+            "references": [{"source": "prompts/brief.txt", "chunk": "x",
+                            "domain": "d", "project": None,
+                            "source_ref": None, "score": 0.9}],
+            "telemetry": {
+                "requery_triggered": False, "score_improved": False,
+                "rewrite_adopted": False, "initial_score": 0.9,
+                "retry_score": None, "final_score": 0.9,
+                "score_change": None,
+            },
+        })
 
     job_id = client.post("/api/evals/run", json={}).json()["job_id"]
     job = wait_for_job(job_id)
@@ -500,9 +514,15 @@ def test_eval_run_computes_and_stores_metrics(tmp_db, monkeypatch):
     runs = client.get("/api/evals/runs").json()["items"]
     assert len(runs) == 1
     assert runs[0]["hit_rate"] == 0.5      # one hit, one miss
+    assert runs[0]["base_hit_rate"] == 0.5
+    assert runs[0]["mode"] == "comparison"
+    assert runs[0]["requery_rate"] == 0.0
     detail = client.get(f"/api/evals/runs/{runs[0]['id']}").json()
     assert len(detail["per_query"]) == 2
     assert detail["config"]["k"] == api_mod._eval_k()
+    assert detail["config"]["mode"] == "comparison"
+    assert detail["set_fingerprint"]
+    assert detail["library_fingerprint"]
 
 
 def test_eval_run_refuses_empty_golden_set(tmp_db):
