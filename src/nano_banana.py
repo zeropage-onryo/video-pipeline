@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from . import generative
+from . import generative, render_assets
 from .db import DB_PATH
 from .gemini_utils import sniff_mime
 from .shot import Shot
@@ -240,10 +240,11 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
         # the row logs the prompt the person wrote, not the constant
         # wrapper around it -- the flag says which framing was applied
         shot_row_id = _shot_row_for_prompt(prompt, db_path)
+        generation_params = {"model": model, "source": "workflow",
+                             "framing": "still", "references": len(references)}
         generation_id = generative.record_generation(
             shot_row_id, "nano", prompt,
-            params={"model": model, "source": "workflow",
-                    "framing": "still", "references": len(references)},
+            params=generation_params,
             output_path=str(out_path),
             **kwargs,
         )
@@ -255,8 +256,16 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
         else:
             media_url = f"/renders/nano/{out_path.name}"
 
+        asset = render_assets.record_best_effort(
+            generation_id=generation_id, tool="nano", model=model,
+            media_kind="image", prompt=prompt, media_url=media_url,
+            output_path=str(out_path), metadata=generation_params,
+            path=db_path if db_path is not None else DB_PATH,
+        )
+
         return {"ok": True, "media_url": media_url,
                 "generation_id": generation_id, "path": str(out_path),
+                "asset_id": asset["id"], "asset_rag": asset["rag"],
                 "error": None}
     except Exception as e:
         return {"ok": False, "media_url": None, "generation_id": None,

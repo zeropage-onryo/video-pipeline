@@ -4,6 +4,10 @@ Web UI for the Zero Page Films pipeline. FastAPI backend, server-rendered shell,
 
 `prototype/studio.html` is the **visual source of truth** — a working single-file mockup with the real shader, layout, tokens, and interaction model. Port from it. Do not redesign it. Its data is fixtures; your job is to replace every fixture with a live connection.
 
+The Assets view also owns successful first-party renders. Nano Banana images and Runway videos land
+there automatically with the exact prompt and model details; generated images may be selected as
+future references, while generated videos are gallery-only for any image-input control.
+
 ---
 
 ## 0. Prime directive — no orphan controls

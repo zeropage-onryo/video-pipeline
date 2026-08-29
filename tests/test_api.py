@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from app import api as api_mod
 from app import jobs
 from app.main import app
-from src import autonomy, db, entities, evalstore, preprod
+from src import autonomy, db, entities, evalstore, preprod, render_assets
 
 client = TestClient(app)
 
@@ -96,7 +96,8 @@ def test_capabilities_light_up_with_key_and_store(tmp_db, monkeypatch):
 def test_assets_empty_and_counts_come_from_db(tmp_db):
     data = client.get("/api/assets").json()
     assert data["items"] == []
-    assert data["counts"] == {"all": 0, "location": 0, "character": 0, "prop": 0}
+    assert data["counts"] == {"all": 0, "location": 0, "character": 0,
+                              "prop": 0, "generated": 0}
 
 
 def test_assets_unify_locations_characters_props(tmp_db):
@@ -105,7 +106,8 @@ def test_assets_unify_locations_characters_props(tmp_db):
     entities.add_prop(name="Ducati 959", category="vehicle", path=tmp_db)
 
     data = client.get("/api/assets").json()
-    assert data["counts"] == {"all": 3, "location": 1, "character": 1, "prop": 1}
+    assert data["counts"] == {"all": 3, "location": 1, "character": 1,
+                              "prop": 1, "generated": 0}
     cats = {i["id"]: i["category"] for i in data["items"]}
     assert set(cats.values()) == {"location", "character", "prop"}
 
@@ -221,11 +223,40 @@ def photo_root(tmp_path, monkeypatch):
 def test_media_lists_photos_with_real_dates(tmp_db, photo_root):
     preprod.add_location("garage", {"space": "the garage"}, path=tmp_db)
     media = client.get("/api/media").json()
-    assert media["counts"] == {"all": 1, "location": 1, "character": 0, "prop": 0}
+    assert media["counts"] == {"all": 1, "location": 1, "character": 0,
+                               "prop": 0, "generated": 0}
     item = media["items"][0]
     assert item["asset_name"] == "garage"
     assert item["url"].startswith("/locations/garage/photo/plate.jpg")
     assert len(item["date"]) == 10   # a real ISO date from the file's mtime
+
+
+def test_generated_renders_join_assets_and_video_stays_out_of_image_pickers(
+        tmp_db, monkeypatch):
+    monkeypatch.setattr(render_assets, "_ingest",
+                        lambda *a, **k: {"ok": True, "chunks": 1, "error": None})
+    image = render_assets.record(
+        generation_id=101, tool="nano", model="gemini-3-pro-image-preview",
+        media_kind="image", prompt="low angle bike portrait",
+        media_url="/renders/nano/a.png", path=tmp_db,
+    )
+    video = render_assets.record(
+        generation_id=102, tool="runway", model="gen4.5",
+        media_kind="video", prompt="camera pushes toward the motorcycle",
+        media_url="/renders/runway/b.mp4", path=tmp_db,
+    )
+
+    assets = client.get("/api/assets?category=generated").json()
+    assert assets["counts"]["generated"] == 2
+    assert {item["id"] for item in assets["items"]} == {
+        f"generated-{image['id']}", f"generated-{video['id']}"}
+    assert {item["text"] for item in assets["items"]} == {
+        "low angle bike portrait", "camera pushes toward the motorcycle"}
+
+    image_picker = client.get("/api/media").json()
+    assert [item["kind"] for item in image_picker["items"]] == ["image"]
+    gallery = client.get("/api/media?kind=all&category=generated").json()
+    assert {item["kind"] for item in gallery["items"]} == {"image", "video"}
 
 
 def test_pipeline_run_carries_picked_media_as_image_refs(tmp_db, photo_root,

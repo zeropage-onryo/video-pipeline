@@ -97,6 +97,14 @@ therefore include base/CRAG Hit@k and MRR, re-query/adoption/success rates, expe
 and fingerprints for the golden set, configuration, and reference library. Deltas are only shown
 when those identities match.
 
+**Generated assets.** Successful Nano Banana and Runway calls write the normal `generations`
+attempt row and a `generated_assets` Asset Bank row only after usable media exists. That second row
+keeps the durable/local media URL, exact prompt, model, media type, and scene identifiers. Its prompt
+description is indexed on the same RAG `assets` shelf used by photographed assets. Asset publication
+is best-effort so SQLite or pgvector downtime cannot turn a completed paid render into a failed job.
+The media API defaults to images for reference pickers; the Asset gallery explicitly asks for all
+media so Runway clips are browseable without being passed into image-only inputs.
+
 **The credit gate.** `structure_prompt` extracts each AI shot's paste-ready prompt;
 `score_prompts` runs every one through a two-layer judge — a zero-cost structural check,
 then a strict LLM rubric (subject/camera/motion/lighting/coherence, 0–2 each, bar

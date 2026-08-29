@@ -171,6 +171,12 @@ whether a retry ran, whether it improved the score, whether it was adopted, and 
 reference-library fingerprint used at the time. The private `/studio` Stats view shows that product
 telemetry; `/ui` uses the same retrieval path but never exposes the internal diagnostics.
 
+Every successful Nano Banana image and Runway video is also published to `/ui`'s Asset Bank with
+its exact prompt, provider/model, media type, and available scene metadata. Nano images remain
+selectable as later image references; Runway clips appear in the gallery but stay out of image-only
+pickers. The prompt and model description are indexed on the RAG `assets` shelf, while a temporary
+vector-store failure never discards the completed render or its local Asset Bank record.
+
 ```bash
 docker compose up -d                       # Postgres + pgvector
 

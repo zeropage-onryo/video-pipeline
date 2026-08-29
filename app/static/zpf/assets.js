@@ -39,8 +39,8 @@ export async function renderAssets() {
     if (search.value.trim()) params.set('q', search.value.trim());
     if (acat !== 'all') params.set('category', acat);
     [media, assets] = await Promise.all([
-      api('/api/media?' + params.toString()),
-      loadAssets(),
+      api('/api/media?kind=all&' + params.toString()),
+      loadAssets(true),
     ]);
   } catch (e) {
     gallery.innerHTML = '';
@@ -49,19 +49,20 @@ export async function renderAssets() {
   }
   stateline(astate, null);
 
-  const CATS = [['all', 'All'], ['location', 'Locations'], ['character', 'Characters'], ['prop', 'Props']];
+  const CATS = [['all', 'All'], ['location', 'Locations'], ['character', 'Characters'],
+    ['prop', 'Props'], ['generated', 'Generated']];
   cats.innerHTML = CATS.map(([k, l]) =>
     `<button class="cat" data-c="${k}" aria-pressed="${acat === k}">${l}<u>${media.counts[k] ?? 0}</u></button>`).join('');
   cats.querySelectorAll('.cat').forEach(b => b.onclick = () => { acat = b.dataset.c; renderAssets(); });
 
   document.getElementById('lcount').textContent =
-    `${media.items.length}${media.items.length !== media.counts.all ? ' of ' + media.counts.all : ''} photo${media.counts.all === 1 ? '' : 's'}`;
+    `${media.items.length}${media.items.length !== media.counts.all ? ' of ' + media.counts.all : ''} media item${media.counts.all === 1 ? '' : 's'}`;
 
   if (!media.items.length) {
     gallery.innerHTML = '';
     stateline(astate, 'empty', media.counts.all
       ? 'Nothing matches — clear the search or switch category'
-      : 'No media yet — click + Add asset to save your first character, room, or prop');
+      : 'No media yet — add an asset or generate your first image or clip');
     return;
   }
 
@@ -75,10 +76,12 @@ export async function renderAssets() {
 
   gallery.innerHTML = groups.map(g => `
     <div class="gdate">${esc(dateLabel(g.date))}
-      <span class="m">${g.items.length} photo${g.items.length === 1 ? '' : 's'}</span></div>
+      <span class="m">${g.items.length} item${g.items.length === 1 ? '' : 's'}</span></div>
     <div class="gphotos">${g.items.map(m => `
-      <button class="gph" type="button" data-a="${esc(m.asset_id)}"
-              style="background-image:url('${esc(m.url)}')">
+      <button class="gph${m.kind === 'video' ? ' video' : ''}" type="button"
+              data-a="${esc(m.asset_id)}"
+              ${m.kind === 'image' ? `style="background-image:url('${esc(m.url)}')"` : ''}>
+        ${m.kind === 'video' ? `<video src="${esc(m.url)}" muted loop playsinline preload="metadata"></video>` : ''}
         <span class="mname">${esc(m.asset_name)} · ${esc(m.category)}</span>
       </button>`).join('')}
     </div>`).join('');
@@ -86,6 +89,11 @@ export async function renderAssets() {
   gallery.querySelectorAll('.gph').forEach(tile => tile.onclick = () => {
     const asset = assets.items.find(a => a.id === tile.dataset.a);
     if (asset) openAssetDetail(asset);
+  });
+  gallery.querySelectorAll('.gph.video').forEach(tile => {
+    const video = tile.querySelector('video');
+    tile.onmouseenter = () => video.play().catch(() => {});
+    tile.onmouseleave = () => { video.pause(); video.currentTime = 0; };
   });
 }
 

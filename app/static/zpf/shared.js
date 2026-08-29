@@ -189,15 +189,27 @@ export function openAssetDetail(asset) {
   const dmeta = document.getElementById('dmeta');
   const dtr = document.getElementById('dtr');
   dn.textContent = asset.name;
-  df.style.backgroundImage = asset.poster ? `url("${asset.poster}")` : 'none';
-  dstrip.innerHTML = (asset.photos || []).map(p =>
-    `<div class="th" style="background-image:url('${p}')" data-p="${esc(p)}"></div>`).join('');
+  const media = asset.media || (asset.photos || []).map(url => ({ url, kind: 'image' }));
+  const show = item => {
+    df.innerHTML = '';
+    df.style.backgroundImage = 'none';
+    if (!item) return;
+    if (item.kind === 'video') {
+      df.innerHTML = `<video src="${esc(item.url)}" controls playsinline preload="metadata"></video>`;
+    } else {
+      df.style.backgroundImage = `url("${item.url}")`;
+    }
+  };
+  show(media[0] || (asset.poster ? { url: asset.poster, kind: 'image' } : null));
+  dstrip.innerHTML = media.map((item, i) =>
+    `<button class="th${item.kind === 'video' ? ' video' : ''}" data-i="${i}"
+      ${item.kind === 'image' ? `style="background-image:url('${esc(item.url)}')"` : ''}>${item.kind === 'video' ? '▶' : ''}</button>`).join('');
   dstrip.querySelectorAll('.th').forEach(t => {
-    t.onclick = () => { df.style.backgroundImage = `url("${t.dataset.p}")`; };
+    t.onclick = () => show(media[Number(t.dataset.i)]);
   });
   const rows = [
     ['Category', asset.category],
-    ['Photos', (asset.photos || []).length],
+    ['Media', media.length],
   ];
   if (asset.meta) {
     for (const [k, v] of Object.entries(asset.meta)) {

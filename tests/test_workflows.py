@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 
 from app import jobs, workflow_runner
 from app.main import app
-from src import db, generative, runway, workflows
+from src import db, generative, render_assets, runway, workflows
 
 client = TestClient(app)
 
@@ -31,6 +31,14 @@ def signed_in(monkeypatch):
     monkeypatch.setattr(
         auth, "current_account",
         lambda request, user=None: {"slug": "antihero", "display_name": "ANTIHERO"})
+
+
+@pytest.fixture(autouse=True)
+def generated_asset_rag(monkeypatch):
+    """Rendering tests exercise Asset Bank persistence, not Postgres."""
+    monkeypatch.setattr(
+        render_assets, "_ingest",
+        lambda *a, **k: {"ok": True, "chunks": 1, "error": None})
 
 
 @pytest.fixture(autouse=True)
@@ -186,6 +194,11 @@ def test_generate_from_prompt_renders_and_logs(tmp_db, tmp_path, monkeypatch,
         row = conn.execute("SELECT tool, params_json FROM generations").fetchone()
     assert row["tool"] == "runway"
     assert '"source": "workflow"' in row["params_json"]
+    asset = render_assets.list_all(path=tmp_db)[0]
+    assert result["asset_id"] == asset["id"]
+    assert asset["media_kind"] == "video"
+    assert asset["prompt"] == "a drawer closing"
+    assert asset["model"] == runway.DEFAULT_MODEL
 
 
 def test_generate_from_prompt_turns_bytes_into_a_data_uri(tmp_db, tmp_path,
@@ -630,6 +643,11 @@ def test_nano_generate_renders_and_logs(tmp_db, tmp_path, monkeypatch):
         rows = conn.execute("SELECT tool FROM generations").fetchall()
     assert [r[0] for r in rows] == ["nano"]
     assert nano_banana.generations_today(db_path=tmp_db) == 1
+    asset = render_assets.list_all(path=tmp_db)[0]
+    assert result["asset_id"] == asset["id"]
+    assert asset["media_kind"] == "image"
+    assert asset["prompt"] == "a red bike"
+    assert asset["model"] == nano_banana.MODEL
 
 
 def test_nano_generate_honours_the_daily_cap(tmp_db, tmp_path, monkeypatch):

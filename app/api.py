@@ -39,6 +39,7 @@ from src import (
     presets,
     rag,
     rag_eval,
+    render_assets,
     runway,
     settings,
     workflows,
@@ -216,6 +217,31 @@ def _assets_all() -> list:
             "meta": {"kind": p.get("category")},
             "created_at": p.get("created_at"),
         })
+    for rendered in render_assets.list_all(path=db.DB_PATH):
+        url = rendered["media_url"]
+        kind = rendered["media_kind"]
+        meta = {
+            "provider": rendered["provider"],
+            "model": rendered["model"],
+            "type": kind,
+        }
+        for key in ("ratio", "duration", "references", "source", "framing",
+                    "prompt_image"):
+            if rendered["metadata"].get(key) is not None:
+                meta[key] = rendered["metadata"][key]
+        for key in ("project", "concept_id", "shot_n"):
+            if rendered.get(key) is not None:
+                meta[key] = rendered[key]
+        items.append({
+            "id": f"generated-{rendered['id']}", "category": "generated",
+            "name": f"{rendered['provider']} {kind}",
+            "photos": [url] if kind == "image" else [],
+            "media": [{"url": url, "kind": kind}],
+            "media_url": url, "media_kind": kind,
+            "poster": url if kind == "image" else None,
+            "text": rendered["prompt"], "meta": meta,
+            "created_at": rendered.get("created_at"),
+        })
     return items
 
 
@@ -224,9 +250,9 @@ def assets_list(q: Optional[str] = None, category: Optional[str] = None,
                 limit: int = 200):
     items = _assets_all()
     counts = {"all": len(items)}
-    for cat in ("location", "character", "prop"):
+    for cat in ("location", "character", "prop", "generated"):
         counts[cat] = sum(1 for i in items if i["category"] == cat)
-    if category in ("location", "character", "prop"):
+    if category in ("location", "character", "prop", "generated"):
         items = [i for i in items if i["category"] == category]
     if q:
         needle = q.lower().strip()
@@ -237,22 +263,44 @@ def assets_list(q: Optional[str] = None, category: Optional[str] = None,
 
 @router.get("/media")
 def media_list(q: Optional[str] = None, category: Optional[str] = None,
-               limit: int = 500):
-    """Every saved photo as one flat, newest-first list with its REAL
-    file date -- what the media panel's picker grid and the Assets
-    gallery group by. Dates come from the file on disk, not a guess."""
+               kind: str = "image", limit: int = 500):
+    """Saved media as one flat, newest-first list.
+
+    Image-only is the safe default because this endpoint also feeds image
+    reference pickers.  The Asset Bank requests ``kind=all`` so generated
+    Runway clips appear in its gallery without being offered as still-image
+    inputs to Nano or Runway.
+    """
     from datetime import datetime, timezone
 
     items = []
     for asset in _assets_all():
-        for url in asset["photos"]:
-            target = _resolve_asset_photo(url)
-            if target is None:
+        generated = asset["category"] == "generated"
+        media = asset.get("media") or [
+            {"url": url, "kind": "image"} for url in asset["photos"]]
+        for entry in media:
+            url = entry["url"]
+            media_kind = entry.get("kind", "image")
+            if kind != "all" and media_kind != kind:
                 continue
-            mtime = datetime.fromtimestamp(target.stat().st_mtime, tz=timezone.utc)
+            if generated:
+                try:
+                    mtime = datetime.fromisoformat(
+                        str(asset.get("created_at") or "").replace("Z", "+00:00"))
+                    if mtime.tzinfo is None:
+                        mtime = mtime.replace(tzinfo=timezone.utc)
+                except ValueError:
+                    mtime = datetime.now(timezone.utc)
+            else:
+                target = _resolve_asset_photo(url)
+                if target is None:
+                    continue
+                mtime = datetime.fromtimestamp(target.stat().st_mtime,
+                                                tz=timezone.utc)
             items.append({
                 "url": url, "asset_id": asset["id"],
                 "asset_name": asset["name"], "category": asset["category"],
+                "kind": media_kind,
                 "haystack": (asset["name"] + " " + (asset["text"] or "")).lower(),
                 "date": mtime.date().isoformat(),
                 "ts": mtime.timestamp(),
@@ -260,9 +308,9 @@ def media_list(q: Optional[str] = None, category: Optional[str] = None,
     items.sort(key=lambda x: x["ts"], reverse=True)
     # counts are set totals, before any filter -- same rule as /api/assets
     counts = {"all": len(items)}
-    for cat in ("location", "character", "prop"):
+    for cat in ("location", "character", "prop", "generated"):
         counts[cat] = sum(1 for i in items if i["category"] == cat)
-    if category in ("location", "character", "prop"):
+    if category in ("location", "character", "prop", "generated"):
         items = [i for i in items if i["category"] == category]
     if q:
         needle = q.lower().strip()

@@ -44,7 +44,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from . import generative
+from . import generative, render_assets
 from .db import DB_PATH
 from .shot import Shot
 
@@ -277,12 +277,13 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                        prompt_image=prompt_image, client=client)
 
         shot_row_id = _shot_row_for_prompt(prompt, db_path)
+        generation_params = {"model": model, "ratio": DEFAULT_RATIO,
+                             "duration": DEFAULT_DURATION,
+                             "concept_id": concept_id, "shot_n": shot_n,
+                             "prompt_image": bool(prompt_image)}
         generation_id = generative.record_generation(
             shot_row_id, "runway", prompt,
-            params={"model": model, "ratio": DEFAULT_RATIO,
-                    "duration": DEFAULT_DURATION,
-                    "concept_id": concept_id, "shot_n": shot_n,
-                    "prompt_image": bool(prompt_image)},
+            params=generation_params,
             output_path=str(out_path),
             cost_usd=estimate_cost(1, model=model),
             **kwargs,
@@ -296,8 +297,17 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
             media_url = f"/renders/runway/{out_path.name}"
 
         preprod.set_shot_media_url(concept_id, shot_n, media_url, **kwargs)
+        asset = render_assets.record_best_effort(
+            generation_id=generation_id, tool="runway", model=model,
+            media_kind="video", prompt=prompt, media_url=media_url,
+            output_path=str(out_path), project=concept.get("brand"),
+            concept_id=concept_id, shot_n=shot_n,
+            metadata=generation_params,
+            path=db_path if db_path is not None else DB_PATH,
+        )
         return {"ok": True, "media_url": media_url,
                 "generation_id": generation_id, "path": str(out_path),
+                "asset_id": asset["id"], "asset_rag": asset["rag"],
                 "error": None}
     except Exception as e:
         return {"ok": False, "error": _safe_error(e)}
@@ -351,12 +361,13 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
                        prompt_image=prompt_image, client=client)
 
         shot_row_id = _shot_row_for_prompt(prompt, db_path)
+        generation_params = {"model": model, "ratio": DEFAULT_RATIO,
+                             "duration": DEFAULT_DURATION,
+                             "source": "workflow",
+                             "prompt_image": bool(prompt_image)}
         generation_id = generative.record_generation(
             shot_row_id, "runway", prompt,
-            params={"model": model, "ratio": DEFAULT_RATIO,
-                    "duration": DEFAULT_DURATION,
-                    "source": "workflow",
-                    "prompt_image": bool(prompt_image)},
+            params=generation_params,
             output_path=str(out_path),
             cost_usd=estimate_cost(1, model=model),
             **kwargs,
@@ -369,8 +380,16 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
         else:
             media_url = f"/renders/runway/{out_path.name}"
 
+        asset = render_assets.record_best_effort(
+            generation_id=generation_id, tool="runway", model=model,
+            media_kind="video", prompt=prompt, media_url=media_url,
+            output_path=str(out_path), metadata=generation_params,
+            path=db_path if db_path is not None else DB_PATH,
+        )
+
         return {"ok": True, "media_url": media_url,
                 "generation_id": generation_id, "path": str(out_path),
+                "asset_id": asset["id"], "asset_rag": asset["rag"],
                 "error": None}
     except Exception as e:
         return {"ok": False, "error": _safe_error(e)}
