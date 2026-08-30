@@ -881,9 +881,27 @@ async function runAll() {
   const btn = $('wfrunall');
   btn.disabled = true;
   try {
-    await saveWorkflow(true);                      // run executes the SAVED graph
+    // The runner executes a SAVED graph, so a run always saves first.
+    // In concept mode that save goes to the shot's own row -- which is
+    // also what reopening the concept restores from, so the graph that
+    // ran and the graph you come back to are the same row. It used to
+    // POST a fresh library workflow every session and read none of
+    // them back, leaving an orphan row per sitting.
+    let runId;
+    if (directorConceptId && activeShotN !== null) {
+      shotGraphs.set(activeShotN, graph.serialize());
+      const res = await api(
+        `/api/concepts/${directorConceptId}/shots/${activeShotN}/graph`,
+        { method: 'PUT',
+          body: { graph: graph.serialize(),
+                  name: directorConcept ? directorConcept.title : null } });
+      runId = res.id;
+    } else {
+      await saveWorkflow(true);
+      runId = currentId;
+    }
     clearRunState();
-    const res = await api(`/api/workflows/${currentId}/run`, { method: 'POST', body: {} });
+    const res = await api(`/api/workflows/${runId}/run`, { method: 'POST', body: {} });
     runAllJobId = res.job_id;
     wfStateline('loading', 'Running…');
   } catch (e) {
@@ -892,12 +910,18 @@ async function runAll() {
   }
 }
 
-function applyNodeStates(states) {
+function applyNodeStates(states, opts = {}) {
   if (!states || !graph) return;
   for (const [id, s] of Object.entries(states)) {
     const node = graph.getNodeById(Number(id));
     if (!node) continue;
-    if (s.status === 'done') { node._out = s.output; maybeAttachShotOutput(node); }
+    // quiet: restoring a saved canvas, not finishing a run. The output
+    // is put back on the node, but it must NOT re-post itself to the
+    // shot -- that already happened on the run that produced it.
+    if (s.status === 'done') {
+      node._out = s.output;
+      if (!opts.quiet) maybeAttachShotOutput(node);
+    }
     setNodeState(node,
       s.status === 'running' ? 'running'
         : s.status === 'done' ? 'done'
@@ -1169,6 +1193,13 @@ export function initWorkflows() {
       if (['done', 'failed', 'cancelled'].includes(job.status)) {
         runAllJobId = null;
         $('wfrunall').disabled = false;
+        // the run's outputs are the expensive part — keep them with the
+        // canvas, so leaving and coming back never means re-running to
+        // see the enhanced prompt again
+        if (directorConceptId && activeShotN !== null) {
+          shotGraphs.set(activeShotN, graph.serialize());
+          saveShotGraph(activeShotN, job.node_states);
+        }
         if (job.status === 'done') wfStateline('empty', job.detail || 'Run complete');
         else wfStateline('error', job.error || `Run ${job.status}`);
       }
@@ -1274,7 +1305,13 @@ function shotChainGraph(d, s) {
   // as ref_urls on all three billed nodes, so the enhance, the keyframe
   // and the clip all ground on the same material.
   const refs = s.refs || [];
-  const text = s.desc || s.prompt || '';
+  // The User Prompt node seeds from what the GENERATOR wrote, not from
+  // the enhanced text the Studio chain stored as the shot's prompt.
+  // Otherwise pressing Run on a chained concept enhances an already-
+  // enhanced prompt — a paid call that makes it worse, since enhance
+  // instructions compound. written_prompt only exists on scenes the
+  // chain touched; everything else falls through unchanged.
+  const text = s.written_prompt || s.prompt || s.desc || '';
   seededTexts.set(`${d.id}·${s.n}`, text);
 
   const nodes = [
@@ -1346,22 +1383,69 @@ function renderShotDock() {
     b.onclick = () => activateShot(+b.dataset.n));
 }
 
-function activateShot(n) {
+async function activateShot(n) {
   if (!directorConcept) return;
   const shot = directorConcept.shots.find(s => s.n === n);
   if (!shot) return;
   // pocket the current shot's edits before switching — nothing is lost
   if (activeShotN !== null && graph) {
     shotGraphs.set(activeShotN, graph.serialize());
+    saveShotGraph(activeShotN);          // and it outlives the session
   }
   activeShotN = n;
+
+  // In-session edits win; then the canvas saved on this shot's last
+  // visit; only then a fresh chain built from the shot. Reopening a
+  // concept used to always take the third branch, which cleared every
+  // node's output and made re-running the enhance the only way to see
+  // the enhanced prompt again.
+  let serialized = shotGraphs.get(n);
+  let states = null;
+  if (!serialized) {
+    const saved = await loadShotGraph(n);
+    if (saved && saved.graph && (saved.graph.nodes || []).length) {
+      serialized = saved.graph;
+      states = saved.states;
+    }
+  }
   graph.clear();
-  graph.configure(shotGraphs.get(n) || shotChainGraph(directorConcept, shot));
+  graph.configure(serialized || shotChainGraph(directorConcept, shot));
   clearRunState();
+  // put back what each node produced — serialize() carries a node's
+  // config and position but never its output
+  if (states) applyNodeStates(states, { quiet: true });
   renderShotDock();
   pendingFit = true;
   fitWhenSized();
   canvas.setDirty(true, true);
+}
+
+/* ── the canvas outlives the visit ──
+   A concept's node tree is saved per shot and restored on the next
+   open. Best-effort throughout: a canvas that fails to save is a
+   canvas you rebuild, never a run that fails. */
+
+async function saveShotGraph(n, states) {
+  if (!directorConceptId || n === null || n === undefined) return;
+  const serialized = shotGraphs.get(n) || (graph && graph.serialize());
+  if (!serialized || !(serialized.nodes || []).length) return;
+  try {
+    await api(`/api/concepts/${directorConceptId}/shots/${n}/graph`, {
+      method: 'PUT',
+      body: { graph: serialized, states: states || null,
+              name: directorConcept ? directorConcept.title : null },
+    });
+    $('wfsaved').textContent = 'Saved just now';
+  } catch { /* the drawing is not the deliverable */ }
+}
+
+async function loadShotGraph(n) {
+  if (!directorConceptId) return null;
+  try {
+    return await api(`/api/concepts/${directorConceptId}/shots/${n}/graph`);
+  } catch {
+    return null;
+  }
 }
 
 export async function openConceptInDirector(id) {
@@ -1422,7 +1506,7 @@ export async function openConceptInDirector(id) {
   activeShotN = null;
   shotGraphs.clear();
   setConceptScope(d);
-  activateShot(d.shots[0].n);     // one shot at a time — the rest wait in the dock
+  await activateShot(d.shots[0].n);   // one shot at a time — the rest wait in the dock
   canvasOpen = true;              // before the view fronts, so its render lands on the canvas
   landingRequested = false;
   await ensureDirectorView();

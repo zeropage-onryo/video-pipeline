@@ -35,6 +35,20 @@ DAILY_CAP = int(os.environ.get("NANO_DAILY_CAP", "20"))
 RETRIES = int(os.environ.get("NANO_RETRIES", "3"))
 RETRY_DELAY = 4.0
 
+# Saying "9:16" inside the prompt does not shape the output: the model
+# infers a shape from the references unless the request configures one,
+# and a vertical shot with landscape reference photos came back 864x1184
+# -- 3:4 (2026-08-29). That frame is what Runway anchors the clip on, so
+# a 3:4 keyframe into a 9:16 clip loses a quarter of its width, and
+# everything this pipeline renders is vertical.
+ASPECT_RATIO = os.environ.get("NANO_ASPECT_RATIO", "9:16")
+# Identity lives in pixels on the face, and the API's default is 1K --
+# but 2K is not offered by every image model on this endpoint, and
+# guessing wrong would fail a billed call. Opt in with NANO_IMAGE_SIZE=2K
+# once the configured model is known to take it; an unsupported value
+# degrades to an unconfigured call rather than losing the render.
+IMAGE_SIZE = os.environ.get("NANO_IMAGE_SIZE", "")
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 RENDER_DIR = PROJECT_ROOT / "data" / "renders" / "nano"
 
@@ -116,7 +130,7 @@ def _shot_row_for_prompt(prompt: str, db_path) -> int:
                                **kwargs)
 
 
-def _generate_content(client, model: str, parts):
+def _generate_content(client, model: str, parts, config=None):
     """The image call, retried on the two transient statuses the rest of
     the project already retries (gemini_utils.generate_with_retry).
     Its own helper rather than that one because that returns
@@ -131,7 +145,8 @@ def _generate_content(client, model: str, parts):
     last = None
     for attempt in range(RETRIES):
         try:
-            return client.models.generate_content(model=model, contents=parts)
+            return client.models.generate_content(model=model, contents=parts,
+                                                  config=config)
         except Exception as e:
             if not ("RESOURCE_EXHAUSTED" in str(e) or "UNAVAILABLE" in str(e)):
                 raise
@@ -140,6 +155,36 @@ def _generate_content(client, model: str, parts):
                 match = re.search(r"retry in ([\d.]+)s", str(e))
                 time.sleep(float(match.group(1)) + 2 if match else RETRY_DELAY)
     raise last
+
+
+def _rejected_the_config(error) -> bool:
+    """Whether an INVALID_ARGUMENT is about the shape we asked for
+    rather than about the picture we asked for.
+
+    Narrow on purpose. A content refusal is an answer, not a blip, and
+    retrying it spends twice to be told no twice -- the rule this file
+    already keeps. But an image_config the endpoint does not offer (2K
+    is not on every model here) would lose an otherwise good render, so
+    that one case drops the config and asks again."""
+    text = str(error)
+    return "INVALID_ARGUMENT" in text and any(
+        field in text for field in
+        ("image_config", "imageConfig", "aspect_ratio", "aspectRatio",
+         "image_size", "imageSize"))
+
+
+def image_config(types, aspect_ratio: str = "", image_size: str = ""):
+    """The request config that fixes the output shape, or None when
+    nothing was asked for. `types` is passed in rather than imported so
+    this stays callable without the SDK installed."""
+    fields = {}
+    if aspect_ratio:
+        fields["aspect_ratio"] = aspect_ratio
+    if image_size:
+        fields["image_size"] = image_size
+    if not fields:
+        return None
+    return types.GenerateContentConfig(image_config=types.ImageConfig(**fields))
 
 
 def as_reference_list(reference) -> list:
@@ -182,7 +227,9 @@ def as_reference_list(reference) -> list:
 
 def generate_image(prompt: str, out_path: Path, *, model: str = MODEL,
                    reference_bytes=None,
-                   reference_mime: Optional[str] = None, client=None) -> Path:
+                   reference_mime: Optional[str] = None, client=None,
+                   aspect_ratio: str = ASPECT_RATIO,
+                   image_size: str = IMAGE_SIZE) -> Path:
     """The thin raising wrapper: one generate_content call (retried on a
     transient overload), first image part written to out_path. Raises
     when the model returns no image -- here the image IS the deliverable
@@ -193,7 +240,13 @@ def generate_image(prompt: str, out_path: Path, *, model: str = MODEL,
     its own inline part, mime sniffed per image. reference_mime is
     honoured for a single reference so existing callers keep their
     behaviour, and ignored for a list, where per-image sniffing is the
-    only thing that can be right."""
+    only thing that can be right.
+
+    `aspect_ratio` and `image_size` shape the output (see ASPECT_RATIO).
+    Either empty means "don't configure it" and the model picks, which
+    is what it did for every render before this. A config the endpoint
+    rejects retries once without it: a wrongly-shaped frame is a far
+    better outcome than an INVALID_ARGUMENT on a paid call."""
     from google.genai import types
 
     client = client or _client()
@@ -207,7 +260,13 @@ def generate_image(prompt: str, out_path: Path, *, model: str = MODEL,
             mime_type=(reference_mime if reference_mime and len(references) == 1
                        else sniff_mime(data))))
     parts.append(prompt)
-    response = _generate_content(client, model, parts)
+    config = image_config(types, aspect_ratio, image_size)
+    try:
+        response = _generate_content(client, model, parts, config=config)
+    except Exception as e:
+        if config is None or not _rejected_the_config(e):
+            raise
+        response = _generate_content(client, model, parts)
     for candidate in response.candidates or []:
         for part in (candidate.content.parts or []) if candidate.content else []:
             inline = getattr(part, "inline_data", None)
@@ -224,7 +283,10 @@ def generate_image(prompt: str, out_path: Path, *, model: str = MODEL,
 
 
 def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
-                         model: str = MODEL, client=None) -> dict:
+                         model: str = MODEL, client=None,
+                         aspect_ratio: str = ASPECT_RATIO,
+                         image_size: str = IMAGE_SIZE,
+                         concept_id=None) -> dict:
     """
     Never raises: {"ok", "media_url", "generation_id", "path", "error"}.
     The Workflows canvas's Nano Banana node: prompt in, an image under
@@ -257,11 +319,18 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
 
         references = as_reference_list(reference_image)
 
+        # the stamp is second-resolution, so two renders in the same
+        # second collide -- and a collision here is silent: one concept's
+        # queue card ends up showing another's keyframe. `concept_id`
+        # (the Studio chain always passes it) makes the name unique
+        # where it actually matters.
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-        out_path = RENDER_DIR / f"wf-{stamp}.png"
+        who = f"c{concept_id}-" if concept_id else "wf-"
+        out_path = RENDER_DIR / f"{who}{stamp}.png"
         generate_image(as_still_frame(prompt, has_reference=len(references)),
                        out_path, model=model,
-                       reference_bytes=references, client=client)
+                       reference_bytes=references, client=client,
+                       aspect_ratio=aspect_ratio, image_size=image_size)
 
         # the row logs the prompt the person wrote, not the constant
         # wrapper around it -- the flag says which framing was applied
@@ -269,7 +338,8 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
         generation_id = generative.record_generation(
             shot_row_id, "nano", prompt,
             params={"model": model, "source": "workflow",
-                    "framing": "still", "references": len(references)},
+                    "framing": "still", "references": len(references),
+                    **({"concept_id": concept_id} if concept_id else {})},
             output_path=str(out_path),
             **kwargs,
         )

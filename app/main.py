@@ -187,6 +187,12 @@ app.mount("/static", NoCacheStaticFiles(directory=str(APP_DIR / "static")), name
 RENDERS_DIR = PROJECT_ROOT / "data" / "renders"
 RENDERS_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/renders", NoCacheStaticFiles(directory=str(RENDERS_DIR)), name="renders")
+# Composer reference uploads (data/refs/) -- a photo dragged onto the
+# Studio composer needs a URL to ride on, or it can ground the writing
+# call and nothing after it.
+UPLOAD_REFS_DIR = PROJECT_ROOT / "data" / "refs"
+UPLOAD_REFS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/refs", NoCacheStaticFiles(directory=str(UPLOAD_REFS_DIR)), name="refs")
 # Every /api route now requires a session -- the /ui shell is gated, so
 # its backing endpoints are too (401 JSON, which shared.js surfaces as a
 # stateline). The legacy /studio pages stay open as the dev console.

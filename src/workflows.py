@@ -33,6 +33,97 @@ CREATE TABLE IF NOT EXISTS workflows (
 def init(path=DB_PATH) -> None:
     with connect(path) as conn:
         conn.executescript(SCHEMA)
+        # A concept's canvas is a saved graph too (2026-08-28). It used
+        # to be rebuilt from the shot every time it opened and thrown
+        # away on exit, so the enhance output -- a paid Gemini call --
+        # had to be re-run on every visit just to see it again.
+        # Additive, so an existing database gains the columns untouched.
+        existing = {r["name"] for r in conn.execute("PRAGMA table_info(workflows)")}
+        for column in ("concept_id INTEGER", "shot_n INTEGER",
+                       "states_json TEXT", "seed_hash TEXT"):
+            if column.split()[0] not in existing:
+                conn.execute(f"ALTER TABLE workflows ADD COLUMN {column}")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_wf_shot "
+                     "ON workflows (concept_id, shot_n) "
+                     "WHERE concept_id IS NOT NULL")
+
+
+def save_shot_graph(concept_id: int, shot_n: int, graph: dict,
+                    states: Optional[dict] = None, name: Optional[str] = None,
+                    brand: Optional[str] = None, seed_hash: Optional[str] = None,
+                    path=DB_PATH) -> int:
+    """The canvas for one shot of one concept, upserted.
+
+    Keyed on (concept_id, shot_n) rather than appended, because a Run
+    all used to POST a brand-new workflow row every time and then never
+    read any of them back -- the graph was saved purely so the runner
+    had something to execute, and reopening the concept rebuilt it from
+    scratch regardless.
+
+    `states` is what each node PRODUCED (the runner's own node states).
+    Stored beside the drawing because LiteGraph's serialize() carries
+    node config and position but not output: without it a restored
+    canvas is the right shape with every box empty, which is exactly
+    the thing that made re-running feel mandatory.
+    """
+    now = _now()
+    payload = (json.dumps(graph or {}),
+               json.dumps(states) if states is not None else None)
+    with connect(path) as conn:
+        row = conn.execute(
+            "SELECT id FROM workflows WHERE concept_id = ? AND shot_n = ?",
+            (concept_id, shot_n),
+        ).fetchone()
+        if row:
+            # states absent means "graph only" -- never blank what the
+            # last run produced just because this save didn't carry it
+            if payload[1] is None:
+                conn.execute(
+                    "UPDATE workflows SET updated_at = ?, graph_json = ?, "
+                    "seed_hash = ? WHERE id = ?",
+                    (now, payload[0], seed_hash, row["id"]))
+            else:
+                conn.execute(
+                    "UPDATE workflows SET updated_at = ?, graph_json = ?, "
+                    "states_json = ?, seed_hash = ? WHERE id = ?",
+                    (now, payload[0], payload[1], seed_hash, row["id"]))
+            return int(row["id"])
+        cursor = conn.execute(
+            "INSERT INTO workflows (created_at, updated_at, brand, name, "
+            "graph_json, concept_id, shot_n, states_json, seed_hash) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (now, now, brand, (name or "").strip() or f"Shot {shot_n}",
+             payload[0], concept_id, shot_n, payload[1], seed_hash),
+        )
+        return int(cursor.lastrowid)
+
+
+def get_shot_graph(concept_id: int, shot_n: int, path=DB_PATH) -> Optional[dict]:
+    """The saved canvas for one shot, or None to build a fresh one."""
+    with connect(path) as conn:
+        row = conn.execute(
+            "SELECT * FROM workflows WHERE concept_id = ? AND shot_n = ?",
+            (concept_id, shot_n),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "id": row["id"],
+        "graph": json.loads(row["graph_json"] or "{}"),
+        "states": json.loads(row["states_json"] or "null"),
+        "seed_hash": row["seed_hash"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def delete_shot_graphs(concept_id: int, path=DB_PATH) -> int:
+    """Drop a concept's saved canvases -- used when its prompt changes
+    underneath them and the stored graph would be a stale drawing of a
+    shot that no longer says that."""
+    with connect(path) as conn:
+        cursor = conn.execute(
+            "DELETE FROM workflows WHERE concept_id = ?", (concept_id,))
+        return cursor.rowcount
 
 
 def create_workflow(name: str, graph: dict, brand: Optional[str] = None,
@@ -85,10 +176,13 @@ def list_workflows(brand: Optional[str] = None, path=DB_PATH) -> list[dict[str, 
     names and sizes, and graph_json is the heavy column. A brand filter
     still includes brandless rows: those are the shared templates (the
     seeded default), visible from every brand."""
-    query = "SELECT * FROM workflows"
+    # concept-scoped canvases are excluded: they belong to a shot, not
+    # to the workflow library, and listing them would fill the picker
+    # with one entry per shot anyone has ever opened
+    query = "SELECT * FROM workflows WHERE concept_id IS NULL"
     params: tuple = ()
     if brand:
-        query += " WHERE brand = ? OR brand IS NULL"
+        query += " AND (brand = ? OR brand IS NULL)"
         params = (brand,)
     query += " ORDER BY updated_at DESC, id DESC"
     with connect(path) as conn:

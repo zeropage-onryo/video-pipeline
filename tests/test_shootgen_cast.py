@@ -51,6 +51,82 @@ def test_format_cast_empty_when_nothing_on_file():
     assert shootgen.format_cast([], []) == ""
 
 
+MIKE_ON_FILE = {
+    "name": "Mike", "role": "protagonist", "photo_count": 6,
+    "notes": "Stills of myself for my personal social media page.",
+    "description": {
+        "notes": "Stills of myself for my personal social media page.",
+        "look": "A fair-skinned male with dark brown hair and a short mustache.",
+        "features": ["Short, dark mustache", "Brown eyes"],
+        "continuity": "The mustache and the hairstyle must remain consistent.",
+    },
+}
+
+
+def test_format_cast_can_carry_the_appearance_the_description_already_holds():
+    """The renders kept aging Mike up and losing the moustache, and the
+    prompt never once said he had one: the cast line sent `notes`, which
+    says why his photos exist, not what he looks like. The photo and the
+    sentence do different jobs and the sentence was missing."""
+    block = shootgen.format_cast([MIKE_ON_FILE], [], detail=True)
+    assert "short mustache" in block
+    assert "must remain consistent" in block
+
+
+def test_format_cast_stays_lean_for_ideation():
+    """Default off: ideation needs to know WHO is on file, and a cast of
+    five with full descriptions crowds out the ideas."""
+    block = shootgen.format_cast([MIKE_ON_FILE], [])
+    assert "Mike" in block
+    assert "short mustache" not in block
+
+
+def test_format_cast_detail_survives_an_asset_with_no_description():
+    """Half the rows are older than the describe step. A missing
+    description is a thinner line, never a crash."""
+    block = shootgen.format_cast(
+        [{"name": "Mike", "photo_count": 2}],
+        [{"name": "Helmet", "photo_count": 1, "description": "not a dict"}],
+        detail=True)
+    assert "Mike" in block and "Helmet" in block
+
+
+def test_the_scene_writer_grounds_in_appearance_and_ideation_does_not(tmp_db,
+                                                                      monkeypatch):
+    """The two paths want different things from the same table. Only the
+    scene writers' output becomes a prompt a renderer grounds."""
+    entities.add_character(
+        "Mike", role="protagonist", photo_count=6,
+        description=MIKE_ON_FILE["description"], path=tmp_db)
+    captured = {}
+
+    def fake_generate(client, model, prompt):
+        captured["prompt"] = prompt
+        return json.dumps({"plan": {"duration": "12s", "shots": [
+            {"n": 1, "type": "CHARACTER", "source": "CAMERA", "cam": "BMPCC",
+             "location": "hallway", "desc": "d", "light": "l"},
+        ]}})
+
+    monkeypatch.setattr(shootgen, "generate_with_retry", fake_generate)
+    concept_id = preprod.save_concept(
+        {"title": "Void Signal", "hook": "h", "logline": "l"},
+        brand="antihero", path=tmp_db)
+    shootgen.write_scene_for_concept(concept_id, gemini_client=None, db_path=tmp_db)
+    assert "short mustache" in captured["prompt"]
+
+    def fake_concept(client, model, prompt):
+        captured["prompt"] = prompt
+        return response_for({
+            "title": "T", "hook": "h", "logline": "l", "duration": "12s",
+            "shots": [{"n": 1, "type": "CHARACTER", "source": "CAMERA", "cam": "BMPCC",
+                       "location": "hallway", "desc": "d", "light": "l"}],
+        })
+
+    monkeypatch.setattr(shootgen, "generate_with_retry", fake_concept)
+    shootgen.generate_concept(brand="antihero", gemini_client=None, db_path=tmp_db)
+    assert "short mustache" not in captured["prompt"]
+
+
 # ---------- build_concept_prompt / build_shotlist_prompt ----------
 
 def test_build_concept_prompt_injects_cast():

@@ -11,7 +11,16 @@
 # gets exercised and each channel's credit gate (autonomy.evaluator_agreement)
 # keeps filling. Previously this only ran antihero/antihero, so Zero Page's
 # queue never refilled with genuinely Zero Page content.
-cd "/Users/iphone/Documents/Github Portfolio" || exit 1
+# The project root, repathed 2026-08-29 when the folder was renamed from
+# "Github Portfolio". The rename broke this silently: launchd ran the
+# script, the cd failed, and a night with no runs looks exactly like a
+# healthy night unless something says so -- which is why the log below
+# gets a line either way.
+ROOT="/Users/iphone/Documents/PRODUCTION PIPLINE .GIT"
+if ! cd "$ROOT"; then
+  echo "$(date -u +%FT%TZ) morning: project root missing: $ROOT" >&2
+  exit 1
+fi
 source venv/bin/activate
 mkdir -p data
 

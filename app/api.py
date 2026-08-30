@@ -33,6 +33,7 @@ from src import (
     db,
     entities,
     evalstore,
+    imagery,
     inspiration,
     instagram,
     preprod,
@@ -568,6 +569,11 @@ def _concept_card(c: dict) -> dict:
         "is_scene": c.get("is_scene", False),
         "picked": c.get("picked", False),
         "archived": c.get("archived", False),
+        # parked = the chain took it as far as it can without spending;
+        # it is waiting in the Queue on a human. An explicit marker, not
+        # "has a reference_image" -- see preprod.set_shot_parked.
+        "parked": c.get("parked", False),
+        "park_reason": c.get("park_reason") or "",
         "graded": c.get("graded", False),
         "refs": c.get("refs") or [],
         "prompt": ((c.get("shots") or [{}])[0].get("prompt") or "")
@@ -667,8 +673,13 @@ def _auto_refs(text: str, already: list) -> list:
     many words -- but nothing was ever attaching those files, so the
     renderer got the sentence and not the face (2026-08-28). This
     closes that loop: read the finished scene back, find the assets it
-    named, take ONE photo each (a face and a bike, not twelve angles of
-    the same bike), and let them ride on the shot.
+    named, and let their photos ride on the shot.
+
+    Two passes, because a slot is worth different things to different
+    assets. Pass one takes ONE photo of every asset the scene named, so
+    nothing named goes unattached and the anchor slot (Runway reads
+    whichever is first) still holds the character the scene opens on.
+    Pass two spends what is left on more angles of the characters.
 
     Grounding shapes, it doesn't gate: no match, or no assets at all,
     just means the scene renders on its text like it did before.
@@ -679,23 +690,55 @@ def _auto_refs(text: str, already: list) -> list:
     except Exception:
         return []
     picked = list(already)
-    for asset in shootgen.named_assets(text, assets):
+    named = shootgen.named_assets(text, assets)
+    for asset in named:
         if len(picked) >= MAX_IMAGE_REFS:
-            break
+            return picked
         photo = _best_photo(asset["photos"])
         if photo and photo not in picked:
             picked.append(photo)
+    # Pass two: whatever slots are left go to MORE ANGLES OF THE FACES,
+    # round-robin so two characters share the remainder evenly.
+    faces = [a for a in named if a.get("category") == "character"]
+    for index in range(1, CHARACTER_REF_PHOTOS):
+        for asset in faces:
+            if len(picked) >= MAX_IMAGE_REFS:
+                return picked
+            angles = _asset_photos(asset["photos"], CHARACTER_REF_PHOTOS)
+            if index < len(angles) and angles[index] not in picked:
+                picked.append(angles[index])
     return picked
 
 
+# How many photos of one character are worth spending reference slots
+# on. A face is the case the one-photo rule below was not written for:
+# the Garage Guest keyframe grounded a three-quarter head turn on a
+# single frontal portrait and aged him about ten years, while the
+# three-quarter frame it needed sat unused in the same folder
+# (2026-08-29). A prop gains almost nothing from a second angle; an
+# identity gains most of what it has. Three, because past that the
+# photos are duplicates of angles already sent.
+CHARACTER_REF_PHOTOS = 3
+
+
 def _best_photo(photos: list) -> Optional[str]:
-    """One photo per asset -- a face and a bike, not twelve angles of
-    the bike -- preferring one the renderer can actually decode."""
+    """The one photo that stands for an asset -- a face and a bike, not
+    twelve angles of the bike -- preferring one the renderer can
+    actually decode."""
+    picks = _asset_photos(photos, 1)
+    return picks[0] if picks else None
+
+
+def _asset_photos(photos: list, limit: int) -> list:
+    """Up to `limit` of an asset's photos, decodable ones first.
+
+    Same preference _best_photo has always had, applied to a run of
+    them: a HEIC the renderer cannot open is worth less than the third
+    JPEG, so it sorts last rather than eating a slot."""
     urls = [p.split("?")[0] for p in photos if p]
-    for url in urls:
-        if Path(url).suffix.lower() in _DECODES_NATIVELY:
-            return url
-    return urls[0] if urls else None
+    native = [u for u in urls if Path(u).suffix.lower() in _DECODES_NATIVELY]
+    other = [u for u in urls if u not in native]
+    return (native + other)[:max(0, limit)]
 
 
 def _attach_scene_refs(concept_id: int, manual: list) -> list:
@@ -737,6 +780,13 @@ async def scenes_run(request: Request):
     concept's shot as well as sent as vision input, which is what
     carries them into every node once it reaches Director; an uploaded
     file grounds this call only, since it has no URL to ride on.
+
+    It runs the grounding and writing stages of src/scene_chain.py and
+    STOPS there: Create's job ends on the concepts board (2026-08-29,
+    Mike's call). Enhancing, keyframing and rendering are the Director
+    canvas's work when a person is driving, and the nightly graph's when
+    nobody is -- both go through the same stage functions, so there is
+    one implementation of each rather than three.
     """
     form = await request.form()
     idea = (form.get("idea") or form.get("prompt") or "").strip()
@@ -760,35 +810,24 @@ async def scenes_run(request: Request):
     def work(job):
         from google import genai
 
-        from src import shootgen
+        from src import scene_chain
 
-        jobs.progress(job, 0.15, "grounding in references")
-        references = shootgen.reference_block(spark=idea, db_path=db.DB_PATH)
-        try:
-            cast = shootgen.format_cast(
-                entities.list_characters(path=db.DB_PATH),
-                entities.list_props(path=db.DB_PATH))
-        except Exception:
-            cast = None        # naming the cast is grounding, never a gate
-        jobs.progress(job, 0.4, f"writing {count} concept(s)")
-        result = shootgen.generate_scene_concepts(
-            idea, brand, count=count,
+        # ground -> write -> attach, and STOP: pressing Create writes
+        # concepts and lands on the board. The enhance, the keyframe and
+        # the clip are the Director canvas's job when a person is doing
+        # this by hand -- and the nightly graph's job when nobody is
+        # (src/orchestrator.py calls the same stage functions).
+        result = scene_chain.run(
+            idea, brand, count=count, refs=refs, image_refs=image_refs or None,
+            db_path=db.DB_PATH,
             gemini_client=genai.Client(api_key=api_key),
-            references=references, cast=cast, db_path=db.DB_PATH,
-            refs=refs, image_refs=image_refs or None)
+            resolve_photo=_resolve_asset_photo,
+            attach_refs=_attach_scene_refs,
+            progress=lambda fraction, detail: jobs.progress(job, fraction, detail))
         saved = result["scenes"]
-        # the assets each scene NAMED, attached to it -- the loop
-        # format_cast opens and nothing used to close
-        grounded = 0
-        for scene in saved:
-            try:
-                if _attach_scene_refs(scene["concept_id"], refs):
-                    grounded += 1
-            except Exception:
-                pass          # a missing photo never fails a written scene
         detail = f"{len(saved)} concept(s)"
-        if grounded:
-            detail += f" · {grounded} grounded in references"
+        for note in result["notes"]:
+            detail += f" · {note}"
         return {"detail": detail,
                 "ref_id": saved[0]["concept_id"] if saved else None}
 
@@ -852,28 +891,43 @@ def _runway_state() -> dict:
 
 @router.get("/queue/pending")
 def queue_pending(brand: Optional[str] = None):
-    """What is waiting on you to spend: picked, not archived, no clip
-    yet. Derived from the rows, so it survives a restart -- the jobs
-    registry does not, and an approval that vanished on restart would be
-    a queue that lies."""
+    """What is waiting on you to spend: parked by the chain or picked on
+    the board, not archived, no clip yet. Derived from the rows, so it
+    survives a restart -- the jobs registry does not, and an approval
+    that vanished on restart would be a queue that lies.
+
+    Two ways in, because there are two ways a scene gets here: the
+    Studio chain parks it (concept written, prompt enhanced, keyframe
+    rendered -- the next step is the one that costs money), or you pick
+    a text-only concept off the board yourself."""
     cards = [_concept_card(c) for c in preprod.list_concepts(path=db.DB_PATH)]
     if brand in preprod.BRANDS:
         cards = [c for c in cards if c["brand"] == brand]
     pending = [c for c in cards
-               if c["picked"] and not c["archived"]
+               if (c["picked"] or c["parked"]) and not c["archived"]
                and c["is_scene"] and not c["media_url"]]
     return {"items": pending, "runway": _runway_state()}
 
 
 @router.post("/queue/{concept_id}/approve")
 def queue_approve(concept_id: int):
-    """Approve = render. The concept's stored prompt goes through the
-    Runway API (anchored on its reference image when it has one), and
-    the clip comes back attached to the shot.
+    """Approve = render, and approving IS the pick.
 
-    Approving also resolves the batch: every other concept written from
-    the same idea that you did NOT pick is archived, because you have
-    now answered the question those cards were asking.
+    The concept's stored prompt goes through the Runway API (anchored on
+    its keyframe when it has one) and the clip comes back attached to
+    the shot. picked_at is stamped here rather than requiring a separate
+    click, because with the chain parking scenes straight into the Queue
+    the spend gate is where the real choice is made -- and pick_rate
+    ("how many generated scenes were worth rendering") is better
+    answered there than by a board click nothing was ever risked on.
+
+    It deliberately does NOT archive the siblings any more. That tidy-up
+    inferred "you have answered this batch" from which rows were picked,
+    which was safe while picking was a separate bulk step done first:
+    pick two, approve one, both survived. Now that approval is the pick,
+    approving take 1 would archive takes 2-4 out from under you -- and
+    nondeterministically, since it ran after Runway returned ~90s later.
+    Rejecting archives explicitly, and that is the honest signal.
     """
     if not runway.has_key():
         return _error(503, "runway_unavailable", "RUNWAYML_API_SECRET is not set")
@@ -882,33 +936,24 @@ def queue_approve(concept_id: int):
         return _error(404, "not_found", "no such concept")
     if not concept["shots"]:
         return _error(400, "no_prompt", "this concept carries no prompt to render")
-    if not concept.get("picked"):
-        return _error(400, "not_picked", "pick it on the board before approving")
+    if not (concept.get("picked") or concept.get("parked")):
+        return _error(400, "not_queued",
+                      "this concept isn't in the queue — pick it on the board first")
 
     shot_n = concept["shots"][0].get("n", 1)
+    # the pick is recorded BEFORE the spend, not after it: a render that
+    # fails halfway still leaves the row saying you chose this one
+    if not concept.get("picked"):
+        preprod.set_picked(concept_id, True, path=db.DB_PATH)
 
     def work(job):
         jobs.progress(job, 0.2, "rendering via Runway")
-        result = runway.generate_for_shot(concept_id, shot_n, db_path=db.DB_PATH)
+        result = runway.generate_for_shot(
+            concept_id, shot_n, db_path=db.DB_PATH,
+            resolve_photo=_resolve_asset_photo)
         if not result.get("ok"):
             raise RuntimeError(result.get("error") or "render failed")
-        # the batch is answered: keep this one, archive the siblings it
-        # was picked over. Best-effort -- a clip that rendered is not
-        # un-rendered because the tidy-up failed.
-        archived = 0
-        try:
-            if concept.get("spark"):
-                picked_ids = [c["id"] for c in preprod.list_concepts(path=db.DB_PATH)
-                              if c.get("spark") == concept["spark"] and c.get("picked")]
-                archived = preprod.archive_batch(
-                    concept["spark"], keep_ids=picked_ids,
-                    brand=concept.get("brand"), path=db.DB_PATH)
-        except Exception:
-            pass
-        detail = "clip attached"
-        if archived:
-            detail += f" · {archived} unpicked archived"
-        return {"ref_id": concept_id, "detail": detail}
+        return {"ref_id": concept_id, "detail": "clip attached"}
 
     job = jobs.start("render", f"approved · {concept['title']}", work)
     return {"job_id": job["id"]}
@@ -916,9 +961,11 @@ def queue_approve(concept_id: int):
 
 @router.post("/queue/{concept_id}/reject")
 def queue_reject(concept_id: int):
-    """Rejected here means: not worth the spend. The pick comes off and
+    """Rejected here means: not worth the spend. Any pick comes off and
     the concept archives, so it reads as generated-but-not-picked in
-    pick_rate -- which is the truth about it."""
+    pick_rate -- which is the truth about it. This is the only thing
+    that takes a sibling off the board now; approving no longer infers
+    it (see queue_approve)."""
     concept = preprod.get_concept(concept_id, path=db.DB_PATH)
     if concept is None:
         return _error(404, "not_found", "no such concept")
@@ -1084,7 +1131,9 @@ def shot_generate(concept_id: int, shot_n: int):
 
     def work(job):
         jobs.progress(job, 0.2, "rendering via Runway")
-        result = runway.generate_for_shot(concept_id, shot_n, db_path=db.DB_PATH)
+        result = runway.generate_for_shot(
+            concept_id, shot_n, db_path=db.DB_PATH,
+            resolve_photo=_resolve_asset_photo)
         if not result.get("ok"):
             raise RuntimeError(result.get("error") or "render failed")
         return {"ref_id": concept_id,
@@ -1575,12 +1624,22 @@ def _shot_seed_hash(concept: dict, shot_n: int) -> Optional[str]:
     of the shot's prompt in its User Prompt node, so if the shot's
     prompt changes underneath it -- a Direct revision, a Polish, a
     replan -- the stored drawing is of a shot that no longer says that.
+
+    The refs are in the hash for the same reason and were missed for a
+    worse one: the graph freezes them into `ref_urls` on every billed
+    node, so a shot whose references improve while its prompt stays
+    identical restores a canvas still grounded on the old ones, and the
+    next keyframe silently renders against a set nobody meant to use
+    (2026-08-29 -- found re-attaching a scene's photos). A drawing of
+    the wrong references is as stale as a drawing of the wrong words.
     """
     shot = next((s for s in (concept.get("shots") or [])
                  if s.get("n") == shot_n), None)
     if shot is None:
         return None
-    return hashlib.sha256((shot.get("prompt") or "").encode()).hexdigest()
+    seed = [shot.get("prompt") or ""]
+    seed.extend(str(ref) for ref in (shot.get("refs") or []))
+    return hashlib.sha256("\x00".join(seed).encode()).hexdigest()
 
 
 @router.get("/concepts/{concept_id}/shots/{shot_n}/graph")
@@ -2191,7 +2250,7 @@ def workflow_exec_nano(body: WfGenerateBody):
         # bike, matching the graph runner's Nano branch
         reference = [
             data for data in (
-                workflow_runner.image_bytes_for_gemini(
+                imagery.image_bytes_for_gemini(
                     url, resolve_photo=_resolve_asset_photo)
                 for url in body.reference_urls())
             if data

@@ -57,14 +57,16 @@ REAL_JUDGE_PROMPT = orchestrator._judge_prompt
 
 
 def make_concept(**overrides):
+    """ONE scene, ONE prompt -- what gen_concept has written since
+    2026-08-29. A multi-shot concept would be generated, scored and
+    keyframed and then invisible to the Queue, which keys on is_scene
+    (len(shots) == 1)."""
     concept = {
         "title": "The Waiting",
         "hook": "a hand already on the door handle",
         "logline": "He waits for someone who never knocks.",
         "shots": [
-            {"n": 1, "type": "CHARACTER", "source": "CAMERA", "cam": "BMPCC",
-             "location": "hallway", "desc": "low angle, he steps into frame"},
-            {"n": 2, "type": "BROLL", "source": "AI", "tool": "KLING",
+            {"n": 1, "type": "BROLL", "source": "AI", "tool": "KLING",
              "location": "hallway", "desc": "the handle turns on its own",
              "prompt": GOOD_PROMPT},
         ],
@@ -73,20 +75,48 @@ def make_concept(**overrides):
     return concept
 
 
-def stage_fakes(monkeypatch, results):
-    """Patch generate_concept; record the kwargs of every attempt."""
-    queue = list(results)
-    calls = []
+class _Calls(list):
+    """A list that also carries the keyframe calls, so a test can assert
+    on both without two return values."""
+    keyframes: list
 
-    def fake_generate(brand, client=None, spark=None, gemini_client=None,
-                      model=None, use_pov=True, db_path=None, references="",
-                      cast=None):
+
+def stage_fakes(monkeypatch, results):
+    """Patch generate_scene_concept; record the kwargs of every attempt."""
+    queue = list(results)
+    calls = _Calls()
+
+    def fake_generate(brand, spark=None, gemini_client=None, model=None,
+                      db_path=None, references="", cast=None, tool=None,
+                      image_refs=None):
         calls.append({"brand": brand, "spark": spark, "references": references, "cast": cast})
         concept, warnings = queue.pop(0)
-        return {"concept_id": len(calls), "concept": concept, "warnings": warnings}
+        concept_id = _save_scene(db.DB_PATH, concept, brand)
+        return {"concept_id": concept_id, "concept": concept, "warnings": warnings}
 
-    monkeypatch.setattr(orchestrator.shootgen, "generate_concept", fake_generate)
+    monkeypatch.setattr(orchestrator.shootgen, "generate_scene_concept", fake_generate)
+    # the keyframe node renders a still for every scene whose prompt
+    # clears the gate. Patched by name and counted: a miss here is a
+    # real billed image call escaping a test.
+    keyframes = []
+
+    def fake_keyframe(prompt, *, reference_image=None, db_path=None,
+                      concept_id=None, **kw):
+        keyframes.append({"prompt": prompt, "concept_id": concept_id})
+        return {"ok": True, "media_url": f"https://cdn/key-{concept_id}.png",
+                "generation_id": 1, "path": "x", "error": None}
+
+    monkeypatch.setattr(orchestrator.scene_chain.nano_banana,
+                        "generate_from_prompt", fake_keyframe)
+    calls.keyframes = keyframes
     return calls
+
+
+def _save_scene(path, concept, brand):
+    """A real row, because the keyframe node reads the concept back out
+    of the DB to persist its prompt and attach its still."""
+    return preprod.save_concept(concept, brand=brand, spark="test",
+                                prompt_template="T", path=path)
 
 
 # ---------- brand defaults to channel: the hold_queue-13 regression ----------
@@ -121,8 +151,13 @@ def test_run_explicit_brand_can_still_disagree_with_channel_on_purpose(tmp_db, m
 
 # ---------- the left third: the original loop, preserved ----------
 
-def test_clean_run_parks_in_shadow_with_the_render_stub_reason(tmp_db, monkeypatch):
-    stage_fakes(monkeypatch, [(make_concept(), [])])
+def test_clean_run_keyframes_the_scene_and_parks_it_for_approval(tmp_db, monkeypatch):
+    """What a night actually produces (2026-08-29). It used to end
+    "no usable clips (render is a dry-run stub)" -- true, and useless:
+    it described the stub rather than anything you could judge. Now the
+    scored prompt is stored on the shot, a keyframe is attached, and the
+    scene waits in the Queue where approving is what spends."""
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])])
 
     result = orchestrator.run("gearing up ritual")
 
@@ -131,8 +166,19 @@ def test_clean_run_parks_in_shadow_with_the_render_stub_reason(tmp_db, monkeypat
     # the AI shot's prompt was extracted...
     assert result["prompts"] == [
         {"tool": "KLING", "prompt": GOOD_PROMPT, "still": ""}]
-    # ...but render is a stub, so the run parks instead of posting
-    assert "render is a dry-run stub" in result["held_reason"]
+    # ...one still was rendered from it, and the run parks rather than posting
+    assert len(calls.keyframes) == 1
+    assert calls.keyframes[0]["prompt"] == GOOD_PROMPT
+    assert "keyframe rendered" in result["held_reason"]
+
+    # and the scene itself is now waiting where the money gets spent:
+    # its prompt stored, its still attached, parked but not picked
+    concept = preprod.get_concept(result["concept_id"], path=tmp_db)
+    shot = concept["shots"][0]
+    assert shot["prompt"] == GOOD_PROMPT
+    assert shot["reference_image"].startswith("https://cdn/key-")
+    assert concept["parked"] is True
+    assert concept["picked"] is False
     [row] = autonomy.list_hold(path=tmp_db)
     assert row["status"] == "held"
     assert row["concept_id"] == 1
@@ -553,7 +599,7 @@ def test_a_successful_rework_rescues_the_run(tmp_db, monkeypatch):
     assert result["prompts"][1]["prompt"] == f"{bible}. {REWORKED_PROMPT}"
     # cleared the gate -- now parked only because render is the dry-run
     # stub, not because of the prompt gate
-    assert "render is a dry-run stub" in result["held_reason"]
+    assert "keyframe rendered" in result["held_reason"]
 
 
 def test_rework_that_errors_keeps_the_original_score_and_still_holds(tmp_db, monkeypatch):
@@ -693,10 +739,17 @@ def test_every_shot_with_a_prompt_is_ai_eligible(tmp_db, monkeypatch):
     structured and scored like any other; its real capture rides along to
     the hold card, and the Midjourney still is skipped -- the capture IS
     the anchor frame a still would otherwise have to invent."""
-    concept = make_concept()
-    concept["shots"][0]["prompt"] = GOOD_PROMPT
-    concept["shots"][0]["tool"] = "SEEDANCE"
-    concept["shots"][0]["reference_image"] = "https://cdn.example/take.jpg"
+    # an explicit two-shot concept: gen_concept writes one-scene concepts
+    # now, but a legacy row still has to structure and score correctly
+    concept = make_concept(shots=[
+        {"n": 1, "type": "CHARACTER", "source": "CAMERA", "cam": "BMPCC",
+         "location": "hallway", "desc": "low angle, he steps into frame",
+         "prompt": GOOD_PROMPT, "tool": "SEEDANCE",
+         "reference_image": "https://cdn.example/take.jpg"},
+        {"n": 2, "type": "BROLL", "source": "AI", "tool": "KLING",
+         "location": "hallway", "desc": "the handle turns on its own",
+         "prompt": GOOD_PROMPT},
+    ])
     stage_fakes(monkeypatch, [(concept, [])])
 
     result = orchestrator.run("gearing up ritual")

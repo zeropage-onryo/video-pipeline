@@ -229,8 +229,76 @@ def has_key() -> bool:
     return bool(os.environ.get("RUNWAYML_API_SECRET"))
 
 
+RENDERS_ROOT = Path(__file__).resolve().parent.parent / "data" / "renders"
+
+
+def _local_render_bytes(value: str):
+    """A site-relative /renders/ URL -> that file's bytes, or None.
+
+    A render is a local file no model provider can fetch by URL, and the
+    path comes out of a stored shot, so anything escaping data/renders/
+    is refused. Mirrors app/workflow_runner.render_bytes, which does the
+    same job for the canvas; this copy exists so src/ never imports app/.
+    """
+    try:
+        root = RENDERS_ROOT.resolve()
+        target = (root / value[len("/renders/"):]).resolve()
+        if root in target.parents and target.is_file():
+            return target.read_bytes()
+    except OSError:
+        return None
+    return None
+
+
+def as_prompt_image(value, *, resolve_photo=None):
+    """Anything we might have stored as a reference -> something Runway
+    can actually anchor on, or None.
+
+    Runway takes ONE frame, and it must be a public URL or an inline
+    data: URI -- it cannot fetch /renders/nano/x.png or /refs/y.jpg off
+    a local app. Until this existed, generate_for_shot dropped every
+    non-http reference silently (`prompt_image = reference if
+    reference.startswith("http")`), so a keyframe rendered on a machine
+    without R2 anchored nothing while the Queue card said "anchors on
+    the attached reference" and the credit was spent on the lie.
+
+    The mime comes from the magic number, not a guess: Nano writes PNG,
+    and the old bytes path hardcoded image/jpeg.
+    """
+    if isinstance(value, (bytes, bytearray)):
+        data = bytes(value)
+        if not data:
+            return None
+        from .gemini_utils import sniff_mime
+        return ("data:" + sniff_mime(data) + ";base64,"
+                + base64.b64encode(data).decode("ascii"))
+    if not value or not isinstance(value, str):
+        return None
+    value = value.strip()
+    if value.startswith(("http://", "https://", "data:image/")):
+        return value
+    data = None
+    if value.startswith("/renders/"):
+        data = _local_render_bytes(value)
+    elif resolve_photo is not None:
+        try:
+            target = resolve_photo(value)
+        except Exception:
+            target = None
+        if target is not None:
+            try:
+                data = Path(target).read_bytes()
+            except OSError:
+                data = None
+    # a reference that cannot be resolved is dropped, never fatal --
+    # an unanchored clip is worse than no clip only if nobody is told,
+    # and generate_for_shot records prompt_image=False either way
+    return as_prompt_image(data) if data else None
+
+
 def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
-                      model: str = DEFAULT_MODEL, client=None) -> dict:
+                      model: str = DEFAULT_MODEL, client=None,
+                      resolve_photo=None) -> dict:
     """
     Never raises: {"ok", "media_url", "generation_id", "error"}. One
     render for one concept shot, through every wall this module already
@@ -238,8 +306,12 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
     cannot spend around it; the cap is checked before any call; the
     attempt is a generations row either way the pick later goes.
 
-    Reads the shot's stored prompt, anchors on its reference_image when
-    that's a public URL (what the reference is FOR), downloads the clip
+    Reads the shot's stored prompt and anchors on its reference_image
+    (what the reference is FOR) through as_prompt_image, so a keyframe
+    that never reached R2 still anchors as inline bytes instead of
+    silently rendering text-to-video. `resolve_photo` is the caller's
+    asset-path resolver -- the web app passes its own; without one, a
+    picked asset photo is simply dropped. Downloads the clip
     to data/renders/runway/, uploads to R2 when configured (Instagram
     needs a public URL), else leaves it served from the app's /renders
     mount -- and attaches the result via preprod.set_shot_media_url,
@@ -268,8 +340,10 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
             return {"ok": False,
                     "error": f"shot {shot_n} has no AI prompt to render from"}
 
-        reference = (shot.get("reference_image") or "").strip()
-        prompt_image = reference if reference.startswith(("http://", "https://")) else None
+        # the keyframe (or picked photo) this shot anchors on, turned
+        # into something the API can read -- see as_prompt_image
+        prompt_image = as_prompt_image(shot.get("reference_image"),
+                                       resolve_photo=resolve_photo)
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"c{concept_id}-s{shot_n}-{stamp}.mp4"
@@ -314,11 +388,11 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
     around it either; the cap is checked first; the attempt is a
     generations row via the same synthesized-shot path the graph uses.
 
-    `reference_image` anchors the render: a public http(s) URL or a
-    data: URI passes straight through as prompt_image; raw image bytes
-    (a picked local asset photo, which Runway could never fetch) become
-    a data URI. Anything else is dropped -- a reference is an
-    enhancement, never a gate.
+    `reference_image` anchors the render through as_prompt_image: a
+    public http(s) URL or a data: URI passes straight through, raw
+    image bytes and a local /renders/ path become a data URI with the
+    mime read off the magic number. Anything else is dropped -- a
+    reference is an enhancement, never a gate.
     """
     from . import storage
     kwargs = {"path": db_path} if db_path is not None else {}
@@ -337,13 +411,7 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
                     "error": f"daily cap: {used}/{DAILY_CAP} generations used "
                              f"today (RUNWAY_DAILY_CAP to raise)"}
 
-        prompt_image = None
-        if isinstance(reference_image, (bytes, bytearray)):
-            prompt_image = ("data:image/jpeg;base64,"
-                            + base64.b64encode(bytes(reference_image)).decode("ascii"))
-        elif isinstance(reference_image, str) and reference_image.startswith(
-                ("http://", "https://", "data:image/")):
-            prompt_image = reference_image
+        prompt_image = as_prompt_image(reference_image)
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"wf-{stamp}.mp4"

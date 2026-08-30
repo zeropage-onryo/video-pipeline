@@ -461,7 +461,55 @@ def named_assets(text: str, assets: list) -> list[dict]:
     return [asset for _, _, asset in hits]
 
 
-def format_cast(characters: list, props: list) -> str:
+def _asset_notes(asset: dict) -> str:
+    """An asset's one-line notes, however its description arrived.
+
+    entities._row_to_dict parses that column into a dict and falls back
+    to {"notes": raw}, so a row is always safe -- but format_cast also
+    takes hand-built dicts, and `(asset.get("description") or {}).get`
+    raised on any of them that carried a plain string. One bad shape
+    should thin a cast line, never kill the scene-writing job that
+    happens to name that asset.
+    """
+    notes = asset.get("notes")
+    if notes:
+        return str(notes)
+    description = asset.get("description")
+    if isinstance(description, dict):
+        return str(description.get("notes") or "")
+    return str(description or "")
+
+
+def cast_detail(asset: dict) -> str:
+    """An asset's stored appearance, as lines for the cast block.
+
+    A reference photo and a sentence do different jobs, and this block
+    was only ever sending one of them. The photo is what the renderer
+    matches pixels against; the sentence is what pins the model's own
+    prior down where the photo is silent -- an angle it never saw, a
+    feature small in frame. Michael's description has said "short dark
+    mustache" and "dark brown hair styled back" since the day his
+    photos were described, and none of it ever reached a prompt: the
+    cast line sent `notes`, which says why the photos exist, not what
+    he looks like. The renders aged him up and thinned the moustache
+    accordingly, because nothing in the words disagreed (2026-08-29).
+
+    look and continuity only. `features` is the long tail, and this
+    block also rides in every ideation prompt, where the room needed is
+    for ideas rather than for six bullets on one man's jawline.
+    """
+    description = asset.get("description")
+    if not isinstance(description, dict):
+        return ""
+    lines = []
+    for key, label in (("look", "Appearance"), ("continuity", "Continuity")):
+        value = str(description.get(key) or "").strip()
+        if value:
+            lines.append(f"  {label}: {value}")
+    return "\n".join(lines)
+
+
+def format_cast(characters: list, props: list, *, detail: bool = False) -> str:
     """
     Named characters and props that have reference stills on file --
     one level down from the room to what's actually in it, same
@@ -470,21 +518,33 @@ def format_cast(characters: list, props: list) -> str:
     that the shoot is missing something.
 
     A character/prop without photo_count still gets listed -- it's
-    still worth naming by name for continuity across shots -- but only
-    ones with photos are told to lean on the reference image instead
-    of prompt text for appearance.
+    still worth naming by name for continuity across shots -- and ones
+    with photos are told so, because the renderer is separately handed
+    those files (`_auto_refs`) and the prompt should say what it is
+    looking at.
+
+    `detail` adds each asset's stored appearance (see cast_detail).
+    Off by default: ideation only needs to know WHO is available, and a
+    cast of five with full descriptions crowds out the ideas. On for
+    the two scene writers, whose output is the prompt a renderer
+    actually grounds -- there, agreeing with the photos in words is the
+    difference between a matched face and a drifting one.
     """
     lines = []
     for c in characters:
         ref = " (reference photos on file)" if c.get("photo_count") else ""
         role = f" — {c['role']}" if c.get("role") else ""
-        notes = c.get("notes") or (c.get("description") or {}).get("notes")
+        notes = _asset_notes(c)
         lines.append(f"- {c['name']}{role}{ref}" + (f": {notes}" if notes else ""))
+        if detail:
+            lines.extend(filter(None, [cast_detail(c)]))
     for p in props:
         ref = " (reference photos on file)" if p.get("photo_count") else ""
         category = f" — {p['category']}" if p.get("category") else ""
-        notes = p.get("notes") or (p.get("description") or {}).get("notes")
+        notes = _asset_notes(p)
         lines.append(f"- {p['name']}{category}{ref}" + (f": {notes}" if notes else ""))
+        if detail:
+            lines.extend(filter(None, [cast_detail(p)]))
     return "\n".join(lines)
 
 
@@ -854,7 +914,7 @@ def generate_scene_concept(brand: str, spark=None, gemini_client=None,
     # the same convention generate_concept keeps.
     if cast is None:
         cast = format_cast(entities.list_characters(**kwargs),
-                           entities.list_props(**kwargs))
+                           entities.list_props(**kwargs), detail=True)
     prompt = build_scene_brief_prompt(brand, spark=spark, references=references,
                                       cast=cast)
     contents = prompt
@@ -934,7 +994,8 @@ def generate_scene_concepts(idea: str, brand: str, count: int = 4,
                             gemini_client=None, model: str = MODEL,
                             references: str = "", cast=None, db_path=None,
                             tool: str = DEFAULT_SCENE_TOOL,
-                            refs=None, image_refs=None) -> dict:
+                            refs=None, image_refs=None,
+                            template_tag: str = "", on_retry=None) -> dict:
     """
     One idea -> N scenes to PICK BETWEEN (2026-08-26).
 
@@ -976,10 +1037,17 @@ def generate_scene_concepts(idea: str, brand: str, count: int = 4,
                 contents.append(label)
             contents.append(types.Part.from_bytes(data=data, mime_type=mime))
         contents.append(prompt)
-    scenes = parse_scenes_response(generate_with_retry(gemini_client, model, contents))
+    scenes = parse_scenes_response(
+        generate_with_retry(gemini_client, model, contents, on_retry=on_retry))
 
     location_names = [loc["name"] for loc in locations]
     allowed = ZEROPAGE_AI_TOOLS if brand == "zeropage" else None
+    # What gets HASHED, which is what pick_rate buckets by. The tag
+    # separates rows produced by different pipelines: pre-2026-08-29 a
+    # picked row meant a board click, and after the chain it means a
+    # spend approval. Same template, two meanings, one bucket -- and
+    # by_prompt is exactly where that would be unreadable.
+    hashed = prompt + (f"\n\n[{template_tag}]" if template_tag else "")
     saved = []
     for scene in scenes:
         shot = {"n": 1, "type": "BROLL", "source": "AI",
@@ -992,11 +1060,11 @@ def generate_scene_concepts(idea: str, brand: str, count: int = 4,
                    "shots": [shot]}
         warnings = validate_concept(concept, location_names, allowed_tools=allowed)
         concept_id = preprod.save_concept(
-            concept, brand=brand, spark=idea, prompt_template=prompt,
+            concept, brand=brand, spark=idea, prompt_template=hashed,
             warnings=warnings, **kwargs)
         saved.append({"concept_id": concept_id, "title": scene["title"],
                       "warnings": warnings})
-    return {"scenes": saved, "prompt_template": prompt}
+    return {"scenes": saved, "prompt_template": hashed}
 
 
 def write_scene_for_concept(concept_id: int, gemini_client=None,
@@ -1028,7 +1096,7 @@ def write_scene_for_concept(concept_id: int, gemini_client=None,
         concept.get("spark")) if part)
     if cast is None:
         cast = format_cast(entities.list_characters(**kwargs),
-                           entities.list_props(**kwargs))
+                           entities.list_props(**kwargs), detail=True)
     prompt = build_scene_brief_prompt(concept.get("brand") or "antihero",
                                       spark=spark, references=references, cast=cast)
     parsed = parse_scene_brief_response(

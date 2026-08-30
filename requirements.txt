@@ -13,6 +13,7 @@ uvicorn
 jinja2
 python-multipart
 Pillow
+pillow-heif   # .heic decoding -- iPhone photos are half the asset bank, and without this a HEIC reference is accepted, listed, and then silently dropped at render
 psycopg[binary]
 pgvector
 pypdf   # /library/ingest's PDF file upload -- text extraction before chunking

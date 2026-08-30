@@ -28,8 +28,17 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-from src import db, runway
-from src.gemini_utils import sniff_mime
+from src import db, imagery, runway
+
+# The reference->bytes layer and the enhance call moved to
+# src/imagery.py (2026-08-29) so the Studio's scene chain could reach
+# them from src/, which must never import app/. Exactly ONE alias is
+# kept: execute_graph calls enhance() bare, and patching
+# workflow_runner.enhance is the established node seam in the tests.
+# Everything else is called through `imagery.` on purpose -- an alias
+# that can be monkeypatched without affecting the code that runs is
+# how a test passes while a real billed call escapes.
+enhance = imagery.enhance
 
 # The v1 catalogue. Text-source nodes carry their value in properties;
 # the other three call a backend function. Resist growing this list
@@ -98,157 +107,6 @@ def _input_value(node: dict, name: str, links: dict, outputs: dict):
     return None
 
 
-def render_bytes(value):
-    """An upstream node's /renders/ URL -> that file's bytes, or None.
-    Shared by both reference resolvers: a render is a local file no
-    model provider can fetch by URL, and the path is user-influenced,
-    so anything escaping data/renders/ is refused."""
-    from pathlib import Path
-
-    root = (Path(__file__).resolve().parent.parent / "data" / "renders").resolve()
-    target = (root / value[len("/renders/"):]).resolve()
-    if root in target.parents and target.is_file():
-        return target.read_bytes()
-    return None
-
-
-MAX_FETCH_BYTES = 15 * 1024 * 1024      # Gemini's inline request budget is ~20MB
-FETCH_TIMEOUT = 10
-
-
-def _public_host(host) -> bool:
-    """SSRF guard: reference URLs come out of the graph JSON, which is
-    user-controlled, and this fetch runs on the server. Only addresses
-    outside the private ranges are allowed, so a pasted URL can never
-    make the app read its own network."""
-    import ipaddress
-    import socket
-
-    try:
-        infos = socket.getaddrinfo(host, None)
-    except Exception:
-        return False
-    for info in infos:
-        try:
-            ip = ipaddress.ip_address(info[4][0])
-        except ValueError:
-            return False
-        if (ip.is_private or ip.is_loopback or ip.is_link_local
-                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
-            return False
-    return bool(infos)
-
-
-def fetch_image_bytes(url):
-    """A public image URL -> its bytes, or None. Never raises.
-
-    This exists because R2 went live: once storage is configured every
-    stored reference image and every keyframe is an https URL, and
-    NEITHER model can fetch one. Gemini takes inline bytes only, so
-    before this an https reference was silently dropped (Nano) or
-    degraded to a line of text naming the URL (enhance) -- the reference
-    looked attached on the canvas and reached no model at all."""
-    from urllib.parse import urlparse
-
-    import requests
-
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        return None
-    if not _public_host(parsed.hostname):
-        return None
-    try:
-        with requests.get(url, stream=True, timeout=FETCH_TIMEOUT) as response:
-            response.raise_for_status()
-            kind = (response.headers.get("content-type") or "").split(";")[0].strip()
-            if kind and not kind.startswith("image/"):
-                return None
-            data = b""
-            for chunk in response.iter_content(64 * 1024):
-                data += chunk
-                if len(data) > MAX_FETCH_BYTES:
-                    return None            # too big to ride inline; drop it
-        return data or None
-    except Exception:
-        return None                        # a reference is an enhancement, never a gate
-
-
-
-
-def image_bytes_for_gemini(value, resolve_photo=None):
-    """Any reference input -> raw bytes Gemini can take as vision input
-    (it never fetches URLs itself). A data URI decodes; an upstream
-    render's /renders/ URL resolves against data/renders/; a picked
-    asset photo resolves through resolve_photo; a public http(s) URL is
-    fetched. Local resolution is tried first -- a file on this disk
-    beats a round trip. None when nothing resolves: a reference is an
-    enhancement, never a gate."""
-    import base64
-
-    if not value or not isinstance(value, str):
-        return None
-    if value.startswith("data:image/"):
-        try:
-            return base64.b64decode(value.split(",", 1)[1])
-        except Exception:
-            return None
-    if value.startswith("/renders/"):
-        return render_bytes(value)
-    if value.startswith(("http://", "https://")):
-        return fetch_image_bytes(value)
-    target = resolve_photo(value) if resolve_photo else None
-    return upright(target.read_bytes()) if target is not None else None
-
-
-VISION_MAX_EDGE = 1536   # these models tile an image at ~1k px anyway
-
-
-def upright(data):
-    """A reference photo as the renderers should receive it: rotation
-    baked in, and not absurdly larger than the model will look at.
-
-    Two things, because both are about the same journey from disk to
-    request body:
-
-    ROTATION. Every photo off Mike's iPhone is stored landscape with
-    EXIF orientation 6 -- a portrait only because a tag says to turn
-    it. We hand the renderers raw bytes, and a model fed a face lying
-    on its side grounds badly on it (2026-08-28).
-
-    SIZE. These models tile an image down to about a thousand pixels
-    regardless, so a 5712x4284 still costs megabytes of request body
-    and buys nothing with them. Three untouched references came to
-    ~10MB against an inline ceiling around 20MB, and a request that
-    heavy is also the first thing shed when the model is busy. Capping
-    the long edge takes the same three to a few hundred KB.
-
-    A photo already upright and already small comes back as the very
-    same object -- no re-encode, no generation loss. Never a gate:
-    bytes we cannot read pass through to fail where they did before.
-    """
-    if not data:
-        return data
-    try:
-        import io
-
-        from PIL import Image, ImageOps
-        with Image.open(io.BytesIO(data)) as im:
-            turned = (im.getexif() or {}).get(274, 1) not in (1, None)
-            oversized = max(im.size) > VISION_MAX_EDGE
-            if not (turned or oversized):
-                return data
-            fixed = ImageOps.exif_transpose(im) if turned else im
-            if oversized:
-                fixed.thumbnail((VISION_MAX_EDGE, VISION_MAX_EDGE),
-                                Image.LANCZOS)
-            out = io.BytesIO()
-            fixed.convert("RGB").save(out, format="JPEG", quality=88,
-                                      optimize=True)
-            return out.getvalue()
-    except Exception:
-        return data
-
-
 def image_for_runway(value, resolve_photo=None):
     """A Generate node's reference input -> something Runway can anchor
     on. A picked asset photo is a site-relative URL Runway could never
@@ -264,65 +122,9 @@ def image_for_runway(value, resolve_photo=None):
     if value.startswith(("http://", "https://", "data:image/")):
         return value
     if value.startswith("/renders/"):
-        return render_bytes(value)
+        return imagery.render_bytes(value)
     target = resolve_photo(value) if resolve_photo else None
-    return upright(target.read_bytes()) if target is not None else None
-
-
-def enhance(system: str, user: str, images=None, *, gemini_client,
-            resolve_photo=None, model: Optional[str] = None,
-            references: str = "") -> str:
-    """The Gemini 2.5 Flash enhance call: system + user prompt plus
-    optional reference images as vision input -- the same
-    generate_with_retry path director.py and shootgen.py already use.
-    An empty system falls back to the prompt-enhancement instruction
-    (prompts/enhance_system.txt via workflows._enhance_system_text), so
-    a bare user prompt is still ENHANCED with vivid detail rather than
-    echoed to an uninstructed model. `references` is the optional RAG
-    grounding block (the Ground node's output) folded in as its own
-    labelled section -- grounding material, not the instruction.
-    Raises on an empty prompt or a dead model: here the model call IS
-    the deliverable, the promptgen contract."""
-    from google.genai import types
-
-    from src import shootgen, workflows
-    from src.gemini_utils import generate_with_retry
-
-    system = (system or "").strip()
-    user = (user or "").strip()
-    references = (references or "").strip()
-    if not (system or user or references):
-        raise ValueError("nothing to enhance — connect or type a prompt first")
-    if not system:
-        system = workflows._enhance_system_text()
-    blocks = [system]
-    if references:
-        blocks.append("REFERENCES — ground the prompt in these:\n" + references)
-    if user:
-        blocks.append(user)
-    text = "\n\n".join(blocks)
-    parts = []
-    for image in images or []:
-        # every reference the same way, local file or public URL -- the
-        # model must SEE it. Naming a URL in the text (what this did
-        # before) tells a model that cannot fetch URLs that one exists,
-        # which is indistinguishable from no reference at all.
-        data = image_bytes_for_gemini(image, resolve_photo=resolve_photo)
-        if data:
-            # caption first, image second -- the binding between a photo
-            # and the name the prompt uses for it
-            label = (shootgen.reference_label(image)
-                     if isinstance(image, str) else "")
-            if label:
-                parts.append(label)
-            parts.append(types.Part.from_bytes(
-                data=data, mime_type=sniff_mime(data)))
-        elif isinstance(image, str) and image.startswith(("http://", "https://")):
-            # unreachable (private host, too big, dead link): say so,
-            # rather than pretending the reference landed
-            text += f"\nReference image (could not be loaded): {image}"
-    parts.append(text)
-    return generate_with_retry(gemini_client, model or shootgen.MODEL, parts)
+    return imagery.upright(target.read_bytes()) if target is not None else None
 
 
 def shot_reference_urls(properties, db_path=None) -> list:
@@ -493,7 +295,7 @@ def execute_graph(graph: dict, *, gemini_client=None, resolve_photo=None,
                 references = [
                     (shootgen.reference_label(url), data)
                     for url, data in (
-                        (url, image_bytes_for_gemini(
+                        (url, imagery.image_bytes_for_gemini(
                             url, resolve_photo=resolve_photo))
                         for url in urls)
                     if data

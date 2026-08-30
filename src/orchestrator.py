@@ -51,7 +51,20 @@ from typing import Optional, TypedDict
 from google import genai
 from langgraph.graph import END, START, StateGraph
 
-from . import autonomy, crag, db, entities, preprod, promptgen, rag, scheduling, settings, shootgen, winners
+from . import (
+    autonomy,
+    crag,
+    db,
+    entities,
+    preprod,
+    promptgen,
+    rag,
+    scene_chain,
+    scheduling,
+    settings,
+    shootgen,
+    winners,
+)
 from .gemini_utils import generate_with_retry
 
 MAX_ATTEMPTS = 3
@@ -94,6 +107,8 @@ class GenState(TypedDict, total=False):
     prompts: list                   # [{"tool", "prompt"}] for the AI shots
     prompt_scores: list             # [{prompt, score, pass, reason, dims}]
     prompt_rework_attempts: int     # bounded per-shot rewrite passes, not concept retries
+    keyframes: list                 # [{"n", "ok", "url", "error"}] -- the stills
+    parked_reason: str              # what the Queue card says it is waiting on
     clips: list                     # [{"tool", "prompt", "url", "ok"}]
     caption: str
     posted: list                    # [{"platform", "id", "url"}] once real posting exists
@@ -247,17 +262,25 @@ def gen_concept(state: GenState) -> GenState:
     if avoid:
         spark = f"{spark or ''}\n{avoid}".strip()
 
-    result = shootgen.generate_concept(
+    # ONE scene, ONE prompt -- the same unit the Studio has produced
+    # since 2026-08-26, not the legacy multi-shot concept this node used
+    # to write. That divergence stopped being cosmetic on 2026-08-29,
+    # when the night's output started parking in the Queue: the Queue
+    # (and pick_rate, and the scene board) key on is_scene, which is
+    # len(shots) == 1, so a six-shot concept would have been generated,
+    # scored, keyframed and then invisible to the surface meant to
+    # approve it. `use_pov` has no meaning here -- the scene brief
+    # neither offers nor names a camera -- so it stops being passed
+    # rather than being passed and ignored.
+    result = shootgen.generate_scene_concept(
         brand=state.get("brand", "antihero"),
-        client=state.get("client"),
         spark=spark,
         gemini_client=_client(),
-        use_pov=state.get("use_pov", False),
         db_path=db.DB_PATH,
         references=state.get("references", ""),
         cast=state.get("cast"),
     )
-    # generate_concept returns warnings BESIDE the concept, not inside it;
+    # the generator returns warnings BESIDE the concept, not inside it;
     # fold them in so evaluate's code-enforced check actually sees them.
     concept = {**result["concept"], "warnings": result["warnings"]}
     return {"concept": concept, "concept_id": result["concept_id"],
@@ -570,6 +593,72 @@ def route_after_score(state: GenState) -> str:
     return "hold"
 
 
+def keyframe(state: GenState) -> GenState:
+    """What the automation actually produces overnight: a scene with its
+    scored prompt stored on it, a still to look at, and a place in the
+    Queue.
+
+    Before this the right-hand side of the graph was all stub -- every
+    run ended "no usable clips (render is a dry-run stub)" in the hold
+    queue, so the nightly loop was structurally complete and produced
+    nothing anyone could judge. A keyframe costs cents and a clip costs
+    real money, so the automation goes as far as the still and stops:
+    approving in the Queue is what spends.
+
+    Two things happen here, both through src/scene_chain.py so the
+    request path, the canvas and this graph share one implementation:
+
+    - the prompt structure_prompt refined is PERSISTED onto the shot.
+      It was only ever in the run's state before, which meant the row
+      Runway would render from still held shootgen's first draft while
+      the version that passed the gate lived in a job payload.
+    - a Nano keyframe is rendered from that prompt and attached as the
+      shot's reference_image -- the frame the clip will anchor on.
+
+    Gated by the prompt gate above it, deliberately: only a scene whose
+    prompt cleared the judge earns an image. Never fatal -- a keyframe
+    that fails (usually NANO_DAILY_CAP, 20/day shared with every
+    Director render) parks the scene as text-to-video with the reason
+    on its card, which is the honest version of the same run.
+    """
+    concept_id = state.get("concept_id")
+    if not concept_id:
+        return {"keyframes": []}
+
+    shots = [s for s in (state.get("concept", {}) or {}).get("shots", [])
+             if s.get("prompt")]
+    prompts = state.get("prompts", [])
+    done = []
+    for shot, refined in zip(shots, prompts):
+        shot_n = shot.get("n", 1)
+        try:
+            scene_chain.persist_prompt(concept_id, shot_n,
+                                       refined.get("prompt", ""),
+                                       db_path=db.DB_PATH)
+        except Exception as e:
+            done.append({"n": shot_n, "ok": False, "error": f"prompt not stored: {e}"})
+            continue
+        if os.environ.get("ZEROPAGE_KEYFRAME") == "0":
+            done.append({"n": shot_n, "ok": False, "error": "keyframes disabled"})
+            continue
+        result = scene_chain.keyframe_scene(concept_id, shot_n, db_path=db.DB_PATH)
+        done.append({"n": shot_n, "ok": bool(result.get("ok")),
+                     "url": result.get("media_url"),
+                     "error": result.get("error")})
+
+    rendered = [k for k in done if k["ok"]]
+    failed = [k for k in done if not k["ok"]]
+    reason = ("keyframe rendered — approve in the Queue to spend on the clip"
+              if rendered else
+              "no keyframe: " + (failed[0].get("error") or "unknown")
+              if failed else "no shot to keyframe")
+    try:
+        scene_chain.park_scene(concept_id, reason, db_path=db.DB_PATH)
+    except Exception:
+        pass       # a scene that cannot be parked is still on the board
+    return {"keyframes": done, "parked_reason": reason}
+
+
 def generate_render(state: GenState) -> GenState:
     """The credit gate: rendering is dry by default (ZEROPAGE_RENDER != 1)
     -- every clip comes back url=None, ok=False and the run parks
@@ -719,6 +808,12 @@ def hold(state: GenState) -> GenState:
             f"{x['reason']} ({x['score']}/10)" for x in failed_scores)
     elif not state.get("prompts"):
         reason = "no AI shots to render (camera-only concept)"
+    elif state.get("parked_reason"):
+        # the run got as far as it can without spending: the scene is in
+        # the Queue with (usually) a still, waiting on a human. Saying
+        # "no usable clips" here was true and useless -- it described
+        # the stub rather than what the night produced.
+        reason = state["parked_reason"]
     elif not state.get("clips"):
         reason = "held before render"
     else:
@@ -736,7 +831,7 @@ def _build():
         ("gen_concept", gen_concept), ("evaluate", evaluate),
         ("structure_prompt", structure_prompt), ("score_prompts", score_prompts),
         ("revise_prompts", revise_prompts),
-        ("generate_render", generate_render),
+        ("keyframe", keyframe), ("generate_render", generate_render),
         ("qc_clip", qc_clip), ("caption", caption), ("publish", publish),
         ("hold", hold),
     ]:
@@ -761,17 +856,21 @@ def _build():
     # already passed untouched), so it routes back through the SAME judge --
     # never back through score_prompts, which would re-bill every already-
     # passing shot's judge call for nothing.
+    # the gate's pass branch goes to `keyframe` first: the still is what
+    # the morning approval actually looks at, and it is the last step
+    # that does not spend real money
     g.add_conditional_edges("score_prompts", route_after_score, {
-        "generate_render": "generate_render",
+        "generate_render": "keyframe",
         "rework": "revise_prompts",
         "hold": "hold",
     })
     g.add_conditional_edges("revise_prompts", route_after_score, {
-        "generate_render": "generate_render",
+        "generate_render": "keyframe",
         "rework": "revise_prompts",  # unreachable while MAX_PROMPT_REWORKS == 1;
                                       # kept so raising that constant later just works
         "hold": "hold",
     })
+    g.add_edge("keyframe", "generate_render")
     g.add_edge("generate_render", "qc_clip")
     g.add_conditional_edges("qc_clip", route_after_qc, {
         "caption": "caption", "hold": "hold",

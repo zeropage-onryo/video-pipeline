@@ -42,12 +42,19 @@
     <div class="stack rise d2">
       <div class="glass" id="cbox">
         <div class="attachbar" id="attachbar"></div>
-        <textarea id="prompt" placeholder="Night ride, tank badge macro, low key garage…"></textarea>
+        <textarea id="prompt" placeholder="A rider suits up in a dark garage and something is already wrong…"></textarea>
         <div class="cfoot">
           <button class="plus" id="up" data-label="Add media" aria-label="Add media" aria-expanded="false">
             <svg viewBox="0 0 24 24" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
           </button>
+          <span class="m cfnote">references ride into every node — prompt, keyframe and clip</span>
           <span class="spacer"></span>
+          <select class="wfselect" id="ccount" aria-label="How many concepts">
+            <option value="1">1 concept</option>
+            <option value="2">2 concepts</option>
+            <option value="3">3 concepts</option>
+            <option value="4" selected>4 concepts</option>
+          </select>
           <button class="go" id="go" data-cap="pipeline.run" disabled>Create</button>
         </div>
         <input type="file" id="upfiles" accept="image/*" multiple hidden>
@@ -98,128 +105,29 @@
     <div class="gallery" id="gallery"></div>
   </div>
 
-  <!-- ══ PIPELINE · Concept / Generate / Director ══ -->
+  <!-- ══ PIPELINE · the concepts one idea produced, and the pick ══ -->
+  <!-- A concept IS a scene IS one prompt (2026-08-28) -- there was never
+       a second thing here, so there is no longer a second tab. The idea
+       goes in on Studio; this page is only the deciding. -->
   <div class="view" id="v-pipeline">
     <div class="vhead">
       <h2>Pipeline</h2>
-      <div class="cats ptabs" id="ptabs" style="margin:0;padding:0">
-        <button class="cat" data-ptab="scenes" aria-pressed="true">Scenes</button>
-        <button class="cat" data-ptab="concept" aria-pressed="false">Concept</button>
-        <button class="cat" data-ptab="generate" aria-pressed="false">Generate</button>
-      </div>
+      <span class="m">pick the ones worth the spend — approving them in Queue is what renders</span>
       <span class="spacer"></span><span class="m" id="pbrand"></span>
     </div>
 
-    <!-- ── Scenes tab: an idea in, several standalone scenes out;
-         pick the ones worth rendering and take them to Director ── -->
-    <div class="ptab" id="ptab-scenes">
-      <div class="scomposer" data-cap="pipeline.run">
-        <div class="glass gencomposer">
-          <div class="dirhead">
-            <h3>What's the idea?</h3>
-            <span class="m">one idea in · several standalone scenes out · pick the ones worth rendering</span>
-          </div>
-          <div class="mentionwrap">
-            <textarea id="sceneidea" rows="3" placeholder="A rider suits up in a dark garage and something is already wrong…"></textarea>
-            <div class="mentiondrop" id="scmentions" hidden></div>
-          </div>
-          <div class="attachbar" id="scattach"></div>
-          <div class="cfoot">
-            <button class="plus" id="scup" data-label="Attach reference" aria-label="Attach reference">
-              <svg viewBox="0 0 24 24" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-            </button>
-            <span class="m">references ride into every node — prompt, Flash, keyframe and clip</span>
-            <span class="spacer"></span>
-            <select class="wfselect" id="sccount">
-              <option value="3">3 scenes</option>
-              <option value="4" selected>4 scenes</option>
-              <option value="6">6 scenes</option>
-            </select>
-            <button class="go" id="scgo" data-cap="pipeline.run">Write the scenes</button>
-          </div>
-        </div>
-      </div>
-      <div class="stateline" id="scstate" hidden></div>
-      <div class="chead">
-        <h3>Scenes</h3>
-        <span class="m" id="sccount2">—</span>
-        <span class="spacer"></span>
-        <div class="cats" id="scfilters" style="margin:0;padding:0">
-          <button class="cat" data-scf="" aria-pressed="true">All</button>
-          <button class="cat" data-scf="idea" aria-pressed="false">Unjudged</button>
-          <button class="cat" data-scf="picked" aria-pressed="false">Picked</button>
-        </div>
-      </div>
-      <div class="scenegrid" id="scenelist"></div>
-    </div><!-- /ptab-scenes --><!-- /ptab-scenes -->
-
-    <!-- ── Concept tab: the existing loop, unchanged ── -->
-    <div class="ptab" id="ptab-concept" hidden>
-    <div class="scomposer" data-cap="pipeline.run">
-      <div class="glass sbar2">
-        <input class="search" id="sceneprompt" placeholder="Describe the scene — a spark, a mood, a beat…">
-        <button class="go" id="scenego">Generate scene</button>
-      </div>
-    </div>
-
-    <div id="sceneboard"></div>
-
+    <div class="stateline" id="scstate" hidden></div>
     <div class="chead">
       <h3>Concepts</h3>
-      <span class="m" id="ccount">—</span>
+      <span class="m" id="sccount2">—</span>
       <span class="spacer"></span>
-      <span class="m">Approve plans the shot list · deny records to rag</span>
-    </div>
-    <div class="stateline" id="cstate" hidden></div>
-    <div class="concepts" id="concepts"></div>
-
-    <div class="twocol">
-      <div class="glass panel">
-        <div class="ptitle">Hold queue · the dead-man log</div>
-        <div class="stateline" id="hstate" hidden></div>
-        <div class="tbl" id="holds"></div>
-      </div>
-      <div class="glass panel" id="fbpanel">
-        <div class="ptitle">Scenes · the pick label</div>
-        <div class="tbl" id="planned"></div>
+      <div class="cats" id="scfilters" style="margin:0;padding:0">
+        <button class="cat" data-scf="" aria-pressed="true">Open</button>
+        <button class="cat" data-scf="picked" aria-pressed="false">Picked</button>
+        <button class="cat" data-scf="archived" aria-pressed="false">Archived</button>
       </div>
     </div>
-    </div><!-- /ptab-concept -->
-
-    <!-- ── Generate tab: one image/video, Higgsfield-simple ── -->
-    <div class="ptab" id="ptab-generate" hidden>
-      <div class="scomposer">
-        <div class="glass gencomposer">
-          <div class="genrow">
-            <select class="wfselect" id="genpreset"><option value="">Camera preset…</option></select>
-            <select class="wfselect" id="genout">
-              <option value="image">Image · Nano Banana</option>
-              <option value="video">Video · Runway</option>
-              <option value="prompt">Prompt only</option>
-            </select>
-            <span class="spacer"></span>
-            <select class="wfselect" id="genconcept"><option value="">Save as new concept</option></select>
-          </div>
-          <div class="attachbar" id="genattach"></div>
-          <div class="mentionwrap">
-            <textarea id="genprompt" placeholder="Describe the shot — type @ to pull a character, prop, or room from the memory bank…"></textarea>
-            <div class="mentiondrop" id="genmentions" hidden></div>
-          </div>
-          <div class="cfoot">
-            <button class="plus" id="genup" data-label="Attach reference" aria-label="Attach reference">
-              <svg viewBox="0 0 24 24" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-            </button>
-            <span class="m">reference images and video ground the generation</span>
-            <span class="spacer"></span>
-            <button class="go" id="gengo" data-cap="pipeline.run" disabled>Generate</button>
-          </div>
-          <input type="file" id="genfiles" accept="image/*,video/*" multiple hidden>
-        </div>
-      </div>
-      <div class="stateline" id="genstate" hidden></div>
-      <div id="genresult"></div>
-    </div><!-- /ptab-generate -->
-
+    <div class="scenegrid" id="scenelist"></div>
   </div><!-- /v-pipeline -->
 
   <!-- ══ DIRECTOR · the node canvas, scene to scene for continuity ══ -->
@@ -334,7 +242,25 @@
 
   <!-- ══ QUEUE ══ -->
   <div class="view" id="v-queue">
-    <div class="vhead"><h2>Queue</h2><span class="spacer"></span><span class="m" id="qcount">—</span></div>
+    <div class="vhead">
+      <h2>Queue</h2>
+      <span class="m">approving a concept here is what spends — it renders the clip through Runway</span>
+      <span class="spacer"></span><span class="m" id="qcount">—</span>
+    </div>
+
+    <div class="chead">
+      <h3>Awaiting approval</h3>
+      <span class="m" id="pendcount">—</span>
+      <span class="spacer"></span>
+      <span class="m" id="rwstate">—</span>
+    </div>
+    <div class="stateline" id="pendstate" hidden></div>
+    <div class="scenegrid" id="pendlist"></div>
+
+    <div class="chead">
+      <h3>Jobs</h3>
+      <span class="m">live · the registry clears on restart</span>
+    </div>
     <div class="stateline" id="qstate" hidden></div>
     <div class="qlist" id="qlist"></div>
   </div>
@@ -353,24 +279,6 @@
 <div class="jobs" id="jobs"></div>
 <div class="scrim" id="scrim"></div>
 <div class="scrim" id="dscrim"></div>
-<div class="deny" id="deny">
-  <div class="dnhead">
-    <h3 id="dntitle">—</h3>
-    <button class="x" id="dncancel" aria-label="Close">✕</button>
-  </div>
-  <div class="dnbody">
-    <div class="dnlabel">What was wrong</div>
-    <div class="reasons" id="reasons"></div>
-    <div class="dnlabel">Note for the next run</div>
-    <textarea id="dnnote" class="dnta short" placeholder="Optional — what should have happened instead. Folds into the next generation's spark."></textarea>
-  </div>
-  <div class="dnfoot">
-    <span class="m" id="dnmeta">—</span>
-    <span class="spacer"></span>
-    <button class="btn" id="dnback">Cancel</button>
-    <button class="btn pri" id="dnsave">Record &amp; remove</button>
-  </div>
-</div>
 <div class="pal" id="pal"><input id="pq" placeholder="Run a command or jump to an asset…" autocomplete="off"><div class="plist" id="plist"></div></div>
 
 <!-- assets: the add-asset modal. Creation posts to the always-on

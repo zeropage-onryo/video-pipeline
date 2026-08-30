@@ -1,5 +1,12 @@
 /* Studio view: the composer with live RAG grounding, and the asset
-   carousel. Create posts /api/pipeline/run and routes to Pipeline. */
+   carousel.
+
+   The idea is typed HERE and nowhere else (2026-08-28). Create posts
+   /api/scenes/run -- one idea, 1-4 standalone concepts out -- and routes
+   to Pipeline, which is now purely the deciding surface. The references
+   picked here (uploads, or photos out of the asset bank) ride into the
+   generation as vision input AND are stored on each concept's shot, so
+   they reach the keyframe and the clip later. */
 import { api, esc, loadAssets, openAssetDetail, state, stateline, wireScrub } from './shared.js';
 
 const promptEl = () => document.getElementById('prompt');
@@ -24,9 +31,9 @@ export function initStudio(go) {
     const text = prompt.value.trim();
     if (!text) return;
     goBtn.disabled = true;
-    goBtn.textContent = 'Creating…';
+    goBtn.textContent = 'Writing…';
     try {
-      await api('/api/pipeline/run', { method: 'POST', body: collectRunForm(text) });
+      await api('/api/scenes/run', { method: 'POST', body: collectRunForm(text) });
       prompt.value = '';
       clearAttachments();
       document.getElementById('upmenu').hidden = true;
@@ -162,9 +169,11 @@ async function renderMediaGrid() {
   });
 }
 
-export function collectRunForm(prompt) {
+export function collectRunForm(idea) {
   const body = new FormData();
-  body.append('prompt', prompt);
+  body.append('idea', idea);
+  const count = document.getElementById('ccount');
+  body.append('count', count ? count.value : '4');
   for (const a of attachments) {
     if (a.kind === 'file') body.append('files', a.file);
     else body.append('asset_photos', a.url);

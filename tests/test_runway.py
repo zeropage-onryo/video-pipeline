@@ -235,6 +235,63 @@ def test_for_shot_anchors_on_the_reference_image(scene_db, approved, fake_downlo
     assert client.calls[0]["prompt_image"] == "https://cdn.example/plate.jpg"
 
 
+def test_for_shot_anchors_on_a_local_keyframe_as_bytes(scene_db, approved,
+                                                       fake_download, monkeypatch,
+                                                       tmp_path):
+    """The bug this closes: a Nano keyframe is /renders/nano/x.png until
+    R2 is configured, and the old code took reference_image only when it
+    started with http -- so the keyframe silently anchored nothing while
+    the Queue card said it did, and the credit was spent on the lie."""
+    import src.storage as storage
+    monkeypatch.setattr(runway, "RENDER_DIR", tmp_path / "renders")
+    monkeypatch.setattr(storage, "configured", lambda: False)
+    renders = tmp_path / "data-renders"
+    (renders / "nano").mkdir(parents=True)
+    png = b"\x89PNG\r\n\x1a\n" + b"keyframe-bytes"
+    (renders / "nano" / "wf-1.png").write_bytes(png)
+    monkeypatch.setattr(runway, "RENDERS_ROOT", renders)
+
+    concept_id = seed_scene(scene_db, reference="/renders/nano/wf-1.png")
+    client = FakeClient()
+    result = runway.generate_for_shot(concept_id, 1, db_path=scene_db, client=client)
+    assert result["ok"], result["error"]
+    sent = client.calls[0]["prompt_image"]
+    # inline, and typed off the magic number -- Nano writes PNG, and the
+    # old bytes path hardcoded image/jpeg
+    assert sent.startswith("data:image/png;base64,")
+
+
+def test_for_shot_resolves_a_picked_asset_photo(scene_db, approved, fake_download,
+                                                monkeypatch, tmp_path):
+    """A site-relative asset photo is resolved by the caller's own
+    resolver (the web app passes _resolve_asset_photo); without one it
+    is dropped rather than pretended about."""
+    import src.storage as storage
+    monkeypatch.setattr(runway, "RENDER_DIR", tmp_path / "renders")
+    monkeypatch.setattr(storage, "configured", lambda: False)
+    photo = tmp_path / "michael.jpg"
+    photo.write_bytes(b"\xff\xd8" + b"jacket")
+    concept_id = seed_scene(scene_db, reference="/characters/michael/photo/1.jpg")
+
+    client = FakeClient()
+    assert runway.generate_for_shot(concept_id, 1, db_path=scene_db,
+                                    client=client)["ok"]
+    assert "prompt_image" not in client.calls[0]        # no resolver -> dropped
+
+    client = FakeClient()
+    assert runway.generate_for_shot(concept_id, 1, db_path=scene_db, client=client,
+                                    resolve_photo=lambda url: photo)["ok"]
+    assert client.calls[0]["prompt_image"].startswith("data:image/jpeg;base64,")
+
+
+def test_as_prompt_image_refuses_a_path_escaping_the_render_root(monkeypatch, tmp_path):
+    renders = tmp_path / "renders"
+    renders.mkdir()
+    (tmp_path / "secret.png").write_bytes(b"\x89PNG\r\n\x1a\nno")
+    monkeypatch.setattr(runway, "RENDERS_ROOT", renders)
+    assert runway.as_prompt_image("/renders/../secret.png") is None
+
+
 def test_for_shot_missing_pieces_are_results(scene_db, approved, monkeypatch, tmp_path):
     from src import preprod
     monkeypatch.setattr(runway, "RENDER_DIR", tmp_path / "renders")

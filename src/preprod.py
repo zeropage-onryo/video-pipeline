@@ -116,6 +116,14 @@ def init(path: Path | str = DB_PATH) -> None:
         # existing database gains it without touching a single row.
         if "picked_at" not in existing:
             conn.execute("ALTER TABLE shoot_concepts ADD COLUMN picked_at TEXT")
+        # the board clears itself: a concept you resolved (picked and sent
+        # to render, or passed over) stops being a card without stopping
+        # being a row. The row is the label -- pick_rate needs the ones
+        # you did NOT pick as much as the ones you did -- and it stays in
+        # the Dev Studio's ungraded pool until it is graded. Archiving is
+        # the board's memory, not the database's.
+        if "archived_at" not in existing:
+            conn.execute("ALTER TABLE shoot_concepts ADD COLUMN archived_at TEXT")
 
 
 def save_judge_score(concept_id: int, judge: dict, path: Path | str = DB_PATH) -> None:
@@ -344,10 +352,23 @@ def _concept_row(row, conn) -> dict[str, Any]:
     # Two stored flags could disagree with the rows they describe.
     data["is_scene"] = len(data["shots"]) == 1
     data["picked"] = bool(data.get("picked_at"))
+    data["archived"] = bool(data.get("archived_at"))
+    # graded is what finally retires an archived concept: the Dev
+    # Studio's grade queue draws on judge_overall IS NULL, so a row
+    # archived off the board is still waiting to teach something.
+    data["graded"] = data.get("judge_overall") is not None
     # the reference photos this scene was written against, carried on
     # the shot itself -- shots_json was always one flexible JSON column,
     # so plural references cost no schema change
     data["refs"] = (data["shots"][0].get("refs") or []) if data["shots"] else []
+    # parked: the chain got this scene as far as it can go without
+    # spending, and it is sitting in the Queue. Stored on the shot
+    # rather than derived from reference_image, which the Director
+    # canvas also writes -- see set_shot_parked.
+    first = data["shots"][0] if data["shots"] else {}
+    data["parked"] = bool(first.get("parked_at"))
+    data["park_reason"] = first.get("park_reason") or ""
+
     data["locations"] = [
         dict(r)
         for r in conn.execute(
@@ -528,6 +549,53 @@ def set_shot_reference_image(concept_id: int, shot_n, reference_url,
         )
 
 
+def set_shot_parked(concept_id: int, shot_n, reason: str = "",
+                    path: Path | str = DB_PATH) -> None:
+    """
+    Mark a shot as finished with the automatic half and waiting on a
+    human to approve the spend -- what the Studio chain writes when it
+    has a concept, an enhanced prompt and (usually) a keyframe, and the
+    next step is the one that costs money.
+
+    An explicit marker, not an inference. The obvious shortcut is to
+    treat "has a reference_image" as "waiting in the Queue", but that
+    field is also written by the Director canvas mid-work
+    (POST /concepts/{id}/shots/{n}/reference), so inferring would drag
+    every scene anyone has ever keyframed into the spend queue. Stored
+    on the shot like refs / reference_image / media_url -- shots_json
+    was always one flexible JSON column, so no migration.
+
+    Empty reason is legal (parked, nothing to say). Passing parked=False
+    is not a thing: leaving the queue is approving or archiving, both of
+    which already have their own timestamps. Raises if the concept or
+    the shot (by its "n") doesn't exist.
+    """
+    with connect(path) as conn:
+        row = conn.execute(
+            "SELECT shots_json FROM shoot_concepts WHERE id = ?", (concept_id,)
+        ).fetchone()
+        if not row:
+            raise ValueError(f"no concept with id {concept_id}")
+
+        shots = json.loads(row["shots_json"] or "[]")
+        for shot in shots:
+            if shot.get("n") == shot_n:
+                shot["parked_at"] = _now()
+                cleaned = (reason or "").strip()
+                if cleaned:
+                    shot["park_reason"] = cleaned
+                else:
+                    shot.pop("park_reason", None)
+                break
+        else:
+            raise ValueError(f"concept {concept_id} has no shot n={shot_n!r}")
+
+        conn.execute(
+            "UPDATE shoot_concepts SET shots_json = ? WHERE id = ?",
+            (json.dumps(shots), concept_id),
+        )
+
+
 def set_picked(concept_id: int, picked: bool = True,
                path: Path | str = DB_PATH) -> None:
     """The label, moved to fit the unit (2026-08-26).
@@ -549,6 +617,59 @@ def set_picked(concept_id: int, picked: bool = True,
         )
         if cur.rowcount == 0:
             raise ValueError(f"no concept {concept_id}")
+
+
+def set_archived(concept_id: int, archived: bool = True,
+                 path: Path | str = DB_PATH) -> None:
+    """Take a concept off the board without taking it out of the data.
+
+    The board is a decision surface: once you have picked one of the
+    several an idea produced and sent it to render, the others have been
+    decided about and standing there they are just noise. But an
+    unpicked row is the only negative signal this system collects --
+    pick_rate is generated-vs-picked, and deleting the ones you passed
+    over would make the rate 100% forever and unfalsifiable.
+
+    So archiving hides, it does not delete. The row keeps counting in
+    pick_rate and keeps sitting in the Dev Studio's ungraded pool
+    (judge_overall IS NULL), which is where it finally earns its keep by
+    teaching the RAG shelves what a miss looks like.
+    """
+    with connect(path) as conn:
+        cur = conn.execute(
+            "UPDATE shoot_concepts SET archived_at = ? WHERE id = ?",
+            (_now() if archived else None, concept_id),
+        )
+        if cur.rowcount == 0:
+            raise ValueError(f"no concept {concept_id}")
+
+
+def archive_batch(spark: str, keep_ids: list[int] | None = None,
+                  brand: Optional[str] = None,
+                  path: Path | str = DB_PATH) -> int:
+    """Archive every unresolved concept written from one idea, except
+    the ones named in keep_ids. Returns how many were archived.
+
+    A batch is "the concepts one idea produced", and the idea is stored
+    on each row as `spark` -- generate_scene_concepts writes all N with
+    the same one. That is the grouping the human is actually deciding
+    within: pick from these four, the other three are answered.
+    """
+    keep = set(keep_ids or [])
+    with connect(path) as conn:
+        rows = conn.execute(
+            "SELECT id FROM shoot_concepts "
+            "WHERE spark = ? AND archived_at IS NULL"
+            + (" AND brand = ?" if brand else ""),
+            (spark, brand) if brand else (spark,),
+        ).fetchall()
+        targets = [r["id"] for r in rows if r["id"] not in keep]
+        for concept_id in targets:
+            conn.execute(
+                "UPDATE shoot_concepts SET archived_at = ? WHERE id = ?",
+                (_now(), concept_id),
+            )
+    return len(targets)
 
 
 def pick_rate(path: Path | str = DB_PATH) -> dict[str, Any]:

@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 
 from app import api, workflow_runner
 from app.main import app
-from src import db, entities, preprod, shootgen
+from src import db, entities, imagery, preprod, shootgen
 
 client = TestClient(app)
 
@@ -122,6 +122,64 @@ def test_a_photo_the_renderer_cannot_decode_is_not_the_one_picked():
     assert api._best_photo([]) is None
 
 
+def test_the_spare_slots_go_to_more_angles_of_the_face(monkeypatch):
+    """The Garage Guest keyframe grounded a three-quarter head turn on a
+    single frontal portrait and aged him about ten years — while the
+    three-quarter frame it needed sat unused in the same folder. Every
+    named asset still gets one photo first, so the bike is not starved
+    and the anchor slot still holds the character the scene opens on."""
+    michael = dict(MICHAEL, photos=["/characters/michael/photo/front.jpg",
+                                    "/characters/michael/photo/three-quarter.jpg",
+                                    "/characters/michael/photo/profile.jpg",
+                                    "/characters/michael/photo/helmet.jpg"])
+    monkeypatch.setattr(api, "_assets_all", lambda: [michael, CYCLOPS, BIKE])
+    refs = api._auto_refs(SCENE, [])
+    assert refs[0] == "/characters/michael/photo/front.jpg"     # the anchor
+    assert refs[:3] == ["/characters/michael/photo/front.jpg",
+                        "/characters/cyclops/photo/a.jpg",
+                        "/props/motorcycle/photo/a.jpg"]
+    assert "/characters/michael/photo/three-quarter.jpg" in refs
+    assert "/characters/michael/photo/profile.jpg" in refs
+    # three per character, never the whole folder
+    assert "/characters/michael/photo/helmet.jpg" not in refs
+
+
+def test_a_prop_never_gets_a_second_angle(monkeypatch):
+    """A prop gains almost nothing from another angle and an identity
+    gains most of what it has, so the spare slots are not shared out."""
+    bike = dict(BIKE, photos=["/props/motorcycle/photo/a.jpg",
+                              "/props/motorcycle/photo/b.jpg"])
+    monkeypatch.setattr(api, "_assets_all", lambda: [bike])
+    assert api._auto_refs("the Ducati Panigale 959 idles", []) \
+        == ["/props/motorcycle/photo/a.jpg"]
+
+
+def test_the_reference_cap_still_holds(monkeypatch):
+    """MAX_IMAGE_REFS is what one call sends to Gemini, and pass two
+    must not walk past it."""
+    michael = dict(MICHAEL, photos=[f"/characters/michael/photo/{n}.jpg"
+                                    for n in "abcd"])
+    monkeypatch.setattr(api, "_assets_all", lambda: [michael, CYCLOPS, BIKE])
+    monkeypatch.setattr(api, "MAX_IMAGE_REFS", 4)
+    refs = api._auto_refs(SCENE, [])
+    assert len(refs) == 4
+    assert refs[:3] == ["/characters/michael/photo/a.jpg",
+                        "/characters/cyclops/photo/a.jpg",
+                        "/props/motorcycle/photo/a.jpg"]
+
+
+def test_extra_angles_prefer_the_ones_that_decode(monkeypatch):
+    """Same preference _best_photo has always had, applied to a run of
+    them: a HEIC that drops silently at render sorts behind the JPEGs
+    rather than eating a slot."""
+    assert api._asset_photos(["/characters/michael/photo/a.heic",
+                              "/characters/michael/photo/b.jpg?thumb=1",
+                              "/characters/michael/photo/c.JPG"], 2) \
+        == ["/characters/michael/photo/b.jpg", "/characters/michael/photo/c.JPG"]
+    assert api._asset_photos([], 3) == []
+    assert api._asset_photos(["/characters/michael/photo/a.jpg"], 0) == []
+
+
 def test_an_asset_with_no_photos_is_not_a_reference():
     unphotographed = dict(MICHAEL, photos=[])
     assert shootgen.named_assets(SCENE, [unphotographed]) == []
@@ -152,7 +210,7 @@ def test_the_written_scene_comes_out_carrying_its_references(tmp_db, monkeypatch
     monkeypatch.setattr(api, "_assets_all", lambda: CAST)
     monkeypatch.setattr(
         "src.shootgen.generate_with_retry",
-        lambda c, m, p: json.dumps({"scenes": [
+        lambda c, m, p, **_: json.dumps({"scenes": [
             {"title": "The Garage Guest", "prompt": SCENE}]}))
 
     job = wait_for_job(client.post(
@@ -374,7 +432,7 @@ def test_a_sideways_photo_is_turned_upright():
     import io
 
     from PIL import Image
-    fixed = workflow_runner.upright(_jpeg((40, 20), orientation=6))
+    fixed = imagery.upright(_jpeg((40, 20), orientation=6))
     with Image.open(io.BytesIO(fixed)) as im:
         assert im.size == (20, 40)                  # turned, not just tagged
         assert (im.getexif() or {}).get(274, 1) in (1, None)
@@ -390,10 +448,10 @@ def test_a_huge_photo_is_capped_before_it_is_sent():
 
     from PIL import Image
     big = _jpeg((4000, 3000))
-    small = workflow_runner.upright(big)
+    small = imagery.upright(big)
     with Image.open(io.BytesIO(small)) as im:
-        assert max(im.size) == workflow_runner.VISION_MAX_EDGE
-        assert im.size == (workflow_runner.VISION_MAX_EDGE, 1152)  # aspect kept
+        assert max(im.size) == imagery.VISION_MAX_EDGE
+        assert im.size == (imagery.VISION_MAX_EDGE, 1152)  # aspect kept
     assert len(small) < len(big)
 
 
@@ -401,18 +459,18 @@ def test_a_sideways_huge_photo_is_both_turned_and_capped():
     import io
 
     from PIL import Image
-    fixed = workflow_runner.upright(_jpeg((4000, 3000), orientation=6))
+    fixed = imagery.upright(_jpeg((4000, 3000), orientation=6))
     with Image.open(io.BytesIO(fixed)) as im:
         assert im.size[1] > im.size[0]                     # turned upright
-        assert max(im.size) == workflow_runner.VISION_MAX_EDGE
+        assert max(im.size) == imagery.VISION_MAX_EDGE
 
 
 def test_an_already_upright_photo_is_untouched():
     """No re-encode, no quality loss, on the majority that need nothing."""
     data = _jpeg((40, 20), orientation=1)
-    assert workflow_runner.upright(data) is data
+    assert imagery.upright(data) is data
     plain = _jpeg((40, 20))
-    assert workflow_runner.upright(plain) is plain
+    assert imagery.upright(plain) is plain
 
 
 def test_an_uploaded_photo_is_not_saved_sideways(tmp_path, monkeypatch):
@@ -457,8 +515,8 @@ def test_a_photo_that_is_not_an_image_is_skipped_not_raised():
 
 
 def test_unreadable_bytes_pass_straight_through():
-    assert workflow_runner.upright(b"not an image") == b"not an image"
-    assert workflow_runner.upright(b"") == b""
+    assert imagery.upright(b"not an image") == b"not an image"
+    assert imagery.upright(b"") == b""
 
 
 # --- every route that writes a concept grounds it ---------------------------
@@ -503,5 +561,10 @@ def test_every_concept_writing_route_uses_the_one_collector():
     # the one place uploads/asset_photos are read off a form
     assert source.count('form.getlist("asset_photos")') == 1
     assert source.count('form.getlist("files")') == 1
-    # and every route that writes a concept attaches what it collected
-    assert source.count("_attach_scene_refs(") == 4   # 1 def + 3 call sites
+    # and every route that writes a concept attaches what it collected.
+    # Counted without the paren because /scenes/run now HANDS the
+    # function to src/scene_chain.py rather than calling it inline --
+    # src/ cannot list asset photos itself, so the app injects the one
+    # implementation instead of a second copy growing down there.
+    assert source.count("_attach_scene_refs") == 4    # 1 def + 2 calls + 1 injection
+    assert "attach_refs=_attach_scene_refs" in source

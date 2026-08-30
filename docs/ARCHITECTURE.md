@@ -19,31 +19,32 @@ What actually happens when you press Create in the Studio. No graph, no autonomy
 line, because a person is standing there waiting for it.
 
 ```
-/ui composer ──▶ POST /api/pipeline/run
-                      │
-                      ├── api.scene_grounding: reference_block (RAG) + the brand's inspiration lanes
-                      │
-                      ▼
-              shootgen.generate_scene_concepts(idea, brand, count)
-                      │   several scenes, ONE call, so they vary against each other
-                      ▼
-              saved as ordinary shoot_concepts rows (shots = one element each)
-                      │
-                      │  you pick one ──▶ picked_at ──▶ pick_rate
-                      ▼
-              Director canvas ── app/workflow_runner.py executes node by node
-                      │
-                      ├─ enhance (Gemini 3 Flash, system prompt from prompts/enhance_system.txt,
-                      │           auto_ground pulls RAG + the shot's reference image as INLINE BYTES)
-                      ├─ Nano Banana Pro ──▶ keyframe ──▶ attached to the shot as reference_image
-                      └─ Runway ──▶ clip ──▶ attached to the shot as media_url
+/ui composer (idea + uploads/asset photos + count 1-4)
+        │
+        └──▶ POST /api/scenes/run ──▶ src.scene_chain.run()
+                      ├─ ground        reference_block (RAG) + format_cast
+                      ├─ write_scenes  generate_scene_concepts(idea, brand, count)
+                      │                several scenes, ONE call, so they vary
+                      └─ attach_refs   the asset photos each scene NAMED
+                             │
+                             ▼
+                    CONCEPTS BOARD — and Create stops here
+                             │
+                you open one in Director (app/workflow_runner.py)
+                    prompt → instructions → enhance → Nano keyframe → Runway clip
+                             │
+                    Pick ──▶ QUEUE ──▶ approve = spend
 ```
+
+Create writes concepts and stops (2026-08-29, Mike's call): pressing it is for reading
+concepts, not for a minute of billed work nobody asked for.
 
 **Reference images are fetched, never named.** Neither model can retrieve a URL. Once renders moved
 to R2 and every reference became an `https://…r2.dev/…` link, naming it in the prompt text silently
 became no grounding at all — the model was told an image existed and never saw one.
-`workflow_runner.fetch_image_bytes` pulls it server-side (SSRF-guarded, `image/*` only, size-capped,
-never raises) and attaches real bytes with the mime read from the magic number. Attaching bytes is
+`imagery.fetch_image_bytes` pulls it server-side (SSRF-guarded, `image/*` only, size-capped,
+never raises; it and `enhance` moved from `app/workflow_runner.py` to `src/imagery.py` on
+2026-08-29 so the chain could reach them from `src/`, which never imports `app/`) and attaches real bytes with the mime read from the magic number. Attaching bytes is
 only half of it: a `REFERENCE_NOTE` tells the model what the reference is *for* — match subject,
 wardrobe, props, location; do **not** copy its framing — because bytes with no instruction leave it
 guessing between copy, continue and ignore.
@@ -57,6 +58,46 @@ cannot draw.
 
 
 ---
+
+## What the night produces
+
+The same stages, unattended. `src/orchestrator.py`'s right side used to be all stub, so
+every nightly run ended `"no usable clips (render is a dry-run stub)"` in `hold_queue` —
+structurally complete, and nothing anyone could judge over coffee. Since 2026-08-29 a
+`keyframe` node sits between the prompt gate and the (still dry) render:
+
+```
+score_prompts ──pass──▶ keyframe ──▶ generate_render (dry unless ZEROPAGE_RENDER=1)
+                          │                 │
+                          │                 ▼
+                          │            qc_clip … publish
+                          │
+              persist the scored prompt onto the shot
+              render a Nano still  ──▶ shot.reference_image
+              park the scene       ──▶ QUEUE, with its still
+```
+
+Three things it fixes at once. The prompt that passed the gate is now **on the row** — it
+lived only in the run's state before, so Runway would have rendered shootgen's first draft.
+The morning has something to **look at** rather than a reason string. And `gen_concept`
+writes **one-scene concepts** (`generate_scene_concept`) instead of the legacy multi-shot
+ones — that divergence stopped being cosmetic the moment the output started landing in the
+Queue, which keys on `is_scene`.
+
+The prompt gate is what earns a keyframe: 8 sparks × 2 brands is 16 runs a night against
+`NANO_DAILY_CAP` of 20, shared with every Director render. `ZEROPAGE_KEYFRAME=0` turns the
+step off. A keyframe that fails parks the scene as text-to-video with the reason on its
+card — degrade, don't break, as everywhere else.
+
+**Parked is a marker, not an inference.** `shot["parked_at"]` (`preprod.set_shot_parked`)
+says a scene is waiting on a human to spend; `GET /api/queue/pending` is `parked or picked`.
+Treating "has a `reference_image`" as "in the queue" would drag every scene the Director
+canvas has ever keyframed mid-work into the spend gate. **Approving a parked scene is what
+picks it** — nobody clicked pick on an unattended run — which also makes `pick_rate` read
+"scenes worth rendering" rather than "cards clicked". Approving no longer archives the
+unpicked siblings from the same spark: that inference was safe when picking came first in
+bulk, but with approval *as* the pick it would archive the rest of the batch out from under
+you, and racily, since it ran after Runway returned. Rejecting archives, explicitly.
 
 ## The LangGraph orchestrator — the autonomous path
 

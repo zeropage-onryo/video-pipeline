@@ -8,7 +8,6 @@ export const state = {
   brand: document.body.dataset.brand || 'antihero',
   assets: null,          // cached /api/assets payload
   jobs: new Map(),       // id -> job, fed by SSE
-  denyReasons: [],
 };
 
 export const bus = new EventTarget();

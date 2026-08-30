@@ -19,12 +19,12 @@
   <string>com.zeropage.shadowrun</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/iphone/Documents/Github Portfolio/venv/bin/python</string>
+    <string>/Users/iphone/Documents/PRODUCTION PIPLINE .GIT/venv/bin/python</string>
     <string>-m</string>
     <string>src.trigger</string>
   </array>
   <key>WorkingDirectory</key>
-  <string>/Users/iphone/Documents/Github Portfolio</string>
+  <string>/Users/iphone/Documents/PRODUCTION PIPLINE .GIT</string>
   <key>StartCalendarInterval</key>
   <dict>
     <key>Hour</key>
@@ -33,8 +33,8 @@
     <integer>30</integer>
   </dict>
   <key>StandardOutPath</key>
-  <string>/Users/iphone/Documents/Github Portfolio/data/trigger.log</string>
+  <string>/Users/iphone/Documents/PRODUCTION PIPLINE .GIT/data/trigger.log</string>
   <key>StandardErrorPath</key>
-  <string>/Users/iphone/Documents/Github Portfolio/data/trigger.log</string>
+  <string>/Users/iphone/Documents/PRODUCTION PIPLINE .GIT/data/trigger.log</string>
 </dict>
 </plist>

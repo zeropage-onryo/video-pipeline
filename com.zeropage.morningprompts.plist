@@ -6,11 +6,11 @@
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
-    <string>/Users/iphone/Documents/Github Portfolio/run_morning_prompts.sh</string>
+    <string>/Users/iphone/Documents/PRODUCTION PIPLINE .GIT/run_morning_prompts.sh</string>
   </array>
   <key>StartCalendarInterval</key>
   <dict><key>Hour</key><integer>6</integer><key>Minute</key><integer>0</integer></dict>
-  <key>StandardOutPath</key><string>/Users/iphone/Documents/Github Portfolio/data/morning_prompts.out</string>
-  <key>StandardErrorPath</key><string>/Users/iphone/Documents/Github Portfolio/data/morning_prompts.err</string>
+  <key>StandardOutPath</key><string>/Users/iphone/Documents/PRODUCTION PIPLINE .GIT/data/morning_prompts.out</string>
+  <key>StandardErrorPath</key><string>/Users/iphone/Documents/PRODUCTION PIPLINE .GIT/data/morning_prompts.err</string>
 </dict>
 </plist>

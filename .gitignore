@@ -46,3 +46,13 @@ data/renders/
 data/_scratch_*
 data/*.log
 data/*.db*
+
+# Reference photos uploaded through the composer and the sheets built
+# from them -- user data and generated artifacts, not source (2026-08-29)
+data/refs/
+data/*.jpg
+data/*.tar.gz
+
+# Claude Code's per-machine permission allowlist: local paths, no value
+# to anyone else checking this out
+.claude/settings.local.json

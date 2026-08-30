@@ -125,8 +125,9 @@ SQLite (`data/pipeline.db`).
 idea -> shot-list shape split a concept across up to six independently-rendered prompts,
 which is exactly what the scene bible existed to paper over; one paste-ready whole-scene
 prompt is what the video models actually take. `shootgen.generate_scene_concept` is the
-path every Create button uses (`/api/pipeline/run` — Studio's composer, Pipeline's
-"Generate scene", the Director brief): it reuses the proven gold-standard skeleton
+path the single-concept Create uses (`/api/pipeline/run` — the Director brief; Studio's
+composer moved to `/api/scenes/run` on 2026-08-28, which is the same generator asked for
+N takes at once): it reuses the proven gold-standard skeleton
 (`prompts/scene_brief_prompt.txt`, grounded style -> beats -> diegetic sound ->
 avoid-list), saves an ordinary `shoot_concepts` row whose `shots` is a ONE-element list,
 and deliberately does **not** prepend the scene bible — that anchor holds separate shots
@@ -151,9 +152,10 @@ generation.
 **You get SEVERAL scenes and pick between them** (same day, same shape).
 `shootgen.generate_scene_concepts` writes N of those one-shot rows off ONE idea in a
 single call, so the takes are varied against each other rather than rolled independently
-(the `generate_concept_ideas` reasoning) — `POST /api/scenes/run`, behind Pipeline's
-**Scenes** tab, which is the default. A card is laid out as Mike specified: the
-references it was written against ABOVE, the scene, then the returned prompt BELOW.
+(the `generate_concept_ideas` reasoning) — `POST /api/scenes/run`, which is what **the
+Studio composer's Create button** posts (2026-08-28). A card is laid out as Mike
+specified: the references it was written against ABOVE, the scene, then the returned
+prompt BELOW.
 **The label moved with the unit:** `shortlist_rate` asked "was this idea worth planning
 a shot list for", derived from `shots != []` — a question with no answer left once every
 concept has exactly one shot. `preprod.pick_rate` asks how many generated scenes were
@@ -166,6 +168,188 @@ both would have meant one tile that could only ever read 100%. `pick_rate` and
 **A scene's references are plural and live ON its shot** (`shot["refs"]` — no schema
 change, `shots_json` was always flexible), which is what carries them into the enhance,
 the keyframe and the clip when it opens in Director.
+
+**The references now actually get attached (2026-08-28).** The loop was open at its most
+embarrassing point: `format_cast` tells the generator that Michael and the Ducati have
+"(reference photos on file)", the scene it writes says exactly that, the photos sit in
+`characters/michael` — and nothing ever handed them to a renderer. Every concept in the
+live database carried `refs=None`, so Director grounded on a sentence instead of a face.
+Three parts to closing it:
+
+- `shootgen.named_assets(text, assets)` reads a finished scene back and returns the assets
+  it named — the mirror of `format_cast`. Matching is on the asset's name **plus multi-word
+  proper nouns from its own notes** (`asset_aliases`), because the prop is stored as
+  "Motorcycle" and every scene calls it a Ducati Panigale 959. Two consecutive capitalised
+  words, never one: a missed alias costs a photo, a false one attaches a reference the shot
+  was never meant to resemble.
+- **Order is load-bearing, not cosmetic.** Runway anchors a clip on exactly ONE frame
+  (`urls[0]`), so the sort is category (character → prop → **location last**) and then
+  position of first mention in the scene. A room photo in the anchor slot makes the model
+  reproduce the room instead of the scene; two characters are not interchangeable either,
+  and a scene that opens on Michael must not anchor on the monster he meets later.
+- `api._attach_scene_refs` runs after every `/api/scenes/run`, manual picks first (an
+  explicit choice outranks an inferred one, and first is what Runway anchors on).
+  `ops/backfill_scene_refs.py` did the same for concepts written before the fix.
+
+**Composer uploads persist** (`data/refs/`, content-addressed, served at `/refs`, resolved by
+`_resolve_asset_photo` like any asset photo). An uploaded photo used to ground one Gemini call
+and then cease to exist, so it could never reach the keyframe or the clip.
+
+**`.heic` decodes now** (`pillow-heif`, registered in `_to_jpeg`, degrading if absent), and
+`_best_photo` prefers a natively-decodable sibling regardless. `IMAGE_EXTENSIONS` has always
+listed `.heic` and the gallery has always shown it, but Pillow could not read one — so a HEIC
+reference was accepted, listed on the shot, and then **silently** dropped at render. Half the
+asset bank comes off an iPhone.
+
+**A concept's canvas outlives the visit (2026-08-28).** Run all called `saveWorkflow()` with
+`currentId = null`, so in concept mode it POSTed a brand-new library workflow row every
+session purely so the runner had a saved graph to execute — and read none of them back:
+`openConceptInDirector` sets `currentId = null`, clears `shotGraphs` and rebuilds the chain
+from the shot. Node positions, hand-edited text and every node's output were discarded on
+exit, which made re-running a paid Gemini enhance the only way to see the enhanced prompt
+again. "Save to concept" never covered this — it persists shot *prompts* only.
+
+`workflows` gains `concept_id`, `shot_n`, `states_json`, `seed_hash` (additive ALTER, plus a
+partial unique index on `(concept_id, shot_n)`), and `save_shot_graph`/`get_shot_graph` upsert
+one row per shot. Three things make it work:
+
+- **States are stored beside the drawing.** LiteGraph's `serialize()` carries a node's config
+  and position but never its output, so a graph restored without them is the right shape with
+  every box empty — exactly the thing that made re-running feel mandatory. The runner already
+  computes them (`execute_graph` → `result["nodes"]`); Run all now saves them with the graph.
+  Restoring applies them with `applyNodeStates(states, {quiet: true})` — `quiet` because a
+  restored output must NOT re-post itself to the shot, which already happened on the run that
+  produced it.
+- **The graph that ran and the graph you return to are one row.** Run all in concept mode
+  saves to the shot's row and runs *that* id, instead of saving to a throwaway and executing
+  something the canvas never sees again.
+- **Staleness is checked on READ, not invalidated on write.** A saved graph holds a copy of
+  the prompt in its User Prompt node, so a Direct revision, a Polish or a replan turns it into
+  a drawing of a shot that no longer says that. `shot_graph_get` compares `seed_hash` against
+  the live shot and returns `graph: null, stale: true` so the client rebuilds. Self-healing: a
+  route added later that rewrites a prompt cannot forget to invalidate anything.
+
+Concept-scoped rows are excluded from `list_workflows`, or the Open… picker would fill with one
+entry per shot anyone has ever opened. `DELETE /api/concepts/{id}/graph` is the reset hatch.
+
+**The enhance instruction preserves rather than expands** (`prompts/enhance_system.txt`).
+The original said "take the user's simple prompt and expand it with vivid, descriptive
+details" — but the input is a finished director's prompt, so the model summarised it: a real
+run dropped every "(reference photos on file)" lock, the entire Avoid list, the beat order,
+"one continuous handheld take" and "no background music", and returned a paraphrase. It is now
+a tighten-don't-summarise instruction that names those four categories as untouchable, orders
+the output constraints → style → texture → blocking, and forbids "cinematic"/"masterpiece"
+padding. The test asserts what it protects, not its wording.
+
+**One idea box, one board, one spend gate (2026-08-28, Mike's call.)** Scenes and
+concepts were never two things — a concept IS one scene IS one prompt, one
+`shoot_concepts` row — so keeping them as two Pipeline tabs meant two places to look for
+the same card. The three surfaces are now split by *what you are doing*, not by what the
+row is called:
+
+- **Studio** is where an idea is typed, and the only place. The hero composer carries the
+  idea, its references (uploads or picks out of the asset bank) and a **1–4** count, and
+  posts multipart to `/api/scenes/run` (`SCENE_COUNT_MAX = 4` enforces the cap
+  server-side — the select is not the gate). The Pipeline composer, the legacy "Generate
+  scene" bar and the Generate tab are gone; `app/static/zpf/generate.js` was deleted.
+  **Create writes concepts and stops on the board** (2026-08-29, Mike's call): pressing it
+  is for reading concepts, not for a minute of billed work nobody asked for. Enhancing and
+  keyframing are the Director canvas's job when a person is driving — and the nightly
+  graph's when nobody is.
+- **Pipeline** is only the deciding: one grid of concept cards, filters Open / Picked /
+  Archived, and Pick / Not this one / Open in Director. The approve-deny-holds loop went
+  with the merge — denying a concept is what the Dev Studio's grade queue does, against
+  every archived row, with the teach-to-RAG shelves behind it.
+- **Queue** is the spend gate. Rendering is the only step that costs money, so it is the
+  only one with a gate in front of it, and **approving in Queue is what calls Runway**
+  (`POST /api/queue/{id}/approve`). `GET /api/queue/pending` is derived from the rows
+  (**parked or picked**, not archived, no `media_url`) rather than from the jobs registry,
+  which is an in-process dict a restart clears — an approval queue that quietly emptied
+  itself on restart would be a queue that lies. The live job registry stays underneath it,
+  and says so. Two ways in: the chain parks a scene once its keyframe is rendered, or you
+  pick a text-only concept off the board.
+
+**Leaving the board is archiving, never deleting** (`archived_at`, additive ALTER, same
+shape as `picked_at`). An unpicked row is the only negative signal this system collects:
+`pick_rate` is generated-vs-picked, so deleting what you passed over would make the rate
+read 100% forever and unfalsifiable. Archived rows stay counted and stay in the Dev
+Studio's ungraded pool (`judge_overall IS NULL`) until they are graded, which is where
+they earn their keep. Two things archive a concept: **Not this one** on a card, and
+**Reject** at the spend gate (which also unpicks — rejected there means generated and not
+picked, which is the truth about it). Approving used to archive the unpicked siblings from
+the same `spark` too; that inference was removed on 2026-08-29 when approving became the
+pick. It was safe while picking was a separate bulk step done first — pick two, approve
+one, both survive — but with approval *as* the pick, approving take 1 archives takes 2–4
+out from under you, and racily, since it ran after Runway returned ~90s later.
+`preprod.archive_batch` stays as a tested helper with no caller.
+
+**The night does the rest (2026-08-29, Mike's call.)** Enhancing, keyframing and
+rendering happen in the **Director canvas** when Michael is steering a scene, and in the
+**nightly graph** when nobody is. `src/scene_chain.py` holds one implementation of each
+stage — `ground`, `write_scenes`, `persist_prompt`, `keyframe_scene`, `park_scene` — so
+those three callers share code instead of growing three copies of "render a keyframe"
+that drift apart. The two app-layer capabilities `src/` cannot reach (which asset photos a
+scene named; how to resolve a site-relative photo to a file) are **injected as callables**,
+because `src/` never imports `app/`.
+
+**This is what finally makes the LangGraph load-bearing.** `src/orchestrator.py`'s right
+side was all stub: every nightly run ended `"no usable clips (render is a dry-run stub)"`
+in `hold_queue` — structurally complete, and nothing anyone could judge in the morning. A
+new `keyframe` node sits between the prompt gate and the (still dry) render:
+
+- It **persists** the prompt `structure_prompt` refined onto the shot. That prompt only
+  ever lived in the run's state before, so the row Runway would render from still held
+  shootgen's first draft while the version that passed the gate sat in a job payload.
+  `persist_prompt` keeps the model's own text as `shot["written_prompt"]` — the grade
+  queue teaches on what the MODEL wrote, and the Director canvas seeds its User Prompt
+  node from it, so opening a polished concept and pressing Run does not enhance an
+  already-enhanced prompt (a paid call that makes it worse; the instructions compound).
+- It renders a **Nano keyframe** from that prompt and attaches it as the shot's
+  `reference_image` — the frame the clip will anchor on.
+- It **parks** the scene (`shot["parked_at"]` / `park_reason`) so it appears in the Queue
+  with its still, and the hold row says what the night produced instead of describing the
+  stub.
+
+**The prompt gate is what earns a keyframe.** Only a scene whose prompt cleared the judge
+(`score_prompts`, bar `prompt_gate_min`, fails closed) gets an image — 8 sparks × 2 brands
+is 16 runs a night against `NANO_DAILY_CAP` of 20, which is also shared with every
+Director render. A keyframe that fails parks the scene as text-to-video with the reason on
+its card. `ZEROPAGE_KEYFRAME=0` turns the step off without touching the graph.
+
+**`gen_concept` writes ONE scene now**, through `shootgen.generate_scene_concept` rather
+than the legacy multi-shot `generate_concept`. That divergence stopped being cosmetic the
+moment the night's output started parking in the Queue: the Queue, `pick_rate` and the
+scene board all key on `is_scene` (`len(shots) == 1`), so a six-shot concept would have
+been generated, scored, keyframed and then invisible to the surface meant to approve it.
+`use_pov` stopped being passed with it — the scene brief neither offers nor names a camera.
+
+**Parked is an explicit marker**, never inferred from `reference_image`: the Director
+canvas writes that field mid-work, so inferring would drag every scene anyone has ever
+keyframed into the spend queue. `GET /api/queue/pending` is `parked or picked`, and
+**approving a parked scene is what picks it** — nobody clicked pick on an unattended run,
+so the real choice is made at the spend gate, which is also the better source for
+`pick_rate` ("how many generated scenes were worth rendering"). A `template_tag` rides
+into the hashed prompt template so `by_prompt` does not average two meanings of "picked".
+
+- **`src/imagery.py`** is `enhance` plus the whole reference→bytes layer
+  (`fetch_image_bytes` with its SSRF guard and 15MB cap, `image_bytes_for_gemini`,
+  `render_bytes`, `upright`), lifted out of `app/workflow_runner.py` unchanged so the
+  stages can reach it from `src/`. The canvas keeps exactly one alias,
+  `workflow_runner.enhance`, because `execute_graph` calls it bare and the tests patch it
+  there; everything else is called through `imagery.` on purpose — an alias that can be
+  monkeypatched without affecting the code that runs is how a test passes while a real
+  billed call escapes.
+- **The keyframe now actually anchors the clip.** `runway.as_prompt_image` resolves a
+  reference to something the API can read: a public URL passes through, local `/renders/`
+  and asset paths become an inline data URI with the mime read off the magic number.
+  Before it, `generate_for_shot` took `reference_image` only when it started with `http`,
+  so on any machine without R2 the keyframe silently anchored nothing while the Queue card
+  said "anchors on the attached reference" and the credit was spent on the lie.
+- **The nightly job was repathed** (2026-08-29): `run_morning_prompts.sh` and
+  `com.zeropage.morningprompts.plist` still pointed at `/Users/iphone/Documents/Github
+  Portfolio`, so the folder rename killed it silently on 2026-08-24 — launchd ran the
+  script, the `cd` failed, and a night with no runs looks exactly like a healthy night.
+  The `cd` now logs and exits 1. Reloading the plist is a manual step after a rename.
 
 ```
 locations/<name>/*.jpg  --locations.py-->  locations table (vision description per space)
@@ -347,24 +531,17 @@ is yours, in Resolve, by hand.
   existing modules. One rule governs it: **every control is backed by a working endpoint and
   gated by `GET /api/capabilities`**, which is derived live (key presence, a real
   `rag.connect()`), never a static dict. Views: Studio (composer with live `/api/retrieve`
-  grounding + asset carousel), Assets (locations/characters/props unified), Pipeline
-  (restructured 2026-08-25 into tabs over one engine; **Scenes** is the default since 2026-08-26), Director (the node canvas as its
-  own rail view — Mike's explicit call, same day: the nodes must never be buried behind a
-  tab), Analytics (real metric snapshots, two brands never averaged), Queue. **Pipeline's
-  two tabs:** *Concept* is the
-  original pre-production loop unchanged (approve = queue the shot list, deny =
-  reasons-enum + note → an `autonomy` correction always, a RAG `denials` chunk best-effort,
-  then the concept is deleted; plus the hold queue and the agreement numbers). *Generate* is
-  Higgsfield-style single generation: a camera-preset picker (`prompts/presets.json` via
-  `src/presets.py` — data, not code, sourced from the repo's video-prompting references),
-  `@` mentions autocompleting against `GET /api/assets/search` (cross-category name search;
-  picking one names the asset in the prompt AND attaches its photo), image *and video*
-  references (video rides a Gemini call inline under ~19MB, else through the Files API —
-  `api.video_part`), and `POST /api/generate/run`: Ground (`reference_block`) → Enhance
-  (preset + references folded into one Gemini call) → saved as a REAL one-shot
-  `shoot_concepts` row (or appended to an existing concept via `concept_id`) → best-effort
-  gated render (image via Nano Banana lands as the shot's `reference_image`; video via
-  Runway's spend gate lands as `media_url`; refusal still leaves the saved concept).
+  grounding + asset carousel; **the idea composer lives here and nowhere else** since
+  2026-08-28), Assets (locations/characters/props unified), Pipeline (**no tabs** since
+  2026-08-28 — one board of concept cards, which is all it ever was), Director (the node
+  canvas as its own rail view — Mike's explicit call, 2026-08-25: the nodes must never be
+  buried behind a tab), Analytics (real metric snapshots, two brands never averaged),
+  Queue (the approval gate, then the live job registry). The tabbed Pipeline of
+  2026-08-25 — *Concept* (approve/deny + holds) and *Generate* (Higgsfield-style single
+  generation) — was merged away; `POST /api/generate/run` and the preset picker
+  (`prompts/presets.json` via `src/presets.py`) survive as Director node plumbing, and
+  video references still ride a Gemini call inline under ~19MB, else through the Files API
+  (`api.video_part`).
   *Director* — its own rail view — is what the old Workflows view actually was: the
   LiteGraph canvas (`app/workflow_runner.py` executes, `src/workflows.py` stores, per-node
   Run + Run all, the seeded "Prompt enhancement" template still opens from the toolbar),

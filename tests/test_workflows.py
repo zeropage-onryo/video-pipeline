@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 
 from app import jobs, workflow_runner
 from app.main import app
-from src import db, generative, runway, workflows
+from src import db, generative, imagery, runway, workflows
 
 client = TestClient(app)
 
@@ -640,8 +640,9 @@ class FakeGeminiImageClient:
         response = SimpleNamespace(candidates=[candidate], text=None)
         self.calls = []
 
-        def generate_content(model, contents):
-            self.calls.append({"model": model, "contents": contents})
+        def generate_content(model, contents, config=None):
+            self.calls.append({"model": model, "contents": contents,
+                               "config": config})
             return response
 
         self.models = SimpleNamespace(generate_content=generate_content)
@@ -697,23 +698,103 @@ def test_nano_generate_surfaces_a_textonly_refusal(tmp_db, tmp_path, monkeypatch
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     monkeypatch.setattr(nano_banana, "RENDER_DIR", tmp_path / "nano")
     fake = FakeGeminiImageClient()
-    fake.models = SimpleNamespace(generate_content=lambda model, contents:
-                                  SimpleNamespace(candidates=[], text="no can do"))
+    fake.models = SimpleNamespace(
+        generate_content=lambda model, contents, config=None:
+        SimpleNamespace(candidates=[], text="no can do"))
     result = nano_banana.generate_from_prompt("a bike", db_path=tmp_db, client=fake)
     assert not result["ok"] and "no image" in result["error"]
+
+
+def test_nano_asks_for_the_shape_it_needs(tmp_db, tmp_path, monkeypatch):
+    """Every render here is vertical, and saying "9:16" inside the prompt
+    does not make it so — the model infers a shape from the references
+    unless the request configures one, and returned 3:4 for a shot whose
+    prompt opened with "9:16" (2026-08-29). The keyframe is what Runway
+    anchors the clip on, so the wrong shape there crops the clip."""
+    from src import nano_banana
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(nano_banana, "RENDER_DIR", tmp_path / "nano")
+    monkeypatch.setattr("src.storage.configured", lambda: False)
+    fake = FakeGeminiImageClient()
+    assert nano_banana.generate_from_prompt("a red bike", db_path=tmp_db,
+                                            client=fake)["ok"]
+    config = fake.calls[0]["config"]
+    assert config is not None
+    assert config.image_config.aspect_ratio == "9:16"
+
+
+def test_nano_leaves_the_shape_alone_when_nothing_is_asked_for(tmp_db, tmp_path,
+                                                              monkeypatch):
+    """Empty means "don't configure it" — the behaviour every render had
+    before this, still reachable."""
+    from src import nano_banana
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(nano_banana, "RENDER_DIR", tmp_path / "nano")
+    monkeypatch.setattr("src.storage.configured", lambda: False)
+    fake = FakeGeminiImageClient()
+    assert nano_banana.generate_from_prompt("a red bike", db_path=tmp_db,
+                                            client=fake, aspect_ratio="",
+                                            image_size="")["ok"]
+    assert fake.calls[0]["config"] is None
+
+
+def test_a_config_the_endpoint_rejects_still_renders(tmp_db, tmp_path, monkeypatch):
+    """A wrongly-shaped frame is a far better outcome than losing a
+    billed call to an INVALID_ARGUMENT, so an unsupported image_config
+    retries once without it. NANO_IMAGE_SIZE is the reason this exists:
+    2K is not offered by every model on this endpoint."""
+    from src import nano_banana
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(nano_banana, "RENDER_DIR", tmp_path / "nano")
+    monkeypatch.setattr("src.storage.configured", lambda: False)
+    fake = FakeGeminiImageClient()
+    inner = fake.models.generate_content
+
+    def picky(model, contents, config=None):
+        if config is not None:
+            raise RuntimeError("400 INVALID_ARGUMENT: image_size not supported")
+        return inner(model, contents, config=config)
+
+    fake.models = SimpleNamespace(generate_content=picky)
+    result = nano_banana.generate_from_prompt("a red bike", db_path=tmp_db,
+                                              client=fake, image_size="2K")
+    assert result["ok"], result["error"]
+    assert [c["config"] for c in fake.calls] == [None]    # the retry landed
+
+
+def test_a_real_failure_is_not_swallowed_by_the_shape_retry(tmp_db, tmp_path,
+                                                            monkeypatch):
+    """Only INVALID_ARGUMENT degrades. Anything else still surfaces —
+    the image IS the deliverable here."""
+    from src import nano_banana
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(nano_banana, "RENDER_DIR", tmp_path / "nano")
+    fake = FakeGeminiImageClient()
+
+    def broken(model, contents, config=None):
+        raise RuntimeError("500 INTERNAL")
+
+    fake.models = SimpleNamespace(generate_content=broken)
+    result = nano_banana.generate_from_prompt("a red bike", db_path=tmp_db,
+                                              client=fake)
+    assert not result["ok"] and "INTERNAL" in result["error"]
 
 
 # --- the nano node in the executor and the API ------------------------------
 
 def test_image_bytes_for_gemini_resolves_renders_and_data_uris(tmp_path):
     import base64
-    assert workflow_runner.image_bytes_for_gemini(
+    assert imagery.image_bytes_for_gemini(
         "data:image/png;base64," + base64.b64encode(b"PIX").decode()) == b"PIX"
     photo = tmp_path / "p.jpg"
     photo.write_bytes(b"JPEGBYTES")
-    assert workflow_runner.image_bytes_for_gemini(
+    assert imagery.image_bytes_for_gemini(
         "/assets/antihero/p.jpg", resolve_photo=lambda v: photo) == b"JPEGBYTES"
-    assert workflow_runner.image_bytes_for_gemini("https://x/y.png") is None
+    assert imagery.image_bytes_for_gemini("https://x/y.png") is None
 
 
 # --- the keyframe -> clip chain ---------------------------------------------
@@ -769,7 +850,7 @@ def test_a_remote_reference_reaches_gemini_as_vision_not_as_a_url(monkeypatch):
     The reference looked attached on the canvas and reached no model --
     silently dropped for Nano, and reduced to a line of TEXT naming the
     URL for enhance, which is indistinguishable from no reference."""
-    monkeypatch.setattr(workflow_runner, "fetch_image_bytes",
+    monkeypatch.setattr(imagery, "fetch_image_bytes",
                         lambda url: PNG_BYTES if url == R2_URL else None)
     captured = {}
     monkeypatch.setattr("src.gemini_utils.generate_with_retry",
@@ -786,7 +867,7 @@ def test_a_remote_reference_reaches_gemini_as_vision_not_as_a_url(monkeypatch):
 
 
 def test_an_unreachable_reference_says_so_instead_of_pretending(monkeypatch):
-    monkeypatch.setattr(workflow_runner, "fetch_image_bytes", lambda url: None)
+    monkeypatch.setattr(imagery, "fetch_image_bytes", lambda url: None)
     captured = {}
     monkeypatch.setattr("src.gemini_utils.generate_with_retry",
                         lambda client, model, contents:
@@ -797,9 +878,9 @@ def test_an_unreachable_reference_says_so_instead_of_pretending(monkeypatch):
 
 
 def test_image_bytes_for_gemini_fetches_a_public_url(monkeypatch):
-    monkeypatch.setattr(workflow_runner, "fetch_image_bytes",
+    monkeypatch.setattr(imagery, "fetch_image_bytes",
                         lambda url: PNG_BYTES)
-    assert workflow_runner.image_bytes_for_gemini(R2_URL) == PNG_BYTES
+    assert imagery.image_bytes_for_gemini(R2_URL) == PNG_BYTES
 
 
 def test_the_reference_fetch_refuses_private_addresses():
@@ -807,9 +888,9 @@ def test_the_reference_fetch_refuses_private_addresses():
     server-side, so the SSRF guard is the wall. Literal IPs, so no DNS
     (and no network) is needed to check it."""
     for host in ("127.0.0.1", "10.0.0.5", "169.254.169.254", "192.168.1.1"):
-        assert workflow_runner._public_host(host) is False
-    assert workflow_runner.fetch_image_bytes("http://169.254.169.254/latest/meta-data") is None
-    assert workflow_runner.fetch_image_bytes("file:///etc/passwd") is None
+        assert imagery._public_host(host) is False
+    assert imagery.fetch_image_bytes("http://169.254.169.254/latest/meta-data") is None
+    assert imagery.fetch_image_bytes("file:///etc/passwd") is None
 
 
 def test_sniff_mime_reads_the_magic_number():
@@ -852,7 +933,7 @@ def test_a_scenes_references_inform_every_node_that_runs(tmp_db, monkeypatch):
     grounds on the same list."""
     JPEG = b"\xff\xd8\xff\xe0face"
     refs = ["https://cdn.test/face.jpg", "https://cdn.test/jacket.jpg"]
-    monkeypatch.setattr(workflow_runner, "fetch_image_bytes", lambda url: JPEG)
+    monkeypatch.setattr(imagery, "fetch_image_bytes", lambda url: JPEG)
     monkeypatch.setattr(runway, "has_key", lambda: True)
 
     seen = {}
@@ -946,11 +1027,11 @@ def test_nano_retries_a_transient_overload(tmp_db, tmp_path, monkeypatch):
     good = fake.models.generate_content
     attempts = []
 
-    def flaky(model, contents):
+    def flaky(model, contents, config=None):
         attempts.append(model)
         if len(attempts) < 3:
             raise RuntimeError("503 UNAVAILABLE. high demand")
-        return good(model=model, contents=contents)
+        return good(model=model, contents=contents, config=config)
 
     fake.models = SimpleNamespace(generate_content=flaky)
     result = nano_banana.generate_from_prompt("a bike", db_path=tmp_db, client=fake)
@@ -961,14 +1042,16 @@ def test_nano_retries_a_transient_overload(tmp_db, tmp_path, monkeypatch):
 
 def test_nano_does_not_retry_a_real_refusal(tmp_db, tmp_path, monkeypatch):
     """A refusal is an answer, not a blip -- retrying it would spend
-    twice to be told no twice."""
+    twice to be told no twice. Note the status: the output-shape
+    degrade also keys on INVALID_ARGUMENT, so it has to be narrow
+    enough to leave a bare content refusal alone."""
     from src import nano_banana
 
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     monkeypatch.setattr(nano_banana, "RENDER_DIR", tmp_path / "nano")
     calls = []
 
-    def refuse(model, contents):
+    def refuse(model, contents, config=None):
         calls.append(model)
         raise RuntimeError("400 INVALID_ARGUMENT")
 
@@ -985,7 +1068,7 @@ def test_image_for_runway_carries_an_upstream_keyframe(tmp_path, monkeypatch):
     renders = tmp_path / "data" / "renders" / "nano"
     renders.mkdir(parents=True)
     (renders / "wf-1.png").write_bytes(b"KEYFRAME")
-    monkeypatch.setattr(workflow_runner, "render_bytes",
+    monkeypatch.setattr(imagery, "render_bytes",
                         lambda v: (tmp_path / "data" / "renders"
                                    / v[len("/renders/"):]).read_bytes())
     assert workflow_runner.image_for_runway("/renders/nano/wf-1.png") == b"KEYFRAME"
@@ -998,7 +1081,7 @@ def test_render_bytes_refuses_a_path_that_escapes_the_render_dir():
     # pyproject.toml is tracked, so it definitely exists -- the guard is
     # what refuses it, not a missing file
     assert (Path(__file__).resolve().parent.parent / "pyproject.toml").is_file()
-    assert workflow_runner.render_bytes("/renders/../../pyproject.toml") is None
+    assert imagery.render_bytes("/renders/../../pyproject.toml") is None
 
 
 def test_generate_falls_back_to_the_shots_reference_like_the_other_nodes(
@@ -1084,7 +1167,7 @@ def test_api_exec_nano_sends_every_reference_the_canvas_posted(
                         lambda prompt, **kw: seen.update(kw) or {
                             "ok": True, "media_url": "/renders/nano/x.png",
                             "generation_id": 1, "path": "x", "error": None})
-    monkeypatch.setattr("app.workflow_runner.image_bytes_for_gemini",
+    monkeypatch.setattr("src.imagery.image_bytes_for_gemini",
                         lambda url, resolve_photo=None: url.encode())
 
     response = client.post("/api/workflows/exec/nano", json={

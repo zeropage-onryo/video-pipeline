@@ -80,7 +80,7 @@ concepts, with no manual step. Still open:
   auto-refresh isn't built, so the automation goes silently stale without it.
 - **TikTok** — separate, gated follow-up (developer-app approval required).
 
-## 5. Taste + performance judge on the concept generator  (to build — Mike's ask)
+## 5. Taste + performance judge on the concept generator  (SHIPPED — verified 2026-08-27)
 An LLM judge that scores each new concept against Michael's OWN history — his
 approve/reject grades on `/holds`, his hand-marked winners (`winners.py`
 worked/didn't-work), and his top performers by analytics — to predict "Michael
@@ -102,6 +102,15 @@ it to rank the generated slate (and optionally filter or retry the weakest), so
 every slate self-filters toward what he likes and what works. All inputs exist;
 this wires them into an active scorer. Arguably the highest-leverage item here.
 
+STATUS (verified 2026-08-27): **shipped.** `src/taste_judge.py` exists and does
+exactly this — `gather_signals` pulls graded concepts, `winners.list_all` and
+`post_seo.derive_signals`; `score_concept` is the isolated LLM call; it's wired
+at `app/main.py:1622` and the verdict is stored so `preprod` can rank on it. It
+also grew a sibling the backlog never asked for: `src/uncanny_judge.py`, the
+on-brand gate, which scores against a FIXED rubric precisely *because*
+taste_judge needs history and therefore can't work on day one. taste_judge
+degrades to a neutral 5.0; uncanny_judge fails closed.
+
 ## 6. Midjourney image → R2 → Zero Page one-tap queue  (to build — Mike's ask)
 Zero Page auto-posts Midjourney image posts, semi-automatically with one-tap
 approval (Mike's chosen shape: keep Midjourney, queue not fully-auto).
@@ -122,7 +131,7 @@ ensure/convert JPEG → `storage.upload_file` to R2 → create a *held* row on t
 upload → one-tap approve on `/holds` → posts. Channel stays `queue` (one-tap),
 not `auto`. JPEG-only (Meta rejects PNG/HEIC) — convert on upload.
 
-## 7. Brand switcher — ANTIHERO ⇄ Zero Page, full separation  (to build — paused mid-build)
+## 7. Brand switcher — ANTIHERO ⇄ Zero Page, full separation  (SHIPPED — verified 2026-08-27)
 A brand switcher in the studio so the two brands never get confused and
 Michael can flip between them. Full separation (his choice): the active brand
 drives concept generation, and the holds/queue + library + analytics views
@@ -142,3 +151,85 @@ filtered to the active brand's channel; add a `brand` column to `videos`
 (migration + backfill) so analytics/library filter by brand; studio-header
 switcher with per-brand label + accent. Note: the RAG reference library is
 domain-scoped, not brand-scoped, so it does not filter by brand meaningfully.
+
+STATUS (verified 2026-08-27): **shipped**, essentially as specced.
+`active_brand(request)` is at `app/main.py:112`, registered as a Jinja global on
+the next line so the switcher renders everywhere without touching each route's
+context, and `POST /brand/{name}` (with `safe_next`) is at line 330. Generation
+tags to the active brand. The one thing that moved past the spec: inspiration
+lanes ARE now brand-scoped (`src/inspiration.py`, "so grounding never leaks
+across brands") — the note above about the library being domain-only still
+holds for the RAG shelves, but brand isolation exists at the inspiration layer.
+
+---
+
+# Open
+
+Everything above this line is shipped or parked. Below is what's actually next.
+
+## 8. Account tenancy — the launch blocker  (to build — full plan in `tasks/task-account-tenancy.md`)
+No owned table has an `account_id`. `list_concepts` is
+`SELECT * FROM shoot_concepts ORDER BY id DESC LIMIT ?` — no owner predicate —
+and `get_concept` is `WHERE id = ?` with no ownership check, against sequential
+integer ids. So a second signed-in user would see every concept anyone has ever
+generated, and could fetch any of them by guessing.
+
+The render caps compound it: `SELECT COUNT(*) FROM generations WHERE tool =
+'runway' AND created_at >= ?` counts globally, not per account. Default is 6/day.
+The first pilot user to log in each morning exhausts everyone's budget.
+
+Why it isn't already there: sign-in was built before there was anyone to sign
+in, so `accounts.py` / `auth.py` / capability gating landed as a complete
+front half with no back half. Nothing broke, because there has only ever been
+one user.
+
+This is the gate on showing the product to a single other person — ahead of
+anything else in this file, including item 9. Scope is one weekend: an
+ownership column, filtered reads, ownership checks on mutate, per-account caps
+(keep a global ceiling too), and the tests that would have caught it. The one
+decision to make first is whether the tenancy boundary is the **account** or the
+**brand** — today `brand` is the only scoping dimension and both brands belong
+to one operator; an outside user needs their own brands, which makes
+`account_id` the real boundary and `brand` a dimension inside it. Getting that
+backwards means doing the pass twice.
+
+## 9. LangGraph under the Studio's render path  (ANSWERED 2026-08-29 — it belonged in the graph that already exists)
+The question was whether to put the Studio's *request* path on LangGraph, with a
+checkpointer and an `interrupt()` for the keyframe approval. The answer turned out to be
+that the request path should get SHORTER, not longer — Create writes concepts and stops on
+the board — and that the full run belongs to the **automation**, where
+`src/orchestrator.py`'s StateGraph already lives.
+
+What shipped: `src/scene_chain.py` holds the stages as plain functions (`ground`,
+`write_scenes`, `persist_prompt`, `keyframe_scene`, `park_scene`), and the orchestrator
+gained a `keyframe` node between the prompt gate and the dry render. The nightly run now
+persists the scored prompt onto the shot, renders a still, and parks the scene in the Queue
+— instead of ending every night with "no usable clips (render is a dry-run stub)". That is
+the first time the LangGraph in this repo has been load-bearing: its output is now
+something you can look at and approve.
+
+Why the stages are functions rather than a second graph, and why no checkpointer:
+
+- Called from a StateGraph node and from a FastAPI job, a stage is the same function. A
+  second graph for the request path would be ceremony — that path is now three stages with
+  no branching at all.
+- `interrupt()` spanning the human wait resumes against a concept that may have been edited
+  in Director since — the staleness problem `_shot_seed_hash` already solves. The Queue is
+  derived from rows and already survives a restart, so a checkpointer would be a second,
+  quieter answer to the same question, free to disagree with the first.
+- A `SqliteSaver` on `data/pipeline.db` runs `PRAGMA journal_mode=WAL`, and the backups
+  here are plain file copies — under WAL, copying `pipeline.db` alone silently omits the
+  newest committed transactions. If a checkpointer is ever added it goes in
+  `data/checkpoints.db`.
+
+Taken from the plan on the way past: the node functions came out of
+`app/workflow_runner.py` into `src/imagery.py` so both executors share one implementation
+(`enhance`, `fetch_image_bytes`, `image_bytes_for_gemini`, `upright`), and
+`runway.generate_for_shot` now resolves a non-http keyframe instead of silently dropping
+the anchor.
+
+**Still open, and still worth doing:** the tracing. `langsmith` is already a dependency and
+`.env` already sets `LANGSMITH_TRACING=true`, but the graph is only half the work now —
+`@traceable` on `scene_chain`'s stages would cover the Director and request paths too, for
+no new dependency. Also still true: `langgraph` is unpinned in `requirements.txt`, and that
+is a library that moves.
