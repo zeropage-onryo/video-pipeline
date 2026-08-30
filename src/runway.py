@@ -60,6 +60,84 @@ SPEND_ENV = "RUNWAY_SPEND_OK"
 CREDIT_USD = 0.01
 CREDITS_PER_SECOND = {"gen4_turbo": 5, "gen4.5": 12}
 
+# promptText caps, straight off the runwayml SDK's own type definitions.
+# Both models this project uses take 1000 characters; the roomier ones
+# (seedance2 at 3500, seedance2_5 at 15000) are named in the error so a
+# prompt that will not fit says where it WOULD fit. This matters because
+# a director's prompt here runs 1400-1500 characters and puts its Avoid
+# list LAST -- silently truncating would drop exactly the constraints
+# the look depends on, so an over-long prompt refuses instead, before
+# any credit is spent (2026-08-29).
+PROMPT_LIMITS = {"gen4_turbo": 1000, "gen4.5": 1000}
+DEFAULT_PROMPT_LIMIT = 1000
+
+
+def prompt_limit(model: str = DEFAULT_MODEL) -> int:
+    return PROMPT_LIMITS.get(model, DEFAULT_PROMPT_LIMIT)
+
+
+def check_prompt_length(prompt: str, model: str = DEFAULT_MODEL) -> None:
+    """Raise before spending if promptText will not fit.
+
+    Measured in UTF-16 code units, which is what the API counts -- an
+    emoji or an accented character is not always one unit, and a prompt
+    that passes a len() check can still be rejected by the API."""
+    limit = prompt_limit(model)
+    used = len((prompt or "").encode("utf-16-le")) // 2
+    if used > limit:
+        raise ValueError(
+            f"prompt is {used} characters, {model} takes {limit} "
+            f"(cut {used - limit}). Trim the shot description before the "
+            f"Avoid list -- the negatives are what hold the look. Roomier "
+            f"models: seedance2 (3500), seedance2_5 (15000)."
+        )
+
+
+def render_aliases(db_path=None) -> dict:
+    """Asset name -> the phrase to use instead when talking to Runway.
+
+    Runway's moderation reads a NAME, not your intent: "Cyclops" is a
+    Marvel character to a classifier however Homeric yours is, and the
+    whole prompt is refused for "referencing third party content"
+    (2026-08-29). The name was never doing the work anyway -- the
+    keyframe carries the look -- so it costs nothing to describe the
+    thing instead.
+
+    Explicit per asset (`description.render_alias`), never guessed: no
+    list of trademarks could be complete, and swapping every asset name
+    for its full description would blow a 1000-character budget on the
+    first sentence. Set it on the assets that actually get flagged.
+    """
+    import json
+
+    try:
+        from . import entities
+        kwargs = {"path": db_path} if db_path is not None else {}
+        rows = (entities.list_characters(**kwargs)
+                + entities.list_props(**kwargs))
+    except Exception:
+        return {}          # sanitising is a courtesy, never a gate
+    out = {}
+    for row in rows:
+        name = (row.get("name") or "").strip()
+        raw = row.get("description") or ""
+        try:
+            alias = (json.loads(raw) or {}).get("render_alias")
+        except (ValueError, TypeError):
+            alias = None
+        if name and isinstance(alias, str) and alias.strip():
+            out[name] = alias.strip()
+    return out
+
+
+def safe_prompt(prompt: str, db_path=None) -> str:
+    """The prompt with flagged asset names swapped for their aliases."""
+    text = prompt or ""
+    for name, alias in render_aliases(db_path).items():
+        text = re.sub(r"(?<![\w])" + re.escape(name) + r"(?![\w])",
+                      alias, text, flags=re.IGNORECASE)
+    return text
+
 
 def spend_approved() -> bool:
     """The human approval for burning API credits. Per-run by design:
@@ -121,7 +199,7 @@ def _download(url: str, out_path: Path) -> None:
 
 def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
                    ratio: str = DEFAULT_RATIO, duration: int = DEFAULT_DURATION,
-                   prompt_image=None, client=None) -> Path:
+                   prompt_image=None, client=None, db_path=None) -> Path:
     """
     The thin wrapper: create -> wait -> download. Raises on anything --
     including a missing spend approval, which is checked HERE so no
@@ -134,6 +212,10 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
             f"(Explore Mode, free on the Unlimited plan), or set {SPEND_ENV}=1 "
             f"on this run to approve API credits"
         )
+    # Name-swap first, THEN measure: an alias changes the length, and
+    # what we check has to be what we send.
+    prompt = safe_prompt(prompt, db_path)
+    check_prompt_length(prompt, model)
     client = client or _make_client()
     kwargs = {"prompt_image": prompt_image} if prompt_image is not None else {}
     task = client.image_to_video.create(
@@ -199,7 +281,8 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *, shot_id: Optional[i
         for i in range(1, n + 1):
             out_path = out_dir / f"cand{i}.mp4"
             try:
-                generate_video(prompt, out_path, model=model, client=client, **cfg)
+                generate_video(prompt, out_path, model=model, client=client,
+                               db_path=db_path, **cfg)
             except Exception as e:
                 errors.append(f"candidate {i}: {_safe_error(e)}")
                 continue
@@ -348,7 +431,8 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"c{concept_id}-s{shot_n}-{stamp}.mp4"
         generate_video(prompt, out_path, model=model,
-                       prompt_image=prompt_image, client=client)
+                       prompt_image=prompt_image, client=client,
+                       db_path=db_path)
 
         shot_row_id = _shot_row_for_prompt(prompt, db_path)
         generation_id = generative.record_generation(
@@ -416,7 +500,8 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"wf-{stamp}.mp4"
         generate_video(prompt, out_path, model=model,
-                       prompt_image=prompt_image, client=client)
+                       prompt_image=prompt_image, client=client,
+                       db_path=db_path)
 
         shot_row_id = _shot_row_for_prompt(prompt, db_path)
         generation_id = generative.record_generation(
