@@ -28,11 +28,11 @@ def test_save_list_delete_scene_briefs(tmp_db):
     a = preprod.save_scene_brief("antihero", "Portal Room", "the brief text",
                                  spark="x", path=tmp_db)
     preprod.save_scene_brief("zeropage", "Other", "zp brief", path=tmp_db)
-    ah = preprod.list_scene_briefs(brand="antihero", path=tmp_db)
+    ah = preprod.list_scene_briefs(brand="antihero", path=tmp_db, account_id=None)
     assert len(ah) == 1 and ah[0]["title"] == "Portal Room"
     assert ah[0]["brief"] == "the brief text"
     preprod.delete_scene_brief(a, path=tmp_db)
-    assert preprod.list_scene_briefs(brand="antihero", path=tmp_db) == []
+    assert preprod.list_scene_briefs(brand="antihero", path=tmp_db, account_id=None) == []
 
 
 def test_build_scene_brief_prompt_has_the_full_skeleton():
@@ -97,7 +97,7 @@ def test_scene_concept_saves_exactly_one_prompt(tmp_path, monkeypatch):
         brand="antihero", spark="a breathing pillar", gemini_client=object(),
         db_path=path)
 
-    saved = preprod.get_concept(result["concept_id"], path=path)
+    saved = preprod.get_concept(result["concept_id"], path=path, account_id=None)
     assert saved["title"] == "Concrete Camouflage"
     assert len(saved["shots"]) == 1
     shot = saved["shots"][0]
@@ -119,7 +119,7 @@ def test_scene_concept_does_not_prepend_the_scene_bible(tmp_path, monkeypatch):
 
     result = shootgen.generate_scene_concept(
         brand="antihero", gemini_client=object(), db_path=path)
-    prompt = preprod.get_concept(result["concept_id"], path=path)["shots"][0]["prompt"]
+    prompt = preprod.get_concept(result["concept_id"], path=path, account_id=None)["shots"][0]["prompt"]
     assert prompt == "the prompt text"
     assert not prompt.startswith("Scene:")
 
@@ -139,4 +139,4 @@ def test_scene_concept_validates_the_tool_per_brand(tmp_path, monkeypatch):
     result = shootgen.generate_scene_concept(
         brand="zeropage", gemini_client=object(), db_path=path, tool="VEO")
     assert result["warnings"]                       # VEO is not a Zero Page tool
-    assert preprod.get_concept(result["concept_id"], path=path) is not None
+    assert preprod.get_concept(result["concept_id"], path=path, account_id=None) is not None

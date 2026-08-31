@@ -218,7 +218,7 @@ def test_for_shot_renders_logs_and_attaches(scene_db, approved, fake_download,
     assert "prompt_image" not in client.calls[0]     # no reference -> text-to-video
     # served from /renders, logged, and attached to the shot
     assert result["media_url"].startswith("/renders/runway/")
-    concept = preprod.get_concept(concept_id, path=scene_db)
+    concept = preprod.get_concept(concept_id, path=scene_db, account_id=None)
     assert concept["shots"][0]["media_url"] == result["media_url"]
     assert runway.generations_today(db_path=scene_db) == 1
 

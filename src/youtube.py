@@ -10,6 +10,7 @@ returns a result dict describing what happened.
 """
 import os
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
 import requests
@@ -279,7 +280,7 @@ def search_videos(query: str, api_key: str, limit: int = 8,
     return {"ok": True, "videos": videos, "error": ""}
 
 
-def import_channel_videos(handle: str, api_key=None, db_path=None) -> dict:
+def import_channel_videos(handle: str, api_key=None, db_path=None, account_id: Optional[int] = None) -> dict:
     """
     Add every video on a channel that isn't already tracked, with an
     initial metrics snapshot where stats are available. Never raises.
@@ -300,7 +301,7 @@ def import_channel_videos(handle: str, api_key=None, db_path=None) -> dict:
 
     known_ids = {
         parse_video_id(v.get("url"))
-        for v in db.list_videos(limit=10_000, **kwargs)
+        for v in db.list_videos(limit=10_000, **kwargs, account_id=account_id)
     }
     new_videos = [v for v in channel_videos if v["video_id"] not in known_ids]
 

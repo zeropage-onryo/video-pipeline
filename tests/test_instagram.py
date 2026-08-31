@@ -224,7 +224,7 @@ def test_refresh_writes_a_snapshot_on_success(tmp_db, monkeypatch):
         ]})
 
     monkeypatch.setattr(instagram.requests, "get", fake_get)
-    video = db.get_video(vid, path=tmp_db)
+    video = db.get_video(vid, path=tmp_db, account_id=None)
     result = instagram.refresh_metrics_for_video(video, token="tok", db_path=tmp_db)
     assert result == {"ok": True, "views": 420, "likes": 33, "comments": 5,
                       "saves": 7, "shares": 2}
@@ -242,7 +242,7 @@ def test_refresh_prefers_a_stored_media_id_key(tmp_db, monkeypatch):
         lambda url, params=None, timeout=None: FakeResponse(
             {"data": [{"name": "views", "values": [{"value": 9}]}]}),
     )
-    video = dict(db.get_video(vid, path=tmp_db), media_id="17900000000000000")
+    video = dict(db.get_video(vid, path=tmp_db, account_id=None), media_id="17900000000000000")
     result = instagram.refresh_metrics_for_video(video, token="tok", db_path=tmp_db)
     assert result["ok"] is True
     assert result["views"] == 9
@@ -256,7 +256,7 @@ def test_refresh_reports_api_failure_with_token_redacted(tmp_db, monkeypatch):
         raise RuntimeError("denied for token tok-secret")
 
     monkeypatch.setattr(instagram.requests, "get", fake_get)
-    video = db.get_video(vid, path=tmp_db)
+    video = db.get_video(vid, path=tmp_db, account_id=None)
     result = instagram.refresh_metrics_for_video(video, token="tok-secret", db_path=tmp_db)
     assert result["ok"] is False
     assert "tok-secret" not in result["error"]

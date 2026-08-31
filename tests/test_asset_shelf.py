@@ -203,7 +203,7 @@ def test_backfill_describes_undescribed_cast_and_stores_it(tmp_db, photo_dirs,
     assert result["described"] == 2                    # character + prop
     assert ("character", "Mike", 1) in seen
     # stored on the row...
-    assert entities.get_character(cid, path=tmp_db)["description"]["look"]
+    assert entities.get_character(cid, path=tmp_db, account_id=None)["description"]["look"]
     # ...and in the chunk, which is the whole point
     mike = next(r for r in shelf if r["source"] == "assets/character-mike")
     assert "leather jacket" in mike["text"]
@@ -213,7 +213,7 @@ def test_backfill_skips_already_described_assets(tmp_db, photo_dirs, shelf,
                                                  monkeypatch):
     """Re-describing is a billed call for no new information."""
     cid, _ = _seed(tmp_db, photo_dirs)
-    entities.set_description("character", cid, CHARACTER_VISION, path=tmp_db)
+    entities.set_description("character", cid, CHARACTER_VISION, path=tmp_db, account_id=None)
     calls = []
     monkeypatch.setattr(locations, "describe_entity",
                         lambda *a, **k: calls.append(a) or CHARACTER_VISION)
@@ -259,17 +259,17 @@ def test_backfill_survives_a_down_store(tmp_db, photo_dirs):
 def test_set_description_merges_over_typed_notes(tmp_db):
     cid = entities.add_character("Mike", description={"notes": "deadpan"},
                                  path=tmp_db)
-    entities.set_description("character", cid, CHARACTER_VISION, path=tmp_db)
-    desc = entities.get_character(cid, path=tmp_db)["description"]
+    entities.set_description("character", cid, CHARACTER_VISION, path=tmp_db, account_id=None)
+    desc = entities.get_character(cid, path=tmp_db, account_id=None)["description"]
     assert desc["notes"] == "deadpan"          # the human's text survives
     assert desc["look"].startswith("a man in a cracked")
 
 
 def test_set_description_rejects_unknown_kinds_and_ids(tmp_db):
     with pytest.raises(ValueError):
-        entities.set_description("spaceship", 1, {}, path=tmp_db)
+        entities.set_description("spaceship", 1, {}, path=tmp_db, account_id=None)
     with pytest.raises(ValueError):
-        entities.set_description("character", 999, {}, path=tmp_db)
+        entities.set_description("character", 999, {}, path=tmp_db, account_id=None)
 
 
 # ---------- "this failed, THIS is what worked" ----------

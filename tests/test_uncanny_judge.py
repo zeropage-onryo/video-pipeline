@@ -93,7 +93,7 @@ def test_save_uncanny_score_persists_pass_and_reason(tmp_db):
     preprod.save_uncanny_score(
         cid, {"overall": 8.5, "passed": True, "reasons": ["frame 1 is wrong"]},
         path=tmp_db)
-    got = preprod.get_concept(cid, path=tmp_db)
+    got = preprod.get_concept(cid, path=tmp_db, account_id=None)
     assert got["uncanny_overall"] == 8.5
     assert got["uncanny_passed"] == 1
     assert "frame 1 is wrong" in got["uncanny_reason"]

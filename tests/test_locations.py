@@ -99,7 +99,7 @@ def test_describe_locations_saves_each_space(tmp_db, locations_dir, monkeypatch)
     )
 
     assert result["described"] == 2
-    saved = preprod.list_locations(path=tmp_db)
+    saved = preprod.list_locations(path=tmp_db, account_id=None)
     assert [loc["name"] for loc in saved] == ["garage", "hallway"]
     assert saved[0]["description"]["space"].startswith("narrow hallway")
     assert saved[0]["photo_count"] == 2
@@ -122,7 +122,7 @@ def test_describe_locations_is_incremental(tmp_db, locations_dir, monkeypatch):
     assert len(calls) == 1  # garage only
     assert result["described"] == 1
     assert result["skipped"] == 1
-    assert preprod.get_location_by_name("hallway", path=tmp_db)["description"]["space"] == (
+    assert preprod.get_location_by_name("hallway", path=tmp_db, account_id=None)["description"]["space"] == (
         "already known"
     )
 
@@ -134,7 +134,7 @@ def test_describe_locations_force_redescribes(tmp_db, locations_dir, monkeypatch
 
     locations.describe_locations(locations_dir, client=None, db_path=tmp_db, force=True)
 
-    updated = preprod.get_location_by_name("hallway", path=tmp_db)
+    updated = preprod.get_location_by_name("hallway", path=tmp_db, account_id=None)
     assert updated["description"]["space"].startswith("narrow hallway")
 
 
@@ -147,4 +147,4 @@ def test_describe_locations_survives_one_bad_response(tmp_db, locations_dir, mon
 
     assert result["described"] == 1
     assert result["failed"] == 1
-    assert [loc["name"] for loc in preprod.list_locations(path=tmp_db)] == ["hallway"]
+    assert [loc["name"] for loc in preprod.list_locations(path=tmp_db, account_id=None)] == ["hallway"]

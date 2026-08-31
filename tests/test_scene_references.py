@@ -132,7 +132,7 @@ def test_the_spare_slots_go_to_more_angles_of_the_face(monkeypatch):
                                     "/characters/michael/photo/three-quarter.jpg",
                                     "/characters/michael/photo/profile.jpg",
                                     "/characters/michael/photo/helmet.jpg"])
-    monkeypatch.setattr(api, "_assets_all", lambda: [michael, CYCLOPS, BIKE])
+    monkeypatch.setattr(api, "_assets_all", lambda account_id=None: [michael, CYCLOPS, BIKE])
     refs = api._auto_refs(SCENE, [])
     assert refs[0] == "/characters/michael/photo/front.jpg"     # the anchor
     assert refs[:3] == ["/characters/michael/photo/front.jpg",
@@ -149,7 +149,7 @@ def test_a_prop_never_gets_a_second_angle(monkeypatch):
     gains most of what it has, so the spare slots are not shared out."""
     bike = dict(BIKE, photos=["/props/motorcycle/photo/a.jpg",
                               "/props/motorcycle/photo/b.jpg"])
-    monkeypatch.setattr(api, "_assets_all", lambda: [bike])
+    monkeypatch.setattr(api, "_assets_all", lambda account_id=None: [bike])
     assert api._auto_refs("the Ducati Panigale 959 idles", []) \
         == ["/props/motorcycle/photo/a.jpg"]
 
@@ -159,7 +159,7 @@ def test_the_reference_cap_still_holds(monkeypatch):
     must not walk past it."""
     michael = dict(MICHAEL, photos=[f"/characters/michael/photo/{n}.jpg"
                                     for n in "abcd"])
-    monkeypatch.setattr(api, "_assets_all", lambda: [michael, CYCLOPS, BIKE])
+    monkeypatch.setattr(api, "_assets_all", lambda account_id=None: [michael, CYCLOPS, BIKE])
     monkeypatch.setattr(api, "MAX_IMAGE_REFS", 4)
     refs = api._auto_refs(SCENE, [])
     assert len(refs) == 4
@@ -207,7 +207,7 @@ def test_the_written_scene_comes_out_carrying_its_references(tmp_db, monkeypatch
     monkeypatch.setattr("google.genai.Client", lambda api_key=None: object())
     monkeypatch.setattr("src.shootgen.reference_block",
                         lambda spark=None, client=None, db_path=None: "")
-    monkeypatch.setattr(api, "_assets_all", lambda: CAST)
+    monkeypatch.setattr(api, "_assets_all", lambda account_id=None: CAST)
     monkeypatch.setattr(
         "src.shootgen.generate_with_retry",
         lambda c, m, p, **_: json.dumps({"scenes": [
@@ -232,29 +232,29 @@ def test_the_written_scene_comes_out_carrying_its_references(tmp_db, monkeypatch
 def test_a_manual_pick_outranks_an_inferred_one(tmp_db, monkeypatch):
     """An explicit pick is first, because first is what Runway anchors
     on. Inferred references fill in behind it."""
-    monkeypatch.setattr(api, "_assets_all", lambda: CAST)
+    monkeypatch.setattr(api, "_assets_all", lambda account_id=None: CAST)
     scene_id = preprod.save_concept(
         {"title": "t", "shots": [{"n": 1, "source": "AI", "prompt": SCENE}]},
         brand="zeropage", path=tmp_db)
     refs = api._attach_scene_refs(scene_id, ["/locations/living-room/photo/a.jpg"])
     assert refs[0] == "/locations/living-room/photo/a.jpg"
     assert "/characters/michael/photo/a.jpg" in refs
-    assert preprod.get_concept(scene_id, path=tmp_db)["refs"] == refs
+    assert preprod.get_concept(scene_id, path=tmp_db, account_id=None)["refs"] == refs
 
 
 def test_attaching_never_rewrites_the_prompt(tmp_db, monkeypatch):
-    monkeypatch.setattr(api, "_assets_all", lambda: CAST)
+    monkeypatch.setattr(api, "_assets_all", lambda account_id=None: CAST)
     scene_id = preprod.save_concept(
         {"title": "t", "shots": [{"n": 1, "source": "AI", "prompt": SCENE}]},
         brand="zeropage", path=tmp_db)
     api._attach_scene_refs(scene_id, [])
-    assert preprod.get_concept(scene_id, path=tmp_db)["shots"][0]["prompt"] == SCENE
+    assert preprod.get_concept(scene_id, path=tmp_db, account_id=None)["shots"][0]["prompt"] == SCENE
 
 
 def test_no_assets_at_all_leaves_the_scene_alone(tmp_db, monkeypatch):
     """Grounding shapes, it doesn't gate — an empty asset bank writes
     scenes exactly like it did before."""
-    monkeypatch.setattr(api, "_assets_all", lambda: [])
+    monkeypatch.setattr(api, "_assets_all", lambda account_id=None: [])
     scene_id = preprod.save_concept(
         {"title": "t", "shots": [{"n": 1, "source": "AI", "prompt": SCENE}]},
         brand="zeropage", path=tmp_db)
@@ -326,7 +326,7 @@ def test_an_empty_ref_list_reads_the_shot_back(tmp_path, monkeypatch):
     refs = ["/characters/michael/photo/a.jpg", "/props/motorcycle/photo/b.jpg"]
     monkeypatch.setattr(
         "src.preprod.get_concept",
-        lambda concept_id, path=None: {"shots": [{"n": 1, "refs": refs}]})
+        lambda concept_id, path=None, account_id=None: {"shots": [{"n": 1, "refs": refs}]})
     urls = workflow_runner.node_reference_urls(
         {"id": 1}, {"concept_id": 121, "shot_n": 1,
                     "ref_urls": [], "image_url": ""}, {}, {})
@@ -532,7 +532,7 @@ def _fake_gemini(monkeypatch, scene_text):
     monkeypatch.setattr("google.genai.Client", lambda api_key=None: object())
     monkeypatch.setattr("src.shootgen.reference_block",
                         lambda spark=None, client=None, db_path=None: "")
-    monkeypatch.setattr(api, "_assets_all", lambda: CAST)
+    monkeypatch.setattr(api, "_assets_all", lambda account_id=None: CAST)
     monkeypatch.setattr(
         "src.shootgen.generate_with_retry",
         # both response shapes: `brief` for the one-scene route

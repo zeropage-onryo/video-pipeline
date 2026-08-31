@@ -23,6 +23,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -165,7 +166,7 @@ def rank(concepts: list[dict], signals=None, gemini_client=None, db_path=None) -
     return sorted(scored, key=lambda c: c["judge"]["overall"], reverse=True)
 
 
-def main(argv=None) -> int:
+def main(argv=None, account_id: Optional[int] = None) -> int:
     load_dotenv()
     parser = argparse.ArgumentParser(
         description="Rank recent concepts by predicted taste fit + performance.")
@@ -180,13 +181,13 @@ def main(argv=None) -> int:
               "videos, then this judge has something to score against.", file=sys.stderr)
 
     if args.concept_id:
-        c = preprod.get_concept(args.concept_id)
+        c = preprod.get_concept(args.concept_id, account_id=account_id)
         if not c:
             print(f"no concept {args.concept_id}", file=sys.stderr)
             return 1
         concepts = [c]
     else:
-        concepts = preprod.list_concepts(limit=args.limit)
+        concepts = preprod.list_concepts(limit=args.limit, account_id=account_id)
 
     for c in rank(concepts, signals=signals):
         j = c["judge"]

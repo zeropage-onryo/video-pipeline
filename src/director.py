@@ -20,6 +20,7 @@ Two protections keep a note from quietly destroying work:
 """
 import json
 from pathlib import Path
+from typing import Optional
 
 from . import preprod
 from .gemini_utils import generate_with_retry, strip_fences
@@ -75,7 +76,9 @@ def _summarise(old_shots: list, new_shots: list) -> str:
 
 
 def direct_scene(concept_id: int, note: str, gemini_client=None,
-                 model: str = MODEL, db_path=None) -> dict:
+                 model: str = MODEL, db_path=None,
+                 account_id: Optional[int] = None,
+) -> dict:
     """
     Never raises: {"ok", "summary", "warnings", "error"}. The stored
     scene is only replaced by a plan that parsed, kept its shots, and
@@ -88,7 +91,7 @@ def direct_scene(concept_id: int, note: str, gemini_client=None,
     try:
         if not note:
             return {"ok": False, "error": "an empty note directs nothing"}
-        concept = preprod.get_concept(concept_id, **kwargs)
+        concept = preprod.get_concept(concept_id, **kwargs, account_id=account_id)
         if concept is None:
             return {"ok": False, "error": f"no concept {concept_id}"}
         old_shots = concept.get("shots") or []
@@ -96,7 +99,7 @@ def direct_scene(concept_id: int, note: str, gemini_client=None,
             return {"ok": False,
                     "error": "this concept has no shot plan yet — approve it first"}
 
-        locations = preprod.list_locations(**kwargs)
+        locations = preprod.list_locations(**kwargs, account_id=account_id)
         prompt = build_direct_prompt(
             concept, note, shootgen.format_locations(locations))
 
@@ -136,7 +139,9 @@ def direct_scene(concept_id: int, note: str, gemini_client=None,
 
 
 def refine_shot_prompt(concept_id: int, shot_n, gemini_client=None,
-                       model: str = MODEL, db_path=None) -> dict:
+                       model: str = MODEL, db_path=None,
+                       account_id: Optional[int] = None,
+) -> dict:
     """
     Never raises. Technique-aware polish for ONE shot's AI prompt --
     promptgen.refine_prompt against the ai_prompting shelf, written
@@ -158,7 +163,7 @@ def refine_shot_prompt(concept_id: int, shot_n, gemini_client=None,
 
     kwargs = {"path": db_path} if db_path is not None else {}
     try:
-        concept = preprod.get_concept(concept_id, **kwargs)
+        concept = preprod.get_concept(concept_id, **kwargs, account_id=account_id)
         if concept is None:
             return {"ok": False, "error": f"no concept {concept_id}"}
         shots = concept.get("shots") or []
@@ -187,7 +192,7 @@ def refine_shot_prompt(concept_id: int, shot_n, gemini_client=None,
                     "summary": "already technique-clean — kept as is", "error": None}
 
         shot["prompt"] = refined
-        locations = preprod.list_locations(**kwargs)
+        locations = preprod.list_locations(**kwargs, account_id=account_id)
         warnings = shootgen.validate_concept(
             {**concept, "shots": shots},
             [loc["name"] for loc in locations],

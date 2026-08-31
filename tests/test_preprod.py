@@ -43,14 +43,14 @@ SAMPLE_SHOTS = [
 # ---------- locations ----------
 
 def test_init_creates_tables(tmp_db):
-    assert preprod.summary(tmp_db) == {
+    assert preprod.summary(tmp_db, account_id=None) == {
         "locations": 0, "shoot_concepts": 0,
     }
 
 
 def test_add_location_stores_description(tmp_db):
     loc_id = preprod.add_location("hallway", SAMPLE_DESCRIPTION, photo_count=3, path=tmp_db)
-    loc = preprod.get_location(loc_id, path=tmp_db)
+    loc = preprod.get_location(loc_id, path=tmp_db, account_id=None)
     assert loc["name"] == "hallway"
     assert loc["photo_count"] == 3
     assert loc["description"]["space"].startswith("narrow hallway")
@@ -61,7 +61,7 @@ def test_add_location_is_idempotent_by_name(tmp_db):
     preprod.add_location("hallway", SAMPLE_DESCRIPTION, photo_count=3, path=tmp_db)
     preprod.add_location("hallway", {"space": "updated"}, photo_count=4, path=tmp_db)
 
-    locations = preprod.list_locations(path=tmp_db)
+    locations = preprod.list_locations(path=tmp_db, account_id=None)
     assert len(locations) == 1
     assert locations[0]["description"]["space"] == "updated"
     assert locations[0]["photo_count"] == 4
@@ -69,12 +69,12 @@ def test_add_location_is_idempotent_by_name(tmp_db):
 
 def test_get_location_by_name(tmp_db):
     preprod.add_location("garage", SAMPLE_DESCRIPTION, path=tmp_db)
-    assert preprod.get_location_by_name("garage", path=tmp_db)["name"] == "garage"
-    assert preprod.get_location_by_name("nowhere", path=tmp_db) is None
+    assert preprod.get_location_by_name("garage", path=tmp_db, account_id=None)["name"] == "garage"
+    assert preprod.get_location_by_name("nowhere", path=tmp_db, account_id=None) is None
 
 
 def test_list_locations_empty_is_safe(tmp_db):
-    assert preprod.list_locations(path=tmp_db) == []
+    assert preprod.list_locations(path=tmp_db, account_id=None) == []
 
 
 # ---------- concepts ----------
@@ -98,7 +98,7 @@ def test_save_concept_round_trips(tmp_db):
         location_ids=[loc_id], path=tmp_db,
     )
 
-    saved = preprod.get_concept(concept_id, path=tmp_db)
+    saved = preprod.get_concept(concept_id, path=tmp_db, account_id=None)
     assert saved["title"] == "The Waiting"
     assert saved["brand"] == "antihero"
     assert len(saved["shots"]) == 2
@@ -127,10 +127,10 @@ def test_shot_label_is_recorded(tmp_db):
     preprod.mark_shot(ids[1], path=tmp_db)
     preprod.mark_shot(ids[2], path=tmp_db)
 
-    assert preprod.get_concept(ids[1], path=tmp_db)["shot_done"] == 1
-    assert preprod.get_concept(ids[0], path=tmp_db)["shot_done"] == 0
+    assert preprod.get_concept(ids[1], path=tmp_db, account_id=None)["shot_done"] == 1
+    assert preprod.get_concept(ids[0], path=tmp_db, account_id=None)["shot_done"] == 0
 
-    rate = preprod.shoot_rate(path=tmp_db)
+    rate = preprod.shoot_rate(path=tmp_db, account_id=None)
     assert rate["generated"] == 4
     assert rate["shot"] == 2
     assert rate["rate"] == 0.5
@@ -142,11 +142,11 @@ def test_mark_shot_is_reversible(tmp_db):
     )
     preprod.mark_shot(concept_id, path=tmp_db)
     preprod.mark_shot(concept_id, shot=False, path=tmp_db)
-    assert preprod.get_concept(concept_id, path=tmp_db)["shot_done"] == 0
+    assert preprod.get_concept(concept_id, path=tmp_db, account_id=None)["shot_done"] == 0
 
 
 def test_shoot_rate_empty_is_safe(tmp_db):
-    assert preprod.shoot_rate(path=tmp_db)["rate"] is None
+    assert preprod.shoot_rate(path=tmp_db, account_id=None)["rate"] is None
 
 
 def test_list_concepts_newest_first(tmp_db):
@@ -154,7 +154,7 @@ def test_list_concepts_newest_first(tmp_db):
         preprod.save_concept(
             {"title": f"Concept {n}", "shots": SAMPLE_SHOTS}, brand="antihero", path=tmp_db,
         )
-    titles = [c["title"] for c in preprod.list_concepts(path=tmp_db)]
+    titles = [c["title"] for c in preprod.list_concepts(path=tmp_db, account_id=None)]
     assert titles == ["Concept 2", "Concept 1", "Concept 0"]
 
 
@@ -169,8 +169,8 @@ def test_concept_records_prompt_hash_for_comparison(tmp_db):
         {"title": "B", "shots": SAMPLE_SHOTS}, brand="antihero",
         prompt_template="version two", path=tmp_db,
     )
-    hash_a = preprod.get_concept(a, path=tmp_db)["prompt_hash"]
-    hash_b = preprod.get_concept(b, path=tmp_db)["prompt_hash"]
+    hash_a = preprod.get_concept(a, path=tmp_db, account_id=None)["prompt_hash"]
+    hash_b = preprod.get_concept(b, path=tmp_db, account_id=None)["prompt_hash"]
     assert hash_a and hash_b and hash_a != hash_b
 
 
@@ -180,7 +180,7 @@ def test_concept_survives_json_round_trip(tmp_db):
         {"title": "T", "shots": SAMPLE_SHOTS, "ai": {"tool": "RUNWAY"}},
         brand="zeropage", client="a bar", path=tmp_db,
     )
-    saved = preprod.get_concept(concept_id, path=tmp_db)
+    saved = preprod.get_concept(concept_id, path=tmp_db, account_id=None)
     assert isinstance(saved["shots"], list)
     assert saved["shots"][0]["cam"] == "BMPCC"
     assert saved["client"] == "a bar"
@@ -196,7 +196,7 @@ def test_save_concept_allows_an_idea_with_no_shots(tmp_db):
          "logline": "He waits for a call."},
         brand="antihero", path=tmp_db,
     )
-    saved = preprod.get_concept(concept_id, path=tmp_db)
+    saved = preprod.get_concept(concept_id, path=tmp_db, account_id=None)
     assert saved["shots"] == []
     assert saved["has_shot_list"] is False
 
@@ -214,7 +214,7 @@ def test_update_concept_shots_fills_in_the_plan(tmp_db):
         location_ids=[],
         path=tmp_db,
     )
-    saved = preprod.get_concept(concept_id, path=tmp_db)
+    saved = preprod.get_concept(concept_id, path=tmp_db, account_id=None)
     assert saved["has_shot_list"] is True
     assert len(saved["shots"]) == 2
     assert saved["duration"] == "12s"
@@ -231,7 +231,7 @@ def test_update_concept_shots_links_locations(tmp_db):
     preprod.update_concept_shots(
         concept_id, {"shots": SAMPLE_SHOTS}, location_ids=[loc_id], path=tmp_db,
     )
-    assert [loc["name"] for loc in preprod.get_concept(concept_id, path=tmp_db)["locations"]] == [
+    assert [loc["name"] for loc in preprod.get_concept(concept_id, path=tmp_db, account_id=None)["locations"]] == [
         "hallway"
     ]
 
@@ -250,8 +250,8 @@ def test_save_concept_ideas_saves_a_batch(tmp_db):
         ideas, brand="antihero", spark="a door", prompt_template="v1", path=tmp_db,
     )
     assert len(ids) == 8
-    assert preprod.summary(tmp_db)["shoot_concepts"] == 8
-    assert all(c["has_shot_list"] is False for c in preprod.list_concepts(path=tmp_db))
+    assert preprod.summary(tmp_db, account_id=None)["shoot_concepts"] == 8
+    assert all(c["has_shot_list"] is False for c in preprod.list_concepts(path=tmp_db, account_id=None))
 
 
 
@@ -271,7 +271,7 @@ def test_concept_warnings_are_stored_and_returned(tmp_db):
         warnings=["shot 1: location 'rooftop helipad' is not a described space"],
         path=tmp_db,
     )
-    saved = preprod.get_concept(concept_id, path=tmp_db)
+    saved = preprod.get_concept(concept_id, path=tmp_db, account_id=None)
     assert saved["warnings"] == [
         "shot 1: location 'rooftop helipad' is not a described space"
     ]
@@ -279,7 +279,7 @@ def test_concept_warnings_are_stored_and_returned(tmp_db):
 
 def test_concept_with_no_warnings_reads_as_empty(tmp_db):
     concept_id = preprod.save_concept({"title": "T"}, brand="antihero", path=tmp_db)
-    assert preprod.get_concept(concept_id, path=tmp_db)["warnings"] == []
+    assert preprod.get_concept(concept_id, path=tmp_db, account_id=None)["warnings"] == []
 
 
 def test_update_concept_shots_replaces_warnings(tmp_db):
@@ -290,13 +290,13 @@ def test_update_concept_shots_replaces_warnings(tmp_db):
     preprod.update_concept_shots(
         concept_id, {"shots": SAMPLE_SHOTS}, warnings=["shot 2: bad cam"], path=tmp_db,
     )
-    assert preprod.get_concept(concept_id, path=tmp_db)["warnings"] == ["shot 2: bad cam"]
+    assert preprod.get_concept(concept_id, path=tmp_db, account_id=None)["warnings"] == ["shot 2: bad cam"]
 
 
 def test_list_concepts_includes_warnings(tmp_db):
     preprod.save_concept({"title": "T"}, brand="antihero",
                          warnings=["something"], path=tmp_db)
-    assert preprod.list_concepts(path=tmp_db)[0]["warnings"] == ["something"]
+    assert preprod.list_concepts(path=tmp_db, account_id=None)[0]["warnings"] == ["something"]
 
 
 def test_use_pov_is_remembered_on_the_concept(tmp_db):
@@ -305,8 +305,8 @@ def test_use_pov_is_remembered_on_the_concept(tmp_db):
     on = preprod.save_concept({"title": "A"}, brand="antihero",
                               use_pov=True, path=tmp_db)
     off = preprod.save_concept({"title": "B"}, brand="antihero", path=tmp_db)
-    assert preprod.get_concept(on, path=tmp_db)["use_pov"] is True
-    assert preprod.get_concept(off, path=tmp_db)["use_pov"] is False
+    assert preprod.get_concept(on, path=tmp_db, account_id=None)["use_pov"] is True
+    assert preprod.get_concept(off, path=tmp_db, account_id=None)["use_pov"] is False
 
 
 # ---------- ai_shots: real + AI as co-inputs ----------
@@ -326,7 +326,7 @@ def test_ai_shots_derived_from_per_shot_source(tmp_db):
     ]
     cid = preprod.save_concept({"title": "T", "shots": shots},
                                brand="antihero", path=tmp_db)
-    saved = preprod.get_concept(cid, path=tmp_db)
+    saved = preprod.get_concept(cid, path=tmp_db, account_id=None)
     assert [s["tool"] for s in saved["ai_shots"]] == ["VEO", "SEEDANCE"]
 
 
@@ -339,7 +339,7 @@ def test_legacy_single_ai_dict_appears_in_ai_shots(tmp_db):
          "ai": {"tool": "KLING", "technique": "t", "prompt": "p"}},
         brand="antihero", path=tmp_db,
     )
-    saved = preprod.get_concept(cid, path=tmp_db)
+    saved = preprod.get_concept(cid, path=tmp_db, account_id=None)
     assert len(saved["ai_shots"]) == 1
     assert saved["ai_shots"][0]["tool"] == "KLING"
 
@@ -351,7 +351,7 @@ def test_shots_without_source_default_to_camera(tmp_db):
                                   "location": "hallway", "desc": "d"}]},
         brand="antihero", path=tmp_db,
     )
-    assert preprod.get_concept(cid, path=tmp_db)["ai_shots"] == []
+    assert preprod.get_concept(cid, path=tmp_db, account_id=None)["ai_shots"] == []
 
 
 # ---------- reference captures: the real take behind an AI shot ----------
@@ -361,7 +361,7 @@ def test_set_shot_reference_image_attaches_to_the_matching_shot(tmp_db):
         {"title": "T", "shots": SAMPLE_SHOTS}, brand="antihero", path=tmp_db)
     preprod.set_shot_reference_image(cid, 2, "https://cdn.example/take.jpg",
                                      path=tmp_db)
-    shots = preprod.get_concept(cid, path=tmp_db)["shots"]
+    shots = preprod.get_concept(cid, path=tmp_db, account_id=None)["shots"]
     assert shots[1]["reference_image"] == "https://cdn.example/take.jpg"
     # the other shot is untouched and carries no key at all
     assert "reference_image" not in shots[0]
@@ -375,7 +375,7 @@ def test_set_shot_reference_image_empty_clears_it(tmp_db):
     preprod.set_shot_reference_image(cid, 1, "https://cdn.example/take.jpg",
                                      path=tmp_db)
     preprod.set_shot_reference_image(cid, 1, "", path=tmp_db)
-    shots = preprod.get_concept(cid, path=tmp_db)["shots"]
+    shots = preprod.get_concept(cid, path=tmp_db, account_id=None)["shots"]
     assert "reference_image" not in shots[0]
 
 

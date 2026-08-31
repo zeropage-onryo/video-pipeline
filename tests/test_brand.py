@@ -97,7 +97,7 @@ def test_videos_brand_column_and_null_inclusive_filter(tmp_db):
     db.add_video("a", "youtube", "2026-08-01", brand="antihero", path=tmp_db)
     db.add_video("z", "youtube", "2026-08-02", brand="zeropage", path=tmp_db)
     db.add_video("legacy", "youtube", "2026-08-03", path=tmp_db)  # untagged
-    zp = {v["title"] for v in db.list_videos(brand="zeropage", path=tmp_db)}
-    ah = {v["title"] for v in db.list_videos(brand="antihero", path=tmp_db)}
+    zp = {v["title"] for v in db.list_videos(brand="zeropage", path=tmp_db, account_id=None)}
+    ah = {v["title"] for v in db.list_videos(brand="antihero", path=tmp_db, account_id=None)}
     assert zp == {"z", "legacy"}   # brand match + NULL-inclusive legacy
     assert ah == {"a", "legacy"}

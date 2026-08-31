@@ -54,6 +54,7 @@ def derive_signals(
     posted_within_days: Optional[int] = 180,
     metric: str = "views",
     db_path=None,
+    account_id: Optional[int] = None,
 ) -> dict[str, Any]:
     """
     Split every scored video at the window median and tally the traits
@@ -66,11 +67,13 @@ def derive_signals(
     bench = db.benchmark(
         at_days=at_days, posted_within_days=posted_within_days,
         metric=metric, **kwargs,
-    )
+    
+        account_id=account_id,)
     rows = db.get_top_performers(
         at_days=at_days, posted_within_days=posted_within_days,
         metric=metric, limit=1000, **kwargs,
-    )
+    
+        account_id=account_id,)
 
     signals: dict[str, Any] = {
         "sample": len(rows), "median": bench["median"],

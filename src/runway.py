@@ -93,7 +93,7 @@ def check_prompt_length(prompt: str, model: str = DEFAULT_MODEL) -> None:
         )
 
 
-def render_aliases(db_path=None) -> dict:
+def render_aliases(db_path=None, account_id: Optional[int] = None) -> dict:
     """Asset name -> the phrase to use instead when talking to Runway.
 
     Runway's moderation reads a NAME, not your intent: "Cyclops" is a
@@ -113,8 +113,8 @@ def render_aliases(db_path=None) -> dict:
     try:
         from . import entities
         kwargs = {"path": db_path} if db_path is not None else {}
-        rows = (entities.list_characters(**kwargs)
-                + entities.list_props(**kwargs))
+        rows = (entities.list_characters(**kwargs, account_id=account_id)
+                + entities.list_props(**kwargs, account_id=account_id))
     except Exception:
         return {}          # sanitising is a courtesy, never a gate
     out = {}
@@ -381,7 +381,9 @@ def as_prompt_image(value, *, resolve_photo=None):
 
 def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                       model: str = DEFAULT_MODEL, client=None,
-                      resolve_photo=None) -> dict:
+                      resolve_photo=None,
+                      account_id: Optional[int] = None,
+) -> dict:
     """
     Never raises: {"ok", "media_url", "generation_id", "error"}. One
     render for one concept shot, through every wall this module already
@@ -411,7 +413,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                     "error": f"daily cap: {used}/{DAILY_CAP} generations used "
                              f"today (RUNWAY_DAILY_CAP to raise)"}
 
-        concept = preprod.get_concept(concept_id, **kwargs)
+        concept = preprod.get_concept(concept_id, **kwargs, account_id=account_id)
         if concept is None:
             return {"ok": False, "error": f"no concept {concept_id}"}
         shot = next((s for s in concept.get("shots") or []

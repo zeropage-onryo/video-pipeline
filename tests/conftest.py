@@ -40,3 +40,29 @@ def no_network(monkeypatch, request):
     monkeypatch.setattr(socket.socket, "connect", blocked)
     monkeypatch.setattr(socket.socket, "connect_ex", blocked)
     monkeypatch.setattr(socket, "create_connection", blocked)
+
+
+@pytest.fixture(autouse=True)
+def account_scope():
+    """Give every route an account to act as.
+
+    Routes take `account_id: int = Depends(auth.current_account_id)`, and
+    FastAPI captures that callable when the route is registered -- so
+    monkeypatching the module attribute the way these tests patch
+    `auth.current_user` does nothing. `dependency_overrides` is the
+    supported seam.
+
+    None is the unowned pool: rows that carry no account_id, which is
+    exactly what a fixture database with no seeded accounts holds. So
+    every test that was never about ownership keeps asserting what it
+    always did. A test that IS about isolation seeds real accounts and
+    sets its own override -- see tests/test_tenancy.py.
+    """
+    from app import auth
+    from app.main import app
+
+    app.dependency_overrides[auth.current_account_id] = lambda: None
+    app.dependency_overrides[auth.dev_account_id] = lambda: None
+    yield
+    app.dependency_overrides.pop(auth.current_account_id, None)
+    app.dependency_overrides.pop(auth.dev_account_id, None)

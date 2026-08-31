@@ -22,6 +22,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -118,7 +119,7 @@ def rank(concepts: list[dict], gemini_client=None) -> list[dict]:
     return sorted(scored, key=lambda c: c["uncanny"]["overall"], reverse=True)
 
 
-def main(argv=None) -> int:
+def main(argv=None, account_id: Optional[int] = None) -> int:
     load_dotenv()
     parser = argparse.ArgumentParser(
         description="Score recent Zero Page concepts on the on-brand (uncanny) gate.")
@@ -127,13 +128,13 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     if args.concept_id:
-        c = preprod.get_concept(args.concept_id)
+        c = preprod.get_concept(args.concept_id, account_id=account_id)
         if not c:
             print(f"no concept {args.concept_id}", file=sys.stderr)
             return 1
         concepts = [c]
     else:
-        concepts = [c for c in preprod.list_concepts(limit=args.limit)
+        concepts = [c for c in preprod.list_concepts(limit=args.limit, account_id=account_id)
                     if c.get("brand") == "zeropage"]
 
     for c in rank(concepts):

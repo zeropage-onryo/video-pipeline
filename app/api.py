@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -50,7 +50,7 @@ from src import (
 )
 from src.locations import IMAGE_EXTENSIONS
 
-from . import jobs, workflow_runner
+from . import auth, jobs, workflow_runner
 
 router = APIRouter(prefix="/api")
 
@@ -189,9 +189,9 @@ def _description_text(desc) -> str:
     return " · ".join(parts)
 
 
-def _assets_all() -> list:
+def _assets_all(account_id: Optional[int] = None) -> list:
     items = []
-    for loc in preprod.list_locations(path=db.DB_PATH):
+    for loc in preprod.list_locations(path=db.DB_PATH, account_id=account_id):
         photos = _location_photos(loc["name"])
         items.append({
             "id": f"location-{loc['id']}", "category": "location",
@@ -202,7 +202,7 @@ def _assets_all() -> list:
             "meta": {"photo_count": loc.get("photo_count")},
             "created_at": loc.get("created_at"),
         })
-    for c in entities.list_characters(path=db.DB_PATH):
+    for c in entities.list_characters(path=db.DB_PATH, account_id=account_id):
         slug = _slug(c["name"])
         photos = [f"/characters/{slug}/photo/{fn}?thumb=1"
                   for fn in _photo_names(CHARACTERS_DIR, slug)]
@@ -214,7 +214,7 @@ def _assets_all() -> list:
             "meta": {"role": c.get("role")},
             "created_at": c.get("created_at"),
         })
-    for p in entities.list_props(path=db.DB_PATH):
+    for p in entities.list_props(path=db.DB_PATH, account_id=account_id):
         slug = _slug(p["name"])
         photos = [f"/props/{slug}/photo/{fn}?thumb=1"
                   for fn in _photo_names(PROPS_DIR, slug)]
@@ -231,8 +231,10 @@ def _assets_all() -> list:
 
 @router.get("/assets")
 def assets_list(q: Optional[str] = None, category: Optional[str] = None,
-                limit: int = 200):
-    items = _assets_all()
+                limit: int = 200,
+                account_id: int = Depends(auth.current_account_id),
+):
+    items = _assets_all(account_id)
     counts = {"all": len(items)}
     for cat in ("location", "character", "prop"):
         counts[cat] = sum(1 for i in items if i["category"] == cat)
@@ -247,14 +249,16 @@ def assets_list(q: Optional[str] = None, category: Optional[str] = None,
 
 @router.get("/media")
 def media_list(q: Optional[str] = None, category: Optional[str] = None,
-               limit: int = 500):
+               limit: int = 500,
+               account_id: int = Depends(auth.current_account_id),
+):
     """Every saved photo as one flat, newest-first list with its REAL
     file date -- what the media panel's picker grid and the Assets
     gallery group by. Dates come from the file on disk, not a guess."""
     from datetime import datetime, timezone
 
     items = []
-    for asset in _assets_all():
+    for asset in _assets_all(account_id):
         for url in asset["photos"]:
             target = _resolve_asset_photo(url)
             if target is None:
@@ -283,13 +287,13 @@ def media_list(q: Optional[str] = None, category: Optional[str] = None,
 
 
 @router.get("/assets/search")
-def assets_search(q: str = "", limit: int = 8):
+def assets_search(q: str = "", limit: int = 8, account_id: int = Depends(auth.current_account_id)):
     """Cross-category name search over characters/props/locations -- the
     `@` mention autocomplete's endpoint. Name-prefix matches rank first,
     substring matches after; slim rows (name, category, thumb) because
     the dropdown needs nothing heavier."""
     needle = q.lower().strip()
-    items = _assets_all()
+    items = _assets_all(account_id)
     if needle:
         starts = [i for i in items if i["name"].lower().startswith(needle)]
         start_ids = {i["id"] for i in starts}
@@ -302,8 +306,8 @@ def assets_search(q: str = "", limit: int = 8):
 
 
 @router.get("/assets/{category}/{item_id}")
-def asset_detail(category: str, item_id: int):
-    asset = next((i for i in _assets_all()
+def asset_detail(category: str, item_id: int, account_id: int = Depends(auth.current_account_id)):
+    asset = next((i for i in _assets_all(account_id)
                   if i["id"] == f"{category}-{item_id}"), None)
     if asset is None:
         return _error(404, "not_found", "no such asset")
@@ -497,8 +501,8 @@ def assets_backfill(body: BackfillBody):
 
 
 @router.delete("/assets/characters/{character_id}")
-def asset_delete_character(character_id: int):
-    row = entities.get_character(character_id, path=db.DB_PATH)
+def asset_delete_character(character_id: int, account_id: int = Depends(auth.current_account_id)):
+    row = entities.get_character(character_id, path=db.DB_PATH, account_id=account_id)
     if row is None:
         return _error(404, "not_found", "no such character")
     entities.delete_character(character_id, path=db.DB_PATH)
@@ -507,8 +511,8 @@ def asset_delete_character(character_id: int):
 
 
 @router.delete("/assets/props/{prop_id}")
-def asset_delete_prop(prop_id: int):
-    row = entities.get_prop(prop_id, path=db.DB_PATH)
+def asset_delete_prop(prop_id: int, account_id: int = Depends(auth.current_account_id)):
+    row = entities.get_prop(prop_id, path=db.DB_PATH, account_id=account_id)
     if row is None:
         return _error(404, "not_found", "no such prop")
     entities.delete_prop(prop_id, path=db.DB_PATH)
@@ -606,12 +610,14 @@ def _concept_card(c: dict) -> dict:
 
 @router.get("/pipeline/concepts")
 def pipeline_concepts(brand: Optional[str] = None, status: Optional[str] = None,
-                      archived: bool = False):
+                      archived: bool = False,
+                      account_id: int = Depends(auth.current_account_id),
+):
     """The board. Archived concepts are hidden by default -- they are
     decided about, and the board is for what is still open. They are
     still here (`?archived=true`) and still counted in pick_rate, which
     reads the rows rather than this endpoint."""
-    cards = [_concept_card(c) for c in preprod.list_concepts(path=db.DB_PATH)]
+    cards = [_concept_card(c) for c in preprod.list_concepts(path=db.DB_PATH, account_id=account_id)]
     if brand in preprod.BRANDS:
         cards = [c for c in cards if c["brand"] == brand]
     if status in ("idea", "planned", "shot"):
@@ -621,8 +627,8 @@ def pipeline_concepts(brand: Optional[str] = None, status: Optional[str] = None,
     return {
         "items": cards,
         "deny_reasons": list(DENY_REASONS),
-        "shoot": preprod.shoot_rate(path=db.DB_PATH),
-        "pick": preprod.pick_rate(path=db.DB_PATH),
+        "shoot": preprod.shoot_rate(path=db.DB_PATH, account_id=account_id),
+        "pick": preprod.pick_rate(path=db.DB_PATH, account_id=account_id),
     }
 
 
@@ -694,7 +700,8 @@ async def _collect_refs(form, want_video: bool = False, drop_urls=None):
     return image_refs, ref_urls, video_refs
 
 
-def _auto_refs(text: str, already: list) -> list:
+def _auto_refs(text: str, already: list,
+               account_id: Optional[int] = None) -> list:
     """The photos of the assets this scene actually names.
 
     `format_cast` tells the generator that Michael and the Ducati have
@@ -715,7 +722,7 @@ def _auto_refs(text: str, already: list) -> list:
     """
     try:
         from src import shootgen
-        assets = _assets_all()
+        assets = _assets_all(account_id)
     except Exception:
         return []
     picked = list(already)
@@ -770,7 +777,8 @@ def _asset_photos(photos: list, limit: int) -> list:
     return (native + other)[:max(0, limit)]
 
 
-def _attach_scene_refs(concept_id: int, manual: list) -> list:
+def _attach_scene_refs(concept_id: int, manual: list,
+                       account_id: Optional[int] = None) -> list:
     """Store a scene's references on its shot, manual picks first.
 
     On the shot rather than on the concept because that is what the
@@ -778,13 +786,13 @@ def _attach_scene_refs(concept_id: int, manual: list) -> list:
     nodes), and manual first because an explicit pick outranks anything
     inferred -- and because Runway anchors on whichever one is first.
     """
-    concept = preprod.get_concept(concept_id, path=db.DB_PATH)
+    concept = preprod.get_concept(concept_id, path=db.DB_PATH, account_id=account_id)
     if concept is None or not concept["shots"]:
         return []
     shots = [dict(sh) for sh in concept["shots"]]
     text = " ".join(str(shots[0].get(k) or "")
                     for k in ("desc", "prompt", "location"))
-    refs = _auto_refs(text, manual)[:MAX_IMAGE_REFS]
+    refs = _auto_refs(text, manual, account_id)[:MAX_IMAGE_REFS]
     if not refs:
         return []
     shots[0]["refs"] = refs
@@ -974,14 +982,14 @@ class PickBody(BaseModel):
 
 
 @router.post("/concepts/{concept_id}/pick")
-def concept_pick(concept_id: int, body: PickBody):
+def concept_pick(concept_id: int, body: PickBody, account_id: int = Depends(auth.current_account_id)):
     """The label: this scene is worth rendering."""
     try:
         preprod.set_picked(concept_id, body.picked, path=db.DB_PATH)
     except ValueError as e:
         return _error(404, "not_found", str(e))
     return {"ok": True, "picked": body.picked,
-            "pick": preprod.pick_rate(path=db.DB_PATH)}
+            "pick": preprod.pick_rate(path=db.DB_PATH, account_id=account_id)}
 
 
 class ArchiveBody(BaseModel):
@@ -1024,7 +1032,7 @@ def _runway_state() -> dict:
 
 
 @router.get("/queue/pending")
-def queue_pending(brand: Optional[str] = None):
+def queue_pending(brand: Optional[str] = None, account_id: int = Depends(auth.current_account_id)):
     """What is waiting on you to spend: parked by the chain or picked on
     the board, not archived, no clip yet. Derived from the rows, so it
     survives a restart -- the jobs registry does not, and an approval
@@ -1034,7 +1042,7 @@ def queue_pending(brand: Optional[str] = None):
     Studio chain parks it (concept written, prompt enhanced, keyframe
     rendered -- the next step is the one that costs money), or you pick
     a text-only concept off the board yourself."""
-    cards = [_concept_card(c) for c in preprod.list_concepts(path=db.DB_PATH)]
+    cards = [_concept_card(c) for c in preprod.list_concepts(path=db.DB_PATH, account_id=account_id)]
     if brand in preprod.BRANDS:
         cards = [c for c in cards if c["brand"] == brand]
     pending = [c for c in cards
@@ -1044,7 +1052,7 @@ def queue_pending(brand: Optional[str] = None):
 
 
 @router.post("/queue/{concept_id}/approve")
-def queue_approve(concept_id: int):
+def queue_approve(concept_id: int, account_id: int = Depends(auth.current_account_id)):
     """Approve = render, and approving IS the pick.
 
     The concept's stored prompt goes through the Runway API (anchored on
@@ -1065,7 +1073,7 @@ def queue_approve(concept_id: int):
     """
     if not runway.has_key():
         return _error(503, "runway_unavailable", "RUNWAYML_API_SECRET is not set")
-    concept = preprod.get_concept(concept_id, path=db.DB_PATH)
+    concept = preprod.get_concept(concept_id, path=db.DB_PATH, account_id=account_id)
     if concept is None:
         return _error(404, "not_found", "no such concept")
     if not concept["shots"]:
@@ -1094,18 +1102,18 @@ def queue_approve(concept_id: int):
 
 
 @router.post("/queue/{concept_id}/reject")
-def queue_reject(concept_id: int):
+def queue_reject(concept_id: int, account_id: int = Depends(auth.current_account_id)):
     """Rejected here means: not worth the spend. Any pick comes off and
     the concept archives, so it reads as generated-but-not-picked in
     pick_rate -- which is the truth about it. This is the only thing
     that takes a sibling off the board now; approving no longer infers
     it (see queue_approve)."""
-    concept = preprod.get_concept(concept_id, path=db.DB_PATH)
+    concept = preprod.get_concept(concept_id, path=db.DB_PATH, account_id=account_id)
     if concept is None:
         return _error(404, "not_found", "no such concept")
     preprod.set_picked(concept_id, False, path=db.DB_PATH)
     preprod.set_archived(concept_id, True, path=db.DB_PATH)
-    return {"ok": True, "pick": preprod.pick_rate(path=db.DB_PATH)}
+    return {"ok": True, "pick": preprod.pick_rate(path=db.DB_PATH, account_id=account_id)}
 
 
 class ConceptRefsBody(BaseModel):
@@ -1113,11 +1121,11 @@ class ConceptRefsBody(BaseModel):
 
 
 @router.post("/concepts/{concept_id}/refs")
-def concept_refs(concept_id: int, body: ConceptRefsBody):
+def concept_refs(concept_id: int, body: ConceptRefsBody, account_id: int = Depends(auth.current_account_id)):
     """The reference photos a scene grounds on -- a LIST, because a face
     and a jacket are two references. Stored on the shot itself, so they
     ride into the enhance, the keyframe and the clip."""
-    concept = preprod.get_concept(concept_id, path=db.DB_PATH)
+    concept = preprod.get_concept(concept_id, path=db.DB_PATH, account_id=account_id)
     if concept is None or not concept["shots"]:
         return _error(404, "not_found", "no such scene")
     shots = [dict(s) for s in concept["shots"]]
@@ -1133,7 +1141,7 @@ def concept_refs(concept_id: int, body: ConceptRefsBody):
 
 
 @router.get("/concepts/{concept_id}")
-def concept_detail(concept_id: int):
+def concept_detail(concept_id: int, account_id: int = Depends(auth.current_account_id)):
     """The scene board's data: the full shot list, each shot carrying its
     stored per-tool AI prompt plus the OpenArt Director rendering
     (pure text composition, zero model calls). This is the surface the
@@ -1141,7 +1149,7 @@ def concept_detail(concept_id: int):
     the tool's own UI, paste the rendered clip's URL back onto the shot."""
     from src import shootgen
 
-    concept = preprod.get_concept(concept_id, path=db.DB_PATH)
+    concept = preprod.get_concept(concept_id, path=db.DB_PATH, account_id=account_id)
     if concept is None:
         return _error(404, "not_found", "no such concept")
     # director_prompt (the OpenArt rendering) ships with in-progress
@@ -1189,7 +1197,7 @@ class DirectBody(BaseModel):
 
 
 @router.post("/concepts/{concept_id}/direct")
-def concept_direct(concept_id: int, body: DirectBody):
+def concept_direct(concept_id: int, body: DirectBody, account_id: int = Depends(auth.current_account_id)):
     """Director mode: one note revises the stored scene in place --
     validated, attachments carried over, refused when the revision
     comes back broken. One billed call per note."""
@@ -1199,7 +1207,7 @@ def concept_direct(concept_id: int, body: DirectBody):
     note = body.note.strip()
     if not note:
         return _error(400, "empty_note", "an empty note directs nothing")
-    concept = preprod.get_concept(concept_id, path=db.DB_PATH)
+    concept = preprod.get_concept(concept_id, path=db.DB_PATH, account_id=account_id)
     if concept is None:
         return _error(404, "not_found", "no such concept")
 
@@ -1223,13 +1231,13 @@ def concept_direct(concept_id: int, body: DirectBody):
 
 
 @router.post("/concepts/{concept_id}/shots/{shot_n}/refine")
-def shot_refine(concept_id: int, shot_n: int):
+def shot_refine(concept_id: int, shot_n: int, account_id: int = Depends(auth.current_account_id)):
     """Technique-aware polish for one shot's AI prompt, grounded in the
     ai_prompting shelf. Falls back to unchanged on anything broken."""
     api_key = _gemini_key()
     if not api_key:
         return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
-    concept = preprod.get_concept(concept_id, path=db.DB_PATH)
+    concept = preprod.get_concept(concept_id, path=db.DB_PATH, account_id=account_id)
     if concept is None:
         return _error(404, "not_found", "no such concept")
 
@@ -1250,7 +1258,7 @@ def shot_refine(concept_id: int, shot_n: int):
 
 
 @router.post("/concepts/{concept_id}/shots/{shot_n}/generate")
-def shot_generate(concept_id: int, shot_n: int):
+def shot_generate(concept_id: int, shot_n: int, account_id: int = Depends(auth.current_account_id)):
     """One click, one render: the shot's stored prompt through the
     Runway API (anchored on its reference_image when set), the clip
     downloaded, logged as a generations row, and attached to the shot.
@@ -1259,7 +1267,7 @@ def shot_generate(concept_id: int, shot_n: int):
     around the module's own gate."""
     if not runway.has_key():
         return _error(503, "runway_unavailable", "RUNWAYML_API_SECRET is not set")
-    concept = preprod.get_concept(concept_id, path=db.DB_PATH)
+    concept = preprod.get_concept(concept_id, path=db.DB_PATH, account_id=account_id)
     if concept is None:
         return _error(404, "not_found", "no such concept")
 
@@ -1418,7 +1426,7 @@ def scene_grounding(brand: str, spark) -> str:
 
 
 @router.post("/pipeline/run")
-async def pipeline_run(request: Request):
+async def pipeline_run(request: Request, account_id: int = Depends(auth.current_account_id)):
     """The Create button: one full concept from the composer's prompt,
     grounded exactly the way /concepts/generate grounds -- reference
     block first, then the generator. Multipart: `prompt` plus optional
@@ -1467,7 +1475,7 @@ async def pipeline_run(request: Request):
         # much as a Create-written one
         try:
             if result.get("concept_id"):
-                attached = _attach_scene_refs(result["concept_id"], refs)
+                attached = _attach_scene_refs(result["concept_id"], refs, account_id)
                 if attached:
                     detail += f" · {len(attached)} reference(s)"
         except Exception:
@@ -1569,7 +1577,7 @@ def _generate_title(prompt: str) -> str:
 
 
 @router.post("/generate/run")
-async def generate_run(request: Request):
+async def generate_run(request: Request, account_id: int = Depends(auth.current_account_id)):
     """The Generate button: preset + prompt (+ attached image/video
     references) -> Ground -> Enhance -> saved one-shot concept -> the
     render. The render is best-effort and honestly gated: an image goes
@@ -1593,7 +1601,7 @@ async def generate_run(request: Request):
     preset = presets.get_preset(form.get("preset"))
     concept_id_raw = (form.get("concept_id") or "").strip()
     attach_to = int(concept_id_raw) if concept_id_raw.isdigit() else None
-    if attach_to is not None and preprod.get_concept(attach_to, path=db.DB_PATH) is None:
+    if attach_to is not None and preprod.get_concept(attach_to, path=db.DB_PATH, account_id=account_id) is None:
         return _error(404, "not_found", "no such concept to attach to")
 
     image_refs, ref_urls, video_refs = await _collect_refs(form, want_video=True)
@@ -1622,9 +1630,9 @@ async def generate_run(request: Request):
                 "desc": prompt, "prompt": enhanced}
         allowed = shootgen.ZEROPAGE_AI_TOOLS if brand == "zeropage" else None
         location_names = [loc["name"]
-                          for loc in preprod.list_locations(path=db.DB_PATH)]
+                          for loc in preprod.list_locations(path=db.DB_PATH, account_id=account_id)]
         if attach_to is not None:
-            concept = preprod.get_concept(attach_to, path=db.DB_PATH)
+            concept = preprod.get_concept(attach_to, path=db.DB_PATH, account_id=account_id)
             shots = list(concept.get("shots") or [])
             shot["n"] = max((s.get("n") or 0 for s in shots), default=0) + 1
             shots.append(shot)
@@ -1646,7 +1654,7 @@ async def generate_run(request: Request):
             # opens in Director like any other, so it grounds like any
             # other -- best-effort, never fails the generation
             try:
-                _attach_scene_refs(concept_id, ref_urls)
+                _attach_scene_refs(concept_id, ref_urls, account_id)
             except Exception:
                 pass
 
@@ -1702,7 +1710,8 @@ class ShotGraphBody(BaseModel):
 
 
 @router.put("/concepts/{concept_id}/shots/{shot_n}/graph")
-def shot_graph_save(concept_id: int, shot_n: int, body: ShotGraphBody):
+def shot_graph_save(concept_id: int, shot_n: int, body: ShotGraphBody,
+        account_id: int = Depends(auth.current_account_id)):
     """Keep a shot's canvas — the node tree AND what each node produced.
 
     Run all used to save the graph to a throwaway workflow row purely so
@@ -1710,7 +1719,7 @@ def shot_graph_save(concept_id: int, shot_n: int, body: ShotGraphBody):
     rebuilt the canvas from the shot and cleared every output. That made
     re-running a paid Gemini enhance the only way to see the enhanced
     prompt again (2026-08-28)."""
-    concept = preprod.get_concept(concept_id, path=db.DB_PATH)
+    concept = preprod.get_concept(concept_id, path=db.DB_PATH, account_id=account_id)
     if concept is None:
         return _error(404, "not_found", "no such concept")
     if not body.graph.get("nodes"):
@@ -1746,7 +1755,7 @@ def _shot_seed_hash(concept: dict, shot_n: int) -> Optional[str]:
 
 
 @router.get("/concepts/{concept_id}/shots/{shot_n}/graph")
-def shot_graph_get(concept_id: int, shot_n: int):
+def shot_graph_get(concept_id: int, shot_n: int, account_id: int = Depends(auth.current_account_id)):
     """The saved canvas, or `graph: null` meaning build a fresh one.
 
     Staleness is checked HERE rather than invalidated from the handful
@@ -1757,7 +1766,7 @@ def shot_graph_get(concept_id: int, shot_n: int):
     saved = workflows.get_shot_graph(concept_id, shot_n, path=db.DB_PATH)
     if saved is None:
         return {"graph": None, "states": None, "updated_at": None, "stale": False}
-    concept = preprod.get_concept(concept_id, path=db.DB_PATH)
+    concept = preprod.get_concept(concept_id, path=db.DB_PATH, account_id=account_id)
     if concept is None:
         return _error(404, "not_found", "no such concept")
     current = _shot_seed_hash(concept, shot_n)
@@ -1777,7 +1786,8 @@ def shot_graph_reset(concept_id: int):
 
 
 @router.post("/concepts/{concept_id}/shots/{shot_n}/prompt")
-def shot_prompt_update(concept_id: int, shot_n: int, body: ShotPromptBody):
+def shot_prompt_update(concept_id: int, shot_n: int, body: ShotPromptBody,
+        account_id: int = Depends(auth.current_account_id)):
     """Persist one shot's edited prompt from the Director canvas --
     through update_concept_shots (so the picked title/hook/logline are
     never touched), re-validated the same way a fresh plan is. The
@@ -1787,7 +1797,7 @@ def shot_prompt_update(concept_id: int, shot_n: int, body: ShotPromptBody):
     text = body.prompt.strip()
     if not text:
         return _error(400, "empty_prompt", "an empty prompt renders nothing")
-    concept = preprod.get_concept(concept_id, path=db.DB_PATH)
+    concept = preprod.get_concept(concept_id, path=db.DB_PATH, account_id=account_id)
     if concept is None:
         return _error(404, "not_found", "no such concept")
     shots = concept.get("shots") or []
@@ -1797,7 +1807,7 @@ def shot_prompt_update(concept_id: int, shot_n: int, body: ShotPromptBody):
     shot["prompt"] = text
     warnings = shootgen.validate_concept(
         {**concept, "shots": shots},
-        [loc["name"] for loc in preprod.list_locations(path=db.DB_PATH)],
+        [loc["name"] for loc in preprod.list_locations(path=db.DB_PATH, account_id=account_id)],
         use_pov=bool(concept.get("use_pov")),
         allowed_tools=shootgen.ZEROPAGE_AI_TOOLS
         if concept.get("brand") == "zeropage" else None)
@@ -1828,12 +1838,12 @@ def shot_reference_attach(concept_id: int, shot_n: int, body: ShotReferenceBody)
 
 
 @router.post("/concepts/{concept_id}/approve")
-def concept_approve(concept_id: int):
+def concept_approve(concept_id: int, account_id: int = Depends(auth.current_account_id)):
     """Approve an idea = write ITS scene prompt (2026-08-26). Stage two
     used to explode an idea into a shot list; a concept is one scene now,
     so this fills in that one prompt. Only an idea needs it -- a concept
     that already carries its scene has nothing to write."""
-    concept = preprod.get_concept(concept_id, path=db.DB_PATH)
+    concept = preprod.get_concept(concept_id, path=db.DB_PATH, account_id=account_id)
     if concept is None:
         return _error(404, "not_found", "no such concept")
     if concept.get("shots"):
@@ -1871,13 +1881,13 @@ class DenyBody(BaseModel):
 
 
 @router.post("/concepts/{concept_id}/deny")
-def concept_deny(concept_id: int, body: DenyBody):
+def concept_deny(concept_id: int, body: DenyBody, account_id: int = Depends(auth.current_account_id)):
     """Deny records WHY, then vacates the slot: the reasons + note become
     a correction the next generation's spark folds in (autonomy's
     human_note channel, consumed once), and the same text is written to
     the RAG 'denials' shelf as evidence. The correction always lands;
     the chunk is best-effort -- a down store must not lose the label."""
-    concept = preprod.get_concept(concept_id, path=db.DB_PATH)
+    concept = preprod.get_concept(concept_id, path=db.DB_PATH, account_id=account_id)
     if concept is None:
         return _error(404, "not_found", "no such concept")
     reasons = [r for r in body.reasons if r in DENY_REASONS]
@@ -2126,8 +2136,8 @@ def evals_run(body: EvalRunBody):
 
 # --- analytics --------------------------------------------------------------
 
-def _brand_rows(brand: Optional[str]) -> list:
-    rows = db.latest_metrics_by_video(path=db.DB_PATH)
+def _brand_rows(brand: Optional[str], account_id: Optional[int] = None) -> list:
+    rows = db.latest_metrics_by_video(path=db.DB_PATH, account_id=account_id)
     if brand in preprod.BRANDS:
         # NULL-inclusive, same as /analytics: untagged legacy videos stay.
         rows = [r for r in rows if r.get("brand") in (None, brand)]
@@ -2135,8 +2145,9 @@ def _brand_rows(brand: Optional[str]) -> list:
 
 
 @router.get("/analytics/summary")
-def analytics_summary(brand: Optional[str] = None, platform: Optional[str] = None):
-    rows = _brand_rows(brand)
+def analytics_summary(brand: Optional[str] = None, platform: Optional[str] = None,
+        account_id: int = Depends(auth.current_account_id)):
+    rows = _brand_rows(brand, account_id)
     counts = {"all": len(rows)}
     for p in db.PLATFORMS:
         counts[p] = sum(1 for r in rows if r["platform"] == p)
@@ -2155,8 +2166,9 @@ def analytics_summary(brand: Optional[str] = None, platform: Optional[str] = Non
 
 
 @router.get("/analytics/posts")
-def analytics_posts(brand: Optional[str] = None, platform: Optional[str] = None):
-    rows = _brand_rows(brand)
+def analytics_posts(brand: Optional[str] = None, platform: Optional[str] = None,
+        account_id: int = Depends(auth.current_account_id)):
+    rows = _brand_rows(brand, account_id)
     if platform in db.PLATFORMS:
         rows = [r for r in rows if r["platform"] == platform]
     ranked = sorted(rows, key=lambda r: (r["views"] is None, -(r["views"] or 0)))
@@ -2183,8 +2195,8 @@ def analytics_accounts():
 
 
 @router.post("/videos/{video_id}/refresh")
-def video_refresh(video_id: int):
-    video = db.get_video(video_id, path=db.DB_PATH)
+def video_refresh(video_id: int, account_id: int = Depends(auth.current_account_id)):
+    video = db.get_video(video_id, path=db.DB_PATH, account_id=account_id)
     if video is None:
         return _error(404, "not_found", "video not found")
     if video["platform"] == "instagram":

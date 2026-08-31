@@ -61,7 +61,7 @@ def test_direct_revises_and_carries_attachments(tmp_db, monkeypatch):
     assert result["ok"], result["error"]
     assert "revised shot(s) 1" in result["summary"]
 
-    concept = preprod.get_concept(concept_id, path=tmp_db)
+    concept = preprod.get_concept(concept_id, path=tmp_db, account_id=None)
     shot1 = concept["shots"][0]
     assert shot1["prompt"] == "low key garage, slower push"
     # the clip and reference attached to shot 1 survived the rewrite
@@ -75,13 +75,13 @@ def test_direct_revises_and_carries_attachments(tmp_db, monkeypatch):
 
 def test_broken_revision_never_lands(tmp_db, monkeypatch):
     concept_id = seed_scene(tmp_db)
-    before = preprod.get_concept(concept_id, path=tmp_db)["shots"]
+    before = preprod.get_concept(concept_id, path=tmp_db, account_id=None)["shots"]
 
     for bad in ("not json at all", json.dumps({"shots": []})):
         monkeypatch.setattr(director, "generate_with_retry", fake_model(bad))
         result = director.direct_scene(concept_id, "make it moodier", db_path=tmp_db)
         assert result["ok"] is False
-        assert preprod.get_concept(concept_id, path=tmp_db)["shots"] == before
+        assert preprod.get_concept(concept_id, path=tmp_db, account_id=None)["shots"] == before
 
 
 def test_silent_shot_loss_is_refused(tmp_db, monkeypatch):
@@ -129,7 +129,7 @@ def test_hallucinated_location_surfaces_as_warning_not_rejection(tmp_db, monkeyp
                                    db_path=tmp_db)
     assert result["ok"] is True                      # saved, not rejected
     assert any("moon base" in w for w in result["warnings"])
-    saved = preprod.get_concept(concept_id, path=tmp_db)
+    saved = preprod.get_concept(concept_id, path=tmp_db, account_id=None)
     assert any("moon base" in w for w in saved["warnings"])
 
 
@@ -149,7 +149,7 @@ def test_refine_writes_back_only_a_changed_prompt(tmp_db, monkeypatch):
                         raising=False)
     result = director.refine_shot_prompt(concept_id, 1, db_path=tmp_db)
     assert result["ok"] and result["changed"]
-    saved = preprod.get_concept(concept_id, path=tmp_db)
+    saved = preprod.get_concept(concept_id, path=tmp_db, account_id=None)
     assert saved["shots"][0]["prompt"].endswith("no plastic AI sheen")
 
 

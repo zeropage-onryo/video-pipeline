@@ -161,7 +161,9 @@ def evidence_block(signals: dict, gemini_client=None, db_path=None,
 
 def propose_slate(brand: str, signals: Optional[dict] = None, gemini_client=None,
                   model: str = MODEL, count: int = DEFAULT_COUNT,
-                  db_path=None, references: str = "") -> dict:
+                  db_path=None, references: str = "",
+                  account_id: Optional[int] = None,
+) -> dict:
     """
     Propose the next slate as ordinary concept ideas, each carrying the
     evidence sentence that ties it to the numbers. Saved through
@@ -172,7 +174,7 @@ def propose_slate(brand: str, signals: Optional[dict] = None, gemini_client=None
     if not signals.get("sample"):
         print(NO_SIGNALS_NOTE, file=sys.stderr)
 
-    locations = preprod.list_locations(**kwargs)
+    locations = preprod.list_locations(**kwargs, account_id=account_id)
     if not locations:
         print(shootgen.NO_LOCATIONS_NOTE, file=sys.stderr)
 

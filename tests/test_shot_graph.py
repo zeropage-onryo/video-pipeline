@@ -132,7 +132,7 @@ def test_better_references_underneath_retire_the_drawing_too(tmp_db):
     a hash over the prompt alone called the old drawing fresh and the
     next keyframe rendered against references nobody meant to use."""
     cid = a_concept(tmp_db)
-    concept = preprod.get_concept(cid, path=tmp_db)
+    concept = preprod.get_concept(cid, path=tmp_db, account_id=None)
     shots = [dict(s) for s in concept["shots"]]
     shots[0]["refs"] = ["/characters/michael/photo/a.jpg"]
     preprod.update_concept_shots(cid, {"shots": shots}, path=tmp_db)
@@ -152,7 +152,7 @@ def test_staleness_is_checked_on_read_not_invalidated_on_write(tmp_db):
     cid = a_concept(tmp_db, prompt="original")
     client.put(f"/api/concepts/{cid}/shots/1/graph", json={"graph": GRAPH})
     # a write that bypasses every API route entirely
-    concept = preprod.get_concept(cid, path=tmp_db)
+    concept = preprod.get_concept(cid, path=tmp_db, account_id=None)
     shots = [dict(s) for s in concept["shots"]]
     shots[0]["prompt"] = "changed behind the API's back"
     preprod.update_concept_shots(cid, {"shots": shots}, path=tmp_db)

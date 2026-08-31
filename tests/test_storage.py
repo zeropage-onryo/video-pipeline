@@ -126,7 +126,7 @@ def test_publish_shot_media_writes_media_url_onto_matching_shot(
     result = storage.publish_shot_media(concept_id, 1, clip, db_path=tmp_db)
 
     assert result == {"ok": True, "url": "https://pub-abc123.r2.dev/clips/gold-drip.mp4"}
-    concept = preprod.get_concept(concept_id, path=tmp_db)
+    concept = preprod.get_concept(concept_id, path=tmp_db, account_id=None)
     assert concept["shots"][0]["media_url"] == "https://pub-abc123.r2.dev/clips/gold-drip.mp4"
 
 
@@ -194,6 +194,6 @@ def test_set_shot_media_url_leaves_other_shots_untouched(tmp_db):
         {"title": "T", "shots": shots}, brand="antihero", path=tmp_db
     )
     preprod.set_shot_media_url(concept_id, 2, "https://example.com/b.mp4", path=tmp_db)
-    concept = preprod.get_concept(concept_id, path=tmp_db)
+    concept = preprod.get_concept(concept_id, path=tmp_db, account_id=None)
     assert "media_url" not in concept["shots"][0]
     assert concept["shots"][1]["media_url"] == "https://example.com/b.mp4"

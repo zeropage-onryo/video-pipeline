@@ -127,7 +127,7 @@ def image_for_runway(value, resolve_photo=None):
     return imagery.upright(target.read_bytes()) if target is not None else None
 
 
-def shot_reference_urls(properties, db_path=None) -> list:
+def shot_reference_urls(properties, db_path=None, account_id: Optional[int] = None) -> list:
     """The references stored on the shot this node belongs to, read at
     RUN time rather than trusted from the drawing.
 
@@ -148,7 +148,7 @@ def shot_reference_urls(properties, db_path=None) -> list:
     try:
         from src import preprod
         concept = preprod.get_concept(int(concept_id),
-                                      path=db_path or db.DB_PATH)
+                                      path=db_path or db.DB_PATH, account_id=account_id)
     except Exception:
         return []
     for shot in (concept or {}).get("shots") or []:

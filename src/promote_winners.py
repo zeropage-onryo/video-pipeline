@@ -136,6 +136,7 @@ def candidate_winners(
     min_multiple: float = MIN_MULTIPLE,
     db_path=None,
     conn=None,
+    account_id: Optional[int] = None,
 ) -> list[dict[str, Any]]:
     """
     Videos that beat their comparison-window median by at least
@@ -149,7 +150,8 @@ def candidate_winners(
     bench = db.benchmark(
         at_days=at_days, posted_within_days=posted_within_days,
         platform=platform, metric=metric, **kwargs,
-    )
+    
+        account_id=account_id,)
     if not bench["median"]:
         return []
 
@@ -158,7 +160,8 @@ def candidate_winners(
     rows = db.get_top_performers(
         at_days=at_days, posted_within_days=posted_within_days,
         platform=platform, metric=metric, limit=limit, **kwargs,
-    )
+    
+        account_id=account_id,)
     out = []
     for row in rows:
         if row["video_id"] in already_promoted or not row["score"]:

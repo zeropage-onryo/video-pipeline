@@ -23,6 +23,9 @@ concept_locations happens to be empty -- which is exactly the state of
 the live one -- so these tests seed a row first. Both failures were
 observed for real before the current implementation.
 """
+import ast
+import pathlib
+import re
 import sqlite3
 
 import pytest
@@ -265,3 +268,180 @@ def test_a_join_table_pointing_at_locations_old_is_healed(legacy_db):
     sql = _sql(legacy_db, "concept_locations")
     assert "locations_old" not in sql
     assert _one(legacy_db, "SELECT count(*) FROM concept_locations") == 2
+
+
+# --------------------------------------------------------------------------
+# reads -- one account cannot see another's rows
+# --------------------------------------------------------------------------
+
+@pytest.fixture
+def two_accounts(tmp_path):
+    """Two accounts, one concept, one location and one character each."""
+    path = tmp_path / "shared.db"
+    db.init_db(path)
+    preprod.init(path)
+    entities.init(path)
+    generative.init(path)
+    accounts.seed("mike@example.com", path=path)
+    with db.connect(path) as conn:
+        a = conn.execute("SELECT id FROM accounts WHERE slug='zeropage'").fetchone()["id"]
+        b = conn.execute("SELECT id FROM accounts WHERE slug='antihero'").fetchone()["id"]
+        for owner, tag in ((a, "A"), (b, "B")):
+            conn.execute(
+                "INSERT INTO shoot_concepts (created_at, brand, title, shots_json, "
+                "account_id) VALUES ('t', 'zeropage', ?, '[]', ?)", (f"{tag} concept", owner))
+            conn.execute(
+                "INSERT INTO locations (created_at, name, account_id) VALUES ('t', ?, ?)",
+                (f"{tag} place", owner))
+            conn.execute(
+                "INSERT INTO characters (name, created_at, account_id) VALUES (?, 't', ?)",
+                (f"{tag} person", owner))
+    return path, a, b
+
+
+def test_a_list_returns_only_your_own(two_accounts):
+    path, a, b = two_accounts
+    assert [c["title"] for c in preprod.list_concepts(path=path, account_id=a)] == ["A concept"]
+    assert [c["title"] for c in preprod.list_concepts(path=path, account_id=b)] == ["B concept"]
+
+
+def test_fetching_someone_elses_concept_by_id_is_indistinguishable_from_missing(two_accounts):
+    """Ids are sequential integers. If "not yours" answered differently
+    from "no such row", counting from 1 would map the whole table."""
+    path, a, b = two_accounts
+    theirs = preprod.list_concepts(path=path, account_id=b)[0]["id"]
+    assert preprod.get_concept(theirs, path=path, account_id=a) is None
+    assert preprod.get_concept(999_999, path=path, account_id=a) is None
+    assert preprod.get_concept(theirs, path=path, account_id=b) is not None
+
+
+def test_locations_and_cast_are_scoped_too(two_accounts):
+    path, a, b = two_accounts
+    assert [x["name"] for x in preprod.list_locations(path=path, account_id=a)] == ["A place"]
+    assert [x["name"] for x in entities.list_characters(path=path, account_id=b)] == ["B person"]
+    theirs = entities.list_characters(path=path, account_id=b)[0]["id"]
+    assert entities.get_character(theirs, path=path, account_id=a) is None
+
+
+def test_counts_do_not_leak_how_much_work_the_other_account_has_done(two_accounts):
+    path, a, b = two_accounts
+    assert preprod.summary(path=path, account_id=a) == {"locations": 1, "shoot_concepts": 1}
+    assert entities.summary(path=path, account_id=b) == {"characters": 1, "props": 0}
+
+
+def test_the_unowned_pool_is_its_own_scope(two_accounts):
+    """account_id=None addresses rows that predate tenancy. It must not
+    be a skeleton key onto everybody's."""
+    path, a, b = two_accounts
+    assert preprod.list_concepts(path=path, account_id=None) == []
+
+
+# --------------------------------------------------------------------------
+# the regression test: no unscoped read survives review
+# --------------------------------------------------------------------------
+
+# Statements that legitimately touch an owned table without an owner
+# predicate. Each needs a reason, and the reason has to be about the
+# statement, not about convenience.
+UNSCOPED_ALLOWED = {
+    # migrations run before ownership exists, and operate on the whole table
+    "INSERT INTO locations_new",
+    "SELECT sql FROM sqlite_master",
+    "PRAGMA table_info",
+    # db.own_table's own backfill: the statement that CREATES ownership
+    "SET account_id = ? WHERE account_id IS NULL",
+    # the FK-repair copy, a pure join-table rebuild
+    "INSERT INTO concept_locations_new",
+    # concept_locations is reached only through an owned concept, and its
+    # rows cascade with one -- it has no account_id of its own by design
+    "FROM concept_locations",
+    "INTO concept_locations",
+    "DELETE FROM concept_locations",
+}
+
+OWNED_RE = re.compile(
+    r"\b(?:FROM|JOIN|UPDATE|INTO)\s+(shoot_concepts|locations|characters|props|"
+    r"generations|videos|scene_briefs|shots)\b",
+    re.I,
+)
+
+
+def _flatten(node):
+    """The text of a string literal, an f-string, or the two concatenated.
+
+    An f-string is a JoinedStr whose pieces are separate Constants, so
+    reading only Constants splits `f"INSERT INTO x SELECT {cols} FROM y"`
+    into fragments and reports half a statement. Placeholders become
+    `{}` -- enough to keep the SQL readable without pretending to know
+    what they expand to.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        return "".join(
+            v.value if isinstance(v, ast.Constant) and isinstance(v.value, str) else "{}"
+            for v in node.values
+        )
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left, right = _flatten(node.left), _flatten(node.right)
+        if left is not None and right is not None:
+            return left + right
+    return None
+
+
+def _docstrings(tree):
+    """Prose is not SQL. shootgen's stage-two docstring says "into shots"."""
+    out = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            doc = ast.get_docstring(node, clean=False)
+            if doc:
+                out.add(doc)
+    return out
+
+
+def _sql_literals(path):
+    """Every string in a module that looks like a statement, not prose."""
+    tree = ast.parse(pathlib.Path(path).read_text())
+    docs = _docstrings(tree)
+    seen = set()
+    for node in ast.walk(tree):
+        text = _flatten(node)
+        if text is None or text in docs:
+            continue
+        if not OWNED_RE.search(text):
+            continue
+        key = (node.lineno, text)
+        if key in seen:
+            continue
+        seen.add(key)
+        yield node.lineno, " ".join(text.split())
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="writes and the render caps are stages 3 and 4; this lists what is "
+           "left, and turns into an XPASS the moment they land -- at which "
+           "point delete the marker rather than the test",
+)
+def test_no_query_against_an_owned_table_forgets_its_owner():
+    """The test that would have caught this whole class of bug.
+
+    `list_concepts` was `SELECT * FROM shoot_concepts ORDER BY id DESC
+    LIMIT ?` for as long as there was only one user, and nothing failed,
+    because nothing was wrong yet. This fails the moment a new query
+    reaches an owned table without saying whose rows it wants.
+    """
+    offenders = []
+    root = pathlib.Path(__file__).resolve().parent.parent
+    for module in sorted((root / "src").glob("*.py")) + sorted((root / "app").glob("*.py")):
+        for lineno, sql in _sql_literals(module):
+            if "account_id" in sql:
+                continue
+            if any(allowed.lower() in sql.lower() for allowed in UNSCOPED_ALLOWED):
+                continue
+            offenders.append(f"{module.relative_to(root)}:{lineno}  {sql[:90]}")
+    assert not offenders, (
+        "these statements touch an owned table with no account_id predicate:\n  "
+        + "\n  ".join(offenders)
+    )

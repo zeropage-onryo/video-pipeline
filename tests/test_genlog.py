@@ -49,7 +49,7 @@ def test_keep_marks_generation_and_resolves_shot(shot_id, tmp_db, capsys):
     genlog.main(["keep", str(gen_id)], db_path=tmp_db)
 
     assert "kept" in capsys.readouterr().out.lower()
-    assert gen.get_shot(shot_id, tmp_db)["resolved"] == 1
+    assert gen.get_shot(shot_id, tmp_db, account_id=None)["resolved"] == 1
 
 
 def test_reject_stores_the_reason(shot_id, tmp_db, capsys):

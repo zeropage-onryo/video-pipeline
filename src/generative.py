@@ -116,10 +116,15 @@ def add_shot(
         return int(cur.lastrowid)
 
 
-def get_shot(shot_id: int, path: Path | str = DB_PATH) -> Optional[dict[str, Any]]:
-    """Fetch a shot with its spec parsed back out."""
+def get_shot(shot_id: int, path: Path | str = DB_PATH, *,
+             account_id: int) -> Optional[dict[str, Any]]:
+    """Fetch a shot with its spec parsed back out -- if it is this
+    account's. None for someone else's, same as for a missing id."""
     with connect(path) as conn:
-        row = conn.execute("SELECT * FROM shots WHERE id = ?", (shot_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM shots WHERE id = ? AND account_id IS ?",
+            (shot_id, account_id),
+        ).fetchone()
     if not row:
         return None
     data = dict(row)
@@ -220,6 +225,8 @@ def mark_rejected(
 def attempts_to_keeper(
     tool: Optional[str] = None,
     path: Path | str = DB_PATH,
+    *,
+    account_id: int,
 ) -> list[dict[str, Any]]:
     """
     For each resolved shot, how many attempts it took on the tool that won.
@@ -232,21 +239,24 @@ def attempts_to_keeper(
         SELECT g.shot_id, s.subject, s.camera, s.size,
                g.tool, g.attempt AS attempts, g.cost_usd,
                (SELECT COUNT(*) FROM generations x
-                 WHERE x.shot_id = g.shot_id) AS total_attempts_all_tools,
+                 WHERE x.shot_id = g.shot_id
+                   AND x.account_id IS g.account_id) AS total_attempts_all_tools,
                (SELECT COALESCE(SUM(x.cost_usd), 0) FROM generations x
-                 WHERE x.shot_id = g.shot_id) AS total_cost
+                 WHERE x.shot_id = g.shot_id
+                   AND x.account_id IS g.account_id) AS total_cost
         FROM generations g
         JOIN shots s ON s.id = g.shot_id
-        WHERE g.kept = 1
+        WHERE g.kept = 1 AND g.account_id IS ?
         {tool_clause}
         ORDER BY g.shot_id
     """.format(tool_clause="AND g.tool = ?" if tool else "")
-    params = (tool,) if tool else ()
+    params = (account_id, tool) if tool else (account_id,)
     with connect(path) as conn:
         return [dict(r) for r in conn.execute(sql, params)]
 
 
-def tool_scoreboard(path: Path | str = DB_PATH) -> list[dict[str, Any]]:
+def tool_scoreboard(path: Path | str = DB_PATH, *,
+                    account_id: int) -> list[dict[str, Any]]:
     """
     Per tool: attempts made, clips kept, hit rate, spend.
 
@@ -262,10 +272,13 @@ def tool_scoreboard(path: Path | str = DB_PATH) -> list[dict[str, Any]]:
                    SUM(g.kept)                 AS kept,
                    COALESCE(SUM(g.cost_usd),0) AS spend
             FROM generations g
-            WHERE g.shot_id IN (SELECT shot_id FROM generations WHERE kept = 1)
+            WHERE g.account_id IS ?
+              AND g.shot_id IN (SELECT shot_id FROM generations
+                                 WHERE kept = 1 AND account_id IS ?)
             GROUP BY g.tool
             ORDER BY g.tool
-            """
+            """,
+            (account_id, account_id),
         ).fetchall()
     out = []
     for r in rows:
@@ -284,6 +297,8 @@ def tool_scoreboard(path: Path | str = DB_PATH) -> list[dict[str, Any]]:
 def failure_reasons(
     tool: Optional[str] = None,
     path: Path | str = DB_PATH,
+    *,
+    account_id: int,
 ) -> list[dict[str, Any]]:
     """
     What goes wrong, grouped. Tells you which failure your prompts keep
@@ -292,11 +307,11 @@ def failure_reasons(
     sql = """
         SELECT reject_reason AS reason, COUNT(*) AS n
         FROM generations
-        WHERE reject_reason IS NOT NULL {tool_clause}
+        WHERE reject_reason IS NOT NULL AND account_id IS ? {tool_clause}
         GROUP BY reject_reason
         ORDER BY n DESC
     """.format(tool_clause="AND tool = ?" if tool else "")
-    params = (tool,) if tool else ()
+    params = (account_id, tool) if tool else (account_id,)
     with connect(path) as conn:
         return [dict(r) for r in conn.execute(sql, params)]
 
@@ -304,6 +319,8 @@ def failure_reasons(
 def winning_prompts(
     limit: int = 10,
     path: Path | str = DB_PATH,
+    *,
+    account_id: int,
 ) -> list[dict[str, Any]]:
     """
     Prompts that produced a keeper, fewest attempts first.
@@ -321,17 +338,18 @@ def winning_prompts(
                        s.subject, s.camera, s.size, s.spec_json
                 FROM generations g
                 JOIN shots s ON s.id = g.shot_id
-                WHERE g.kept = 1
+                WHERE g.kept = 1 AND g.account_id IS ?
                 ORDER BY g.attempt ASC, g.created_at DESC
                 LIMIT ?
                 """,
-                (limit,),
+                (account_id, limit),
             )
         ]
 
 
-def open_shots(path: Path | str = DB_PATH) -> list[dict[str, Any]]:
-    """Shots with no keeper yet — the working queue."""
+def open_shots(path: Path | str = DB_PATH, *,
+               account_id: int) -> list[dict[str, Any]]:
+    """Shots with no keeper yet — this account's working queue."""
     with connect(path) as conn:
         return [
             dict(r)
@@ -339,18 +357,22 @@ def open_shots(path: Path | str = DB_PATH) -> list[dict[str, Any]]:
                 """
                 SELECT s.*, COUNT(g.id) AS attempts_so_far
                 FROM shots s
-                LEFT JOIN generations g ON g.shot_id = s.id
-                WHERE s.resolved = 0
+                LEFT JOIN generations g
+                       ON g.shot_id = s.id AND g.account_id IS s.account_id
+                WHERE s.resolved = 0 AND s.account_id IS ?
                 GROUP BY s.id
                 ORDER BY s.created_at DESC
-                """
+                """,
+                (account_id,),
             )
         ]
 
 
-def summary(path: Path | str = DB_PATH) -> dict[str, int]:
+def summary(path: Path | str = DB_PATH, *, account_id: int) -> dict[str, int]:
     with connect(path) as conn:
         return {
-            t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+            t: conn.execute(
+                f"SELECT COUNT(*) FROM {t} WHERE account_id IS ?", (account_id,)
+            ).fetchone()[0]
             for t in ("shots", "generations")
         }

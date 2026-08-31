@@ -18,6 +18,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 from google import genai
@@ -156,7 +157,8 @@ def describe_entity(client, kind: str, name: str, photos: list) -> dict:
     return parse_entity_description(generate_with_retry(client, VISION_MODEL, parts))
 
 
-def describe_locations(root: Path, client=None, db_path=None, force: bool = False) -> dict:
+def describe_locations(root: Path, client=None, db_path=None, force: bool = False,
+        account_id: Optional[int] = None) -> dict:
     """
     Describe every space under `root` and save it. Returns counts of
     what happened. One unusable response doesn't lose the rest of the
@@ -166,7 +168,7 @@ def describe_locations(root: Path, client=None, db_path=None, force: bool = Fals
     described = skipped = failed = 0
 
     for name, photos in find_location_dirs(root):
-        if not force and preprod.get_location_by_name(name, **kwargs):
+        if not force and preprod.get_location_by_name(name, **kwargs, account_id=account_id):
             print(f"{name}: already described, skipping")
             skipped += 1
             continue

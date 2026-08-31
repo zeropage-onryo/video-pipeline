@@ -264,7 +264,7 @@ def test_deny_records_correction_and_deletes_even_when_store_is_down(tmp_db):
     # the correction landed regardless -- the label is never lost
     notes = [c["note"] for c in autonomy.pending_corrections(path=tmp_db)]
     assert any("off-tone" in n and "wrong mood" in n for n in notes)
-    assert preprod.get_concept(concept_id, path=tmp_db) is None
+    assert preprod.get_concept(concept_id, path=tmp_db, account_id=None) is None
 
 
 def test_deny_validates_reasons(tmp_db):
@@ -272,7 +272,7 @@ def test_deny_validates_reasons(tmp_db):
     response = client.post(f"/api/concepts/{concept_id}/deny",
                            json={"reasons": ["not a reason"]})
     assert response.status_code == 400
-    assert preprod.get_concept(concept_id, path=tmp_db) is not None
+    assert preprod.get_concept(concept_id, path=tmp_db, account_id=None) is not None
 
 
 def test_approve_writes_the_scene_via_job(tmp_db, monkeypatch):
@@ -658,7 +658,7 @@ def test_create_character_describes_its_photos_and_shelves_the_look(
     # the vision step saw the photo that was just written
     assert fake_vision == [{"kind": "character", "name": "Mike", "photos": 1}]
 
-    [row] = entities.list_characters(path=tmp_db)
+    [row] = entities.list_characters(path=tmp_db, account_id=None)
     assert row["name"] == "Mike" and row["photo_count"] == 1
     assert row["description"]["look"].startswith("a man in a cracked")
     assert row["description"]["notes"] == "leather jacket, deadpan"
@@ -689,7 +689,7 @@ def test_create_character_survives_a_failed_vision_call(
     assert body["ok"] is True and body["described"] is False
     assert "vision unavailable" in body["note"]
     assert (tmp_path / "characters" / "mike" / "a.png").exists()
-    assert entities.list_characters(path=tmp_db)[0]["name"] == "Mike"
+    assert entities.list_characters(path=tmp_db, account_id=None)[0]["name"] == "Mike"
     assert rag_recorder                       # still shelved, just thinner
 
 
@@ -747,7 +747,7 @@ def test_create_location_describes_and_teaches(tmp_db, tmp_path, monkeypatch,
     assert res.status_code == 200
     body = res.json()
     assert body["ok"] and body["described"] is True
-    saved = preprod.get_location_by_name("garage", path=tmp_db)
+    saved = preprod.get_location_by_name("garage", path=tmp_db, account_id=None)
     assert saved is not None and saved["photo_count"] == 2
     [record] = rag_recorder
     assert record["source"] == "assets/location-garage"
@@ -797,7 +797,7 @@ def test_delete_character_drops_the_shelf_chunk(tmp_db, monkeypatch):
     cid = entities.add_character("Mike", role="protagonist", path=tmp_db)
     res = client.delete(f"/api/assets/characters/{cid}")
     assert res.json()["deleted"] == cid
-    assert entities.list_characters(path=tmp_db) == []
+    assert entities.list_characters(path=tmp_db, account_id=None) == []
     assert dropped == ["assets/character-mike"]
     assert client.delete(f"/api/assets/characters/{cid}").status_code == 404
 
@@ -811,7 +811,7 @@ def test_create_asset_survives_a_down_store(tmp_db, tmp_path, monkeypatch):
     body = res.json()
     assert body["ok"] is True
     assert body["rag"]["ok"] is False
-    assert entities.list_props(path=tmp_db)[0]["name"] == "Helmet"
+    assert entities.list_props(path=tmp_db, account_id=None)[0]["name"] == "Helmet"
 
 
 def test_holds_resolve_writes_the_prompt_verdict(tmp_db):

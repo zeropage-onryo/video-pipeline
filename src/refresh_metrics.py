@@ -17,6 +17,7 @@ stubbed until their modules land (BACKLOG #4).
 import argparse
 import os
 import sys
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -41,11 +42,11 @@ def _refresh_platform(platform, videos, db_path=None):
     return [{"ok": False, "error": f"{platform} refresh not wired yet"} for _ in videos]
 
 
-def refresh_all(platform=None, db_path=None):
+def refresh_all(platform=None, db_path=None, account_id: Optional[int] = None):
     """Sweep metrics for all posted videos, grouped by platform. Returns
     {platform: {videos, refreshed, failed, errors}}."""
     kwargs = {"path": db_path} if db_path is not None else {}
-    videos = db.list_videos(limit=10000, **kwargs)  # newest first, all platforms
+    videos = db.list_videos(limit=10000, **kwargs, account_id=account_id)  # newest first, all platforms
     by_platform = {}
     for v in videos:
         p = v.get("platform")

@@ -50,7 +50,7 @@ def test_format_signals_with_no_sample_says_so():
 
 
 def test_build_rework_prompt_fills_every_placeholder(tmp_db):
-    locations = preprod.list_locations(path=tmp_db)
+    locations = preprod.list_locations(path=tmp_db, account_id=None)
     prompt = rework.build_rework_prompt(
         locations, brand="antihero", signals=SIGNALS, count=4,
         references="REF BLOCK",
@@ -70,7 +70,7 @@ def test_propose_slate_saves_ideas_with_their_evidence(tmp_db, monkeypatch):
     assert result["ideas"][0]["evidence"].startswith("workshop")
     # proposals are ordinary concept ideas -- the human pick (planning
     # one) stays the recorded label, measured by shortlist_rate
-    saved = preprod.list_concepts(path=tmp_db)
+    saved = preprod.list_concepts(path=tmp_db, account_id=None)
     assert {c["title"] for c in saved} == {"Ritual Two", "Ritual Three"}
 
 

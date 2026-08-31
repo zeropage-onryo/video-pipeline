@@ -350,11 +350,14 @@ def save_scene_brief(brand: str, title: str, brief: str,
 
 
 def list_scene_briefs(brand: Optional[str] = None,
-                      path: Path | str = DB_PATH) -> list[dict[str, Any]]:
-    sql = "SELECT * FROM scene_briefs"
-    params: list[Any] = []
+                      path: Path | str = DB_PATH, *,
+                      account_id: int) -> list[dict[str, Any]]:
+    """This account's briefs. `brand` still narrows within them -- it is
+    a label on the row now, not the thing that decides who may see it."""
+    sql = "SELECT * FROM scene_briefs WHERE account_id IS ?"
+    params: list[Any] = [account_id]
     if brand:
-        sql += " WHERE brand = ?"
+        sql += " AND brand = ?"
         params.append(brand)
     sql += " ORDER BY id DESC"
     with connect(path) as conn:
@@ -417,23 +420,35 @@ def _location_row(row) -> dict[str, Any]:
     return data
 
 
-def get_location(location_id: int, path: Path | str = DB_PATH) -> Optional[dict[str, Any]]:
+def get_location(location_id: int, path: Path | str = DB_PATH, *,
+                 account_id: int) -> Optional[dict[str, Any]]:
     with connect(path) as conn:
-        row = conn.execute("SELECT * FROM locations WHERE id = ?", (location_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM locations WHERE id = ? AND account_id IS ?",
+            (location_id, account_id),
+        ).fetchone()
     return _location_row(row) if row else None
 
 
-def get_location_by_name(name: str, path: Path | str = DB_PATH) -> Optional[dict[str, Any]]:
+def get_location_by_name(name: str, path: Path | str = DB_PATH, *,
+                         account_id: int) -> Optional[dict[str, Any]]:
     with connect(path) as conn:
-        row = conn.execute("SELECT * FROM locations WHERE name = ?", (name,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM locations WHERE name = ? AND account_id IS ?",
+            (name, account_id),
+        ).fetchone()
     return _location_row(row) if row else None
 
 
-def list_locations(path: Path | str = DB_PATH) -> list[dict[str, Any]]:
+def list_locations(path: Path | str = DB_PATH, *,
+                   account_id: int) -> list[dict[str, Any]]:
     with connect(path) as conn:
         return [
             _location_row(r)
-            for r in conn.execute("SELECT * FROM locations ORDER BY name ASC")
+            for r in conn.execute(
+                "SELECT * FROM locations WHERE account_id IS ? ORDER BY name ASC",
+                (account_id,),
+            )
         ]
 
 
@@ -629,20 +644,37 @@ def _concept_row(row, conn) -> dict[str, Any]:
     return data
 
 
-def get_concept(concept_id: int, path: Path | str = DB_PATH) -> Optional[dict[str, Any]]:
+def get_concept(concept_id: int, path: Path | str = DB_PATH, *,
+                account_id: int) -> Optional[dict[str, Any]]:
+    """One concept, if it is this account's.
+
+    Returns None for a concept that belongs to someone else -- the same
+    answer as for a concept that does not exist. The distinction would
+    be an enumeration oracle: ids are sequential integers, so "not
+    yours" and "not found" have to be indistinguishable or anyone can
+    map the whole table by counting.
+
+    `account_id` is keyword-only and has no default. An optional
+    ownership argument is a leak waiting for the one call site that
+    forgets it; this way a forgotten one is a TypeError at the call.
+    """
     with connect(path) as conn:
         row = conn.execute(
-            "SELECT * FROM shoot_concepts WHERE id = ?", (concept_id,)
+            "SELECT * FROM shoot_concepts WHERE id = ? AND account_id IS ?",
+            (concept_id, account_id),
         ).fetchone()
         return _concept_row(row, conn) if row else None
 
 
-def list_concepts(limit: int = 100, path: Path | str = DB_PATH) -> list[dict[str, Any]]:
-    """Newest first -- the ones you just generated are the ones you're
-    deciding about."""
+def list_concepts(limit: int = 100, path: Path | str = DB_PATH, *,
+                  account_id: int) -> list[dict[str, Any]]:
+    """This account's concepts, newest first -- the ones you just
+    generated are the ones you're deciding about."""
     with connect(path) as conn:
         rows = conn.execute(
-            "SELECT * FROM shoot_concepts ORDER BY id DESC LIMIT ?", (limit,)
+            "SELECT * FROM shoot_concepts WHERE account_id IS ? "
+            "ORDER BY id DESC LIMIT ?",
+            (account_id, limit),
         ).fetchall()
         return [_concept_row(r, conn) for r in rows]
 
@@ -917,7 +949,7 @@ def archive_batch(spark: str, keep_ids: list[int] | None = None,
     return len(targets)
 
 
-def pick_rate(path: Path | str = DB_PATH) -> dict[str, Any]:
+def pick_rate(path: Path | str = DB_PATH, *, account_id: int) -> dict[str, Any]:
     """Of the scenes generated, how many were worth rendering.
 
     shortlist_rate's successor, same shape and same per-prompt-hash
@@ -933,9 +965,10 @@ def pick_rate(path: Path | str = DB_PATH) -> dict[str, Any]:
                    COUNT(*) AS generated,
                    SUM(CASE WHEN picked_at IS NOT NULL THEN 1 ELSE 0 END) AS picked
             FROM shoot_concepts
-            WHERE json_array_length(shots_json) = 1
+            WHERE json_array_length(shots_json) = 1 AND account_id IS ?
             GROUP BY prompt_hash
-            """
+            """,
+            (account_id,),
         ).fetchall()
 
     by_prompt = [
@@ -968,7 +1001,7 @@ def mark_shot(concept_id: int, shot: bool = True, path: Path | str = DB_PATH) ->
             raise ValueError(f"no concept with id {concept_id}")
 
 
-def shoot_rate(path: Path | str = DB_PATH) -> dict[str, Any]:
+def shoot_rate(path: Path | str = DB_PATH, *, account_id: int) -> dict[str, Any]:
     """
     How many generated concepts you actually shoot, overall and per
     prompt version. The pre-production equivalent of selection_rate.
@@ -980,8 +1013,10 @@ def shoot_rate(path: Path | str = DB_PATH) -> dict[str, Any]:
                    COUNT(*)        AS generated,
                    SUM(shot_done)  AS shot
             FROM shoot_concepts
+            WHERE account_id IS ?
             GROUP BY prompt_hash
-            """
+            """,
+            (account_id,),
         ).fetchall()
 
     by_prompt = [
@@ -1003,9 +1038,14 @@ def shoot_rate(path: Path | str = DB_PATH) -> dict[str, Any]:
     }
 
 
-def summary(path: Path | str = DB_PATH) -> dict[str, int]:
+def summary(path: Path | str = DB_PATH, *, account_id: int) -> dict[str, int]:
+    """Counts for one account. An unscoped COUNT here would have been a
+    quiet cross-account leak -- small, but it is still telling you how
+    much work everyone else has done."""
     with connect(path) as conn:
         return {
-            t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+            t: conn.execute(
+                f"SELECT COUNT(*) FROM {t} WHERE account_id IS ?", (account_id,)
+            ).fetchone()[0]
             for t in ("locations", "shoot_concepts")
         }

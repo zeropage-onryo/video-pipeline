@@ -76,7 +76,7 @@ def test_load_brand_rejects_unknown_brand():
 # ---------- prompt ----------
 
 def test_build_concept_prompt_includes_locations_and_brand(tmp_db):
-    locations = preprod.list_locations(path=tmp_db)
+    locations = preprod.list_locations(path=tmp_db, account_id=None)
     prompt = shootgen.build_concept_prompt(locations, "antihero", None, "someone at the door")
 
     assert "hallway" in prompt and "garage" in prompt
@@ -87,7 +87,7 @@ def test_build_concept_prompt_includes_locations_and_brand(tmp_db):
 
 
 def test_build_concept_prompt_without_spark_or_client(tmp_db):
-    locations = preprod.list_locations(path=tmp_db)
+    locations = preprod.list_locations(path=tmp_db, account_id=None)
     prompt = shootgen.build_concept_prompt(locations, "antihero", None, None)
     assert "{spark}" not in prompt and "{client}" not in prompt
 
@@ -98,7 +98,7 @@ def test_build_concept_prompt_notes_attached_images(tmp_db):
     note in the prompt so the model treats the attached image parts as
     grounding, not decoration -- separate from the Workflow library's
     `{references}` block."""
-    locations = preprod.list_locations(path=tmp_db)
+    locations = preprod.list_locations(path=tmp_db, account_id=None)
     prompt = shootgen.build_concept_prompt(locations, "antihero", None, None,
                                            image_ref_count=2)
     assert "{visual_refs}" not in prompt
@@ -107,7 +107,7 @@ def test_build_concept_prompt_notes_attached_images(tmp_db):
 
 @pytest.mark.xfail(reason="image_refs visual-note support not implemented yet in build_concept_prompt", strict=False)
 def test_build_concept_prompt_omits_the_visual_note_by_default(tmp_db):
-    locations = preprod.list_locations(path=tmp_db)
+    locations = preprod.list_locations(path=tmp_db, account_id=None)
     prompt = shootgen.build_concept_prompt(locations, "antihero", None, None)
     assert "{visual_refs}" not in prompt
     assert "attached below this prompt" not in prompt
@@ -137,28 +137,28 @@ def test_location_variety_note_locked_wins_even_with_plenty_of_rooms():
 
 
 def test_apply_location_lock_filters_to_the_named_location(tmp_db):
-    locations = preprod.list_locations(path=tmp_db)
+    locations = preprod.list_locations(path=tmp_db, account_id=None)
     filtered, locked = shootgen._apply_location_lock(locations, ["garage"])
     assert locked is True
     assert [loc["name"] for loc in filtered] == ["garage"]
 
 
 def test_apply_location_lock_is_case_insensitive(tmp_db):
-    locations = preprod.list_locations(path=tmp_db)
+    locations = preprod.list_locations(path=tmp_db, account_id=None)
     filtered, locked = shootgen._apply_location_lock(locations, ["GARAGE"])
     assert locked is True
     assert [loc["name"] for loc in filtered] == ["garage"]
 
 
 def test_apply_location_lock_none_means_use_everything(tmp_db):
-    locations = preprod.list_locations(path=tmp_db)
+    locations = preprod.list_locations(path=tmp_db, account_id=None)
     filtered, locked = shootgen._apply_location_lock(locations, None)
     assert locked is False
     assert filtered == locations
 
 
 def test_apply_location_lock_falls_back_to_everything_on_no_match(tmp_db, capsys):
-    locations = preprod.list_locations(path=tmp_db)
+    locations = preprod.list_locations(path=tmp_db, account_id=None)
     filtered, locked = shootgen._apply_location_lock(locations, ["basement"])
     assert locked is False
     assert filtered == locations
@@ -166,14 +166,14 @@ def test_apply_location_lock_falls_back_to_everything_on_no_match(tmp_db, capsys
 
 
 def test_build_concept_prompt_lock_location_reaches_the_prompt(tmp_db):
-    locations = [loc for loc in preprod.list_locations(path=tmp_db) if loc["name"] == "garage"]
+    locations = [loc for loc in preprod.list_locations(path=tmp_db, account_id=None) if loc["name"] == "garage"]
     prompt = shootgen.build_concept_prompt(locations, "antihero", None, None,
                                            lock_location=True)
     assert "LOCATION LOCK" in prompt
 
 
 def test_build_ideas_prompt_lock_location_reaches_the_prompt(tmp_db):
-    locations = [loc for loc in preprod.list_locations(path=tmp_db) if loc["name"] == "garage"]
+    locations = [loc for loc in preprod.list_locations(path=tmp_db, account_id=None) if loc["name"] == "garage"]
     prompt = shootgen.build_ideas_prompt(locations, "antihero", None, None,
                                          lock_location=True)
     assert "LOCATION LOCK" in prompt
@@ -329,7 +329,7 @@ def test_generate_concept_saves_and_links_locations(tmp_db, monkeypatch):
     )
 
     assert result["warnings"] == []
-    saved = preprod.get_concept(result["concept_id"], path=tmp_db)
+    saved = preprod.get_concept(result["concept_id"], path=tmp_db, account_id=None)
     assert saved["title"] == "The Waiting"
     assert saved["brand"] == "antihero"
     assert {loc["name"] for loc in saved["locations"]} == {"hallway", "garage"}
@@ -355,7 +355,7 @@ def test_generate_concept_only_locations_locks_prompt_and_linked_rooms(tmp_db, m
     # text elsewhere in the prompt is free to say "hallway" as scene-setting.
     assert "- garage:" in seen["prompt"]
     assert "- hallway:" not in seen["prompt"]
-    saved = preprod.get_concept(result["concept_id"], path=tmp_db)
+    saved = preprod.get_concept(result["concept_id"], path=tmp_db, account_id=None)
     assert {loc["name"] for loc in saved["locations"]} == {"garage"}
 
 
@@ -429,7 +429,7 @@ def test_generate_concept_saves_even_with_warnings(tmp_db, monkeypatch):
     )
 
     assert result["warnings"]
-    assert preprod.get_concept(result["concept_id"], path=tmp_db) is not None
+    assert preprod.get_concept(result["concept_id"], path=tmp_db, account_id=None) is not None
 
 
 @pytest.mark.xfail(reason="image_refs vision Part support not implemented yet in generate_concept", strict=False)
@@ -509,7 +509,7 @@ IDEAS_RESPONSE = json.dumps({"ideas": [
 
 
 def test_build_ideas_prompt_includes_locations_brand_and_count(tmp_db):
-    locations = preprod.list_locations(path=tmp_db)
+    locations = preprod.list_locations(path=tmp_db, account_id=None)
     prompt = shootgen.build_ideas_prompt(locations, "antihero", None, "a door", count=8)
 
     assert "hallway" in prompt and "garage" in prompt
@@ -550,7 +550,7 @@ def test_generate_concept_ideas_saves_them_all(tmp_db, monkeypatch):
     )
 
     assert len(result["concept_ids"]) == 8
-    saved = preprod.list_concepts(path=tmp_db)
+    saved = preprod.list_concepts(path=tmp_db, account_id=None)
     assert len(saved) == 8
     assert all(c["has_shot_list"] is False for c in saved)
     assert all(c["brand"] == "antihero" for c in saved)
@@ -629,7 +629,7 @@ PLAN_RESPONSE = json.dumps({"plan": {
 
 
 def test_build_shotlist_prompt_includes_the_chosen_idea(tmp_db):
-    locations = preprod.list_locations(path=tmp_db)
+    locations = preprod.list_locations(path=tmp_db, account_id=None)
     concept = {"title": "Void Signal", "hook": "a thumb", "logline": "he waits"}
     prompt = shootgen.build_shotlist_prompt(locations, "antihero", None, concept)
 
@@ -668,7 +668,7 @@ def test_write_scene_fills_in_a_chosen_idea(tmp_db, monkeypatch):
     )
 
     assert result["warnings"] == []
-    saved = preprod.get_concept(concept_id, path=tmp_db)
+    saved = preprod.get_concept(concept_id, path=tmp_db, account_id=None)
     assert saved["has_shot_list"] is True
     assert len(saved["shots"]) == 1
     assert saved["shots"][0]["prompt"].startswith("Ultra-realistic grounded")
@@ -705,7 +705,7 @@ def test_write_scene_validates_and_still_saves(tmp_db, monkeypatch):
         concept_id, gemini_client=None, db_path=tmp_db, tool="VEO")
 
     assert any("VEO" in w for w in result["warnings"])   # not a Zero Page tool
-    assert preprod.get_concept(concept_id, path=tmp_db)["has_shot_list"] is True
+    assert preprod.get_concept(concept_id, path=tmp_db, account_id=None)["has_shot_list"] is True
 
 
 def test_write_scene_rejects_a_missing_concept(tmp_db):
@@ -715,14 +715,14 @@ def test_write_scene_rejects_a_missing_concept(tmp_db):
 # ---------- POV camera toggle ----------
 
 def test_prompt_offers_the_pov_camera_when_on(tmp_db):
-    locations = preprod.list_locations(path=tmp_db)
+    locations = preprod.list_locations(path=tmp_db, account_id=None)
     prompt = shootgen.build_concept_prompt(locations, "antihero", None, None, use_pov=True)
     assert "ACTION5" in prompt
     assert "{pov}" not in prompt
 
 
 def test_prompt_withholds_the_pov_camera_when_off(tmp_db):
-    locations = preprod.list_locations(path=tmp_db)
+    locations = preprod.list_locations(path=tmp_db, account_id=None)
     prompt = shootgen.build_concept_prompt(locations, "antihero", None, None, use_pov=False)
     assert "ACTION5" not in prompt
     assert "BMPCC only" in prompt
@@ -730,7 +730,7 @@ def test_prompt_withholds_the_pov_camera_when_off(tmp_db):
 
 
 def test_shotlist_prompt_respects_the_pov_toggle(tmp_db):
-    locations = preprod.list_locations(path=tmp_db)
+    locations = preprod.list_locations(path=tmp_db, account_id=None)
     concept = {"title": "T", "hook": "h", "logline": "l"}
     off = shootgen.build_shotlist_prompt(locations, "antihero", None, concept, use_pov=False)
     assert "ACTION5" not in off
@@ -793,7 +793,7 @@ def test_generated_concept_keeps_its_warnings_in_the_database(tmp_db, monkeypatc
     result = shootgen.generate_concept(
         brand="antihero", client=None, gemini_client=None, db_path=tmp_db,
     )
-    stored = preprod.get_concept(result["concept_id"], path=tmp_db)["warnings"]
+    stored = preprod.get_concept(result["concept_id"], path=tmp_db, account_id=None)["warnings"]
     assert any("rooftop helipad" in w for w in stored)
 
 
@@ -803,7 +803,7 @@ def test_scene_warnings_survive_on_the_row(tmp_db, monkeypatch):
     monkeypatch.setattr(shootgen, "generate_with_retry", lambda *a, **kw: SCENE_RESPONSE)
     shootgen.write_scene_for_concept(concept_id, gemini_client=None,
                                      db_path=tmp_db, tool="VEO")
-    assert preprod.get_concept(concept_id, path=tmp_db)["warnings"]
+    assert preprod.get_concept(concept_id, path=tmp_db, account_id=None)["warnings"]
 
 # ---------- director_prompt: the OpenArt Director rendering ----------
 # Pure text composition -- no model call, so these run in microseconds.

@@ -115,6 +115,56 @@ def current_account(request: Request,
     return member_of[0]
 
 
+def current_account_id(request: Request) -> int:
+    """The account this request acts as, as a FastAPI dependency.
+
+    Signing in is not the same as having access: a fresh user gets a
+    users row and zero account_members rows on purpose (see
+    accounts.py), and that state renders the membership gate. So a
+    signed-in user with no membership is a 403 here, not a crash and not
+    a silent fall-through to somebody else's data.
+
+    Routes take this rather than reaching for current_account
+    themselves, because a route that forgets is a route that leaks --
+    this way the account id is a parameter the handler cannot use
+    without declaring.
+    """
+    account = current_account(request)
+    if account is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="no account access")
+    return int(account["id"])
+
+
+def dev_account_id(request: Request) -> int:
+    """The dev console's account: the signed-in one when there is one,
+    otherwise the bootstrap account.
+
+    Deliberately NOT current_account_id. The dev console (`dev` router,
+    DEV_TOOLS only) is the single operator's engine room -- it is not
+    mounted on a public deployment and is never part of a pilot -- and
+    it has never required a session. Making it 403 would lock Mike out
+    of his own workshop to protect it from a second user who by
+    definition cannot reach it.
+
+    So it degrades, but it degrades *visibly and in one named place*
+    rather than by letting `account_id` default to None somewhere deep
+    in the data layer. /api gets current_account_id and no fallback.
+    """
+    account = current_account(request)
+    if account is not None:
+        return int(account["id"])
+    with db.connect(db.DB_PATH) as conn:
+        bootstrap = db.bootstrap_account_id(conn)
+    if bootstrap is None:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=503,
+            detail="no accounts exist yet -- run `python -m src.accounts seed <email>`",
+        )
+    return bootstrap
+
+
 def require_user_ui(request: Request):
     """Gate for HTML routes: no session -> the sign-in screen."""
     user = current_user(request)

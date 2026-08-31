@@ -517,14 +517,18 @@ def list_videos(
     limit: int = 200,
     brand: Optional[str] = None,
     path: Path | str = DB_PATH,
+    *,
+    account_id: int,
 ) -> list[dict[str, Any]]:
-    """All videos, newest first, optionally filtered to one platform and/or
-    brand. A brand filter is NULL-inclusive -- videos tagged with that brand
-    OR not yet tagged at all -- so legacy posts still show while the pipeline
-    tags new ones."""
+    """This account's videos, newest first, optionally filtered to one
+    platform and/or brand. A brand filter is NULL-inclusive -- videos
+    tagged with that brand OR not yet tagged at all -- so legacy posts
+    still show while the pipeline tags new ones. Ownership is not
+    NULL-inclusive in the same way: `brand` is a label you may not have
+    filled in, `account_id` is who the row belongs to."""
     sql = "SELECT * FROM videos"
-    clauses: list[str] = []
-    params: list[Any] = []
+    clauses: list[str] = ["account_id IS ?"]
+    params: list[Any] = [account_id]
     if platform:
         clauses.append("platform = ?")
         params.append(platform)
@@ -539,7 +543,8 @@ def list_videos(
         return [dict(r) for r in conn.execute(sql, params)]
 
 
-def get_video(video_id: int, path: Path | str = DB_PATH) -> Optional[dict[str, Any]]:
+def get_video(video_id: int, path: Path | str = DB_PATH, *,
+              account_id: int) -> Optional[dict[str, Any]]:
     """
     One video's full metadata, plus its originating pitch (idea_title,
     idea_logline, idea_story_note) if idea_id is set -- all None
@@ -552,9 +557,9 @@ def get_video(video_id: int, path: Path | str = DB_PATH) -> Optional[dict[str, A
                    i.story_note AS idea_story_note
             FROM videos v
             LEFT JOIN ideas i ON i.id = v.idea_id
-            WHERE v.id = ?
+            WHERE v.id = ? AND v.account_id IS ?
             """,
-            (video_id,),
+            (video_id, account_id),
         ).fetchone()
     return dict(row) if row else None
 
@@ -592,6 +597,8 @@ def get_top_performers(
     metric: str = "views",
     ascending: bool = False,
     path: Path | str = DB_PATH,
+    *,
+    account_id: int,
 ) -> list[dict[str, Any]]:
     """
     Your best videos, compared fairly.
@@ -644,6 +651,7 @@ def get_top_performers(
             JOIN metrics m ON m.video_id = v.id
             LEFT JOIN ideas i ON i.id = v.idea_id
             WHERE m.{metric} IS NOT NULL
+              AND v.account_id IS ?
               AND ABS(julianday(m.captured_at) - julianday(v.posted_at) - ?) <= ?
               {"AND substr(v.posted_at, 1, 10) >= ?" if cutoff else ""}
         )
@@ -656,7 +664,9 @@ def get_top_performers(
         ORDER BY score {"ASC" if ascending else "DESC"}
         LIMIT ?
     """
-    params: list[Any] = [at_days, at_days, at_days * AGE_TOLERANCE]
+    # order matters: the account predicate sits before the two age
+    # placeholders in the WHERE clause above
+    params: list[Any] = [at_days, account_id, at_days, at_days * AGE_TOLERANCE]
     if cutoff:
         params.append(cutoff)
     if platform:
@@ -674,6 +684,8 @@ def benchmark(
     platform: Optional[str] = None,
     metric: str = "views",
     path: Path | str = DB_PATH,
+    *,
+    account_id: int,
 ) -> dict[str, Any]:
     """
     Median and spread for the same window, so a single video can be called
@@ -691,6 +703,7 @@ def benchmark(
         limit=100_000,
         metric=metric,
         path=path,
+        account_id=account_id,
     )
     scores = sorted(r["score"] for r in rows if r["score"] is not None)
     if not scores:
@@ -733,7 +746,8 @@ def get_video_history(
 _VIDEO_TEXT_FIELDS = {"topic", "hook_type"}
 
 
-def distinct_video_field_values(field: str, path: Path | str = DB_PATH) -> list[str]:
+def distinct_video_field_values(field: str, path: Path | str = DB_PATH, *,
+                                account_id: int) -> list[str]:
     """
     Values already used for a free-text video field, so a datalist can
     converge vocabulary without locking it down. `field` is checked
@@ -745,12 +759,15 @@ def distinct_video_field_values(field: str, path: Path | str = DB_PATH) -> list[
     with connect(path) as conn:
         rows = conn.execute(
             f"SELECT DISTINCT {field} FROM videos "
-            f"WHERE {field} IS NOT NULL AND {field} != '' ORDER BY {field}"
+            f"WHERE account_id IS ? AND {field} IS NOT NULL AND {field} != '' "
+            f"ORDER BY {field}",
+            (account_id,),
         ).fetchall()
     return [r[0] for r in rows]
 
 
-def latest_metrics_by_video(path: Path | str = DB_PATH) -> list[dict[str, Any]]:
+def latest_metrics_by_video(path: Path | str = DB_PATH, *,
+                            account_id: int) -> list[dict[str, Any]]:
     """
     One row per video with its most recent snapshot, if any. Backs
     /metrics/new's "previous value greyed behind each input" -- the
@@ -770,8 +787,10 @@ def latest_metrics_by_video(path: Path | str = DB_PATH) -> list[dict[str, Any]]:
                     ORDER BY captured_at DESC
                     LIMIT 1
                 )
+                WHERE v.account_id IS ?
                 ORDER BY v.posted_at DESC
-                """
+                """,
+                (account_id,),
             )
         ]
 

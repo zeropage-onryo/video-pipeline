@@ -167,7 +167,7 @@ def test_post_videos_new_creates_a_video(tmp_db):
     # rather than bouncing the user out to the marketing page
     assert response.headers["location"] == "/studio"
 
-    videos = db.list_videos(path=tmp_db)
+    videos = db.list_videos(path=tmp_db, account_id=None)
     assert len(videos) == 1
     assert videos[0]["title"] == "Test Video"
     assert videos[0]["platform"] == "youtube"
@@ -178,7 +178,7 @@ def test_post_videos_new_rejects_bad_platform(tmp_db):
         "title": "Test Video", "platform": "myspace", "posted_at": "2026-01-01",
     })
     assert response.status_code == 400
-    assert db.list_videos(path=tmp_db) == []
+    assert db.list_videos(path=tmp_db, account_id=None) == []
 
 
 # ---------- parse_metrics_form ----------
@@ -413,7 +413,7 @@ def test_post_import_reports_failure_without_breaking(tmp_db, monkeypatch):
                            follow_redirects=False)
 
     assert response.status_code in (302, 303, 307)
-    assert db.list_videos(path=tmp_db) == []
+    assert db.list_videos(path=tmp_db, account_id=None) == []
 
 
 def test_post_import_requires_a_handle(tmp_db):
@@ -522,10 +522,10 @@ def test_post_mark_concept_shot_toggles_and_redirects(tmp_preprod_db):
     response = client.post(f"/concepts/{concept_id}/shot", follow_redirects=False)
 
     assert response.status_code in (302, 303, 307)
-    assert preprod.get_concept(concept_id, path=tmp_preprod_db)["shot_done"] == 1
+    assert preprod.get_concept(concept_id, path=tmp_preprod_db, account_id=None)["shot_done"] == 1
 
     client.post(f"/concepts/{concept_id}/shot", follow_redirects=False)
-    assert preprod.get_concept(concept_id, path=tmp_preprod_db)["shot_done"] == 0
+    assert preprod.get_concept(concept_id, path=tmp_preprod_db, account_id=None)["shot_done"] == 0
 
 
 def test_post_mark_concept_shot_404s_for_missing_concept(tmp_preprod_db):
@@ -1190,7 +1190,7 @@ def test_attach_reference_by_url_lands_on_the_shot(tmp_preprod_db):
         data={"reference_url": "https://cdn.example/take.jpg", "next": "/concepts"},
         follow_redirects=False)
     assert response.status_code == 303
-    shots = preprod.get_concept(cid, path=tmp_preprod_db)["shots"]
+    shots = preprod.get_concept(cid, path=tmp_preprod_db, account_id=None)["shots"]
     assert shots[0]["reference_image"] == "https://cdn.example/take.jpg"
 
 
@@ -1200,7 +1200,7 @@ def test_clear_reference_detaches_it(tmp_preprod_db):
                                      path=tmp_preprod_db)
     client.post(f"/concepts/{cid}/shots/1/reference",
                 data={"remove": "1"}, follow_redirects=False)
-    shots = preprod.get_concept(cid, path=tmp_preprod_db)["shots"]
+    shots = preprod.get_concept(cid, path=tmp_preprod_db, account_id=None)["shots"]
     assert "reference_image" not in shots[0]
 
 
@@ -1308,7 +1308,7 @@ def test_grade_fresh_generates_without_saving_a_concept(tmp_dev_db, monkeypatch)
     assert response.status_code == 303
     location = unquote(response.headers["location"])
     assert "mode=fresh" in location and "Throwaway" in location
-    assert preprod.list_concepts(path=tmp_dev_db) == []   # nothing saved
+    assert preprod.list_concepts(path=tmp_dev_db, account_id=None) == []   # nothing saved
 
     # the redirect renders the item for grading
     follow = client.get(response.headers["location"]).text
@@ -1333,7 +1333,7 @@ def test_grade_fresh_verdict_teaches_winners(tmp_dev_db):
     [row] = winners.list_all(path=tmp_dev_db)
     assert row["video_ref"] == "fresh-grade"
     assert row["prompt"] == "Throwaway idea"
-    assert preprod.list_concepts(path=tmp_dev_db) == []
+    assert preprod.list_concepts(path=tmp_dev_db, account_id=None) == []
 
 
 def test_grade_golden_mark_adds_and_removes_a_label(tmp_dev_db):
