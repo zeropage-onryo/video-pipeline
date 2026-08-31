@@ -33,6 +33,7 @@ from src import (
     db,
     entities,
     evalstore,
+    higgsfield,
     imagery,
     inspiration,
     instagram,
@@ -121,6 +122,10 @@ def compute_capabilities() -> dict:
         "analytics.instagram": bool(instagram.access_token()),
         "runway.generate": runway.has_key(),
         "runway.spend": runway.spend_approved(),
+        # Higgsfield is the other half of ZEROPAGE_AI_TOOLS, and it
+        # bills its own API credits on its own per-run approval
+        "higgsfield.generate": higgsfield.has_key(),
+        "higgsfield.spend": higgsfield.spend_approved(),
         "nano.generate": gemini,               # Nano Banana rides the Gemini key
         "workflows": True,
         "jobs": True,

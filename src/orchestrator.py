@@ -667,15 +667,23 @@ def generate_render(state: GenState) -> GenState:
     its own second gate: no RUNWAY_SPEND_OK=1 means the clip comes back
     ok=False with "render it in the app" as the reason -- the Runway API
     has no Explore Mode, so API credits are always a deliberate, per-run
-    human approval. tool==VEO keeps the legacy veo.py path for when Veo
+    human approval.
+
+    tool==HIGGSFIELD routes through higgsfield.py (wired 2026-08-31),
+    which has the same two gates -- and until it existed every night a
+    shot planned for Higgsfield came back "no adapter wired for
+    HIGGSFIELD" and parked, though shootgen names HIGGSFIELD first in
+    ZEROPAGE_AI_TOOLS and shot.py already compiled its prompt.
+
+    tool==VEO keeps the legacy veo.py path for when Veo
     returns to the registry; anything else is honestly "no adapter
     wired"."""
     prompts = state.get("prompts", [])
     if os.environ.get("ZEROPAGE_RENDER") != "1":
         return {"clips": [{**p, "url": None, "ok": False} for p in prompts]}
 
-    from . import runway, veo
-    connectors = {"VEO": veo, "RUNWAY": runway}
+    from . import higgsfield, runway, veo
+    connectors = {"VEO": veo, "RUNWAY": runway, "HIGGSFIELD": higgsfield}
     out_root = (Path(db.DB_PATH).parent.parent / "footage" / "generated"
                 / f"concept-{state.get('concept_id', 'x')}")
     clips = []
