@@ -663,3 +663,17 @@ def test_resolve_account_on_a_fresh_database_is_the_unowned_pool(tmp_path):
     path = tmp_path / "fresh.db"
     db.init_db(path)
     assert accounts.resolve_account(path=path) is None
+
+
+def test_resolve_account_before_the_table_exists_is_not_a_crash(tmp_path):
+    """A database that predates accounts.init() is a fresh install, not an
+    error. This raised sqlite3.OperationalError("no such table: accounts")
+    until a full-suite run scheduled the mcp_server tests onto a worker
+    whose database had never been seeded -- the two-halves runs never put
+    them there, so it hid."""
+    path = tmp_path / "no-accounts-table.db"
+    with db.connect(path) as conn:
+        conn.execute("CREATE TABLE placeholder (id INTEGER)")
+    assert accounts.resolve_account(path=path) is None
+    with pytest.raises(ValueError):
+        accounts.resolve_account("zeropage", path=path)

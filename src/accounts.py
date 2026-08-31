@@ -255,11 +255,21 @@ def resolve_account(slug: Optional[str] = None,
     argument on purpose; a fallback buried in the data layer is the leak
     that rule exists to prevent. Here it is deliberate and in one place.
 
-    Returns None only on a database with no accounts at all, which is a
-    fresh install: the caller then operates on the unowned pool, which is
-    exactly what that database holds.
+    Returns None on a database with no accounts -- including one where
+    the table does not exist yet, which a fresh install genuinely is.
+    The caller then operates on the unowned pool, which is exactly what
+    such a database holds. Raising there instead would turn "nothing has
+    been seeded" into a crash in every CLI and MCP tool, which is what
+    it did until a full-suite run happened to schedule the mcp_server
+    tests onto a worker with an unseeded database.
     """
     with connect(path) as conn:
+        if conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'accounts'"
+        ).fetchone() is None:
+            if slug:
+                raise ValueError(f"no account {slug!r} -- no accounts exist yet")
+            return None
         if slug:
             row = conn.execute(
                 "SELECT id FROM accounts WHERE slug = ?", (slug.strip().lower(),)
