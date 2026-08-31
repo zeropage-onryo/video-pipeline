@@ -105,33 +105,31 @@ def test_house_negatives_reach_the_model_that_has_a_field_for_them():
     _, body = higgsfield.build_body("a shot", model="kling2.5",
                                     negative_prompt="no logos")
     assert body["negative_prompt"] == "no logos"
-    # ...and are silently NOT sent to one that has no such field, rather
-    # than being smuggled into the prompt text
-    _, seed = higgsfield.build_body("a shot", model="seedance-pro",
-                                    negative_prompt="no logos")
-    assert "negative_prompt" not in seed
 
 
 def test_duration_is_clamped_into_the_models_own_range():
     _, kling = higgsfield.build_body("x", model="kling2.5", duration=99)
     assert kling["duration"] == 10
-    _, seed = higgsfield.build_body("x", model="seedance-pro", duration=1)
-    assert seed["duration"] == 2
+    _, short = higgsfield.build_body("x", model="kling2.5", duration=1)
+    assert short["duration"] == 5
 
 
 def test_a_reference_routes_to_the_image_to_video_path():
-    path, body = higgsfield.build_body("x", model="seedance-pro",
+    path, body = higgsfield.build_body("x", model="kling2.5",
                                        image_url="https://cdn/i.png")
     assert path.endswith("/image-to-video")
     assert body["image_url"] == "https://cdn/i.png"
-    text_path, text_body = higgsfield.build_body("x", model="seedance-pro")
+    text_path, text_body = higgsfield.build_body("x", model="kling2.5")
     assert text_path.endswith("/text-to-video")
     assert "image_url" not in text_body
 
 
-def test_vertical_is_the_default_frame():
-    _, body = higgsfield.build_body("x", model="seedance-pro")
-    assert body["aspect_ratio"] == "9:16"
+def test_kling_gets_no_aspect_ratio_so_vertical_must_come_from_a_keyframe():
+    """kling declares no aspect_ratio field. Sending 9:16 anyway would be
+    a lie the house format depends on -- the vertical frame has to come
+    from the keyframe through image-to-video."""
+    _, body = higgsfield.build_body("x", model="kling2.5")
+    assert "aspect_ratio" not in body
 
 
 def test_unknown_model_raises_before_any_call():
@@ -181,11 +179,11 @@ def test_generate_video_submits_polls_and_downloads(tmp_path, approved, keys,
                                                     fake_download):
     http = FakeHttp(statuses=("queued", "in_progress", "completed"))
     out = higgsfield.generate_video("a close shot", tmp_path / "a.mp4",
-                                    model="seedance-pro", http=http)
+                                    model="kling2.5", http=http)
     assert out.is_file()
     assert fake_download == ["https://cdn.higgsfield.ai/out/clip.mp4"]
     submit_url, submit_body = http.calls[0]
-    assert submit_url == higgsfield.HOST + "/bytedance/seedance/v1/pro/fast/text-to-video"
+    assert submit_url == higgsfield.HOST + "/kling-video/v2.5-turbo/pro/text-to-video"
     assert submit_body["prompt"] == "a close shot"
     assert http.calls[1][0] == STATUS_URL          # polled what submit returned
 
@@ -333,3 +331,49 @@ def test_the_generation_row_records_the_anchor_that_was_actually_sent(
     with generative.connect(tmp_db) as conn:
         params = conn.execute("SELECT params_json FROM generations").fetchone()[0]
     assert json.loads(params)["prompt_image"] is False
+
+
+# ---------- Cloudflare ----------
+
+def test_requests_carry_a_browser_user_agent(keys, monkeypatch):
+    """api.higgsfield.ai is behind Cloudflare, which 403s urllib's default
+    "Python-urllib/3.x" signature before Higgsfield ever sees the call --
+    an auth failure that is not one. Verified live 2026-08-31."""
+    seen = {}
+
+    class FakeResponse:
+        def read(self):
+            return b'{"status": "queued"}'
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        seen["headers"] = {k.lower(): v for k, v in req.header_items()}
+        return FakeResponse()
+
+    monkeypatch.setattr(higgsfield.urllib.request, "urlopen", fake_urlopen)
+    higgsfield._request("https://api.higgsfield.ai/x", {"prompt": "p"})
+    ua = seen["headers"].get("User-agent".lower(), "")
+    assert ua and "python-urllib" not in ua.lower()
+    assert seen["headers"]["authorization"].startswith("Key ")
+
+
+# ---------- availability, probed live 2026-08-31 ----------
+
+def test_the_default_model_is_one_the_account_can_actually_reach():
+    """DEFAULT_MODEL was seedance-pro until a live probe showed seedance
+    and veo return 404 model_not_found on this key. A default that 404s
+    means every render fails on the first call."""
+    assert higgsfield.DEFAULT_MODEL in higgsfield.AVAILABLE_MODELS
+
+
+def test_an_unreachable_model_refuses_before_the_round_trip():
+    for model in ("seedance-pro", "seedance-lite", "veo3.1", "veo3.1-fast"):
+        with pytest.raises(ValueError, match="model_not_found"):
+            higgsfield.build_body("x", model=model)
+
+
+def test_only_kling_is_currently_reachable():
+    assert set(higgsfield.AVAILABLE_MODELS) == {"kling2.5", "kling2.1"}

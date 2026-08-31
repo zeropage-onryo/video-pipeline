@@ -102,6 +102,17 @@ RENDERS_ROOT = Path(__file__).resolve().parent.parent / "data" / "renders"
 # --------------------------------------------------------------------------
 # the model registry -- paths and the params each endpoint actually takes
 # --------------------------------------------------------------------------
+# AVAILABILITY IS NOT THE SAME AS DOCUMENTED. The public OpenAPI spec
+# advertises seedance, kling and veo paths, but probed live against this
+# account's key on 2026-08-31 (POST with an empty body, so no job could
+# be created), only the kling routes answer: seedance and veo all return
+# 404 {"detail":"model_not_found"}, while kling returns 400 "'prompt' is
+# a required property" -- the route exists and rejected the body. The
+# Cloud dashboard agrees: it lists only Soul 2, Soul Cinema and Soul ID.
+# So the seedance/veo entries stay (the paths are right if the account
+# ever gains them) but are marked unavailable, and DEFAULT_MODEL is a
+# kling one. Re-probe before trusting an entry marked unavailable.
+#
 # `params` is a WHITELIST, not documentation: build_body() drops anything
 # a model does not declare rather than sending a field the API will
 # reject or silently ignore. `verified` dates the body schema against
@@ -109,21 +120,27 @@ RENDERS_ROOT = Path(__file__).resolve().parent.parent / "data" / "renders"
 # common fields only, which is the safe subset every model in the list
 # advertises (prompt, duration).
 VIDEO_MODELS: dict[str, dict] = {
+    # 404 model_not_found on this account, probed 2026-08-31
     "seedance-pro": {
+        "available": False,
         "t2v": "/bytedance/seedance/v1/pro/fast/text-to-video",
         "i2v": "/bytedance/seedance/v1/pro/fast/image-to-video",
         "params": ("duration", "resolution", "aspect_ratio", "camera_fixed"),
         "durations": (2, 12),          # min/max, integer seconds
         "verified": "2026-08-31",
     },
+    # 404 model_not_found on this account, probed 2026-08-31
     "seedance-lite": {
+        "available": False,
         "t2v": "/bytedance/seedance/v1/lite/text-to-video",
         "i2v": "/bytedance/seedance/v1/lite/image-to-video",
         "params": ("duration", "resolution", "aspect_ratio", "camera_fixed"),
         "durations": (2, 12),
         "verified": None,
     },
+    # route confirmed live 2026-08-31
     "kling2.5": {
+        "available": True,
         "t2v": "/kling-video/v2.5-turbo/pro/text-to-video",
         "i2v": "/kling-video/v2.5-turbo/pro/image-to-video",
         # kling takes NO aspect_ratio -- the frame comes from the source
@@ -133,21 +150,27 @@ VIDEO_MODELS: dict[str, dict] = {
         "durations": (5, 10),
         "verified": "2026-08-31",
     },
+    # route confirmed live 2026-08-31
     "kling2.1": {
+        "available": True,
         "t2v": "/kling-video/v2.1/master/text-to-video",
         "i2v": "/kling-video/v2.1/master/image-to-video",
         "params": ("duration", "cfg_scale", "negative_prompt"),
         "durations": (5, 10),
         "verified": None,
     },
+    # 404 model_not_found on this account, probed 2026-08-31
     "veo3.1-fast": {
+        "available": False,
         "t2v": "/veo3.1/fast",
         "i2v": "/veo3.1/fast/image-to-video",
         "params": ("duration", "resolution", "aspect_ratio", "generate_audio"),
         "durations": (4, 8),
         "verified": None,
     },
+    # 404 model_not_found on this account, probed 2026-08-31
     "veo3.1": {
+        "available": False,
         "t2v": "/veo3.1",
         "i2v": "/veo3.1/image-to-video",
         "params": ("duration", "resolution", "aspect_ratio", "generate_audio"),
@@ -157,8 +180,15 @@ VIDEO_MODELS: dict[str, dict] = {
 }
 
 MODELS = tuple(VIDEO_MODELS)
-DEFAULT_MODEL = os.environ.get("HIGGSFIELD_MODEL", "seedance-pro")
-DEFAULT_ASPECT = "9:16"        # the platform vertical, shot.HOUSE_ASPECT
+AVAILABLE_MODELS = tuple(k for k, v in VIDEO_MODELS.items() if v.get("available"))
+DEFAULT_MODEL = os.environ.get("HIGGSFIELD_MODEL", "kling2.5")
+# The platform vertical, shot.HOUSE_ASPECT. NOTE: kling -- the only
+# family this account can reach -- takes no aspect_ratio at all, so on
+# text-to-video the frame is whatever the model defaults to. The 9:16
+# house format therefore has to come from the KEYFRAME via
+# image-to-video, which is how the pipeline runs anyway (keyframe node
+# -> approve -> clip). A t2v kling render will not be vertical.
+DEFAULT_ASPECT = "9:16"
 DEFAULT_RESOLUTION = os.environ.get("HIGGSFIELD_RESOLUTION", "720")
 DEFAULT_DURATION = 5
 
@@ -167,6 +197,12 @@ def model_spec(model: str) -> dict:
     spec = VIDEO_MODELS.get(model)
     if spec is None:
         raise ValueError(f"model must be one of {MODELS}, got {model!r}")
+    if not spec.get("available"):
+        raise ValueError(
+            f"{model!r} returned model_not_found on this account when probed "
+            f"2026-08-31 -- its path is right but the account cannot reach it. "
+            f"Available: {', '.join(AVAILABLE_MODELS)}. Re-probe before "
+            f"removing this guard.")
     return spec
 
 
@@ -283,6 +319,20 @@ def generations_today(db_path=None) -> int:
 # --------------------------------------------------------------------------
 # the wire
 # --------------------------------------------------------------------------
+# api.higgsfield.ai sits behind Cloudflare, and Cloudflare refuses
+# urllib's default "Python-urllib/3.x" signature with a 403 (error 1010,
+# "banned based on your browser's signature") BEFORE the request ever
+# reaches Higgsfield -- so it reads as an auth failure and is not one.
+# Verified live 2026-08-31: same URL, same key, default UA -> 403; this
+# UA -> 404 "Not found" (the id is fake, the credentials are fine), and
+# with no Authorization header at all -> 401 "Invalid credentials".
+# Do not remove this header; it is load-bearing, not cosmetic.
+USER_AGENT = os.environ.get(
+    "HIGGSFIELD_USER_AGENT",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
+
+
 def _request(url: str, payload: Optional[dict] = None) -> dict:
     """One authenticated JSON round-trip. POST when there is a payload,
     else GET. Injected as `http` in tests so nothing here needs a key."""
@@ -295,7 +345,9 @@ def _request(url: str, payload: Optional[dict] = None) -> dict:
     req = urllib.request.Request(
         url, data=data,
         headers={"Authorization": f"Key {creds[0]}:{creds[1]}",
-                 "Content-Type": "application/json"},
+                 "Content-Type": "application/json",
+                 "Accept": "application/json",
+                 "User-Agent": USER_AGENT},
         method="POST" if payload is not None else "GET",
     )
     with urllib.request.urlopen(req, timeout=60) as response:
