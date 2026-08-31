@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from .db import DB_PATH, connect
+from .db import DB_PATH, OWNED_TABLES, backfill_owner, connect
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -214,7 +214,35 @@ def seed(email: str, password_hash: Optional[str] = None,
     antihero = upsert_account("antihero", "ANTIHERO", "#d64550", path=path)
     add_member(zeropage, user_id, path=path)
     add_member(antihero, user_id, path=path)
-    return {"user_id": user_id, "accounts": [zeropage, antihero]}
+    claimed = claim_unowned_rows(path=path)
+    return {"user_id": user_id, "accounts": [zeropage, antihero],
+            "claimed": claimed}
+
+
+def claim_unowned_rows(account_id: Optional[int] = None,
+                       path: Path | str = DB_PATH) -> dict[str, int]:
+    """Give every pre-tenancy row an owner. Returns {table: rows claimed}.
+
+    Each module's own init() backfills too, but init() runs before there
+    is an account to backfill *to* on a fresh database -- so seeding is
+    the other end of that. Tables that do not exist yet are skipped
+    rather than created: this claims ownership, it does not define
+    schema.
+    """
+    claimed: dict[str, int] = {}
+    with connect(path) as conn:
+        present = {r["name"] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'")}
+        for table in OWNED_TABLES:
+            if table not in present:
+                continue
+            cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+            if "account_id" not in cols:
+                continue
+            n = backfill_owner(conn, table, account_id)
+            if n:
+                claimed[table] = n
+    return claimed
 
 
 def main(argv=None) -> None:

@@ -22,7 +22,7 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
-from .db import DB_PATH, _hash, _now, connect
+from .db import DB_PATH, _ensure_accounts_table, _hash, _now, connect, own_table
 
 BRANDS = ("antihero", "zeropage")
 
@@ -85,6 +85,158 @@ CREATE INDEX IF NOT EXISTS idx_cl_concept    ON concept_locations (concept_id);
 """
 
 
+# `locations.name` was globally UNIQUE, which is fine for one operator and
+# wrong the moment there are two: no second account could ever own a place
+# called "Garage". A UNIQUE lives in the table definition and SQLite cannot
+# ALTER one away, so the fix is a rebuild.
+LOCATIONS_TARGET = """
+CREATE TABLE locations_new (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at  TEXT    NOT NULL,
+    name        TEXT    NOT NULL,
+    photo_count INTEGER,
+    description_json TEXT,
+    notes       TEXT,
+    account_id  INTEGER REFERENCES accounts(id)
+)
+"""
+
+# Uniqueness is an expression index, not a table constraint, and the
+# COALESCE is load-bearing: SQLite treats NULLs as distinct inside a
+# UNIQUE, so a plain UNIQUE(account_id, name) lets two ownerless rows
+# named "hallway" both exist -- which is exactly what add_location's
+# upsert relies on NOT happening. Folding NULL to 0 keeps an unowned row
+# behaving the way it did before tenancy, so nothing changes for a
+# caller that has not been given an account yet, while two real accounts
+# can still each own a Garage.
+LOCATIONS_UNIQUE = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_locations_owner_name "
+    "ON locations (COALESCE(account_id, 0), name)"
+)
+
+CONCEPT_LOCATIONS_TARGET = """
+CREATE TABLE concept_locations_new (
+    concept_id  INTEGER NOT NULL REFERENCES shoot_concepts(id) ON DELETE CASCADE,
+    location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+    UNIQUE (concept_id, location_id)
+)
+"""
+
+
+def _rebuild_locations_unique(conn) -> bool:
+    """Move locations from UNIQUE(name) to UNIQUE(account_id, name).
+
+    Driven by the target shape rather than by the old one, so it is
+    idempotent and takes the same path on a fresh database as on an
+    existing one. Returns True when it actually rebuilt.
+
+    **Never rename the old table out of the way.** That is the obvious
+    shape for a SQLite rebuild and it is wrong here, because
+    `concept_locations` has a foreign key into `locations`: since 3.25 a
+    RENAME rewrites the REFERENCES clauses of *other* tables to follow
+    it, so `concept_locations` ends up pointing at `locations_old` and
+    that table is about to be dropped. Neither `PRAGMA foreign_keys=OFF`
+    nor `PRAGMA legacy_alter_table=ON` prevents it -- both were tried
+    against a copy of the live database and both still rewrote the
+    clause (SQLite 3.37.2).
+
+    So build the new table alongside, drop the original, and rename the
+    new one *into* the original's name. Nothing ever references
+    `locations_new`, so that rename rewrites nothing, and
+    `concept_locations` keeps pointing at `locations` throughout.
+    Foreign keys go off only so the DROP does not fire ON DELETE CASCADE
+    down into `concept_locations`.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'locations'"
+    ).fetchone()
+    if row is None or "UNIQUE" not in (row["sql"] or "").upper():
+        return False   # already the target shape
+
+    present = {r["name"] for r in conn.execute("PRAGMA table_info(locations)")}
+    carried = [c for c in ("id", "created_at", "name", "photo_count",
+                           "description_json", "notes", "account_id")
+               if c in present]
+    cols = ", ".join(carried)
+
+    # The new table points at accounts(id), so that table has to exist
+    # first -- init() runs before seed() on a fresh database, and a
+    # REFERENCES clause naming a missing table is a live landmine rather
+    # than an error at CREATE time. _assert_no_dangling below is what
+    # caught this.
+    _ensure_accounts_table(conn)
+
+    conn.commit()   # a PRAGMA is a no-op inside an open transaction
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.executescript(LOCATIONS_TARGET)
+        conn.execute(f"INSERT INTO locations_new ({cols}) SELECT {cols} FROM locations")
+        conn.execute("DROP TABLE locations")
+        conn.execute("ALTER TABLE locations_new RENAME TO locations")
+        conn.execute(LOCATIONS_UNIQUE)
+        conn.commit()
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+    _assert_no_dangling(conn, "locations rebuild")
+    return True
+
+
+def _repair_concept_locations_fk(conn) -> bool:
+    """Heal a `concept_locations` whose FK was rewritten to point at a
+    table that no longer exists.
+
+    This is not hypothetical: the first version of the rebuild above
+    renamed `locations` out of the way, and every database it touched
+    came out with `REFERENCES "locations_old"(id)`. That table is gone,
+    so any INSERT into concept_locations dies with
+    `no such table: main.locations_old` -- which is every time a concept
+    is saved against a location. The table is a pure join table, so the
+    repair carries its rows across and costs nothing.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' "
+        "AND name = 'concept_locations'"
+    ).fetchone()
+    if row is None or "locations_old" not in (row["sql"] or ""):
+        return False
+
+    conn.commit()
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.executescript(CONCEPT_LOCATIONS_TARGET)
+        conn.execute(
+            "INSERT INTO concept_locations_new (concept_id, location_id) "
+            "SELECT concept_id, location_id FROM concept_locations"
+        )
+        conn.execute("DROP TABLE concept_locations")
+        conn.execute("ALTER TABLE concept_locations_new RENAME TO concept_locations")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_cl_concept ON concept_locations (concept_id)"
+        )
+        conn.commit()
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+    _assert_no_dangling(conn, "concept_locations repair")
+    return True
+
+
+def _assert_no_dangling(conn, what: str) -> None:
+    """`PRAGMA foreign_key_check` is not enough on its own -- it stays
+    silent about a REFERENCES clause naming a table that does not exist,
+    which is exactly the failure mode here. So check the schema text too."""
+    violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+    if violations:
+        raise RuntimeError(f"{what} left FK violations: {violations}")
+    names = {r["name"] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table'")}
+    for table, sql in conn.execute(
+            "SELECT name, sql FROM sqlite_master WHERE type = 'table'"):
+        for ref in re.findall(r'REFERENCES\s+"?(\w+)"?', sql or ""):
+            if ref not in names:
+                raise RuntimeError(
+                    f"{what} left {table} referencing missing table {ref}")
+
+
 def init(path: Path | str = DB_PATH) -> None:
     """Create the pre-production tables. Run after db.init_db()."""
     with connect(path) as conn:
@@ -125,6 +277,18 @@ def init(path: Path | str = DB_PATH) -> None:
         # the board's memory, not the database's.
         if "archived_at" not in existing:
             conn.execute("ALTER TABLE shoot_concepts ADD COLUMN archived_at TEXT")
+        # tenancy. The rebuild runs first: it creates locations already
+        # carrying account_id, so own_table then only has to claim the rows.
+        _repair_concept_locations_fk(conn)
+        _rebuild_locations_unique(conn)
+        own_table(conn, "locations")
+        own_table(conn, "shoot_concepts")
+        own_table(conn, "scene_briefs")
+        # the shape every board query uses: this account's, newest first
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_concepts_account "
+            "ON shoot_concepts (account_id, id DESC)"
+        )
 
 
 def save_judge_score(concept_id: int, judge: dict, path: Path | str = DB_PATH) -> None:
@@ -229,7 +393,7 @@ def add_location(
             """
             INSERT INTO locations (created_at, name, photo_count, description_json, notes)
             VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT (name) DO UPDATE SET
+            ON CONFLICT (COALESCE(account_id, 0), name) DO UPDATE SET
                 photo_count      = excluded.photo_count,
                 description_json = excluded.description_json,
                 notes            = COALESCE(excluded.notes, locations.notes)
@@ -237,10 +401,13 @@ def add_location(
             (_now(), name, photo_count,
              json.dumps(description) if description is not None else None, notes),
         )
-        if cur.lastrowid:
-            return int(cur.lastrowid)
-        row = conn.execute("SELECT id FROM locations WHERE name = ?", (name,)).fetchone()
-        return int(row["id"])
+        # `cur.lastrowid` is not trustworthy after an upsert that took the
+        # DO UPDATE path -- it reports a rowid no statement wrote. Ask.
+        row = conn.execute(
+            "SELECT id FROM locations WHERE name = ? AND COALESCE(account_id, 0) = 0",
+            (name,),
+        ).fetchone()
+        return int(row["id"]) if row else int(cur.lastrowid)
 
 
 def _location_row(row) -> dict[str, Any]:

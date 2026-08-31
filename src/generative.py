@@ -25,7 +25,7 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
-from .db import DB_PATH, _now, connect
+from .db import DB_PATH, _now, connect, own_table
 from .shot import TOOLS, Shot
 
 # The generations-log vocabulary: every video tool from the Shot
@@ -76,6 +76,14 @@ def init(path: Path | str = DB_PATH) -> None:
     """Create the generative tables. Run after db.init_db()."""
     with connect(path) as conn:
         conn.executescript(SCHEMA)
+        # tenancy: generations is what the daily render caps count, so an
+        # unowned row here is a cap another account pays for
+        own_table(conn, "shots")
+        own_table(conn, "generations")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_gen_account_tool "
+            "ON generations (account_id, tool, created_at)"
+        )
 
 
 def add_shot(

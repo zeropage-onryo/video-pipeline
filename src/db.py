@@ -140,6 +140,97 @@ def connect(path: Path | str = DB_PATH) -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+# --------------------------------------------------------------------------
+# tenancy -- every owned row carries the account that owns it
+# --------------------------------------------------------------------------
+
+# The tables whose rows belong to one account rather than to the
+# installation. Every SELECT against one of these needs an account_id
+# predicate; tests/test_tenancy.py asserts that none is missing.
+#
+# `accounts` IS the brand table (accounts.seed creates zeropage and
+# antihero), so account_id is the scoping key and the `brand` TEXT column
+# is a label carried alongside it, not the boundary. See
+# docs/tasks/task-account-tenancy.md.
+OWNED_TABLES = (
+    "shoot_concepts",
+    "locations",
+    "characters",
+    "props",
+    "generations",
+    "videos",
+    "scene_briefs",
+    "shots",
+)
+
+
+def _ensure_accounts_table(conn: sqlite3.Connection) -> None:
+    """The FK target has to exist before a column can point at it.
+
+    Imported lazily: accounts.py imports this module, so a top-level
+    import would be a cycle. Idempotent -- the schema is all
+    CREATE TABLE IF NOT EXISTS -- which matters because init order varies
+    (the app lifespan runs accounts.init() itself; a test that only calls
+    preprod.init() does not).
+    """
+    from .accounts import SCHEMA as ACCOUNTS_SCHEMA
+    conn.executescript(ACCOUNTS_SCHEMA)
+
+
+def add_account_column(conn: sqlite3.Connection, table: str) -> bool:
+    """Additive ALTER TABLE, the preprod.picked_at pattern. True if added.
+
+    Nullable on purpose. SQLite cannot add a NOT NULL column to a table
+    that already has rows without a default, and the only honest default
+    -- a literal account id -- differs per database. So NULL means
+    "predates tenancy" and backfill_owner is what claims those rows.
+    Ownership is enforced by the queries, not by the column.
+    """
+    cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+    if "account_id" in cols:
+        return False
+    _ensure_accounts_table(conn)
+    conn.execute(
+        f"ALTER TABLE {table} ADD COLUMN account_id INTEGER REFERENCES accounts(id)"
+    )
+    return True
+
+
+def bootstrap_account_id(conn: sqlite3.Connection) -> Optional[int]:
+    """The account pre-tenancy rows belong to: the oldest one, which on
+    every database that exists today is Mike's. None before seeding."""
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'accounts'"
+    ).fetchone()
+    if exists is None:
+        return None
+    row = conn.execute("SELECT MIN(id) AS id FROM accounts").fetchone()
+    return row["id"] if row and row["id"] is not None else None
+
+
+def backfill_owner(conn: sqlite3.Connection, table: str,
+                   account_id: Optional[int] = None) -> int:
+    """Claim every ownerless row for the bootstrap account; returns how
+    many. A no-op when there is no account yet -- init() runs before
+    seed() on a fresh database, so accounts.seed() calls this again once
+    there is finally an owner to claim them for."""
+    if account_id is None:
+        account_id = bootstrap_account_id(conn)
+    if account_id is None:
+        return 0
+    cur = conn.execute(
+        f"UPDATE {table} SET account_id = ? WHERE account_id IS NULL",
+        (account_id,),
+    )
+    return cur.rowcount
+
+
+def own_table(conn: sqlite3.Connection, table: str) -> None:
+    """add_account_column + backfill_owner -- the pair every init() wants."""
+    add_account_column(conn, table)
+    backfill_owner(conn, table)
+
+
 def init_db(path: Path | str = DB_PATH) -> None:
     """Create the tables. Safe to run repeatedly."""
     with connect(path) as conn:
@@ -148,6 +239,8 @@ def init_db(path: Path | str = DB_PATH) -> None:
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(videos)")}
         if "brand" not in cols:
             conn.execute("ALTER TABLE videos ADD COLUMN brand TEXT")
+        # tenancy: a posted video belongs to the account that made it
+        own_table(conn, "videos")
 
 
 # --------------------------------------------------------------------------

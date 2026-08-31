@@ -45,6 +45,9 @@ CREATE INDEX IF NOT EXISTS idx_props_category ON props (category);
 def init(path=db.DB_PATH) -> None:
     with db.connect(path) as conn:
         conn.executescript(SCHEMA)
+        # tenancy: a cast member or a prop belongs to one account's bank
+        db.own_table(conn, "characters")
+        db.own_table(conn, "props")
 
 
 def _now() -> str:
