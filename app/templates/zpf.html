@@ -47,6 +47,10 @@
           <button class="plus" id="up" data-label="Add media" aria-label="Add media" aria-expanded="false">
             <svg viewBox="0 0 24 24" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
           </button>
+          <button class="plus" id="scoutbtn" data-cap="scout" data-label="Research an idea"
+                  aria-label="Research an idea" title="Crawl for a spark and its references">
+            <svg viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          </button>
           <span class="m cfnote">references ride into every node — prompt, keyframe and clip</span>
           <span class="spacer"></span>
           <select class="wfselect" id="ccount" aria-label="How many concepts">
@@ -68,6 +72,22 @@
         </div>
         <div class="mgrid" id="mgrid"></div>
         <div class="upnote m" id="upnote"></div>
+      </div>
+
+      <!-- What the scout found, and why. Shown only after a spark is
+           loaded: the rationale and evidence are for the person
+           deciding, and are deliberately NOT sent into the generation
+           (src/scout.py's docstring says why -- reasoning about trends
+           steers the camera toward the internet and away from a room). -->
+      <div class="glass scoutcard" id="scoutcard" hidden>
+        <div class="rhead">
+          <span class="live"></span>
+          <span class="m" style="flex:1" id="scoutlabel">Researched spark</span>
+          <span class="m" id="scoutscore">—</span>
+          <button class="ax" id="scoutclear" aria-label="Dismiss">✕</button>
+        </div>
+        <div class="scoutwhy" id="scoutwhy"></div>
+        <div class="scoutbin" id="scoutbin"></div>
       </div>
 
       <div class="glass retr" id="retr" data-cap="retrieve">

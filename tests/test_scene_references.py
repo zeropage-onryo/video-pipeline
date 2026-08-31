@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 
 from app import api, workflow_runner
 from app.main import app
-from src import db, entities, imagery, preprod, shootgen
+from src import db, entities, imagery, preprod, refbin, shootgen
 
 client = TestClient(app)
 
@@ -268,7 +268,10 @@ def test_an_uploaded_reference_is_saved_and_resolves_back(tmp_path, monkeypatch)
     never reach the keyframe or the clip. It needs a URL, and that URL
     has to resolve back to bytes through the same function every render
     path uses."""
-    monkeypatch.setattr(api, "UPLOAD_REFS_DIR", tmp_path / "refs")
+    # src/refbin.py owns data/refs in both directions now, so the
+    # directory is patched there -- patching api.UPLOAD_REFS_DIR alone
+    # would move the reader and leave the writer on the real folder.
+    monkeypatch.setattr(refbin, "REFS_DIR", tmp_path / "refs")
     jpeg = b"\xff\xd8\xff" + b"not really a jpeg"
     url = api._save_upload_ref(jpeg)
     assert url.startswith("/refs/") and url.endswith(".jpg")

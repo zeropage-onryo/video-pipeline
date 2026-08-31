@@ -1,10 +1,16 @@
 """
 src/orchestrator.py — the autonomous content graph over pre-production:
 
-    planner -> ensure_locations -> ground_entities -> ground_rag
+    scout -> planner -> ensure_locations -> ground_entities -> ground_rag
         -> gen_concept -> evaluate -> structure_prompt -> generate_render
                 ^_____________|            -> qc_clip -> caption -> publish
                 (corrective re-run)                 \\-> hold  (park, don't post)
+
+`scout` is the research agent's socket (src/scout.py): asked for, it
+replaces the caller's rotated spark with one discovered by crawling;
+unasked, or with an empty bank, it is a no-op and the run proceeds on
+whatever spark it was given. It runs before planner so the direction is
+traced beside the concept it produced.
 
 The left third (ensure_locations -> gen_concept -> evaluate and its
 retry edge) is the original evaluate-and-retry loop, unchanged in
@@ -27,6 +33,14 @@ behavior. The right two-thirds is the posting line, gated hard:
 The evaluator combines the code-enforced `warnings` (prompts request,
 code enforces) with an optional LLM-judge (JUDGE=1) scoring solo-shoot
 feasibility.
+
+The run takes photos as well as a direction. `reference_photos` is a
+list of site-relative URLs -- `/refs/<sha>.jpg` from the research
+scout's bin, or asset-bank photo URLs -- and they reach BOTH models:
+as bytes the scene writer can look at, and as the shot's `refs`, which
+is what the keyframe and the clip anchor on. Deliberately NOT
+`picked_references`, which names RAG SOURCES: one is what the models
+look at, the other is what they read.
 
 Deps:   pip install langgraph langsmith
 Env:    GEMINI_API_KEY            (required, already used by your stages)
@@ -65,6 +79,9 @@ from . import (
     shootgen,
     winners,
 )
+from . import (
+    scout as scout_mod,
+)
 from .gemini_utils import generate_with_retry
 
 MAX_ATTEMPTS = 3
@@ -86,12 +103,20 @@ class GenState(TypedDict, total=False):
     brand: str
     client: Optional[str]
     spark: Optional[str]
+    scout: bool                     # ask the research agent for the spark
+    scout_finding_id: int           # which banked finding seeded this run
+    scout_rationale: str            # why the scout chose it (stored, never injected)
     use_pov: bool
     channel: str
     picked_locations: list          # ids; empty/absent = all on file
     picked_characters: list
     picked_props: list
     picked_references: list         # asset-shelf source identifiers; empty/absent = no asset
+    reference_photos: list          # PHOTO urls the run was handed -- /refs/<sha>.jpg
+                                    # from the research scout, or asset-bank photo
+                                    # URLs. Deliberately NOT picked_references, which
+                                    # names RAG SOURCES: one is what the models look
+                                    # at, the other is what they read.
                                     # grounding (craft/structuring advice still auto-grounds
                                     # -- see ground_rag)
     # grounding
@@ -107,6 +132,7 @@ class GenState(TypedDict, total=False):
     prompts: list                   # [{"tool", "prompt"}] for the AI shots
     prompt_scores: list             # [{prompt, score, pass, reason, dims}]
     prompt_rework_attempts: int     # bounded per-shot rewrite passes, not concept retries
+    refs: list                      # the photo urls attached to the scene's shot
     keyframes: list                 # [{"n", "ok", "url", "error"}] -- the stills
     parked_reason: str              # what the Queue card says it is waiting on
     clips: list                     # [{"tool", "prompt", "url", "ok"}]
@@ -153,16 +179,67 @@ def _judge(concept: dict) -> tuple[float, list[str]]:
 
 # --- nodes: the left third (the original loop) ----------------------------
 
+def scout(state: GenState) -> GenState:
+    """The research agent's socket. Claims a spark discovered by
+    src/scout.py -- or leaves the run exactly as it found it.
+
+    Three reasons this is a node rather than a step in trigger.py:
+    the choice of direction is then traced in LangSmith beside the
+    concept it produced (so a bad night can be read back to the signal
+    that caused it); a LangGraph-dev invocation gets the same behaviour
+    as the cron path without duplicating it; and `scout_finding_id`
+    rides the run state to `hold`, so the Queue card can say what the
+    idea came from.
+
+    The guard is inside the node, not on a conditional edge, on
+    purpose: this must be a no-op for every existing caller. An
+    explicit `spark=` (a Director re-fire, a hand-typed direction, the
+    16 sparks run_morning_prompts.sh walks) already knows what it
+    wants, and silently overriding it with a crawl result would make
+    `--spark` a lie. So the node acts only when asked -- state["scout"]
+    -- and even then falls straight through when the bank has nothing
+    at or above scout.SCORE_FLOOR, leaving the caller's spark (which is
+    sparks.txt's rotation) untouched. A thin crawl night costs the run
+    nothing.
+
+    Never raises: the whole point of the fallback is that research is
+    an enhancement over a rotation that already works.
+    """
+    if not state.get("scout"):
+        return {}
+    try:
+        finding = scout_mod.next_spark(state.get("brand") or "zeropage", path=db.DB_PATH)
+    except Exception as e:
+        print(f"note: scout unavailable, keeping the rotated spark: {e}", file=sys.stderr)
+        return {}
+    if not finding:
+        print("note: scout bank empty above the floor — keeping the rotated spark",
+              file=sys.stderr)
+        return {}
+    print(f"scout: spark={finding['spark']!r} score={finding.get('score')}", file=sys.stderr)
+    return {"spark": finding["spark"],
+            "goal": finding["spark"],
+            "scout_finding_id": finding["id"],
+            "scout_rationale": finding.get("rationale") or ""}
+
+
 def planner(state: GenState) -> GenState:
     """BUILD stub -- for now: straight to a full plan, autonomy read from
     the channel row (defaulting to shadow if the table isn't seeded).
     Also mints the run_id everything downstream logs against."""
     channel = state.get("channel") or "zeropage"
     row = autonomy.get_channel(channel, path=db.DB_PATH)
+    run_id = state.get("run_id") or uuid.uuid4().hex
+    # Claim the scouted spark here, not in the scout node: the run_id it
+    # is stamped with is minted on this line, and a finding marked used
+    # before a run exists to point at is how the same spark gets served
+    # twice after a crash between the two.
+    if state.get("scout_finding_id"):
+        scout_mod.mark_used(state["scout_finding_id"], run_id=run_id, path=db.DB_PATH)
     return {
         "channel": channel,
         "autonomy": (row or {}).get("autonomy", "shadow"),
-        "run_id": state.get("run_id") or uuid.uuid4().hex,
+        "run_id": run_id,
     }
 
 
@@ -272,6 +349,13 @@ def gen_concept(state: GenState) -> GenState:
     # approve it. `use_pov` has no meaning here -- the scene brief
     # neither offers nor names a camera -- so it stops being passed
     # rather than being passed and ignored.
+    # Photos the run was handed -- the scout's bin, normally -- as bytes
+    # the writer can actually look at. A scene written FROM a photograph
+    # beats one told a photograph exists, which is the whole reason
+    # format_cast's "(reference photos on file)" was not enough.
+    handed = list(state.get("reference_photos") or [])
+    image_refs = scene_chain.as_image_refs(handed) if handed else None
+
     result = shootgen.generate_scene_concept(
         brand=state.get("brand", "antihero"),
         spark=spark,
@@ -279,12 +363,27 @@ def gen_concept(state: GenState) -> GenState:
         db_path=db.DB_PATH,
         references=state.get("references", ""),
         cast=state.get("cast"),
+        image_refs=image_refs,
     )
     # the generator returns warnings BESIDE the concept, not inside it;
     # fold them in so evaluate's code-enforced check actually sees them.
     concept = {**result["concept"], "warnings": result["warnings"]}
+
+    # The photos this scene renders against, stored on its shot: the
+    # assets it NAMED first (identity holds the anchor slot Runway reads),
+    # the handed-in research images after. Never fatal -- an ungrounded
+    # scene is still a scene, and attach_refs says so by returning [].
+    refs = []
+    try:
+        refs = scene_chain.attach_refs(result["concept_id"], handed,
+                                       db_path=db.DB_PATH)
+        if refs:
+            concept["shots"][0]["refs"] = refs
+    except Exception as e:
+        print(f"note: references not attached: {e}", file=sys.stderr)
+
     return {"concept": concept, "concept_id": result["concept_id"],
-            "attempts": state.get("attempts", 0) + 1}
+            "refs": refs, "attempts": state.get("attempts", 0) + 1}
 
 
 def evaluate(state: GenState) -> GenState:
@@ -834,6 +933,7 @@ def hold(state: GenState) -> GenState:
 def _build():
     g = StateGraph(GenState)
     for name, fn in [
+        ("scout", scout),
         ("planner", planner), ("ensure_locations", ensure_locations),
         ("ground_entities", ground_entities), ("ground_rag", ground_rag),
         ("gen_concept", gen_concept), ("evaluate", evaluate),
@@ -845,7 +945,8 @@ def _build():
     ]:
         g.add_node(name, fn)
 
-    g.add_edge(START, "planner")
+    g.add_edge(START, "scout")
+    g.add_edge("scout", "planner")
     g.add_conditional_edges("planner",
         lambda s: "go", {"go": "ensure_locations"})
     g.add_conditional_edges("ensure_locations",
@@ -895,7 +996,9 @@ GRAPH = _build()
 def run(goal: str, *, brand: Optional[str] = None, spark: Optional[str] = None,
         client: Optional[str] = None, use_pov: bool = False,
         channel: str = "zeropage", picked_locations=None,
-        picked_characters=None, picked_props=None, picked_references=None) -> dict:
+        picked_characters=None, picked_props=None, picked_references=None,
+        reference_photos=None,
+        scout: bool = False) -> dict:
     """
     `brand` defaults to `channel` rather than a hardcoded value on
     purpose: `channel` decides where the run gets FILED (which
@@ -912,6 +1015,13 @@ def run(goal: str, *, brand: Optional[str] = None, spark: Optional[str] = None,
     still lets channel and brand differ on purpose when that's really
     what's wanted -- this only changes what happens when brand is
     omitted.
+
+    `scout=True` asks the research agent for the direction instead of
+    using the one passed in. Off by default and never inferred: an
+    explicit spark stays authoritative, and a caller that wants a
+    crawled idea has to say so. The spark passed alongside it is still
+    required -- it is what the run falls back to when the scout's bank
+    is empty or every finding sits below scout.SCORE_FLOOR.
     """
     if brand is None:
         brand = channel
@@ -921,12 +1031,14 @@ def run(goal: str, *, brand: Optional[str] = None, spark: Optional[str] = None,
               file=sys.stderr)
     autonomy.init(path=db.DB_PATH)
     winners.init(path=db.DB_PATH)
+    scout_mod.init(path=db.DB_PATH)
     return GRAPH.invoke({
-        "goal": goal, "brand": brand, "spark": spark or goal,
+        "goal": goal, "brand": brand, "spark": spark or goal, "scout": scout,
         "client": client, "use_pov": use_pov, "channel": channel,
         "picked_locations": picked_locations or [],
         "picked_characters": picked_characters or [],
         "picked_props": picked_props or [],
         "picked_references": picked_references or [],
+        "reference_photos": reference_photos or [],
         "attempts": 0,
     })

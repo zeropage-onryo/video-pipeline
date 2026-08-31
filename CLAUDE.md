@@ -45,10 +45,22 @@ venv/bin/python -m src.shootgen --scene <concept_id>   # write THAT idea's scene
 venv/bin/python -c "from src import orchestrator; print(orchestrator.run('gearing up ritual'))"
 venv/bin/python -c "from src import autonomy; print(autonomy.list_hold())"      # the dead-man log
 
+# THE RESEARCH SCOUT — where a spark comes from when it isn't typed.
+# Four best-effort lanes (grounded web search on the Gemini key, YouTube
+# search.list, RSS feeds from prompts/scout_sources.txt, the inspiration
+# accounts), digested by ONE call into scored one-line sparks + the
+# reference images behind them. Banked in scout_findings / scout_bin;
+# nothing here spends render credit.
+venv/bin/python -m src.scout run  [--brand ...] [--count 4] [--lanes web,shorts,feeds,creators]
+venv/bin/python -m src.scout list [--brand ...] [--unused]
+venv/bin/python -m src.scout next --brand zeropage       # the servable spark, or exit 1
+
 # THE NIGHTLY TRIGGER — one shadow run, spark rotated from prompts/sparks.txt.
 # ops/com.zeropage.shadowrun.plist schedules it at 03:30 (see its header to
-# install); grading happens on /holds each morning.
-venv/bin/python -m src.trigger [--spark ...] [--channel zeropage]
+# install); grading happens on /holds each morning. --scout takes the
+# direction from the scout's bank instead, falling back to the rotation
+# when the bank is empty or under scout.SCORE_FLOOR.
+venv/bin/python -m src.trigger [--spark ...] [--channel zeropage] [--scout]
 
 # GENERATIVE CLIPS (for a shot the footage can't cover)
 venv/bin/python -m src.promptgen "<loose shot description>" [--idea-id N] [--slot-index N]
@@ -69,6 +81,12 @@ venv/bin/python -m src.scheduling run [--approve] [--live]
 venv/bin/python -m src.rag ingest <files...>        # (re-)build the pgvector library
 venv/bin/python -m src.rag query "<text>" [--k 5]
 venv/bin/python -m src.rag_eval <cases.json> [--k 5]   # hit@k + MRR over labeled cases
+
+# MCP SURFACE — the board, reachable from off this machine. Mounted on the
+# web app at /mcp when ZEROPAGE_MCP=1 AND ZEROPAGE_MCP_TOKEN is set (no
+# token = refused, never served open). Read/decide tools are always on;
+# ZEROPAGE_MCP_ENGINE=1 adds research + generate. See START_SERVER.md.
+venv/bin/python -c "from src import mcp_server; print([f.__name__ for f in mcp_server.TOOLS])"
 
 # SIGN-IN — seed the auth tables once (idempotent); real login guards /ui + /api
 venv/bin/python -m src.accounts seed you@example.com [--password '...']
@@ -345,11 +363,20 @@ into the hashed prompt template so `by_prompt` does not average two meanings of 
   Before it, `generate_for_shot` took `reference_image` only when it started with `http`,
   so on any machine without R2 the keyframe silently anchored nothing while the Queue card
   said "anchors on the attached reference" and the credit was spent on the lie.
-- **The nightly job was repathed** (2026-08-29): `run_morning_prompts.sh` and
-  `com.zeropage.morningprompts.plist` still pointed at `/Users/iphone/Documents/Github
-  Portfolio`, so the folder rename killed it silently on 2026-08-24 — launchd ran the
-  script, the `cd` failed, and a night with no runs looks exactly like a healthy night.
-  The `cd` now logs and exits 1. Reloading the plist is a manual step after a rename.
+- **The nightly job has two failure modes, and it hit both** (2026-08-31). First:
+  `~/Library/LaunchAgents` holds a **copy** of the plist, so editing the repo's copy
+  changes nothing — the installed one kept pointing at `/Users/iphone/Documents/Github
+  Portfolio` after the folder was renamed. `ops/install-launchagents.sh` now copies and
+  reloads it in one step, and `--check` reports whether the installed copy has drifted.
+  Second, and the one that actually stopped it around 2026-08-20: `data/morning_prompts.err`
+  reads `/bin/bash: …/run_morning_prompts.sh: Operation not permitted`. **`EPERM`, not
+  `ENOENT`** — that is macOS TCC denying a LaunchAgent access to `~/Documents`, which is a
+  protected location. A LaunchAgent gets no consent prompt, so it is refused in silence,
+  and the same path runs fine from Terminal (which has its own grant). Fix is either Full
+  Disk Access for `/bin/bash`, or moving the project out of `~/Documents` — the durable
+  one, since nothing else about this project wants to live in a TCC-protected folder.
+  Both failure modes look identical from inside: a night with no runs reads exactly like a
+  healthy night, which is why the `cd` now logs and exits 1.
 
 ```
 locations/<name>/*.jpg  --locations.py-->  locations table (vision description per space)
@@ -631,6 +658,36 @@ is yours, in Resolve, by hand.
   survives. `refine_shot_prompt` is per-shot technique polish via `promptgen.
   refine_prompt` against the `ai_prompting` shelf; the template is
   `prompts/direct_prompt.txt`.
+- **`src/mcp_server.py`** + **`app/mcp_mount.py`** — the MCP surface (2026-08-31), so the
+  board can be read and decided on from a phone or an agent instead of only from this
+  machine. **An adapter, never a store:** every tool is a thin call into `preprod` or
+  `scout`, and `data/pipeline.db` stays the one source of truth — a synced second store is
+  the mistake `asset_shelf` exists to fix. The read/decide tools (`board`, `idea`,
+  `search`, `capture`, `pick`, `archive`, `add_spark`, `tonight`, `sparks`, `images`,
+  `stats`, `job`) are always on; **nothing on them spends**. Picking still only puts a
+  concept in front of the Queue, and approving there is still what calls Runway, still on
+  this machine — the single spend gate is load-bearing, and a second door onto it from a
+  phone is exactly how it stops being one.
+  `ZEROPAGE_MCP_ENGINE=1` adds the two that cost model credit: `research`
+  (`scout.scout` — crawl, bank scored sparks, download the images behind them) and
+  `generate` (`orchestrator.run` — the LangGraph, ending PARKED in the Queue). `generate`
+  **refuses outright while `ZEROPAGE_RENDER=1`**: that flag turns `generate_render` from a
+  dry stub into real Veo spend, and a remote caller must never be what trips it. Both run
+  through `app/jobs.py` and return a job id — a five-minute graph run must not sit on an
+  open HTTP request.
+  **Two layers, and the split is the testable part.** The tool functions are plain Python
+  against a database path (so the whole surface is testable with no `mcp` package
+  installed); `build_server` wraps them lazily. `app/jobs.py` is injected as callables
+  because `src/` never imports `app/` — the `scene_chain` pattern.
+  Three things were found by running it, not reading it: mcp **2.x renamed FastMCP to
+  MCPServer** and moved `stateless_http` onto `streamable_http_app()` (hence the `mcp>=2`
+  pin); the SDK's DNS-rebinding protection **421s any unrecognised `Host`**, which behind a
+  tunnel means every real call fails looking like a broken server (hence
+  `ZEROPAGE_MCP_HOSTS`, `*` to disable — safe only because the bearer token is checked
+  before the MCP app is entered); and the SDK relays **only a `ToolError`'s message**,
+  replacing every other exception with "Error executing tool <name>" — so caller errors are
+  translated, or an agent cannot tell a bad id from a broken server and retries the
+  identical call.
 - **`app/seo.py`** — the machine-readable growth surface, all pure functions so the exact bytes a
   crawler sees are testable without a server: `robots.txt` (the AI crawlers named explicitly and
   allowed; the app disallowed), `llms.txt` (what "grounded" means plus the hard specs — the part
@@ -696,6 +753,66 @@ is yours, in Resolve, by hand.
   (unverifiable = don't post). `build_caption` grounds captions in `post_seo.derive_signals` and
   picks the best of several candidates by `score_post` (pure, free), degrading to the fallback
   caption on any failure.
+- **`src/scout.py`** — the research scout: the input side the pipeline never had. Four
+  best-effort lanes (`web` = Gemini's `google_search` tool on the existing key; `shorts` =
+  `youtube.search_videos`, titles against view counts; `feeds` = RSS/Atom from
+  `prompts/scout_sources.txt`; `creators` = `inspiration.combined_grounding`), compressed by
+  ONE call into scored one-line sparks. **The digest is not optional plumbing** — `{spark}` is
+  a single line in `scene_brief_prompt.txt` sitting beside a CRAG block, so raw crawl text
+  passed through would produce concepts about the internet instead of about a room. Gates in
+  order: `winners.avoid_guidance` folded into the prompt, recent sparks re-checked in code by
+  `_spark_key` (prompts request, code enforces), then `SCORE_FLOOR` — under it a finding is
+  banked but never served, and the caller falls back to `sparks.txt`. Findings are **banked and
+  claimed separately** (`next_spark` hands one over, `mark_used` stamps it) so a crash loses no
+  research and the 16-run nightly batch can't fire one spark twice.
+  **Deliberately NOT grounded in the described rooms** — tried, measured, backed out
+  (2026-08-31). The scout's main consumer is the nightly graph, whose generator is
+  `build_scene_brief_prompt`, and that template's entire placeholder set is `{brand} {cast}
+  {example} {references} {spark}` — there is no `{locations}`, so a spark pinned to a room
+  imposes a constraint nothing downstream can honour. (The Create path's `scenes_prompt.txt`
+  DOES have `{locations}`, but `generate_scene_concepts` fetches the rooms itself at generation
+  time, so pre-committing to one only removes the variety `location_variety_note` manages.) An
+  ablation on identical signals settled it: without the rooms block the sparks came back
+  *better* — "a dinner plate set for three", "peeling paint reveals a hidden eye" — than with it
+  ("shaking hands holding one rusted key" on a balcony).
+  **What actually fixed the drift** was the digest prompt's translation rule (the signals are
+  where an idea comes FROM, not what the scene is ABOUT, with worked bad/good pairs) plus an
+  explicit ban on screens, feeds, algorithms, monetisation, AI, creators and content-making as
+  the SUBJECT of a spark — and, upstream of both, the query altitude: asking what is "trending"
+  returns the content business talking about itself (monetisation updates, policy changes, gear
+  launches), real signal that nobody can point a camera at. The queries now ask what imagery and
+  staging is landing. Two further lane facts from live runs: YouTube's keyword index returns
+  **zero** results for the sentence-shaped queries the grounded lane wants (hence separate
+  `WEB_QUERIES` / `SHORTS_QUERIES`, ordered by `relevance` not `viewCount`), and Reddit answers
+  403 to `.json` and 429 to `.rss` from a datacenter IP, so the shipped sources are RSS.
+- **The Instagram research lane** (`scout.gather_instagram` + the reading half of
+  `src/instagram.py`) — **there is no FYP API and there never has been.** Probed against the
+  live `zeropagefilms` token 2026-08-31: `explore`, `reels`, `trending`, `recommended_media`
+  and `discover` all return "Tried accessing nonexisting field". Meta has never exposed the
+  Explore/For-You surface to any API; the only way to read it is scraping a logged-in session,
+  which breaks Meta's terms and risks the account this pipeline publishes to. So the lane reads
+  what is **performing** instead — `business_discovery` on the handles already in
+  `inspiration.py` (curated by Mike's taste, not an algorithm) and `hashtag_top_media` (Meta's
+  own "top" ranking). Both are **Facebook-Login only**: they need `IG_GRAPH_TOKEN`, a different
+  credential on a different host from the publishing `IG_ACCESS_TOKEN`, which
+  `graph.facebook.com` cannot even parse. The lane never falls back to the publishing token —
+  that would turn "not configured" into what looks like an outage — and reports the missing
+  credential once per pass rather than once per handle.
+  **The hashtag id cache IS the rate-limit strategy.** Meta allows 30 unique tags per rolling
+  7 days, counted on the `ig_hashtag_search` ID lookup, and a tag's id never changes — so
+  `ig_hashtag_ids` caches ids forever and only a genuinely new tag spends budget. The budget is
+  checked locally *before* calling, so an exhausted window logs the real reason instead of a
+  generic API error. `INSTAGRAM_TAGS` is deliberately short and stable; churning it is what
+  would starve the lane. Note hashtag media carries **no `username`** (Meta strips it), so the
+  permalink is the only attribution and the bin stores it as `source_url`.
+- **`src/refbin.py`** — one owner for `data/refs`, both directions: the content-addressed name,
+  the JPEG normalisation (EXIF transpose BEFORE `convert("RGB")`, HEIC when `pillow-heif` is
+  present), `save`, `fetch` (bounded download for scouted images) and `resolve`. It exists
+  because `src/` cannot import `app/` and the scout writes where composer uploads live; the
+  read had to move with the write, since a patched writer and an unpatched reader is a file that
+  saves successfully and then resolves to nothing. `app/api.py`'s `_to_jpeg`/`_save_upload_ref`/
+  `_resolve_asset_photo` now delegate. **The URL shape is the point**: a scouted image comes out
+  as `/refs/<sha>.jpg`, so it rides the composer path with no new route or resolver.
 - **`src/gemini_utils.py`** — shared `generate_with_retry` (retries on `RESOURCE_EXHAUSTED`/
   `UNAVAILABLE`, falls through to `FALLBACK_MODELS` if the primary model stays down for the whole
   retry budget) and `strip_fences` (strips markdown code fences from model JSON output).
@@ -728,6 +845,16 @@ is yours, in Resolve, by hand.
   — `/metrics/new` still accepts typed numbers, `/concepts`
   still renders. The exceptions are deliberate: `promptgen` and `locations` fail loudly, because
   there the model call *is* the deliverable rather than bookkeeping on top of one.
+- **A crawl is an enhancement, never a dependency.** Every scout lane, the digest, the image
+  fetch and the bank read all degrade to contributing nothing rather than raising — the static
+  `sparks.txt` rotation they replace never failed, and a research step that can fail a night is
+  a downgrade. What a silent lane *does* owe is a line: `scout()` returns `errors` and the CLI
+  prints them, because a crawl that quietly finds nothing looks exactly like a healthy one (the
+  same failure mode that hid the dead launchd job for eleven nights).
+- **A reference must be traceable to where it came from.** Bin rows keep `source_url` and the
+  Create card renders it as a link on every tile. These are other people's frames held as mood
+  reference; an unattributed tile in front of someone about to spend a render on it is the wrong
+  affordance.
 - **Verify by running it, not by reading it.** Every real bug this project has had — a `warnings`
   string shattered into 140 single-character warnings, CI dying on torch's CUDA build, two tests
   passing only because the dev machine had a populated database, a site with no navigation between

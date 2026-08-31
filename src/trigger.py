@@ -5,9 +5,13 @@ click. Build-order step 5: autonomous *creation*, posting still gated.
 
     venv/bin/python -m src.trigger                # tonight's spark, rotated
     venv/bin/python -m src.trigger --spark "..."  # explicit direction
+    venv/bin/python -m src.trigger --scout        # a spark the scout crawled for
 
 The spark rotates through prompts/sparks.txt by day of year, so
-consecutive nights get different directions with nobody typing. The run
+consecutive nights get different directions with nobody typing.
+`--scout` asks src/scout.py's bank for a researched direction instead;
+the rotation is still computed and passed, because it is what the run
+falls back to when the bank is empty or thin (see orchestrator.scout). The run
 itself goes through the full content graph and -- with render/publish
 stubbed and both channels in shadow -- always ends as a hold_queue row.
 The morning ritual on /holds (approve/reject) is what grades the
@@ -61,6 +65,9 @@ def main(argv=None) -> int:
     # hold_queue row 13 / concept 111 on 2026-08-14). Pass --brand
     # explicitly only when you actually want it to differ from --channel.
     parser.add_argument("--brand", default=None)
+    parser.add_argument("--scout", action="store_true",
+                        help="use a spark from src.scout's bank, falling back "
+                             "to the rotation when it has nothing servable")
     args = parser.parse_args(argv)
 
     spark = args.spark or pick_spark(load_sparks(), date.today().timetuple().tm_yday)
@@ -70,7 +77,8 @@ def main(argv=None) -> int:
     from . import autonomy, db, orchestrator
 
     try:
-        result = orchestrator.run(spark, brand=args.brand, channel=args.channel)
+        result = orchestrator.run(spark, brand=args.brand, channel=args.channel,
+                                  scout=args.scout)
     except Exception as e:
         # the dead-man log gets the crash too -- a silent night looks
         # exactly like a healthy night unless failures leave a row
@@ -79,7 +87,10 @@ def main(argv=None) -> int:
         print(f"trigger: run crashed: {e}", file=sys.stderr)
         return 1
 
-    print(f"trigger: spark={spark!r} channel={args.channel} "
+    # the spark the run actually used, which --scout may have replaced --
+    # printing the requested one would make the log disagree with the concept
+    used = result.get("spark") or spark
+    print(f"trigger: spark={used!r} channel={args.channel} "
           f"attempts={result.get('attempts')} "
           f"concept_id={result.get('concept_id')} "
           f"hold_id={result.get('hold_id')} "

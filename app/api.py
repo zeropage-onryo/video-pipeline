@@ -41,7 +41,9 @@ from src import (
     presets,
     rag,
     rag_eval,
+    refbin,
     runway,
+    scout,
     settings,
     workflows,
     youtube,
@@ -113,6 +115,9 @@ def compute_capabilities() -> dict:
         "retrieve": store and gemini,          # query embeds with Gemini
         "pipeline.concepts": True,
         "pipeline.run": gemini,
+        # the scout crawls with the google_search tool on the same key
+        # every other stage uses, so the key is the whole gate
+        "scout": gemini,
         "pipeline.deny": True,                  # correction always lands; RAG chunk is best-effort
         "holds": True,
         "evals.golden": True,
@@ -627,7 +632,7 @@ def pipeline_concepts(brand: Optional[str] = None, status: Optional[str] = None,
 # Director, render and autopilot keep working unmodified. What is new is
 # that you get SEVERAL and the pick is recorded (preprod.pick_rate).
 
-async def _collect_refs(form, want_video: bool = False):
+async def _collect_refs(form, want_video: bool = False, drop_urls=None):
     """Every reference one composer submission carries, in both the
     forms the pipeline needs: BYTES for the Gemini call happening now,
     and URLS to store on the shot so the keyframe and the clip get them
@@ -637,7 +642,15 @@ async def _collect_refs(form, want_video: bool = False):
     /scenes/run, /pipeline/run and /generate/run -- and three copies of
     this is exactly how two of them ended up silently discarding the
     URLs (2026-08-28). Returns (image_refs, ref_urls, video_refs).
+
+    `drop_urls` refuses named picked photos before they are read. Only
+    /scenes/run passes it, and only for research images the submitted
+    idea has walked away from -- see scenes_run. Filtering HERE rather
+    than after the fact is what keeps ref_urls and image_refs in step;
+    they are built together and image_refs carries no URL to filter on
+    later.
     """
+    drop_urls = drop_urls or set()
     # local, like every other shootgen use here -- the module pulls in
     # google.genai and this file must stay cheap to import
     from src import shootgen
@@ -667,6 +680,8 @@ async def _collect_refs(form, want_video: bool = False):
     for picked in form.getlist("asset_photos"):
         picked = str(picked).split("?")[0]
         if not picked or picked in ref_urls or len(ref_urls) >= MAX_IMAGE_REFS:
+            continue
+        if picked in drop_urls:
             continue
         ref_urls.append(picked)
         target = _resolve_asset_photo(picked)
@@ -819,7 +834,32 @@ async def scenes_run(request: Request):
         count = SCENE_COUNT_DEFAULT
     count = max(1, min(SCENE_COUNT_MAX, count))
 
-    image_refs, refs, _ = await _collect_refs(form)
+    # A researched spark and an idea Mike typed himself are two separate
+    # paths, and this route is the only place they touch. The composer
+    # sends the id of whatever research was on screen; the SERVER decides
+    # whether this submission is still that research, because a
+    # client-side flag is exactly what goes stale when someone loads a
+    # spark and then types their own idea over it.
+    #
+    # One comparison, two consequences. If the idea is no longer the
+    # scout's spark then (a) the finding is not claimed -- burning a
+    # spark that wrote nothing would silently throw away research -- and
+    # (b) that pass's images do not ride along either. The second half
+    # matters more than it looks: those photos become the shot's `refs`,
+    # and refs[0] is the frame Runway anchors the whole clip on. His own
+    # idea anchored on a stranger's thumbnail is not his own idea.
+    try:
+        scout_finding_id = int(form.get("scout_finding_id") or 0)
+    except (TypeError, ValueError):
+        scout_finding_id = 0
+    scout_claimed = bool(scout_finding_id) and scout.claims(
+        scout_finding_id, idea, path=db.DB_PATH)
+    drop_urls = set()
+    if scout_finding_id and not scout_claimed:
+        drop_urls = {b["url"] for b in
+                     scout.bin_for_finding(scout_finding_id, path=db.DB_PATH)}
+
+    image_refs, refs, _ = await _collect_refs(form, drop_urls=drop_urls)
 
     def work(job):
         from google import genai
@@ -839,6 +879,10 @@ async def scenes_run(request: Request):
             attach_refs=_attach_scene_refs,
             progress=lambda fraction, detail: jobs.progress(job, fraction, detail))
         saved = result["scenes"]
+        if scout_claimed and saved:
+            scout.mark_used(scout_finding_id,
+                            run_id=f"concept:{saved[0]['concept_id']}",
+                            path=db.DB_PATH)
         detail = f"{len(saved)} concept(s)"
         for note in result["notes"]:
             detail += f" · {note}"
@@ -847,6 +891,82 @@ async def scenes_run(request: Request):
 
     job = jobs.start("scenes", f"concepts · {idea[:60]}", work)
     return {"job_id": job["id"], "image_refs": len(image_refs)}
+
+
+# --- the research scout -----------------------------------------------------
+# src/scout.py crawls, scores and banks; these two routes are how the
+# Create composer reaches the bank. The spark it hands back is a plain
+# line of text and the bin images are ordinary /refs/<sha>.jpg URLs --
+# the same shape a dragged-on photo gets -- so pressing Create after
+# loading one goes through exactly the path a hand-typed idea does.
+
+
+@router.get("/scout/spark")
+def scout_spark(brand: Optional[str] = None):
+    """The next researched spark for this brand, with the images from
+    the pass it was read out of.
+
+    Does NOT claim it. A person can load a spark, read it, and decide
+    against it without burning it -- the claim happens when a run
+    actually generates from it (see /scenes/run's `scout_finding_id`,
+    and orchestrator.planner on the nightly path).
+
+    An empty bank is a 200 with `spark: null`, not a 404: "nothing
+    researched yet" is a normal state of this surface, and the composer
+    renders it as an invitation to research rather than as an error.
+    """
+    brand = brand if brand in preprod.BRANDS else "antihero"
+    finding = scout.next_spark(brand, path=db.DB_PATH)
+    if not finding:
+        return {"spark": None, "brand": brand, "bin": [],
+                "banked": len(scout.list_findings(brand=brand, unused_only=True,
+                                                  path=db.DB_PATH))}
+    try:
+        sources = json.loads(finding.get("sources") or "[]")
+    except (TypeError, ValueError):
+        sources = []
+    return {
+        "brand": brand,
+        "spark": finding["spark"],
+        "finding_id": finding["id"],
+        "rationale": finding.get("rationale") or "",
+        "evidence": finding.get("evidence") or "",
+        "score": finding.get("score"),
+        "sources": sources,
+        "bin": [{"url": b["url"], "source_url": b.get("source_url") or "",
+                 "title": b.get("title") or "", "lane": b.get("lane") or "",
+                 "metric": b.get("metric") or ""}
+                for b in scout.bin_for_finding(finding["id"], path=db.DB_PATH)],
+    }
+
+
+class ScoutRunBody(BaseModel):
+    brand: Optional[str] = None
+    count: int = 4
+
+
+@router.post("/scout/run")
+def scout_run(body: ScoutRunBody):
+    """Fire one research pass as a job, so the crawl narrates on the
+    same SSE feed as everything else -- it takes tens of seconds and a
+    silent button is indistinguishable from a broken one."""
+    if not _gemini_key():
+        return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
+    brand = body.brand if body.brand in preprod.BRANDS else "antihero"
+    count = max(1, min(6, int(body.count or 4)))
+
+    def work(job):
+        jobs.progress(job, 0.15, "crawling")
+        result = scout.scout(brand, count, path=db.DB_PATH)
+        jobs.progress(job, 0.9, "banking")
+        if not result["ok"]:
+            raise RuntimeError(result["errors"][0] if result["errors"]
+                               else "the crawl found nothing usable")
+        detail = f"{len(result['findings'])} spark(s) · {len(result['bin'])} image(s)"
+        return {"detail": detail}
+
+    job = jobs.start("scout", f"research · {brand}", work)
+    return {"job_id": job["id"], "brand": brand}
 
 
 class PickBody(BaseModel):
@@ -1170,56 +1290,45 @@ _PHOTO_ROOTS = {
 # in exactly the sense a picked asset photo is -- it just had nowhere to
 # live, so it grounded one Gemini call and vanished. It lives here now,
 # beside the rendered clips, under the same gitignored data/ roof.
-UPLOAD_REFS_DIR = PROJECT_ROOT / "data" / "refs"
+#
+# The directory, the content-addressed name and the JPEG normalisation
+# moved to src/refbin.py once the scout started writing research images
+# into the same bin: src/ cannot import app/, so leaving the rule here
+# would have meant a second implementation of it, and a second writer
+# that drifts is how one photo ends up stored under two names. These
+# two names stay as the app-side spelling -- app/main.py mounts
+# UPLOAD_REFS_DIR, and several routes call _save_upload_ref.
+UPLOAD_REFS_DIR = refbin.REFS_DIR
 
 
 def _save_upload_ref(jpeg: bytes) -> Optional[str]:
     """Persist one uploaded reference, return the URL it rides on.
-
-    Content-addressed, so attaching the same photo to six scenes stores
-    it once. Best-effort: a full disk costs the reference, never the
-    scene that was being written."""
-    try:
-        UPLOAD_REFS_DIR.mkdir(parents=True, exist_ok=True)
-        name = hashlib.sha256(jpeg).hexdigest()[:24] + ".jpg"
-        target = UPLOAD_REFS_DIR / name
-        if not target.exists():
-            target.write_bytes(jpeg)
-        return f"/refs/{name}"
-    except Exception:
-        return None
+    Best-effort: a full disk costs the reference, never the scene that
+    was being written."""
+    return refbin.save(jpeg)
 
 
 def _resolve_asset_photo(url_path: str) -> Optional[Path]:
-    """A picked media-panel thumbnail arrives as its site-relative photo
-    URL (/locations/<space>/photo/<file>, ?thumb stripped). Resolve it
-    against the real photo roots with the same traversal guard the
-    photo routes use -- anything that escapes is silently dropped, an
-    attachment is an enhancement.
+    """A reference URL -> the file on disk, or None.
+
+    Delegates to src/asset_shelf.resolve_photo (2026-08-31). The rule
+    moved down there because the nightly graph resolves references at
+    6am with no web app running and cannot call this; two copies of a
+    path-traversal guard is the shape of bug where one of them is weaker
+    and nobody notices. Behaviour is unchanged: both URL shapes, the
+    ?thumb strip, and anything escaping its root silently dropped.
 
     Composer uploads (/refs/<name>.jpg) resolve here too, because every
     caller that turns a reference URL into bytes -- the scene writer,
     the Director graph's enhance/keyframe/clip nodes -- goes through
-    this one function. Teaching it the new shape is what makes an
-    uploaded photo reach the render at all."""
-    clean = (url_path or "").split("?")[0].strip("/")
-    parts = clean.split("/")
-    if len(parts) == 2 and parts[0] == "refs":
-        target = (UPLOAD_REFS_DIR / parts[1]).resolve()
-        if UPLOAD_REFS_DIR.resolve() != target.parent:
-            return None
-        return target if target.is_file() else None
-    if len(parts) != 4 or parts[2] != "photo":
-        return None
-    root = _PHOTO_ROOTS.get(parts[0])
-    if root is None:
-        return None
-    target = (root / parts[1] / parts[3]).resolve()
-    if root.resolve() not in target.parents:
-        return None
-    if not target.is_file() or target.suffix.lower() not in IMAGE_EXTENSIONS:
-        return None
-    return target
+    this one function. The research scout writes into the same bin, so
+    a crawled image needs no new route and no new resolver.
+    """
+    # roots injected (the tests point them at a tmp_path); the refs
+    # directory deliberately NOT injected -- src/refbin.py owns it in
+    # both directions, so the reader has to follow refbin.REFS_DIR or
+    # it moves while the writer stays on the real folder.
+    return asset_shelf.resolve_photo(url_path, roots=_PHOTO_ROOTS)
 
 
 MAX_VIDEO_REFS = 2   # a video ref is heavy; two is plenty of grounding
@@ -1278,29 +1387,9 @@ _DECODES_NATIVELY = {".jpg", ".jpeg", ".png", ".webp"}
 
 
 def _to_jpeg(data: bytes) -> Optional[bytes]:
-    import io
-
-    from PIL import Image
-    try:
-        import pillow_heif  # iPhone photos, when it is installed
-        pillow_heif.register_heif_opener()
-    except Exception:
-        pass                         # degrade: .heic simply stays unreadable
-    try:
-        from PIL import ImageOps
-        image = Image.open(io.BytesIO(data))
-        # BEFORE convert("RGB"), which drops the EXIF this reads. Every
-        # still off an iPhone is stored landscape with orientation 6 --
-        # a portrait only because a tag says so. Converting first threw
-        # the tag away and baked the photo in sideways, and
-        # _save_upload_ref then wrote that sideways file to data/refs
-        # where nothing downstream could ever recover it (2026-08-28).
-        image = ImageOps.exif_transpose(image).convert("RGB")
-        buf = io.BytesIO()
-        image.save(buf, "JPEG", quality=90)
-        return buf.getvalue()
-    except Exception:
-        return None   # not a readable image -- skip, never fail the run
+    """Any readable upload -> upright RGB JPEG. See src/refbin.to_jpeg
+    for why the EXIF transpose has to happen before the RGB convert."""
+    return refbin.to_jpeg(data)
 
 
 def scene_grounding(brand: str, spark) -> str:

@@ -237,6 +237,57 @@ h1{
 .gph:hover .mname{opacity:1}
 
 /* retrieval — opens only when there's a query */
+/* ── THE RESEARCH SCOUT CARD ─────────────────────────
+   Sits between the composer and the grounding readout, because that is
+   the order the person reads in: the idea, then where it came from,
+   then what it retrieved. Borrows .rhead/.live from .retr so a crawled
+   spark and a vector hit look like the same system. */
+.scoutcard{margin-top:12px;overflow:hidden}
+.scoutcard .rhead .ax{
+  width:18px;height:18px;border-radius:var(--rp);background:transparent;
+  border:1px solid var(--line-hi);color:var(--dim);font-size:9px;
+  display:grid;place-items:center;cursor:pointer;flex:none;
+}
+.scoutcard .rhead .ax:hover{color:var(--text);border-color:var(--signal)}
+.scoutwhy{padding:0 24px 4px}
+.swhy{font-size:13.5px;line-height:1.5;color:var(--text)}
+.sev{
+  font-size:12.5px;line-height:1.5;color:var(--dim);margin-top:6px;
+  padding-left:10px;border-left:1px solid var(--line-hi);
+}
+.ssrcs{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.ssrc{
+  font-family:var(--mono);font-size:9px;letter-spacing:.11em;text-transform:uppercase;
+  color:var(--dimmer);text-decoration:none;padding:3px 8px;border-radius:var(--rp);
+  border:1px solid var(--line);
+}
+.ssrc:hover{color:var(--dim);border-color:var(--line-hi)}
+
+/* The bin. Every tile carries its source link -- these are other
+   people's frames held as mood reference, and an unattributed tile in
+   front of someone about to render from it is the wrong affordance. */
+.scoutbin{display:flex;gap:8px;flex-wrap:wrap;padding:14px 24px 20px}
+/* The idea has been typed over, so the server will drop these. Shown
+   rather than removed: the references come straight back if he restores
+   the spark, and silently emptying the bar on one keystroke is worse
+   than dimming it. */
+.scoutbin.dropped .btile,
+.attachbar .attach.dropped{opacity:.28;filter:grayscale(1)}
+.scoutbin:empty{display:none}
+.btile{
+  width:96px;height:96px;margin:0;border-radius:10px;border:1px solid var(--line-hi);
+  background-size:cover;background-position:center;position:relative;overflow:hidden;flex:none;
+}
+.btile figcaption{
+  position:absolute;left:0;right:0;bottom:0;padding:4px 6px;
+  background:linear-gradient(transparent,rgb(0 0 0 / .82));
+}
+.btile figcaption a{
+  font-family:var(--mono);font-size:8px;letter-spacing:.1em;text-transform:uppercase;
+  color:rgb(255 255 255 / .78);text-decoration:none;
+}
+.btile figcaption a:hover{color:#fff;text-decoration:underline}
+
 .retr{
   margin-top:12px;overflow:hidden;max-height:0;opacity:0;
   transition:max-height 380ms cubic-bezier(.22,.61,.36,1),opacity 260ms,margin-top 380ms;
