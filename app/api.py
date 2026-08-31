@@ -552,6 +552,14 @@ def _concept_card(c: dict) -> dict:
     status = "shot" if c.get("shot_done") else (
         "planned" if c.get("has_shot_list") else "idea")
     location_names = [loc["name"] for loc in c.get("locations") or []]
+    # ONE line saying what happens, so the board can be scanned instead
+    # of read (2026-08-31). The writer supplies it; concept_summary caps
+    # it to one line and derives one from the prompt for older rows.
+    first_shot = (c.get("shots") or [{}])[0]
+    summary = preprod.concept_summary(
+        c.get("logline") or c.get("hook") or "",
+        first_shot.get("prompt") or "",
+    ) if c.get("is_scene") else ""
     grounded = []
     for name in location_names:
         photos = _location_photos(name)
@@ -561,6 +569,7 @@ def _concept_card(c: dict) -> dict:
         "id": c["id"], "n": f"SHOOT-{c['id']:02d}",
         "title": c.get("title"), "hook": c.get("hook"),
         "logline": c.get("logline") or c.get("hook") or "",
+        "summary": summary,
         "brand": c.get("brand"), "spark": c.get("spark"),
         "status": status,
         "shot_count": len(c.get("shots") or []),

@@ -77,6 +77,7 @@ async function renderPending() {
         <span class="spacer"></span>
         <span class="m">${c.parked ? 'READY · AWAITING APPROVAL' : 'PICKED'}</span>
       </div>
+      ${c.summary ? `<p class="scsum" title="${esc(c.summary)}">${esc(c.summary)}</p>` : ''}
       ${c.reference_image
         ? `<img class="scshot" src="${esc(c.reference_image)}" alt="">` : ''}
       <p class="scprompt">${esc(c.prompt)}</p>

@@ -362,3 +362,117 @@ def test_rejecting_unpicks_and_archives(tmp_db):
     assert res.json()["pick"]["picked"] == 0
     concept = preprod.get_concept(scene_id, path=tmp_db)
     assert concept["picked"] is False and concept["archived"] is True
+
+
+# --- the one line the board is read by ---------------------------------------
+# A scene prompt is ~1200 characters of camera, grade, beats and
+# avoid-list; four of them open at once is what the summary replaces
+# (2026-08-31). The writer supplies `logline`, the card caps it to one
+# line, and a row written before the prompt asked for one gets a line
+# derived from its own prompt rather than a blank.
+
+def test_writer_logline_is_saved_and_served_as_the_card_summary(tmp_db, monkeypatch):
+    def fake_model(client_, model, contents, **_):
+        return json.dumps({"scenes": [{
+            "title": "The Garage Guest",
+            "logline": "Michael finds a cyclops polishing his silverware",
+            "location": "garage", "prompt": "P1"}]})
+
+    monkeypatch.setattr("src.shootgen.generate_with_retry", fake_model)
+    # the prompt template has to ASK for it, or nothing arrives to save
+    assert "logline" in shootgen.build_scenes_prompt("x", "zeropage", 2, [])
+
+    result = shootgen.generate_scene_concepts("x", "zeropage", count=1, db_path=tmp_db)
+    saved = preprod.get_concept(result["scenes"][0]["concept_id"], path=tmp_db)
+    assert saved["logline"] == "Michael finds a cyclops polishing his silverware"
+
+    card = next(c for c in client.get("/api/pipeline/concepts").json()["items"]
+                if c["id"] == saved["id"])
+    assert card["summary"] == "Michael finds a cyclops polishing his silverware"
+
+
+def test_a_missing_logline_never_leaves_a_card_blank(tmp_db, monkeypatch):
+    """The model skipping the key, or a row written before it existed."""
+    def fake_model(client_, model, contents, **_):
+        return json.dumps({"scenes": [{"title": "Untitled", "prompt": (
+            "Ultra-realistic grounded dark comedy video in 9:16. "
+            "Style: raw handheld, muted colour. "
+            "Beats: Open on a low-angle shot of Michael wrestling a breathing "
+            "sofa. He loses. No background music.")}]})
+
+    monkeypatch.setattr("src.shootgen.generate_with_retry", fake_model)
+    result = shootgen.generate_scene_concepts("x", "zeropage", count=1, db_path=tmp_db)
+    card = next(c for c in client.get("/api/pipeline/concepts").json()["items"]
+                if c["id"] == result["scenes"][0]["concept_id"])
+    # derived from the BEATS block, with the camera direction taken off
+    assert card["summary"].startswith("Michael wrestling a breathing sofa")
+    assert "low-angle" not in card["summary"]
+
+
+def test_the_summary_fits_one_line_of_the_narrowest_card():
+    """Both caps, and both cut on a WORD boundary -- a line that ends
+    mid-word is what "cuts off" looked like before."""
+    out = preprod.concept_summary(" ".join(f"word{i}" for i in range(40)))
+    assert len(out.split(" ")) == preprod.SUMMARY_WORDS and out.endswith("…")
+
+    # 8 short words are under the word cap but over the character one
+    wordy = "Michael investigates the extraordinarily complicated mechanical contraption downstairs"
+    out = preprod.concept_summary(wordy)
+    assert len(out) <= preprod.SUMMARY_CHARS + 1        # +1 for the ellipsis
+    assert "…" in out and not out.replace("…", "").endswith(" ")
+    assert wordy.startswith(out.replace("…", ""))       # never cut mid-word
+
+    # one that already fits is printed whole, with no ellipsis at all
+    fits = "Michael finds a cyclops asleep in his bed"
+    assert preprod.concept_summary(fits) == fits
+
+    assert "\n" not in preprod.concept_summary("two\nlines here")
+    # nothing to say and nothing to derive from stays empty, so the card
+    # drops the line rather than printing a stub
+    assert preprod.concept_summary("", "") == ""
+
+
+def test_the_backfill_writes_lines_by_the_same_rules_as_the_writer(monkeypatch):
+    """One copy of the rules. A backfilled logline that obeyed different
+    ones would be a second voice on the same board. All the rows go in
+    ONE call -- the model is regularly throttled, and N calls is N waits."""
+    seen = {}
+
+    def fake_model(client_, model, contents, **_):
+        seen["prompt"] = contents
+        return ('```json\n{"loglines": {"7": "  Michael wrestles a breathing sofa  ",\n'
+                '"9": "Cyclops tears the wall open", "11": "  "}}\n```')
+
+    monkeypatch.setattr("src.shootgen.generate_with_retry", fake_model)
+    lines = shootgen.write_loglines({7: "prompt seven", 9: "prompt nine", 11: "p"})
+
+    # fences, padding and quotes gone; ids are ints; an empty line is
+    # dropped rather than written over a real row
+    assert lines == {7: "Michael wrestles a breathing sofa",
+                     9: "Cyclops tears the wall open"}
+    assert all(f"SCENE {i}" in seen["prompt"] for i in (7, 9, 11))
+    assert shootgen.LOGLINE_RULES in seen["prompt"]
+    # and the writer's own template gets that same block, not a copy
+    assert shootgen.LOGLINE_RULES in shootgen.build_scenes_prompt("x", "zeropage", 2, [])
+    assert "{logline_rules}" not in shootgen.build_scenes_prompt("x", "zeropage", 2, [])
+
+
+def test_the_backfill_targets_anything_the_card_would_trim(tmp_db):
+    """Empty AND too-long both count -- a 148-character logline from the
+    singular writer is what the ellipsis was eating."""
+    from ops import backfill_loglines
+
+    def concept(logline):
+        cid = preprod.save_concept(
+            {"title": "T", "hook": "", "logline": logline,
+             "shots": [{"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
+                        "desc": "T", "prompt": "Beats: something happens."}]},
+            brand="zeropage", prompt_template="T", path=tmp_db)
+        return preprod.get_concept(cid, path=tmp_db)
+
+    assert backfill_loglines.needs_one(concept(""))
+    assert backfill_loglines.needs_one(concept(
+        "In a dark, gritty garage, Michael prepares his motorcycle for the "
+        "night under the silent, watchful gaze of a massive cyclops"))
+    assert not backfill_loglines.needs_one(
+        concept("Michael finds a cyclops asleep in his bed"))

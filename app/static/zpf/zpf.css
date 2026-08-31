@@ -478,6 +478,25 @@ html[data-v="studio"] #gl{opacity:1;transition:opacity .5s}
   width:100%;max-height:340px;object-fit:cover;object-position:center top;
   border-radius:var(--r1);border:1px solid var(--line);display:block;
 }
+/* the one line the card is actually read by. Kept to ONE line on
+   purpose -- the point is comparing four cards on one screen, and a
+   summary that wraps is a paragraph again. Full text on hover (title). */
+.scsum{
+  font-size:14.5px;line-height:1.5;color:var(--text);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+/* the prompt, folded away. Open one when you want the craft detail. */
+.scdet{border-top:1px solid var(--line);padding-top:11px}
+.scdet>summary{
+  cursor:pointer;list-style:none;display:flex;align-items:center;gap:7px;width:max-content;
+  transition:color var(--t);
+}
+.scdet>summary::-webkit-details-marker{display:none}
+.scdet>summary::before{content:'▸';font-size:9px;transition:transform var(--t)}
+.scdet[open]>summary{color:var(--text)}
+.scdet[open]>summary::before{transform:rotate(90deg)}
+.scdet>summary:hover{color:var(--text)}
+.scdet .scprompt{margin-top:11px}
 .scprompt{
   font-size:13px;line-height:1.62;color:var(--dim);max-height:210px;overflow-y:auto;
   white-space:pre-wrap;padding:12px 14px;border-radius:var(--r1);

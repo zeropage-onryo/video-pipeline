@@ -10,6 +10,14 @@
    label (preprod.pick_rate). Nothing renders from here: a picked
    concept moves to Queue, and approving it there is what calls Runway.
 
+   The card leads with ONE line saying what happens (2026-08-31). A
+   scene prompt is ~1200 characters of camera, grade, beats and
+   avoid-list, and four of those open at once meant reading every one to
+   find out what the concepts even were -- so the summary is the card
+   and the prompt is folded away behind a toggle. The line comes from
+   the writer (`logline`); app/api.py caps it to one line and derives
+   one from the prompt for rows written before it was asked for.
+
    Leaving the board is archiving, never deleting (2026-08-28). An
    unpicked row is the only negative signal this system collects -- if
    the ones you passed over were deleted, pick_rate would read 100%
@@ -22,6 +30,10 @@ import { openConceptInDirector } from './workflows.js';
 let wired = false;
 let filter = '';               // '' open | picked | archived
 let items = [];
+// which cards have their prompt open. Kept out here because the board
+// re-renders whole on every pick/archive, and a <details> that snapped
+// shut every time you picked a sibling would be worse than no toggle.
+const openPrompts = new Set();
 
 const $ = id => document.getElementById(id);
 
@@ -58,8 +70,12 @@ function card(c) {
       ${clip}
       <span class="m">${status}</span>
     </div>
+    ${c.summary ? `<p class="scsum" title="${esc(c.summary)}">${esc(c.summary)}</p>` : ''}
     ${shot}
-    <p class="scprompt">${esc(c.prompt)}</p>
+    <details class="scdet"${openPrompts.has(c.id) ? ' open' : ''}>
+      <summary class="m">Prompt</summary>
+      <p class="scprompt">${esc(c.prompt)}</p>
+    </details>
     ${(c.warnings || []).length
       ? `<div class="cwarn">${c.warnings.map(w => '⚠ ' + esc(w)).join('<br>')}</div>` : ''}
     <div class="scfoot">
@@ -108,6 +124,9 @@ export async function renderBoard() {
 
   list.querySelectorAll('.scene').forEach(el => {
     const id = Number(el.dataset.id);
+    const det = el.querySelector('.scdet');
+    if (det) det.addEventListener('toggle', () =>
+      det.open ? openPrompts.add(id) : openPrompts.delete(id));
     el.querySelectorAll('[data-act]').forEach(btn => btn.onclick = async () => {
       const act = btn.dataset.act;
       if (act === 'direct') { openConceptInDirector(id); return; }

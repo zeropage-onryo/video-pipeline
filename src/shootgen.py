@@ -951,6 +951,69 @@ def generate_scene_concept(brand: str, spark=None, gemini_client=None,
     return {"concept_id": concept_id, "concept": concept, "warnings": warnings}
 
 
+# The one line the board is read by. ONE copy of the rules, injected
+# into scenes_prompt.txt AND used by write_logline below, because a
+# backfilled line that obeys different rules than the writer's is a
+# second voice on the same board (2026-08-31).
+LOGLINE_RULES = """Also give each scene a "logline": ONE very short line saying what actually
+happens in it, so the filmmaker can tell the takes apart at a glance without
+reading the prompts. It has to fit on ONE line of a narrow card, so the length
+is a hard limit, not a preference: AT MOST 8 WORDS AND UNDER 50 CHARACTERS.
+One sentence, no trailing period, plain concrete action — who does what and
+what goes wrong. Name the character and the thing, never the craft: no camera,
+lens, grade, lighting or mood words, and never "a scene in which". Cut every
+adjective that is not doing work; "massive", "frustrated" and "mysterious" are
+the first to go.
+Good: "Michael finds a cyclops asleep in his bed"   (40 characters)
+Good: "Cyclops stretches the wall's latex until it tears"   (48)
+Bad:  "A raw handheld dark-comedy piece exploring domestic unease"   (craft, not action)
+Bad:  "Michael discovers a massive cyclops curiously inspecting his Ducati Panigale"   (76 — far too long)
+"""
+
+
+def build_loglines_prompt(scene_prompts: dict) -> str:
+    """Read loglines OFF scene prompts that already exist -- for rows
+    written before the writer was asked for one, or with one too long to
+    fit the card. Same rules as the writer (LOGLINE_RULES), so a
+    backfilled card reads like its neighbours.
+
+    ALL of them in one call, for the two reasons generate_scene_concepts
+    batches: they come back varied against each other rather than rolled
+    independently, and it is one round trip instead of N against a model
+    that is regularly throttled."""
+    scenes = "\n\n".join(f"=== SCENE {sid} ===\n{prompt}"
+                          for sid, prompt in scene_prompts.items())
+    return (f"{LOGLINE_RULES}\n\n"
+            "Below are scene prompts that were written without a usable "
+            "logline, each under its own id. Write one for each, obeying the "
+            "rules above. Return STRICT JSON ONLY, no fences, no preamble, in "
+            'this shape: {"loglines": {"<id>": "the logline", ...}}\n\n'
+            f"{scenes}")
+
+
+def parse_loglines_response(text: str) -> dict:
+    """The testable seam: raw model text -> {int id: one-line string}.
+    Tolerant of a bare mapping as well as the documented wrapper, and it
+    drops anything empty rather than writing a blank over a real row."""
+    data = json.loads(strip_fences(text))
+    raw = data.get("loglines") if isinstance(data, dict) and "loglines" in data else data
+    out = {}
+    for sid, line in (raw or {}).items():
+        line = " ".join(str(line or "").split()).strip('"')
+        if line:
+            out[int(sid)] = line
+    return out
+
+
+def write_loglines(scene_prompts: dict, gemini_client=None,
+                   model: str = MODEL) -> dict:
+    """A logline for each {id: scene prompt}, one call, one line each."""
+    if not scene_prompts:
+        return {}
+    return parse_loglines_response(generate_with_retry(
+        gemini_client, model, build_loglines_prompt(scene_prompts)))
+
+
 def build_scenes_prompt(idea: str, brand: str, count: int, locations: list,
                         references: str = "", cast=None) -> str:
     """N standalone scene prompts off ONE idea, in the same proven
@@ -960,6 +1023,7 @@ def build_scenes_prompt(idea: str, brand: str, count: int, locations: list,
     template = (PROMPTS_DIR / "scenes_prompt.txt").read_text()
     example = gold_standard_example() or "(no gold-standard example on file)"
     return (template
+            .replace("{logline_rules}", LOGLINE_RULES)
             .replace("{count}", str(count))
             .replace("{idea}", (idea or "").strip() or "(no idea given — surprise me)")
             .replace("{brand}", load_brand(brand))
@@ -972,7 +1036,15 @@ def build_scenes_prompt(idea: str, brand: str, count: int, locations: list,
 def parse_scenes_response(text: str) -> list:
     """Tolerant of the two shapes a model reaches for: the documented
     {"scenes": [...]} and a bare array. Anything without a prompt is
-    dropped here rather than saved as an unrenderable row."""
+    dropped here rather than saved as an unrenderable row.
+
+    `logline` is the one line the board shows under the title so the
+    scenes can be told apart without reading four scene prompts. It is
+    OPTIONAL here on purpose -- a model that skips the key still yields
+    a renderable scene, and preprod.concept_summary derives a line from
+    the prompt for any row that arrives without one. Newlines are
+    collapsed because the card gives it exactly one line.
+    """
     data = json.loads(strip_fences(text))
     raw = data.get("scenes") if isinstance(data, dict) else data
     scenes = []
@@ -984,6 +1056,7 @@ def parse_scenes_response(text: str) -> list:
             continue
         scenes.append({
             "title": (item.get("title") or "Untitled scene").strip(),
+            "logline": " ".join((item.get("logline") or "").split()),
             "location": (item.get("location") or "").strip(),
             "prompt": prompt,
         })
@@ -1050,20 +1123,23 @@ def generate_scene_concepts(idea: str, brand: str, count: int = 4,
     hashed = prompt + (f"\n\n[{template_tag}]" if template_tag else "")
     saved = []
     for scene in scenes:
+        logline = scene.get("logline") or ""
         shot = {"n": 1, "type": "BROLL", "source": "AI",
                 "tool": (tool or DEFAULT_SCENE_TOOL).upper(),
-                "desc": scene["title"], "prompt": scene["prompt"],
+                "desc": logline or scene["title"], "prompt": scene["prompt"],
                 "refs": list(refs or [])}
         if scene.get("location"):
             shot["location"] = scene["location"]
-        concept = {"title": scene["title"], "hook": "", "logline": "",
+        # logline is the label the board reads, never an input to a
+        # render -- see parse_scenes_response and preprod.concept_summary
+        concept = {"title": scene["title"], "hook": "", "logline": logline,
                    "shots": [shot]}
         warnings = validate_concept(concept, location_names, allowed_tools=allowed)
         concept_id = preprod.save_concept(
             concept, brand=brand, spark=idea, prompt_template=hashed,
             warnings=warnings, **kwargs)
         saved.append({"concept_id": concept_id, "title": scene["title"],
-                      "warnings": warnings})
+                      "logline": logline, "warnings": warnings})
     return {"scenes": saved, "prompt_template": hashed}
 
 

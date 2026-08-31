@@ -18,6 +18,7 @@ pitches, and it costs one column to keep.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Optional
 
@@ -327,6 +328,83 @@ def save_concept(
                 (concept_id, location_id),
             )
         return concept_id
+
+
+# --- the one line a card shows -----------------------------------------------
+# The board's whole job is choosing between several concepts, and a
+# scene prompt is ~1200 characters of camera, grade and beats -- reading
+# four of those to find out what happens is what the summary line
+# replaces (2026-08-31). The writer supplies it as `logline`; these two
+# helpers are the safety net for a row that has none (every concept
+# written before the prompt asked for one) and the hard cap that keeps
+# it to ONE line whatever the model returned.
+
+# Measured, not guessed (2026-08-31). .scenegrid is
+# repeat(auto-fill,minmax(380px,1fr)) capped at 1680px, so the NARROWEST
+# a card ever gets is a 4-column row on a wide screen: a 349px text box,
+# which fits ~54 average characters at 14.5px. Budget under that and cut
+# on a word boundary -- a line trimmed at a word reads as a short
+# summary, where the CSS ellipsis mid-word reads as broken.
+SUMMARY_WORDS = 8
+SUMMARY_CHARS = 52
+
+# Camera-craft openers the beats almost always start with. Stripping
+# them is what turns "Open on an extreme macro of a pale membrane pinned
+# over a hole" into "a pale membrane pinned over a hole" -- the summary
+# is meant to say what happens, and framing is not what happens.
+_OPENERS = re.compile(
+    r"""^\s*(?:the\s+(?:scene|video|clip|film)\s+)?(?:
+        (?:begin|begins|open|opens|start|starts|starting|opening)
+        (?:\s+(?:on|with|in))?\s+
+        (?:an?\s+|the\s+)?
+        (?:(?:extreme\s+|low[- ]angle\s+|high[- ]angle\s+|wide\s+|close\s+|macro\s+|tight\s+|
+             handheld\s+|static\s+|slow\s+)*
+           (?:shot|macro|angle|close[- ]up|frame|framing|push[- ]in|pan|tilt)
+           (?:\s+(?:of|on|at))?\s+)?
+      | the\s+camera\s+\w+(?:s)?(?:\s+(?:on|to|in|at|from))?\s+
+    )""",
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def derive_logline(prompt: str) -> str:
+    """A summary read out of the prompt itself, for a concept the writer
+    gave no logline. First sentence of the BEATS block with the camera
+    direction taken off the front -- coarse on purpose: this is the
+    fallback, and a concept written today carries a real logline."""
+    text = (prompt or "").strip()
+    if not text:
+        return ""
+    beats = re.split(r"\bbeats?\s*:", text, maxsplit=1, flags=re.IGNORECASE)
+    # No BEATS header: skip the open line and the style block, which are
+    # boilerplate in every prompt this pipeline writes.
+    body = beats[1] if len(beats) > 1 else re.split(
+        r"\bstyle\s*:[^.]*\.", text, maxsplit=1, flags=re.IGNORECASE)[-1]
+    sentence = re.split(r"(?<=[.!?])\s+", body.strip(), maxsplit=1)[0]
+    return _OPENERS.sub("", sentence).strip()
+
+
+def concept_summary(logline: str = "", prompt: str = "",
+                    words: int = SUMMARY_WORDS,
+                    chars: int = SUMMARY_CHARS) -> str:
+    """The line the card prints, capped so it stays ONE line at the
+    narrowest a card gets: the writer's logline when there is one,
+    otherwise derive_logline. Both caps cut on a word boundary."""
+    line = " ".join((logline or "").split())
+    if not line:
+        line = " ".join(derive_logline(prompt).split())
+    if not line:
+        return ""
+    line = line.rstrip(" .,;:—-")
+    parts = line.split(" ")
+    cut = len(parts) > words
+    if cut:
+        parts = parts[:words]
+    while len(" ".join(parts)) > chars and len(parts) > 1:
+        parts.pop()
+        cut = True
+    line = " ".join(parts).rstrip(" .,;:—-") + ("…" if cut else "")
+    return line[:1].upper() + line[1:]
 
 
 def _concept_row(row, conn) -> dict[str, Any]:
