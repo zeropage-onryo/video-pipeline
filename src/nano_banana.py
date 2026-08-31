@@ -32,6 +32,11 @@ from .shot import Shot
 
 MODEL = os.environ.get("NANO_BANANA_MODEL", "gemini-2.5-flash-image")
 DAILY_CAP = int(os.environ.get("NANO_DAILY_CAP", "20"))
+# The installation-wide wall, beside the per-account one. Defaults to the
+# SAME number, so a single-operator database behaves exactly as it did --
+# admitting a second account is what forces a deliberate decision about
+# whose card is paying, instead of the total quietly doubling.
+GLOBAL_DAILY_CAP = int(os.environ.get("NANO_GLOBAL_DAILY_CAP", str(DAILY_CAP)))
 RETRIES = int(os.environ.get("NANO_RETRIES", "3"))
 RETRY_DELAY = 4.0
 
@@ -106,20 +111,17 @@ def _client():
     return genai.Client()
 
 
-def generations_today(db_path=None) -> int:
-    """Nano generations logged since UTC midnight -- what DAILY_CAP
-    counts against, read from the same generations table the
-    scoreboards do."""
-    today = datetime.now(timezone.utc).date().isoformat()
-    with generative.connect(db_path if db_path is not None else DB_PATH) as conn:
-        row = conn.execute(
-            "SELECT COUNT(*) FROM generations WHERE tool = 'nano' AND created_at >= ?",
-            (today,),
-        ).fetchone()
-        return row[0]
+def generations_today(db_path=None, *, account_id=None, everyone: bool = False) -> int:
+    """This account's nano generations since UTC midnight -- what
+    DAILY_CAP counts against. `everyone=True` gives the installation-wide
+    count that GLOBAL_DAILY_CAP counts against."""
+    return generative.used_today(
+        "nano", db_path if db_path is not None else DB_PATH,
+        account_id=account_id, everyone=everyone,
+    )
 
 
-def _shot_row_for_prompt(prompt: str, db_path) -> int:
+def _shot_row_for_prompt(prompt: str, db_path, account_id: Optional[int] = None) -> int:
     """A generations row needs a shot to hang off; a free-standing
     canvas prompt doesn't have one, so synthesize a minimal Shot --
     the row exists to make the attempt countable."""
@@ -127,7 +129,7 @@ def _shot_row_for_prompt(prompt: str, db_path) -> int:
     generative.init(**kwargs)
     shot = Shot(subject=prompt[:100], action="as prompted")
     return generative.add_shot(shot, notes="auto-created by nano_banana.generate_from_prompt",
-                               **kwargs)
+                               **kwargs, account_id=account_id)
 
 
 def _generate_content(client, model: str, parts, config=None):
@@ -286,7 +288,9 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
                          model: str = MODEL, client=None,
                          aspect_ratio: str = ASPECT_RATIO,
                          image_size: str = IMAGE_SIZE,
-                         concept_id=None) -> dict:
+                         concept_id=None,
+                         account_id: Optional[int] = None,
+) -> dict:
     """
     Never raises: {"ok", "media_url", "generation_id", "path", "error"}.
     The Workflows canvas's Nano Banana node: prompt in, an image under
@@ -311,11 +315,16 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
             return {"ok": False, "error": "GEMINI_API_KEY not set"}
 
         generative.init(**kwargs)
-        used = generations_today(db_path=db_path)
-        if used >= DAILY_CAP:
-            return {"ok": False,
-                    "error": f"daily cap: {used}/{DAILY_CAP} images generated "
-                             f"today (NANO_DAILY_CAP to raise)"}
+        refusal = generative.cap_error(
+            "nano", 1, account_id=account_id,
+            per_account=DAILY_CAP, ceiling=GLOBAL_DAILY_CAP,
+            path=db_path if db_path is not None else DB_PATH,
+            env_prefix="NANO", phrase="images generated",
+            used=generations_today(db_path=db_path, account_id=account_id),
+            used_everywhere=generations_today(db_path=db_path, everyone=True),
+        )
+        if refusal:
+            return {"ok": False, "error": refusal}
 
         references = as_reference_list(reference_image)
 
@@ -342,7 +351,8 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
                     **({"concept_id": concept_id} if concept_id else {})},
             output_path=str(out_path),
             **kwargs,
-        )
+        
+            account_id=account_id,)
 
         if storage.configured():
             media_url = storage.upload_file(

@@ -181,7 +181,7 @@ def describe_locations(root: Path, client=None, db_path=None, force: bool = Fals
             failed += 1
             continue
 
-        preprod.add_location(name, description, photo_count=len(photos), **kwargs)
+        preprod.add_location(name, description, photo_count=len(photos), **kwargs, account_id=account_id)
         described += 1
 
     return {"described": described, "skipped": skipped, "failed": failed}

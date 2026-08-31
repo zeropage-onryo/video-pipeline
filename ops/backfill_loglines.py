@@ -20,11 +20,12 @@ re-running is free. Run from the project root:
 """
 import os
 import sys
+from typing import Optional
 
 from dotenv import load_dotenv
 from google import genai
 
-from src import db, preprod, shootgen
+from src import accounts, db, preprod, shootgen
 
 
 def needs_one(concept: dict) -> bool:
@@ -44,7 +45,12 @@ def needs_one(concept: dict) -> bool:
     return preprod.concept_summary(logline).endswith("…")
 
 
-def main(write: bool) -> int:
+def main(write: bool, account_id: Optional[int] = None) -> int:
+    # A one-off ops script has no session. Without this it acts as
+    # nobody, and after the tenancy backfill nobody owns no rows --
+    # so it would report zero work and look like a clean run.
+    if account_id is None:
+        account_id = accounts.resolve_account()
     load_dotenv()
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
@@ -53,8 +59,8 @@ def main(write: bool) -> int:
     client = genai.Client(api_key=api_key)
 
     wanted, titles = {}, {}
-    for row in preprod.list_concepts(limit=1000, path=db.DB_PATH):
-        concept = preprod.get_concept(row["id"], path=db.DB_PATH)
+    for row in preprod.list_concepts(limit=1000, path=db.DB_PATH, account_id=account_id):
+        concept = preprod.get_concept(row["id"], path=db.DB_PATH, account_id=account_id)
         if needs_one(concept):
             wanted[concept["id"]] = concept["shots"][0]["prompt"]
             titles[concept["id"]] = concept["title"]
@@ -74,8 +80,10 @@ def main(write: bool) -> int:
         print(f"  SHOOT-{concept_id:02d} {titles[concept_id][:26]:<28} — {line}{flag}")
         if write:
             with preprod.connect(db.DB_PATH) as conn:
-                conn.execute("UPDATE shoot_concepts SET logline = ? WHERE id = ?",
-                             (line, concept_id))
+                conn.execute(
+                    "UPDATE shoot_concepts SET logline = ? "
+                    "WHERE id = ? AND account_id IS ?",
+                    (line, concept_id, account_id))
         touched += 1
     print(f"\n{touched} concept(s) {'updated' if write else 'would be updated'}")
     return touched

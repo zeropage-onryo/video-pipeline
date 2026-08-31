@@ -21,7 +21,7 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
-from . import db
+from . import accounts, db
 
 WIRED_PLATFORMS = ("youtube", "instagram")
 
@@ -75,9 +75,18 @@ def main(argv=None):
                         help="only this platform (default: every platform with posts)")
     parser.add_argument("--no-promote", action="store_true",
                         help="refresh metrics only; skip the promote_winners step")
+    parser.add_argument(
+        "--account", default=None,
+        help=(
+            "The account to act as, by slug (zeropage / antihero). "
+            "Defaults to the oldest account on the database -- the nightly "
+            "job has no session, and acting as nobody would find no videos."
+        ),
+    )
     args = parser.parse_args(argv)
+    account_id = accounts.resolve_account(args.account)
 
-    summary = refresh_all(platform=args.platform)
+    summary = refresh_all(platform=args.platform, account_id=account_id)
     for p, s in summary.items():
         line = f"{p}: refreshed {s['refreshed']}/{s['videos']}"
         if s["failed"]:

@@ -31,17 +31,17 @@ def _concept(title="A concept"):
 
 
 def test_save_judge_score_persists_on_the_concept(tmp_db):
-    cid = preprod.save_concept(_concept(), "antihero", path=tmp_db)
+    cid = preprod.save_concept(_concept(), "antihero", path=tmp_db, account_id=None)
     preprod.save_judge_score(
         cid, {"overall": 8, "taste_fit": 9, "performance": 7, "reasons": ["r1", "r2"]},
-        path=tmp_db)
+        path=tmp_db, account_id=None)
     c = preprod.get_concept(cid, path=tmp_db, account_id=None)
     assert c["judge_overall"] == 8 and c["judge_taste"] == 9 and c["judge_perf"] == 7
     assert "r1" in c["judge_reason"]
 
 
 def test_grade_route_scores_and_stores(tmp_db, monkeypatch):
-    cid = preprod.save_concept(_concept(), "antihero", path=tmp_db)
+    cid = preprod.save_concept(_concept(), "antihero", path=tmp_db, account_id=None)
     monkeypatch.setattr(
         app_main.taste_judge, "score_concept",
         lambda concept, **k: {"overall": 8.0, "taste_fit": 9.0, "performance": 7.0,
@@ -52,10 +52,10 @@ def test_grade_route_scores_and_stores(tmp_db, monkeypatch):
 
 
 def test_grade_all_scores_only_ungraded(tmp_db, monkeypatch):
-    c1 = preprod.save_concept(_concept("one"), "antihero", path=tmp_db)
-    c2 = preprod.save_concept(_concept("two"), "antihero", path=tmp_db)
+    c1 = preprod.save_concept(_concept("one"), "antihero", path=tmp_db, account_id=None)
+    c2 = preprod.save_concept(_concept("two"), "antihero", path=tmp_db, account_id=None)
     preprod.save_judge_score(
-        c1, {"overall": 5, "taste_fit": 5, "performance": 5, "reasons": []}, path=tmp_db)
+        c1, {"overall": 5, "taste_fit": 5, "performance": 5, "reasons": []}, path=tmp_db, account_id=None)
     calls = []
 
     def fake(concept, **k):
@@ -69,15 +69,15 @@ def test_grade_all_scores_only_ungraded(tmp_db, monkeypatch):
 
 
 def test_discard_deletes_the_concept(tmp_db):
-    cid = preprod.save_concept(_concept("gone"), "antihero", path=tmp_db)
+    cid = preprod.save_concept(_concept("gone"), "antihero", path=tmp_db, account_id=None)
     r = client.post(f"/concepts/{cid}/discard", follow_redirects=False)
     assert r.status_code == 303 and "/studio?tab=grade" in r.headers["location"]
     assert preprod.get_concept(cid, path=tmp_db, account_id=None) is None
 
 
 def test_discard_all_clears_only_the_active_brand(tmp_db):
-    a = preprod.save_concept(_concept("keep? no"), "antihero", path=tmp_db)
-    z = preprod.save_concept(_concept("other brand"), "zeropage", path=tmp_db)
+    a = preprod.save_concept(_concept("keep? no"), "antihero", path=tmp_db, account_id=None)
+    z = preprod.save_concept(_concept("other brand"), "zeropage", path=tmp_db, account_id=None)
     client.cookies.set("brand", "antihero")
     r = client.post("/concepts/discard-all", follow_redirects=False)
     client.cookies.clear()
@@ -92,8 +92,8 @@ def test_concepts_are_brand_scoped_in_the_api(tmp_db, monkeypatch):
     from app import auth
     stub = {"id": 1, "email": "t@example.com", "display_name": "T"}
     monkeypatch.setattr(auth, "current_user", lambda request: stub)
-    preprod.save_concept(_concept("AH ONLY ONE"), "antihero", path=tmp_db)
-    preprod.save_concept(_concept("ZP ONLY ONE"), "zeropage", path=tmp_db)
+    preprod.save_concept(_concept("AH ONLY ONE"), "antihero", path=tmp_db, account_id=None)
+    preprod.save_concept(_concept("ZP ONLY ONE"), "zeropage", path=tmp_db, account_id=None)
     titles = [c["title"] for c in
               client.get("/api/pipeline/concepts?brand=zeropage").json()["items"]]
     assert "ZP ONLY ONE" in titles

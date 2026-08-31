@@ -232,8 +232,8 @@ def test_add_location_still_upserts_by_name(tmp_path):
     path = tmp_path / "fresh.db"
     db.init_db(path)
     preprod.init(path)
-    first = preprod.add_location("hallway", photo_count=3, path=path)
-    again = preprod.add_location("hallway", photo_count=4, path=path)
+    first = preprod.add_location("hallway", photo_count=3, path=path, account_id=None)
+    again = preprod.add_location("hallway", photo_count=4, path=path, account_id=None)
     assert first == again
     assert _one(path, "SELECT count(*) FROM locations") == 1
     assert _one(path, "SELECT photo_count FROM locations WHERE id = ?", (first,)) == 4
@@ -337,6 +337,122 @@ def test_the_unowned_pool_is_its_own_scope(two_accounts):
 
 
 # --------------------------------------------------------------------------
+# writes -- ownership is stamped on create and checked on mutate
+# --------------------------------------------------------------------------
+
+def test_a_new_concept_is_stamped_with_its_creator(two_accounts):
+    path, a, b = two_accounts
+    new_id = preprod.save_concept(
+        {"title": "Mine", "shots": []}, brand="zeropage", path=path, account_id=a)
+    assert preprod.get_concept(new_id, path=path, account_id=a)["title"] == "Mine"
+    assert preprod.get_concept(new_id, path=path, account_id=b) is None
+
+
+def test_you_cannot_mutate_someone_elses_concept(two_accounts):
+    """set_picked already raised "no concept N" on a rowcount of 0, and
+    with the owner in the WHERE clause that now covers "not yours" too --
+    which is the right error, because it is the same one a genuinely
+    missing id gives. The mutation must not land either way."""
+    path, a, b = two_accounts
+    theirs = preprod.list_concepts(path=path, account_id=b)[0]["id"]
+    with pytest.raises(ValueError):
+        preprod.set_picked(theirs, True, path=path, account_id=a)
+    assert preprod.get_concept(theirs, path=path, account_id=b)["picked_at"] is None
+
+    preprod.set_picked(theirs, True, path=path, account_id=b)
+    assert preprod.get_concept(theirs, path=path, account_id=b)["picked_at"] is not None
+
+
+def test_you_cannot_delete_someone_elses_concept(two_accounts):
+    path, a, b = two_accounts
+    theirs = preprod.list_concepts(path=path, account_id=b)[0]["id"]
+    preprod.delete_concept(theirs, path=path, account_id=a)
+    assert preprod.get_concept(theirs, path=path, account_id=b) is not None
+
+
+def test_clearing_the_slate_clears_only_your_own(two_accounts):
+    """This one used to be `DELETE FROM shoot_concepts` with no argument."""
+    path, a, b = two_accounts
+    removed = preprod.delete_all_concepts(path=path, account_id=a)
+    assert removed == 1
+    assert preprod.list_concepts(path=path, account_id=a) == []
+    assert len(preprod.list_concepts(path=path, account_id=b)) == 1
+
+
+def test_a_concept_cannot_be_pinned_to_someone_elses_location(two_accounts):
+    """location_ids arrives from a request. Without the ownership check
+    a guessed integer links your concept to a stranger's room -- and the
+    concept card would then render its name."""
+    path, a, b = two_accounts
+    theirs = preprod.list_locations(path=path, account_id=b)[0]["id"]
+    mine = preprod.save_concept(
+        {"title": "Borrowed", "shots": []}, brand="zeropage",
+        location_ids=[theirs], path=path, account_id=a)
+    assert preprod.get_concept(mine, path=path, account_id=a)["locations"] == []
+
+
+def test_cast_and_props_are_stamped_and_checked(two_accounts):
+    path, a, b = two_accounts
+    cid = entities.add_character("Rider", path=path, account_id=a)
+    assert entities.get_character(cid, path=path, account_id=b) is None
+    entities.delete_character(cid, path=path, account_id=b)
+    assert entities.get_character(cid, path=path, account_id=a) is not None
+
+
+# --------------------------------------------------------------------------
+# caps -- your renders are not billed to their day, and neither is the card
+# --------------------------------------------------------------------------
+
+def _log_render(path, account_id, tool="runway", n=1):
+    from src.shot import Shot
+    shot_id = generative.add_shot(
+        Shot(subject="a bike", action="idles"), path=path, account_id=account_id)
+    for _ in range(n):
+        generative.record_generation(
+            shot_id, tool, "a prompt", path=path, account_id=account_id)
+
+
+def test_one_accounts_renders_do_not_count_against_anothers_cap(two_accounts):
+    path, a, b = two_accounts
+    _log_render(path, a, n=3)
+    assert generative.used_today("runway", path, account_id=a) == 3
+    assert generative.used_today("runway", path, account_id=b) == 0
+
+
+def test_the_per_account_cap_refuses_before_the_ceiling_does(two_accounts):
+    path, a, _b = two_accounts
+    _log_render(path, a, n=2)
+    refusal = generative.cap_error(
+        "runway", 1, account_id=a, per_account=2, ceiling=99,
+        path=path, env_prefix="RUNWAY")
+    assert refusal is not None and "daily cap" in refusal
+
+
+def test_the_global_ceiling_catches_what_per_account_caps_cannot(two_accounts):
+    """Two accounts, each comfortably inside its own cap, together over
+    the ceiling. Per-account limits alone are ten pilot users times six
+    renders on one card, every one of them within their rights."""
+    path, a, b = two_accounts
+    _log_render(path, a, n=3)
+    _log_render(path, b, n=3)
+    assert generative.cap_error("runway", 1, account_id=a, per_account=10,
+                                ceiling=99, path=path, env_prefix="RUNWAY") is None
+    refusal = generative.cap_error("runway", 1, account_id=a, per_account=10,
+                                   ceiling=6, path=path, env_prefix="RUNWAY")
+    assert refusal is not None and "daily ceiling" in refusal
+
+
+def test_a_generation_cannot_be_logged_against_someone_elses_shot(two_accounts):
+    from src.shot import Shot
+    path, a, b = two_accounts
+    shot_id = generative.add_shot(
+        Shot(subject="a bike", action="idles"), path=path, account_id=a)
+    with pytest.raises(ValueError):
+        generative.record_generation(
+            shot_id, "runway", "a prompt", path=path, account_id=b)
+
+
+# --------------------------------------------------------------------------
 # the regression test: no unscoped read survives review
 # --------------------------------------------------------------------------
 
@@ -357,6 +473,17 @@ UNSCOPED_ALLOWED = {
     "FROM concept_locations",
     "INTO concept_locations",
     "DELETE FROM concept_locations",
+    # the global ceiling in generative.used_today(everyone=True). The one
+    # query in the codebase that is SUPPOSED to count every account: it is
+    # what stops ten pilot users, each inside their own cap, from putting
+    # sixty renders on one card.
+    "SELECT COUNT(*) FROM generations WHERE tool = ? AND created_at >= ?",
+    # assembled in pieces: the owner predicate lives in a different
+    # literal from the one that names the table, so the scan cannot see
+    # them together. Both are checked by tests of their own --
+    # test_a_list_returns_only_your_own and the videos scoping tests.
+    "SELECT * FROM videos",
+    "ROW_NUMBER()",
 }
 
 OWNED_RE = re.compile(
@@ -404,8 +531,19 @@ def _sql_literals(path):
     """Every string in a module that looks like a statement, not prose."""
     tree = ast.parse(pathlib.Path(path).read_text())
     docs = _docstrings(tree)
+    # An f-string's pieces are Constants in their own right, so walking
+    # everything reports `" FROM locations"` on its own and misses that
+    # the whole statement says `INSERT INTO locations_new ... FROM
+    # locations`. Read the JoinedStr, skip its parts.
+    inside_fstring = {
+        id(part)
+        for node in ast.walk(tree) if isinstance(node, ast.JoinedStr)
+        for part in ast.walk(node) if part is not node
+    }
     seen = set()
     for node in ast.walk(tree):
+        if id(node) in inside_fstring:
+            continue
         text = _flatten(node)
         if text is None or text in docs:
             continue
@@ -418,12 +556,6 @@ def _sql_literals(path):
         yield node.lineno, " ".join(text.split())
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="writes and the render caps are stages 3 and 4; this lists what is "
-           "left, and turns into an XPASS the moment they land -- at which "
-           "point delete the marker rather than the test",
-)
 def test_no_query_against_an_owned_table_forgets_its_owner():
     """The test that would have caught this whole class of bug.
 
@@ -434,7 +566,10 @@ def test_no_query_against_an_owned_table_forgets_its_owner():
     """
     offenders = []
     root = pathlib.Path(__file__).resolve().parent.parent
-    for module in sorted((root / "src").glob("*.py")) + sorted((root / "app").glob("*.py")):
+    modules = (sorted((root / "src").glob("*.py"))
+               + sorted((root / "app").glob("*.py"))
+               + sorted((root / "ops").glob("*.py")))
+    for module in modules:
         for lineno, sql in _sql_literals(module):
             if "account_id" in sql:
                 continue
@@ -445,3 +580,86 @@ def test_no_query_against_an_owned_table_forgets_its_owner():
         "these statements touch an owned table with no account_id predicate:\n  "
         + "\n  ".join(offenders)
     )
+
+
+# --------------------------------------------------------------------------
+# the tenant is not the brand
+# --------------------------------------------------------------------------
+
+def test_the_brand_pill_does_not_empty_the_board(two_accounts, monkeypatch):
+    """The bug this closes, found by running the migration against a copy
+    of the live database rather than by reading the code.
+
+    `accounts` is doing double duty: zeropage and antihero are two
+    brands, and they are also two account rows Mike is a member of.
+    auth.current_account reads the brand cookie and returns the matching
+    membership -- that is what the pill switches and what colours the UI.
+    Scope the DATA by that and clicking ANTIHERO scopes every query to
+    account 2, which the backfill gave nothing: an empty board, no
+    locations, no cast, on a database with eleven concepts in it.
+
+    So current_account_id returns the tenant (oldest membership) and the
+    pill goes on filtering by brand inside it.
+    """
+    from app import auth
+
+    path, a, b = two_accounts
+    with db.connect(path) as conn:
+        user_id = conn.execute(
+            "SELECT user_id FROM account_members ORDER BY account_id"
+        ).fetchone()["user_id"]
+        # both concepts to the tenant, the way the backfill leaves them
+        conn.execute("UPDATE shoot_concepts SET account_id = ?", (a,))
+
+    monkeypatch.setattr(auth, "current_user", lambda request: {"id": user_id})
+    monkeypatch.setattr(auth.db, "DB_PATH", path)
+
+    class Request:
+        def __init__(self, brand):
+            self.cookies = {"brand": brand}
+
+    for brand in ("zeropage", "antihero"):
+        scoped_to = auth.current_account_id(Request(brand))
+        assert scoped_to == a, f"the {brand} pill switched tenants"
+        assert len(preprod.list_concepts(path=path, account_id=scoped_to)) == 2
+
+
+def test_a_user_with_no_membership_is_refused_not_defaulted(monkeypatch, tmp_path):
+    """Signing in is not the same as having access -- a fresh signup gets
+    zero account_members rows on purpose. That has to be a 403, not a
+    fall-through to whichever account happens to be first."""
+    from fastapi import HTTPException
+
+    from app import auth
+
+    path = tmp_path / "empty.db"
+    db.init_db(path)
+    accounts.init(path)
+    uid = accounts.create_user("stranger@example.com", path=path)
+
+    monkeypatch.setattr(auth, "current_user", lambda request: {"id": uid})
+    monkeypatch.setattr(auth.db, "DB_PATH", path)
+
+    class Request:
+        cookies: dict = {}
+
+    with pytest.raises(HTTPException) as raised:
+        auth.current_account_id(Request())
+    assert raised.value.status_code == 403
+
+
+def test_an_entry_point_with_no_session_acts_as_the_bootstrap_account(two_accounts):
+    """CLIs, the nightly graph and the MCP surface have no cookie. After
+    the backfill "nobody" owns nothing, so defaulting to None would make
+    a night's work vanish rather than fail."""
+    path, a, _b = two_accounts
+    assert accounts.resolve_account(path=path) == a
+    assert accounts.resolve_account("antihero", path=path) != a
+    with pytest.raises(ValueError):
+        accounts.resolve_account("nosuchbrand", path=path)
+
+
+def test_resolve_account_on_a_fresh_database_is_the_unowned_pool(tmp_path):
+    path = tmp_path / "fresh.db"
+    db.init_db(path)
+    assert accounts.resolve_account(path=path) is None

@@ -26,7 +26,7 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
-from . import preprod
+from . import accounts, preprod
 from .gemini_utils import generate_with_retry, strip_fences
 
 MODEL = os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview")
@@ -125,7 +125,19 @@ def main(argv=None, account_id: Optional[int] = None) -> int:
         description="Score recent Zero Page concepts on the on-brand (uncanny) gate.")
     parser.add_argument("--limit", type=int, default=8)
     parser.add_argument("--concept-id", type=int)
+    parser.add_argument(
+        "--account", default=None,
+        help=(
+            "The account to act as, by slug (zeropage / antihero). "
+            "Defaults to the oldest account on the database -- an "
+            "unattended run has no session, and acting as nobody "
+            "would read an empty database."
+        ),
+    )
     args = parser.parse_args(argv)
+    if account_id is None:
+        account_id = accounts.resolve_account(args.account)
+
 
     if args.concept_id:
         c = preprod.get_concept(args.concept_id, account_id=account_id)

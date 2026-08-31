@@ -24,6 +24,9 @@ import pytest
 os.environ["DEV_TOOLS"] = "1"
 
 
+from app.main import app as _APP_AT_IMPORT  # noqa: E402  (see account_scope)
+
+
 class NetworkUseInTest(RuntimeError):
     pass
 
@@ -58,11 +61,23 @@ def account_scope():
     always did. A test that IS about isolation seeds real accounts and
     sets its own override -- see tests/test_tenancy.py.
     """
+    import app.main as app_main
     from app import auth
-    from app.main import app
 
-    app.dependency_overrides[auth.current_account_id] = lambda: None
-    app.dependency_overrides[auth.dev_account_id] = lambda: None
+    # Both app objects, and they really can be two. test_dev_tools.py does
+    # `importlib.reload(app_main)` to exercise the DEV_TOOLS=0 posture,
+    # which builds a NEW FastAPI instance and rebinds app.main.app -- while
+    # every other test module still holds the original from its
+    # module-level `from app.main import app`. Override only the current
+    # one and those modules' requests resolve the real dependency, which
+    # then trips over a stubbed account dict that has no "id". That failure
+    # only appears when the two files land in the same xdist worker, which
+    # is why it looked like flakiness.
+    targets = {id(_APP_AT_IMPORT): _APP_AT_IMPORT, id(app_main.app): app_main.app}
+    for target in targets.values():
+        target.dependency_overrides[auth.current_account_id] = lambda: None
+        target.dependency_overrides[auth.dev_account_id] = lambda: None
     yield
-    app.dependency_overrides.pop(auth.current_account_id, None)
-    app.dependency_overrides.pop(auth.dev_account_id, None)
+    for target in targets.values():
+        target.dependency_overrides.pop(auth.current_account_id, None)
+        target.dependency_overrides.pop(auth.dev_account_id, None)

@@ -31,12 +31,12 @@ def seeded_db(tmp_path):
     ]
     for i, (title, topic, hook) in enumerate(winners):
         vid = db.add_video(title, "youtube", "2026-01-01", topic=topic,
-                           hook_type=hook, path=path)
-        db.record_metrics(vid, views=1000 + i, captured_at="2026-01-08", path=path)
+                           hook_type=hook, path=path, account_id=None)
+        db.record_metrics(vid, views=1000 + i, captured_at="2026-01-08", path=path, account_id=None)
     for i, (title, topic, hook) in enumerate(losers):
         vid = db.add_video(title, "youtube", "2026-01-01", topic=topic,
-                           hook_type=hook, path=path)
-        db.record_metrics(vid, views=10 + i, captured_at="2026-01-08", path=path)
+                           hook_type=hook, path=path, account_id=None)
+        db.record_metrics(vid, views=10 + i, captured_at="2026-01-08", path=path, account_id=None)
     return path
 
 

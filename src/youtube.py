@@ -98,7 +98,7 @@ def _parse_statistics(stats: dict) -> dict:
     }
 
 
-def refresh_metrics_for_video(video: dict, api_key=None, db_path=None) -> dict:
+def refresh_metrics_for_video(video: dict, api_key=None, db_path=None, account_id: Optional[int] = None) -> dict:
     """
     Fetch and record one video's current numbers. Never raises --
     "missing key or failed call must not break the screen; manual
@@ -121,7 +121,7 @@ def refresh_metrics_for_video(video: dict, api_key=None, db_path=None) -> dict:
         return {"ok": False, "error": _safe_error(e, api_key)}
 
     kwargs = {"path": db_path} if db_path is not None else {}
-    db.record_metrics(video["id"], **stats, **kwargs)
+    db.record_metrics(video["id"], **stats, **kwargs, account_id=account_id)
     return {"ok": True, **stats}
 
 
@@ -318,10 +318,11 @@ def import_channel_videos(handle: str, api_key=None, db_path=None, account_id: O
             video["title"], "youtube", video["published_at"],
             url=f"https://www.youtube.com/watch?v={video['video_id']}",
             **kwargs,
-        )
+        
+            account_id=account_id,)
         added += 1
         if video["video_id"] in stats:
-            db.record_metrics(video_db_id, **stats[video["video_id"]], **kwargs)
+            db.record_metrics(video_db_id, **stats[video["video_id"]], **kwargs, account_id=account_id)
 
     return {"ok": True, "added": added}
 

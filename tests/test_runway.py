@@ -188,7 +188,7 @@ def seed_scene(path, reference=""):
     if reference:
         shot["reference_image"] = reference
     return preprod.save_concept(
-        {"title": "Vault", "shots": [shot]}, brand="antihero", path=path)
+        {"title": "Vault", "shots": [shot]}, brand="antihero", path=path, account_id=None)
 
 
 def test_for_shot_respects_the_spend_gate(scene_db, monkeypatch, tmp_path):
@@ -301,7 +301,7 @@ def test_for_shot_missing_pieces_are_results(scene_db, approved, monkeypatch, tm
         {"title": "Cam only",
          "shots": [{"n": 1, "type": "CHARACTER", "source": "CAMERA",
                     "cam": "BMPCC", "location": "garage"}]},
-        brand="antihero", path=scene_db)
+        brand="antihero", path=scene_db, account_id=None)
     assert "no shot 9" in runway.generate_for_shot(
         concept_id, 9, db_path=scene_db, client=FakeClient())["error"]
     assert "no AI prompt" in runway.generate_for_shot(
@@ -382,7 +382,7 @@ def test_a_flagged_asset_name_is_swapped_for_its_alias(asset_db):
     from src import entities
     entities.add_character(
         "Cyclops", description=json.dumps({"render_alias": "one-eyed humanoid"}),
-        path=asset_db)
+        path=asset_db, account_id=None)
     out = runway.safe_prompt("A Cyclops polishes a spoon. The cyclops sighs.",
                              db_path=asset_db)
     assert "yclops" not in out
@@ -396,7 +396,7 @@ def test_an_asset_without_an_alias_is_left_alone(asset_db):
 
     from src import entities
     entities.add_character("Michael", description=json.dumps({"look": "a man"}),
-                           path=asset_db)
+                           path=asset_db, account_id=None)
     assert runway.safe_prompt("Michael rides", db_path=asset_db) == "Michael rides"
 
 
@@ -409,7 +409,7 @@ def test_the_swap_happens_before_the_length_check(asset_db, approved,
 
     from src import entities
     entities.add_character(
-        "Cyclops", description=json.dumps({"render_alias": "x"}), path=asset_db)
+        "Cyclops", description=json.dumps({"render_alias": "x"}), path=asset_db, account_id=None)
     prompt = "Cyclops " * 130          # 1040 chars, 260 once swapped
     assert len(prompt) > 1000
     seen = {}

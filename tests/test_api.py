@@ -100,9 +100,9 @@ def test_assets_empty_and_counts_come_from_db(tmp_db):
 
 
 def test_assets_unify_locations_characters_props(tmp_db):
-    preprod.add_location("garage", {"space": "low key garage"}, path=tmp_db)
-    entities.add_character(name="Michael", role="rider", path=tmp_db)
-    entities.add_prop(name="Ducati 959", category="vehicle", path=tmp_db)
+    preprod.add_location("garage", {"space": "low key garage"}, path=tmp_db, account_id=None)
+    entities.add_character(name="Michael", role="rider", path=tmp_db, account_id=None)
+    entities.add_prop(name="Ducati 959", category="vehicle", path=tmp_db, account_id=None)
 
     data = client.get("/api/assets").json()
     assert data["counts"] == {"all": 3, "location": 1, "character": 1, "prop": 1}
@@ -160,7 +160,8 @@ def seed_concept(path, title="Vault", shots=None):
         {"title": title, "hook": "hook", "logline": "log",
          "duration": "30s", "shots": shots or []},
         brand="antihero", spark="spark", path=path,
-    )
+    
+        account_id=None,)
 
 
 def test_pipeline_concepts_derive_status(tmp_db):
@@ -219,7 +220,7 @@ def photo_root(tmp_path, monkeypatch):
 
 
 def test_media_lists_photos_with_real_dates(tmp_db, photo_root):
-    preprod.add_location("garage", {"space": "the garage"}, path=tmp_db)
+    preprod.add_location("garage", {"space": "the garage"}, path=tmp_db, account_id=None)
     media = client.get("/api/media").json()
     assert media["counts"] == {"all": 1, "location": 1, "character": 0, "prop": 0}
     item = media["items"][0]
@@ -230,7 +231,7 @@ def test_media_lists_photos_with_real_dates(tmp_db, photo_root):
 
 def test_pipeline_run_carries_picked_media_as_image_refs(tmp_db, photo_root,
                                                          monkeypatch):
-    preprod.add_location("garage", {"space": "the garage"}, path=tmp_db)
+    preprod.add_location("garage", {"space": "the garage"}, path=tmp_db, account_id=None)
     seen = {}
     import src.shootgen as shootgen
     monkeypatch.setattr(shootgen, "reference_block", lambda **k: "")
@@ -517,8 +518,8 @@ def test_eval_run_refuses_empty_golden_set(tmp_db):
 
 def test_analytics_summary_and_posts(tmp_db):
     vid = db.add_video(title="Night ride", platform="youtube",
-                       posted_at="2026-08-01", brand="antihero", path=tmp_db)
-    db.record_metrics(vid, views=1200, likes=80, path=tmp_db)
+                       posted_at="2026-08-01", brand="antihero", path=tmp_db, account_id=None)
+    db.record_metrics(vid, views=1200, likes=80, path=tmp_db, account_id=None)
     summary = client.get("/api/analytics/summary?brand=antihero").json()
     assert summary["tiles"]["views"] == 1200
     assert summary["tiles"]["videos"] == 1
@@ -530,7 +531,7 @@ def test_analytics_summary_and_posts(tmp_db):
 
 def test_video_refresh_maps_failure_to_502(tmp_db, monkeypatch):
     vid = db.add_video(title="v", platform="youtube",
-                       posted_at="2026-08-01", path=tmp_db)
+                       posted_at="2026-08-01", path=tmp_db, account_id=None)
     monkeypatch.setattr(api_mod.youtube, "refresh_metrics_for_video",
                         lambda video, api_key=None, db_path=None:
                             {"ok": False, "error": "no key"})
@@ -794,7 +795,7 @@ def test_delete_character_drops_the_shelf_chunk(tmp_db, monkeypatch):
     monkeypatch.setattr(api_mod.rag, "connect", lambda db_url=None: _RagConn())
     monkeypatch.setattr(api_mod.rag, "delete_source",
                         lambda conn, source: dropped.append(source) or 1)
-    cid = entities.add_character("Mike", role="protagonist", path=tmp_db)
+    cid = entities.add_character("Mike", role="protagonist", path=tmp_db, account_id=None)
     res = client.delete(f"/api/assets/characters/{cid}")
     assert res.json()["deleted"] == cid
     assert entities.list_characters(path=tmp_db, account_id=None) == []

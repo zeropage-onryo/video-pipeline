@@ -117,8 +117,8 @@ def test_video_links_back_to_its_pitch(tmp_db):
             (run_id,)).fetchone()[0]
 
     vid = db.add_video("Story 2", "tiktok", "2026-07-01",
-                       idea_id=idea_id, timeline="Story 2", path=tmp_db)
-    db.record_metrics(vid, views=5000, captured_at="2026-07-08", path=tmp_db)
+                       idea_id=idea_id, timeline="Story 2", path=tmp_db, account_id=None)
+    db.record_metrics(vid, views=5000, captured_at="2026-07-08", path=tmp_db, account_id=None)
 
     top = db.get_top_performers(path=tmp_db, account_id=None)
     assert top[0]["logline"] == "Line 2."
@@ -126,49 +126,49 @@ def test_video_links_back_to_its_pitch(tmp_db):
 
 def test_bad_platform_rejected(tmp_db):
     with pytest.raises(ValueError, match="platform"):
-        db.add_video("x", "myspace", "2026-07-01", path=tmp_db)
+        db.add_video("x", "myspace", "2026-07-01", path=tmp_db, account_id=None)
 
 
 def test_bad_date_rejected(tmp_db):
     with pytest.raises(ValueError, match="posted_at"):
-        db.add_video("x", "tiktok", "last tuesday", path=tmp_db)
+        db.add_video("x", "tiktok", "last tuesday", path=tmp_db, account_id=None)
 
 
 def test_metrics_for_missing_video_rejected(tmp_db):
     with pytest.raises(ValueError, match="no video"):
-        db.record_metrics(999, views=10, path=tmp_db)
+        db.record_metrics(999, views=10, path=tmp_db, account_id=None)
 
 
 def test_one_idea_two_platforms(tmp_db):
-    a = db.add_video("Story 1", "tiktok", "2026-07-01", path=tmp_db)
-    b = db.add_video("Story 1", "youtube", "2026-07-01", path=tmp_db)
+    a = db.add_video("Story 1", "tiktok", "2026-07-01", path=tmp_db, account_id=None)
+    b = db.add_video("Story 1", "youtube", "2026-07-01", path=tmp_db, account_id=None)
     assert a != b
     assert len(db.list_videos(platform="tiktok", path=tmp_db, account_id=None)) == 1
 
 
 def test_snapshots_accumulate(tmp_db):
-    vid = db.add_video("clip", "tiktok", "2026-07-01", path=tmp_db)
-    db.record_metrics(vid, views=1000, captured_at="2026-07-02", path=tmp_db)
-    db.record_metrics(vid, views=9000, captured_at="2026-07-20", path=tmp_db)
-    history = db.get_video_history(vid, path=tmp_db)
+    vid = db.add_video("clip", "tiktok", "2026-07-01", path=tmp_db, account_id=None)
+    db.record_metrics(vid, views=1000, captured_at="2026-07-02", path=tmp_db, account_id=None)
+    db.record_metrics(vid, views=9000, captured_at="2026-07-20", path=tmp_db, account_id=None)
+    history = db.get_video_history(vid, path=tmp_db, account_id=None)
     assert [h["views"] for h in history] == [1000, 9000]
     assert history[0]["age_days"] == 1.0
 
 
 def test_same_timestamp_updates_in_place(tmp_db):
-    vid = db.add_video("clip", "tiktok", "2026-07-01", path=tmp_db)
-    db.record_metrics(vid, views=100, captured_at="2026-07-02", path=tmp_db)
-    db.record_metrics(vid, views=150, captured_at="2026-07-02", path=tmp_db)
-    assert len(db.get_video_history(vid, path=tmp_db)) == 1
+    vid = db.add_video("clip", "tiktok", "2026-07-01", path=tmp_db, account_id=None)
+    db.record_metrics(vid, views=100, captured_at="2026-07-02", path=tmp_db, account_id=None)
+    db.record_metrics(vid, views=150, captured_at="2026-07-02", path=tmp_db, account_id=None)
+    assert len(db.get_video_history(vid, path=tmp_db, account_id=None)) == 1
 
 
 def test_old_video_does_not_win_on_totals(tmp_db):
-    old = db.add_video("old", "tiktok", "2025-01-01", path=tmp_db)
-    db.record_metrics(old, views=2_000, captured_at="2025-01-08", path=tmp_db)
-    db.record_metrics(old, views=90_000, captured_at="2026-07-01", path=tmp_db)
+    old = db.add_video("old", "tiktok", "2025-01-01", path=tmp_db, account_id=None)
+    db.record_metrics(old, views=2_000, captured_at="2025-01-08", path=tmp_db, account_id=None)
+    db.record_metrics(old, views=90_000, captured_at="2026-07-01", path=tmp_db, account_id=None)
 
-    new = db.add_video("new", "tiktok", "2026-07-01", path=tmp_db)
-    db.record_metrics(new, views=30_000, captured_at="2026-07-08", path=tmp_db)
+    new = db.add_video("new", "tiktok", "2026-07-01", path=tmp_db, account_id=None)
+    db.record_metrics(new, views=30_000, captured_at="2026-07-08", path=tmp_db, account_id=None)
 
     top = db.get_top_performers(at_days=7, path=tmp_db, account_id=None)
     assert top[0]["title"] == "new"
@@ -177,10 +177,10 @@ def test_old_video_does_not_win_on_totals(tmp_db):
 
 
 def test_top_performers_filters_by_platform(tmp_db):
-    a = db.add_video("tt", "tiktok", "2026-07-01", path=tmp_db)
-    b = db.add_video("yt", "youtube", "2026-07-01", path=tmp_db)
-    db.record_metrics(a, views=100, captured_at="2026-07-08", path=tmp_db)
-    db.record_metrics(b, views=999, captured_at="2026-07-08", path=tmp_db)
+    a = db.add_video("tt", "tiktok", "2026-07-01", path=tmp_db, account_id=None)
+    b = db.add_video("yt", "youtube", "2026-07-01", path=tmp_db, account_id=None)
+    db.record_metrics(a, views=100, captured_at="2026-07-08", path=tmp_db, account_id=None)
+    db.record_metrics(b, views=999, captured_at="2026-07-08", path=tmp_db, account_id=None)
     top = db.get_top_performers(platform="tiktok", path=tmp_db, account_id=None)
     assert len(top) == 1 and top[0]["title"] == "tt"
 
@@ -210,10 +210,10 @@ def _days_ago(n: int) -> str:
 def _post(tmp_db, title, days_ago, views, platform="tiktok"):
     """A video posted N days ago, measured at 7 days old."""
     posted = _days_ago(days_ago)
-    vid = db.add_video(title, platform, posted, path=tmp_db)
+    vid = db.add_video(title, platform, posted, path=tmp_db, account_id=None)
     measured = (datetime.fromisoformat(posted)
                 + timedelta(days=7)).date().isoformat()
-    db.record_metrics(vid, views=views, captured_at=measured, path=tmp_db)
+    db.record_metrics(vid, views=views, captured_at=measured, path=tmp_db, account_id=None)
     return vid
 
 
@@ -258,14 +258,14 @@ def test_window_composes_with_platform(tmp_db):
 def test_window_composes_with_at_days(tmp_db):
     """Recency filter and measurement age are independent."""
     posted = _days_ago(30)
-    vid = db.add_video("slow burner", "tiktok", posted, path=tmp_db)
+    vid = db.add_video("slow burner", "tiktok", posted, path=tmp_db, account_id=None)
     d = datetime.fromisoformat(posted)
     db.record_metrics(vid, views=500,
                       captured_at=(d + timedelta(days=1)).date().isoformat(),
-                      path=tmp_db)
+                      path=tmp_db, account_id=None)
     db.record_metrics(vid, views=40_000,
                       captured_at=(d + timedelta(days=28)).date().isoformat(),
-                      path=tmp_db)
+                      path=tmp_db, account_id=None)
 
     # Ages that the video actually has readings near. This test used to
     # ask at_days=7 and expect the day-1 reading, which was asserting the
@@ -348,15 +348,15 @@ def test_benchmark_empty_is_safe(tmp_db):
 # ---------- distinct_video_field_values ----------
 
 def test_distinct_video_field_values_returns_sorted_unique(tmp_db):
-    db.add_video("a", "tiktok", "2026-01-01", topic="workshop", path=tmp_db)
-    db.add_video("b", "tiktok", "2026-01-02", topic="workshop", path=tmp_db)
-    db.add_video("c", "tiktok", "2026-01-03", topic="commute", path=tmp_db)
+    db.add_video("a", "tiktok", "2026-01-01", topic="workshop", path=tmp_db, account_id=None)
+    db.add_video("b", "tiktok", "2026-01-02", topic="workshop", path=tmp_db, account_id=None)
+    db.add_video("c", "tiktok", "2026-01-03", topic="commute", path=tmp_db, account_id=None)
     assert db.distinct_video_field_values("topic", path=tmp_db, account_id=None) == ["commute", "workshop"]
 
 
 def test_distinct_video_field_values_excludes_blank(tmp_db):
-    db.add_video("a", "tiktok", "2026-01-01", topic="workshop", path=tmp_db)
-    db.add_video("b", "tiktok", "2026-01-02", path=tmp_db)
+    db.add_video("a", "tiktok", "2026-01-01", topic="workshop", path=tmp_db, account_id=None)
+    db.add_video("b", "tiktok", "2026-01-02", path=tmp_db, account_id=None)
     assert db.distinct_video_field_values("topic", path=tmp_db, account_id=None) == ["workshop"]
 
 
@@ -368,16 +368,16 @@ def test_distinct_video_field_values_rejects_unknown_field(tmp_db):
 # ---------- latest_metrics_by_video ----------
 
 def test_latest_metrics_by_video_with_no_snapshot_yet(tmp_db):
-    vid = db.add_video("a", "tiktok", "2026-01-01", path=tmp_db)
+    vid = db.add_video("a", "tiktok", "2026-01-01", path=tmp_db, account_id=None)
     rows = db.latest_metrics_by_video(path=tmp_db, account_id=None)
     assert rows[0]["video_id"] == vid
     assert rows[0]["views"] is None
 
 
 def test_latest_metrics_by_video_returns_most_recent_snapshot(tmp_db):
-    vid = db.add_video("a", "tiktok", "2026-01-01", path=tmp_db)
-    db.record_metrics(vid, views=100, captured_at="2026-01-02", path=tmp_db)
-    db.record_metrics(vid, views=500, captured_at="2026-01-10", path=tmp_db)
+    vid = db.add_video("a", "tiktok", "2026-01-01", path=tmp_db, account_id=None)
+    db.record_metrics(vid, views=100, captured_at="2026-01-02", path=tmp_db, account_id=None)
+    db.record_metrics(vid, views=500, captured_at="2026-01-10", path=tmp_db, account_id=None)
     rows = db.latest_metrics_by_video(path=tmp_db, account_id=None)
     assert rows[0]["views"] == 500
 
@@ -390,7 +390,7 @@ def test_get_video_returns_none_for_missing_id(tmp_db):
 
 def test_get_video_includes_metadata(tmp_db):
     vid = db.add_video("Night Run", "youtube", "2026-01-01",
-                       url="https://x", topic="workshop", path=tmp_db)
+                       url="https://x", topic="workshop", path=tmp_db, account_id=None)
     video = db.get_video(vid, path=tmp_db, account_id=None)
     assert video["title"] == "Night Run"
     assert video["platform"] == "youtube"
@@ -398,7 +398,7 @@ def test_get_video_includes_metadata(tmp_db):
 
 
 def test_get_video_has_no_originating_pitch_when_not_linked(tmp_db):
-    vid = db.add_video("Night Run", "youtube", "2026-01-01", path=tmp_db)
+    vid = db.add_video("Night Run", "youtube", "2026-01-01", path=tmp_db, account_id=None)
     video = db.get_video(vid, path=tmp_db, account_id=None)
     assert video["idea_id"] is None
     assert video["idea_title"] is None
@@ -410,7 +410,7 @@ def test_get_video_includes_originating_pitch_when_linked(tmp_db):
         idea_id = conn.execute(
             "SELECT id FROM ideas WHERE run_id = ? AND number = 2", (run_id,)
         ).fetchone()[0]
-    vid = db.add_video("Story 2", "tiktok", "2026-01-01", idea_id=idea_id, path=tmp_db)
+    vid = db.add_video("Story 2", "tiktok", "2026-01-01", idea_id=idea_id, path=tmp_db, account_id=None)
 
     video = db.get_video(vid, path=tmp_db, account_id=None)
     assert video["idea_title"] == "Story 2"
@@ -425,11 +425,11 @@ def test_a_video_with_no_snapshot_near_the_age_is_excluded(tmp_db):
     far off it is -- so a video measured on day 1 gets compared against
     one measured on day 90, and the benchmark colouring lies.
     """
-    old = db.add_video("measured late", "tiktok", "2026-01-01", path=tmp_db)
-    db.record_metrics(old, views=5000, captured_at="2026-04-01", path=tmp_db)  # ~90d
+    old = db.add_video("measured late", "tiktok", "2026-01-01", path=tmp_db, account_id=None)
+    db.record_metrics(old, views=5000, captured_at="2026-04-01", path=tmp_db, account_id=None)  # ~90d
 
-    young = db.add_video("measured early", "tiktok", "2026-03-30", path=tmp_db)
-    db.record_metrics(young, views=40, captured_at="2026-03-31", path=tmp_db)  # ~1d
+    young = db.add_video("measured early", "tiktok", "2026-03-30", path=tmp_db, account_id=None)
+    db.record_metrics(young, views=40, captured_at="2026-03-31", path=tmp_db, account_id=None)  # ~1d
 
     at_90 = [r["title"] for r in db.get_top_performers(
         at_days=90, posted_within_days=None, posted_since="2025-01-01", path=tmp_db, account_id=None)]
@@ -441,10 +441,10 @@ def test_a_video_with_no_snapshot_near_the_age_is_excluded(tmp_db):
 
 
 def test_benchmark_only_averages_comparable_readings(tmp_db):
-    old = db.add_video("late", "tiktok", "2026-01-01", path=tmp_db)
-    db.record_metrics(old, views=5000, captured_at="2026-04-01", path=tmp_db)
-    young = db.add_video("early", "tiktok", "2026-03-30", path=tmp_db)
-    db.record_metrics(young, views=40, captured_at="2026-03-31", path=tmp_db)
+    old = db.add_video("late", "tiktok", "2026-01-01", path=tmp_db, account_id=None)
+    db.record_metrics(old, views=5000, captured_at="2026-04-01", path=tmp_db, account_id=None)
+    young = db.add_video("early", "tiktok", "2026-03-30", path=tmp_db, account_id=None)
+    db.record_metrics(young, views=40, captured_at="2026-03-31", path=tmp_db, account_id=None)
 
     bench = db.benchmark(at_days=90, posted_since="2025-01-01", path=tmp_db, account_id=None)
     assert bench["n"] == 1 and bench["median"] == 5000
@@ -452,7 +452,7 @@ def test_benchmark_only_averages_comparable_readings(tmp_db):
 
 def test_tolerance_is_generous_enough_for_a_few_days_slip(tmp_db):
     """Checking numbers on day 9 instead of day 7 is normal use."""
-    vid = db.add_video("slightly late", "tiktok", "2026-01-01", path=tmp_db)
-    db.record_metrics(vid, views=100, captured_at="2026-01-10", path=tmp_db)  # 9d
+    vid = db.add_video("slightly late", "tiktok", "2026-01-01", path=tmp_db, account_id=None)
+    db.record_metrics(vid, views=100, captured_at="2026-01-10", path=tmp_db, account_id=None)  # 9d
     got = db.get_top_performers(at_days=7, posted_since="2025-01-01", path=tmp_db, account_id=None)
     assert [r["title"] for r in got] == ["slightly late"]

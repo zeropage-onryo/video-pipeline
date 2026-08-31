@@ -70,15 +70,16 @@ def _row_to_dict(row) -> dict:
 # --- characters -----------------------------------------------------------
 
 def add_character(name, role="", description=None, reference_image="",
-                  photo_count=0, notes="", path=db.DB_PATH) -> int:
+                  photo_count=0, notes="", path=db.DB_PATH, *,
+                  account_id: int) -> int:
     with db.connect(path) as conn:
         cur = conn.execute(
             "INSERT INTO characters "
-            "(name, created_at, role, description, reference_image, photo_count, notes) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "(name, created_at, role, description, reference_image, photo_count, "
+            "notes, account_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (name, _now(), role,
              json.dumps(description) if description is not None else None,
-             reference_image, photo_count, notes),
+             reference_image, photo_count, notes, account_id),
         )
         return cur.lastrowid
 
@@ -101,23 +102,28 @@ def get_character(character_id: int, path=db.DB_PATH, *, account_id: int):
     return _row_to_dict(row) if row else None
 
 
-def delete_character(character_id: int, path=db.DB_PATH) -> None:
+def delete_character(character_id: int, path=db.DB_PATH, *,
+                     account_id: int) -> None:
     with db.connect(path) as conn:
-        conn.execute("DELETE FROM characters WHERE id = ?", (character_id,))
+        conn.execute(
+            "DELETE FROM characters WHERE id = ? AND account_id IS ?",
+            (character_id, account_id),
+        )
 
 
 # --- props ----------------------------------------------------------------
 
 def add_prop(name, category="", description=None, reference_image="",
-             photo_count=0, notes="", path=db.DB_PATH) -> int:
+             photo_count=0, notes="", path=db.DB_PATH, *,
+             account_id: int) -> int:
     with db.connect(path) as conn:
         cur = conn.execute(
             "INSERT INTO props "
-            "(name, created_at, category, description, reference_image, photo_count, notes) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "(name, created_at, category, description, reference_image, "
+            "photo_count, notes, account_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (name, _now(), category,
              json.dumps(description) if description is not None else None,
-             reference_image, photo_count, notes),
+             reference_image, photo_count, notes, account_id),
         )
         return cur.lastrowid
 
@@ -140,9 +146,12 @@ def get_prop(prop_id: int, path=db.DB_PATH, *, account_id: int):
     return _row_to_dict(row) if row else None
 
 
-def delete_prop(prop_id: int, path=db.DB_PATH) -> None:
+def delete_prop(prop_id: int, path=db.DB_PATH, *, account_id: int) -> None:
     with db.connect(path) as conn:
-        conn.execute("DELETE FROM props WHERE id = ?", (prop_id,))
+        conn.execute(
+            "DELETE FROM props WHERE id = ? AND account_id IS ?",
+            (prop_id, account_id),
+        )
 
 
 # --- descriptions ----------------------------------------------------------

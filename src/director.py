@@ -130,7 +130,7 @@ def direct_scene(concept_id: int, note: str, gemini_client=None,
             concept_id,
             {"duration": plan.get("duration"), "shots": new_shots,
              "edit": plan.get("edit")},
-            warnings=warnings, **kwargs)
+            warnings=warnings, **kwargs, account_id=account_id)
 
         return {"ok": True, "summary": _summarise(old_shots, new_shots),
                 "warnings": warnings, "error": None}
@@ -202,7 +202,7 @@ def refine_shot_prompt(concept_id: int, shot_n, gemini_client=None,
             concept_id,
             {"duration": concept.get("duration"), "shots": shots,
              "edit": concept.get("edit_note") or concept.get("edit")},
-            warnings=warnings, **kwargs)
+            warnings=warnings, **kwargs, account_id=account_id)
         return {"ok": True, "changed": True,
                 "summary": f"shot {shot_n} prompt polished for {tool or 'its tool'}",
                 "error": None}

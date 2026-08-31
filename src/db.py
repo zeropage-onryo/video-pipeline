@@ -440,6 +440,8 @@ def add_video(
     notes: Optional[str] = None,
     brand: Optional[str] = None,
     path: Path | str = DB_PATH,
+    *,
+    account_id: int,
 ) -> int:
     """
     Store a posted video. Returns its id.
@@ -462,11 +464,11 @@ def add_video(
             """
             INSERT INTO videos
                 (idea_id, title, platform, posted_at, url, timeline,
-                 topic, hook_type, duration_s, notes, brand)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 topic, hook_type, duration_s, notes, brand, account_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (idea_id, title, platform, posted_at, url, timeline,
-             topic, hook_type, duration_s, notes, brand),
+             topic, hook_type, duration_s, notes, brand, account_id),
         )
         return int(cur.lastrowid)
 
@@ -481,16 +483,26 @@ def record_metrics(
     watch_time_seconds: Optional[float] = None,
     captured_at: Optional[str] = None,
     path: Path | str = DB_PATH,
+    *,
+    account_id: int,
 ) -> int:
     """
     Save a snapshot of how a video is doing right now.
+
+    `metrics` carries no owner of its own: a snapshot belongs to a video,
+    and the video belongs to an account. What is scoped is the right to
+    write one -- you cannot attach numbers to a stranger's post.
 
     Call it every time you check. Do not overwrite old rows. A repeat
     write for the same timestamp updates in place rather than duplicating.
     """
     captured_at = captured_at or _now()
     with connect(path) as conn:
-        if not conn.execute("SELECT 1 FROM videos WHERE id = ?", (video_id,)).fetchone():
+        owned = conn.execute(
+            "SELECT 1 FROM videos WHERE id = ? AND account_id IS ?",
+            (video_id, account_id),
+        ).fetchone()
+        if not owned:
             raise ValueError(f"no video with id {video_id}")
         cur = conn.execute(
             """
@@ -722,7 +734,7 @@ def benchmark(
 
 
 def get_video_history(
-    video_id: int, path: Path | str = DB_PATH
+    video_id: int, path: Path | str = DB_PATH, *, account_id: int
 ) -> list[dict[str, Any]]:
     """Every snapshot for one video, oldest first. The growth curve."""
     with connect(path) as conn:
@@ -735,10 +747,10 @@ def get_video_history(
                              - julianday(v.posted_at), 1) AS age_days
                 FROM metrics m
                 JOIN videos v ON v.id = m.video_id
-                WHERE m.video_id = ?
+                WHERE m.video_id = ? AND v.account_id IS ?
                 ORDER BY m.captured_at ASC
                 """,
-                (video_id,),
+                (video_id, account_id),
             )
         ]
 

@@ -368,7 +368,7 @@ async def _save_uploaded_photos(base_dir: Path, slug: str, photos) -> tuple:
 
 
 @router.post("/assets/locations")
-async def asset_create_location(request: Request):
+async def asset_create_location(request: Request, account_id: Optional[int] = None):
     """Save a space's photos and describe it (vision) -- the describe is
     best-effort so a failed model call keeps the photos on disk to
     retry, exactly the old /locations/upload contract."""
@@ -407,7 +407,7 @@ async def asset_create_location(request: Request):
                 p for p in space_dir.iterdir()
                 if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS)
             preprod.add_location(slug, description,
-                                 photo_count=len(all_photos), path=db.DB_PATH)
+                                 photo_count=len(all_photos), path=db.DB_PATH, account_id=account_id)
             described = True
         except Exception as e:
             note = f"saved {len(saved)} photo(s) but could not describe the space: {e}"
@@ -418,7 +418,7 @@ async def asset_create_location(request: Request):
             "photos": len(saved), "note": note, "rag": chunk}
 
 
-async def _create_entity(kind: str, request: Request):
+async def _create_entity(kind: str, request: Request, account_id: int):
     """Characters and props are the same shape: name + one labelled
     field + notes + photos. Save the photos, describe them (vision, so
     appearance is retrievable), store the row, put it on the shelf."""
@@ -443,10 +443,13 @@ async def _create_entity(kind: str, request: Request):
     if notes:
         description["notes"] = notes
 
+    # picked by kind, so the audit that checks every scoped call site
+    # cannot see this one -- account_id is passed by hand, and stays that way
     add = entities.add_character if kind == "character" else entities.add_prop
     add(name=name, **{label: field},
         description=description or None,
-        reference_image=ref, photo_count=count, notes=notes, path=db.DB_PATH)
+        reference_image=ref, photo_count=count, notes=notes, path=db.DB_PATH,
+        account_id=account_id)
 
     chunk = ingest_asset_chunk(kind, slug, name, {
         label: field, "notes": notes, "description": description})
@@ -458,13 +461,13 @@ async def _create_entity(kind: str, request: Request):
 
 
 @router.post("/assets/characters")
-async def asset_create_character(request: Request):
-    return await _create_entity("character", request)
+async def asset_create_character(request: Request, account_id: int = Depends(auth.current_account_id)):
+    return await _create_entity("character", request, account_id)
 
 
 @router.post("/assets/props")
-async def asset_create_prop(request: Request):
-    return await _create_entity("prop", request)
+async def asset_create_prop(request: Request, account_id: int = Depends(auth.current_account_id)):
+    return await _create_entity("prop", request, account_id)
 
 
 class BackfillBody(BaseModel):
@@ -505,7 +508,7 @@ def asset_delete_character(character_id: int, account_id: int = Depends(auth.cur
     row = entities.get_character(character_id, path=db.DB_PATH, account_id=account_id)
     if row is None:
         return _error(404, "not_found", "no such character")
-    entities.delete_character(character_id, path=db.DB_PATH)
+    entities.delete_character(character_id, path=db.DB_PATH, account_id=account_id)
     _drop_asset_chunk("character", _slug(row["name"]))
     return {"deleted": character_id}
 
@@ -515,7 +518,7 @@ def asset_delete_prop(prop_id: int, account_id: int = Depends(auth.current_accou
     row = entities.get_prop(prop_id, path=db.DB_PATH, account_id=account_id)
     if row is None:
         return _error(404, "not_found", "no such prop")
-    entities.delete_prop(prop_id, path=db.DB_PATH)
+    entities.delete_prop(prop_id, path=db.DB_PATH, account_id=account_id)
     _drop_asset_chunk("prop", _slug(row["name"]))
     return {"deleted": prop_id}
 
@@ -798,7 +801,7 @@ def _attach_scene_refs(concept_id: int, manual: list,
     shots[0]["refs"] = refs
     preprod.update_concept_shots(
         concept_id, {"shots": shots, "duration": concept.get("duration")},
-        warnings=concept.get("warnings") or [], path=db.DB_PATH)
+        warnings=concept.get("warnings") or [], path=db.DB_PATH, account_id=account_id)
     return refs
 
 
@@ -985,7 +988,7 @@ class PickBody(BaseModel):
 def concept_pick(concept_id: int, body: PickBody, account_id: int = Depends(auth.current_account_id)):
     """The label: this scene is worth rendering."""
     try:
-        preprod.set_picked(concept_id, body.picked, path=db.DB_PATH)
+        preprod.set_picked(concept_id, body.picked, path=db.DB_PATH, account_id=account_id)
     except ValueError as e:
         return _error(404, "not_found", str(e))
     return {"ok": True, "picked": body.picked,
@@ -997,11 +1000,11 @@ class ArchiveBody(BaseModel):
 
 
 @router.post("/concepts/{concept_id}/archive")
-def concept_archive(concept_id: int, body: ArchiveBody):
+def concept_archive(concept_id: int, body: ArchiveBody, account_id: Optional[int] = None):
     """Take a concept off the board. Not a delete: the row stays for
     pick_rate and stays in the Dev Studio's ungraded pool."""
     try:
-        preprod.set_archived(concept_id, body.archived, path=db.DB_PATH)
+        preprod.set_archived(concept_id, body.archived, path=db.DB_PATH, account_id=account_id)
     except ValueError as e:
         return _error(404, "not_found", str(e))
     return {"ok": True, "archived": body.archived}
@@ -1086,7 +1089,7 @@ def queue_approve(concept_id: int, account_id: int = Depends(auth.current_accoun
     # the pick is recorded BEFORE the spend, not after it: a render that
     # fails halfway still leaves the row saying you chose this one
     if not concept.get("picked"):
-        preprod.set_picked(concept_id, True, path=db.DB_PATH)
+        preprod.set_picked(concept_id, True, path=db.DB_PATH, account_id=account_id)
 
     def work(job):
         jobs.progress(job, 0.2, "rendering via Runway")
@@ -1111,8 +1114,8 @@ def queue_reject(concept_id: int, account_id: int = Depends(auth.current_account
     concept = preprod.get_concept(concept_id, path=db.DB_PATH, account_id=account_id)
     if concept is None:
         return _error(404, "not_found", "no such concept")
-    preprod.set_picked(concept_id, False, path=db.DB_PATH)
-    preprod.set_archived(concept_id, True, path=db.DB_PATH)
+    preprod.set_picked(concept_id, False, path=db.DB_PATH, account_id=account_id)
+    preprod.set_archived(concept_id, True, path=db.DB_PATH, account_id=account_id)
     return {"ok": True, "pick": preprod.pick_rate(path=db.DB_PATH, account_id=account_id)}
 
 
@@ -1136,7 +1139,7 @@ def concept_refs(concept_id: int, body: ConceptRefsBody, account_id: int = Depen
     preprod.update_concept_shots(
         concept_id,
         {"shots": shots, "duration": concept.get("duration")},
-        warnings=concept.get("warnings") or [], path=db.DB_PATH)
+        warnings=concept.get("warnings") or [], path=db.DB_PATH, account_id=account_id)
     return {"ok": True, "refs": shots[0]["refs"]}
 
 
@@ -1177,7 +1180,7 @@ class ShotMediaBody(BaseModel):
 
 
 @router.post("/concepts/{concept_id}/shots/{shot_n}/media")
-def shot_media_attach(concept_id: int, shot_n: int, body: ShotMediaBody):
+def shot_media_attach(concept_id: int, shot_n: int, body: ShotMediaBody, account_id: Optional[int] = None):
     """Attach the rendered clip's URL to one shot -- the paste-back half
     of the Runway loop, and the field autopilot.build_plan() requires
     before it will ever emit a post action."""
@@ -1186,7 +1189,7 @@ def shot_media_attach(concept_id: int, shot_n: int, body: ShotMediaBody):
         return _error(400, "invalid_url",
                       "paste the clip's public http(s) URL")
     try:
-        preprod.set_shot_media_url(concept_id, shot_n, url, path=db.DB_PATH)
+        preprod.set_shot_media_url(concept_id, shot_n, url, path=db.DB_PATH, account_id=account_id)
     except ValueError as e:
         return _error(404, "not_found", str(e))
     return {"concept_id": concept_id, "shot_n": shot_n, "media_url": url}
@@ -1606,7 +1609,7 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
 
     image_refs, ref_urls, video_refs = await _collect_refs(form, want_video=True)
 
-    def work(job):
+    def work(job, account_id: Optional[int] = None):
         from google import genai
 
         from src import nano_banana, shootgen
@@ -1640,7 +1643,7 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
                 {**concept, "shots": shots}, location_names,
                 use_pov=bool(concept.get("use_pov")), allowed_tools=allowed)
             preprod.update_concept_shots(attach_to, {"shots": shots},
-                                         warnings=warnings, path=db.DB_PATH)
+                                         warnings=warnings, path=db.DB_PATH, account_id=account_id)
             concept_id = attach_to
         else:
             concept_dict = {"title": _generate_title(prompt), "hook": "",
@@ -1649,7 +1652,7 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
                 concept_dict, location_names, allowed_tools=allowed)
             concept_id = preprod.save_concept(
                 concept_dict, brand=brand, spark=prompt,
-                warnings=warnings, path=db.DB_PATH)
+                warnings=warnings, path=db.DB_PATH, account_id=account_id)
             # a one-shot generation is a concept like any other and
             # opens in Director like any other, so it grounds like any
             # other -- best-effort, never fails the generation
@@ -1666,7 +1669,7 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
                 db_path=db.DB_PATH)
             if result.get("ok"):
                 preprod.set_shot_reference_image(
-                    concept_id, shot["n"], result["media_url"], path=db.DB_PATH)
+                    concept_id, shot["n"], result["media_url"], path=db.DB_PATH, account_id=account_id)
                 notes.append("image rendered → shot reference")
             else:
                 notes.append(f"image render skipped: {result.get('error')}")
@@ -1679,7 +1682,7 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
                     db_path=db.DB_PATH)
                 if result.get("ok"):
                     preprod.set_shot_media_url(
-                        concept_id, shot["n"], result["media_url"], path=db.DB_PATH)
+                        concept_id, shot["n"], result["media_url"], path=db.DB_PATH, account_id=account_id)
                     notes.append("clip rendered and attached")
                 else:
                     notes.append(f"render skipped: {result.get('error')}")
@@ -1812,7 +1815,7 @@ def shot_prompt_update(concept_id: int, shot_n: int, body: ShotPromptBody,
         allowed_tools=shootgen.ZEROPAGE_AI_TOOLS
         if concept.get("brand") == "zeropage" else None)
     preprod.update_concept_shots(concept_id, {"shots": shots},
-                                 warnings=warnings, path=db.DB_PATH)
+                                 warnings=warnings, path=db.DB_PATH, account_id=account_id)
     return {"concept_id": concept_id, "shot_n": shot_n, "warnings": warnings}
 
 
@@ -1821,7 +1824,7 @@ class ShotReferenceBody(BaseModel):
 
 
 @router.post("/concepts/{concept_id}/shots/{shot_n}/reference")
-def shot_reference_attach(concept_id: int, shot_n: int, body: ShotReferenceBody):
+def shot_reference_attach(concept_id: int, shot_n: int, body: ShotReferenceBody, account_id: Optional[int] = None):
     """Attach (or clear, with "") an image URL as one shot's reference
     anchor -- how a Director-canvas Nano render lands back on the shot.
     The /ui JSON twin of the dev console's form route."""
@@ -1830,7 +1833,7 @@ def shot_reference_attach(concept_id: int, shot_n: int, body: ShotReferenceBody)
         return _error(400, "invalid_url",
                       "paste a public http(s) URL or a site-relative path")
     try:
-        preprod.set_shot_reference_image(concept_id, shot_n, url, path=db.DB_PATH)
+        preprod.set_shot_reference_image(concept_id, shot_n, url, path=db.DB_PATH, account_id=account_id)
     except ValueError as e:
         return _error(404, "not_found", str(e))
     return {"concept_id": concept_id, "shot_n": shot_n,
@@ -1929,7 +1932,7 @@ def concept_deny(concept_id: int, body: DenyBody, account_id: int = Depends(auth
     except Exception as e:
         chunk_error = str(e)
 
-    preprod.delete_concept(concept_id, path=db.DB_PATH)
+    preprod.delete_concept(concept_id, path=db.DB_PATH, account_id=account_id)
     return {
         "denied": concept_id,
         "correction_id": correction_id,

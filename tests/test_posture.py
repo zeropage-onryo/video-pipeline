@@ -95,13 +95,13 @@ def _concept_with_rendered_shot(brand, tmp_db):
         {"title": f"{brand} clip", "hook": "h", "logline": "l",
          "shots": [{"n": 1, "type": "BROLL", "source": "AI", "tool": "VEO",
                     "prompt": "p", "media_url": "https://cdn/x.mp4"}]},
-        brand=brand, path=tmp_db)
+        brand=brand, path=tmp_db, account_id=None)
 
 
 def test_antihero_never_enters_an_autopost_plan(tmp_db):
     cid = _concept_with_rendered_shot("antihero", tmp_db)
     preprod.save_uncanny_score(cid, {"overall": 9, "passed": True, "reasons": []},
-                               path=tmp_db)  # even if (wrongly) marked passed
+                               path=tmp_db, account_id=None)  # even if (wrongly) marked passed
     posts = [a for a in autopilot.build_plan(db_path=tmp_db)["actions"]
              if a["kind"] == "post"]
     assert posts == []   # review-gated forever
@@ -110,7 +110,7 @@ def test_antihero_never_enters_an_autopost_plan(tmp_db):
 def test_zeropage_held_concept_is_not_post_eligible(tmp_db):
     cid = _concept_with_rendered_shot("zeropage", tmp_db)
     preprod.save_uncanny_score(cid, {"overall": 4, "passed": False, "reasons": ["glossy"]},
-                               path=tmp_db)
+                               path=tmp_db, account_id=None)
     posts = [a for a in autopilot.build_plan(db_path=tmp_db)["actions"]
              if a["kind"] == "post"]
     assert posts == []
@@ -127,7 +127,7 @@ def test_zeropage_unjudged_concept_is_not_post_eligible(tmp_db):
 def test_zeropage_passed_concept_is_post_eligible(tmp_db):
     cid = _concept_with_rendered_shot("zeropage", tmp_db)
     preprod.save_uncanny_score(cid, {"overall": 9, "passed": True, "reasons": []},
-                               path=tmp_db)
+                               path=tmp_db, account_id=None)
     posts = [a for a in autopilot.build_plan(db_path=tmp_db)["actions"]
              if a["kind"] == "post"]
     assert len(posts) == 1

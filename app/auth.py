@@ -128,12 +128,44 @@ def current_account_id(request: Request) -> int:
     themselves, because a route that forgets is a route that leaks --
     this way the account id is a parameter the handler cannot use
     without declaring.
+
+    **Deliberately NOT current_account.** They answer different
+    questions, and conflating them empties Mike's board. current_account
+    resolves the BRAND: it reads the brand cookie and returns the
+    membership whose slug matches, which is what the brand pill switches
+    and what the UI colours itself from. This returns the TENANT: the
+    user's oldest membership, whichever brand they are currently looking
+    at.
+
+    That distinction is load-bearing because Mike's two accounts --
+    zeropage and antihero -- are two brands of one operator sharing one
+    asset bank, one board and one cast list. Scope the data by
+    current_account and clicking the ANTIHERO pill scopes every query to
+    account 2, which owns nothing: an empty board, no locations, no
+    cast. Verified against a copy of the live database, which has all 11
+    concepts under account 1.
+
+    So: `account_id` is who owns the row, `brand` is the label on it, and
+    the pill still filters by brand the way it always did -- the filter
+    just happens inside the tenant now instead of being the only thing
+    separating anybody from anybody.
+
+    (The impure part, worth naming: `accounts` is serving as both tenant
+    and brand table, and "oldest membership" is what picks the tenant out
+    of the two. That holds for one operator with two brands and for a
+    pilot user with one account. It stops holding the day one person
+    legitimately belongs to two DIFFERENT operators, and that is when
+    accounts has to split into tenants and brands for real.)
     """
-    account = current_account(request)
-    if account is None:
+    user = current_user(request)
+    if user is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=401, detail="sign in first")
+    member_of = accounts.memberships(user["id"], path=db.DB_PATH)
+    if not member_of:
         from fastapi import HTTPException
         raise HTTPException(status_code=403, detail="no account access")
-    return int(account["id"])
+    return min(int(a["id"]) for a in member_of)
 
 
 def dev_account_id(request: Request) -> int:

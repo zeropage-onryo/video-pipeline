@@ -12,14 +12,20 @@ prompt is never rewritten. Run from the project root:
     python -m ops.backfill_scene_refs --write
 """
 import sys
+from typing import Optional
 
 from app import api
-from src import db, preprod
+from src import accounts, db, preprod
 
 
-def main(write: bool) -> int:
+def main(write: bool, account_id: Optional[int] = None) -> int:
+    # A one-off ops script has no session. Without this it acts as
+    # nobody, and after the tenancy backfill nobody owns no rows --
+    # so it would report zero work and look like a clean run.
+    if account_id is None:
+        account_id = accounts.resolve_account()
     touched = 0
-    for concept in preprod.list_concepts(limit=1000, path=db.DB_PATH):
+    for concept in preprod.list_concepts(limit=1000, path=db.DB_PATH, account_id=account_id):
         shots = concept.get("shots") or []
         if not shots or shots[0].get("refs"):
             continue

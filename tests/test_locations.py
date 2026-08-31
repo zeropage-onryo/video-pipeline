@@ -107,7 +107,7 @@ def test_describe_locations_saves_each_space(tmp_db, locations_dir, monkeypatch)
 
 def test_describe_locations_is_incremental(tmp_db, locations_dir, monkeypatch):
     """A space already described isn't re-sent to the model."""
-    preprod.add_location("hallway", {"space": "already known"}, photo_count=2, path=tmp_db)
+    preprod.add_location("hallway", {"space": "already known"}, photo_count=2, path=tmp_db, account_id=None)
 
     calls = []
 
@@ -128,7 +128,7 @@ def test_describe_locations_is_incremental(tmp_db, locations_dir, monkeypatch):
 
 
 def test_describe_locations_force_redescribes(tmp_db, locations_dir, monkeypatch):
-    preprod.add_location("hallway", {"space": "stale"}, photo_count=2, path=tmp_db)
+    preprod.add_location("hallway", {"space": "stale"}, photo_count=2, path=tmp_db, account_id=None)
     monkeypatch.setattr(locations, "generate_with_retry",
                         lambda *a, **kw: VALID_DESCRIPTION)
 

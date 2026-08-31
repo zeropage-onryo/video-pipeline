@@ -92,14 +92,15 @@ def test_build_plan_reads_ai_shots_without_touching_anything(tmp_path):
     path = tmp_path / "test.db"
     db.init_db(path)
     preprod.init(path)
-    preprod.add_location("garage", {"space": "g"}, path=path)
+    preprod.add_location("garage", {"space": "g"}, path=path, account_id=None)
     preprod.save_concept(
         {"title": "T", "shots": [
             {"n": 1, "type": "BROLL", "source": "AI", "tool": "VEO",
              "location": "garage", "desc": "d", "prompt": "a drawer closing"},
         ]},
         brand="antihero", path=path,
-    )
+    
+        account_id=None,)
     plan = autopilot.build_plan(db_path=path)
     kinds = [a["kind"] for a in plan["actions"]]
     assert kinds == ["generate"]
@@ -115,14 +116,15 @@ def test_build_plan_emits_post_only_once_media_exists(tmp_path):
     path = tmp_path / "test.db"
     db.init_db(path)
     preprod.init(path)
-    preprod.add_location("garage", {"space": "g"}, path=path)
+    preprod.add_location("garage", {"space": "g"}, path=path, account_id=None)
     preprod.save_concept(
         {"title": "No media yet", "hook": "h", "shots": [
             {"n": 1, "type": "BROLL", "source": "AI", "tool": "VEO",
              "location": "garage", "desc": "d", "prompt": "p"},
         ]},
         brand="zeropage", path=path,
-    )
+    
+        account_id=None,)
     cid = preprod.save_concept(
         {"title": "Rendered", "hook": "the hook", "shots": [
             {"n": 1, "type": "BROLL", "source": "AI", "tool": "VEO",
@@ -130,9 +132,10 @@ def test_build_plan_emits_post_only_once_media_exists(tmp_path):
              "media_url": "https://cdn.example/rendered.mp4"},
         ]},
         brand="zeropage", path=path,
-    )
+    
+        account_id=None,)
     preprod.save_uncanny_score(
-        cid, {"overall": 9, "passed": True, "reasons": []}, path=path)
+        cid, {"overall": 9, "passed": True, "reasons": []}, path=path, account_id=None)
     plan = autopilot.build_plan(db_path=path)
     posts = [a for a in plan["actions"] if a["kind"] == "post"]
     assert len(posts) == 1

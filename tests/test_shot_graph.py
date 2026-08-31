@@ -41,7 +41,7 @@ def a_concept(path, prompt="the scene as written"):
         {"title": "The Garage Guest", "hook": "", "logline": "",
          "shots": [{"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
                     "desc": "d", "prompt": prompt}]},
-        brand="zeropage", path=path)
+        brand="zeropage", path=path, account_id=None)
 
 
 GRAPH = {"nodes": [{"id": 3, "type": "zpf/enhance", "pos": [640, 370],
@@ -103,7 +103,7 @@ def test_each_shot_keeps_its_own_canvas(tmp_db):
         {"title": "two shots", "shots": [
             {"n": 1, "source": "AI", "prompt": "one"},
             {"n": 2, "source": "AI", "prompt": "two"}]},
-        brand="zeropage", path=tmp_db)
+        brand="zeropage", path=tmp_db, account_id=None)
     client.put(f"/api/concepts/{cid}/shots/1/graph", json={"graph": GRAPH})
     assert client.get(f"/api/concepts/{cid}/shots/2/graph").json()["graph"] is None
 
@@ -135,14 +135,14 @@ def test_better_references_underneath_retire_the_drawing_too(tmp_db):
     concept = preprod.get_concept(cid, path=tmp_db, account_id=None)
     shots = [dict(s) for s in concept["shots"]]
     shots[0]["refs"] = ["/characters/michael/photo/a.jpg"]
-    preprod.update_concept_shots(cid, {"shots": shots}, path=tmp_db)
+    preprod.update_concept_shots(cid, {"shots": shots}, path=tmp_db, account_id=None)
 
     client.put(f"/api/concepts/{cid}/shots/1/graph", json={"graph": GRAPH})
     assert client.get(f"/api/concepts/{cid}/shots/1/graph").json()["stale"] is False
 
     shots[0]["refs"] = ["/characters/michael/photo/a.jpg",
                         "/characters/michael/photo/b.jpg"]
-    preprod.update_concept_shots(cid, {"shots": shots}, path=tmp_db)
+    preprod.update_concept_shots(cid, {"shots": shots}, path=tmp_db, account_id=None)
     assert client.get(f"/api/concepts/{cid}/shots/1/graph").json()["stale"] is True
 
 
@@ -155,7 +155,7 @@ def test_staleness_is_checked_on_read_not_invalidated_on_write(tmp_db):
     concept = preprod.get_concept(cid, path=tmp_db, account_id=None)
     shots = [dict(s) for s in concept["shots"]]
     shots[0]["prompt"] = "changed behind the API's back"
-    preprod.update_concept_shots(cid, {"shots": shots}, path=tmp_db)
+    preprod.update_concept_shots(cid, {"shots": shots}, path=tmp_db, account_id=None)
     assert client.get(f"/api/concepts/{cid}/shots/1/graph").json()["stale"] is True
 
 
@@ -164,7 +164,7 @@ def test_the_reset_hatch_drops_every_saved_canvas(tmp_db):
         {"title": "two shots", "shots": [
             {"n": 1, "source": "AI", "prompt": "one"},
             {"n": 2, "source": "AI", "prompt": "two"}]},
-        brand="zeropage", path=tmp_db)
+        brand="zeropage", path=tmp_db, account_id=None)
     client.put(f"/api/concepts/{cid}/shots/1/graph", json={"graph": GRAPH})
     client.put(f"/api/concepts/{cid}/shots/2/graph", json={"graph": GRAPH})
     assert client.delete(f"/api/concepts/{cid}/graph").json()["removed"] == 2

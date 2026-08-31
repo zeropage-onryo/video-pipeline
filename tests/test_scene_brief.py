@@ -26,12 +26,12 @@ def tmp_db(tmp_path, monkeypatch):
 
 def test_save_list_delete_scene_briefs(tmp_db):
     a = preprod.save_scene_brief("antihero", "Portal Room", "the brief text",
-                                 spark="x", path=tmp_db)
-    preprod.save_scene_brief("zeropage", "Other", "zp brief", path=tmp_db)
+                                 spark="x", path=tmp_db, account_id=None)
+    preprod.save_scene_brief("zeropage", "Other", "zp brief", path=tmp_db, account_id=None)
     ah = preprod.list_scene_briefs(brand="antihero", path=tmp_db, account_id=None)
     assert len(ah) == 1 and ah[0]["title"] == "Portal Room"
     assert ah[0]["brief"] == "the brief text"
-    preprod.delete_scene_brief(a, path=tmp_db)
+    preprod.delete_scene_brief(a, path=tmp_db, account_id=None)
     assert preprod.list_scene_briefs(brand="antihero", path=tmp_db, account_id=None) == []
 
 

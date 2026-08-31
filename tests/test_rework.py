@@ -19,7 +19,7 @@ def tmp_db(tmp_path):
     path = tmp_path / "test.db"
     db.init_db(path)
     preprod.init(path)
-    preprod.add_location("garage", {"space": "cold garage"}, path=path)
+    preprod.add_location("garage", {"space": "cold garage"}, path=path, account_id=None)
     return path
 
 

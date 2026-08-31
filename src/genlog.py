@@ -6,8 +6,9 @@ the reusable work is; this just records the decision you already made
 -- kept, or rejected with a reason. No generation APIs are called here.
 """
 import argparse
+from typing import Optional
 
-from . import db
+from . import accounts, db
 from . import generative as gen
 from .shot import TOOLS
 
@@ -17,7 +18,7 @@ REJECT_REASONS = (
 )
 
 
-def main(argv=None, db_path=None):
+def main(argv=None, db_path=None, account_id: Optional[int] = None):
     parser = argparse.ArgumentParser(
         description="Log a generation attempt: record one, then mark it kept or rejected."
     )
@@ -39,7 +40,26 @@ def main(argv=None, db_path=None):
     p_reject.add_argument("generation_id", type=int)
     p_reject.add_argument("reason", choices=REJECT_REASONS)
 
+    
+    parser.add_argument(
+        "--account", default=None,
+        help=(
+            "The account to act as, by slug (zeropage / antihero). "
+            "Defaults to the oldest account on the database -- an "
+            "unattended run has no session, and acting as nobody "
+            "would read an empty database."
+        ),
+    )
     args = parser.parse_args(argv)
+
+    if account_id is None:
+
+        # resolve against the database this invocation was pointed at,
+        # not the module default -- otherwise --db reads one database
+        # and takes its account id from another
+        account_id = accounts.resolve_account(
+            args.account, path=db_path if db_path is not None else db.DB_PATH)
+
     kwargs = {"path": db_path} if db_path is not None else {}
 
     db.init_db(**kwargs)
@@ -50,15 +70,16 @@ def main(argv=None, db_path=None):
             args.shot_id, args.tool, args.prompt,
             output_path=args.output_path, cost_usd=args.cost_usd, notes=args.notes,
             **kwargs,
-        )
+        
+            account_id=account_id,)
         print(f"Recorded generation {generation_id} ({args.tool}, shot {args.shot_id})")
 
     elif args.command == "keep":
-        gen.mark_kept(args.generation_id, output_path=args.output_path, **kwargs)
+        gen.mark_kept(args.generation_id, output_path=args.output_path, **kwargs, account_id=account_id)
         print(f"Marked generation {args.generation_id} kept")
 
     elif args.command == "reject":
-        gen.mark_rejected(args.generation_id, args.reason, **kwargs)
+        gen.mark_rejected(args.generation_id, args.reason, **kwargs, account_id=account_id)
         print(f"Marked generation {args.generation_id} rejected ({args.reason})")
 
 

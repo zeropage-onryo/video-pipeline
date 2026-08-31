@@ -89,10 +89,10 @@ def test_save_uncanny_score_persists_pass_and_reason(tmp_db):
          "logline": "a room that's upside down but nobody reacts",
          "shots": [{"n": 1, "type": "BROLL", "source": "AI",
                     "tool": "VEO", "prompt": "x"}]},
-        brand="zeropage", path=tmp_db)
+        brand="zeropage", path=tmp_db, account_id=None)
     preprod.save_uncanny_score(
         cid, {"overall": 8.5, "passed": True, "reasons": ["frame 1 is wrong"]},
-        path=tmp_db)
+        path=tmp_db, account_id=None)
     got = preprod.get_concept(cid, path=tmp_db, account_id=None)
     assert got["uncanny_overall"] == 8.5
     assert got["uncanny_passed"] == 1

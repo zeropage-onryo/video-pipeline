@@ -155,7 +155,7 @@ def generate_prompts_for_slot(
 
     shot = structure_shot(description, examples, client, model=model)
 
-    shot_id = gen.add_shot(shot, idea_id=idea_id, slot_index=slot_index, **kwargs)
+    shot_id = gen.add_shot(shot, idea_id=idea_id, slot_index=slot_index, **kwargs, account_id=account_id)
     prompts = render_all(shot)
 
     return {"shot_id": shot_id, "shot": shot.as_dict(), "prompts": prompts}

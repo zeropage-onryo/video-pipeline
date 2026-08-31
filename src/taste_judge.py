@@ -27,7 +27,7 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
-from . import db, post_seo, preprod, winners
+from . import accounts, db, post_seo, preprod, winners
 from .gemini_utils import generate_with_retry, strip_fences
 
 MODEL = os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview")
@@ -36,26 +36,30 @@ NEUTRAL = 5.0
 HISTORY_LIMIT = 12   # recent graded items per side to show the judge
 
 
-def _graded_concepts(status: str, limit: int, path) -> list[dict]:
-    """Titles/hooks/loglines of concepts whose hold you graded `status`."""
+def _graded_concepts(status: str, limit: int, path, account_id=None) -> list[dict]:
+    """Titles/hooks/loglines of concepts whose hold you graded `status`.
+
+    hold_queue has no owner of its own -- it is scoped through the
+    concept it points at, which is why the predicate is on `c`."""
     with db.connect(path) as conn:
         rows = conn.execute(
             "SELECT c.title, c.hook, c.logline FROM hold_queue h "
             "JOIN shoot_concepts c ON c.id = h.concept_id "
             "WHERE h.status = ? AND h.concept_id IS NOT NULL "
+            "AND c.account_id IS ? "
             "ORDER BY h.created_at DESC LIMIT ?",
-            (status, limit),
+            (status, account_id, limit),
         ).fetchall()
     return [dict(r) for r in rows]
 
 
-def gather_signals(db_path=None) -> dict:
+def gather_signals(db_path=None, account_id=None) -> dict:
     """Everything the judge scores against -- pure, no network."""
     path = db_path or db.DB_PATH
     wins = winners.list_all(path=path)
     return {
-        "liked": _graded_concepts("approved", HISTORY_LIMIT, path),
-        "disliked": _graded_concepts("rejected", HISTORY_LIMIT, path),
+        "liked": _graded_concepts("approved", HISTORY_LIMIT, path, account_id),
+        "disliked": _graded_concepts("rejected", HISTORY_LIMIT, path, account_id),
         "winners": [w for w in wins if w.get("verdict") != "didnt_work"][:HISTORY_LIMIT],
         "avoid": [w for w in wins if w.get("verdict") == "didnt_work"][:HISTORY_LIMIT],
         "perf": post_seo.derive_signals(db_path=db_path),
@@ -173,7 +177,19 @@ def main(argv=None, account_id: Optional[int] = None) -> int:
     parser.add_argument("--limit", type=int, default=8,
                         help="how many recent concepts to score")
     parser.add_argument("--concept-id", type=int, help="score just this concept id")
+    parser.add_argument(
+        "--account", default=None,
+        help=(
+            "The account to act as, by slug (zeropage / antihero). "
+            "Defaults to the oldest account on the database -- an "
+            "unattended run has no session, and acting as nobody "
+            "would read an empty database."
+        ),
+    )
     args = parser.parse_args(argv)
+    if account_id is None:
+        account_id = accounts.resolve_account(args.account)
+
 
     signals = gather_signals()
     if not has_history(signals):

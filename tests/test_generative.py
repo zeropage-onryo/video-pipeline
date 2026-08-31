@@ -105,10 +105,10 @@ def test_renderers_are_pure():
 # ---------- tracking ----------
 
 def test_attempts_increment_per_tool(tmp_db):
-    sid = gen.add_shot(make_shot(), path=tmp_db)
-    a = gen.record_generation(sid, "runway", "p1", path=tmp_db)
-    b = gen.record_generation(sid, "runway", "p2", path=tmp_db)
-    c = gen.record_generation(sid, "kling", "p3", path=tmp_db)
+    sid = gen.add_shot(make_shot(), path=tmp_db, account_id=None)
+    a = gen.record_generation(sid, "runway", "p1", path=tmp_db, account_id=None)
+    b = gen.record_generation(sid, "runway", "p2", path=tmp_db, account_id=None)
+    c = gen.record_generation(sid, "kling", "p3", path=tmp_db, account_id=None)
     with db.connect(tmp_db) as conn:
         rows = {r["id"]: r["attempt"] for r in
                 conn.execute("SELECT id, attempt FROM generations")}
@@ -117,43 +117,43 @@ def test_attempts_increment_per_tool(tmp_db):
 
 
 def test_empty_prompt_rejected(tmp_db):
-    sid = gen.add_shot(make_shot(), path=tmp_db)
+    sid = gen.add_shot(make_shot(), path=tmp_db, account_id=None)
     with pytest.raises(ValueError, match="prompt cannot be empty"):
-        gen.record_generation(sid, "runway", "   ", path=tmp_db)
+        gen.record_generation(sid, "runway", "   ", path=tmp_db, account_id=None)
 
 
 def test_unknown_tool_rejected_on_write(tmp_db):
-    sid = gen.add_shot(make_shot(), path=tmp_db)
+    sid = gen.add_shot(make_shot(), path=tmp_db, account_id=None)
     with pytest.raises(ValueError, match="tool must be one of"):
-        gen.record_generation(sid, "sora", "x", path=tmp_db)
+        gen.record_generation(sid, "sora", "x", path=tmp_db, account_id=None)
 
 
 def test_generation_for_missing_shot_rejected(tmp_db):
     with pytest.raises(ValueError, match="no shot"):
-        gen.record_generation(999, "runway", "x", path=tmp_db)
+        gen.record_generation(999, "runway", "x", path=tmp_db, account_id=None)
 
 
 def test_keeping_resolves_the_shot(tmp_db):
-    sid = gen.add_shot(make_shot(), path=tmp_db)
+    sid = gen.add_shot(make_shot(), path=tmp_db, account_id=None)
     assert len(gen.open_shots(tmp_db, account_id=None)) == 1
-    g = gen.record_generation(sid, "veo", "p", path=tmp_db)
-    gen.mark_kept(g, output_path="gen/hand_01.mp4", path=tmp_db)
+    g = gen.record_generation(sid, "veo", "p", path=tmp_db, account_id=None)
+    gen.mark_kept(g, output_path="gen/hand_01.mp4", path=tmp_db, account_id=None)
     assert gen.open_shots(tmp_db, account_id=None) == []
     assert gen.get_shot(sid, tmp_db, account_id=None)["resolved"] == 1
 
 
 def test_spec_round_trips(tmp_db):
-    sid = gen.add_shot(make_shot(camera="orbit"), path=tmp_db)
+    sid = gen.add_shot(make_shot(camera="orbit"), path=tmp_db, account_id=None)
     spec = gen.get_shot(sid, tmp_db, account_id=None)["spec"]
     assert spec["camera"] == "orbit"
     assert spec["subject"] == "a gloved hand"
 
 
 def test_attempts_to_keeper_counts_the_winner(tmp_db):
-    sid = gen.add_shot(make_shot(), path=tmp_db)
+    sid = gen.add_shot(make_shot(), path=tmp_db, account_id=None)
     for i in range(4):
-        g = gen.record_generation(sid, "runway", f"p{i}", cost_usd=0.5, path=tmp_db)
-    gen.mark_kept(g, path=tmp_db)
+        g = gen.record_generation(sid, "runway", f"p{i}", cost_usd=0.5, path=tmp_db, account_id=None)
+    gen.mark_kept(g, path=tmp_db, account_id=None)
 
     rows = gen.attempts_to_keeper(path=tmp_db, account_id=None)
     assert len(rows) == 1
@@ -162,14 +162,14 @@ def test_attempts_to_keeper_counts_the_winner(tmp_db):
 
 
 def test_tool_scoreboard_ranks_by_hit_rate(tmp_db):
-    s1 = gen.add_shot(make_shot(), path=tmp_db)
+    s1 = gen.add_shot(make_shot(), path=tmp_db, account_id=None)
     for i in range(5):
-        g = gen.record_generation(s1, "runway", f"a{i}", cost_usd=1.0, path=tmp_db)
-    gen.mark_kept(g, path=tmp_db)
+        g = gen.record_generation(s1, "runway", f"a{i}", cost_usd=1.0, path=tmp_db, account_id=None)
+    gen.mark_kept(g, path=tmp_db, account_id=None)
 
-    s2 = gen.add_shot(make_shot(subject="a door"), path=tmp_db)
-    g2 = gen.record_generation(s2, "kling", "b0", cost_usd=1.0, path=tmp_db)
-    gen.mark_kept(g2, path=tmp_db)
+    s2 = gen.add_shot(make_shot(subject="a door"), path=tmp_db, account_id=None)
+    g2 = gen.record_generation(s2, "kling", "b0", cost_usd=1.0, path=tmp_db, account_id=None)
+    gen.mark_kept(g2, path=tmp_db, account_id=None)
 
     board = {b["tool"]: b for b in gen.tool_scoreboard(tmp_db, account_id=None)}
     assert board["runway"]["hit_rate"] == 0.2
@@ -179,36 +179,36 @@ def test_tool_scoreboard_ranks_by_hit_rate(tmp_db):
 
 def test_abandoned_shots_excluded_from_scoreboard(tmp_db):
     """A shot you gave up on shouldn't punish whichever tool you tried."""
-    good = gen.add_shot(make_shot(), path=tmp_db)
-    g = gen.record_generation(good, "veo", "x", path=tmp_db)
-    gen.mark_kept(g, path=tmp_db)
+    good = gen.add_shot(make_shot(), path=tmp_db, account_id=None)
+    g = gen.record_generation(good, "veo", "x", path=tmp_db, account_id=None)
+    gen.mark_kept(g, path=tmp_db, account_id=None)
 
-    dud = gen.add_shot(make_shot(subject="impossible thing"), path=tmp_db)
+    dud = gen.add_shot(make_shot(subject="impossible thing"), path=tmp_db, account_id=None)
     for i in range(8):
-        gen.record_generation(dud, "veo", f"y{i}", path=tmp_db)
+        gen.record_generation(dud, "veo", f"y{i}", path=tmp_db, account_id=None)
 
     board = {b["tool"]: b for b in gen.tool_scoreboard(tmp_db, account_id=None)}
     assert board["veo"]["attempts"] == 1
 
 
 def test_failure_reasons_grouped(tmp_db):
-    sid = gen.add_shot(make_shot(), path=tmp_db)
+    sid = gen.add_shot(make_shot(), path=tmp_db, account_id=None)
     for reason in ("morphing hands", "morphing hands", "wrong lighting"):
-        g = gen.record_generation(sid, "runway", "p", path=tmp_db)
-        gen.mark_rejected(g, reason, path=tmp_db)
+        g = gen.record_generation(sid, "runway", "p", path=tmp_db, account_id=None)
+        gen.mark_rejected(g, reason, path=tmp_db, account_id=None)
     top = gen.failure_reasons(path=tmp_db, account_id=None)
     assert top[0] == {"reason": "morphing hands", "n": 2}
 
 
 def test_winning_prompts_fewest_attempts_first(tmp_db):
-    slow = gen.add_shot(make_shot(), path=tmp_db)
+    slow = gen.add_shot(make_shot(), path=tmp_db, account_id=None)
     for i in range(6):
-        g = gen.record_generation(slow, "runway", f"slow{i}", path=tmp_db)
-    gen.mark_kept(g, path=tmp_db)
+        g = gen.record_generation(slow, "runway", f"slow{i}", path=tmp_db, account_id=None)
+    gen.mark_kept(g, path=tmp_db, account_id=None)
 
-    fast = gen.add_shot(make_shot(subject="a door"), path=tmp_db)
-    g2 = gen.record_generation(fast, "kling", "fast", path=tmp_db)
-    gen.mark_kept(g2, path=tmp_db)
+    fast = gen.add_shot(make_shot(subject="a door"), path=tmp_db, account_id=None)
+    g2 = gen.record_generation(fast, "kling", "fast", path=tmp_db, account_id=None)
+    gen.mark_kept(g2, path=tmp_db, account_id=None)
 
     winners = gen.winning_prompts(path=tmp_db, account_id=None)
     assert winners[0]["prompt"] == "fast"
@@ -222,10 +222,10 @@ def test_shot_links_to_a_pitch(tmp_db):
     with db.connect(tmp_db) as conn:
         idea_id = conn.execute("SELECT id FROM ideas WHERE run_id = ?",
                                (run,)).fetchone()[0]
-    sid = gen.add_shot(make_shot(), idea_id=idea_id, slot_index=2, path=tmp_db)
+    sid = gen.add_shot(make_shot(), idea_id=idea_id, slot_index=2, path=tmp_db, account_id=None)
     assert gen.get_shot(sid, tmp_db, account_id=None)["idea_id"] == idea_id
 
 
 def test_shot_for_missing_idea_rejected(tmp_db):
     with pytest.raises(ValueError, match="no idea"):
-        gen.add_shot(make_shot(), idea_id=999, path=tmp_db)
+        gen.add_shot(make_shot(), idea_id=999, path=tmp_db, account_id=None)

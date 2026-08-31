@@ -70,7 +70,7 @@ def seed_concept(path, shots=None, brand="antihero"):
                "shots": shots if shots is not None else [
                    {"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
                     "desc": "tank badge macro", "prompt": "macro of the tank badge"}]}
-    return preprod.save_concept(concept, brand=brand, spark="spark", path=path)
+    return preprod.save_concept(concept, brand=brand, spark="spark", path=path, account_id=None)
 
 
 # --- presets ----------------------------------------------------------------
@@ -100,9 +100,9 @@ def test_api_presets(tmp_db):
 # --- @ mention asset search -------------------------------------------------
 
 def test_assets_search_is_cross_category_and_prefix_first(tmp_db):
-    preprod.add_location("garage", {"space": "a dim garage"}, path=tmp_db)
-    entities.add_character("Juno", role="the dog", path=tmp_db)
-    entities.add_prop("Ducati Monster", category="vehicle", path=tmp_db)
+    preprod.add_location("garage", {"space": "a dim garage"}, path=tmp_db, account_id=None)
+    entities.add_character("Juno", role="the dog", path=tmp_db, account_id=None)
+    entities.add_prop("Ducati Monster", category="vehicle", path=tmp_db, account_id=None)
 
     res = client.get("/api/assets/search?q=ju").json()
     assert [i["name"] for i in res["items"]] == ["Juno"]

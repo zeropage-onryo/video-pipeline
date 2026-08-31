@@ -235,7 +235,7 @@ def test_a_manual_pick_outranks_an_inferred_one(tmp_db, monkeypatch):
     monkeypatch.setattr(api, "_assets_all", lambda account_id=None: CAST)
     scene_id = preprod.save_concept(
         {"title": "t", "shots": [{"n": 1, "source": "AI", "prompt": SCENE}]},
-        brand="zeropage", path=tmp_db)
+        brand="zeropage", path=tmp_db, account_id=None)
     refs = api._attach_scene_refs(scene_id, ["/locations/living-room/photo/a.jpg"])
     assert refs[0] == "/locations/living-room/photo/a.jpg"
     assert "/characters/michael/photo/a.jpg" in refs
@@ -246,7 +246,7 @@ def test_attaching_never_rewrites_the_prompt(tmp_db, monkeypatch):
     monkeypatch.setattr(api, "_assets_all", lambda account_id=None: CAST)
     scene_id = preprod.save_concept(
         {"title": "t", "shots": [{"n": 1, "source": "AI", "prompt": SCENE}]},
-        brand="zeropage", path=tmp_db)
+        brand="zeropage", path=tmp_db, account_id=None)
     api._attach_scene_refs(scene_id, [])
     assert preprod.get_concept(scene_id, path=tmp_db, account_id=None)["shots"][0]["prompt"] == SCENE
 
@@ -257,7 +257,7 @@ def test_no_assets_at_all_leaves_the_scene_alone(tmp_db, monkeypatch):
     monkeypatch.setattr(api, "_assets_all", lambda account_id=None: [])
     scene_id = preprod.save_concept(
         {"title": "t", "shots": [{"n": 1, "source": "AI", "prompt": SCENE}]},
-        brand="zeropage", path=tmp_db)
+        brand="zeropage", path=tmp_db, account_id=None)
     assert api._attach_scene_refs(scene_id, []) == []
 
 

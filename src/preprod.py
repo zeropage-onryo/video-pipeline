@@ -291,46 +291,67 @@ def init(path: Path | str = DB_PATH) -> None:
         )
 
 
-def save_judge_score(concept_id: int, judge: dict, path: Path | str = DB_PATH) -> None:
+def save_judge_score(concept_id: int, judge: dict, path: Path | str = DB_PATH, *,
+                     account_id: int) -> None:
     """Store the taste + performance judge's verdict on a concept so the UI
     can show and rank by it. `judge` is taste_judge.score_concept()'s dict."""
     with connect(path) as conn:
         conn.execute(
             "UPDATE shoot_concepts SET judge_overall=?, judge_taste=?, "
-            "judge_perf=?, judge_reason=? WHERE id=?",
+            "judge_perf=?, judge_reason=? WHERE id=? AND account_id IS ?",
             (judge.get("overall"), judge.get("taste_fit"), judge.get("performance"),
-             " · ".join(judge.get("reasons") or [])[:500], concept_id),
+             " · ".join(judge.get("reasons") or [])[:500], concept_id, account_id),
         )
 
 
-def save_uncanny_score(concept_id: int, score: dict, path: Path | str = DB_PATH) -> None:
+def save_uncanny_score(concept_id: int, score: dict, path: Path | str = DB_PATH, *,
+                       account_id: int) -> None:
     """Store Zero Page's on-brand gate verdict on a concept so the UI can show
     the PASS/HOLD and autopilot can check it. `score` is
     uncanny_judge.score_concept()'s dict."""
     with connect(path) as conn:
         conn.execute(
             "UPDATE shoot_concepts SET uncanny_overall=?, uncanny_passed=?, "
-            "uncanny_reason=? WHERE id=?",
+            "uncanny_reason=? WHERE id=? AND account_id IS ?",
             (score.get("overall"), 1 if score.get("passed") else 0,
-             " · ".join(score.get("reasons") or [])[:500], concept_id),
+             " · ".join(score.get("reasons") or [])[:500], concept_id, account_id),
         )
 
 
-def delete_concept(concept_id: int, path: Path | str = DB_PATH) -> None:
-    """Discard a concept for good. concept_locations rows cascade via the
-    FK (connect() sets PRAGMA foreign_keys=ON)."""
+def delete_concept(concept_id: int, path: Path | str = DB_PATH, *,
+                   account_id: int) -> None:
+    """Discard a concept for good -- if it is yours. concept_locations
+    rows cascade via the FK (connect() sets PRAGMA foreign_keys=ON).
+
+    Deleting someone else's is silently a no-op rather than an error,
+    for the same reason get_concept returns None: an error would confirm
+    the row exists."""
     with connect(path) as conn:
-        conn.execute("DELETE FROM shoot_concepts WHERE id = ?", (concept_id,))
+        conn.execute(
+            "DELETE FROM shoot_concepts WHERE id = ? AND account_id IS ?",
+            (concept_id, account_id),
+        )
 
 
-def delete_all_concepts(brand: Optional[str] = None, path: Path | str = DB_PATH) -> int:
-    """Clear the concept slate -- all of it, or just one brand's. Returns
-    how many were removed. concept_locations cascades via the FK."""
+def delete_all_concepts(brand: Optional[str] = None, path: Path | str = DB_PATH, *,
+                        account_id: int) -> int:
+    """Clear ONE ACCOUNT's concept slate -- all of it, or just one of its
+    brands. Returns how many were removed. concept_locations cascades.
+
+    `account_id` is required here above all: this used to be
+    `DELETE FROM shoot_concepts` with no argument at all, which wiped the
+    whole table. With a second account on the database that is not a
+    reset, it is someone else's work gone."""
     with connect(path) as conn:
         if brand:
-            cur = conn.execute("DELETE FROM shoot_concepts WHERE brand = ?", (brand,))
+            cur = conn.execute(
+                "DELETE FROM shoot_concepts WHERE brand = ? AND account_id IS ?",
+                (brand, account_id),
+            )
         else:
-            cur = conn.execute("DELETE FROM shoot_concepts")
+            cur = conn.execute(
+                "DELETE FROM shoot_concepts WHERE account_id IS ?", (account_id,)
+            )
         return cur.rowcount
 
 
@@ -338,13 +359,14 @@ def delete_all_concepts(brand: Optional[str] = None, path: Path | str = DB_PATH)
 # scene briefs -- one cohesive whole-scene prompt (the winning skeleton)
 # --------------------------------------------------------------------------
 def save_scene_brief(brand: str, title: str, brief: str,
-                     spark: Optional[str] = None, path: Path | str = DB_PATH) -> int:
+                     spark: Optional[str] = None, path: Path | str = DB_PATH, *,
+                     account_id: int) -> int:
     with connect(path) as conn:
         cur = conn.execute(
-            "INSERT INTO scene_briefs (created_at, brand, spark, title, brief) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO scene_briefs (created_at, brand, spark, title, brief, "
+            "account_id) VALUES (?, ?, ?, ?, ?, ?)",
             (_now(), brand, (spark or "").strip() or None,
-             (title or "Untitled scene").strip(), brief.strip()),
+             (title or "Untitled scene").strip(), brief.strip(), account_id),
         )
         return int(cur.lastrowid)
 
@@ -364,9 +386,13 @@ def list_scene_briefs(brand: Optional[str] = None,
         return [dict(r) for r in conn.execute(sql, params)]
 
 
-def delete_scene_brief(brief_id: int, path: Path | str = DB_PATH) -> None:
+def delete_scene_brief(brief_id: int, path: Path | str = DB_PATH, *,
+                       account_id: int) -> None:
     with connect(path) as conn:
-        conn.execute("DELETE FROM scene_briefs WHERE id = ?", (brief_id,))
+        conn.execute(
+            "DELETE FROM scene_briefs WHERE id = ? AND account_id IS ?",
+            (brief_id, account_id),
+        )
 
 
 # --------------------------------------------------------------------------
@@ -380,6 +406,8 @@ def add_location(
     photo_count: Optional[int] = None,
     notes: Optional[str] = None,
     path: Path | str = DB_PATH,
+    *,
+    account_id: int,
 ) -> int:
     """
     Record (or re-record) a place you can shoot. Keyed by name, so
@@ -394,21 +422,24 @@ def add_location(
     with connect(path) as conn:
         cur = conn.execute(
             """
-            INSERT INTO locations (created_at, name, photo_count, description_json, notes)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO locations (created_at, name, photo_count, description_json,
+                                   notes, account_id)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT (COALESCE(account_id, 0), name) DO UPDATE SET
                 photo_count      = excluded.photo_count,
                 description_json = excluded.description_json,
                 notes            = COALESCE(excluded.notes, locations.notes)
             """,
             (_now(), name, photo_count,
-             json.dumps(description) if description is not None else None, notes),
+             json.dumps(description) if description is not None else None, notes,
+             account_id),
         )
         # `cur.lastrowid` is not trustworthy after an upsert that took the
         # DO UPDATE path -- it reports a rowid no statement wrote. Ask.
         row = conn.execute(
-            "SELECT id FROM locations WHERE name = ? AND COALESCE(account_id, 0) = 0",
-            (name,),
+            "SELECT id FROM locations WHERE name = ? "
+            "AND COALESCE(account_id, 0) = COALESCE(?, 0)",
+            (name, account_id),
         ).fetchone()
         return int(row["id"]) if row else int(cur.lastrowid)
 
@@ -467,9 +498,15 @@ def save_concept(
     warnings: Optional[list] = None,
     use_pov: bool = False,
     path: Path | str = DB_PATH,
+    *,
+    account_id: int,
 ) -> int:
     """
     Store one generated concept, warnings and all. Returns its id.
+
+    `account_id` is stamped from the caller's session, never taken from
+    a request parameter -- a client that can name the owner of a row it
+    is creating can create rows in someone else's account.
 
     Warnings are stored rather than just counted: a concept that broke a
     rule is worth looking at and deciding on, and a number in a flash
@@ -491,8 +528,8 @@ def save_concept(
             INSERT INTO shoot_concepts
                 (created_at, brand, client, spark, title, hook, logline,
                  duration, shots_json, ai_json, edit_note, grade_note, prompt_hash,
-                 warnings_json, use_pov, format)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 warnings_json, use_pov, format, account_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (_now(), brand, client, spark, title,
              concept.get("hook"), concept.get("logline"), concept.get("duration"),
@@ -500,11 +537,19 @@ def save_concept(
              json.dumps(concept["ai"]) if concept.get("ai") else None,
              concept.get("edit"), concept.get("grade"), _hash(prompt_template),
              json.dumps(warnings) if warnings else None, 1 if use_pov else 0,
-             concept.get("format")),
+             concept.get("format"), account_id),
         )
         concept_id = int(cur.lastrowid)
 
         for location_id in location_ids or []:
+            # a concept may only be pinned to a location the same account
+            # owns -- otherwise a guessed id links you to a stranger's room
+            owned = conn.execute(
+                "SELECT 1 FROM locations WHERE id = ? AND account_id IS ?",
+                (location_id, account_id),
+            ).fetchone()
+            if not owned:
+                continue
             conn.execute(
                 "INSERT OR IGNORE INTO concept_locations (concept_id, location_id) VALUES (?, ?)",
                 (concept_id, location_id),
@@ -635,10 +680,10 @@ def _concept_row(row, conn) -> dict[str, Any]:
             """
             SELECT l.id, l.name FROM locations l
             JOIN concept_locations cl ON cl.location_id = l.id
-            WHERE cl.concept_id = ?
+            WHERE cl.concept_id = ? AND l.account_id IS ?
             ORDER BY l.name
             """,
-            (data["id"],),
+            (data["id"], data.get("account_id")),
         )
     ]
     return data
@@ -687,6 +732,8 @@ def save_concept_ideas(
     prompt_template: Optional[str] = None,
     use_pov: bool = False,
     path: Path | str = DB_PATH,
+    *,
+    account_id: int,
 ) -> list:
     """
     Stage one: save a batch of cheap ideas, no shot lists yet. Returns
@@ -695,7 +742,8 @@ def save_concept_ideas(
     """
     return [
         save_concept(idea, brand=brand, client=client, spark=spark,
-                     prompt_template=prompt_template, use_pov=use_pov, path=path)
+                     prompt_template=prompt_template, use_pov=use_pov, path=path,
+                     account_id=account_id)
         for idea in ideas
     ]
 
@@ -706,6 +754,8 @@ def update_concept_shots(
     location_ids: Optional[list] = None,
     warnings: Optional[list] = None,
     path: Path | str = DB_PATH,
+    *,
+    account_id: int,
 ) -> None:
     """
     Stage two: attach a shot list to an idea you chose. Leaves the
@@ -715,7 +765,8 @@ def update_concept_shots(
     """
     with connect(path) as conn:
         exists = conn.execute(
-            "SELECT 1 FROM shoot_concepts WHERE id = ?", (concept_id,)
+            "SELECT 1 FROM shoot_concepts WHERE id = ? AND account_id IS ?",
+            (concept_id, account_id),
         ).fetchone()
         if not exists:
             raise ValueError(f"no concept with id {concept_id}")
@@ -729,7 +780,7 @@ def update_concept_shots(
                    edit_note  = COALESCE(?, edit_note),
                    grade_note = COALESCE(?, grade_note),
                    warnings_json = ?
-             WHERE id = ?
+             WHERE id = ? AND account_id IS ?
             """,
             (plan.get("duration"),
              json.dumps(plan.get("shots") or []),
@@ -738,10 +789,16 @@ def update_concept_shots(
              # replaced, not merged: planning re-validates from scratch,
              # so an idea-stage warning must not linger as if still true
              json.dumps(warnings) if warnings else None,
-             concept_id),
+             concept_id, account_id),
         )
 
         for location_id in location_ids or []:
+            owned = conn.execute(
+                "SELECT 1 FROM locations WHERE id = ? AND account_id IS ?",
+                (location_id, account_id),
+            ).fetchone()
+            if not owned:
+                continue
             conn.execute(
                 "INSERT OR IGNORE INTO concept_locations (concept_id, location_id) VALUES (?, ?)",
                 (concept_id, location_id),
@@ -749,7 +806,8 @@ def update_concept_shots(
 
 
 def set_shot_media_url(concept_id: int, shot_n, media_url: str,
-                        path: Path | str = DB_PATH) -> None:
+                        path: Path | str = DB_PATH, *,
+                        account_id: int) -> None:
     """
     Attach a rendered clip's public URL to one shot in a concept's shot
     list -- the one field autopilot.build_plan() checks before it will
@@ -766,7 +824,8 @@ def set_shot_media_url(concept_id: int, shot_n, media_url: str,
 
     with connect(path) as conn:
         row = conn.execute(
-            "SELECT shots_json FROM shoot_concepts WHERE id = ?", (concept_id,)
+            "SELECT shots_json FROM shoot_concepts WHERE id = ? AND account_id IS ?",
+            (concept_id, account_id),
         ).fetchone()
         if not row:
             raise ValueError(f"no concept with id {concept_id}")
@@ -780,13 +839,14 @@ def set_shot_media_url(concept_id: int, shot_n, media_url: str,
             raise ValueError(f"concept {concept_id} has no shot n={shot_n!r}")
 
         conn.execute(
-            "UPDATE shoot_concepts SET shots_json = ? WHERE id = ?",
-            (json.dumps(shots), concept_id),
+            "UPDATE shoot_concepts SET shots_json = ? WHERE id = ? AND account_id IS ?",
+            (json.dumps(shots), concept_id, account_id),
         )
 
 
 def set_shot_reference_image(concept_id: int, shot_n, reference_url,
-                             path: Path | str = DB_PATH) -> None:
+                             path: Path | str = DB_PATH, *,
+                             account_id: int) -> None:
     """
     Attach a real capture -- the acting take or room plate Michael
     filmed -- to one shot as the reference image its AI generation
@@ -801,7 +861,8 @@ def set_shot_reference_image(concept_id: int, shot_n, reference_url,
     """
     with connect(path) as conn:
         row = conn.execute(
-            "SELECT shots_json FROM shoot_concepts WHERE id = ?", (concept_id,)
+            "SELECT shots_json FROM shoot_concepts WHERE id = ? AND account_id IS ?",
+            (concept_id, account_id),
         ).fetchone()
         if not row:
             raise ValueError(f"no concept with id {concept_id}")
@@ -821,13 +882,14 @@ def set_shot_reference_image(concept_id: int, shot_n, reference_url,
             raise ValueError(f"concept {concept_id} has no shot n={shot_n!r}")
 
         conn.execute(
-            "UPDATE shoot_concepts SET shots_json = ? WHERE id = ?",
-            (json.dumps(shots), concept_id),
+            "UPDATE shoot_concepts SET shots_json = ? WHERE id = ? AND account_id IS ?",
+            (json.dumps(shots), concept_id, account_id),
         )
 
 
 def set_shot_parked(concept_id: int, shot_n, reason: str = "",
-                    path: Path | str = DB_PATH) -> None:
+                    path: Path | str = DB_PATH, *,
+                    account_id: int) -> None:
     """
     Mark a shot as finished with the automatic half and waiting on a
     human to approve the spend -- what the Studio chain writes when it
@@ -849,7 +911,8 @@ def set_shot_parked(concept_id: int, shot_n, reason: str = "",
     """
     with connect(path) as conn:
         row = conn.execute(
-            "SELECT shots_json FROM shoot_concepts WHERE id = ?", (concept_id,)
+            "SELECT shots_json FROM shoot_concepts WHERE id = ? AND account_id IS ?",
+            (concept_id, account_id),
         ).fetchone()
         if not row:
             raise ValueError(f"no concept with id {concept_id}")
@@ -868,13 +931,14 @@ def set_shot_parked(concept_id: int, shot_n, reason: str = "",
             raise ValueError(f"concept {concept_id} has no shot n={shot_n!r}")
 
         conn.execute(
-            "UPDATE shoot_concepts SET shots_json = ? WHERE id = ?",
-            (json.dumps(shots), concept_id),
+            "UPDATE shoot_concepts SET shots_json = ? WHERE id = ? AND account_id IS ?",
+            (json.dumps(shots), concept_id, account_id),
         )
 
 
 def set_picked(concept_id: int, picked: bool = True,
-               path: Path | str = DB_PATH) -> None:
+               path: Path | str = DB_PATH, *,
+               account_id: int) -> None:
     """The label, moved to fit the unit (2026-08-26).
 
     shortlist_rate asked "was this idea worth planning a shot list for",
@@ -889,15 +953,16 @@ def set_picked(concept_id: int, picked: bool = True,
     """
     with connect(path) as conn:
         cur = conn.execute(
-            "UPDATE shoot_concepts SET picked_at = ? WHERE id = ?",
-            (_now() if picked else None, concept_id),
+            "UPDATE shoot_concepts SET picked_at = ? WHERE id = ? AND account_id IS ?",
+            (_now() if picked else None, concept_id, account_id),
         )
         if cur.rowcount == 0:
             raise ValueError(f"no concept {concept_id}")
 
 
 def set_archived(concept_id: int, archived: bool = True,
-                 path: Path | str = DB_PATH) -> None:
+                 path: Path | str = DB_PATH, *,
+                 account_id: int) -> None:
     """Take a concept off the board without taking it out of the data.
 
     The board is a decision surface: once you have picked one of the
@@ -914,8 +979,8 @@ def set_archived(concept_id: int, archived: bool = True,
     """
     with connect(path) as conn:
         cur = conn.execute(
-            "UPDATE shoot_concepts SET archived_at = ? WHERE id = ?",
-            (_now() if archived else None, concept_id),
+            "UPDATE shoot_concepts SET archived_at = ? WHERE id = ? AND account_id IS ?",
+            (_now() if archived else None, concept_id, account_id),
         )
         if cur.rowcount == 0:
             raise ValueError(f"no concept {concept_id}")
@@ -923,7 +988,8 @@ def set_archived(concept_id: int, archived: bool = True,
 
 def archive_batch(spark: str, keep_ids: list[int] | None = None,
                   brand: Optional[str] = None,
-                  path: Path | str = DB_PATH) -> int:
+                  path: Path | str = DB_PATH, *,
+                  account_id: int) -> int:
     """Archive every unresolved concept written from one idea, except
     the ones named in keep_ids. Returns how many were archived.
 
@@ -936,15 +1002,15 @@ def archive_batch(spark: str, keep_ids: list[int] | None = None,
     with connect(path) as conn:
         rows = conn.execute(
             "SELECT id FROM shoot_concepts "
-            "WHERE spark = ? AND archived_at IS NULL"
+            "WHERE spark = ? AND archived_at IS NULL AND account_id IS ?"
             + (" AND brand = ?" if brand else ""),
-            (spark, brand) if brand else (spark,),
+            (spark, account_id, brand) if brand else (spark, account_id),
         ).fetchall()
         targets = [r["id"] for r in rows if r["id"] not in keep]
         for concept_id in targets:
             conn.execute(
-                "UPDATE shoot_concepts SET archived_at = ? WHERE id = ?",
-                (_now(), concept_id),
+                "UPDATE shoot_concepts SET archived_at = ? WHERE id = ? AND account_id IS ?",
+                (_now(), concept_id, account_id),
             )
     return len(targets)
 
@@ -990,12 +1056,13 @@ def pick_rate(path: Path | str = DB_PATH, *, account_id: int) -> dict[str, Any]:
     }
 
 
-def mark_shot(concept_id: int, shot: bool = True, path: Path | str = DB_PATH) -> None:
+def mark_shot(concept_id: int, shot: bool = True, path: Path | str = DB_PATH, *,
+              account_id: int) -> None:
     """Record that you actually went and shot this one -- the label."""
     with connect(path) as conn:
         cur = conn.execute(
-            "UPDATE shoot_concepts SET shot_done = ? WHERE id = ?",
-            (1 if shot else 0, concept_id),
+            "UPDATE shoot_concepts SET shot_done = ? WHERE id = ? AND account_id IS ?",
+            (1 if shot else 0, concept_id, account_id),
         )
         if cur.rowcount == 0:
             raise ValueError(f"no concept with id {concept_id}")

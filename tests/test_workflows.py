@@ -165,7 +165,9 @@ def test_generate_from_prompt_refuses_without_spend_approval(tmp_db, tmp_path,
 def test_generate_from_prompt_honours_the_daily_cap(tmp_db, tmp_path, monkeypatch):
     monkeypatch.setenv(runway.SPEND_ENV, "1")
     monkeypatch.setattr(runway, "RENDER_DIR", tmp_path / "renders")
-    monkeypatch.setattr(runway, "generations_today", lambda db_path=None: runway.DAILY_CAP)
+    monkeypatch.setattr(runway, "generations_today",
+                        lambda db_path=None, account_id=None, everyone=False:
+                        runway.DAILY_CAP)
     result = runway.generate_from_prompt("x", db_path=tmp_db, client=FakeClient())
     assert result["ok"] is False
     assert "daily cap" in result["error"]

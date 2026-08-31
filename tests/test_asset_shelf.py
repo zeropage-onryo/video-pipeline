@@ -153,10 +153,10 @@ def test_describe_entity_refuses_an_unknown_kind():
 # --- the backfill -----------------------------------------------------------
 
 def _seed(tmp_db, photo_dirs, with_photos=True):
-    preprod.add_location("garage", SAMPLE_SPACE, photo_count=1, path=tmp_db)
+    preprod.add_location("garage", SAMPLE_SPACE, photo_count=1, path=tmp_db, account_id=None)
     cid = entities.add_character("Mike", role="protagonist", notes="deadpan",
-                                 path=tmp_db)
-    pid = entities.add_prop("Helmet", category="gear", path=tmp_db)
+                                 path=tmp_db, account_id=None)
+    pid = entities.add_prop("Helmet", category="gear", path=tmp_db, account_id=None)
     if with_photos:
         for kind, slug in (("character", "mike"), ("prop", "helmet")):
             d = photo_dirs[kind] / slug
@@ -258,7 +258,7 @@ def test_backfill_survives_a_down_store(tmp_db, photo_dirs):
 
 def test_set_description_merges_over_typed_notes(tmp_db):
     cid = entities.add_character("Mike", description={"notes": "deadpan"},
-                                 path=tmp_db)
+                                 path=tmp_db, account_id=None)
     entities.set_description("character", cid, CHARACTER_VISION, path=tmp_db, account_id=None)
     desc = entities.get_character(cid, path=tmp_db, account_id=None)["description"]
     assert desc["notes"] == "deadpan"          # the human's text survives

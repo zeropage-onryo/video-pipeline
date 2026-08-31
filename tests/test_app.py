@@ -205,25 +205,25 @@ def test_metrics_new_get_returns_200(tmp_db):
 
 
 def test_post_metrics_new_records_snapshot_and_redirects(tmp_db):
-    vid = db.add_video("Test", "youtube", "2026-01-01", path=tmp_db)
+    vid = db.add_video("Test", "youtube", "2026-01-01", path=tmp_db, account_id=None)
     response = client.post(
         "/metrics/new", data={f"views_{vid}": "82"}, follow_redirects=False,
     )
     assert response.status_code in (302, 303, 307)
     assert "updated=1" in response.headers["location"]
 
-    history = db.get_video_history(vid, path=tmp_db)
+    history = db.get_video_history(vid, path=tmp_db, account_id=None)
     assert history[-1]["views"] == 82
 
 
 def test_post_metrics_new_skips_videos_with_nothing_typed(tmp_db):
-    v1 = db.add_video("A", "youtube", "2026-01-01", path=tmp_db)
-    v2 = db.add_video("B", "youtube", "2026-01-01", path=tmp_db)
+    v1 = db.add_video("A", "youtube", "2026-01-01", path=tmp_db, account_id=None)
+    v2 = db.add_video("B", "youtube", "2026-01-01", path=tmp_db, account_id=None)
     response = client.post(
         "/metrics/new", data={f"views_{v1}": "50"}, follow_redirects=False,
     )
     assert "updated=1" in response.headers["location"]
-    assert db.get_video_history(v2, path=tmp_db) == []
+    assert db.get_video_history(v2, path=tmp_db, account_id=None) == []
 
 
 def test_metrics_new_shows_updated_count(tmp_db):
@@ -256,10 +256,10 @@ def test_benchmark_class_missing_data_is_neutral():
 # discipline (same window for ranking and colouring) survives any skin.
 
 def test_performance_rows_colours_against_the_same_window(tmp_preprod_db):
-    v1 = db.add_video("Winner", "youtube", "2026-01-01", path=tmp_preprod_db)
-    v2 = db.add_video("Loser", "youtube", "2026-01-01", path=tmp_preprod_db)
-    db.record_metrics(v1, views=1000, captured_at="2026-01-08", path=tmp_preprod_db)
-    db.record_metrics(v2, views=10, captured_at="2026-01-08", path=tmp_preprod_db)
+    v1 = db.add_video("Winner", "youtube", "2026-01-01", path=tmp_preprod_db, account_id=None)
+    v2 = db.add_video("Loser", "youtube", "2026-01-01", path=tmp_preprod_db, account_id=None)
+    db.record_metrics(v1, views=1000, captured_at="2026-01-08", path=tmp_preprod_db, account_id=None)
+    db.record_metrics(v2, views=10, captured_at="2026-01-08", path=tmp_preprod_db, account_id=None)
 
     result = app_main.performance_rows(posted_within="all")
     classes = {r["title"]: r["css_class"] for r in result["rows"]}
@@ -270,8 +270,8 @@ def test_performance_rows_colours_against_the_same_window(tmp_preprod_db):
 def test_performance_rows_respects_the_posted_window(tmp_preprod_db):
     old_date = (date.today() - timedelta(days=400)).isoformat()
     old_measured = (date.today() - timedelta(days=393)).isoformat()
-    v_old = db.add_video("Old", "youtube", old_date, path=tmp_preprod_db)
-    db.record_metrics(v_old, views=99999, captured_at=old_measured, path=tmp_preprod_db)
+    v_old = db.add_video("Old", "youtube", old_date, path=tmp_preprod_db, account_id=None)
+    db.record_metrics(v_old, views=99999, captured_at=old_measured, path=tmp_preprod_db, account_id=None)
 
     titles = [r["title"] for r in app_main.performance_rows()["rows"]]
     assert "Old" not in titles          # default window: last 6 months
@@ -288,7 +288,7 @@ def test_video_detail_404s_for_missing_video(tmp_db):
 
 def test_video_detail_shows_metadata(tmp_db):
     vid = db.add_video("Night Run", "youtube", "2025-09-29",
-                       url="https://x", path=tmp_db)
+                       url="https://x", path=tmp_db, account_id=None)
     response = client.get(f"/videos/{vid}")
     assert response.status_code == 200
     assert "Night Run" in response.text
@@ -296,14 +296,14 @@ def test_video_detail_shows_metadata(tmp_db):
 
 
 def test_video_detail_shows_snapshot_history(tmp_db):
-    vid = db.add_video("Night Run", "youtube", "2025-09-29", path=tmp_db)
-    db.record_metrics(vid, views=82, captured_at="2026-07-29", path=tmp_db)
+    vid = db.add_video("Night Run", "youtube", "2025-09-29", path=tmp_db, account_id=None)
+    db.record_metrics(vid, views=82, captured_at="2026-07-29", path=tmp_db, account_id=None)
     response = client.get(f"/videos/{vid}")
     assert "82" in response.text
 
 
 def test_video_detail_no_originating_pitch(tmp_db):
-    vid = db.add_video("Night Run", "youtube", "2025-09-29", path=tmp_db)
+    vid = db.add_video("Night Run", "youtube", "2025-09-29", path=tmp_db, account_id=None)
     response = client.get(f"/videos/{vid}")
     assert "Not linked to a pitch" in response.text
 
@@ -317,7 +317,7 @@ def test_video_detail_shows_originating_pitch_when_linked(tmp_db):
         idea_id = conn.execute(
             "SELECT id FROM ideas WHERE run_id = ? AND number = 2", (run_id,)
         ).fetchone()[0]
-    vid = db.add_video("S2 video", "tiktok", "2026-01-01", idea_id=idea_id, path=tmp_db)
+    vid = db.add_video("S2 video", "tiktok", "2026-01-01", idea_id=idea_id, path=tmp_db, account_id=None)
 
     response = client.get(f"/videos/{vid}")
     assert "S2" in response.text
@@ -328,7 +328,7 @@ def test_video_detail_shows_originating_pitch_when_linked(tmp_db):
 
 def test_post_metrics_refresh_records_a_snapshot(tmp_db, monkeypatch):
     vid = db.add_video("Night Run", "youtube", "2025-09-29",
-                       url="https://www.youtube.com/watch?v=abc12345678", path=tmp_db)
+                       url="https://www.youtube.com/watch?v=abc12345678", path=tmp_db, account_id=None)
     monkeypatch.setattr(
         app_main.youtube, "fetch_video_stats",
         lambda video_id, api_key: {"views": 82, "likes": 5, "comments": 1},
@@ -339,7 +339,7 @@ def test_post_metrics_refresh_records_a_snapshot(tmp_db, monkeypatch):
 
     assert response.status_code in (302, 303, 307)
     assert "message=" in response.headers["location"]
-    history = db.get_video_history(vid, path=tmp_db)
+    history = db.get_video_history(vid, path=tmp_db, account_id=None)
     assert history[-1]["views"] == 82
 
 
@@ -350,13 +350,13 @@ def test_post_metrics_refresh_404s_for_missing_video(tmp_db):
 
 def test_post_metrics_refresh_reports_failure_without_breaking(tmp_db, monkeypatch):
     vid = db.add_video("Night Run", "youtube", "2025-09-29",
-                       url="https://www.youtube.com/watch?v=abc12345678", path=tmp_db)
+                       url="https://www.youtube.com/watch?v=abc12345678", path=tmp_db, account_id=None)
     monkeypatch.delenv("YOUTUBE_API_KEY", raising=False)
 
     response = client.post(f"/metrics/refresh/{vid}", follow_redirects=False)
 
     assert response.status_code in (302, 303, 307)
-    assert db.get_video_history(vid, path=tmp_db) == []
+    assert db.get_video_history(vid, path=tmp_db, account_id=None) == []
 
 
 def test_metrics_new_shows_refresh_message(tmp_db):
@@ -366,13 +366,13 @@ def test_metrics_new_shows_refresh_message(tmp_db):
 
 def test_metrics_new_shows_refresh_button_for_youtube(tmp_db):
     db.add_video("Night Run", "youtube", "2025-09-29",
-                 url="https://www.youtube.com/watch?v=abc", path=tmp_db)
+                 url="https://www.youtube.com/watch?v=abc", path=tmp_db, account_id=None)
     response = client.get("/metrics/new")
     assert "Refresh" in response.text
 
 
 def test_metrics_new_no_refresh_button_for_non_youtube(tmp_db):
-    db.add_video("Some TikTok video", "tiktok", "2025-09-29", path=tmp_db)
+    db.add_video("Some TikTok video", "tiktok", "2025-09-29", path=tmp_db, account_id=None)
     response = client.get("/metrics/new")
     # the page prose mentions Refresh; what must be absent is the button itself
     assert 'form="refresh-' not in response.text
@@ -471,7 +471,8 @@ def test_grade_tab_grades_the_one_scene_prompt(tmp_dev_db):
     cid = preprod.save_concept(
         {"title": "The Waiting", "hook": "", "shots": SCENE_SHOT},
         brand="antihero", path=tmp_dev_db,
-    )
+    
+        account_id=None,)
     text = client.get(f"/studio?tab=grade&mode=shot&concept_id={cid}").text
     assert "The Waiting" in text
     assert "THE SCENE PROMPT" in text
@@ -490,7 +491,7 @@ def test_grade_tab_keeps_the_idea_form_for_legacy_shot_lists(tmp_dev_db):
             dict(SCENE_SHOT[0]),
             {"n": 2, "type": "BROLL", "source": "AI", "tool": "KLING",
              "desc": "d", "prompt": "second prompt"}]},
-        brand="antihero", path=tmp_dev_db)
+        brand="antihero", path=tmp_dev_db, account_id=None)
     text = client.get(f"/studio?tab=grade&mode=shot&concept_id={cid}").text
     assert "LEGACY SHOT LIST" in text
     assert "TEACH THE IDEA ITSELF" in text
@@ -499,7 +500,7 @@ def test_grade_tab_keeps_the_idea_form_for_legacy_shot_lists(tmp_dev_db):
 
 def test_grade_tab_says_so_when_a_concept_has_no_prompt(tmp_dev_db):
     cid = preprod.save_concept({"title": "Bare", "shots": CONCEPT_SHOTS},
-                               brand="antihero", path=tmp_dev_db)
+                               brand="antihero", path=tmp_dev_db, account_id=None)
     text = client.get(f"/studio?tab=grade&mode=shot&concept_id={cid}").text
     assert "no prompt yet" in text
 
@@ -507,10 +508,10 @@ def test_grade_tab_says_so_when_a_concept_has_no_prompt(tmp_dev_db):
 def test_stats_tab_shows_shoot_rate(tmp_dev_db):
     ids = [
         preprod.save_concept({"title": f"C{n}", "shots": CONCEPT_SHOTS},
-                             brand="antihero", path=tmp_dev_db)
+                             brand="antihero", path=tmp_dev_db, account_id=None)
         for n in range(4)
     ]
-    preprod.mark_shot(ids[0], path=tmp_dev_db)
+    preprod.mark_shot(ids[0], path=tmp_dev_db, account_id=None)
     response = client.get("/studio?tab=stats")
     assert "Shoot rate · 1/4" in response.text
 
@@ -518,7 +519,8 @@ def test_stats_tab_shows_shoot_rate(tmp_dev_db):
 def test_post_mark_concept_shot_toggles_and_redirects(tmp_preprod_db):
     concept_id = preprod.save_concept(
         {"title": "The Waiting", "shots": CONCEPT_SHOTS}, brand="antihero", path=tmp_preprod_db,
-    )
+    
+        account_id=None,)
     response = client.post(f"/concepts/{concept_id}/shot", follow_redirects=False)
 
     assert response.status_code in (302, 303, 307)
@@ -639,7 +641,7 @@ def test_note_form_writes_a_pending_correction(tmp_autonomy_db):
 
 
 def test_video_detail_still_has_its_nav(tmp_preprod_db):
-    vid = db.add_video("Night Run", "youtube", "2025-09-29", path=tmp_preprod_db)
+    vid = db.add_video("Night Run", "youtube", "2025-09-29", path=tmp_preprod_db, account_id=None)
     response = client.get(f"/videos/{vid}")
     assert 'href="/analytics"' in response.text
 
@@ -757,8 +759,8 @@ def test_studio_renders_with_videos_logged_but_unmeasured(tmp_dev_db):
     """The old empty-state distinction lived in the strip the ZP home
     no longer renders; what must survive is that the page renders with
     data in every state and the video is correctly absent at 7 days."""
-    vid = db.add_video("Night Run", "youtube", "2025-09-29", path=tmp_dev_db)
-    db.record_metrics(vid, views=82, captured_at="2026-07-29", path=tmp_dev_db)
+    vid = db.add_video("Night Run", "youtube", "2025-09-29", path=tmp_dev_db, account_id=None)
+    db.record_metrics(vid, views=82, captured_at="2026-07-29", path=tmp_dev_db, account_id=None)
 
     response = client.get("/studio")
     assert response.status_code == 200
@@ -770,10 +772,10 @@ def test_studio_renders_with_videos_logged_but_unmeasured(tmp_dev_db):
 # ---------- /analytics ----------
 
 def test_analytics_page_renders_with_tiles_and_bars(tmp_db):
-    v1 = db.add_video("Big", "youtube", "2026-01-01", path=tmp_db)
-    v2 = db.add_video("Small", "youtube", "2026-01-02", path=tmp_db)
-    db.record_metrics(v1, views=1000, likes=10, captured_at="2026-01-08", path=tmp_db)
-    db.record_metrics(v2, views=250, likes=5, captured_at="2026-01-08", path=tmp_db)
+    v1 = db.add_video("Big", "youtube", "2026-01-01", path=tmp_db, account_id=None)
+    v2 = db.add_video("Small", "youtube", "2026-01-02", path=tmp_db, account_id=None)
+    db.record_metrics(v1, views=1000, likes=10, captured_at="2026-01-08", path=tmp_db, account_id=None)
+    db.record_metrics(v2, views=250, likes=5, captured_at="2026-01-08", path=tmp_db, account_id=None)
 
     response = client.get("/analytics")
     assert response.status_code == 200
@@ -1000,8 +1002,8 @@ def test_clean_title_keeps_a_title_that_is_only_hashtags():
 
 def test_analytics_page_shows_cleaned_titles(tmp_db):
     vid = db.add_video("Margarita Recipe #cocktail #margarita #fyp",
-                       "youtube", "2026-01-01", path=tmp_db)
-    db.record_metrics(vid, views=100, captured_at="2026-01-08", path=tmp_db)
+                       "youtube", "2026-01-01", path=tmp_db, account_id=None)
+    db.record_metrics(vid, views=100, captured_at="2026-01-08", path=tmp_db, account_id=None)
     response = client.get("/analytics")
     assert "Margarita Recipe" in response.text
     assert "#cocktail" not in response.text
@@ -1014,7 +1016,7 @@ def test_metrics_new_still_works_as_an_alias(tmp_db):
 
 
 def test_post_metrics_redirects_to_analytics(tmp_db):
-    vid = db.add_video("T", "youtube", "2026-01-01", path=tmp_db)
+    vid = db.add_video("T", "youtube", "2026-01-01", path=tmp_db, account_id=None)
     response = client.post("/metrics/new", data={f"views_{vid}": "5"},
                            follow_redirects=False)
     assert "/analytics?updated=1" in response.headers["location"]
@@ -1110,22 +1112,24 @@ def test_schema_uses_the_configured_site_url(monkeypatch):
 # ---------- inline actions land back on the canvas ----------
 
 def test_mark_shot_from_the_studio_returns_to_the_studio(tmp_preprod_db):
-    preprod.add_location("garage", {"space": "garage"}, path=tmp_preprod_db)
+    preprod.add_location("garage", {"space": "garage"}, path=tmp_preprod_db, account_id=None)
     cid = preprod.save_concept(
         {"title": "T", "hook": "h", "logline": "l", "shots": []},
         brand="antihero", path=tmp_preprod_db,
-    )
+    
+        account_id=None,)
     response = client.post(f"/concepts/{cid}/shot", data={"next": "/studio"},
                            follow_redirects=False)
     assert response.headers["location"] == "/studio"
 
 
 def test_mark_shot_without_next_still_returns_to_concepts(tmp_preprod_db):
-    preprod.add_location("garage", {"space": "garage"}, path=tmp_preprod_db)
+    preprod.add_location("garage", {"space": "garage"}, path=tmp_preprod_db, account_id=None)
     cid = preprod.save_concept(
         {"title": "T", "hook": "h", "logline": "l", "shots": []},
         brand="antihero", path=tmp_preprod_db,
-    )
+    
+        account_id=None,)
     response = client.post(f"/concepts/{cid}/shot", follow_redirects=False)
     assert response.headers["location"] == "/concepts"
 
@@ -1143,7 +1147,7 @@ def test_post_metrics_refresh_dispatches_instagram(tmp_db, monkeypatch):
     """An Instagram row refreshes through instagram.py, the same shape
     YouTube already has -- one dispatch on the stored platform."""
     vid = db.add_video("Reel", "instagram", "2026-08-01",
-                       url="ig://17912345678901234", path=tmp_db)
+                       url="ig://17912345678901234", path=tmp_db, account_id=None)
 
     seen = {}
 
@@ -1162,7 +1166,7 @@ def test_post_metrics_refresh_dispatches_instagram(tmp_db, monkeypatch):
 
 
 def test_metrics_page_offers_refresh_for_instagram(tmp_db):
-    db.add_video("Reel", "instagram", "2026-08-01", path=tmp_db)
+    db.add_video("Reel", "instagram", "2026-08-01", path=tmp_db, account_id=None)
     response = client.get("/metrics/new")
     assert 'form="refresh-' in response.text
 
@@ -1180,7 +1184,7 @@ def _planned_concept(path):
          "shots": [{"n": 1, "type": "BROLL", "source": "AI", "tool": "KLING",
                     "location": "hallway", "desc": "the handle turns",
                     "light": "spill", "prompt": "a handle turning in the dark"}]},
-        brand="antihero", path=path)
+        brand="antihero", path=path, account_id=None)
 
 
 def test_attach_reference_by_url_lands_on_the_shot(tmp_preprod_db):
@@ -1197,7 +1201,7 @@ def test_attach_reference_by_url_lands_on_the_shot(tmp_preprod_db):
 def test_clear_reference_detaches_it(tmp_preprod_db):
     cid = _planned_concept(tmp_preprod_db)
     preprod.set_shot_reference_image(cid, 1, "https://cdn.example/take.jpg",
-                                     path=tmp_preprod_db)
+                                     path=tmp_preprod_db, account_id=None)
     client.post(f"/concepts/{cid}/shots/1/reference",
                 data={"remove": "1"}, follow_redirects=False)
     shots = preprod.get_concept(cid, path=tmp_preprod_db, account_id=None)["shots"]
@@ -1256,12 +1260,12 @@ def _drain_golden(path):
 
 def test_grade_draw_shot_picks_only_ungraded_concepts(tmp_dev_db):
     graded = preprod.save_concept({"title": "Graded"}, brand="antihero",
-                                  path=tmp_dev_db)
+                                  path=tmp_dev_db, account_id=None)
     preprod.save_judge_score(graded, {"overall": 8, "taste_fit": 8,
                                       "performance": 8, "reasons": []},
-                             path=tmp_dev_db)
+                             path=tmp_dev_db, account_id=None)
     ungraded = preprod.save_concept({"title": "Fresh meat"}, brand="antihero",
-                                    path=tmp_dev_db)
+                                    path=tmp_dev_db, account_id=None)
     response = client.get("/grade/draw?mode=shot", follow_redirects=False)
     assert response.status_code == 303
     assert f"concept_id={ungraded}" in response.headers["location"]
@@ -1288,7 +1292,7 @@ def test_grade_tab_surfaces_concept_warnings(tmp_dev_db):
     cid = preprod.save_concept(
         {"title": "W", "shots": CONCEPT_SHOTS}, brand="antihero",
         warnings=["shot 1: location 'rooftop helipad' is not a described space"],
-        path=tmp_dev_db)
+        path=tmp_dev_db, account_id=None)
     assert "rooftop helipad" in client.get(
         f"/studio?tab=grade&mode=shot&concept_id={cid}").text
 
@@ -1547,7 +1551,7 @@ def test_teach_it_records_both_halves(tmp_dev_db, monkeypatch):
     from src import winners
     winners.init(tmp_dev_db)
     cid = preprod.save_concept({"title": "T", "shots": CONCEPT_SHOTS},
-                               brand="antihero", path=tmp_dev_db)
+                               brand="antihero", path=tmp_dev_db, account_id=None)
     monkeypatch.setattr(app_main.winners, "ingest_to_rag",
                         lambda entry_id, path=None: {"ok": True, "chunks": 1})
 
@@ -1570,7 +1574,7 @@ def test_deny_without_a_replacement_is_unchanged(tmp_dev_db, monkeypatch):
     from src import winners
     winners.init(tmp_dev_db)
     cid = preprod.save_concept({"title": "T", "shots": CONCEPT_SHOTS},
-                               brand="antihero", path=tmp_dev_db)
+                               brand="antihero", path=tmp_dev_db, account_id=None)
     monkeypatch.setattr(app_main.winners, "ingest_to_rag",
                         lambda entry_id, path=None: {"ok": True, "chunks": 1})
     client.post(f"/concepts/{cid}/shots/1/verdict",
@@ -1586,7 +1590,7 @@ def test_approve_ignores_a_stray_replacement(tmp_dev_db, monkeypatch):
     from src import winners
     winners.init(tmp_dev_db)
     cid = preprod.save_concept({"title": "T", "shots": CONCEPT_SHOTS},
-                               brand="antihero", path=tmp_dev_db)
+                               brand="antihero", path=tmp_dev_db, account_id=None)
     monkeypatch.setattr(app_main.winners, "ingest_to_rag",
                         lambda entry_id, path=None: {"ok": True, "chunks": 1})
     client.post(f"/concepts/{cid}/shots/1/verdict",
@@ -1602,7 +1606,7 @@ def test_grade_tab_offers_the_better_prompt_field(tmp_dev_db):
         {"title": "T", "shots": [{"n": 1, "type": "BROLL", "source": "AI",
                                   "tool": "RUNWAY", "desc": "d",
                                   "prompt": "a prompt"}]},
-        brand="antihero", path=tmp_dev_db)
+        brand="antihero", path=tmp_dev_db, account_id=None)
     page = client.get(f"/studio?tab=grade&mode=shot&concept_id={cid}").text
     assert 'name="replacement"' in page
     assert "A BETTER PROMPT" in page
@@ -1615,7 +1619,7 @@ def _scene_concept(path):
         {"title": "T", "shots": [{"n": 1, "type": "BROLL", "source": "AI",
                                   "tool": "RUNWAY", "desc": "d",
                                   "prompt": "the model's prompt"}]},
-        brand="antihero", path=path)
+        brand="antihero", path=path, account_id=None)
 
 
 @pytest.fixture

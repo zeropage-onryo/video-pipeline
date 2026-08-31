@@ -132,7 +132,7 @@ def tmp_db(tmp_path):
 
 def test_refresh_records_a_snapshot_on_success(tmp_db, monkeypatch):
     vid = db.add_video("Night Run", "youtube", "2025-09-29",
-                       url="https://www.youtube.com/watch?v=abc12345678", path=tmp_db)
+                       url="https://www.youtube.com/watch?v=abc12345678", path=tmp_db, account_id=None)
     video = db.get_video(vid, path=tmp_db, account_id=None)
 
     monkeypatch.setattr(
@@ -143,23 +143,23 @@ def test_refresh_records_a_snapshot_on_success(tmp_db, monkeypatch):
     result = refresh_metrics_for_video(video, api_key="test-key", db_path=tmp_db)
 
     assert result["ok"] is True
-    history = db.get_video_history(vid, path=tmp_db)
+    history = db.get_video_history(vid, path=tmp_db, account_id=None)
     assert history[-1]["views"] == 82
 
 
 def test_refresh_fails_gracefully_without_api_key(tmp_db):
     vid = db.add_video("Night Run", "youtube", "2025-09-29",
-                       url="https://www.youtube.com/watch?v=abc12345678", path=tmp_db)
+                       url="https://www.youtube.com/watch?v=abc12345678", path=tmp_db, account_id=None)
     video = db.get_video(vid, path=tmp_db, account_id=None)
 
     result = refresh_metrics_for_video(video, api_key=None, db_path=tmp_db)
 
     assert result["ok"] is False
-    assert db.get_video_history(vid, path=tmp_db) == []
+    assert db.get_video_history(vid, path=tmp_db, account_id=None) == []
 
 
 def test_refresh_fails_gracefully_for_non_youtube_video(tmp_db):
-    vid = db.add_video("Night Run", "tiktok", "2025-09-29", path=tmp_db)
+    vid = db.add_video("Night Run", "tiktok", "2025-09-29", path=tmp_db, account_id=None)
     video = db.get_video(vid, path=tmp_db, account_id=None)
 
     assert refresh_metrics_for_video(video, api_key="test-key", db_path=tmp_db)["ok"] is False
@@ -167,7 +167,7 @@ def test_refresh_fails_gracefully_for_non_youtube_video(tmp_db):
 
 def test_refresh_fails_gracefully_for_unparseable_url(tmp_db):
     vid = db.add_video("Night Run", "youtube", "2025-09-29",
-                       url="https://example.com/not-a-real-video", path=tmp_db)
+                       url="https://example.com/not-a-real-video", path=tmp_db, account_id=None)
     video = db.get_video(vid, path=tmp_db, account_id=None)
 
     assert refresh_metrics_for_video(video, api_key="test-key", db_path=tmp_db)["ok"] is False
@@ -175,7 +175,7 @@ def test_refresh_fails_gracefully_for_unparseable_url(tmp_db):
 
 def test_refresh_fails_gracefully_when_api_call_raises(tmp_db, monkeypatch):
     vid = db.add_video("Night Run", "youtube", "2025-09-29",
-                       url="https://www.youtube.com/watch?v=abc12345678", path=tmp_db)
+                       url="https://www.youtube.com/watch?v=abc12345678", path=tmp_db, account_id=None)
     video = db.get_video(vid, path=tmp_db, account_id=None)
 
     def boom(video_id, api_key):
@@ -186,7 +186,7 @@ def test_refresh_fails_gracefully_when_api_call_raises(tmp_db, monkeypatch):
     result = refresh_metrics_for_video(video, api_key="test-key", db_path=tmp_db)
 
     assert result["ok"] is False
-    assert db.get_video_history(vid, path=tmp_db) == []
+    assert db.get_video_history(vid, path=tmp_db, account_id=None) == []
 
 
 # ---------- channel import ----------
@@ -335,12 +335,12 @@ def test_import_adds_new_videos_with_initial_snapshot(tmp_db, monkeypatch):
     assert all(v["platform"] == "youtube" for v in videos)
 
     night_run = next(v for v in videos if v["title"] == "Night Run")
-    assert db.get_video_history(night_run["id"], path=tmp_db)[-1]["views"] == 82
+    assert db.get_video_history(night_run["id"], path=tmp_db, account_id=None)[-1]["views"] == 82
 
 
 def test_import_skips_videos_already_in_the_database(tmp_db, monkeypatch):
     db.add_video("Night Run", "youtube", "2025-09-29",
-                 url="https://www.youtube.com/watch?v=vid1", path=tmp_db)
+                 url="https://www.youtube.com/watch?v=vid1", path=tmp_db, account_id=None)
 
     pages = [_page([
         ("vid1", "Night Run", "2025-09-29T00:00:00Z"),
@@ -397,7 +397,7 @@ def test_import_error_never_leaks_the_api_key(tmp_db, monkeypatch):
 def test_refresh_error_never_leaks_the_api_key(tmp_db, monkeypatch):
     secret = "AIzaSuperSecretKeyValue"
     vid = db.add_video("Night Run", "youtube", "2025-09-29",
-                       url="https://www.youtube.com/watch?v=abc12345678", path=tmp_db)
+                       url="https://www.youtube.com/watch?v=abc12345678", path=tmp_db, account_id=None)
     video = db.get_video(vid, path=tmp_db, account_id=None)
 
     def leaky_fetch(video_id, api_key):
@@ -423,4 +423,4 @@ def test_import_still_adds_videos_when_stats_call_fails(tmp_db, monkeypatch):
     assert result["ok"] is True
     assert result["added"] == 1
     videos = db.list_videos(path=tmp_db, account_id=None)
-    assert db.get_video_history(videos[0]["id"], path=tmp_db) == []
+    assert db.get_video_history(videos[0]["id"], path=tmp_db, account_id=None) == []

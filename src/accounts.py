@@ -245,6 +245,35 @@ def claim_unowned_rows(account_id: Optional[int] = None,
     return claimed
 
 
+def resolve_account(slug: Optional[str] = None,
+                    path: Path | str = DB_PATH) -> Optional[int]:
+    """Turn a `--account <slug>` into an id, or fall back to the oldest
+    account on the database.
+
+    For ENTRY POINTS only -- CLIs, the nightly run, anything with no
+    session behind it. Library functions take `account_id` as a required
+    argument on purpose; a fallback buried in the data layer is the leak
+    that rule exists to prevent. Here it is deliberate and in one place.
+
+    Returns None only on a database with no accounts at all, which is a
+    fresh install: the caller then operates on the unowned pool, which is
+    exactly what that database holds.
+    """
+    with connect(path) as conn:
+        if slug:
+            row = conn.execute(
+                "SELECT id FROM accounts WHERE slug = ?", (slug.strip().lower(),)
+            ).fetchone()
+            if row is None:
+                known = [r["slug"] for r in conn.execute(
+                    "SELECT slug FROM accounts ORDER BY slug")]
+                raise ValueError(
+                    f"no account {slug!r}" + (f" -- try one of {known}" if known else ""))
+            return int(row["id"])
+        row = conn.execute("SELECT MIN(id) AS id FROM accounts").fetchone()
+        return int(row["id"]) if row and row["id"] is not None else None
+
+
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(
         prog="accounts",

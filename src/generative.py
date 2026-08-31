@@ -22,6 +22,7 @@ discard. This records the decision instead of losing it.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -92,6 +93,8 @@ def add_shot(
     slot_index: Optional[int] = None,
     notes: Optional[str] = None,
     path: Path | str = DB_PATH,
+    *,
+    account_id: int,
 ) -> int:
     """
     Record a gap in the footage that a generated clip will fill.
@@ -107,13 +110,77 @@ def add_shot(
             """
             INSERT INTO shots
                 (created_at, idea_id, slot_index, spec_json, subject,
-                 camera, size, duration_s, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 camera, size, duration_s, notes, account_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (_now(), idea_id, slot_index, json.dumps(shot.as_dict()),
-             shot.subject, shot.camera, shot.size, shot.duration_s, notes),
+             shot.subject, shot.camera, shot.size, shot.duration_s, notes,
+             account_id),
         )
         return int(cur.lastrowid)
+
+
+# --------------------------------------------------------------------------
+# the daily spend wall
+# --------------------------------------------------------------------------
+
+def used_today(tool: str, path: Path | str = DB_PATH, *,
+               account_id: Optional[int] = None, everyone: bool = False) -> int:
+    """Generations logged for `tool` since UTC midnight.
+
+    Reads the same generations table the scoreboards do, so a cap cannot
+    drift from the log. `everyone=True` ignores ownership on purpose --
+    that is the installation-wide count, and it is the only query here
+    allowed to.
+    """
+    today = datetime.now(timezone.utc).date().isoformat()
+    with connect(path) as conn:
+        if everyone:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM generations WHERE tool = ? AND created_at >= ?",
+                (tool, today),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM generations "
+                "WHERE tool = ? AND created_at >= ? AND account_id IS ?",
+                (tool, today, account_id),
+            ).fetchone()
+        return int(row[0])
+
+
+def cap_error(tool: str, n: int = 1, *, account_id: Optional[int],
+              per_account: int, ceiling: int, path: Path | str = DB_PATH,
+              env_prefix: str, phrase: str = "generations used",
+              used: Optional[int] = None,
+              used_everywhere: Optional[int] = None) -> Optional[str]:
+    """The message to refuse with, or None to go ahead.
+
+    TWO walls, and both are needed. The per-account cap is fairness: it
+    stops whoever logs in first from spending everyone's day. The global
+    ceiling is the credit card: per-account alone means ten pilot users
+    times six renders is sixty renders billed to one person, and each of
+    them is inside their limit the whole time.
+
+    Checked per-account first so the error a user sees names the limit
+    they can actually do something about.
+    """
+    # `used` is passed in by each tool module, from its own
+    # generations_today(). That keeps one seam per tool for tests to patch
+    # -- a cap check that quietly stopped calling the function the tests
+    # stub is how a "capped" render makes a real billed API call.
+    if used is None:
+        used = used_today(tool, path, account_id=account_id)
+    if used + n > per_account:
+        more = f", {n} more would exceed it" if n > 1 else ""
+        return (f"daily cap: {used}/{per_account} {phrase} today{more} "
+                f"({env_prefix}_DAILY_CAP to raise)")
+    everyone = (used_everywhere if used_everywhere is not None
+                else used_today(tool, path, everyone=True))
+    if everyone + n > ceiling:
+        return (f"daily ceiling: {everyone}/{ceiling} {phrase} across "
+                f"all accounts today ({env_prefix}_GLOBAL_DAILY_CAP to raise)")
+    return None
 
 
 def get_shot(shot_id: int, path: Path | str = DB_PATH, *,
@@ -141,6 +208,8 @@ def record_generation(
     cost_usd: Optional[float] = None,
     notes: Optional[str] = None,
     path: Path | str = DB_PATH,
+    *,
+    account_id: int,
 ) -> int:
     """
     Log one attempt. Attempt number is assigned automatically, counting per
@@ -152,23 +221,29 @@ def record_generation(
         raise ValueError("prompt cannot be empty")
 
     with connect(path) as conn:
-        if not conn.execute("SELECT 1 FROM shots WHERE id = ?", (shot_id,)).fetchone():
+        owned = conn.execute(
+            "SELECT 1 FROM shots WHERE id = ? AND account_id IS ?",
+            (shot_id, account_id),
+        ).fetchone()
+        if not owned:
             raise ValueError(f"no shot with id {shot_id}")
+        # attempt numbering is per shot, per tool, per account -- a shared
+        # counter would leak how often the other account is retrying
         prior = conn.execute(
             "SELECT COALESCE(MAX(attempt), 0) FROM generations "
-            "WHERE shot_id = ? AND tool = ?",
-            (shot_id, tool),
+            "WHERE shot_id = ? AND tool = ? AND account_id IS ?",
+            (shot_id, tool, account_id),
         ).fetchone()[0]
         cur = conn.execute(
             """
             INSERT INTO generations
                 (shot_id, created_at, tool, attempt, prompt, params_json,
-                 output_path, cost_usd, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 output_path, cost_usd, notes, account_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (shot_id, _now(), tool, prior + 1, prompt,
              json.dumps(params) if params else None,
-             output_path, cost_usd, notes),
+             output_path, cost_usd, notes, account_id),
         )
         return int(cur.lastrowid)
 
@@ -177,6 +252,8 @@ def mark_kept(
     generation_id: int,
     output_path: Optional[str] = None,
     path: Path | str = DB_PATH,
+    *,
+    account_id: int,
 ) -> None:
     """
     The one you used. Marks its shot resolved.
@@ -186,22 +263,28 @@ def mark_kept(
     """
     with connect(path) as conn:
         row = conn.execute(
-            "SELECT shot_id FROM generations WHERE id = ?", (generation_id,)
+            "SELECT shot_id FROM generations WHERE id = ? AND account_id IS ?",
+            (generation_id, account_id),
         ).fetchone()
         if not row:
             raise ValueError(f"no generation with id {generation_id}")
         conn.execute(
             "UPDATE generations SET kept = 1, output_path = COALESCE(?, output_path) "
-            "WHERE id = ?",
-            (output_path, generation_id),
+            "WHERE id = ? AND account_id IS ?",
+            (output_path, generation_id, account_id),
         )
-        conn.execute("UPDATE shots SET resolved = 1 WHERE id = ?", (row["shot_id"],))
+        conn.execute(
+            "UPDATE shots SET resolved = 1 WHERE id = ? AND account_id IS ?",
+            (row["shot_id"], account_id),
+        )
 
 
 def mark_rejected(
     generation_id: int,
     reason: str,
     path: Path | str = DB_PATH,
+    *,
+    account_id: int,
 ) -> None:
     """
     Why a take failed. Free text, but keep the vocabulary tight — "morphing
@@ -210,8 +293,9 @@ def mark_rejected(
     """
     with connect(path) as conn:
         cur = conn.execute(
-            "UPDATE generations SET reject_reason = ? WHERE id = ?",
-            (reason, generation_id),
+            "UPDATE generations SET reject_reason = ? "
+            "WHERE id = ? AND account_id IS ?",
+            (reason, generation_id, account_id),
         )
         if cur.rowcount == 0:
             raise ValueError(f"no generation with id {generation_id}")

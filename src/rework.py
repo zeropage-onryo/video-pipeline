@@ -185,7 +185,8 @@ def propose_slate(brand: str, signals: Optional[dict] = None, gemini_client=None
     concept_ids = preprod.save_concept_ideas(
         ideas, brand=brand, spark="rework: evidence-grounded slate",
         prompt_template=prompt, **kwargs,
-    )
+    
+        account_id=account_id,)
     return {"concept_ids": concept_ids, "ideas": ideas}
 
 

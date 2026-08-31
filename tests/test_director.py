@@ -31,7 +31,7 @@ def seed_scene(path):
              {"n": 2, "type": "CHARACTER", "source": "CAMERA", "cam": "BMPCC",
               "location": "garage", "desc": "hands on the wrench"},
          ]},
-        brand="antihero", path=path)
+        brand="antihero", path=path, account_id=None)
 
 
 def fake_model(response_text):
@@ -102,7 +102,7 @@ def test_silent_shot_loss_is_refused(tmp_db, monkeypatch):
 def test_direct_needs_a_note_and_a_planned_scene(tmp_db, monkeypatch):
     monkeypatch.setattr(director, "generate_with_retry", fake_model("{}"))
     concept_id = preprod.save_concept(
-        {"title": "Idea only", "shots": []}, brand="antihero", path=tmp_db)
+        {"title": "Idea only", "shots": []}, brand="antihero", path=tmp_db, account_id=None)
     assert "no shot plan" in director.direct_scene(
         concept_id, "moodier", db_path=tmp_db)["error"]
     assert "empty note" in director.direct_scene(
@@ -115,7 +115,7 @@ def test_hallucinated_location_surfaces_as_warning_not_rejection(tmp_db, monkeyp
     """A CAMERA shot moved to a room that doesn't exist is a visible
     warning on the saved scene, never a rejection -- prompts request,
     code advises. (An AI shot may invent a space; that's not flagged.)"""
-    preprod.add_location("garage", {"space": "the real garage"}, path=tmp_db)
+    preprod.add_location("garage", {"space": "the real garage"}, path=tmp_db, account_id=None)
     concept_id = seed_scene(tmp_db)
     revised = {"shots": [
         {"n": 1, "type": "BROLL", "source": "AI", "location": "garage",

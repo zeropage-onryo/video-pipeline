@@ -120,7 +120,9 @@ def upload_file(local_path: Path | str, key: Optional[str] = None,
 
 def publish_shot_media(concept_id: int, shot_n, local_path: Path | str,
                         content_type: Optional[str] = None,
-                        db_path=None) -> dict:
+                        db_path=None,
+                        account_id: Optional[int] = None,
+) -> dict:
     """
     The safe orchestrator: upload a rendered clip and write the
     resulting public URL onto the matching shot's media_url, so
@@ -142,7 +144,7 @@ def publish_shot_media(concept_id: int, shot_n, local_path: Path | str,
         return {"ok": False, "error": str(e)}
 
     try:
-        preprod.set_shot_media_url(concept_id, shot_n, url, **kwargs)
+        preprod.set_shot_media_url(concept_id, shot_n, url, **kwargs, account_id=account_id)
     except Exception as e:
         # Uploaded fine, but the DB write failed -- surface the URL
         # anyway so it's not lost, since re-uploading is wasted work.

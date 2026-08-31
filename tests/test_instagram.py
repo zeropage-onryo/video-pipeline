@@ -211,7 +211,7 @@ def test_refresh_honest_about_permalink_without_media_id(tmp_db):
 
 def test_refresh_writes_a_snapshot_on_success(tmp_db, monkeypatch):
     vid = db.add_video("Reel", "instagram", "2026-08-01",
-                       url="ig://17912345678901234", path=tmp_db)
+                       url="ig://17912345678901234", path=tmp_db, account_id=None)
 
     def fake_get(url, params=None, timeout=None):
         assert "17912345678901234/insights" in url
@@ -229,14 +229,14 @@ def test_refresh_writes_a_snapshot_on_success(tmp_db, monkeypatch):
     assert result == {"ok": True, "views": 420, "likes": 33, "comments": 5,
                       "saves": 7, "shares": 2}
 
-    history = db.get_video_history(vid, path=tmp_db)
+    history = db.get_video_history(vid, path=tmp_db, account_id=None)
     assert history[-1]["views"] == 420
     assert history[-1]["saves"] == 7
 
 
 def test_refresh_prefers_a_stored_media_id_key(tmp_db, monkeypatch):
     vid = db.add_video("Reel", "instagram", "2026-08-01",
-                       url="https://www.instagram.com/reel/AbC123/", path=tmp_db)
+                       url="https://www.instagram.com/reel/AbC123/", path=tmp_db, account_id=None)
     monkeypatch.setattr(
         instagram.requests, "get",
         lambda url, params=None, timeout=None: FakeResponse(
@@ -250,7 +250,7 @@ def test_refresh_prefers_a_stored_media_id_key(tmp_db, monkeypatch):
 
 def test_refresh_reports_api_failure_with_token_redacted(tmp_db, monkeypatch):
     vid = db.add_video("Reel", "instagram", "2026-08-01",
-                       url="ig://179", path=tmp_db)
+                       url="ig://179", path=tmp_db, account_id=None)
 
     def fake_get(url, params=None, timeout=None):
         raise RuntimeError("denied for token tok-secret")

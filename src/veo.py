@@ -36,7 +36,6 @@ from __future__ import annotations
 import os
 import re
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -51,6 +50,11 @@ MODELS = ("veo-3.1-generate-preview", "veo-3", "veo-3-fast")
 DEFAULT_MODEL = os.environ.get("VEO_MODEL", "veo-3-fast")   # cheapest first spend
 DEFAULT_RESOLUTION = os.environ.get("VEO_RESOLUTION", "720p")
 DAILY_CAP = int(os.environ.get("VEO_DAILY_CAP", "6"))
+# The installation-wide wall, beside the per-account one. Defaults to the
+# SAME number, so a single-operator database behaves exactly as it did --
+# admitting a second account is what forces a deliberate decision about
+# whose card is paying, instead of the total quietly doubling.
+GLOBAL_DAILY_CAP = int(os.environ.get("VEO_GLOBAL_DAILY_CAP", str(DAILY_CAP)))
 
 # Rough per-clip estimate for the previews (8s, 720p, audio included),
 # from Veo API pricing pages 2026-08. An estimate for a confirm dialog,
@@ -72,17 +76,14 @@ def estimate_cost(n: int) -> float:
     return round(n * COST_PER_CLIP_USD, 2)
 
 
-def generations_today(db_path=None) -> int:
-    """Veo generations logged since UTC midnight -- what DAILY_CAP
-    counts against. Reads the same generations table the scoreboards do,
-    so the cap can't drift from the log."""
-    today = datetime.now(timezone.utc).date().isoformat()
-    with generative.connect(db_path if db_path is not None else DB_PATH) as conn:
-        row = conn.execute(
-            "SELECT COUNT(*) FROM generations WHERE tool = 'veo' AND created_at >= ?",
-            (today,),
-        ).fetchone()
-        return row[0]
+def generations_today(db_path=None, *, account_id=None, everyone: bool = False) -> int:
+    """This account's veo generations since UTC midnight -- what
+    DAILY_CAP counts against. `everyone=True` gives the installation-wide
+    count that GLOBAL_DAILY_CAP counts against."""
+    return generative.used_today(
+        "veo", db_path if db_path is not None else DB_PATH,
+        account_id=account_id, everyone=everyone,
+    )
 
 
 def _make_client() -> genai.Client:
@@ -139,7 +140,7 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
     return out_path
 
 
-def _shot_row_for_prompt(prompt: str, db_path) -> int:
+def _shot_row_for_prompt(prompt: str, db_path, account_id: Optional[int] = None) -> int:
     """A generations row needs a shot to hang off. The interactive path
     has one from promptgen; the graph's AI shots don't, so synthesize a
     minimal Shot -- the row exists to make the attempt countable, and
@@ -148,12 +149,12 @@ def _shot_row_for_prompt(prompt: str, db_path) -> int:
     generative.init(**kwargs)
     shot = Shot(subject=prompt[:100], action="as prompted")
     return generative.add_shot(shot, notes="auto-created by veo.generate_candidates",
-                               **kwargs)
+                               **kwargs, account_id=account_id)
 
 
 def generate_candidates(prompt: str, out_dir, n: int = 3, *, shot_id: Optional[int] = None,
                         db_path=None, client=None, model: str = DEFAULT_MODEL,
-                        **cfg) -> dict:
+                        account_id: Optional[int] = None, **cfg) -> dict:
     """
     Never raises. {"ok", "candidates": [{path, generation_id, model}],
     "error"} -- a missing key, a failed job, or the daily cap is a
@@ -165,11 +166,16 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *, shot_id: Optional[i
     kwargs = {"path": db_path} if db_path is not None else {}
 
     try:
-        used = generations_today(db_path=db_path)
-        if used + n > DAILY_CAP:
-            return {"ok": False, "candidates": [],
-                    "error": f"daily cap: {used}/{DAILY_CAP} generations used today, "
-                             f"{n} more would exceed it (VEO_DAILY_CAP to raise)"}
+        refusal = generative.cap_error(
+            "veo", n, account_id=account_id,
+            per_account=DAILY_CAP, ceiling=GLOBAL_DAILY_CAP,
+            path=db_path if db_path is not None else DB_PATH,
+            env_prefix="VEO", phrase="generations used",
+            used=generations_today(db_path=db_path, account_id=account_id),
+            used_everywhere=generations_today(db_path=db_path, everyone=True),
+        )
+        if refusal:
+            return {"ok": False, "candidates": [], "error": refusal}
 
         if shot_id is None:
             shot_id = _shot_row_for_prompt(prompt, db_path)
@@ -190,7 +196,7 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *, shot_id: Optional[i
                 cost_usd=COST_PER_CLIP_USD,
                 notes=None,
                 **kwargs,
-            )
+             account_id=account_id)
             candidates.append({"path": str(out_path),
                                "generation_id": generation_id, "model": model})
 

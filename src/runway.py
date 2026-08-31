@@ -53,6 +53,11 @@ DEFAULT_MODEL = os.environ.get("RUNWAY_MODEL", "gen4_turbo")   # cheapest first 
 DEFAULT_RATIO = "720:1280"   # 9:16, the platform vertical
 DEFAULT_DURATION = 5
 DAILY_CAP = int(os.environ.get("RUNWAY_DAILY_CAP", "6"))
+# The installation-wide wall, beside the per-account one. Defaults to the
+# SAME number, so a single-operator database behaves exactly as it did --
+# admitting a second account is what forces a deliberate decision about
+# whose card is paying, instead of the total quietly doubling.
+GLOBAL_DAILY_CAP = int(os.environ.get("RUNWAY_GLOBAL_DAILY_CAP", str(DAILY_CAP)))
 
 SPEND_ENV = "RUNWAY_SPEND_OK"
 
@@ -161,17 +166,14 @@ def estimate_cost(n: int, *, model: str = DEFAULT_MODEL,
     return round(n * duration * per_second * CREDIT_USD, 2)
 
 
-def generations_today(db_path=None) -> int:
-    """Runway generations logged since UTC midnight -- what DAILY_CAP
-    counts against. Reads the same generations table the scoreboards do,
-    so the cap can't drift from the log."""
-    today = datetime.now(timezone.utc).date().isoformat()
-    with generative.connect(db_path if db_path is not None else DB_PATH) as conn:
-        row = conn.execute(
-            "SELECT COUNT(*) FROM generations WHERE tool = 'runway' AND created_at >= ?",
-            (today,),
-        ).fetchone()
-        return row[0]
+def generations_today(db_path=None, *, account_id=None, everyone: bool = False) -> int:
+    """This account's runway generations since UTC midnight -- what
+    DAILY_CAP counts against. `everyone=True` gives the installation-wide
+    count that GLOBAL_DAILY_CAP counts against."""
+    return generative.used_today(
+        "runway", db_path if db_path is not None else DB_PATH,
+        account_id=account_id, everyone=everyone,
+    )
 
 
 def _make_client():
@@ -235,7 +237,7 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
     return out_path
 
 
-def _shot_row_for_prompt(prompt: str, db_path) -> int:
+def _shot_row_for_prompt(prompt: str, db_path, account_id: Optional[int] = None) -> int:
     """A generations row needs a shot to hang off. The graph's AI shots
     don't have one, so synthesize a minimal Shot -- the row exists to
     make the attempt countable, and its notes say where it came from."""
@@ -243,12 +245,12 @@ def _shot_row_for_prompt(prompt: str, db_path) -> int:
     generative.init(**kwargs)
     shot = Shot(subject=prompt[:100], action="as prompted")
     return generative.add_shot(shot, notes="auto-created by runway.generate_candidates",
-                               **kwargs)
+                               **kwargs, account_id=account_id)
 
 
 def generate_candidates(prompt: str, out_dir, n: int = 3, *, shot_id: Optional[int] = None,
                         db_path=None, client=None, model: str = DEFAULT_MODEL,
-                        **cfg) -> dict:
+                        account_id: Optional[int] = None, **cfg) -> dict:
     """
     Never raises. {"ok", "candidates": [{path, generation_id, model}],
     "error"} -- a missing approval, a missing key, a failed job, or the
@@ -266,11 +268,16 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *, shot_id: Optional[i
                              f"~${estimate_cost(n, model=model, duration=int(cfg.get('duration', DEFAULT_DURATION)))} "
                              f"of API credits for this run"}
 
-        used = generations_today(db_path=db_path)
-        if used + n > DAILY_CAP:
-            return {"ok": False, "candidates": [],
-                    "error": f"daily cap: {used}/{DAILY_CAP} generations used today, "
-                             f"{n} more would exceed it (RUNWAY_DAILY_CAP to raise)"}
+        refusal = generative.cap_error(
+            "runway", n, account_id=account_id,
+            per_account=DAILY_CAP, ceiling=GLOBAL_DAILY_CAP,
+            path=db_path if db_path is not None else DB_PATH,
+            env_prefix="RUNWAY", phrase="generations used",
+            used=generations_today(db_path=db_path, account_id=account_id),
+            used_everywhere=generations_today(db_path=db_path, everyone=True),
+        )
+        if refusal:
+            return {"ok": False, "candidates": [], "error": refusal}
 
         if shot_id is None:
             shot_id = _shot_row_for_prompt(prompt, db_path)
@@ -293,7 +300,7 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *, shot_id: Optional[i
                 cost_usd=estimate_cost(1, model=model, duration=duration),
                 notes=None,
                 **kwargs,
-            )
+             account_id=account_id)
             candidates.append({"path": str(out_path),
                                "generation_id": generation_id, "model": model})
 
@@ -407,11 +414,16 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
     kwargs = {"path": db_path} if db_path is not None else {}
 
     try:
-        used = generations_today(db_path=db_path)
-        if used >= DAILY_CAP:
-            return {"ok": False,
-                    "error": f"daily cap: {used}/{DAILY_CAP} generations used "
-                             f"today (RUNWAY_DAILY_CAP to raise)"}
+        refusal = generative.cap_error(
+            "runway", 1, account_id=account_id,
+            per_account=DAILY_CAP, ceiling=GLOBAL_DAILY_CAP,
+            path=db_path if db_path is not None else DB_PATH,
+            env_prefix="RUNWAY", phrase="generations used",
+            used=generations_today(db_path=db_path, account_id=account_id),
+            used_everywhere=generations_today(db_path=db_path, everyone=True),
+        )
+        if refusal:
+            return {"ok": False, "error": refusal}
 
         concept = preprod.get_concept(concept_id, **kwargs, account_id=account_id)
         if concept is None:
@@ -446,7 +458,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
             output_path=str(out_path),
             cost_usd=estimate_cost(1, model=model),
             **kwargs,
-        )
+         account_id=account_id)
 
         if storage.configured():
             media_url = storage.upload_file(
@@ -455,7 +467,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
         else:
             media_url = f"/renders/runway/{out_path.name}"
 
-        preprod.set_shot_media_url(concept_id, shot_n, media_url, **kwargs)
+        preprod.set_shot_media_url(concept_id, shot_n, media_url, **kwargs, account_id=account_id)
         return {"ok": True, "media_url": media_url,
                 "generation_id": generation_id, "path": str(out_path),
                 "error": None}
@@ -464,7 +476,9 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
 
 
 def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
-                         model: str = DEFAULT_MODEL, client=None) -> dict:
+                         model: str = DEFAULT_MODEL, client=None,
+                         account_id: Optional[int] = None,
+) -> dict:
     """
     Never raises: {"ok", "media_url", "generation_id", "path", "error"}.
     The free-standing render behind the Workflows canvas's Generate
@@ -491,11 +505,16 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
         # a fresh DB has no generations table until something inits it;
         # the cap count below must not be the thing that discovers that
         generative.init(**kwargs)
-        used = generations_today(db_path=db_path)
-        if used >= DAILY_CAP:
-            return {"ok": False,
-                    "error": f"daily cap: {used}/{DAILY_CAP} generations used "
-                             f"today (RUNWAY_DAILY_CAP to raise)"}
+        refusal = generative.cap_error(
+            "runway", 1, account_id=account_id,
+            per_account=DAILY_CAP, ceiling=GLOBAL_DAILY_CAP,
+            path=db_path if db_path is not None else DB_PATH,
+            env_prefix="RUNWAY", phrase="generations used",
+            used=generations_today(db_path=db_path, account_id=account_id),
+            used_everywhere=generations_today(db_path=db_path, everyone=True),
+        )
+        if refusal:
+            return {"ok": False, "error": refusal}
 
         prompt_image = as_prompt_image(reference_image)
 
@@ -515,7 +534,7 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
             output_path=str(out_path),
             cost_usd=estimate_cost(1, model=model),
             **kwargs,
-        )
+         account_id=account_id)
 
         if storage.configured():
             media_url = storage.upload_file(

@@ -19,6 +19,7 @@ import os
 import re
 import time
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
 import requests
@@ -249,7 +250,7 @@ def parse_media_id(url):
     return None
 
 
-def refresh_metrics_for_video(video: dict, token=None, db_path=None) -> dict:
+def refresh_metrics_for_video(video: dict, token=None, db_path=None, account_id: Optional[int] = None) -> dict:
     """
     Fetch and record one Instagram video's current numbers -- the
     alongside-YouTube half, same shape as youtube.refresh_metrics_for_video.
@@ -279,7 +280,7 @@ def refresh_metrics_for_video(video: dict, token=None, db_path=None) -> dict:
         "shares": insights.get("shares"),
     }
     kwargs = {"path": db_path} if db_path is not None else {}
-    db.record_metrics(video["id"], **stats, **kwargs)
+    db.record_metrics(video["id"], **stats, **kwargs, account_id=account_id)
     return {"ok": True, **stats}
 
 
