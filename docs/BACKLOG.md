@@ -167,7 +167,7 @@ holds for the RAG shelves, but brand isolation exists at the inspiration layer.
 
 Everything above this line is shipped or parked. Below is what's actually next.
 
-## 8. Account tenancy — the launch blocker  (to build — full plan in `tasks/task-account-tenancy.md`)
+## 8. Account tenancy — the launch blocker  (SHIPPED 2026-08-31 on `claude/account-tenancy` — see below for the one decision left)
 No owned table has an `account_id`. `list_concepts` is
 `SELECT * FROM shoot_concepts ORDER BY id DESC LIMIT ?` — no owner predicate —
 and `get_concept` is `WHERE id = ?` with no ownership check, against sequential
@@ -184,14 +184,39 @@ front half with no back half. Nothing broke, because there has only ever been
 one user.
 
 This is the gate on showing the product to a single other person — ahead of
-anything else in this file, including item 9. Scope is one weekend: an
-ownership column, filtered reads, ownership checks on mutate, per-account caps
-(keep a global ceiling too), and the tests that would have caught it. The one
-decision to make first is whether the tenancy boundary is the **account** or the
-**brand** — today `brand` is the only scoping dimension and both brands belong
-to one operator; an outside user needs their own brands, which makes
-`account_id` the real boundary and `brand` a dimension inside it. Getting that
-backwards means doing the pass twice.
+anything else in this file, including item 9.
+
+**What shipped** (`5f66f59` schema, `b7216d8` reads, `3ddf55a` writes + caps +
+entry points). `account_id` on all 8 owned tables, backfilled; every read,
+write, mutate and delete carries an owner; per-account render caps plus a
+global ceiling; `tests/test_tenancy.py` (35 tests) including a static one that
+parses every SQL literal in `src/`, `app/` and `ops/` and fails on any
+statement reaching an owned table without an owner predicate.
+
+**The boundary question, answered differently from the framing above.** The
+premise that `brand` is "the only scoping dimension" was already out of date:
+`accounts` IS the brand table — `seed()` creates `zeropage` and `antihero`, and
+`auth.current_account()` picks between them off the brand cookie. So
+`account_id` became the scoping key and `brand` stayed a label.
+
+But that has a sting the plan did not see, and only running the migration
+against a copy of the live database showed it: if the data is scoped by
+`current_account`, clicking the ANTIHERO pill scopes every query to account 2,
+which the backfill gave nothing — an empty board on a database with eleven
+concepts. The fix is that `auth.current_account_id` resolves the **tenant** (the
+user's oldest membership) while `current_account` goes on resolving the
+**brand** for the pill.
+
+**Still open, and it is the real version of the original question:** `accounts`
+is now doing double duty as tenant table and brand table, with "oldest
+membership" picking the tenant. That holds for one operator with two brands, and
+for a pilot user with one account. It stops holding the day one person belongs
+to two different operators — which is when `accounts` has to split into
+`tenants` and `brands` properly. Worth deciding before the pilot grows past
+people who each have exactly one.
+
+The rest of section 6 of the task doc (deploy, rotate secrets, invite 5–10 by
+manual INSERT) is untouched and still next.
 
 ## 9. LangGraph under the Studio's render path  (ANSWERED 2026-08-29 — it belonged in the graph that already exists)
 The question was whether to put the Studio's *request* path on LangGraph, with a

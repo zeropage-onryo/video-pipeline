@@ -1,3 +1,26 @@
+> **Shipped 2026-08-31** on `claude/account-tenancy` — `5f66f59` (schema),
+> `b7216d8` (reads), `3ddf55a` (writes, caps, entry points). Every box below is
+> ticked except section 6, which is deployment and the pilot invites.
+>
+> Four things this plan did not predict, all found by running rather than
+> reading, all now covered by tests in `tests/test_tenancy.py`:
+>
+> 1. **The boundary question resolves the other way.** `accounts` already IS the
+>    brand table, so `account_id` became the scoping key and `brand` a label —
+>    but then the brand pill, which switches `current_account`, would have
+>    scoped every query to an account the backfill gave nothing. `current_account_id`
+>    resolves the tenant; `current_account` still resolves the brand.
+> 2. **`locations.name` was globally UNIQUE**, so no second account could own a
+>    "Garage". The rebuild that fixes it sits next to a foreign key, and the two
+>    obvious ways to write it both destroy `concept_locations`.
+> 3. **The entry points are not a footnote.** After the backfill nobody owns
+>    nothing, so a CLI or the nightly graph running as "nobody" reads an empty
+>    database and reports a clean run. `--account` and
+>    `accounts.resolve_account()` exist for that, not for tidiness.
+> 4. **The caps needed the seam kept.** Routing the check past each tool's own
+>    `generations_today()` would have silently un-patched the tests that stop a
+>    "capped" render making a real billed call.
+
 # Task — account tenancy (the launch blocker)
 
 **Why this exists.** `accounts.py`, `auth.py` and capability gating are built and working, but the
@@ -22,12 +45,12 @@ integers, so any concept is reachable by guessing.
 
 ## 1. Schema — give every owned row an owner
 
-- [ ] Add `account_id INTEGER REFERENCES accounts(id)` to `shoot_concepts`, `locations`,
+- [x] Add `account_id INTEGER REFERENCES accounts(id)` to `shoot_concepts`, `locations`,
       `characters`, `props`, `generations`, `videos`, `scene_briefs`.
-- [ ] Additive `ALTER TABLE` in each module's own `init()` — the `preprod.py` pattern already used
+- [x] Additive `ALTER TABLE` in each module's own `init()` — the `preprod.py` pattern already used
       for `picked_at`. No migration framework, no destructive change.
-- [ ] Backfill every existing row to the bootstrap account so current data keeps working.
-- [ ] Index `(account_id, id DESC)` on `shoot_concepts` — it's the shape every list query uses.
+- [x] Backfill every existing row to the bootstrap account so current data keeps working.
+- [x] Index `(account_id, id DESC)` on `shoot_concepts` — it's the shape every list query uses.
 
 **Decide first:** is the tenancy boundary the **account** or the **brand**? Today `brand` is the
 only scoping dimension and `antihero` / `zeropage` are two brands of one operator. An outside user
@@ -36,40 +59,40 @@ needs their own brands, so `account_id` is the real boundary and `brand` becomes
 
 ## 2. Reads — no query returns another account's rows
 
-- [ ] `list_concepts(account_id, ...)` — required argument, not optional with a default. An optional
+- [x] `list_concepts(account_id, ...)` — required argument, not optional with a default. An optional
       arg is a leak waiting for the one call site that forgets it.
-- [ ] `get_concept(concept_id, account_id)` — returns `None` on mismatch, exactly as it does for a
+- [x] `get_concept(concept_id, account_id)` — returns `None` on mismatch, exactly as it does for a
       missing id. Don't distinguish "not yours" from "not found"; that difference is an enumeration
       oracle.
-- [ ] Same treatment for locations, characters, props, generations, videos, holds, scene briefs.
-- [ ] Audit every `SELECT` in `src/` for a missing `account_id` predicate. Grep for `FROM ` and read
+- [x] Same treatment for locations, characters, props, generations, videos, holds, scene briefs.
+- [x] Audit every `SELECT` in `src/` for a missing `account_id` predicate. Grep for `FROM ` and read
       each one.
 
 ## 3. Writes — ownership set on create, checked on mutate
 
-- [ ] Every insert stamps `account_id` from `auth.current_account`, never from a request parameter.
-- [ ] `update_concept_shots`, `set_shot_media_url`, `delete_concept`, the verdict routes, director
+- [x] Every insert stamps `account_id` from `auth.current_account`, never from a request parameter.
+- [x] `update_concept_shots`, `set_shot_media_url`, `delete_concept`, the verdict routes, director
       mode — all verify ownership before mutating.
-- [ ] `delete_all_concepts()` with no argument currently wipes the whole table. Make `account_id`
+- [x] `delete_all_concepts()` with no argument currently wipes the whole table. Make `account_id`
       required.
 
 ## 4. Caps — per account, per day
 
-- [ ] `runway._used()`, `veo._used()`, `midjourney._used()`, `nano_banana._used()` take `account_id`
+- [x] `runway._used()`, `veo._used()`, `midjourney._used()`, `nano_banana._used()` take `account_id`
       and add it to the `WHERE`.
-- [ ] Keep a **global** ceiling as well as the per-account one. Per-account alone means ten users
+- [x] Keep a **global** ceiling as well as the per-account one. Per-account alone means ten users
       times six renders is sixty renders on your card.
-- [ ] Decide whose key pays. Options: your key with a hard per-account quota (simplest for a pilot),
+- [x] Decide whose key pays. Options: your key with a hard per-account quota (simplest for a pilot),
       or bring-your-own-key per account (no cost exposure, more onboarding friction). For 5–10
       invited users, your key plus a low quota is the right call.
 
 ## 5. Tests — the ones that would have caught this
 
-- [ ] Two accounts, one concept each: A's list returns exactly one row and never B's.
-- [ ] A fetching B's concept by id returns `None`.
-- [ ] A's renders don't count against B's cap.
-- [ ] A cannot mutate or delete B's concept.
-- [ ] Regression test: assert no `SELECT` against an owned table lacks an `account_id` predicate.
+- [x] Two accounts, one concept each: A's list returns exactly one row and never B's.
+- [x] A fetching B's concept by id returns `None`.
+- [x] A's renders don't count against B's cap.
+- [x] A cannot mutate or delete B's concept.
+- [x] Regression test: assert no `SELECT` against an owned table lacks an `account_id` predicate.
 
 ## 6. Then, and only then
 
