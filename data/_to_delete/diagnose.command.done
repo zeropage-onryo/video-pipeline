@@ -1,7 +1,0 @@
-#!/bin/bash
-# Temporary — written by Claude for one diagnostic run, removed afterwards.
-# Read-only: it imports, tests and reports. It writes nothing but its log.
-cd "$(dirname "$0")"
-bash "data/_to_delete/diag.sh"
-echo
-echo "Done. Log written to data/_to_delete/diag.log"

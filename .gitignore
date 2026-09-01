@@ -56,3 +56,9 @@ data/*.tar.gz
 # Claude Code's per-machine permission allowlist: local paths, no value
 # to anyone else checking this out
 .claude/settings.local.json
+
+# Claude's scratch space over the FUSE mount: stale git locks it cannot
+# unlink, diagnostic logs, staged tarballs, index backups. The folder name
+# says what it is. Ignored because c02fd3a swept 18 of them into history
+# before this rule existed.
+data/_to_delete/
