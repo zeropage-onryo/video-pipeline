@@ -1,7 +1,7 @@
 """
 src/orchestrator.py — the autonomous content graph over pre-production:
 
-    scout -> planner -> ensure_locations -> ground_entities -> ground_rag
+    scout -> planner -> ground_entities -> ground_rag
         -> gen_concept -> evaluate -> structure_prompt -> generate_render
                 ^_____________|            -> qc_clip -> caption -> publish
                 (corrective re-run)                 \\-> hold  (park, don't post)
@@ -12,7 +12,7 @@ unasked, or with an empty bank, it is a no-op and the run proceeds on
 whatever spark it was given. It runs before planner so the direction is
 traced beside the concept it produced.
 
-The left third (ensure_locations -> gen_concept -> evaluate and its
+The left third (planner -> gen_concept -> evaluate and its
 retry edge) is the original evaluate-and-retry loop, unchanged in
 behavior. The right two-thirds is the posting line, gated hard:
 
@@ -66,11 +66,11 @@ from google import genai
 from langgraph.graph import END, START, StateGraph
 
 from . import (
+    accounts,
     autonomy,
     crag,
     db,
     entities,
-    preprod,
     promptgen,
     rag,
     scene_chain,
@@ -108,6 +108,14 @@ class GenState(TypedDict, total=False):
     scout_rationale: str            # why the scout chose it (stored, never injected)
     use_pov: bool
     channel: str
+    account_id: Optional[int]       # whose run this is. Set once by run();
+                                    # every node reads it off the state rather
+                                    # than taking a parameter, because
+                                    # LangGraph calls a node with the state and
+                                    # nothing else -- a node with an
+                                    # `account_id=None` parameter would always
+                                    # get None and quietly see an empty
+                                    # database.
     picked_locations: list          # ids; empty/absent = all on file
     picked_characters: list
     picked_props: list
@@ -243,28 +251,23 @@ def planner(state: GenState) -> GenState:
     }
 
 
-def ensure_locations(state: GenState) -> GenState:
-    if not preprod.list_locations(path=db.DB_PATH):
-        return {"error": "No described locations — photograph a space first."}
-    return {}
-
-
 def ground_entities(state: GenState) -> GenState:
     """The chosen characters/props (or everything on file when nothing
     was picked), formatted the way the concept prompt's {cast} section
     expects. Data layer was already live; this is the socket."""
+    account_id = state.get("account_id")
     picked_chars = state.get("picked_characters") or []
     picked_props = state.get("picked_props") or []
     if picked_chars:
-        characters = [c for c in (entities.get_character(i, path=db.DB_PATH)
+        characters = [c for c in (entities.get_character(i, path=db.DB_PATH, account_id=account_id)
                                   for i in picked_chars) if c]
     else:
-        characters = entities.list_characters(path=db.DB_PATH)
+        characters = entities.list_characters(path=db.DB_PATH, account_id=account_id)
     if picked_props:
-        props = [p for p in (entities.get_prop(i, path=db.DB_PATH)
+        props = [p for p in (entities.get_prop(i, path=db.DB_PATH, account_id=account_id)
                              for i in picked_props) if p]
     else:
-        props = entities.list_props(path=db.DB_PATH)
+        props = entities.list_props(path=db.DB_PATH, account_id=account_id)
     return {"cast": shootgen.format_cast(characters, props)}
 
 
@@ -364,6 +367,7 @@ def gen_concept(state: GenState) -> GenState:
         references=state.get("references", ""),
         cast=state.get("cast"),
         image_refs=image_refs,
+        account_id=state.get("account_id"),
     )
     # the generator returns warnings BESIDE the concept, not inside it;
     # fold them in so evaluate's code-enforced check actually sees them.
@@ -376,7 +380,8 @@ def gen_concept(state: GenState) -> GenState:
     refs = []
     try:
         refs = scene_chain.attach_refs(result["concept_id"], handed,
-                                       db_path=db.DB_PATH)
+                                       db_path=db.DB_PATH,
+                                       account_id=state.get("account_id"))
         if refs:
             concept["shots"][0]["refs"] = refs
     except Exception as e:
@@ -733,14 +738,16 @@ def keyframe(state: GenState) -> GenState:
         try:
             scene_chain.persist_prompt(concept_id, shot_n,
                                        refined.get("prompt", ""),
-                                       db_path=db.DB_PATH)
+                                       db_path=db.DB_PATH,
+                                       account_id=state.get("account_id"))
         except Exception as e:
             done.append({"n": shot_n, "ok": False, "error": f"prompt not stored: {e}"})
             continue
         if os.environ.get("ZEROPAGE_KEYFRAME") == "0":
             done.append({"n": shot_n, "ok": False, "error": "keyframes disabled"})
             continue
-        result = scene_chain.keyframe_scene(concept_id, shot_n, db_path=db.DB_PATH)
+        result = scene_chain.keyframe_scene(concept_id, shot_n, db_path=db.DB_PATH,
+                                            account_id=state.get("account_id"))
         done.append({"n": shot_n, "ok": bool(result.get("ok")),
                      "url": result.get("media_url"),
                      "error": result.get("error")})
@@ -752,7 +759,8 @@ def keyframe(state: GenState) -> GenState:
               "no keyframe: " + (failed[0].get("error") or "unknown")
               if failed else "no shot to keyframe")
     try:
-        scene_chain.park_scene(concept_id, reason, db_path=db.DB_PATH)
+        scene_chain.park_scene(concept_id, reason, db_path=db.DB_PATH,
+                               account_id=state.get("account_id"))
     except Exception:
         pass       # a scene that cannot be parked is still on the board
     return {"keyframes": done, "parked_reason": reason}
@@ -934,7 +942,7 @@ def _build():
     g = StateGraph(GenState)
     for name, fn in [
         ("scout", scout),
-        ("planner", planner), ("ensure_locations", ensure_locations),
+        ("planner", planner),
         ("ground_entities", ground_entities), ("ground_rag", ground_rag),
         ("gen_concept", gen_concept), ("evaluate", evaluate),
         ("structure_prompt", structure_prompt), ("score_prompts", score_prompts),
@@ -947,11 +955,16 @@ def _build():
 
     g.add_edge(START, "scout")
     g.add_edge("scout", "planner")
-    g.add_conditional_edges("planner",
-        lambda s: "go", {"go": "ensure_locations"})
-    g.add_conditional_edges("ensure_locations",
-        lambda s: "stop" if s.get("error") else "go",
-        {"stop": "hold", "go": "ground_entities"})
+    # No ensure_locations gate (removed 2026-08-31, Mike's call). It
+    # errored a run to `hold` when the locations table was empty --
+    # gating the night on described rooms that its own generator never
+    # reads: build_scene_brief_prompt's entire placeholder set is
+    # {brand} {cast} {example} {references} {spark}, with no
+    # {locations} in it. Since 2026-08-20 every shot is AI-generated,
+    # so a room is named material the scene MAY use, exactly like cast
+    # -- and an empty table means "nothing filed under places yet", not
+    # a reason to refuse to think.
+    g.add_edge("planner", "ground_entities")
     g.add_edge("ground_entities", "ground_rag")
     g.add_edge("ground_rag", "gen_concept")
     g.add_edge("gen_concept", "evaluate")
@@ -998,7 +1011,7 @@ def run(goal: str, *, brand: Optional[str] = None, spark: Optional[str] = None,
         channel: str = "zeropage", picked_locations=None,
         picked_characters=None, picked_props=None, picked_references=None,
         reference_photos=None,
-        scout: bool = False) -> dict:
+        scout: bool = False, account_id: Optional[int] = None) -> dict:
     """
     `brand` defaults to `channel` rather than a hardcoded value on
     purpose: `channel` decides where the run gets FILED (which
@@ -1032,7 +1045,15 @@ def run(goal: str, *, brand: Optional[str] = None, spark: Optional[str] = None,
     autonomy.init(path=db.DB_PATH)
     winners.init(path=db.DB_PATH)
     scout_mod.init(path=db.DB_PATH)
+    # An unattended run has no session, so it acts as the bootstrap
+    # account rather than as nobody. "Nobody" is not neutral here: after
+    # the tenancy backfill every row has an owner, so a run with
+    # account_id=None reads an empty database, writes rows no one can
+    # see, and reports a night's work that isn't there.
+    if account_id is None:
+        account_id = accounts.resolve_account(path=db.DB_PATH)
     return GRAPH.invoke({
+        "account_id": account_id,
         "goal": goal, "brand": brand, "spark": spark or goal, "scout": scout,
         "client": client, "use_pov": use_pov, "channel": channel,
         "picked_locations": picked_locations or [],

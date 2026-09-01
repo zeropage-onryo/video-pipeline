@@ -19,12 +19,13 @@ import os
 import re
 import sys
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
-from . import entities, preprod, rag
+from . import accounts, db, entities, preprod, rag
 from . import shot as shot_module
 from .db import DB_PATH, init_db
 from .gemini_utils import generate_with_retry, strip_fences
@@ -188,7 +189,8 @@ def build_reference_query(locations: list, spark=None, client=None,
     return " ".join(str(p) for p in parts)[:max_chars]
 
 
-def reference_block(spark=None, client=None, db_path=None, picked_sources=None) -> str:
+def reference_block(spark=None, client=None, db_path=None, picked_sources=None,
+        account_id: Optional[int] = None) -> str:
     """
     Retrieve grounding references for an ideation run and return the
     formatted block, or "" if nothing applies. Never raises -- the same
@@ -222,7 +224,7 @@ def reference_block(spark=None, client=None, db_path=None, picked_sources=None) 
     again by the new LEARNED_IDEATION_DOMAINS semantic search.
     """
     kwargs = {"path": db_path} if db_path is not None else {}
-    locations = preprod.list_locations(**kwargs)
+    locations = preprod.list_locations(**kwargs, account_id=account_id)
     query = build_reference_query(locations, spark=spark, client=client)
 
     references = []
@@ -322,6 +324,66 @@ def location_variety_note(locations: list, lock: bool = False) -> str:
         "room just because it's the one that's photographed; invent the space "
         "the story actually wants and match it to the grade."
     )
+
+
+SCENE_LOCATION_FREE_NOTE = (
+    "(no room picked for this run — set each scene wherever the idea implies, "
+    "inventing whatever space it needs)"
+)
+
+SCENE_LOCATION_LOCK_NOTE = (
+    "\n(picked for this run, and their photos are attached above — set the "
+    "scenes here and match what the photos show)"
+)
+
+
+def picked_locations(refs, locations: list) -> list:
+    """The described rooms among THIS run's reference URLs.
+
+    A room now reaches a generation the same way a face does: somebody
+    attached its photo. `/locations/<slug>/photo/<file>` is the URL the
+    asset bank hands out, so the slug in the path IS the pick -- no new
+    form field, and no client-side flag that can go stale the way
+    `scout_finding_id` did before `scout.claims` was written to check it
+    server-side. A room attached by accident is also visible as a tile
+    somebody can remove, which a hidden setting is not.
+    """
+    from . import asset_shelf
+
+    slugs = set()
+    for ref in refs or []:
+        parts = str(ref).split("?")[0].strip("/").split("/")
+        if len(parts) >= 2 and parts[0] == "locations":
+            slugs.add(parts[1])
+    if not slugs:
+        return []
+    return [loc for loc in locations
+            if asset_shelf.slugify(loc.get("name") or "") in slugs]
+
+
+def format_scene_locations(locations: list) -> str:
+    """The rooms block for a SCENE generation (2026-08-31, Mike's call).
+
+    The old block listed every described room under "set scenes in these
+    real spaces where they fit", which made the photographed rooms the
+    default gravity of every Create. That was right when shots came off
+    a camera and you could only film where you actually are. Since
+    2026-08-20 every shot is AI-generated, so the room stopped being a
+    constraint and became named material -- and material nobody chose
+    for this idea has no business steering it.
+
+    So the block is now built from what was PICKED for this run, and
+    nothing else. Picking is a deliberate act, so it reads as a lock
+    (the `location_variety_note(lock=True)` reasoning): lean into the
+    space rather than manufacturing variety away from it. Picking
+    nothing says the scene may be set anywhere at all.
+
+    `format_locations` is untouched -- rework.py and director.py still
+    want the whole catalogue.
+    """
+    if not locations:
+        return SCENE_LOCATION_FREE_NOTE
+    return format_locations(locations) + SCENE_LOCATION_LOCK_NOTE
 
 
 def format_locations(locations: list) -> str:
@@ -799,7 +861,9 @@ def generate_concept_ideas(brand: str, client=None, spark=None, gemini_client=No
                            model: str = MODEL, count: int = DEFAULT_IDEA_COUNT,
                            use_pov: bool = False, db_path=None,
                            references: str = "", formats=None,
-                           only_locations=None) -> dict:
+                           only_locations=None,
+                           account_id: Optional[int] = None,
+) -> dict:
     """
     Stage one: several cheap ideas in a single call, so they can be
     varied against each other rather than rolled independently. No shot
@@ -814,7 +878,7 @@ def generate_concept_ideas(brand: str, client=None, spark=None, gemini_client=No
     same as before this existed.
     """
     kwargs = {"path": db_path} if db_path is not None else {}
-    locations = preprod.list_locations(**kwargs)
+    locations = preprod.list_locations(**kwargs, account_id=account_id)
     if not locations:
         # Grounding is an enhancement, never a gate -- the same degrade
         # contract reference_block keeps when the library is down.
@@ -833,7 +897,8 @@ def generate_concept_ideas(brand: str, client=None, spark=None, gemini_client=No
     concept_ids = preprod.save_concept_ideas(
         ideas, brand=brand, client=client, spark=spark,
         prompt_template=prompt, use_pov=use_pov, **kwargs,
-    )
+    
+        account_id=account_id,)
     return {"concept_ids": concept_ids, "ideas": ideas}
 
 
@@ -889,7 +954,9 @@ DEFAULT_SCENE_TOOL = "RUNWAY"
 def generate_scene_concept(brand: str, spark=None, gemini_client=None,
                            model: str = MODEL, references: str = "", cast=None,
                            db_path=None, tool: str = DEFAULT_SCENE_TOOL,
-                           image_refs=None) -> dict:
+                           image_refs=None,
+                           account_id: Optional[int] = None,
+) -> dict:
     """
     A concept IS one scene, and the scene IS one prompt (2026-08-26).
 
@@ -913,8 +980,8 @@ def generate_scene_concept(brand: str, spark=None, gemini_client=None,
     # cast=None means "everything on file", "" means explicitly none --
     # the same convention generate_concept keeps.
     if cast is None:
-        cast = format_cast(entities.list_characters(**kwargs),
-                           entities.list_props(**kwargs), detail=True)
+        cast = format_cast(entities.list_characters(**kwargs, account_id=account_id),
+                           entities.list_props(**kwargs, account_id=account_id), detail=True)
     prompt = build_scene_brief_prompt(brand, spark=spark, references=references,
                                       cast=cast)
     contents = prompt
@@ -942,12 +1009,12 @@ def generate_scene_concept(brand: str, spark=None, gemini_client=None,
             "prompt": parsed["brief"]}
     concept = {"title": parsed["title"], "hook": parsed["hook"],
                "logline": parsed["logline"], "shots": [shot]}
-    location_names = [loc["name"] for loc in preprod.list_locations(**kwargs)]
+    location_names = [loc["name"] for loc in preprod.list_locations(**kwargs, account_id=account_id)]
     allowed = ZEROPAGE_AI_TOOLS if brand == "zeropage" else None
     warnings = validate_concept(concept, location_names, allowed_tools=allowed)
     concept_id = preprod.save_concept(
         concept, brand=brand, spark=spark, prompt_template=prompt,
-        warnings=warnings, **kwargs)
+        warnings=warnings, **kwargs, account_id=account_id)
     return {"concept_id": concept_id, "concept": concept, "warnings": warnings}
 
 
@@ -1019,7 +1086,12 @@ def build_scenes_prompt(idea: str, brand: str, count: int, locations: list,
     """N standalone scene prompts off ONE idea, in the same proven
     skeleton build_scene_brief_prompt uses -- the difference is plural
     and independent: these are competing takes to pick between, not
-    parts of one video."""
+    parts of one video.
+
+    `locations` is what was PICKED for this run, not the catalogue --
+    see format_scene_locations. An empty list is the normal case and
+    means the scenes may be set anywhere.
+    """
     template = (PROMPTS_DIR / "scenes_prompt.txt").read_text()
     example = gold_standard_example() or "(no gold-standard example on file)"
     return (template
@@ -1028,7 +1100,7 @@ def build_scenes_prompt(idea: str, brand: str, count: int, locations: list,
             .replace("{idea}", (idea or "").strip() or "(no idea given — surprise me)")
             .replace("{brand}", load_brand(brand))
             .replace("{cast}", cast or NO_CAST_NOTE)
-            .replace("{locations}", format_locations(locations))
+            .replace("{locations}", format_scene_locations(locations))
             .replace("{references}", references or NO_REFERENCES_NOTE)
             .replace("{example}", example))
 
@@ -1068,7 +1140,9 @@ def generate_scene_concepts(idea: str, brand: str, count: int = 4,
                             references: str = "", cast=None, db_path=None,
                             tool: str = DEFAULT_SCENE_TOOL,
                             refs=None, image_refs=None,
-                            template_tag: str = "", on_retry=None) -> dict:
+                            template_tag: str = "", on_retry=None,
+                            account_id: Optional[int] = None,
+) -> dict:
     """
     One idea -> N scenes to PICK BETWEEN (2026-08-26).
 
@@ -1089,9 +1163,12 @@ def generate_scene_concepts(idea: str, brand: str, count: int = 4,
     vision input.
     """
     kwargs = {"path": db_path} if db_path is not None else {}
-    locations = preprod.list_locations(**kwargs)
-    if not locations:
-        print(NO_LOCATIONS_NOTE, file=sys.stderr)
+    # Only the rooms attached to THIS run steer it. No stderr note when
+    # there are none: an unpinned scene is the normal case now, not a
+    # degraded one, and a note printed every single run is a note nobody
+    # reads on the one night it would have meant something.
+    on_file = preprod.list_locations(**kwargs, account_id=account_id)
+    locations = picked_locations(refs, on_file)
     prompt = build_scenes_prompt(idea, brand, count, locations,
                                  references=references, cast=cast)
     contents = prompt
@@ -1113,7 +1190,11 @@ def generate_scene_concepts(idea: str, brand: str, count: int = 4,
     scenes = parse_scenes_response(
         generate_with_retry(gemini_client, model, contents, on_retry=on_retry))
 
-    location_names = [loc["name"] for loc in locations]
+    # Validated against every described room, not just the picked ones:
+    # a scene that names a real space it was not handed is fine, and a
+    # scene that names one that does not exist is the thing worth
+    # flagging. (AI shots are not flagged at all -- see validate_concept.)
+    location_names = [loc["name"] for loc in on_file]
     allowed = ZEROPAGE_AI_TOOLS if brand == "zeropage" else None
     # What gets HASHED, which is what pick_rate buckets by. The tag
     # separates rows produced by different pipelines: pre-2026-08-29 a
@@ -1137,7 +1218,7 @@ def generate_scene_concepts(idea: str, brand: str, count: int = 4,
         warnings = validate_concept(concept, location_names, allowed_tools=allowed)
         concept_id = preprod.save_concept(
             concept, brand=brand, spark=idea, prompt_template=hashed,
-            warnings=warnings, **kwargs)
+            warnings=warnings, **kwargs, account_id=account_id)
         saved.append({"concept_id": concept_id, "title": scene["title"],
                       "logline": logline, "warnings": warnings})
     return {"scenes": saved, "prompt_template": hashed}
@@ -1145,7 +1226,9 @@ def generate_scene_concepts(idea: str, brand: str, count: int = 4,
 
 def write_scene_for_concept(concept_id: int, gemini_client=None,
                             model: str = MODEL, references: str = "", cast=None,
-                            db_path=None, tool: str = DEFAULT_SCENE_TOOL) -> dict:
+                            db_path=None, tool: str = DEFAULT_SCENE_TOOL,
+                            account_id: Optional[int] = None,
+) -> dict:
 
 
     """
@@ -1162,7 +1245,7 @@ def write_scene_for_concept(concept_id: int, gemini_client=None,
     this fills in the shots only, through update_concept_shots.
     """
     kwargs = {"path": db_path} if db_path is not None else {}
-    concept = preprod.get_concept(concept_id, **kwargs)
+    concept = preprod.get_concept(concept_id, **kwargs, account_id=account_id)
     if concept is None:
         raise ValueError(f"no concept {concept_id}")
 
@@ -1171,8 +1254,8 @@ def write_scene_for_concept(concept_id: int, gemini_client=None,
         concept.get("title"), concept.get("hook"), concept.get("logline"),
         concept.get("spark")) if part)
     if cast is None:
-        cast = format_cast(entities.list_characters(**kwargs),
-                           entities.list_props(**kwargs), detail=True)
+        cast = format_cast(entities.list_characters(**kwargs, account_id=account_id),
+                           entities.list_props(**kwargs, account_id=account_id), detail=True)
     prompt = build_scene_brief_prompt(concept.get("brand") or "antihero",
                                       spark=spark, references=references, cast=cast)
     parsed = parse_scene_brief_response(
@@ -1182,13 +1265,13 @@ def write_scene_for_concept(concept_id: int, gemini_client=None,
             "tool": (tool or DEFAULT_SCENE_TOOL).upper(),
             "desc": concept.get("logline") or concept.get("title") or "",
             "prompt": parsed["brief"]}
-    location_names = [loc["name"] for loc in preprod.list_locations(**kwargs)]
+    location_names = [loc["name"] for loc in preprod.list_locations(**kwargs, account_id=account_id)]
     allowed = ZEROPAGE_AI_TOOLS if concept.get("brand") == "zeropage" else None
     warnings = validate_concept({**concept, "shots": [shot]}, location_names,
                                 use_pov=bool(concept.get("use_pov")),
                                 allowed_tools=allowed)
     preprod.update_concept_shots(concept_id, {"shots": [shot]},
-                                 warnings=warnings, **kwargs)
+                                 warnings=warnings, **kwargs, account_id=account_id)
     return {"concept_id": concept_id, "shots": [shot], "warnings": warnings}
 
 def parse_concept_response(text: str) -> dict:
@@ -1323,7 +1406,9 @@ def director_prompt(shot: dict, concept=None) -> str:
 def generate_concept(brand: str, client=None, spark=None, gemini_client=None,
                      model: str = MODEL, use_pov: bool = False, db_path=None,
                      references: str = "", cast=None, formats=None,
-                     only_locations=None, image_refs=None) -> dict:
+                     only_locations=None, image_refs=None,
+                     account_id: Optional[int] = None,
+) -> dict:
     """
     One concept, grounded in the described locations, validated and
     saved. Returns {"concept_id", "concept", "warnings"}.
@@ -1348,14 +1433,15 @@ def generate_concept(brand: str, client=None, spark=None, gemini_client=None,
     None/empty means text-only, exactly as before this parameter existed.
     """
     kwargs = {"path": db_path} if db_path is not None else {}
-    locations = preprod.list_locations(**kwargs)
+    locations = preprod.list_locations(**kwargs, account_id=account_id)
     if not locations:
         print(NO_LOCATIONS_NOTE, file=sys.stderr)
 
     locations, lock_location = _apply_location_lock(locations, only_locations)
 
     if cast is None:
-        cast = format_cast(entities.list_characters(**kwargs), entities.list_props(**kwargs))
+        cast = format_cast(entities.list_characters(**kwargs, account_id=account_id), entities.list_props(**kwargs,
+                account_id=account_id))
 
     if formats is None:
         formats = ranked_formats(**kwargs)
@@ -1387,7 +1473,8 @@ def generate_concept(brand: str, client=None, spark=None, gemini_client=None,
         concept, brand=brand, client=client, spark=spark,
         location_ids=location_ids, prompt_template=prompt,
         warnings=warnings, use_pov=use_pov, **kwargs,
-    )
+    
+        account_id=account_id,)
     return {"concept_id": concept_id, "concept": concept, "warnings": warnings}
 
 
@@ -1421,7 +1508,7 @@ def format_concept_as_text(concept: dict, warnings=None) -> str:
     return "\n".join(lines)
 
 
-def main(db_path=None):
+def main(db_path=None, account_id: Optional[int] = None):
     load_dotenv()
 
     parser = argparse.ArgumentParser(
@@ -1440,7 +1527,20 @@ def main(db_path=None):
                         help="pin this run to one location on file (repeatable for more "
                              "than one) -- a deliberate choice, so the variety nudge "
                              "toward AI-invented environments is skipped")
+    parser.add_argument(
+        "--account", default=None,
+        help=(
+            "The account to act as, by slug (zeropage / antihero). "
+            "Defaults to the oldest account on the database -- an "
+            "unattended run has no session, and acting as nobody "
+            "would read an empty database."
+        ),
+    )
     args = parser.parse_args()
+    if account_id is None:
+        account_id = accounts.resolve_account(
+            args.account, path=db_path if db_path is not None else db.DB_PATH)
+
 
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
@@ -1466,7 +1566,7 @@ def main(db_path=None):
             print(e, file=sys.stderr)
             sys.exit(1)
 
-        concept = preprod.get_concept(args.scene, path=path)
+        concept = preprod.get_concept(args.scene, path=path, account_id=account_id)
         print(f"\nConcept {args.scene}")
         print(format_concept_as_text(concept, result["warnings"]))
         return

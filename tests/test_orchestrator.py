@@ -25,7 +25,7 @@ def tmp_db(tmp_path, monkeypatch):
     entities.init(path)
     autonomy.init(path)
     monkeypatch.setattr(db, "DB_PATH", path)
-    preprod.add_location("hallway", {"space": "narrow hallway"}, photo_count=2, path=path)
+    preprod.add_location("hallway", {"space": "narrow hallway"}, photo_count=2, path=path, account_id=None)
     # graph tests must not reach the real library or Gemini
     monkeypatch.setattr(orchestrator.crag, "retrieve_with_crag",
                         lambda *a, **k: {"ok": False, "references": [],
@@ -88,7 +88,7 @@ def stage_fakes(monkeypatch, results):
 
     def fake_generate(brand, spark=None, gemini_client=None, model=None,
                       db_path=None, references="", cast=None, tool=None,
-                      image_refs=None):
+                      image_refs=None, account_id=None):
         calls.append({"brand": brand, "spark": spark, "references": references, "cast": cast})
         concept, warnings = queue.pop(0)
         concept_id = _save_scene(db.DB_PATH, concept, brand)
@@ -116,7 +116,7 @@ def _save_scene(path, concept, brand):
     """A real row, because the keyframe node reads the concept back out
     of the DB to persist its prompt and attach its still."""
     return preprod.save_concept(concept, brand=brand, spark="test",
-                                prompt_template="T", path=path)
+                                prompt_template="T", path=path, account_id=None)
 
 
 # ---------- brand defaults to channel: the hold_queue-13 regression ----------
@@ -173,7 +173,7 @@ def test_clean_run_keyframes_the_scene_and_parks_it_for_approval(tmp_db, monkeyp
 
     # and the scene itself is now waiting where the money gets spent:
     # its prompt stored, its still attached, parked but not picked
-    concept = preprod.get_concept(result["concept_id"], path=tmp_db)
+    concept = preprod.get_concept(result["concept_id"], path=tmp_db, account_id=None)
     shot = concept["shots"][0]
     assert shot["prompt"] == GOOD_PROMPT
     assert shot["reference_image"].startswith("https://cdn/key-")
@@ -249,23 +249,30 @@ def test_out_of_retries_parks_with_the_eval_reason(tmp_db, monkeypatch):
     assert row["status"] == "held"
 
 
-def test_no_locations_parks_before_any_generation(tmp_path, monkeypatch):
-    path = tmp_path / "empty.db"
-    db.init_db(path)
-    preprod.init(path)
-    entities.init(path)
-    autonomy.init(path)
-    monkeypatch.setattr(db, "DB_PATH", path)
-    monkeypatch.setattr(orchestrator.crag, "retrieve_with_crag",
-                        lambda *a, **k: {"ok": False, "references": [], "error": "x"})
-    calls = stage_fakes(monkeypatch, [])
+def test_no_locations_still_generates(tmp_db, monkeypatch):
+    """The ensure_locations gate is retired (2026-08-31, Mike's call).
+
+    It parked a run before any generation when the locations table was
+    empty -- refusing to think over described rooms the night's own
+    generator never reads: build_scene_brief_prompt's placeholders are
+    {brand} {cast} {example} {references} {spark}, with no {locations}
+    among them. Since every shot is AI-generated, a room is optional
+    named material like cast, and an empty table means "nothing filed
+    under places yet", not a reason to refuse.
+
+    Uses tmp_db and empties it rather than building a bare database, so
+    the run still gets that fixture's no-network patches -- a test that
+    reaches ground_rag without them builds a real genai client.
+    """
+    with db.connect(db.DB_PATH) as conn:
+        conn.execute("DELETE FROM locations")
+    assert preprod.list_locations(path=db.DB_PATH, account_id=None) == []
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])])
 
     result = orchestrator.run("ritual")
 
-    assert "No described locations" in result["held_reason"]
-    assert calls == []                       # generate never ran
-    [row] = autonomy.list_hold(path=path)    # even the failure is logged
-    assert "No described locations" in row["reason"]
+    assert calls, "generation never ran with an empty locations table"
+    assert "No described locations" not in (result.get("held_reason") or "")
 
 
 def test_camera_only_concept_parks_with_its_own_reason(tmp_db, monkeypatch):
@@ -284,8 +291,8 @@ def test_camera_only_concept_parks_with_its_own_reason(tmp_db, monkeypatch):
 # ---------- grounding ----------
 
 def test_ground_entities_uses_only_the_picked_character(tmp_db, monkeypatch):
-    mike = entities.add_character("Mike — on camera", role="protagonist", path=tmp_db)
-    entities.add_character("Guest — bartender", role="guest", path=tmp_db)
+    mike = entities.add_character("Mike — on camera", role="protagonist", path=tmp_db, account_id=None)
+    entities.add_character("Guest — bartender", role="guest", path=tmp_db, account_id=None)
     calls = stage_fakes(monkeypatch, [(make_concept(), [])])
 
     orchestrator.run("ritual", picked_characters=[mike])
@@ -295,8 +302,8 @@ def test_ground_entities_uses_only_the_picked_character(tmp_db, monkeypatch):
 
 
 def test_ground_entities_defaults_to_everything_on_file(tmp_db, monkeypatch):
-    entities.add_character("Mike — on camera", path=tmp_db)
-    entities.add_prop("Ducati Panigale V2", category="vehicle", path=tmp_db)
+    entities.add_character("Mike — on camera", path=tmp_db, account_id=None)
+    entities.add_prop("Ducati Panigale V2", category="vehicle", path=tmp_db, account_id=None)
     calls = stage_fakes(monkeypatch, [(make_concept(), [])])
 
     orchestrator.run("ritual")

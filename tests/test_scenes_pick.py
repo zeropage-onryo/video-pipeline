@@ -51,7 +51,7 @@ def a_scene(path, title="Cold Open", refs=None, prompt="P"):
         {"title": title, "hook": "", "logline": "",
          "shots": [{"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
                     "desc": title, "prompt": prompt, "refs": list(refs or [])}]},
-        brand="zeropage", prompt_template="T", path=path)
+        brand="zeropage", prompt_template="T", path=path, account_id=None)
 
 
 # --- generating several to pick between -------------------------------------
@@ -77,7 +77,7 @@ def test_one_idea_writes_several_one_shot_concepts(tmp_db, monkeypatch):
     assert "gearing up ritual" in captured["prompt"]
     assert "STANDALONE" in captured["prompt"]
 
-    saved = [preprod.get_concept(s["concept_id"], path=tmp_db) for s in result["scenes"]]
+    saved = [preprod.get_concept(s["concept_id"], path=tmp_db, account_id=None) for s in result["scenes"]]
     for concept in saved:
         assert concept["is_scene"]                   # exactly one shot each
         assert len(concept["shots"]) == 1
@@ -151,13 +151,13 @@ def test_picking_is_recorded_and_counted(tmp_db):
     assert res.json()["pick"]["generated"] == 4
     assert res.json()["pick"]["rate"] == 0.25
 
-    concept = preprod.get_concept(ids[0], path=tmp_db)
+    concept = preprod.get_concept(ids[0], path=tmp_db, account_id=None)
     assert concept["picked"] is True
     assert concept["picked_at"]                       # windowable, not a bare flag
 
     # unpicking clears it again
     client.post(f"/api/concepts/{ids[0]}/pick", json={"picked": False})
-    assert preprod.get_concept(ids[0], path=tmp_db)["picked_at"] is None
+    assert preprod.get_concept(ids[0], path=tmp_db, account_id=None)["picked_at"] is None
 
 
 def test_pick_rate_ignores_legacy_multi_shot_concepts(tmp_db):
@@ -168,8 +168,8 @@ def test_pick_rate_ignores_legacy_multi_shot_concepts(tmp_db):
         {"title": "old", "hook": "", "logline": "",
          "shots": [{"n": 1, "type": "BROLL", "source": "AI", "prompt": "x"},
                    {"n": 2, "type": "BROLL", "source": "AI", "prompt": "y"}]},
-        brand="zeropage", path=tmp_db)
-    assert preprod.pick_rate(path=tmp_db)["generated"] == 1
+        brand="zeropage", path=tmp_db, account_id=None)
+    assert preprod.pick_rate(path=tmp_db, account_id=None)["generated"] == 1
 
 
 def test_picking_something_that_does_not_exist_is_a_404(tmp_db):
@@ -177,7 +177,7 @@ def test_picking_something_that_does_not_exist_is_a_404(tmp_db):
 
 
 def test_pick_rate_on_an_empty_table_is_none_not_a_crash(tmp_db):
-    assert preprod.pick_rate(path=tmp_db)["rate"] is None
+    assert preprod.pick_rate(path=tmp_db, account_id=None)["rate"] is None
 
 
 # --- the references a scene carries -----------------------------------------
@@ -187,7 +187,7 @@ def test_refs_round_trip_on_the_shot(tmp_db):
     res = client.post(f"/api/concepts/{scene_id}/refs",
                       json={"refs": ["/a/face.jpg", "/b/jacket.jpg"]})
     assert res.json()["refs"] == ["/a/face.jpg", "/b/jacket.jpg"]
-    concept = preprod.get_concept(scene_id, path=tmp_db)
+    concept = preprod.get_concept(scene_id, path=tmp_db, account_id=None)
     assert concept["refs"] == ["/a/face.jpg", "/b/jacket.jpg"]
     assert concept["shots"][0]["prompt"] == "P"       # the prompt is untouched
     # and the card surfaces them for the board
@@ -215,7 +215,7 @@ def test_archiving_hides_the_card_but_keeps_the_row(tmp_db):
         "/api/pipeline/concepts?brand=zeropage&archived=true").json()
     assert len(everything["items"]) == 3
     assert everything["pick"]["generated"] == 3
-    archived = preprod.get_concept(ids[0], path=tmp_db)
+    archived = preprod.get_concept(ids[0], path=tmp_db, account_id=None)
     assert archived["archived"] is True
     assert archived["archived_at"]
     assert archived["graded"] is False        # the Dev Studio still owes it a grade
@@ -225,7 +225,7 @@ def test_archiving_is_reversible(tmp_db):
     scene_id = a_scene(tmp_db)
     client.post(f"/api/concepts/{scene_id}/archive", json={"archived": True})
     client.post(f"/api/concepts/{scene_id}/archive", json={"archived": False})
-    assert preprod.get_concept(scene_id, path=tmp_db)["archived"] is False
+    assert preprod.get_concept(scene_id, path=tmp_db, account_id=None)["archived"] is False
     assert len(client.get("/api/pipeline/concepts?brand=zeropage").json()["items"]) == 1
 
 
@@ -239,19 +239,19 @@ def test_archive_batch_keeps_the_ones_you_name(tmp_db):
     batch worth resolving together."""
     kept = preprod.save_concept(
         {"title": "keep", "shots": [{"n": 1, "source": "AI", "prompt": "p"}]},
-        brand="zeropage", spark="night ride", path=tmp_db)
+        brand="zeropage", spark="night ride", path=tmp_db, account_id=None)
     others = [preprod.save_concept(
         {"title": f"other{i}", "shots": [{"n": 1, "source": "AI", "prompt": "p"}]},
-        brand="zeropage", spark="night ride", path=tmp_db) for i in range(2)]
+        brand="zeropage", spark="night ride", path=tmp_db, account_id=None) for i in range(2)]
     unrelated = preprod.save_concept(
         {"title": "different idea", "shots": [{"n": 1, "source": "AI", "prompt": "p"}]},
-        brand="zeropage", spark="garage", path=tmp_db)
+        brand="zeropage", spark="garage", path=tmp_db, account_id=None)
 
     assert preprod.archive_batch("night ride", keep_ids=[kept],
-                                 brand="zeropage", path=tmp_db) == 2
-    assert preprod.get_concept(kept, path=tmp_db)["archived"] is False
-    assert all(preprod.get_concept(i, path=tmp_db)["archived"] for i in others)
-    assert preprod.get_concept(unrelated, path=tmp_db)["archived"] is False
+                                 brand="zeropage", path=tmp_db, account_id=None) == 2
+    assert preprod.get_concept(kept, path=tmp_db, account_id=None)["archived"] is False
+    assert all(preprod.get_concept(i, path=tmp_db, account_id=None)["archived"] for i in others)
+    assert preprod.get_concept(unrelated, path=tmp_db, account_id=None)["archived"] is False
 
 
 # --- the approval gate ------------------------------------------------------
@@ -268,7 +268,7 @@ def test_pending_is_what_is_picked_and_not_yet_rendered(tmp_db):
     archived = a_scene(tmp_db, "archived")
     for scene_id in (picked, rendered, archived):
         client.post(f"/api/concepts/{scene_id}/pick", json={"picked": True})
-    preprod.set_shot_media_url(rendered, 1, "https://x/clip.mp4", path=tmp_db)
+    preprod.set_shot_media_url(rendered, 1, "https://x/clip.mp4", path=tmp_db, account_id=None)
     client.post(f"/api/concepts/{archived}/archive", json={"archived": True})
 
     body = client.get("/api/queue/pending?brand=zeropage").json()
@@ -283,11 +283,11 @@ def test_a_parked_scene_is_pending_but_a_merely_keyframed_one_is_not(tmp_db):
     would drag every scene anyone ever keyframed into the spend queue.
     """
     parked = a_scene(tmp_db, "parked by the chain")
-    preprod.set_shot_reference_image(parked, 1, "https://cdn/key.png", path=tmp_db)
-    preprod.set_shot_parked(parked, 1, "keyframe rendered", path=tmp_db)
+    preprod.set_shot_reference_image(parked, 1, "https://cdn/key.png", path=tmp_db, account_id=None)
+    preprod.set_shot_parked(parked, 1, "keyframe rendered", path=tmp_db, account_id=None)
 
     mid_work = a_scene(tmp_db, "keyframed in Director")
-    preprod.set_shot_reference_image(mid_work, 1, "https://cdn/other.png", path=tmp_db)
+    preprod.set_shot_reference_image(mid_work, 1, "https://cdn/other.png", path=tmp_db, account_id=None)
 
     items = client.get("/api/queue/pending?brand=zeropage").json()["items"]
     assert [c["id"] for c in items] == [parked]
@@ -319,9 +319,9 @@ def test_approving_one_take_leaves_its_siblings_in_the_queue(tmp_db, monkeypatch
     takes = [preprod.save_concept(
         {"title": f"take{i}", "shots": [{"n": 1, "source": "AI", "tool": "RUNWAY",
                                          "prompt": "p"}]},
-        brand="zeropage", spark="night ride", path=tmp_db) for i in range(3)]
+        brand="zeropage", spark="night ride", path=tmp_db, account_id=None) for i in range(3)]
     for scene_id in takes:
-        preprod.set_shot_parked(scene_id, 1, "keyframe rendered", path=tmp_db)
+        preprod.set_shot_parked(scene_id, 1, "keyframe rendered", path=tmp_db, account_id=None)
 
     monkeypatch.setattr("src.runway.has_key", lambda: True)
     rendered = {}
@@ -329,7 +329,7 @@ def test_approving_one_take_leaves_its_siblings_in_the_queue(tmp_db, monkeypatch
     def fake_render(concept_id, shot_n, db_path=None, resolve_photo=None):
         rendered["args"] = (concept_id, shot_n)
         preprod.set_shot_media_url(concept_id, shot_n, "https://x/clip.mp4",
-                                   path=db_path)
+                                   path=db_path, account_id=None)
         return {"ok": True}
 
     monkeypatch.setattr("src.runway.generate_for_shot", fake_render)
@@ -339,8 +339,8 @@ def test_approving_one_take_leaves_its_siblings_in_the_queue(tmp_db, monkeypatch
     assert rendered["args"] == (takes[0], 1)
 
     # approving stamped the pick, and it stamped it before the spend
-    assert preprod.get_concept(takes[0], path=tmp_db)["picked"] is True
-    assert all(not preprod.get_concept(i, path=tmp_db)["archived"] for i in takes)
+    assert preprod.get_concept(takes[0], path=tmp_db, account_id=None)["picked"] is True
+    assert all(not preprod.get_concept(i, path=tmp_db, account_id=None)["archived"] for i in takes)
     # the rendered one leaves the queue on its own; the others stay
     pending = client.get("/api/queue/pending?brand=zeropage").json()["items"]
     assert sorted(c["id"] for c in pending) == takes[1:]   # newest-first listing
@@ -360,7 +360,7 @@ def test_rejecting_unpicks_and_archives(tmp_db):
     client.post(f"/api/concepts/{scene_id}/pick", json={"picked": True})
     res = client.post(f"/api/queue/{scene_id}/reject")
     assert res.json()["pick"]["picked"] == 0
-    concept = preprod.get_concept(scene_id, path=tmp_db)
+    concept = preprod.get_concept(scene_id, path=tmp_db, account_id=None)
     assert concept["picked"] is False and concept["archived"] is True
 
 
@@ -383,7 +383,7 @@ def test_writer_logline_is_saved_and_served_as_the_card_summary(tmp_db, monkeypa
     assert "logline" in shootgen.build_scenes_prompt("x", "zeropage", 2, [])
 
     result = shootgen.generate_scene_concepts("x", "zeropage", count=1, db_path=tmp_db)
-    saved = preprod.get_concept(result["scenes"][0]["concept_id"], path=tmp_db)
+    saved = preprod.get_concept(result["scenes"][0]["concept_id"], path=tmp_db, account_id=None)
     assert saved["logline"] == "Michael finds a cyclops polishing his silverware"
 
     card = next(c for c in client.get("/api/pipeline/concepts").json()["items"]
@@ -467,8 +467,8 @@ def test_the_backfill_targets_anything_the_card_would_trim(tmp_db):
             {"title": "T", "hook": "", "logline": logline,
              "shots": [{"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
                         "desc": "T", "prompt": "Beats: something happens."}]},
-            brand="zeropage", prompt_template="T", path=tmp_db)
-        return preprod.get_concept(cid, path=tmp_db)
+            brand="zeropage", prompt_template="T", path=tmp_db, account_id=None)
+        return preprod.get_concept(cid, path=tmp_db, account_id=None)
 
     assert backfill_loglines.needs_one(concept(""))
     assert backfill_loglines.needs_one(concept(
@@ -476,3 +476,106 @@ def test_the_backfill_targets_anything_the_card_would_trim(tmp_db):
         "night under the silent, watchful gaze of a massive cyclops"))
     assert not backfill_loglines.needs_one(
         concept("Michael finds a cyclops asleep in his bed"))
+
+
+# --- the rooms stopped being the anchor (2026-08-31, Mike's call) -----------
+#
+# The Create path used to list every described room under "set scenes in
+# these real spaces where they fit", which made the photographed rooms
+# the default gravity of every generation. That was right when shots came
+# off a camera. Since 2026-08-20 every shot is AI-generated, so a room is
+# named material like cast -- and material nobody chose for this idea has
+# no business steering it. Now only what was PICKED for the run appears.
+
+LOCS = [
+    {"name": "Front Hallway",
+     "description": {"space": "narrow hallway", "light_sources": ["overhead practical"]}},
+    {"name": "Garage", "description": {"space": "cold concrete garage"}},
+]
+
+
+def test_a_room_is_picked_by_attaching_its_photo():
+    """`/locations/<slug>/photo/<file>` is the URL the asset bank hands
+    out, so the slug in the path IS the pick -- no new form field and no
+    client-side flag that can go stale."""
+    picked = shootgen.picked_locations(
+        ["/locations/garage/photo/x.jpg?thumb=1"], LOCS)
+    assert [loc["name"] for loc in picked] == ["Garage"]
+
+
+def test_uploads_and_other_assets_pick_no_room():
+    assert shootgen.picked_locations(
+        ["/refs/abc123.jpg", "/characters/michael/photo/1.jpg", "/props/bike/photo/2.jpg"],
+        LOCS) == []
+
+
+def test_no_pick_means_the_scene_may_be_set_anywhere():
+    """The un-pinned run is the NORMAL case now, not a degraded one --
+    which is why it reads as permission rather than as a missing-input
+    note."""
+    prompt = shootgen.build_scenes_prompt("a bench with one glove", "zeropage", 3, [])
+    assert "{locations}" not in prompt
+    assert "no room picked" in prompt
+    assert "NOT limited to real rooms" in prompt
+
+
+def test_a_picked_room_reads_as_a_lock():
+    """Picking is deliberate, so it gets the location_variety_note(lock)
+    treatment: lean into the space, don't manufacture variety away from
+    it."""
+    block = shootgen.format_scene_locations(LOCS[1:])
+    assert "cold concrete garage" in block
+    assert "picked for this run" in block
+    assert "Front Hallway" not in block
+
+
+def test_unpicked_rooms_never_reach_the_prompt(tmp_db, monkeypatch):
+    """The regression this exists for: a room on file steering an idea
+    that never asked for it."""
+    preprod.add_location("Front Hallway", {"space": "narrow hallway"},
+                         photo_count=2, path=tmp_db, account_id=None)
+    monkeypatch.setattr(shootgen, "generate_with_retry",
+                        lambda client, model, contents, **kw: '{"scenes": []}')
+    captured = {}
+    real_build = shootgen.build_scenes_prompt
+
+    def spy(idea, brand, count, locations, **kw):
+        captured["locations"] = locations
+        return real_build(idea, brand, count, locations, **kw)
+
+    monkeypatch.setattr(shootgen, "build_scenes_prompt", spy)
+    shootgen.generate_scene_concepts("a glove on a bench", "zeropage", count=1,
+                                     db_path=tmp_db, refs=["/refs/abc.jpg"])
+    assert captured["locations"] == []
+
+
+def test_a_picked_room_does_reach_the_prompt(tmp_db, monkeypatch):
+    preprod.add_location("Garage", {"space": "cold concrete garage"},
+                         photo_count=2, path=tmp_db, account_id=None)
+    monkeypatch.setattr(shootgen, "generate_with_retry",
+                        lambda client, model, contents, **kw: '{"scenes": []}')
+    captured = {}
+    real_build = shootgen.build_scenes_prompt
+
+    def spy(idea, brand, count, locations, **kw):
+        captured["locations"] = locations
+        return real_build(idea, brand, count, locations, **kw)
+
+    monkeypatch.setattr(shootgen, "build_scenes_prompt", spy)
+    shootgen.generate_scene_concepts(
+        "a glove on a bench", "zeropage", count=1, db_path=tmp_db,
+        refs=["/locations/garage/photo/x.jpg"])
+    assert [loc["name"] for loc in captured["locations"]] == ["Garage"]
+
+
+def test_validation_still_knows_every_real_room(tmp_db, monkeypatch):
+    """Validated against the whole catalogue, not the picks: naming a
+    real space you were not handed is fine, naming one that does not
+    exist is the thing worth flagging."""
+    preprod.add_location("Garage", {"space": "cold concrete garage"},
+                         photo_count=2, path=tmp_db, account_id=None)
+    warnings = shootgen.validate_concept(
+        {"shots": [{"n": 1, "type": "CHARACTER", "source": "CAMERA",
+                    "cam": "BMPCC", "location": "Garage"}]},
+        [loc["name"] for loc in preprod.list_locations(path=tmp_db, account_id=None)])
+    assert not any("unknown location" in w for w in warnings)

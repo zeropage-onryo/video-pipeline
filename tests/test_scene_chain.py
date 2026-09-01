@@ -110,7 +110,7 @@ def test_create_writes_concepts_and_stops(tmp_db, seams):
     job = create()
     assert job["status"] == "done", job.get("error")
 
-    concepts = preprod.list_concepts(path=tmp_db)
+    concepts = preprod.list_concepts(path=tmp_db, account_id=None)
     assert len(concepts) == 2
     assert seams["write"] == 1          # ONE call for both takes, not two
     assert seams["enhance"] == []       # nothing enhanced
@@ -131,7 +131,7 @@ def test_no_scene_at_all_is_a_failed_run_not_a_silent_one(tmp_db, seams, monkeyp
     job = create()
     assert job["status"] == "failed"
     assert "no usable scene" in (job["error"] or "")
-    assert preprod.list_concepts(path=tmp_db) == []
+    assert preprod.list_concepts(path=tmp_db, account_id=None) == []
 
 
 # --- the stages the other two callers use -----------------------------------
@@ -141,7 +141,7 @@ def a_scene(path, prompt="a rider suits up", refs=None):
         {"title": "Cold Open", "hook": "", "logline": "",
          "shots": [{"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
                     "desc": "x", "prompt": prompt, "refs": list(refs or [])}]},
-        brand="zeropage", prompt_template="T", path=path)
+        brand="zeropage", prompt_template="T", path=path, account_id=None)
 
 
 def test_persist_prompt_keeps_the_generators_own_words(tmp_db):
@@ -154,13 +154,13 @@ def test_persist_prompt_keeps_the_generators_own_words(tmp_db):
     scene_id = a_scene(tmp_db, prompt="the draft")
     assert scene_chain.persist_prompt(scene_id, 1, "the polished version",
                                       db_path=tmp_db) is True
-    shot = preprod.get_concept(scene_id, path=tmp_db)["shots"][0]
+    shot = preprod.get_concept(scene_id, path=tmp_db, account_id=None)["shots"][0]
     assert shot["prompt"] == "the polished version"
     assert shot["written_prompt"] == "the draft"
 
     # polishing twice must not lose the original under the first polish
     scene_chain.persist_prompt(scene_id, 1, "polished again", db_path=tmp_db)
-    shot = preprod.get_concept(scene_id, path=tmp_db)["shots"][0]
+    shot = preprod.get_concept(scene_id, path=tmp_db, account_id=None)["shots"][0]
     assert shot["prompt"] == "polished again"
     assert shot["written_prompt"] == "the draft"
 
@@ -187,7 +187,7 @@ def test_keyframe_attaches_the_still_and_names_every_reference(tmp_db, seams,
     assert seams["nano"][0]["refs"] == [(shootgen.reference_label(photo),
                                          b"\xff\xd8jacket")]
     assert seams["nano"][0]["concept_id"] == scene_id     # names its own file
-    shot = preprod.get_concept(scene_id, path=tmp_db)["shots"][0]
+    shot = preprod.get_concept(scene_id, path=tmp_db, account_id=None)["shots"][0]
     assert shot["reference_image"] == f"https://cdn/key-{scene_id}.png"
 
 
@@ -199,11 +199,11 @@ def test_a_failed_keyframe_is_a_result_not_an_exception(tmp_db, monkeypatch):
     result = scene_chain.keyframe_scene(scene_id, 1, db_path=tmp_db)
     assert result["ok"] is False and "daily cap" in result["error"]
     assert "reference_image" not in preprod.get_concept(scene_id,
-                                                        path=tmp_db)["shots"][0]
+                                                        path=tmp_db, account_id=None)["shots"][0]
     # a scene with no prompt has nothing to render, and says so
     empty = preprod.save_concept(
         {"title": "Empty", "shots": [{"n": 1, "source": "AI", "tool": "RUNWAY"}]},
-        brand="zeropage", path=tmp_db)
+        brand="zeropage", path=tmp_db, account_id=None)
     assert "no prompt" in scene_chain.keyframe_scene(empty, 1,
                                                      db_path=tmp_db)["error"]
 
@@ -217,7 +217,7 @@ def test_parking_is_what_puts_a_scene_in_the_queue(tmp_db):
 
     mid_work = a_scene(tmp_db)
     preprod.set_shot_reference_image(mid_work, 1, "https://cdn/other.png",
-                                     path=tmp_db)
+                                     path=tmp_db, account_id=None)
 
     items = client.get("/api/queue/pending?brand=zeropage").json()["items"]
     assert [c["id"] for c in items] == [parked]
