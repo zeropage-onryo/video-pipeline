@@ -677,3 +677,71 @@ def test_resolve_account_before_the_table_exists_is_not_a_crash(tmp_path):
     assert accounts.resolve_account(path=path) is None
     with pytest.raises(ValueError):
         accounts.resolve_account("zeropage", path=path)
+
+
+# --------------------------------------------------------------------------
+# inviting a pilot user
+# --------------------------------------------------------------------------
+
+def test_an_invite_gives_them_their_own_account_not_yours(two_accounts):
+    """The whole point, and the easy thing to get catastrophically wrong:
+    a pilot user needs a workspace, not a membership in Mike's."""
+    path, a, _b = two_accounts
+    result = accounts.invite("alex@example.com", "alex", path=path)
+
+    assert result["created_user"] and result["created_account"]
+    assert result["account_id"] not in (a, _b)
+    # their board is empty, and Mike's is untouched
+    assert preprod.list_concepts(path=path, account_id=result["account_id"]) == []
+    assert len(preprod.list_concepts(path=path, account_id=a)) == 1
+
+
+def test_inviting_someone_into_an_account_that_owns_rows_is_refused(two_accounts):
+    """`--brand zeropage` would not give them a workspace, it would give
+    them Mike's board. The error has to say how much."""
+    path, _a, _b = two_accounts
+    with pytest.raises(ValueError) as raised:
+        accounts.invite("alex@example.com", "zeropage", path=path)
+    assert "owns" in str(raised.value)
+    assert "join_existing" in str(raised.value)
+
+
+def test_sharing_a_workspace_is_possible_but_has_to_be_asked_for(two_accounts):
+    path, a, _b = two_accounts
+    result = accounts.invite("alex@example.com", "zeropage",
+                             join_existing=True, path=path)
+    assert result["account_id"] == a
+
+
+def test_the_invited_row_is_unclaimed_so_oauth_can_take_it(two_accounts):
+    """auth._finish_oauth claims a user row by email when it has no
+    password and no identity. That is what makes an invite complete
+    before the person has ever visited -- and why there is no secret to
+    send them."""
+    path, _a, _b = two_accounts
+    accounts.invite("alex@example.com", "alex", path=path)
+    user = accounts.get_user_by_email("alex@example.com", path=path)
+    assert user["password_hash"] is None
+    with db.connect(path) as conn:
+        assert conn.execute(
+            "SELECT 1 FROM auth_identities WHERE user_id = ?", (user["id"],)
+        ).fetchone() is None
+
+
+def test_inviting_the_same_person_twice_is_not_an_error(two_accounts):
+    path, _a, _b = two_accounts
+    first = accounts.invite("alex@example.com", "alex", path=path)
+    again = accounts.invite("alex@example.com", "alex", path=path)
+    assert again["user_id"] == first["user_id"]
+    assert again["account_id"] == first["account_id"]
+    assert not again["created_user"] and not again["created_account"]
+    assert len(accounts.memberships(first["user_id"], path=path)) == 1
+
+
+def test_an_invite_needs_a_plausible_email_and_a_slug(two_accounts):
+    path, _a, _b = two_accounts
+    for bad_email in ("", "   ", "not-an-email"):
+        with pytest.raises(ValueError):
+            accounts.invite(bad_email, "alex", path=path)
+    with pytest.raises(ValueError):
+        accounts.invite("alex@example.com", "  ", path=path)

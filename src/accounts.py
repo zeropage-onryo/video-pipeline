@@ -284,6 +284,76 @@ def resolve_account(slug: Optional[str] = None,
         return int(row["id"]) if row and row["id"] is not None else None
 
 
+def invite(email: str, slug: str, display_name: Optional[str] = None,
+           role: str = "member", join_existing: bool = False,
+           path: Path | str = DB_PATH) -> dict[str, Any]:
+    """Give one person their own account, and the membership to enter it.
+
+    The v1 posture, made a command instead of a hand-written INSERT: a
+    signup gets a users row and zero memberships, so access is only ever
+    granted deliberately. This is that grant.
+
+    **A pilot user gets their OWN account.** That is the whole point and
+    it is the easy thing to get catastrophically wrong: adding someone to
+    `zeropage` does not give them a workspace, it gives them Mike's --
+    every concept, location and cast member on the board, because
+    account_id is the ownership boundary. So an account that already owns
+    rows is refused unless `join_existing` says otherwise, and the error
+    counts what they would have been able to see.
+
+    No password and no auth identity is created on purpose: the row sits
+    unclaimed until they sign in with Google or Discord, and
+    `auth._finish_oauth` claims it by email on that first sign-in (the
+    same path the bootstrap user takes). So the invite is complete before
+    they have ever visited, and there is no secret to send them.
+
+    Returns {"user_id", "account_id", "slug", "created_user",
+    "created_account", "role"}.
+    """
+    email = email.strip().lower()
+    if not email or "@" not in email:
+        raise ValueError(f"that does not look like an email: {email!r}")
+    slug = slug.strip().lower()
+    if not slug:
+        raise ValueError("an invite needs an account slug")
+
+    with connect(path) as conn:
+        existing = conn.execute(
+            "SELECT id FROM accounts WHERE slug = ?", (slug,)).fetchone()
+        if existing is not None and not join_existing:
+            owned = 0
+            for table in OWNED_TABLES:
+                present = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                    (table,)).fetchone()
+                if not present:
+                    continue
+                cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+                if "account_id" not in cols:
+                    continue
+                owned += conn.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE account_id = ?",
+                    (existing["id"],)).fetchone()[0]
+            if owned:
+                raise ValueError(
+                    f"account {slug!r} already exists and owns {owned} rows -- "
+                    f"inviting {email} into it would show them all of that. "
+                    f"Give them their own slug, or pass join_existing=True "
+                    f"(--join-existing) if sharing a workspace is what you mean.")
+
+    created_account = existing is None
+    account_id = upsert_account(slug, display_name or slug.title(), path=path)
+
+    user = get_user_by_email(email, path=path)
+    created_user = user is None
+    user_id = user["id"] if user else create_user(email, path=path)
+
+    add_member(account_id, user_id, role=role, path=path)
+    return {"user_id": user_id, "account_id": account_id, "slug": slug,
+            "created_user": created_user, "created_account": created_account,
+            "role": role}
+
+
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(
         prog="accounts",
@@ -296,7 +366,62 @@ def main(argv=None) -> None:
     p_seed.add_argument("--password", default=None,
                         help="set a login password (hashed, never stored raw)")
     p_seed.add_argument("--name", default="Mike")
+
+    p_inv = sub.add_parser(
+        "invite",
+        help="give one person their OWN account and the membership to enter it")
+    p_inv.add_argument("email")
+    p_inv.add_argument(
+        "--brand", required=True,
+        help="the account slug they will own -- their workspace, not yours. "
+             "Use a new one; an existing slug that owns rows is refused.")
+    p_inv.add_argument("--name", default=None,
+                       help="display name for the account (default: the slug)")
+    p_inv.add_argument("--role", default="member",
+                       help="recorded on the membership row. Nothing enforces "
+                            "it yet -- it is a label, not a permission.")
+    p_inv.add_argument("--join-existing", action="store_true",
+                       help="allow adding them to an account that already owns "
+                            "rows, i.e. deliberately share a workspace")
+
+    sub.add_parser("members", help="who can enter what")
+
     args = parser.parse_args(argv)
+
+    if args.command == "members":
+        with connect(DB_PATH) as conn:
+            rows = conn.execute(
+                "SELECT a.slug, a.id AS account_id, u.email, m.role "
+                "FROM account_members m "
+                "JOIN accounts a ON a.id = m.account_id "
+                "JOIN users u ON u.id = m.user_id "
+                "ORDER BY a.slug, u.email").fetchall()
+        if not rows:
+            print("nobody has access to anything yet")
+            return
+        for r in rows:
+            print(f"  {r['slug']:<16} {r['email']:<32} {r['role']}")
+        return
+
+    if args.command == "invite":
+        try:
+            result = invite(args.email, args.brand, display_name=args.name,
+                            role=args.role, join_existing=args.join_existing)
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            sys.exit(1)
+        made = []
+        if result["created_account"]:
+            made.append(f"account {result['slug']!r} (id {result['account_id']})")
+        if result["created_user"]:
+            made.append(f"user {args.email} (id {result['user_id']})")
+        print("created " + " and ".join(made) if made
+              else f"{args.email} already existed")
+        print(f"{args.email} is now {result['role']} of {result['slug']!r}.")
+        print("Tell them to sign in with Google or Discord using that exact "
+              "email -- the first sign-in claims the row. Their board starts "
+              "empty; they cannot see anyone else's.")
+        return
 
     password_hash = None
     if args.password:
