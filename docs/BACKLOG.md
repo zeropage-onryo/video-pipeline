@@ -258,3 +258,51 @@ the anchor.
 `@traceable` on `scene_chain`'s stages would cover the Director and request paths too, for
 no new dependency. Also still true: `langgraph` is unpinned in `requirements.txt`, and that
 is a library that moves.
+
+## 10. Whose credits do pilot users spend? — BYOK, and the positioning behind it  (to decide, then maybe build — Mike's ask, 2026-09-01)
+Full write-up: `docs/tasks/task-byok-and-pilot-credits.md`. Two questions asked
+back to back after tenancy shipped — *"if I'm having other users wouldn't they
+use their own credits / apis"* and *"how can i make it like higgsfield or
+runway"* — which turn out to be the same question from both ends.
+
+**The finding.** Tenancy scoped the data and did nothing to the spend. Every API
+key is still a process-wide `os.environ.get()` made at call time, with no
+per-account storage anywhere: five functions for the billed renders
+(`runway._make_client`, `veo._make_client`, `midjourney._request`,
+`higgsfield._credentials`, `nano_banana._client`) and ~20 more inline sites for
+the cheap Gemini path. So **every render a pilot user makes bills Mike's cards**,
+and the per-account cap is the only wall.
+
+**BYOK is now small, because tenancy shipped.** `account_id` is already threaded
+through every render path, so the work is an encrypted `account_keys` table, an
+`accounts.key_for(account_id, provider)` resolver that falls back to the
+environment when there is no row, five call-site swaps, and fixing the two
+`_safe_error` redactors to scrub the key that was *used* rather than the one in
+the environment. The real cost is encryption at rest (backups are plain file
+copies, so a plaintext key column puts other people's credentials in them) and
+onboarding friction.
+
+**Recommended shape:** split by cost, not by principle. Mike's keys pay for the
+cheap high-frequency steps (concepts, judges, scout, RAG, nano stills — cents,
+and they are what builds the taste loop); the user's key pays for the expensive
+renders. Veo is $3.20/clip against runway's $0.25 and midjourney's $0.27, and at
+the shipped defaults one account's theoretical daily max is ~$26 with veo ~74% of
+it.
+
+**Two things that are bugs regardless of the BYOK decision:**
+- Every `*_GLOBAL_DAILY_CAP` defaults to `str(DAILY_CAP)`, so the *installation*
+  ceiling equals *one account's* allowance — the second pilot user gets nothing
+  once the first has used the day. Numbers still unchosen from the last session.
+- **Veo has no `SPEND_OK` gate.** Runway, midjourney and higgsfield all need an
+  explicit per-command approval Mike controls; the most expensive tool needs only
+  to be under the cap.
+
+**The caveat, and it is the real answer to the second question.** Higgsfield and
+Runway are model companies; reselling their inference is their business, not a
+position this repo can win from. What is defensible here is the pipeline with
+taste in it — scout's real references, `taste_judge` scored on Mike's own graded
+history, `uncanny_judge`, `winning_prompts`, pick/shoot rate, the nightly
+orchestrator — a system whose tenth run beats its first because it learned the
+user. The binding constraint is distribution, not architecture: none of section 3
+of the task doc gets a single user. If the next session has to choose, the demo
+in front of ten people beats BYOK, and BYOK gets built the week someone asks.
