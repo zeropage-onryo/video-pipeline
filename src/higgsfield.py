@@ -84,6 +84,11 @@ SOUL_PATH = os.environ.get("HIGGSFIELD_SOUL_PATH", "/higgsfield-ai/soul/v2/stand
 
 SPEND_ENV = "HIGGSFIELD_SPEND_OK"
 DAILY_CAP = int(os.environ.get("HIGGSFIELD_DAILY_CAP", "6"))
+# The installation-wide wall, beside the per-account one. Defaults to the
+# SAME number, so a single-operator database behaves exactly as it did --
+# admitting a second account is what forces a deliberate decision about
+# whose card is paying, instead of the total quietly doubling.
+GLOBAL_DAILY_CAP = int(os.environ.get("HIGGSFIELD_GLOBAL_DAILY_CAP", str(DAILY_CAP)))
 POLL_SECONDS = 3
 TIMEOUT_SECONDS = int(os.environ.get("HIGGSFIELD_TIMEOUT_S", "600"))
 
@@ -302,18 +307,14 @@ def safe_prompt(prompt: str, db_path=None) -> str:
     return text
 
 
-def generations_today(db_path=None) -> int:
-    """Higgsfield generations logged since UTC midnight -- what DAILY_CAP
-    counts against. Reads the same generations table the scoreboards do,
-    so the cap cannot drift from the log."""
-    today = datetime.now(timezone.utc).date().isoformat()
-    with generative.connect(db_path if db_path is not None else DB_PATH) as conn:
-        row = conn.execute(
-            "SELECT COUNT(*) FROM generations WHERE tool = 'higgsfield' "
-            "AND created_at >= ?",
-            (today,),
-        ).fetchone()
-        return row[0]
+def generations_today(db_path=None, *, account_id=None, everyone: bool = False) -> int:
+    """This account's higgsfield generations since UTC midnight -- what
+    DAILY_CAP counts against. `everyone=True` gives the installation-wide
+    count that GLOBAL_DAILY_CAP counts against."""
+    return generative.used_today(
+        "higgsfield", db_path if db_path is not None else DB_PATH,
+        account_id=account_id, everyone=everyone,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -576,19 +577,19 @@ def as_image_url(value, *, resolve_photo=None) -> Optional[str]:
 # --------------------------------------------------------------------------
 # the never-raises edges
 # --------------------------------------------------------------------------
-def _shot_row_for_prompt(prompt: str, db_path, note: str) -> int:
+def _shot_row_for_prompt(prompt: str, db_path, note: str, account_id: Optional[int] = None) -> int:
     """A generations row needs a shot to hang off. The graph's AI shots
     do not have one, so synthesize a minimal Shot -- the row exists to
     make the attempt countable, and its notes say where it came from."""
     kwargs = {"path": db_path} if db_path is not None else {}
     generative.init(**kwargs)
     shot = Shot(subject=prompt[:100], action="as prompted")
-    return generative.add_shot(shot, notes=note, **kwargs)
+    return generative.add_shot(shot, notes=note, **kwargs, account_id=account_id)
 
 
 def generate_candidates(prompt: str, out_dir, n: int = 3, *,
                         shot_id: Optional[int] = None, db_path=None,
-                        model: str = DEFAULT_MODEL, http=None, **cfg) -> dict:
+                        model: str = DEFAULT_MODEL, http=None, account_id: Optional[int] = None, **cfg) -> dict:
     """
     Never raises. The interface orchestrator.generate_render calls --
     identical in signature and result shape to runway.generate_candidates
@@ -622,12 +623,16 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *,
                              f"of API credits for this run"}
 
         generative.init(**kwargs)
-        used = generations_today(db_path=db_path)
-        if used + n > DAILY_CAP:
-            return {"ok": False, "candidates": [],
-                    "error": f"daily cap: {used}/{DAILY_CAP} generations used "
-                             f"today, {n} more would exceed it "
-                             f"(HIGGSFIELD_DAILY_CAP to raise)"}
+        refusal = generative.cap_error(
+            "higgsfield", n, account_id=account_id,
+            per_account=DAILY_CAP, ceiling=GLOBAL_DAILY_CAP,
+            path=db_path if db_path is not None else DB_PATH,
+            env_prefix="HIGGSFIELD", phrase="generations used",
+            used=generations_today(db_path=db_path, account_id=account_id),
+            used_everywhere=generations_today(db_path=db_path, everyone=True),
+        )
+        if refusal:
+            return {"ok": False, "candidates": [], "error": refusal}
 
         if shot_id is None:
             shot_id = _shot_row_for_prompt(
@@ -650,7 +655,7 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *,
                 cost_usd=estimate_cost(1, model=model, duration=duration),
                 notes=None,
                 **kwargs,
-            )
+             account_id=account_id)
             candidates.append({"path": str(out_path),
                                "generation_id": generation_id, "model": model})
 
@@ -674,7 +679,9 @@ def _publish(out_path: Path, content_type: str) -> str:
 
 def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                       model: str = DEFAULT_MODEL, resolve_photo=None,
-                      http=None) -> dict:
+                      http=None,
+                      account_id: Optional[int] = None,
+) -> dict:
     """
     Never raises: {"ok", "media_url", "generation_id", "path", "error"}.
     One render for one concept shot, through every wall this module has
@@ -691,13 +698,18 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
     kwargs = {"path": db_path} if db_path is not None else {}
 
     try:
-        used = generations_today(db_path=db_path)
-        if used >= DAILY_CAP:
-            return {"ok": False,
-                    "error": f"daily cap: {used}/{DAILY_CAP} generations used "
-                             f"today (HIGGSFIELD_DAILY_CAP to raise)"}
+        refusal = generative.cap_error(
+            "higgsfield", 1, account_id=account_id,
+            per_account=DAILY_CAP, ceiling=GLOBAL_DAILY_CAP,
+            path=db_path if db_path is not None else DB_PATH,
+            env_prefix="HIGGSFIELD", phrase="generations used",
+            used=generations_today(db_path=db_path, account_id=account_id),
+            used_everywhere=generations_today(db_path=db_path, everyone=True),
+        )
+        if refusal:
+            return {"ok": False, "error": refusal}
 
-        concept = preprod.get_concept(concept_id, **kwargs)
+        concept = preprod.get_concept(concept_id, **kwargs, account_id=account_id)
         if concept is None:
             return {"ok": False, "error": f"no concept {concept_id}"}
         shot = next((s for s in concept.get("shots") or []
@@ -728,9 +740,9 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
             output_path=str(out_path),
             cost_usd=estimate_cost(1, model=model),
             **kwargs,
-        )
+         account_id=account_id)
         media_url = _publish(out_path, "video/mp4")
-        preprod.set_shot_media_url(concept_id, shot_n, media_url, **kwargs)
+        preprod.set_shot_media_url(concept_id, shot_n, media_url, **kwargs, account_id=account_id)
         return {"ok": True, "media_url": media_url,
                 "generation_id": generation_id, "path": str(out_path),
                 "error": None}
@@ -740,7 +752,9 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
 
 def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
                          model: str = DEFAULT_MODEL, resolve_photo=None,
-                         http=None) -> dict:
+                         http=None,
+                         account_id: Optional[int] = None,
+) -> dict:
     """
     Never raises: {"ok", "media_url", "generation_id", "path", "error"}.
     The free-standing render behind the Workflows canvas's Generate node
@@ -756,11 +770,16 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
         # a fresh DB has no generations table until something inits it;
         # the cap count must not be the thing that discovers that
         generative.init(**kwargs)
-        used = generations_today(db_path=db_path)
-        if used >= DAILY_CAP:
-            return {"ok": False,
-                    "error": f"daily cap: {used}/{DAILY_CAP} generations used "
-                             f"today (HIGGSFIELD_DAILY_CAP to raise)"}
+        refusal = generative.cap_error(
+            "higgsfield", 1, account_id=account_id,
+            per_account=DAILY_CAP, ceiling=GLOBAL_DAILY_CAP,
+            path=db_path if db_path is not None else DB_PATH,
+            env_prefix="HIGGSFIELD", phrase="generations used",
+            used=generations_today(db_path=db_path, account_id=account_id),
+            used_everywhere=generations_today(db_path=db_path, everyone=True),
+        )
+        if refusal:
+            return {"ok": False, "error": refusal}
 
         image_url = as_image_url(reference_image, resolve_photo=resolve_photo)
 
@@ -779,7 +798,7 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
             output_path=str(out_path),
             cost_usd=estimate_cost(1, model=model),
             **kwargs,
-        )
+         account_id=account_id)
         return {"ok": True, "media_url": _publish(out_path, "video/mp4"),
                 "generation_id": generation_id, "path": str(out_path),
                 "error": None}
@@ -787,7 +806,7 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
         return {"ok": False, "error": _safe_error(e)}
 
 
-def generate_image_from_prompt(prompt: str, *, db_path=None, http=None) -> dict:
+def generate_image_from_prompt(prompt: str, *, db_path=None, http=None, account_id: Optional[int] = None) -> dict:
     """
     Never raises: {"ok", "media_url", "generation_id", "path", "error"}.
     A Soul still -- the keyframe alternative to nano_banana and the
@@ -802,11 +821,16 @@ def generate_image_from_prompt(prompt: str, *, db_path=None, http=None) -> dict:
             return {"ok": False, "error": "an empty prompt renders nothing"}
 
         generative.init(**kwargs)
-        used = generations_today(db_path=db_path)
-        if used >= DAILY_CAP:
-            return {"ok": False,
-                    "error": f"daily cap: {used}/{DAILY_CAP} generations used "
-                             f"today (HIGGSFIELD_DAILY_CAP to raise)"}
+        refusal = generative.cap_error(
+            "higgsfield", 1, account_id=account_id,
+            per_account=DAILY_CAP, ceiling=GLOBAL_DAILY_CAP,
+            path=db_path if db_path is not None else DB_PATH,
+            env_prefix="HIGGSFIELD", phrase="generations used",
+            used=generations_today(db_path=db_path, account_id=account_id),
+            used_everywhere=generations_today(db_path=db_path, everyone=True),
+        )
+        if refusal:
+            return {"ok": False, "error": refusal}
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"soul-{stamp}.jpg"
@@ -820,7 +844,7 @@ def generate_image_from_prompt(prompt: str, *, db_path=None, http=None) -> dict:
             output_path=str(out_path),
             cost_usd=estimate_image_cost(1),
             **kwargs,
-        )
+         account_id=account_id)
         return {"ok": True, "media_url": _publish(out_path, "image/jpeg"),
                 "generation_id": generation_id, "path": str(out_path),
                 "error": None}
