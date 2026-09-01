@@ -43,26 +43,11 @@ FETCH_TIMEOUT = 10
 
 
 def _public_host(host) -> bool:
-    """SSRF guard: reference URLs come out of the graph JSON, which is
-    user-controlled, and this fetch runs on the server. Only addresses
-    outside the private ranges are allowed, so a pasted URL can never
-    make the app read its own network."""
-    import ipaddress
-    import socket
-
-    try:
-        infos = socket.getaddrinfo(host, None)
-    except Exception:
-        return False
-    for info in infos:
-        try:
-            ip = ipaddress.ip_address(info[4][0])
-        except ValueError:
-            return False
-        if (ip.is_private or ip.is_loopback or ip.is_link_local
-                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
-            return False
-    return bool(infos)
+    """Delegates to refbin.public_host -- one guard, two fetchers.
+    Kept as a name here because the tests and the node handlers use it.
+    """
+    from . import refbin
+    return refbin.public_host(host)
 
 
 def fetch_image_bytes(url):

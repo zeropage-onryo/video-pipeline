@@ -114,14 +114,52 @@ def resolve(url_path: str) -> Optional[Path]:
         return None
 
 
+def public_host(host) -> bool:
+    """SSRF guard: only addresses outside the private ranges.
+
+    THE canonical one -- src/imagery.py delegates here. It moved down
+    when the MCP surface gained bank_reference (2026-09-01): a crawl URL
+    at least came from Reddit or YouTube, but an AGENT-supplied URL is
+    whatever a page the agent read told it to fetch, and this fetch runs
+    server-side. A guard that only one of two fetchers has is the shape
+    of bug where the weaker one is the one that gets called.
+    """
+    import ipaddress
+    import socket
+
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except Exception:
+        return False
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return False
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            return False
+    return bool(infos)
+
+
 def fetch(url: str) -> Optional[str]:
     """Download a remote image into the bin, normalised. None on
     anything that isn't a readable image within the size bound.
 
-    Streamed with a hard byte cap rather than read whole: these URLs
-    come off a crawl, so nothing has vouched for what is behind them.
+    Streamed with a hard byte cap rather than read whole, and refused
+    outright for a private address: these URLs come off a crawl -- or,
+    since bank_reference, off whatever page an agent happened to read --
+    so nothing has vouched for what is behind them.
     """
+    from urllib.parse import urlparse
+
     import requests
+
+    parsed = urlparse(url or "")
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return None
+    if not public_host(parsed.hostname):
+        return None
     try:
         with requests.get(url, stream=True, timeout=FETCH_TIMEOUT) as resp:
             resp.raise_for_status()

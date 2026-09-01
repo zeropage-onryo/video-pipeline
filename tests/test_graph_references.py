@@ -176,3 +176,67 @@ def test_the_keyframe_finds_a_resolver_on_its_own(tmp_db, photo_bank, monkeypatc
     assert seen["refs"], "the keyframe rendered with no references at all"
     label, data = seen["refs"][0]
     assert data == JPEG and "michael" in label.lower()
+
+
+# --- the MCP surface can bank an image, not just a direction ----------------
+
+def test_an_agent_can_bank_a_reference_behind_its_spark(tmp_db, photo_bank,
+                                                        monkeypatch):
+    """bank_spark hands the graph a direction and no photographs, and the
+    only writer to the bin was the crawl -- so on a night the crawl found
+    none (DNS, 2026-09-01) an agent could give the run an idea and not one
+    frame to render it against."""
+    from src import mcp_server, refbin
+
+    monkeypatch.setattr(refbin, "fetch", lambda url: refbin.save(JPEG))
+    fid = mcp_server.bank_spark("antihero", "a hand already on the handle",
+                                rationale="r", evidence="e", path=tmp_db)["id"]
+
+    out = mcp_server.bank_reference(fid, "https://cdn.example/a.jpg",
+                                    source_url="https://example.com/post",
+                                    title="a post", path=tmp_db)
+    assert out["ok"] and out["url"].startswith("/refs/")
+    assert out["banked"] == 1
+
+    # a hand-banked spark has no crawl pass, so it gets one of its own --
+    # and spark_images, which reads through the finding, keeps working
+    tiles = mcp_server.spark_images(fid, path=tmp_db)
+    urls = [t["url"] for t in (tiles.get("images") or tiles.get("tiles") or [])]
+    assert out["url"] in urls
+
+
+def test_attribution_is_required_and_the_bin_is_capped(tmp_db, photo_bank,
+                                                       monkeypatch):
+    from src import mcp_server, refbin, scout
+
+    fid = mcp_server.bank_spark("antihero", "the door that stays shut",
+                                path=tmp_db)["id"]
+    with pytest.raises(ValueError, match="source_url"):
+        mcp_server.bank_reference(fid, "https://cdn.example/a.jpg",
+                                  source_url="  ", path=tmp_db)
+
+    seq = iter(range(50))
+    monkeypatch.setattr(refbin, "fetch",
+                        lambda url: refbin.save(JPEG + bytes([next(seq)])))
+    for _ in range(scout.MAX_BIN_IMAGES + 3):
+        mcp_server.bank_reference(fid, "https://cdn.example/x.jpg",
+                                  source_url="https://example.com/p", path=tmp_db)
+    banked = scout.bin_for_pass(scout.agent_pass_id(fid), path=tmp_db)
+    assert len(banked) == scout.MAX_BIN_IMAGES
+
+
+def test_an_agent_supplied_url_still_cannot_reach_this_machine(tmp_db, photo_bank):
+    """The URL comes off whatever page the agent read, and the fetch runs
+    server-side. Literal IPs, so no DNS (and no network) is needed."""
+    from src import mcp_server, refbin
+
+    for host in ("127.0.0.1", "10.0.0.5", "169.254.169.254", "192.168.1.1"):
+        assert refbin.public_host(host) is False
+    assert refbin.fetch("http://169.254.169.254/latest/meta-data") is None
+    assert refbin.fetch("file:///etc/passwd") is None
+
+    fid = mcp_server.bank_spark("antihero", "a spark", path=tmp_db)["id"]
+    out = mcp_server.bank_reference(fid, "http://127.0.0.1/secret.jpg",
+                                    source_url="https://example.com/p",
+                                    path=tmp_db)
+    assert out["ok"] is False and out["banked"] == 0

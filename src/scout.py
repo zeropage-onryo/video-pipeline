@@ -832,6 +832,67 @@ def bin_for_pass(pass_id: str, path=db.DB_PATH) -> list[dict]:
         return []
 
 
+def agent_pass_id(finding_id: int) -> str:
+    """The pass a finding banked by hand (or by an agent) belongs to.
+
+    The crawl mints a pass_id per crawl and hangs its images off it,
+    because one act of research produces many candidate readings. A
+    spark typed through bank_spark has no pass at all -- so its images
+    get a pass of their own, named for the finding, and spark_images
+    keeps working unchanged.
+    """
+    return f"agent-{int(finding_id)}"
+
+
+def bin_add(brand: str, pass_id: str, url: str, source_url: str = "",
+            title: str = "", lane: str = "agent", metric: str = "",
+            limit: int = MAX_BIN_IMAGES, path=db.DB_PATH) -> Optional[dict]:
+    """Put ONE already-fetched image in the bin. Returns the row, or
+    None when the pass is full or the write fails.
+
+    `url` is expected to be a /refs/<sha>.jpg that refbin has already
+    normalised -- this function stores, it does not download. Keeping
+    the fetch outside means the guards (public host, byte cap, JPEG
+    normalisation) live in one place regardless of who is banking.
+    """
+    if not url:
+        return None
+    try:
+        init(path)
+        with db.connect(path) as conn:
+            used = conn.execute(
+                "SELECT COUNT(*) FROM scout_bin WHERE pass_id = ?",
+                (pass_id,)).fetchone()[0]
+            if used >= limit:
+                return None
+            if conn.execute("SELECT 1 FROM scout_bin WHERE pass_id = ? AND url = ?",
+                            (pass_id, url)).fetchone():
+                return None          # content-addressed: the same photo once
+            cur = conn.execute(
+                "INSERT INTO scout_bin (created_at, pass_id, brand, url, "
+                "source_url, title, lane, metric) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (_now(), pass_id, brand, url, source_url, title, lane, metric))
+            return {"id": cur.lastrowid, "pass_id": pass_id, "brand": brand,
+                    "url": url, "source_url": source_url, "title": title,
+                    "lane": lane, "metric": metric}
+    except Exception:
+        return None
+
+
+def set_pass_id(finding_id: int, pass_id: str, path=db.DB_PATH) -> None:
+    """Give a finding a pass to hang images off. Only ever fills an
+    EMPTY one -- a crawl's pass is the record of an act of research and
+    must not be rewritten."""
+    try:
+        with db.connect(path) as conn:
+            conn.execute(
+                "UPDATE scout_findings SET pass_id = ? "
+                "WHERE id = ? AND (pass_id IS NULL OR pass_id = '')",
+                (pass_id, finding_id))
+    except Exception:
+        pass
+
+
 def get_finding(finding_id: int, path=db.DB_PATH) -> Optional[dict]:
     try:
         with db.connect(path) as conn:

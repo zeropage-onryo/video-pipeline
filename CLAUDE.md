@@ -702,6 +702,62 @@ is yours, in Resolve, by hand.
   `.claude/skills/idea-agent/` is the agent that drives these tools — and its first move is
   reading the board, not generating: a run that adds four concepts to eleven unreviewed ones
   buried the decision that was already the bottleneck.
+- **Nothing auto-posts right now** (2026-08-31, Mike's call). `autopilot.AUTO_POST_BRANDS` is
+  an empty tuple, so no brand enters an auto-post plan: everything lands in the Queue and a
+  person pushes it out, including a Zero Page concept that CLEARED the on-brand gate. A hold,
+  not a repeal — Zero Page was built to auto-post and the uncanny gate exists to make that safe;
+  lifting it is putting `"zeropage"` back in the tuple.
+  **Deliberately a constant, not `ZEROPAGE_AUTOPILOT=0`**: that env var also gates the MANUAL
+  approve-and-post button (app/main.py: *"Posting is OFF — set ZEROPAGE_AUTOPILOT=1"*), so
+  switching it off to stop the machine posting would also stop Mike posting by hand from the
+  Queue — the exact opposite of "everything goes to the Queue". The posture belongs in code
+  anyway, which is what `build_plan`'s comment block has always said.
+  The check reads from a **whitelist** rather than excluding one name, so **ANTIHERO can never
+  be let out by an edit that only meant to free Zero Page** — and a test objects if anyone adds
+  it. The uncanny check stays in front regardless: lifting the hold must not also open the gate.
+- **The feedback loop, and where it was broken** (2026-08-31). Three loops run at
+  different speeds. The **craft loop** (prompt → keyframe → does it look right) has always
+  worked — `winners` holds real notes because Mike looks at keyframes and reacts. The other
+  two were both broken, in the same way: the cheap signal was never captured.
+  **The taste loop** recorded only that a concept was passed over, never why. Thirteen of the
+  first fifteen were rejected and taught nothing. Worse, the Grade tab's most reachable button
+  was `/concepts/{id}/discard`, which called `delete_concept` — a **hard delete on the one page
+  built for teaching the system what a miss looks like**, destroying exactly the row
+  `set_archived`'s docstring says must survive ("deleting the ones you passed over would make
+  the rate 100% forever and unfalsifiable"). Replaced by `/concepts/{id}/pass`: five
+  one-keystroke buttons (`preprod.ARCHIVE_REASONS` — boring / off-brand / unshootable / seen it
+  / other) that archive with a reason and never delete. A reason is never a gate — passing
+  without one still archives, because an archive that fails on a missing word is an archive that
+  does not happen. `preprod.reason_counts` tallies them on the tab, because a queue with no
+  visible result is a chore and a tally that moves is a scoreboard. This is the FIRST
+  idea-level signal the pipeline has ever collected: `avoid_guidance` holds craft notes about
+  PROMPTS, and nothing anywhere held "you keep rejecting these for being boring."
+  **The audience loop was severed, not empty.** `videos.idea_id` points at the legacy pitch
+  pipeline's `ideas` table and has never been written (0 of 10 rows), so a posted video could
+  not be traced to the concept that made it — everything the audience taught was structurally
+  unable to reach the generator. `videos.concept_id` is the link, and `preprod.posted_outcomes`
+  is the join. It reads the **latest** metrics snapshot per video, never an average: `metrics`
+  is a growth curve on purpose. `concept_id` carries no `REFERENCES` on purpose either —
+  `shoot_concepts` is created by `preprod.init`, which runs AFTER `db.SCHEMA`, so a declared
+  foreign key there fails every insert with "no such table: main.shoot_concepts" (it did; 27
+  tests said so). The writer enforces the link, not the schema.
+  **And the reason nothing had ever posted** (found 2026-08-31, fixed). `uncanny_judge.py` was
+  written, tested, and never called from `src/` or `app/` — only from tests. Meanwhile
+  `autopilot.plan` reads the verdict it was supposed to write, and says so in as many words:
+  *"the gate fails closed, so 'unjudged' == 'held'"*. With `uncanny_passed` NULL on every row,
+  **every Zero Page concept was permanently ineligible to auto-post**. The gate was never wrong
+  — failing closed on an unjudged concept is exactly right for a channel that posts with no
+  human — it was simply never fed. `orchestrator.brand_gate` is the missing wire: it runs after
+  `evaluate` passes, scores zeropage concepts, and stores the verdict.
+  It **records, it never routes.** The gate belongs at the posting decision, not at generation:
+  a concept that misses the brand is still worth keeping and learning from, and parking it there
+  would destroy the negative signal the grade queue exists for. Antihero skips it entirely —
+  review-gated forever, so judging it is spend on a number nothing reads. `ZEROPAGE_UNCANNY=0`
+  skips it, and skipping means never auto-posting, which is the honest degrade.
+  Still open: **0 of 15 concepts scored by the TASTE judge** — that one is a manual Dev Studio
+  ranking tool, gates nothing, and costs a billed call per click, which is why the queue has
+  never been worked. Deleting its columns was considered and rejected: the uncanny columns
+  beside them are load-bearing, and the two are easy to confuse.
 - **`app/seo.py`** — the machine-readable growth surface, all pure functions so the exact bytes a
   crawler sees are testable without a server: `robots.txt` (the AI crawlers named explicitly and
   allowed; the app disallowed), `llms.txt` (what "grounded" means plus the hard specs — the part

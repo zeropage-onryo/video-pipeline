@@ -36,6 +36,25 @@ KILL_SWITCH_PATH = PROJECT_ROOT / "data" / "autopilot.off"
 
 ENABLE_ENV = "ZEROPAGE_AUTOPILOT"
 
+# Which brands may enter an AUTO-post plan. Empty means none: everything
+# lands in the Queue and a person pushes it out.
+#
+# WHY A CONSTANT AND NOT THE ENV VAR (2026-08-31). ZEROPAGE_AUTOPILOT
+# also gates the MANUAL approve-and-post button (app/main.py: "Posting is
+# OFF -- set ZEROPAGE_AUTOPILOT=1"), so switching it off to stop the
+# machine posting would also stop Mike posting by hand from the Queue --
+# the opposite of what "everything goes to the Queue for now" means. The
+# posture belongs in code anyway, which is what the block in build_plan
+# has always said.
+#
+# This is a HOLD, not a repeal. Zero Page was built to auto-post and the
+# whole uncanny gate exists to make that safe; the hold is until the loop
+# has proved itself on something a person chose to publish. Re-enable by
+# putting "zeropage" back in this tuple -- and note that ANTIHERO must
+# never be added: it is review-gated forever, which is why the check
+# below reads from a whitelist rather than excluding one name.
+AUTO_POST_BRANDS: tuple[str, ...] = ()
+
 
 def _unwired(kind: str) -> Callable[[dict], Any]:
     def executor(action: dict):
@@ -118,14 +137,17 @@ def build_plan(db_path=None, account_id: Optional[int] = None) -> dict[str, Any]
                 "tool": shot.get("tool"),
                 "prompt": prompt,
             })
-        # The two postures are enforced HERE, at the plan, so no configuration
+        # The postures are enforced HERE, at the plan, so no configuration
         # mistake downstream can auto-post the wrong thing:
         #   ANTIHERO is review-gated forever -- it NEVER enters an auto-post
         #     plan. Michael's face and name only post when he approves.
-        #   ZERO PAGE auto-posts, but ONLY concepts that cleared the on-brand
-        #     (uncanny) gate. A concept that wasn't judged, or was HELD, is not
-        #     post-eligible -- the gate fails closed, so "unjudged" == "held".
-        if concept.get("brand") != "zeropage":
+        #   ZERO PAGE is review-gated too, for now (2026-08-31, Mike's call):
+        #     AUTO_POST_BRANDS is empty, so EVERYTHING goes to the Queue and
+        #     a person pushes it out. Even a concept that clears the on-brand
+        #     gate stays put.
+        #   The uncanny check below stays regardless -- when Zero Page is let
+        #     back out, an unjudged concept must still be ineligible.
+        if concept.get("brand") not in AUTO_POST_BRANDS:
             continue
         if not concept.get("uncanny_passed"):
             continue

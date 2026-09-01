@@ -784,3 +784,77 @@ def test_a_shot_with_no_prompt_still_drops_out(tmp_db, monkeypatch):
     result = orchestrator.run("gearing up ritual")
 
     assert [p["tool"] for p in result["prompts"]] == ["KLING"]
+
+
+# --- the on-brand gate actually gets fed (2026-08-31) -----------------------
+#
+# uncanny_judge.py was written, tested, and never called from src/ or app/ --
+# only from tests. autopilot.plan reads the verdict it was meant to write
+# ("the gate fails closed, so unjudged == held"), so every Zero Page concept
+# was permanently ineligible to auto-post and the pipeline never posted
+# anything. These pin the wire, because the failure mode is silence.
+
+def _judge_spy(monkeypatch, passed=True):
+    calls = []
+
+    def fake(concept, gemini_client=None):
+        calls.append(concept.get("title"))
+        return {"overall": 9.0 if passed else 3.0, "passed": passed,
+                "reasons": [], "graded": True, "uncanny_hook": 9.0,
+                "grounded": 9.0, "format_fit": 9.0, "faceless": 9.0}
+
+    monkeypatch.setattr(orchestrator.uncanny_judge, "score_concept", fake)
+    return calls
+
+
+def test_a_zeropage_run_leaves_the_concept_judged(tmp_db, monkeypatch):
+    """The autopilot cannot auto-post an unjudged concept. If this stops
+    passing, nothing Zero Page generates can ever reach an audience."""
+    calls = _judge_spy(monkeypatch)
+    stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    result = orchestrator.run("ritual", brand="zeropage", channel="zeropage")
+
+    assert calls, "the uncanny judge was never called"
+    row = preprod.get_concept(result["concept_id"], path=db.DB_PATH, account_id=None)
+    assert row["uncanny_passed"], "the verdict never reached the row autopilot reads"
+
+
+def test_antihero_never_pays_for_the_gate(tmp_db, monkeypatch):
+    """Antihero is review-gated forever and never enters an auto-post
+    plan, so judging it is spend on a number nothing reads."""
+    calls = _judge_spy(monkeypatch)
+    stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    orchestrator.run("ritual", brand="antihero", channel="antihero")
+
+    assert calls == []
+
+
+def test_a_failed_verdict_does_not_park_the_run(tmp_db, monkeypatch):
+    """brand_gate records, it never routes. A concept that misses the
+    brand is still worth keeping and learning from -- parking it here
+    would destroy the negative signal the grade queue exists for."""
+    _judge_spy(monkeypatch, passed=False)
+    stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    result = orchestrator.run("ritual", brand="zeropage", channel="zeropage")
+
+    assert result["concept_id"], "a failed brand verdict stopped the run"
+    row = preprod.get_concept(result["concept_id"], path=db.DB_PATH, account_id=None)
+    assert row["uncanny_passed"] == 0
+
+
+def test_a_broken_judge_leaves_the_concept_unjudged(tmp_db, monkeypatch):
+    """Fails CLOSED and loudly. An exception here must not take the run
+    down, and must not silently mark the concept post-eligible."""
+    def boom(concept, gemini_client=None):
+        raise RuntimeError("judge is down")
+
+    monkeypatch.setattr(orchestrator.uncanny_judge, "score_concept", boom)
+    stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    result = orchestrator.run("ritual", brand="zeropage", channel="zeropage")
+
+    row = preprod.get_concept(result["concept_id"], path=db.DB_PATH, account_id=None)
+    assert not row["uncanny_passed"]

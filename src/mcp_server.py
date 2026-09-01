@@ -41,7 +41,7 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
-from . import accounts, db, preprod, scout
+from . import accounts, db, preprod, refbin, scout
 
 # The board's filters. "open" is deliberately first and is the default:
 # it is the only one that answers "what is waiting on me".
@@ -429,6 +429,69 @@ def pipeline_stats(path: Path | str = db.DB_PATH, account_id: Optional[int] = No
 
 # --- the research bin ------------------------------------------------------
 
+def bank_reference(
+    finding_id: int,
+    image_url: str,
+    source_url: str,
+    title: str = "",
+    path: Path | str = db.DB_PATH,
+) -> dict[str, Any]:
+    """Put ONE reference image behind a banked spark.
+
+    The gap this closes: bank_spark hands the nightly run a direction
+    but no photographs, and the only thing that ever wrote to the bin
+    was the crawl -- so on a night the crawl found no images (or failed
+    on DNS, which is what happened 2026-09-01) an agent could give the
+    graph an idea and not one frame to render it against.
+
+    THE FETCH HAPPENS HERE, SERVER-SIDE, ON PURPOSE. The caller hands
+    over a URL, not bytes: refbin.fetch is what enforces the public-host
+    guard, the 8MB cap, the JPEG normalisation and the content-addressed
+    /refs/<sha>.jpg name. An agent chose this URL after reading some
+    page, which makes it exactly the input those guards exist for --
+    passing bytes straight through would put the decision in the
+    client's hands and the request on this machine's network.
+
+    `source_url` is REQUIRED, not decoration. These are other people's
+    frames held as mood reference, and an unattributed one in front of
+    somebody about to spend a render is the wrong affordance --
+    spark_images returns it on every tile for the same reason.
+
+    Capped at MAX_BIN_IMAGES per pass, same as the crawl: a bin bigger
+    than one generation carries has a tail that can never be used.
+    """
+    finding = scout.get_finding(int(finding_id), path=path)
+    if finding is None:
+        raise ValueError(f"no finding {finding_id}")
+    if not (source_url or "").strip():
+        raise ValueError("source_url is required — an unattributed reference "
+                         "is the wrong thing to put in front of a spend")
+
+    pass_id = (finding.get("pass_id") or "").strip()
+    if not pass_id:
+        pass_id = scout.agent_pass_id(finding["id"])
+        scout.set_pass_id(finding["id"], pass_id, path=path)
+
+    stored = refbin.fetch(image_url)
+    if not stored:
+        return {"ok": False, "finding_id": finding["id"], "pass_id": pass_id,
+                "error": "not a readable image, too large, or a refused host",
+                "banked": len(scout.bin_for_pass(pass_id, path=path))}
+
+    row = scout.bin_add(finding["brand"], pass_id, stored,
+                        source_url=source_url.strip(), title=title.strip(),
+                        lane="agent", path=path)
+    banked = scout.bin_for_pass(pass_id, path=path)
+    if row is None:
+        return {"ok": False, "finding_id": finding["id"], "pass_id": pass_id,
+                "url": stored, "banked": len(banked),
+                "error": f"already banked, or the pass is full "
+                         f"({scout.MAX_BIN_IMAGES} images)"}
+    return {"ok": True, "finding_id": finding["id"], "pass_id": pass_id,
+            "url": stored, "source_url": row["source_url"],
+            "banked": len(banked), "cap": scout.MAX_BIN_IMAGES}
+
+
 def spark_images(finding_id: int, path: Path | str = db.DB_PATH) -> dict[str, Any]:
     """The reference images the scout downloaded on the pass this spark
     came out of.
@@ -587,7 +650,7 @@ def run_graph(spark: str, brand: str, goal: str = "",
 
 TOOLS = (
     list_ideas, get_idea, search_ideas, capture_idea, pick_idea,
-    archive_idea, bank_spark, next_spark, list_sparks, spark_images,
+    archive_idea, bank_spark, bank_reference, next_spark, list_sparks, spark_images,
     pipeline_stats,
 )
 ENGINE_TOOLS = (run_research, run_graph)
@@ -724,6 +787,21 @@ def build_server(path: Path | str = db.DB_PATH, name: str = "zeropage-ideas",
         """The reference images the scout banked alongside a spark, each
         with the source URL it came from."""
         return _t(spark_images, finding_id, path=path)
+
+    @server.tool(annotations=writes)
+    def reference(finding_id: int, image_url: str, source_url: str,
+                  title: str = "") -> dict:
+        """Bank one reference image behind a spark, so the run it feeds
+        has something to render against and not just words.
+
+        Hand over the image's URL and the page it came from -- this
+        downloads it here, through the same guards and into the same
+        /refs/<sha>.jpg bin a composer upload lands in. Attribution is
+        required. Your own cast and prop photos do NOT go through here:
+        they are already on file and get attached automatically to any
+        scene that names them, ahead of anything banked."""
+        return _t(bank_reference, finding_id, image_url=image_url,
+                  source_url=source_url, title=title, path=path)
 
     @server.tool(annotations=read_only)
     def stats() -> dict:

@@ -71,12 +71,14 @@ from . import (
     crag,
     db,
     entities,
+    preprod,
     promptgen,
     rag,
     scene_chain,
     scheduling,
     settings,
     shootgen,
+    uncanny_judge,
     winners,
 )
 from . import (
@@ -408,6 +410,55 @@ def route_after_eval(state: GenState) -> str:
     if state.get("attempts", 0) < MAX_ATTEMPTS:
         return "retry"
     return "hold"                   # out of retries -> park it, don't post it
+
+
+def brand_gate(state: GenState) -> GenState:
+    """Score a Zero Page concept against the on-brand (uncanny) rubric
+    and STORE the verdict. The missing wire (2026-08-31).
+
+    `uncanny_judge.py` was written, tested and never once called from
+    src/ or app/ -- only from tests. Meanwhile `autopilot.plan` reads
+    the verdict it was supposed to write:
+
+        # the gate fails closed, so "unjudged" == "held"
+        if not concept.get("uncanny_passed"):
+            continue
+
+    So every Zero Page concept was permanently ineligible to auto-post,
+    and the pipeline had never posted anything. The gate was not wrong
+    -- failing closed on an unjudged concept is exactly right for a
+    channel that posts without a human -- it was just never fed.
+
+    This node RECORDS, it never routes. The gate belongs at the posting
+    decision (autopilot), not at generation: a concept that misses the
+    brand is still worth keeping, looking at, and learning from, and
+    parking it here would delete the negative signal the grade queue is
+    for. So the graph runs on regardless of the verdict.
+
+    Antihero skips it entirely -- that brand is review-gated forever and
+    never enters an auto-post plan, so a billed call to decide something
+    nothing reads would be spend for nothing.
+    """
+    if state.get("brand") != "zeropage":
+        return {}
+    concept_id = state.get("concept_id")
+    if not concept_id:
+        return {}
+    if os.environ.get("ZEROPAGE_UNCANNY") == "0":
+        print("note: uncanny judge skipped (ZEROPAGE_UNCANNY=0) -- the concept "
+              "stays unjudged, and an unjudged concept never auto-posts",
+              file=sys.stderr)
+        return {}
+    try:
+        score = uncanny_judge.score_concept(state.get("concept") or {},
+                                            gemini_client=_client())
+        preprod.save_uncanny_score(concept_id, score, path=db.DB_PATH,
+                                   account_id=state.get("account_id"))
+    except Exception as e:                    # surfaced, never silent
+        print(f"note: uncanny judge failed ({type(e).__name__}: {e}) -- concept "
+              "stays unjudged, which the autopilot reads as held",
+              file=sys.stderr)
+    return {}
 
 
 # --- nodes: the posting line ----------------------------------------------
@@ -945,6 +996,7 @@ def _build():
         ("planner", planner),
         ("ground_entities", ground_entities), ("ground_rag", ground_rag),
         ("gen_concept", gen_concept), ("evaluate", evaluate),
+        ("brand_gate", brand_gate),
         ("structure_prompt", structure_prompt), ("score_prompts", score_prompts),
         ("revise_prompts", revise_prompts),
         ("keyframe", keyframe), ("generate_render", generate_render),
@@ -969,10 +1021,11 @@ def _build():
     g.add_edge("ground_rag", "gen_concept")
     g.add_edge("gen_concept", "evaluate")
     g.add_conditional_edges("evaluate", route_after_eval, {
-        "pass": "structure_prompt",
+        "pass": "brand_gate",
         "retry": "gen_concept",
         "hold": "hold",
     })
+    g.add_edge("brand_gate", "structure_prompt")
     g.add_edge("structure_prompt", "score_prompts")
     # revise_prompts re-scores only the shots it rewrote (leaving shots that
     # already passed untouched), so it routes back through the SAME judge --
