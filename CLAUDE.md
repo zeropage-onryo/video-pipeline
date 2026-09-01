@@ -86,7 +86,8 @@ venv/bin/python -m src.rag_eval <cases.json> [--k 5]   # hit@k + MRR over labele
 # web app at /mcp when ZEROPAGE_MCP=1 AND ZEROPAGE_MCP_TOKEN is set (no
 # token = refused, never served open). Read/decide tools are always on;
 # ZEROPAGE_MCP_ENGINE=1 adds research + generate. See START_SERVER.md.
-venv/bin/python -c "from src import mcp_server; print([f.__name__ for f in mcp_server.TOOLS])"
+venv/bin/python -m src.mcp_server --engine   # stdio; Claude Desktop launches this itself
+# Registering it: ops/connect-claude.md (paste ops/claude-desktop-mcp.json, ⌘Q, reopen)
 
 # SIGN-IN — seed the auth tables once (idempotent); real login guards /ui + /api
 venv/bin/python -m src.accounts seed you@example.com [--password '...']
@@ -430,7 +431,7 @@ is yours, in Resolve, by hand.
   `shots != []`, never stored, so it can't drift), `shoot_rate()` is which ones actually got shot.
   Both break down per prompt hash.
 - **`src/orchestrator.py`** — the autonomous content graph (LangGraph, registered as `zeropage`
-  in `langgraph.json`): `planner -> ensure_locations -> ground_entities -> ground_rag ->
+  in `langgraph.json`): `planner -> ground_entities -> ground_rag ->
   gen_concept -> evaluate -> structure_prompt -> score_prompts -> generate_render ->
   qc_clip -> caption -> publish`, with the corrective `evaluate -> gen_concept` retry edge and
   a `hold` sink. `score_prompts` is the credit gate proper: a deterministic floor (thin /
@@ -688,6 +689,19 @@ is yours, in Resolve, by hand.
   replacing every other exception with "Error executing tool <name>" — so caller errors are
   translated, or an agent cannot tell a bad id from a broken server and retries the
   identical call.
+  **Two transports, and stdio is the default.** `python -m src.mcp_server` runs it over a
+  pipe: Claude Desktop launches the process itself, so there is no port, no bearer token on the
+  public internet, and nothing to leave running — and because the desktop app proxies its local
+  MCP servers up to cloud sessions, the board reaches a phone through the same connection. The
+  tunnel was only ever buying the part the desktop already does. The HTTP mount stays for the
+  caller stdio cannot serve: something that is NOT the desktop app reaching this pipeline over a
+  network. `main()` is the one place `src/` imports `app/` — deliberately, to inject the single
+  job registry rather than grow a second one; the rule exists so the LIBRARY layer imports
+  without the web app, and a process entry point is not that. `app/jobs.py` is stdlib-only, so
+  it costs nothing.
+  `.claude/skills/idea-agent/` is the agent that drives these tools — and its first move is
+  reading the board, not generating: a run that adds four concepts to eleven unreviewed ones
+  buried the decision that was already the bottleneck.
 - **`app/seo.py`** — the machine-readable growth surface, all pure functions so the exact bytes a
   crawler sees are testable without a server: `robots.txt` (the AI crawlers named explicitly and
   allowed; the app disallowed), `llms.txt` (what "grounded" means plus the hard specs — the part
@@ -832,10 +846,32 @@ is yours, in Resolve, by hand.
   (The orchestrator adds one twist: it *uses* the warnings to retry, but the saved result
   still carries them.)
 - **Grounded in what exists — grounding shapes, it doesn't gate.** Every stage generates *from*
-  real material: concepts from photographed spaces, AI prompts from the
-  named real room they extend, ideation from the reference library and proven winners. That is
-  what keeps output shootable and on-brand. A mismatch is a warning, and a missing grounding
-  source degrades to an ungrounded run with a note.
+  real material: the cast and props on file, the reference library, proven winners, and the
+  photos attached to the run. A mismatch is a warning, and a missing grounding source degrades
+  to an ungrounded run with a note.
+  **Rooms are material you may pick, not the frame you must generate inside**
+  (2026-08-31, Mike's call, both brands). Concepts used to be generated *from* photographed
+  spaces, because a camera can only film where you actually are. Since 2026-08-20 every shot is
+  AI-generated, so that stopped being true and the rooms became what cast already is: named
+  material a scene MAY use. Three things carried the old rule and all three are gone.
+  `orchestrator.ensure_locations` **errored a run to `hold`** when the locations table was
+  empty — gating the night on rooms its own generator never reads, since
+  `build_scene_brief_prompt`'s whole placeholder set is `{brand} {cast} {example}
+  {references} {spark}` with no `{locations}` in it; the node is deleted and `planner` now
+  edges straight to `ground_entities`. `prompts/scenes_prompt.txt` listed every described room
+  under "set scenes in these real spaces where they fit", which made the photographed rooms the
+  default gravity of every Create; it now says the scene may be set anywhere the idea implies
+  and that no room has to appear. And `generate_scene_concepts` passed the whole catalogue into
+  the prompt; it now passes `picked_locations(refs, on_file)` — **only the rooms whose photos
+  are attached to THIS run**, since `/locations/<slug>/photo/<file>` is the URL the asset bank
+  hands out, so the slug in a ref path IS the pick. No new form field and no client-side flag
+  to go stale (the `scout_finding_id` lesson), and an accidental pick is a visible tile
+  somebody can remove. Picking reads as a LOCK, not a hint — it is a deliberate act, so it gets
+  `location_variety_note(lock=True)`'s treatment: lean into the space rather than manufacture
+  variety away from it. `validate_concept` still checks a named room against the **whole**
+  catalogue, because naming a real space you were not handed is fine and naming one that does
+  not exist is the thing worth flagging. `format_locations` is untouched — `rework.py` and
+  `director.py` still want the catalogue.
 - **The human choice is the label, and it gets recorded.** `shootgen.py` generates ideas, a human
   plans some (`shortlist_rate`), and shoots fewer still (`shoot_done`). Stored with the prompt's
   hash, so a prompt change can be measured against the rate it produced rather than argued about.

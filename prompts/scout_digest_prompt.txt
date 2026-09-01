@@ -38,6 +38,32 @@ and open enough to shoot three ways.
   good:  "the last check before leaving"   "a routine performed wrong"
          "an object that means more than it should"
 
+A SPARK IS A SITUATION, NOT AN IMAGE. Six words that name a texture, a
+camera move or a lens is NOT a spark, however evocative it sounds --
+"macro zoom tracking a pulsing wrist" and "lens threading through a
+pulled seam" are the failure this rule exists for. Both were banked at
+0.85 and 0.80, and neither says what happens, so nothing downstream
+could build a video from them and nothing ever got shot. If it does not
+contain something a person DOES, it is invalid: return it with score 0.0
+or do not return it at all.
+
+THE STAKE IS THE POINT. Grounded-uncanny with no human feeling under it
+is just a weird GIF. The spark must be about something the viewer has
+ALREADY FELT -- grief, compulsion, dread about their own home, the sense
+of being outnumbered in a room they own. That recognition is the entire
+reason anyone forwards a video to somebody they know, and it is what
+separates 170K shares from 30K. State it in `stake`, plainly, as the
+feeling and who recognises it. A candidate you cannot write a stake for
+is a candidate to throw away.
+
+  situation + turn, with a stake:
+    "setting the table for one too many"
+       -- the extra place gets quietly cleared away. Grief; anyone who
+          has caught themselves doing it.
+    "locking a door that is already locked"
+       -- the check repeats, faster each time. Compulsion; anyone whose
+          brain does this at 2am.
+
 FORBIDDEN as the subject of a spark, in every case: screens, phones, feeds,
 scrolling, apps, cameras-as-topic, algorithms, analytics, views, monetisation,
 AI, creators, trends, or the act of making content. Never name a platform, a
@@ -57,12 +83,20 @@ Score each 0.0-1.0 for whether it is worth spending a render on.
 Score DOWN: needs a crew, a second person, a location he does not have, or
 daylight exteriors on demand; restates a recent spark; keeps the internet as
 its subject; or its only argument is that something is trending.
-Score UP: a visible physical action; an object that can carry emotional weight;
-and the crawl gives a reason it lands NOW.
+Score 0.0 -- not low, ZERO: it names a lens, a camera move, a shot type or a
+material instead of an action ("macro", "zoom", "tracking", "POV", "handheld",
+"latex", "seam"); or you cannot state a stake for it. Nothing in this file
+penalised either failure before 2026-08-31, which is how four camera specs
+came to sit in the bank scored 0.80 and above.
+Score UP: a visible physical action; a TURN (the thing that goes wrong or
+changes, not just the setup); a stake a stranger would recognise as their own
+life; and the crawl gives a reason it lands NOW.
 
 Return ONLY JSON, no prose and no code fence:
 {"candidates": [
-  {"spark": "<the direction, six words or so>",
+  {"spark": "<the situation, six words or so -- something a person DOES>",
+   "turn": "<one line: what goes wrong, changes, or repeats>",
+   "stake": "<one line: the feeling this is about, and who recognises it>",
    "rationale": "<one sentence: the human beat you found under the signal>",
    "evidence": "<one sentence a human can check: what in the crawl argues for it>",
    "sources": ["<url or @handle the evidence came from>", ...],

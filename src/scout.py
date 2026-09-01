@@ -361,11 +361,26 @@ def gather_shorts(brand: str, api_key=None) -> list[dict]:
             # YouTube returns titles HTML-escaped (&#39;, &amp;). Left
             # as-is they reach the digest as literal entities and come
             # back inside a spark.
+            # NO "image" KEY, DELIBERATELY -- this lane contributes text
+            # signal only. A YouTube thumbnail is a marketing asset, not
+            # a frame: it is engineered as a face plus huge text plus a
+            # UI screenshot because that is what earns a click. The first
+            # real bin (2026-08-31) came back as three monetisation-guru
+            # thumbnails -- "MONETIZED $5,000", a YouTube Studio revenue
+            # graph, a man screaming over "$203,523.43" -- and those were
+            # what the Create composer would have pre-attached to a Zero
+            # Page scene. refs[0] is the frame Runway anchors the whole
+            # clip on (see the reference-grounding notes), so that is not
+            # a weak reference, it is a poisoned one.
+            #
+            # Better queries do not fix this: the SHAPE of a thumbnail is
+            # wrong for the job whatever it depicts. The titles and view
+            # counts are the part of this lane that earns its place, and
+            # they stay.
             signals.append({
                 "lane": "shorts",
                 "detail": html.unescape(v.get("title", "") or ""),
                 "url": v.get("url", ""),
-                "image": v.get("thumbnail", ""),
                 "metric": f"{views:,} views" if isinstance(views, int) else "",
             })
     return signals
@@ -685,6 +700,29 @@ def digest(brand: str, signals: list[dict], client, model: str, count: int = 4,
 
 # --- the bank --------------------------------------------------------------
 
+def _fold_reasoning(candidate: dict) -> str:
+    """turn + stake + rationale into the one column that stores them.
+
+    The digest prompt asks for `turn` (what goes wrong) and `stake` (the
+    feeling, and who recognises it) as separate fields, because naming
+    them separately is what forces the model to HAVE them -- a spark
+    with no stake is the failure that put four camera specs in the bank
+    at 0.80 and produced a shoot rate of zero. But asking for a field
+    and then dropping it on the floor is worse than not asking: the
+    prompt would be steering nothing and no test would notice. So they
+    are folded in here rather than added as columns -- one place to read
+    the reasoning behind a spark, and no migration.
+    """
+    parts = []
+    if candidate.get("turn"):
+        parts.append(f"TURN: {candidate['turn']}")
+    if candidate.get("stake"):
+        parts.append(f"STAKE: {candidate['stake']}")
+    if candidate.get("rationale"):
+        parts.append(candidate["rationale"])
+    return "  ".join(parts)
+
+
 def record(brand: str, candidate: dict, lanes="", pass_id="", path=db.DB_PATH) -> int:
     init(path)
     with db.connect(path) as conn:
@@ -693,7 +731,7 @@ def record(brand: str, candidate: dict, lanes="", pass_id="", path=db.DB_PATH) -
             "rationale, evidence, sources, score, lanes, pass_id) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (_now(), brand, candidate["spark"], _spark_key(candidate["spark"]),
-             candidate.get("rationale", ""), candidate.get("evidence", ""),
+             _fold_reasoning(candidate), candidate.get("evidence", ""),
              json.dumps(candidate.get("sources", [])),
              candidate.get("score", 0.0), lanes, pass_id))
         return cur.lastrowid
@@ -724,13 +762,42 @@ def stash_images(brand: str, pass_id: str, signals: list[dict],
     """
     fetch = fetch or refbin.fetch
     init(path)
+    # WHICH LANES MAY CONTRIBUTE A PICTURE. Instagram only, and that is a
+    # finding, not a default (2026-08-31 -- every image below was opened
+    # and looked at, which is the only way any of this surfaced).
+    #
+    # The sources that give good TEXT signal do not give good IMAGE
+    # signal, because an article's lead image illustrates the article's
+    # TOPIC, not a mood:
+    #   shorts  YouTube thumbnails are marketing assets engineered as
+    #           face + huge text + UI screenshot. The first real bin was
+    #           three monetisation-guru thumbnails ("MONETIZED $5,000",
+    #           a Studio revenue graph, a man screaming over "$203,523.43").
+    #   feeds   gear journalism yields product shots (a hand holding a
+    #           camera, a woman at an editing desk beside a NAS); craft
+    #           explainers yield copyrighted film stills with recognisable
+    #           actors. Two of six useless, one legally awkward, none
+    #           usable as an anchor.
+    #   web     grounded search returns prose, no images at all.
+    #
+    # Instagram is different in kind: there the image IS the post -- a
+    # creator's own frame, the creative artefact itself rather than an
+    # illustration of an article about one. That is the only source where
+    # an automatic bin is defensible.
+    #
+    # So the bin is EMPTY until IG_GRAPH_TOKEN exists. That is the correct
+    # answer, not a degraded one, and the composer already renders it as
+    # "No reference images in this pass" and attaches nothing. refs[0] is
+    # the frame Runway anchors the whole clip on; no reference beats a
+    # wrong one.
+    image_lanes = {"instagram"}
     stored: list[dict] = []
     seen: set[str] = set()
     for s in signals:
         if len(stored) >= limit:
             break
         remote = (s.get("image") or "").strip()
-        if not remote:
+        if not remote or s.get("lane") not in image_lanes:
             continue
         local = fetch(remote)
         if not local or local in seen:

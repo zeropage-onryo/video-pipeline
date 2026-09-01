@@ -68,11 +68,59 @@ def test_grade_all_scores_only_ungraded(tmp_db, monkeypatch):
     assert calls == [c2]   # the already-graded one is skipped
 
 
-def test_discard_deletes_the_concept(tmp_db):
-    cid = preprod.save_concept(_concept("gone"), "antihero", path=tmp_db, account_id=None)
-    r = client.post(f"/concepts/{cid}/discard", follow_redirects=False)
+def test_pass_archives_with_a_reason_and_never_deletes(tmp_db):
+    """Discard used to hard-delete from this page (replaced 2026-08-31).
+
+    That put the destruction of the only negative signal this pipeline
+    collects on the one page built to collect it -- see set_archived:
+    "deleting the ones you passed over would make the rate 100% forever
+    and unfalsifiable." The row must survive, and the reason must land.
+    """
+    cid = preprod.save_concept(_concept("passed on"), "antihero", path=tmp_db,
+                               account_id=None)
+    r = client.post(f"/concepts/{cid}/pass", data={"reason": "boring"},
+                    follow_redirects=False)
     assert r.status_code == 303 and "/studio?tab=grade" in r.headers["location"]
-    assert preprod.get_concept(cid, path=tmp_db, account_id=None) is None
+
+    row = preprod.get_concept(cid, path=tmp_db, account_id=None)
+    assert row is not None, "passing on a concept deleted it"
+    assert row["archived"] is True
+    assert row["archive_reason"] == "boring"
+
+
+def test_a_passed_concept_still_counts_against_pick_rate(tmp_db):
+    """The whole reason archiving beats deleting: the row keeps counting
+    as generated-and-not-picked, so the rate stays falsifiable."""
+    cid = preprod.save_concept(_concept("passed on"), "antihero", path=tmp_db,
+                               account_id=None)
+    before = preprod.pick_rate(path=tmp_db, account_id=None)["generated"]
+    client.post(f"/concepts/{cid}/pass", data={"reason": "off-brand"},
+                follow_redirects=False)
+    assert preprod.pick_rate(path=tmp_db, account_id=None)["generated"] == before
+
+
+def test_reasons_are_tallied_for_the_grade_tab(tmp_db):
+    """A queue with no visible result is a chore. The tally is the payoff
+    -- and the first idea-level signal the pipeline has ever had."""
+    for reason in ("boring", "boring", "off-brand"):
+        cid = preprod.save_concept(_concept(f"x{reason}"), "antihero",
+                                   path=tmp_db, account_id=None)
+        client.post(f"/concepts/{cid}/pass", data={"reason": reason},
+                    follow_redirects=False)
+    counts = preprod.reason_counts(path=tmp_db, account_id=None)
+    assert counts[0] == {"reason": "boring", "n": 2}
+    assert {"reason": "off-brand", "n": 1} in counts
+
+
+def test_pass_without_a_reason_still_archives(tmp_db):
+    """A reason is the point, but never a gate -- an archive that fails
+    because someone did not pick a word is an archive that does not
+    happen, and the row stays on the board forever."""
+    cid = preprod.save_concept(_concept("no reason"), "antihero", path=tmp_db,
+                               account_id=None)
+    client.post(f"/concepts/{cid}/pass", follow_redirects=False)
+    row = preprod.get_concept(cid, path=tmp_db, account_id=None)
+    assert row["archived"] is True and row["archive_reason"] == ""
 
 
 def test_discard_all_clears_only_the_active_brand(tmp_db):
@@ -98,3 +146,35 @@ def test_concepts_are_brand_scoped_in_the_api(tmp_db, monkeypatch):
               client.get("/api/pipeline/concepts?brand=zeropage").json()["items"]]
     assert "ZP ONLY ONE" in titles
     assert "AH ONLY ONE" not in titles
+
+
+def test_posted_outcomes_reads_the_latest_snapshot(tmp_db):
+    """The join that closes the audience loop (2026-08-31).
+
+    `videos.idea_id` pointed at the LEGACY pitch pipeline's table and was
+    never once written, so a posted video could not be traced back to the
+    concept that made it — whatever the audience taught was structurally
+    unable to reach the generator.
+
+    `metrics` is a growth curve on purpose (db.py: "a video has 8k views
+    on day one and 40k on day thirty"), so the join must read the LATEST
+    snapshot per video. Averaging would throw the curve away.
+    """
+    import sqlite3
+
+    cid = preprod.save_concept(_concept("posted"), "zeropage", path=tmp_db,
+                               account_id=None)
+    assert preprod.posted_outcomes(path=tmp_db, account_id=None) == []
+
+    with sqlite3.connect(str(tmp_db)) as conn:
+        conn.execute("INSERT INTO videos (concept_id, title, platform, posted_at, brand) "
+                     "VALUES (?,?,?,?,?)", (cid, "posted", "instagram", "2026-09-01", "zeropage"))
+        vid = conn.execute("SELECT id FROM videos").fetchone()[0]
+        for day, shares in (("2026-09-01", 10), ("2026-09-08", 170)):
+            conn.execute("INSERT INTO metrics (video_id, captured_at, views, likes, "
+                         "comments, saves, shares) VALUES (?,?,?,?,?,?,?)",
+                         (vid, day, 9000, 800, 40, 150, shares))
+
+    [row] = preprod.posted_outcomes(path=tmp_db, account_id=None)
+    assert row["concept_id"] == cid
+    assert row["shares"] == 170, "read the first snapshot, not the latest"

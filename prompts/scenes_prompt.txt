@@ -19,7 +19,8 @@ CAST & PROPS ON FILE (reference the uploaded photos as the EXACT face / EXACT
 clothing where they apply; name them, don't redescribe their appearance):
 {cast}
 
-ROOMS ON FILE (set scenes in these real spaces where they fit):
+LOCATION — set each scene wherever the idea implies. Invent whatever space
+it needs; you are NOT limited to real rooms, and no room has to appear:
 {locations}
 
 REFERENCE LIBRARY (tone and structure to echo):
@@ -55,4 +56,4 @@ films, directors, brands, or real people.
 {logline_rules}
 
 Output STRICT JSON ONLY in this exact shape:
-{"scenes": [{"title": "2-4 word cinematic title", "logline": "at most 12 words — what happens", "location": "the room on file it is set in, or empty", "prompt": "the full cohesive scene prompt — all five parts in order, ready to paste straight into a video model"}]}
+{"scenes": [{"title": "2-4 word cinematic title", "logline": "at most 12 words — what happens", "location": "the picked room it is set in, or empty when the scene is set somewhere invented", "prompt": "the full cohesive scene prompt — all five parts in order, ready to paste straight into a video model"}]}

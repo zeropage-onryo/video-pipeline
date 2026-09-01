@@ -277,6 +277,19 @@ def init(path: Path | str = DB_PATH) -> None:
         # the board's memory, not the database's.
         if "archived_at" not in existing:
             conn.execute("ALTER TABLE shoot_concepts ADD COLUMN archived_at TEXT")
+        # WHY a reason and not just a timestamp (2026-08-31). archived_at
+        # records THAT a concept was passed over; it cannot record what
+        # was wrong with it. Thirteen of the first fifteen concepts were
+        # rejected and the system learned nothing from any of them,
+        # because nothing ever asked. An unpicked row is the ONLY
+        # negative signal this pipeline collects at volume, and a
+        # rejection with no reason can never reach avoid_guidance. One
+        # word costs a keystroke and is worth more than ten more
+        # generated concepts. ALTER-only, same as picked_at and
+        # archived_at above -- the CREATE literal is the pre-decision
+        # schema and these three are all decisions recorded onto it.
+        if "archive_reason" not in existing:
+            conn.execute("ALTER TABLE shoot_concepts ADD COLUMN archive_reason TEXT")
         # tenancy. The rebuild runs first: it creates locations already
         # carrying account_id, so own_table then only has to claim the rows.
         _repair_concept_locations_fk(conn)
@@ -658,6 +671,7 @@ def _concept_row(row, conn) -> dict[str, Any]:
     data["is_scene"] = len(data["shots"]) == 1
     data["picked"] = bool(data.get("picked_at"))
     data["archived"] = bool(data.get("archived_at"))
+    data["archive_reason"] = data.get("archive_reason") or ""
     # graded is what finally retires an archived concept: the Dev
     # Studio's grade queue draws on judge_overall IS NULL, so a row
     # archived off the board is still waiting to teach something.
@@ -960,9 +974,17 @@ def set_picked(concept_id: int, picked: bool = True,
             raise ValueError(f"no concept {concept_id}")
 
 
+# The vocabulary the Grade tab offers as buttons. Deliberately short and
+# closed: a free-text box gets skipped, and five words that can be
+# COUNTED are worth more than a paragraph nobody writes. "other" exists
+# so an honest rejection fitting none of these is still recorded rather
+# than forced into the nearest wrong bucket.
+ARCHIVE_REASONS = ("boring", "off-brand", "unshootable", "seen it", "other")
+
+
 def set_archived(concept_id: int, archived: bool = True,
                  path: Path | str = DB_PATH, *,
-                 account_id: int) -> None:
+                 account_id: int, reason: str = "") -> None:
     """Take a concept off the board without taking it out of the data.
 
     The board is a decision surface: once you have picked one of the
@@ -979,8 +1001,11 @@ def set_archived(concept_id: int, archived: bool = True,
     """
     with connect(path) as conn:
         cur = conn.execute(
-            "UPDATE shoot_concepts SET archived_at = ? WHERE id = ? AND account_id IS ?",
-            (_now() if archived else None, concept_id, account_id),
+            "UPDATE shoot_concepts SET archived_at = ?, archive_reason = ? "
+            "WHERE id = ? AND account_id IS ?",
+            (_now() if archived else None,
+             ((reason or "").strip() or None) if archived else None,
+             concept_id, account_id),
         )
         if cur.rowcount == 0:
             raise ValueError(f"no concept {concept_id}")
@@ -1013,6 +1038,62 @@ def archive_batch(spark: str, keep_ids: list[int] | None = None,
                 (_now(), concept_id, account_id),
             )
     return len(targets)
+
+
+def posted_outcomes(path: Path | str = DB_PATH, *,
+                    account_id: int) -> list[dict[str, Any]]:
+    """Concepts that reached an audience, with their latest numbers.
+
+    The join that closes the loop (2026-08-31). `videos.concept_id` is
+    the link; `metrics` snapshots the numbers over time, so the LATEST
+    snapshot per video is the one worth reading -- metrics is a growth
+    curve on purpose (see db.py), and averaging it would throw the curve
+    away.
+
+    Empty until something is posted with a concept behind it, which is
+    the honest state: the ten rows already in `videos` are pre-pipeline
+    uploads with no concept to point at.
+    """
+    with connect(path) as conn:
+        rows = conn.execute(
+            """
+            SELECT c.id AS concept_id, c.title, c.brand, c.archive_reason,
+                   v.id AS video_id, v.platform, v.posted_at, v.url,
+                   m.views, m.likes, m.comments, m.saves, m.shares
+            FROM shoot_concepts c
+            JOIN videos v ON v.concept_id = c.id
+            LEFT JOIN metrics m ON m.id = (
+                SELECT id FROM metrics WHERE video_id = v.id
+                ORDER BY captured_at DESC, id DESC LIMIT 1
+            )
+            WHERE c.account_id IS ?
+            ORDER BY v.posted_at DESC
+            """,
+            (account_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def reason_counts(path: Path | str = DB_PATH, *,
+                  account_id: int) -> list[dict[str, Any]]:
+    """How many concepts were passed on for each reason, commonest first.
+
+    The payoff that makes the Grade tab worth opening. Working a queue
+    with no visible result is a chore; a tally that shifts as you go is
+    a scoreboard. It is also the first idea-level signal this pipeline
+    has ever had -- avoid_guidance holds craft notes about PROMPTS, and
+    nothing anywhere held "you keep rejecting these for being boring".
+    """
+    with connect(path) as conn:
+        rows = conn.execute(
+            "SELECT archive_reason AS reason, COUNT(*) AS n "
+            "FROM shoot_concepts "
+            "WHERE archived_at IS NOT NULL AND archive_reason IS NOT NULL "
+            "AND account_id IS ? "
+            "GROUP BY archive_reason ORDER BY n DESC, reason",
+            (account_id,),
+        ).fetchall()
+    return [{"reason": r["reason"], "n": r["n"]} for r in rows]
 
 
 def pick_rate(path: Path | str = DB_PATH, *, account_id: int) -> dict[str, Any]:

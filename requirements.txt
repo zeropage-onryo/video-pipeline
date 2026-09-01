@@ -19,6 +19,7 @@ pgvector
 pypdf   # /library/ingest's PDF file upload -- text extraction before chunking
 langgraph
 langsmith
+mcp>=2   # the MCP surface (src/mcp_server.py). v2 renamed FastMCP to MCPServer and moved stateless_http onto streamable_http_app(); code written against 1.x imports a module that no longer exists, so this pin is load-bearing -- verify src/mcp_server.build_server on a major bump
 authlib
 itsdangerous
 argon2-cffi

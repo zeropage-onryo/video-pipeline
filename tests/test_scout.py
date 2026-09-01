@@ -343,10 +343,10 @@ def test_planner_claims_the_finding_against_the_run_it_minted(tmp_db):
 
 def test_stash_images_banks_each_image_with_its_source(tmp_db):
     signals = [
-        {"lane": "shorts", "detail": "a night ride", "url": "https://yt/watch?v=1",
-         "image": "https://img/1.jpg", "metric": "1,000 views"},
-        {"lane": "feeds", "detail": "a garage post", "url": "https://reddit.com/r/x/1",
-         "image": "https://img/2.jpg", "metric": "40 upvotes"},
+        {"lane": "instagram", "detail": "a night ride", "url": "https://ig/p/1",
+         "image": "https://img/1.jpg", "metric": "1,000 likes"},
+        {"lane": "instagram", "detail": "a garage post", "url": "https://ig/p/2",
+         "image": "https://img/2.jpg", "metric": ""},
         {"lane": "web", "detail": "no image on this one"},
     ]
     fetched = {}
@@ -359,14 +359,14 @@ def test_stash_images_banks_each_image_with_its_source(tmp_db):
                               fetch=fake_fetch)
 
     assert [r["url"] for r in rows] == ["/refs/0.jpg", "/refs/1.jpg"]
-    assert rows[0]["source_url"] == "https://yt/watch?v=1"
-    assert rows[1]["lane"] == "feeds"
+    assert rows[0]["source_url"] == "https://ig/p/1"
+    assert rows[1]["lane"] == "instagram"
     assert scout.bin_for_pass("pass-1", path=tmp_db)
 
 
 def test_stash_images_dedupes_the_same_picture_found_twice(tmp_db):
-    signals = [{"lane": "shorts", "detail": "a", "image": "https://img/1.jpg"},
-               {"lane": "feeds", "detail": "b", "image": "https://img/copy.jpg"}]
+    signals = [{"lane": "instagram", "detail": "a", "image": "https://img/1.jpg"},
+               {"lane": "instagram", "detail": "b", "image": "https://img/copy.jpg"}]
     # content-addressed storage returns the same URL for identical bytes
     rows = scout.stash_images("zeropage", "pass-1", signals, path=tmp_db,
                               fetch=lambda url: "/refs/same.jpg")
@@ -374,7 +374,7 @@ def test_stash_images_dedupes_the_same_picture_found_twice(tmp_db):
 
 
 def test_stash_images_skips_what_it_cannot_fetch(tmp_db):
-    signals = [{"lane": "shorts", "detail": "a", "image": "https://img/broken.jpg"}]
+    signals = [{"lane": "instagram", "detail": "a", "image": "https://img/broken.jpg"}]
     rows = scout.stash_images("zeropage", "pass-1", signals, path=tmp_db,
                               fetch=lambda url: None)
     assert rows == []
@@ -382,7 +382,7 @@ def test_stash_images_skips_what_it_cannot_fetch(tmp_db):
 
 
 def test_stash_images_stops_at_the_composer_limit(tmp_db):
-    signals = [{"lane": "shorts", "detail": str(i), "image": f"https://img/{i}.jpg"}
+    signals = [{"lane": "instagram", "detail": str(i), "image": f"https://img/{i}.jpg"}
                for i in range(20)]
     rows = scout.stash_images("zeropage", "pass-1", signals, path=tmp_db,
                               fetch=lambda url: f"/refs/{url[-6:]}")
@@ -391,7 +391,7 @@ def test_stash_images_stops_at_the_composer_limit(tmp_db):
 
 def test_bin_for_finding_returns_the_pass_it_was_read_out_of(tmp_db, monkeypatch):
     monkeypatch.setattr(scout, "gather_web", lambda *a, **k: [
-        {"lane": "web", "detail": "x", "image": "https://img/1.jpg"}])
+        {"lane": "instagram", "detail": "x", "image": "https://img/1.jpg"}])
     monkeypatch.setattr(scout.refbin, "fetch", lambda url: "/refs/one.jpg")
 
     result = scout.scout("zeropage", 2, client=FakeClient(DIGEST_JSON), model="fake",
@@ -477,3 +477,76 @@ def test_the_digest_keeps_the_translation_rule_and_the_ban_list():
     assert "not what the scene is" in template.replace("\n", " ")
     for banned in ("screens", "monetisation", "algorithms"):
         assert banned in template
+
+
+# ---------- what may enter the bin ----------
+
+def test_youtube_thumbnails_never_enter_the_bin(tmp_db):
+    """The first real bin (2026-08-31) came back as three YouTube
+    monetisation-guru thumbnails -- "MONETIZED $5,000", a Studio revenue
+    graph, a man screaming over "$203,523.43". Those would have been
+    pre-attached to a Zero Page scene, and refs[0] is the frame Runway
+    anchors the clip on. A thumbnail is a marketing asset engineered as
+    face + text + UI screenshot; its SHAPE is wrong for the job whatever
+    the query returns, so the lane contributes text only."""
+    signals = [
+        {"lane": "shorts", "detail": "a title", "image": "https://i.ytimg.com/x.jpg",
+         "url": "https://youtube.com/watch?v=1"},
+        {"lane": "feeds", "detail": "an article", "image": "https://blog/lead.jpg",
+         "url": "https://blog/post"},
+    ]
+    rows = scout.stash_images("zeropage", "p", signals, path=tmp_db,
+                              fetch=lambda u: f"/refs/{u[-9:]}")
+    assert [r["lane"] for r in rows] == []      # neither lane may bank a picture
+
+
+def test_only_instagram_may_bank_a_picture(tmp_db):
+    """Every other lane's images were opened and looked at (2026-08-31):
+    YouTube gives clickbait thumbnails, feeds give product shots and
+    copyrighted film stills. On Instagram the image IS the post -- the
+    creator's own frame rather than an illustration of an article about
+    one -- which is the only case where banking it blind is defensible."""
+    signals = [
+        {"lane": "shorts", "detail": "t", "image": "https://i.ytimg.com/a.jpg"},
+        {"lane": "feeds", "detail": "t", "image": "https://blog/lead.jpg"},
+        {"lane": "web", "detail": "t", "image": "https://x/y.jpg"},
+        {"lane": "instagram", "detail": "t", "image": "https://cdn.ig/p.jpg",
+         "url": "https://instagram.com/p/abc"},
+    ]
+    rows = scout.stash_images("zeropage", "p", signals, path=tmp_db,
+                              fetch=lambda u: "/refs/ok.jpg")
+    assert [r["lane"] for r in rows] == ["instagram"]
+
+
+def test_an_empty_bin_is_the_correct_answer_not_a_failure(tmp_db):
+    """No reference beats a wrong one: refs[0] is the frame Runway
+    anchors the clip on."""
+    rows = scout.stash_images("zeropage", "p", [
+        {"lane": "feeds", "detail": "t", "image": "https://blog/lead.jpg"}],
+        path=tmp_db, fetch=lambda u: "/refs/ok.jpg")
+    assert rows == []
+    assert scout.bin_for_pass("p", path=tmp_db) == []
+
+
+def test_the_shorts_lane_still_carries_its_text_signal(monkeypatch):
+    """Dropping the image must not cost the titles and view counts --
+    that is the half of this lane that earns its place."""
+    from src import youtube
+    monkeypatch.setenv("YOUTUBE_API_KEY", "k")
+    monkeypatch.setattr(youtube, "search_videos", lambda q, key, **kw: {
+        "ok": True, "videos": [{"title": "a night ride", "views": 12345,
+                                "url": "https://youtube.com/watch?v=1",
+                                "thumbnail": "https://i.ytimg.com/x.jpg"}]})
+    [signal] = [s for s in scout.gather_shorts("zeropage") if s.get("detail")][:1]
+    assert signal["detail"] == "a night ride"
+    assert "12,345 views" in signal["metric"]
+    assert not signal.get("image")
+
+
+def test_a_new_lane_must_opt_in_before_its_images_are_banked(tmp_db):
+    """Fail closed: an unknown lane's pictures are not banked until
+    someone has looked at what they actually are."""
+    rows = scout.stash_images("zeropage", "p", [
+        {"lane": "some_new_lane", "detail": "x", "image": "https://x/y.jpg"}],
+        path=tmp_db, fetch=lambda u: "/refs/a.jpg")
+    assert rows == []

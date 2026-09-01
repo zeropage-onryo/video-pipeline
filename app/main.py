@@ -478,6 +478,16 @@ def _grade_context(mode: Optional[str], concept_id: Optional[int],
     same item without re-drawing -- and, for fresh, without re-billing."""
     context = {"mode": mode, "concept": None, "golden": None,
                "probe": None, "fresh": None,
+               # the Pass buttons on the drawn card -- one per reason, so
+               # rejecting is a keystroke rather than a free-text box
+               # nobody fills in
+               "archive_reasons": list(preprod.ARCHIVE_REASONS),
+               # what the rejections have taught so far. Counted here
+               # rather than in the template because a number nobody can
+               # see is a number nobody acts on -- this is the payoff
+               # that makes working the queue feel like it did something.
+               "reason_counts": preprod.reason_counts(path=db.DB_PATH,
+                                                      account_id=account_id),
                "ungraded_count": sum(
                    1 for c in preprod.list_concepts(path=db.DB_PATH, account_id=account_id)
                    if c.get("judge_overall") is None),
@@ -1659,14 +1669,36 @@ def concepts_grade(concept_id: int, next: str = Form(""), account_id: int = Depe
     return _redirect_with_message(safe_next(next, "/studio?tab=grade"), msg)
 
 
-@dev.post("/concepts/{concept_id}/discard")
-def concepts_discard(concept_id: int, next: str = Form(""), account_id: int = Depends(auth.dev_account_id)):
-    """Discard a concept you don't want. Deletes it (locations cascade)."""
+@dev.post("/concepts/{concept_id}/pass")
+def concepts_pass(concept_id: int, reason: str = Form(""), next: str = Form(""),
+                  account_id: int = Depends(auth.dev_account_id)):
+    """Pass on a concept, and record WHY. Archives; never deletes.
+
+    Replaces the Discard button (2026-08-31), which called
+    delete_concept. That put a hard delete on the one page built for
+    teaching the system what a miss looks like -- and set_archived's own
+    docstring says why that is backwards: "an unpicked row is the only
+    negative signal this system collects -- pick_rate is
+    generated-vs-picked, and deleting the ones you passed over would
+    make the rate 100% forever and unfalsifiable." The most reachable
+    button on the Grade tab was destroying the data the tab exists to
+    collect.
+
+    The reason is the point. Thirteen of the first fifteen concepts were
+    rejected and taught nothing, because archived_at records only that
+    it happened. One word, one keystroke, no model call -- which is also
+    what makes this cheap enough to actually use, unlike the billed
+    Grade button beside it.
+    """
     if preprod.get_concept(concept_id, path=db.DB_PATH, account_id=account_id) is None:
         raise HTTPException(status_code=404, detail="no such concept")
-    preprod.delete_concept(concept_id, path=db.DB_PATH, account_id=account_id)
+    reason = (reason or "").strip()
+    preprod.set_archived(concept_id, path=db.DB_PATH, account_id=account_id,
+                         reason=reason)
+    said = f" — {reason}" if reason else ""
     return _redirect_with_message(safe_next(next, "/studio?tab=grade"),
-                                  f"Discarded SHOOT-{concept_id:02d}.")
+                                  f"Passed on SHOOT-{concept_id:02d}{said}. "
+                                  "Archived, not deleted.")
 
 
 @dev.post("/concepts/discard-all")

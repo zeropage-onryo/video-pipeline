@@ -79,6 +79,13 @@ CREATE TABLE IF NOT EXISTS ideas (
 CREATE TABLE IF NOT EXISTS videos (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     idea_id    INTEGER REFERENCES ideas(id) ON DELETE SET NULL,
+    -- The concept that produced this post (2026-08-31). Deliberately NOT
+    -- a REFERENCES: shoot_concepts is created by preprod.init, which runs
+    -- AFTER this schema, so a declared foreign key here fails every insert
+    -- with "no such table: main.shoot_concepts". The link is enforced by
+    -- the writer, not the schema -- same trade db.py already makes for
+    -- being the spine that loads first.
+    concept_id INTEGER,
     title      TEXT    NOT NULL,
     platform   TEXT    NOT NULL,
     posted_at  TEXT    NOT NULL,
@@ -239,6 +246,21 @@ def init_db(path: Path | str = DB_PATH) -> None:
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(videos)")}
         if "brand" not in cols:
             conn.execute("ALTER TABLE videos ADD COLUMN brand TEXT")
+        # The audience loop's missing link (2026-08-31). `idea_id` points
+        # at the LEGACY pitch pipeline's `ideas` table; nothing has ever
+        # written it (0 of 10 rows), and the ideas this project generates
+        # now live in shoot_concepts. So a posted video could never be
+        # traced back to the concept that produced it, and everything the
+        # audience taught was structurally unable to reach the generator
+        # -- the loop was severed here, not merely empty.
+        #
+        # Nullable and additive on purpose: the ten rows already in this
+        # table are pre-pipeline uploads from 2020-2024 with no concept
+        # behind them, and inventing a link for them would be worse than
+        # leaving it open. This buys the join for everything posted from
+        # here on.
+        if "concept_id" not in cols:
+            conn.execute("ALTER TABLE videos ADD COLUMN concept_id INTEGER")
         # tenancy: a posted video belongs to the account that made it
         own_table(conn, "videos")
 

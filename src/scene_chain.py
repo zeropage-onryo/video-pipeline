@@ -32,6 +32,7 @@ file) are INJECTED as callables, because src/ never imports app/.
 """
 from __future__ import annotations
 
+import sys
 from typing import Callable, Optional
 
 from . import db, imagery, nano_banana, preprod, shootgen
@@ -154,8 +155,15 @@ def attach_refs(concept_id: int, extra: list | None = None, *, db_path=None, acc
     picked: list = []
     try:
         from . import asset_shelf
-        named = shootgen.named_assets(text, asset_shelf.catalogue(db_path=path))
-    except Exception:
+        named = shootgen.named_assets(
+            text, asset_shelf.catalogue(db_path=path, account_id=account_id))
+    except Exception as e:
+        # Say so. This except swallowed an account-scoping mistake for
+        # two nights: the catalogue came back empty, every scene "named
+        # nothing", and the keyframes rendered with no face in them
+        # while the Queue card still said the scene was grounded.
+        print(f"note: asset catalogue unavailable, scene renders on its text: {e}",
+              file=sys.stderr)
         named = []
     for asset in named:                      # one photo of everything named
         if len(picked) >= MAX_REFS:

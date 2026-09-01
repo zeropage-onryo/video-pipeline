@@ -22,6 +22,14 @@
 <div class="drawrow">
   <a class="btnw" href="/grade/draw?mode=shot">Draw ungraded concept ({{ grade.ungraded_count }})</a>
   <a class="btnw" href="/grade/draw?mode=golden">Draw golden query ({{ grade.golden_count }})</a>
+  {# What the passes have taught so far. The tally is the payoff that
+     makes working this queue feel like it did something -- and it is the
+     first idea-level signal the pipeline has ever collected. #}
+  {% if grade.reason_counts %}
+  <p style="margin-top:8px; opacity:.75">Passed so far —
+    {% for rc in grade.reason_counts %}{{ rc.reason }}: {{ rc.n }}{% if not loop.last %} · {% endif %}{% endfor %}
+  </p>
+  {% endif %}
   <a class="btnw" href="/grade/draw?mode=any">Grade anything</a>
   <form method="post" action="/grade/fresh" style="display:flex; gap:8px; flex:1; min-width:280px">
     <input type="text" name="spark" placeholder="Optional spark for a fresh throwaway prompt…" style="flex:1">
@@ -106,11 +114,16 @@ HOOK: {{ c.hook }}{% endif %}{% if c.logline %}
         <input type="hidden" name="next" value="/grade/draw?mode=shot">
         <button type="submit" class="primary">Grade taste + perf · billed</button>
       </form>
-      <form method="post" action="/concepts/{{ c.id }}/discard"
-            onsubmit="return confirm('Discard SHOOT-{{ '%02d'|format(c.id) }}? This deletes it.')">
+      {# Pass, with a reason. One click each, no model call -- the cheap
+         half of the Grade tab, and the only place the system ever hears
+         WHY something was rejected. Archives; nothing here deletes. #}
+      {% for r in grade.archive_reasons %}
+      <form method="post" action="/concepts/{{ c.id }}/pass">
         <input type="hidden" name="next" value="/grade/draw?mode=shot">
-        <button type="submit" style="color:var(--red,#d64550)">Discard</button>
+        <input type="hidden" name="reason" value="{{ r }}">
+        <button type="submit" title="Archive with reason: {{ r }}">Pass · {{ r }}</button>
       </form>
+      {% endfor %}
       <a class="btnw" href="/grade/draw?mode=shot">Skip → next</a>
     </div>
   </div>

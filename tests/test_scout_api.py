@@ -91,9 +91,9 @@ def test_spark_comes_back_with_its_reasoning_and_its_bin(tmp_db):
          "sources": ["https://example.com/a"], "score": 0.82},
         pass_id="pass-1", path=tmp_db)
     scout.stash_images("zeropage", "pass-1",
-                       [{"lane": "shorts", "detail": "a night ride",
-                         "url": "https://yt/watch?v=1", "image": "https://img/1.jpg",
-                         "metric": "1,000 views"}],
+                       [{"lane": "instagram", "detail": "a night ride",
+                         "url": "https://ig/p/1", "image": "https://img/1.jpg",
+                         "metric": "1,000 likes"}],
                        path=tmp_db, fetch=lambda u: "/refs/abc.jpg")
 
     body = client.get("/api/scout/spark?brand=zeropage").json()
@@ -103,7 +103,7 @@ def test_spark_comes_back_with_its_reasoning_and_its_bin(tmp_db):
     assert body["evidence"].startswith("three top posts")
     assert body["sources"] == ["https://example.com/a"]
     assert body["bin"][0]["url"] == "/refs/abc.jpg"
-    assert body["bin"][0]["source_url"] == "https://yt/watch?v=1"
+    assert body["bin"][0]["source_url"] == "https://ig/p/1"
 
 
 def test_a_bin_image_url_is_the_same_shape_a_composer_upload_gets(tmp_db):
@@ -320,7 +320,7 @@ def test_his_own_idea_does_not_inherit_the_research_images(tmp_db, monkeypatch):
     finding_id = scout.record("zeropage", {"spark": "the last check before leaving",
                                            "score": 0.9}, pass_id="p", path=tmp_db)
     scout.stash_images("zeropage", "p",
-                       [{"lane": "shorts", "detail": "a clip", "image": "https://i/1.jpg"}],
+                       [{"lane": "instagram", "detail": "a clip", "image": "https://i/1.jpg"}],
                        path=tmp_db, fetch=lambda u: "/refs/research.jpg")
     monkeypatch.setattr(api_mod, "_gemini_key", lambda: "test-key")
 
@@ -346,7 +346,7 @@ def test_his_own_photos_survive_when_the_research_is_dropped(tmp_db, monkeypatch
     finding_id = scout.record("zeropage", {"spark": "the last check before leaving",
                                            "score": 0.9}, pass_id="p", path=tmp_db)
     scout.stash_images("zeropage", "p",
-                       [{"lane": "shorts", "detail": "a clip", "image": "https://i/1.jpg"}],
+                       [{"lane": "instagram", "detail": "a clip", "image": "https://i/1.jpg"}],
                        path=tmp_db, fetch=lambda u: "/refs/research.jpg")
     monkeypatch.setattr(api_mod, "_gemini_key", lambda: "test-key")
     monkeypatch.setattr(api_mod, "_resolve_asset_photo", lambda url: None)
@@ -374,7 +374,7 @@ def test_the_research_images_ride_along_when_the_spark_is_used(tmp_db, monkeypat
     finding_id = scout.record("zeropage", {"spark": "the last check before leaving",
                                            "score": 0.9}, pass_id="p", path=tmp_db)
     scout.stash_images("zeropage", "p",
-                       [{"lane": "shorts", "detail": "a clip", "image": "https://i/1.jpg"}],
+                       [{"lane": "instagram", "detail": "a clip", "image": "https://i/1.jpg"}],
                        path=tmp_db, fetch=lambda u: "/refs/research.jpg")
     monkeypatch.setattr(api_mod, "_gemini_key", lambda: "test-key")
     monkeypatch.setattr(api_mod, "_resolve_asset_photo", lambda url: None)
