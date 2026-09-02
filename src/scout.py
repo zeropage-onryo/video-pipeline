@@ -243,8 +243,9 @@ BRAND_NOTES = {
     "antihero": ("Moto/noir personal brand. A real person, real machine, real "
                  "rooms. Low-key night grade. The machine is a recurring "
                  "character, not a subject."),
-    "zeropage": ("Faceless, format-driven, uncanny. No recognisable person. "
-                 "The format itself is the hook."),
+    "zeropage": ("Format-driven, uncanny. People may appear, but never the "
+                 "same person twice -- no recurring star. The format itself "
+                 "is the hook."),
 }
 
 
