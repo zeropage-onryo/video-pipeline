@@ -266,13 +266,40 @@ renders. Veo is $3.20/clip against runway's $0.25 and midjourney's $0.27, and at
 the shipped defaults one account's theoretical daily max is ~$26 with veo ~74% of
 it.
 
+**What the providers actually offer (checked 2026-09-02).** Three of the four
+are bearer keys with no delegation, which shapes the whole connector story:
+
+| provider | auth | OAuth for third-party apps? |
+|---|---|---|
+| Runway | API key, **organization-scoped**, displayed once | no |
+| Higgsfield | key id + secret | no |
+| Veo | Gemini Developer API = key; **Vertex AI = Google Cloud IAM** | **yes, via Vertex** |
+| Midjourney | no official API exists | n/a |
+
+So onboarding is "paste your API key" for two of them, not "connect your
+account" -- a bigger trust ask, and users feel it. A Runway key hands over the
+whole organization's API access unscoped, and Runway's own docs warn that
+removing a user does not revoke their key: revocation is manual and on the
+tenant's side, which makes blast-radius limiting Mike's job. The per-account
+`DAILY_CAP` is already exactly that instrument.
+
+**Midjourney breaks the model outright.** With no official API, the AceDataCloud
+route means tenants are not handing over *their* credentials -- Mike is reselling
+his own access and carrying the cost. "One key per tenant across all platforms"
+has an exception, and it is the one where he pays. Decide it deliberately.
+
+Veo is the only place a real "Connect your Google account" button is possible,
+and only by moving off the Gemini Developer API onto Vertex AI. Not a pilot-week
+change, but it is the one provider where the good version exists.
+
 **Two things that are bugs regardless of the BYOK decision:**
 - Every `*_GLOBAL_DAILY_CAP` defaults to `str(DAILY_CAP)`, so the *installation*
   ceiling equals *one account's* allowance — the second pilot user gets nothing
   once the first has used the day. Numbers still unchosen from the last session.
-- **Veo has no `SPEND_OK` gate.** Runway, midjourney and higgsfield all need an
-  explicit per-command approval Mike controls; the most expensive tool needs only
-  to be under the cap.
+- ~~**Veo has no `SPEND_OK` gate.**~~ FIXED 2026-09-02 (#12): `VEO_SPEND_OK`,
+  checked inside `generate_video` so nothing can spend around it. Six clips at
+  $3.20 is $19.20 that used to leave on a dry run while the cheaper tools all
+  stopped and asked.
 
 **The caveat, and it is the real answer to the second question.** Higgsfield and
 Runway are model companies; reselling their inference is their business, not a
@@ -324,6 +351,152 @@ without `account_id`, so the per-account count is always against `None` (and
 approve fails with `no concept N` for every owned row); and Veo has no spend
 gate at all. Starting globals proposed there: runway 18, veo 8, higgsfield 18,
 midjourney 30, nano 60.
+## 12. The tenancy gap the dry run found  (SHIPPED 2026-09-02 -- one route left, blocked on #11)
+`docs/PILOT_DRY_RUN.md`. `hold_queue` and `workflows` had no `account_id`, and
+`holds_post` takes no account dependency at all -- so any signed-in user, with
+or without a membership, read Mike's hold queue and Director canvases, could
+reject a hold, delete a canvas, and could fire "post now" against the autopilot
+gate. The concept and asset surface is clean; this was the tables tenancy never
+listed. **This is the gate on the pilot, ahead of the cost tracker.** It also
+measured #2's two bugs (the global caps, veo's missing SPEND_OK) and reproduced
+#11's `corrections` bug end to end.
+
+### Done (the half that does not touch app/api.py)
+- **`hold_queue` and `workflows` are in `db.OWNED_TABLES`**, with the column
+  added and every store function taking an owner: `autonomy.to_hold` /
+  `list_hold` / `resolve_hold` (now returns False rather than raising, so a
+  caller 404s on somebody else's hold) / `posts_today` / `evaluator_agreement`,
+  and `workflows.create` / `update` / `delete` / `list` / `get` plus the
+  concept-keyed canvas path (`save_shot_graph` / `get_shot_graph` /
+  `delete_shot_graphs`).
+- **The backfill is deliberately NOT run yet.** Claiming the existing rows for
+  the bootstrap account while the routes still ask with no account would empty
+  Mike's own queue and canvas list. The rows stay NULL -- which is what "nobody
+  has said who owns them" honestly looks like -- and one word in each `init()`
+  (`add_account_column` -> `own_table`) finishes it, in the same commit that
+  converts the routes.
+- **`app/jobs.py` carries an owner** (`_account_id`, underscore-prefixed so it
+  never reaches the wire), matched in the three places that face a caller: the
+  list, the per-job lookup, and the SSE fan-out.
+- **`VEO_SPEND_OK`.** Veo was the one generator that spent without being asked:
+  six clips at $3.20 is $19.20 leaving on a dry run while the cheaper tools all
+  stopped at the gate. Same shape as runway/midjourney/higgsfield.
+- **`.env.example`** documents all five `*_GLOBAL_DAILY_CAP` values and what one
+  account can spend in a day at the defaults (~$25.80).
+- **Two guards, in `tests/test_tenancy_routes.py`**, because the failure here
+  was omission and no behavioural test can see an omission:
+  - every table in a freshly built database must appear in exactly one of
+    `OWNED_TABLES` / `SHARED_TABLES` / `PENDING_OWNERSHIP` / `INFRA_TABLES`;
+  - every `/api` route must declare `current_account_id` or be listed with a
+    reason -- and `PENDING_SCOPE` in that file is the exact remaining ledger.
+  The old static SQL scan in `tests/test_tenancy.py` now builds its regex from
+  `db.OWNED_TABLES` instead of repeating it, which is why it never saw these
+  two tables: they were not in the list, so no query against them could offend.
+
+### Done (the routes, second commit)
+All 23. **54 of 66 routes declare an owner, up from 29.** The backfill flipped on
+in the same commit, so the pairing test passes with both halves moved.
+
+Three routes were the interesting case: `asset_create_location`,
+`shot_media_attach` and `shot_reference_attach` already had an `account_id`
+parameter -- as a bare `Optional[int] = None`, which FastAPI reads as a **query
+parameter**, not the dependency. Every real request arrived with `None` and
+`AND account_id IS ?` matched nothing. Strictly worse than no owner at all,
+because it reads as done in review; it is the same shape that made
+`concept_archive` 404 every card on the real board. There is now a test for that
+exact shape.
+
+Four routes touch only shared tables and take an owner anyway -- `/scout/run`,
+`/evals/run`, `/workflows/exec/enhance`, the harness. They start jobs, and the
+job rail is per-account.
+
+### Left: one route, and it is not about effort
+`GET /analytics/accounts` reports the autonomy channels, and `channels` is itself
+in `db.PENDING_OWNERSHIP`. Its rows are installation-wide, so a dependency there
+would be decoration rather than scoping. It closes when `channels` does, which
+needs per-account seeding of `DEFAULT_CHANNELS` -- a design decision, and part of
+#11 rather than of this item.
+
+## 14. Off the laptop, onto Postgres — the substrate decision  (to build — Mike's ask, 2026-09-02)
+
+**The trigger is a person, not a date.** If the REST API product (#10) does not
+happen and this stays Mike's own studio, the Mac with the launchd walls now
+fixed is adequate and every migration below is pure cost. The moment somebody
+else's concepts depend on his laptop being open, it is not.
+
+Two moves. They are independent and get conflated constantly — Supabase does not
+run `src/orchestrator.py`, and a box does not give you row-level security.
+
+### Move one — Supabase for the data layer
+Postgres, which this repo already runs for pgvector, plus auth and row-level
+security.
+
+- **Replaces:** `src/accounts.py` + `app/auth.py` (users, `account_members`,
+  `auth_identities`, the Google/Discord OAuth dance), `data/pipeline.db`, and the
+  hand-maintained half of #8/#12 — every `WHERE account_id IS ?` becomes belt
+  and braces behind a policy the database enforces. **RLS is the structural fix
+  for the exact bug the dry run found:** a query that forgets its owner returns
+  nothing, so there is no such thing as a table nobody added to a list.
+- **Consolidates `rag_documents` into the same database**, which unblocks the
+  provenance third of #11 — the `project` label that is written at exactly one
+  site and read by nobody.
+- **The trap, and it is the whole thing.** RLS only protects a request that
+  carries tenant identity into the database. A FastAPI server connecting with the
+  service-role key — which the nightly orchestrator must — **bypasses RLS
+  entirely**, and you are back to remembering `account_id` in every query with a
+  false sense of safety. Getting the benefit means setting the claim per request
+  (`SET LOCAL request.jwt.claims`, or a per-request role) and treating
+  service-key paths as a small, deliberate, audited set. Plenty of teams adopt
+  Supabase, route everything through the service key, and ship the leak they
+  thought they had bought their way out of.
+- **What #12 already bought:** every route knows its account, so there is
+  somewhere obvious to set that claim. The guard tests in
+  `tests/test_tenancy_routes.py` keep working and become the second line rather
+  than the only one.
+- Exit is `pg_dump`. Cost is a flat monthly fee in the tens.
+
+### Move two — one always-on box for the app and the scheduler
+Fly or Railway; a small machine running the FastAPI app and the nightly.
+
+- **This is what kills launchd and TCC.** The 6am walk failed silently for
+  eleven nights on two macOS walls plus a plist that drifted after a folder
+  rename — failure modes that exist only because of *where* it runs. It is
+  uptime, not throughput: nothing here is about load, and SQLite on the laptop
+  would serve hundreds of readers without noticing.
+- It is also where the #10 REST API answers from, since inbound requests arrive
+  whenever a customer sends them.
+- It also decouples the dev server from production. A save currently runs
+  migrations against the live DB seconds later, which is how `concept_locations`
+  got damaged once.
+- **It is a split, not a move.** `framebank` cuts stills from 149GB of ProRes in
+  `footage/`, and the asset shelf reads local photo roots. A cloud orchestrator
+  can see neither. Those lanes stay local, or get pre-ingested to R2 first.
+
+### Considered and rejected
+- **AWS.** Better in exactly two places: Secrets Manager + KMS for #10's tenant
+  credentials (per-tenant encryption context, and a CloudTrail record of every
+  decrypt, which Supabase Vault has no equivalent of), and Step Functions for the
+  render pipeline's submit → poll → download. Against that: Cognito is the weak
+  link where auth is the piece most worth handing off, there is no "just
+  connect" (IAM, VPC, RDS Proxy, CDK), the floor is roughly $30/month for a NAT
+  gateway alone, and S3 bills the video egress that R2 gives away. **If one AWS
+  piece is ever taken it should be KMS on its own** — an SDK call from wherever
+  the app runs, committing to nothing else.
+- **Neon.** Excellent Postgres with real branching, genuinely appealing given the
+  live-migration scar. No auth, no storage, so more pieces to assemble.
+- **Cloudflare D1 + Workers.** Coherent, and R2 is already here, but D1 is
+  SQLite-flavoured and gives no pgvector — it would split the RAG layer off from
+  everything else.
+- **Modal / Replicate.** Solve GPU problems this repo does not have; it calls
+  other people's APIs rather than running models.
+
+### Order
+1. Nothing until there is a second person, or until #10 is decided.
+2. **Move secrets once.** If BYOK (#10) is happening, pick the substrate *before*
+   building the connector layer — tenant credentials are the one thing not to
+   migrate twice.
+3. Supabase, then the box. Not the reverse: a box still pointed at a SQLite file
+   on a laptop is the worst of both.
 
 ## 11. The shared brain — global learning, made deliberate  (to build — Mike's decision, 2026-09-01)
 Full write-up: `docs/tasks/task-shared-brain.md`. Raised as a tenancy gap — nine
