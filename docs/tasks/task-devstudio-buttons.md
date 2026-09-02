@@ -131,6 +131,29 @@ and loaded. Confirm with `launchctl list | grep zeropage`, then `cp` and
 
 This is the only thing keeping the grading queue empty. Nothing else is blocked.
 
+### 7. The launchagent installer only covers one of the two agents
+
+Added 08-31 after `ops/install-launchagents.sh` landed. That script is the right idea — its header
+correctly names the failure mode (`~/Library/LaunchAgents` holds a *copy*; editing the repo's plist
+changes nothing) and it has a `--check` mode that diffs installed against repo. But:
+
+```
+ops/install-launchagents.sh        LABEL="com.zeropage.morningprompts"   # 06:00, refresh metrics
+ops/com.zeropage.shadowrun.plist                                         # 03:30, python -m src.trigger
+                                   # ^ never installed by that script
+```
+
+The evidence that it has still never fired on schedule: `data/trigger.log` holds exactly one
+`trigger:` line, at **16:30 UTC** — a hand-run, not the 03:30 slot. Holds 17, 19, 20 and 21 were
+created 16:03-16:46 without writing to that log at all, so they came from the Studio or the graph
+directly, not from `src.trigger`.
+
+Make the installer loop over both labels (or fold the trigger into the 06:00 script and delete the
+second plist — one scheduled entry point is easier to reason about than two). Then
+`ops/install-launchagents.sh --check` should report both as installed and loaded.
+
+Until this lands the grading queue only fills when someone runs the trigger by hand.
+
 ## What not to change
 
 - `runway.generate` / `runway.spend` being false is correct. `RUNWAYML_API_SECRET` is absent, and
