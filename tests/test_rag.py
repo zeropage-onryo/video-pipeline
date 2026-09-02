@@ -269,6 +269,73 @@ def test_query_with_an_empty_domain_list_has_no_where_clause():
     assert len(params) == 2
 
 
+# ---------- provenance: a label is not a fence ----------
+
+def test_query_with_a_preferred_project_fetches_a_wider_pool_and_resorts():
+    """Own neighbourhood first, nothing excluded: the pool is k x
+    PREFER_POOL rows by plain distance (so the HNSW index still serves
+    it), re-sorted with the boost off matching rows' distance, top k
+    kept. The returned score stays the raw similarity."""
+    conn = FakeConn(rows=[
+        ("theirs.md", "a stranger's lesson", "denials", "pilot", None, 0.20),
+        ("mine.md", "my own lesson", "denials", "zeropage", None, 0.22),
+    ])
+    results = rag.query("q", FakeEmbedClient(), conn, k=3, domain="denials",
+                        prefer_project="zeropage")
+    sql, params = conn.executed[0]
+    assert "ORDER BY distance - CASE WHEN project = %s THEN %s ELSE 0 END" in sql
+    assert "FROM (" in sql and "LIMIT %s" in sql
+    assert "project = %s" not in sql.split("FROM (")[1].split(") AS pool")[0]  # no fence inside
+    assert params[-3:] == ["zeropage", rag.PROJECT_BOOST, 3]
+    assert 3 * rag.PREFER_POOL in params                       # the wider pool
+    assert [r["own"] for r in results] == [False, True]
+    assert [r["score"] for r in results] == [0.8, 0.78]         # raw, never boosted
+
+
+def test_query_without_a_preference_is_the_query_it_always_was():
+    conn = FakeConn(rows=[])
+    rag.query("anything", FakeEmbedClient(), conn, k=3, prefer_project=None)
+    sql, params = conn.executed[0]
+    assert "CASE WHEN" not in sql and "FROM (" not in sql
+    assert len(params) == 2
+
+
+def test_the_boost_is_a_tie_break_not_a_fence():
+    """A clearly better stranger's row still wins; an equal own row is
+    preferred; a NULL-labelled row is retrieved like any other."""
+    assert 0 < rag.PROJECT_BOOST < 0.1
+    # the ordering expression, evaluated the way Postgres would
+    def key(distance, project, mine="zeropage"):
+        return distance - (rag.PROJECT_BOOST if project == mine else 0)
+    assert key(0.30, "pilot") < key(0.40, "zeropage")          # much better stranger wins
+    assert key(0.30, "zeropage") < key(0.29, "pilot")          # near-tie goes to mine
+    assert key(0.30, None) == 0.30                              # unlabelled: untouched
+
+
+def test_label_domains_stamps_only_unlabelled_rows_by_default():
+    conn = FakeConn(rows=[])
+    rag.label_domains(conn, "zeropage", ["denials", "assets"])
+    sql, params = conn.executed[0]
+    assert sql.startswith("UPDATE rag_documents SET project = %s WHERE domain = ANY(%s)")
+    assert "project IS NULL" in sql
+    assert params == ["zeropage", ["denials", "assets"]]
+    conn = FakeConn(rows=[])
+    rag.label_domains(conn, None, "assets", only_unlabelled=False)
+    sql, params = conn.executed[0]
+    assert "project IS NULL" not in sql and params == [None, ["assets"]]
+    assert rag.label_domains(FakeConn(), "x", []) == 0
+
+
+def test_retrieve_references_passes_the_preference_through(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    conn = FakeConn(rows=[])
+    monkeypatch.setattr(rag, "connect", lambda db_url=None: conn)
+    monkeypatch.setattr(rag, "make_client", lambda: FakeEmbedClient())
+    rag.retrieve_references("query text", k=2, domain="denials", prefer_project="zeropage")
+    sql, params = conn.executed[0]
+    assert "CASE WHEN project = %s" in sql and "zeropage" in params
+
+
 # ---------- retrieve_references never raises ----------
 
 def test_retrieve_references_degrades_without_an_api_key(monkeypatch):

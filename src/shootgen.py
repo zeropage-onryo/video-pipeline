@@ -226,6 +226,9 @@ def reference_block(spark=None, client=None, db_path=None, picked_sources=None,
     kwargs = {"path": db_path} if db_path is not None else {}
     locations = preprod.list_locations(**kwargs, account_id=account_id)
     query = build_reference_query(locations, spark=spark, client=client)
+    # the caller's neighbourhood: own lessons first, nobody's excluded
+    from . import accounts
+    mine = accounts.slug_of(account_id, **kwargs)
 
     references = []
 
@@ -240,7 +243,8 @@ def reference_block(spark=None, client=None, db_path=None, picked_sources=None,
                   file=sys.stderr)
 
     if query.strip():
-        retrieval = rag.retrieve_references(query, domain=AUTO_IDEATION_DOMAINS)
+        retrieval = rag.retrieve_references(query, domain=AUTO_IDEATION_DOMAINS,
+                                            prefer_project=mine)
         if retrieval["ok"] and retrieval["references"]:
             print(f"Grounding in {len(retrieval['references'])} craft reference(s)",
                   file=sys.stderr)
@@ -249,7 +253,8 @@ def reference_block(spark=None, client=None, db_path=None, picked_sources=None,
             reason = retrieval.get("error", "reference library is empty")
             print(f"note: generating without craft references: {reason}", file=sys.stderr)
 
-        learned = rag.retrieve_references(query, domain=LEARNED_IDEATION_DOMAINS)
+        learned = rag.retrieve_references(query, domain=LEARNED_IDEATION_DOMAINS,
+                                          prefer_project=mine)
         if learned["ok"] and learned["references"]:
             print(f"Grounding in {len(learned['references'])} taught reference(s) "
                   "-- your own approve/deny history", file=sys.stderr)

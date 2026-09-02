@@ -1553,7 +1553,7 @@ def test_teach_it_records_both_halves(tmp_dev_db, monkeypatch):
     cid = preprod.save_concept({"title": "T", "shots": CONCEPT_SHOTS},
                                brand="antihero", path=tmp_dev_db, account_id=None)
     monkeypatch.setattr(app_main.winners, "ingest_to_rag",
-                        lambda entry_id, path=None: {"ok": True, "chunks": 1})
+                        lambda entry_id, path=None, project=None: {"ok": True, "chunks": 1})
 
     response = client.post(
         f"/concepts/{cid}/shots/1/verdict",
@@ -1576,7 +1576,7 @@ def test_deny_without_a_replacement_is_unchanged(tmp_dev_db, monkeypatch):
     cid = preprod.save_concept({"title": "T", "shots": CONCEPT_SHOTS},
                                brand="antihero", path=tmp_dev_db, account_id=None)
     monkeypatch.setattr(app_main.winners, "ingest_to_rag",
-                        lambda entry_id, path=None: {"ok": True, "chunks": 1})
+                        lambda entry_id, path=None, project=None: {"ok": True, "chunks": 1})
     client.post(f"/concepts/{cid}/shots/1/verdict",
                 data={"text": "vague prompt", "verdict": "didnt_work"},
                 follow_redirects=False)
@@ -1592,7 +1592,7 @@ def test_approve_ignores_a_stray_replacement(tmp_dev_db, monkeypatch):
     cid = preprod.save_concept({"title": "T", "shots": CONCEPT_SHOTS},
                                brand="antihero", path=tmp_dev_db, account_id=None)
     monkeypatch.setattr(app_main.winners, "ingest_to_rag",
-                        lambda entry_id, path=None: {"ok": True, "chunks": 1})
+                        lambda entry_id, path=None, project=None: {"ok": True, "chunks": 1})
     client.post(f"/concepts/{cid}/shots/1/verdict",
                 data={"text": "good prompt", "replacement": "ignored",
                       "verdict": "worked"},
@@ -1627,7 +1627,7 @@ def teachable(tmp_dev_db, monkeypatch):
     from src import winners
     winners.init(tmp_dev_db)
     monkeypatch.setattr(app_main.winners, "ingest_to_rag",
-                        lambda entry_id, path=None: {"ok": True, "chunks": 1})
+                        lambda entry_id, path=None, project=None: {"ok": True, "chunks": 1})
     return tmp_dev_db
 
 

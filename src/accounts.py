@@ -245,6 +245,26 @@ def claim_unowned_rows(account_id: Optional[int] = None,
     return claimed
 
 
+def slug_of(account_id: Optional[int], path: Path | str = DB_PATH) -> Optional[str]:
+    """The tenant's slug for an account id -- the label rag_documents.project
+    carries (see src/rag.py). Never raises: None in, None out; a database
+    with no accounts table (a fresh install, most test fixtures) is None
+    too, which the library treats as "unlabelled", never as an error."""
+    if account_id is None:
+        return None
+    try:
+        with connect(path) as conn:
+            if conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'accounts'"
+            ).fetchone() is None:
+                return None
+            row = conn.execute("SELECT slug FROM accounts WHERE id = ?",
+                               (int(account_id),)).fetchone()
+            return str(row["slug"]) if row else None
+    except Exception:
+        return None
+
+
 def resolve_account(slug: Optional[str] = None,
                     path: Path | str = DB_PATH) -> Optional[int]:
     """Turn a `--account <slug>` into an id, or fall back to the oldest

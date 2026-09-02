@@ -40,7 +40,8 @@ def test_grade_retrieval_weak_on_empty_references():
 def test_retrieve_with_crag_skips_rewrite_when_retrieval_is_strong(monkeypatch):
     calls = {"retrieve": 0, "rewrite": 0}
 
-    def fake_retrieve(query, k=5, db_url=None, domain=None, project=None):
+    def fake_retrieve(query, k=5, db_url=None, domain=None, project=None,
+                      prefer_project=None):
         calls["retrieve"] += 1
         return {"ok": True, "references": make_refs(0.9)}
 
@@ -58,7 +59,8 @@ def test_retrieve_with_crag_skips_rewrite_when_retrieval_is_strong(monkeypatch):
 def test_retrieve_with_crag_rewrites_and_adopts_a_better_result(monkeypatch):
     retrieve_calls = []
 
-    def fake_retrieve(query, k=5, db_url=None, domain=None, project=None):
+    def fake_retrieve(query, k=5, db_url=None, domain=None, project=None,
+                      prefer_project=None):
         retrieve_calls.append(query)
         if query == "original":
             return {"ok": True, "references": make_refs(0.2)}
@@ -76,7 +78,8 @@ def test_retrieve_with_crag_rewrites_and_adopts_a_better_result(monkeypatch):
 
 
 def test_retrieve_with_crag_keeps_original_when_rewrite_does_not_improve(monkeypatch):
-    def fake_retrieve(query, k=5, db_url=None, domain=None, project=None):
+    def fake_retrieve(query, k=5, db_url=None, domain=None, project=None,
+                      prefer_project=None):
         # both attempts come back equally weak
         return {"ok": True, "references": make_refs(0.3)}
 
@@ -91,7 +94,8 @@ def test_retrieve_with_crag_keeps_original_when_rewrite_does_not_improve(monkeyp
 
 
 def test_retrieve_with_crag_falls_back_to_original_when_rewrite_fails(monkeypatch):
-    def fake_retrieve(query, k=5, db_url=None, domain=None, project=None):
+    def fake_retrieve(query, k=5, db_url=None, domain=None, project=None,
+                      prefer_project=None):
         return {"ok": True, "references": make_refs(0.2)}
 
     def broken_rewrite(*a, **k):
@@ -121,7 +125,8 @@ def test_retrieve_with_crag_passes_through_a_failed_retrieval_untouched(monkeypa
 def test_retrieve_with_crag_forwards_k_domain_and_project(monkeypatch):
     calls = []
 
-    def fake_retrieve(query, k=5, db_url=None, domain=None, project=None):
+    def fake_retrieve(query, k=5, db_url=None, domain=None, project=None,
+                      prefer_project=None):
         calls.append({"k": k, "domain": domain, "project": project})
         return {"ok": True, "references": make_refs(0.9)}
 

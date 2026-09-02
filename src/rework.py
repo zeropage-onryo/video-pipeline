@@ -106,7 +106,7 @@ def parse_slate_response(text: str) -> list:
 
 
 def evidence_block(signals: dict, gemini_client=None, db_path=None,
-                   picked_sources=None) -> str:
+                   picked_sources=None, account_id: Optional[int] = None) -> str:
     """
     Edge helper, like shootgen.reference_block: retrieve the reference
     material rework grounds on. Never raises. Same two-layer split as
@@ -122,6 +122,8 @@ def evidence_block(signals: dict, gemini_client=None, db_path=None,
     for key in ("winning_topics", "winning_hooks", "winning_title_words"):
         parts.extend((signals.get(key) or {}).keys())
     query = " ".join(parts) or "proven winning short-form video concepts"
+    from . import accounts
+    mine = accounts.slug_of(account_id, path=db_path if db_path is not None else DB_PATH)
 
     references = []
 
@@ -142,9 +144,11 @@ def evidence_block(signals: dict, gemini_client=None, db_path=None,
         if gemini_client is not None:
             retrieval = crag.retrieve_with_crag(
                 query, gemini_client, MODEL, domain=AUTO_REWORK_DOMAINS,
+                prefer_project=mine,
             )
         else:
-            retrieval = rag.retrieve_references(query, domain=AUTO_REWORK_DOMAINS)
+            retrieval = rag.retrieve_references(query, domain=AUTO_REWORK_DOMAINS,
+                                                prefer_project=mine)
     except Exception as e:  # pragma: no cover - belt over crag's own braces
         retrieval = {"ok": False, "references": [], "error": str(e)}
 

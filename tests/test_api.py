@@ -142,7 +142,7 @@ def test_retrieve_returns_hits_and_latency(tmp_db, monkeypatch):
     monkeypatch.setattr(api_mod.rag, "connect", lambda db_url=None: FakeConn())
     monkeypatch.setattr(api_mod.rag, "make_client", lambda: object())
     monkeypatch.setattr(api_mod.rag, "query",
-                        lambda text, client_, conn, k=5, domain=None: hits)
+                        lambda text, client_, conn, k=5, domain=None, prefer_project=None: hits)
     data = client.post("/api/retrieve", json={"query": "night ride"}).json()
     assert data["hits"] == hits
     assert isinstance(data["latency_ms"], int)
@@ -713,7 +713,7 @@ def test_assets_backfill_runs_as_a_job(tmp_db, monkeypatch):
     """The catch-up for assets created before the shelf existed."""
     calls = {}
 
-    def fake_backfill(db_path=None, describe=False, gemini_client=None):
+    def fake_backfill(db_path=None, describe=False, gemini_client=None, account_id=None):
         calls.update(describe=describe, client=gemini_client)
         return {"ingested": 3, "described": 0, "failed": 0,
                 "skipped_no_photos": 0, "errors": []}

@@ -362,7 +362,10 @@ needs, none of which is scoping them:
   (`app/api.py:1923`, as the brand) and **no caller reads it**. Without a label,
   the shelf gets noisier per user instead of smarter — the network effect
   backwards. A label is not a fence: everyone still reaches every lesson, own
-  neighbourhood ranked first.
+  neighbourhood ranked first. **SHIPPED 2026-09-02 (#12, part two):** `project`
+  is the tenant slug, written at every learning-shelf ingest, preferred (never
+  filtered) at every retrieval site via `prefer_project` + `PROJECT_BOOST`; the
+  live store's 150 learning chunks are labelled; measured before/after on a copy.
 
 Ahead of #2 if a second person is going on the system soon; behind it if not,
 since #2 is what makes the caps a budget.

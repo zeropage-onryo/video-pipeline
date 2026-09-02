@@ -137,7 +137,7 @@ def test_refine_writes_back_only_a_changed_prompt(tmp_db, monkeypatch):
     concept_id = seed_scene(tmp_db)
     from src import promptgen, rag
     monkeypatch.setattr(rag, "retrieve_references",
-                        lambda q, k=5, db_url=None, domain=None, project=None:
+                        lambda q, k=5, db_url=None, domain=None, project=None, prefer_project=None:
                             {"ok": True, "references": [
                                 {"source": "s", "chunk": "technique", "domain": "ai_prompting",
                                  "project": None, "source_ref": None, "score": 0.9}]})
@@ -159,7 +159,7 @@ def test_refine_without_the_shelf_is_a_result(tmp_db, monkeypatch):
     monkeypatch.setattr(promptgen, "refine_prompt",
                         lambda *a, **k: "unreached", raising=False)
     monkeypatch.setattr(rag, "retrieve_references",
-                        lambda q, k=5, db_url=None, domain=None, project=None:
+                        lambda q, k=5, db_url=None, domain=None, project=None, prefer_project=None:
                             {"ok": False, "references": [], "error": "store down"})
     result = director.refine_shot_prompt(concept_id, 1, db_path=tmp_db)
     assert result["ok"] is False

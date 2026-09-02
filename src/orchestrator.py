@@ -373,8 +373,9 @@ def ground_rag(state: GenState) -> GenState:
 
     query = (state.get("spark") or state.get("goal") or "").strip()
     if query:
-        craft = crag.retrieve_with_crag(query, _client(), GEMINI_MODEL,
-                                        domain=shootgen.AUTO_IDEATION_DOMAINS)
+        craft = crag.retrieve_with_crag(
+            query, _client(), GEMINI_MODEL, domain=shootgen.AUTO_IDEATION_DOMAINS,
+            prefer_project=accounts.slug_of(state.get("account_id"), path=db.DB_PATH))
         if craft.get("ok") and craft.get("references"):
             print(f"Grounding in {len(craft['references'])} craft reference(s)", file=sys.stderr)
             references.extend(craft["references"])
@@ -566,7 +567,7 @@ def _midjourney_still(shot_prompt: str) -> str:
                                  model=GEMINI_MODEL)
 
 
-def _technique_references(tool: str) -> str:
+def _technique_references(tool: str, account_id: Optional[int] = None) -> str:
     """AI-video prompt-syntax guidance for this shot's tool, CRAG-graded
     off the ai_prompting shelf -- the same never-raises degrade contract
     ground_rag keeps. Its own retrieval, separate from ground_rag's:
@@ -575,7 +576,9 @@ def _technique_references(tool: str) -> str:
     match just means no refinement happens, same as an ungrounded run."""
     query = (f"{tool} prompting technique for photorealistic AI video generation"
              if tool else "AI video prompting technique for photorealistic generation")
-    result = crag.retrieve_with_crag(query, _client(), GEMINI_MODEL, domain=promptgen.REFINE_DOMAIN)
+    result = crag.retrieve_with_crag(
+        query, _client(), GEMINI_MODEL, domain=promptgen.REFINE_DOMAIN,
+        prefer_project=accounts.slug_of(account_id, path=db.DB_PATH))
     if result.get("ok") and result.get("references"):
         return rag.format_references(result["references"])
     return ""
@@ -611,7 +614,7 @@ def structure_prompt(state: GenState) -> GenState:
     prompts = []
     for s in shots:
         tool = s.get("tool") or ""
-        references = _technique_references(tool)
+        references = _technique_references(tool, state.get("account_id"))
         refined = promptgen.refine_prompt(s["prompt"], tool, _client(),
                                           model=GEMINI_MODEL, references=references)
         reference_image = (s.get("reference_image") or "").strip()

@@ -1216,3 +1216,73 @@ def test_the_global_caps_are_set_deliberately_in_the_example_env():
         assert key in values, f"{key} is not set in .env.example"
         assert int(values[key]) > cap, f"{key} is not above the per-account cap of {cap}"
     assert "people" in text and "x 3" in text     # the arithmetic is written down
+
+
+# --------------------------------------------------------------------------
+# provenance on the shelves (part two): the label is the tenant, and it is
+# written at every learning-shelf ingest and read at every retrieval site
+# --------------------------------------------------------------------------
+
+def test_slug_of_is_the_tenant_and_never_raises(two_accounts, tmp_path):
+    path, a, b = two_accounts
+    assert accounts.slug_of(a, path=path) == "zeropage"
+    assert accounts.slug_of(b, path=path) == "antihero"
+    assert accounts.slug_of(None, path=path) is None
+    assert accounts.slug_of(999, path=path) is None
+    fresh = tmp_path / "no-accounts.db"
+    with db.connect(fresh) as conn:
+        conn.execute("CREATE TABLE placeholder (id INTEGER)")
+    assert accounts.slug_of(1, path=fresh) is None
+
+
+def test_a_denial_is_labelled_with_the_tenant_not_the_brand(two_accounts, monkeypatch):
+    """The one site that ever wrote `project` wrote the brand. A second
+    user's rows are labelled with Mike's brand name until fix-order item
+    5 lands (PILOT_DRY_RUN #9), so keyed by brand a stranger's denial
+    would rank FIRST for Mike's next concept."""
+    from fastapi.testclient import TestClient
+
+    import app.main as app_main
+    from app import api as api_mod
+    from app import auth
+
+    path, a, b = two_accounts
+    autonomy.init(path)
+    monkeypatch.setattr(db, "DB_PATH", path)
+    records = []
+
+    class _Conn:
+        def close(self):
+            pass
+    monkeypatch.setattr(api_mod.rag, "connect", lambda db_url=None: _Conn())
+    monkeypatch.setattr(api_mod.rag, "init_store", lambda c: None)
+    monkeypatch.setattr(api_mod.rag, "make_client", lambda: object())
+    monkeypatch.setattr(api_mod.rag, "ingest_records",
+                        lambda recs, client_, conn: records.extend(recs) or len(recs))
+    monkeypatch.setattr(auth, "current_user", lambda request: {"id": 1})
+    app_main.app.dependency_overrides[auth.current_account_id] = lambda: b
+    with db.connect(path) as conn:
+        theirs = conn.execute("SELECT id FROM shoot_concepts WHERE account_id = ?",
+                              (b,)).fetchone()["id"]
+        conn.execute("UPDATE shoot_concepts SET brand = 'zeropage' WHERE id = ?", (theirs,))
+    res = TestClient(app_main.app).post(
+        f"/api/concepts/{theirs}/deny", json={"reasons": ["off-tone"], "note": "no"})
+    assert res.status_code == 200, res.text
+    assert records and records[0]["domain"] == "denials"
+    assert records[0]["project"] == "antihero"        # the tenant (account b)
+    assert records[0]["project"] != "zeropage"        # not the row's brand
+
+
+def test_ideation_prefers_the_tenants_own_neighbourhood(two_accounts, monkeypatch):
+    """Every automatic retrieval in reference_block passes the caller's
+    slug as prefer_project -- never as project, which would be a fence."""
+    from src import shootgen
+    path, a, _b = two_accounts
+    calls = []
+    monkeypatch.setattr(shootgen.rag, "retrieve_references",
+                        lambda *args, **kw: calls.append(kw) or
+                        {"ok": True, "references": []})
+    monkeypatch.setattr(shootgen, "build_reference_query", lambda *a, **k: "a query")
+    shootgen.reference_block(spark="gearing up ritual", db_path=path, account_id=a)
+    assert calls and all(c.get("prefer_project") == "zeropage" for c in calls)
+    assert all(c.get("project") is None for c in calls)

@@ -809,7 +809,15 @@ is yours, in Resolve, by hand.
   itself on every ingest. `shootgen.py` injects into a prompt's `{references}` section, querying
   with the spark plus the mood of the described rooms.
   `retrieve_references` never raises, so no Postgres means an ungrounded run with a stderr note,
-  not a dead one. The `rag` CLI fails loudly — there
+  not a dead one. **`project` is the tenant that taught the row** (2026-09-02: the account
+  slug via `accounts.slug_of`, NOT the brand -- rag.py's docstring says why), written at every
+  learning-shelf ingest (denials, assets, winning/avoid prompts, proven_results) and NULL on the
+  craft shelves on purpose. A label is not a fence: every retrieval site passes the caller's
+  slug as `prefer_project`, which fetches a wider pool by similarity and re-sorts it with a
+  small `PROJECT_BOOST` for the caller's own rows, so their lessons rank first and nobody's
+  are excluded. `project=` stays the hard filter for the CLI; `python -m src.rag label` is
+  the backfill (150 live chunks labelled `zeropage` on 2026-09-02, measured before/after on a
+  copy first). The `rag` CLI fails loudly — there
   the store is the deliverable. `rag_eval.py` scores retrieval (hit@k, MRR) against a labeled
   JSON case file, judged at document level, sources deduplicated before ranking. **Note:**
   psycopg/libpq connects below Python's socket module, so `tests/conftest.py`'s network guard

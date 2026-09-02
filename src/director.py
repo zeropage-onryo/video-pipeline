@@ -177,7 +177,10 @@ def refine_shot_prompt(concept_id: int, shot_n, gemini_client=None,
         tool = shot.get("tool") or ""
         query = (f"{tool} prompting technique for photorealistic AI video generation"
                  if tool else "AI video prompting technique")
-        retrieval = rag.retrieve_references(query, k=5, domain=refine_domain)
+        from . import accounts
+        retrieval = rag.retrieve_references(
+            query, k=5, domain=refine_domain,
+            prefer_project=accounts.slug_of(account_id, **kwargs))
         references = rag.format_references(retrieval["references"]) \
             if retrieval.get("ok") and retrieval.get("references") else ""
         if not references:

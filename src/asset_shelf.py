@@ -103,9 +103,12 @@ def chunk_text(kind: str, name: str, fields: dict) -> str:
     return "\n".join(lines)
 
 
-def ingest_one(kind: str, slug: str, name: str, fields: dict) -> dict:
+def ingest_one(kind: str, slug: str, name: str, fields: dict, *,
+               project: Optional[str] = None) -> dict:
     """Write one asset's chunk. Never raises -- a down store returns
-    {"ok": False} so the caller can report it and move on."""
+    {"ok": False} so the caller can report it and move on. `project` is
+    the owner's tenant slug (rag.py: the label that ranks a tenant's own
+    assets first without hiding anyone's)."""
     text = chunk_text(kind, name, fields)
     try:
         conn = rag.connect()
@@ -113,7 +116,7 @@ def ingest_one(kind: str, slug: str, name: str, fields: dict) -> dict:
             rag.init_store(conn)
             written = rag.ingest_records(
                 [{"source": source_key(kind, slug), "text": text,
-                  "domain": DOMAIN, "project": None, "source_ref": None}],
+                  "domain": DOMAIN, "project": project, "source_ref": None}],
                 rag.make_client(), conn,
             )
         finally:
@@ -285,6 +288,8 @@ def backfill(db_path=None, describe: bool = False, gemini_client=None, account_i
     path = db.DB_PATH if db_path is None else db_path
     result = {"ingested": 0, "described": 0, "failed": 0,
               "skipped_no_photos": 0, "errors": []}
+    from . import accounts
+    project = accounts.slug_of(account_id, path=path)
 
     def record_error(what: str, error: str) -> None:
         result["failed"] += 1
@@ -294,7 +299,8 @@ def backfill(db_path=None, describe: bool = False, gemini_client=None, account_i
     for loc in preprod.list_locations(path=path, account_id=account_id):
         name = loc["name"]
         outcome = ingest_one("location", slugify(name), name,
-                             {"description": loc.get("description") or {}})
+                             {"description": loc.get("description") or {}},
+                             project=project)
         if outcome["ok"]:
             result["ingested"] += 1
         else:
@@ -324,7 +330,8 @@ def backfill(db_path=None, describe: bool = False, gemini_client=None, account_i
                 except Exception as e:
                     record_error(f"{kind} {name}", str(e))
 
-        outcome = ingest_one(kind, slug, name, entity_fields(kind, row))
+        outcome = ingest_one(kind, slug, name, entity_fields(kind, row),
+                             project=project)
         if outcome["ok"]:
             result["ingested"] += 1
         else:

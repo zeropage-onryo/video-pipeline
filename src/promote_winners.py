@@ -189,8 +189,10 @@ def _window_signals(kwargs: dict) -> Optional[dict]:
         return None
 
 
-def _to_queue_entry(c: dict, signals: Optional[dict] = None) -> dict:
+def _to_queue_entry(c: dict, signals: Optional[dict] = None,
+                    project: Optional[str] = None) -> dict:
     return {
+        "project": project,
         "video_id": c["video_id"], "idea_id": c["idea_id"],
         "title": c["title"], "platform": c["platform"],
         "metric": c["metric"], "score": c["score"],
@@ -199,11 +201,21 @@ def _to_queue_entry(c: dict, signals: Optional[dict] = None) -> dict:
     }
 
 
-def _ingest_candidates(candidates: list, signals: Optional[dict] = None) -> None:
+def _project_for(kwargs: dict) -> Optional[str]:
+    """The tenant whose videos are being promoted -- the label their
+    proven_results chunks carry (src/rag.py)."""
+    from . import accounts
+    return accounts.slug_of(kwargs.get("account_id"),
+                            path=kwargs.get("db_path") or db.DB_PATH)
+
+
+def _ingest_candidates(candidates: list, signals: Optional[dict] = None,
+                       project: Optional[str] = None) -> None:
     records = [
         {"source": source_key(c["video_id"]),
          "text": render_reference_doc(c, signals=signals),
-         "domain": DOMAIN, "source_ref": f"video:{c['video_id']}"}
+         "domain": DOMAIN, "project": project,
+         "source_ref": f"video:{c['video_id']}"}
         for c in candidates
     ]
     if not records:
@@ -229,7 +241,8 @@ def propose(**kwargs) -> list[dict[str, Any]]:
         conn.close()
 
     signals = _window_signals(kwargs)
-    queue = [_to_queue_entry(c, signals=signals) for c in candidates]
+    project = _project_for(kwargs)
+    queue = [_to_queue_entry(c, signals=signals, project=project) for c in candidates]
     QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
     QUEUE_PATH.write_text(json.dumps(queue, indent=2))
     return queue
@@ -263,7 +276,8 @@ def approve(video_ids: Optional[list] = None) -> dict[str, Any]:
         rag.init_store(conn)
         records = [
             {"source": source_key(c["video_id"]), "text": c["doc"],
-             "domain": DOMAIN, "source_ref": f"video:{c['video_id']}"}
+             "domain": DOMAIN, "project": c.get("project"),
+             "source_ref": f"video:{c['video_id']}"}
             for c in to_promote
         ]
         rag.ingest_records(records, client, conn)
@@ -299,7 +313,8 @@ def run_auto(**kwargs) -> dict[str, Any]:
     finally:
         conn.close()
 
-    _ingest_candidates(candidates, signals=_window_signals(kwargs))
+    _ingest_candidates(candidates, signals=_window_signals(kwargs),
+                       project=_project_for(kwargs))
     return {"promoted": len(candidates),
             "video_ids": sorted(c["video_id"] for c in candidates)}
 

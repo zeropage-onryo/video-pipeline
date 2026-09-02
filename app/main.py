@@ -137,9 +137,12 @@ def seed_gold_standard():
         already = any((w.get("note") or "").startswith("gold standard")
                       for w in winners.list_all(path=db.DB_PATH))
         if not already:
+            with db.connect(db.DB_PATH) as conn:
+                owner = db.bootstrap_account_id(conn)
             winners.record_and_learn(
                 "runway", text, note="gold standard structural exemplar",
-                verdict="worked", path=db.DB_PATH)
+                verdict="worked", path=db.DB_PATH,
+                project=accounts_mod.slug_of(owner, path=db.DB_PATH))
     except Exception:
         pass
 
@@ -703,7 +706,7 @@ async def grade_fresh(request: Request, account_id: int = Depends(auth.dev_accou
 VERDICTS = ("approve", "teach", "deny")
 
 
-def teach_verdict(tool, text, form, *, video_ref, subject, path):
+def teach_verdict(tool, text, form, *, video_ref, subject, path, project=None):
     """
     One teaching submission from any grade form. Returns the message.
 
@@ -732,14 +735,16 @@ def teach_verdict(tool, text, form, *, video_ref, subject, path):
 
     if replacement and verdict in ("teach", "deny"):
         result = winners.record_pair(
-            tool, text, replacement, note=note, video_ref=video_ref, path=path)
+            tool, text, replacement, note=note, video_ref=video_ref, path=path,
+            project=project)
         if result.get("ingested"):
             return (f"Taught {subject} — future generations imitate your version "
                     "and avoid the one it wrote.")
     else:
         result = winners.record_and_learn(
             tool, text, note=note, video_ref=video_ref,
-            verdict="didnt_work" if verdict == "deny" else "worked", path=path)
+            verdict="didnt_work" if verdict == "deny" else "worked", path=path,
+            project=project)
         if result.get("ingested"):
             verb = "steer away from" if verdict == "deny" else "imitate"
             return f"Recorded {subject} — future generations will {verb} it."
@@ -748,7 +753,8 @@ def teach_verdict(tool, text, form, *, video_ref, subject, path):
 
 
 @dev.post("/grade/fresh/verdict")
-async def grade_fresh_verdict(request: Request):
+async def grade_fresh_verdict(request: Request,
+                              account_id: int = Depends(auth.dev_account_id)):
     """The fresh prompt's approve/deny -- straight through the same
     winners.record_and_learn teaching loop a real concept's verdict
     uses, video_ref marking it as a throwaway grade."""
@@ -759,6 +765,7 @@ async def grade_fresh_verdict(request: Request):
             "/studio?tab=grade&message="
             + quote("Nothing to record — the text was empty."), status_code=303)
     message = teach_verdict("concept", text, form, video_ref="fresh-grade",
+                            project=accounts_mod.slug_of(account_id, path=db.DB_PATH),
                             subject="the throwaway", path=db.DB_PATH)
     return RedirectResponse(
         f"/studio?tab=grade&message={quote(message)}", status_code=303)
@@ -1339,7 +1346,8 @@ def winners_page(request: Request, prompt: Optional[str] = None,
 
 
 @dev.post("/winners")
-async def winners_add(request: Request):
+async def winners_add(request: Request,
+                      account_id: int = Depends(auth.dev_account_id)):
     """Save the winner durably, then teach it to the pipeline. Saving
     always succeeds; the RAG ingest is best-effort so a down store never
     loses the winner -- it just re-ingests later."""
@@ -1353,7 +1361,8 @@ async def winners_add(request: Request):
     result = winners.record_and_learn(
         form.get("tool") or "runway", prompt,
         note=form.get("note") or "", video_ref=form.get("video_ref") or "",
-        verdict=form.get("verdict") or "worked", path=db.DB_PATH)
+        verdict=form.get("verdict") or "worked", path=db.DB_PATH,
+        project=accounts_mod.slug_of(account_id, path=db.DB_PATH))
     verb = "avoid" if result.get("verdict") == "didnt_work" else "imitate"
     if result.get("ingested"):
         message = f"Saved and taught — future generations will {verb} it."
@@ -1685,7 +1694,8 @@ async def concept_shot_reference(concept_id: int, shot_n: int, request: Request,
 
 
 @dev.post("/concepts/{concept_id}/verdict")
-async def concept_verdict(concept_id: int, request: Request):
+async def concept_verdict(concept_id: int, request: Request,
+                          account_id: int = Depends(auth.dev_account_id)):
     """Subtle approve/deny on a whole concept or idea, with the idea text
     editable right there -- records straight through winners.py's existing
     teaching loop (the same one /winners already exposes as its own page),
@@ -1699,12 +1709,14 @@ async def concept_verdict(concept_id: int, request: Request):
         return _redirect_with_message(destination, "Nothing to record — the text was empty.")
     message = teach_verdict("concept", text, form,
                             video_ref=f"concept-{concept_id}",
-                            subject=f"SHOOT-{concept_id:02d}", path=db.DB_PATH)
+                            subject=f"SHOOT-{concept_id:02d}", path=db.DB_PATH,
+                            project=accounts_mod.slug_of(account_id, path=db.DB_PATH))
     return _redirect_with_message(destination, message)
 
 
 @dev.post("/concepts/{concept_id}/shots/{shot_n}/verdict")
-async def concept_shot_verdict(concept_id: int, shot_n: int, request: Request):
+async def concept_shot_verdict(concept_id: int, shot_n: int, request: Request,
+                               account_id: int = Depends(auth.dev_account_id)):
     """Subtle approve/deny on one AI shot's render prompt, with the prompt
     text editable right there before it's taught -- same winners.py loop as
     above, scoped to the exact prompt that would go to Runway/Higgsfield."""
@@ -1716,7 +1728,8 @@ async def concept_shot_verdict(concept_id: int, shot_n: int, request: Request):
     tool = (form.get("tool") or "runway").strip().lower()
     message = teach_verdict(tool, text, form,
                             video_ref=f"concept-{concept_id}-shot-{shot_n}",
-                            subject=f"shot {shot_n}", path=db.DB_PATH)
+                            subject=f"shot {shot_n}", path=db.DB_PATH,
+                            project=accounts_mod.slug_of(account_id, path=db.DB_PATH))
     return _redirect_with_message(destination, message)
 
 

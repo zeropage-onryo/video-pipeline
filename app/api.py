@@ -27,6 +27,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from src import (
+    accounts,
     asset_shelf,
     autonomy,
     autopilot,
@@ -413,7 +414,8 @@ async def asset_create_location(request: Request, account_id: int = Depends(auth
             note = f"saved {len(saved)} photo(s) but could not describe the space: {e}"
 
     chunk = ingest_asset_chunk("location", slug, slug,
-                               {"description": description or {}})
+                               {"description": description or {}},
+                               project=accounts.slug_of(account_id, path=db.DB_PATH))
     return {"ok": True, "slug": slug, "described": described,
             "photos": len(saved), "note": note, "rag": chunk}
 
@@ -452,7 +454,8 @@ async def _create_entity(kind: str, request: Request, account_id: int):
         account_id=account_id)
 
     chunk = ingest_asset_chunk(kind, slug, name, {
-        label: field, "notes": notes, "description": description})
+        label: field, "notes": notes, "description": description},
+        project=accounts.slug_of(account_id, path=db.DB_PATH))
     note = None if vision["ok"] else (
         f"photos saved but not described: {vision['error']}" if count
         else "no photos to describe")
@@ -491,7 +494,7 @@ def assets_backfill(body: BackfillBody, account_id: int = Depends(auth.current_a
             client = genai.Client(api_key=_gemini_key())
         jobs.progress(job, 0.1, "walking assets")
         result = asset_shelf.backfill(db_path=db.DB_PATH, describe=body.describe,
-                                      gemini_client=client)
+                                      gemini_client=client, account_id=account_id)
         detail = f"{result['ingested']} on the shelf"
         if result["described"]:
             detail += f" · {result['described']} described"
@@ -543,7 +546,8 @@ def retrieve(body: RetrieveBody, account_id: int = Depends(auth.current_account_
         conn = rag.connect()
         try:
             hits = rag.query(query_text, rag.make_client(), conn,
-                             k=body.k, domain=body.domain or None)
+                             k=body.k, domain=body.domain or None,
+                             prefer_project=accounts.slug_of(account_id, path=db.DB_PATH))
         finally:
             try:
                 conn.close()
@@ -1941,9 +1945,12 @@ def concept_deny(concept_id: int, body: DenyBody, account_id: int = Depends(auth
         conn = rag.connect()
         try:
             rag.init_store(conn)
+            # project is the TENANT that taught the lesson, not the brand
+            # (src/rag.py's docstring says why the brand was the wrong key)
             chunk_written = rag.ingest_records(
                 [{"source": f"denials/concept-{concept_id}", "text": text,
-                  "domain": "denials", "project": concept.get("brand"),
+                  "domain": "denials",
+                  "project": accounts.slug_of(account_id, path=db.DB_PATH),
                   "source_ref": None}],
                 rag.make_client(), conn,
             )

@@ -238,3 +238,45 @@ each finding was reproduced by an actual request or an actual query, not read
 off the source. The RAG store was unreachable (no Postgres in the container), so
 `rag_documents.project` — BACKLOG #11's third point — was **not** exercised
 here; it was, against the live store, in the part-two commit that followed.
+
+## Part two — the RAG provenance gap (2026-09-02, same branch)
+
+Tested against the live store this time (`RAG_DATABASE_URL`, 284 chunks), on a
+Postgres copy made with `CREATE DATABASE ... TEMPLATE zeropage` before anything
+touched the real one.
+
+**What was true:** every one of the 284 chunks had `project = NULL`. The one
+write site (the deny handler) set the brand, and no `denials` chunk had ever
+been written. No retrieval site passed it.
+
+**Decision, written in `src/rag.py`'s docstring:** `project` is the **tenant**
+that taught the row — `accounts.slug_of(account_id)`, "zeropage" for both of
+Mike's brands — not the brand. Brand was wrong twice: it is a label inside the
+tenant everywhere else, and until finding 9 is fixed a second user's rows carry
+Mike's brand name, so keyed by brand a stranger's denial would rank *first* for
+Mike. Written now at every learning-shelf ingest (denials, assets, winning /
+avoid prompts, proven_results, the gold-standard seed); the craft shelves
+(ai_prompting, marketing, cinematography, the manifest) stay NULL on purpose —
+nobody's taste, everyone's. Read at every retrieval site as `prefer_project`:
+a wider pool by similarity, re-sorted with `PROJECT_BOOST` (0.02, chosen from
+a sweep) off the caller's own rows. `project=` remains a hard filter for the
+CLI only.
+
+**Measured, same queries, k=5, the four learning shelves** (full output in the
+part-two commit message):
+
+- one tenant, before vs after labelling: identical top-5 sets and identical
+  order up to exact-score ties on 3/3 queries — Mike's grounding did not move;
+- two tenants simulated on the copy (the two `winning_prompts` sources that
+  ranked highest for "gearing up ritual" relabelled as a stranger's): as Mike,
+  5/5 own in the top 5 and the stranger's rows below his own band; as the
+  stranger, their 4 chunks first and Mike's lessons filling the rest, and on
+  the two queries they had taught nothing about, Mike's lessons 5/5 — the
+  shared brain running forwards.
+
+**Backfilled the live store:** `python -m src.rag label --project zeropage
+--domain assets avoid_prompts winning_prompts denials proven_results` → 150
+chunks (14 assets, 58 avoid, 78 winning; the other two shelves are empty).
+Honest because every learning row was written by the only tenant that has
+ever existed; a second run is a no-op, and `--project none --overwrite`
+reverses it.

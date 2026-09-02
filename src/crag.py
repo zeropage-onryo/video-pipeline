@@ -80,6 +80,7 @@ def retrieve_with_crag(
     project: Optional[str] = None,
     db_url: Optional[str] = None,
     threshold: Optional[float] = None,
+    prefer_project: Optional[str] = None,
 ) -> dict:
     """
     Never raises -- same contract as rag.retrieve_references, since
@@ -90,7 +91,8 @@ def retrieve_with_crag(
       "grade": the grade_retrieval() verdict for the references actually returned
       "rewritten_query": the query that was actually used, if a rewrite happened and helped; else None
     """
-    result = rag.retrieve_references(query, k=k, db_url=db_url, domain=domain, project=project)
+    result = rag.retrieve_references(query, k=k, db_url=db_url, domain=domain, project=project,
+                                     prefer_project=prefer_project)
     if not result["ok"]:
         return {**result, "grade": None, "rewritten_query": None}
 
@@ -105,7 +107,8 @@ def retrieve_with_crag(
         # rather than losing it -- something grounded beats nothing.
         return {**result, "grade": grade, "rewritten_query": None}
 
-    retried = rag.retrieve_references(rewritten, k=k, db_url=db_url, domain=domain, project=project)
+    retried = rag.retrieve_references(rewritten, k=k, db_url=db_url, domain=domain, project=project,
+                                      prefer_project=prefer_project)
     if not retried["ok"] or not retried["references"]:
         # the rewrite came back empty or the connection broke -- keep
         # whatever the original weak attempt found rather than nothing.
