@@ -319,10 +319,11 @@ def test_ground_entities_defaults_to_everything_on_file(tmp_db, monkeypatch):
 
 def test_ground_rag_auto_grounds_only_in_craft_advice_domains(tmp_db, monkeypatch):
     """
-    The marketing shelf (platform mechanics, structuring advice) is the
-    automatic layer -- never the brand's own assets (personal_brand,
-    cinematography, proven_results, winning_prompts), which stay
-    opt-in via picked_references (narrowed 2026-08-20).
+    The marketing shelf (platform mechanics, structuring advice) is one
+    automatic layer. The STYLE shelves (personal_brand, cinematography)
+    stay opt-in via picked_references (narrowed 2026-08-20); performance
+    history joined the automatic side 2026-09-02 and has its own tests
+    below.
     """
     calls = []
 
@@ -987,3 +988,75 @@ def test_run_with_a_finding_id_claims_it_under_this_runs_id(tmp_db, monkeypatch)
     assert result.get("scout_finding_id") == fid
     row = scout.get_finding(fid, dsn=tmp_db)
     assert row["used_at"] and row["run_id"] == result["run_id"]
+
+
+# --- performance history grounds every run (Mike, 2026-09-02) ---------------
+#
+# proven_results and winning_prompts sat in the opt-in set, which made them
+# dead on the only path that matters: an unattended run picks nothing, so
+# fetch_by_sources was never called, so no nightly concept was ever written
+# against what actually travelled. refresh_metrics -> promote_winners -> RAG
+# filled the shelf every morning and nothing read it.
+
+def test_performance_history_is_pulled_with_nothing_picked(tmp_db, monkeypatch):
+    def fake_crag(query, client, model, domain=None, **kwargs):
+        if domain == orchestrator.shootgen.PERFORMANCE_DOMAINS:
+            return {"ok": True, "references": [
+                {"source": "proven_results/video-42.txt",
+                 "chunk": "the loop cut on the wrong beat -- 4.1x median"}]}
+        return {"ok": False, "references": [], "error": "not exercised"}
+
+    monkeypatch.setattr(orchestrator.crag, "retrieve_with_crag", fake_crag)
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    orchestrator.run("gearing up ritual")          # nothing picked
+
+    assert "proven_results/video-42.txt" in calls[0]["references"]
+    assert "4.1x median" in calls[0]["references"]
+
+
+def test_performance_history_is_evidence_not_style(tmp_db, monkeypatch):
+    """Only the two evidence shelves went automatic. Voice and look are
+    still a person's choice, so they must not ride along."""
+    assert orchestrator.shootgen.PERFORMANCE_DOMAINS == (
+        "proven_results", "winning_prompts")
+    for style in ("personal_brand", "cinematography"):
+        assert style not in orchestrator.shootgen.PERFORMANCE_DOMAINS
+        assert style in orchestrator.shootgen.ASSET_IDEATION_DOMAINS
+
+
+def test_both_automatic_layers_are_retrieved_separately(tmp_db, monkeypatch):
+    """Craft and performance are two retrievals, not one query against a
+    merged shelf: "how do videos travel" and "how did OURS travel" are
+    different questions and rank differently."""
+    domains = []
+
+    def fake_crag(query, client, model, domain=None, **kwargs):
+        domains.append(domain)
+        return {"ok": False, "references": [], "error": "not exercised"}
+
+    monkeypatch.setattr(orchestrator.crag, "retrieve_with_crag", fake_crag)
+    stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    orchestrator.run("gearing up ritual")
+
+    assert orchestrator.shootgen.AUTO_IDEATION_DOMAINS in domains
+    assert orchestrator.shootgen.PERFORMANCE_DOMAINS in domains
+
+
+def test_a_dead_performance_shelf_still_generates(tmp_db, monkeypatch):
+    """Same never-raises contract as the craft layer: an unreachable store
+    means this layer contributes nothing, never a crash."""
+    def fake_crag(query, client, model, domain=None, **kwargs):
+        if domain == orchestrator.shootgen.PERFORMANCE_DOMAINS:
+            raise RuntimeError("this must never reach the caller")
+        return {"ok": False, "references": [], "error": "not exercised"}
+
+    monkeypatch.setattr(
+        orchestrator.crag, "retrieve_with_crag",
+        lambda *a, **k: {"ok": False, "references": [], "error": "no store"})
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    orchestrator.run("ritual")
+
+    assert calls, "the run must still produce a concept"

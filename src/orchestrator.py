@@ -358,17 +358,30 @@ def ground_rag(state: GenState) -> GenState:
       swipe) stays automatic, CRAG-graded off the spark, same as it
       always was. This isn't the brand's own material, so there's
       nothing to leak by grounding on it every run.
-    - The brand's own assets (personal_brand voice, cinematography
-      look, proven_results/winning_prompts performance history) stay
-      opt-in only: picked_references names exact source identifiers
-      (as shown on /library or rag.list_sources), pulled verbatim with
-      rag.fetch_by_sources -- no embedding call, no similarity
-      ranking, because the selection already happened. Nothing picked
-      means nothing from these shelves, not even an attempt.
+    - PERFORMANCE HISTORY (shootgen.PERFORMANCE_DOMAINS --
+      proven_results and winning_prompts) is automatic too, since
+      2026-09-02. It used to sit in the opt-in set, which made it dead
+      on the only path that matters: an unattended run picks nothing,
+      so nothing was ever pulled, so every nightly concept was written
+      against generic craft advice while refresh_metrics ->
+      promote_winners -> RAG kept filling a shelf no run read. The
+      analytics loop existed end to end and never closed.
+    - The brand's own STYLE assets (personal_brand voice,
+      cinematography look) stay opt-in only: picked_references names
+      exact source identifiers (as shown on /library or
+      rag.list_sources), pulled verbatim with rag.fetch_by_sources --
+      no embedding call, no similarity ranking, because the selection
+      already happened. Nothing picked means nothing from these
+      shelves, not even an attempt.
 
-    Never raises on either layer: an unreachable store, an empty
-    spark, or picks that don't match anything all degrade to that
-    layer contributing nothing, never a crash."""
+    Evidence automatic, taste picked. That is the line between the
+    second layer and the third: what this channel published and how it
+    performed has no style to impose, while which voice a run wears is
+    a decision a person should still make.
+
+    Never raises on any layer: an unreachable store, an empty spark, or
+    picks that don't match anything all degrade to that layer
+    contributing nothing, never a crash."""
     references = []
 
     query = (state.get("spark") or state.get("goal") or "").strip()
@@ -382,6 +395,21 @@ def ground_rag(state: GenState) -> GenState:
         elif not craft.get("ok"):
             print(f"note: no craft-advice grounding: {craft.get('error', 'unavailable')}",
                   file=sys.stderr)
+
+    if query:
+        history = crag.retrieve_with_crag(query, _client(), GEMINI_MODEL,
+                                          domain=shootgen.PERFORMANCE_DOMAINS)
+        if history.get("ok") and history.get("references"):
+            print(f"Grounding in {len(history['references'])} performance "
+                  f"reference(s) -- what actually travelled", file=sys.stderr)
+            references.extend(history["references"])
+        elif not history.get("ok"):
+            # Said out loud, because this layer failing is invisible
+            # otherwise: a run grounded on nothing looks exactly like a
+            # run grounded on everything, which is how the opt-in
+            # version hid for weeks.
+            print(f"note: no performance grounding: "
+                  f"{history.get('error', 'unavailable')}", file=sys.stderr)
 
     picked = state.get("picked_references") or []
     if picked:
