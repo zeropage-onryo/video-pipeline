@@ -56,3 +56,49 @@ def test_spark_is_treated_as_trend_input_for_zeropage():
 def test_zeropage_ideas_prompt_bans_named_ip():
     p = shootgen.build_ideas_prompt([], "zeropage", count=5)
     assert "never name films" in p.lower() or "Never name films" in p
+
+
+# --- the faceless brand stops being handed a cast (2026-09-01) --------------
+#
+# prompts/concept_zeropage.txt: "FACELESS -- no recurring person; any human is
+# anonymous (hand, back, silhouette), never a repeating character."
+# prompts/scenes_prompt.txt:    "reference the uploaded photos as the EXACT
+#                                face ... name them, don't redescribe them."
+# Two instructions in direct contradiction, and the cast block won: every Zero
+# Page concept on the board named Michael, Cyclops or the Ducati.
+
+CHARACTERS = [{"name": "Michael", "role": "protagonist", "photo_count": 3,
+               "description": '{"look": "dark hair"}'}]
+PROPS = [{"name": "Ducati Panigale 959", "photo_count": 2,
+          "description": '{"look": "red"}'}]
+
+
+def test_zeropage_gets_no_cast_block():
+    assert shootgen.cast_for("zeropage", CHARACTERS, PROPS) == ""
+
+
+def test_antihero_still_gets_its_cast():
+    """The fix must not cost Antihero the thing that makes it work --
+    real cast, named, with reference photos on file."""
+    block = shootgen.cast_for("antihero", CHARACTERS, PROPS)
+    assert "Michael" in block and "Ducati" in block
+
+
+def test_an_empty_cast_tells_the_model_to_describe_plainly():
+    """A faceless brand must not just lose the block silently -- the
+    prompt has to say what to do instead, or the model invents a
+    recurring person to fill the gap."""
+    prompt = shootgen.build_scene_brief_prompt(
+        "zeropage", spark="a routine performed wrong",
+        cast=shootgen.cast_for("zeropage", CHARACTERS, PROPS))
+    assert "{cast}" not in prompt
+    assert shootgen.NO_CAST_NOTE in prompt
+
+    # Scoped to the CAST section on purpose. "Michael" also appears in
+    # the BRAND blurb ("ZERO PAGE FILMS -- Michael's VIRAL content
+    # engine"), which names whose channel it is, not who is on screen.
+    # Asserting on the whole prompt would fail on that and teach nothing.
+    start = prompt.index("CAST & PROPS ON FILE")
+    section = prompt[start:prompt.index("\n\n", start)]
+    assert "Michael" not in section
+    assert "Ducati" not in section

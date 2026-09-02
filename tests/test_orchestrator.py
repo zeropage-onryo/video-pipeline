@@ -86,10 +86,12 @@ def stage_fakes(monkeypatch, results):
     queue = list(results)
     calls = _Calls()
 
-    def fake_generate(brand, spark=None, gemini_client=None, model=None,
+    def fake_generate(brand, spark=None, steer="", gemini_client=None, model=None,
                       db_path=None, references="", cast=None, tool=None,
                       image_refs=None, account_id=None):
-        calls.append({"brand": brand, "spark": spark, "references": references, "cast": cast})
+        calls.append({"brand": brand, "spark": spark, "steer": steer,
+                      "references": references,
+                      "cast": cast, "image_refs": list(image_refs or [])})
         concept, warnings = queue.pop(0)
         concept_id = _save_scene(db.DB_PATH, concept, brand)
         return {"concept_id": concept_id, "concept": concept, "warnings": warnings}
@@ -295,7 +297,11 @@ def test_ground_entities_uses_only_the_picked_character(tmp_db, monkeypatch):
     entities.add_character("Guest — bartender", role="guest", path=tmp_db, account_id=None)
     calls = stage_fakes(monkeypatch, [(make_concept(), [])])
 
-    orchestrator.run("ritual", picked_characters=[mike])
+    # antihero explicitly: this covers picked-vs-default, and Zero Page
+    # gets no cast block at all now (see cast_for), which would make the
+    # assertion below pass for the wrong reason.
+    orchestrator.run("ritual", brand="antihero", channel="antihero",
+                     picked_characters=[mike])
 
     assert "Mike — on camera" in calls[0]["cast"]
     assert "Guest — bartender" not in calls[0]["cast"]
@@ -306,7 +312,7 @@ def test_ground_entities_defaults_to_everything_on_file(tmp_db, monkeypatch):
     entities.add_prop("Ducati Panigale V2", category="vehicle", path=tmp_db, account_id=None)
     calls = stage_fakes(monkeypatch, [(make_concept(), [])])
 
-    orchestrator.run("ritual")
+    orchestrator.run("ritual", brand="antihero", channel="antihero")
 
     assert "Mike — on camera" in calls[0]["cast"]
     assert "Ducati Panigale V2" in calls[0]["cast"]
@@ -460,16 +466,21 @@ def test_qc_rejects_missing_and_tiny_files(tmp_path):
 
 # ---------- human_note: corrections steer the next generation ----------
 
-def test_pending_corrections_fold_into_the_spark_once(tmp_db, monkeypatch):
+def test_pending_corrections_steer_once_and_never_touch_the_spark(tmp_db, monkeypatch):
+    """Corrections steer the generation and are consumed so each note
+    steers exactly once. They ride in `steer`, not `spark` (2026-09-01):
+    the spark column is the direction the board prints and _spark_key
+    hashes, and a note folded into it made the same idea look new."""
     autonomy.add_correction("less neon, more silence", path=tmp_db)
     calls = stage_fakes(monkeypatch, [(make_concept(), []), (make_concept(), [])])
 
     orchestrator.run("ritual")
-    assert "less neon, more silence" in calls[0]["spark"]
+    assert "less neon, more silence" in calls[0]["steer"]
+    assert "less neon" not in (calls[0]["spark"] or ""), "note leaked into the spark"
     assert autonomy.pending_corrections(path=tmp_db) == []   # consumed
 
     orchestrator.run("ritual")                               # next night
-    assert "less neon" not in (calls[1]["spark"] or "")      # steered once
+    assert "less neon" not in (calls[1]["steer"] or "")      # steered once
 
 
 # ---------- the prompt gate (the credit gate) ----------
@@ -858,3 +869,108 @@ def test_a_broken_judge_leaves_the_concept_unjudged(tmp_db, monkeypatch):
 
     row = preprod.get_concept(result["concept_id"], path=db.DB_PATH, account_id=None)
     assert not row["uncanny_passed"]
+
+
+# ---------- a scouted night arrives with its photographs --------------------
+#
+# The half of the research contract that was wired at both ends and
+# connected in the middle by nothing. `orchestrator.scout` returned the
+# spark alone, so `reference_photos` was empty on every unattended run:
+# the crawl downloaded images into data/refs, banked them against the
+# finding, and no concept the graph wrote could see one. Every scene
+# generated on 2026-09-01 (concepts 141-148) came back grounded on the
+# same five asset-bank photos of the cast whatever direction it ran on --
+# research reached the WORDS of the prompt and never the pictures.
+
+def test_a_scouted_run_writes_the_scene_from_the_images_it_researched(
+        tmp_db, monkeypatch, tmp_path):
+    from src import asset_shelf, refbin, scout
+
+    monkeypatch.setattr(refbin, "REFS_DIR", tmp_path / "refs")
+    # an empty asset bank on disk: this scene names nothing, so the only
+    # references it can possibly get are the researched ones
+    monkeypatch.setattr(asset_shelf, "PHOTO_DIRS",
+                        {kind: tmp_path / plural for kind, plural in
+                         (("character", "characters"), ("prop", "props"),
+                          ("location", "locations"))})
+    jpeg = b"\xff\xd8\xff" + b"a banked frame"
+    banked = refbin.save(jpeg)
+
+    scout.record("zeropage", {"spark": "a hand already on the handle",
+                              "score": 0.9}, pass_id="p", path=tmp_db)
+    scout.bin_add("zeropage", "p", banked,
+                  source_url="https://example.com/post", path=tmp_db)
+
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])])
+    out = orchestrator.run("the rotation", brand="zeropage", channel="zeropage",
+                           scout=True)
+
+    assert out["spark"] == "a hand already on the handle"
+    # the WRITER saw the photograph, rather than being told one existed
+    assert calls[0]["image_refs"], \
+        "the scene was written from the spark's words and none of its images"
+    data, _mime, _label = calls[0]["image_refs"][0]
+    assert data == jpeg
+    # and it landed on the shot, which is what the keyframe and clip read
+    assert banked in preprod.get_concept(
+        out["concept_id"], path=tmp_db, account_id=None)["shots"][0]["refs"]
+
+
+def test_a_rotation_night_is_untouched_by_any_of_this(tmp_db, monkeypatch):
+    """A run that did not ask to scout must reach the writer exactly as
+    it always did -- no bank read, no photographs, no change."""
+    from src import scout
+
+    scout.record("zeropage", {"spark": "a crawled idea", "score": 0.99},
+                 pass_id="p", path=tmp_db)
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])])
+    out = orchestrator.run("the last check before leaving", brand="zeropage",
+                           channel="zeropage")
+
+    assert out["spark"] == "the last check before leaving"
+    assert calls[0]["image_refs"] == []
+
+
+def test_avoid_guidance_steers_without_becoming_the_spark(tmp_db, monkeypatch):
+    """The spark column is the DIRECTION, not the scaffolding (2026-09-01).
+
+    gen_concept used to concatenate winners.avoid_guidance onto `spark`
+    and pass one string, which the generator then stored -- so every
+    graph-written row carried ~1500 characters of craft notes in the
+    column the board prints, archive_batch groups by, and
+    scout._spark_key hashes. Novelty detection compared the notes along
+    with the idea, so the same direction on a night with a different
+    avoid-list looked new. The advice still has to REACH the model,
+    which is why this checks both halves.
+    """
+    monkeypatch.setattr(orchestrator.winners, "avoid_guidance",
+                        lambda **k: "AVOID: no glossy CGI")
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    orchestrator.run("a routine performed wrong", brand="zeropage",
+                     channel="zeropage")
+
+    [call] = calls
+    assert call["spark"] == "a routine performed wrong", \
+        "the avoid block leaked back into the stored spark"
+    assert "AVOID: no glossy CGI" in call["steer"], \
+        "the advice stopped reaching the model"
+
+
+def test_a_zeropage_run_is_handed_no_cast(tmp_db, monkeypatch):
+    """The faceless brand must not be told to name a recurring person.
+
+    Every Zero Page concept on the board named Michael, Cyclops or the
+    Ducati, because ground_entities handed the shared {cast} socket every
+    asset on file regardless of brand — and that socket says "reference
+    the uploaded photos as the EXACT face ... name them", flatly against
+    concept_zeropage.txt's "FACELESS -- no recurring person".
+    """
+    entities.add_character("Mike — on camera", path=tmp_db, account_id=None)
+    entities.add_prop("Ducati Panigale V2", category="vehicle", path=tmp_db,
+                      account_id=None)
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    orchestrator.run("ritual", brand="zeropage", channel="zeropage")
+
+    assert calls[0]["cast"] == "", "the faceless brand was handed a cast"

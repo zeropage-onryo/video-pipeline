@@ -571,6 +571,32 @@ def cast_detail(asset: dict) -> str:
     return "\n".join(lines)
 
 
+# Brands that get a CAST block at all. Zero Page is absent on purpose
+# (2026-09-01): its own brief says "FACELESS -- no recurring person; any
+# human is anonymous (hand, back, silhouette), never a repeating
+# character", while the shared {cast} socket says "reference the uploaded
+# photos as the EXACT face ... name them". Two instructions in direct
+# contradiction, and the cast block won: every Zero Page concept on the
+# board named Michael, Cyclops or the Ducati, in the brand whose entire
+# identity is that nobody recurs.
+#
+# Scoped by BRAND, not by a column on characters: an asset is not owned
+# by a brand -- the same jacket could appear in either -- what differs is
+# whether a brand is allowed to NAME a recurring person at all. That is a
+# property of the brand, so it lives here.
+CAST_BRANDS = ("antihero",)
+
+
+def cast_for(brand: str, characters: list, props: list, *, detail: bool = False) -> str:
+    """The cast block a brand is allowed to see. "" for a faceless brand,
+    which format_cast's callers already handle -- an empty cast falls
+    through to NO_CAST_NOTE, telling the model to describe appearance
+    plainly instead of naming anyone."""
+    if brand not in CAST_BRANDS:
+        return ""
+    return format_cast(characters, props, detail=detail)
+
+
 def format_cast(characters: list, props: list, *, detail: bool = False) -> str:
     """
     Named characters and props that have reference stills on file --
@@ -982,7 +1008,8 @@ def generate_scene_brief(brand: str, spark=None, gemini_client=None,
 DEFAULT_SCENE_TOOL = "RUNWAY"
 
 
-def generate_scene_concept(brand: str, spark=None, gemini_client=None,
+def generate_scene_concept(brand: str, spark=None, steer: str = "",
+                           gemini_client=None,
                            model: str = MODEL, references: str = "", cast=None,
                            db_path=None, tool: str = DEFAULT_SCENE_TOOL,
                            image_refs=None,
@@ -1013,7 +1040,17 @@ def generate_scene_concept(brand: str, spark=None, gemini_client=None,
     if cast is None:
         cast = format_cast(entities.list_characters(**kwargs, account_id=account_id),
                            entities.list_props(**kwargs, account_id=account_id), detail=True)
-    prompt = build_scene_brief_prompt(brand, spark=spark, references=references,
+    # The prompt gets the direction PLUS whatever is steering this run;
+    # the ROW gets the direction alone. Before this split (2026-09-01) the
+    # caller concatenated them and passed one string, so
+    # winners.avoid_guidance -- ~1500 characters of craft notes -- was
+    # saved as the concept's `spark`. That is the column the board prints,
+    # the one archive_batch groups by, and the one scout._spark_key hashes
+    # for novelty: the same direction on a night with a different
+    # avoid-list hashed differently, so novelty silently stopped working
+    # for every graph-generated row.
+    steered = f"{spark or ''}\n{steer}".strip() if steer else spark
+    prompt = build_scene_brief_prompt(brand, spark=steered, references=references,
                                       cast=cast)
     contents = prompt
     if image_refs:

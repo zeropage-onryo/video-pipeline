@@ -702,6 +702,25 @@ is yours, in Resolve, by hand.
   `.claude/skills/idea-agent/` is the agent that drives these tools — and its first move is
   reading the board, not generating: a run that adds four concepts to eleven unreviewed ones
   buried the decision that was already the bottleneck.
+- **The spark column is the direction, not the scaffolding** (2026-09-01). `gen_concept` used to
+  do `spark = f"{spark}\n{avoid}"` and pass one string, which the generator stored — so every
+  graph-written row carried ~1500 characters of `winners.avoid_guidance` in the column the board
+  prints, `archive_batch` groups by, and `scout._spark_key` hashes. Novelty compared the craft
+  notes along with the idea, so the same direction on a night with a different avoid-list looked
+  new: **novelty detection had silently stopped working** for every graph row. Split now —
+  `generate_scene_concept(spark=..., steer=...)`: the prompt sees both, the row sees the
+  direction. Filmmaker corrections ride in `steer` too, still consumed so each note steers once.
+- **A faceless brand is handed no cast** (2026-09-01). `ground_entities` passed every asset on
+  file to the shared `{cast}` socket regardless of brand, and that socket says *"reference the
+  uploaded photos as the EXACT face … name them"* — flatly against `concept_zeropage.txt`'s
+  *"FACELESS — no recurring person; any human is anonymous."* The cast block won: **every Zero
+  Page concept on the board named Michael, Cyclops or the Ducati**, in the brand whose whole
+  identity is that nobody recurs. `shootgen.cast_for(brand, ...)` gates it on `CAST_BRANDS`,
+  applied in BOTH the graph and the Create path (`scene_chain.ground`). Scoped by brand rather
+  than by a column on `characters` on purpose: an asset is not owned by a brand — the same
+  jacket could appear in either — what differs is whether a brand may NAME a recurring person,
+  which is a property of the brand. An empty cast falls through to `NO_CAST_NOTE`, so the model
+  is told to describe appearance plainly rather than left to invent someone.
 - **Nothing auto-posts right now** (2026-08-31, Mike's call). `autopilot.AUTO_POST_BRANDS` is
   an empty tuple, so no brand enters an auto-post plan: everything lands in the Queue and a
   person pushes it out, including a Zero Page concept that CLEARED the on-brand gate. A hold,

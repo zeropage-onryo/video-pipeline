@@ -1,7 +1,7 @@
 """
 src/orchestrator.py — the autonomous content graph over pre-production:
 
-    scout -> planner -> ground_entities -> ground_rag
+    research -> scout -> planner -> ground_entities -> ground_rag
         -> gen_concept -> evaluate -> structure_prompt -> generate_render
                 ^_____________|            -> qc_clip -> caption -> publish
                 (corrective re-run)                 \\-> hold  (park, don't post)
@@ -74,6 +74,7 @@ from . import (
     preprod,
     promptgen,
     rag,
+    research_agent,
     scene_chain,
     scheduling,
     settings,
@@ -105,6 +106,8 @@ class GenState(TypedDict, total=False):
     brand: str
     client: Optional[str]
     spark: Optional[str]
+    research: bool                  # let the Claude agent fill the bank first
+    research_note: str              # what that pass did, for the trace
     scout: bool                     # ask the research agent for the spark
     scout_finding_id: int           # which banked finding seeded this run
     scout_rationale: str            # why the scout chose it (stored, never injected)
@@ -189,9 +192,51 @@ def _judge(concept: dict) -> tuple[float, list[str]]:
 
 # --- nodes: the left third (the original loop) ----------------------------
 
+def research(state: GenState) -> GenState:
+    """Claude, with tools, filling the bank the next node drains.
+
+    This is the tier that did not exist. `scout` reads a bank; it does
+    not decide anything, so on a night the crawl came back thin every
+    run fell through to the same rotating text file and the concepts
+    read like it. Here a model actually looks -- at the board's own
+    history, at the web -- and banks what it finds, through this repo's
+    own MCP server so the tools are the same twelve Claude Desktop
+    shows (see src/research_agent.py for why the transport is worth a
+    subprocess).
+
+    Deliberately a SEPARATE node from `scout` rather than a smarter
+    version of it. This one writes to the bank and returns no spark;
+    `scout` reads the bank and knows nothing about where a finding came
+    from. So the two producers stay interchangeable, the crawl keeps
+    working unchanged, and a night where this node does nothing is
+    exactly the night the pipeline had before it.
+
+    Off unless asked, same as `scout` and for the same reason: an
+    explicit `--spark` already knows what it wants, and a node that
+    silently spent Anthropic credit on every Director re-fire would be
+    a surprise on a bill. Never raises -- research_agent.run() returns
+    its failures.
+    """
+    if not (state.get("research") and state.get("scout")):
+        # Gated on BOTH: filling a bank nothing is going to read is
+        # spend with no output. `--scout` is what reads it.
+        return {}
+    brand = state.get("brand") or "zeropage"
+    result = research_agent.run(brand)
+    note = result.get("note") or ""
+    print(f"research: {brand} — {note}", file=sys.stderr)
+    return {"research_note": note}
+
+
 def scout(state: GenState) -> GenState:
-    """The research agent's socket. Claims a spark discovered by
-    src/scout.py -- or leaves the run exactly as it found it.
+    """The research agent's socket. Takes a spark discovered by
+    src/scout.py -- AND the images banked behind it -- or leaves the run
+    exactly as it found it.
+
+    Both halves, deliberately. A direction with no photographs is a
+    sentence the writer can only be TOLD about; the whole argument for
+    the bin is that a scene written FROM a frame beats one written from
+    a description of it.
 
     Three reasons this is a node rather than a step in trigger.py:
     the choice of direction is then traced in LangSmith beside the
@@ -226,11 +271,38 @@ def scout(state: GenState) -> GenState:
         print("note: scout bank empty above the floor — keeping the rotated spark",
               file=sys.stderr)
         return {}
-    print(f"scout: spark={finding['spark']!r} score={finding.get('score')}", file=sys.stderr)
+    # The PHOTOS behind the spark, not just the spark. Until 2026-09-01
+    # this node returned the direction and nothing else, so
+    # `reference_photos` stayed empty on every unattended run: the crawl
+    # downloaded images into data/refs, banked them, and no concept the
+    # graph ever wrote could see one. Every night's refs were the same
+    # five asset-bank photos of the cast regardless of the direction --
+    # research reached the WORDS and never the pictures.
+    #
+    # Photos the caller handed in stay FIRST and are never displaced. An
+    # explicit reference_photos= is a deliberate act (a Director re-fire,
+    # a person's pick); the bin is what fills the space it left.
+    photos = list(state.get("reference_photos") or [])
+    try:
+        photos += [b["url"] for b in scout_mod.bin_for_finding(
+            finding["id"], path=db.DB_PATH)
+            if b.get("url") and b["url"] not in photos]
+    except Exception as e:
+        # Say so rather than swallow: a spark that arrives without its
+        # images looks identical to a spark that had none, and that is
+        # exactly the failure that hid for a fortnight.
+        print(f"note: spark {finding['id']} banked, its images did not load: {e}",
+              file=sys.stderr)
+    print(f"scout: spark={finding['spark']!r} score={finding.get('score')} "
+          f"photos={len(photos)}", file=sys.stderr)
+    if not photos:
+        print("note: no reference images behind this spark — the scene will be "
+              "written and grounded on the asset bank alone", file=sys.stderr)
     return {"spark": finding["spark"],
             "goal": finding["spark"],
             "scout_finding_id": finding["id"],
-            "scout_rationale": finding.get("rationale") or ""}
+            "scout_rationale": finding.get("rationale") or "",
+            "reference_photos": photos}
 
 
 def planner(state: GenState) -> GenState:
@@ -270,7 +342,10 @@ def ground_entities(state: GenState) -> GenState:
                              for i in picked_props) if p]
     else:
         props = entities.list_props(path=db.DB_PATH, account_id=account_id)
-    return {"cast": shootgen.format_cast(characters, props)}
+    # Brand-scoped: a faceless brand gets no cast block at all, or the
+    # {cast} socket tells it to name people it must never name.
+    return {"cast": shootgen.cast_for(state.get("brand", "antihero"),
+                                      characters, props)}
 
 
 def ground_rag(state: GenState) -> GenState:
@@ -331,10 +406,19 @@ def gen_concept(state: GenState) -> GenState:
     # human_note: standing corrections (dropped on /holds or via
     # autonomy.add_correction) fold into the spark the same way the
     # evaluator's do, and are consumed so each note steers once.
+    # Both of these STEER the generation without becoming the direction.
+    # They used to be concatenated onto `spark`, which the generator then
+    # stored -- so every row's `spark` column carried ~1500 characters of
+    # craft notes instead of the one line it is meant to hold, and
+    # scout._spark_key hashed the notes along with the idea, quietly
+    # breaking novelty detection. Kept separate now (2026-09-01): the
+    # prompt sees both, the row sees the direction.
+    steer_parts: list[str] = []
+
     notes = autonomy.pending_corrections(path=db.DB_PATH)
     if notes:
-        spark = (f"{spark or ''}\nNotes from the filmmaker: "
-                 + "; ".join(n["note"] for n in notes)).strip()
+        steer_parts.append("Notes from the filmmaker: "
+                           + "; ".join(n["note"] for n in notes))
         for n in notes:
             autonomy.consume_correction(n["id"], path=db.DB_PATH)
 
@@ -342,7 +426,8 @@ def gen_concept(state: GenState) -> GenState:
     # folded in so the next batch avoids repeating them (winners.avoid_guidance).
     avoid = winners.avoid_guidance(path=db.DB_PATH)
     if avoid:
-        spark = f"{spark or ''}\n{avoid}".strip()
+        steer_parts.append(avoid)
+    steer = "\n".join(steer_parts)
 
     # ONE scene, ONE prompt -- the same unit the Studio has produced
     # since 2026-08-26, not the legacy multi-shot concept this node used
@@ -364,6 +449,7 @@ def gen_concept(state: GenState) -> GenState:
     result = shootgen.generate_scene_concept(
         brand=state.get("brand", "antihero"),
         spark=spark,
+        steer=steer,
         gemini_client=_client(),
         db_path=db.DB_PATH,
         references=state.get("references", ""),
@@ -992,6 +1078,7 @@ def hold(state: GenState) -> GenState:
 def _build():
     g = StateGraph(GenState)
     for name, fn in [
+        ("research", research),
         ("scout", scout),
         ("planner", planner),
         ("ground_entities", ground_entities), ("ground_rag", ground_rag),
@@ -1005,7 +1092,8 @@ def _build():
     ]:
         g.add_node(name, fn)
 
-    g.add_edge(START, "scout")
+    g.add_edge(START, "research")
+    g.add_edge("research", "scout")
     g.add_edge("scout", "planner")
     # No ensure_locations gate (removed 2026-08-31, Mike's call). It
     # errored a run to `hold` when the locations table was empty --
@@ -1064,7 +1152,8 @@ def run(goal: str, *, brand: Optional[str] = None, spark: Optional[str] = None,
         channel: str = "zeropage", picked_locations=None,
         picked_characters=None, picked_props=None, picked_references=None,
         reference_photos=None,
-        scout: bool = False, account_id: Optional[int] = None) -> dict:
+        scout: bool = False, research: bool = False,
+        account_id: Optional[int] = None) -> dict:
     """
     `brand` defaults to `channel` rather than a hardcoded value on
     purpose: `channel` decides where the run gets FILED (which
@@ -1081,6 +1170,13 @@ def run(goal: str, *, brand: Optional[str] = None, spark: Optional[str] = None,
     still lets channel and brand differ on purpose when that's really
     what's wanted -- this only changes what happens when brand is
     omitted.
+
+    `research=True` lets a Claude agent fill the bank before it is read.
+    It requires `scout=True` as well -- filling a bank nothing will read
+    is spend with no output -- and is off by default for the same reason
+    scout is: an explicit spark already knows what it wants, and a node
+    that quietly spent Anthropic credit on every Director re-fire would
+    be a surprise on a bill.
 
     `scout=True` asks the research agent for the direction instead of
     using the one passed in. Off by default and never inferred: an
@@ -1108,6 +1204,7 @@ def run(goal: str, *, brand: Optional[str] = None, spark: Optional[str] = None,
     return GRAPH.invoke({
         "account_id": account_id,
         "goal": goal, "brand": brand, "spark": spark or goal, "scout": scout,
+        "research": research, "research_note": "",
         "client": client, "use_pov": use_pov, "channel": channel,
         "picked_locations": picked_locations or [],
         "picked_characters": picked_characters or [],

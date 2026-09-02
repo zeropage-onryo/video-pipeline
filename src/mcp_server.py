@@ -304,16 +304,24 @@ def pick_idea(idea_id: int, picked: bool = True,
     return _card(preprod.get_concept(int(idea_id), path=path, account_id=account_id))
 
 
-def archive_idea(idea_id: int, archived: bool = True,
+def archive_idea(idea_id: int, archived: bool = True, reason: str = "",
                  path: Path | str = db.DB_PATH,
                  account_id: Optional[int] = None,
 ) -> dict[str, Any]:
     """Take a concept off the board. Hides, never deletes -- an unpicked
     row is the only negative signal this system collects, and it stays
     in the ungraded pool until it has taught the RAG shelves something.
+
+    `reason` is WHY (2026-09-01), the same vocabulary the Grade tab's
+    Pass buttons write. archived_at records only THAT a concept was
+    passed over; the reason is the part that can ever reach
+    avoid_guidance. Never a gate -- an archive that fails because nobody
+    picked a word is an archive that does not happen, and the row sits on
+    the board forever.
     """
     account_id = _account(account_id, path)
-    preprod.set_archived(int(idea_id), archived=archived, path=path, account_id=account_id)
+    preprod.set_archived(int(idea_id), archived=archived, path=path,
+                         account_id=account_id, reason=reason)
     return _card(preprod.get_concept(int(idea_id), path=path, account_id=account_id))
 
 
@@ -761,9 +769,12 @@ def build_server(path: Path | str = db.DB_PATH, name: str = "zeropage-ideas",
         return _t(pick_idea, idea_id, picked=picked, path=path)
 
     @server.tool(annotations=writes)
-    def archive(idea_id: int, archived: bool = True) -> dict:
-        """Take a concept off the board. Hides it; never deletes."""
-        return _t(archive_idea, idea_id, archived=archived, path=path)
+    def archive(idea_id: int, archived: bool = True, reason: str = "") -> dict:
+        """Take a concept off the board. Hides it; never deletes. `reason`
+        is one of boring, off-brand, unshootable, seen it, other -- the
+        only record this pipeline keeps of WHY anything was rejected."""
+        return _t(archive_idea, idea_id, archived=archived, reason=reason,
+                  path=path)
 
     @server.tool(annotations=writes)
     def add_spark(brand: str, spark: str, rationale: str = "",

@@ -66,7 +66,11 @@ def ground(idea: str, *, brand: str = "", db_path=None, account_id: Optional[int
     cast = None
     try:
         from . import entities
-        cast = shootgen.format_cast(
+        # Brand-scoped, same rule the graph follows: a faceless brand
+        # gets no cast block, or the {cast} socket instructs it to name
+        # a recurring person its own brief forbids.
+        cast = shootgen.cast_for(
+            brand,
             entities.list_characters(path=path, account_id=account_id),
             entities.list_props(path=path, account_id=account_id), detail=True)
     except Exception:
@@ -104,6 +108,20 @@ CHARACTER_REF_PHOTOS = 3
 # scout's MAX_BIN_IMAGES -- a bin bigger than the cap has a tail that
 # can never be used.
 MAX_REFS = 6
+# Slots HELD for research images when a run has any. Ordering alone was
+# not enough: `extra` went last, and last never arrived. A scene naming
+# Michael, the Ducati, the jacket and one more asset spends four slots on
+# named assets and the remaining two on more angles of the face, so the
+# crawl's images were appended to a list that was already full -- every
+# concept written on 2026-09-01 came out with six asset-bank photos and
+# nothing researched, which is indistinguishable from an empty bin.
+#
+# The reservation comes out of the EXTRA FACE ANGLES, never out of the
+# named assets: a second portrait is a refinement, and identity is the
+# thing the whole reference contract exists to protect. So a scene that
+# names six assets still gets six -- cast beats inspiration when they
+# actually compete -- but the common case stops starving research.
+RESEARCH_SLOTS = 2
 _DECODES_NATIVELY = {".jpg", ".jpeg", ".png", ".webp"}
 
 
@@ -135,10 +153,15 @@ def attach_refs(concept_id: int, extra: list | None = None, *, db_path=None, acc
          character -> prop -> location, because a full-room photo in the
          anchor slot makes the model reproduce that room instead of the
          scene),
-      2. then more angles of the faces, round-robin,
+      2. then more angles of the faces, round-robin -- but stopping
+         RESEARCH_SLOTS short of the cap when there is research to fit,
       3. then `extra` -- the scout's downloaded research images, LAST
          and never in the anchor slot. Crawled material should inform a
          render, not become its subject.
+
+    Last is not the same as never, which is what step 2 quietly made it
+    until 2026-09-01. Being at the back of a queue that always filled
+    before reaching you is being excluded, so step 2 now yields.
 
     Grounding shapes, it never gates: no match, no assets, or a broken
     catalogue all just mean the scene renders on its text.
@@ -171,10 +194,18 @@ def attach_refs(concept_id: int, extra: list | None = None, *, db_path=None, acc
         best = _ordered(asset.get("photos") or [], 1)
         if best and best[0] not in picked:
             picked.append(best[0])
+    # What the face angles may grow into, leaving room for research.
+    # Computed from what `extra` ACTUALLY holds, so a run with no
+    # research images still spends every slot on the cast exactly as
+    # before -- this reserves for photographs that exist, never for the
+    # possibility of some.
+    reserved = min(len(extra or []), RESEARCH_SLOTS)
+    angle_cap = max(len(picked), MAX_REFS - reserved)
+
     faces = [a for a in named if a.get("category") == "character"]
     for index in range(1, CHARACTER_REF_PHOTOS):   # more angles of the faces
         for asset in faces:
-            if len(picked) >= MAX_REFS:
+            if len(picked) >= angle_cap:
                 break
             angles = _ordered(asset.get("photos") or [], CHARACTER_REF_PHOTOS)
             if index < len(angles) and angles[index] not in picked:
