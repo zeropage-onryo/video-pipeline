@@ -1003,9 +1003,18 @@ class ArchiveBody(BaseModel):
 
 
 @router.post("/concepts/{concept_id}/archive")
-def concept_archive(concept_id: int, body: ArchiveBody, account_id: Optional[int] = None):
+def concept_archive(concept_id: int, body: ArchiveBody,
+                    account_id: int = Depends(auth.current_account_id)):
     """Take a concept off the board. Not a delete: the row stays for
-    pick_rate and stays in the Dev Studio's ungraded pool."""
+    pick_rate and stays in the Dev Studio's ungraded pool.
+
+    account_id comes from the dependency, NOT from a bare default
+    (2026-09-02). Written as `account_id: Optional[int] = None` it was a
+    *query parameter* to FastAPI, so every call arrived with None and
+    set_archived's `WHERE ... AND account_id IS ?` matched nothing --
+    the X on the board 404'd on every card that had an owner while Pick,
+    which took the dependency, worked. Same scoping as pick or the two
+    buttons disagree about whose rows they are."""
     try:
         preprod.set_archived(concept_id, body.archived, path=db.DB_PATH, account_id=account_id)
     except ValueError as e:

@@ -240,3 +240,127 @@ def test_an_agent_supplied_url_still_cannot_reach_this_machine(tmp_db, photo_ban
                                     source_url="https://example.com/p",
                                     path=tmp_db)
     assert out["ok"] is False and out["banked"] == 0
+
+
+# --- the node that carries them: spark AND photographs -----------------------
+# Until 2026-09-01 orchestrator.scout returned the direction alone, so
+# `reference_photos` was empty on every unattended run. The crawl fetched
+# images into data/refs, banked them, and nothing the graph wrote could
+# ever see one -- concepts 141-148 all came out grounded on the same five
+# asset-bank photos of the cast whatever the spark said.
+
+def test_the_node_carries_the_photographs_behind_its_spark(tmp_db, photo_bank):
+    from src import orchestrator, scout
+
+    banked = [refbin.save(JPEG + bytes([i])) for i in range(3)]
+    fid = scout.record("zeropage", {"spark": "a crawled idea", "score": 0.9},
+                       pass_id="p", path=tmp_db)
+    for url in banked:
+        scout.bin_add("zeropage", "p", url, source_url="https://example.com/p",
+                      path=tmp_db)
+
+    out = orchestrator.scout({"brand": "zeropage", "spark": "the rotation",
+                              "scout": True})
+
+    assert out["spark"] == "a crawled idea"
+    assert out["scout_finding_id"] == fid
+    assert out["reference_photos"] == banked, \
+        "the spark arrived without the images it was read out of"
+
+
+def test_photos_the_caller_handed_in_are_never_displaced(tmp_db, photo_bank):
+    """An explicit reference_photos= is a deliberate act -- a Director
+    re-fire, a person's pick. The bin fills the space it left, in front
+    of nothing."""
+    from src import orchestrator, scout
+
+    mine = refbin.save(JPEG + b"mine")
+    theirs = refbin.save(JPEG + b"theirs")
+    scout.record("zeropage", {"spark": "a crawled idea", "score": 0.9},
+                 pass_id="p", path=tmp_db)
+    scout.bin_add("zeropage", "p", theirs, source_url="https://example.com/p",
+                  path=tmp_db)
+
+    out = orchestrator.scout({"brand": "zeropage", "spark": "the rotation",
+                              "scout": True, "reference_photos": [mine]})
+
+    assert out["reference_photos"] == [mine, theirs]
+
+
+def test_a_spark_banked_with_no_images_is_a_normal_night(tmp_db, photo_bank):
+    """The bin is empty whenever no image-carrying lane survived the
+    crawl. That must cost the run its pictures, not the run."""
+    from src import orchestrator, scout
+
+    scout.record("zeropage", {"spark": "a crawled idea", "score": 0.9},
+                 pass_id="p", path=tmp_db)
+    out = orchestrator.scout({"brand": "zeropage", "spark": "the rotation",
+                              "scout": True})
+    assert out["spark"] == "a crawled idea"
+    assert out["reference_photos"] == []
+
+
+# --- and they survive a cast that would otherwise fill every slot ------------
+
+def test_research_survives_a_scene_that_names_the_whole_cast(tmp_db, photo_bank):
+    """The bug ordering alone could not fix. Four named assets plus more
+    angles of the face spend all six slots before `extra` is read, so
+    "research images go last" silently meant "research images go
+    nowhere" -- which looks exactly like an empty bin."""
+    photo_bank("character", "michael", "a.jpg", "b.jpg", "c.jpg")
+    photo_bank("prop", "ducati", "bike.jpg")
+    photo_bank("prop", "jacket", "coat.jpg")
+    entities.add_character("Michael", path=tmp_db, account_id=None)
+    entities.add_prop("Ducati", path=tmp_db, account_id=None)
+    entities.add_prop("jacket", path=tmp_db, account_id=None)
+    scouted = [refbin.save(JPEG + bytes([i])) for i in range(3)]
+
+    scene_id = a_scene(tmp_db, "Michael zips the jacket beside the Ducati.")
+    refs = scene_chain.attach_refs(scene_id, scouted, db_path=tmp_db)
+
+    assert refs[0] == "/characters/michael/photo/a.jpg", "identity lost the anchor"
+    kept = [r for r in refs if r in scouted]
+    assert len(kept) == scene_chain.RESEARCH_SLOTS
+    assert refs[-scene_chain.RESEARCH_SLOTS:] == kept, "research must stay at the back"
+    assert len(refs) == scene_chain.MAX_REFS
+
+
+def test_a_run_with_no_research_still_spends_every_slot_on_the_cast(tmp_db, photo_bank):
+    """The reservation is for photographs that EXIST, never for the
+    possibility of some -- otherwise it would quietly cost the cast two
+    slots on every rotation night."""
+    photo_bank("character", "michael", *[f"{i}.jpg" for i in range(4)])
+    photo_bank("prop", "ducati", "bike.jpg")
+    entities.add_character("Michael", path=tmp_db, account_id=None)
+    entities.add_prop("Ducati", path=tmp_db, account_id=None)
+
+    scene_id = a_scene(tmp_db, "Michael wheels the Ducati out.")
+    refs = scene_chain.attach_refs(scene_id, [], db_path=tmp_db)
+
+    # the bike, plus all three photos of the face CHARACTER_REF_PHOTOS
+    # allows -- exactly what this returned before research was reserved for
+    assert len(refs) == 1 + scene_chain.CHARACTER_REF_PHOTOS
+    assert all(r.startswith(("/characters/", "/props/")) for r in refs)
+    assert len([r for r in refs if "michael" in r]) == scene_chain.CHARACTER_REF_PHOTOS
+
+
+def test_the_cast_still_wins_when_they_actually_compete(tmp_db, photo_bank):
+    """Six named assets is six named assets. The reservation comes out of
+    extra face angles, which are a refinement -- never out of identity."""
+    for slug in ("michael", "cyclops"):
+        photo_bank("character", slug, "a.jpg")
+    for slug in ("ducati", "jacket", "helmet", "gloves"):
+        photo_bank("prop", slug, f"{slug}.jpg")
+    entities.add_character("Michael", path=tmp_db, account_id=None)
+    entities.add_character("Cyclops", path=tmp_db, account_id=None)
+    for prop in ("Ducati", "jacket", "helmet", "gloves"):
+        entities.add_prop(prop, path=tmp_db, account_id=None)
+    scouted = [refbin.save(JPEG + b"s")]
+
+    scene_id = a_scene(
+        tmp_db, "Michael and Cyclops load the helmet, gloves and jacket "
+                "onto the Ducati.")
+    refs = scene_chain.attach_refs(scene_id, scouted, db_path=tmp_db)
+
+    assert len(refs) == scene_chain.MAX_REFS
+    assert scouted[0] not in refs

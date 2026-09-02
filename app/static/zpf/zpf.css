@@ -553,7 +553,27 @@ html[data-v="studio"] #gl{opacity:1;transition:opacity .5s}
   white-space:pre-wrap;padding:12px 14px;border-radius:var(--r1);
   background:rgb(255 255 255 / .03);border:1px solid var(--line);
 }
-.scfoot{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.scfoot{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+/* the verdict buttons (2026-09-02). Two round icons, X then check,
+   left to right the way a swipe deck reads. Sized to 44px because that
+   is the smallest comfortable touch target and because the pair has to
+   be findable at a glance on a grid of four cards. Colour only on
+   hover/state -- a board where every card is already shouting red and
+   green is a board you cannot scan. */
+.swipe{
+  width:44px;height:44px;flex:none;border-radius:50%;
+  display:grid;place-items:center;line-height:1;font-size:17px;cursor:pointer;
+  border:1px solid var(--line-hi);background:rgb(8 8 10 / .45);backdrop-filter:blur(10px);
+  color:var(--dim);
+  transition:color var(--t),border-color var(--t),background var(--t),transform var(--t);
+}
+.swipe:hover{transform:scale(1.07)}
+.swipe:active{transform:scale(.93)}
+.swipe:disabled{opacity:.4;cursor:default;transform:none}
+.swipe.no:hover{color:var(--signal);border-color:var(--signal);background:var(--signal-soft)}
+.swipe.yes:hover{color:#5fd08a;border-color:#5fd08a;background:rgb(95 208 138 / .12)}
+/* already picked: the check stays lit, and clicking it again unpicks */
+.swipe.yes.on{color:#5fd08a;border-color:#5fd08a;background:rgb(95 208 138 / .18)}
 /* the hero composer's note, dropped on narrow screens where the count
    select and the button need the room more */
 .cfnote{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

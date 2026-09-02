@@ -11,6 +11,15 @@ BRAND:
 {brand}
 {spark}
 
+WHAT THE SPARK IS, AND WHAT YOU DO WITH IT: it is the filmmaker's IDEA, told
+in full -- who is there, what they want, what is in the way, what changes. It
+is NOT the prompt and it is not a shot. Your job is to choose the ONE stretch
+of it that a single AI-generated clip can actually hold, and write that. The
+rest of the idea does not go in the prompt; it goes in "logline", where a human
+reads it. Do not try to stage the whole idea -- a prompt carrying five separate
+actions is rejected before it renders, and losing the idea's shape is not the
+cost of keeping its best ten seconds.
+
 CAST & PROPS ON FILE (reference the uploaded photos as the EXACT face / EXACT
 clothing where they apply; name them, don't redescribe their appearance):
 {cast}
@@ -32,10 +41,18 @@ Write the "brief" as a single cohesive prompt with these five parts, in order:
    imperfect framing that drifts and re-centres, muted colour, practical light,
    real locations, grounded and rough — NOT glossy, epic or stylized. Fold in
    the brand's grade here so it still belongs to that world.
-3. BEATS: 4-7 sequential beats in prose. Open on an uncomfortable or arresting
-   image (the frame-1 hook), turn/reveal, escalate with grounded physical
-   comedy or tension, and END ABRUPTLY. Reactions are serious and physically
-   believable — that restraint is what makes it funny or tense, never cartoon.
+3. BEATS: ONE continuous action, escalating, in prose. Open on an uncomfortable
+   or arresting image (the frame-1 hook), turn/reveal, and END ABRUPTLY.
+   Reactions are serious and physically believable — that restraint is what
+   makes it funny or tense, never cartoon.
+   A BEAT IS NOT A NEW ACTION. Escalation inside one action is what a video
+   model can hold: attention shifting, a light changing, the hands slowing, the
+   camera drifting and re-centring, the same movement repeating harder. A CHAIN
+   of separate physical events is not — "he picks it up, crosses the room,
+   opens the drawer, turns, drops it" is five actions and gets rejected as a
+   multi-stage sequence before a credit is spent. Pick the single action the
+   idea turns on and stay inside it. No hand-to-hand object exchanges, no
+   crossing between rooms, no physics stunts.
 4. SOUND: begin "No background music." then the diegetic sound only — exactly
    what you would hear in that scene.
 5. AVOID: no polished/fantasy gloss, no dramatic slow motion, no glossy CGI, no

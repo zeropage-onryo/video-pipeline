@@ -6,6 +6,7 @@ click. Build-order step 5: autonomous *creation*, posting still gated.
     venv/bin/python -m src.trigger                # tonight's spark, rotated
     venv/bin/python -m src.trigger --spark "..."  # explicit direction
     venv/bin/python -m src.trigger --scout        # a spark the scout crawled for
+    venv/bin/python -m src.trigger --research     # let Claude research one first
 
 The spark rotates through prompts/sparks.txt by day of year, so
 consecutive nights get different directions with nobody typing.
@@ -68,6 +69,9 @@ def main(argv=None) -> int:
     parser.add_argument("--scout", action="store_true",
                         help="use a spark from src.scout's bank, falling back "
                              "to the rotation when it has nothing servable")
+    parser.add_argument("--research", action="store_true",
+                        help="let the Claude agent fill the bank first (implies "
+                             "--scout; no-op without ANTHROPIC_API_KEY)")
     args = parser.parse_args(argv)
 
     spark = args.spark or pick_spark(load_sparks(), date.today().timetuple().tm_yday)
@@ -78,7 +82,8 @@ def main(argv=None) -> int:
 
     try:
         result = orchestrator.run(spark, brand=args.brand, channel=args.channel,
-                                  scout=args.scout)
+                                  scout=args.scout or args.research,
+                                  research=args.research)
     except Exception as e:
         # the dead-man log gets the crash too -- a silent night looks
         # exactly like a healthy night unless failures leave a row

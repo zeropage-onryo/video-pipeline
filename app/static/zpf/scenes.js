@@ -78,11 +78,20 @@ function card(c) {
     </details>
     ${(c.warnings || []).length
       ? `<div class="cwarn">${c.warnings.map(w => '⚠ ' + esc(w)).join('<br>')}</div>` : ''}
+    <!-- the verdict, as two icons (2026-09-02): the whole board is one
+         binary question asked of four cards at once, and X / check reads
+         faster than two words of the same size. Same two calls behind
+         them as before: pick toggles picked_at, X archives (never
+         deletes -- an unpicked row is the only negative signal here). -->
     <div class="scfoot">
       ${c.archived
         ? '<button class="tag" data-act="restore">Put back on the board</button>'
-        : `<button class="tag" data-act="pick">${c.picked ? 'Unpick' : 'Pick this'}</button>
-           <button class="tag" data-act="archive">Not this one</button>`}
+        : `<button class="swipe no" data-act="archive" title="Not this one"
+                   aria-label="Not this one — take it off the board">✕</button>
+           <button class="swipe yes${c.picked ? ' on' : ''}" data-act="pick"
+                   title="${c.picked ? 'Picked — click to unpick' : 'Pick this'}"
+                   aria-pressed="${c.picked ? 'true' : 'false'}"
+                   aria-label="${c.picked ? 'Unpick this concept' : 'Pick this concept'}">✓</button>`}
       <span class="spacer"></span>
       <button class="go" data-act="direct">Open in Director</button>
     </div>

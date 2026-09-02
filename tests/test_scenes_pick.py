@@ -229,6 +229,45 @@ def test_archiving_is_reversible(tmp_db):
     assert len(client.get("/api/pipeline/concepts?brand=zeropage").json()["items"]) == 1
 
 
+def test_archiving_a_row_that_has_an_owner_works(tmp_db):
+    """The X on the board archives a concept that belongs to an account.
+
+    Regression, 2026-09-02. `concept_archive` declared
+    `account_id: Optional[int] = None`, which to FastAPI is a *query
+    parameter*, not the auth dependency -- so every archive arrived as
+    None and set_archived's `WHERE ... AND account_id IS ?` matched
+    nothing. Every card on the real board 404'd on "Not this one" while
+    "Pick this", which took `Depends(current_account_id)`, worked.
+
+    The rest of this file runs under conftest's unowned pool
+    (account_id None), where a bare default and the dependency return
+    the same value and the bug is invisible -- so this test seeds an
+    OWNED row and an account to act as, which is the only shape that
+    tells them apart."""
+    from app import auth
+    from app.main import app as live
+    from src import accounts
+
+    accounts.init(tmp_db)
+    account_id = accounts.upsert_account("owned", "OWNED", path=tmp_db)
+
+    owned = preprod.save_concept(
+        {"title": "Owned", "hook": "", "logline": "",
+         "shots": [{"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
+                    "desc": "Owned", "prompt": "P", "refs": []}]},
+        brand="zeropage", prompt_template="T", path=tmp_db, account_id=account_id)
+
+    previous = live.dependency_overrides[auth.current_account_id]
+    live.dependency_overrides[auth.current_account_id] = lambda: account_id
+    try:
+        r = client.post(f"/api/concepts/{owned}/archive", json={"archived": True})
+        assert r.status_code == 200, r.text
+        assert preprod.get_concept(
+            owned, path=tmp_db, account_id=account_id)["archived"] is True
+    finally:
+        live.dependency_overrides[auth.current_account_id] = previous
+
+
 def test_archiving_something_that_does_not_exist_is_a_404(tmp_db):
     assert client.post("/api/concepts/9999/archive",
                        json={"archived": True}).status_code == 404

@@ -19,6 +19,28 @@ pgvector
 pypdf   # /library/ingest's PDF file upload -- text extraction before chunking
 langgraph
 langsmith
+# The research node (src/research_agent.py). Claude drives it while every
+# other node stays on Gemini, and langchain-mcp-adapters is how the graph
+# reaches this repo's OWN MCP server over stdio -- so the tools the 6am run
+# gets are the same twelve Claude Desktop shows. Both are optional at
+# runtime: research_agent.ready() reports the missing one and the night
+# falls through to the crawl.
+# Reference-image search (src/imagesearch.py). Optional: with no key the
+# stock lanes report themselves as unconfigured and the agent banks ideas
+# without images rather than inventing URLs for them. Free tiers cover the
+# nightly volume many times over.
+#   UNSPLASH_ACCESS_KEY   https://unsplash.com/developers
+#   PEXELS_API_KEY        https://www.pexels.com/api/
+# No package needed -- both are plain REST over `requests`, already here.
+
+langchain-google-genai   # the default provider, on the key this repo already has
+langchain-anthropic      # optional: RESEARCH_PROVIDER=anthropic, needs its own key
+# NOT langchain-mcp-adapters. It requires mcp<2.0.0 and this repo requires
+# mcp>=2 (v2 renamed FastMCP to MCPServer, which build_server imports), so
+# installing it downgrades mcp to 1.29.x and src/mcp_server.py stops
+# importing -- the adapter meant to drive the server breaks the server.
+# src/research_agent.py talks to it with the mcp 2.x client instead, in
+# about forty lines, reading tool schemas off list_tools().
 mcp>=2   # the MCP surface (src/mcp_server.py). v2 renamed FastMCP to MCPServer and moved stateless_http onto streamable_http_app(); code written against 1.x imports a module that no longer exists, so this pin is load-bearing -- verify src/mcp_server.build_server on a major bump
 authlib
 itsdangerous
