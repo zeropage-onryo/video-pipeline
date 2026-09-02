@@ -114,7 +114,9 @@ def _card(concept: dict) -> dict[str, Any]:
         "brand": concept["brand"],
         "title": concept["title"],
         "summary": preprod.concept_summary(
-            concept.get("logline") or "", shot.get("prompt") or ""
+            concept.get("card_line") or "",
+            concept.get("logline") or "",
+            shot.get("prompt") or "",
         ),
         "status": _status_of(concept),
         "is_scene": concept.get("is_scene", False),
@@ -134,6 +136,7 @@ def _full(concept: dict) -> dict[str, Any]:
     out.update(
         {
             "hook": concept.get("hook") or "",
+            "card_line": concept.get("card_line") or "",
             "logline": concept.get("logline") or "",
             "duration": concept.get("duration") or "",
             "format": concept.get("format") or "",

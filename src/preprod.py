@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS shoot_concepts (
     title       TEXT    NOT NULL,
     hook        TEXT,
     logline     TEXT,
+    card_line   TEXT,
     duration    TEXT,
     shots_json  TEXT    NOT NULL,
     ai_json     TEXT,
@@ -277,6 +278,13 @@ def init(path: Path | str = DB_PATH) -> None:
         # the board's memory, not the database's.
         if "archived_at" not in existing:
             conn.execute("ALTER TABLE shoot_concepts ADD COLUMN archived_at TEXT")
+        # The board's one-line label, separate from `logline` ON PURPOSE
+        # (2026-09-02). scene_brief_prompt.txt makes logline 2-4 sentences
+        # -- "where the IDEA survives", the want/obstacle/turn a one-action
+        # prompt cannot hold. That is the idea record; this is the card.
+        # Trimming the first to make the second threw the idea away.
+        if "card_line" not in existing:
+            conn.execute("ALTER TABLE shoot_concepts ADD COLUMN card_line TEXT")
         # WHY a reason and not just a timestamp (2026-08-31). archived_at
         # records THAT a concept was passed over; it cannot record what
         # was wrong with it. Thirteen of the first fifteen concepts were
@@ -539,13 +547,14 @@ def save_concept(
         cur = conn.execute(
             """
             INSERT INTO shoot_concepts
-                (created_at, brand, client, spark, title, hook, logline,
+                (created_at, brand, client, spark, title, hook, logline, card_line,
                  duration, shots_json, ai_json, edit_note, grade_note, prompt_hash,
                  warnings_json, use_pov, format, account_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (_now(), brand, client, spark, title,
-             concept.get("hook"), concept.get("logline"), concept.get("duration"),
+             concept.get("hook"), concept.get("logline"),
+             concept.get("card_line"), concept.get("duration"),
              json.dumps(concept.get("shots") or []),
              json.dumps(concept["ai"]) if concept.get("ai") else None,
              concept.get("edit"), concept.get("grade"), _hash(prompt_template),
@@ -624,13 +633,17 @@ def derive_logline(prompt: str) -> str:
     return _OPENERS.sub("", sentence).strip()
 
 
-def concept_summary(logline: str = "", prompt: str = "",
+def concept_summary(card_line: str = "", logline: str = "", prompt: str = "",
                     words: int = SUMMARY_WORDS,
                     chars: int = SUMMARY_CHARS) -> str:
     """The line the card prints, capped so it stays ONE line at the
-    narrowest a card gets: the writer's logline when there is one,
-    otherwise derive_logline. Both caps cut on a word boundary."""
-    line = " ".join((logline or "").split())
+    narrowest a card gets. Three sources, best first: the purpose-written
+    `card_line`; a `logline`, which on the nightly path is 2-4 sentences
+    of idea record and so gets trimmed; and failing both, a clause read
+    out of the prompt. Every cap falls on a word boundary."""
+    line = " ".join((card_line or "").split())
+    if not line:
+        line = " ".join((logline or "").split())
     if not line:
         line = " ".join(derive_logline(prompt).split())
     if not line:

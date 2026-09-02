@@ -371,27 +371,60 @@ def test_rejecting_unpicks_and_archives(tmp_db):
 # line, and a row written before the prompt asked for one gets a line
 # derived from its own prompt rather than a blank.
 
-def test_writer_logline_is_saved_and_served_as_the_card_summary(tmp_db, monkeypatch):
+def test_writer_card_line_is_saved_and_served_as_the_card_summary(tmp_db, monkeypatch):
     def fake_model(client_, model, contents, **_):
         return json.dumps({"scenes": [{
             "title": "The Garage Guest",
-            "logline": "Michael finds a cyclops polishing his silverware",
+            "card_line": "Michael finds a cyclops polishing silverware",
             "location": "garage", "prompt": "P1"}]})
 
     monkeypatch.setattr("src.shootgen.generate_with_retry", fake_model)
     # the prompt template has to ASK for it, or nothing arrives to save
-    assert "logline" in shootgen.build_scenes_prompt("x", "zeropage", 2, [])
+    assert "card_line" in shootgen.build_scenes_prompt("x", "zeropage", 2, [])
 
     result = shootgen.generate_scene_concepts("x", "zeropage", count=1, db_path=tmp_db)
-    saved = preprod.get_concept(result["scenes"][0]["concept_id"], path=tmp_db, account_id=None)
-    assert saved["logline"] == "Michael finds a cyclops polishing his silverware"
+    saved = preprod.get_concept(result["scenes"][0]["concept_id"], path=tmp_db,
+                                account_id=None)
+    assert saved["card_line"] == "Michael finds a cyclops polishing silverware"
 
     card = next(c for c in client.get("/api/pipeline/concepts").json()["items"]
                 if c["id"] == saved["id"])
-    assert card["summary"] == "Michael finds a cyclops polishing his silverware"
+    assert card["summary"] == "Michael finds a cyclops polishing silverware"
 
 
-def test_a_missing_logline_never_leaves_a_card_blank(tmp_db, monkeypatch):
+def test_a_rich_logline_is_never_squeezed_into_the_card_line(tmp_db, monkeypatch):
+    """scene_brief_prompt.txt makes `logline` 2-4 sentences on purpose --
+    "where the IDEA survives". The card gets its OWN field; the idea
+    record is stored whole and is only a fallback for the card."""
+    rich = ("Michael tries to repair his motorcycle in a cramped garage while a "
+            "massive cyclops watches. He wants the ride more than he wants to be "
+            "safe, and the creature is the price of admission.")
+
+    def fake_model(client_, model, contents, **_):
+        return json.dumps({"title": "Garage Giant", "hook": "a greasy wrench",
+                           "card_line": "Cyclops watches Michael fix his bike",
+                           "logline": rich, "brief": "Beats: he fixes it."})
+
+    monkeypatch.setattr("src.shootgen.generate_with_retry", fake_model)
+    assert "card_line" in shootgen.build_scene_brief_prompt("zeropage")
+
+    out = shootgen.generate_scene_concept("zeropage", db_path=tmp_db, cast="")
+    saved = preprod.get_concept(out["concept_id"], path=tmp_db, account_id=None)
+    assert saved["logline"] == rich                      # stored whole
+    assert saved["card_line"] == "Cyclops watches Michael fix his bike"
+
+    card = next(c for c in client.get("/api/pipeline/concepts").json()["items"]
+                if c["id"] == saved["id"])
+    assert card["summary"] == "Cyclops watches Michael fix his bike"
+    assert not card["summary"].endswith("\u2026")
+
+    # with no card line the rich logline is a TRIMMED fallback -- never
+    # shown whole, and never rewritten in the row
+    assert preprod.concept_summary("", rich).endswith("\u2026")
+
+
+
+def test_a_missing_card_line_never_leaves_a_card_blank(tmp_db, monkeypatch):
     """The model skipping the key, or a row written before it existed."""
     def fake_model(client_, model, contents, **_):
         return json.dumps({"scenes": [{"title": "Untitled", "prompt": (
@@ -432,7 +465,7 @@ def test_the_summary_fits_one_line_of_the_narrowest_card():
     assert preprod.concept_summary("", "") == ""
 
 
-def test_the_backfill_writes_lines_by_the_same_rules_as_the_writer(monkeypatch):
+def test_the_backfill_writes_lines_by_the_same_rules_as_the_writers(monkeypatch):
     """One copy of the rules. A backfilled logline that obeyed different
     ones would be a second voice on the same board. All the rows go in
     ONE call -- the model is regularly throttled, and N calls is N waits."""
@@ -440,31 +473,33 @@ def test_the_backfill_writes_lines_by_the_same_rules_as_the_writer(monkeypatch):
 
     def fake_model(client_, model, contents, **_):
         seen["prompt"] = contents
-        return ('```json\n{"loglines": {"7": "  Michael wrestles a breathing sofa  ",\n'
+        return ('```json\n{"card_lines": {"7": "  Michael wrestles a breathing sofa  ",\n'
                 '"9": "Cyclops tears the wall open", "11": "  "}}\n```')
 
     monkeypatch.setattr("src.shootgen.generate_with_retry", fake_model)
-    lines = shootgen.write_loglines({7: "prompt seven", 9: "prompt nine", 11: "p"})
+    lines = shootgen.write_card_lines({7: "prompt seven", 9: "prompt nine", 11: "p"})
 
     # fences, padding and quotes gone; ids are ints; an empty line is
     # dropped rather than written over a real row
     assert lines == {7: "Michael wrestles a breathing sofa",
                      9: "Cyclops tears the wall open"}
     assert all(f"SCENE {i}" in seen["prompt"] for i in (7, 9, 11))
-    assert shootgen.LOGLINE_RULES in seen["prompt"]
-    # and the writer's own template gets that same block, not a copy
-    assert shootgen.LOGLINE_RULES in shootgen.build_scenes_prompt("x", "zeropage", 2, [])
-    assert "{logline_rules}" not in shootgen.build_scenes_prompt("x", "zeropage", 2, [])
+    assert shootgen.CARD_LINE_RULES in seen["prompt"]
+    # and BOTH writer templates get that same block, not a copy
+    for built in (shootgen.build_scenes_prompt("x", "zeropage", 2, []),
+                  shootgen.build_scene_brief_prompt("zeropage")):
+        assert shootgen.CARD_LINE_RULES in built
+        assert "{card_line_rules}" not in built
 
 
 def test_the_backfill_targets_anything_the_card_would_trim(tmp_db):
-    """Empty AND too-long both count -- a 148-character logline from the
-    singular writer is what the ellipsis was eating."""
+    """Empty AND too-long both count. It writes `card_line` and leaves
+    `logline` alone -- the idea record is not a long card label."""
     from ops import backfill_loglines
 
-    def concept(logline):
+    def concept(card_line):
         cid = preprod.save_concept(
-            {"title": "T", "hook": "", "logline": logline,
+            {"title": "T", "hook": "", "logline": "", "card_line": card_line,
              "shots": [{"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
                         "desc": "T", "prompt": "Beats: something happens."}]},
             brand="zeropage", prompt_template="T", path=tmp_db, account_id=None)
@@ -476,6 +511,7 @@ def test_the_backfill_targets_anything_the_card_would_trim(tmp_db):
         "night under the silent, watchful gaze of a massive cyclops"))
     assert not backfill_loglines.needs_one(
         concept("Michael finds a cyclops asleep in his bed"))
+
 
 
 # --- the rooms stopped being the anchor (2026-08-31, Mike's call) -----------

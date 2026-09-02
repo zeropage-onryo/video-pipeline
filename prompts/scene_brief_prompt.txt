@@ -46,8 +46,21 @@ Describe every look in cinematography and colour-grade terms only — never name
 films, directors, brands, or real people.
 
 Output STRICT JSON ONLY in this exact shape:
-{"title": "2-4 word cinematic title", "hook": "the frame-1 image in one line — literally what fills the screen in the first second", "logline": "one plain sentence: what happens in this scene", "brief": "the full cohesive scene prompt — all five parts in order, ready to paste straight into a video model"}
+{"title": "2-4 word cinematic title", "hook": "the frame-1 image in one line — literally what fills the screen in the first second", "card_line": "at most 8 words and 50 characters — what happens", "logline": "2-4 plain sentences: the whole idea, including the part the prompt could not hold", "brief": "the full cohesive scene prompt — all five parts in order, ready to paste straight into a video model"}
 
-"hook" and "logline" are for a human scanning a list of scenes. They are NOT
-part of the prompt, must not repeat its style block, and must not be written in
-prompt language — plain sentences only.
+"hook", "card_line" and "logline" are for a human scanning a list of scenes.
+They are NOT part of the prompt, must not repeat its style block, and must not
+be written in prompt language — plain sentences only.
+
+{card_line_rules}
+The card line and the logline are different jobs and NEITHER replaces the
+other: the card line is the label on a card in a grid, the logline is the idea
+record below. Write both. Do not shorten the logline to fit the card, and do
+not pad the card line toward the logline.
+
+"logline" is where the IDEA survives. The prompt holds one action because that
+is all a video model can render; the logline holds what the scene is actually
+about — the want, the obstacle, the turn, and why anyone would feel it. Write
+it so that reading the logline and watching the clip together makes sense of
+each other. A one-line logline under a rich spark means the idea was thrown
+away rather than compressed.
