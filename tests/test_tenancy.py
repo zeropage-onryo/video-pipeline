@@ -624,6 +624,56 @@ def test_the_brand_pill_does_not_empty_the_board(two_accounts, monkeypatch):
         assert len(preprod.list_concepts(path=path, account_id=scoped_to)) == 2
 
 
+def test_the_brand_pill_does_not_empty_the_dev_console(two_accounts, monkeypatch):
+    """The same rule, for the other door (2026-09-02).
+
+    dev_account_id resolved the BRAND, not the tenant, so with the pill
+    on ANTIHERO the Dev Studio scoped itself to the account the backfill
+    gave nothing: "Draw ungraded concept (0)" against 29 concepts, and
+    the board's taste signal reading zero.
+
+    The half that would have cost data rather than a confusing page:
+    four dev routes write (fresh grade, new video, metrics, reference
+    pick), and a write made under the wrong pill lands on an account the
+    board and the judge never read."""
+    from app import auth
+
+    path, a, _b = two_accounts
+    with db.connect(path) as conn:
+        user_id = conn.execute(
+            "SELECT user_id FROM account_members ORDER BY account_id"
+        ).fetchone()["user_id"]
+        conn.execute("UPDATE shoot_concepts SET account_id = ?", (a,))
+
+    monkeypatch.setattr(auth, "current_user", lambda request: {"id": user_id})
+    monkeypatch.setattr(auth.db, "DB_PATH", path)
+
+    class Request:
+        def __init__(self, brand):
+            self.cookies = {"brand": brand}
+
+    for brand in ("zeropage", "antihero"):
+        assert auth.dev_account_id(Request(brand)) == a, f"the {brand} pill switched tenants"
+        # and it agrees with the door /api comes through
+        assert auth.dev_account_id(Request(brand)) == auth.current_account_id(Request(brand))
+
+
+def test_the_dev_console_still_works_with_no_session(two_accounts, monkeypatch):
+    """The fallback is the one thing that stays different from
+    current_account_id: the engine room has never required a cookie, and
+    a 403 there locks Mike out of his own workshop."""
+    from app import auth
+
+    path, a, _b = two_accounts
+    monkeypatch.setattr(auth, "current_user", lambda request: None)
+    monkeypatch.setattr(auth.db, "DB_PATH", path)
+
+    class Request:
+        cookies: dict = {}
+
+    assert auth.dev_account_id(Request()) == a
+
+
 def test_a_user_with_no_membership_is_refused_not_defaulted(monkeypatch, tmp_path):
     """Signing in is not the same as having access -- a fresh signup gets
     zero account_members rows on purpose. That has to be a 403, not a

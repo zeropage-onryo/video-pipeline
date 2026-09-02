@@ -191,6 +191,39 @@ def test_keyframe_attaches_the_still_and_names_every_reference(tmp_db, seams,
     assert shot["reference_image"] == f"https://cdn/key-{scene_id}.png"
 
 
+def test_the_keyframe_prompt_names_only_references_that_resolved(
+        tmp_db, seams, monkeypatch):
+    """The prompt the keyframe renders from has to agree with the
+    captions the images carry.
+
+    The scene writers invent "@Image 1 / @Image 2" -- a syntax nothing
+    here emits and no renderer receives -- so the sentence naming the
+    face pointed at nothing while the jacket bound anyway off its own
+    name. And a HEIC Pillow could not decode is dropped before the call,
+    so naming it would promise a picture that never rode along.
+    """
+    monkeypatch.setattr(
+        imagery, "image_bytes_for_gemini",
+        lambda url, resolve_photo=None: (b"\xff\xd8ok"
+                                         if url.lower().endswith(".jpg") else None))
+    scene_id = a_scene(
+        tmp_db,
+        prompt=("REFERENCES: Use @Image 1 for Michael's face.\n\n"
+                "ACTION: he waits by the @Image 2 bike."),
+        refs=["/characters/michael/photo/a.jpg",
+              "/props/motorcycle/photo/b.heic"])
+
+    assert scene_chain.keyframe_scene(scene_id, 1, db_path=tmp_db)["ok"]
+    prompt = seams["nano"][0]["prompt"]
+    assert "@Image" not in prompt
+    assert '"Michael"' in prompt
+    assert "Motorcycle" not in prompt          # dropped, so never promised
+    assert len(seams["nano"][0]["refs"]) == 1  # and never sent either
+    # the stored shot keeps the writer's text; only the render is rebound
+    shot = preprod.get_concept(scene_id, path=tmp_db, account_id=None)["shots"][0]
+    assert "@Image 1" in shot["prompt"]
+
+
 def test_a_failed_keyframe_is_a_result_not_an_exception(tmp_db, monkeypatch):
     monkeypatch.setattr(nano_banana, "generate_from_prompt",
                         lambda prompt, **kw: {"ok": False, "media_url": None,
@@ -240,3 +273,80 @@ def test_the_stages_stay_callable_from_a_graph_and_from_a_request():
     # and src/ never imports app/: the app-layer capabilities are injected
     assert "from app" not in source and "import app" not in source
     assert "attach_refs" in source and "resolve_photo" in source
+
+
+# --- a scene with no references gets one generated (2026-09-02) -------------
+#
+# keyframe_scene passes reference_image=None when shot["refs"] is empty, so the
+# still renders from prompt text alone. For Zero Page that is EVERY scene: no
+# cast to attach, and the scout's image bin empty since Instagram's
+# public-content endpoint started refusing. The brand built on grounded texture
+# was the one keyframing blind.
+
+def _scene_without_refs(tmp_db):
+    return preprod.save_concept(
+        {"title": "The Living Wall", "shots": [
+            {"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
+             "prompt": "a sponge on a wall that bruises under pressure"},
+        ]},
+        brand="zeropage", path=tmp_db, account_id=None)
+
+
+def test_no_target_without_spend_approval(tmp_db, monkeypatch):
+    """MIDJOURNEY_SPEND_OK is per-run by design -- "an approval that's
+    always on isn't an approval". Unapproved, behaviour is unchanged."""
+    monkeypatch.delenv("MIDJOURNEY_SPEND_OK", raising=False)
+    cid = _scene_without_refs(tmp_db)
+    shot = preprod.get_concept(cid, path=tmp_db, account_id=None)["shots"][0]
+
+    assert scene_chain.visual_target(cid, shot, db_path=tmp_db,
+                                     account_id=None) == ""
+
+
+def test_an_approved_run_gets_a_target_attached(tmp_db, monkeypatch):
+    """The target lands on the shot's refs, not in a local -- the Queue
+    card reads refs to show what the spend is anchored on, and a target
+    nobody can see is a target nobody can veto."""
+    monkeypatch.setenv("MIDJOURNEY_SPEND_OK", "1")
+    monkeypatch.setattr(scene_chain.shootgen, "still_prompt",
+                        lambda *a, **k: "a bruised wall --ar 9:16 --style raw")
+
+    from pathlib import Path
+
+    from src import midjourney, refbin
+
+    def fake_generate(prompt, out, **k):
+        out = Path(out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"jpegbytes")
+        return out
+
+    monkeypatch.setattr(midjourney, "generate_image", fake_generate)
+    monkeypatch.setattr(refbin, "save", lambda data: "/refs/generated.jpg")
+
+    cid = _scene_without_refs(tmp_db)
+    shot = preprod.get_concept(cid, path=tmp_db, account_id=None)["shots"][0]
+
+    url = scene_chain.visual_target(cid, shot, db_path=tmp_db, account_id=None)
+    assert url == "/refs/generated.jpg"
+    after = preprod.get_concept(cid, path=tmp_db, account_id=None)
+    assert after["shots"][0]["refs"] == ["/refs/generated.jpg"]
+
+
+def test_a_failed_target_is_never_fatal(tmp_db, monkeypatch):
+    """A scene with no target is still a scene -- it keyframes the way
+    it always did."""
+    monkeypatch.setenv("MIDJOURNEY_SPEND_OK", "1")
+    from src import midjourney
+    monkeypatch.setattr(scene_chain.shootgen, "still_prompt",
+                        lambda *a, **k: "a bruised wall")
+
+    def boom(prompt, out, **k):
+        raise RuntimeError("midjourney is down")
+
+    monkeypatch.setattr(midjourney, "generate_image", boom)
+    cid = _scene_without_refs(tmp_db)
+    shot = preprod.get_concept(cid, path=tmp_db, account_id=None)["shots"][0]
+
+    assert scene_chain.visual_target(cid, shot, db_path=tmp_db,
+                                     account_id=None) == ""

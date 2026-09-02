@@ -10,6 +10,12 @@
 
 # Environment variables
 .env
+# ...and every backup of it. `.env.bak.<timestamp>` files get made by hand
+# during token rotation and are NOT covered by ".env" alone -- two of them
+# were one `git add -A` away from putting live Gemini, R2, Instagram and
+# OAuth credentials into history permanently (2026-09-02).
+.env.*
+!.env.example
 
 # Python
 __pycache__/

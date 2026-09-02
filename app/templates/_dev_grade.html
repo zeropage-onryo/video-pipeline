@@ -3,6 +3,13 @@
    random golden query run through live retrieval, and a fresh throwaway
    prompt that is generated but never saved.
 
+   The whole queue is listed above the drawn card (2026-09-02): the draw
+   is random, so without a list there is no way to see what is waiting or
+   to work it in a deliberate order. Clicking a row deals that concept
+   instead of a random one -- same screen, same forms. A concept leaves
+   this queue two ways: pass on it, or grade it -- and a graded one is on
+   the Graded tab with its score.
+
    A concept is ONE scene and one prompt now (2026-08-26), so the prompt
    IS the grading surface: approve it, teach a better one, or deny it.
    Concepts written before the change carry several prompts; each gets
@@ -30,12 +37,51 @@
     {% for rc in grade.reason_counts %}{{ rc.reason }}: {{ rc.n }}{% if not loop.last %} · {% endif %}{% endfor %}
   </p>
   {% endif %}
+  {# The Pipeline board's check and X are the taste label the judge
+     scores against. Shown here so the loop is visible from the room
+     that consumes it -- otherwise the two clicks look like they only
+     move cards around. #}
+  {% if grade.board_taste.liked or grade.board_taste.disliked %}
+  <p style="margin-top:8px; opacity:.75">Board taste the judge is reading —
+    {{ grade.board_taste.liked }} picked · {{ grade.board_taste.disliked }} passed
+  </p>
+  {% endif %}
   <a class="btnw" href="/grade/draw?mode=any">Grade anything</a>
   <form method="post" action="/grade/fresh" style="display:flex; gap:8px; flex:1; min-width:280px">
     <input type="text" name="spark" placeholder="Optional spark for a fresh throwaway prompt…" style="flex:1">
     <button type="submit" class="primary">Fresh prompt · billed</button>
   </form>
 </div>
+
+{# The queue itself. Open by default -- seeing what is waiting is the
+   point -- and scrollable rather than tall, so the drawn card below
+   stays on screen. A row is a link into the same ?mode=shot view the
+   random draw redirects to, so nothing about grading changes; only the
+   order does. #}
+{% if grade.ungraded %}
+<details class="panel" open style="margin-bottom:18px">
+  <summary class="panel-head" style="cursor:pointer; list-style:none">
+    <span class="id">UNGRADED QUEUE</span>
+    <span class="m">{{ grade.ungraded_count }} WAITING · CLICK ONE TO GRADE IT</span>
+  </summary>
+  <div class="uqwrap">
+    {% for u in grade.ungraded %}
+    <a class="uq{{ ' here' if grade.concept_id == u.id }}"
+       href="/studio?tab=grade&amp;mode=shot&amp;concept_id={{ u.id }}">
+      <span class="uid">{{ u.n }}</span>
+      <span class="ut">{{ u.title }}
+        {% if u.summary %}<span class="us">{{ u.summary }}</span>{% endif %}
+      </span>
+      <span class="utags">
+        <span class="tag faint">{{ u.brand|upper }}</span>
+        {% if u.picked %}<span class="tag bone" title="You picked this on the board">✓ PICKED</span>{% endif %}
+      </span>
+      <span class="ug">{% if u.prompt_count %}{{ u.prompt_count }} prompt{{ "s" if u.prompt_count != 1 }}{% else %}no prompt{% endif %}</span>
+    </a>
+    {% endfor %}
+  </div>
+</details>
+{% endif %}
 
 {% if grade.mode == "shot" and grade.concept %}
 {% set c = grade.concept %}

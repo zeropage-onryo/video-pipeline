@@ -20,6 +20,11 @@ reason instead, which is the negative signal the Grade tab collects.
 import argparse
 import re
 import sys
+from pathlib import Path as _P
+
+# Run as `venv/bin/python ops/<name>.py` from anywhere: the repo root
+# is not on sys.path unless the project happens to be pip-installed.
+sys.path.insert(0, str(_P(__file__).resolve().parent.parent))
 
 from src import accounts, db, preprod, scene_chain
 

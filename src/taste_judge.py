@@ -1,7 +1,8 @@
 """
 The taste + performance judge. Scores a concept against THIS creator's own
-record -- what they approved vs rejected on /holds, what they hand-marked
-worked vs didn't-work, and the traits of their winning vs losing posts -- to
+record -- what they picked vs passed on the Pipeline board, what they
+approved vs rejected on /holds, what they hand-marked worked vs
+didn't-work, and the traits of their winning vs losing posts -- to
 predict "they'll like this" and "this will travel," so a slate can rank
 itself toward what the creator actually likes and what actually works.
 
@@ -53,13 +54,85 @@ def _graded_concepts(status: str, limit: int, path, account_id=None) -> list[dic
     return [dict(r) for r in rows]
 
 
+# The two board clicks, as a query. `picked_at` and `archived_at` were
+# a displayed number and nothing else until 2026-09-02 -- pick_rate and
+# a reason tally. But the check and the X ARE the taste label: they are
+# the one place he says "this one, not that one" about a concept before
+# any money is spent on it, and they are said far more often than a
+# hold is graded. So they are read here, alongside the hold queue.
+#
+# Deliberately NOT written to the RAG avoid_prompts shelf as well. His
+# pick rate is ~2 in 29 by design -- a board where most cards are
+# passed over is a board doing its job -- and ingesting every pass as
+# an "avoid this" example would bury the handful of winning examples
+# under ten times as many negatives and teach the writer to be timid.
+# The judge weighs; the shelf instructs. This is a weight.
+_BOARD_VERDICTS = {
+    # a pick beats a later archive: a picked concept that was archived
+    # after rendering was still one he wanted made, and counting it as
+    # a dislike would teach the judge the opposite of what happened.
+    "liked": ("picked_at IS NOT NULL", "picked_at"),
+    "disliked": ("archived_at IS NOT NULL AND picked_at IS NULL", "archived_at"),
+}
+
+
+def _board_verdicts(kind: str, limit: int, path, account_id=None) -> list[dict]:
+    """Concepts he picked (or passed on) with the board's ✓ / ✗."""
+    where, order = _BOARD_VERDICTS[kind]
+    with db.connect(path) as conn:
+        rows = conn.execute(
+            "SELECT title, hook, logline FROM shoot_concepts "
+            f"WHERE {where} AND account_id IS ? "
+            f"ORDER BY {order} DESC LIMIT ?",
+            (account_id, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _merge(*groups, limit: int = HISTORY_LIMIT) -> list[dict]:
+    """One side's history, board first, deduped, capped.
+
+    Board first because it is the surface he actually works: a hold
+    queue graded once a week should not push out the twenty passes he
+    made this morning. Dedup on title+hook because the same concept can
+    be both picked on the board and approved on a hold, and showing the
+    judge one concept twice is a thumb on the scale it cannot see."""
+    seen: set = set()
+    out: list[dict] = []
+    for group in groups:
+        for row in group:
+            key = ((row.get("title") or "").strip().lower(),
+                   (row.get("hook") or "").strip().lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(row)
+            if len(out) >= limit:
+                return out
+    return out
+
+
+def board_taste(db_path=None, account_id=None) -> dict:
+    """How many board verdicts the judge is actually reading right now.
+
+    Capped at HISTORY_LIMIT on purpose, because that is the honest
+    number: it is what reaches the prompt, not what is in the table. A
+    signal nobody can see is a signal nobody trusts is working -- same
+    reason the Grade tab counts its pass reasons."""
+    path = db_path or db.DB_PATH
+    return {kind: len(_board_verdicts(kind, HISTORY_LIMIT, path, account_id))
+            for kind in _BOARD_VERDICTS}
+
+
 def gather_signals(db_path=None, account_id=None) -> dict:
     """Everything the judge scores against -- pure, no network."""
     path = db_path or db.DB_PATH
     wins = winners.list_all(path=path)
     return {
-        "liked": _graded_concepts("approved", HISTORY_LIMIT, path, account_id),
-        "disliked": _graded_concepts("rejected", HISTORY_LIMIT, path, account_id),
+        "liked": _merge(_board_verdicts("liked", HISTORY_LIMIT, path, account_id),
+                        _graded_concepts("approved", HISTORY_LIMIT, path, account_id)),
+        "disliked": _merge(_board_verdicts("disliked", HISTORY_LIMIT, path, account_id),
+                           _graded_concepts("rejected", HISTORY_LIMIT, path, account_id)),
         "winners": [w for w in wins if w.get("verdict") != "didnt_work"][:HISTORY_LIMIT],
         "avoid": [w for w in wins if w.get("verdict") == "didnt_work"][:HISTORY_LIMIT],
         "perf": post_seo.derive_signals(db_path=db_path),

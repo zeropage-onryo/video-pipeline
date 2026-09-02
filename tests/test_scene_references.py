@@ -378,6 +378,65 @@ def test_a_reference_url_names_its_asset():
         "Reference photo supplied with this prompt:")
 
 
+def test_the_prompt_names_the_photographs_that_are_actually_attached():
+    """The scene writers invent "@Image 1 / @Image 2". Nothing in this
+    repo emits that syntax and no renderer ever receives such a tag, so
+    the one sentence saying which photograph was the face pointed at
+    nothing. The jacket bound anyway -- "leather moto jacket" collides
+    with its own caption -- and the face did not, which is the whole of
+    why 155-158 came back as a stock leading man in an accurate jacket
+    (2026-09-02)."""
+    from src import shootgen
+    prompt = (
+        "Scene: The Oil Ritual -- Michael in his garage.\n\n"
+        "REFERENCES: Use @Image 1 for Michael's face and @Image 2 for the "
+        "leather moto jacket.\n\n"
+        "CONTINUITY: Michael wears the @Image 2 leather jacket throughout.\n\n"
+        "LOOK: heavy film grain.")
+    out = shootgen.bind_references(prompt, [
+        "/characters/michael/photo/IMG_0586.JPG",
+        "/props/leather-moto-jacket/photo/IMG_0599.JPG",
+        "/characters/michael/photo/IMG_0593.JPG",
+        "/characters/michael/photo/IMG_0599.JPG",
+    ])
+    # the invented tags are gone -- from the block AND from the prose
+    assert "@Image" not in out
+    assert "Use @Image 1" not in out
+    assert "Michael wears the leather jacket throughout." in out
+    # what replaces them names the assets by the words reference_label
+    # captions the images with, so prompt and captions agree
+    assert out.startswith("REFERENCES —")
+    assert '"Michael" — 3 photographs' in out
+    assert '"Leather Moto Jacket"' in out
+    assert "APPARENT AGE" in out          # the drift these renders showed
+    assert "LOOK: heavy film grain." in out
+
+
+def test_the_numbers_are_stripped_and_never_remapped():
+    """The writer numbered its images before `attach_refs` had chosen
+    anything, so "@Image 2" never referred to the second entry of this
+    list. Guessing a mapping would be a guess wearing a fact's clothes."""
+    from src import shootgen
+    out = shootgen.bind_references(
+        "ACTION: he lifts the @Image 3 helmet onto @Image 1's head.",
+        ["/characters/michael/photo/a.jpg"])
+    assert "@Image" not in out and "3" not in out.split("REFERENCES")[-1].split("ACTION")[-1]
+    assert "he lifts the helmet onto 's head." in out or "helmet" in out
+
+
+def test_no_references_means_no_reference_block():
+    """A block describing images that are not there is worse than none:
+    it spends the model's attention looking for them. A scene with no
+    refs renders on its text, which is the documented behaviour."""
+    from src import shootgen
+    out = shootgen.bind_references(
+        "Scene: a room.\n\nREFERENCES: Use @Image 1 for the face.\n\n"
+        "LOOK: grainy.", [])
+    assert "REFERENCES" not in out
+    assert "@Image" not in out
+    assert "Scene: a room." in out and "LOOK: grainy." in out
+
+
 def test_an_unrecognised_url_is_simply_unlabelled():
     """No label is the old behaviour, never an error."""
     from src import shootgen

@@ -623,9 +623,12 @@ def pipeline_concepts(brand: Optional[str] = None, status: Optional[str] = None,
     decided about, and the board is for what is still open. They are
     still here (`?archived=true`) and still counted in pick_rate, which
     reads the rows rather than this endpoint."""
-    cards = [_concept_card(c) for c in preprod.list_concepts(path=db.DB_PATH, account_id=account_id)]
-    if brand in preprod.BRANDS:
-        cards = [c for c in cards if c["brand"] == brand]
+    # brand goes into the query, not a filter after it -- list_concepts
+    # takes the newest 100 of THIS ACCOUNT, and both brands live in one
+    # account, so filtering afterwards meant one brand could eat the
+    # whole limit and quietly shorten the other's board.
+    cards = [_concept_card(c) for c in preprod.list_concepts(
+        path=db.DB_PATH, account_id=account_id, brand=brand)]
     if status in ("idea", "planned", "shot"):
         cards = [c for c in cards if c["status"] == status]
     if not archived:
@@ -1057,9 +1060,8 @@ def queue_pending(brand: Optional[str] = None, account_id: int = Depends(auth.cu
     Studio chain parks it (concept written, prompt enhanced, keyframe
     rendered -- the next step is the one that costs money), or you pick
     a text-only concept off the board yourself."""
-    cards = [_concept_card(c) for c in preprod.list_concepts(path=db.DB_PATH, account_id=account_id)]
-    if brand in preprod.BRANDS:
-        cards = [c for c in cards if c["brand"] == brand]
+    cards = [_concept_card(c) for c in preprod.list_concepts(
+        path=db.DB_PATH, account_id=account_id, brand=brand)]   # scoped in SQL, see above
     pending = [c for c in cards
                if (c["picked"] or c["parked"]) and not c["archived"]
                and c["is_scene"] and not c["media_url"]]

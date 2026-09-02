@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 import app.main as app_main
 from app.main import app
-from src import autonomy, db, entities, inspiration, preprod, winners
+from src import autonomy, db, entities, evalstore, inspiration, preprod, winners
 
 client = TestClient(app)
 
@@ -22,6 +22,9 @@ def tmp_db(tmp_path, monkeypatch):
     autonomy.init(path)
     winners.init(path)
     inspiration.init(path)
+    # the Grade tab counts the golden set alongside the ungraded pool,
+    # so rendering it needs evalstore's tables too
+    evalstore.init(path)
     monkeypatch.setattr(db, "DB_PATH", path)
     return path
 
@@ -178,3 +181,136 @@ def test_posted_outcomes_reads_the_latest_snapshot(tmp_db):
     [row] = preprod.posted_outcomes(path=tmp_db, account_id=None)
     assert row["concept_id"] == cid
     assert row["shares"] == 170, "read the first snapshot, not the latest"
+
+
+# --- the ungraded queue, listed --------------------------------------------
+# The draw is random. A count alone ("12 waiting") says nothing about what
+# is in the pool, so the Grade tab lists it (2026-09-02). Same filter the
+# draw uses -- judge_overall IS NULL -- so the list and the count on the
+# button can never disagree.
+
+def test_ungraded_rows_list_the_whole_pool_newest_first(tmp_db):
+    a = preprod.save_concept(_concept("first written"), "antihero", path=tmp_db, account_id=None)
+    b = preprod.save_concept(_concept("second written"), "antihero", path=tmp_db, account_id=None)
+    rows = app_main._ungraded_rows(None)
+    assert [r["id"] for r in rows] == [b, a]
+    assert rows[0]["n"] == f"SHOOT-{b:02d}" and rows[0]["title"] == "second written"
+
+
+def test_a_graded_concept_leaves_the_list(tmp_db):
+    graded = preprod.save_concept(_concept("scored"), "antihero", path=tmp_db, account_id=None)
+    waiting = preprod.save_concept(_concept("not scored"), "antihero", path=tmp_db, account_id=None)
+    preprod.save_judge_score(
+        graded, {"overall": 7, "taste_fit": 7, "performance": 7, "reasons": []},
+        path=tmp_db, account_id=None)
+    assert [r["id"] for r in app_main._ungraded_rows(None)] == [waiting]
+
+
+def test_passing_takes_a_concept_out_of_the_queue(tmp_db):
+    """The bug this pool exists to not have: `set_archived` leaves
+    judge_overall NULL, so before 2026-09-02 a concept passed on from
+    this tab stayed in the queue and could be drawn again forever."""
+    cid = preprod.save_concept(_concept("passed on"), "antihero", path=tmp_db, account_id=None)
+    kept = preprod.save_concept(_concept("still open"), "antihero", path=tmp_db, account_id=None)
+    client.post(f"/concepts/{cid}/pass", data={"reason": "boring"}, follow_redirects=False)
+    assert [r["id"] for r in app_main._ungraded_rows(None)] == [kept]
+
+
+def test_the_draw_cannot_deal_a_passed_concept(tmp_db):
+    """The list and the draw must share one definition of the pool, or
+    the draw deals rows the list never showed."""
+    cid = preprod.save_concept(_concept("passed on"), "antihero", path=tmp_db, account_id=None)
+    client.post(f"/concepts/{cid}/pass", data={"reason": "boring"}, follow_redirects=False)
+    r = client.get("/grade/draw?mode=shot", follow_redirects=False)
+    assert f"concept_id={cid}" not in r.headers["location"]
+    assert "message=" in r.headers["location"]   # nothing left to draw
+
+
+def test_grade_all_never_bills_for_a_passed_concept(tmp_db, monkeypatch):
+    """Passing is a decision. Spending a billed judge call to score
+    something already rejected is money for an answer nobody wants."""
+    passed = preprod.save_concept(_concept("passed on"), "antihero", path=tmp_db, account_id=None)
+    open_ = preprod.save_concept(_concept("still open"), "antihero", path=tmp_db, account_id=None)
+    client.post(f"/concepts/{passed}/pass", data={"reason": "boring"}, follow_redirects=False)
+    calls = []
+
+    def fake(concept, **k):
+        calls.append(concept["id"])
+        return {"overall": 6.0, "taste_fit": 6.0, "performance": 6.0,
+                "reasons": [], "graded": True}
+
+    monkeypatch.setattr(app_main.taste_judge, "score_concept", fake)
+    client.post("/concepts/grade-all", follow_redirects=False)
+    assert calls == [open_]
+
+
+def test_the_list_and_the_draw_button_count_agree(tmp_db):
+    for i in range(3):
+        preprod.save_concept(_concept(f"c{i}"), "antihero", path=tmp_db, account_id=None)
+    ctx = app_main._grade_context(None, None, None, None, None)
+    assert ctx["ungraded_count"] == len(ctx["ungraded"]) == 3
+
+
+def test_the_grade_tab_renders_a_row_per_ungraded_concept(tmp_db):
+    cid = preprod.save_concept(_concept("on the queue"), "antihero", path=tmp_db, account_id=None)
+    body = client.get("/studio?tab=grade").text
+    assert "UNGRADED QUEUE" in body
+    assert "on the queue" in body
+    assert f"/studio?tab=grade&amp;mode=shot&amp;concept_id={cid}" in body
+
+
+def test_the_drawn_concept_is_marked_in_the_list(tmp_db):
+    cid = preprod.save_concept(_concept("drawn"), "antihero", path=tmp_db, account_id=None)
+    body = client.get(f"/studio?tab=grade&mode=shot&concept_id={cid}").text
+    assert 'class="uq here"' in body
+
+
+# --- the Graded tab ---------------------------------------------------------
+# A concept leaves the queue two ways: passed on, or graded. Passing was
+# always visible in the reason tally; a score used to just make the
+# concept vanish from the draw. The scores are the data now (2026-09-02).
+
+def test_graded_concepts_are_listed_best_first(tmp_db):
+    low = preprod.save_concept(_concept("a five"), "antihero", path=tmp_db, account_id=None)
+    high = preprod.save_concept(_concept("a nine"), "antihero", path=tmp_db, account_id=None)
+    preprod.save_judge_score(low, {"overall": 5, "taste_fit": 5, "performance": 5,
+                                   "reasons": ["thin"]}, path=tmp_db, account_id=None)
+    preprod.save_judge_score(high, {"overall": 9, "taste_fit": 9, "performance": 8,
+                                    "reasons": ["a real scene"]}, path=tmp_db, account_id=None)
+    rows = app_main._graded_rows(None)
+    assert [r["id"] for r in rows] == [high, low]
+    assert rows[0]["good"] is True and rows[1]["good"] is False   # the 7+ mark
+    assert rows[0]["taste"] == 9 and rows[0]["perf"] == 8
+
+
+def test_an_ungraded_concept_is_not_on_the_graded_tab(tmp_db):
+    preprod.save_concept(_concept("waiting"), "antihero", path=tmp_db, account_id=None)
+    assert app_main._graded_rows(None) == []
+
+
+def test_a_graded_concept_leaves_the_queue_for_the_graded_tab(tmp_db):
+    """The two lists partition the concepts: nothing is on both, and
+    grading is what moves a row across."""
+    cid = preprod.save_concept(_concept("scored"), "antihero", path=tmp_db, account_id=None)
+    assert [r["id"] for r in app_main._ungraded_rows(None)] == [cid]
+    preprod.save_judge_score(cid, {"overall": 8, "taste_fit": 8, "performance": 8,
+                                   "reasons": []}, path=tmp_db, account_id=None)
+    assert app_main._ungraded_rows(None) == []
+    assert [r["id"] for r in app_main._graded_rows(None)] == [cid]
+
+
+def test_the_graded_tab_renders_the_score_and_links_back_to_grading(tmp_db):
+    cid = preprod.save_concept(_concept("scored"), "antihero", path=tmp_db, account_id=None)
+    preprod.save_judge_score(cid, {"overall": 9, "taste_fit": 9, "performance": 8,
+                                   "reasons": ["a real scene"]}, path=tmp_db, account_id=None)
+    body = client.get("/studio?tab=graded").text
+    assert "GRADED CONCEPTS" in body
+    assert "a real scene" in body            # the judge's reason, on the row
+    assert 'class="uq scored strong"' in body
+    assert f"/studio?tab=grade&amp;mode=shot&amp;concept_id={cid}" in body
+
+
+def test_the_graded_tab_says_so_when_nothing_is_scored(tmp_db):
+    preprod.save_concept(_concept("waiting"), "antihero", path=tmp_db, account_id=None)
+    body = client.get("/studio?tab=graded").text
+    assert "NOTHING SCORED YET" in body

@@ -102,12 +102,17 @@ function card(c) {
 
 export async function renderBoard() {
   const list = $('scenelist');
-  const wantArchived = filter === 'archived';
   let body;
   boardState('loading', 'Loading concepts…');
   try {
-    body = await api('/api/pipeline/concepts?brand=' + encodeURIComponent(state.brand)
-                     + (wantArchived ? '&archived=true' : ''));
+    // always ask for the archived ones too, whichever tab is showing.
+    // The board is scoped twice -- by brand and by archived -- and a
+    // count line that can only see one side of the second scope is how
+    // "11 shown · 2/29 picked" ended up reading as 18 missing cards
+    // (2026-09-02). One request that knows both numbers can say where
+    // everything went; the tabs are a filter over what it returned.
+    body = await api('/api/pipeline/concepts?brand='
+                     + encodeURIComponent(state.brand) + '&archived=true');
   } catch (e) {
     list.innerHTML = '';
     boardState('error', `Concepts unavailable: ${e.message}`, renderBoard);
@@ -117,19 +122,30 @@ export async function renderBoard() {
 
   // only one-shot concepts are the unit; a legacy multi-shot row is a
   // different decision and is left to the Dev Studio
-  items = (body.items || []).filter(c => c.is_scene);
-  if (wantArchived) items = items.filter(c => c.archived);
-  if (filter === 'picked') items = items.filter(c => c.picked);
+  const all = (body.items || []).filter(c => c.is_scene);
+  const open = all.filter(c => !c.archived);
+  const gone = all.filter(c => c.archived);
+  const wantArchived = filter === 'archived';
+  items = wantArchived ? gone
+    : filter === 'picked' ? open.filter(c => c.picked)
+    : open;
 
+  // Named scopes, because every number here answers a different
+  // question: open/archived are THIS BRAND, and pick_rate is the
+  // account's measurement across both -- windowing it by brand would
+  // make it a different statistic (see preprod.pick_rate).
   const rate = body.pick || {};
+  const scope = `${state.brand} · ${open.length} open · ${gone.length} archived`;
   $('sccount2').textContent = rate.generated
-    ? `${items.length} shown · ${rate.picked}/${rate.generated} picked all time`
-    : `${items.length}`;
+    ? `${scope} · ${rate.picked}/${rate.generated} picked all time, all brands`
+    : scope;
 
   list.innerHTML = items.length ? items.map(card).join('')
     : `<div class="probeblank">${wantArchived
         ? 'Nothing archived yet'
-        : 'No concepts open — type an idea on Studio and hit Create'}</div>`;
+        : filter === 'picked'
+          ? 'Nothing picked yet — the check on a card sends it to Queue'
+          : 'No concepts open — type an idea on Studio and hit Create'}</div>`;
 
   list.querySelectorAll('.scene').forEach(el => {
     const id = Number(el.dataset.id);

@@ -392,7 +392,12 @@ def dashboard():
 # eval dataset. Everything an end user creates with lives on /ui; what
 # happens here only changes what /ui's next generation does.
 
-DEV_TABS = ("stats", "grade", "library", "settings", "dataset")
+DEV_TABS = ("stats", "grade", "graded", "library", "settings", "dataset")
+
+# What "scored well" means on the Graded tab (2026-09-02, Mike's call).
+# A display threshold only: nothing is gated on it, it decides which
+# rows read as strong.
+GOOD_SCORE = 7.0
 
 GRADE_EMPTY = ("Nothing to grade right now — every concept is scored and "
                "the golden set is empty.")
@@ -470,12 +475,76 @@ def _golden_probe(query: str) -> dict:
     return out
 
 
+def _ungraded_concepts(account_id: int) -> list[dict]:
+    """The grade queue: not yet scored, and not passed on.
+
+    ONE definition, used by the list, the random draw and grade-all, so
+    those three can never disagree about what is waiting.
+
+    Archived rows are excluded (2026-09-02). `set_archived` leaves
+    judge_overall NULL, so before this a concept passed on from this tab
+    stayed in the queue and could be drawn again forever -- and grade-all
+    would spend a billed call scoring something already rejected. Passing
+    is a decision; the queue is for concepts still undecided.
+    """
+    return [c for c in preprod.list_concepts(path=db.DB_PATH, account_id=account_id)
+            if c.get("judge_overall") is None and not c.get("archived")]
+
+
+def _concept_line(c: dict) -> dict:
+    """One concept as one scannable row, shared by both queue lists."""
+    shots = [s for s in (c.get("shots") or []) if s.get("prompt")]
+    return {
+        "id": c["id"],
+        "n": f"SHOOT-{c['id']:02d}",
+        "brand": c.get("brand") or "",
+        "title": c.get("title") or "(untitled)",
+        # the same one-line label the Pipeline board prints, so a
+        # concept reads identically in both rooms
+        "summary": preprod.concept_summary(
+            c.get("card_line") or "",
+            c.get("logline") or c.get("hook") or "",
+            (shots[0].get("prompt") if shots else "") or "",
+        ),
+        "prompt_count": len(shots),
+        "picked": bool(c.get("picked_at")),
+    }
+
+
+def _ungraded_rows(account_id: int) -> list[dict]:
+    """Every concept waiting to be graded, newest first."""
+    return [_concept_line(c) for c in _ungraded_concepts(account_id)]
+
+
+def _graded_rows(account_id: int) -> list[dict]:
+    """Everything already scored, best first -- where a concept goes when
+    it leaves the queue. Sorting by score rather than by id is the point:
+    this is the tab that answers "what did the judge actually like".
+    """
+    rows = []
+    for c in preprod.list_concepts(path=db.DB_PATH, account_id=account_id):
+        if c.get("judge_overall") is None:
+            continue
+        reason = (c.get("judge_reason") or "").strip()
+        rows.append({**_concept_line(c),
+                     "overall": c.get("judge_overall"),
+                     "taste": c.get("judge_taste"),
+                     "perf": c.get("judge_perf"),
+                     "reason": reason,
+                     "good": (c.get("judge_overall") or 0) >= GOOD_SCORE,
+                     "archived": bool(c.get("archived"))})
+    rows.sort(key=lambda r: (r["overall"] or 0, r["id"]), reverse=True)
+    return rows
+
+
 def _grade_context(mode: Optional[str], concept_id: Optional[int],
                    golden_id: Optional[int], fresh: Optional[str],
                    account_id: int) -> dict:
-    """What the Grade tab shows: one drawn item (or nothing yet). The
-    id/payload arrives in the query string so a refresh re-renders the
-    same item without re-drawing -- and, for fresh, without re-billing."""
+    """What the Grade tab shows: the whole ungraded queue as a list, plus
+    one drawn item (or nothing yet). The id/payload arrives in the query
+    string so a refresh re-renders the same item without re-drawing --
+    and, for fresh, without re-billing."""
+    ungraded = _ungraded_rows(account_id)
     context = {"mode": mode, "concept": None, "golden": None,
                "probe": None, "fresh": None,
                # the Pass buttons on the drawn card -- one per reason, so
@@ -488,9 +557,17 @@ def _grade_context(mode: Optional[str], concept_id: Optional[int],
                # that makes working the queue feel like it did something.
                "reason_counts": preprod.reason_counts(path=db.DB_PATH,
                                                       account_id=account_id),
-               "ungraded_count": sum(
-                   1 for c in preprod.list_concepts(path=db.DB_PATH, account_id=account_id)
-                   if c.get("judge_overall") is None),
+               # the board's check/X, as the judge sees them -- the two
+               # clicks feed taste_judge.gather_signals, and this says
+               # how many are reaching it (capped at HISTORY_LIMIT)
+               "board_taste": taste_judge.board_taste(db_path=db.DB_PATH,
+                                                      account_id=account_id),
+               # the whole queue, not just its size: the draw is random,
+               # so without a list there is no way to see what is waiting
+               # or to grade in a deliberate order.
+               "ungraded": ungraded,
+               "ungraded_count": len(ungraded),
+               "concept_id": concept_id,
                "golden_count": len(evalstore.list_golden(path=db.DB_PATH))}
     if mode == "shot" and concept_id is not None:
         concept = preprod.get_concept(concept_id, path=db.DB_PATH, account_id=account_id)
@@ -531,6 +608,9 @@ def studio(request: Request, tab: Optional[str] = None, message: Optional[str] =
         context["metrics"] = _pipeline_metrics(account_id)
     elif active_tab == "grade":
         context["grade"] = _grade_context(mode, concept_id, golden_id, fresh, account_id)
+    elif active_tab == "graded":
+        context["graded"] = _graded_rows(account_id)
+        context["good_score"] = GOOD_SCORE
     elif active_tab == "library":
         context["library"] = _library_context(q, domain)
     elif active_tab == "settings":
@@ -545,17 +625,16 @@ def studio(request: Request, tab: Optional[str] = None, message: Optional[str] =
 
 @dev.get("/grade/draw")
 def grade_draw(mode: str = "any", message: Optional[str] = None, account_id: int = Depends(auth.dev_account_id)):
-    """Deal the next random thing to grade. `shot` draws an ungraded
-    concept (judge_overall IS NULL -- the same filter grade-all uses,
-    randomized instead of exhaustive); `golden` draws a golden query;
+    """Deal the next random thing to grade. `shot` draws from
+    _ungraded_concepts -- the same pool the queue list and grade-all use,
+    randomized instead of exhaustive; `golden` draws a golden query;
     `any` round-robins whatever has items. Fresh prompts are a billed
     POST, never drawn implicitly."""
     if mode not in ("shot", "golden", "any"):
         mode = "any"
     pools = []
     if mode in ("shot", "any"):
-        ungraded = [c["id"] for c in preprod.list_concepts(path=db.DB_PATH, account_id=account_id)
-                    if c.get("judge_overall") is None]
+        ungraded = [c["id"] for c in _ungraded_concepts(account_id)]
         if ungraded:
             pools.append(("shot", ungraded))
     if mode in ("golden", "any"):
@@ -1714,17 +1793,16 @@ def concepts_discard_all(request: Request, account_id: Optional[int] = None):
 
 @dev.post("/concepts/grade-all")
 def concepts_grade_all(account_id: int = Depends(auth.dev_account_id)):
-    """Grade every not-yet-graded concept against your history. Each is one
+    """Grade every concept in the queue against your history. Each is one
     billed call, so this is an explicit button, not automatic. Signals are
-    gathered once and reused across the batch."""
-    concepts = preprod.list_concepts(path=db.DB_PATH, account_id=account_id)
+    gathered once and reused across the batch. Concepts passed on are not
+    in the queue and so are never billed for (2026-09-02)."""
     signals = taste_judge.gather_signals(db_path=db.DB_PATH)
     graded = 0
-    for c in concepts:
-        if c.get("judge_overall") is None:
-            judge = taste_judge.score_concept(c, signals=signals, db_path=db.DB_PATH)
-            preprod.save_judge_score(c["id"], judge, path=db.DB_PATH, account_id=account_id)
-            graded += 1
+    for c in _ungraded_concepts(account_id):
+        judge = taste_judge.score_concept(c, signals=signals, db_path=db.DB_PATH)
+        preprod.save_judge_score(c["id"], judge, path=db.DB_PATH, account_id=account_id)
+        graded += 1
     return RedirectResponse(
         "/concepts?message=" + quote(f"Graded {graded} concept(s)."), status_code=303)
 

@@ -488,6 +488,91 @@ def reference_label(url: str) -> str:
     return f"Reference photo — {name}, {role}:"
 
 
+# The scene writers invent "@Image 1 / @Image 2". Nothing in this repo
+# has ever emitted that syntax and no such tag is sent to any renderer
+# (src/shot.py: reference-asset mapping is out of scope; the real
+# bindings are Runway's {uri, tag}, Higgsfield's <<<element_id>>> and,
+# for Gemini, the caption reference_label writes above each image).
+_IMAGE_TAG = re.compile(r"@\s*(?:Image|Img|Photo|Ref(?:erence)?)\s*#?\s*\d+", re.I)
+_REF_BLOCK = re.compile(
+    r"(?:^|\n)\s*REFERENCES?\s*:.*?(?=\n\s*\n|\n[A-Z][A-Z /&-]{2,}\s*:|\Z)", re.S)
+
+# What each kind of reference is FOR. The character line names apparent
+# age on purpose: with the binding broken, "hero / leading man" resolved
+# to the model's prior for one, which is a broader jaw and a fuller
+# hairline than Michael's and reads about five years older than he is.
+_BIND_INSTRUCTION = {
+    "characters": ("match this person's face EXACTLY as photographed — bone "
+                   "structure, hairline, brow, nose, mustache shape, eye shape "
+                   "and APPARENT AGE. A specific real person, not a character "
+                   "type. Do not idealise, do not age, do not broaden the jaw."),
+    "props": "reproduce this object exactly as photographed.",
+    "locations": "a guide to the space only, never the subject of the frame.",
+}
+
+
+def reference_identity(url: str):
+    """(name, kind) for a reference URL, or None if it names no asset.
+
+    The name is built the same way `reference_label` builds its caption,
+    so a prompt written from this refers to each photograph by the exact
+    words the model was handed above it."""
+    parts = (url or "").split("?")[0].strip("/").split("/")
+    if len(parts) != 4 or parts[2] != "photo" or parts[0] not in _LABEL_ROLE:
+        return None
+    return parts[1].replace("-", " ").replace("_", " ").strip().title(), parts[0]
+
+
+def bind_references(prompt: str, urls: list) -> str:
+    """Rewrite a scene prompt so its REFERENCES block names the photos
+    that are ACTUALLY attached.
+
+    The one sentence telling the renderer which picture is the face
+    pointed at a tag that does not exist. The jacket survived it -- the
+    words "leather moto jacket" collide with its own caption, so it
+    bound anyway -- and the face did not, which is why concepts 155-158
+    came back as a stock leading man wearing an accurate jacket
+    (2026-09-02). A broken binding fails SILENTLY and asymmetrically:
+    the parts of a shot that happen to be named in prose survive it and
+    the parts that relied on the tag do not, so the render looks
+    grounded while the identity is invented.
+
+    Bare `@Image N` tokens are STRIPPED, never remapped to a position.
+    The writer numbered them before `attach_refs` had chosen anything,
+    so the numbers never referred to this list and a plausible-looking
+    remap would be a guess wearing a fact's clothes.
+
+    Pass only the references that RESOLVED. Naming a photograph the
+    renderer was never handed (a HEIC Pillow could not decode) is the
+    same bug in a smaller shape.
+    """
+    seen: list = []
+    for url in urls or []:
+        found = reference_identity(url)
+        if found and found not in seen:
+            seen.append(found)
+
+    text = _REF_BLOCK.sub("", prompt or "")
+    text = _IMAGE_TAG.sub("", text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = re.sub(r"[ \t]+([,.;])", r"\1", text).strip()
+    if not seen:
+        # A reference block describing images that are not there is
+        # worse than none: it spends the model's attention looking for
+        # them. Stripping is the honest outcome.
+        return text
+
+    lines = ["REFERENCES — the photographs attached above this prompt. Each is "
+             "captioned with the name of the thing it shows:"]
+    for name, kind in seen:
+        count = sum(1 for u in urls
+                    if (reference_identity(u) or (None, None))[0] == name)
+        views = (f" — {count} photographs, different angles of the same subject"
+                 if count > 1 else "")
+        lines.append(f'- "{name}"{views}: {_BIND_INSTRUCTION[kind]}')
+    return "\n".join(lines) + "\n\n" + text
+
+
 def named_assets(text: str, assets: list) -> list[dict]:
     """Which of these assets the scene actually names, identity first.
 
@@ -585,6 +670,37 @@ def cast_detail(asset: dict) -> str:
 # whether a brand is allowed to NAME a recurring person at all. That is a
 # property of the brand, so it lives here.
 CAST_BRANDS = ("antihero",)
+
+
+STILL_RUBRIC = """Write a Midjourney prompt for a single STILL that will be the
+reference / first frame of this video shot. Describe ONLY what's in the frame --
+subject, composition, framing/lens, lighting, mood, style. NO motion, NO camera
+movement (the still is a frozen frame). One vivid sentence, then Midjourney flags.
+End with: --ar 9:16 --style raw
+Return ONLY the prompt line, nothing else."""
+
+
+def still_prompt(shot_prompt: str, gemini_client=None, model: str = MODEL) -> str:
+    """A motion-free frame prompt derived from a video shot prompt.
+
+    Lives here rather than in orchestrator (where it started) because
+    scene_chain needs it too and cannot import orchestrator -- the
+    dependency runs the other way. And it is prompt-building, which is
+    what this module is.
+
+    Returns "" on any failure. A scene with no still prompt is a scene
+    that keyframes the way it always did; nothing downstream may treat
+    the empty string as an error.
+    """
+    try:
+        raw = generate_with_retry(gemini_client, model,
+                                  STILL_RUBRIC + "\n\nVIDEO SHOT:\n" + shot_prompt)
+        line = next((ln.strip() for ln in (raw or "").splitlines() if ln.strip()), "")
+        if line and "--ar" not in line:
+            line = line + " --ar 9:16 --style raw"
+        return line
+    except Exception:
+        return ""
 
 
 def cast_for(brand: str, characters: list, props: list, *, detail: bool = False) -> str:

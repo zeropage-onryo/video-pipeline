@@ -739,14 +739,30 @@ def get_concept(concept_id: int, path: Path | str = DB_PATH, *,
 
 
 def list_concepts(limit: int = 100, path: Path | str = DB_PATH, *,
-                  account_id: int) -> list[dict[str, Any]]:
+                  account_id: int, brand: Optional[str] = None) -> list[dict[str, Any]]:
     """This account's concepts, newest first -- the ones you just
-    generated are the ones you're deciding about."""
+    generated are the ones you're deciding about.
+
+    `brand` filters in SQL, and that is the point of it (2026-09-02).
+    The board has always been per-brand, but it filtered the rows in
+    Python AFTER this function had already cut the newest 100 across
+    the whole account. Two brands sharing one account means the LIMIT
+    is spent on whichever one was generated for most recently: at 100+
+    concepts, the other brand's board starts silently losing its oldest
+    cards, and it looks exactly like a board that is just showing you
+    less than you made. Filtering here spends the limit on the brand
+    being asked for.
+
+    An unknown brand is ignored rather than returning nothing -- callers
+    pass a cookie value, and a stale cookie should show the board, not
+    empty it."""
+    scoped = brand if brand in BRANDS else None
     with connect(path) as conn:
         rows = conn.execute(
             "SELECT * FROM shoot_concepts WHERE account_id IS ? "
-            "ORDER BY id DESC LIMIT ?",
-            (account_id, limit),
+            + ("AND brand = ? " if scoped else "")
+            + "ORDER BY id DESC LIMIT ?",
+            (account_id, scoped, limit) if scoped else (account_id, limit),
         ).fetchall()
         return [_concept_row(r, conn) for r in rows]
 
@@ -987,12 +1003,25 @@ def set_picked(concept_id: int, picked: bool = True,
             raise ValueError(f"no concept {concept_id}")
 
 
-# The vocabulary the Grade tab offers as buttons. Deliberately short and
-# closed: a free-text box gets skipped, and five words that can be
-# COUNTED are worth more than a paragraph nobody writes. "other" exists
-# so an honest rejection fitting none of these is still recorded rather
-# than forced into the nearest wrong bucket.
-ARCHIVE_REASONS = ("boring", "off-brand", "unshootable", "seen it", "other")
+# The vocabulary the Grade tab offers as buttons. Short and closed: a
+# free-text box gets skipped, and words that can be COUNTED are worth
+# more than a paragraph nobody writes.
+#
+# "weak concept" replaced "other" (2026-09-02). It was never an edge
+# case -- it was Mike's commonest verdict, 10 of the first 13, meaning
+# "I just didn't like the idea". Called "other" that reads as unsorted
+# noise; called what it is, it is the single clearest signal the board
+# produces about generation quality. A catch-all has to be NAMED
+# honestly or it hides the thing it is measuring.
+#
+# "no turn" and "no stake" sit beside it deliberately: they are the two
+# fields the digest prompt now demands of every spark (situation, turn,
+# stake), so a rejection tagged with one points straight at the prompt
+# field that failed. "weak concept" stays for when the honest answer is
+# just no -- forcing a category when none fits collects noise, which is
+# how "other" got to 10 in the first place.
+ARCHIVE_REASONS = ("weak concept", "no turn", "no stake", "off-brand",
+                   "unshootable", "seen it")
 
 
 def set_archived(concept_id: int, archived: bool = True,

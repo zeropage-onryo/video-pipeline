@@ -169,23 +169,43 @@ def current_account_id(request: Request) -> int:
 
 
 def dev_account_id(request: Request) -> int:
-    """The dev console's account: the signed-in one when there is one,
-    otherwise the bootstrap account.
+    """The dev console's account: the signed-in user's TENANT when there
+    is a session, otherwise the bootstrap account.
 
-    Deliberately NOT current_account_id. The dev console (`dev` router,
-    DEV_TOOLS only) is the single operator's engine room -- it is not
-    mounted on a public deployment and is never part of a pilot -- and
-    it has never required a session. Making it 403 would lock Mike out
-    of his own workshop to protect it from a second user who by
-    definition cannot reach it.
+    Same tenant rule as current_account_id, and for the same reason
+    (2026-09-02). This used to call `current_account`, which resolves
+    the BRAND from the cookie -- so with the pill on ANTIHERO the whole
+    dev console scoped itself to account 2, which owns nothing: "Draw
+    ungraded concept (0)" on a database holding 29 of them, and the
+    board's taste signal reading zero. That is the exact failure
+    test_the_brand_pill_does_not_empty_the_board closed for /api, left
+    open here because this function predates it.
 
-    So it degrades, but it degrades *visibly and in one named place*
-    rather than by letting `account_id` default to None somewhere deep
-    in the data layer. /api gets current_account_id and no fallback.
+    Worse than the empty page: four dev routes WRITE (a fresh grade, a
+    new video, metrics, a reference pick). Every one of those made
+    while the pill was on the other brand stamped account_id = 2, where
+    the board, the Queue and the judge -- all of which read the tenant
+    -- can never see it again. Nothing had landed there yet when this
+    was found, which was luck, not design.
+
+    What stays deliberately different from current_account_id is the
+    FALLBACK. The dev console (`dev` router, DEV_TOOLS only) is the
+    single operator's engine room -- never mounted on a public
+    deployment, never part of a pilot -- and it has never required a
+    session. Making it 403 would lock Mike out of his own workshop to
+    protect it from a second user who by definition cannot reach it. So
+    it degrades to the bootstrap account, and it degrades *visibly and
+    in one named place* rather than by letting `account_id` default to
+    None somewhere deep in the data layer. /api gets no fallback.
+
+    The brand pill still does what it always did: it filters by brand
+    (a column on the row) inside the tenant, and colours the UI.
     """
-    account = current_account(request)
-    if account is not None:
-        return int(account["id"])
+    user = current_user(request)
+    if user is not None:
+        member_of = accounts.memberships(user["id"], path=db.DB_PATH)
+        if member_of:
+            return min(int(a["id"]) for a in member_of)
     with db.connect(db.DB_PATH) as conn:
         bootstrap = db.bootstrap_account_id(conn)
     if bootstrap is None:

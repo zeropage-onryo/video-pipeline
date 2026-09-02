@@ -284,6 +284,67 @@ def persist_prompt(concept_id: int, shot_n, text: str, *, db_path=None, account_
     return True
 
 
+def visual_target(concept_id: int, shot: dict, *, db_path=None,
+                  account_id: Optional[int] = None,
+                  gemini_client=None) -> str:
+    """Give a scene with NO references something to look at, by
+    generating one (2026-09-02).
+
+    THE FAILURE THIS FIXES. keyframe_scene builds its reference list from
+    `shot["refs"]` and passes `reference_image=None` when that list is
+    empty -- so the still is rendered from the prompt text alone. For
+    Antihero that rarely happens: the scene names Michael and the Ducati
+    and attach_refs hangs their photos on it. For Zero Page it happens
+    EVERY time, because a faceless brand has no cast to attach and the
+    scout's image bin has been empty since Instagram's public-content
+    endpoint started refusing (2026-09-02: "0 reference image(s)
+    binned"). So the brand whose whole register is grounded uncanny
+    TEXTURE was the one keyframing with nothing to look at.
+
+    A generated still is not the same object as a banked one and must
+    not be confused with it. The bin holds EVIDENCE -- a frame from a
+    video that actually travelled, carrying the source_url that says so.
+    This is a VISUAL TARGET: what this specific scene should look like.
+    It is written from the shot's own prompt, so it matches the scene
+    rather than merely resembling its mood, which is the thing a found
+    image can never do.
+
+    Gated by midjourney.spend_approved(), which reads MIDJOURNEY_SPEND_OK
+    and is deliberately per-run rather than a .env line -- "an approval
+    that's always on isn't an approval". Unapproved, this returns "" and
+    the keyframe behaves exactly as it did before. Never raises: a scene
+    with no target is still a scene.
+    """
+    from . import midjourney, refbin
+
+    path = db_path if db_path is not None else db.DB_PATH
+    prompt = (shot.get("prompt") or "").strip()
+    if not prompt or not midjourney.spend_approved():
+        return ""
+    try:
+        line = shootgen.still_prompt(prompt, gemini_client=gemini_client)
+        if not line:
+            return ""
+        out = refbin.REFS_DIR / f"mj-{concept_id}-{shot.get('n', 1)}.jpg"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        midjourney.generate_image(line, out)
+        url = refbin.save(out.read_bytes())
+        if not url:
+            return ""
+        # Stored on the shot, not held in a local: the Queue card reads
+        # refs to show what the spend is anchored on, and a target
+        # nobody can see is a target nobody can veto.
+        existing = list(shot.get("refs") or [])
+        preprod.update_concept_shots(
+            concept_id, {"shots": [dict(shot, refs=existing + [url])]},
+            path=path, account_id=account_id)
+        return url
+    except Exception as e:                      # surfaced, never fatal
+        print(f"note: no visual target ({type(e).__name__}: {e}) -- "
+              "the still renders from text alone", file=sys.stderr)
+        return ""
+
+
 def keyframe_scene(concept_id: int, shot_n=None, *, db_path=None,
                    resolve_photo=None,
                    account_id: Optional[int] = None,
@@ -317,11 +378,31 @@ def keyframe_scene(concept_id: int, shot_n=None, *, db_path=None,
         # while the card still claimed the scene was grounded.
         from . import asset_shelf
         resolve_photo = asset_shelf.resolve_photo
+    # No references at all means the still would be rendered from the
+    # prompt text alone -- which is every Zero Page scene, every night.
+    # Generate a target first when the spend is approved.
+    if not (shot.get("refs") or []):
+        made = visual_target(concept_id, shot, db_path=path,
+                             account_id=account_id)
+        if made:
+            shot = dict(shot, refs=[made])
+
     references = []
+    resolved: list = []
     for url in (shot.get("refs") or []):
         data = imagery.image_bytes_for_gemini(url, resolve_photo=resolve_photo)
         if data:
             references.append((shootgen.reference_label(url), data))
+            resolved.append(url)
+
+    # Make the prompt agree with the captions. The scene writer names
+    # its references "@Image 1" / "@Image 2" -- a syntax nothing here
+    # emits and no renderer receives -- so the sentence that said which
+    # photograph was the face pointed at nothing, and the face was the
+    # only part of the shot with no other way to bind. `resolved`, not
+    # `refs`: a reference that failed to decode is not attached, and
+    # naming it would promise a picture that never rode along.
+    prompt = shootgen.bind_references(prompt, resolved)
 
     result = nano_banana.generate_from_prompt(
         prompt, reference_image=references or None, db_path=path,

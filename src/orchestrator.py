@@ -549,28 +549,21 @@ def brand_gate(state: GenState) -> GenState:
 
 # --- nodes: the posting line ----------------------------------------------
 
-_STILL_RUBRIC = """Write a Midjourney prompt for a single STILL that will be the
-reference / first frame of this video shot. Describe ONLY what's in the frame --
-subject, composition, framing/lens, lighting, mood, style. NO motion, NO camera
-movement (the still is a frozen frame). One vivid sentence, then Midjourney flags.
-End with: --ar 9:16 --style raw
-Return ONLY the prompt line, nothing else."""
+# The still rubric lives in shootgen.STILL_RUBRIC (2026-09-02).
 
 
 def _midjourney_still(shot_prompt: str) -> str:
     """The Midjourney still that anchors a Runway shot -- a motion-free
     frame prompt derived from the video prompt. It is the reference frame
     Runway builds from AND an image post in its own right. No gate:
-    stills cost nothing to prompt and, per policy, need no approval."""
-    try:
-        raw = generate_with_retry(_client(), GEMINI_MODEL,
-                                  _STILL_RUBRIC + "\n\nVIDEO SHOT:\n" + shot_prompt)
-        line = next((ln.strip() for ln in (raw or "").splitlines() if ln.strip()), "")
-        if line and "--ar" not in line:
-            line = line + " --ar 9:16 --style raw"
-        return line
-    except Exception:
-        return ""
+    stills cost nothing to prompt and, per policy, need no approval.
+
+    The rubric moved to shootgen.still_prompt (2026-09-02) so
+    scene_chain can use it too -- scene_chain cannot import this module,
+    the dependency runs the other way.
+    """
+    return shootgen.still_prompt(shot_prompt, gemini_client=_client(),
+                                 model=GEMINI_MODEL)
 
 
 def _technique_references(tool: str) -> str:
