@@ -368,7 +368,7 @@ async def _save_uploaded_photos(base_dir: Path, slug: str, photos) -> tuple:
 
 
 @router.post("/assets/locations")
-async def asset_create_location(request: Request, account_id: Optional[int] = None):
+async def asset_create_location(request: Request, account_id: int = Depends(auth.current_account_id)):
     """Save a space's photos and describe it (vision) -- the describe is
     best-effort so a failed model call keeps the photos on disk to
     retry, exactly the old /locations/upload contract."""
@@ -475,7 +475,7 @@ class BackfillBody(BaseModel):
 
 
 @router.post("/assets/backfill")
-def assets_backfill(body: BackfillBody):
+def assets_backfill(body: BackfillBody, account_id: int = Depends(auth.current_account_id)):
     """Put everything already on disk onto the shelf -- the catch-up for
     assets created before the shelf existed. `describe` also runs the
     vision step on undescribed cast/props: one billed call each, opt-in,
@@ -499,7 +499,7 @@ def assets_backfill(body: BackfillBody):
             detail += f" · {result['failed']} failed"
         return {"detail": detail, "output": json.dumps(result)}
 
-    job = jobs.start("backfill", "assets → rag shelf", work)
+    job = jobs.start("backfill", "assets → rag shelf", work, account_id=account_id)
     return {"job_id": job["id"]}
 
 
@@ -532,7 +532,7 @@ class RetrieveBody(BaseModel):
 
 
 @router.post("/retrieve")
-def retrieve(body: RetrieveBody):
+def retrieve(body: RetrieveBody, account_id: int = Depends(auth.current_account_id)):
     """One endpoint serves the Studio grounding rail, the Evals probe,
     and the harness -- the same scorer everywhere, per the spec."""
     query_text = body.query.strip()
@@ -816,7 +816,7 @@ SCENE_COUNT_DEFAULT = 4
 
 
 @router.post("/scenes/run")
-async def scenes_run(request: Request):
+async def scenes_run(request: Request, account_id: int = Depends(auth.current_account_id)):
     """Several takes on one idea, to pick between -- the Studio Create
     button (2026-08-28).
 
@@ -890,7 +890,7 @@ async def scenes_run(request: Request):
         # (src/orchestrator.py calls the same stage functions).
         result = scene_chain.run(
             idea, brand, count=count, refs=refs, image_refs=image_refs or None,
-            db_path=db.DB_PATH,
+            db_path=db.DB_PATH, account_id=account_id,
             gemini_client=genai.Client(api_key=api_key),
             resolve_photo=_resolve_asset_photo,
             attach_refs=_attach_scene_refs,
@@ -906,7 +906,7 @@ async def scenes_run(request: Request):
         return {"detail": detail,
                 "ref_id": saved[0]["concept_id"] if saved else None}
 
-    job = jobs.start("scenes", f"concepts · {idea[:60]}", work)
+    job = jobs.start("scenes", f"concepts · {idea[:60]}", work, account_id=account_id)
     return {"job_id": job["id"], "image_refs": len(image_refs)}
 
 
@@ -919,7 +919,7 @@ async def scenes_run(request: Request):
 
 
 @router.get("/scout/spark")
-def scout_spark(brand: Optional[str] = None):
+def scout_spark(brand: Optional[str] = None, account_id: int = Depends(auth.current_account_id)):
     """The next researched spark for this brand, with the images from
     the pass it was read out of.
 
@@ -963,7 +963,7 @@ class ScoutRunBody(BaseModel):
 
 
 @router.post("/scout/run")
-def scout_run(body: ScoutRunBody):
+def scout_run(body: ScoutRunBody, account_id: int = Depends(auth.current_account_id)):
     """Fire one research pass as a job, so the crawl narrates on the
     same SSE feed as everything else -- it takes tens of seconds and a
     silent button is indistinguishable from a broken one."""
@@ -982,7 +982,7 @@ def scout_run(body: ScoutRunBody):
         detail = f"{len(result['findings'])} spark(s) · {len(result['bin'])} image(s)"
         return {"detail": detail}
 
-    job = jobs.start("scout", f"research · {brand}", work)
+    job = jobs.start("scout", f"research · {brand}", work, account_id=account_id)
     return {"job_id": job["id"], "brand": brand}
 
 
@@ -1114,7 +1114,7 @@ def queue_approve(concept_id: int, account_id: int = Depends(auth.current_accoun
             raise RuntimeError(result.get("error") or "render failed")
         return {"ref_id": concept_id, "detail": "clip attached"}
 
-    job = jobs.start("render", f"approved · {concept['title']}", work)
+    job = jobs.start("render", f"approved · {concept['title']}", work, account_id=account_id)
     return {"job_id": job["id"]}
 
 
@@ -1194,7 +1194,8 @@ class ShotMediaBody(BaseModel):
 
 
 @router.post("/concepts/{concept_id}/shots/{shot_n}/media")
-def shot_media_attach(concept_id: int, shot_n: int, body: ShotMediaBody, account_id: Optional[int] = None):
+def shot_media_attach(concept_id: int, shot_n: int, body: ShotMediaBody,
+                      account_id: int = Depends(auth.current_account_id)):
     """Attach the rendered clip's URL to one shot -- the paste-back half
     of the Runway loop, and the field autopilot.build_plan() requires
     before it will ever emit a post action."""
@@ -1243,7 +1244,7 @@ def concept_direct(concept_id: int, body: DirectBody, account_id: int = Depends(
             detail += f" · {len(result['warnings'])} warning(s)"
         return {"ref_id": concept_id, "detail": detail}
 
-    job = jobs.start("direct", f"direct · {note[:60]}", work)
+    job = jobs.start("direct", f"direct · {note[:60]}", work, account_id=account_id)
     return {"job_id": job["id"]}
 
 
@@ -1270,7 +1271,7 @@ def shot_refine(concept_id: int, shot_n: int, account_id: int = Depends(auth.cur
             raise RuntimeError(result.get("error") or "polish failed")
         return {"ref_id": concept_id, "detail": result.get("summary") or "polished"}
 
-    job = jobs.start("refine", f"polish · shot {shot_n}", work)
+    job = jobs.start("refine", f"polish · shot {shot_n}", work, account_id=account_id)
     return {"job_id": job["id"]}
 
 
@@ -1298,7 +1299,7 @@ def shot_generate(concept_id: int, shot_n: int, account_id: int = Depends(auth.c
         return {"ref_id": concept_id,
                 "detail": f"clip attached to shot {shot_n}"}
 
-    job = jobs.start("render", f"runway · {concept['title']} shot {shot_n}", work)
+    job = jobs.start("render", f"runway · {concept['title']} shot {shot_n}", work, account_id=account_id)
     return {"job_id": job["id"]}
 
 
@@ -1499,7 +1500,7 @@ async def pipeline_run(request: Request, account_id: int = Depends(auth.current_
             pass
         return {"ref_id": result.get("concept_id"), "detail": detail}
 
-    job = jobs.start("concept", f"concept · {prompt[:60]}", work)
+    job = jobs.start("concept", f"concept · {prompt[:60]}", work, account_id=account_id)
     return {"job_id": job["id"], "image_refs": len(image_refs)}
 
 
@@ -1525,7 +1526,8 @@ def presets_list():
 
 
 @router.get("/director/landing")
-def director_landing(request: Request, brand: Optional[str] = None):
+def director_landing(request: Request, brand: Optional[str] = None,
+                     account_id: int = Depends(auth.current_account_id)):
     """Director tab's chat-first entry: a real pre-filled sample brief
     (the gold-standard exemplar, shortened to its style + action blocks)
     plus quick-start chips. Zero Page's chips are its real format
@@ -1709,7 +1711,7 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
         return {"ref_id": concept_id, "detail": detail, "output": enhanced,
                 "shot_n": shot["n"]}
 
-    job = jobs.start("generate", f"generate · {prompt[:60]}", work)
+    job = jobs.start("generate", f"generate · {prompt[:60]}", work, account_id=account_id)
     return {"job_id": job["id"],
             "image_refs": len(image_refs), "video_refs": len(video_refs)}
 
@@ -1744,7 +1746,8 @@ def shot_graph_save(concept_id: int, shot_n: int, body: ShotGraphBody,
     workflow_id = workflows.save_shot_graph(
         concept_id, shot_n, body.graph, states=body.states,
         name=body.name or concept.get("title"), brand=concept.get("brand"),
-        seed_hash=_shot_seed_hash(concept, shot_n), path=db.DB_PATH)
+        seed_hash=_shot_seed_hash(concept, shot_n), path=db.DB_PATH,
+        account_id=account_id)
     return {"ok": True, "id": workflow_id}
 
 
@@ -1780,12 +1783,13 @@ def shot_graph_get(concept_id: int, shot_n: int, account_id: int = Depends(auth.
     canvas's own save). Comparing on read is self-healing: a route
     added later that rewrites a prompt cannot forget to call anything.
     """
-    saved = workflows.get_shot_graph(concept_id, shot_n, path=db.DB_PATH)
-    if saved is None:
-        return {"graph": None, "states": None, "updated_at": None, "stale": False}
     concept = preprod.get_concept(concept_id, path=db.DB_PATH, account_id=account_id)
     if concept is None:
         return _error(404, "not_found", "no such concept")
+    saved = workflows.get_shot_graph(concept_id, shot_n, path=db.DB_PATH,
+                                     account_id=account_id)
+    if saved is None:
+        return {"graph": None, "states": None, "updated_at": None, "stale": False}
     current = _shot_seed_hash(concept, shot_n)
     if saved.get("seed_hash") and current and saved["seed_hash"] != current:
         return {"graph": None, "states": None,
@@ -1795,10 +1799,14 @@ def shot_graph_get(concept_id: int, shot_n: int, account_id: int = Depends(auth.
 
 
 @router.delete("/concepts/{concept_id}/graph")
-def shot_graph_reset(concept_id: int):
+def shot_graph_reset(concept_id: int, account_id: int = Depends(auth.current_account_id)):
     """Throw the saved canvases away and rebuild from the shots — the
-    escape hatch for a graph that has gone stale against its prompt."""
-    removed = workflows.delete_shot_graphs(concept_id, path=db.DB_PATH)
+    escape hatch for a graph that has gone stale against its prompt.
+    Someone else's concept is a 404, the same as a missing one."""
+    if preprod.get_concept(concept_id, path=db.DB_PATH, account_id=account_id) is None:
+        return _error(404, "not_found", "no such concept")
+    removed = workflows.delete_shot_graphs(concept_id, path=db.DB_PATH,
+                                           account_id=account_id)
     return {"ok": True, "removed": removed}
 
 
@@ -1838,7 +1846,8 @@ class ShotReferenceBody(BaseModel):
 
 
 @router.post("/concepts/{concept_id}/shots/{shot_n}/reference")
-def shot_reference_attach(concept_id: int, shot_n: int, body: ShotReferenceBody, account_id: Optional[int] = None):
+def shot_reference_attach(concept_id: int, shot_n: int, body: ShotReferenceBody,
+                          account_id: int = Depends(auth.current_account_id)):
     """Attach (or clear, with "") an image URL as one shot's reference
     anchor -- how a Director-canvas Nano render lands back on the shot.
     The /ui JSON twin of the dev console's form route."""
@@ -1888,7 +1897,7 @@ def concept_approve(concept_id: int, account_id: int = Depends(auth.current_acco
             detail += f" · {len(warnings)} warning(s)"
         return {"ref_id": concept_id, "detail": detail}
 
-    job = jobs.start("plan", f"scene · {concept['title']}", work)
+    job = jobs.start("plan", f"scene · {concept['title']}", work, account_id=account_id)
     return {"job_id": job["id"], "concept_id": concept_id}
 
 
@@ -1958,13 +1967,16 @@ def concept_deny(concept_id: int, body: DenyBody, account_id: int = Depends(auth
 # --- holds ------------------------------------------------------------------
 
 @router.get("/holds")
-def holds_list(channel: Optional[str] = None):
-    held = autonomy.list_hold(status="held", path=db.DB_PATH)
+def holds_list(channel: Optional[str] = None,
+               account_id: int = Depends(auth.current_account_id)):
+    """This account's hold queue. `channel` is the brand pill's filter
+    and filters INSIDE the tenant, never across it."""
+    held = autonomy.list_hold(status="held", path=db.DB_PATH, account_id=account_id)
     if channel:
         held = [h for h in held if h["channel"] == channel]
     return {
         "items": held,
-        "agreement": autonomy.evaluator_agreement(path=db.DB_PATH),
+        "agreement": autonomy.evaluator_agreement(path=db.DB_PATH, account_id=account_id),
         "gate": autonomy.prompt_gate_agreement(path=db.DB_PATH),
         "pass_rate": autonomy.first_try_pass_rate(path=db.DB_PATH),
         "channels": autonomy.list_channels(path=db.DB_PATH),
@@ -1977,13 +1989,14 @@ class ResolveBody(BaseModel):
 
 
 @router.post("/holds/{hold_id}/resolve")
-def holds_resolve(hold_id: int, body: ResolveBody):
-    row = next((h for h in autonomy.list_hold(status=None, path=db.DB_PATH)
-                if h["id"] == hold_id), None)
+def holds_resolve(hold_id: int, body: ResolveBody,
+                  account_id: int = Depends(auth.current_account_id)):
+    row = autonomy.get_hold(hold_id, path=db.DB_PATH, account_id=account_id)
     if row is None:
         return _error(404, "not_found", "no such hold")
     try:
-        autonomy.resolve_hold(hold_id, body.status, path=db.DB_PATH)
+        autonomy.resolve_hold(hold_id, body.status, path=db.DB_PATH,
+                              account_id=account_id)
     except ValueError as e:
         return _error(400, "invalid_status", str(e))
     # Mirror /holds' grading: the human verdict lands next to the gate's.
@@ -1997,14 +2010,31 @@ def holds_resolve(hold_id: int, body: ResolveBody):
 
 
 @router.post("/holds/{hold_id}/post")
-def holds_post(hold_id: int):
+def holds_post(hold_id: int, account_id: int = Depends(auth.current_account_id)):
     """The explicit 'post now' -- moved here from the retired /holds dev
     page (2026-08-26) so /ui's hold queue keeps the whole ritual. One
-    post action per channel target, through autopilot's unchanged
-    three-condition gate; until credentials and real media exist it
-    reports exactly what's missing rather than pretending."""
-    row = next((h for h in autonomy.list_hold(status=None, path=db.DB_PATH)
-                if h["id"] == hold_id), None)
+    post action per channel target, through autopilot's gate; until
+    credentials and real media exist it reports exactly what's missing
+    rather than pretending.
+
+    THE GATE, named (2026-09-02): this is the most expensive
+    irreversible action in the product, and until the dry run it took
+    no account at all -- `def holds_post(hold_id)`, an unscoped lookup,
+    then execute(approve=True, dry_run=False). What stands between a
+    caller and a post now:
+      * ownership -- the hold must be this account's (404 otherwise),
+        the one fact here that is about the CALLER;
+      * ZEROPAGE_POST_OK=1, the per-run approval in the render tools'
+        SPEND_OK shape (autopilot.POST_ENV), checked inside the
+        executor so nothing posts around it;
+      * ZEROPAGE_AUTOPILOT, the platform credentials, and the
+        data/autopilot.off kill switch -- three facts about the
+        INSTALLATION, unchanged.
+    The `approve=True` below is this click. What is still not checked
+    is whether this person may publish AS the installation, whose
+    credentials every post goes out under -- that is the role system
+    this project deliberately does not have (see autopilot.POST_ENV)."""
+    row = autonomy.get_hold(hold_id, path=db.DB_PATH, account_id=account_id)
     if row is None:
         return _error(404, "not_found", "no such hold")
     channel = autonomy.get_channel(row.get("channel", ""), path=db.DB_PATH) or {}
@@ -2038,12 +2068,15 @@ def holds_post(hold_id: int):
 
     mode = result.get("mode")
     if mode == "live" and result.get("executed"):
-        autonomy.resolve_hold(hold_id, "posted", path=db.DB_PATH)
+        autonomy.resolve_hold(hold_id, "posted", path=db.DB_PATH, account_id=account_id)
         return {"id": hold_id, "posted": True, "targets": targets, "mode": mode}
     if mode == "live":
         detail = "; ".join(result.get("skipped") or ["no rendered media to post yet"])
     elif mode == "disabled":
         detail = "posting is OFF — set ZEROPAGE_AUTOPILOT=1 and the platform credentials"
+    elif mode == "post-unapproved":
+        detail = (f"posting is not approved for this run — set {autopilot.POST_ENV}=1 "
+                  "on the serve command (per run, never in .env)")
     elif mode == "killed":
         detail = "autopilot kill switch is on (data/autopilot.off)"
     else:
@@ -2054,7 +2087,7 @@ def holds_post(hold_id: int):
 # --- evals ------------------------------------------------------------------
 
 @router.get("/evals/golden")
-def evals_golden():
+def evals_golden(account_id: int = Depends(auth.current_account_id)):
     return {"items": evalstore.list_golden(path=db.DB_PATH)}
 
 
@@ -2065,7 +2098,7 @@ class GoldenBody(BaseModel):
 
 
 @router.post("/evals/golden")
-def evals_golden_add(body: GoldenBody):
+def evals_golden_add(body: GoldenBody, account_id: int = Depends(auth.current_account_id)):
     try:
         golden_id = evalstore.add_golden(body.query, body.relevant,
                                          source=body.source, path=db.DB_PATH)
@@ -2075,18 +2108,18 @@ def evals_golden_add(body: GoldenBody):
 
 
 @router.delete("/evals/golden/{golden_id}")
-def evals_golden_delete(golden_id: int):
+def evals_golden_delete(golden_id: int, account_id: int = Depends(auth.current_account_id)):
     evalstore.delete_golden(golden_id, path=db.DB_PATH)
     return {"deleted": golden_id}
 
 
 @router.get("/evals/runs")
-def evals_runs():
+def evals_runs(account_id: int = Depends(auth.current_account_id)):
     return {"items": evalstore.list_runs(path=db.DB_PATH)}
 
 
 @router.get("/evals/runs/{run_id}")
-def evals_run_detail(run_id: int):
+def evals_run_detail(run_id: int, account_id: int = Depends(auth.current_account_id)):
     run = evalstore.get_run(run_id, path=db.DB_PATH)
     if run is None:
         return _error(404, "not_found", "no such run")
@@ -2098,7 +2131,7 @@ class EvalRunBody(BaseModel):
 
 
 @router.post("/evals/run")
-def evals_run(body: EvalRunBody):
+def evals_run(body: EvalRunBody, account_id: int = Depends(auth.current_account_id)):
     """The harness: every golden query against the live store, Hit@k and
     MRR computed server-side (rag_eval), the run stored with its config.
     The client never calculates a metric."""
@@ -2146,7 +2179,7 @@ def evals_run(body: EvalRunBody):
         return {"ref_id": run_id,
                 "detail": f"hit@{k} {result['hit_rate']:.2f} · MRR {result['mrr']:.2f}"}
 
-    job = jobs.start("eval", f"eval · {len(cases)} queries", work,
+    job = jobs.start("eval", f"eval · {len(cases)} queries", work, account_id=account_id,
                      cancellable=True)
     return {"job_id": job["id"]}
 
@@ -2197,7 +2230,7 @@ def analytics_posts(brand: Optional[str] = None, platform: Optional[str] = None,
 
 
 @router.get("/analytics/accounts")
-def analytics_accounts():
+def analytics_accounts(account_id: int = Depends(auth.current_account_id)):
     """What is actually connected: platform key presence (real config, not
     a wish list) plus the autonomy channels and their levels."""
     return {
@@ -2243,18 +2276,23 @@ class WorkflowBody(BaseModel):
 
 
 @router.get("/workflows")
-def workflows_list(brand: Optional[str] = None):
-    return {"items": workflows.list_workflows(brand=brand or None, path=db.DB_PATH)}
+def workflows_list(brand: Optional[str] = None,
+                   account_id: int = Depends(auth.current_account_id)):
+    """This account's canvases. `brand` filters inside the tenant --
+    account_id is ownership, brand is the label the pill filters by."""
+    return {"items": workflows.list_workflows(brand=brand or None, path=db.DB_PATH,
+                                              account_id=account_id)}
 
 
 @router.post("/workflows")
-def workflows_create(body: WorkflowBody, request: Request):
+def workflows_create(body: WorkflowBody, request: Request,
+                     account_id: int = Depends(auth.current_account_id)):
     brand = body.brand if body.brand in preprod.BRANDS else (
         request.cookies.get("brand")
         if request.cookies.get("brand") in preprod.BRANDS else "antihero")
     workflow_id = workflows.create_workflow(
         body.name or "Untitled workflow", body.graph or {},
-        brand=brand, path=db.DB_PATH)
+        brand=brand, path=db.DB_PATH, account_id=account_id)
     return {"id": workflow_id}
 
 
@@ -2266,7 +2304,7 @@ class GroundBody(BaseModel):
 
 
 @router.post("/workflows/exec/ground")
-def workflow_exec_ground(body: GroundBody):
+def workflow_exec_ground(body: GroundBody, account_id: int = Depends(auth.current_account_id)):
     """The Ground in References node: the existing RAG-grounding step
     (shootgen.reference_block) as a visible, wireable call. Degrades to
     "" with the store down, same as everywhere else."""
@@ -2286,7 +2324,7 @@ class EnhanceBody(BaseModel):
 
 
 @router.post("/workflows/exec/enhance")
-def workflow_exec_enhance(body: EnhanceBody):
+def workflow_exec_enhance(body: EnhanceBody, account_id: int = Depends(auth.current_account_id)):
     """The Gemini 2.5 Flash enhance node's own Run: one billed Gemini
     call through generate_with_retry, images riding as vision input and
     the Ground node's references folded in as grounding. A job, so the
@@ -2312,7 +2350,8 @@ def workflow_exec_enhance(body: EnhanceBody):
             resolve_photo=_resolve_asset_photo)
         return {"detail": text[:80], "output": text}
 
-    job = jobs.start("enhance", f"enhance · {(body.user or body.system)[:50]}", work)
+    job = jobs.start("enhance", f"enhance · {(body.user or body.system)[:50]}", work,
+                     account_id=account_id)
     return {"job_id": job["id"]}
 
 
@@ -2338,7 +2377,7 @@ class WfGenerateBody(BaseModel):
 
 
 @router.post("/workflows/exec/generate")
-def workflow_exec_generate(body: WfGenerateBody):
+def workflow_exec_generate(body: WfGenerateBody, account_id: int = Depends(auth.current_account_id)):
     """The Generate node's own Run: one Runway render from a free-
     standing prompt + optional reference. Billed, capped, and
     spend-gated -- generate_video refuses without RUNWAY_SPEND_OK=1 on
@@ -2360,12 +2399,12 @@ def workflow_exec_generate(body: WfGenerateBody):
             raise RuntimeError(result.get("error") or "render failed")
         return {"detail": "clip rendered", "output": result["media_url"]}
 
-    job = jobs.start("render", f"runway · {body.prompt[:50]}", work)
+    job = jobs.start("render", f"runway · {body.prompt[:50]}", work, account_id=account_id)
     return {"job_id": job["id"]}
 
 
 @router.post("/workflows/exec/nano")
-def workflow_exec_nano(body: WfGenerateBody):
+def workflow_exec_nano(body: WfGenerateBody, account_id: int = Depends(auth.current_account_id)):
     """The Nano Banana node's own Run: one Gemini image render from a
     free-standing prompt + optional reference. Billed on the same
     GEMINI_API_KEY as everything else, capped by NANO_DAILY_CAP inside
@@ -2393,39 +2432,41 @@ def workflow_exec_nano(body: WfGenerateBody):
             raise RuntimeError(result.get("error") or "render failed")
         return {"detail": "image rendered", "output": result["media_url"]}
 
-    job = jobs.start("render", f"nano · {body.prompt[:50]}", work)
+    job = jobs.start("render", f"nano · {body.prompt[:50]}", work, account_id=account_id)
     return {"job_id": job["id"]}
 
 
 @router.get("/workflows/{workflow_id}")
-def workflows_get(workflow_id: int):
-    workflow = workflows.get_workflow(workflow_id, path=db.DB_PATH)
+def workflows_get(workflow_id: int, account_id: int = Depends(auth.current_account_id)):
+    workflow = workflows.get_workflow(workflow_id, path=db.DB_PATH, account_id=account_id)
     if workflow is None:
         return _error(404, "not_found", "no such workflow")
     return workflow
 
 
 @router.put("/workflows/{workflow_id}")
-def workflows_update(workflow_id: int, body: WorkflowBody):
+def workflows_update(workflow_id: int, body: WorkflowBody,
+                     account_id: int = Depends(auth.current_account_id)):
     if not workflows.update_workflow(workflow_id, name=body.name,
-                                     graph=body.graph, path=db.DB_PATH):
+                                     graph=body.graph, path=db.DB_PATH,
+                                     account_id=account_id):
         return _error(404, "not_found", "no such workflow")
     return {"id": workflow_id}
 
 
 @router.delete("/workflows/{workflow_id}")
-def workflows_delete(workflow_id: int):
-    if not workflows.delete_workflow(workflow_id, path=db.DB_PATH):
+def workflows_delete(workflow_id: int, account_id: int = Depends(auth.current_account_id)):
+    if not workflows.delete_workflow(workflow_id, path=db.DB_PATH, account_id=account_id):
         return _error(404, "not_found", "no such workflow")
     return {"deleted": workflow_id}
 
 
 @router.post("/workflows/{workflow_id}/run")
-def workflows_run(workflow_id: int):
+def workflows_run(workflow_id: int, account_id: int = Depends(auth.current_account_id)):
     """Run all: topological order over the SAVED graph (the client saves
     before it runs), sequential, every node's state pushed over the jobs
     SSE feed so the canvas lights up as nodes complete."""
-    workflow = workflows.get_workflow(workflow_id, path=db.DB_PATH)
+    workflow = workflows.get_workflow(workflow_id, path=db.DB_PATH, account_id=account_id)
     if workflow is None:
         return _error(404, "not_found", "no such workflow")
     graph = workflow.get("graph") or {}
@@ -2456,33 +2497,40 @@ def workflows_run(workflow_id: int):
         return {"ref_id": workflow_id, "detail": f"{done} node(s) executed"}
 
     job = jobs.start("workflow", f"workflow · {workflow['name']}", work,
-                     cancellable=True)
+                     cancellable=True, account_id=account_id)
     return {"job_id": job["id"]}
 
 
 # --- jobs -------------------------------------------------------------------
 
 @router.get("/jobs")
-def jobs_list(active: Optional[bool] = None):
-    return {"items": jobs.list_jobs(active=active)}
+def jobs_list(active: Optional[bool] = None,
+              account_id: int = Depends(auth.current_account_id)):
+    return {"items": jobs.list_jobs(active=active, account_id=account_id)}
 
 
 @router.get("/jobs/stream")
-async def jobs_stream():
+async def jobs_stream(account_id: int = Depends(auth.current_account_id)):
     """SSE. The job rail, the queue view, and the pipeline cards all
     subscribe here -- the only push channel, nothing polls. Registered
-    before /jobs/{job_id} so 'stream' isn't captured as an id."""
+    before /jobs/{job_id} so 'stream' isn't captured as an id.
+
+    The registry publishes every job to every subscriber; the filter
+    is here, at the one place the account is known, so a subscriber
+    only ever sees its own."""
     queue = jobs.subscribe()
 
     async def gen():
         import asyncio
         try:
             # current state first, so a fresh subscriber isn't blind
-            for job in jobs.list_jobs():
+            for job in jobs.list_jobs(account_id=account_id):
                 yield f"event: job\ndata: {json.dumps(job)}\n\n"
             while True:
                 try:
                     job = await asyncio.wait_for(queue.get(), timeout=25)
+                    if not jobs.owned_by(job, account_id):
+                        continue
                     yield f"event: job\ndata: {json.dumps(job)}\n\n"
                 except asyncio.TimeoutError:
                     yield ": keep-alive\n\n"
@@ -2495,23 +2543,26 @@ async def jobs_stream():
 
 
 @router.get("/jobs/{job_id}")
-def job_detail(job_id: int):
-    job = jobs.get(job_id)
+def job_detail(job_id: int, account_id: int = Depends(auth.current_account_id)):
+    job = jobs.get(job_id, account_id=account_id)
     if job is None:
         return _error(404, "not_found", "no such job")
     return job
 
 
 @router.post("/jobs/{job_id}/cancel")
-def job_cancel(job_id: int):
-    job = jobs.cancel(job_id)
+def job_cancel(job_id: int, account_id: int = Depends(auth.current_account_id)):
+    job = jobs.cancel(job_id, account_id=account_id)
     if job is None:
         return _error(404, "not_found", "no such job")
     return jobs.snapshot(job)
 
 
 @router.delete("/jobs/{job_id}")
-def job_clear(job_id: int):
-    if not jobs.remove(job_id):
+def job_clear(job_id: int, account_id: int = Depends(auth.current_account_id)):
+    removed = jobs.remove(job_id, account_id=account_id)
+    if removed is None:
+        return _error(404, "not_found", "no such job")
+    if not removed:
         return _error(409, "not_finished", "only finished jobs can be cleared")
     return {"deleted": job_id}

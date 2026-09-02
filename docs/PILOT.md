@@ -14,13 +14,15 @@ signup has zero memberships on purpose. `auth.current_account_id` resolves the
 resolves the **brand** for the pill. Those two must not be confused: scope the
 data by the brand and clicking ANTIHERO shows an empty board.
 
-> **Corrected 2026-09-02 by the dry run** (`docs/PILOT_DRY_RUN.md`): the
-> paragraph above is true of the eight tables in `db.OWNED_TABLES` and of every
-> route that takes `auth.current_account_id`. It is NOT true of `hold_queue`,
-> `workflows` or the job registry, which have no owner at all, and a signed-in
-> user with zero memberships reaches all three. Signing in currently grants
-> Mike's publishing queue and his Director canvases. Do not invite anyone until
-> items 1-3 of that report's fix order are done.
+The dry run of 2026-09-02 (`docs/PILOT_DRY_RUN.md`) found the paragraph above
+was true of the eight tables then on `db.OWNED_TABLES` and false of
+`hold_queue`, `workflows` and the job registry, which had no owner at all.
+Fixed the same day: both tables are owned and backfilled, every job carries
+its account, every `/api` route declares `auth.current_account_id` (a test
+walks the router), and every table is either owned or named in
+`db.SHARED_TABLES` with the reason it is global. Items 4 and 5 of that
+report's fix order (`corrections` scoping, `active_brand` off memberships)
+are still open and can follow the first user.
 
 **So a pilot user gets their own account.** Adding them to `zeropage` does not
 give them a workspace, it gives them yours. `accounts invite` refuses that by
@@ -45,8 +47,11 @@ That default is correct for one operator and wrong the moment there are two:
 you included. Raise the globals to roughly (per-account cap × people) before
 inviting anyone. **Measured 2026-09-02:** six renders under a
 second account produce `daily ceiling: 6/6 ... across all accounts` for Mike.
-And `src/veo.py` defines no `SPEND_ENV` at all -- $3.20/clip behind a cap and
-nothing else. That number is your daily spend limit — the default exists to
+`.env.example` now carries the decision for three people (18 / 18 / 18 / 30 /
+60, the arithmetic in the comment) -- copy it and change the multiplier; the
+code defaults stay the one-operator numbers. Veo has `VEO_SPEND_OK` since the
+same day, the per-run approval Runway and Higgsfield always had. The global
+number is your daily spend limit — the default exists to
 force the decision rather than let the total quietly multiply.
 
 The per-account cap is fairness. The global ceiling is the credit card. Both
@@ -60,6 +65,12 @@ ZEROPAGE_MCP_HOSTS=<host>            # or DNS-rebinding protection blocks /mcp
 RUNWAY_GLOBAL_DAILY_CAP=...          # and the other four
 SESSION_SECRET=<stable value>        # unset = ephemeral, sign-ins die on restart
 ```
+
+And on the **command**, never in `.env`, on the day something should actually
+go out: `ZEROPAGE_POST_OK=1` (the per-run approval to publish, the posting
+equivalent of `RUNWAY_SPEND_OK`; without it every post reports
+`post-unapproved`) and `VEO_SPEND_OK=1` if Veo is to render. A serve process
+started without them cannot publish or spend Veo credit however it is asked.
 
 Leave `ZEROPAGE_MCP` **unset**. With a tunnel in front, setting it puts the MCP
 endpoint on the public internet — the thing START_SERVER.md warns about. The
@@ -121,11 +132,14 @@ with Google or Discord on that exact address, and the first sign-in claims it
 
 ## If it goes wrong
 
-`tests/test_tenancy.py` is the safety net — 42 tests, including a static one
-that parses every SQL literal in `src/`, `app/` and `ops/` and fails on any
-statement that reaches an owned table without an owner predicate. If someone
-adds a query that leaks, that test is what catches it. Run it before any
-deploy:
+`tests/test_tenancy.py` is the safety net — a static test that parses every SQL
+literal in `src/`, `app/` and `ops/` and fails on any statement that reaches an
+owned table without an owner predicate; a route test that walks `/api` and
+fails on any route that does not declare `auth.current_account_id`; a schema
+test that fails on any table neither owned nor named in `db.SHARED_TABLES`
+with a reason; and a stranger signed in with no membership making the dry
+run's requests. If someone adds a query, a route or a table that leaks, one of
+those is what catches it. Run it before any deploy:
 
 ```bash
 venv/bin/python -m pytest -q tests/test_tenancy.py

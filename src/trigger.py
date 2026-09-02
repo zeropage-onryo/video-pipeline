@@ -88,7 +88,9 @@ def main(argv=None) -> int:
         # the dead-man log gets the crash too -- a silent night looks
         # exactly like a healthy night unless failures leave a row
         autonomy.init(path=db.DB_PATH)
-        autonomy.to_hold(args.channel, f"trigger crashed: {e}", path=db.DB_PATH)
+        from . import accounts
+        autonomy.to_hold(args.channel, f"trigger crashed: {e}", path=db.DB_PATH,
+                         account_id=accounts.resolve_account(path=db.DB_PATH))
         print(f"trigger: run crashed: {e}", file=sys.stderr)
         return 1
 

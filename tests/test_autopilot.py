@@ -71,6 +71,7 @@ def test_kill_switch_beats_everything(clean_gate, monkeypatch):
 
 def test_all_three_conditions_align_and_executors_fire(clean_gate, monkeypatch):
     monkeypatch.setenv(autopilot.ENABLE_ENV, "1")
+    monkeypatch.setenv(autopilot.POST_ENV, "1")
     result = autopilot.execute(PLAN, approve=True, dry_run=False)
     assert result["mode"] == "live"
     assert result["executed"] == 2
@@ -157,6 +158,7 @@ def test_real_post_adapter_is_registered():
 
 def test_post_dispatch_routes_by_platform(monkeypatch):
     from src import instagram, youtube
+    monkeypatch.setenv(autopilot.POST_ENV, "1")     # the gate has its own test
     ig_calls = []
     yt_calls = []
     monkeypatch.setattr(instagram, "execute_post_action", lambda a: ig_calls.append(a))
@@ -195,6 +197,7 @@ def test_live_mode_calls_the_instagram_adapter(tmp_path, monkeypatch):
     from src import instagram
     monkeypatch.setattr(autopilot, "KILL_SWITCH_PATH", tmp_path / "autopilot.off")
     monkeypatch.setenv(autopilot.ENABLE_ENV, "1")
+    monkeypatch.setenv(autopilot.POST_ENV, "1")
     monkeypatch.setenv("IG_USER_ID", "user-9")
     monkeypatch.setenv("IG_ACCESS_TOKEN", "tok")
 

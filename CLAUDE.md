@@ -458,7 +458,14 @@ is yours, in Resolve, by hand.
   `autonomy.hold_queue` with its reason. Tests drive the compiled `GRAPH` hermetically and the
   publish gates directly.
 - **`src/autonomy.py`** — channels / hold_queue / corrections / settings on the shared SQLite
-  DB (the preprod.py pattern). Autonomy is **per-channel** (`shadow` | `queue` | `auto`), both
+  DB (the preprod.py pattern). `hold_queue` and `workflows` are OWNED tables since
+  2026-09-02 (`db.OWNED_TABLES`; the dry run found any signed-in user could grade Mike's
+  holds and delete his canvases), and every table is either owned or named in
+  `db.SHARED_TABLES` with the reason it is global -- the schema test in
+  `tests/test_tenancy.py` fails on one that is neither, and the route test there fails on
+  any `/api` route that does not declare `auth.current_account_id`. Posting has a per-run
+  approval, `ZEROPAGE_POST_OK=1` (`autopilot.POST_ENV`), in the render tools' SPEND_OK
+  shape; `holds_post`'s docstring says what that gate is and is not. Autonomy is **per-channel** (`shadow` | `queue` | `auto`), both
   channels seed as `shadow`, and promotion is a one-row `set_autonomy` change. The kill switch
   is global (a `settings` row or `ZEROPAGE_KILL=1`) and forces every run to hold. `hold_queue`
   doubles as the dead-man log — every graph run writes a row — and morning approve/reject via
@@ -473,7 +480,9 @@ is yours, in Resolve, by hand.
   days); `generate_candidates` is the never-raises edge: N candidates, every attempt a
   `generations` row (the data `attempts_to_keeper`/`tool_scoreboard` read), **nothing ever
   auto-kept** — the pick is the label. Guardrails live in the module: a DB-enforced
-  `VEO_DAILY_CAP` (default 6/day) and `estimate_cost` so every dry-run preview prices the plan.
+  `VEO_DAILY_CAP` (default 6/day), `VEO_SPEND_OK=1` per run (2026-09-02, runway's shape --
+  it was the most expensive tool in the repo and the only ungated one), and `estimate_cost`
+  so every dry-run preview prices the plan.
   Reached two ways, both gated: the graph's `generate_render` only when `ZEROPAGE_RENDER=1`
   (unadapted tools — KLING/RUNWAY/... — honestly stay dry), and `autopilot.EXECUTORS["generate"]`
   only in live mode through the full L4 gate. Config verified against the *installed*

@@ -20,10 +20,10 @@ def _seed(path):
     winners.init(path)
     liked_id = preprod.save_concept(_concept("The Last Check", "keys snatched"), "antihero", path=path, account_id=None)
     disliked_id = preprod.save_concept(_concept("Boring Wait", "a slow pan"), "antihero", path=path, account_id=None)
-    h1 = autonomy.to_hold("antihero", "r", concept_id=liked_id, path=path)
-    h2 = autonomy.to_hold("antihero", "r", concept_id=disliked_id, path=path)
-    autonomy.resolve_hold(h1, "approved", path=path)
-    autonomy.resolve_hold(h2, "rejected", path=path)
+    h1 = autonomy.to_hold("antihero", "r", concept_id=liked_id, path=path, account_id=None)
+    h2 = autonomy.to_hold("antihero", "r", concept_id=disliked_id, path=path, account_id=None)
+    autonomy.resolve_hold(h1, "approved", path=path, account_id=None)
+    autonomy.resolve_hold(h2, "rejected", path=path, account_id=None)
     winners.add("runway", "a great prompt", note="clean render", verdict="worked", path=path)
     return path
 

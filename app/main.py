@@ -414,7 +414,7 @@ def _pipeline_metrics(account_id: int) -> dict:
     return {
         "pick": preprod.pick_rate(path=db.DB_PATH, account_id=account_id),
         "shoot": preprod.shoot_rate(path=db.DB_PATH, account_id=account_id),
-        "agreement": autonomy.evaluator_agreement(path=db.DB_PATH),
+        "agreement": autonomy.evaluator_agreement(path=db.DB_PATH, account_id=account_id),
         "gate": autonomy.prompt_gate_agreement(path=db.DB_PATH),
         "pass_rate": autonomy.first_try_pass_rate(path=db.DB_PATH),
         "killed": autonomy.killed(path=db.DB_PATH),
@@ -1270,7 +1270,8 @@ async def post_image_fire(request: Request):
 
 
 @dev.post("/post-image/queue")
-async def post_image_queue(request: Request):
+async def post_image_queue(request: Request,
+                                account_id: int = Depends(auth.dev_account_id)):
     """Semi-auto Midjourney path (BACKLOG #6): take a generated still -- an
     uploaded file or a public URL -- plus a caption, host it on R2 as a JPEG
     if it's a file (Meta rejects PNG/HEIC), and QUEUE it as a held image post
@@ -1310,7 +1311,8 @@ async def post_image_queue(request: Request):
 
     hold_id = autonomy.to_hold(
         channel, "Midjourney image queued for approval", caption=caption,
-        payload={"image_url": image_url}, status="held", path=db.DB_PATH)
+        payload={"image_url": image_url}, status="held", path=db.DB_PATH,
+        account_id=account_id)
     return RedirectResponse(
         "/holds?message=" + quote(f"Queued image post #{hold_id} for approval."),
         status_code=303)

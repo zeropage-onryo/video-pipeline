@@ -103,6 +103,6 @@ def test_main_crash_still_writes_the_dead_man_row(tmp_db, monkeypatch):
     monkeypatch.setattr(orchestrator, "run", boom)
 
     assert trigger.main([]) == 1
-    [row] = autonomy.list_hold(path=tmp_db)
+    [row] = autonomy.list_hold(path=tmp_db, account_id=None)
     assert "trigger crashed" in row["reason"]
     assert "gemini fell over" in row["reason"]

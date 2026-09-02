@@ -181,7 +181,7 @@ def test_clean_run_keyframes_the_scene_and_parks_it_for_approval(tmp_db, monkeyp
     assert shot["reference_image"].startswith("https://cdn/key-")
     assert concept["parked"] is True
     assert concept["picked"] is False
-    [row] = autonomy.list_hold(path=tmp_db)
+    [row] = autonomy.list_hold(path=tmp_db, account_id=None)
     assert row["status"] == "held"
     assert row["concept_id"] == 1
     assert row["payload"]["prompts"][0]["tool"] == "KLING"
@@ -247,7 +247,7 @@ def test_out_of_retries_parks_with_the_eval_reason(tmp_db, monkeypatch):
     assert result["attempts"] == orchestrator.MAX_ATTEMPTS
     assert "eval stop" in result["held_reason"]
     assert "concept has no shots" in result["held_reason"]
-    [row] = autonomy.list_hold(path=tmp_db)
+    [row] = autonomy.list_hold(path=tmp_db, account_id=None)
     assert row["status"] == "held"
 
 
@@ -743,7 +743,7 @@ def test_post_gate_rejects_failed_qc_empty_caption_and_warnings(tmp_db, monkeypa
 
 def test_post_gate_enforces_the_rate_cap(tmp_db, monkeypatch):
     monkeypatch.delenv("ZEROPAGE_KILL", raising=False)
-    autonomy.to_hold("zeropage", "already posted", status="posted", path=tmp_db)
+    autonomy.to_hold("zeropage", "already posted", status="posted", path=tmp_db, account_id=None)
 
     result = orchestrator.publish(ready_state(tmp_db))
 
@@ -779,7 +779,7 @@ def test_every_shot_with_a_prompt_is_ai_eligible(tmp_db, monkeypatch):
     # a shot with no capture carries no key at all, same as the shot dict
     assert "reference_image" not in plain
     # the capture reaches the hold card next to the prompt it anchors
-    [row] = autonomy.list_hold(path=tmp_db)
+    [row] = autonomy.list_hold(path=tmp_db, account_id=None)
     assert row["payload"]["prompts"][0]["reference_image"] == "https://cdn.example/take.jpg"
     scores = row["payload"].get("prompt_scores") or []
     if scores:

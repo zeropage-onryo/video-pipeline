@@ -81,7 +81,7 @@ def ground(idea: str, *, brand: str = "", db_path=None, account_id: Optional[int
 def write_scenes(idea: str, brand: str, *, count: int = 1, references: str = "",
                  cast=None, refs=None, image_refs=None, db_path=None,
                  gemini_client=None, template_tag: str = "",
-                 on_retry=None) -> dict:
+                 on_retry=None, account_id: Optional[int] = None) -> dict:
     """N standalone takes on one idea, in ONE call so they are varied
     against each other rather than rolled independently. Raises: with no
     scene there is nothing to work on, and the caller must say so.
@@ -94,7 +94,7 @@ def write_scenes(idea: str, brand: str, *, count: int = 1, references: str = "",
         gemini_client=gemini_client, references=references, cast=cast,
         db_path=db_path if db_path is not None else db.DB_PATH,
         refs=list(refs or []), image_refs=image_refs or None,
-        template_tag=template_tag, on_retry=on_retry)
+        template_tag=template_tag, on_retry=on_retry, account_id=account_id)
 
 
 # How many photos of ONE character are worth a reference slot. A face
@@ -428,12 +428,17 @@ def park_scene(concept_id: int, reason: str = "", *, db_path=None, account_id: O
 def run(idea: str, brand: str, *, count: int = 1, refs=None, image_refs=None,
         db_path=None, gemini_client=None, resolve_photo: Optional[Callable] = None,
         attach_refs: Optional[Callable] = None,
-        progress: Optional[Callable] = None) -> dict:
+        progress: Optional[Callable] = None,
+        account_id: Optional[int] = None) -> dict:
     """Ground, write and attach -- what pressing Create does, and where
     it stops. Returns {"scenes": [...], "notes": [...], "prompt_template"}.
 
     `progress(fraction, detail)` is optional and is how the jobs SSE feed
-    narrates the run.
+    narrates the run. `account_id` is whose concepts these are: it was
+    dropped at this boundary until 2026-09-02, so Create wrote ownerless
+    rows that the next startup's backfill handed to the bootstrap
+    account -- invisible with one operator, a pilot's concepts on Mike's
+    board with two.
     """
     def say(fraction, detail=""):
         if progress:
@@ -446,7 +451,7 @@ def run(idea: str, brand: str, *, count: int = 1, refs=None, image_refs=None,
     notes: list = []
 
     say(0.15, "grounding in references")
-    grounded = ground(idea, brand=brand, db_path=path)
+    grounded = ground(idea, brand=brand, db_path=path, account_id=account_id)
 
     say(0.4, f"writing {max(1, min(MAX_SCENES, count))} scene(s)")
     # A busy model and a thinking model look identical from outside, and
@@ -457,7 +462,8 @@ def run(idea: str, brand: str, *, count: int = 1, refs=None, image_refs=None,
                            cast=grounded["cast"], refs=refs,
                            image_refs=image_refs, db_path=path,
                            gemini_client=gemini_client,
-                           on_retry=lambda note: say(0.4, note))
+                           on_retry=lambda note: say(0.4, note),
+                           account_id=account_id)
     scenes = written.get("scenes") or []
     if not scenes:
         raise RuntimeError("the model returned no usable scene")
@@ -468,7 +474,8 @@ def run(idea: str, brand: str, *, count: int = 1, refs=None, image_refs=None,
         if attach_refs is None:
             continue
         try:
-            if attach_refs(scene["concept_id"], list(refs or [])):
+            if attach_refs(scene["concept_id"], list(refs or []),
+                           account_id=account_id):
                 grounded_count += 1
         except Exception:
             pass          # a missing photo never fails a written scene

@@ -23,6 +23,21 @@ So the invite is not the risk. **Anyone who signs in with Google — invited or
 not — reads Mike's publishing queue and his Director canvases, and can act on
 both.**
 
+## Status (2026-09-02, later the same day)
+
+Findings 1-7 are fixed on `claude/pilot-dry-run` -- each has a **Fixed:**
+line below. 8 and 9 are not (fix order items 4 and 5; they can follow the
+first user). The migration was proved against a copy of the live database
+before it touched the tree: 55 holds and 5 canvases claimed by account 1,
+integrity and foreign-key checks clean, idempotent on a second init. Every
+regression test below was run against the pre-fix tree first and failed
+there (`tests/test_tenancy.py`, 5 failed + 7 errored on the old code).
+
+One thing the route test found that this run did not list: three routes --
+`POST /api/assets/locations`, `.../shots/{n}/media`, `.../shots/{n}/reference`
+-- took `account_id` as a plain **query parameter**, so the caller chose
+whose row to write. All three take the dependency now.
+
 ## Blocks the invite
 
 ### 1. The hold queue is global, and "Post now" takes no owner
@@ -39,6 +54,17 @@ and `data/autopilot.off`) — three switches about *the installation*, none abou
 *the caller*. Today the kill-switch file exists, which is the sole reason this
 is not already live.
 
+**Fixed:** `hold_queue.account_id` (additive ALTER, backfilled to account 1,
+on `db.OWNED_TABLES`); `list_hold`/`get_hold`/`resolve_hold`/`to_hold`/
+`evaluator_agreement` take the owner keyword-only with no default; every
+`/api/holds*` route declares `Depends(auth.current_account_id)` and answers
+404 for someone else's hold, the concept routes' shape. `holds_post` names
+its gate in its docstring, and posting gained the per-run approval the render
+tools have: `ZEROPAGE_POST_OK=1` (`autopilot.POST_ENV`), checked inside
+`_post_dispatch` so nothing publishes around it, reported as mode
+`post-unapproved` by `execute` and by the scheduling worker. It is still a
+fact about the run, not the caller -- the docstring says so.
+
 ### 2. Director canvases are global, and destructible
 `workflows` has no `account_id` (5 rows). As the pilot:
 
@@ -51,6 +77,13 @@ DELETE /api/workflows/3    -> 200 {"deleted":3}     # gone from the table
 Workflow 3 was "Midnight Evasion". It is not in the copy any more. Per
 `docs/` the node tree is saved per shot *with its outputs*, so this deletes the
 record of paid renders, not scratch state.
+
+**Fixed:** `workflows.account_id`, same path; every store function takes the
+owner keyword-only; `GET/PUT/DELETE /api/workflows/{id}` and `/run` are 404 for
+another account's canvas, the list is the caller's, and `brand` filters inside
+the tenant. `DELETE /api/concepts/{id}/graph` -- which took no account at all
+-- checks the concept first. Verified on the copy: as account 2, "Midnight
+Evasion" reads as missing and its delete changes nothing.
 
 ### 3. "Signed in" is not "has access" — except where it is
 `auth.current_account_id` does the right thing: no membership → 403. Verified,
@@ -68,14 +101,32 @@ zero memberships:
 PILOT.md's "a fresh signup has zero memberships on purpose" describes an
 intention the routes do not all implement.
 
+**Fixed:** `test_every_api_route_declares_whose_rows_it_wants` walks the
+router and fails on any `/api` route without `Depends(auth.current_account_id)`
+unless it is on a two-entry exempt list (`GET /api/capabilities`,
+`GET /api/presets` -- installation facts, the same bytes for everyone). It
+listed 35 routes on the old tree. `test_signed_in_with_no_membership_is_refused_everywhere`
+makes the request the dry run made -- a user with zero memberships -- and gets
+403 on every route in this table.
+
 ### 4. The job registry is global
 `app/jobs.py` is a module-level dict, by design (one process, one worker). It is
 also unscoped: the pilot saw a job labelled "Mike's private render" and got 200
 from `POST /api/jobs/1/cancel`.
 
+**Fixed:** every job record carries `account_id` from `create`/`start`; all
+fifteen `jobs.start` calls pass the route's account (the MCP surface passes the
+operator's); `/api/jobs` and the SSE stream filter by it, and the per-job routes
+404 for anyone else. Still a dict, still one process.
+
 ### 5. Smaller leaks, same cause
 `/api/evals/golden` and `/api/evals/runs` return Mike's eval set and run history.
 `/api/director/landing` returns his brand block and sample prompt.
+
+**Fixed:** all of them, plus `/api/analytics/accounts`, `/api/retrieve`,
+`/api/scout/*`, `/api/scenes/run` and the four `/api/workflows/exec/*`
+routes, declare the dependency. The eval tables stay shared (they measure the
+store, `db.SHARED_TABLES`), but a user with no membership no longer reads them.
 
 ## Breaks on the second user
 
@@ -91,10 +142,20 @@ allowance for all five tools (runway 6/6, veo 6/6, higgsfield 6/6, midjourney
 10/10, nano 20/20). The first person to render each day ends the day for
 everyone.
 
+**Fixed:** `.env.example` sets all five `*_GLOBAL_DAILY_CAP`s for three people
+(per-account cap x 3: 18 / 18 / 18 / 30 / 60) with the arithmetic in the
+comment; a test pins each above its per-account cap. The code defaults are
+unchanged on purpose -- a one-operator database still behaves as it did.
+
 ### 7. Veo still has no spend gate
 `runway`, `midjourney` and `higgsfield` each define `SPEND_ENV`. `src/veo.py`
 does not — `hasattr(veo, "SPEND_ENV")` is `False`. `veo.estimate_cost(6)` is
 **$19.20**, and the cap is the only wall in front of it.
+
+**Fixed:** `veo.SPEND_ENV = "VEO_SPEND_OK"`, `spend_approved()`, checked inside
+`generate_video` before the client is built and again at the
+`generate_candidates` edge with the priced estimate in the refusal --
+runway.py's wiring exactly.
 
 ### 8. A pilot's denial steers Mike's night, once, then vanishes
 Proven end to end. The pilot denied *their own* concept with the note "never put
@@ -109,6 +170,10 @@ PILOT's run:  pending_corrections() -> []
 unconsumed row and consumes it. This is BACKLOG #11's live bug, now with a
 reproduction.
 
+**Not fixed** (fix order item 4). `corrections` is listed in `db.SHARED_TABLES`
+with this bug named in its reason, so the schema test passes without anyone
+mistaking the listing for a decision.
+
 ### 9. The pilot is told they are ANTIHERO
 `app/main.py:112` — `active_brand` reads the cookie, validates it against a
 hardcoded `BRANDS`, and falls back to `DEFAULT_BRAND`. It never looks at
@@ -117,6 +182,9 @@ every row they create is labelled `brand="antihero"` (verified: their new
 workflow saved that way), the brand pill offers them Mike's two brands, and
 `POST /brand/zeropage` returns 303 → `/studio`, which is DEV_TOOLS-only and
 404s on a real deployment.
+
+**Not fixed** (fix order item 5). It is also why `rag_documents.project` is
+the tenant's account slug and not the brand -- see the part-two commit.
 
 ## What holds — don't rebuild these
 
@@ -154,11 +222,19 @@ rows.
 
 1–3 are what an invite waits on. 4–5 can follow the first user.
 
+**1–3 done, 2026-09-02.** The tables are decided out loud in
+`db.SHARED_TABLES`: `channels` stays the installation's (a channel is a
+destination bound to env credentials, created only by the seed, so a tenant
+with no channel row has no targets), `scheduled_posts` stays the operator's
+worker queue until a route can write it, and `corrections` is listed with its
+bug named. Everything else without an owner is the shared brain by Mike's
+decision, or reached only through an owned row.
+
 ## Caveats on this run
 
 Container is Python 3.11 / FastAPI 0.141.1; Mike's venv is Python 3.13 with its
 own pins. Nothing above depends on framework behaviour except by inference —
 each finding was reproduced by an actual request or an actual query, not read
 off the source. The RAG store was unreachable (no Postgres in the container), so
-`rag_documents.project` — BACKLOG #11's third point — was **not** exercised and
-remains untested.
+`rag_documents.project` — BACKLOG #11's third point — was **not** exercised
+here; it was, against the live store, in the part-two commit that followed.

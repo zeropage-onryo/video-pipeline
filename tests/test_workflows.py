@@ -98,32 +98,32 @@ def reference_shape_graph():
 def test_workflow_crud_roundtrip(tmp_db):
     graph = {"nodes": [node(1, "zpf/user_prompt")], "links": []}
     wf_id = workflows.create_workflow("night ride", graph,
-                                      brand="antihero", path=tmp_db)
+                                      brand="antihero", path=tmp_db, account_id=None)
 
-    listed = workflows.list_workflows(path=tmp_db)
+    listed = workflows.list_workflows(path=tmp_db, account_id=None)
     assert [w["name"] for w in listed] == ["night ride"]
     assert listed[0]["node_count"] == 1
     assert "graph" not in listed[0]          # the list stays light
 
-    loaded = workflows.get_workflow(wf_id, path=tmp_db)
+    loaded = workflows.get_workflow(wf_id, path=tmp_db, account_id=None)
     assert loaded["graph"] == graph
 
-    assert workflows.update_workflow(wf_id, name="garage ritual", path=tmp_db)
-    assert workflows.get_workflow(wf_id, path=tmp_db)["name"] == "garage ritual"
+    assert workflows.update_workflow(wf_id, name="garage ritual", path=tmp_db, account_id=None)
+    assert workflows.get_workflow(wf_id, path=tmp_db, account_id=None)["name"] == "garage ritual"
     # graph untouched by a name-only update
-    assert workflows.get_workflow(wf_id, path=tmp_db)["graph"] == graph
+    assert workflows.get_workflow(wf_id, path=tmp_db, account_id=None)["graph"] == graph
 
-    assert workflows.delete_workflow(wf_id, path=tmp_db)
-    assert workflows.get_workflow(wf_id, path=tmp_db) is None
-    assert not workflows.delete_workflow(wf_id, path=tmp_db)
+    assert workflows.delete_workflow(wf_id, path=tmp_db, account_id=None)
+    assert workflows.get_workflow(wf_id, path=tmp_db, account_id=None) is None
+    assert not workflows.delete_workflow(wf_id, path=tmp_db, account_id=None)
 
 
 def test_workflow_list_scopes_by_brand(tmp_db):
-    workflows.create_workflow("a", {}, brand="antihero", path=tmp_db)
-    workflows.create_workflow("z", {}, brand="zeropage", path=tmp_db)
+    workflows.create_workflow("a", {}, brand="antihero", path=tmp_db, account_id=None)
+    workflows.create_workflow("z", {}, brand="zeropage", path=tmp_db, account_id=None)
     assert [w["name"] for w in
-            workflows.list_workflows(brand="zeropage", path=tmp_db)] == ["z"]
-    assert len(workflows.list_workflows(path=tmp_db)) == 2
+            workflows.list_workflows(brand="zeropage", path=tmp_db, account_id=None)] == ["z"]
+    assert len(workflows.list_workflows(path=tmp_db, account_id=None)) == 2
 
 
 # --- runway.generate_from_prompt --------------------------------------------
@@ -573,7 +573,7 @@ def test_seed_default_plants_the_template_once(tmp_db):
     assert wf_id is not None
     assert workflows.seed_default(path=tmp_db) is None   # idempotent
 
-    template = workflows.get_workflow(wf_id, path=tmp_db)
+    template = workflows.get_workflow(wf_id, path=tmp_db, account_id=None)
     assert template["name"] == "Prompt enhancement"
     assert template["brand"] is None                     # shared across brands
     types = [n["type"] for n in template["graph"]["nodes"]]
@@ -590,17 +590,17 @@ def test_seed_default_plants_the_template_once(tmp_db):
 
 def test_seed_default_respects_an_intentionally_emptied_slate(tmp_db):
     wf_id = workflows.seed_default(path=tmp_db)
-    workflows.create_workflow("mine", {}, brand="antihero", path=tmp_db)
-    workflows.delete_workflow(wf_id, path=tmp_db)
+    workflows.create_workflow("mine", {}, brand="antihero", path=tmp_db, account_id=None)
+    workflows.delete_workflow(wf_id, path=tmp_db, account_id=None)
     # other workflows exist -> the deleted template stays deleted
     assert workflows.seed_default(path=tmp_db) is None
 
 
 def test_brandless_template_shows_up_under_every_brand(tmp_db):
     workflows.seed_default(path=tmp_db)
-    workflows.create_workflow("z", {}, brand="zeropage", path=tmp_db)
+    workflows.create_workflow("z", {}, brand="zeropage", path=tmp_db, account_id=None)
     for brand in ("antihero", "zeropage"):
-        names = [w["name"] for w in workflows.list_workflows(brand=brand, path=tmp_db)]
+        names = [w["name"] for w in workflows.list_workflows(brand=brand, path=tmp_db, account_id=None)]
         assert "Prompt enhancement" in names
 
 

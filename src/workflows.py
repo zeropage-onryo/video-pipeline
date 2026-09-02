@@ -9,6 +9,14 @@ db.py in its own module (own SCHEMA, own init), the preprod.py pattern.
 Execution lives elsewhere (app/workflow_runner.py); a row here is only
 the drawing. Deleting one deletes a saved graph, never a render -- the
 generations table keeps every attempt regardless.
+
+OWNED (db.OWNED_TABLES, 2026-09-02). `account_id` is who owns a canvas;
+`brand` stays a label the picker filters inside it. The dry run proved
+that without the owner any signed-in user listed Mike's canvases,
+overwrote one and deleted "Midnight Evasion" -- a shot's saved graph
+carries its outputs, so that was the record of paid renders, not
+scratch. Every function below takes the owner keyword-only with no
+default, so a call site that forgets is a TypeError, never a leak.
 """
 from __future__ import annotations
 
@@ -16,7 +24,7 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
-from .db import DB_PATH, _now, connect
+from .db import DB_PATH, _now, bootstrap_account_id, connect, own_table
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS workflows (
@@ -46,12 +54,17 @@ def init(path=DB_PATH) -> None:
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_wf_shot "
                      "ON workflows (concept_id, shot_n) "
                      "WHERE concept_id IS NOT NULL")
+        # tenancy (2026-09-02): additive ALTER + backfill to the bootstrap
+        # account, the path every other owned table took. Proved against
+        # a copy of the live database (5 canvases, all claimed by account
+        # 1) before this line existed in the tree.
+        own_table(conn, "workflows")
 
 
 def save_shot_graph(concept_id: int, shot_n: int, graph: dict,
                     states: Optional[dict] = None, name: Optional[str] = None,
                     brand: Optional[str] = None, seed_hash: Optional[str] = None,
-                    path=DB_PATH) -> int:
+                    path=DB_PATH, *, account_id: Optional[int]) -> int:
     """The canvas for one shot of one concept, upserted.
 
     Keyed on (concept_id, shot_n) rather than appended, because a Run
@@ -71,8 +84,9 @@ def save_shot_graph(concept_id: int, shot_n: int, graph: dict,
                json.dumps(states) if states is not None else None)
     with connect(path) as conn:
         row = conn.execute(
-            "SELECT id FROM workflows WHERE concept_id = ? AND shot_n = ?",
-            (concept_id, shot_n),
+            "SELECT id FROM workflows WHERE concept_id = ? AND shot_n = ? "
+            "AND account_id IS ?",
+            (concept_id, shot_n, account_id),
         ).fetchone()
         if row:
             # states absent means "graph only" -- never blank what the
@@ -80,30 +94,32 @@ def save_shot_graph(concept_id: int, shot_n: int, graph: dict,
             if payload[1] is None:
                 conn.execute(
                     "UPDATE workflows SET updated_at = ?, graph_json = ?, "
-                    "seed_hash = ? WHERE id = ?",
-                    (now, payload[0], seed_hash, row["id"]))
+                    "seed_hash = ? WHERE id = ? AND account_id IS ?",
+                    (now, payload[0], seed_hash, row["id"], account_id))
             else:
                 conn.execute(
                     "UPDATE workflows SET updated_at = ?, graph_json = ?, "
-                    "states_json = ?, seed_hash = ? WHERE id = ?",
-                    (now, payload[0], payload[1], seed_hash, row["id"]))
+                    "states_json = ?, seed_hash = ? WHERE id = ? AND account_id IS ?",
+                    (now, payload[0], payload[1], seed_hash, row["id"], account_id))
             return int(row["id"])
         cursor = conn.execute(
             "INSERT INTO workflows (created_at, updated_at, brand, name, "
-            "graph_json, concept_id, shot_n, states_json, seed_hash) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "graph_json, concept_id, shot_n, states_json, seed_hash, account_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (now, now, brand, (name or "").strip() or f"Shot {shot_n}",
-             payload[0], concept_id, shot_n, payload[1], seed_hash),
+             payload[0], concept_id, shot_n, payload[1], seed_hash, account_id),
         )
         return int(cursor.lastrowid)
 
 
-def get_shot_graph(concept_id: int, shot_n: int, path=DB_PATH) -> Optional[dict]:
+def get_shot_graph(concept_id: int, shot_n: int, path=DB_PATH, *,
+                   account_id: Optional[int]) -> Optional[dict]:
     """The saved canvas for one shot, or None to build a fresh one."""
     with connect(path) as conn:
         row = conn.execute(
-            "SELECT * FROM workflows WHERE concept_id = ? AND shot_n = ?",
-            (concept_id, shot_n),
+            "SELECT * FROM workflows WHERE concept_id = ? AND shot_n = ? "
+            "AND account_id IS ?",
+            (concept_id, shot_n, account_id),
         ).fetchone()
     if row is None:
         return None
@@ -116,32 +132,36 @@ def get_shot_graph(concept_id: int, shot_n: int, path=DB_PATH) -> Optional[dict]
     }
 
 
-def delete_shot_graphs(concept_id: int, path=DB_PATH) -> int:
+def delete_shot_graphs(concept_id: int, path=DB_PATH, *,
+                       account_id: Optional[int]) -> int:
     """Drop a concept's saved canvases -- used when its prompt changes
     underneath them and the stored graph would be a stale drawing of a
     shot that no longer says that."""
     with connect(path) as conn:
         cursor = conn.execute(
-            "DELETE FROM workflows WHERE concept_id = ?", (concept_id,))
+            "DELETE FROM workflows WHERE concept_id = ? AND account_id IS ?",
+            (concept_id, account_id))
         return cursor.rowcount
 
 
 def create_workflow(name: str, graph: dict, brand: Optional[str] = None,
-                    path=DB_PATH) -> int:
+                    path=DB_PATH, *, account_id: Optional[int]) -> int:
     name = (name or "").strip() or "Untitled workflow"
     now = _now()
     with connect(path) as conn:
         cursor = conn.execute(
-            "INSERT INTO workflows (created_at, updated_at, brand, name, graph_json) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (now, now, brand, name, json.dumps(graph or {})),
+            "INSERT INTO workflows (created_at, updated_at, brand, name, "
+            "graph_json, account_id) VALUES (?, ?, ?, ?, ?, ?)",
+            (now, now, brand, name, json.dumps(graph or {}), account_id),
         )
         return cursor.lastrowid
 
 
 def update_workflow(workflow_id: int, name: Optional[str] = None,
-                    graph: Optional[dict] = None, path=DB_PATH) -> bool:
-    """Update the fields that were passed; absent means unchanged."""
+                    graph: Optional[dict] = None, path=DB_PATH, *,
+                    account_id: Optional[int]) -> bool:
+    """Update the fields that were passed; absent means unchanged.
+    False for someone else's row, same as for a missing id."""
     fields, values = ["updated_at = ?"], [_now()]
     if name is not None and name.strip():
         fields.append("name = ?")
@@ -151,15 +171,19 @@ def update_workflow(workflow_id: int, name: Optional[str] = None,
         values.append(json.dumps(graph))
     with connect(path) as conn:
         cursor = conn.execute(
-            f"UPDATE workflows SET {', '.join(fields)} WHERE id = ?",
-            (*values, workflow_id),
+            f"UPDATE workflows SET {', '.join(fields)} "
+            f"WHERE id = ? AND account_id IS ?",
+            (*values, workflow_id, account_id),
         )
         return cursor.rowcount > 0
 
 
-def delete_workflow(workflow_id: int, path=DB_PATH) -> bool:
+def delete_workflow(workflow_id: int, path=DB_PATH, *,
+                    account_id: Optional[int]) -> bool:
     with connect(path) as conn:
-        cursor = conn.execute("DELETE FROM workflows WHERE id = ?", (workflow_id,))
+        cursor = conn.execute(
+            "DELETE FROM workflows WHERE id = ? AND account_id IS ?",
+            (workflow_id, account_id))
         return cursor.rowcount > 0
 
 
@@ -171,29 +195,36 @@ def _row(raw: dict, with_graph: bool) -> dict[str, Any]:
     return raw
 
 
-def list_workflows(brand: Optional[str] = None, path=DB_PATH) -> list[dict[str, Any]]:
-    """Newest-edited first, graphs left behind -- the picker only needs
-    names and sizes, and graph_json is the heavy column. A brand filter
-    still includes brandless rows: those are the shared templates (the
-    seeded default), visible from every brand."""
+def list_workflows(brand: Optional[str] = None, path=DB_PATH, *,
+                   account_id: Optional[int]) -> list[dict[str, Any]]:
+    """This account's canvases, newest-edited first, graphs left behind
+    -- the picker only needs names and sizes, and graph_json is the
+    heavy column. A brand filter still includes brandless rows: those
+    are the shared templates (the seeded default), visible from every
+    brand -- of the same account. Brand filters inside the tenant; it
+    never widens it."""
     # concept-scoped canvases are excluded: they belong to a shot, not
     # to the workflow library, and listing them would fill the picker
     # with one entry per shot anyone has ever opened
-    query = "SELECT * FROM workflows WHERE concept_id IS NULL"
-    params: tuple = ()
+    query = "SELECT * FROM workflows WHERE concept_id IS NULL AND account_id IS ?"
+    params: tuple = (account_id,)
     if brand:
         query += " AND (brand = ? OR brand IS NULL)"
-        params = (brand,)
+        params = (account_id, brand)
     query += " ORDER BY updated_at DESC, id DESC"
     with connect(path) as conn:
         return [_row(dict(r), with_graph=False)
                 for r in conn.execute(query, params)]
 
 
-def get_workflow(workflow_id: int, path=DB_PATH) -> Optional[dict[str, Any]]:
+def get_workflow(workflow_id: int, path=DB_PATH, *,
+                 account_id: Optional[int]) -> Optional[dict[str, Any]]:
+    """One canvas, if it is this account's; None otherwise, the same
+    answer as for a missing id."""
     with connect(path) as conn:
-        raw = conn.execute("SELECT * FROM workflows WHERE id = ?",
-                           (workflow_id,)).fetchone()
+        raw = conn.execute(
+            "SELECT * FROM workflows WHERE id = ? AND account_id IS ?",
+            (workflow_id, account_id)).fetchone()
     return _row(dict(raw), with_graph=True) if raw else None
 
 
@@ -264,7 +295,13 @@ def seed_default(path=DB_PATH) -> Optional[int]:
     canvas opens onto the typical workflow instead of an empty grid.
     Brandless (shared across brands), idempotent on the name -- a
     deleted template stays deleted only while other workflows exist;
-    an entirely empty table reseeds, the evalstore pattern."""
+    an entirely empty table reseeds, the evalstore pattern.
+
+    An installation-level seed, so its idempotence checks are the two
+    statements the static tenancy test allows by name. The row it
+    plants belongs to the bootstrap account (None on a database not yet
+    seeded, and accounts.seed claims it then) -- the starter canvas is
+    the operator's, not a template every tenant is handed."""
     init(path)
     with connect(path) as conn:
         existing = conn.execute(
@@ -275,5 +312,6 @@ def seed_default(path=DB_PATH) -> Optional[int]:
         any_row = conn.execute("SELECT id FROM workflows LIMIT 1").fetchone()
         if any_row:
             return None
+        owner = bootstrap_account_id(conn)
     return create_workflow("Prompt enhancement", default_template(),
-                           brand=None, path=path)
+                           brand=None, path=path, account_id=owner)

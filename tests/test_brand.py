@@ -57,8 +57,8 @@ def test_holds_are_filtered_to_the_active_brand(tmp_db, monkeypatch):
     from app import auth
     stub = {"id": 1, "email": "t@example.com", "display_name": "T"}
     monkeypatch.setattr(auth, "current_user", lambda request: stub)
-    autonomy.to_hold("antihero", "ANTIHERO-REASON-XYZ", status="held", path=tmp_db)
-    autonomy.to_hold("zeropage", "ZEROPAGE-REASON-XYZ", status="held", path=tmp_db)
+    autonomy.to_hold("antihero", "ANTIHERO-REASON-XYZ", status="held", path=tmp_db, account_id=None)
+    autonomy.to_hold("zeropage", "ZEROPAGE-REASON-XYZ", status="held", path=tmp_db, account_id=None)
     reasons = [h["reason"] for h in
                client.get("/api/holds?channel=zeropage").json()["items"]]
     assert reasons == ["ZEROPAGE-REASON-XYZ"]

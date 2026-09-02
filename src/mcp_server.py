@@ -725,11 +725,14 @@ def build_server(path: Path | str = db.DB_PATH, name: str = "zeropage-ideas",
 
     def _run(fn, *args, **kwargs):
         """Engine tools go through the job registry when one was
-        injected, and return a job id instead of a result."""
+        injected, and return a job id instead of a result. The job is
+        the operator's (this surface has a bearer token, not a session
+        -- see _account), so it shows on their rail and nobody else's."""
         label = kwargs.pop("_label", fn.__name__)
         if start_job is None:
             return _t(fn, *args, **kwargs)
-        job = start_job("mcp", label, lambda job: {"result": fn(*args, **kwargs)})
+        job = start_job("mcp", label, lambda job: {"result": fn(*args, **kwargs)},
+                        account_id=_account(None, path))
         return {"job_id": job["id"], "status": job["status"], "label": label,
                 "note": "started; poll with the `job` tool"}
 
@@ -848,7 +851,7 @@ def build_server(path: Path | str = db.DB_PATH, name: str = "zeropage-ideas",
             was injected, engine tools or not -- reading the progress of
             a render somebody kicked off in Studio is exactly the thing
             worth having on a phone."""
-            snap = job_status(int(job_id))
+            snap = job_status(int(job_id), account_id=_account(None, path))
             if snap is None:
                 raise ToolError(
                     f"no job {job_id} -- the registry is in-process and a "

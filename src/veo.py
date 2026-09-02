@@ -17,7 +17,12 @@ Two layers, youtube.py's shape:
                          action through genlog, because the pick is the
                          label.
 
-EVERY CALL COSTS REAL MONEY. Two guardrails live here, not in callers:
+EVERY CALL COSTS REAL MONEY. Three guardrails live here, not in callers:
+- VEO_SPEND_OK=1 must be set or generate_video raises (added 2026-09-02,
+  runway.py's exact shape). Until then this was the most expensive tool
+  in the repo -- estimate_cost(6) is $19.20 -- and the only one with no
+  per-run approval: the cap was the whole wall. Set it per run, never
+  in .env, so every Veo spend is an explicit human yes.
 - DAILY_CAP: a hard per-UTC-day cap on generations (default 6,
   VEO_DAILY_CAP to change) counted from the generations table, so a
   runaway loop hits a wall the DB enforces.
@@ -56,6 +61,8 @@ DAILY_CAP = int(os.environ.get("VEO_DAILY_CAP", "6"))
 # whose card is paying, instead of the total quietly doubling.
 GLOBAL_DAILY_CAP = int(os.environ.get("VEO_GLOBAL_DAILY_CAP", str(DAILY_CAP)))
 
+SPEND_ENV = "VEO_SPEND_OK"
+
 # Rough per-clip estimate for the previews (8s, 720p, audio included),
 # from Veo API pricing pages 2026-08. An estimate for a confirm dialog,
 # not an invoice -- verify against Google's pricing before live spend.
@@ -70,6 +77,13 @@ def _safe_error(e: Exception) -> str:
         if value:
             text = text.replace(value, f"<{name}>")
     return re.sub(r"key=[A-Za-z0-9_\-]+", "key=<redacted>", text)
+
+
+def spend_approved() -> bool:
+    """The human approval for a Veo spend. Per-run by design: set
+    VEO_SPEND_OK=1 on the command, not in .env -- an approval that's
+    always on isn't an approval."""
+    return (os.environ.get(SPEND_ENV) or "").strip() == "1"
 
 
 def estimate_cost(n: int) -> float:
@@ -106,7 +120,15 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
     Config field names verified against the INSTALLED google-genai
     (1.x, 2026-08): the SDK takes duration_seconds (int), not the
     docs-snippet "duration" string.
+
+    The spend gate is checked HERE, before the client is even built, so
+    no caller can spend around it -- runway.generate_video's rule.
     """
+    if not spend_approved():
+        raise RuntimeError(
+            f"credit spend not approved: set {SPEND_ENV}=1 on this run to "
+            f"approve Veo spend (~${COST_PER_CLIP_USD:.2f} per clip)"
+        )
     client = client or _make_client()
     kwargs = {"image": image} if image is not None else {}
     operation = client.models.generate_videos(
@@ -166,6 +188,11 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *, shot_id: Optional[i
     kwargs = {"path": db_path} if db_path is not None else {}
 
     try:
+        if not spend_approved():
+            return {"ok": False, "candidates": [],
+                    "error": f"credit spend not approved: set {SPEND_ENV}=1 to "
+                             f"approve ~${estimate_cost(n)} of Veo spend for this run"}
+
         refusal = generative.cap_error(
             "veo", n, account_id=account_id,
             per_account=DAILY_CAP, ceiling=GLOBAL_DAILY_CAP,

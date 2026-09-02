@@ -1010,6 +1010,7 @@ def _park(state: GenState, reason: str) -> GenState:
                  "critique": state.get("critique"),
                  "error": state.get("error")},
         path=db.DB_PATH,
+        account_id=state.get("account_id"),
     )
     return {"hold_id": hold_id, "held_reason": reason}
 

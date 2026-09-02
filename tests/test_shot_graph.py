@@ -84,7 +84,7 @@ def test_saving_twice_updates_one_row_instead_of_piling_up(tmp_db):
     second = client.put(f"/api/concepts/{cid}/shots/1/graph",
                         json={"graph": GRAPH, "states": STATES}).json()["id"]
     assert first == second
-    rows = workflows.get_shot_graph(cid, 1, path=tmp_db)
+    rows = workflows.get_shot_graph(cid, 1, path=tmp_db, account_id=None)
     assert rows["states"] == STATES
 
 
@@ -189,7 +189,7 @@ def test_the_saved_canvas_is_what_run_all_executes(tmp_db):
     cid = a_concept(tmp_db)
     saved_id = client.put(f"/api/concepts/{cid}/shots/1/graph",
                           json={"graph": GRAPH}).json()["id"]
-    ran = workflows.get_workflow(saved_id, path=tmp_db)
+    ran = workflows.get_workflow(saved_id, path=tmp_db, account_id=None)
     assert ran["graph"]["nodes"][0]["id"] == 3
 
 

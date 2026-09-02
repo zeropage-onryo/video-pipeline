@@ -292,9 +292,10 @@ findings that shape it: `tool_scoreboard` and `attempts_to_keeper` already
 compute cost-per-keeper and are surfaced nowhere, and `usage_metadata` appears
 zero times in the repo, so no LLM call has ever been costed. 42 of the 46 Gemini
 call sites funnel through `gemini_utils.generate_with_retry`, which is where the
-meter goes. Also carries the two acknowledged bugs from #10 (the five
-`*_GLOBAL_DAILY_CAP` defaults, and veo's missing `SPEND_OK`), because this is
-what produces the numbers needed to choose them.
+meter goes. The two acknowledged bugs from #10 (the five `*_GLOBAL_DAILY_CAP`
+defaults, and veo's missing `SPEND_OK`) were closed by #12 on 2026-09-02 --
+the caps are chosen for three people in `.env.example`; the tracker is what
+would let them be chosen from data instead.
 
 Goal: surface where the pipeline spends money and where it wastes it, so
 inefficiency is visible instead of hidden.
@@ -316,7 +317,15 @@ above a threshold. Tie into the prompt-gate agreement so "credits that would
 have been wasted" is a headline number (autonomy.prompt_gate_agreement already
 tracks passed-but-rejected = would-have-burned).
 
-## 12. The tenancy gap the dry run found  (NEXT -- ahead of #2 and #11, 2026-09-02)
+## 12. The tenancy gap the dry run found  (SHIPPED 2026-09-02, `claude/pilot-dry-run`)
+Fix-order items 1–3 landed the same day: `hold_queue` and `workflows` owned
+and backfilled, `holds_post` and the job registry take an owner, a
+route-signature test and a schema test (`db.SHARED_TABLES`, the decisions
+written down) make it unrepeatable, the five global caps are set in
+`.env.example`, `VEO_SPEND_OK` exists, and posting has its per-run
+`ZEROPAGE_POST_OK`. Items 4 (`corrections`) and 5 (`active_brand`) remain --
+see #11. The original entry, for the record:
+
 `docs/PILOT_DRY_RUN.md`. `hold_queue` and `workflows` have no `account_id`, and
 `holds_post` takes no account dependency at all -- so any signed-in user, with
 or without a membership, reads Mike's hold queue and Director canvases, can

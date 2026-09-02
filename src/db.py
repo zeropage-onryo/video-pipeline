@@ -168,7 +168,71 @@ OWNED_TABLES = (
     "videos",
     "scene_briefs",
     "shots",
+    # The two the dry run found (docs/PILOT_DRY_RUN.md, 2026-09-02). They
+    # were never on this list, so the static SQL test -- which audits the
+    # list -- could not see that any signed-in user read Mike's publishing
+    # queue and could delete his Director canvases.
+    "hold_queue",
+    "workflows",
 )
+
+# The tables that are global BY DECISION, each with the reason. This is
+# the other half of OWNED_TABLES: every table a user's actions write rows
+# into is either owned (above, with an account_id and a predicate on
+# every query) or named here. tests/test_tenancy.py enumerates the live
+# schema and fails on a table in neither, so a future session cannot
+# "finish the migration" by scoping the shared brain, and cannot add a
+# new table without deciding which side it lands on.
+#
+# Mike's decision (BACKLOG #11, 2026-09-01): "the learning loop continues
+# for all users, the entire app learns as it goes and gets better, that
+# is the loop." A label is not a fence -- rag_documents.project ranks a
+# tenant's own lessons first without hiding anyone else's.
+SHARED_TABLES = {
+    # -- the auth schema itself: it defines tenancy, it is not subject to it
+    "users": "the sign-in identity; ownership is derived FROM this table",
+    "auth_identities": "provider identities of users; the auth schema",
+    "accounts": "the tenant/brand table every account_id points at",
+    "account_members": "the membership grant; the gate, not a row someone owns",
+    # -- the shared brain: learning tables global by Mike's decision
+    "winning_prompts": "taught prompts; the lesson is shared, ranked by "
+                       "rag_documents.project rather than fenced",
+    "prompt_scores": "the credit gate's own log, one row per scored prompt; "
+                     "gate-vs-human agreement is a number about the gate",
+    "scout_findings": "the research bank; a direction is not anyone's row",
+    "scout_bin": "the scout's reference bin, keyed by pass, not by person",
+    "inspiration_accounts": "the researched accounts a brand draws on",
+    "eval_golden": "the retrieval eval's labelled queries; measure the store",
+    "eval_runs": "the retrieval eval's run history; measures the store",
+    # -- reached only through an owned row, so no owner of their own
+    "concept_locations": "join table under shoot_concepts; cascades with it",
+    "metrics": "snapshots under videos; every read joins v.account_id",
+    # -- the installation's own configuration and bookkeeping
+    "settings": "the kill switch and the Dev Studio tunables; one installation",
+    "channels": "publish destinations bound to the INSTALLATION's credentials "
+                "(IG_USER_ID, IG_ACCESS_TOKEN are env, not rows). A channel is "
+                "created only by autonomy.init's seed, so a tenant with no "
+                "channel row has no post targets and cannot reach them. "
+                "Decided out loud 2026-09-02: this is the publishing path and "
+                "it stays the operator's, not a per-tenant row",
+    "scheduled_posts": "the publish worker's queue: an intention to post "
+                       "through the installation's credentials, written only "
+                       "by the operator's CLI (no route exists), drained by "
+                       "cron for the whole installation. Becomes owned the "
+                       "day a route can write it -- decided 2026-09-02",
+    "corrections": "standing notes folded into the next run's spark. GLOBAL "
+                   "BY ACCIDENT, and a live bug (BACKLOG #11, PILOT_DRY_RUN "
+                   "#8): a pilot's denial steers Mike's night once. Listed "
+                   "here so the schema test passes; fix order item 4",
+    "ig_hashtag_ids": "a cache of Meta's hashtag ids; the tag is the key",
+    # -- the legacy pitch pipeline, removed Aug 2026; nothing writes them
+    "pitch_runs": "historical rows from the removed post-production chain",
+    "ideas": "historical rows from the removed post-production chain",
+    # -- the closed reference set (src/imagesearch.py, src/framebank.py)
+    "image_candidates": "server-found image search results the agent may "
+                        "only reference by id; a search cache, not authorship",
+    "frames": "stills cut from the operator's own footage; the frame bank",
+}
 
 
 def _ensure_accounts_table(conn: sqlite3.Connection) -> None:

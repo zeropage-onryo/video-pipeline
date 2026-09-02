@@ -188,6 +188,11 @@ def run_due(now: Optional[str] = None, approve: bool = False, live: bool = False
     # publish them -- the double-post this dance exists to prevent.
     mode = autopilot.execute({"actions": []}, approve=approve,
                              dry_run=not live)["mode"]
+    # The empty probe carries no post action, so it cannot see the
+    # per-run posting approval; ask directly, or a live worker would
+    # mark every row `publishing` and then be refused by the executor.
+    if mode == "live" and not autopilot.post_approved():
+        mode = "post-unapproved"
 
     published = 0
     deferred: list[str] = []

@@ -16,7 +16,10 @@ Four tables:
 - hold_queue   -- the dead-man log. EVERY graph run ends here as a row:
                   held (with why) or posted (with what). If you want to
                   know what the graph did while you weren't looking,
-                  it's one table.
+                  it's one table. OWNED (db.OWNED_TABLES, 2026-09-02):
+                  a hold is the run of one account, and the dry run
+                  proved any signed-in user could list and reject
+                  Mike's until it carried an owner.
 - corrections  -- mid-run human notes, for the human_note interrupt
                   node when it lands. Written now so the schema exists.
 - settings     -- key/value; the kill switch lives here. Global on
@@ -128,6 +131,12 @@ def init(path=db.DB_PATH) -> None:
                 "VALUES (?, ?, ?, ?, ?)",
                 (name, autonomy, cap, targets, notes),
             )
+        # tenancy (2026-09-02): the additive ALTER + backfill every owned
+        # table got on 2026-08-31, which this one was left out of. Every
+        # existing hold belongs to the bootstrap account -- on the live
+        # database that is account 1, the one that owns every concept the
+        # holds point at. Proved against a copy before it landed here.
+        db.own_table(conn, "hold_queue")
 
 
 # --- channels -------------------------------------------------------------
@@ -182,48 +191,84 @@ def killed(path=db.DB_PATH) -> bool:
 
 def to_hold(channel: str, reason: str, concept_id=None, caption: str = "",
             payload: Optional[dict] = None, status: str = "held",
-            path=db.DB_PATH) -> int:
+            path=db.DB_PATH, *, account_id: Optional[int]) -> int:
+    """Park a run. `account_id` is keyword-only with no default, the
+    preprod.get_concept rule: a forgotten owner is a TypeError at the
+    call, not a row nobody can see (or everybody can)."""
     with db.connect(path) as conn:
         cursor = conn.execute(
             "INSERT INTO hold_queue (created_at, channel, status, reason, "
-            "concept_id, caption, payload) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "concept_id, caption, payload, account_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (_now(), channel, status, reason, concept_id, caption,
-             json.dumps(payload) if payload is not None else None),
+             json.dumps(payload) if payload is not None else None, account_id),
         )
         return cursor.lastrowid
 
 
-def list_hold(status: Optional[str] = "held", path=db.DB_PATH) -> list[dict]:
-    query = "SELECT * FROM hold_queue"
-    params: tuple = ()
+def _parse_payload(row: dict) -> dict:
+    if row.get("payload"):
+        try:
+            row["payload"] = json.loads(row["payload"])
+        except (ValueError, TypeError):
+            pass
+    return row
+
+
+def list_hold(status: Optional[str] = "held", path=db.DB_PATH, *,
+              account_id: Optional[int]) -> list[dict]:
+    """This account's holds, newest first. status=None lists every
+    status; the owner predicate is never optional."""
+    query = "SELECT * FROM hold_queue WHERE account_id IS ?"
+    params: tuple = (account_id,)
     if status is not None:
-        query += " WHERE status = ?"
-        params = (status,)
+        query += " AND status = ?"
+        params = (account_id, status)
     query += " ORDER BY created_at DESC"
     with db.connect(path) as conn:
         rows = [dict(r) for r in conn.execute(query, params)]
-    for row in rows:
-        if row.get("payload"):
-            try:
-                row["payload"] = json.loads(row["payload"])
-            except (ValueError, TypeError):
-                pass
-    return rows
+    return [_parse_payload(row) for row in rows]
 
 
-def resolve_hold(hold_id: int, status: str, path=db.DB_PATH) -> None:
+def get_hold(hold_id: int, path=db.DB_PATH, *,
+             account_id: Optional[int]) -> Optional[dict]:
+    """One hold, if it is this account's. None for someone else's, the
+    same answer as for a missing id -- ids are sequential, so "not
+    yours" and "not found" must be indistinguishable or the table can
+    be mapped by counting (the preprod.get_concept rule)."""
+    with db.connect(path) as conn:
+        row = conn.execute(
+            "SELECT * FROM hold_queue WHERE id = ? AND account_id IS ?",
+            (hold_id, account_id),
+        ).fetchone()
+    return _parse_payload(dict(row)) if row else None
+
+
+def resolve_hold(hold_id: int, status: str, path=db.DB_PATH, *,
+                 account_id: Optional[int]) -> bool:
     """Your morning verdict on a shadow run: approved (would have
     posted) or rejected (glad it held). This is how the evaluator gets
-    graded -- agreement over these rows is the number that earns auto."""
+    graded -- agreement over these rows is the number that earns auto.
+
+    Returns whether a row changed: False for someone else's hold, same
+    as for a missing id, so the route above answers 404 for both."""
     if status not in ("approved", "rejected", "posted"):
         raise ValueError(f"status must be approved|rejected|posted, got {status!r}")
     with db.connect(path) as conn:
-        conn.execute("UPDATE hold_queue SET status = ? WHERE id = ?", (status, hold_id))
+        cursor = conn.execute(
+            "UPDATE hold_queue SET status = ? WHERE id = ? AND account_id IS ?",
+            (status, hold_id, account_id))
+        return cursor.rowcount > 0
 
 
 def posts_today(channel: str, path=db.DB_PATH) -> int:
     """Posted rows for this channel since UTC midnight -- what the rate
-    cap in the publish gate counts against."""
+    cap in the publish gate counts against.
+
+    Deliberately NOT scoped by account: a channel is the installation's
+    destination (db.SHARED_TABLES), and its rate cap is a cap on what
+    reaches that destination per day, whoever filed the run. The static
+    tenancy test allows this statement by name."""
     today = datetime.now(timezone.utc).date().isoformat()
     with db.connect(path) as conn:
         row = conn.execute(
@@ -234,16 +279,19 @@ def posts_today(channel: str, path=db.DB_PATH) -> int:
         return row[0]
 
 
-def evaluator_agreement(channel: Optional[str] = None, path=db.DB_PATH) -> dict:
+def evaluator_agreement(channel: Optional[str] = None, path=db.DB_PATH, *,
+                        account_id: Optional[int]) -> dict:
     """The credit-gate number: of the shadow runs you've graded, how
     often would you have posted what the graph wanted to post? ~0.9
-    over a real stretch is the doc's bar for promoting a channel."""
+    over a real stretch is the doc's bar for promoting a channel.
+    Over THIS account's graded holds -- the grades are one person's
+    judgment of the graph, not a pooled score."""
     query = ("SELECT status, COUNT(*) FROM hold_queue "
-             "WHERE status IN ('approved', 'rejected')")
-    params: tuple = ()
+             "WHERE status IN ('approved', 'rejected') AND account_id IS ?")
+    params: tuple = (account_id,)
     if channel:
         query += " AND channel = ?"
-        params = (channel,)
+        params = (account_id, channel)
     query += " GROUP BY status"
     with db.connect(path) as conn:
         counts = dict(conn.execute(query, params).fetchall())

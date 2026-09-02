@@ -445,7 +445,7 @@ def test_shot_generate_surfaces_render_failure(tmp_db, monkeypatch):
 # --- holds ------------------------------------------------------------------
 
 def test_holds_resolve_roundtrip(tmp_db):
-    hold_id = autonomy.to_hold("antihero", "shadow run", path=tmp_db)
+    hold_id = autonomy.to_hold("antihero", "shadow run", path=tmp_db, account_id=None)
     data = client.get("/api/holds").json()
     assert [h["id"] for h in data["items"]] == [hold_id]
     response = client.post(f"/api/holds/{hold_id}/resolve",
@@ -456,7 +456,7 @@ def test_holds_resolve_roundtrip(tmp_db):
 
 
 def test_holds_resolve_rejects_bad_status(tmp_db):
-    hold_id = autonomy.to_hold("antihero", "x", path=tmp_db)
+    hold_id = autonomy.to_hold("antihero", "x", path=tmp_db, account_id=None)
     assert client.post(f"/api/holds/{hold_id}/resolve",
                        json={"status": "meh"}).status_code == 400
 
@@ -823,7 +823,7 @@ def test_holds_resolve_writes_the_prompt_verdict(tmp_db):
         {"prompt": "p", "score": 9, "pass": True, "reason": "", "dims": {}}],
         path=tmp_db)
     hold_id = autonomy.to_hold("zeropage", "shadow", payload={"run_id": "runX"},
-                               path=tmp_db)
+                               path=tmp_db, account_id=None)
     client.post(f"/api/holds/{hold_id}/resolve", json={"status": "rejected"})
     gate = autonomy.prompt_gate_agreement(path=tmp_db)
     assert gate["graded"] == 1

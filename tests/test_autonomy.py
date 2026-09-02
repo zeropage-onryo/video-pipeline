@@ -65,9 +65,9 @@ def test_hold_round_trip_with_payload(tmp_db):
     hold_id = autonomy.to_hold(
         "zeropage", "shadow — grading only", concept_id=7,
         caption="a caption", payload={"prompts": [{"tool": "KLING"}]},
-        path=tmp_db,
+        path=tmp_db, account_id=None
     )
-    [row] = autonomy.list_hold(path=tmp_db)
+    [row] = autonomy.list_hold(path=tmp_db, account_id=None)
     assert row["id"] == hold_id
     assert row["channel"] == "zeropage"
     assert row["concept_id"] == 7
@@ -75,23 +75,23 @@ def test_hold_round_trip_with_payload(tmp_db):
 
 
 def test_resolve_hold_grades_a_run(tmp_db):
-    hold_id = autonomy.to_hold("zeropage", "shadow", path=tmp_db)
-    autonomy.resolve_hold(hold_id, "approved", path=tmp_db)
-    assert autonomy.list_hold(status="held", path=tmp_db) == []
-    [row] = autonomy.list_hold(status="approved", path=tmp_db)
+    hold_id = autonomy.to_hold("zeropage", "shadow", path=tmp_db, account_id=None)
+    autonomy.resolve_hold(hold_id, "approved", path=tmp_db, account_id=None)
+    assert autonomy.list_hold(status="held", path=tmp_db, account_id=None) == []
+    [row] = autonomy.list_hold(status="approved", path=tmp_db, account_id=None)
     assert row["id"] == hold_id
 
 
 def test_resolve_hold_rejects_unknown_status(tmp_db):
-    hold_id = autonomy.to_hold("zeropage", "shadow", path=tmp_db)
+    hold_id = autonomy.to_hold("zeropage", "shadow", path=tmp_db, account_id=None)
     with pytest.raises(ValueError):
-        autonomy.resolve_hold(hold_id, "maybe", path=tmp_db)
+        autonomy.resolve_hold(hold_id, "maybe", path=tmp_db, account_id=None)
 
 
 def test_posts_today_counts_only_posted(tmp_db):
-    autonomy.to_hold("zeropage", "held one", path=tmp_db)
-    autonomy.to_hold("zeropage", "posted one", status="posted", path=tmp_db)
-    autonomy.to_hold("personal", "other channel", status="posted", path=tmp_db)
+    autonomy.to_hold("zeropage", "held one", path=tmp_db, account_id=None)
+    autonomy.to_hold("zeropage", "posted one", status="posted", path=tmp_db, account_id=None)
+    autonomy.to_hold("personal", "other channel", status="posted", path=tmp_db, account_id=None)
     assert autonomy.posts_today("zeropage", path=tmp_db) == 1
 
 
@@ -99,16 +99,16 @@ def test_posts_today_counts_only_posted(tmp_db):
 
 def test_evaluator_agreement_math(tmp_db):
     for status in ("approved", "approved", "approved", "rejected"):
-        hold_id = autonomy.to_hold("zeropage", "shadow", path=tmp_db)
-        autonomy.resolve_hold(hold_id, status, path=tmp_db)
-    result = autonomy.evaluator_agreement("zeropage", path=tmp_db)
+        hold_id = autonomy.to_hold("zeropage", "shadow", path=tmp_db, account_id=None)
+        autonomy.resolve_hold(hold_id, status, path=tmp_db, account_id=None)
+    result = autonomy.evaluator_agreement("zeropage", path=tmp_db, account_id=None)
     assert result["graded"] == 4
     assert result["approved"] == 3
     assert result["agreement"] == 0.75
 
 
 def test_evaluator_agreement_empty_is_none_not_zero(tmp_db):
-    assert autonomy.evaluator_agreement(path=tmp_db)["agreement"] is None
+    assert autonomy.evaluator_agreement(path=tmp_db, account_id=None)["agreement"] is None
 
 
 # ---------- the prompt gate's numbers ----------

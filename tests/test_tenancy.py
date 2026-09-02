@@ -30,7 +30,7 @@ import sqlite3
 
 import pytest
 
-from src import accounts, db, entities, generative, preprod
+from src import accounts, autonomy, db, entities, generative, preprod, workflows
 
 # The pre-tenancy shape, copied from the schema as it stood at a8fe240.
 # Written out rather than imported so that a later edit to preprod.SCHEMA
@@ -111,6 +111,8 @@ def test_every_owned_table_grows_an_account_id(tmp_path):
     preprod.init(path)
     entities.init(path)
     generative.init(path)
+    autonomy.init(path)
+    workflows.init(path)
     with db.connect(path) as conn:
         for table in db.OWNED_TABLES:
             cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
@@ -484,11 +486,24 @@ UNSCOPED_ALLOWED = {
     # test_a_list_returns_only_your_own and the videos scoping tests.
     "SELECT * FROM videos",
     "ROW_NUMBER()",
+    # a channel's rate cap is on what reaches the DESTINATION per day,
+    # whoever filed the run -- channels are the installation's
+    # (db.SHARED_TABLES), so this count is meant to span every account
+    "SELECT COUNT(*) FROM hold_queue WHERE channel = ? AND status = 'posted'",
+    # autonomy.init's one-time rename of the personal channel: a migration
+    "UPDATE hold_queue SET channel='antihero'",
+    # workflows.seed_default's idempotence checks: an installation-level
+    # seed asking whether the starter canvas exists at all
+    "SELECT id FROM workflows WHERE name = ?",
+    "SELECT id FROM workflows LIMIT 1",
 }
 
+# Built from the list, not written out beside it: adding a table to
+# db.OWNED_TABLES is what puts it under this test. hold_queue and
+# workflows were owned in every sense that mattered and on the list in
+# none, and this regex used to be the only place the list was repeated.
 OWNED_RE = re.compile(
-    r"\b(?:FROM|JOIN|UPDATE|INTO)\s+(shoot_concepts|locations|characters|props|"
-    r"generations|videos|scene_briefs|shots)\b",
+    r"\b(?:FROM|JOIN|UPDATE|INTO)\s+(" + "|".join(db.OWNED_TABLES) + r")\b",
     re.I,
 )
 
@@ -795,3 +810,409 @@ def test_an_invite_needs_a_plausible_email_and_a_slug(two_accounts):
             accounts.invite(bad_email, "alex", path=path)
     with pytest.raises(ValueError):
         accounts.invite("alex@example.com", "  ", path=path)
+
+
+# --------------------------------------------------------------------------
+# the dry run's leaks (docs/PILOT_DRY_RUN.md, 2026-09-02): the tables
+# tenancy never listed, the routes that never declared an owner, and the
+# job registry that had none
+# --------------------------------------------------------------------------
+
+# /api routes that legitimately take no account. Each one has to be about
+# the installation, not about anybody's rows, and cheap enough that a
+# signed-in stranger reading it costs nothing. Everything else declares
+# `Depends(auth.current_account_id)` -- the parameter the handler cannot
+# use without declaring -- or this test fails.
+ROUTES_WITHOUT_AN_ACCOUNT = {
+    # what the shell may render: key presence and store reachability,
+    # derived live; nothing owned is read and the answer is the same
+    # for every caller. The shell asks before any account resolves.
+    ("GET", "/api/capabilities"),
+    # prompts/presets.json and prompts/enhance_system.txt, straight off
+    # disk -- repo content, the same bytes for everyone
+    ("GET", "/api/presets"),
+}
+
+
+def _api_routes():
+    from fastapi.routing import APIRoute
+
+    from app import api as api_mod
+    return [r for r in api_mod.router.routes if isinstance(r, APIRoute)]
+
+
+def _declares_account(endpoint) -> bool:
+    import inspect
+
+    from fastapi import params
+
+    from app import auth
+    return any(
+        isinstance(p.default, params.Depends)
+        and p.default.dependency is auth.current_account_id
+        for p in inspect.signature(endpoint).parameters.values()
+    )
+
+
+def test_every_api_route_declares_whose_rows_it_wants():
+    """The test that would have caught all three tables at once.
+
+    The static SQL test audits db.OWNED_TABLES, so a table missing from
+    the list is invisible to it; this one audits the routes instead. A
+    signed-in user with zero memberships -- the state a Google sign-up
+    lands in -- is stopped by current_account_id and by nothing else,
+    so a route that does not declare it is a route that serves them
+    whatever it serves. The dry run walked /api/holds, /api/workflows
+    and /api/jobs exactly that way.
+    """
+    offenders, stale = [], []
+    seen = set()
+    for route in _api_routes():
+        for method in sorted(route.methods or ()):
+            key = (method, route.path)
+            seen.add(key)
+            if key in ROUTES_WITHOUT_AN_ACCOUNT:
+                continue
+            if not _declares_account(route.endpoint):
+                offenders.append(f"{method:6} {route.path}  ({route.endpoint.__name__})")
+    stale = sorted(k for k in ROUTES_WITHOUT_AN_ACCOUNT if k not in seen)
+    assert not offenders, (
+        "these /api routes take no account -- a signed-in stranger reaches them:\n  "
+        + "\n  ".join(offenders))
+    assert not stale, f"exempt list names routes that no longer exist: {stale}"
+
+
+def _init_everything(path):
+    """Every init the app lifespan runs, plus the CLI-only ones, so the
+    schema under test is the whole schema."""
+    from src import (
+        evalstore,
+        framebank,
+        imagesearch,
+        inspiration,
+        instagram,
+        scheduling,
+        scout,
+        settings,
+        winners,
+    )
+    db.init_db(path)
+    preprod.init(path)
+    entities.init(path)
+    autonomy.init(path)
+    winners.init(path)
+    inspiration.init(path)
+    evalstore.init(path)
+    workflows.init(path)
+    generative.init(path)
+    accounts.init(path)
+    settings.init(path)
+    scheduling.init(path)
+    scout.init(path)
+    instagram.init(path)
+    imagesearch.init(path)
+    framebank.init(path)
+
+
+AUTH_SCHEMA = {"users", "auth_identities", "accounts", "account_members"}
+
+
+def test_every_table_is_owned_or_declared_shared(tmp_path):
+    """BACKLOG #11's first bullet, as a test: the learning tables are
+    global BY DECISION, and writing the decision down is what stops a
+    future session reading twenty unscoped tables next to a tenancy
+    suite and "finishing the migration". A table on neither list is a
+    table nobody decided about."""
+    path = tmp_path / "whole.db"
+    _init_everything(path)
+    with db.connect(path) as conn:
+        tables = {r["name"] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' "
+            "AND name NOT LIKE 'sqlite_%'")}
+        undecided = sorted(tables - set(db.OWNED_TABLES) - set(db.SHARED_TABLES))
+        assert not undecided, (
+            "tables that are neither owned nor declared shared (with a reason) "
+            f"in db.SHARED_TABLES: {undecided}")
+        both = sorted(set(db.OWNED_TABLES) & set(db.SHARED_TABLES))
+        assert not both, f"a table cannot be both owned and shared: {both}"
+        gone = sorted(set(db.SHARED_TABLES) - tables)
+        assert not gone, f"SHARED_TABLES names tables that do not exist: {gone}"
+        for table in db.OWNED_TABLES:
+            cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+            assert "account_id" in cols, f"{table} is listed as owned but has no owner column"
+        for table, reason in db.SHARED_TABLES.items():
+            assert reason.strip(), f"{table} is shared with no reason written down"
+            if table in AUTH_SCHEMA:
+                continue     # account_members.account_id is the grant, not an owner
+            cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+            assert "account_id" not in cols, (
+                f"{table} has an account_id column but is declared shared -- decide")
+
+
+PRE_TENANCY_HOLDS_AND_CANVASES = """
+CREATE TABLE hold_queue (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    channel    TEXT NOT NULL,
+    status     TEXT NOT NULL DEFAULT 'held',
+    reason     TEXT,
+    concept_id INTEGER,
+    caption    TEXT,
+    payload    TEXT
+);
+CREATE TABLE workflows (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    brand      TEXT,
+    name       TEXT NOT NULL,
+    graph_json TEXT NOT NULL
+);
+"""
+
+
+def test_existing_holds_and_canvases_are_claimed_by_the_bootstrap_account(tmp_path):
+    """The migration the dry run asked for: the additive path the other
+    eight tables took, every existing row to the bootstrap account.
+    Seeding after init (the fresh-database order) claims them too."""
+    path = tmp_path / "legacy-holds.db"
+    conn = sqlite3.connect(path)
+    conn.executescript(PRE_TENANCY_HOLDS_AND_CANVASES)
+    conn.execute("INSERT INTO hold_queue (created_at, channel) VALUES ('t', 'zeropage')")
+    conn.execute("INSERT INTO hold_queue (created_at, channel, status) "
+                 "VALUES ('t', 'antihero', 'posted')")
+    conn.execute("INSERT INTO workflows (created_at, updated_at, name, graph_json) "
+                 "VALUES ('t', 't', 'Midnight Evasion', '{}')")
+    conn.commit()
+    conn.close()
+
+    autonomy.init(path)
+    workflows.init(path)
+    assert _one(path, "SELECT count(*) FROM hold_queue WHERE account_id IS NULL") == 2
+    assert _one(path, "SELECT count(*) FROM workflows WHERE account_id IS NULL") == 1
+
+    accounts.seed("mike@example.com", path=path)
+    owner = _one(path, "SELECT MIN(id) FROM accounts")
+    assert _one(path, "SELECT count(*) FROM hold_queue WHERE account_id = ?", (owner,)) == 2
+    assert _one(path, "SELECT count(*) FROM workflows WHERE account_id = ?", (owner,)) == 1
+    assert _one(path, "SELECT name FROM workflows") == "Midnight Evasion"
+    autonomy.init(path)          # idempotent, and nothing re-claimed or lost
+    workflows.init(path)
+    assert _one(path, "SELECT count(*) FROM hold_queue") == 2
+
+
+@pytest.fixture
+def two_tenants(two_accounts, monkeypatch):
+    """two_accounts plus a hold, a canvas and a running job each, the
+    app pointed at that database, and a way to make a request as either
+    account or as a signed-in user with no membership at all."""
+    from fastapi.testclient import TestClient
+
+    import app.main as app_main
+    from app import auth, jobs
+
+    path, a, b = two_accounts
+    autonomy.init(path)
+    workflows.init(path)
+    monkeypatch.setattr(db, "DB_PATH", path)
+    jobs.clear_all_for_tests()
+
+    holds = {owner: autonomy.to_hold("zeropage", f"{tag} run", path=path, account_id=owner)
+             for owner, tag in ((a, "A"), (b, "B"))}
+    canvases = {owner: workflows.create_workflow(f"{tag} canvas", {"nodes": [{"id": 1}]},
+                                                 path=path, account_id=owner)
+                for owner, tag in ((a, "A"), (b, "B"))}
+    running = {owner: jobs.create("render", f"{tag}'s private render", account_id=owner)
+               for owner, tag in ((a, "A"), (b, "B"))}
+
+    client = TestClient(app_main.app)
+
+    def act_as(account_id):
+        # a session for the router-level gate; the tenant is the override
+        monkeypatch.setattr(auth, "current_user",
+                            lambda request: {"id": 1, "email": "member@example.com"})
+        app_main.app.dependency_overrides[auth.current_account_id] = lambda: account_id
+        return client
+
+    def nobody():
+        """Signed in, zero memberships: the real dependency runs and
+        must refuse, because nothing else will."""
+        app_main.app.dependency_overrides.pop(auth.current_account_id, None)
+        uid = accounts.create_user("stranger@example.com", path=path)
+        monkeypatch.setattr(auth, "current_user", lambda request: {"id": uid})
+        return client
+
+    yield {"path": path, "a": a, "b": b, "holds": holds, "canvases": canvases,
+           "jobs": running, "as": act_as, "nobody": nobody}
+    jobs.clear_all_for_tests()
+
+
+def test_a_stranger_cannot_read_or_grade_your_holds(two_tenants):
+    """Proven as the pilot in the dry run: hold 38 went held -> rejected."""
+    t = two_tenants
+    client = t["as"](t["b"])
+    listed = client.get("/api/holds").json()["items"]
+    assert [h["id"] for h in listed] == [t["holds"][t["b"]]]
+
+    theirs = t["holds"][t["a"]]
+    res = client.post(f"/api/holds/{theirs}/resolve", json={"status": "rejected"})
+    assert res.status_code == 404
+    assert autonomy.get_hold(theirs, path=t["path"], account_id=t["a"])["status"] == "held"
+    # your own still works, and the grade lands on YOUR agreement number
+    mine = t["holds"][t["b"]]
+    assert client.post(f"/api/holds/{mine}/resolve",
+                       json={"status": "approved"}).status_code == 200
+    assert client.get("/api/holds").json()["agreement"]["graded"] == 1
+    assert t["as"](t["a"]).get("/api/holds").json()["agreement"]["graded"] == 0
+
+
+def test_post_now_takes_an_owner_and_never_reaches_the_gate_for_a_stranger(
+        two_tenants, monkeypatch):
+    """`def holds_post(hold_id)` -- no account of any kind -- was the
+    finding that blocks the invite. Someone else's hold is a 404 and
+    autopilot.execute is never called."""
+    from app import api as api_mod
+    t = two_tenants
+
+    def never(*args, **kwargs):
+        raise AssertionError("autopilot.execute reached for someone else's hold")
+    monkeypatch.setattr(api_mod.autopilot, "execute", never)
+
+    res = t["as"](t["b"]).post(f"/api/holds/{t['holds'][t['a']]}/post")
+    assert res.status_code == 404
+
+
+def test_posting_needs_the_per_run_approval_even_for_the_owner(two_tenants, monkeypatch):
+    """The three standing switches are about the installation; the
+    per-run yes is ZEROPAGE_POST_OK, in the render tools' SPEND_OK
+    shape. Without it a live plan that would post reports so and
+    publishes nothing, and no executor is ever entered."""
+    from src import autopilot
+    monkeypatch.setenv(autopilot.ENABLE_ENV, "1")
+    monkeypatch.delenv(autopilot.POST_ENV, raising=False)
+    monkeypatch.setattr(autopilot, "KILL_SWITCH_PATH", two_tenants["path"].parent / "off")
+    fired = []
+    monkeypatch.setattr(autopilot, "EXECUTORS",
+                        {"post": lambda a: fired.append(a), "generate": lambda a: fired.append(a)})
+    plan = {"actions": [{"kind": "generate", "tool": "veo", "prompt": "p"},
+                        {"kind": "post", "platform": "instagram", "caption": "c"}]}
+    result = autopilot.execute(plan, approve=True, dry_run=False)
+    assert result["mode"] == "post-unapproved"
+    assert result["executed"] == 0 and fired == []
+    # and the executor itself is a wall, not just the mode
+    with pytest.raises(RuntimeError, match=autopilot.POST_ENV):
+        autopilot._post_dispatch({"kind": "post", "platform": "instagram"})
+    monkeypatch.setenv(autopilot.POST_ENV, "1")
+    assert autopilot.execute(plan, approve=True, dry_run=False)["mode"] == "live"
+    assert len(fired) == 2
+
+
+def test_a_stranger_cannot_see_or_destroy_your_canvases(two_tenants):
+    """Workflow 3, "Midnight Evasion", is not in the dry run's copy any
+    more. A shot's saved graph carries its outputs, so that deleted
+    the record of paid renders."""
+    t = two_tenants
+    client = t["as"](t["b"])
+    theirs, mine = t["canvases"][t["a"]], t["canvases"][t["b"]]
+    assert [w["id"] for w in client.get("/api/workflows").json()["items"]] == [mine]
+    assert client.get(f"/api/workflows/{theirs}").status_code == 404
+    assert client.put(f"/api/workflows/{theirs}", json={"name": "overwritten"}).status_code == 404
+    assert client.delete(f"/api/workflows/{theirs}").status_code == 404
+    assert client.post(f"/api/workflows/{theirs}/run").status_code == 404
+    survivor = workflows.get_workflow(theirs, path=t["path"], account_id=t["a"])
+    assert survivor is not None and survivor["name"] == "A canvas"
+    # brand is a label inside the tenant, never a way across it
+    assert [w["id"] for w in
+            client.get("/api/workflows?brand=zeropage").json()["items"]] == [mine]
+
+
+def test_a_stranger_cannot_reset_the_canvases_of_your_concept(two_tenants):
+    """DELETE /api/concepts/{id}/graph took no account at all."""
+    t = two_tenants
+    with db.connect(t["path"]) as conn:
+        theirs = conn.execute("SELECT id FROM shoot_concepts WHERE account_id = ?",
+                              (t["a"],)).fetchone()["id"]
+    workflows.save_shot_graph(theirs, 1, {"nodes": [{"id": 1}]}, path=t["path"],
+                              account_id=t["a"])
+    assert t["as"](t["b"]).delete(f"/api/concepts/{theirs}/graph").status_code == 404
+    assert workflows.get_shot_graph(theirs, 1, path=t["path"], account_id=t["a"]) is not None
+    assert t["as"](t["a"]).delete(f"/api/concepts/{theirs}/graph").json()["removed"] == 1
+
+
+def test_jobs_are_attributed_and_private(two_tenants):
+    """The pilot saw a job labelled "Mike's private render" and got 200
+    from its cancel. In-memory is fine; unattributed is not."""
+    from app import jobs
+    t = two_tenants
+    client = t["as"](t["b"])
+    theirs, mine = t["jobs"][t["a"]]["id"], t["jobs"][t["b"]]["id"]
+    assert [j["id"] for j in client.get("/api/jobs").json()["items"]] == [mine]
+    assert client.get(f"/api/jobs/{theirs}").status_code == 404
+    assert client.post(f"/api/jobs/{theirs}/cancel").status_code == 404
+    assert client.delete(f"/api/jobs/{theirs}").status_code == 404
+    assert jobs.get(theirs, account_id=t["a"])["status"] == "queued"   # untouched
+    # the stream's filter is the same predicate the routes use
+    assert jobs.owned_by(jobs.get(theirs, account_id=t["a"]), t["b"]) is False
+    assert jobs.owned_by(jobs.get(theirs, account_id=t["a"]), t["a"]) is True
+    assert [j["id"] for j in jobs.list_jobs(account_id=t["b"])] == [mine]
+
+
+def test_signed_in_with_no_membership_is_refused_everywhere(two_tenants):
+    """The state a Google sign-up lands in. The dry run's table: /api/assets
+    403 (correct) beside /api/holds, /api/workflows, /api/jobs 200."""
+    t = two_tenants
+    client = t["nobody"]()
+    for path in ("/api/holds", "/api/workflows", "/api/jobs", "/api/evals/golden",
+                 "/api/evals/runs", "/api/director/landing", "/api/analytics/accounts",
+                 f"/api/workflows/{t['canvases'][t['a']]}",
+                 f"/api/jobs/{t['jobs'][t['a']]['id']}"):
+        assert client.get(path).status_code == 403, path
+    theirs = t["holds"][t["a"]]
+    assert client.post(f"/api/holds/{theirs}/resolve", json={"status": "rejected"}).status_code == 403
+    assert client.post(f"/api/holds/{theirs}/post").status_code == 403
+    assert client.delete(f"/api/workflows/{t['canvases'][t['a']]}").status_code == 403
+    assert client.post(f"/api/jobs/{t['jobs'][t['a']]['id']}/cancel").status_code == 403
+    assert autonomy.get_hold(theirs, path=t["path"], account_id=t["a"])["status"] == "held"
+
+
+# --------------------------------------------------------------------------
+# the two numbers
+# --------------------------------------------------------------------------
+
+def test_veo_has_the_same_spend_gate_as_every_other_paid_tool(tmp_path, monkeypatch):
+    """estimate_cost(6) is $19.20 -- the most expensive tool in the repo
+    was the only one with no per-run approval."""
+    from src import runway, veo
+    assert veo.SPEND_ENV == "VEO_SPEND_OK"
+    assert veo.spend_approved.__doc__ and runway.spend_approved.__doc__
+    monkeypatch.delenv(veo.SPEND_ENV, raising=False)
+
+    class Untouchable:
+        def __getattr__(self, name):
+            raise AssertionError("the SDK was reached with no spend approval")
+
+    with pytest.raises(RuntimeError, match="VEO_SPEND_OK"):
+        veo.generate_video("x", tmp_path / "c.mp4", client=Untouchable())
+    result = veo.generate_candidates("x", tmp_path / "out", n=6,
+                                     db_path=tmp_path / "v.db", client=Untouchable())
+    assert result["ok"] is False
+    assert "VEO_SPEND_OK" in result["error"] and "$19.2" in result["error"]
+
+
+def test_the_global_caps_are_set_deliberately_in_the_example_env():
+    """Every global defaults to its per-account cap, which is right for
+    one operator and wrong for two: the first person to render each
+    day ends the day for everyone. .env.example carries the decision
+    -- (per-account cap x people) -- so a deployment copies a ceiling
+    that was chosen, not the one-operator default."""
+    from src import higgsfield, midjourney, nano_banana, runway, veo
+    text = (pathlib.Path(__file__).resolve().parent.parent / ".env.example").read_text()
+    values = dict(re.findall(r"^([A-Z_]+_GLOBAL_DAILY_CAP)=(\d+)", text, re.M))
+    per_account = {"RUNWAY": runway.DAILY_CAP, "VEO": veo.DAILY_CAP,
+                   "HIGGSFIELD": higgsfield.DAILY_CAP, "MIDJOURNEY": midjourney.DAILY_CAP,
+                   "NANO": nano_banana.DAILY_CAP}
+    for prefix, cap in per_account.items():
+        key = f"{prefix}_GLOBAL_DAILY_CAP"
+        assert key in values, f"{key} is not set in .env.example"
+        assert int(values[key]) > cap, f"{key} is not above the per-account cap of {cap}"
+    assert "people" in text and "x 3" in text     # the arithmetic is written down
