@@ -144,6 +144,36 @@ AUTO_IDEATION_DOMAINS = ("marketing",)
 # reference_block's docstring.
 ASSET_IDEATION_DOMAINS = ("personal_brand", "cinematography", "proven_results", "winning_prompts")
 
+# The brand's own PERFORMANCE HISTORY -- what actually travelled, and the
+# prompts that produced it. Automatic since 2026-09-02, and the reason is
+# that opt-in made it dead code on the only path that matters: an
+# unattended 03:30 run picks nothing, so `picked_references` is empty, so
+# ASSET_IDEATION_DOMAINS contributed NOTHING to any nightly concept ever.
+# Every night's ideas were written against generic platform craft advice
+# while the analytics -> promote_winners -> RAG loop faithfully filled a
+# shelf nobody read (Mike, 2026-09-02).
+#
+# These two are split out of the asset set rather than promoting the whole
+# of it, because they are a different KIND of thing. personal_brand and
+# cinematography are style -- voice and look -- and a person should choose
+# which voice a run wears. proven_results and winning_prompts are
+# EVIDENCE: what this channel published and how it did. Evidence has no
+# taste to impose, so grounding on it every run is closer to reading the
+# scoreboard than to being told what to write.
+#
+# Retrieved by SIMILARITY (crag, off the spark), not verbatim by name --
+# the opposite of the picked path, and necessarily so: with nothing
+# picked there is no selection to honour, so relevance has to be earned.
+#
+# NOT project-scoped, and that is a known state rather than an oversight.
+# `rag_documents.project` exists and `rag.query` filters on it, but
+# neither promote_winners nor winners writes it, so a project= filter here
+# would match zero rows and quietly ground on nothing -- the exact failure
+# this constant exists to end. Labelling these shelves is backlog #11
+# (the shared brain), and this layer should start passing project= the
+# moment that lands.
+PERFORMANCE_DOMAINS = ("proven_results", "winning_prompts")
+
 # What you (or /ui) directly taught the pipeline about its OWN output --
 # approve/deny + edited-prompt verdicts (winners.py's winning_prompts /
 # avoid_prompts, written from both the dev page's per-concept and per-shot
@@ -674,13 +704,19 @@ def cast_detail(asset: dict) -> str:
 
 
 # Brands that get a CAST block at all. Zero Page is absent on purpose
-# (2026-09-01): its own brief says "FACELESS -- no recurring person; any
-# human is anonymous (hand, back, silhouette), never a repeating
-# character", while the shared {cast} socket says "reference the uploaded
-# photos as the EXACT face ... name them". Two instructions in direct
-# contradiction, and the cast block won: every Zero Page concept on the
-# board named Michael, Cyclops or the Ducati, in the brand whose entire
-# identity is that nobody recurs.
+# (2026-09-01): its own brief says NO RECURRING STAR -- people may appear
+# and their faces may be seen, but nobody comes back -- while the shared
+# {cast} socket says "reference the uploaded photos as the EXACT face ...
+# name them". Two instructions in direct contradiction, and the cast
+# block won: every Zero Page concept on the board named Michael, Cyclops
+# or the Ducati, in the brand whose entire identity is that nobody
+# recurs.
+#
+# This is the right cut under the corrected rule too (Mike, 2026-09-02).
+# Zero Page was never a no-faces channel -- a stranger in close-up is a
+# perfectly good Zero Page frame. What it must not be is tied to his
+# personal account, and the cast block is exactly the thing that ties it
+# there: Michael, by name, with reference photos of his face.
 #
 # Scoped by BRAND, not by a column on characters: an asset is not owned
 # by a brand -- the same jacket could appear in either -- what differs is
@@ -710,6 +746,16 @@ def still_prompt(shot_prompt: str, gemini_client=None, model: str = MODEL) -> st
     the empty string as an error.
     """
     try:
+        if gemini_client is None:
+            # Build one rather than fail silently. Without this the
+            # function returns "" for every caller that does not happen
+            # to hold a client -- which is keyframe_scene, the only
+            # caller that matters, so the whole feature was a no-op
+            # (caught by running it, 2026-09-02).
+            key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+            if not key:
+                return ""
+            gemini_client = genai.Client(api_key=key)
         raw = generate_with_retry(gemini_client, model,
                                   STILL_RUBRIC + "\n\nVIDEO SHOT:\n" + shot_prompt)
         line = next((ln.strip() for ln in (raw or "").splitlines() if ln.strip()), "")
@@ -720,8 +766,78 @@ def still_prompt(shot_prompt: str, gemini_client=None, model: str = MODEL) -> st
         return ""
 
 
+# How many stills one shot is compiled into. Two by default: a move has
+# a start and an end, and the pair is what makes a still a STRIP rather
+# than a picture. Raising it costs one nano call per beat against
+# NANO_DAILY_CAP, which is why it is a constant and not a guess.
+BEATS_PER_SHOT = 2
+
+BEAT_RUBRIC = """A shot prompt describes a MOVE -- a tilt, a push-in, a pan --
+that travels through more than one moment. Your job is to name those moments,
+so each can be rendered as its OWN still image.
+
+Return a JSON array of at most {count} short strings, in the order the shot
+plays them. Each string names ONE moment as a still photograph: what is in the
+frame at that instant, and nothing else.
+
+RULES:
+- Each moment must be renderable ALONE. If two of your moments would only make
+  sense side by side, they are one moment, not two.
+- NO camera-move verbs inside a moment ("tilts up", "pushes in", "then").
+  A moment is where the camera ARRIVED, not how it got there. The move stays in
+  the shot prompt; you are naming frames.
+- If the shot really holds only one moment, return an array of ONE. Do not
+  invent a second beat to fill the count -- a padded beat renders a frame
+  nobody asked for and spends a nano call to do it.
+- Name subjects concretely ("the hand holding the phone, screen lit"), never
+  abstractly ("the tension", "the realisation").
+
+Return ONLY the JSON array. No prose, no fences."""
+
+
+def beat_moments(shot_prompt: str, *, count: int = BEATS_PER_SHOT,
+                 gemini_client=None, model: str = MODEL) -> list:
+    """The moments one shot's move passes through, as still briefs.
+
+    The keyframe used to be ONE image per shot, and a prompt reading
+    "tilt up from the hand to his wide-eyed face" came back as a collage
+    -- hallway, phone, and a head floating across the top third (concept
+    167, 2026-09-02). The model was not wrong: it was asked for one
+    picture of two moments and it made one picture of two moments.
+
+    The fix is to keep the move and split the FRAME. Each beat is
+    rendered separately, with the full shot prompt behind it for grade,
+    lens and texture, and only the beat line saying which instant this
+    image is.
+
+    Returns [] on any failure or missing key -- and [] means "one still,
+    the way it always was". Nothing downstream may read the empty list
+    as an error.
+    """
+    shot_prompt = (shot_prompt or "").strip()
+    if not shot_prompt or count < 2:
+        return []
+    try:
+        if gemini_client is None:
+            key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+            if not key:
+                return []
+            gemini_client = genai.Client(api_key=key)
+        raw = generate_with_retry(
+            gemini_client, model,
+            BEAT_RUBRIC.format(count=count) + "\n\nVIDEO SHOT:\n" + shot_prompt)
+        beats = json.loads(strip_fences(raw or ""))
+        if not isinstance(beats, list):
+            return []
+        out = [str(b).strip() for b in beats if str(b).strip()]
+        return out[:count] if len(out) > 1 else []
+    except Exception:
+        return []
+
+
 def cast_for(brand: str, characters: list, props: list, *, detail: bool = False) -> str:
-    """The cast block a brand is allowed to see. "" for a faceless brand,
+    """The cast block a brand is allowed to see. "" for a brand with no
+    recurring star,
     which format_cast's callers already handle -- an empty cast falls
     through to NO_CAST_NOTE, telling the model to describe appearance
     plainly instead of naming anyone."""
