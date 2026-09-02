@@ -16,29 +16,6 @@ sets stacked on one card.
 - Consider applying the lighter treatment across the whole `.sk` skin so it
   stays consistent.
 
-## 2. Cost-efficiency tracker  (to build — Mike's ask)
-"Build a tracker to make cost efficiency issues visible."
-
-Goal: surface where the pipeline spends money and where it wastes it, so
-inefficiency is visible instead of hidden.
-
-Cost sources to instrument:
-- **Gemini calls per run** — concept gen, Midjourney still gen, prompt-gate
-  judge, CRAG grading, caption. Token cost per stage → which stage is the
-  token hog.
-- **Render credits** — Runway/Veo per clip (when the adapter's wired).
-  `veo.estimate_cost` already exists; genlog already logs attempts.
-- **Attempts-to-keeper** — from `generative.py` (attempts_to_keeper): $ per
-  *usable* clip is the real efficiency number. A prompt that lands in 2 tries
-  beats one that lands in 6.
-- **Held vs posted ratio** — runs generated that never ship = wasted spend.
-
-Surface as: a `/costs` page (or a Scoreboard panel) — per-run cost, cost per
-kept clip, most expensive stage, and flags for prompts/stages that burn
-above a threshold. Tie into the prompt-gate agreement so "credits that would
-have been wasted" is a headline number (autonomy.prompt_gate_agreement already
-tracks passed-but-rejected = would-have-burned).
-
 ## 3. Remove the location limit  (largely shipped — Mike's ask)
 Right now generation is grounded ONLY in described locations, and there's
 just one on file (the studio-bedroom), so every prompt is stuck in that
@@ -306,3 +283,67 @@ orchestrator — a system whose tenth run beats its first because it learned the
 user. The binding constraint is distribution, not architecture: none of section 3
 of the task doc gets a single user. If the next session has to choose, the demo
 in front of ten people beats BYOK, and BYOK gets built the week someone asks.
+
+## 2. Cost-efficiency tracker  (NEXT — scoped 2026-09-01, not started)
+"Build a tracker to make cost efficiency issues visible."
+
+Full write-up: `docs/tasks/task-cost-tracker.md` — a 4–5 hour block. The two
+findings that shape it: `tool_scoreboard` and `attempts_to_keeper` already
+compute cost-per-keeper and are surfaced nowhere, and `usage_metadata` appears
+zero times in the repo, so no LLM call has ever been costed. 42 of the 46 Gemini
+call sites funnel through `gemini_utils.generate_with_retry`, which is where the
+meter goes. Also carries the two acknowledged bugs from #10 (the five
+`*_GLOBAL_DAILY_CAP` defaults, and veo's missing `SPEND_OK`), because this is
+what produces the numbers needed to choose them.
+
+Goal: surface where the pipeline spends money and where it wastes it, so
+inefficiency is visible instead of hidden.
+
+Cost sources to instrument:
+- **Gemini calls per run** — concept gen, Midjourney still gen, prompt-gate
+  judge, CRAG grading, caption. Token cost per stage → which stage is the
+  token hog.
+- **Render credits** — Runway/Veo per clip (when the adapter's wired).
+  `veo.estimate_cost` already exists; genlog already logs attempts.
+- **Attempts-to-keeper** — from `generative.py` (attempts_to_keeper): $ per
+  *usable* clip is the real efficiency number. A prompt that lands in 2 tries
+  beats one that lands in 6.
+- **Held vs posted ratio** — runs generated that never ship = wasted spend.
+
+Surface as: a `/costs` page (or a Scoreboard panel) — per-run cost, cost per
+kept clip, most expensive stage, and flags for prompts/stages that burn
+above a threshold. Tie into the prompt-gate agreement so "credits that would
+have been wasted" is a headline number (autonomy.prompt_gate_agreement already
+tracks passed-but-rejected = would-have-burned).
+
+## 11. The shared brain — global learning, made deliberate  (to build — Mike's decision, 2026-09-01)
+Full write-up: `docs/tasks/task-shared-brain.md`. Raised as a tenancy gap — nine
+learning tables with no `account_id` — and answered by Mike as a design choice:
+
+> "the learning loop continues for all users, the entire app learns as it goes
+> and gets better, that is the loop. I see all the data in dev studio."
+
+So the learning tables stay global. This item is the three things that decision
+needs, none of which is scoping them:
+
+- **Write it down.** `taste_judge` already scores against *your* grades and
+  *everyone's* winners — the right hybrid, declared nowhere, with its third input
+  (`post_seo.derive_signals` called without `account_id`) global by accident
+  rather than intent. A future session reads twenty unscoped tables next to a
+  42-test tenancy suite and "finishes the migration". A `SHARED` tuple beside
+  `db.OWNED_TABLES` prevents that.
+- **`corrections` is a live bug.** No brand, no account, `pending_corrections`
+  takes every unconsumed note and consumes it. A pilot user denying a concept on
+  their own board writes a standing instruction that steers Mike's next nightly
+  run, once, and is gone before their own night sees it. A lesson is shared; an
+  instruction is addressed. The lesson half already works — the denial reaches
+  everyone through the `denials` RAG shelf.
+- **Provenance on the shelves.** `rag_documents` has a `project` column *and* an
+  index, `rag.retrieve` already filters on it, exactly one site writes it
+  (`app/api.py:1923`, as the brand) and **no caller reads it**. Without a label,
+  the shelf gets noisier per user instead of smarter — the network effect
+  backwards. A label is not a fence: everyone still reaches every lesson, own
+  neighbourhood ranked first.
+
+Ahead of #2 if a second person is going on the system soon; behind it if not,
+since #2 is what makes the caps a budget.
