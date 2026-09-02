@@ -51,6 +51,19 @@ def sniff_mime(data) -> str:
 FALLBACK_MODELS = ["gemini-3.1-flash-lite", "gemini-pro-latest"]
 
 
+def is_retriable(error) -> bool:
+    """Transient, so waiting is worth it -- a busy model (UNAVAILABLE) or a
+    spent quota (RESOURCE_EXHAUSTED). Everything else (a bad key, a
+    malformed request, a refusal) is a fact about the call and retrying it
+    only spends the same failure again.
+
+    Lifted out of generate_with_retry 2026-09-02 so the embedding path can
+    hold the same opinion. Two copies of "which errors are worth a second
+    try" is the shape of bug where one of them quietly forgets 429."""
+    text = str(error)
+    return "RESOURCE_EXHAUSTED" in text or "UNAVAILABLE" in text
+
+
 def retry_delay(error, attempt: int) -> float:
     """How long to wait before attempt N+1.
 
@@ -96,8 +109,7 @@ def generate_with_retry(client: genai.Client, model: str, contents,
                     print(f"  (used fallback model {current_model})", file=sys.stderr)
                 return response.text.strip()
             except Exception as e:
-                retriable = "RESOURCE_EXHAUSTED" in str(e) or "UNAVAILABLE" in str(e)
-                if not retriable:
+                if not is_retriable(e):
                     raise
                 if attempt == budget - 1:
                     if last:

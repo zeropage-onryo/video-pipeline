@@ -84,6 +84,105 @@ def test_embed_texts_batches_large_inputs():
     assert len(client.calls[0]["contents"]) == 100
 
 
+# ---------- a spent quota is waited out, not lost (2026-09-02) ----------
+#
+# gemini-embedding is limited PER MINUTE, and the nightly walk fires 16 runs
+# back to back -- so the ceiling gets hit by bunching and clears in under a
+# minute. Two runs in morning_prompts.log lost their grounding to a 429 that
+# would have succeeded seconds later, and an ungrounded concept looks exactly
+# like a grounded one from outside.
+
+QUOTA_429 = ("429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': "
+             "'Quota exceeded for "
+             "aiplatform.googleapis.com/global_embed_content_requests_per_"
+             "minute_per_base_model', 'status': 'RESOURCE_EXHAUSTED'}}")
+
+
+class FlakyEmbedClient(FakeEmbedClient):
+    """Raises `error` on the first `fail_times` calls, then behaves."""
+
+    def __init__(self, fail_times, error=QUOTA_429):
+        super().__init__()
+        self.remaining = fail_times
+        self.attempts = 0
+        outer = self
+        good = self.models
+
+        class _Models:
+            def embed_content(self, **kw):
+                outer.attempts += 1
+                if outer.remaining > 0:
+                    outer.remaining -= 1
+                    raise RuntimeError(error)
+                return good.embed_content(**kw)
+
+        self.models = _Models()
+
+
+def test_a_spent_embedding_quota_is_retried(monkeypatch):
+    monkeypatch.setattr(rag.time, "sleep", lambda s: None)
+    client = FlakyEmbedClient(fail_times=2)
+
+    vectors = rag.embed_texts(["one", "two"], client)
+
+    assert len(vectors) == 2               # the grounding survives
+    assert client.attempts == 3            # two 429s, then the real call
+
+
+def test_the_429s_own_cooldown_is_honoured(monkeypatch):
+    """A 429 states how long to wait. Guessing under it earns another one."""
+    waited = []
+    monkeypatch.setattr(rag.time, "sleep", waited.append)
+    client = FlakyEmbedClient(
+        fail_times=1, error="429 RESOURCE_EXHAUSTED, retry in 31.5s")
+
+    rag.embed_texts(["one"], client)
+
+    assert waited and waited[0] >= 31.5
+
+
+def test_a_real_failure_is_not_retried(monkeypatch):
+    """Retrying a bad key just spends the same failure six times."""
+    monkeypatch.setattr(rag.time, "sleep", lambda s: None)
+    client = FlakyEmbedClient(fail_times=1, error="401 PERMISSION_DENIED")
+
+    with pytest.raises(RuntimeError):
+        rag.embed_texts(["one"], client)
+    assert client.attempts == 1
+
+
+def test_the_budget_is_finite_and_then_it_raises(monkeypatch):
+    """After actually waiting, an ungrounded run is the right outcome --
+    retrieve_references catches this and degrades."""
+    monkeypatch.setattr(rag.time, "sleep", lambda s: None)
+    client = FlakyEmbedClient(fail_times=99)
+
+    with pytest.raises(RuntimeError):
+        rag.embed_texts(["one"], client)
+    assert client.attempts == rag.gemini_utils.MAX_RETRIES
+
+
+def test_a_tripped_batch_does_not_re_embed_the_ones_that_landed(monkeypatch):
+    """A long ingest that trips on batch three resumes at batch three."""
+    monkeypatch.setattr(rag.time, "sleep", lambda s: None)
+    client = FakeEmbedClient()
+    calls = {"n": 0}
+    real = client.models.embed_content
+
+    def flaky(**kw):
+        calls["n"] += 1
+        if calls["n"] == 3:                # first attempt at batch 3
+            raise RuntimeError(QUOTA_429)
+        return real(**kw)
+
+    client.models.embed_content = flaky
+
+    vectors = rag.embed_texts([f"t{i}" for i in range(250)], client)
+
+    assert len(vectors) == 250
+    assert calls["n"] == 4                 # 3 batches + 1 retry, not 3 + 3
+
+
 # ---------- the store (fake connection) ----------
 
 class FakeConn:
