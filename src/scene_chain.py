@@ -35,7 +35,7 @@ from __future__ import annotations
 import sys
 from typing import Callable, Optional
 
-from . import imagery, nano_banana, preprod, shootgen
+from . import db, imagery, nano_banana, preprod, shootgen
 
 # Enhancing and keyframing are per-scene model calls, so a batch of 4 is
 # 4 of each. The cap that actually bites is nano_banana.DAILY_CAP (20/day,
@@ -386,7 +386,7 @@ def visual_target(concept_id: int, shot: dict, *, spark: str = "",
             for url in made:
                 conn.execute(
                     "INSERT INTO scout_bin (created_at, pass_id, brand, url, "
-                    "source_url, title, lane, metric) VALUES (?,?,?,?,?,?,?,?)",
+                    "source_url, title, lane, metric) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
                     (scout._now(), pass_id, "", url, "", (spark or "")[:120],
                      "target", ""),
                 )

@@ -387,3 +387,92 @@ Still open, both choices rather than defects: `corrections` is cross-tenant
 (item 4) and `active_brand` never looks at membership (item 5). Everything
 else left before an invite is deployment, not code.
 
+## 13. Three bins, told apart  (to build — Mike's ask, 2026-09-02)
+
+Mike, after watching a Pinterest crawl feed a keyframe end to end:
+
+> "I want a separate bin that the idea agent crawls from specifically, the
+> asset bank that I can pull from personally, and the generated content that
+> goes in the asset bank."
+
+Three stores with three different owners, three lifetimes and three trust
+levels. Today there is **one**.
+
+### What actually exists now
+
+`data/refs/<sha>.jpg` is a single content-addressed pool, and everything
+writes to it through the same `refbin.save`/`refbin.fetch` door:
+
+| writer | what it puts there | who owns it |
+|---|---|---|
+| `scout.stash_images` | crawl thumbnails, feed lead images | the agent |
+| `mcp_server.bank_reference` | a URL the idea agent chose | the agent |
+| `ops/ingest-saved-images.py` | a folder Mike saved by hand | Mike |
+| `app/api.py:1333` | a composer upload | Mike |
+| `scene_chain.visual_target` | a generated still | the machine |
+
+They come out the far end identical: `/refs/<sha>.jpg`, indistinguishable.
+That sameness was a deliberate and good decision — it is why a scouted image
+resolves through `_resolve_asset_photo`, attaches as an `image_ref` and rides
+into a generation with no new route. It is also why there is no query that
+answers "show me only what I put there", or "only what the agent crawled",
+or "only what we made".
+
+The discriminator half-exists and is unused: `scout_bin.lane` already records
+`pinterest` / `agent` / `target` / the crawl lanes. But a composer upload gets
+no `scout_bin` row at all — it attaches straight to a shot — so the one thing
+Mike most wants to pull from personally is the one thing with no row anywhere.
+
+The asset shelf (`locations/`, `characters/`, `props/` + the `assets` RAG
+domain) is a separate, permanent, *named* store — and nothing automatic reads
+it. Characters and props reach a prompt only through `{cast}`, which
+`cast_for` returns `""` for on Zero Page; locations only through a manual
+`picked_locations`; the RAG shelf only through an opt-in `picked_references`.
+An unattended 03:30 run has never touched any of it.
+
+### The three bins
+
+1. **Crawl bin — the agent's.** What the idea agent found tonight, keyed by
+   pass, capped at `MAX_BIN_IMAGES`, disposable. This is what `scout_bin` is
+   today and it can stay exactly as it is. Attribution (`source_url`) is
+   load-bearing here: these are other people's frames.
+2. **Asset bank — Mike's.** Named, permanent, curated, pulled from
+   deliberately: `warehouse-corridor`, not `<sha>.jpg`. Midjourney
+   environments and characters land here. Described once on ingest so the
+   agent can *search* it and propose picks for a spark, rather than crawling
+   for something already on the shelf. No cap — a library is not a bin.
+3. **Generated content → promoted into the asset bank.** A keyframe or render
+   that turned out well becomes a reusable asset. This is the loop that makes
+   the bank compound instead of Mike re-sourcing the same corridor forever.
+   Promotion is an explicit act, not automatic: the whole value of the bank is
+   that everything in it was chosen.
+
+### What this needs (rough)
+
+- **Provenance on every reference.** An `origin` the pool can be queried by —
+  `crawl` / `mine` / `generated` — written at every `refbin` door including the
+  composer upload, which currently records nothing. Cheapest correct version
+  is a row per stored ref, not a new directory: the flat `/refs/<sha>.jpg`
+  shape is what makes everything downstream work and must not change.
+- **The asset bank as a real store**, per the folder + describe-on-ingest
+  sketch (a `library/environments/<slug>/` convention, vision description on
+  ingest, into the `assets` RAG domain).
+- **An MCP tool that can see it.** The idea agent's whole surface is
+  `bank_spark`, `bank_reference`, `spark_images`, `next_spark`,
+  `list_sparks` + idea CRUD. Nothing lists or searches the shelf, so the agent
+  cannot pick from it even when it is the right answer. `bank_reference` also
+  takes a URL, not a file — a Midjourney PNG on Mike's disk has no URL, which
+  is why `ops/ingest-saved-images.py` had to exist at all.
+- **A promote step** from a rendered keyframe to a named asset.
+- **A pick step in the scout node**, so chosen bank assets ride into
+  `reference_photos` alongside the crawl rather than instead of it.
+
+### Order
+
+Provenance first — it is small, it unblocks every "show me only X" question,
+and without it bins 2 and 3 have nowhere to record what they are. The bank and
+the promote loop after. The MCP tool last, since the agent can't usefully
+choose from a shelf that isn't described yet.
+
+Parked deliberately: Mike wants to keep testing the current loop first
+(2026-09-02).
