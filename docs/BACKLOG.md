@@ -316,6 +316,16 @@ above a threshold. Tie into the prompt-gate agreement so "credits that would
 have been wasted" is a headline number (autonomy.prompt_gate_agreement already
 tracks passed-but-rejected = would-have-burned).
 
+## 12. The tenancy gap the dry run found  (NEXT -- ahead of #2 and #11, 2026-09-02)
+`docs/PILOT_DRY_RUN.md`. `hold_queue` and `workflows` have no `account_id`, and
+`holds_post` takes no account dependency at all -- so any signed-in user, with
+or without a membership, reads Mike's hold queue and Director canvases, can
+reject a hold, delete a canvas, and can fire "post now" against the autopilot
+gate. The concept and asset surface is clean; this is the tables tenancy never
+listed. Fix order is in the report. **This is now the gate on the pilot, ahead
+of the cost tracker.** It also measured #2's two bugs (the global caps, veo's
+missing SPEND_OK) and reproduced #11's `corrections` bug end to end.
+
 ## 11. The shared brain — global learning, made deliberate  (to build — Mike's decision, 2026-09-01)
 Full write-up: `docs/tasks/task-shared-brain.md`. Raised as a tenancy gap — nine
 learning tables with no `account_id` — and answered by Mike as a design choice:

@@ -14,6 +14,14 @@ signup has zero memberships on purpose. `auth.current_account_id` resolves the
 resolves the **brand** for the pill. Those two must not be confused: scope the
 data by the brand and clicking ANTIHERO shows an empty board.
 
+> **Corrected 2026-09-02 by the dry run** (`docs/PILOT_DRY_RUN.md`): the
+> paragraph above is true of the eight tables in `db.OWNED_TABLES` and of every
+> route that takes `auth.current_account_id`. It is NOT true of `hold_queue`,
+> `workflows` or the job registry, which have no owner at all, and a signed-in
+> user with zero memberships reaches all three. Signing in currently grants
+> Mike's publishing queue and his Director canvases. Do not invite anyone until
+> items 1-3 of that report's fix order are done.
+
 **So a pilot user gets their own account.** Adding them to `zeropage` does not
 give them a workspace, it gives them yours. `accounts invite` refuses that by
 default and counts what they would have seen.
@@ -35,7 +43,10 @@ Every `*_GLOBAL_DAILY_CAP` defaults to the same number as its per-account cap:
 That default is correct for one operator and wrong the moment there are two:
 **the first person to render each day exhausts the ceiling for everybody**,
 you included. Raise the globals to roughly (per-account cap × people) before
-inviting anyone. That number is your daily spend limit — the default exists to
+inviting anyone. **Measured 2026-09-02:** six renders under a
+second account produce `daily ceiling: 6/6 ... across all accounts` for Mike.
+And `src/veo.py` defines no `SPEND_ENV` at all -- $3.20/clip behind a cap and
+nothing else. That number is your daily spend limit — the default exists to
 force the decision rather than let the total quietly multiply.
 
 The per-account cap is fairness. The global ceiling is the credit card. Both
