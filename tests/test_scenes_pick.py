@@ -245,7 +245,8 @@ def test_archiving_a_row_that_has_an_owner_works(tmp_db):
     OWNED row and an account to act as, which is the only shape that
     tells them apart."""
     from app import auth
-    from app.main import app as live
+    live = client.app   # the app THIS client is bound to -- app.main.app is a
+    # different object after test_dev_tools reloads the module
     from src import accounts
 
     accounts.init(tmp_db)
@@ -365,10 +366,14 @@ def test_approving_one_take_leaves_its_siblings_in_the_queue(tmp_db, monkeypatch
     monkeypatch.setattr("src.runway.has_key", lambda: True)
     rendered = {}
 
-    def fake_render(concept_id, shot_n, db_path=None, resolve_photo=None):
+    def fake_render(concept_id, shot_n, db_path=None, resolve_photo=None,
+                    account_id=None):
+        # account_id because the route passes it now (2026-09-02). This
+        # test runs in conftest's unowned pool, where it is None; the
+        # owned case is test_the_render_path_carries_the_owner.
         rendered["args"] = (concept_id, shot_n)
         preprod.set_shot_media_url(concept_id, shot_n, "https://x/clip.mp4",
-                                   path=db_path, account_id=None)
+                                   path=db_path, account_id=account_id)
         return {"ok": True}
 
     monkeypatch.setattr("src.runway.generate_for_shot", fake_render)

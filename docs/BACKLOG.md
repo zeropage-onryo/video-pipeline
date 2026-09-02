@@ -292,10 +292,9 @@ findings that shape it: `tool_scoreboard` and `attempts_to_keeper` already
 compute cost-per-keeper and are surfaced nowhere, and `usage_metadata` appears
 zero times in the repo, so no LLM call has ever been costed. 42 of the 46 Gemini
 call sites funnel through `gemini_utils.generate_with_retry`, which is where the
-meter goes. The two acknowledged bugs from #10 (the five `*_GLOBAL_DAILY_CAP`
-defaults, and veo's missing `SPEND_OK`) were closed by #12 on 2026-09-02 --
-the caps are chosen for three people in `.env.example`; the tracker is what
-would let them be chosen from data instead.
+meter goes. Also carries the two acknowledged bugs from #10 (the five
+`*_GLOBAL_DAILY_CAP` defaults, and veo's missing `SPEND_OK`), because this is
+what produces the numbers needed to choose them.
 
 Goal: surface where the pipeline spends money and where it wastes it, so
 inefficiency is visible instead of hidden.
@@ -317,23 +316,14 @@ above a threshold. Tie into the prompt-gate agreement so "credits that would
 have been wasted" is a headline number (autonomy.prompt_gate_agreement already
 tracks passed-but-rejected = would-have-burned).
 
-## 12. The tenancy gap the dry run found  (SHIPPED 2026-09-02, `claude/pilot-dry-run`)
-Fix-order items 1–3 landed the same day: `hold_queue` and `workflows` owned
-and backfilled, `holds_post` and the job registry take an owner, a
-route-signature test and a schema test (`db.SHARED_TABLES`, the decisions
-written down) make it unrepeatable, the five global caps are set in
-`.env.example`, `VEO_SPEND_OK` exists, and posting has its per-run
-`ZEROPAGE_POST_OK`. Items 4 (`corrections`) and 5 (`active_brand`) remain --
-see #11. The original entry, for the record:
-
-`docs/PILOT_DRY_RUN.md`. `hold_queue` and `workflows` have no `account_id`, and
-`holds_post` takes no account dependency at all -- so any signed-in user, with
-or without a membership, reads Mike's hold queue and Director canvases, can
-reject a hold, delete a canvas, and can fire "post now" against the autopilot
-gate. The concept and asset surface is clean; this is the tables tenancy never
-listed. Fix order is in the report. **This is now the gate on the pilot, ahead
-of the cost tracker.** It also measured #2's two bugs (the global caps, veo's
-missing SPEND_OK) and reproduced #11's `corrections` bug end to end.
+**What the pilot dry run settled (2026-09-02, `docs/PILOT_DRY_RUN.md`):** the caps
+work — six pilot renders refused Mike at 0/6 of his own, exactly as predicted —
+but two things must land before any cost number is real: the Queue approve, the
+Director generate and the nightly `generate_render` all call the connector
+without `account_id`, so the per-account count is always against `None` (and
+approve fails with `no concept N` for every owned row); and Veo has no spend
+gate at all. Starting globals proposed there: runway 18, veo 8, higgsfield 18,
+midjourney 30, nano 60.
 
 ## 11. The shared brain — global learning, made deliberate  (to build — Mike's decision, 2026-09-01)
 Full write-up: `docs/tasks/task-shared-brain.md`. Raised as a tenancy gap — nine
@@ -362,10 +352,38 @@ needs, none of which is scoping them:
   (`app/api.py:1923`, as the brand) and **no caller reads it**. Without a label,
   the shelf gets noisier per user instead of smarter — the network effect
   backwards. A label is not a fence: everyone still reaches every lesson, own
-  neighbourhood ranked first. **SHIPPED 2026-09-02 (#12, part two):** `project`
-  is the tenant slug, written at every learning-shelf ingest, preferred (never
-  filtered) at every retrieval site via `prefer_project` + `PROJECT_BOOST`; the
-  live store's 150 learning chunks are labelled; measured before/after on a copy.
+  neighbourhood ranked first.
 
 Ahead of #2 if a second person is going on the system soon; behind it if not,
 since #2 is what makes the caps a budget.
+
+**What the pilot dry run settled (2026-09-02, `docs/PILOT_DRY_RUN.md`):** all
+three confirmed by running. `corrections` reproduced end to end — a pilot's deny
+note steered Mike's nightly `gen_concept` once and was gone before the pilot's
+own night. `project` is NULL on all 233 live chunks and read by no caller. The
+judge: winners global is right, grades are scoped but every caller passes no
+account (so "your grades" is always empty), performance is unscoped by accident.
+One case the write-up did not have: the **asset shelf** is keyed
+`assets/<kind>-<slug>` with no owner, so a same-named character in two accounts
+overwrites on ingest and deletes the other tenant's chunk on delete — and shares
+one photo directory on disk. Ahead of #2, then: a second person is going on.
+
+## 12. The tenancy gap the dry run found  (SHIPPED 2026-09-02 -- see the report)
+`docs/PILOT_DRY_RUN.md` is now the merge of both dry runs plus a table of where
+every finding stands. Shipped: `51a39a8` (account_id on hold_queue and
+workflows, holds_post's dependency, ZEROPAGE_POST_OK, the job registry, the
+route + schema tests, the five caps, VEO_SPEND_OK) and `12a1573`
+(rag_documents.project as the tenant, ranking not fencing, measured).
+
+Then re-running the first walk's probes against the fix found two the fix had
+not closed, both fixed on this branch: the render path called
+`generate_for_shot` without the owner -- so Queue-approve and the Director's
+generate had been dead for every OWNED concept since tenancy landed -- and
+`def work(job, account_id=None)` in `/api/generate/run` shadowed the route's
+dependency, so every concept it saved belonged to nobody until the next
+startup handed it to the bootstrap account.
+
+Still open, both choices rather than defects: `corrections` is cross-tenant
+(item 4) and `active_brand` never looks at membership (item 5). Everything
+else left before an invite is deployment, not code.
+

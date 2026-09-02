@@ -1113,7 +1113,7 @@ def queue_approve(concept_id: int, account_id: int = Depends(auth.current_accoun
         jobs.progress(job, 0.2, "rendering via Runway")
         result = runway.generate_for_shot(
             concept_id, shot_n, db_path=db.DB_PATH,
-            resolve_photo=_resolve_asset_photo)
+            resolve_photo=_resolve_asset_photo, account_id=account_id)
         if not result.get("ok"):
             raise RuntimeError(result.get("error") or "render failed")
         return {"ref_id": concept_id, "detail": "clip attached"}
@@ -1297,7 +1297,7 @@ def shot_generate(concept_id: int, shot_n: int, account_id: int = Depends(auth.c
         jobs.progress(job, 0.2, "rendering via Runway")
         result = runway.generate_for_shot(
             concept_id, shot_n, db_path=db.DB_PATH,
-            resolve_photo=_resolve_asset_photo)
+            resolve_photo=_resolve_asset_photo, account_id=account_id)
         if not result.get("ok"):
             raise RuntimeError(result.get("error") or "render failed")
         return {"ref_id": concept_id,
@@ -1629,7 +1629,12 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
 
     image_refs, ref_urls, video_refs = await _collect_refs(form, want_video=True)
 
-    def work(job, account_id: Optional[int] = None):
+    def work(job):
+        # NOT `def work(job, account_id=None)` (2026-09-02): jobs.start
+        # calls fn(job), so that parameter shadowed the route's
+        # dependency with None and every concept this route saved
+        # belonged to nobody until backfill_owner handed it to the
+        # bootstrap account at the next startup.
         from google import genai
 
         from src import nano_banana, shootgen

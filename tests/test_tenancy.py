@@ -1286,3 +1286,96 @@ def test_ideation_prefers_the_tenants_own_neighbourhood(two_accounts, monkeypatc
     shootgen.reference_block(spark="gearing up ritual", db_path=path, account_id=a)
     assert calls and all(c.get("prefer_project") == "zeropage" for c in calls)
     assert all(c.get("project") is None for c in calls)
+
+
+# --------------------------------------------------------------------------
+# the render path, and the closure that ate the owner
+#
+# Both found by re-running the dry run's probes against the fix (2026-09-02):
+# the three tables were closed and these two were not. Neither is a leak --
+# they are the same mistake pointing inward, where the owner is dropped on the
+# way to the data layer and the caller's own rows stop existing.
+# --------------------------------------------------------------------------
+
+def test_the_render_path_carries_the_owner(two_tenants, monkeypatch):
+    """Queue-approve and the Director's generate resolved the concept WITH
+    the account and then called generate_for_shot WITHOUT it, so
+    preprod.get_concept(account_id=None) found nothing and the render died
+    with "no concept N" -- for the owner, on their own row, before any API
+    call. Measured on a copy of the live database: concept 149, owned by
+    account 1, {'ok': False, 'error': 'no concept 149'}.
+
+    It also meant the per-account cap inside generate_for_shot counted
+    against None instead of the caller.
+    """
+    import time
+
+    from app import jobs
+    from src import preprod, runway
+
+    t = two_tenants
+    seen = {}
+
+    def fake_generate_for_shot(concept_id, shot_n, **kwargs):
+        seen.update(kwargs)
+        return {"ok": True, "media_url": "file:///clip.mp4", "generation_id": 1}
+
+    monkeypatch.setattr(runway, "generate_for_shot", fake_generate_for_shot)
+    monkeypatch.setattr(runway, "has_key", lambda: True)
+
+    owner = t["a"]
+    concept_id = preprod.save_concept(
+        {"title": "a take", "logline": "x",
+         "shots": [{"n": 1, "ai_prompt": "a prompt"}]},
+        "zeropage", path=t["path"], account_id=owner)
+    preprod.set_picked(concept_id, True, path=t["path"], account_id=owner)
+
+    client = t["as"](owner)
+    for url in (f"/api/queue/{concept_id}/approve",
+                f"/api/concepts/{concept_id}/shots/1/generate"):
+        seen.clear()
+        res = client.post(url)
+        assert res.status_code == 200, (url, res.text)
+        job_id = res.json()["job_id"]
+        deadline = time.time() + 5
+        while time.time() < deadline and jobs.get(job_id, account_id=owner)["status"] in ("queued", "running"):
+            time.sleep(0.01)
+        done = jobs.get(job_id, account_id=owner)
+        assert done["status"] == "done", done.get("error")
+        assert seen.get("account_id") == owner, (
+            f"{url} called generate_for_shot with account_id="
+            f"{seen.get('account_id')!r} -- the owner's own render dies")
+
+
+def test_no_job_closure_shadows_the_route_owner():
+    """`jobs.start` calls `fn(job)` with one argument, so an inner
+    `def work(job, account_id=None)` binds None over the route's resolved
+    dependency -- silently, because the name is right there in scope.
+
+    That is how POST /api/generate/run saved every concept with
+    account_id=NULL, which preprod.init's backfill_owner then handed to the
+    bootstrap account at the next startup. Under --reload that is every code
+    edit, which is why it never looked broken: Mike's own orphans came back
+    to him. A pilot's would come back to him too.
+
+    Static because the failure is invisible at runtime -- the write
+    succeeds, it just belongs to nobody.
+    """
+    import ast
+    import pathlib
+
+    offenders = []
+    for path in (pathlib.Path("app/api.py"), pathlib.Path("app/main.py")):
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for inner in ast.walk(node):
+                if inner is node or not isinstance(inner, ast.FunctionDef):
+                    continue
+                names = [a.arg for a in inner.args.args]
+                if "account_id" in names[1:]:
+                    offenders.append(f"{path}:{inner.lineno} {inner.name}({', '.join(names)})")
+    assert not offenders, (
+        "a job function takes account_id as a parameter; jobs.start passes "
+        "only the job, so it is always None:\n  " + "\n  ".join(offenders))
