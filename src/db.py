@@ -79,6 +79,13 @@ CREATE TABLE IF NOT EXISTS ideas (
 CREATE TABLE IF NOT EXISTS videos (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     idea_id    INTEGER REFERENCES ideas(id) ON DELETE SET NULL,
+    -- The concept that produced this post (2026-08-31). Deliberately NOT
+    -- a REFERENCES: shoot_concepts is created by preprod.init, which runs
+    -- AFTER this schema, so a declared foreign key here fails every insert
+    -- with "no such table: main.shoot_concepts". The link is enforced by
+    -- the writer, not the schema -- same trade db.py already makes for
+    -- being the spine that loads first.
+    concept_id INTEGER,
     title      TEXT    NOT NULL,
     platform   TEXT    NOT NULL,
     posted_at  TEXT    NOT NULL,
@@ -140,6 +147,166 @@ def connect(path: Path | str = DB_PATH) -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+# --------------------------------------------------------------------------
+# tenancy -- every owned row carries the account that owns it
+# --------------------------------------------------------------------------
+
+# The tables whose rows belong to one account rather than to the
+# installation. Every SELECT against one of these needs an account_id
+# predicate; tests/test_tenancy.py asserts that none is missing.
+#
+# `accounts` IS the brand table (accounts.seed creates zeropage and
+# antihero), so account_id is the scoping key and the `brand` TEXT column
+# is a label carried alongside it, not the boundary. See
+# docs/tasks/task-account-tenancy.md.
+OWNED_TABLES = (
+    "shoot_concepts",
+    "locations",
+    "characters",
+    "props",
+    "generations",
+    "videos",
+    "scene_briefs",
+    "shots",
+    # The two the dry run found (docs/PILOT_DRY_RUN.md, 2026-09-02). They
+    # were never on this list, so the static SQL test -- which audits the
+    # list -- could not see that any signed-in user read Mike's publishing
+    # queue and could delete his Director canvases.
+    "hold_queue",
+    "workflows",
+    # main's assets archive (9444f23), decided at the merge (2026-09-02):
+    # a generated asset is one account's paid render
+    "generated_assets",
+)
+
+# The tables that are global BY DECISION, each with the reason. This is
+# the other half of OWNED_TABLES: every table a user's actions write rows
+# into is either owned (above, with an account_id and a predicate on
+# every query) or named here. tests/test_tenancy.py enumerates the live
+# schema and fails on a table in neither, so a future session cannot
+# "finish the migration" by scoping the shared brain, and cannot add a
+# new table without deciding which side it lands on.
+#
+# Mike's decision (BACKLOG #11, 2026-09-01): "the learning loop continues
+# for all users, the entire app learns as it goes and gets better, that
+# is the loop." A label is not a fence -- rag_documents.project ranks a
+# tenant's own lessons first without hiding anyone else's.
+SHARED_TABLES = {
+    # -- the auth schema itself: it defines tenancy, it is not subject to it
+    "users": "the sign-in identity; ownership is derived FROM this table",
+    "auth_identities": "provider identities of users; the auth schema",
+    "accounts": "the tenant/brand table every account_id points at",
+    "account_members": "the membership grant; the gate, not a row someone owns",
+    # -- the shared brain: learning tables global by Mike's decision
+    "winning_prompts": "taught prompts; the lesson is shared, ranked by "
+                       "rag_documents.project rather than fenced",
+    "prompt_scores": "the credit gate's own log, one row per scored prompt; "
+                     "gate-vs-human agreement is a number about the gate",
+    "scout_findings": "the research bank; a direction is not anyone's row",
+    "scout_bin": "the scout's reference bin, keyed by pass, not by person",
+    "inspiration_accounts": "the researched accounts a brand draws on",
+    "eval_golden": "the retrieval eval's labelled queries; measure the store",
+    "eval_runs": "the retrieval eval's run history; measures the store",
+    "crag_retrievals": "CRAG's per-retrieval telemetry (93c49ff); measures the "
+                       "store and the rewrite, not anyone's rows",
+    # -- reached only through an owned row, so no owner of their own
+    "concept_locations": "join table under shoot_concepts; cascades with it",
+    "metrics": "snapshots under videos; every read joins v.account_id",
+    # -- the installation's own configuration and bookkeeping
+    "settings": "the kill switch and the Dev Studio tunables; one installation",
+    "channels": "publish destinations bound to the INSTALLATION's credentials "
+                "(IG_USER_ID, IG_ACCESS_TOKEN are env, not rows). A channel is "
+                "created only by autonomy.init's seed, so a tenant with no "
+                "channel row has no post targets and cannot reach them. "
+                "Decided out loud 2026-09-02: this is the publishing path and "
+                "it stays the operator's, not a per-tenant row",
+    "scheduled_posts": "the publish worker's queue: an intention to post "
+                       "through the installation's credentials, written only "
+                       "by the operator's CLI (no route exists), drained by "
+                       "cron for the whole installation. Becomes owned the "
+                       "day a route can write it -- decided 2026-09-02",
+    "corrections": "standing notes folded into the next run's spark. GLOBAL "
+                   "BY ACCIDENT, and a live bug (BACKLOG #11, PILOT_DRY_RUN "
+                   "#8): a pilot's denial steers Mike's night once. Listed "
+                   "here so the schema test passes; fix order item 4",
+    "ig_hashtag_ids": "a cache of Meta's hashtag ids; the tag is the key",
+    # -- the legacy pitch pipeline, removed Aug 2026; nothing writes them
+    "pitch_runs": "historical rows from the removed post-production chain",
+    "ideas": "historical rows from the removed post-production chain",
+    # -- the closed reference set (src/imagesearch.py, src/framebank.py)
+    "image_candidates": "server-found image search results the agent may "
+                        "only reference by id; a search cache, not authorship",
+    "frames": "stills cut from the operator's own footage; the frame bank",
+}
+
+
+def _ensure_accounts_table(conn: sqlite3.Connection) -> None:
+    """The FK target has to exist before a column can point at it.
+
+    Imported lazily: accounts.py imports this module, so a top-level
+    import would be a cycle. Idempotent -- the schema is all
+    CREATE TABLE IF NOT EXISTS -- which matters because init order varies
+    (the app lifespan runs accounts.init() itself; a test that only calls
+    preprod.init() does not).
+    """
+    from .accounts import SCHEMA as ACCOUNTS_SCHEMA
+    conn.executescript(ACCOUNTS_SCHEMA)
+
+
+def add_account_column(conn: sqlite3.Connection, table: str) -> bool:
+    """Additive ALTER TABLE, the preprod.picked_at pattern. True if added.
+
+    Nullable on purpose. SQLite cannot add a NOT NULL column to a table
+    that already has rows without a default, and the only honest default
+    -- a literal account id -- differs per database. So NULL means
+    "predates tenancy" and backfill_owner is what claims those rows.
+    Ownership is enforced by the queries, not by the column.
+    """
+    cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+    if "account_id" in cols:
+        return False
+    _ensure_accounts_table(conn)
+    conn.execute(
+        f"ALTER TABLE {table} ADD COLUMN account_id INTEGER REFERENCES accounts(id)"
+    )
+    return True
+
+
+def bootstrap_account_id(conn: sqlite3.Connection) -> Optional[int]:
+    """The account pre-tenancy rows belong to: the oldest one, which on
+    every database that exists today is Mike's. None before seeding."""
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'accounts'"
+    ).fetchone()
+    if exists is None:
+        return None
+    row = conn.execute("SELECT MIN(id) AS id FROM accounts").fetchone()
+    return row["id"] if row and row["id"] is not None else None
+
+
+def backfill_owner(conn: sqlite3.Connection, table: str,
+                   account_id: Optional[int] = None) -> int:
+    """Claim every ownerless row for the bootstrap account; returns how
+    many. A no-op when there is no account yet -- init() runs before
+    seed() on a fresh database, so accounts.seed() calls this again once
+    there is finally an owner to claim them for."""
+    if account_id is None:
+        account_id = bootstrap_account_id(conn)
+    if account_id is None:
+        return 0
+    cur = conn.execute(
+        f"UPDATE {table} SET account_id = ? WHERE account_id IS NULL",
+        (account_id,),
+    )
+    return cur.rowcount
+
+
+def own_table(conn: sqlite3.Connection, table: str) -> None:
+    """add_account_column + backfill_owner -- the pair every init() wants."""
+    add_account_column(conn, table)
+    backfill_owner(conn, table)
+
+
 def init_db(path: Path | str = DB_PATH) -> None:
     """Create the tables. Safe to run repeatedly."""
     with connect(path) as conn:
@@ -148,6 +315,23 @@ def init_db(path: Path | str = DB_PATH) -> None:
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(videos)")}
         if "brand" not in cols:
             conn.execute("ALTER TABLE videos ADD COLUMN brand TEXT")
+        # The audience loop's missing link (2026-08-31). `idea_id` points
+        # at the LEGACY pitch pipeline's `ideas` table; nothing has ever
+        # written it (0 of 10 rows), and the ideas this project generates
+        # now live in shoot_concepts. So a posted video could never be
+        # traced back to the concept that produced it, and everything the
+        # audience taught was structurally unable to reach the generator
+        # -- the loop was severed here, not merely empty.
+        #
+        # Nullable and additive on purpose: the ten rows already in this
+        # table are pre-pipeline uploads from 2020-2024 with no concept
+        # behind them, and inventing a link for them would be worse than
+        # leaving it open. This buys the join for everything posted from
+        # here on.
+        if "concept_id" not in cols:
+            conn.execute("ALTER TABLE videos ADD COLUMN concept_id INTEGER")
+        # tenancy: a posted video belongs to the account that made it
+        own_table(conn, "videos")
 
 
 # --------------------------------------------------------------------------
@@ -347,6 +531,8 @@ def add_video(
     notes: Optional[str] = None,
     brand: Optional[str] = None,
     path: Path | str = DB_PATH,
+    *,
+    account_id: int,
 ) -> int:
     """
     Store a posted video. Returns its id.
@@ -369,11 +555,11 @@ def add_video(
             """
             INSERT INTO videos
                 (idea_id, title, platform, posted_at, url, timeline,
-                 topic, hook_type, duration_s, notes, brand)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 topic, hook_type, duration_s, notes, brand, account_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (idea_id, title, platform, posted_at, url, timeline,
-             topic, hook_type, duration_s, notes, brand),
+             topic, hook_type, duration_s, notes, brand, account_id),
         )
         return int(cur.lastrowid)
 
@@ -388,16 +574,26 @@ def record_metrics(
     watch_time_seconds: Optional[float] = None,
     captured_at: Optional[str] = None,
     path: Path | str = DB_PATH,
+    *,
+    account_id: int,
 ) -> int:
     """
     Save a snapshot of how a video is doing right now.
+
+    `metrics` carries no owner of its own: a snapshot belongs to a video,
+    and the video belongs to an account. What is scoped is the right to
+    write one -- you cannot attach numbers to a stranger's post.
 
     Call it every time you check. Do not overwrite old rows. A repeat
     write for the same timestamp updates in place rather than duplicating.
     """
     captured_at = captured_at or _now()
     with connect(path) as conn:
-        if not conn.execute("SELECT 1 FROM videos WHERE id = ?", (video_id,)).fetchone():
+        owned = conn.execute(
+            "SELECT 1 FROM videos WHERE id = ? AND account_id IS ?",
+            (video_id, account_id),
+        ).fetchone()
+        if not owned:
             raise ValueError(f"no video with id {video_id}")
         cur = conn.execute(
             """
@@ -424,14 +620,18 @@ def list_videos(
     limit: int = 200,
     brand: Optional[str] = None,
     path: Path | str = DB_PATH,
+    *,
+    account_id: int,
 ) -> list[dict[str, Any]]:
-    """All videos, newest first, optionally filtered to one platform and/or
-    brand. A brand filter is NULL-inclusive -- videos tagged with that brand
-    OR not yet tagged at all -- so legacy posts still show while the pipeline
-    tags new ones."""
+    """This account's videos, newest first, optionally filtered to one
+    platform and/or brand. A brand filter is NULL-inclusive -- videos
+    tagged with that brand OR not yet tagged at all -- so legacy posts
+    still show while the pipeline tags new ones. Ownership is not
+    NULL-inclusive in the same way: `brand` is a label you may not have
+    filled in, `account_id` is who the row belongs to."""
     sql = "SELECT * FROM videos"
-    clauses: list[str] = []
-    params: list[Any] = []
+    clauses: list[str] = ["account_id IS ?"]
+    params: list[Any] = [account_id]
     if platform:
         clauses.append("platform = ?")
         params.append(platform)
@@ -446,7 +646,8 @@ def list_videos(
         return [dict(r) for r in conn.execute(sql, params)]
 
 
-def get_video(video_id: int, path: Path | str = DB_PATH) -> Optional[dict[str, Any]]:
+def get_video(video_id: int, path: Path | str = DB_PATH, *,
+              account_id: int) -> Optional[dict[str, Any]]:
     """
     One video's full metadata, plus its originating pitch (idea_title,
     idea_logline, idea_story_note) if idea_id is set -- all None
@@ -459,9 +660,9 @@ def get_video(video_id: int, path: Path | str = DB_PATH) -> Optional[dict[str, A
                    i.story_note AS idea_story_note
             FROM videos v
             LEFT JOIN ideas i ON i.id = v.idea_id
-            WHERE v.id = ?
+            WHERE v.id = ? AND v.account_id IS ?
             """,
-            (video_id,),
+            (video_id, account_id),
         ).fetchone()
     return dict(row) if row else None
 
@@ -499,6 +700,8 @@ def get_top_performers(
     metric: str = "views",
     ascending: bool = False,
     path: Path | str = DB_PATH,
+    *,
+    account_id: int,
 ) -> list[dict[str, Any]]:
     """
     Your best videos, compared fairly.
@@ -551,6 +754,7 @@ def get_top_performers(
             JOIN metrics m ON m.video_id = v.id
             LEFT JOIN ideas i ON i.id = v.idea_id
             WHERE m.{metric} IS NOT NULL
+              AND v.account_id IS ?
               AND ABS(julianday(m.captured_at) - julianday(v.posted_at) - ?) <= ?
               {"AND substr(v.posted_at, 1, 10) >= ?" if cutoff else ""}
         )
@@ -563,7 +767,9 @@ def get_top_performers(
         ORDER BY score {"ASC" if ascending else "DESC"}
         LIMIT ?
     """
-    params: list[Any] = [at_days, at_days, at_days * AGE_TOLERANCE]
+    # order matters: the account predicate sits before the two age
+    # placeholders in the WHERE clause above
+    params: list[Any] = [at_days, account_id, at_days, at_days * AGE_TOLERANCE]
     if cutoff:
         params.append(cutoff)
     if platform:
@@ -581,6 +787,8 @@ def benchmark(
     platform: Optional[str] = None,
     metric: str = "views",
     path: Path | str = DB_PATH,
+    *,
+    account_id: int,
 ) -> dict[str, Any]:
     """
     Median and spread for the same window, so a single video can be called
@@ -598,6 +806,7 @@ def benchmark(
         limit=100_000,
         metric=metric,
         path=path,
+        account_id=account_id,
     )
     scores = sorted(r["score"] for r in rows if r["score"] is not None)
     if not scores:
@@ -616,7 +825,7 @@ def benchmark(
 
 
 def get_video_history(
-    video_id: int, path: Path | str = DB_PATH
+    video_id: int, path: Path | str = DB_PATH, *, account_id: int
 ) -> list[dict[str, Any]]:
     """Every snapshot for one video, oldest first. The growth curve."""
     with connect(path) as conn:
@@ -629,10 +838,10 @@ def get_video_history(
                              - julianday(v.posted_at), 1) AS age_days
                 FROM metrics m
                 JOIN videos v ON v.id = m.video_id
-                WHERE m.video_id = ?
+                WHERE m.video_id = ? AND v.account_id IS ?
                 ORDER BY m.captured_at ASC
                 """,
-                (video_id,),
+                (video_id, account_id),
             )
         ]
 
@@ -640,7 +849,8 @@ def get_video_history(
 _VIDEO_TEXT_FIELDS = {"topic", "hook_type"}
 
 
-def distinct_video_field_values(field: str, path: Path | str = DB_PATH) -> list[str]:
+def distinct_video_field_values(field: str, path: Path | str = DB_PATH, *,
+                                account_id: int) -> list[str]:
     """
     Values already used for a free-text video field, so a datalist can
     converge vocabulary without locking it down. `field` is checked
@@ -652,12 +862,15 @@ def distinct_video_field_values(field: str, path: Path | str = DB_PATH) -> list[
     with connect(path) as conn:
         rows = conn.execute(
             f"SELECT DISTINCT {field} FROM videos "
-            f"WHERE {field} IS NOT NULL AND {field} != '' ORDER BY {field}"
+            f"WHERE account_id IS ? AND {field} IS NOT NULL AND {field} != '' "
+            f"ORDER BY {field}",
+            (account_id,),
         ).fetchall()
     return [r[0] for r in rows]
 
 
-def latest_metrics_by_video(path: Path | str = DB_PATH) -> list[dict[str, Any]]:
+def latest_metrics_by_video(path: Path | str = DB_PATH, *,
+                            account_id: int) -> list[dict[str, Any]]:
     """
     One row per video with its most recent snapshot, if any. Backs
     /metrics/new's "previous value greyed behind each input" -- the
@@ -677,8 +890,10 @@ def latest_metrics_by_video(path: Path | str = DB_PATH) -> list[dict[str, Any]]:
                     ORDER BY captured_at DESC
                     LIMIT 1
                 )
+                WHERE v.account_id IS ?
                 ORDER BY v.posted_at DESC
-                """
+                """,
+                (account_id,),
             )
         ]
 

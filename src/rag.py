@@ -18,6 +18,34 @@ The CLI (ingest/query) fails loudly -- there the store *is* the
 deliverable. `retrieve_references` never raises -- for pitch.py the
 library is an enhancement, and a missing Postgres must not stop a
 pitch run.
+
+WHAT `project` MEANS (decided 2026-09-02, once). `rag_documents.project`
+is the TENANT that taught the row: the slug of the account the writer
+acts as (`accounts.slug_of(account_id)`) -- for Mike that is "zeropage"
+on every row, whichever of his two brands it came from, because his
+two brands are one tenant. It is NOT the brand. The only site that ever
+wrote it (the deny handler) wrote the brand, and brand was the wrong
+key twice over: `account_id` is the boundary everywhere else in the app
+and `brand` a label inside it (docs/PILOT.md), and until fix-order item
+5 lands a second user's rows are labelled with Mike's brand name
+(PILOT_DRY_RUN #9) -- so keyed by brand, a stranger's denials would have
+ranked FIRST for Mike's next concept, the exact failure this exists to
+prevent.
+
+A LABEL IS NOT A FENCE. Mike's decision (BACKLOG #11) is that the
+learning loop stays global: everyone reaches every lesson. The label
+makes it *yours first*: `query(prefer_project=...)` fetches a wider
+pool by similarity and re-sorts it with a small bonus for rows from the
+caller's own neighbourhood (PROJECT_BOOST), so an equally good lesson
+of yours outranks a stranger's, a much better lesson of theirs still
+wins, and a row with no label at all -- the craft shelves, anything
+whose origin is unknown -- is retrieved exactly as before. `project=`
+is still a hard filter for the CLI and for callers that mean one; no
+retrieval site in the product uses it. NULL means "everyone's": the
+craft references (ai_prompting, marketing, cinematography, the manifest)
+are nobody's taste and stay unlabelled on purpose; the learning shelves
+(denials, winning_prompts, avoid_prompts, assets, proven_results) carry
+the tenant that taught them.
 """
 import argparse
 import hashlib
@@ -34,6 +62,21 @@ EMBED_MODEL = "gemini-embedding-001"
 EMBED_DIM = 768
 EMBED_BATCH = 100
 DEFAULT_DB_URL = "postgresql://localhost/zeropage"
+
+# The neighbourhood bonus, in cosine-distance units, and how many times k
+# the wider fetch pulls before re-sorting. Chosen from a sweep on a copy
+# of the live store (2026-09-02, "gearing up ritual" over the learning
+# shelves): the top-20 similarity band was 0.6465..0.6184, 0.028 wide,
+# and a stranger's row at 0.6287 sat at rank 4 by similarity alone. Any
+# boost >= 0.01 moved every own row in that band above it, because own
+# rows are dense there; 0.02 keeps that (yours first) while still letting
+# a stranger's row win when it is better by more than the local band --
+# on the two queries whose pool held no stranger rows, and for a tenant
+# with nothing taught yet, the result is exactly the shared brain. The
+# pool is fetched by plain distance so pgvector's HNSW index still serves
+# it; the re-sort happens over that pool, never over the whole table.
+PROJECT_BOOST = 0.02
+PREFER_POOL = 4
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 REFERENCE_MANIFEST = PROJECT_ROOT / "evals" / "reference_library.json"
@@ -196,7 +239,8 @@ def ingest_records(records: list, client, conn) -> int:
 
 
 def query(text: str, client, conn, k: int = 5,
-          domain=None, project: Optional[str] = None) -> list:
+          domain=None, project: Optional[str] = None,
+          prefer_project: Optional[str] = None) -> list:
     """
     Top-k chunks by cosine similarity, optionally scoped to one or more
     shelves (domain) or one project. This pairing is the pgvector payoff:
@@ -207,6 +251,14 @@ def query(text: str, client, conn, k: int = 5,
     against both its brand and cinematography shelves in one query
     rather than needing two round trips whose results it would then
     have to merge and re-rank itself.
+
+    `project` is a fence: only that project's rows. `prefer_project` is
+    a neighbourhood: every row stays reachable, the caller's own rank
+    first (PREFER_POOL x k fetched by distance, re-sorted with
+    PROJECT_BOOST off the distance of rows whose project matches, top k
+    kept). The returned `score` is always the raw similarity -- CRAG
+    grades on it, and a boosted score would tell the grader a stranger's
+    weak match was strong. `own` says whether the row was boosted.
     """
     [vector] = embed_texts([text], client, task_type="RETRIEVAL_QUERY")
     filters, params = [], [vector]
@@ -221,25 +273,62 @@ def query(text: str, client, conn, k: int = 5,
         filters.append("project = %s")
         params.append(project)
     where_sql = (" WHERE " + " AND ".join(filters)) if filters else ""
-    params.append(k)
-    cursor = conn.execute(
+    ranked = (
         "SELECT source, chunk, domain, project, source_ref, "
         "embedding <=> %s::vector AS distance "
-        f"FROM rag_documents{where_sql} ORDER BY distance LIMIT %s",
-        params,
+        f"FROM rag_documents{where_sql} ORDER BY distance LIMIT %s"
     )
-    return [
+    if not prefer_project:
+        params.append(k)
+        cursor = conn.execute(ranked, params)
+    else:
+        params.append(k * PREFER_POOL)
+        params.extend([prefer_project, PROJECT_BOOST, k])
+        cursor = conn.execute(
+            "SELECT source, chunk, domain, project, source_ref, distance "
+            f"FROM ({ranked}) AS pool "
+            "ORDER BY distance - CASE WHEN project = %s THEN %s ELSE 0 END, distance "
+            "LIMIT %s",
+            params,
+        )
+    rows = [
         {"source": source, "chunk": chunk, "domain": row_domain,
          "project": row_project, "source_ref": source_ref,
          "score": round(1.0 - distance, 4)}
         for source, chunk, row_domain, row_project, source_ref, distance
         in cursor.fetchall()
     ]
+    if prefer_project:
+        for row in rows:
+            row["own"] = row["project"] == prefer_project
+    return rows
+
+
+def label_domains(conn, project: Optional[str], domains, *,
+                  only_unlabelled: bool = True) -> int:
+    """Stamp every chunk on the given shelves with `project` -- the
+    backfill for rows written before the label meant anything. Returns
+    rows changed. `only_unlabelled` (the default) never overwrites a
+    label somebody set on purpose; pass False to relabel. `project=None`
+    clears the label, which is the honest state for a row whose origin
+    is genuinely unknown -- a NULL is still retrieved, a guess is a lie."""
+    domains = list(domains) if isinstance(domains, (list, tuple, set)) else [domains]
+    if not domains:
+        return 0
+    where = "domain = ANY(%s)"
+    params: list = [project, domains]
+    if only_unlabelled:
+        where += " AND project IS NULL"
+    cursor = conn.execute(
+        f"UPDATE rag_documents SET project = %s WHERE {where}", params)
+    conn.commit()
+    return cursor.rowcount
 
 
 def retrieve_references(text: str, k: int = 5, db_url: Optional[str] = None,
                         domain=None,
-                        project: Optional[str] = None) -> dict:
+                        project: Optional[str] = None,
+                        prefer_project: Optional[str] = None) -> dict:
     """
     Never raises. {"ok": True, "references": [...]} or
     {"ok": False, "references": [], "error": "..."} -- a missing key,
@@ -249,6 +338,8 @@ def retrieve_references(text: str, k: int = 5, db_url: Optional[str] = None,
     that re-reads .env would un-do a test's environment on purpose.
 
     domain: same str | list/tuple/set | None contract as query().
+    prefer_project: the caller's tenant slug -- own neighbourhood first,
+    nothing excluded (see the module docstring).
     """
     if not (os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")):
         return {"ok": False, "references": [],
@@ -258,7 +349,8 @@ def retrieve_references(text: str, k: int = 5, db_url: Optional[str] = None,
         conn = connect(db_url)
         client = make_client()
         return {"ok": True, "references": query(
-            text, client, conn, k=k, domain=domain, project=project)}
+            text, client, conn, k=k, domain=domain, project=project,
+            prefer_project=prefer_project)}
     except Exception as e:
         return {"ok": False, "references": [], "error": str(e)}
     finally:
@@ -419,7 +511,18 @@ def main(argv=None) -> None:
     query_p.add_argument("text")
     query_p.add_argument("--k", type=int, default=5)
     query_p.add_argument("--domain")
-    query_p.add_argument("--project")
+    query_p.add_argument("--project", help="a fence: only this project's rows")
+    query_p.add_argument("--prefer-project",
+                         help="a neighbourhood: this tenant's rows rank first, nothing excluded")
+    label_p = sub.add_parser(
+        "label",
+        help="stamp every unlabelled chunk on the given shelves with a tenant slug "
+             "(the provenance backfill); --overwrite relabels stamped rows too",
+    )
+    label_p.add_argument("--project", required=True,
+                         help="the tenant slug, e.g. zeropage; 'none' clears the label")
+    label_p.add_argument("--domain", required=True, nargs="+")
+    label_p.add_argument("--overwrite", action="store_true")
     args = parser.parse_args(argv)
 
     # loud on purpose: when you run this command, the store is the point
@@ -444,9 +547,16 @@ def main(argv=None) -> None:
             by_domain[r["domain"]] = by_domain.get(r["domain"], 0) + 1
         breakdown = ", ".join(f"{n} {d}" for d, n in sorted(by_domain.items()))
         print(f"Ingested {len(records)} source(s) ({breakdown}), {written} chunk(s) total")
+    elif args.verb == "label":
+        project = None if args.project.lower() == "none" else args.project
+        changed = label_domains(conn, project, args.domain,
+                                only_unlabelled=not args.overwrite)
+        print(f"Labelled {changed} chunk(s) on {', '.join(args.domain)} "
+              f"as project={project!r}")
     else:
         results = query(args.text, client, conn, k=args.k,
-                        domain=args.domain, project=args.project)
+                        domain=args.domain, project=args.project,
+                        prefer_project=args.prefer_project)
         print(json.dumps(results, indent=2))
     conn.close()
 

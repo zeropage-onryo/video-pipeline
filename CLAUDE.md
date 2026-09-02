@@ -45,10 +45,22 @@ venv/bin/python -m src.shootgen --scene <concept_id>   # write THAT idea's scene
 venv/bin/python -c "from src import orchestrator; print(orchestrator.run('gearing up ritual'))"
 venv/bin/python -c "from src import autonomy; print(autonomy.list_hold())"      # the dead-man log
 
+# THE RESEARCH SCOUT — where a spark comes from when it isn't typed.
+# Four best-effort lanes (grounded web search on the Gemini key, YouTube
+# search.list, RSS feeds from prompts/scout_sources.txt, the inspiration
+# accounts), digested by ONE call into scored one-line sparks + the
+# reference images behind them. Banked in scout_findings / scout_bin;
+# nothing here spends render credit.
+venv/bin/python -m src.scout run  [--brand ...] [--count 4] [--lanes web,shorts,feeds,creators]
+venv/bin/python -m src.scout list [--brand ...] [--unused]
+venv/bin/python -m src.scout next --brand zeropage       # the servable spark, or exit 1
+
 # THE NIGHTLY TRIGGER — one shadow run, spark rotated from prompts/sparks.txt.
 # ops/com.zeropage.shadowrun.plist schedules it at 03:30 (see its header to
-# install); grading happens on /holds each morning.
-venv/bin/python -m src.trigger [--spark ...] [--channel zeropage]
+# install); grading happens on /holds each morning. --scout takes the
+# direction from the scout's bank instead, falling back to the rotation
+# when the bank is empty or under scout.SCORE_FLOOR.
+venv/bin/python -m src.trigger [--spark ...] [--channel zeropage] [--scout]
 
 # GENERATIVE CLIPS (for a shot the footage can't cover)
 venv/bin/python -m src.promptgen "<loose shot description>" [--idea-id N] [--slot-index N]
@@ -69,6 +81,13 @@ venv/bin/python -m src.scheduling run [--approve] [--live]
 venv/bin/python -m src.rag ingest <files...>        # (re-)build the pgvector library
 venv/bin/python -m src.rag query "<text>" [--k 5]
 venv/bin/python -m src.rag_eval <cases.json> [--k 5]   # hit@k + MRR over labeled cases
+
+# MCP SURFACE — the board, reachable from off this machine. Mounted on the
+# web app at /mcp when ZEROPAGE_MCP=1 AND ZEROPAGE_MCP_TOKEN is set (no
+# token = refused, never served open). Read/decide tools are always on;
+# ZEROPAGE_MCP_ENGINE=1 adds research + generate. See START_SERVER.md.
+venv/bin/python -m src.mcp_server --engine   # stdio; Claude Desktop launches this itself
+# Registering it: ops/connect-claude.md (paste ops/claude-desktop-mcp.json, ⌘Q, reopen)
 
 # SIGN-IN — seed the auth tables once (idempotent); real login guards /ui + /api
 venv/bin/python -m src.accounts seed you@example.com [--password '...']
@@ -125,8 +144,9 @@ SQLite (`data/pipeline.db`).
 idea -> shot-list shape split a concept across up to six independently-rendered prompts,
 which is exactly what the scene bible existed to paper over; one paste-ready whole-scene
 prompt is what the video models actually take. `shootgen.generate_scene_concept` is the
-path every Create button uses (`/api/pipeline/run` — Studio's composer, Pipeline's
-"Generate scene", the Director brief): it reuses the proven gold-standard skeleton
+path the single-concept Create uses (`/api/pipeline/run` — the Director brief; Studio's
+composer moved to `/api/scenes/run` on 2026-08-28, which is the same generator asked for
+N takes at once): it reuses the proven gold-standard skeleton
 (`prompts/scene_brief_prompt.txt`, grounded style -> beats -> diegetic sound ->
 avoid-list), saves an ordinary `shoot_concepts` row whose `shots` is a ONE-element list,
 and deliberately does **not** prepend the scene bible — that anchor holds separate shots
@@ -151,9 +171,10 @@ generation.
 **You get SEVERAL scenes and pick between them** (same day, same shape).
 `shootgen.generate_scene_concepts` writes N of those one-shot rows off ONE idea in a
 single call, so the takes are varied against each other rather than rolled independently
-(the `generate_concept_ideas` reasoning) — `POST /api/scenes/run`, behind Pipeline's
-**Scenes** tab, which is the default. A card is laid out as Mike specified: the
-references it was written against ABOVE, the scene, then the returned prompt BELOW.
+(the `generate_concept_ideas` reasoning) — `POST /api/scenes/run`, which is what **the
+Studio composer's Create button** posts (2026-08-28). A card is laid out as Mike
+specified: the references it was written against ABOVE, the scene, then the returned
+prompt BELOW.
 **The label moved with the unit:** `shortlist_rate` asked "was this idea worth planning
 a shot list for", derived from `shots != []` — a question with no answer left once every
 concept has exactly one shot. `preprod.pick_rate` asks how many generated scenes were
@@ -166,6 +187,197 @@ both would have meant one tile that could only ever read 100%. `pick_rate` and
 **A scene's references are plural and live ON its shot** (`shot["refs"]` — no schema
 change, `shots_json` was always flexible), which is what carries them into the enhance,
 the keyframe and the clip when it opens in Director.
+
+**The references now actually get attached (2026-08-28).** The loop was open at its most
+embarrassing point: `format_cast` tells the generator that Michael and the Ducati have
+"(reference photos on file)", the scene it writes says exactly that, the photos sit in
+`characters/michael` — and nothing ever handed them to a renderer. Every concept in the
+live database carried `refs=None`, so Director grounded on a sentence instead of a face.
+Three parts to closing it:
+
+- `shootgen.named_assets(text, assets)` reads a finished scene back and returns the assets
+  it named — the mirror of `format_cast`. Matching is on the asset's name **plus multi-word
+  proper nouns from its own notes** (`asset_aliases`), because the prop is stored as
+  "Motorcycle" and every scene calls it a Ducati Panigale 959. Two consecutive capitalised
+  words, never one: a missed alias costs a photo, a false one attaches a reference the shot
+  was never meant to resemble.
+- **Order is load-bearing, not cosmetic.** Runway anchors a clip on exactly ONE frame
+  (`urls[0]`), so the sort is category (character → prop → **location last**) and then
+  position of first mention in the scene. A room photo in the anchor slot makes the model
+  reproduce the room instead of the scene; two characters are not interchangeable either,
+  and a scene that opens on Michael must not anchor on the monster he meets later.
+- `api._attach_scene_refs` runs after every `/api/scenes/run`, manual picks first (an
+  explicit choice outranks an inferred one, and first is what Runway anchors on).
+  `ops/backfill_scene_refs.py` did the same for concepts written before the fix.
+
+**Composer uploads persist** (`data/refs/`, content-addressed, served at `/refs`, resolved by
+`_resolve_asset_photo` like any asset photo). An uploaded photo used to ground one Gemini call
+and then cease to exist, so it could never reach the keyframe or the clip.
+
+**`.heic` decodes now** (`pillow-heif`, registered in `_to_jpeg`, degrading if absent), and
+`_best_photo` prefers a natively-decodable sibling regardless. `IMAGE_EXTENSIONS` has always
+listed `.heic` and the gallery has always shown it, but Pillow could not read one — so a HEIC
+reference was accepted, listed on the shot, and then **silently** dropped at render. Half the
+asset bank comes off an iPhone.
+
+**A concept's canvas outlives the visit (2026-08-28).** Run all called `saveWorkflow()` with
+`currentId = null`, so in concept mode it POSTed a brand-new library workflow row every
+session purely so the runner had a saved graph to execute — and read none of them back:
+`openConceptInDirector` sets `currentId = null`, clears `shotGraphs` and rebuilds the chain
+from the shot. Node positions, hand-edited text and every node's output were discarded on
+exit, which made re-running a paid Gemini enhance the only way to see the enhanced prompt
+again. "Save to concept" never covered this — it persists shot *prompts* only.
+
+`workflows` gains `concept_id`, `shot_n`, `states_json`, `seed_hash` (additive ALTER, plus a
+partial unique index on `(concept_id, shot_n)`), and `save_shot_graph`/`get_shot_graph` upsert
+one row per shot. Three things make it work:
+
+- **States are stored beside the drawing.** LiteGraph's `serialize()` carries a node's config
+  and position but never its output, so a graph restored without them is the right shape with
+  every box empty — exactly the thing that made re-running feel mandatory. The runner already
+  computes them (`execute_graph` → `result["nodes"]`); Run all now saves them with the graph.
+  Restoring applies them with `applyNodeStates(states, {quiet: true})` — `quiet` because a
+  restored output must NOT re-post itself to the shot, which already happened on the run that
+  produced it.
+- **The graph that ran and the graph you return to are one row.** Run all in concept mode
+  saves to the shot's row and runs *that* id, instead of saving to a throwaway and executing
+  something the canvas never sees again.
+- **Staleness is checked on READ, not invalidated on write.** A saved graph holds a copy of
+  the prompt in its User Prompt node, so a Direct revision, a Polish or a replan turns it into
+  a drawing of a shot that no longer says that. `shot_graph_get` compares `seed_hash` against
+  the live shot and returns `graph: null, stale: true` so the client rebuilds. Self-healing: a
+  route added later that rewrites a prompt cannot forget to invalidate anything.
+
+Concept-scoped rows are excluded from `list_workflows`, or the Open… picker would fill with one
+entry per shot anyone has ever opened. `DELETE /api/concepts/{id}/graph` is the reset hatch.
+
+**The enhance instruction preserves rather than expands** (`prompts/enhance_system.txt`).
+The original said "take the user's simple prompt and expand it with vivid, descriptive
+details" — but the input is a finished director's prompt, so the model summarised it: a real
+run dropped every "(reference photos on file)" lock, the entire Avoid list, the beat order,
+"one continuous handheld take" and "no background music", and returned a paraphrase. It is now
+a tighten-don't-summarise instruction that names those four categories as untouchable, orders
+the output constraints → style → texture → blocking, and forbids "cinematic"/"masterpiece"
+padding. The test asserts what it protects, not its wording.
+
+**One idea box, one board, one spend gate (2026-08-28, Mike's call.)** Scenes and
+concepts were never two things — a concept IS one scene IS one prompt, one
+`shoot_concepts` row — so keeping them as two Pipeline tabs meant two places to look for
+the same card. The three surfaces are now split by *what you are doing*, not by what the
+row is called:
+
+- **Studio** is where an idea is typed, and the only place. The hero composer carries the
+  idea, its references (uploads or picks out of the asset bank) and a **1–4** count, and
+  posts multipart to `/api/scenes/run` (`SCENE_COUNT_MAX = 4` enforces the cap
+  server-side — the select is not the gate). The Pipeline composer, the legacy "Generate
+  scene" bar and the Generate tab are gone; `app/static/zpf/generate.js` was deleted.
+  **Create writes concepts and stops on the board** (2026-08-29, Mike's call): pressing it
+  is for reading concepts, not for a minute of billed work nobody asked for. Enhancing and
+  keyframing are the Director canvas's job when a person is driving — and the nightly
+  graph's when nobody is.
+- **Pipeline** is only the deciding: one grid of concept cards, filters Open / Picked /
+  Archived, and Pick / Not this one / Open in Director. The approve-deny-holds loop went
+  with the merge — denying a concept is what the Dev Studio's grade queue does, against
+  every archived row, with the teach-to-RAG shelves behind it.
+- **Queue** is the spend gate. Rendering is the only step that costs money, so it is the
+  only one with a gate in front of it, and **approving in Queue is what calls Runway**
+  (`POST /api/queue/{id}/approve`). `GET /api/queue/pending` is derived from the rows
+  (**parked or picked**, not archived, no `media_url`) rather than from the jobs registry,
+  which is an in-process dict a restart clears — an approval queue that quietly emptied
+  itself on restart would be a queue that lies. The live job registry stays underneath it,
+  and says so. Two ways in: the chain parks a scene once its keyframe is rendered, or you
+  pick a text-only concept off the board.
+
+**Leaving the board is archiving, never deleting** (`archived_at`, additive ALTER, same
+shape as `picked_at`). An unpicked row is the only negative signal this system collects:
+`pick_rate` is generated-vs-picked, so deleting what you passed over would make the rate
+read 100% forever and unfalsifiable. Archived rows stay counted and stay in the Dev
+Studio's ungraded pool (`judge_overall IS NULL`) until they are graded, which is where
+they earn their keep. Two things archive a concept: **Not this one** on a card, and
+**Reject** at the spend gate (which also unpicks — rejected there means generated and not
+picked, which is the truth about it). Approving used to archive the unpicked siblings from
+the same `spark` too; that inference was removed on 2026-08-29 when approving became the
+pick. It was safe while picking was a separate bulk step done first — pick two, approve
+one, both survive — but with approval *as* the pick, approving take 1 archives takes 2–4
+out from under you, and racily, since it ran after Runway returned ~90s later.
+`preprod.archive_batch` stays as a tested helper with no caller.
+
+**The night does the rest (2026-08-29, Mike's call.)** Enhancing, keyframing and
+rendering happen in the **Director canvas** when Michael is steering a scene, and in the
+**nightly graph** when nobody is. `src/scene_chain.py` holds one implementation of each
+stage — `ground`, `write_scenes`, `persist_prompt`, `keyframe_scene`, `park_scene` — so
+those three callers share code instead of growing three copies of "render a keyframe"
+that drift apart. The two app-layer capabilities `src/` cannot reach (which asset photos a
+scene named; how to resolve a site-relative photo to a file) are **injected as callables**,
+because `src/` never imports `app/`.
+
+**This is what finally makes the LangGraph load-bearing.** `src/orchestrator.py`'s right
+side was all stub: every nightly run ended `"no usable clips (render is a dry-run stub)"`
+in `hold_queue` — structurally complete, and nothing anyone could judge in the morning. A
+new `keyframe` node sits between the prompt gate and the (still dry) render:
+
+- It **persists** the prompt `structure_prompt` refined onto the shot. That prompt only
+  ever lived in the run's state before, so the row Runway would render from still held
+  shootgen's first draft while the version that passed the gate sat in a job payload.
+  `persist_prompt` keeps the model's own text as `shot["written_prompt"]` — the grade
+  queue teaches on what the MODEL wrote, and the Director canvas seeds its User Prompt
+  node from it, so opening a polished concept and pressing Run does not enhance an
+  already-enhanced prompt (a paid call that makes it worse; the instructions compound).
+- It renders a **Nano keyframe** from that prompt and attaches it as the shot's
+  `reference_image` — the frame the clip will anchor on.
+- It **parks** the scene (`shot["parked_at"]` / `park_reason`) so it appears in the Queue
+  with its still, and the hold row says what the night produced instead of describing the
+  stub.
+
+**The prompt gate is what earns a keyframe.** Only a scene whose prompt cleared the judge
+(`score_prompts`, bar `prompt_gate_min`, fails closed) gets an image — 8 sparks × 2 brands
+is 16 runs a night against `NANO_DAILY_CAP` of 20, which is also shared with every
+Director render. A keyframe that fails parks the scene as text-to-video with the reason on
+its card. `ZEROPAGE_KEYFRAME=0` turns the step off without touching the graph.
+
+**`gen_concept` writes ONE scene now**, through `shootgen.generate_scene_concept` rather
+than the legacy multi-shot `generate_concept`. That divergence stopped being cosmetic the
+moment the night's output started parking in the Queue: the Queue, `pick_rate` and the
+scene board all key on `is_scene` (`len(shots) == 1`), so a six-shot concept would have
+been generated, scored, keyframed and then invisible to the surface meant to approve it.
+`use_pov` stopped being passed with it — the scene brief neither offers nor names a camera.
+
+**Parked is an explicit marker**, never inferred from `reference_image`: the Director
+canvas writes that field mid-work, so inferring would drag every scene anyone has ever
+keyframed into the spend queue. `GET /api/queue/pending` is `parked or picked`, and
+**approving a parked scene is what picks it** — nobody clicked pick on an unattended run,
+so the real choice is made at the spend gate, which is also the better source for
+`pick_rate` ("how many generated scenes were worth rendering"). A `template_tag` rides
+into the hashed prompt template so `by_prompt` does not average two meanings of "picked".
+
+- **`src/imagery.py`** is `enhance` plus the whole reference→bytes layer
+  (`fetch_image_bytes` with its SSRF guard and 15MB cap, `image_bytes_for_gemini`,
+  `render_bytes`, `upright`), lifted out of `app/workflow_runner.py` unchanged so the
+  stages can reach it from `src/`. The canvas keeps exactly one alias,
+  `workflow_runner.enhance`, because `execute_graph` calls it bare and the tests patch it
+  there; everything else is called through `imagery.` on purpose — an alias that can be
+  monkeypatched without affecting the code that runs is how a test passes while a real
+  billed call escapes.
+- **The keyframe now actually anchors the clip.** `runway.as_prompt_image` resolves a
+  reference to something the API can read: a public URL passes through, local `/renders/`
+  and asset paths become an inline data URI with the mime read off the magic number.
+  Before it, `generate_for_shot` took `reference_image` only when it started with `http`,
+  so on any machine without R2 the keyframe silently anchored nothing while the Queue card
+  said "anchors on the attached reference" and the credit was spent on the lie.
+- **The nightly job has two failure modes, and it hit both** (2026-08-31). First:
+  `~/Library/LaunchAgents` holds a **copy** of the plist, so editing the repo's copy
+  changes nothing — the installed one kept pointing at `/Users/iphone/Documents/Github
+  Portfolio` after the folder was renamed. `ops/install-launchagents.sh` now copies and
+  reloads it in one step, and `--check` reports whether the installed copy has drifted.
+  Second, and the one that actually stopped it around 2026-08-20: `data/morning_prompts.err`
+  reads `/bin/bash: …/run_morning_prompts.sh: Operation not permitted`. **`EPERM`, not
+  `ENOENT`** — that is macOS TCC denying a LaunchAgent access to `~/Documents`, which is a
+  protected location. A LaunchAgent gets no consent prompt, so it is refused in silence,
+  and the same path runs fine from Terminal (which has its own grant). Fix is either Full
+  Disk Access for `/bin/bash`, or moving the project out of `~/Documents` — the durable
+  one, since nothing else about this project wants to live in a TCC-protected folder.
+  Both failure modes look identical from inside: a night with no runs reads exactly like a
+  healthy night, which is why the `cd` now logs and exits 1.
 
 ```
 locations/<name>/*.jpg  --locations.py-->  locations table (vision description per space)
@@ -219,7 +431,7 @@ is yours, in Resolve, by hand.
   `shots != []`, never stored, so it can't drift), `shoot_rate()` is which ones actually got shot.
   Both break down per prompt hash.
 - **`src/orchestrator.py`** — the autonomous content graph (LangGraph, registered as `zeropage`
-  in `langgraph.json`): `planner -> ensure_locations -> ground_entities -> ground_rag ->
+  in `langgraph.json`): `planner -> ground_entities -> ground_rag ->
   gen_concept -> evaluate -> structure_prompt -> score_prompts -> generate_render ->
   qc_clip -> caption -> publish`, with the corrective `evaluate -> gen_concept` retry edge and
   a `hold` sink. `score_prompts` is the credit gate proper: a deterministic floor (thin /
@@ -246,7 +458,14 @@ is yours, in Resolve, by hand.
   `autonomy.hold_queue` with its reason. Tests drive the compiled `GRAPH` hermetically and the
   publish gates directly.
 - **`src/autonomy.py`** — channels / hold_queue / corrections / settings on the shared SQLite
-  DB (the preprod.py pattern). Autonomy is **per-channel** (`shadow` | `queue` | `auto`), both
+  DB (the preprod.py pattern). `hold_queue` and `workflows` are OWNED tables since
+  2026-09-02 (`db.OWNED_TABLES`; the dry run found any signed-in user could grade Mike's
+  holds and delete his canvases), and every table is either owned or named in
+  `db.SHARED_TABLES` with the reason it is global -- the schema test in
+  `tests/test_tenancy.py` fails on one that is neither, and the route test there fails on
+  any `/api` route that does not declare `auth.current_account_id`. Posting has a per-run
+  approval, `ZEROPAGE_POST_OK=1` (`autopilot.POST_ENV`), in the render tools' SPEND_OK
+  shape; `holds_post`'s docstring says what that gate is and is not. Autonomy is **per-channel** (`shadow` | `queue` | `auto`), both
   channels seed as `shadow`, and promotion is a one-row `set_autonomy` change. The kill switch
   is global (a `settings` row or `ZEROPAGE_KILL=1`) and forces every run to hold. `hold_queue`
   doubles as the dead-man log — every graph run writes a row — and morning approve/reject via
@@ -261,7 +480,9 @@ is yours, in Resolve, by hand.
   days); `generate_candidates` is the never-raises edge: N candidates, every attempt a
   `generations` row (the data `attempts_to_keeper`/`tool_scoreboard` read), **nothing ever
   auto-kept** — the pick is the label. Guardrails live in the module: a DB-enforced
-  `VEO_DAILY_CAP` (default 6/day) and `estimate_cost` so every dry-run preview prices the plan.
+  `VEO_DAILY_CAP` (default 6/day), `VEO_SPEND_OK=1` per run (2026-09-02, runway's shape --
+  it was the most expensive tool in the repo and the only ungated one), and `estimate_cost`
+  so every dry-run preview prices the plan.
   Reached two ways, both gated: the graph's `generate_render` only when `ZEROPAGE_RENDER=1`
   (unadapted tools — KLING/RUNWAY/... — honestly stay dry), and `autopilot.EXECUTORS["generate"]`
   only in live mode through the full L4 gate. Config verified against the *installed*
@@ -347,24 +568,17 @@ is yours, in Resolve, by hand.
   existing modules. One rule governs it: **every control is backed by a working endpoint and
   gated by `GET /api/capabilities`**, which is derived live (key presence, a real
   `rag.connect()`), never a static dict. Views: Studio (composer with live `/api/retrieve`
-  grounding + asset carousel), Assets (locations/characters/props unified), Pipeline
-  (restructured 2026-08-25 into tabs over one engine; **Scenes** is the default since 2026-08-26), Director (the node canvas as its
-  own rail view — Mike's explicit call, same day: the nodes must never be buried behind a
-  tab), Analytics (real metric snapshots, two brands never averaged), Queue. **Pipeline's
-  two tabs:** *Concept* is the
-  original pre-production loop unchanged (approve = queue the shot list, deny =
-  reasons-enum + note → an `autonomy` correction always, a RAG `denials` chunk best-effort,
-  then the concept is deleted; plus the hold queue and the agreement numbers). *Generate* is
-  Higgsfield-style single generation: a camera-preset picker (`prompts/presets.json` via
-  `src/presets.py` — data, not code, sourced from the repo's video-prompting references),
-  `@` mentions autocompleting against `GET /api/assets/search` (cross-category name search;
-  picking one names the asset in the prompt AND attaches its photo), image *and video*
-  references (video rides a Gemini call inline under ~19MB, else through the Files API —
-  `api.video_part`), and `POST /api/generate/run`: Ground (`reference_block`) → Enhance
-  (preset + references folded into one Gemini call) → saved as a REAL one-shot
-  `shoot_concepts` row (or appended to an existing concept via `concept_id`) → best-effort
-  gated render (image via Nano Banana lands as the shot's `reference_image`; video via
-  Runway's spend gate lands as `media_url`; refusal still leaves the saved concept).
+  grounding + asset carousel; **the idea composer lives here and nowhere else** since
+  2026-08-28), Assets (locations/characters/props unified), Pipeline (**no tabs** since
+  2026-08-28 — one board of concept cards, which is all it ever was), Director (the node
+  canvas as its own rail view — Mike's explicit call, 2026-08-25: the nodes must never be
+  buried behind a tab), Analytics (real metric snapshots, two brands never averaged),
+  Queue (the approval gate, then the live job registry). The tabbed Pipeline of
+  2026-08-25 — *Concept* (approve/deny + holds) and *Generate* (Higgsfield-style single
+  generation) — was merged away; `POST /api/generate/run` and the preset picker
+  (`prompts/presets.json` via `src/presets.py`) survive as Director node plumbing, and
+  video references still ride a Gemini call inline under ~19MB, else through the Files API
+  (`api.video_part`).
   *Director* — its own rail view — is what the old Workflows view actually was: the
   LiteGraph canvas (`app/workflow_runner.py` executes, `src/workflows.py` stores, per-node
   Run + Run all, the seeded "Prompt enhancement" template still opens from the toolbar),
@@ -454,6 +668,124 @@ is yours, in Resolve, by hand.
   survives. `refine_shot_prompt` is per-shot technique polish via `promptgen.
   refine_prompt` against the `ai_prompting` shelf; the template is
   `prompts/direct_prompt.txt`.
+- **`src/mcp_server.py`** + **`app/mcp_mount.py`** — the MCP surface (2026-08-31), so the
+  board can be read and decided on from a phone or an agent instead of only from this
+  machine. **An adapter, never a store:** every tool is a thin call into `preprod` or
+  `scout`, and `data/pipeline.db` stays the one source of truth — a synced second store is
+  the mistake `asset_shelf` exists to fix. The read/decide tools (`board`, `idea`,
+  `search`, `capture`, `pick`, `archive`, `add_spark`, `tonight`, `sparks`, `images`,
+  `stats`, `job`) are always on; **nothing on them spends**. Picking still only puts a
+  concept in front of the Queue, and approving there is still what calls Runway, still on
+  this machine — the single spend gate is load-bearing, and a second door onto it from a
+  phone is exactly how it stops being one.
+  `ZEROPAGE_MCP_ENGINE=1` adds the two that cost model credit: `research`
+  (`scout.scout` — crawl, bank scored sparks, download the images behind them) and
+  `generate` (`orchestrator.run` — the LangGraph, ending PARKED in the Queue). `generate`
+  **refuses outright while `ZEROPAGE_RENDER=1`**: that flag turns `generate_render` from a
+  dry stub into real Veo spend, and a remote caller must never be what trips it. Both run
+  through `app/jobs.py` and return a job id — a five-minute graph run must not sit on an
+  open HTTP request.
+  **Two layers, and the split is the testable part.** The tool functions are plain Python
+  against a database path (so the whole surface is testable with no `mcp` package
+  installed); `build_server` wraps them lazily. `app/jobs.py` is injected as callables
+  because `src/` never imports `app/` — the `scene_chain` pattern.
+  Three things were found by running it, not reading it: mcp **2.x renamed FastMCP to
+  MCPServer** and moved `stateless_http` onto `streamable_http_app()` (hence the `mcp>=2`
+  pin); the SDK's DNS-rebinding protection **421s any unrecognised `Host`**, which behind a
+  tunnel means every real call fails looking like a broken server (hence
+  `ZEROPAGE_MCP_HOSTS`, `*` to disable — safe only because the bearer token is checked
+  before the MCP app is entered); and the SDK relays **only a `ToolError`'s message**,
+  replacing every other exception with "Error executing tool <name>" — so caller errors are
+  translated, or an agent cannot tell a bad id from a broken server and retries the
+  identical call.
+  **Two transports, and stdio is the default.** `python -m src.mcp_server` runs it over a
+  pipe: Claude Desktop launches the process itself, so there is no port, no bearer token on the
+  public internet, and nothing to leave running — and because the desktop app proxies its local
+  MCP servers up to cloud sessions, the board reaches a phone through the same connection. The
+  tunnel was only ever buying the part the desktop already does. The HTTP mount stays for the
+  caller stdio cannot serve: something that is NOT the desktop app reaching this pipeline over a
+  network. `main()` is the one place `src/` imports `app/` — deliberately, to inject the single
+  job registry rather than grow a second one; the rule exists so the LIBRARY layer imports
+  without the web app, and a process entry point is not that. `app/jobs.py` is stdlib-only, so
+  it costs nothing.
+  `.claude/skills/idea-agent/` is the agent that drives these tools — and its first move is
+  reading the board, not generating: a run that adds four concepts to eleven unreviewed ones
+  buried the decision that was already the bottleneck.
+- **The spark column is the direction, not the scaffolding** (2026-09-01). `gen_concept` used to
+  do `spark = f"{spark}\n{avoid}"` and pass one string, which the generator stored — so every
+  graph-written row carried ~1500 characters of `winners.avoid_guidance` in the column the board
+  prints, `archive_batch` groups by, and `scout._spark_key` hashes. Novelty compared the craft
+  notes along with the idea, so the same direction on a night with a different avoid-list looked
+  new: **novelty detection had silently stopped working** for every graph row. Split now —
+  `generate_scene_concept(spark=..., steer=...)`: the prompt sees both, the row sees the
+  direction. Filmmaker corrections ride in `steer` too, still consumed so each note steers once.
+- **A faceless brand is handed no cast** (2026-09-01). `ground_entities` passed every asset on
+  file to the shared `{cast}` socket regardless of brand, and that socket says *"reference the
+  uploaded photos as the EXACT face … name them"* — flatly against `concept_zeropage.txt`'s
+  *"FACELESS — no recurring person; any human is anonymous."* The cast block won: **every Zero
+  Page concept on the board named Michael, Cyclops or the Ducati**, in the brand whose whole
+  identity is that nobody recurs. `shootgen.cast_for(brand, ...)` gates it on `CAST_BRANDS`,
+  applied in BOTH the graph and the Create path (`scene_chain.ground`). Scoped by brand rather
+  than by a column on `characters` on purpose: an asset is not owned by a brand — the same
+  jacket could appear in either — what differs is whether a brand may NAME a recurring person,
+  which is a property of the brand. An empty cast falls through to `NO_CAST_NOTE`, so the model
+  is told to describe appearance plainly rather than left to invent someone.
+- **Nothing auto-posts right now** (2026-08-31, Mike's call). `autopilot.AUTO_POST_BRANDS` is
+  an empty tuple, so no brand enters an auto-post plan: everything lands in the Queue and a
+  person pushes it out, including a Zero Page concept that CLEARED the on-brand gate. A hold,
+  not a repeal — Zero Page was built to auto-post and the uncanny gate exists to make that safe;
+  lifting it is putting `"zeropage"` back in the tuple.
+  **Deliberately a constant, not `ZEROPAGE_AUTOPILOT=0`**: that env var also gates the MANUAL
+  approve-and-post button (app/main.py: *"Posting is OFF — set ZEROPAGE_AUTOPILOT=1"*), so
+  switching it off to stop the machine posting would also stop Mike posting by hand from the
+  Queue — the exact opposite of "everything goes to the Queue". The posture belongs in code
+  anyway, which is what `build_plan`'s comment block has always said.
+  The check reads from a **whitelist** rather than excluding one name, so **ANTIHERO can never
+  be let out by an edit that only meant to free Zero Page** — and a test objects if anyone adds
+  it. The uncanny check stays in front regardless: lifting the hold must not also open the gate.
+- **The feedback loop, and where it was broken** (2026-08-31). Three loops run at
+  different speeds. The **craft loop** (prompt → keyframe → does it look right) has always
+  worked — `winners` holds real notes because Mike looks at keyframes and reacts. The other
+  two were both broken, in the same way: the cheap signal was never captured.
+  **The taste loop** recorded only that a concept was passed over, never why. Thirteen of the
+  first fifteen were rejected and taught nothing. Worse, the Grade tab's most reachable button
+  was `/concepts/{id}/discard`, which called `delete_concept` — a **hard delete on the one page
+  built for teaching the system what a miss looks like**, destroying exactly the row
+  `set_archived`'s docstring says must survive ("deleting the ones you passed over would make
+  the rate 100% forever and unfalsifiable"). Replaced by `/concepts/{id}/pass`: five
+  one-keystroke buttons (`preprod.ARCHIVE_REASONS` — boring / off-brand / unshootable / seen it
+  / other) that archive with a reason and never delete. A reason is never a gate — passing
+  without one still archives, because an archive that fails on a missing word is an archive that
+  does not happen. `preprod.reason_counts` tallies them on the tab, because a queue with no
+  visible result is a chore and a tally that moves is a scoreboard. This is the FIRST
+  idea-level signal the pipeline has ever collected: `avoid_guidance` holds craft notes about
+  PROMPTS, and nothing anywhere held "you keep rejecting these for being boring."
+  **The audience loop was severed, not empty.** `videos.idea_id` points at the legacy pitch
+  pipeline's `ideas` table and has never been written (0 of 10 rows), so a posted video could
+  not be traced to the concept that made it — everything the audience taught was structurally
+  unable to reach the generator. `videos.concept_id` is the link, and `preprod.posted_outcomes`
+  is the join. It reads the **latest** metrics snapshot per video, never an average: `metrics`
+  is a growth curve on purpose. `concept_id` carries no `REFERENCES` on purpose either —
+  `shoot_concepts` is created by `preprod.init`, which runs AFTER `db.SCHEMA`, so a declared
+  foreign key there fails every insert with "no such table: main.shoot_concepts" (it did; 27
+  tests said so). The writer enforces the link, not the schema.
+  **And the reason nothing had ever posted** (found 2026-08-31, fixed). `uncanny_judge.py` was
+  written, tested, and never called from `src/` or `app/` — only from tests. Meanwhile
+  `autopilot.plan` reads the verdict it was supposed to write, and says so in as many words:
+  *"the gate fails closed, so 'unjudged' == 'held'"*. With `uncanny_passed` NULL on every row,
+  **every Zero Page concept was permanently ineligible to auto-post**. The gate was never wrong
+  — failing closed on an unjudged concept is exactly right for a channel that posts with no
+  human — it was simply never fed. `orchestrator.brand_gate` is the missing wire: it runs after
+  `evaluate` passes, scores zeropage concepts, and stores the verdict.
+  It **records, it never routes.** The gate belongs at the posting decision, not at generation:
+  a concept that misses the brand is still worth keeping and learning from, and parking it there
+  would destroy the negative signal the grade queue exists for. Antihero skips it entirely —
+  review-gated forever, so judging it is spend on a number nothing reads. `ZEROPAGE_UNCANNY=0`
+  skips it, and skipping means never auto-posting, which is the honest degrade.
+  Still open: **0 of 15 concepts scored by the TASTE judge** — that one is a manual Dev Studio
+  ranking tool, gates nothing, and costs a billed call per click, which is why the queue has
+  never been worked. Deleting its columns was considered and rejected: the uncanny columns
+  beside them are load-bearing, and the two are easy to confuse.
 - **`app/seo.py`** — the machine-readable growth surface, all pure functions so the exact bytes a
   crawler sees are testable without a server: `robots.txt` (the AI crawlers named explicitly and
   allowed; the app disallowed), `llms.txt` (what "grounded" means plus the hard specs — the part
@@ -477,7 +809,15 @@ is yours, in Resolve, by hand.
   itself on every ingest. `shootgen.py` injects into a prompt's `{references}` section, querying
   with the spark plus the mood of the described rooms.
   `retrieve_references` never raises, so no Postgres means an ungrounded run with a stderr note,
-  not a dead one. The `rag` CLI fails loudly — there
+  not a dead one. **`project` is the tenant that taught the row** (2026-09-02: the account
+  slug via `accounts.slug_of`, NOT the brand -- rag.py's docstring says why), written at every
+  learning-shelf ingest (denials, assets, winning/avoid prompts, proven_results) and NULL on the
+  craft shelves on purpose. A label is not a fence: every retrieval site passes the caller's
+  slug as `prefer_project`, which fetches a wider pool by similarity and re-sorts it with a
+  small `PROJECT_BOOST` for the caller's own rows, so their lessons rank first and nobody's
+  are excluded. `project=` stays the hard filter for the CLI; `python -m src.rag label` is
+  the backfill (150 live chunks labelled `zeropage` on 2026-09-02, measured before/after on a
+  copy first). The `rag` CLI fails loudly — there
   the store is the deliverable. `rag_eval.py` scores retrieval (hit@k, MRR) against a labeled
   JSON case file, judged at document level, sources deduplicated before ranking. **Note:**
   psycopg/libpq connects below Python's socket module, so `tests/conftest.py`'s network guard
@@ -519,6 +859,66 @@ is yours, in Resolve, by hand.
   (unverifiable = don't post). `build_caption` grounds captions in `post_seo.derive_signals` and
   picks the best of several candidates by `score_post` (pure, free), degrading to the fallback
   caption on any failure.
+- **`src/scout.py`** — the research scout: the input side the pipeline never had. Four
+  best-effort lanes (`web` = Gemini's `google_search` tool on the existing key; `shorts` =
+  `youtube.search_videos`, titles against view counts; `feeds` = RSS/Atom from
+  `prompts/scout_sources.txt`; `creators` = `inspiration.combined_grounding`), compressed by
+  ONE call into scored one-line sparks. **The digest is not optional plumbing** — `{spark}` is
+  a single line in `scene_brief_prompt.txt` sitting beside a CRAG block, so raw crawl text
+  passed through would produce concepts about the internet instead of about a room. Gates in
+  order: `winners.avoid_guidance` folded into the prompt, recent sparks re-checked in code by
+  `_spark_key` (prompts request, code enforces), then `SCORE_FLOOR` — under it a finding is
+  banked but never served, and the caller falls back to `sparks.txt`. Findings are **banked and
+  claimed separately** (`next_spark` hands one over, `mark_used` stamps it) so a crash loses no
+  research and the 16-run nightly batch can't fire one spark twice.
+  **Deliberately NOT grounded in the described rooms** — tried, measured, backed out
+  (2026-08-31). The scout's main consumer is the nightly graph, whose generator is
+  `build_scene_brief_prompt`, and that template's entire placeholder set is `{brand} {cast}
+  {example} {references} {spark}` — there is no `{locations}`, so a spark pinned to a room
+  imposes a constraint nothing downstream can honour. (The Create path's `scenes_prompt.txt`
+  DOES have `{locations}`, but `generate_scene_concepts` fetches the rooms itself at generation
+  time, so pre-committing to one only removes the variety `location_variety_note` manages.) An
+  ablation on identical signals settled it: without the rooms block the sparks came back
+  *better* — "a dinner plate set for three", "peeling paint reveals a hidden eye" — than with it
+  ("shaking hands holding one rusted key" on a balcony).
+  **What actually fixed the drift** was the digest prompt's translation rule (the signals are
+  where an idea comes FROM, not what the scene is ABOUT, with worked bad/good pairs) plus an
+  explicit ban on screens, feeds, algorithms, monetisation, AI, creators and content-making as
+  the SUBJECT of a spark — and, upstream of both, the query altitude: asking what is "trending"
+  returns the content business talking about itself (monetisation updates, policy changes, gear
+  launches), real signal that nobody can point a camera at. The queries now ask what imagery and
+  staging is landing. Two further lane facts from live runs: YouTube's keyword index returns
+  **zero** results for the sentence-shaped queries the grounded lane wants (hence separate
+  `WEB_QUERIES` / `SHORTS_QUERIES`, ordered by `relevance` not `viewCount`), and Reddit answers
+  403 to `.json` and 429 to `.rss` from a datacenter IP, so the shipped sources are RSS.
+- **The Instagram research lane** (`scout.gather_instagram` + the reading half of
+  `src/instagram.py`) — **there is no FYP API and there never has been.** Probed against the
+  live `zeropagefilms` token 2026-08-31: `explore`, `reels`, `trending`, `recommended_media`
+  and `discover` all return "Tried accessing nonexisting field". Meta has never exposed the
+  Explore/For-You surface to any API; the only way to read it is scraping a logged-in session,
+  which breaks Meta's terms and risks the account this pipeline publishes to. So the lane reads
+  what is **performing** instead — `business_discovery` on the handles already in
+  `inspiration.py` (curated by Mike's taste, not an algorithm) and `hashtag_top_media` (Meta's
+  own "top" ranking). Both are **Facebook-Login only**: they need `IG_GRAPH_TOKEN`, a different
+  credential on a different host from the publishing `IG_ACCESS_TOKEN`, which
+  `graph.facebook.com` cannot even parse. The lane never falls back to the publishing token —
+  that would turn "not configured" into what looks like an outage — and reports the missing
+  credential once per pass rather than once per handle.
+  **The hashtag id cache IS the rate-limit strategy.** Meta allows 30 unique tags per rolling
+  7 days, counted on the `ig_hashtag_search` ID lookup, and a tag's id never changes — so
+  `ig_hashtag_ids` caches ids forever and only a genuinely new tag spends budget. The budget is
+  checked locally *before* calling, so an exhausted window logs the real reason instead of a
+  generic API error. `INSTAGRAM_TAGS` is deliberately short and stable; churning it is what
+  would starve the lane. Note hashtag media carries **no `username`** (Meta strips it), so the
+  permalink is the only attribution and the bin stores it as `source_url`.
+- **`src/refbin.py`** — one owner for `data/refs`, both directions: the content-addressed name,
+  the JPEG normalisation (EXIF transpose BEFORE `convert("RGB")`, HEIC when `pillow-heif` is
+  present), `save`, `fetch` (bounded download for scouted images) and `resolve`. It exists
+  because `src/` cannot import `app/` and the scout writes where composer uploads live; the
+  read had to move with the write, since a patched writer and an unpatched reader is a file that
+  saves successfully and then resolves to nothing. `app/api.py`'s `_to_jpeg`/`_save_upload_ref`/
+  `_resolve_asset_photo` now delegate. **The URL shape is the point**: a scouted image comes out
+  as `/refs/<sha>.jpg`, so it rides the composer path with no new route or resolver.
 - **`src/gemini_utils.py`** — shared `generate_with_retry` (retries on `RESOURCE_EXHAUSTED`/
   `UNAVAILABLE`, falls through to `FALLBACK_MODELS` if the primary model stays down for the whole
   retry budget) and `strip_fences` (strips markdown code fences from model JSON output).
@@ -538,10 +938,32 @@ is yours, in Resolve, by hand.
   (The orchestrator adds one twist: it *uses* the warnings to retry, but the saved result
   still carries them.)
 - **Grounded in what exists — grounding shapes, it doesn't gate.** Every stage generates *from*
-  real material: concepts from photographed spaces, AI prompts from the
-  named real room they extend, ideation from the reference library and proven winners. That is
-  what keeps output shootable and on-brand. A mismatch is a warning, and a missing grounding
-  source degrades to an ungrounded run with a note.
+  real material: the cast and props on file, the reference library, proven winners, and the
+  photos attached to the run. A mismatch is a warning, and a missing grounding source degrades
+  to an ungrounded run with a note.
+  **Rooms are material you may pick, not the frame you must generate inside**
+  (2026-08-31, Mike's call, both brands). Concepts used to be generated *from* photographed
+  spaces, because a camera can only film where you actually are. Since 2026-08-20 every shot is
+  AI-generated, so that stopped being true and the rooms became what cast already is: named
+  material a scene MAY use. Three things carried the old rule and all three are gone.
+  `orchestrator.ensure_locations` **errored a run to `hold`** when the locations table was
+  empty — gating the night on rooms its own generator never reads, since
+  `build_scene_brief_prompt`'s whole placeholder set is `{brand} {cast} {example}
+  {references} {spark}` with no `{locations}` in it; the node is deleted and `planner` now
+  edges straight to `ground_entities`. `prompts/scenes_prompt.txt` listed every described room
+  under "set scenes in these real spaces where they fit", which made the photographed rooms the
+  default gravity of every Create; it now says the scene may be set anywhere the idea implies
+  and that no room has to appear. And `generate_scene_concepts` passed the whole catalogue into
+  the prompt; it now passes `picked_locations(refs, on_file)` — **only the rooms whose photos
+  are attached to THIS run**, since `/locations/<slug>/photo/<file>` is the URL the asset bank
+  hands out, so the slug in a ref path IS the pick. No new form field and no client-side flag
+  to go stale (the `scout_finding_id` lesson), and an accidental pick is a visible tile
+  somebody can remove. Picking reads as a LOCK, not a hint — it is a deliberate act, so it gets
+  `location_variety_note(lock=True)`'s treatment: lean into the space rather than manufacture
+  variety away from it. `validate_concept` still checks a named room against the **whole**
+  catalogue, because naming a real space you were not handed is fine and naming one that does
+  not exist is the thing worth flagging. `format_locations` is untouched — `rework.py` and
+  `director.py` still want the catalogue.
 - **The human choice is the label, and it gets recorded.** `shootgen.py` generates ideas, a human
   plans some (`shortlist_rate`), and shoots fewer still (`shoot_done`). Stored with the prompt's
   hash, so a prompt change can be measured against the rate it produced rather than argued about.
@@ -551,6 +973,16 @@ is yours, in Resolve, by hand.
   — `/metrics/new` still accepts typed numbers, `/concepts`
   still renders. The exceptions are deliberate: `promptgen` and `locations` fail loudly, because
   there the model call *is* the deliverable rather than bookkeeping on top of one.
+- **A crawl is an enhancement, never a dependency.** Every scout lane, the digest, the image
+  fetch and the bank read all degrade to contributing nothing rather than raising — the static
+  `sparks.txt` rotation they replace never failed, and a research step that can fail a night is
+  a downgrade. What a silent lane *does* owe is a line: `scout()` returns `errors` and the CLI
+  prints them, because a crawl that quietly finds nothing looks exactly like a healthy one (the
+  same failure mode that hid the dead launchd job for eleven nights).
+- **A reference must be traceable to where it came from.** Bin rows keep `source_url` and the
+  Create card renders it as a link on every tile. These are other people's frames held as mood
+  reference; an unattributed tile in front of someone about to spend a render on it is the wrong
+  affordance.
 - **Verify by running it, not by reading it.** Every real bug this project has had — a `warnings`
   string shattered into 140 single-character warnings, CI dying on torch's CUDA build, two tests
   passing only because the dev machine had a populated database, a site with no navigation between

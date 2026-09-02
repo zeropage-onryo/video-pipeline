@@ -95,13 +95,13 @@ def _concept_with_rendered_shot(brand, tmp_db):
         {"title": f"{brand} clip", "hook": "h", "logline": "l",
          "shots": [{"n": 1, "type": "BROLL", "source": "AI", "tool": "VEO",
                     "prompt": "p", "media_url": "https://cdn/x.mp4"}]},
-        brand=brand, path=tmp_db)
+        brand=brand, path=tmp_db, account_id=None)
 
 
 def test_antihero_never_enters_an_autopost_plan(tmp_db):
     cid = _concept_with_rendered_shot("antihero", tmp_db)
     preprod.save_uncanny_score(cid, {"overall": 9, "passed": True, "reasons": []},
-                               path=tmp_db)  # even if (wrongly) marked passed
+                               path=tmp_db, account_id=None)  # even if (wrongly) marked passed
     posts = [a for a in autopilot.build_plan(db_path=tmp_db)["actions"]
              if a["kind"] == "post"]
     assert posts == []   # review-gated forever
@@ -110,7 +110,7 @@ def test_antihero_never_enters_an_autopost_plan(tmp_db):
 def test_zeropage_held_concept_is_not_post_eligible(tmp_db):
     cid = _concept_with_rendered_shot("zeropage", tmp_db)
     preprod.save_uncanny_score(cid, {"overall": 4, "passed": False, "reasons": ["glossy"]},
-                               path=tmp_db)
+                               path=tmp_db, account_id=None)
     posts = [a for a in autopilot.build_plan(db_path=tmp_db)["actions"]
              if a["kind"] == "post"]
     assert posts == []
@@ -124,11 +124,52 @@ def test_zeropage_unjudged_concept_is_not_post_eligible(tmp_db):
     assert posts == []
 
 
-def test_zeropage_passed_concept_is_post_eligible(tmp_db):
+def test_nothing_auto_posts_while_the_hold_is_on(tmp_db):
+    """The hold (2026-08-31, Mike's call): AUTO_POST_BRANDS is empty, so
+    everything lands in the Queue and a person pushes it out. A concept
+    that CLEARS the on-brand gate still stays put -- that is the whole
+    point of the hold, and the case worth pinning."""
     cid = _concept_with_rendered_shot("zeropage", tmp_db)
     preprod.save_uncanny_score(cid, {"overall": 9, "passed": True, "reasons": []},
-                               path=tmp_db)
+                               path=tmp_db, account_id=None)
+    assert autopilot.AUTO_POST_BRANDS == ()
+    posts = [a for a in autopilot.build_plan(db_path=tmp_db)["actions"]
+             if a["kind"] == "post"]
+    assert posts == []
+
+
+def test_the_hold_can_be_lifted_for_zeropage(tmp_db, monkeypatch):
+    """The mechanism still works — this is what proves lifting the hold
+    is a one-line change and not a rewrite, and keeps the post-planning
+    path covered while nothing is allowed to use it."""
+    cid = _concept_with_rendered_shot("zeropage", tmp_db)
+    preprod.save_uncanny_score(cid, {"overall": 9, "passed": True, "reasons": []},
+                               path=tmp_db, account_id=None)
+    monkeypatch.setattr(autopilot, "AUTO_POST_BRANDS", ("zeropage",))
     posts = [a for a in autopilot.build_plan(db_path=tmp_db)["actions"]
              if a["kind"] == "post"]
     assert len(posts) == 1
     assert posts[0]["title"] == "zeropage clip"
+
+
+def test_the_uncanny_gate_still_bites_when_the_hold_is_lifted(tmp_db, monkeypatch):
+    """Lifting the hold must not also open the gate. An unjudged concept
+    stays ineligible even for a whitelisted brand."""
+    _concept_with_rendered_shot("zeropage", tmp_db)          # no uncanny score
+    monkeypatch.setattr(autopilot, "AUTO_POST_BRANDS", ("zeropage",))
+    posts = [a for a in autopilot.build_plan(db_path=tmp_db)["actions"]
+             if a["kind"] == "post"]
+    assert posts == []
+
+
+def test_antihero_stays_gated_even_if_someone_whitelists_it(tmp_db, monkeypatch):
+    """The whitelist is a convenience, not the Antihero guarantee. If a
+    future edit ever adds antihero, this is the test that objects --
+    Michael's face and name post only when he approves."""
+    cid = _concept_with_rendered_shot("antihero", tmp_db)
+    preprod.save_uncanny_score(cid, {"overall": 9, "passed": True, "reasons": []},
+                               path=tmp_db, account_id=None)
+    monkeypatch.setattr(autopilot, "AUTO_POST_BRANDS", ("zeropage",))
+    posts = [a for a in autopilot.build_plan(db_path=tmp_db)["actions"]
+             if a["kind"] == "post"]
+    assert posts == []

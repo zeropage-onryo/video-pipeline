@@ -17,10 +17,11 @@ stubbed until their modules land (BACKLOG #4).
 import argparse
 import os
 import sys
+from typing import Optional
 
 from dotenv import load_dotenv
 
-from . import db
+from . import accounts, db
 
 WIRED_PLATFORMS = ("youtube", "instagram")
 
@@ -41,11 +42,11 @@ def _refresh_platform(platform, videos, db_path=None):
     return [{"ok": False, "error": f"{platform} refresh not wired yet"} for _ in videos]
 
 
-def refresh_all(platform=None, db_path=None):
+def refresh_all(platform=None, db_path=None, account_id: Optional[int] = None):
     """Sweep metrics for all posted videos, grouped by platform. Returns
     {platform: {videos, refreshed, failed, errors}}."""
     kwargs = {"path": db_path} if db_path is not None else {}
-    videos = db.list_videos(limit=10000, **kwargs)  # newest first, all platforms
+    videos = db.list_videos(limit=10000, **kwargs, account_id=account_id)  # newest first, all platforms
     by_platform = {}
     for v in videos:
         p = v.get("platform")
@@ -74,9 +75,18 @@ def main(argv=None):
                         help="only this platform (default: every platform with posts)")
     parser.add_argument("--no-promote", action="store_true",
                         help="refresh metrics only; skip the promote_winners step")
+    parser.add_argument(
+        "--account", default=None,
+        help=(
+            "The account to act as, by slug (zeropage / antihero). "
+            "Defaults to the oldest account on the database -- the nightly "
+            "job has no session, and acting as nobody would find no videos."
+        ),
+    )
     args = parser.parse_args(argv)
+    account_id = accounts.resolve_account(args.account)
 
-    summary = refresh_all(platform=args.platform)
+    summary = refresh_all(platform=args.platform, account_id=account_id)
     for p, s in summary.items():
         line = f"{p}: refreshed {s['refreshed']}/{s['videos']}"
         if s["failed"]:

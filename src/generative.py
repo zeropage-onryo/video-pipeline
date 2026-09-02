@@ -22,10 +22,11 @@ discard. This records the decision instead of losing it.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from .db import DB_PATH, _now, connect
+from .db import DB_PATH, _now, connect, own_table
 from .shot import TOOLS, Shot
 
 # The generations-log vocabulary: every video tool from the Shot
@@ -76,6 +77,14 @@ def init(path: Path | str = DB_PATH) -> None:
     """Create the generative tables. Run after db.init_db()."""
     with connect(path) as conn:
         conn.executescript(SCHEMA)
+        # tenancy: generations is what the daily render caps count, so an
+        # unowned row here is a cap another account pays for
+        own_table(conn, "shots")
+        own_table(conn, "generations")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_gen_account_tool "
+            "ON generations (account_id, tool, created_at)"
+        )
 
 
 def add_shot(
@@ -84,6 +93,8 @@ def add_shot(
     slot_index: Optional[int] = None,
     notes: Optional[str] = None,
     path: Path | str = DB_PATH,
+    *,
+    account_id: int,
 ) -> int:
     """
     Record a gap in the footage that a generated clip will fill.
@@ -99,19 +110,88 @@ def add_shot(
             """
             INSERT INTO shots
                 (created_at, idea_id, slot_index, spec_json, subject,
-                 camera, size, duration_s, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 camera, size, duration_s, notes, account_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (_now(), idea_id, slot_index, json.dumps(shot.as_dict()),
-             shot.subject, shot.camera, shot.size, shot.duration_s, notes),
+             shot.subject, shot.camera, shot.size, shot.duration_s, notes,
+             account_id),
         )
         return int(cur.lastrowid)
 
 
-def get_shot(shot_id: int, path: Path | str = DB_PATH) -> Optional[dict[str, Any]]:
-    """Fetch a shot with its spec parsed back out."""
+# --------------------------------------------------------------------------
+# the daily spend wall
+# --------------------------------------------------------------------------
+
+def used_today(tool: str, path: Path | str = DB_PATH, *,
+               account_id: Optional[int] = None, everyone: bool = False) -> int:
+    """Generations logged for `tool` since UTC midnight.
+
+    Reads the same generations table the scoreboards do, so a cap cannot
+    drift from the log. `everyone=True` ignores ownership on purpose --
+    that is the installation-wide count, and it is the only query here
+    allowed to.
+    """
+    today = datetime.now(timezone.utc).date().isoformat()
     with connect(path) as conn:
-        row = conn.execute("SELECT * FROM shots WHERE id = ?", (shot_id,)).fetchone()
+        if everyone:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM generations WHERE tool = ? AND created_at >= ?",
+                (tool, today),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM generations "
+                "WHERE tool = ? AND created_at >= ? AND account_id IS ?",
+                (tool, today, account_id),
+            ).fetchone()
+        return int(row[0])
+
+
+def cap_error(tool: str, n: int = 1, *, account_id: Optional[int],
+              per_account: int, ceiling: int, path: Path | str = DB_PATH,
+              env_prefix: str, phrase: str = "generations used",
+              used: Optional[int] = None,
+              used_everywhere: Optional[int] = None) -> Optional[str]:
+    """The message to refuse with, or None to go ahead.
+
+    TWO walls, and both are needed. The per-account cap is fairness: it
+    stops whoever logs in first from spending everyone's day. The global
+    ceiling is the credit card: per-account alone means ten pilot users
+    times six renders is sixty renders billed to one person, and each of
+    them is inside their limit the whole time.
+
+    Checked per-account first so the error a user sees names the limit
+    they can actually do something about.
+    """
+    # `used` is passed in by each tool module, from its own
+    # generations_today(). That keeps one seam per tool for tests to patch
+    # -- a cap check that quietly stopped calling the function the tests
+    # stub is how a "capped" render makes a real billed API call.
+    if used is None:
+        used = used_today(tool, path, account_id=account_id)
+    if used + n > per_account:
+        more = f", {n} more would exceed it" if n > 1 else ""
+        return (f"daily cap: {used}/{per_account} {phrase} today{more} "
+                f"({env_prefix}_DAILY_CAP to raise)")
+    everyone = (used_everywhere if used_everywhere is not None
+                else used_today(tool, path, everyone=True))
+    if everyone + n > ceiling:
+        return (f"daily ceiling: {everyone}/{ceiling} {phrase} across "
+                f"all accounts today ({env_prefix}_GLOBAL_DAILY_CAP to raise)")
+    return None
+
+
+def get_shot(shot_id: int, path: Path | str = DB_PATH, *,
+             account_id: int) -> Optional[dict[str, Any]]:
+    """Fetch a shot with its spec parsed back out -- if it is this
+    account's. None for someone else's, same as for a missing id."""
+    with connect(path) as conn:
+        row = conn.execute(
+            "SELECT * FROM shots WHERE id = ? AND account_id IS ?",
+            (shot_id, account_id),
+        ).fetchone()
     if not row:
         return None
     data = dict(row)
@@ -128,6 +208,8 @@ def record_generation(
     cost_usd: Optional[float] = None,
     notes: Optional[str] = None,
     path: Path | str = DB_PATH,
+    *,
+    account_id: int,
 ) -> int:
     """
     Log one attempt. Attempt number is assigned automatically, counting per
@@ -139,23 +221,29 @@ def record_generation(
         raise ValueError("prompt cannot be empty")
 
     with connect(path) as conn:
-        if not conn.execute("SELECT 1 FROM shots WHERE id = ?", (shot_id,)).fetchone():
+        owned = conn.execute(
+            "SELECT 1 FROM shots WHERE id = ? AND account_id IS ?",
+            (shot_id, account_id),
+        ).fetchone()
+        if not owned:
             raise ValueError(f"no shot with id {shot_id}")
+        # attempt numbering is per shot, per tool, per account -- a shared
+        # counter would leak how often the other account is retrying
         prior = conn.execute(
             "SELECT COALESCE(MAX(attempt), 0) FROM generations "
-            "WHERE shot_id = ? AND tool = ?",
-            (shot_id, tool),
+            "WHERE shot_id = ? AND tool = ? AND account_id IS ?",
+            (shot_id, tool, account_id),
         ).fetchone()[0]
         cur = conn.execute(
             """
             INSERT INTO generations
                 (shot_id, created_at, tool, attempt, prompt, params_json,
-                 output_path, cost_usd, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 output_path, cost_usd, notes, account_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (shot_id, _now(), tool, prior + 1, prompt,
              json.dumps(params) if params else None,
-             output_path, cost_usd, notes),
+             output_path, cost_usd, notes, account_id),
         )
         return int(cur.lastrowid)
 
@@ -164,6 +252,8 @@ def mark_kept(
     generation_id: int,
     output_path: Optional[str] = None,
     path: Path | str = DB_PATH,
+    *,
+    account_id: int,
 ) -> None:
     """
     The one you used. Marks its shot resolved.
@@ -173,22 +263,28 @@ def mark_kept(
     """
     with connect(path) as conn:
         row = conn.execute(
-            "SELECT shot_id FROM generations WHERE id = ?", (generation_id,)
+            "SELECT shot_id FROM generations WHERE id = ? AND account_id IS ?",
+            (generation_id, account_id),
         ).fetchone()
         if not row:
             raise ValueError(f"no generation with id {generation_id}")
         conn.execute(
             "UPDATE generations SET kept = 1, output_path = COALESCE(?, output_path) "
-            "WHERE id = ?",
-            (output_path, generation_id),
+            "WHERE id = ? AND account_id IS ?",
+            (output_path, generation_id, account_id),
         )
-        conn.execute("UPDATE shots SET resolved = 1 WHERE id = ?", (row["shot_id"],))
+        conn.execute(
+            "UPDATE shots SET resolved = 1 WHERE id = ? AND account_id IS ?",
+            (row["shot_id"], account_id),
+        )
 
 
 def mark_rejected(
     generation_id: int,
     reason: str,
     path: Path | str = DB_PATH,
+    *,
+    account_id: int,
 ) -> None:
     """
     Why a take failed. Free text, but keep the vocabulary tight — "morphing
@@ -197,8 +293,9 @@ def mark_rejected(
     """
     with connect(path) as conn:
         cur = conn.execute(
-            "UPDATE generations SET reject_reason = ? WHERE id = ?",
-            (reason, generation_id),
+            "UPDATE generations SET reject_reason = ? "
+            "WHERE id = ? AND account_id IS ?",
+            (reason, generation_id, account_id),
         )
         if cur.rowcount == 0:
             raise ValueError(f"no generation with id {generation_id}")
@@ -212,6 +309,8 @@ def mark_rejected(
 def attempts_to_keeper(
     tool: Optional[str] = None,
     path: Path | str = DB_PATH,
+    *,
+    account_id: int,
 ) -> list[dict[str, Any]]:
     """
     For each resolved shot, how many attempts it took on the tool that won.
@@ -224,21 +323,24 @@ def attempts_to_keeper(
         SELECT g.shot_id, s.subject, s.camera, s.size,
                g.tool, g.attempt AS attempts, g.cost_usd,
                (SELECT COUNT(*) FROM generations x
-                 WHERE x.shot_id = g.shot_id) AS total_attempts_all_tools,
+                 WHERE x.shot_id = g.shot_id
+                   AND x.account_id IS g.account_id) AS total_attempts_all_tools,
                (SELECT COALESCE(SUM(x.cost_usd), 0) FROM generations x
-                 WHERE x.shot_id = g.shot_id) AS total_cost
+                 WHERE x.shot_id = g.shot_id
+                   AND x.account_id IS g.account_id) AS total_cost
         FROM generations g
         JOIN shots s ON s.id = g.shot_id
-        WHERE g.kept = 1
+        WHERE g.kept = 1 AND g.account_id IS ?
         {tool_clause}
         ORDER BY g.shot_id
     """.format(tool_clause="AND g.tool = ?" if tool else "")
-    params = (tool,) if tool else ()
+    params = (account_id, tool) if tool else (account_id,)
     with connect(path) as conn:
         return [dict(r) for r in conn.execute(sql, params)]
 
 
-def tool_scoreboard(path: Path | str = DB_PATH) -> list[dict[str, Any]]:
+def tool_scoreboard(path: Path | str = DB_PATH, *,
+                    account_id: int) -> list[dict[str, Any]]:
     """
     Per tool: attempts made, clips kept, hit rate, spend.
 
@@ -254,10 +356,13 @@ def tool_scoreboard(path: Path | str = DB_PATH) -> list[dict[str, Any]]:
                    SUM(g.kept)                 AS kept,
                    COALESCE(SUM(g.cost_usd),0) AS spend
             FROM generations g
-            WHERE g.shot_id IN (SELECT shot_id FROM generations WHERE kept = 1)
+            WHERE g.account_id IS ?
+              AND g.shot_id IN (SELECT shot_id FROM generations
+                                 WHERE kept = 1 AND account_id IS ?)
             GROUP BY g.tool
             ORDER BY g.tool
-            """
+            """,
+            (account_id, account_id),
         ).fetchall()
     out = []
     for r in rows:
@@ -276,6 +381,8 @@ def tool_scoreboard(path: Path | str = DB_PATH) -> list[dict[str, Any]]:
 def failure_reasons(
     tool: Optional[str] = None,
     path: Path | str = DB_PATH,
+    *,
+    account_id: int,
 ) -> list[dict[str, Any]]:
     """
     What goes wrong, grouped. Tells you which failure your prompts keep
@@ -284,11 +391,11 @@ def failure_reasons(
     sql = """
         SELECT reject_reason AS reason, COUNT(*) AS n
         FROM generations
-        WHERE reject_reason IS NOT NULL {tool_clause}
+        WHERE reject_reason IS NOT NULL AND account_id IS ? {tool_clause}
         GROUP BY reject_reason
         ORDER BY n DESC
     """.format(tool_clause="AND tool = ?" if tool else "")
-    params = (tool,) if tool else ()
+    params = (account_id, tool) if tool else (account_id,)
     with connect(path) as conn:
         return [dict(r) for r in conn.execute(sql, params)]
 
@@ -296,6 +403,8 @@ def failure_reasons(
 def winning_prompts(
     limit: int = 10,
     path: Path | str = DB_PATH,
+    *,
+    account_id: int,
 ) -> list[dict[str, Any]]:
     """
     Prompts that produced a keeper, fewest attempts first.
@@ -313,17 +422,18 @@ def winning_prompts(
                        s.subject, s.camera, s.size, s.spec_json
                 FROM generations g
                 JOIN shots s ON s.id = g.shot_id
-                WHERE g.kept = 1
+                WHERE g.kept = 1 AND g.account_id IS ?
                 ORDER BY g.attempt ASC, g.created_at DESC
                 LIMIT ?
                 """,
-                (limit,),
+                (account_id, limit),
             )
         ]
 
 
-def open_shots(path: Path | str = DB_PATH) -> list[dict[str, Any]]:
-    """Shots with no keeper yet — the working queue."""
+def open_shots(path: Path | str = DB_PATH, *,
+               account_id: int) -> list[dict[str, Any]]:
+    """Shots with no keeper yet — this account's working queue."""
     with connect(path) as conn:
         return [
             dict(r)
@@ -331,18 +441,22 @@ def open_shots(path: Path | str = DB_PATH) -> list[dict[str, Any]]:
                 """
                 SELECT s.*, COUNT(g.id) AS attempts_so_far
                 FROM shots s
-                LEFT JOIN generations g ON g.shot_id = s.id
-                WHERE s.resolved = 0
+                LEFT JOIN generations g
+                       ON g.shot_id = s.id AND g.account_id IS s.account_id
+                WHERE s.resolved = 0 AND s.account_id IS ?
                 GROUP BY s.id
                 ORDER BY s.created_at DESC
-                """
+                """,
+                (account_id,),
             )
         ]
 
 
-def summary(path: Path | str = DB_PATH) -> dict[str, int]:
+def summary(path: Path | str = DB_PATH, *, account_id: int) -> dict[str, int]:
     with connect(path) as conn:
         return {
-            t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+            t: conn.execute(
+                f"SELECT COUNT(*) FROM {t} WHERE account_id IS ?", (account_id,)
+            ).fetchone()[0]
             for t in ("shots", "generations")
         }

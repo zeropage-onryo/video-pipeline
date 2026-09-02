@@ -18,6 +18,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 from google import genai
@@ -142,6 +143,7 @@ def generate_prompts_for_slot(
     client=None,
     model: str = MODEL,
     db_path=None,
+    account_id: Optional[int] = None,
 ) -> dict:
     """
     One generative slot in, three tool prompts out. Persists the
@@ -149,11 +151,11 @@ def generate_prompts_for_slot(
     so later generation attempts (G3) can be logged against it.
     """
     kwargs = {"path": db_path} if db_path is not None else {}
-    examples = gen.winning_prompts(limit=5, **kwargs)
+    examples = gen.winning_prompts(limit=5, **kwargs, account_id=account_id)
 
     shot = structure_shot(description, examples, client, model=model)
 
-    shot_id = gen.add_shot(shot, idea_id=idea_id, slot_index=slot_index, **kwargs)
+    shot_id = gen.add_shot(shot, idea_id=idea_id, slot_index=slot_index, **kwargs, account_id=account_id)
     prompts = render_all(shot)
 
     return {"shot_id": shot_id, "shot": shot.as_dict(), "prompts": prompts}

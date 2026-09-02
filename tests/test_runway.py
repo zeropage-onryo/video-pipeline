@@ -188,7 +188,7 @@ def seed_scene(path, reference=""):
     if reference:
         shot["reference_image"] = reference
     return preprod.save_concept(
-        {"title": "Vault", "shots": [shot]}, brand="antihero", path=path)
+        {"title": "Vault", "shots": [shot]}, brand="antihero", path=path, account_id=None)
 
 
 def test_for_shot_respects_the_spend_gate(scene_db, monkeypatch, tmp_path):
@@ -218,7 +218,7 @@ def test_for_shot_renders_logs_and_attaches(scene_db, approved, fake_download,
     assert "prompt_image" not in client.calls[0]     # no reference -> text-to-video
     # served from /renders, logged, and attached to the shot
     assert result["media_url"].startswith("/renders/runway/")
-    concept = preprod.get_concept(concept_id, path=scene_db)
+    concept = preprod.get_concept(concept_id, path=scene_db, account_id=None)
     assert concept["shots"][0]["media_url"] == result["media_url"]
     assert runway.generations_today(db_path=scene_db) == 1
 
@@ -235,6 +235,63 @@ def test_for_shot_anchors_on_the_reference_image(scene_db, approved, fake_downlo
     assert client.calls[0]["prompt_image"] == "https://cdn.example/plate.jpg"
 
 
+def test_for_shot_anchors_on_a_local_keyframe_as_bytes(scene_db, approved,
+                                                       fake_download, monkeypatch,
+                                                       tmp_path):
+    """The bug this closes: a Nano keyframe is /renders/nano/x.png until
+    R2 is configured, and the old code took reference_image only when it
+    started with http -- so the keyframe silently anchored nothing while
+    the Queue card said it did, and the credit was spent on the lie."""
+    import src.storage as storage
+    monkeypatch.setattr(runway, "RENDER_DIR", tmp_path / "renders")
+    monkeypatch.setattr(storage, "configured", lambda: False)
+    renders = tmp_path / "data-renders"
+    (renders / "nano").mkdir(parents=True)
+    png = b"\x89PNG\r\n\x1a\n" + b"keyframe-bytes"
+    (renders / "nano" / "wf-1.png").write_bytes(png)
+    monkeypatch.setattr(runway, "RENDERS_ROOT", renders)
+
+    concept_id = seed_scene(scene_db, reference="/renders/nano/wf-1.png")
+    client = FakeClient()
+    result = runway.generate_for_shot(concept_id, 1, db_path=scene_db, client=client)
+    assert result["ok"], result["error"]
+    sent = client.calls[0]["prompt_image"]
+    # inline, and typed off the magic number -- Nano writes PNG, and the
+    # old bytes path hardcoded image/jpeg
+    assert sent.startswith("data:image/png;base64,")
+
+
+def test_for_shot_resolves_a_picked_asset_photo(scene_db, approved, fake_download,
+                                                monkeypatch, tmp_path):
+    """A site-relative asset photo is resolved by the caller's own
+    resolver (the web app passes _resolve_asset_photo); without one it
+    is dropped rather than pretended about."""
+    import src.storage as storage
+    monkeypatch.setattr(runway, "RENDER_DIR", tmp_path / "renders")
+    monkeypatch.setattr(storage, "configured", lambda: False)
+    photo = tmp_path / "michael.jpg"
+    photo.write_bytes(b"\xff\xd8" + b"jacket")
+    concept_id = seed_scene(scene_db, reference="/characters/michael/photo/1.jpg")
+
+    client = FakeClient()
+    assert runway.generate_for_shot(concept_id, 1, db_path=scene_db,
+                                    client=client)["ok"]
+    assert "prompt_image" not in client.calls[0]        # no resolver -> dropped
+
+    client = FakeClient()
+    assert runway.generate_for_shot(concept_id, 1, db_path=scene_db, client=client,
+                                    resolve_photo=lambda url: photo)["ok"]
+    assert client.calls[0]["prompt_image"].startswith("data:image/jpeg;base64,")
+
+
+def test_as_prompt_image_refuses_a_path_escaping_the_render_root(monkeypatch, tmp_path):
+    renders = tmp_path / "renders"
+    renders.mkdir()
+    (tmp_path / "secret.png").write_bytes(b"\x89PNG\r\n\x1a\nno")
+    monkeypatch.setattr(runway, "RENDERS_ROOT", renders)
+    assert runway.as_prompt_image("/renders/../secret.png") is None
+
+
 def test_for_shot_missing_pieces_are_results(scene_db, approved, monkeypatch, tmp_path):
     from src import preprod
     monkeypatch.setattr(runway, "RENDER_DIR", tmp_path / "renders")
@@ -244,7 +301,7 @@ def test_for_shot_missing_pieces_are_results(scene_db, approved, monkeypatch, tm
         {"title": "Cam only",
          "shots": [{"n": 1, "type": "CHARACTER", "source": "CAMERA",
                     "cam": "BMPCC", "location": "garage"}]},
-        brand="antihero", path=scene_db)
+        brand="antihero", path=scene_db, account_id=None)
     assert "no shot 9" in runway.generate_for_shot(
         concept_id, 9, db_path=scene_db, client=FakeClient())["error"]
     assert "no AI prompt" in runway.generate_for_shot(
@@ -260,3 +317,112 @@ def test_for_shot_cap_blocks_before_any_call(scene_db, approved, monkeypatch, tm
     assert result["ok"] is False
     assert "daily cap" in result["error"]
     assert client.calls == []
+
+
+# --- the prompt has to survive the trip out ---------------------------------
+# Two things sat between a finished director's prompt and a Runway
+# render, and both refused the whole job rather than degrading:
+# moderation reading an asset NAME as third-party IP, and a promptText
+# cap a 1400-character prompt was 46% over (2026-08-29).
+
+def test_a_prompt_over_the_cap_refuses_before_spending(approved):
+    long_prompt = "x" * 1001
+    with pytest.raises(ValueError) as excinfo:
+        runway.generate_video(long_prompt, "/tmp/never.mp4",
+                              client=object())
+    message = str(excinfo.value)
+    assert "1001" in message and "1000" in message
+    assert "cut 1" in message
+    assert "Avoid list" in message          # says WHERE to cut, not just that
+
+
+def test_the_cap_is_measured_in_utf16_like_the_api_counts_it():
+    """An emoji is two UTF-16 units. A len() check passes a prompt the
+    API then rejects, which is the failure this exists to prevent."""
+    assert runway.prompt_limit("gen4_turbo") == 1000
+    runway.check_prompt_length("a" * 1000, "gen4_turbo")     # exactly at it
+    with pytest.raises(ValueError):
+        runway.check_prompt_length("🎬" * 501, "gen4_turbo")  # 1002 units
+
+
+def test_a_prompt_at_the_cap_is_let_through(approved, tmp_db, fake_download,
+                                            monkeypatch):
+    seen = {}
+
+    class FakeTask:
+        output = ["https://cdn.test/clip.mp4"]
+
+    class FakeCreate:
+        def create(self, **kw):
+            seen.update(kw)
+            return SimpleNamespace(wait_for_task_output=lambda: FakeTask())
+
+    monkeypatch.setattr(runway, "_make_client",
+                        lambda: SimpleNamespace(image_to_video=FakeCreate()))
+    runway.generate_video("y" * 1000, "/tmp/ok.mp4", db_path=tmp_db)
+    assert seen["prompt_text"] == "y" * 1000
+
+
+@pytest.fixture
+def asset_db(tmp_db):
+    """tmp_db has the generations tables; the alias lookup reads the
+    asset bank, which is a different module's schema."""
+    from src import entities
+    entities.init(tmp_db)
+    return tmp_db
+
+
+def test_a_flagged_asset_name_is_swapped_for_its_alias(asset_db):
+    """Runway's moderation reads the NAME: "Cyclops" is a Marvel
+    character to a classifier however Homeric yours is, and the whole
+    prompt is refused. The keyframe carries the look, so describing the
+    thing costs nothing."""
+    import json
+
+    from src import entities
+    entities.add_character(
+        "Cyclops", description=json.dumps({"render_alias": "one-eyed humanoid"}),
+        path=asset_db, account_id=None)
+    out = runway.safe_prompt("A Cyclops polishes a spoon. The cyclops sighs.",
+                             db_path=asset_db)
+    assert "yclops" not in out
+    assert out == "A one-eyed humanoid polishes a spoon. The one-eyed humanoid sighs."
+
+
+def test_an_asset_without_an_alias_is_left_alone(asset_db):
+    """Explicit per asset, never guessed -- swapping every name for its
+    description would blow the 1000-character budget on one sentence."""
+    import json
+
+    from src import entities
+    entities.add_character("Michael", description=json.dumps({"look": "a man"}),
+                           path=asset_db, account_id=None)
+    assert runway.safe_prompt("Michael rides", db_path=asset_db) == "Michael rides"
+
+
+def test_the_swap_happens_before_the_length_check(asset_db, approved,
+                                                 monkeypatch):
+    """An alias changes the length, so what we measure has to be what we
+    send -- a name that shortens under substitution must not be refused
+    for a length it no longer has."""
+    import json
+
+    from src import entities
+    entities.add_character(
+        "Cyclops", description=json.dumps({"render_alias": "x"}), path=asset_db, account_id=None)
+    prompt = "Cyclops " * 130          # 1040 chars, 260 once swapped
+    assert len(prompt) > 1000
+    seen = {}
+
+    class FakeTask:
+        output = ["https://cdn.test/clip.mp4"]
+
+    monkeypatch.setattr(
+        runway, "_make_client",
+        lambda: SimpleNamespace(image_to_video=SimpleNamespace(
+            create=lambda **kw: seen.update(kw) or SimpleNamespace(
+                wait_for_task_output=lambda: FakeTask()))))
+    monkeypatch.setattr(runway, "_download", lambda url, path: None)
+    runway.generate_video(prompt, "/tmp/ok.mp4", db_path=asset_db)
+    assert "Cyclops" not in seen["prompt_text"]
+    assert len(seen["prompt_text"]) <= 1000

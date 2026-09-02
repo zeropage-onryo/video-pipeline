@@ -71,6 +71,7 @@ def test_kill_switch_beats_everything(clean_gate, monkeypatch):
 
 def test_all_three_conditions_align_and_executors_fire(clean_gate, monkeypatch):
     monkeypatch.setenv(autopilot.ENABLE_ENV, "1")
+    monkeypatch.setenv(autopilot.POST_ENV, "1")
     result = autopilot.execute(PLAN, approve=True, dry_run=False)
     assert result["mode"] == "live"
     assert result["executed"] == 2
@@ -92,14 +93,15 @@ def test_build_plan_reads_ai_shots_without_touching_anything(tmp_path):
     path = tmp_path / "test.db"
     db.init_db(path)
     preprod.init(path)
-    preprod.add_location("garage", {"space": "g"}, path=path)
+    preprod.add_location("garage", {"space": "g"}, path=path, account_id=None)
     preprod.save_concept(
         {"title": "T", "shots": [
             {"n": 1, "type": "BROLL", "source": "AI", "tool": "VEO",
              "location": "garage", "desc": "d", "prompt": "a drawer closing"},
         ]},
         brand="antihero", path=path,
-    )
+    
+        account_id=None,)
     plan = autopilot.build_plan(db_path=path)
     kinds = [a["kind"] for a in plan["actions"]]
     assert kinds == ["generate"]
@@ -107,22 +109,28 @@ def test_build_plan_reads_ai_shots_without_touching_anything(tmp_path):
     assert plan["actions"][0]["tool"] == "VEO"
 
 
-def test_build_plan_emits_post_only_once_media_exists(tmp_path):
+def test_build_plan_emits_post_only_once_media_exists(tmp_path, monkeypatch):
     """The plan never invents deliverables: a post action appears only
     when a shot carries a rendered media_url for Meta to fetch -- and,
-    for Zero Page, only once the concept has cleared the uncanny gate."""
+    for Zero Page, only once the concept has cleared the uncanny gate.
+
+    Runs with the hold lifted (AUTO_POST_BRANDS patched), because the
+    media-gating rule this covers is independent of who is allowed to
+    post and has to stay tested while nobody is."""
     from src import db, preprod
+    monkeypatch.setattr(autopilot, "AUTO_POST_BRANDS", ("zeropage",))
     path = tmp_path / "test.db"
     db.init_db(path)
     preprod.init(path)
-    preprod.add_location("garage", {"space": "g"}, path=path)
+    preprod.add_location("garage", {"space": "g"}, path=path, account_id=None)
     preprod.save_concept(
         {"title": "No media yet", "hook": "h", "shots": [
             {"n": 1, "type": "BROLL", "source": "AI", "tool": "VEO",
              "location": "garage", "desc": "d", "prompt": "p"},
         ]},
         brand="zeropage", path=path,
-    )
+    
+        account_id=None,)
     cid = preprod.save_concept(
         {"title": "Rendered", "hook": "the hook", "shots": [
             {"n": 1, "type": "BROLL", "source": "AI", "tool": "VEO",
@@ -130,9 +138,10 @@ def test_build_plan_emits_post_only_once_media_exists(tmp_path):
              "media_url": "https://cdn.example/rendered.mp4"},
         ]},
         brand="zeropage", path=path,
-    )
+    
+        account_id=None,)
     preprod.save_uncanny_score(
-        cid, {"overall": 9, "passed": True, "reasons": []}, path=path)
+        cid, {"overall": 9, "passed": True, "reasons": []}, path=path, account_id=None)
     plan = autopilot.build_plan(db_path=path)
     posts = [a for a in plan["actions"] if a["kind"] == "post"]
     assert len(posts) == 1
@@ -149,6 +158,7 @@ def test_real_post_adapter_is_registered():
 
 def test_post_dispatch_routes_by_platform(monkeypatch):
     from src import instagram, youtube
+    monkeypatch.setenv(autopilot.POST_ENV, "1")     # the gate has its own test
     ig_calls = []
     yt_calls = []
     monkeypatch.setattr(instagram, "execute_post_action", lambda a: ig_calls.append(a))
@@ -187,6 +197,7 @@ def test_live_mode_calls_the_instagram_adapter(tmp_path, monkeypatch):
     from src import instagram
     monkeypatch.setattr(autopilot, "KILL_SWITCH_PATH", tmp_path / "autopilot.off")
     monkeypatch.setenv(autopilot.ENABLE_ENV, "1")
+    monkeypatch.setenv(autopilot.POST_ENV, "1")
     monkeypatch.setenv("IG_USER_ID", "user-9")
     monkeypatch.setenv("IG_ACCESS_TOKEN", "tok")
 

@@ -1,0 +1,60 @@
+{# The Graded tab: where a concept goes when it leaves the queue.
+
+   A concept leaves the Grade queue two ways -- passed on (archived, with
+   a reason) or graded (scored by the taste + performance judge). Passing
+   was always visible in the reason tally; scoring vanished, because the
+   only thing a score did was remove the concept from the draw. So the
+   scores are the data now (2026-09-02): every graded concept, best
+   first, so the tab answers "what did the judge actually like" rather
+   than "what is left to do".
+
+   Sorted by score, not by id, and NOT filtered by it -- the threshold
+   below only decides which rows read as strong. Every row still links
+   into the Grade tab's forms: a score is not the end of a concept, and
+   teaching the prompt is still the work. #}
+
+{% if not graded %}
+<div class="panel">
+  <div class="panel-head"><span class="id">GRADED</span><span class="m">NOTHING SCORED YET</span></div>
+  <div class="panel-body">
+    <p class="dim">No concept has been scored yet. Grade one from the
+      <a href="/studio?tab=grade">Grade tab</a> — each is one billed model call —
+      and it moves here with its taste and performance marks.</p>
+  </div>
+</div>
+{% else %}
+{% set strong = graded | selectattr("good") | list | length %}
+<div class="panel">
+  <div class="panel-head">
+    <span class="id">GRADED CONCEPTS</span>
+    <span class="m">{{ graded | length }} SCORED · {{ strong }} AT {{ "%.0f"|format(good_score) }}+ · BEST FIRST</span>
+  </div>
+  <div>
+    {% for g in graded %}
+    <a class="uq scored{{ ' strong' if g.good }}"
+       href="/studio?tab=grade&amp;mode=shot&amp;concept_id={{ g.id }}"
+       title="{{ g.reason }}">
+      <span class="uid">{{ g.n }}</span>
+      <span class="ut">{{ g.title }}
+        {% if g.reason %}<span class="us">{{ g.reason }}</span>
+        {% elif g.summary %}<span class="us">{{ g.summary }}</span>{% endif %}
+      </span>
+      <span class="utags">
+        <span class="tag faint">{{ g.brand|upper }}</span>
+        {% if g.picked %}<span class="tag bone" title="You picked this on the board">✓ PICKED</span>{% endif %}
+        {% if g.archived %}<span class="tag" title="Passed on after it was graded">PASSED</span>{% endif %}
+      </span>
+      <span class="ug">
+        {%- if g.taste is not none %}taste {{ "%.0f"|format(g.taste) }}{% endif %}
+        {%- if g.perf is not none %} · perf {{ "%.0f"|format(g.perf) }}{% endif -%}
+      </span>
+      <span class="sc">{{ "%.0f"|format(g.overall) }}<small>/10</small></span>
+    </a>
+    {% endfor %}
+  </div>
+</div>
+
+<p class="dim" style="margin-top:12px; font-size:12px">A score is a weight, not a verdict —
+  nothing is gated on {{ "%.0f"|format(good_score) }}+. Click a row to open it in the Grade tab,
+  where approve / teach / deny is what actually reaches the RAG shelves.</p>
+{% endif %}

@@ -25,7 +25,7 @@ def tmp_db(tmp_path, monkeypatch):
     entities.init(path)
     autonomy.init(path)
     monkeypatch.setattr(db, "DB_PATH", path)
-    preprod.add_location("hallway", {"space": "narrow hallway"}, photo_count=2, path=path)
+    preprod.add_location("hallway", {"space": "narrow hallway"}, photo_count=2, path=path, account_id=None)
     # graph tests must not reach the real library or Gemini
     monkeypatch.setattr(orchestrator.crag, "retrieve_with_crag",
                         lambda *a, **k: {"ok": False, "references": [],
@@ -57,14 +57,16 @@ REAL_JUDGE_PROMPT = orchestrator._judge_prompt
 
 
 def make_concept(**overrides):
+    """ONE scene, ONE prompt -- what gen_concept has written since
+    2026-08-29. A multi-shot concept would be generated, scored and
+    keyframed and then invisible to the Queue, which keys on is_scene
+    (len(shots) == 1)."""
     concept = {
         "title": "The Waiting",
         "hook": "a hand already on the door handle",
         "logline": "He waits for someone who never knocks.",
         "shots": [
-            {"n": 1, "type": "CHARACTER", "source": "CAMERA", "cam": "BMPCC",
-             "location": "hallway", "desc": "low angle, he steps into frame"},
-            {"n": 2, "type": "BROLL", "source": "AI", "tool": "KLING",
+            {"n": 1, "type": "BROLL", "source": "AI", "tool": "KLING",
              "location": "hallway", "desc": "the handle turns on its own",
              "prompt": GOOD_PROMPT},
         ],
@@ -73,20 +75,50 @@ def make_concept(**overrides):
     return concept
 
 
+class _Calls(list):
+    """A list that also carries the keyframe calls, so a test can assert
+    on both without two return values."""
+    keyframes: list
+
+
 def stage_fakes(monkeypatch, results):
-    """Patch generate_concept; record the kwargs of every attempt."""
+    """Patch generate_scene_concept; record the kwargs of every attempt."""
     queue = list(results)
-    calls = []
+    calls = _Calls()
 
-    def fake_generate(brand, client=None, spark=None, gemini_client=None,
-                      model=None, use_pov=True, db_path=None, references="",
-                      cast=None):
-        calls.append({"brand": brand, "spark": spark, "references": references, "cast": cast})
+    def fake_generate(brand, spark=None, steer="", gemini_client=None, model=None,
+                      db_path=None, references="", cast=None, tool=None,
+                      image_refs=None, account_id=None):
+        calls.append({"brand": brand, "spark": spark, "steer": steer,
+                      "references": references,
+                      "cast": cast, "image_refs": list(image_refs or [])})
         concept, warnings = queue.pop(0)
-        return {"concept_id": len(calls), "concept": concept, "warnings": warnings}
+        concept_id = _save_scene(db.DB_PATH, concept, brand)
+        return {"concept_id": concept_id, "concept": concept, "warnings": warnings}
 
-    monkeypatch.setattr(orchestrator.shootgen, "generate_concept", fake_generate)
+    monkeypatch.setattr(orchestrator.shootgen, "generate_scene_concept", fake_generate)
+    # the keyframe node renders a still for every scene whose prompt
+    # clears the gate. Patched by name and counted: a miss here is a
+    # real billed image call escaping a test.
+    keyframes = []
+
+    def fake_keyframe(prompt, *, reference_image=None, db_path=None,
+                      concept_id=None, **kw):
+        keyframes.append({"prompt": prompt, "concept_id": concept_id})
+        return {"ok": True, "media_url": f"https://cdn/key-{concept_id}.png",
+                "generation_id": 1, "path": "x", "error": None}
+
+    monkeypatch.setattr(orchestrator.scene_chain.nano_banana,
+                        "generate_from_prompt", fake_keyframe)
+    calls.keyframes = keyframes
     return calls
+
+
+def _save_scene(path, concept, brand):
+    """A real row, because the keyframe node reads the concept back out
+    of the DB to persist its prompt and attach its still."""
+    return preprod.save_concept(concept, brand=brand, spark="test",
+                                prompt_template="T", path=path, account_id=None)
 
 
 # ---------- brand defaults to channel: the hold_queue-13 regression ----------
@@ -121,8 +153,13 @@ def test_run_explicit_brand_can_still_disagree_with_channel_on_purpose(tmp_db, m
 
 # ---------- the left third: the original loop, preserved ----------
 
-def test_clean_run_parks_in_shadow_with_the_render_stub_reason(tmp_db, monkeypatch):
-    stage_fakes(monkeypatch, [(make_concept(), [])])
+def test_clean_run_keyframes_the_scene_and_parks_it_for_approval(tmp_db, monkeypatch):
+    """What a night actually produces (2026-08-29). It used to end
+    "no usable clips (render is a dry-run stub)" -- true, and useless:
+    it described the stub rather than anything you could judge. Now the
+    scored prompt is stored on the shot, a keyframe is attached, and the
+    scene waits in the Queue where approving is what spends."""
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])])
 
     result = orchestrator.run("gearing up ritual")
 
@@ -131,9 +168,20 @@ def test_clean_run_parks_in_shadow_with_the_render_stub_reason(tmp_db, monkeypat
     # the AI shot's prompt was extracted...
     assert result["prompts"] == [
         {"tool": "KLING", "prompt": GOOD_PROMPT, "still": ""}]
-    # ...but render is a stub, so the run parks instead of posting
-    assert "render is a dry-run stub" in result["held_reason"]
-    [row] = autonomy.list_hold(path=tmp_db)
+    # ...one still was rendered from it, and the run parks rather than posting
+    assert len(calls.keyframes) == 1
+    assert calls.keyframes[0]["prompt"] == GOOD_PROMPT
+    assert "keyframe rendered" in result["held_reason"]
+
+    # and the scene itself is now waiting where the money gets spent:
+    # its prompt stored, its still attached, parked but not picked
+    concept = preprod.get_concept(result["concept_id"], path=tmp_db, account_id=None)
+    shot = concept["shots"][0]
+    assert shot["prompt"] == GOOD_PROMPT
+    assert shot["reference_image"].startswith("https://cdn/key-")
+    assert concept["parked"] is True
+    assert concept["picked"] is False
+    [row] = autonomy.list_hold(path=tmp_db, account_id=None)
     assert row["status"] == "held"
     assert row["concept_id"] == 1
     assert row["payload"]["prompts"][0]["tool"] == "KLING"
@@ -199,27 +247,34 @@ def test_out_of_retries_parks_with_the_eval_reason(tmp_db, monkeypatch):
     assert result["attempts"] == orchestrator.MAX_ATTEMPTS
     assert "eval stop" in result["held_reason"]
     assert "concept has no shots" in result["held_reason"]
-    [row] = autonomy.list_hold(path=tmp_db)
+    [row] = autonomy.list_hold(path=tmp_db, account_id=None)
     assert row["status"] == "held"
 
 
-def test_no_locations_parks_before_any_generation(tmp_path, monkeypatch):
-    path = tmp_path / "empty.db"
-    db.init_db(path)
-    preprod.init(path)
-    entities.init(path)
-    autonomy.init(path)
-    monkeypatch.setattr(db, "DB_PATH", path)
-    monkeypatch.setattr(orchestrator.crag, "retrieve_with_crag",
-                        lambda *a, **k: {"ok": False, "references": [], "error": "x"})
-    calls = stage_fakes(monkeypatch, [])
+def test_no_locations_still_generates(tmp_db, monkeypatch):
+    """The ensure_locations gate is retired (2026-08-31, Mike's call).
+
+    It parked a run before any generation when the locations table was
+    empty -- refusing to think over described rooms the night's own
+    generator never reads: build_scene_brief_prompt's placeholders are
+    {brand} {cast} {example} {references} {spark}, with no {locations}
+    among them. Since every shot is AI-generated, a room is optional
+    named material like cast, and an empty table means "nothing filed
+    under places yet", not a reason to refuse.
+
+    Uses tmp_db and empties it rather than building a bare database, so
+    the run still gets that fixture's no-network patches -- a test that
+    reaches ground_rag without them builds a real genai client.
+    """
+    with db.connect(db.DB_PATH) as conn:
+        conn.execute("DELETE FROM locations")
+    assert preprod.list_locations(path=db.DB_PATH, account_id=None) == []
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])])
 
     result = orchestrator.run("ritual")
 
-    assert "No described locations" in result["held_reason"]
-    assert calls == []                       # generate never ran
-    [row] = autonomy.list_hold(path=path)    # even the failure is logged
-    assert "No described locations" in row["reason"]
+    assert calls, "generation never ran with an empty locations table"
+    assert "No described locations" not in (result.get("held_reason") or "")
 
 
 def test_camera_only_concept_parks_with_its_own_reason(tmp_db, monkeypatch):
@@ -238,22 +293,26 @@ def test_camera_only_concept_parks_with_its_own_reason(tmp_db, monkeypatch):
 # ---------- grounding ----------
 
 def test_ground_entities_uses_only_the_picked_character(tmp_db, monkeypatch):
-    mike = entities.add_character("Mike — on camera", role="protagonist", path=tmp_db)
-    entities.add_character("Guest — bartender", role="guest", path=tmp_db)
+    mike = entities.add_character("Mike — on camera", role="protagonist", path=tmp_db, account_id=None)
+    entities.add_character("Guest — bartender", role="guest", path=tmp_db, account_id=None)
     calls = stage_fakes(monkeypatch, [(make_concept(), [])])
 
-    orchestrator.run("ritual", picked_characters=[mike])
+    # antihero explicitly: this covers picked-vs-default, and Zero Page
+    # gets no cast block at all now (see cast_for), which would make the
+    # assertion below pass for the wrong reason.
+    orchestrator.run("ritual", brand="antihero", channel="antihero",
+                     picked_characters=[mike])
 
     assert "Mike — on camera" in calls[0]["cast"]
     assert "Guest — bartender" not in calls[0]["cast"]
 
 
 def test_ground_entities_defaults_to_everything_on_file(tmp_db, monkeypatch):
-    entities.add_character("Mike — on camera", path=tmp_db)
-    entities.add_prop("Ducati Panigale V2", category="vehicle", path=tmp_db)
+    entities.add_character("Mike — on camera", path=tmp_db, account_id=None)
+    entities.add_prop("Ducati Panigale V2", category="vehicle", path=tmp_db, account_id=None)
     calls = stage_fakes(monkeypatch, [(make_concept(), [])])
 
-    orchestrator.run("ritual")
+    orchestrator.run("ritual", brand="antihero", channel="antihero")
 
     assert "Mike — on camera" in calls[0]["cast"]
     assert "Ducati Panigale V2" in calls[0]["cast"]
@@ -407,16 +466,21 @@ def test_qc_rejects_missing_and_tiny_files(tmp_path):
 
 # ---------- human_note: corrections steer the next generation ----------
 
-def test_pending_corrections_fold_into_the_spark_once(tmp_db, monkeypatch):
+def test_pending_corrections_steer_once_and_never_touch_the_spark(tmp_db, monkeypatch):
+    """Corrections steer the generation and are consumed so each note
+    steers exactly once. They ride in `steer`, not `spark` (2026-09-01):
+    the spark column is the direction the board prints and _spark_key
+    hashes, and a note folded into it made the same idea look new."""
     autonomy.add_correction("less neon, more silence", path=tmp_db)
     calls = stage_fakes(monkeypatch, [(make_concept(), []), (make_concept(), [])])
 
     orchestrator.run("ritual")
-    assert "less neon, more silence" in calls[0]["spark"]
+    assert "less neon, more silence" in calls[0]["steer"]
+    assert "less neon" not in (calls[0]["spark"] or ""), "note leaked into the spark"
     assert autonomy.pending_corrections(path=tmp_db) == []   # consumed
 
     orchestrator.run("ritual")                               # next night
-    assert "less neon" not in (calls[1]["spark"] or "")      # steered once
+    assert "less neon" not in (calls[1]["steer"] or "")      # steered once
 
 
 # ---------- the prompt gate (the credit gate) ----------
@@ -553,7 +617,7 @@ def test_a_successful_rework_rescues_the_run(tmp_db, monkeypatch):
     assert result["prompts"][1]["prompt"] == f"{bible}. {REWORKED_PROMPT}"
     # cleared the gate -- now parked only because render is the dry-run
     # stub, not because of the prompt gate
-    assert "render is a dry-run stub" in result["held_reason"]
+    assert "keyframe rendered" in result["held_reason"]
 
 
 def test_rework_that_errors_keeps_the_original_score_and_still_holds(tmp_db, monkeypatch):
@@ -679,7 +743,7 @@ def test_post_gate_rejects_failed_qc_empty_caption_and_warnings(tmp_db, monkeypa
 
 def test_post_gate_enforces_the_rate_cap(tmp_db, monkeypatch):
     monkeypatch.delenv("ZEROPAGE_KILL", raising=False)
-    autonomy.to_hold("zeropage", "already posted", status="posted", path=tmp_db)
+    autonomy.to_hold("zeropage", "already posted", status="posted", path=tmp_db, account_id=None)
 
     result = orchestrator.publish(ready_state(tmp_db))
 
@@ -693,10 +757,17 @@ def test_every_shot_with_a_prompt_is_ai_eligible(tmp_db, monkeypatch):
     structured and scored like any other; its real capture rides along to
     the hold card, and the Midjourney still is skipped -- the capture IS
     the anchor frame a still would otherwise have to invent."""
-    concept = make_concept()
-    concept["shots"][0]["prompt"] = GOOD_PROMPT
-    concept["shots"][0]["tool"] = "SEEDANCE"
-    concept["shots"][0]["reference_image"] = "https://cdn.example/take.jpg"
+    # an explicit two-shot concept: gen_concept writes one-scene concepts
+    # now, but a legacy row still has to structure and score correctly
+    concept = make_concept(shots=[
+        {"n": 1, "type": "CHARACTER", "source": "CAMERA", "cam": "BMPCC",
+         "location": "hallway", "desc": "low angle, he steps into frame",
+         "prompt": GOOD_PROMPT, "tool": "SEEDANCE",
+         "reference_image": "https://cdn.example/take.jpg"},
+        {"n": 2, "type": "BROLL", "source": "AI", "tool": "KLING",
+         "location": "hallway", "desc": "the handle turns on its own",
+         "prompt": GOOD_PROMPT},
+    ])
     stage_fakes(monkeypatch, [(concept, [])])
 
     result = orchestrator.run("gearing up ritual")
@@ -708,7 +779,7 @@ def test_every_shot_with_a_prompt_is_ai_eligible(tmp_db, monkeypatch):
     # a shot with no capture carries no key at all, same as the shot dict
     assert "reference_image" not in plain
     # the capture reaches the hold card next to the prompt it anchors
-    [row] = autonomy.list_hold(path=tmp_db)
+    [row] = autonomy.list_hold(path=tmp_db, account_id=None)
     assert row["payload"]["prompts"][0]["reference_image"] == "https://cdn.example/take.jpg"
     scores = row["payload"].get("prompt_scores") or []
     if scores:
@@ -724,3 +795,182 @@ def test_a_shot_with_no_prompt_still_drops_out(tmp_db, monkeypatch):
     result = orchestrator.run("gearing up ritual")
 
     assert [p["tool"] for p in result["prompts"]] == ["KLING"]
+
+
+# --- the on-brand gate actually gets fed (2026-08-31) -----------------------
+#
+# uncanny_judge.py was written, tested, and never called from src/ or app/ --
+# only from tests. autopilot.plan reads the verdict it was meant to write
+# ("the gate fails closed, so unjudged == held"), so every Zero Page concept
+# was permanently ineligible to auto-post and the pipeline never posted
+# anything. These pin the wire, because the failure mode is silence.
+
+def _judge_spy(monkeypatch, passed=True):
+    calls = []
+
+    def fake(concept, gemini_client=None):
+        calls.append(concept.get("title"))
+        return {"overall": 9.0 if passed else 3.0, "passed": passed,
+                "reasons": [], "graded": True, "uncanny_hook": 9.0,
+                "grounded": 9.0, "format_fit": 9.0, "faceless": 9.0}
+
+    monkeypatch.setattr(orchestrator.uncanny_judge, "score_concept", fake)
+    return calls
+
+
+def test_a_zeropage_run_leaves_the_concept_judged(tmp_db, monkeypatch):
+    """The autopilot cannot auto-post an unjudged concept. If this stops
+    passing, nothing Zero Page generates can ever reach an audience."""
+    calls = _judge_spy(monkeypatch)
+    stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    result = orchestrator.run("ritual", brand="zeropage", channel="zeropage")
+
+    assert calls, "the uncanny judge was never called"
+    row = preprod.get_concept(result["concept_id"], path=db.DB_PATH, account_id=None)
+    assert row["uncanny_passed"], "the verdict never reached the row autopilot reads"
+
+
+def test_antihero_never_pays_for_the_gate(tmp_db, monkeypatch):
+    """Antihero is review-gated forever and never enters an auto-post
+    plan, so judging it is spend on a number nothing reads."""
+    calls = _judge_spy(monkeypatch)
+    stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    orchestrator.run("ritual", brand="antihero", channel="antihero")
+
+    assert calls == []
+
+
+def test_a_failed_verdict_does_not_park_the_run(tmp_db, monkeypatch):
+    """brand_gate records, it never routes. A concept that misses the
+    brand is still worth keeping and learning from -- parking it here
+    would destroy the negative signal the grade queue exists for."""
+    _judge_spy(monkeypatch, passed=False)
+    stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    result = orchestrator.run("ritual", brand="zeropage", channel="zeropage")
+
+    assert result["concept_id"], "a failed brand verdict stopped the run"
+    row = preprod.get_concept(result["concept_id"], path=db.DB_PATH, account_id=None)
+    assert row["uncanny_passed"] == 0
+
+
+def test_a_broken_judge_leaves_the_concept_unjudged(tmp_db, monkeypatch):
+    """Fails CLOSED and loudly. An exception here must not take the run
+    down, and must not silently mark the concept post-eligible."""
+    def boom(concept, gemini_client=None):
+        raise RuntimeError("judge is down")
+
+    monkeypatch.setattr(orchestrator.uncanny_judge, "score_concept", boom)
+    stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    result = orchestrator.run("ritual", brand="zeropage", channel="zeropage")
+
+    row = preprod.get_concept(result["concept_id"], path=db.DB_PATH, account_id=None)
+    assert not row["uncanny_passed"]
+
+
+# ---------- a scouted night arrives with its photographs --------------------
+#
+# The half of the research contract that was wired at both ends and
+# connected in the middle by nothing. `orchestrator.scout` returned the
+# spark alone, so `reference_photos` was empty on every unattended run:
+# the crawl downloaded images into data/refs, banked them against the
+# finding, and no concept the graph wrote could see one. Every scene
+# generated on 2026-09-01 (concepts 141-148) came back grounded on the
+# same five asset-bank photos of the cast whatever direction it ran on --
+# research reached the WORDS of the prompt and never the pictures.
+
+def test_a_scouted_run_writes_the_scene_from_the_images_it_researched(
+        tmp_db, monkeypatch, tmp_path):
+    from src import asset_shelf, refbin, scout
+
+    monkeypatch.setattr(refbin, "REFS_DIR", tmp_path / "refs")
+    # an empty asset bank on disk: this scene names nothing, so the only
+    # references it can possibly get are the researched ones
+    monkeypatch.setattr(asset_shelf, "PHOTO_DIRS",
+                        {kind: tmp_path / plural for kind, plural in
+                         (("character", "characters"), ("prop", "props"),
+                          ("location", "locations"))})
+    jpeg = b"\xff\xd8\xff" + b"a banked frame"
+    banked = refbin.save(jpeg)
+
+    scout.record("zeropage", {"spark": "a hand already on the handle",
+                              "score": 0.9}, pass_id="p", path=tmp_db)
+    scout.bin_add("zeropage", "p", banked,
+                  source_url="https://example.com/post", path=tmp_db)
+
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])])
+    out = orchestrator.run("the rotation", brand="zeropage", channel="zeropage",
+                           scout=True)
+
+    assert out["spark"] == "a hand already on the handle"
+    # the WRITER saw the photograph, rather than being told one existed
+    assert calls[0]["image_refs"], \
+        "the scene was written from the spark's words and none of its images"
+    data, _mime, _label = calls[0]["image_refs"][0]
+    assert data == jpeg
+    # and it landed on the shot, which is what the keyframe and clip read
+    assert banked in preprod.get_concept(
+        out["concept_id"], path=tmp_db, account_id=None)["shots"][0]["refs"]
+
+
+def test_a_rotation_night_is_untouched_by_any_of_this(tmp_db, monkeypatch):
+    """A run that did not ask to scout must reach the writer exactly as
+    it always did -- no bank read, no photographs, no change."""
+    from src import scout
+
+    scout.record("zeropage", {"spark": "a crawled idea", "score": 0.99},
+                 pass_id="p", path=tmp_db)
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])])
+    out = orchestrator.run("the last check before leaving", brand="zeropage",
+                           channel="zeropage")
+
+    assert out["spark"] == "the last check before leaving"
+    assert calls[0]["image_refs"] == []
+
+
+def test_avoid_guidance_steers_without_becoming_the_spark(tmp_db, monkeypatch):
+    """The spark column is the DIRECTION, not the scaffolding (2026-09-01).
+
+    gen_concept used to concatenate winners.avoid_guidance onto `spark`
+    and pass one string, which the generator then stored -- so every
+    graph-written row carried ~1500 characters of craft notes in the
+    column the board prints, archive_batch groups by, and
+    scout._spark_key hashes. Novelty detection compared the notes along
+    with the idea, so the same direction on a night with a different
+    avoid-list looked new. The advice still has to REACH the model,
+    which is why this checks both halves.
+    """
+    monkeypatch.setattr(orchestrator.winners, "avoid_guidance",
+                        lambda **k: "AVOID: no glossy CGI")
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    orchestrator.run("a routine performed wrong", brand="zeropage",
+                     channel="zeropage")
+
+    [call] = calls
+    assert call["spark"] == "a routine performed wrong", \
+        "the avoid block leaked back into the stored spark"
+    assert "AVOID: no glossy CGI" in call["steer"], \
+        "the advice stopped reaching the model"
+
+
+def test_a_zeropage_run_is_handed_no_cast(tmp_db, monkeypatch):
+    """The faceless brand must not be told to name a recurring person.
+
+    Every Zero Page concept on the board named Michael, Cyclops or the
+    Ducati, because ground_entities handed the shared {cast} socket every
+    asset on file regardless of brand — and that socket says "reference
+    the uploaded photos as the EXACT face ... name them", flatly against
+    concept_zeropage.txt's "FACELESS -- no recurring person".
+    """
+    entities.add_character("Mike — on camera", path=tmp_db, account_id=None)
+    entities.add_prop("Ducati Panigale V2", category="vehicle", path=tmp_db,
+                      account_id=None)
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    orchestrator.run("ritual", brand="zeropage", channel="zeropage")
+
+    assert calls[0]["cast"] == "", "the faceless brand was handed a cast"

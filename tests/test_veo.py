@@ -55,6 +55,13 @@ class FakeClient:
         return operation
 
 
+@pytest.fixture(autouse=True)
+def spend_ok(monkeypatch):
+    """Every test below approves the spend, runway's pattern: the gate
+    has its own tests at the bottom, and none of these is about it."""
+    monkeypatch.setenv(veo.SPEND_ENV, "1")
+
+
 # ---------- generate_video: the thin wrapper ----------
 
 def test_generate_video_polls_until_done_and_saves(tmp_path):

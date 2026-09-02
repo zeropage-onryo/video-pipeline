@@ -45,6 +45,9 @@ CREATE INDEX IF NOT EXISTS idx_props_category ON props (category);
 def init(path=db.DB_PATH) -> None:
     with db.connect(path) as conn:
         conn.executescript(SCHEMA)
+        # tenancy: a cast member or a prop belongs to one account's bank
+        db.own_table(conn, "characters")
+        db.own_table(conn, "props")
 
 
 def _now() -> str:
@@ -67,73 +70,88 @@ def _row_to_dict(row) -> dict:
 # --- characters -----------------------------------------------------------
 
 def add_character(name, role="", description=None, reference_image="",
-                  photo_count=0, notes="", path=db.DB_PATH) -> int:
+                  photo_count=0, notes="", path=db.DB_PATH, *,
+                  account_id: int) -> int:
     with db.connect(path) as conn:
         cur = conn.execute(
             "INSERT INTO characters "
-            "(name, created_at, role, description, reference_image, photo_count, notes) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "(name, created_at, role, description, reference_image, photo_count, "
+            "notes, account_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (name, _now(), role,
              json.dumps(description) if description is not None else None,
-             reference_image, photo_count, notes),
+             reference_image, photo_count, notes, account_id),
         )
         return cur.lastrowid
 
 
-def list_characters(path=db.DB_PATH) -> list[dict]:
+def list_characters(path=db.DB_PATH, *, account_id: int) -> list[dict]:
     with db.connect(path) as conn:
         rows = conn.execute(
-            "SELECT * FROM characters ORDER BY name COLLATE NOCASE"
+            "SELECT * FROM characters WHERE account_id IS ? "
+            "ORDER BY name COLLATE NOCASE", (account_id,)
         ).fetchall()
     return [_row_to_dict(r) for r in rows]
 
 
-def get_character(character_id: int, path=db.DB_PATH):
+def get_character(character_id: int, path=db.DB_PATH, *, account_id: int):
     with db.connect(path) as conn:
         row = conn.execute(
-            "SELECT * FROM characters WHERE id = ?", (character_id,)
+            "SELECT * FROM characters WHERE id = ? AND account_id IS ?",
+            (character_id, account_id),
         ).fetchone()
     return _row_to_dict(row) if row else None
 
 
-def delete_character(character_id: int, path=db.DB_PATH) -> None:
+def delete_character(character_id: int, path=db.DB_PATH, *,
+                     account_id: int) -> None:
     with db.connect(path) as conn:
-        conn.execute("DELETE FROM characters WHERE id = ?", (character_id,))
+        conn.execute(
+            "DELETE FROM characters WHERE id = ? AND account_id IS ?",
+            (character_id, account_id),
+        )
 
 
 # --- props ----------------------------------------------------------------
 
 def add_prop(name, category="", description=None, reference_image="",
-             photo_count=0, notes="", path=db.DB_PATH) -> int:
+             photo_count=0, notes="", path=db.DB_PATH, *,
+             account_id: int) -> int:
     with db.connect(path) as conn:
         cur = conn.execute(
             "INSERT INTO props "
-            "(name, created_at, category, description, reference_image, photo_count, notes) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "(name, created_at, category, description, reference_image, "
+            "photo_count, notes, account_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (name, _now(), category,
              json.dumps(description) if description is not None else None,
-             reference_image, photo_count, notes),
+             reference_image, photo_count, notes, account_id),
         )
         return cur.lastrowid
 
 
-def list_props(path=db.DB_PATH) -> list[dict]:
+def list_props(path=db.DB_PATH, *, account_id: int) -> list[dict]:
     with db.connect(path) as conn:
         rows = conn.execute(
-            "SELECT * FROM props ORDER BY name COLLATE NOCASE"
+            "SELECT * FROM props WHERE account_id IS ? "
+            "ORDER BY name COLLATE NOCASE", (account_id,)
         ).fetchall()
     return [_row_to_dict(r) for r in rows]
 
 
-def get_prop(prop_id: int, path=db.DB_PATH):
+def get_prop(prop_id: int, path=db.DB_PATH, *, account_id: int):
     with db.connect(path) as conn:
-        row = conn.execute("SELECT * FROM props WHERE id = ?", (prop_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM props WHERE id = ? AND account_id IS ?",
+            (prop_id, account_id),
+        ).fetchone()
     return _row_to_dict(row) if row else None
 
 
-def delete_prop(prop_id: int, path=db.DB_PATH) -> None:
+def delete_prop(prop_id: int, path=db.DB_PATH, *, account_id: int) -> None:
     with db.connect(path) as conn:
-        conn.execute("DELETE FROM props WHERE id = ?", (prop_id,))
+        conn.execute(
+            "DELETE FROM props WHERE id = ? AND account_id IS ?",
+            (prop_id, account_id),
+        )
 
 
 # --- descriptions ----------------------------------------------------------
@@ -142,7 +160,7 @@ TABLES = {"character": "characters", "prop": "props"}
 
 
 def set_description(kind: str, entity_id: int, description: dict,
-                    path=db.DB_PATH) -> None:
+                     path=db.DB_PATH, *, account_id: int) -> None:
     """Attach (or replace) the vision description on one entity --
     what `locations.describe_entity` produced from its photos. Merged
     over whatever the row already carried, so the typed `notes` a
@@ -150,20 +168,26 @@ def set_description(kind: str, entity_id: int, description: dict,
     if kind not in TABLES:
         raise ValueError(f"kind must be one of {tuple(TABLES)}, got {kind!r}")
     getter = get_character if kind == "character" else get_prop
-    row = getter(entity_id, path=path)
+    row = getter(entity_id, path=path, account_id=account_id)
     if row is None:
+        # covers "no such id" and "not yours" alike, on purpose
         raise ValueError(f"no such {kind}: {entity_id}")
     merged = {**(row.get("description") or {}), **(description or {})}
     with db.connect(path) as conn:
         conn.execute(
-            f"UPDATE {TABLES[kind]} SET description = ? WHERE id = ?",
-            (json.dumps(merged), entity_id),
+            f"UPDATE {TABLES[kind]} SET description = ? "
+            f"WHERE id = ? AND account_id IS ?",
+            (json.dumps(merged), entity_id, account_id),
         )
 
 
-def summary(path=db.DB_PATH) -> dict:
+def summary(path=db.DB_PATH, *, account_id: int) -> dict:
     """Counts for the Scoreboard, mirroring db.summary()'s shape."""
     with db.connect(path) as conn:
-        chars = conn.execute("SELECT COUNT(*) FROM characters").fetchone()[0]
-        props = conn.execute("SELECT COUNT(*) FROM props").fetchone()[0]
+        chars = conn.execute(
+            "SELECT COUNT(*) FROM characters WHERE account_id IS ?", (account_id,)
+        ).fetchone()[0]
+        props = conn.execute(
+            "SELECT COUNT(*) FROM props WHERE account_id IS ?", (account_id,)
+        ).fetchone()[0]
     return {"characters": chars, "props": props}

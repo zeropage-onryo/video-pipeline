@@ -16,14 +16,16 @@ and deciding on rather than silently discarding.
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
-from . import crag, entities, preprod, rag
+from . import accounts, crag, db, entities, preprod, rag
 from . import shot as shot_module
 from .db import DB_PATH, init_db
 from .gemini_utils import generate_with_retry, strip_fences
@@ -187,7 +189,8 @@ def build_reference_query(locations: list, spark=None, client=None,
     return " ".join(str(p) for p in parts)[:max_chars]
 
 
-def reference_block(spark=None, client=None, db_path=None, picked_sources=None) -> str:
+def reference_block(spark=None, client=None, db_path=None, picked_sources=None,
+        account_id: Optional[int] = None) -> str:
     """
     Retrieve grounding references for an ideation run and return the
     formatted block, or "" if nothing applies. Never raises -- the same
@@ -221,8 +224,11 @@ def reference_block(spark=None, client=None, db_path=None, picked_sources=None) 
     again by the new LEARNED_IDEATION_DOMAINS semantic search.
     """
     kwargs = {"path": db_path} if db_path is not None else {}
-    locations = preprod.list_locations(**kwargs)
+    locations = preprod.list_locations(**kwargs, account_id=account_id)
     query = build_reference_query(locations, spark=spark, client=client)
+    # the caller's neighbourhood: own lessons first, nobody's excluded
+    from . import accounts
+    mine = accounts.slug_of(account_id, **kwargs)
 
     references = []
 
@@ -240,8 +246,10 @@ def reference_block(spark=None, client=None, db_path=None, picked_sources=None) 
         retrieval = (
             crag.retrieve_with_crag(
                 query, client, MODEL, domain=AUTO_IDEATION_DOMAINS,
+                prefer_project=mine,
             ) if client is not None else
-            rag.retrieve_references(query, domain=AUTO_IDEATION_DOMAINS)
+            rag.retrieve_references(query, domain=AUTO_IDEATION_DOMAINS,
+                                    prefer_project=mine)
         )
         if retrieval["ok"] and retrieval["references"]:
             print(f"Grounding in {len(retrieval['references'])} craft reference(s)",
@@ -254,8 +262,10 @@ def reference_block(spark=None, client=None, db_path=None, picked_sources=None) 
         learned = (
             crag.retrieve_with_crag(
                 query, client, MODEL, domain=LEARNED_IDEATION_DOMAINS,
+                prefer_project=mine,
             ) if client is not None else
-            rag.retrieve_references(query, domain=LEARNED_IDEATION_DOMAINS)
+            rag.retrieve_references(query, domain=LEARNED_IDEATION_DOMAINS,
+                                    prefer_project=mine)
         )
         if learned["ok"] and learned["references"]:
             print(f"Grounding in {len(learned['references'])} taught reference(s) "
@@ -333,6 +343,66 @@ def location_variety_note(locations: list, lock: bool = False) -> str:
     )
 
 
+SCENE_LOCATION_FREE_NOTE = (
+    "(no room picked for this run — set each scene wherever the idea implies, "
+    "inventing whatever space it needs)"
+)
+
+SCENE_LOCATION_LOCK_NOTE = (
+    "\n(picked for this run, and their photos are attached above — set the "
+    "scenes here and match what the photos show)"
+)
+
+
+def picked_locations(refs, locations: list) -> list:
+    """The described rooms among THIS run's reference URLs.
+
+    A room now reaches a generation the same way a face does: somebody
+    attached its photo. `/locations/<slug>/photo/<file>` is the URL the
+    asset bank hands out, so the slug in the path IS the pick -- no new
+    form field, and no client-side flag that can go stale the way
+    `scout_finding_id` did before `scout.claims` was written to check it
+    server-side. A room attached by accident is also visible as a tile
+    somebody can remove, which a hidden setting is not.
+    """
+    from . import asset_shelf
+
+    slugs = set()
+    for ref in refs or []:
+        parts = str(ref).split("?")[0].strip("/").split("/")
+        if len(parts) >= 2 and parts[0] == "locations":
+            slugs.add(parts[1])
+    if not slugs:
+        return []
+    return [loc for loc in locations
+            if asset_shelf.slugify(loc.get("name") or "") in slugs]
+
+
+def format_scene_locations(locations: list) -> str:
+    """The rooms block for a SCENE generation (2026-08-31, Mike's call).
+
+    The old block listed every described room under "set scenes in these
+    real spaces where they fit", which made the photographed rooms the
+    default gravity of every Create. That was right when shots came off
+    a camera and you could only film where you actually are. Since
+    2026-08-20 every shot is AI-generated, so the room stopped being a
+    constraint and became named material -- and material nobody chose
+    for this idea has no business steering it.
+
+    So the block is now built from what was PICKED for this run, and
+    nothing else. Picking is a deliberate act, so it reads as a lock
+    (the `location_variety_note(lock=True)` reasoning): lean into the
+    space rather than manufacturing variety away from it. Picking
+    nothing says the scene may be set anywhere at all.
+
+    `format_locations` is untouched -- rework.py and director.py still
+    want the whole catalogue.
+    """
+    if not locations:
+        return SCENE_LOCATION_FREE_NOTE
+    return format_locations(locations) + SCENE_LOCATION_LOCK_NOTE
+
+
 def format_locations(locations: list) -> str:
     """The described spaces, as the model sees them."""
     lines = []
@@ -348,7 +418,319 @@ def format_locations(locations: list) -> str:
     return "\n".join(lines)
 
 
-def format_cast(characters: list, props: list) -> str:
+# The other half of format_cast (below). format_cast tells the model
+# which assets exist and marks the ones carrying "(reference photos on
+# file)"; this reads the finished scene back and says WHICH of them it
+# actually used, so their photos can be attached to the shot.
+#
+# Without it the loop is open in the worst possible way: the prompt
+# says "Michael (reference photos on file)" because format_cast told it
+# to, the photos sit right there in characters/michael, and nothing
+# ever hands them to the renderer -- the model is told a reference
+# exists and then never shown it.
+
+_ALIAS_STOP = {"The", "A", "An", "This", "That", "These", "Those", "His",
+               "Her", "Its", "Their", "My", "Our", "Shots", "Stills"}
+
+
+def asset_aliases(asset: dict) -> list[str]:
+    """The names this asset can be recognised by in a written scene: its
+    own name, plus any multi-word proper noun in its notes.
+
+    Two consecutive capitalised words, deliberately -- a prop named
+    "Motorcycle" whose notes say "A Ducati Panigale 959" has to be
+    findable when the scene calls it a Ducati, and "Ducati Panigale" is
+    a safe thing to match on where a lone capitalised word is not
+    (every sentence starts with one). Conservative on purpose: a missed
+    alias costs one un-attached photo, a false one attaches a reference
+    the shot was never supposed to resemble.
+    """
+    aliases = []
+    name = (asset.get("name") or "").strip()
+    if name:
+        aliases.append(name)
+    # Punctuation and digits are TOKENS here, not skipped: without them
+    # "A Ducati Panigale 959. Michael's personal vehicle" reads as one
+    # unbroken run and yields the alias "Ducati Panigale Michael",
+    # which matches nothing and belongs to nobody.
+    tokens = re.findall(r"[A-Za-z][A-Za-z'\-]*|[^A-Za-z\s]+",
+                        asset.get("text") or "")
+    run: list[str] = []
+    for token in tokens:
+        if token[0].isalpha() and token[0].isupper() and token not in _ALIAS_STOP:
+            run.append(token.split("'")[0])
+            continue
+        if len(run) >= 2:
+            aliases.append(" ".join(run))
+        run = []
+    if len(run) >= 2:
+        aliases.append(" ".join(run))
+    return aliases
+
+
+_LABEL_ROLE = {
+    "characters": "the EXACT face and likeness",
+    "props": "the EXACT object",
+    "locations": "the location",
+}
+
+
+def reference_label(url: str) -> str:
+    """A one-line caption naming the asset a reference photo belongs to.
+
+    Four bare pictures is not four references. Both platforms this
+    project targets bind an image to a NAME the prompt then uses --
+    Runway takes `{uri, tag}` and documents the tag as "used to
+    reference the image in prompt text"; Higgsfield rewrites
+    `<<<element>>>` into `@element_name`. Gemini has no tag field, so
+    the binding is made its own way: a caption immediately before the
+    image. A shot with two characters and two props otherwise leaves
+    the model to guess which photo is the face (2026-08-28).
+
+    The name comes off the URL, not the database: the slug IS the
+    asset's name run through _slug, so reversing it cannot disagree
+    with the row, needs no query, and still works for an asset that has
+    since been renamed. "" for anything unrecognised -- an unlabelled
+    reference is the old behaviour, never an error.
+    """
+    parts = (url or "").split("?")[0].strip("/").split("/")
+    if len(parts) == 2 and parts[0] == "refs":
+        return "Reference photo supplied with this prompt:"
+    if len(parts) != 4 or parts[2] != "photo":
+        return ""
+    role = _LABEL_ROLE.get(parts[0])
+    if role is None:
+        return ""
+    name = parts[1].replace("-", " ").replace("_", " ").strip().title()
+    return f"Reference photo — {name}, {role}:"
+
+
+# The scene writers invent "@Image 1 / @Image 2". Nothing in this repo
+# has ever emitted that syntax and no such tag is sent to any renderer
+# (src/shot.py: reference-asset mapping is out of scope; the real
+# bindings are Runway's {uri, tag}, Higgsfield's <<<element_id>>> and,
+# for Gemini, the caption reference_label writes above each image).
+_IMAGE_TAG = re.compile(r"@\s*(?:Image|Img|Photo|Ref(?:erence)?)\s*#?\s*\d+", re.I)
+_REF_BLOCK = re.compile(
+    r"(?:^|\n)\s*REFERENCES?\s*:.*?(?=\n\s*\n|\n[A-Z][A-Z /&-]{2,}\s*:|\Z)", re.S)
+
+# What each kind of reference is FOR. The character line names apparent
+# age on purpose: with the binding broken, "hero / leading man" resolved
+# to the model's prior for one, which is a broader jaw and a fuller
+# hairline than Michael's and reads about five years older than he is.
+_BIND_INSTRUCTION = {
+    "characters": ("match this person's face EXACTLY as photographed — bone "
+                   "structure, hairline, brow, nose, mustache shape, eye shape "
+                   "and APPARENT AGE. A specific real person, not a character "
+                   "type. Do not idealise, do not age, do not broaden the jaw."),
+    "props": "reproduce this object exactly as photographed.",
+    "locations": "a guide to the space only, never the subject of the frame.",
+}
+
+
+def reference_identity(url: str):
+    """(name, kind) for a reference URL, or None if it names no asset.
+
+    The name is built the same way `reference_label` builds its caption,
+    so a prompt written from this refers to each photograph by the exact
+    words the model was handed above it."""
+    parts = (url or "").split("?")[0].strip("/").split("/")
+    if len(parts) != 4 or parts[2] != "photo" or parts[0] not in _LABEL_ROLE:
+        return None
+    return parts[1].replace("-", " ").replace("_", " ").strip().title(), parts[0]
+
+
+def bind_references(prompt: str, urls: list) -> str:
+    """Rewrite a scene prompt so its REFERENCES block names the photos
+    that are ACTUALLY attached.
+
+    The one sentence telling the renderer which picture is the face
+    pointed at a tag that does not exist. The jacket survived it -- the
+    words "leather moto jacket" collide with its own caption, so it
+    bound anyway -- and the face did not, which is why concepts 155-158
+    came back as a stock leading man wearing an accurate jacket
+    (2026-09-02). A broken binding fails SILENTLY and asymmetrically:
+    the parts of a shot that happen to be named in prose survive it and
+    the parts that relied on the tag do not, so the render looks
+    grounded while the identity is invented.
+
+    Bare `@Image N` tokens are STRIPPED, never remapped to a position.
+    The writer numbered them before `attach_refs` had chosen anything,
+    so the numbers never referred to this list and a plausible-looking
+    remap would be a guess wearing a fact's clothes.
+
+    Pass only the references that RESOLVED. Naming a photograph the
+    renderer was never handed (a HEIC Pillow could not decode) is the
+    same bug in a smaller shape.
+    """
+    seen: list = []
+    for url in urls or []:
+        found = reference_identity(url)
+        if found and found not in seen:
+            seen.append(found)
+
+    text = _REF_BLOCK.sub("", prompt or "")
+    text = _IMAGE_TAG.sub("", text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = re.sub(r"[ \t]+([,.;])", r"\1", text).strip()
+    if not seen:
+        # A reference block describing images that are not there is
+        # worse than none: it spends the model's attention looking for
+        # them. Stripping is the honest outcome.
+        return text
+
+    lines = ["REFERENCES — the photographs attached above this prompt. Each is "
+             "captioned with the name of the thing it shows:"]
+    for name, kind in seen:
+        count = sum(1 for u in urls
+                    if (reference_identity(u) or (None, None))[0] == name)
+        views = (f" — {count} photographs, different angles of the same subject"
+                 if count > 1 else "")
+        lines.append(f'- "{name}"{views}: {_BIND_INSTRUCTION[kind]}')
+    return "\n".join(lines) + "\n\n" + text
+
+
+def named_assets(text: str, assets: list) -> list[dict]:
+    """Which of these assets the scene actually names, identity first.
+
+    Order is the point, not a detail. Runway anchors a clip on exactly
+    ONE frame, so whatever lands first is what the clip will look like:
+    a character, then the prop they are handling, and a location LAST --
+    a full-room photo in that slot makes the model reproduce that room
+    instead of the scene, which is the documented way to waste a
+    generation.
+    """
+    haystack = " " + re.sub(r"\s+", " ", text or "").lower() + " "
+    rank = {"character": 0, "prop": 1, "location": 2}
+    hits = []
+    for asset in assets:
+        if not asset.get("photos"):
+            continue          # nothing to attach; naming it is not enough
+        at = None
+        for alias in asset_aliases(asset):
+            if len(alias) < 3:
+                continue
+            found = re.search(r"(?<![\w])" + re.escape(alias.lower()) + r"(?![\w])",
+                              haystack)
+            if found and (at is None or found.start() < at):
+                at = found.start()
+        if at is not None:
+            hits.append((rank.get(asset.get("category"), 3), at, asset))
+    # category first, then WHO THE SCENE OPENS ON. Two characters are
+    # not interchangeable in the anchor slot: the scene that begins on
+    # Michael's hand should anchor on Michael, not on the monster he
+    # meets later, and alphabetical or table order gets that wrong half
+    # the time.
+    hits.sort(key=lambda h: (h[0], h[1]))
+    return [asset for _, _, asset in hits]
+
+
+def _asset_notes(asset: dict) -> str:
+    """An asset's one-line notes, however its description arrived.
+
+    entities._row_to_dict parses that column into a dict and falls back
+    to {"notes": raw}, so a row is always safe -- but format_cast also
+    takes hand-built dicts, and `(asset.get("description") or {}).get`
+    raised on any of them that carried a plain string. One bad shape
+    should thin a cast line, never kill the scene-writing job that
+    happens to name that asset.
+    """
+    notes = asset.get("notes")
+    if notes:
+        return str(notes)
+    description = asset.get("description")
+    if isinstance(description, dict):
+        return str(description.get("notes") or "")
+    return str(description or "")
+
+
+def cast_detail(asset: dict) -> str:
+    """An asset's stored appearance, as lines for the cast block.
+
+    A reference photo and a sentence do different jobs, and this block
+    was only ever sending one of them. The photo is what the renderer
+    matches pixels against; the sentence is what pins the model's own
+    prior down where the photo is silent -- an angle it never saw, a
+    feature small in frame. Michael's description has said "short dark
+    mustache" and "dark brown hair styled back" since the day his
+    photos were described, and none of it ever reached a prompt: the
+    cast line sent `notes`, which says why the photos exist, not what
+    he looks like. The renders aged him up and thinned the moustache
+    accordingly, because nothing in the words disagreed (2026-08-29).
+
+    look and continuity only. `features` is the long tail, and this
+    block also rides in every ideation prompt, where the room needed is
+    for ideas rather than for six bullets on one man's jawline.
+    """
+    description = asset.get("description")
+    if not isinstance(description, dict):
+        return ""
+    lines = []
+    for key, label in (("look", "Appearance"), ("continuity", "Continuity")):
+        value = str(description.get(key) or "").strip()
+        if value:
+            lines.append(f"  {label}: {value}")
+    return "\n".join(lines)
+
+
+# Brands that get a CAST block at all. Zero Page is absent on purpose
+# (2026-09-01): its own brief says "FACELESS -- no recurring person; any
+# human is anonymous (hand, back, silhouette), never a repeating
+# character", while the shared {cast} socket says "reference the uploaded
+# photos as the EXACT face ... name them". Two instructions in direct
+# contradiction, and the cast block won: every Zero Page concept on the
+# board named Michael, Cyclops or the Ducati, in the brand whose entire
+# identity is that nobody recurs.
+#
+# Scoped by BRAND, not by a column on characters: an asset is not owned
+# by a brand -- the same jacket could appear in either -- what differs is
+# whether a brand is allowed to NAME a recurring person at all. That is a
+# property of the brand, so it lives here.
+CAST_BRANDS = ("antihero",)
+
+
+STILL_RUBRIC = """Write a Midjourney prompt for a single STILL that will be the
+reference / first frame of this video shot. Describe ONLY what's in the frame --
+subject, composition, framing/lens, lighting, mood, style. NO motion, NO camera
+movement (the still is a frozen frame). One vivid sentence, then Midjourney flags.
+End with: --ar 9:16 --style raw
+Return ONLY the prompt line, nothing else."""
+
+
+def still_prompt(shot_prompt: str, gemini_client=None, model: str = MODEL) -> str:
+    """A motion-free frame prompt derived from a video shot prompt.
+
+    Lives here rather than in orchestrator (where it started) because
+    scene_chain needs it too and cannot import orchestrator -- the
+    dependency runs the other way. And it is prompt-building, which is
+    what this module is.
+
+    Returns "" on any failure. A scene with no still prompt is a scene
+    that keyframes the way it always did; nothing downstream may treat
+    the empty string as an error.
+    """
+    try:
+        raw = generate_with_retry(gemini_client, model,
+                                  STILL_RUBRIC + "\n\nVIDEO SHOT:\n" + shot_prompt)
+        line = next((ln.strip() for ln in (raw or "").splitlines() if ln.strip()), "")
+        if line and "--ar" not in line:
+            line = line + " --ar 9:16 --style raw"
+        return line
+    except Exception:
+        return ""
+
+
+def cast_for(brand: str, characters: list, props: list, *, detail: bool = False) -> str:
+    """The cast block a brand is allowed to see. "" for a faceless brand,
+    which format_cast's callers already handle -- an empty cast falls
+    through to NO_CAST_NOTE, telling the model to describe appearance
+    plainly instead of naming anyone."""
+    if brand not in CAST_BRANDS:
+        return ""
+    return format_cast(characters, props, detail=detail)
+
+
+def format_cast(characters: list, props: list, *, detail: bool = False) -> str:
     """
     Named characters and props that have reference stills on file --
     one level down from the room to what's actually in it, same
@@ -357,21 +739,33 @@ def format_cast(characters: list, props: list) -> str:
     that the shoot is missing something.
 
     A character/prop without photo_count still gets listed -- it's
-    still worth naming by name for continuity across shots -- but only
-    ones with photos are told to lean on the reference image instead
-    of prompt text for appearance.
+    still worth naming by name for continuity across shots -- and ones
+    with photos are told so, because the renderer is separately handed
+    those files (`_auto_refs`) and the prompt should say what it is
+    looking at.
+
+    `detail` adds each asset's stored appearance (see cast_detail).
+    Off by default: ideation only needs to know WHO is available, and a
+    cast of five with full descriptions crowds out the ideas. On for
+    the two scene writers, whose output is the prompt a renderer
+    actually grounds -- there, agreeing with the photos in words is the
+    difference between a matched face and a drifting one.
     """
     lines = []
     for c in characters:
         ref = " (reference photos on file)" if c.get("photo_count") else ""
         role = f" — {c['role']}" if c.get("role") else ""
-        notes = c.get("notes") or (c.get("description") or {}).get("notes")
+        notes = _asset_notes(c)
         lines.append(f"- {c['name']}{role}{ref}" + (f": {notes}" if notes else ""))
+        if detail:
+            lines.extend(filter(None, [cast_detail(c)]))
     for p in props:
         ref = " (reference photos on file)" if p.get("photo_count") else ""
         category = f" — {p['category']}" if p.get("category") else ""
-        notes = p.get("notes") or (p.get("description") or {}).get("notes")
+        notes = _asset_notes(p)
         lines.append(f"- {p['name']}{category}{ref}" + (f": {notes}" if notes else ""))
+        if detail:
+            lines.extend(filter(None, [cast_detail(p)]))
     return "\n".join(lines)
 
 
@@ -626,7 +1020,9 @@ def generate_concept_ideas(brand: str, client=None, spark=None, gemini_client=No
                            model: str = MODEL, count: int = DEFAULT_IDEA_COUNT,
                            use_pov: bool = False, db_path=None,
                            references: str = "", formats=None,
-                           only_locations=None) -> dict:
+                           only_locations=None,
+                           account_id: Optional[int] = None,
+) -> dict:
     """
     Stage one: several cheap ideas in a single call, so they can be
     varied against each other rather than rolled independently. No shot
@@ -641,7 +1037,7 @@ def generate_concept_ideas(brand: str, client=None, spark=None, gemini_client=No
     same as before this existed.
     """
     kwargs = {"path": db_path} if db_path is not None else {}
-    locations = preprod.list_locations(**kwargs)
+    locations = preprod.list_locations(**kwargs, account_id=account_id)
     if not locations:
         # Grounding is an enhancement, never a gate -- the same degrade
         # contract reference_block keeps when the library is down.
@@ -660,7 +1056,8 @@ def generate_concept_ideas(brand: str, client=None, spark=None, gemini_client=No
     concept_ids = preprod.save_concept_ideas(
         ideas, brand=brand, client=client, spark=spark,
         prompt_template=prompt, use_pov=use_pov, **kwargs,
-    )
+    
+        account_id=account_id,)
     return {"concept_ids": concept_ids, "ideas": ideas}
 
 
@@ -674,6 +1071,31 @@ def gold_standard_example() -> str:
         return ""
 
 
+# The one line the board is read by. ONE copy of the rules, injected
+# into BOTH writer templates and reused by the backfill, because a line
+# written to different rules would be a second voice on the same board.
+#
+# `card_line` is deliberately NOT `logline`. On the scene-brief path the
+# logline is 2-4 sentences -- "where the IDEA survives", the want, the
+# obstacle and the turn that a one-action prompt cannot hold. That is the
+# idea record. This is the label on the card, and squeezing one out of
+# the other threw the idea away (2026-09-02).
+CARD_LINE_RULES = """Give each scene a "card_line": ONE very short line saying what actually
+happens in it, so a filmmaker can tell scenes apart at a glance without reading
+the prompts. It has to fit on ONE line of a narrow card, so the length is a hard
+limit, not a preference: AT MOST 8 WORDS AND UNDER 50 CHARACTERS.
+One sentence, no trailing period, plain concrete action — who does what and
+what goes wrong. Name the character and the thing, never the craft: no camera,
+lens, grade, lighting or mood words, and never "a scene in which". Cut every
+adjective that is not doing work; "massive", "frustrated" and "mysterious" are
+the first to go.
+Good: "Michael finds a cyclops asleep in his bed"   (40 characters)
+Good: "Cyclops stretches the wall's latex until it tears"   (48)
+Bad:  "A raw handheld dark-comedy piece exploring domestic unease"   (craft, not action)
+Bad:  "Michael discovers a massive cyclops curiously inspecting his Ducati Panigale"   (76 — far too long)
+"""
+
+
 def build_scene_brief_prompt(brand: str, spark=None, references: str = "",
                              cast=None) -> str:
     """The winning skeleton: one cohesive whole-scene prompt (character refs
@@ -682,6 +1104,7 @@ def build_scene_brief_prompt(brand: str, spark=None, references: str = "",
     template = (PROMPTS_DIR / "scene_brief_prompt.txt").read_text()
     example = gold_standard_example() or "(no gold-standard example on file)"
     return (template
+            .replace("{card_line_rules}", CARD_LINE_RULES)
             .replace("{brand}", load_brand(brand))
             .replace("{spark}", f"CREATIVE SPARK FROM THE FILMMAKER: {spark}" if spark else "")
             .replace("{references}", references or NO_REFERENCES_NOTE)
@@ -690,13 +1113,18 @@ def build_scene_brief_prompt(brand: str, spark=None, references: str = "",
 
 
 def parse_scene_brief_response(text: str) -> dict:
-    """`hook` and `logline` are the human-readable summary a card shows;
-    they're optional so an older response (or a model that skips them)
-    still parses -- the `brief` is the deliverable, they're the label."""
+    """`hook`, `logline` and `card_line` are the human-readable parts;
+    all optional, so an older response (or a model that skips one) still
+    parses -- the `brief` is the deliverable.
+
+    `logline` and `card_line` are NOT the same field and neither replaces
+    the other: the logline is 2-4 sentences of idea record (the template
+    says why), the card line is the board's one-line label."""
     data = json.loads(strip_fences(text))
     return {"title": (data.get("title") or "Untitled scene").strip(),
             "hook": (data.get("hook") or "").strip(),
             "logline": (data.get("logline") or "").strip(),
+            "card_line": " ".join((data.get("card_line") or "").split()),
             "brief": (data.get("brief") or "").strip()}
 
 
@@ -713,10 +1141,13 @@ def generate_scene_brief(brand: str, spark=None, gemini_client=None,
 DEFAULT_SCENE_TOOL = "RUNWAY"
 
 
-def generate_scene_concept(brand: str, spark=None, gemini_client=None,
+def generate_scene_concept(brand: str, spark=None, steer: str = "",
+                           gemini_client=None,
                            model: str = MODEL, references: str = "", cast=None,
                            db_path=None, tool: str = DEFAULT_SCENE_TOOL,
-                           image_refs=None) -> dict:
+                           image_refs=None,
+                           account_id: Optional[int] = None,
+) -> dict:
     """
     A concept IS one scene, and the scene IS one prompt (2026-08-26).
 
@@ -740,15 +1171,36 @@ def generate_scene_concept(brand: str, spark=None, gemini_client=None,
     # cast=None means "everything on file", "" means explicitly none --
     # the same convention generate_concept keeps.
     if cast is None:
-        cast = format_cast(entities.list_characters(**kwargs),
-                           entities.list_props(**kwargs))
-    prompt = build_scene_brief_prompt(brand, spark=spark, references=references,
+        cast = format_cast(entities.list_characters(**kwargs, account_id=account_id),
+                           entities.list_props(**kwargs, account_id=account_id), detail=True)
+    # The prompt gets the direction PLUS whatever is steering this run;
+    # the ROW gets the direction alone. Before this split (2026-09-01) the
+    # caller concatenated them and passed one string, so
+    # winners.avoid_guidance -- ~1500 characters of craft notes -- was
+    # saved as the concept's `spark`. That is the column the board prints,
+    # the one archive_batch groups by, and the one scout._spark_key hashes
+    # for novelty: the same direction on a night with a different
+    # avoid-list hashed differently, so novelty silently stopped working
+    # for every graph-generated row.
+    steered = f"{spark or ''}\n{steer}".strip() if steer else spark
+    prompt = build_scene_brief_prompt(brand, spark=steered, references=references,
                                       cast=cast)
     contents = prompt
     if image_refs:
         from google.genai import types
-        contents = [types.Part.from_bytes(data=data, mime_type=mime)
-                    for data, mime in image_refs] + [prompt]
+        # A caption before each photo, same binding the keyframe uses.
+        # This step WRITES the scene, and the scene text is what
+        # named_assets later reads back to decide which assets get
+        # attached -- so a photo misread here propagates all the way to
+        # the render. Refs may be (data, mime) or (data, mime, label).
+        contents = []
+        for ref in image_refs:
+            data, mime = ref[0], ref[1]
+            label = ref[2] if len(ref) > 2 else ""
+            if label:
+                contents.append(label)
+            contents.append(types.Part.from_bytes(data=data, mime_type=mime))
+        contents.append(prompt)
     parsed = parse_scene_brief_response(
         generate_with_retry(gemini_client, model, contents))
 
@@ -757,14 +1209,59 @@ def generate_scene_concept(brand: str, spark=None, gemini_client=None,
             "desc": parsed["logline"] or parsed["title"],
             "prompt": parsed["brief"]}
     concept = {"title": parsed["title"], "hook": parsed["hook"],
-               "logline": parsed["logline"], "shots": [shot]}
-    location_names = [loc["name"] for loc in preprod.list_locations(**kwargs)]
+               "logline": parsed["logline"], "card_line": parsed["card_line"],
+               "shots": [shot]}
+    location_names = [loc["name"] for loc in preprod.list_locations(**kwargs, account_id=account_id)]
     allowed = ZEROPAGE_AI_TOOLS if brand == "zeropage" else None
     warnings = validate_concept(concept, location_names, allowed_tools=allowed)
     concept_id = preprod.save_concept(
         concept, brand=brand, spark=spark, prompt_template=prompt,
-        warnings=warnings, **kwargs)
+        warnings=warnings, **kwargs, account_id=account_id)
     return {"concept_id": concept_id, "concept": concept, "warnings": warnings}
+
+
+def build_card_lines_prompt(scene_prompts: dict) -> str:
+    """Read loglines OFF scene prompts that already exist -- for rows
+    written before the writer was asked for one, or with one too long to
+    fit the card. Same rules as the writers (CARD_LINE_RULES), so a
+    backfilled card reads like its neighbours.
+
+    ALL of them in one call, for the two reasons generate_scene_concepts
+    batches: they come back varied against each other rather than rolled
+    independently, and it is one round trip instead of N against a model
+    that is regularly throttled."""
+    scenes = "\n\n".join(f"=== SCENE {sid} ===\n{prompt}"
+                          for sid, prompt in scene_prompts.items())
+    return (f"{CARD_LINE_RULES}\n\n"
+            "Below are scene prompts that have no usable card line, each under "
+            "its own id. Write one for each, obeying the rules above. Return "
+            "STRICT JSON ONLY, no fences, no preamble, in this shape: "
+            '{"card_lines": {"<id>": "the line", ...}}\n\n'
+            f"{scenes}")
+
+
+def parse_card_lines_response(text: str) -> dict:
+    """The testable seam: raw model text -> {int id: one-line string}.
+    Tolerant of a bare mapping as well as the documented wrapper, and it
+    drops anything empty rather than writing a blank over a real row."""
+    data = json.loads(strip_fences(text))
+    raw = (data.get("card_lines")
+           if isinstance(data, dict) and "card_lines" in data else data)
+    out = {}
+    for sid, line in (raw or {}).items():
+        line = " ".join(str(line or "").split()).strip('"')
+        if line:
+            out[int(sid)] = line
+    return out
+
+
+def write_card_lines(scene_prompts: dict, gemini_client=None,
+                     model: str = MODEL) -> dict:
+    """A card line for each {id: scene prompt}, one call, one line each."""
+    if not scene_prompts:
+        return {}
+    return parse_card_lines_response(generate_with_retry(
+        gemini_client, model, build_card_lines_prompt(scene_prompts)))
 
 
 def build_scenes_prompt(idea: str, brand: str, count: int, locations: list,
@@ -772,15 +1269,21 @@ def build_scenes_prompt(idea: str, brand: str, count: int, locations: list,
     """N standalone scene prompts off ONE idea, in the same proven
     skeleton build_scene_brief_prompt uses -- the difference is plural
     and independent: these are competing takes to pick between, not
-    parts of one video."""
+    parts of one video.
+
+    `locations` is what was PICKED for this run, not the catalogue --
+    see format_scene_locations. An empty list is the normal case and
+    means the scenes may be set anywhere.
+    """
     template = (PROMPTS_DIR / "scenes_prompt.txt").read_text()
     example = gold_standard_example() or "(no gold-standard example on file)"
     return (template
+            .replace("{card_line_rules}", CARD_LINE_RULES)
             .replace("{count}", str(count))
             .replace("{idea}", (idea or "").strip() or "(no idea given — surprise me)")
             .replace("{brand}", load_brand(brand))
             .replace("{cast}", cast or NO_CAST_NOTE)
-            .replace("{locations}", format_locations(locations))
+            .replace("{locations}", format_scene_locations(locations))
             .replace("{references}", references or NO_REFERENCES_NOTE)
             .replace("{example}", example))
 
@@ -788,7 +1291,15 @@ def build_scenes_prompt(idea: str, brand: str, count: int, locations: list,
 def parse_scenes_response(text: str) -> list:
     """Tolerant of the two shapes a model reaches for: the documented
     {"scenes": [...]} and a bare array. Anything without a prompt is
-    dropped here rather than saved as an unrenderable row."""
+    dropped here rather than saved as an unrenderable row.
+
+    `logline` is the one line the board shows under the title so the
+    scenes can be told apart without reading four scene prompts. It is
+    OPTIONAL here on purpose -- a model that skips the key still yields
+    a renderable scene, and preprod.concept_summary derives a line from
+    the prompt for any row that arrives without one. Newlines are
+    collapsed because the card gives it exactly one line.
+    """
     data = json.loads(strip_fences(text))
     raw = data.get("scenes") if isinstance(data, dict) else data
     scenes = []
@@ -800,6 +1311,7 @@ def parse_scenes_response(text: str) -> list:
             continue
         scenes.append({
             "title": (item.get("title") or "Untitled scene").strip(),
+            "card_line": " ".join((item.get("card_line") or "").split()),
             "location": (item.get("location") or "").strip(),
             "prompt": prompt,
         })
@@ -810,7 +1322,10 @@ def generate_scene_concepts(idea: str, brand: str, count: int = 4,
                             gemini_client=None, model: str = MODEL,
                             references: str = "", cast=None, db_path=None,
                             tool: str = DEFAULT_SCENE_TOOL,
-                            refs=None, image_refs=None) -> dict:
+                            refs=None, image_refs=None,
+                            template_tag: str = "", on_retry=None,
+                            account_id: Optional[int] = None,
+) -> dict:
     """
     One idea -> N scenes to PICK BETWEEN (2026-08-26).
 
@@ -831,42 +1346,73 @@ def generate_scene_concepts(idea: str, brand: str, count: int = 4,
     vision input.
     """
     kwargs = {"path": db_path} if db_path is not None else {}
-    locations = preprod.list_locations(**kwargs)
-    if not locations:
-        print(NO_LOCATIONS_NOTE, file=sys.stderr)
+    # Only the rooms attached to THIS run steer it. No stderr note when
+    # there are none: an unpinned scene is the normal case now, not a
+    # degraded one, and a note printed every single run is a note nobody
+    # reads on the one night it would have meant something.
+    on_file = preprod.list_locations(**kwargs, account_id=account_id)
+    locations = picked_locations(refs, on_file)
     prompt = build_scenes_prompt(idea, brand, count, locations,
                                  references=references, cast=cast)
     contents = prompt
     if image_refs:
         from google.genai import types
-        contents = [types.Part.from_bytes(data=data, mime_type=mime)
-                    for data, mime in image_refs] + [prompt]
-    scenes = parse_scenes_response(generate_with_retry(gemini_client, model, contents))
+        # A caption before each photo, same binding the keyframe uses.
+        # This step WRITES the scene, and the scene text is what
+        # named_assets later reads back to decide which assets get
+        # attached -- so a photo misread here propagates all the way to
+        # the render. Refs may be (data, mime) or (data, mime, label).
+        contents = []
+        for ref in image_refs:
+            data, mime = ref[0], ref[1]
+            label = ref[2] if len(ref) > 2 else ""
+            if label:
+                contents.append(label)
+            contents.append(types.Part.from_bytes(data=data, mime_type=mime))
+        contents.append(prompt)
+    scenes = parse_scenes_response(
+        generate_with_retry(gemini_client, model, contents, on_retry=on_retry))
 
-    location_names = [loc["name"] for loc in locations]
+    # Validated against every described room, not just the picked ones:
+    # a scene that names a real space it was not handed is fine, and a
+    # scene that names one that does not exist is the thing worth
+    # flagging. (AI shots are not flagged at all -- see validate_concept.)
+    location_names = [loc["name"] for loc in on_file]
     allowed = ZEROPAGE_AI_TOOLS if brand == "zeropage" else None
+    # What gets HASHED, which is what pick_rate buckets by. The tag
+    # separates rows produced by different pipelines: pre-2026-08-29 a
+    # picked row meant a board click, and after the chain it means a
+    # spend approval. Same template, two meanings, one bucket -- and
+    # by_prompt is exactly where that would be unreadable.
+    hashed = prompt + (f"\n\n[{template_tag}]" if template_tag else "")
     saved = []
     for scene in scenes:
+        card_line = scene.get("card_line") or ""
         shot = {"n": 1, "type": "BROLL", "source": "AI",
                 "tool": (tool or DEFAULT_SCENE_TOOL).upper(),
-                "desc": scene["title"], "prompt": scene["prompt"],
+                "desc": card_line or scene["title"], "prompt": scene["prompt"],
                 "refs": list(refs or [])}
         if scene.get("location"):
             shot["location"] = scene["location"]
+        # card_line is the label the board reads, never an input to a
+        # render. This path writes no logline: the idea record is the
+        # scene-brief writer's job, and an empty one is honest.
         concept = {"title": scene["title"], "hook": "", "logline": "",
-                   "shots": [shot]}
+                   "card_line": card_line, "shots": [shot]}
         warnings = validate_concept(concept, location_names, allowed_tools=allowed)
         concept_id = preprod.save_concept(
-            concept, brand=brand, spark=idea, prompt_template=prompt,
-            warnings=warnings, **kwargs)
+            concept, brand=brand, spark=idea, prompt_template=hashed,
+            warnings=warnings, **kwargs, account_id=account_id)
         saved.append({"concept_id": concept_id, "title": scene["title"],
-                      "warnings": warnings})
-    return {"scenes": saved, "prompt_template": prompt}
+                      "card_line": card_line, "warnings": warnings})
+    return {"scenes": saved, "prompt_template": hashed}
 
 
 def write_scene_for_concept(concept_id: int, gemini_client=None,
                             model: str = MODEL, references: str = "", cast=None,
-                            db_path=None, tool: str = DEFAULT_SCENE_TOOL) -> dict:
+                            db_path=None, tool: str = DEFAULT_SCENE_TOOL,
+                            account_id: Optional[int] = None,
+) -> dict:
 
 
     """
@@ -879,11 +1425,11 @@ def write_scene_for_concept(concept_id: int, gemini_client=None,
     from anywhere (the ideas stage, rework's evidence-grounded slate) has
     a path to a real prompt instead of being a dead end.
 
-    The picked title/hook/logline are the LABEL and are never rewritten;
+    The picked title/hook/logline/card_line are the LABEL and are never rewritten;
     this fills in the shots only, through update_concept_shots.
     """
     kwargs = {"path": db_path} if db_path is not None else {}
-    concept = preprod.get_concept(concept_id, **kwargs)
+    concept = preprod.get_concept(concept_id, **kwargs, account_id=account_id)
     if concept is None:
         raise ValueError(f"no concept {concept_id}")
 
@@ -892,8 +1438,8 @@ def write_scene_for_concept(concept_id: int, gemini_client=None,
         concept.get("title"), concept.get("hook"), concept.get("logline"),
         concept.get("spark")) if part)
     if cast is None:
-        cast = format_cast(entities.list_characters(**kwargs),
-                           entities.list_props(**kwargs))
+        cast = format_cast(entities.list_characters(**kwargs, account_id=account_id),
+                           entities.list_props(**kwargs, account_id=account_id), detail=True)
     prompt = build_scene_brief_prompt(concept.get("brand") or "antihero",
                                       spark=spark, references=references, cast=cast)
     parsed = parse_scene_brief_response(
@@ -901,15 +1447,16 @@ def write_scene_for_concept(concept_id: int, gemini_client=None,
 
     shot = {"n": 1, "type": "BROLL", "source": "AI",
             "tool": (tool or DEFAULT_SCENE_TOOL).upper(),
-            "desc": concept.get("logline") or concept.get("title") or "",
+            "desc": (concept.get("card_line") or concept.get("logline")
+                     or concept.get("title") or ""),
             "prompt": parsed["brief"]}
-    location_names = [loc["name"] for loc in preprod.list_locations(**kwargs)]
+    location_names = [loc["name"] for loc in preprod.list_locations(**kwargs, account_id=account_id)]
     allowed = ZEROPAGE_AI_TOOLS if concept.get("brand") == "zeropage" else None
     warnings = validate_concept({**concept, "shots": [shot]}, location_names,
                                 use_pov=bool(concept.get("use_pov")),
                                 allowed_tools=allowed)
     preprod.update_concept_shots(concept_id, {"shots": [shot]},
-                                 warnings=warnings, **kwargs)
+                                 warnings=warnings, **kwargs, account_id=account_id)
     return {"concept_id": concept_id, "shots": [shot], "warnings": warnings}
 
 def parse_concept_response(text: str) -> dict:
@@ -1044,7 +1591,9 @@ def director_prompt(shot: dict, concept=None) -> str:
 def generate_concept(brand: str, client=None, spark=None, gemini_client=None,
                      model: str = MODEL, use_pov: bool = False, db_path=None,
                      references: str = "", cast=None, formats=None,
-                     only_locations=None, image_refs=None) -> dict:
+                     only_locations=None, image_refs=None,
+                     account_id: Optional[int] = None,
+) -> dict:
     """
     One concept, grounded in the described locations, validated and
     saved. Returns {"concept_id", "concept", "warnings"}.
@@ -1069,14 +1618,15 @@ def generate_concept(brand: str, client=None, spark=None, gemini_client=None,
     None/empty means text-only, exactly as before this parameter existed.
     """
     kwargs = {"path": db_path} if db_path is not None else {}
-    locations = preprod.list_locations(**kwargs)
+    locations = preprod.list_locations(**kwargs, account_id=account_id)
     if not locations:
         print(NO_LOCATIONS_NOTE, file=sys.stderr)
 
     locations, lock_location = _apply_location_lock(locations, only_locations)
 
     if cast is None:
-        cast = format_cast(entities.list_characters(**kwargs), entities.list_props(**kwargs))
+        cast = format_cast(entities.list_characters(**kwargs, account_id=account_id), entities.list_props(**kwargs,
+                account_id=account_id))
 
     if formats is None:
         formats = ranked_formats(**kwargs)
@@ -1108,7 +1658,8 @@ def generate_concept(brand: str, client=None, spark=None, gemini_client=None,
         concept, brand=brand, client=client, spark=spark,
         location_ids=location_ids, prompt_template=prompt,
         warnings=warnings, use_pov=use_pov, **kwargs,
-    )
+    
+        account_id=account_id,)
     return {"concept_id": concept_id, "concept": concept, "warnings": warnings}
 
 
@@ -1142,7 +1693,7 @@ def format_concept_as_text(concept: dict, warnings=None) -> str:
     return "\n".join(lines)
 
 
-def main(db_path=None):
+def main(db_path=None, account_id: Optional[int] = None):
     load_dotenv()
 
     parser = argparse.ArgumentParser(
@@ -1161,7 +1712,20 @@ def main(db_path=None):
                         help="pin this run to one location on file (repeatable for more "
                              "than one) -- a deliberate choice, so the variety nudge "
                              "toward AI-invented environments is skipped")
+    parser.add_argument(
+        "--account", default=None,
+        help=(
+            "The account to act as, by slug (zeropage / antihero). "
+            "Defaults to the oldest account on the database -- an "
+            "unattended run has no session, and acting as nobody "
+            "would read an empty database."
+        ),
+    )
     args = parser.parse_args()
+    if account_id is None:
+        account_id = accounts.resolve_account(
+            args.account, path=db_path if db_path is not None else db.DB_PATH)
+
 
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
@@ -1187,7 +1751,7 @@ def main(db_path=None):
             print(e, file=sys.stderr)
             sys.exit(1)
 
-        concept = preprod.get_concept(args.scene, path=path)
+        concept = preprod.get_concept(args.scene, path=path, account_id=account_id)
         print(f"\nConcept {args.scene}")
         print(format_concept_as_text(concept, result["warnings"]))
         return

@@ -22,7 +22,7 @@ def tmp_db(tmp_path):
 @pytest.fixture
 def shot_id(tmp_db):
     shot = Shot(subject="a gloved hand", action="closes a steel drawer")
-    return gen.add_shot(shot, path=tmp_db)
+    return gen.add_shot(shot, path=tmp_db, account_id=None)
 
 
 def test_record_logs_a_generation_and_prints_id(shot_id, tmp_db, capsys):
@@ -44,16 +44,16 @@ def test_record_rejects_unknown_tool(shot_id, tmp_db):
 
 
 def test_keep_marks_generation_and_resolves_shot(shot_id, tmp_db, capsys):
-    gen_id = gen.record_generation(shot_id, "veo", "a prompt", path=tmp_db)
+    gen_id = gen.record_generation(shot_id, "veo", "a prompt", path=tmp_db, account_id=None)
 
     genlog.main(["keep", str(gen_id)], db_path=tmp_db)
 
     assert "kept" in capsys.readouterr().out.lower()
-    assert gen.get_shot(shot_id, tmp_db)["resolved"] == 1
+    assert gen.get_shot(shot_id, tmp_db, account_id=None)["resolved"] == 1
 
 
 def test_reject_stores_the_reason(shot_id, tmp_db, capsys):
-    gen_id = gen.record_generation(shot_id, "kling", "a prompt", path=tmp_db)
+    gen_id = gen.record_generation(shot_id, "kling", "a prompt", path=tmp_db, account_id=None)
 
     genlog.main(["reject", str(gen_id), "morphing"], db_path=tmp_db)
 
@@ -66,11 +66,11 @@ def test_reject_stores_the_reason(shot_id, tmp_db, capsys):
 
 
 def test_reject_rejects_reason_outside_controlled_vocabulary(shot_id, tmp_db):
-    gen_id = gen.record_generation(shot_id, "kling", "a prompt", path=tmp_db)
+    gen_id = gen.record_generation(shot_id, "kling", "a prompt", path=tmp_db, account_id=None)
     with pytest.raises(SystemExit):
         genlog.main(["reject", str(gen_id), "vibes felt off"], db_path=tmp_db)
 
 
 def test_reject_other_is_a_valid_reason(shot_id, tmp_db):
-    gen_id = gen.record_generation(shot_id, "kling", "a prompt", path=tmp_db)
+    gen_id = gen.record_generation(shot_id, "kling", "a prompt", path=tmp_db, account_id=None)
     genlog.main(["reject", str(gen_id), "other"], db_path=tmp_db)  # must not raise

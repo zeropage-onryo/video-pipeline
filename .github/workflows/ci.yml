@@ -3,6 +3,23 @@ name: CI
 "on":
   push:
   pull_request:
+  # The eval gate is the only thing here that spends API credits, so it no
+  # longer rides every push (a 15-commit day was 15 full judge runs). It runs
+  # weekly, or on demand from the Actions tab / `gh workflow run CI`. The
+  # hermetic `test` job below still runs on every push and PR -- that is the
+  # fast feedback loop, and it costs nothing.
+  schedule:
+    - cron: "0 12 * * 1"  # Mondays 12:00 UTC = 8am ET (7am when EST)
+  workflow_dispatch:
+
+# A burst of pushes to the same branch cancels its own older in-flight runs
+# instead of queueing N identical lint/test jobs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  # Only push runs get cancelled. A weekly or hand-started eval gate must never
+  # be killed by an unrelated push to the same branch -- that would look like a
+  # skipped gate, and it would already have spent the credits.
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 jobs:
   test:
@@ -36,10 +53,19 @@ jobs:
   # `test` job above (which conftest.py's no_network guard enforces).
   # A fork's PR, or a repo where the secret hasn't been added yet, gets
   # a clean skip instead of N confusing auth failures.
+  #
+  # Runs weekly (Mondays) or on demand, NOT per push -- see the trigger
+  # block above. Run it by hand before merging anything that touches
+  # retrieval, the generation prompts, or the golden set, since a
+  # regression otherwise sits on main until the next Monday.
   eval-gate:
     needs: test
     runs-on: ubuntu-latest
-    if: ${{ !github.event.pull_request.head.repo.fork }}
+    # Weekly cron or a manual run only -- never on an ordinary push or PR.
+    # (The fork check still applies to a manually dispatched PR branch.)
+    if: >-
+      ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+          && !github.event.pull_request.head.repo.fork }}
     env:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       RAG_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/zeropage_ci

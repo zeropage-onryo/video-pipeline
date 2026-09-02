@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 
 from app import jobs, workflow_runner
 from app.main import app
-from src import db, generative, render_assets, runway, workflows
+from src import db, generative, imagery, render_assets, runway, workflows
 
 client = TestClient(app)
 
@@ -106,32 +106,32 @@ def reference_shape_graph():
 def test_workflow_crud_roundtrip(tmp_db):
     graph = {"nodes": [node(1, "zpf/user_prompt")], "links": []}
     wf_id = workflows.create_workflow("night ride", graph,
-                                      brand="antihero", path=tmp_db)
+                                      brand="antihero", path=tmp_db, account_id=None)
 
-    listed = workflows.list_workflows(path=tmp_db)
+    listed = workflows.list_workflows(path=tmp_db, account_id=None)
     assert [w["name"] for w in listed] == ["night ride"]
     assert listed[0]["node_count"] == 1
     assert "graph" not in listed[0]          # the list stays light
 
-    loaded = workflows.get_workflow(wf_id, path=tmp_db)
+    loaded = workflows.get_workflow(wf_id, path=tmp_db, account_id=None)
     assert loaded["graph"] == graph
 
-    assert workflows.update_workflow(wf_id, name="garage ritual", path=tmp_db)
-    assert workflows.get_workflow(wf_id, path=tmp_db)["name"] == "garage ritual"
+    assert workflows.update_workflow(wf_id, name="garage ritual", path=tmp_db, account_id=None)
+    assert workflows.get_workflow(wf_id, path=tmp_db, account_id=None)["name"] == "garage ritual"
     # graph untouched by a name-only update
-    assert workflows.get_workflow(wf_id, path=tmp_db)["graph"] == graph
+    assert workflows.get_workflow(wf_id, path=tmp_db, account_id=None)["graph"] == graph
 
-    assert workflows.delete_workflow(wf_id, path=tmp_db)
-    assert workflows.get_workflow(wf_id, path=tmp_db) is None
-    assert not workflows.delete_workflow(wf_id, path=tmp_db)
+    assert workflows.delete_workflow(wf_id, path=tmp_db, account_id=None)
+    assert workflows.get_workflow(wf_id, path=tmp_db, account_id=None) is None
+    assert not workflows.delete_workflow(wf_id, path=tmp_db, account_id=None)
 
 
 def test_workflow_list_scopes_by_brand(tmp_db):
-    workflows.create_workflow("a", {}, brand="antihero", path=tmp_db)
-    workflows.create_workflow("z", {}, brand="zeropage", path=tmp_db)
+    workflows.create_workflow("a", {}, brand="antihero", path=tmp_db, account_id=None)
+    workflows.create_workflow("z", {}, brand="zeropage", path=tmp_db, account_id=None)
     assert [w["name"] for w in
-            workflows.list_workflows(brand="zeropage", path=tmp_db)] == ["z"]
-    assert len(workflows.list_workflows(path=tmp_db)) == 2
+            workflows.list_workflows(brand="zeropage", path=tmp_db, account_id=None)] == ["z"]
+    assert len(workflows.list_workflows(path=tmp_db, account_id=None)) == 2
 
 
 # --- runway.generate_from_prompt --------------------------------------------
@@ -173,7 +173,9 @@ def test_generate_from_prompt_refuses_without_spend_approval(tmp_db, tmp_path,
 def test_generate_from_prompt_honours_the_daily_cap(tmp_db, tmp_path, monkeypatch):
     monkeypatch.setenv(runway.SPEND_ENV, "1")
     monkeypatch.setattr(runway, "RENDER_DIR", tmp_path / "renders")
-    monkeypatch.setattr(runway, "generations_today", lambda db_path=None: runway.DAILY_CAP)
+    monkeypatch.setattr(runway, "generations_today",
+                        lambda db_path=None, account_id=None, everyone=False:
+                        runway.DAILY_CAP)
     result = runway.generate_from_prompt("x", db_path=tmp_db, client=FakeClient())
     assert result["ok"] is False
     assert "daily cap" in result["error"]
@@ -194,7 +196,7 @@ def test_generate_from_prompt_renders_and_logs(tmp_db, tmp_path, monkeypatch,
         row = conn.execute("SELECT tool, params_json FROM generations").fetchone()
     assert row["tool"] == "runway"
     assert '"source": "workflow"' in row["params_json"]
-    asset = render_assets.list_all(path=tmp_db)[0]
+    asset = render_assets.list_all(path=tmp_db, account_id=None)[0]
     assert result["asset_id"] == asset["id"]
     assert asset["media_kind"] == "video"
     assert asset["prompt"] == "a drawer closing"
@@ -468,8 +470,20 @@ def test_execute_graph_enhance_auto_grounds_on_the_backend(tmp_db, monkeypatch):
 
 
 def test_api_presets_carries_the_enhance_instruction(tmp_db):
+    """The enhance instruction is asserted on what it PROTECTS, not on
+    its wording (2026-08-28). The original told the model to "expand the
+    user's simple prompt", which on a finished director's prompt made it
+    summarise: a real run dropped every "(reference photos on file)"
+    lock, the whole Avoid list, the beat order and the no-music rule,
+    and handed the renderer a paraphrase. Those four are the contract."""
     res = client.get("/api/presets").json()
-    assert "prompt enhancement assistant" in res["enhance_system"]
+    text = res["enhance_system"].lower()
+    assert "output only the prompt" in text
+    for protected in ("reference photos on file", "avoid", "order", "music"):
+        assert protected in text, f"the instruction no longer protects {protected!r}"
+    # and it must steer AWAY from the glossy render, not toward it
+    assert "do not add" in text
+    assert "cinematic" in text.split("do not add", 1)[1]
 
 
 def test_execute_graph_wires_ground_into_enhance_references(tmp_db, monkeypatch):
@@ -521,19 +535,39 @@ def test_api_exec_generate_respects_the_spend_gate(tmp_db, monkeypatch):
 
 # --- the shell + the dev page ----------------------------------------------
 
-def test_ui_shell_has_pipeline_tabs_and_a_director_view(tmp_db):
-    """The 2026-08-25 restructure, corrected same day: Pipeline is two
-    tabs (Concept / Generate); the node canvas is its OWN rail view,
-    Director -- the nodes must never be buried behind a tab. The canvas
-    (LiteGraph) still ships with the shell."""
+def test_ui_shell_is_one_board_per_rail_view(tmp_db):
+    """The 2026-08-28 merge: Pipeline has no tabs left. Scenes and
+    concepts were always the same row, so they are one board; the idea
+    is typed on Studio and the spend is approved in Queue. The node
+    canvas stays its OWN rail view, Director -- the nodes must never be
+    buried behind a tab -- and the canvas (LiteGraph) still ships with
+    the shell."""
     html = client.get("/ui").text
     assert 'data-view="workflows"' not in html
     assert 'data-view="director"' in html
-    assert 'data-ptab="concept"' in html
-    assert 'data-ptab="generate"' in html
-    assert 'data-ptab="director"' not in html
+    assert 'data-view="queue"' in html
+    assert "data-ptab=" not in html            # the tab strip is gone entirely
     assert 'data-view="evals"' not in html
     assert "vendor/litegraph.js" in html
+
+
+def test_the_idea_composer_lives_only_on_studio(tmp_db):
+    """One place to type an idea. The Pipeline composer is gone, and
+    Studio's Create carries the 1-4 count that replaced it."""
+    html = client.get("/ui").text
+    assert html.count('id="ccount"') == 1
+    assert 'id="sceneidea"' not in html        # the Pipeline composer
+    assert 'id="genprompt"' not in html        # the Generate tab composer
+    assert '<option value="4" selected>4 concepts</option>' in html
+    assert '<option value="5"' not in html     # 4 is the cap the API enforces
+
+
+def test_the_queue_is_the_approval_gate(tmp_db):
+    """Rendering is the only step that spends, so it is the only one
+    with a gate -- and the gate is in Queue, not on the board."""
+    html = client.get("/ui").text
+    assert 'id="pendlist"' in html
+    assert "Awaiting approval" in html
 
 
 def test_evals_url_redirects_into_the_dev_studio(tmp_db):
@@ -552,7 +586,7 @@ def test_seed_default_plants_the_template_once(tmp_db):
     assert wf_id is not None
     assert workflows.seed_default(path=tmp_db) is None   # idempotent
 
-    template = workflows.get_workflow(wf_id, path=tmp_db)
+    template = workflows.get_workflow(wf_id, path=tmp_db, account_id=None)
     assert template["name"] == "Prompt enhancement"
     assert template["brand"] is None                     # shared across brands
     types = [n["type"] for n in template["graph"]["nodes"]]
@@ -562,22 +596,24 @@ def test_seed_default_plants_the_template_once(tmp_db):
     assert [(link[1], link[3]) for link in template["graph"]["links"]] \
         == [(1, 3), (2, 3), (3, 4)]
     # the System Prompt ships with the prompts/ text, not empty
-    assert "enhance" in template["graph"]["nodes"][0]["properties"]["text"].lower()
+    seeded = template["graph"]["nodes"][0]["properties"]["text"]
+    assert "output only the prompt" in seeded.lower()
+    assert len(seeded) > 200
 
 
 def test_seed_default_respects_an_intentionally_emptied_slate(tmp_db):
     wf_id = workflows.seed_default(path=tmp_db)
-    workflows.create_workflow("mine", {}, brand="antihero", path=tmp_db)
-    workflows.delete_workflow(wf_id, path=tmp_db)
+    workflows.create_workflow("mine", {}, brand="antihero", path=tmp_db, account_id=None)
+    workflows.delete_workflow(wf_id, path=tmp_db, account_id=None)
     # other workflows exist -> the deleted template stays deleted
     assert workflows.seed_default(path=tmp_db) is None
 
 
 def test_brandless_template_shows_up_under_every_brand(tmp_db):
     workflows.seed_default(path=tmp_db)
-    workflows.create_workflow("z", {}, brand="zeropage", path=tmp_db)
+    workflows.create_workflow("z", {}, brand="zeropage", path=tmp_db, account_id=None)
     for brand in ("antihero", "zeropage"):
-        names = [w["name"] for w in workflows.list_workflows(brand=brand, path=tmp_db)]
+        names = [w["name"] for w in workflows.list_workflows(brand=brand, path=tmp_db, account_id=None)]
         assert "Prompt enhancement" in names
 
 
@@ -619,8 +655,9 @@ class FakeGeminiImageClient:
         response = SimpleNamespace(candidates=[candidate], text=None)
         self.calls = []
 
-        def generate_content(model, contents):
-            self.calls.append({"model": model, "contents": contents})
+        def generate_content(model, contents, config=None):
+            self.calls.append({"model": model, "contents": contents,
+                               "config": config})
             return response
 
         self.models = SimpleNamespace(generate_content=generate_content)
@@ -643,7 +680,7 @@ def test_nano_generate_renders_and_logs(tmp_db, tmp_path, monkeypatch):
         rows = conn.execute("SELECT tool FROM generations").fetchall()
     assert [r[0] for r in rows] == ["nano"]
     assert nano_banana.generations_today(db_path=tmp_db) == 1
-    asset = render_assets.list_all(path=tmp_db)[0]
+    asset = render_assets.list_all(path=tmp_db, account_id=None)[0]
     assert result["asset_id"] == asset["id"]
     assert asset["media_kind"] == "image"
     assert asset["prompt"] == "a red bike"
@@ -681,23 +718,103 @@ def test_nano_generate_surfaces_a_textonly_refusal(tmp_db, tmp_path, monkeypatch
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     monkeypatch.setattr(nano_banana, "RENDER_DIR", tmp_path / "nano")
     fake = FakeGeminiImageClient()
-    fake.models = SimpleNamespace(generate_content=lambda model, contents:
-                                  SimpleNamespace(candidates=[], text="no can do"))
+    fake.models = SimpleNamespace(
+        generate_content=lambda model, contents, config=None:
+        SimpleNamespace(candidates=[], text="no can do"))
     result = nano_banana.generate_from_prompt("a bike", db_path=tmp_db, client=fake)
     assert not result["ok"] and "no image" in result["error"]
+
+
+def test_nano_asks_for_the_shape_it_needs(tmp_db, tmp_path, monkeypatch):
+    """Every render here is vertical, and saying "9:16" inside the prompt
+    does not make it so — the model infers a shape from the references
+    unless the request configures one, and returned 3:4 for a shot whose
+    prompt opened with "9:16" (2026-08-29). The keyframe is what Runway
+    anchors the clip on, so the wrong shape there crops the clip."""
+    from src import nano_banana
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(nano_banana, "RENDER_DIR", tmp_path / "nano")
+    monkeypatch.setattr("src.storage.configured", lambda: False)
+    fake = FakeGeminiImageClient()
+    assert nano_banana.generate_from_prompt("a red bike", db_path=tmp_db,
+                                            client=fake)["ok"]
+    config = fake.calls[0]["config"]
+    assert config is not None
+    assert config.image_config.aspect_ratio == "9:16"
+
+
+def test_nano_leaves_the_shape_alone_when_nothing_is_asked_for(tmp_db, tmp_path,
+                                                              monkeypatch):
+    """Empty means "don't configure it" — the behaviour every render had
+    before this, still reachable."""
+    from src import nano_banana
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(nano_banana, "RENDER_DIR", tmp_path / "nano")
+    monkeypatch.setattr("src.storage.configured", lambda: False)
+    fake = FakeGeminiImageClient()
+    assert nano_banana.generate_from_prompt("a red bike", db_path=tmp_db,
+                                            client=fake, aspect_ratio="",
+                                            image_size="")["ok"]
+    assert fake.calls[0]["config"] is None
+
+
+def test_a_config_the_endpoint_rejects_still_renders(tmp_db, tmp_path, monkeypatch):
+    """A wrongly-shaped frame is a far better outcome than losing a
+    billed call to an INVALID_ARGUMENT, so an unsupported image_config
+    retries once without it. NANO_IMAGE_SIZE is the reason this exists:
+    2K is not offered by every model on this endpoint."""
+    from src import nano_banana
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(nano_banana, "RENDER_DIR", tmp_path / "nano")
+    monkeypatch.setattr("src.storage.configured", lambda: False)
+    fake = FakeGeminiImageClient()
+    inner = fake.models.generate_content
+
+    def picky(model, contents, config=None):
+        if config is not None:
+            raise RuntimeError("400 INVALID_ARGUMENT: image_size not supported")
+        return inner(model, contents, config=config)
+
+    fake.models = SimpleNamespace(generate_content=picky)
+    result = nano_banana.generate_from_prompt("a red bike", db_path=tmp_db,
+                                              client=fake, image_size="2K")
+    assert result["ok"], result["error"]
+    assert [c["config"] for c in fake.calls] == [None]    # the retry landed
+
+
+def test_a_real_failure_is_not_swallowed_by_the_shape_retry(tmp_db, tmp_path,
+                                                            monkeypatch):
+    """Only INVALID_ARGUMENT degrades. Anything else still surfaces —
+    the image IS the deliverable here."""
+    from src import nano_banana
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(nano_banana, "RENDER_DIR", tmp_path / "nano")
+    fake = FakeGeminiImageClient()
+
+    def broken(model, contents, config=None):
+        raise RuntimeError("500 INTERNAL")
+
+    fake.models = SimpleNamespace(generate_content=broken)
+    result = nano_banana.generate_from_prompt("a red bike", db_path=tmp_db,
+                                              client=fake)
+    assert not result["ok"] and "INTERNAL" in result["error"]
 
 
 # --- the nano node in the executor and the API ------------------------------
 
 def test_image_bytes_for_gemini_resolves_renders_and_data_uris(tmp_path):
     import base64
-    assert workflow_runner.image_bytes_for_gemini(
+    assert imagery.image_bytes_for_gemini(
         "data:image/png;base64," + base64.b64encode(b"PIX").decode()) == b"PIX"
     photo = tmp_path / "p.jpg"
     photo.write_bytes(b"JPEGBYTES")
-    assert workflow_runner.image_bytes_for_gemini(
+    assert imagery.image_bytes_for_gemini(
         "/assets/antihero/p.jpg", resolve_photo=lambda v: photo) == b"JPEGBYTES"
-    assert workflow_runner.image_bytes_for_gemini("https://x/y.png") is None
+    assert imagery.image_bytes_for_gemini("https://x/y.png") is None
 
 
 # --- the keyframe -> clip chain ---------------------------------------------
@@ -753,7 +870,7 @@ def test_a_remote_reference_reaches_gemini_as_vision_not_as_a_url(monkeypatch):
     The reference looked attached on the canvas and reached no model --
     silently dropped for Nano, and reduced to a line of TEXT naming the
     URL for enhance, which is indistinguishable from no reference."""
-    monkeypatch.setattr(workflow_runner, "fetch_image_bytes",
+    monkeypatch.setattr(imagery, "fetch_image_bytes",
                         lambda url: PNG_BYTES if url == R2_URL else None)
     captured = {}
     monkeypatch.setattr("src.gemini_utils.generate_with_retry",
@@ -770,7 +887,7 @@ def test_a_remote_reference_reaches_gemini_as_vision_not_as_a_url(monkeypatch):
 
 
 def test_an_unreachable_reference_says_so_instead_of_pretending(monkeypatch):
-    monkeypatch.setattr(workflow_runner, "fetch_image_bytes", lambda url: None)
+    monkeypatch.setattr(imagery, "fetch_image_bytes", lambda url: None)
     captured = {}
     monkeypatch.setattr("src.gemini_utils.generate_with_retry",
                         lambda client, model, contents:
@@ -781,9 +898,9 @@ def test_an_unreachable_reference_says_so_instead_of_pretending(monkeypatch):
 
 
 def test_image_bytes_for_gemini_fetches_a_public_url(monkeypatch):
-    monkeypatch.setattr(workflow_runner, "fetch_image_bytes",
+    monkeypatch.setattr(imagery, "fetch_image_bytes",
                         lambda url: PNG_BYTES)
-    assert workflow_runner.image_bytes_for_gemini(R2_URL) == PNG_BYTES
+    assert imagery.image_bytes_for_gemini(R2_URL) == PNG_BYTES
 
 
 def test_the_reference_fetch_refuses_private_addresses():
@@ -791,9 +908,9 @@ def test_the_reference_fetch_refuses_private_addresses():
     server-side, so the SSRF guard is the wall. Literal IPs, so no DNS
     (and no network) is needed to check it."""
     for host in ("127.0.0.1", "10.0.0.5", "169.254.169.254", "192.168.1.1"):
-        assert workflow_runner._public_host(host) is False
-    assert workflow_runner.fetch_image_bytes("http://169.254.169.254/latest/meta-data") is None
-    assert workflow_runner.fetch_image_bytes("file:///etc/passwd") is None
+        assert imagery._public_host(host) is False
+    assert imagery.fetch_image_bytes("http://169.254.169.254/latest/meta-data") is None
+    assert imagery.fetch_image_bytes("file:///etc/passwd") is None
 
 
 def test_sniff_mime_reads_the_magic_number():
@@ -836,7 +953,7 @@ def test_a_scenes_references_inform_every_node_that_runs(tmp_db, monkeypatch):
     grounds on the same list."""
     JPEG = b"\xff\xd8\xff\xe0face"
     refs = ["https://cdn.test/face.jpg", "https://cdn.test/jacket.jpg"]
-    monkeypatch.setattr(workflow_runner, "fetch_image_bytes", lambda url: JPEG)
+    monkeypatch.setattr(imagery, "fetch_image_bytes", lambda url: JPEG)
     monkeypatch.setattr(runway, "has_key", lambda: True)
 
     seen = {}
@@ -875,7 +992,11 @@ def test_a_scenes_references_inform_every_node_that_runs(tmp_db, monkeypatch):
     workflow_runner.execute_graph(graph, gemini_client=object(), db_path=tmp_db)
 
     assert seen["enhance"] == refs                 # Flash sees both
-    assert seen["nano"] == [JPEG, JPEG]            # Nano gets both, as bytes
+    # Nano gets both, as (label, bytes). These two are plain CDN URLs
+    # rather than asset-bank paths, so there is no asset to name and the
+    # caption is empty -- see test_a_reference_url_names_its_asset for
+    # the /characters/... case that carries a name.
+    assert seen["nano"] == [("", JPEG), ("", JPEG)]
     # Runway's API anchors on ONE frame, so it takes the first only
     assert seen["runway"] == "https://cdn.test/face.jpg"
 
@@ -926,11 +1047,11 @@ def test_nano_retries_a_transient_overload(tmp_db, tmp_path, monkeypatch):
     good = fake.models.generate_content
     attempts = []
 
-    def flaky(model, contents):
+    def flaky(model, contents, config=None):
         attempts.append(model)
         if len(attempts) < 3:
             raise RuntimeError("503 UNAVAILABLE. high demand")
-        return good(model=model, contents=contents)
+        return good(model=model, contents=contents, config=config)
 
     fake.models = SimpleNamespace(generate_content=flaky)
     result = nano_banana.generate_from_prompt("a bike", db_path=tmp_db, client=fake)
@@ -941,14 +1062,16 @@ def test_nano_retries_a_transient_overload(tmp_db, tmp_path, monkeypatch):
 
 def test_nano_does_not_retry_a_real_refusal(tmp_db, tmp_path, monkeypatch):
     """A refusal is an answer, not a blip -- retrying it would spend
-    twice to be told no twice."""
+    twice to be told no twice. Note the status: the output-shape
+    degrade also keys on INVALID_ARGUMENT, so it has to be narrow
+    enough to leave a bare content refusal alone."""
     from src import nano_banana
 
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     monkeypatch.setattr(nano_banana, "RENDER_DIR", tmp_path / "nano")
     calls = []
 
-    def refuse(model, contents):
+    def refuse(model, contents, config=None):
         calls.append(model)
         raise RuntimeError("400 INVALID_ARGUMENT")
 
@@ -965,7 +1088,7 @@ def test_image_for_runway_carries_an_upstream_keyframe(tmp_path, monkeypatch):
     renders = tmp_path / "data" / "renders" / "nano"
     renders.mkdir(parents=True)
     (renders / "wf-1.png").write_bytes(b"KEYFRAME")
-    monkeypatch.setattr(workflow_runner, "render_bytes",
+    monkeypatch.setattr(imagery, "render_bytes",
                         lambda v: (tmp_path / "data" / "renders"
                                    / v[len("/renders/"):]).read_bytes())
     assert workflow_runner.image_for_runway("/renders/nano/wf-1.png") == b"KEYFRAME"
@@ -978,7 +1101,7 @@ def test_render_bytes_refuses_a_path_that_escapes_the_render_dir():
     # pyproject.toml is tracked, so it definitely exists -- the guard is
     # what refuses it, not a missing file
     assert (Path(__file__).resolve().parent.parent / "pyproject.toml").is_file()
-    assert workflow_runner.render_bytes("/renders/../../pyproject.toml") is None
+    assert imagery.render_bytes("/renders/../../pyproject.toml") is None
 
 
 def test_generate_falls_back_to_the_shots_reference_like_the_other_nodes(
@@ -1045,6 +1168,58 @@ def test_api_exec_nano_runs_as_a_job(tmp_db, monkeypatch):
     assert response.status_code == 200
     job = wait_for_job(response.json()["job_id"])
     assert job["status"] == "done" and job["output"] == "/renders/nano/x.png"
+
+
+def test_api_exec_nano_sends_every_reference_the_canvas_posted(
+        tmp_db, monkeypatch):
+    """The canvas posts a node's whole reference list as `images`
+    (workflows.js referenceUrls), but the body model declared only
+    `image` -- so pydantic dropped the field without a word and a
+    per-node Run on Nano Banana rendered with NO references at all.
+    The face, the jacket and the bike arrived as a sentence and never
+    as pixels (2026-08-28)."""
+    from src import nano_banana
+
+    seen = {}
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(nano_banana, "generate_from_prompt",
+                        lambda prompt, **kw: seen.update(kw) or {
+                            "ok": True, "media_url": "/renders/nano/x.png",
+                            "generation_id": 1, "path": "x", "error": None})
+    monkeypatch.setattr("src.imagery.image_bytes_for_gemini",
+                        lambda url, resolve_photo=None: url.encode())
+
+    response = client.post("/api/workflows/exec/nano", json={
+        "prompt": "a bike",
+        "images": ["/characters/michael/photo/a.jpg",
+                   "/props/motorcycle/photo/b.jpg"]})
+    assert response.status_code == 200
+    assert wait_for_job(response.json()["job_id"])["status"] == "done"
+    assert seen["reference_image"] == [b"/characters/michael/photo/a.jpg",
+                                       b"/props/motorcycle/photo/b.jpg"]
+
+
+def test_api_exec_generate_anchors_on_the_first_reference(tmp_db, monkeypatch):
+    """Runway takes exactly one prompt_image, so of the list the canvas
+    posts only the first is usable -- the same rule the graph runner's
+    Generate branch follows."""
+    seen = {}
+
+    monkeypatch.setattr(runway, "has_key", lambda: True)
+    monkeypatch.setattr(runway, "generate_from_prompt",
+                        lambda prompt, **kw: seen.update(kw) or {
+                            "ok": True, "media_url": "/renders/clip.mp4"})
+    monkeypatch.setattr("app.workflow_runner.image_for_runway",
+                        lambda url, resolve_photo=None: url)
+
+    response = client.post("/api/workflows/exec/generate", json={
+        "prompt": "a ride",
+        "images": ["/characters/michael/photo/a.jpg",
+                   "/props/motorcycle/photo/b.jpg"]})
+    assert response.status_code == 200
+    assert wait_for_job(response.json()["job_id"])["status"] == "done"
+    assert seen["reference_image"] == "/characters/michael/photo/a.jpg"
 
 
 def test_capabilities_report_nano(tmp_db, monkeypatch):

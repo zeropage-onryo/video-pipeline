@@ -47,6 +47,7 @@ from src import (
     locations,
     preprod,
     rag,
+    render_assets,
     shootgen,
     taste_judge,
     winners,
@@ -57,7 +58,7 @@ from src import (
     settings as settings_mod,
 )
 
-from . import api, auth, seo
+from . import api, auth, jobs, mcp_mount, seo
 from .sparkline import render_sparkline
 
 load_dotenv()
@@ -137,11 +138,23 @@ def seed_gold_standard():
         already = any((w.get("note") or "").startswith("gold standard")
                       for w in winners.list_all(path=db.DB_PATH))
         if not already:
+            with db.connect(db.DB_PATH) as conn:
+                owner = db.bootstrap_account_id(conn)
             winners.record_and_learn(
                 "runway", text, note="gold standard structural exemplar",
-                verdict="worked", path=db.DB_PATH)
+                verdict="worked", path=db.DB_PATH,
+                project=accounts_mod.slug_of(owner, path=db.DB_PATH))
     except Exception:
         pass
+
+
+# The MCP surface, built before the lifespan so its session manager is
+# available to run. Off unless ZEROPAGE_MCP=1, and refused rather than
+# served open when ZEROPAGE_MCP_TOKEN is unset -- see app/mcp_mount.py.
+# jobs.start/jobs.get are injected because src/ never imports app/.
+MCP_APP, MCP_SESSIONS = mcp_mount.build(
+    path=db.DB_PATH, start_job=jobs.start, job_status=jobs.get
+)
 
 
 @asynccontextmanager
@@ -155,11 +168,15 @@ async def lifespan(app: FastAPI):
     evalstore.init(path=db.DB_PATH)     # golden set seeded from eval_cases.json
     workflows.init(path=db.DB_PATH)     # saved node graphs for /ui Workflows
     workflows.seed_default(path=db.DB_PATH)  # "Prompt enhancement" starter canvas
+    render_assets.init(path=db.DB_PATH)  # generated_assets, owned (merged 2026-09-02)
     generative.init(path=db.DB_PATH)    # generations log the render caps count
     accounts_mod.init(path=db.DB_PATH)  # users / identities / accounts / members
     settings_mod.init(path=db.DB_PATH)  # the Dev Studio tunables (gate/threshold/k)
     seed_gold_standard()                # records the canonical example as a winner
-    yield
+    # The MCP transport is not self-starting: its session manager has
+    # to be entered by whoever hosts it. A no-op when MCP is off.
+    async with mcp_mount.session_lifespan(MCP_SESSIONS):
+        yield
 
 
 class NoCacheStaticFiles(StaticFiles):
@@ -187,9 +204,20 @@ app.mount("/static", NoCacheStaticFiles(directory=str(APP_DIR / "static")), name
 RENDERS_DIR = PROJECT_ROOT / "data" / "renders"
 RENDERS_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/renders", NoCacheStaticFiles(directory=str(RENDERS_DIR)), name="renders")
+# Composer reference uploads (data/refs/) -- a photo dragged onto the
+# Studio composer needs a URL to ride on, or it can ground the writing
+# call and nothing after it.
+UPLOAD_REFS_DIR = PROJECT_ROOT / "data" / "refs"
+UPLOAD_REFS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/refs", NoCacheStaticFiles(directory=str(UPLOAD_REFS_DIR)), name="refs")
 # Every /api route now requires a session -- the /ui shell is gated, so
 # its backing endpoints are too (401 JSON, which shared.js surfaces as a
 # stateline). The legacy /studio pages stay open as the dev console.
+# The MCP endpoint carries its own bearer auth (mcp_mount.guarded), not
+# the zp_session cookie: the callers are agents holding a token, not
+# browsers holding a login. Mounted only when build() returned an app.
+if MCP_APP is not None:
+    app.mount(mcp_mount.MOUNT_PATH, MCP_APP, name="mcp")
 app.include_router(api.router, dependencies=[Depends(auth.require_user_api)])
 app.include_router(auth.router)
 
@@ -259,7 +287,8 @@ def benchmark_class(score, median) -> str:
     return ""
 
 
-def performance_rows(at_days: int = 7, posted_within: str = "6") -> dict:
+def performance_rows(at_days: int = 7, posted_within: str = "6",
+                     account_id: Optional[int] = None) -> dict:
     """
     The feedback loop: what's performing, compared at equal age. The
     benchmark uses the same window as the ranking or the colouring
@@ -272,13 +301,15 @@ def performance_rows(at_days: int = 7, posted_within: str = "6") -> dict:
     posted_within_days = POSTED_WINDOWS.get(posted_within, 180)
     top = db.get_top_performers(
         at_days=at_days, posted_within_days=posted_within_days, limit=5, path=db.DB_PATH,
-    )
+    
+        account_id=account_id,)
     bench = db.benchmark(
         at_days=at_days, posted_within_days=posted_within_days, path=db.DB_PATH,
-    )
+    
+        account_id=account_id,)
     rows = []
     for t in top:
-        history = db.get_video_history(t["video_id"], path=db.DB_PATH)
+        history = db.get_video_history(t["video_id"], path=db.DB_PATH, account_id=account_id)
         rows.append({
             **t,
             "sparkline": render_sparkline(history),
@@ -366,13 +397,18 @@ def dashboard():
 # eval dataset. Everything an end user creates with lives on /ui; what
 # happens here only changes what /ui's next generation does.
 
-DEV_TABS = ("stats", "grade", "library", "settings", "dataset")
+DEV_TABS = ("stats", "grade", "graded", "library", "settings", "dataset")
+
+# What "scored well" means on the Graded tab (2026-09-02, Mike's call).
+# A display threshold only: nothing is gated on it, it decides which
+# rows read as strong.
+GOOD_SCORE = 7.0
 
 GRADE_EMPTY = ("Nothing to grade right now — every concept is scored and "
                "the golden set is empty.")
 
 
-def _pipeline_metrics() -> dict:
+def _pipeline_metrics(account_id: int) -> dict:
     """The numbers about how well the system is working, computed
     server-side. shortlist_rate went with the shot-list stage
     (2026-08-26): it measured "was this idea worth planning", and with
@@ -381,9 +417,9 @@ def _pipeline_metrics() -> dict:
     scenes were worth rendering, which is the decision actually being
     made now."""
     return {
-        "pick": preprod.pick_rate(path=db.DB_PATH),
-        "shoot": preprod.shoot_rate(path=db.DB_PATH),
-        "agreement": autonomy.evaluator_agreement(path=db.DB_PATH),
+        "pick": preprod.pick_rate(path=db.DB_PATH, account_id=account_id),
+        "shoot": preprod.shoot_rate(path=db.DB_PATH, account_id=account_id),
+        "agreement": autonomy.evaluator_agreement(path=db.DB_PATH, account_id=account_id),
         "gate": autonomy.prompt_gate_agreement(path=db.DB_PATH),
         "pass_rate": autonomy.first_try_pass_rate(path=db.DB_PATH),
         "killed": autonomy.killed(path=db.DB_PATH),
@@ -444,19 +480,102 @@ def _golden_probe(query: str) -> dict:
     return out
 
 
+def _ungraded_concepts(account_id: int) -> list[dict]:
+    """The grade queue: not yet scored, and not passed on.
+
+    ONE definition, used by the list, the random draw and grade-all, so
+    those three can never disagree about what is waiting.
+
+    Archived rows are excluded (2026-09-02). `set_archived` leaves
+    judge_overall NULL, so before this a concept passed on from this tab
+    stayed in the queue and could be drawn again forever -- and grade-all
+    would spend a billed call scoring something already rejected. Passing
+    is a decision; the queue is for concepts still undecided.
+    """
+    return [c for c in preprod.list_concepts(path=db.DB_PATH, account_id=account_id)
+            if c.get("judge_overall") is None and not c.get("archived")]
+
+
+def _concept_line(c: dict) -> dict:
+    """One concept as one scannable row, shared by both queue lists."""
+    shots = [s for s in (c.get("shots") or []) if s.get("prompt")]
+    return {
+        "id": c["id"],
+        "n": f"SHOOT-{c['id']:02d}",
+        "brand": c.get("brand") or "",
+        "title": c.get("title") or "(untitled)",
+        # the same one-line label the Pipeline board prints, so a
+        # concept reads identically in both rooms
+        "summary": preprod.concept_summary(
+            c.get("card_line") or "",
+            c.get("logline") or c.get("hook") or "",
+            (shots[0].get("prompt") if shots else "") or "",
+        ),
+        "prompt_count": len(shots),
+        "picked": bool(c.get("picked_at")),
+    }
+
+
+def _ungraded_rows(account_id: int) -> list[dict]:
+    """Every concept waiting to be graded, newest first."""
+    return [_concept_line(c) for c in _ungraded_concepts(account_id)]
+
+
+def _graded_rows(account_id: int) -> list[dict]:
+    """Everything already scored, best first -- where a concept goes when
+    it leaves the queue. Sorting by score rather than by id is the point:
+    this is the tab that answers "what did the judge actually like".
+    """
+    rows = []
+    for c in preprod.list_concepts(path=db.DB_PATH, account_id=account_id):
+        if c.get("judge_overall") is None:
+            continue
+        reason = (c.get("judge_reason") or "").strip()
+        rows.append({**_concept_line(c),
+                     "overall": c.get("judge_overall"),
+                     "taste": c.get("judge_taste"),
+                     "perf": c.get("judge_perf"),
+                     "reason": reason,
+                     "good": (c.get("judge_overall") or 0) >= GOOD_SCORE,
+                     "archived": bool(c.get("archived"))})
+    rows.sort(key=lambda r: (r["overall"] or 0, r["id"]), reverse=True)
+    return rows
+
+
 def _grade_context(mode: Optional[str], concept_id: Optional[int],
-                   golden_id: Optional[int], fresh: Optional[str]) -> dict:
-    """What the Grade tab shows: one drawn item (or nothing yet). The
-    id/payload arrives in the query string so a refresh re-renders the
-    same item without re-drawing -- and, for fresh, without re-billing."""
+                   golden_id: Optional[int], fresh: Optional[str],
+                   account_id: int) -> dict:
+    """What the Grade tab shows: the whole ungraded queue as a list, plus
+    one drawn item (or nothing yet). The id/payload arrives in the query
+    string so a refresh re-renders the same item without re-drawing --
+    and, for fresh, without re-billing."""
+    ungraded = _ungraded_rows(account_id)
     context = {"mode": mode, "concept": None, "golden": None,
                "probe": None, "fresh": None,
-               "ungraded_count": sum(
-                   1 for c in preprod.list_concepts(path=db.DB_PATH)
-                   if c.get("judge_overall") is None),
+               # the Pass buttons on the drawn card -- one per reason, so
+               # rejecting is a keystroke rather than a free-text box
+               # nobody fills in
+               "archive_reasons": list(preprod.ARCHIVE_REASONS),
+               # what the rejections have taught so far. Counted here
+               # rather than in the template because a number nobody can
+               # see is a number nobody acts on -- this is the payoff
+               # that makes working the queue feel like it did something.
+               "reason_counts": preprod.reason_counts(path=db.DB_PATH,
+                                                      account_id=account_id),
+               # the board's check/X, as the judge sees them -- the two
+               # clicks feed taste_judge.gather_signals, and this says
+               # how many are reaching it (capped at HISTORY_LIMIT)
+               "board_taste": taste_judge.board_taste(db_path=db.DB_PATH,
+                                                      account_id=account_id),
+               # the whole queue, not just its size: the draw is random,
+               # so without a list there is no way to see what is waiting
+               # or to grade in a deliberate order.
+               "ungraded": ungraded,
+               "ungraded_count": len(ungraded),
+               "concept_id": concept_id,
                "golden_count": len(evalstore.list_golden(path=db.DB_PATH))}
     if mode == "shot" and concept_id is not None:
-        concept = preprod.get_concept(concept_id, path=db.DB_PATH)
+        concept = preprod.get_concept(concept_id, path=db.DB_PATH, account_id=account_id)
         if concept is not None:
             context["concept"] = _with_director_prompts([concept])[0]
     elif mode == "golden" and golden_id is not None:
@@ -480,7 +599,9 @@ def _grade_context(mode: Optional[str], concept_id: Optional[int],
 def studio(request: Request, tab: Optional[str] = None, message: Optional[str] = None,
            q: Optional[str] = None, domain: Optional[str] = None,
            mode: Optional[str] = None, concept_id: Optional[int] = None,
-           golden_id: Optional[int] = None, fresh: Optional[str] = None):
+           golden_id: Optional[int] = None, fresh: Optional[str] = None,
+           account_id: int = Depends(auth.dev_account_id),
+):
     """The Dev Studio shell. Each tab reuses the existing backend --
     preprod/autonomy calcs, the /api/evals endpoints (via the same
     evals_dev.js the old /evals page used), the rag module, the
@@ -489,9 +610,12 @@ def studio(request: Request, tab: Optional[str] = None, message: Optional[str] =
     context = {"active_tab": active_tab, "active_nav": "home",
                "message": message}
     if active_tab == "stats":
-        context["metrics"] = _pipeline_metrics()
+        context["metrics"] = _pipeline_metrics(account_id)
     elif active_tab == "grade":
-        context["grade"] = _grade_context(mode, concept_id, golden_id, fresh)
+        context["grade"] = _grade_context(mode, concept_id, golden_id, fresh, account_id)
+    elif active_tab == "graded":
+        context["graded"] = _graded_rows(account_id)
+        context["good_score"] = GOOD_SCORE
     elif active_tab == "library":
         context["library"] = _library_context(q, domain)
     elif active_tab == "settings":
@@ -505,18 +629,17 @@ def studio(request: Request, tab: Optional[str] = None, message: Optional[str] =
 
 
 @dev.get("/grade/draw")
-def grade_draw(mode: str = "any", message: Optional[str] = None):
-    """Deal the next random thing to grade. `shot` draws an ungraded
-    concept (judge_overall IS NULL -- the same filter grade-all uses,
-    randomized instead of exhaustive); `golden` draws a golden query;
+def grade_draw(mode: str = "any", message: Optional[str] = None, account_id: int = Depends(auth.dev_account_id)):
+    """Deal the next random thing to grade. `shot` draws from
+    _ungraded_concepts -- the same pool the queue list and grade-all use,
+    randomized instead of exhaustive; `golden` draws a golden query;
     `any` round-robins whatever has items. Fresh prompts are a billed
     POST, never drawn implicitly."""
     if mode not in ("shot", "golden", "any"):
         mode = "any"
     pools = []
     if mode in ("shot", "any"):
-        ungraded = [c["id"] for c in preprod.list_concepts(path=db.DB_PATH)
-                    if c.get("judge_overall") is None]
+        ungraded = [c["id"] for c in _ungraded_concepts(account_id)]
         if ungraded:
             pools.append(("shot", ungraded))
     if mode in ("golden", "any"):
@@ -536,7 +659,7 @@ def grade_draw(mode: str = "any", message: Optional[str] = None):
 
 
 @dev.post("/grade/fresh")
-async def grade_fresh(request: Request):
+async def grade_fresh(request: Request, account_id: int = Depends(auth.dev_account_id)):
     """A brand-new throwaway prompt, purely for grading: one idea via
     the same generator shootgen uses -- grounded the same way -- but
     parsed and shown WITHOUT saving a shoot_concepts row. Approving or
@@ -556,7 +679,7 @@ async def grade_fresh(request: Request):
 
         references = shootgen.reference_block(spark=spark, db_path=db.DB_PATH)
         prompt = shootgen.build_ideas_prompt(
-            preprod.list_locations(path=db.DB_PATH), brand, None, spark, 1,
+            preprod.list_locations(path=db.DB_PATH, account_id=account_id), brand, None, spark, 1,
             references=references,
             formats=shootgen.ranked_formats(path=db.DB_PATH))
         ideas = shootgen.parse_ideas_response(
@@ -585,7 +708,7 @@ async def grade_fresh(request: Request):
 VERDICTS = ("approve", "teach", "deny")
 
 
-def teach_verdict(tool, text, form, *, video_ref, subject, path):
+def teach_verdict(tool, text, form, *, video_ref, subject, path, project=None):
     """
     One teaching submission from any grade form. Returns the message.
 
@@ -614,14 +737,16 @@ def teach_verdict(tool, text, form, *, video_ref, subject, path):
 
     if replacement and verdict in ("teach", "deny"):
         result = winners.record_pair(
-            tool, text, replacement, note=note, video_ref=video_ref, path=path)
+            tool, text, replacement, note=note, video_ref=video_ref, path=path,
+            project=project)
         if result.get("ingested"):
             return (f"Taught {subject} — future generations imitate your version "
                     "and avoid the one it wrote.")
     else:
         result = winners.record_and_learn(
             tool, text, note=note, video_ref=video_ref,
-            verdict="didnt_work" if verdict == "deny" else "worked", path=path)
+            verdict="didnt_work" if verdict == "deny" else "worked", path=path,
+            project=project)
         if result.get("ingested"):
             verb = "steer away from" if verdict == "deny" else "imitate"
             return f"Recorded {subject} — future generations will {verb} it."
@@ -630,7 +755,8 @@ def teach_verdict(tool, text, form, *, video_ref, subject, path):
 
 
 @dev.post("/grade/fresh/verdict")
-async def grade_fresh_verdict(request: Request):
+async def grade_fresh_verdict(request: Request,
+                              account_id: int = Depends(auth.dev_account_id)):
     """The fresh prompt's approve/deny -- straight through the same
     winners.record_and_learn teaching loop a real concept's verdict
     uses, video_ref marking it as a throwaway grade."""
@@ -641,6 +767,7 @@ async def grade_fresh_verdict(request: Request):
             "/studio?tab=grade&message="
             + quote("Nothing to record — the text was empty."), status_code=303)
     message = teach_verdict("concept", text, form, video_ref="fresh-grade",
+                            project=accounts_mod.slug_of(account_id, path=db.DB_PATH),
                             subject="the throwaway", path=db.DB_PATH)
     return RedirectResponse(
         f"/studio?tab=grade&message={quote(message)}", status_code=303)
@@ -830,25 +957,25 @@ def parse_video_form(form: dict) -> dict:
 
 
 @dev.get("/videos/new")
-def videos_new_form(request: Request):
+def videos_new_form(request: Request, account_id: int = Depends(auth.dev_account_id)):
     return templates.TemplateResponse(
         request,
         "videos_new.html",
         {
             "platforms": db.PLATFORMS,
-            "topics": db.distinct_video_field_values("topic", path=db.DB_PATH),
-            "hook_types": db.distinct_video_field_values("hook_type", path=db.DB_PATH),
+            "topics": db.distinct_video_field_values("topic", path=db.DB_PATH, account_id=account_id),
+            "hook_types": db.distinct_video_field_values("hook_type", path=db.DB_PATH, account_id=account_id),
         },
     )
 
 
 @dev.post("/videos/new")
-async def videos_new_submit(request: Request):
+async def videos_new_submit(request: Request, account_id: Optional[int] = None):
     form = dict(await request.form())
     parsed = parse_video_form(form)
     parsed.setdefault("brand", active_brand(request))  # tag to the active brand
     try:
-        db.add_video(**parsed, path=db.DB_PATH)
+        db.add_video(**parsed, path=db.DB_PATH, account_id=account_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return RedirectResponse("/studio", status_code=303)
@@ -1020,7 +1147,7 @@ def evals_page():
 
 
 @dev.get("/references/pick")
-def references_pick(request: Request, message: Optional[str] = None):
+def references_pick(request: Request, message: Optional[str] = None, account_id: int = Depends(auth.dev_account_id)):
     """
     The references picker: a focused page, opened as a popup from the
     Studio composer's or the Concepts form's References button, for
@@ -1059,12 +1186,12 @@ def references_pick(request: Request, message: Optional[str] = None):
     # upload form -- one picker for everything a generation can be
     # grounded on, not two separate systems. Photo resolution mirrors
     # /studio's Workflow library exactly.
-    characters = entities.list_characters(path=db.DB_PATH)
+    characters = entities.list_characters(path=db.DB_PATH, account_id=account_id)
     for c in characters:
         slug = safe_space_name(c["name"])
         c["photos"] = [f"/characters/{slug}/photo/{fn}?thumb=1"
                        for fn in _entity_photos(CHARACTERS_DIR, slug)]
-    props = entities.list_props(path=db.DB_PATH)
+    props = entities.list_props(path=db.DB_PATH, account_id=account_id)
     for p in props:
         slug = safe_space_name(p["name"])
         p["photos"] = [f"/props/{slug}/photo/{fn}?thumb=1"
@@ -1159,7 +1286,8 @@ async def post_image_fire(request: Request):
 
 
 @dev.post("/post-image/queue")
-async def post_image_queue(request: Request):
+async def post_image_queue(request: Request,
+                                account_id: int = Depends(auth.dev_account_id)):
     """Semi-auto Midjourney path (BACKLOG #6): take a generated still -- an
     uploaded file or a public URL -- plus a caption, host it on R2 as a JPEG
     if it's a file (Meta rejects PNG/HEIC), and QUEUE it as a held image post
@@ -1199,7 +1327,8 @@ async def post_image_queue(request: Request):
 
     hold_id = autonomy.to_hold(
         channel, "Midjourney image queued for approval", caption=caption,
-        payload={"image_url": image_url}, status="held", path=db.DB_PATH)
+        payload={"image_url": image_url}, status="held", path=db.DB_PATH,
+        account_id=account_id)
     return RedirectResponse(
         "/holds?message=" + quote(f"Queued image post #{hold_id} for approval."),
         status_code=303)
@@ -1226,7 +1355,8 @@ def winners_page(request: Request, prompt: Optional[str] = None,
 
 
 @dev.post("/winners")
-async def winners_add(request: Request):
+async def winners_add(request: Request,
+                      account_id: int = Depends(auth.dev_account_id)):
     """Save the winner durably, then teach it to the pipeline. Saving
     always succeeds; the RAG ingest is best-effort so a down store never
     loses the winner -- it just re-ingests later."""
@@ -1240,7 +1370,8 @@ async def winners_add(request: Request):
     result = winners.record_and_learn(
         form.get("tool") or "runway", prompt,
         note=form.get("note") or "", video_ref=form.get("video_ref") or "",
-        verdict=form.get("verdict") or "worked", path=db.DB_PATH)
+        verdict=form.get("verdict") or "worked", path=db.DB_PATH,
+        project=accounts_mod.slug_of(account_id, path=db.DB_PATH))
     verb = "avoid" if result.get("verdict") == "didnt_work" else "imitate"
     if result.get("ingested"):
         message = f"Saved and taught — future generations will {verb} it."
@@ -1310,11 +1441,12 @@ async def kill_toggle():
 
 @dev.get("/analytics")
 @dev.get("/metrics/new")   # old URL, kept so bookmarks and habits still land
-def analytics(request: Request, updated: Optional[int] = None, message: Optional[str] = None):
+def analytics(request: Request, updated: Optional[int] = None, message: Optional[str] = None,
+        account_id: int = Depends(auth.dev_account_id)):
     # Scope to the active brand (NULL-inclusive: untagged legacy videos still
     # show, so nothing disappears while the pipeline tags new posts).
     brand = active_brand(request)
-    rows = [r for r in db.latest_metrics_by_video(path=db.DB_PATH)
+    rows = [r for r in db.latest_metrics_by_video(path=db.DB_PATH, account_id=account_id)
             if r.get("brand") in (None, brand)]
 
     # One measure (views) across named videos: a sorted bar list, each
@@ -1344,21 +1476,21 @@ def analytics(request: Request, updated: Optional[int] = None, message: Optional
 
 
 @dev.post("/metrics/new")
-async def metrics_new_submit(request: Request):
+async def metrics_new_submit(request: Request, account_id: int = Depends(auth.dev_account_id)):
     form = dict(await request.form())
-    video_ids = [r["video_id"] for r in db.latest_metrics_by_video(path=db.DB_PATH)]
+    video_ids = [r["video_id"] for r in db.latest_metrics_by_video(path=db.DB_PATH, account_id=account_id)]
     changed = parse_metrics_form(form, video_ids)
     for vid, fields in changed.items():
-        db.record_metrics(vid, path=db.DB_PATH, **fields)
+        db.record_metrics(vid, path=db.DB_PATH, **fields, account_id=account_id)
     return RedirectResponse(f"/analytics?updated={len(changed)}", status_code=303)
 
 
 @dev.post("/metrics/refresh/{video_id}")
-def metrics_refresh(video_id: int):
+def metrics_refresh(video_id: int, account_id: int = Depends(auth.dev_account_id)):
     """One dispatch on the video's platform; every branch returns a
     result dict, so a missing key or failed call is a message on the
     analytics page and manual entry keeps working."""
-    video = db.get_video(video_id, path=db.DB_PATH)
+    video = db.get_video(video_id, path=db.DB_PATH, account_id=account_id)
     if video is None:
         raise HTTPException(status_code=404, detail="video not found")
 
@@ -1380,11 +1512,11 @@ def metrics_refresh(video_id: int):
 
 
 @dev.get("/videos/{video_id}")
-def video_detail(request: Request, video_id: int):
-    video = db.get_video(video_id, path=db.DB_PATH)
+def video_detail(request: Request, video_id: int, account_id: int = Depends(auth.dev_account_id)):
+    video = db.get_video(video_id, path=db.DB_PATH, account_id=account_id)
     if video is None:
         raise HTTPException(status_code=404, detail="video not found")
-    history = db.get_video_history(video_id, path=db.DB_PATH)
+    history = db.get_video_history(video_id, path=db.DB_PATH, account_id=account_id)
     return templates.TemplateResponse(
         request,
         "video_detail.html",
@@ -1527,7 +1659,7 @@ def _with_director_prompts(concepts: list) -> list:
 
 
 @dev.post("/concepts/{concept_id}/shots/{shot_n}/reference")
-async def concept_shot_reference(concept_id: int, shot_n: int, request: Request):
+async def concept_shot_reference(concept_id: int, shot_n: int, request: Request, account_id: Optional[int] = None):
     """Attach (or clear) the real capture behind one shot -- the acting
     take or room plate its AI generation anchors on. A file is hosted on
     R2 as a JPEG (the /post-image/queue shape exactly); a pasted public
@@ -1541,7 +1673,7 @@ async def concept_shot_reference(concept_id: int, shot_n: int, request: Request)
 
     try:
         if form.get("remove"):
-            preprod.set_shot_reference_image(concept_id, shot_n, "", path=db.DB_PATH)
+            preprod.set_shot_reference_image(concept_id, shot_n, "", path=db.DB_PATH, account_id=account_id)
             return back(f"Reference cleared from shot {shot_n}.")
 
         image_url = (form.get("reference_url") or "").strip()
@@ -1564,14 +1696,15 @@ async def concept_shot_reference(concept_id: int, shot_n: int, request: Request)
                 return back(f"Reference upload failed: {e}")
         if not image_url:
             return back("Attach a capture — a file, or a public image URL.")
-        preprod.set_shot_reference_image(concept_id, shot_n, image_url, path=db.DB_PATH)
+        preprod.set_shot_reference_image(concept_id, shot_n, image_url, path=db.DB_PATH, account_id=account_id)
     except ValueError as e:
         return back(str(e))
     return back(f"Reference attached to shot {shot_n} — the AI generation anchors on it.")
 
 
 @dev.post("/concepts/{concept_id}/verdict")
-async def concept_verdict(concept_id: int, request: Request):
+async def concept_verdict(concept_id: int, request: Request,
+                          account_id: int = Depends(auth.dev_account_id)):
     """Subtle approve/deny on a whole concept or idea, with the idea text
     editable right there -- records straight through winners.py's existing
     teaching loop (the same one /winners already exposes as its own page),
@@ -1585,12 +1718,14 @@ async def concept_verdict(concept_id: int, request: Request):
         return _redirect_with_message(destination, "Nothing to record — the text was empty.")
     message = teach_verdict("concept", text, form,
                             video_ref=f"concept-{concept_id}",
-                            subject=f"SHOOT-{concept_id:02d}", path=db.DB_PATH)
+                            subject=f"SHOOT-{concept_id:02d}", path=db.DB_PATH,
+                            project=accounts_mod.slug_of(account_id, path=db.DB_PATH))
     return _redirect_with_message(destination, message)
 
 
 @dev.post("/concepts/{concept_id}/shots/{shot_n}/verdict")
-async def concept_shot_verdict(concept_id: int, shot_n: int, request: Request):
+async def concept_shot_verdict(concept_id: int, shot_n: int, request: Request,
+                               account_id: int = Depends(auth.dev_account_id)):
     """Subtle approve/deny on one AI shot's render prompt, with the prompt
     text editable right there before it's taught -- same winners.py loop as
     above, scoped to the exact prompt that would go to Runway/Higgsfield."""
@@ -1602,7 +1737,8 @@ async def concept_shot_verdict(concept_id: int, shot_n: int, request: Request):
     tool = (form.get("tool") or "runway").strip().lower()
     message = teach_verdict(tool, text, form,
                             video_ref=f"concept-{concept_id}-shot-{shot_n}",
-                            subject=f"shot {shot_n}", path=db.DB_PATH)
+                            subject=f"shot {shot_n}", path=db.DB_PATH,
+                            project=accounts_mod.slug_of(account_id, path=db.DB_PATH))
     return _redirect_with_message(destination, message)
 
 
@@ -1619,15 +1755,15 @@ def concepts_list(message: Optional[str] = None):
 
 
 @dev.post("/concepts/{concept_id}/grade")
-def concepts_grade(concept_id: int, next: str = Form("")):
+def concepts_grade(concept_id: int, next: str = Form(""), account_id: int = Depends(auth.dev_account_id)):
     """Score one concept on taste fit + predicted performance (BACKLOG #5)
     against your own history, and store it so the card shows it. One billed
     model call, on your click -- never automatic."""
-    concept = preprod.get_concept(concept_id, path=db.DB_PATH)
+    concept = preprod.get_concept(concept_id, path=db.DB_PATH, account_id=account_id)
     if concept is None:
         raise HTTPException(status_code=404, detail="no such concept")
     judge = taste_judge.score_concept(concept, db_path=db.DB_PATH)
-    preprod.save_judge_score(concept_id, judge, path=db.DB_PATH)
+    preprod.save_judge_score(concept_id, judge, path=db.DB_PATH, account_id=account_id)
     if judge.get("graded"):
         msg = (f"Graded SHOOT-{concept_id:02d}: {judge['overall']:.0f}/10 "
                f"(taste {judge['taste_fit']:.0f}, perf {judge['performance']:.0f})")
@@ -1636,47 +1772,68 @@ def concepts_grade(concept_id: int, next: str = Form("")):
     return _redirect_with_message(safe_next(next, "/studio?tab=grade"), msg)
 
 
-@dev.post("/concepts/{concept_id}/discard")
-def concepts_discard(concept_id: int, next: str = Form("")):
-    """Discard a concept you don't want. Deletes it (locations cascade)."""
-    if preprod.get_concept(concept_id, path=db.DB_PATH) is None:
+@dev.post("/concepts/{concept_id}/pass")
+def concepts_pass(concept_id: int, reason: str = Form(""), next: str = Form(""),
+                  account_id: int = Depends(auth.dev_account_id)):
+    """Pass on a concept, and record WHY. Archives; never deletes.
+
+    Replaces the Discard button (2026-08-31), which called
+    delete_concept. That put a hard delete on the one page built for
+    teaching the system what a miss looks like -- and set_archived's own
+    docstring says why that is backwards: "an unpicked row is the only
+    negative signal this system collects -- pick_rate is
+    generated-vs-picked, and deleting the ones you passed over would
+    make the rate 100% forever and unfalsifiable." The most reachable
+    button on the Grade tab was destroying the data the tab exists to
+    collect.
+
+    The reason is the point. Thirteen of the first fifteen concepts were
+    rejected and taught nothing, because archived_at records only that
+    it happened. One word, one keystroke, no model call -- which is also
+    what makes this cheap enough to actually use, unlike the billed
+    Grade button beside it.
+    """
+    if preprod.get_concept(concept_id, path=db.DB_PATH, account_id=account_id) is None:
         raise HTTPException(status_code=404, detail="no such concept")
-    preprod.delete_concept(concept_id, path=db.DB_PATH)
+    reason = (reason or "").strip()
+    preprod.set_archived(concept_id, path=db.DB_PATH, account_id=account_id,
+                         reason=reason)
+    said = f" — {reason}" if reason else ""
     return _redirect_with_message(safe_next(next, "/studio?tab=grade"),
-                                  f"Discarded SHOOT-{concept_id:02d}.")
+                                  f"Passed on SHOOT-{concept_id:02d}{said}. "
+                                  "Archived, not deleted.")
 
 
 @dev.post("/concepts/discard-all")
-def concepts_discard_all(request: Request):
+def concepts_discard_all(request: Request, account_id: Optional[int] = None):
     """Clear every concept for the active brand -- a fresh slate when the
     generator's slate isn't landing."""
     brand = active_brand(request)
-    n = preprod.delete_all_concepts(brand=brand, path=db.DB_PATH)
+    n = preprod.delete_all_concepts(brand=brand, path=db.DB_PATH, account_id=account_id)
     return RedirectResponse(
         "/concepts?message=" + quote(f"Discarded all {n} {brand} concept(s)."),
         status_code=303)
 
 
 @dev.post("/concepts/grade-all")
-def concepts_grade_all():
-    """Grade every not-yet-graded concept against your history. Each is one
+def concepts_grade_all(account_id: int = Depends(auth.dev_account_id)):
+    """Grade every concept in the queue against your history. Each is one
     billed call, so this is an explicit button, not automatic. Signals are
-    gathered once and reused across the batch."""
-    concepts = preprod.list_concepts(path=db.DB_PATH)
+    gathered once and reused across the batch. Concepts passed on are not
+    in the queue and so are never billed for (2026-09-02)."""
     signals = taste_judge.gather_signals(db_path=db.DB_PATH)
     graded = 0
-    for c in concepts:
-        if c.get("judge_overall") is None:
-            judge = taste_judge.score_concept(c, signals=signals, db_path=db.DB_PATH)
-            preprod.save_judge_score(c["id"], judge, path=db.DB_PATH)
-            graded += 1
+    for c in _ungraded_concepts(account_id):
+        judge = taste_judge.score_concept(c, signals=signals, db_path=db.DB_PATH)
+        preprod.save_judge_score(c["id"], judge, path=db.DB_PATH, account_id=account_id)
+        graded += 1
     return RedirectResponse(
         "/concepts?message=" + quote(f"Graded {graded} concept(s)."), status_code=303)
 
 
 @dev.post("/concepts/scene-brief/{brief_id}/delete")
-def scene_brief_delete(brief_id: int):
-    preprod.delete_scene_brief(brief_id, path=db.DB_PATH)
+def scene_brief_delete(brief_id: int, account_id: Optional[int] = None):
+    preprod.delete_scene_brief(brief_id, path=db.DB_PATH, account_id=account_id)
     return RedirectResponse(
         "/concepts?message=" + quote(f"Discarded scene brief #{brief_id}."),
         status_code=303)
@@ -1714,12 +1871,12 @@ def safe_next(value: Optional[str], default: str) -> str:
 
 
 @dev.post("/concepts/{concept_id}/shot")
-def concepts_mark_shot(concept_id: int, next: str = Form("")):
-    concept = preprod.get_concept(concept_id, path=db.DB_PATH)
+def concepts_mark_shot(concept_id: int, next: str = Form(""), account_id: int = Depends(auth.dev_account_id)):
+    concept = preprod.get_concept(concept_id, path=db.DB_PATH, account_id=account_id)
     if concept is None:
         raise HTTPException(status_code=404, detail="concept not found")
 
-    preprod.mark_shot(concept_id, shot=not concept["shot_done"], path=db.DB_PATH)
+    preprod.mark_shot(concept_id, shot=not concept["shot_done"], path=db.DB_PATH, account_id=account_id)
     return RedirectResponse(safe_next(next, "/concepts"), status_code=303)
 
 

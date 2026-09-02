@@ -36,6 +36,52 @@ KILL_SWITCH_PATH = PROJECT_ROOT / "data" / "autopilot.off"
 
 ENABLE_ENV = "ZEROPAGE_AUTOPILOT"
 
+# THE POSTING GATE, and what it is and is not (2026-09-02, from the
+# pilot dry run). Publishing is the most expensive irreversible action
+# in the product, and before this it was the one action with no per-run
+# approval: ZEROPAGE_AUTOPILOT, the platform credentials, and the
+# data/autopilot.off kill switch are three facts about THE INSTALLATION
+# -- standing configuration -- and none of them is about the run or the
+# caller. Every render tool has a per-run SPEND_OK; posting had nothing
+# equivalent, so the only thing between a stranger and Mike's Instagram
+# was whether the kill-switch file happened to exist that day.
+#
+# ZEROPAGE_POST_OK=1 is the per-run approval, in exactly the SPEND_OK
+# shape: set it on the command (the serve command, the cron line, the
+# autopilot CLI), never in .env, so a process that can publish is one a
+# person started saying so. It is checked inside _post_dispatch, the
+# way the spend gates live inside generate_video, so no caller can post
+# around it -- and again in execute() so a plan reports "post-unapproved"
+# instead of failing mid-run.
+#
+# What it still is NOT: a fact about the caller. Ownership is now
+# enforced (a hold has an account_id and /api/holds/{id}/post 404s on
+# someone else's), but the credentials a post goes out under belong to
+# the installation, and "may THIS person publish as the installation" is
+# the role system this project deliberately does not have yet (`role`
+# is recorded and enforced nowhere). This gate is the honest floor
+# under that decision, not a substitute for it.
+POST_ENV = "ZEROPAGE_POST_OK"
+
+# Which brands may enter an AUTO-post plan. Empty means none: everything
+# lands in the Queue and a person pushes it out.
+#
+# WHY A CONSTANT AND NOT THE ENV VAR (2026-08-31). ZEROPAGE_AUTOPILOT
+# also gates the MANUAL approve-and-post button (app/main.py: "Posting is
+# OFF -- set ZEROPAGE_AUTOPILOT=1"), so switching it off to stop the
+# machine posting would also stop Mike posting by hand from the Queue --
+# the opposite of what "everything goes to the Queue for now" means. The
+# posture belongs in code anyway, which is what the block in build_plan
+# has always said.
+#
+# This is a HOLD, not a repeal. Zero Page was built to auto-post and the
+# whole uncanny gate exists to make that safe; the hold is until the loop
+# has proved itself on something a person chose to publish. Re-enable by
+# putting "zeropage" back in this tuple -- and note that ANTIHERO must
+# never be added: it is review-gated forever, which is why the check
+# below reads from a whitelist rather than excluding one name.
+AUTO_POST_BRANDS: tuple[str, ...] = ()
+
 
 def _unwired(kind: str) -> Callable[[dict], Any]:
     def executor(action: dict):
@@ -69,10 +115,23 @@ def execute_generate_action(action: dict):
 # live mode -- the gate above them is unchanged. post refuses without
 # IG_USER_ID/IG_ACCESS_TOKEN; generate goes through veo.py's daily cap
 # and logs every attempt through genlog.
+def post_approved() -> bool:
+    """The per-run human approval for publishing. Same contract as the
+    render tools' spend_approved(): set ZEROPAGE_POST_OK=1 on the
+    command, not in .env -- an approval that's always on isn't one."""
+    return (os.environ.get(POST_ENV) or "").strip() == "1"
+
+
 def _post_dispatch(action: dict):
     """Route a post action to its platform's executor. Defaults to
     Instagram (the original behavior); 'youtube' uploads a local file.
-    Both are only ever reached in live mode, behind the same gate."""
+    Both are only ever reached in live mode, behind the same gate --
+    and behind the per-run posting approval, checked here so nothing
+    that reaches an executor directly can publish around it."""
+    if not post_approved():
+        raise RuntimeError(
+            f"posting not approved: set {POST_ENV}=1 on this run to publish "
+            f"(per run, never in .env)")
     platform = (action.get("platform") or "instagram").strip().lower()
     if platform == "youtube":
         return youtube.execute_post_action(action)
@@ -95,7 +154,7 @@ def killed() -> bool:
     return KILL_SWITCH_PATH.exists()
 
 
-def build_plan(db_path=None) -> dict[str, Any]:
+def build_plan(db_path=None, account_id: Optional[int] = None) -> dict[str, Any]:
     """
     What the machine would do next, assembled read-only: one `generate`
     action per AI shot on a planned-but-unshot concept. Posting actions
@@ -104,7 +163,7 @@ def build_plan(db_path=None) -> dict[str, Any]:
     """
     kwargs = {"path": db_path} if db_path is not None else {}
     actions: list[dict[str, Any]] = []
-    for concept in preprod.list_concepts(**kwargs):
+    for concept in preprod.list_concepts(**kwargs, account_id=account_id):
         if concept.get("shot_done"):
             continue
         for shot in concept.get("ai_shots") or []:
@@ -118,14 +177,17 @@ def build_plan(db_path=None) -> dict[str, Any]:
                 "tool": shot.get("tool"),
                 "prompt": prompt,
             })
-        # The two postures are enforced HERE, at the plan, so no configuration
+        # The postures are enforced HERE, at the plan, so no configuration
         # mistake downstream can auto-post the wrong thing:
         #   ANTIHERO is review-gated forever -- it NEVER enters an auto-post
         #     plan. Michael's face and name only post when he approves.
-        #   ZERO PAGE auto-posts, but ONLY concepts that cleared the on-brand
-        #     (uncanny) gate. A concept that wasn't judged, or was HELD, is not
-        #     post-eligible -- the gate fails closed, so "unjudged" == "held".
-        if concept.get("brand") != "zeropage":
+        #   ZERO PAGE is review-gated too, for now (2026-08-31, Mike's call):
+        #     AUTO_POST_BRANDS is empty, so EVERYTHING goes to the Queue and
+        #     a person pushes it out. Even a concept that clears the on-brand
+        #     gate stays put.
+        #   The uncanny check below stays regardless -- when Zero Page is let
+        #     back out, an unjudged concept must still be ineligible.
+        if concept.get("brand") not in AUTO_POST_BRANDS:
             continue
         if not concept.get("uncanny_passed"):
             continue
@@ -164,6 +226,7 @@ def execute(plan: dict, approve: bool = False, dry_run: bool = True) -> dict[str
         for a in actions
     ]
 
+    wants_to_post = any(a.get("kind") == "post" for a in actions)
     if killed():
         mode = "killed"
     elif not enabled():
@@ -172,6 +235,11 @@ def execute(plan: dict, approve: bool = False, dry_run: bool = True) -> dict[str
         mode = "unapproved"
     elif dry_run:
         mode = "dry-run"
+    elif wants_to_post and not post_approved():
+        # the per-run posting approval (POST_ENV above): a live plan that
+        # would publish reports so and executes nothing, rather than
+        # running its generate actions and then failing at the post
+        mode = "post-unapproved"
     else:
         mode = "live"
 

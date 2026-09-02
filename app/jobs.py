@@ -12,6 +12,14 @@ A job function receives its own job dict and may call progress() and
 check cancelled() between steps. Cancellation is cooperative: a job
 that never checks simply reports itself uncancellable and the UI
 renders no Cancel button for it (no orphan controls, no lying ones).
+
+Every job carries the account that started it (2026-09-02). In-memory
+is fine; unattributed is not: the dry run's pilot user saw a job
+labelled "Mike's private render" on /api/jobs and got 200 from its
+cancel. The registry stays one dict, one process, one worker -- reads
+and mutations just say whose jobs they mean, the same rule the tables
+follow, with None meaning the unowned pool (a CLI, a test) exactly as
+it does in the data layer.
 """
 import asyncio
 import itertools
@@ -52,7 +60,8 @@ def _publish(job: dict) -> None:
             pass  # subscriber's loop is gone; unsubscribe cleans it up
 
 
-def create(kind: str, label: str, cancellable: bool = False) -> dict:
+def create(kind: str, label: str, cancellable: bool = False, *,
+           account_id: Optional[int] = None) -> dict:
     with _lock:
         job = {
             "id": next(_ids),
@@ -66,6 +75,7 @@ def create(kind: str, label: str, cancellable: bool = False) -> dict:
             "cancellable": cancellable,
             "started_at": _now(),
             "ended_at": None,
+            "account_id": account_id,
             "_cancel": False,
         }
         _jobs[job["id"]] = job
@@ -102,12 +112,15 @@ def check_cancelled(job: dict) -> None:
 
 
 def start(kind: str, label: str, fn: Callable[[dict], Optional[dict]],
-          cancellable: bool = False) -> dict:
+          cancellable: bool = False, *,
+          account_id: Optional[int] = None) -> dict:
     """
     Run fn(job) in a daemon thread. fn's return dict (if any) is folded
     into the finished job -- e.g. {"ref_id": 12, "detail": "..."}.
+    `account_id` is whose job this is; every route passes the one it
+    resolved, so the rail only ever shows a person their own work.
     """
-    job = create(kind, label, cancellable=cancellable)
+    job = create(kind, label, cancellable=cancellable, account_id=account_id)
 
     def runner():
         update(job["id"], status="running")
@@ -124,10 +137,17 @@ def start(kind: str, label: str, fn: Callable[[dict], Optional[dict]],
     return job
 
 
-def cancel(job_id: int) -> Optional[dict]:
+def owned_by(job: Optional[dict], account_id: Optional[int]) -> bool:
+    """The one predicate every read and mutation goes through. NULL is
+    the unowned pool, matched only by None -- `IS`, not `=`."""
+    return job is not None and job.get("account_id") == account_id
+
+
+def cancel(job_id: int, *, account_id: Optional[int] = None) -> Optional[dict]:
+    """None for someone else's job, same as for a missing id."""
     with _lock:
         job = _jobs.get(job_id)
-        if job is None:
+        if not owned_by(job, account_id):
             return None
         if job["status"] == "queued":
             job.update(status="cancelled", ended_at=_now())
@@ -138,25 +158,31 @@ def cancel(job_id: int) -> Optional[dict]:
     return job
 
 
-def remove(job_id: int) -> bool:
-    """Clear a finished job from the rail. Running jobs stay visible."""
+def remove(job_id: int, *, account_id: Optional[int] = None) -> Optional[bool]:
+    """Clear a finished job from the rail. Running jobs stay visible.
+    None when there is no such job of yours (the route's 404), False
+    when it is yours but not finished (409), True when cleared."""
     with _lock:
         job = _jobs.get(job_id)
-        if job is None or job["status"] in ("queued", "running"):
+        if not owned_by(job, account_id):
+            return None
+        if job["status"] in ("queued", "running"):
             return False
         del _jobs[job_id]
     return True
 
 
-def get(job_id: int) -> Optional[dict]:
+def get(job_id: int, *, account_id: Optional[int] = None) -> Optional[dict]:
     with _lock:
         job = _jobs.get(job_id)
-        return snapshot(job) if job else None
+        return snapshot(job) if owned_by(job, account_id) else None
 
 
-def list_jobs(active: Optional[bool] = None) -> list[dict]:
+def list_jobs(active: Optional[bool] = None, *,
+              account_id: Optional[int] = None) -> list[dict]:
     with _lock:
-        rows = [snapshot(j) for j in _jobs.values()]
+        rows = [snapshot(j) for j in _jobs.values()
+                if owned_by(j, account_id)]
     if active is True:
         rows = [j for j in rows if j["status"] in ("queued", "running")]
     return sorted(rows, key=lambda j: j["id"], reverse=True)

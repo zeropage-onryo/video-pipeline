@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "zeropage": {
+      "command": "/Users/iphone/Documents/PRODUCTION PIPLINE .GIT/venv/bin/python",
+      "args": [
+        "-m",
+        "src.mcp_server",
+        "--engine"
+      ],
+      "cwd": "/Users/iphone/Documents/PRODUCTION PIPLINE .GIT"
+    }
+  }
+}

@@ -4,7 +4,7 @@ import { api, applyCaps, bus, closeDetail, esc, state, stateline } from './share
 import { initField } from './field.js';
 import { initStudio, renderStudio } from './studio.js';
 import { renderAssets } from './assets.js';
-import { initPipeline, renderPipeline, closeDeny } from './pipeline.js';
+import { initPipeline, renderPipeline } from './pipeline.js';
 import { initWorkflows, renderDirectorTab, closeWorkflowModal } from './workflows.js';
 import { renderAnalytics } from './analytics.js';
 import { initQueue, renderQueue } from './queue.js';
@@ -91,7 +91,7 @@ function palCommands() {
   const cmds = Object.keys(VIEWS).map(v =>
     ({ l: 'Go to ' + VIEWS[v].label, k: 'View', run: () => go(v) }));
   if (state.caps['pipeline.run']) {
-    cmds.push({ l: 'New concept from a spark', k: 'Action', run: () => {
+    cmds.push({ l: 'New concepts from an idea', k: 'Action', run: () => {
       go('studio'); setTimeout(() => document.getElementById('prompt').focus(), 60);
     }});
   }
@@ -169,7 +169,7 @@ pq.addEventListener('keydown', e => {
 
 addEventListener('keydown', e => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); palOpen(); return; }
-  if (e.key === 'Escape') { palClose(); closeDeny(); closeWorkflowModal(); closeDetail(); }
+  if (e.key === 'Escape') { palClose(); closeWorkflowModal(); closeDetail(); }
 });
 
 /* hero parallax, straight from the prototype */

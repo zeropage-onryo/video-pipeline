@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from .db import DB_PATH, connect
+from .db import DB_PATH, OWNED_TABLES, backfill_owner, connect
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -214,7 +214,164 @@ def seed(email: str, password_hash: Optional[str] = None,
     antihero = upsert_account("antihero", "ANTIHERO", "#d64550", path=path)
     add_member(zeropage, user_id, path=path)
     add_member(antihero, user_id, path=path)
-    return {"user_id": user_id, "accounts": [zeropage, antihero]}
+    claimed = claim_unowned_rows(path=path)
+    return {"user_id": user_id, "accounts": [zeropage, antihero],
+            "claimed": claimed}
+
+
+def claim_unowned_rows(account_id: Optional[int] = None,
+                       path: Path | str = DB_PATH) -> dict[str, int]:
+    """Give every pre-tenancy row an owner. Returns {table: rows claimed}.
+
+    Each module's own init() backfills too, but init() runs before there
+    is an account to backfill *to* on a fresh database -- so seeding is
+    the other end of that. Tables that do not exist yet are skipped
+    rather than created: this claims ownership, it does not define
+    schema.
+    """
+    claimed: dict[str, int] = {}
+    with connect(path) as conn:
+        present = {r["name"] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'")}
+        for table in OWNED_TABLES:
+            if table not in present:
+                continue
+            cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+            if "account_id" not in cols:
+                continue
+            n = backfill_owner(conn, table, account_id)
+            if n:
+                claimed[table] = n
+    return claimed
+
+
+def slug_of(account_id: Optional[int], path: Path | str = DB_PATH) -> Optional[str]:
+    """The tenant's slug for an account id -- the label rag_documents.project
+    carries (see src/rag.py). Never raises: None in, None out; a database
+    with no accounts table (a fresh install, most test fixtures) is None
+    too, which the library treats as "unlabelled", never as an error."""
+    if account_id is None:
+        return None
+    try:
+        with connect(path) as conn:
+            if conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'accounts'"
+            ).fetchone() is None:
+                return None
+            row = conn.execute("SELECT slug FROM accounts WHERE id = ?",
+                               (int(account_id),)).fetchone()
+            return str(row["slug"]) if row else None
+    except Exception:
+        return None
+
+
+def resolve_account(slug: Optional[str] = None,
+                    path: Path | str = DB_PATH) -> Optional[int]:
+    """Turn a `--account <slug>` into an id, or fall back to the oldest
+    account on the database.
+
+    For ENTRY POINTS only -- CLIs, the nightly run, anything with no
+    session behind it. Library functions take `account_id` as a required
+    argument on purpose; a fallback buried in the data layer is the leak
+    that rule exists to prevent. Here it is deliberate and in one place.
+
+    Returns None on a database with no accounts -- including one where
+    the table does not exist yet, which a fresh install genuinely is.
+    The caller then operates on the unowned pool, which is exactly what
+    such a database holds. Raising there instead would turn "nothing has
+    been seeded" into a crash in every CLI and MCP tool, which is what
+    it did until a full-suite run happened to schedule the mcp_server
+    tests onto a worker with an unseeded database.
+    """
+    with connect(path) as conn:
+        if conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'accounts'"
+        ).fetchone() is None:
+            if slug:
+                raise ValueError(f"no account {slug!r} -- no accounts exist yet")
+            return None
+        if slug:
+            row = conn.execute(
+                "SELECT id FROM accounts WHERE slug = ?", (slug.strip().lower(),)
+            ).fetchone()
+            if row is None:
+                known = [r["slug"] for r in conn.execute(
+                    "SELECT slug FROM accounts ORDER BY slug")]
+                raise ValueError(
+                    f"no account {slug!r}" + (f" -- try one of {known}" if known else ""))
+            return int(row["id"])
+        row = conn.execute("SELECT MIN(id) AS id FROM accounts").fetchone()
+        return int(row["id"]) if row and row["id"] is not None else None
+
+
+def invite(email: str, slug: str, display_name: Optional[str] = None,
+           role: str = "member", join_existing: bool = False,
+           path: Path | str = DB_PATH) -> dict[str, Any]:
+    """Give one person their own account, and the membership to enter it.
+
+    The v1 posture, made a command instead of a hand-written INSERT: a
+    signup gets a users row and zero memberships, so access is only ever
+    granted deliberately. This is that grant.
+
+    **A pilot user gets their OWN account.** That is the whole point and
+    it is the easy thing to get catastrophically wrong: adding someone to
+    `zeropage` does not give them a workspace, it gives them Mike's --
+    every concept, location and cast member on the board, because
+    account_id is the ownership boundary. So an account that already owns
+    rows is refused unless `join_existing` says otherwise, and the error
+    counts what they would have been able to see.
+
+    No password and no auth identity is created on purpose: the row sits
+    unclaimed until they sign in with Google or Discord, and
+    `auth._finish_oauth` claims it by email on that first sign-in (the
+    same path the bootstrap user takes). So the invite is complete before
+    they have ever visited, and there is no secret to send them.
+
+    Returns {"user_id", "account_id", "slug", "created_user",
+    "created_account", "role"}.
+    """
+    email = email.strip().lower()
+    if not email or "@" not in email:
+        raise ValueError(f"that does not look like an email: {email!r}")
+    slug = slug.strip().lower()
+    if not slug:
+        raise ValueError("an invite needs an account slug")
+
+    with connect(path) as conn:
+        existing = conn.execute(
+            "SELECT id FROM accounts WHERE slug = ?", (slug,)).fetchone()
+        if existing is not None and not join_existing:
+            owned = 0
+            for table in OWNED_TABLES:
+                present = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                    (table,)).fetchone()
+                if not present:
+                    continue
+                cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+                if "account_id" not in cols:
+                    continue
+                owned += conn.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE account_id = ?",
+                    (existing["id"],)).fetchone()[0]
+            if owned:
+                raise ValueError(
+                    f"account {slug!r} already exists and owns {owned} rows -- "
+                    f"inviting {email} into it would show them all of that. "
+                    f"Give them their own slug, or pass join_existing=True "
+                    f"(--join-existing) if sharing a workspace is what you mean.")
+
+    created_account = existing is None
+    account_id = upsert_account(slug, display_name or slug.title(), path=path)
+
+    user = get_user_by_email(email, path=path)
+    created_user = user is None
+    user_id = user["id"] if user else create_user(email, path=path)
+
+    add_member(account_id, user_id, role=role, path=path)
+    return {"user_id": user_id, "account_id": account_id, "slug": slug,
+            "created_user": created_user, "created_account": created_account,
+            "role": role}
 
 
 def main(argv=None) -> None:
@@ -229,7 +386,62 @@ def main(argv=None) -> None:
     p_seed.add_argument("--password", default=None,
                         help="set a login password (hashed, never stored raw)")
     p_seed.add_argument("--name", default="Mike")
+
+    p_inv = sub.add_parser(
+        "invite",
+        help="give one person their OWN account and the membership to enter it")
+    p_inv.add_argument("email")
+    p_inv.add_argument(
+        "--brand", required=True,
+        help="the account slug they will own -- their workspace, not yours. "
+             "Use a new one; an existing slug that owns rows is refused.")
+    p_inv.add_argument("--name", default=None,
+                       help="display name for the account (default: the slug)")
+    p_inv.add_argument("--role", default="member",
+                       help="recorded on the membership row. Nothing enforces "
+                            "it yet -- it is a label, not a permission.")
+    p_inv.add_argument("--join-existing", action="store_true",
+                       help="allow adding them to an account that already owns "
+                            "rows, i.e. deliberately share a workspace")
+
+    sub.add_parser("members", help="who can enter what")
+
     args = parser.parse_args(argv)
+
+    if args.command == "members":
+        with connect(DB_PATH) as conn:
+            rows = conn.execute(
+                "SELECT a.slug, a.id AS account_id, u.email, m.role "
+                "FROM account_members m "
+                "JOIN accounts a ON a.id = m.account_id "
+                "JOIN users u ON u.id = m.user_id "
+                "ORDER BY a.slug, u.email").fetchall()
+        if not rows:
+            print("nobody has access to anything yet")
+            return
+        for r in rows:
+            print(f"  {r['slug']:<16} {r['email']:<32} {r['role']}")
+        return
+
+    if args.command == "invite":
+        try:
+            result = invite(args.email, args.brand, display_name=args.name,
+                            role=args.role, join_existing=args.join_existing)
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            sys.exit(1)
+        made = []
+        if result["created_account"]:
+            made.append(f"account {result['slug']!r} (id {result['account_id']})")
+        if result["created_user"]:
+            made.append(f"user {args.email} (id {result['user_id']})")
+        print("created " + " and ".join(made) if made
+              else f"{args.email} already existed")
+        print(f"{args.email} is now {result['role']} of {result['slug']!r}.")
+        print("Tell them to sign in with Google or Discord using that exact "
+              "email -- the first sign-in claims the row. Their board starts "
+              "empty; they cannot see anyone else's.")
+        return
 
     password_hash = None
     if args.password:

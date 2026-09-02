@@ -9,6 +9,8 @@ keeps working -- so refresh_metrics_for_video never raises; it always
 returns a result dict describing what happened.
 """
 import os
+from datetime import datetime, timedelta, timezone
+from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
 import requests
@@ -22,6 +24,7 @@ API_ROOT = "https://www.googleapis.com/youtube/v3"
 YOUTUBE_API_URL = f"{API_ROOT}/videos"
 CHANNELS_API_URL = f"{API_ROOT}/channels"
 PLAYLIST_ITEMS_API_URL = f"{API_ROOT}/playlistItems"
+SEARCH_API_URL = f"{API_ROOT}/search"
 
 # videos.list accepts at most 50 ids per call -- importing a channel
 # costs one call per 50 videos rather than one per video.
@@ -95,7 +98,7 @@ def _parse_statistics(stats: dict) -> dict:
     }
 
 
-def refresh_metrics_for_video(video: dict, api_key=None, db_path=None) -> dict:
+def refresh_metrics_for_video(video: dict, api_key=None, db_path=None, account_id: Optional[int] = None) -> dict:
     """
     Fetch and record one video's current numbers. Never raises --
     "missing key or failed call must not break the screen; manual
@@ -118,7 +121,7 @@ def refresh_metrics_for_video(video: dict, api_key=None, db_path=None) -> dict:
         return {"ok": False, "error": _safe_error(e, api_key)}
 
     kwargs = {"path": db_path} if db_path is not None else {}
-    db.record_metrics(video["id"], **stats, **kwargs)
+    db.record_metrics(video["id"], **stats, **kwargs, account_id=account_id)
     return {"ok": True, **stats}
 
 
@@ -197,7 +200,87 @@ def fetch_stats_bulk(video_ids: list, api_key: str) -> dict:
     return stats
 
 
-def import_channel_videos(handle: str, api_key=None, db_path=None) -> dict:
+def search_videos(query: str, api_key: str, limit: int = 8,
+                  days: int = 30, order: str = "viewCount") -> dict:
+    """
+    Public search for recent videos matching `query`, newest window
+    first, returned with their view counts.
+
+    This is the one YouTube call in the codebase that is not about a
+    video we already own -- src/scout.py uses it to see what formats are
+    actually travelling right now, so the nightly spark is grounded in
+    numbers rather than in what a model remembers about last year.
+
+    Never raises: returns {"ok": False, "error": ...} instead. The scout
+    treats every lane as optional and a raising search would be the one
+    thing able to fail a research pass.
+
+    Quota note: search.list costs 100 units against the free 10,000/day,
+    and does NOT return statistics -- so this spends a second call
+    (fetch_stats_bulk, 1 unit) to attach view counts. Two calls a night
+    per brand is ~1% of the daily quota.
+    """
+    published_after = (
+        datetime.now(timezone.utc) - timedelta(days=days)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        response = requests.get(
+            SEARCH_API_URL,
+            params={
+                "part": "snippet",
+                "q": query,
+                "type": "video",
+                "maxResults": min(int(limit), 50),
+                "order": order,
+                "publishedAfter": published_after,
+                "key": api_key,
+            },
+            timeout=10,
+        )
+        response.raise_for_status()
+        items = response.json().get("items") or []
+    except Exception as e:
+        return {"ok": False, "error": _safe_error(e, api_key), "videos": []}
+
+    videos = []
+    for item in items:
+        video_id = (item.get("id") or {}).get("videoId")
+        snippet = item.get("snippet") or {}
+        if not video_id:
+            continue
+        # The thumbnail is the highest-resolution still YouTube publishes
+        # for a video, and it is the frame the creator chose -- which
+        # makes it the one useful IMAGE in a search result. src/scout.py
+        # pulls it into the research bin as visual evidence for a spark.
+        thumbs = snippet.get("thumbnails") or {}
+        thumb = ""
+        for size in ("maxres", "standard", "high", "medium", "default"):
+            if (thumbs.get(size) or {}).get("url"):
+                thumb = thumbs[size]["url"]
+                break
+        videos.append({
+            "video_id": video_id,
+            "title": snippet.get("title", ""),
+            "channel": snippet.get("channelTitle", ""),
+            "published_at": snippet.get("publishedAt", ""),
+            "url": f"https://www.youtube.com/watch?v={video_id}",
+            "thumbnail": thumb,
+            "views": None,
+        })
+
+    # Best-effort enrichment: a failed stats call still leaves usable
+    # titles, which is most of the format signal the scout is after.
+    try:
+        stats = fetch_stats_bulk([v["video_id"] for v in videos], api_key)
+        for v in videos:
+            v["views"] = (stats.get(v["video_id"]) or {}).get("views")
+    except Exception:
+        pass
+
+    return {"ok": True, "videos": videos, "error": ""}
+
+
+def import_channel_videos(handle: str, api_key=None, db_path=None, account_id: Optional[int] = None) -> dict:
     """
     Add every video on a channel that isn't already tracked, with an
     initial metrics snapshot where stats are available. Never raises.
@@ -218,7 +301,7 @@ def import_channel_videos(handle: str, api_key=None, db_path=None) -> dict:
 
     known_ids = {
         parse_video_id(v.get("url"))
-        for v in db.list_videos(limit=10_000, **kwargs)
+        for v in db.list_videos(limit=10_000, **kwargs, account_id=account_id)
     }
     new_videos = [v for v in channel_videos if v["video_id"] not in known_ids]
 
@@ -235,10 +318,11 @@ def import_channel_videos(handle: str, api_key=None, db_path=None) -> dict:
             video["title"], "youtube", video["published_at"],
             url=f"https://www.youtube.com/watch?v={video['video_id']}",
             **kwargs,
-        )
+        
+            account_id=account_id,)
         added += 1
         if video["video_id"] in stats:
-            db.record_metrics(video_db_id, **stats[video["video_id"]], **kwargs)
+            db.record_metrics(video_db_id, **stats[video["video_id"]], **kwargs, account_id=account_id)
 
     return {"ok": True, "added": added}
 

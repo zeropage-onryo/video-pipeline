@@ -10,6 +10,12 @@
 
 # Environment variables
 .env
+# ...and every backup of it. `.env.bak.<timestamp>` files get made by hand
+# during token rotation and are NOT covered by ".env" alone -- two of them
+# were one `git add -A` away from putting live Gemini, R2, Instagram and
+# OAuth credentials into history permanently (2026-09-02).
+.env.*
+!.env.example
 
 # Python
 __pycache__/
@@ -46,3 +52,19 @@ data/renders/
 data/_scratch_*
 data/*.log
 data/*.db*
+
+# Reference photos uploaded through the composer and the sheets built
+# from them -- user data and generated artifacts, not source (2026-08-29)
+data/refs/
+data/*.jpg
+data/*.tar.gz
+
+# Claude Code's per-machine permission allowlist: local paths, no value
+# to anyone else checking this out
+.claude/settings.local.json
+
+# Claude's scratch space over the FUSE mount: stale git locks it cannot
+# unlink, diagnostic logs, staged tarballs, index backups. The folder name
+# says what it is. Ignored because c02fd3a swept 18 of them into history
+# before this rule existed.
+data/_to_delete/

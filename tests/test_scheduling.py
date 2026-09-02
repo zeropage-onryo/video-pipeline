@@ -22,8 +22,10 @@ def tmp_db(tmp_path):
 
 @pytest.fixture
 def open_gate(tmp_path, monkeypatch):
-    """Env enabled, no kill switch -- live is reachable when asked for."""
+    """Env enabled, posting approved for the run, no kill switch -- live
+    is reachable when asked for."""
     monkeypatch.setenv(autopilot.ENABLE_ENV, "1")
+    monkeypatch.setenv(autopilot.POST_ENV, "1")
     monkeypatch.setattr(autopilot, "KILL_SWITCH_PATH", tmp_path / "autopilot.off")
 
 

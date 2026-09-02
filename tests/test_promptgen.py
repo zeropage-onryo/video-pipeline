@@ -99,7 +99,7 @@ def test_generate_prompts_for_slot_returns_three_prompts_and_persists(tmp_db, mo
     assert set(result["prompts"]) == set(PLATFORMS)
     assert all(result["prompts"][tool].strip() for tool in result["prompts"])
 
-    stored = gen.get_shot(result["shot_id"], tmp_db)
+    stored = gen.get_shot(result["shot_id"], tmp_db, account_id=None)
     assert stored is not None
     assert stored["subject"] == "a gloved hand"
 
@@ -121,7 +121,7 @@ def test_generate_prompts_for_slot_links_idea_and_slot(tmp_db, monkeypatch):
         idea_id=idea_id, slot_index=2, client=None, db_path=tmp_db,
     )
 
-    stored = gen.get_shot(result["shot_id"], tmp_db)
+    stored = gen.get_shot(result["shot_id"], tmp_db, account_id=None)
     assert stored["idea_id"] == idea_id
     assert stored["slot_index"] == 2
 

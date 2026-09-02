@@ -13,7 +13,7 @@ def test_refresh_all_records_missing_key_without_raising(tmp_path, monkeypatch):
     path = tmp_path / "m.db"
     db.init_db(path)
     db.add_video("clip one", "youtube", "2026-08-01",
-                 url="https://youtu.be/abc123", path=path)
+                 url="https://youtu.be/abc123", path=path, account_id=None)
 
     summary = refresh_metrics.refresh_all(platform="youtube", db_path=path)
     assert summary["youtube"]["videos"] == 1

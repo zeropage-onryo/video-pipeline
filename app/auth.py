@@ -115,6 +115,108 @@ def current_account(request: Request,
     return member_of[0]
 
 
+def current_account_id(request: Request) -> int:
+    """The account this request acts as, as a FastAPI dependency.
+
+    Signing in is not the same as having access: a fresh user gets a
+    users row and zero account_members rows on purpose (see
+    accounts.py), and that state renders the membership gate. So a
+    signed-in user with no membership is a 403 here, not a crash and not
+    a silent fall-through to somebody else's data.
+
+    Routes take this rather than reaching for current_account
+    themselves, because a route that forgets is a route that leaks --
+    this way the account id is a parameter the handler cannot use
+    without declaring.
+
+    **Deliberately NOT current_account.** They answer different
+    questions, and conflating them empties Mike's board. current_account
+    resolves the BRAND: it reads the brand cookie and returns the
+    membership whose slug matches, which is what the brand pill switches
+    and what the UI colours itself from. This returns the TENANT: the
+    user's oldest membership, whichever brand they are currently looking
+    at.
+
+    That distinction is load-bearing because Mike's two accounts --
+    zeropage and antihero -- are two brands of one operator sharing one
+    asset bank, one board and one cast list. Scope the data by
+    current_account and clicking the ANTIHERO pill scopes every query to
+    account 2, which owns nothing: an empty board, no locations, no
+    cast. Verified against a copy of the live database, which has all 11
+    concepts under account 1.
+
+    So: `account_id` is who owns the row, `brand` is the label on it, and
+    the pill still filters by brand the way it always did -- the filter
+    just happens inside the tenant now instead of being the only thing
+    separating anybody from anybody.
+
+    (The impure part, worth naming: `accounts` is serving as both tenant
+    and brand table, and "oldest membership" is what picks the tenant out
+    of the two. That holds for one operator with two brands and for a
+    pilot user with one account. It stops holding the day one person
+    legitimately belongs to two DIFFERENT operators, and that is when
+    accounts has to split into tenants and brands for real.)
+    """
+    user = current_user(request)
+    if user is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=401, detail="sign in first")
+    member_of = accounts.memberships(user["id"], path=db.DB_PATH)
+    if not member_of:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="no account access")
+    return min(int(a["id"]) for a in member_of)
+
+
+def dev_account_id(request: Request) -> int:
+    """The dev console's account: the signed-in user's TENANT when there
+    is a session, otherwise the bootstrap account.
+
+    Same tenant rule as current_account_id, and for the same reason
+    (2026-09-02). This used to call `current_account`, which resolves
+    the BRAND from the cookie -- so with the pill on ANTIHERO the whole
+    dev console scoped itself to account 2, which owns nothing: "Draw
+    ungraded concept (0)" on a database holding 29 of them, and the
+    board's taste signal reading zero. That is the exact failure
+    test_the_brand_pill_does_not_empty_the_board closed for /api, left
+    open here because this function predates it.
+
+    Worse than the empty page: four dev routes WRITE (a fresh grade, a
+    new video, metrics, a reference pick). Every one of those made
+    while the pill was on the other brand stamped account_id = 2, where
+    the board, the Queue and the judge -- all of which read the tenant
+    -- can never see it again. Nothing had landed there yet when this
+    was found, which was luck, not design.
+
+    What stays deliberately different from current_account_id is the
+    FALLBACK. The dev console (`dev` router, DEV_TOOLS only) is the
+    single operator's engine room -- never mounted on a public
+    deployment, never part of a pilot -- and it has never required a
+    session. Making it 403 would lock Mike out of his own workshop to
+    protect it from a second user who by definition cannot reach it. So
+    it degrades to the bootstrap account, and it degrades *visibly and
+    in one named place* rather than by letting `account_id` default to
+    None somewhere deep in the data layer. /api gets no fallback.
+
+    The brand pill still does what it always did: it filters by brand
+    (a column on the row) inside the tenant, and colours the UI.
+    """
+    user = current_user(request)
+    if user is not None:
+        member_of = accounts.memberships(user["id"], path=db.DB_PATH)
+        if member_of:
+            return min(int(a["id"]) for a in member_of)
+    with db.connect(db.DB_PATH) as conn:
+        bootstrap = db.bootstrap_account_id(conn)
+    if bootstrap is None:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=503,
+            detail="no accounts exist yet -- run `python -m src.accounts seed <email>`",
+        )
+    return bootstrap
+
+
 def require_user_ui(request: Request):
     """Gate for HTML routes: no session -> the sign-in screen."""
     user = current_user(request)

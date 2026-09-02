@@ -18,12 +18,12 @@ def _seed(path):
     preprod.init(path)
     autonomy.init(path)
     winners.init(path)
-    liked_id = preprod.save_concept(_concept("The Last Check", "keys snatched"), "antihero", path=path)
-    disliked_id = preprod.save_concept(_concept("Boring Wait", "a slow pan"), "antihero", path=path)
-    h1 = autonomy.to_hold("antihero", "r", concept_id=liked_id, path=path)
-    h2 = autonomy.to_hold("antihero", "r", concept_id=disliked_id, path=path)
-    autonomy.resolve_hold(h1, "approved", path=path)
-    autonomy.resolve_hold(h2, "rejected", path=path)
+    liked_id = preprod.save_concept(_concept("The Last Check", "keys snatched"), "antihero", path=path, account_id=None)
+    disliked_id = preprod.save_concept(_concept("Boring Wait", "a slow pan"), "antihero", path=path, account_id=None)
+    h1 = autonomy.to_hold("antihero", "r", concept_id=liked_id, path=path, account_id=None)
+    h2 = autonomy.to_hold("antihero", "r", concept_id=disliked_id, path=path, account_id=None)
+    autonomy.resolve_hold(h1, "approved", path=path, account_id=None)
+    autonomy.resolve_hold(h2, "rejected", path=path, account_id=None)
     winners.add("runway", "a great prompt", note="clean render", verdict="worked", path=path)
     return path
 
@@ -35,6 +35,63 @@ def test_gather_signals_reads_graded_history(tmp_path):
     assert any(c["title"] == "Boring Wait" for c in sig["disliked"])
     assert sig["winners"] and not sig["avoid"]
     assert taste_judge.has_history(sig)
+
+
+def test_the_board_buttons_are_the_taste_signal(tmp_path):
+    """The Pipeline check and X reach the judge (2026-09-02).
+
+    Before this, `picked_at` fed one displayed number and `archived_at`
+    fed a tally, and the judge's liked/disliked read only the hold
+    queue -- which the board never writes. So the surface he actually
+    clicks taught the judge nothing, and a fully worked board still
+    scored neutral."""
+    path = tmp_path / "board.db"
+    for init in (db.init_db, preprod.init, autonomy.init, winners.init):
+        init(path)
+    picked = preprod.save_concept(_concept("Cold Open", "a bolt turns"),
+                                  "antihero", path=path, account_id=None)
+    passed = preprod.save_concept(_concept("Slow Pan", "nothing happens"),
+                                  "antihero", path=path, account_id=None)
+    preprod.set_picked(picked, path=path, account_id=None)
+    preprod.set_archived(passed, path=path, account_id=None)
+
+    sig = taste_judge.gather_signals(db_path=path)
+    assert [c["title"] for c in sig["liked"]] == ["Cold Open"]
+    assert [c["title"] for c in sig["disliked"]] == ["Slow Pan"]
+    assert taste_judge.has_history(sig)
+    # and it reaches the model as evidence, not just the dict
+    prompt = taste_judge.build_prompt(_concept("New"), sig)
+    assert "Cold Open" in prompt and "Slow Pan" in prompt
+
+
+def test_a_picked_concept_archived_later_is_still_a_like(tmp_path):
+    """Picking, rendering and then clearing the card off the board is
+    not a rejection -- he wanted that one made. Counting it as a dislike
+    would teach the judge the opposite of what happened."""
+    path = tmp_path / "both.db"
+    for init in (db.init_db, preprod.init, autonomy.init, winners.init):
+        init(path)
+    cid = preprod.save_concept(_concept("Made It", "he rides"), "antihero",
+                               path=path, account_id=None)
+    preprod.set_picked(cid, path=path, account_id=None)
+    preprod.set_archived(cid, path=path, account_id=None)
+
+    sig = taste_judge.gather_signals(db_path=path)
+    assert [c["title"] for c in sig["liked"]] == ["Made It"]
+    assert sig["disliked"] == []
+
+
+def test_one_concept_picked_and_held_is_shown_to_the_judge_once(tmp_path):
+    """The same concept can carry a board pick and an approved hold.
+    Twice in the evidence list is a thumb on a scale the judge cannot
+    see."""
+    path = _seed(tmp_path / "t.db")
+    liked = [c for c in preprod.list_concepts(path=path, account_id=None)
+             if c["title"] == "The Last Check"][0]
+    preprod.set_picked(liked["id"], path=path, account_id=None)
+
+    sig = taste_judge.gather_signals(db_path=path)
+    assert [c["title"] for c in sig["liked"]].count("The Last Check") == 1
 
 
 def test_no_history_is_neutral_and_never_calls_the_model(tmp_path):

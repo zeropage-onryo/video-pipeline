@@ -82,6 +82,7 @@ def retrieve_with_crag(
     threshold: Optional[float] = None,
     record_telemetry: bool = True,
     telemetry_path=None,
+    prefer_project: Optional[str] = None,
 ) -> dict:
     """
     Never raises -- same contract as rag.retrieve_references, since
@@ -110,6 +111,7 @@ def retrieve_with_crag(
         "threshold": threshold,
         "domain": domain,
         "project": project,
+        "prefer_project": prefer_project,
         "library_count": library["count"],
         "library_fingerprint": library["fingerprint"],
         "error": None,
@@ -125,7 +127,8 @@ def retrieve_with_crag(
                 pass
         return {**response, "telemetry": dict(event)}
 
-    result = rag.retrieve_references(query, k=k, db_url=db_url, domain=domain, project=project)
+    result = rag.retrieve_references(query, k=k, db_url=db_url, domain=domain, project=project,
+                                     prefer_project=prefer_project)
     if not result["ok"]:
         event["error"] = result.get("error")
         return finish({**result, "grade": None, "rewritten_query": None})
@@ -147,7 +150,8 @@ def retrieve_with_crag(
         return finish({**result, "grade": grade, "rewritten_query": None})
 
     event["requery_triggered"] = True
-    retried = rag.retrieve_references(rewritten, k=k, db_url=db_url, domain=domain, project=project)
+    retried = rag.retrieve_references(rewritten, k=k, db_url=db_url, domain=domain, project=project,
+                                      prefer_project=prefer_project)
     if not retried["ok"] or not retried["references"]:
         # the rewrite came back empty or the connection broke -- keep
         # whatever the original weak attempt found rather than nothing.

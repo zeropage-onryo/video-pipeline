@@ -103,9 +103,12 @@ def chunk_text(kind: str, name: str, fields: dict) -> str:
     return "\n".join(lines)
 
 
-def ingest_one(kind: str, slug: str, name: str, fields: dict) -> dict:
+def ingest_one(kind: str, slug: str, name: str, fields: dict, *,
+               project: Optional[str] = None) -> dict:
     """Write one asset's chunk. Never raises -- a down store returns
-    {"ok": False} so the caller can report it and move on."""
+    {"ok": False} so the caller can report it and move on. `project` is
+    the owner's tenant slug (rag.py: the label that ranks a tenant's own
+    assets first without hiding anyone's)."""
     text = chunk_text(kind, name, fields)
     try:
         conn = rag.connect()
@@ -113,7 +116,7 @@ def ingest_one(kind: str, slug: str, name: str, fields: dict) -> dict:
             rag.init_store(conn)
             written = rag.ingest_records(
                 [{"source": source_key(kind, slug), "text": text,
-                  "domain": DOMAIN, "project": None, "source_ref": None}],
+                  "domain": DOMAIN, "project": project, "source_ref": None}],
                 rag.make_client(), conn,
             )
         finally:
@@ -152,6 +155,107 @@ def photos_for(kind: str, slug: str) -> list:
                   if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS)
 
 
+# The site-relative URL every reference in this pipeline travels as.
+# `/characters/<slug>/photo/<file>`, `/props/...`, `/locations/...` for
+# the asset bank, `/refs/<sha>.jpg` for anything the composer uploaded
+# or the scout downloaded. One shape, so a photo picked by hand and a
+# photo found by a crawl are indistinguishable downstream.
+URL_ROOTS = {"characters": "character", "props": "prop", "locations": "location"}
+
+
+def photo_url(kind: str, slug: str, filename: str) -> str:
+    """The URL a photo on disk rides on. The inverse of resolve_photo."""
+    plural = next(k for k, v in URL_ROOTS.items() if v == kind)
+    return f"/{plural}/{slug}/photo/{filename}"
+
+
+def photo_roots() -> dict:
+    """The URL prefix -> directory map, by the plural names the URLs use."""
+    return {plural: PHOTO_DIRS[kind] for plural, kind in URL_ROOTS.items()}
+
+
+def resolve_photo(url_path: str, roots=None, refs_dir=None):
+    """A reference URL -> the file on disk, or None.
+
+    THE reason this lives in src/: the nightly graph resolves references
+    at 6am with no web app running, so it cannot call app/api.py's
+    version. That one now delegates here, because two implementations of
+    a path-traversal guard is the shape of bug where one of them is
+    weaker and nobody notices.
+
+    Handles both shapes, and refuses anything that escapes its root --
+    the URL comes off a stored shot or a crawl, so nothing has vouched
+    for it. None on anything unresolvable: a reference is an
+    enhancement, never a gate.
+
+    `roots` and `refs_dir` are injectable so the WALL has one
+    implementation while the directories stay the caller's: app/api.py
+    passes its own `_PHOTO_ROOTS`, which is what the tests point at a
+    tmp_path. Defaulting them here is what lets the graph resolve a
+    reference at 6am with no app around.
+    """
+    from . import refbin
+
+    roots = roots if roots is not None else photo_roots()
+    refs_root = refs_dir if refs_dir is not None else refbin.REFS_DIR
+    clean = (url_path or "").split("?")[0].strip("/")
+    if not clean:
+        return None
+    parts = clean.split("/")
+
+    # /refs/<sha>.jpg -- composer uploads and scouted research images
+    if len(parts) == 2 and parts[0] == "refs":
+        root = Path(refs_root).resolve()
+        target = (root / parts[1]).resolve()
+        if target.parent != root or not target.is_file():
+            return None
+        return target
+
+    # /<characters|props|locations>/<slug>/photo/<file>
+    if len(parts) != 4 or parts[2] != "photo":
+        return None
+    base = roots.get(parts[0])
+    if base is None:
+        return None
+    root = Path(base).resolve()
+    target = (root / parts[1] / parts[3]).resolve()
+    if root not in target.parents or not target.is_file():
+        return None
+    return target
+
+
+def catalogue(db_path=None, account_id: Optional[int] = None) -> list[dict]:
+    """Every asset on file, in the shape shootgen.named_assets reads:
+    {"category", "name", "photos"} with photos as URLs.
+
+    Same catalogue the Studio's media panel shows, built from src/ so
+    the graph can have it too. Locations come from the locations table,
+    characters and props from entities; the photos come off disk, since
+    that is where they actually are -- photo_count on the row is a
+    counter, not a listing.
+    """
+    from . import db as _db
+    from . import entities, preprod
+
+    path = db_path if db_path is not None else _db.DB_PATH
+    items: list[dict] = []
+
+    def photos(kind: str, name: str) -> list:
+        slug = slugify(name)
+        return [photo_url(kind, slug, f.name) for f in photos_for(kind, slug)]
+
+    for loc in preprod.list_locations(path=path, account_id=account_id):
+        items.append({"category": "location", "name": loc["name"],
+                      "photos": photos("location", loc["name"])})
+    for c in entities.list_characters(path=path, account_id=account_id):
+        items.append({"category": "character", "name": c["name"],
+                      "photos": photos("character", c["name"])})
+    for pr in entities.list_props(path=path, account_id=account_id):
+        items.append({"category": "prop", "name": pr["name"],
+                      "photos": photos("prop", pr["name"])})
+    return items
+
+
 def entity_fields(kind: str, row: dict) -> dict:
     """One character/prop row -> the labelled fields its chunk carries."""
     label = "role" if kind == "character" else "category"
@@ -169,7 +273,7 @@ def described(row: dict) -> bool:
     return isinstance(desc, dict) and bool(desc.get("look"))
 
 
-def backfill(db_path=None, describe: bool = False, gemini_client=None) -> dict:
+def backfill(db_path=None, describe: bool = False, gemini_client=None, account_id: Optional[int] = None) -> dict:
     """
     Put everything already on disk onto the shelf.
 
@@ -184,24 +288,27 @@ def backfill(db_path=None, describe: bool = False, gemini_client=None) -> dict:
     path = db.DB_PATH if db_path is None else db_path
     result = {"ingested": 0, "described": 0, "failed": 0,
               "skipped_no_photos": 0, "errors": []}
+    from . import accounts
+    project = accounts.slug_of(account_id, path=path)
 
     def record_error(what: str, error: str) -> None:
         result["failed"] += 1
         if len(result["errors"]) < 10:
             result["errors"].append(f"{what}: {error}")
 
-    for loc in preprod.list_locations(path=path):
+    for loc in preprod.list_locations(path=path, account_id=account_id):
         name = loc["name"]
         outcome = ingest_one("location", slugify(name), name,
-                             {"description": loc.get("description") or {}})
+                             {"description": loc.get("description") or {}},
+                             project=project)
         if outcome["ok"]:
             result["ingested"] += 1
         else:
             record_error(f"location {name}", outcome["error"])
 
     entity_rows = (
-        [("character", r) for r in entities.list_characters(path=path)]
-        + [("prop", r) for r in entities.list_props(path=path)]
+        [("character", r) for r in entities.list_characters(path=path, account_id=account_id)]
+        + [("prop", r) for r in entities.list_props(path=path, account_id=account_id)]
     )
     for kind, row in entity_rows:
         name = row["name"]
@@ -216,14 +323,15 @@ def backfill(db_path=None, describe: bool = False, gemini_client=None) -> dict:
                 from .locations import describe_entity
                 try:
                     vision = describe_entity(gemini_client, kind, name, photos)
-                    entities.set_description(kind, row["id"], vision, path=path)
+                    entities.set_description(kind, row["id"], vision, path=path, account_id=account_id)
                     row = {**row, "description": {**(row.get("description") or {}),
                                                   **vision}}
                     result["described"] += 1
                 except Exception as e:
                     record_error(f"{kind} {name}", str(e))
 
-        outcome = ingest_one(kind, slug, name, entity_fields(kind, row))
+        outcome = ingest_one(kind, slug, name, entity_fields(kind, row),
+                             project=project)
         if outcome["ok"]:
             result["ingested"] += 1
         else:

@@ -16,6 +16,7 @@ autonomy.py/entities.py: own SCHEMA, own init(), one shared SQLite file.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Optional
 
 from . import db
 
@@ -113,10 +114,11 @@ def _render_doc(w: dict, pair: dict | None = None) -> str:
     return "\n".join(lines)
 
 
-def ingest_to_rag(entry_id, path=db.DB_PATH) -> dict:
+def ingest_to_rag(entry_id, path=db.DB_PATH, project: Optional[str] = None) -> dict:
     """Embed the entry into the right RAG shelf by verdict (winning_prompts
     or avoid_prompts). Never raises -- if the store is down it stays saved
-    and can be re-ingested."""
+    and can be re-ingested. `project` is the teaching tenant's slug
+    (src/rag.py), so their own lessons rank first for them."""
     w = get(entry_id, path=path)
     if not w:
         return {"ok": False, "error": "no such entry"}
@@ -131,6 +133,7 @@ def ingest_to_rag(entry_id, path=db.DB_PATH) -> dict:
             rag.init_store(conn)
             written = rag.ingest_records(
                 [{"source": source, "text": _render_doc(w, pair), "domain": domain,
+                  "project": project,
                   "source_ref": w.get("video_ref") or None}], client, conn)
         finally:
             conn.close()
@@ -143,16 +146,16 @@ def ingest_to_rag(entry_id, path=db.DB_PATH) -> dict:
 
 
 def record_and_learn(tool, prompt, note="", video_ref="", verdict="worked",
-                     path=db.DB_PATH) -> dict:
+                     path=db.DB_PATH, project: Optional[str] = None) -> dict:
     entry_id = add(tool, prompt, note=note, video_ref=video_ref,
                    verdict=verdict, path=path)
-    result = ingest_to_rag(entry_id, path=path)
+    result = ingest_to_rag(entry_id, path=path, project=project)
     return {"id": entry_id, "verdict": _norm_verdict(verdict),
             "ingested": result.get("ok", False), "error": result.get("error")}
 
 
 def record_pair(tool, failed_prompt, working_prompt, note="", video_ref="",
-                path=db.DB_PATH) -> dict:
+                path=db.DB_PATH, project: Optional[str] = None) -> dict:
     """
     The strongest feedback shape there is: "this one failed, and THIS is
     what I wrote instead that worked."
@@ -180,8 +183,8 @@ def record_pair(tool, failed_prompt, working_prompt, note="", video_ref="",
                      (worked_id, failed_id))
         conn.execute("UPDATE winning_prompts SET pair_id = ? WHERE id = ?",
                      (failed_id, worked_id))
-    failed_result = ingest_to_rag(failed_id, path=path)
-    worked_result = ingest_to_rag(worked_id, path=path)
+    failed_result = ingest_to_rag(failed_id, path=path, project=project)
+    worked_result = ingest_to_rag(worked_id, path=path, project=project)
     return {
         "id": worked_id, "failed_id": failed_id, "worked_id": worked_id,
         "verdict": "pair", "paired": True,

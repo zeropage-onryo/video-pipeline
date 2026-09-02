@@ -45,7 +45,6 @@ import os
 import re
 import time
 import urllib.request
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -55,6 +54,11 @@ from .shot import Shot
 
 API_BASE = "https://api.acedata.cloud/midjourney"
 DAILY_CAP = int(os.environ.get("MIDJOURNEY_DAILY_CAP", "10"))
+# The installation-wide wall, beside the per-account one. Defaults to the
+# SAME number, so a single-operator database behaves exactly as it did --
+# admitting a second account is what forces a deliberate decision about
+# whose card is paying, instead of the total quietly doubling.
+GLOBAL_DAILY_CAP = int(os.environ.get("MIDJOURNEY_GLOBAL_DAILY_CAP", str(DAILY_CAP)))
 SPEND_ENV = "MIDJOURNEY_SPEND_OK"
 COST_USD = 0.27  # AceDataCloud per-image, 2026-08 -- recheck platform.acedata.cloud billing
 POLL_INTERVAL = 15
@@ -77,16 +81,14 @@ def _safe_error(e: Exception) -> str:
     return re.sub(r"(Bearer\s+)[A-Za-z0-9_\-.]+", r"\1<redacted>", text)
 
 
-def generations_today(db_path=None) -> int:
-    """Midjourney generations logged since UTC midnight -- what DAILY_CAP
-    counts against. Reads the same generations table the scoreboards do."""
-    today = datetime.now(timezone.utc).date().isoformat()
-    with generative.connect(db_path if db_path is not None else DB_PATH) as conn:
-        row = conn.execute(
-            "SELECT COUNT(*) FROM generations WHERE tool = 'midjourney' AND created_at >= ?",
-            (today,),
-        ).fetchone()
-        return row[0]
+def generations_today(db_path=None, *, account_id=None, everyone: bool = False) -> int:
+    """This account's midjourney generations since UTC midnight -- what
+    DAILY_CAP counts against. `everyone=True` gives the installation-wide
+    count that GLOBAL_DAILY_CAP counts against."""
+    return generative.used_today(
+        "midjourney", db_path if db_path is not None else DB_PATH,
+        account_id=account_id, everyone=everyone,
+    )
 
 
 def _request(path: str, payload: Optional[dict] = None, method: str = "POST") -> dict:
@@ -146,7 +148,7 @@ def generate_image(prompt: str, out_path, *, poll_interval: int = POLL_INTERVAL,
     return out_path
 
 
-def _shot_row_for_prompt(prompt: str, db_path) -> int:
+def _shot_row_for_prompt(prompt: str, db_path, account_id: Optional[int] = None) -> int:
     """A generations row needs a shot to hang off. The graph's AI shots
     don't have one, so synthesize a minimal Shot -- same pattern
     runway.py uses, the row exists to make the attempt countable."""
@@ -154,11 +156,13 @@ def _shot_row_for_prompt(prompt: str, db_path) -> int:
     generative.init(**kwargs)
     shot = Shot(subject=prompt[:100], action="still frame")
     return generative.add_shot(shot, notes="auto-created by midjourney.generate_stills",
-                               **kwargs)
+                               **kwargs, account_id=account_id)
 
 
 def generate_stills(prompt: str, out_dir, *, shot_id: Optional[int] = None,
-                    db_path=None) -> dict:
+                    db_path=None,
+                    account_id: Optional[int] = None,
+) -> dict:
     """
     Never raises. {"ok", "candidates": [{path, generation_id}], "error"}
     -- a missing approval, a missing key, a failed job, or the daily cap
@@ -173,11 +177,16 @@ def generate_stills(prompt: str, out_dir, *, shot_id: Optional[int] = None,
                     "error": f"credit spend not approved: set {SPEND_ENV}=1 to approve "
                              f"~${COST_USD} of AceDataCloud credits for this still"}
 
-        used = generations_today(db_path=db_path)
-        if used + 1 > DAILY_CAP:
-            return {"ok": False, "candidates": [],
-                    "error": f"daily cap: {used}/{DAILY_CAP} stills used today "
-                             f"(MIDJOURNEY_DAILY_CAP to raise)"}
+        refusal = generative.cap_error(
+            "midjourney", 1, account_id=account_id,
+            per_account=DAILY_CAP, ceiling=GLOBAL_DAILY_CAP,
+            path=db_path if db_path is not None else DB_PATH,
+            env_prefix="MIDJOURNEY", phrase="stills used",
+            used=generations_today(db_path=db_path, account_id=account_id),
+            used_everywhere=generations_today(db_path=db_path, everyone=True),
+        )
+        if refusal:
+            return {"ok": False, "candidates": [], "error": refusal}
 
         if shot_id is None:
             shot_id = _shot_row_for_prompt(prompt, db_path)
@@ -192,7 +201,8 @@ def generate_stills(prompt: str, out_dir, *, shot_id: Optional[int] = None,
         generation_id = generative.record_generation(
             shot_id, "midjourney", prompt, params={},
             output_path=str(out_path), cost_usd=COST_USD, notes=None, **kwargs,
-        )
+        
+            account_id=account_id,)
         return {"ok": True, "shot_id": shot_id, "error": None,
                 "candidates": [{"path": str(out_path), "generation_id": generation_id}]}
     except Exception as e:

@@ -1,0 +1,33 @@
+# Feed sources for src/scout.py's no-key lane (RSS/Atom, and Reddit .json
+# where it will answer).
+#
+# Format:  <brand>  <url>
+#   brand is antihero | zeropage | both -- same three values as
+#   inspiration.py, and scoped the same way, so Zero Page's faceless
+#   ideation never grounds on Antihero's moto sources and vice versa.
+#
+# Every URL below was fetched and parsed before being committed
+# (2026-08-31). Do the same when adding one: a feed that 403s is not a
+# loud failure, it is a lane that quietly contributes nothing, and
+# "the scout found less tonight" looks identical to a healthy night.
+#
+# ON REDDIT. The obvious source is deliberately NOT in the default list.
+# https://reddit.com/r/<sub>/top.json answers 403 to an unauthenticated
+# client, and the .rss form answers 200 once and then 429s -- Reddit now
+# rate-limits datacenter traffic hard. scout._parse_reddit and
+# _reddit_image still exist and still work, because a run from a home IP
+# (or with an OAuth token in front of it) does get through, and Reddit
+# preview images are good bin material. Uncomment a line below if yours
+# does; expect it to contribute nothing if it doesn't.
+#
+# Blank lines and # comments are ignored. Nothing here is required: an
+# empty file means the feeds lane contributes nothing and the other
+# three lanes still run.
+
+both      https://nofilmschool.com/rss.xml
+both      https://petapixel.com/feed/
+both      https://www.premiumbeat.com/blog/feed/
+zeropage  https://www.fxguide.com/feed/
+
+# antihero  https://www.reddit.com/r/motorcycles/top.json?t=week&limit=15
+# zeropage  https://www.reddit.com/r/aivideo/top.json?t=week&limit=15

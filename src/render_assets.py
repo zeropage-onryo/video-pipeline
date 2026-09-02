@@ -8,6 +8,12 @@ shelf so later retrieval can find a render by what it depicts.
 
 Asset publication is deliberately best-effort: a completed, paid render must
 still be returned when SQLite or the vector store is temporarily unavailable.
+
+OWNED (db.OWNED_TABLES, merged 2026-09-02): a generated asset is one
+account's paid render, so it carries `account_id` and every read says whose.
+The `project` column stays the brand label the render was made under; the
+RAG chunk's `project` is the TENANT that owns it (src/rag.py's rule), so a
+tenant's own renders rank first on the assets shelf without hiding anyone's.
 """
 from __future__ import annotations
 
@@ -42,6 +48,7 @@ CREATE INDEX IF NOT EXISTS idx_generated_assets_created
 def init(path: Path | str = db.DB_PATH) -> None:
     with db.connect(path) as conn:
         conn.executescript(SCHEMA)
+        db.own_table(conn, "generated_assets")
 
 
 def _label(tool: str, model: str) -> str:
@@ -100,8 +107,11 @@ def record(*, generation_id: int, tool: str, model: str, media_kind: str,
            prompt: str, media_url: str, output_path: Optional[str] = None,
            project: Optional[str] = None, concept_id: Optional[int] = None,
            shot_n: Optional[int] = None, metadata: Optional[dict] = None,
-           path: Path | str = db.DB_PATH) -> dict[str, Any]:
-    """Create or refresh one generated Asset Bank item and index its prompt."""
+           path: Path | str = db.DB_PATH,
+           account_id: Optional[int]) -> dict[str, Any]:
+    """Create or refresh one generated Asset Bank item and index its prompt.
+    `account_id` is keyword-only with no default: a render nobody owns is a
+    render nobody can see, or everybody can."""
     if media_kind not in ("image", "video"):
         raise ValueError("media_kind must be image or video")
     prompt = (prompt or "").strip()
@@ -120,31 +130,36 @@ def record(*, generation_id: int, tool: str, model: str, media_kind: str,
             """
             INSERT INTO generated_assets
                 (created_at, generation_id, tool, model, media_kind, prompt,
-                 media_url, output_path, project, concept_id, shot_n, metadata_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 media_url, output_path, project, concept_id, shot_n, metadata_json,
+                 account_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(generation_id) DO UPDATE SET
                 tool=excluded.tool, model=excluded.model,
                 media_kind=excluded.media_kind, prompt=excluded.prompt,
                 media_url=excluded.media_url, output_path=excluded.output_path,
                 project=excluded.project, concept_id=excluded.concept_id,
-                shot_n=excluded.shot_n, metadata_json=excluded.metadata_json
+                shot_n=excluded.shot_n, metadata_json=excluded.metadata_json,
+                account_id=excluded.account_id
             """,
             (db._now(), generation_id, tool, model, media_kind, prompt,
              media_url, output_path, project, concept_id, shot_n,
-             json.dumps(meta, sort_keys=True)),
+             json.dumps(meta, sort_keys=True), account_id),
         )
+        # lastrowid is untrustworthy after an upsert that took DO UPDATE
         row = conn.execute(
-            "SELECT id FROM generated_assets WHERE generation_id = ?",
-            (generation_id,),
+            "SELECT id FROM generated_assets WHERE generation_id = ? AND account_id IS ?",
+            (generation_id, account_id),
         ).fetchone()
         asset_id = int(row["id"])
 
+    from . import accounts
     return {
         "id": asset_id,
         "rag": _ingest(asset_id, generation_id=generation_id,
                        tool=tool, model=model,
                        media_kind=media_kind, prompt=prompt,
-                       project=project, metadata=meta),
+                       project=accounts.slug_of(account_id, path=path),
+                       metadata=meta),
     }
 
 
@@ -157,11 +172,14 @@ def record_best_effort(**kwargs) -> dict[str, Any]:
                                       "error": str(exc)}}
 
 
-def list_all(path: Path | str = db.DB_PATH) -> list[dict[str, Any]]:
+def list_all(path: Path | str = db.DB_PATH, *,
+             account_id: Optional[int]) -> list[dict[str, Any]]:
+    """This account's generated assets, newest first."""
     init(path)
     with db.connect(path) as conn:
         rows = conn.execute(
-            "SELECT * FROM generated_assets ORDER BY id DESC"
+            "SELECT * FROM generated_assets WHERE account_id IS ? ORDER BY id DESC",
+            (account_id,),
         ).fetchall()
     items = []
     for row in rows:

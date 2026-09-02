@@ -32,8 +32,27 @@ from .shot import Shot
 
 MODEL = os.environ.get("NANO_BANANA_MODEL", "gemini-2.5-flash-image")
 DAILY_CAP = int(os.environ.get("NANO_DAILY_CAP", "20"))
+# The installation-wide wall, beside the per-account one. Defaults to the
+# SAME number, so a single-operator database behaves exactly as it did --
+# admitting a second account is what forces a deliberate decision about
+# whose card is paying, instead of the total quietly doubling.
+GLOBAL_DAILY_CAP = int(os.environ.get("NANO_GLOBAL_DAILY_CAP", str(DAILY_CAP)))
 RETRIES = int(os.environ.get("NANO_RETRIES", "3"))
 RETRY_DELAY = 4.0
+
+# Saying "9:16" inside the prompt does not shape the output: the model
+# infers a shape from the references unless the request configures one,
+# and a vertical shot with landscape reference photos came back 864x1184
+# -- 3:4 (2026-08-29). That frame is what Runway anchors the clip on, so
+# a 3:4 keyframe into a 9:16 clip loses a quarter of its width, and
+# everything this pipeline renders is vertical.
+ASPECT_RATIO = os.environ.get("NANO_ASPECT_RATIO", "9:16")
+# Identity lives in pixels on the face, and the API's default is 1K --
+# but 2K is not offered by every image model on this endpoint, and
+# guessing wrong would fail a billed call. Opt in with NANO_IMAGE_SIZE=2K
+# once the configured model is known to take it; an unsupported value
+# degrades to an unconfigured call rather than losing the render.
+IMAGE_SIZE = os.environ.get("NANO_IMAGE_SIZE", "")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 RENDER_DIR = PROJECT_ROOT / "data" / "renders" / "nano"
@@ -92,20 +111,17 @@ def _client():
     return genai.Client()
 
 
-def generations_today(db_path=None) -> int:
-    """Nano generations logged since UTC midnight -- what DAILY_CAP
-    counts against, read from the same generations table the
-    scoreboards do."""
-    today = datetime.now(timezone.utc).date().isoformat()
-    with generative.connect(db_path if db_path is not None else DB_PATH) as conn:
-        row = conn.execute(
-            "SELECT COUNT(*) FROM generations WHERE tool = 'nano' AND created_at >= ?",
-            (today,),
-        ).fetchone()
-        return row[0]
+def generations_today(db_path=None, *, account_id=None, everyone: bool = False) -> int:
+    """This account's nano generations since UTC midnight -- what
+    DAILY_CAP counts against. `everyone=True` gives the installation-wide
+    count that GLOBAL_DAILY_CAP counts against."""
+    return generative.used_today(
+        "nano", db_path if db_path is not None else DB_PATH,
+        account_id=account_id, everyone=everyone,
+    )
 
 
-def _shot_row_for_prompt(prompt: str, db_path) -> int:
+def _shot_row_for_prompt(prompt: str, db_path, account_id: Optional[int] = None) -> int:
     """A generations row needs a shot to hang off; a free-standing
     canvas prompt doesn't have one, so synthesize a minimal Shot --
     the row exists to make the attempt countable."""
@@ -113,10 +129,10 @@ def _shot_row_for_prompt(prompt: str, db_path) -> int:
     generative.init(**kwargs)
     shot = Shot(subject=prompt[:100], action="as prompted")
     return generative.add_shot(shot, notes="auto-created by nano_banana.generate_from_prompt",
-                               **kwargs)
+                               **kwargs, account_id=account_id)
 
 
-def _generate_content(client, model: str, parts):
+def _generate_content(client, model: str, parts, config=None):
     """The image call, retried on the two transient statuses the rest of
     the project already retries (gemini_utils.generate_with_retry).
     Its own helper rather than that one because that returns
@@ -131,7 +147,8 @@ def _generate_content(client, model: str, parts):
     last = None
     for attempt in range(RETRIES):
         try:
-            return client.models.generate_content(model=model, contents=parts)
+            return client.models.generate_content(model=model, contents=parts,
+                                                  config=config)
         except Exception as e:
             if not ("RESOURCE_EXHAUSTED" in str(e) or "UNAVAILABLE" in str(e)):
                 raise
@@ -142,22 +159,79 @@ def _generate_content(client, model: str, parts):
     raise last
 
 
+def _rejected_the_config(error) -> bool:
+    """Whether an INVALID_ARGUMENT is about the shape we asked for
+    rather than about the picture we asked for.
+
+    Narrow on purpose. A content refusal is an answer, not a blip, and
+    retrying it spends twice to be told no twice -- the rule this file
+    already keeps. But an image_config the endpoint does not offer (2K
+    is not on every model here) would lose an otherwise good render, so
+    that one case drops the config and asks again."""
+    text = str(error)
+    return "INVALID_ARGUMENT" in text and any(
+        field in text for field in
+        ("image_config", "imageConfig", "aspect_ratio", "aspectRatio",
+         "image_size", "imageSize"))
+
+
+def image_config(types, aspect_ratio: str = "", image_size: str = ""):
+    """The request config that fixes the output shape, or None when
+    nothing was asked for. `types` is passed in rather than imported so
+    this stays callable without the SDK installed."""
+    fields = {}
+    if aspect_ratio:
+        fields["aspect_ratio"] = aspect_ratio
+    if image_size:
+        fields["image_size"] = image_size
+    if not fields:
+        return None
+    return types.GenerateContentConfig(image_config=types.ImageConfig(**fields))
+
+
 def as_reference_list(reference) -> list:
-    """One reference or several, normalised to a list of byte strings.
+    """One reference or several, normalised to a list of
+    (label, bytes) pairs -- label may be "" when nothing named it.
 
     Plural on purpose: a character's face and their wardrobe are two
     references, not one, and the whole point of naming assets is that
-    several of them describe one shot. Anything that isn't bytes is
-    dropped -- a reference is an enhancement, never a gate."""
+    several of them describe one shot.
+
+    LABELS, because four bare pictures is not four references. Both
+    platforms this project targets bind an image to a NAME the prompt
+    then uses -- Runway takes `{uri, tag}` and documents the tag as
+    "used to reference the image in prompt text", Higgsfield rewrites
+    `<<<element>>>` to `@element_name`. Gemini has no tag field, so the
+    same binding is made the way its own multi-image convention does
+    it: a caption part immediately before each image. Without it a
+    scene with two characters and two props leaves the model guessing
+    which photo is the face (2026-08-28).
+
+    Accepts a bare bytes, a list of bytes, or a list of (label, bytes)
+    -- old callers keep working and simply pass no names. Anything that
+    isn't bytes is dropped: a reference is an enhancement, never a
+    gate."""
     if reference is None:
         return []
     items = reference if isinstance(reference, (list, tuple)) else [reference]
-    return [bytes(i) for i in items if isinstance(i, (bytes, bytearray)) and i]
+    if isinstance(reference, tuple) and len(reference) == 2 \
+            and isinstance(reference[0], str):
+        items = [reference]           # a single (label, bytes) pair
+    out = []
+    for item in items:
+        label, data = "", item
+        if isinstance(item, tuple) and len(item) == 2:
+            label, data = item[0] or "", item[1]
+        if isinstance(data, (bytes, bytearray)) and data:
+            out.append((str(label), bytes(data)))
+    return out
 
 
 def generate_image(prompt: str, out_path: Path, *, model: str = MODEL,
                    reference_bytes=None,
-                   reference_mime: Optional[str] = None, client=None) -> Path:
+                   reference_mime: Optional[str] = None, client=None,
+                   aspect_ratio: str = ASPECT_RATIO,
+                   image_size: str = IMAGE_SIZE) -> Path:
     """The thin raising wrapper: one generate_content call (retried on a
     transient overload), first image part written to out_path. Raises
     when the model returns no image -- here the image IS the deliverable
@@ -168,20 +242,33 @@ def generate_image(prompt: str, out_path: Path, *, model: str = MODEL,
     its own inline part, mime sniffed per image. reference_mime is
     honoured for a single reference so existing callers keep their
     behaviour, and ignored for a list, where per-image sniffing is the
-    only thing that can be right."""
+    only thing that can be right.
+
+    `aspect_ratio` and `image_size` shape the output (see ASPECT_RATIO).
+    Either empty means "don't configure it" and the model picks, which
+    is what it did for every render before this. A config the endpoint
+    rejects retries once without it: a wrongly-shaped frame is a far
+    better outcome than an INVALID_ARGUMENT on a paid call."""
     from google.genai import types
 
     client = client or _client()
     references = as_reference_list(reference_bytes)
-    parts = [
-        types.Part.from_bytes(
+    parts: list = []
+    for label, data in references:
+        if label:
+            parts.append(label)      # names the image that follows
+        parts.append(types.Part.from_bytes(
             data=data,
             mime_type=(reference_mime if reference_mime and len(references) == 1
-                       else sniff_mime(data)))
-        for data in references
-    ]
+                       else sniff_mime(data))))
     parts.append(prompt)
-    response = _generate_content(client, model, parts)
+    config = image_config(types, aspect_ratio, image_size)
+    try:
+        response = _generate_content(client, model, parts, config=config)
+    except Exception as e:
+        if config is None or not _rejected_the_config(e):
+            raise
+        response = _generate_content(client, model, parts)
     for candidate in response.candidates or []:
         for part in (candidate.content.parts or []) if candidate.content else []:
             inline = getattr(part, "inline_data", None)
@@ -198,7 +285,12 @@ def generate_image(prompt: str, out_path: Path, *, model: str = MODEL,
 
 
 def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
-                         model: str = MODEL, client=None) -> dict:
+                         model: str = MODEL, client=None,
+                         aspect_ratio: str = ASPECT_RATIO,
+                         image_size: str = IMAGE_SIZE,
+                         concept_id=None,
+                         account_id: Optional[int] = None,
+) -> dict:
     """
     Never raises: {"ok", "media_url", "generation_id", "path", "error"}.
     The Workflows canvas's Nano Banana node: prompt in, an image under
@@ -223,31 +315,45 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
             return {"ok": False, "error": "GEMINI_API_KEY not set"}
 
         generative.init(**kwargs)
-        used = generations_today(db_path=db_path)
-        if used >= DAILY_CAP:
-            return {"ok": False,
-                    "error": f"daily cap: {used}/{DAILY_CAP} images generated "
-                             f"today (NANO_DAILY_CAP to raise)"}
+        refusal = generative.cap_error(
+            "nano", 1, account_id=account_id,
+            per_account=DAILY_CAP, ceiling=GLOBAL_DAILY_CAP,
+            path=db_path if db_path is not None else DB_PATH,
+            env_prefix="NANO", phrase="images generated",
+            used=generations_today(db_path=db_path, account_id=account_id),
+            used_everywhere=generations_today(db_path=db_path, everyone=True),
+        )
+        if refusal:
+            return {"ok": False, "error": refusal}
 
         references = as_reference_list(reference_image)
 
+        # the stamp is second-resolution, so two renders in the same
+        # second collide -- and a collision here is silent: one concept's
+        # queue card ends up showing another's keyframe. `concept_id`
+        # (the Studio chain always passes it) makes the name unique
+        # where it actually matters.
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-        out_path = RENDER_DIR / f"wf-{stamp}.png"
+        who = f"c{concept_id}-" if concept_id else "wf-"
+        out_path = RENDER_DIR / f"{who}{stamp}.png"
         generate_image(as_still_frame(prompt, has_reference=len(references)),
                        out_path, model=model,
-                       reference_bytes=references, client=client)
+                       reference_bytes=references, client=client,
+                       aspect_ratio=aspect_ratio, image_size=image_size)
 
         # the row logs the prompt the person wrote, not the constant
         # wrapper around it -- the flag says which framing was applied
         shot_row_id = _shot_row_for_prompt(prompt, db_path)
         generation_params = {"model": model, "source": "workflow",
-                             "framing": "still", "references": len(references)}
+                             "framing": "still", "references": len(references),
+                             **({"concept_id": concept_id} if concept_id else {})}
         generation_id = generative.record_generation(
             shot_row_id, "nano", prompt,
             params=generation_params,
             output_path=str(out_path),
             **kwargs,
-        )
+        
+            account_id=account_id,)
 
         if storage.configured():
             media_url = storage.upload_file(
@@ -257,6 +363,7 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
             media_url = f"/renders/nano/{out_path.name}"
 
         asset = render_assets.record_best_effort(
+            account_id=account_id,
             generation_id=generation_id, tool="nano", model=model,
             media_kind="image", prompt=prompt, media_url=media_url,
             output_path=str(out_path), metadata=generation_params,
