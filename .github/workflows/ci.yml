@@ -51,7 +51,11 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.9"
+          # 3.12, not the 3.9 this used to pin: `mcp>=2` (2026-08-31) and psycopg
+          # 3.3 both require 3.10+, so the install step had no version to
+          # resolve. The laptop venv is 3.13; 3.12 is the newest with wheels
+          # for everything torch/whisper drag in.
+          python-version: "3.12"
 
       - name: Install dependencies
         run: |
@@ -125,7 +129,11 @@ jobs:
       - uses: actions/setup-python@v5
         if: ${{ env.GEMINI_API_KEY != '' }}
         with:
-          python-version: "3.9"
+          # 3.12, not the 3.9 this used to pin: `mcp>=2` (2026-08-31) and psycopg
+          # 3.3 both require 3.10+, so the install step had no version to
+          # resolve. The laptop venv is 3.13; 3.12 is the newest with wheels
+          # for everything torch/whisper drag in.
+          python-version: "3.12"
 
       - name: Install dependencies
         if: ${{ env.GEMINI_API_KEY != '' }}
