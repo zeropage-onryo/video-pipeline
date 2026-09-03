@@ -72,7 +72,11 @@ jobs:
         run: ruff check .
 
       - name: Test with pytest
-        run: pytest tests/ -q
+        # `python -m pytest`, not the `pytest` entrypoint: two test modules
+        # import the repo's top-level `ops/` scripts, which only resolves
+        # when the working directory is on sys.path -- `-m` puts it there,
+        # the entrypoint does not. Same command CLAUDE.md gives for a laptop.
+        run: python -m pytest tests/ -q
 
   # Everything in this job needs a real GEMINI_API_KEY -- it makes real
   # embedding, generation, and judge-model calls, unlike the hermetic
@@ -153,4 +157,4 @@ jobs:
 
       - name: Generation quality gate (faithfulness / relevancy / contextual precision & recall)
         if: ${{ env.GEMINI_API_KEY != '' }}
-        run: pytest evals/ -q --reruns 2 --reruns-delay 15
+        run: python -m pytest evals/ -q --reruns 2 --reruns-delay 15
