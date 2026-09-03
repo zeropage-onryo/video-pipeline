@@ -127,6 +127,39 @@ def test_pick_and_archive_round_trip(board):
                                    path=path)["status"] == "picked"
 
 
+def test_shoot_is_the_label_shoot_rate_reads(board):
+    """`shot` means MADE by any means -- studio, Higgsfield, a camera --
+    not "a render came back". It is the only way the system can see
+    work that never passed through the Queue, and it must never spend."""
+    path, ids = board
+    before = mcp_server.pipeline_stats(path=path)["shoot_rate"]
+    assert before["shot"] == 0
+
+    mcp_server.pick_idea(ids[0], path=path)
+    card = mcp_server.shoot_idea(ids[0], path=path)
+    assert card["status"] == "shot"          # shot outranks picked on the card
+
+    after = mcp_server.pipeline_stats(path=path)["shoot_rate"]
+    assert after["shot"] == before["shot"] + 1
+    assert after["generated"] == before["generated"]
+    assert mcp_server.get_idea(ids[0], path=path)["status"] == "shot"
+
+    # Reversible: un-shooting falls back to the pick that was still there.
+    assert mcp_server.shoot_idea(ids[0], shot=False, path=path)["status"] == "picked"
+    assert mcp_server.pipeline_stats(path=path)["shoot_rate"]["shot"] == before["shot"]
+
+
+def test_shoot_tool_is_a_write_that_never_spends(tmp_db):
+    """Registered beside pick, annotated as a write, and reachable with
+    no engine flag -- recording that something got made costs nothing."""
+    server = mcp_server.build_server(path=tmp_db)
+    by_name = {t.name: t for t in _tools(server)}
+    assert "shoot" in by_name
+    assert by_name["shoot"].annotations.read_only_hint is False
+    assert by_name["shoot"].annotations.destructive_hint is False
+    assert set(by_name["shoot"].input_schema["properties"]) == {"idea_id", "shot"}
+
+
 def test_archiving_never_deletes(board):
     """pick_rate is generated-vs-picked, so a deleted row would make the
     rate read 100% forever and unfalsifiable."""
@@ -282,6 +315,7 @@ def test_caller_errors_reach_the_model(tmp_db):
     lambda p: mcp_server.list_ideas(status="bogus", path=p),
     lambda p: mcp_server.list_ideas(brand="nope", path=p),
     lambda p: mcp_server.get_idea(999999, path=p),
+    lambda p: mcp_server.shoot_idea(999999, path=p),
     lambda p: mcp_server.capture_idea("zeropage", "   ", path=p),
     lambda p: mcp_server.capture_idea("nope", "Title", path=p),
     lambda p: mcp_server.bank_spark("zeropage", "  ", path=p),

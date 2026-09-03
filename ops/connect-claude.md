@@ -59,6 +59,7 @@ Always on, free:
 | `search` | find a concept by any words in it |
 | `capture` | put a new idea on the board |
 | `pick` / `archive` | the two decisions, recorded as labels |
+| `shoot` | record that a concept actually got made, by any means — studio, Higgsfield, a camera |
 | `add_spark` | hand the nightly run a direction |
 | `tonight` | what direction the 03:30 run would take |
 | `sparks` | the scout's bank |

@@ -673,11 +673,18 @@ is yours, in Resolve, by hand.
   machine. **An adapter, never a store:** every tool is a thin call into `preprod` or
   `scout`, and `data/pipeline.db` stays the one source of truth — a synced second store is
   the mistake `asset_shelf` exists to fix. The read/decide tools (`board`, `idea`,
-  `search`, `capture`, `pick`, `archive`, `add_spark`, `tonight`, `sparks`, `images`,
-  `stats`, `job`) are always on; **nothing on them spends**. Picking still only puts a
-  concept in front of the Queue, and approving there is still what calls Runway, still on
-  this machine — the single spend gate is load-bearing, and a second door onto it from a
-  phone is exactly how it stops being one.
+  `search`, `capture`, `pick`, `shoot`, `archive`, `add_spark`, `tonight`, `sparks`,
+  `images`, `stats`, `job`) are always on; **nothing on them spends**. Picking still only
+  puts a concept in front of the Queue, and approving there is still what calls Runway,
+  still on this machine — the single spend gate is load-bearing, and a second door onto it
+  from a phone is exactly how it stops being one. **`shoot` records that a concept got
+  MADE, by any means** (2026-09-03): the render lane, Higgsfield, Mike's own studio, a
+  camera. `preprod.mark_shot` had existed since the start and nothing reachable from a
+  phone called it, so `shoot_rate` read 0.0% across 52 concepts while pieces shipped by
+  hand. Deliberately NOT bound to the Queue's approve: approve authorises a spend before
+  any output exists (failed and discarded renders would all count), and studio work never
+  passes through the Queue at all. If a counter on approve is ever wanted it is a separate
+  `approved`, never this column.
   `ZEROPAGE_MCP_ENGINE=1` adds the two that cost model credit: `research`
   (`scout.scout` — crawl, bank scored sparks, download the images behind them) and
   `generate` (`orchestrator.run` — the LangGraph, ending PARKED in the Queue). `generate`

@@ -304,6 +304,26 @@ def pick_idea(idea_id: int, picked: bool = True,
     return _card(preprod.get_concept(int(idea_id), path=path, account_id=account_id))
 
 
+def shoot_idea(idea_id: int, shot: bool = True,
+               path: Path | str = db.DB_PATH,
+               account_id: Optional[int] = None,
+) -> dict[str, Any]:
+    """Record that this one actually got made -- by ANY means.
+
+    `shot` means a finished piece exists: the render lane, Higgsfield,
+    Mike's own studio, a camera. It is deliberately NOT "a render came
+    back" and NOT bound to the Queue's approve button -- approve
+    precedes the output (it authorises a spend, and failed and discarded
+    renders would all count), and studio work never passes through the
+    Queue at all. Every piece so far was produced by hand, and this is
+    the only way the system can see that work: `shoot_rate` read 0.0%
+    across 52 concepts while things shipped. Never spends.
+    """
+    account_id = _account(account_id, path)
+    preprod.mark_shot(int(idea_id), shot=shot, path=path, account_id=account_id)
+    return _card(preprod.get_concept(int(idea_id), path=path, account_id=account_id))
+
+
 def archive_idea(idea_id: int, archived: bool = True, reason: str = "",
                  path: Path | str = db.DB_PATH,
                  account_id: Optional[int] = None,
@@ -770,6 +790,14 @@ def build_server(path: Path | str = db.DB_PATH, name: str = "zeropage-ideas",
         it puts the concept in front of the Queue's spend gate, which a
         human approves on the machine."""
         return _t(pick_idea, idea_id, picked=picked, path=path)
+
+    @server.tool(annotations=writes)
+    def shoot(idea_id: int, shot: bool = True) -> dict:
+        """Record that a concept actually got MADE -- by any means: the
+        render lane, Higgsfield, the studio, a camera. Not tied to the
+        Queue's approve (that authorises a spend; this records an
+        output). `shoot_rate` is the label it moves. Never spends."""
+        return _t(shoot_idea, idea_id, shot=shot, path=path)
 
     @server.tool(annotations=writes)
     def archive(idea_id: int, archived: bool = True, reason: str = "") -> dict:

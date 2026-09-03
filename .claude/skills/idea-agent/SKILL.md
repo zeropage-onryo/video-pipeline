@@ -159,6 +159,21 @@ and why. Do not hedge across four — the value here is a recommendation
 he can accept or overrule in a second, and "they all have merit" is the
 non-answer that sends him back to the machine.
 
+## When he says he made one
+
+```
+shoot(idea_id)
+```
+
+"I shot that one," "that's done," "I made it in the studio," "rendered
+it in Higgsfield" — all of them mean the same call. `shot` means a
+finished piece EXISTS, by any means; it is not "a render came back" and
+it is not the Queue's approve. This is the one thing the system most
+needs to learn and the one it could not record until now: every piece
+so far was made by hand, and `shoot_rate` read 0.0% while work shipped.
+Ask for the id if he names a title, then call it; it costs nothing and
+it is reversible (`shot=false`).
+
 ## What this never does
 
 **It cannot render, and it must not imply otherwise.** `pick` marks a
