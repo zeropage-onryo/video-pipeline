@@ -6,8 +6,7 @@ phone-linked Cowork session, against `claude/pilot-dry-run`. Board at the time:
 
 **Status 2026-09-03: all four closed on `main` (`9786b06`, `3765c02`, `6dde8ea`,
 `b01dab2`; merged as a fast-forward, pushed). §3's diagnosis and §4's were wrong
-in the ways their sections now say. One leftover (#135's spark) still needs a
-hand.**
+in the ways their sections now say. Every leftover is cleared.**
 
 **The headline: three of these four are exposure gaps, not missing machinery.**
 `preprod.mark_shot()` and `archive_idea(reason=...)` already exist and work —
@@ -199,7 +198,7 @@ for **no turn** — a word that IS in the vocabulary — and recorded nothing.
 
 ---
 
-## Leftovers — cleared 2026-09-03 (one still open)
+## Leftovers — cleared 2026-09-03
 
 - ~~`data/_agent_inbox/`~~ — the three Midjourney stills are banked under
   `agent-38` (`scout_bin` 40–42, lane `saved`, source `midjourney`) via
@@ -215,18 +214,12 @@ for **no turn** — a word that IS in the vocabulary — and recorded nothing.
   `…-agentrefs-2346`; deleted after the full suite passed on the merged tree and
   the live rows read back correctly. Eight older `pipeline.db.b*` backups from
   August remain — not in scope here, but nothing on them is newer than `main`.
-- **#135's spark — still open, needs a hand.** The first line, "3am and the
-  house is awake", is the real spark; the ~1,200 chars after it are the
-  `avoid_guidance` scaffolding the pre-2026-09-01 graph stored in the column.
-  Every lesson in that tail is already in `winning_prompts` under `didnt_work`
-  (checked 2026-09-03), so the tail can simply go. The write to the live
-  database was refused by the session's permission classifier, so run it by
-  hand:
+- ~~#135's spark~~ — trimmed to its first line, "3am and the house is awake".
+  The ~1,200 chars after it were the `avoid_guidance` scaffolding the
+  pre-2026-09-01 graph stored in the column; every lesson in that tail was already
+  in `winning_prompts` under `didnt_work`, so it was dropped, not moved.
 
-  ```bash
-  sqlite3 data/pipeline.db \
-    "update shoot_concepts set spark='3am and the house is awake' where id=135;"
-  ```
+---
 
 ## Out of scope
 
