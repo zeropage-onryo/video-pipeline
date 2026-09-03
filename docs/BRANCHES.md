@@ -39,6 +39,15 @@ merged or deleted.
 | `claude/antihero-concept-grounding-61ebda` | 2 commits (2026-08-24/25): ground Antihero concepts in references + assets, retire the `ensure_locations` gate |
 | `claude/priceless-benz-c449b6` | 3 commits (2026-08-25): Antihero stage two — the shot list grounds in the `{assets}` block. Shares its base with the branch above; the shot-list stage was later deleted (2026-08-26), so most of this cannot land as-is |
 
+## Merged (2026-09-03)
+
+- `claude/task-idea-agent-gaps-1-2f4d2d` — the four idea-agent gaps
+  (`docs/tasks/task-idea-agent-gaps.md`): `shoot` on the MCP surface,
+  `generate` grounded on the spark's bin from either door, the card carrying
+  `origin` + the graph's `gate`, and `archive` naming the counted vocabulary.
+  Fast-forwarded into `main` as `b01dab2`. Delete the branch once its
+  worktree is removed.
+
 ## Deleted (2026-09-02)
 
 All merged into `main` unless noted; nothing on them is lost.
