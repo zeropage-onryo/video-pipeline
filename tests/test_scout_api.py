@@ -229,6 +229,59 @@ def test_a_generation_that_writes_nothing_leaves_the_spark_unclaimed(tmp_db, mon
     assert scout.next_spark("zeropage", path=tmp_db) is not None
 
 
+# ---------- the composer writes the bin too ----------
+
+def _jpeg():
+    buf = io.BytesIO()
+    Image.new("RGB", (8, 8), (200, 40, 40)).save(buf, format="JPEG")
+    return buf.getvalue()
+
+
+def _create(monkeypatch, tmp_path, data, files=None):
+    monkeypatch.setattr(api_mod, "_gemini_key", lambda: "test-key")
+    monkeypatch.setattr(refbin, "REFS_DIR", tmp_path / "refs")
+    from src import scene_chain
+    monkeypatch.setattr(scene_chain, "run", lambda *a, **k: {
+        "scenes": [{"concept_id": 94}], "notes": [], "prompt_template": "t"})
+    job_id = client.post("/api/scenes/run", data=data, files=files).json()["job_id"]
+    assert wait_for_job(job_id)["status"] == "done"
+
+
+def test_uploads_against_the_spark_land_in_its_bin(tmp_db, tmp_path, monkeypatch):
+    """Four photos uploaded against spark #38 rode onto the shot and left
+    spark_images(38) at 0, so a phone's `generate` on the same spark had
+    nothing. The claim now carries the photographs with it."""
+    finding_id = scout.record("zeropage", {"spark": "the last check before leaving",
+                                           "score": 0.9}, path=tmp_db)
+    _create(monkeypatch, tmp_path,
+            {"idea": "the last check before leaving", "brand": "zeropage",
+             "count": "1", "scout_finding_id": str(finding_id)},
+            files=[("files", ("mine.jpg", _jpeg(), "image/jpeg"))])
+    [row] = scout.bin_for_finding(finding_id, path=tmp_db)
+    assert row["url"].startswith("/refs/") and row["lane"] == "composer"
+
+
+def test_his_own_idea_banks_nothing_behind_the_research(tmp_db, tmp_path, monkeypatch):
+    finding_id = scout.record("zeropage", {"spark": "the last check before leaving",
+                                           "score": 0.9}, path=tmp_db)
+    _create(monkeypatch, tmp_path,
+            {"idea": "a monster in the garage at 3am", "brand": "zeropage",
+             "count": "1", "scout_finding_id": str(finding_id)},
+            files=[("files", ("mine.jpg", _jpeg(), "image/jpeg"))])
+    assert scout.bin_for_finding(finding_id, path=tmp_db) == []
+
+
+def test_asset_bank_picks_are_not_references_behind_a_spark(tmp_db, tmp_path, monkeypatch):
+    """A room or the cast is grounding the graph adds for itself."""
+    finding_id = scout.record("zeropage", {"spark": "the last check before leaving",
+                                           "score": 0.9}, path=tmp_db)
+    _create(monkeypatch, tmp_path,
+            {"idea": "the last check before leaving", "brand": "zeropage",
+             "count": "1", "scout_finding_id": str(finding_id),
+             "asset_photos": "/locations/shop/photo/a.jpg"})
+    assert scout.bin_for_finding(finding_id, path=tmp_db) == []
+
+
 # ---------- capability gating ----------
 
 def test_scout_capability_follows_the_gemini_key(monkeypatch):

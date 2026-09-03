@@ -263,6 +263,99 @@ def test_graph_refuses_to_run_with_render_live(monkeypatch):
         mcp_server.run_graph("a spark", "zeropage")
 
 
+# ---------- generate reaches the spark's references ----------
+#
+# run_graph used to take a spark string and nothing else, and
+# orchestrator.run with an explicit spark never reads the bin -- so an
+# agent could bank six photographs behind a spark with `reference` and
+# then generate from that spark with none of them (2026-09-02: #169-#172
+# had refs only when started in Studio).
+
+@pytest.fixture
+def graph_calls(monkeypatch):
+    from src import orchestrator
+    calls = []
+
+    def fake_run(goal, **kw):
+        calls.append(dict(kw, goal=goal))
+        return {"concept_id": None, "attempts": 1}
+    monkeypatch.setattr(orchestrator, "run", fake_run)
+    return calls
+
+
+def _banked(tmp_db, spark="a bench with one glove", brand="zeropage"):
+    fid = scout.record(brand, {"spark": spark, "score": 0.9}, path=tmp_db)
+    for n in (1, 2):
+        scout.bank_urls(fid, [f"/refs/{n}.jpg"], lane="agent", path=tmp_db)
+    return fid
+
+
+def test_generate_by_finding_id_hands_the_graph_its_bin(tmp_db, monkeypatch, graph_calls):
+    monkeypatch.setattr(db, "DB_PATH", tmp_db)
+    fid = _banked(tmp_db)
+    out = mcp_server.run_graph(brand="zeropage", finding_id=fid)
+    [call] = graph_calls
+    assert call["spark"] == "a bench with one glove"      # the finding's own
+    assert call["reference_photos"] == ["/refs/1.jpg", "/refs/2.jpg"]
+    assert call["scout_finding_id"] == fid                # so planner claims it
+    assert out["finding_id"] == fid and out["reference_photos"] == call["reference_photos"]
+
+
+def test_generate_by_spark_text_finds_its_own_photographs(tmp_db, monkeypatch, graph_calls):
+    """add_spark -> reference -> generate(spark) must work without the
+    agent carrying an id between calls, and fixing the capitals must
+    not lose the photos -- the composer's `claims` rule, same key."""
+    monkeypatch.setattr(db, "DB_PATH", tmp_db)
+    fid = _banked(tmp_db)
+    mcp_server.run_graph("A Bench, With One Glove.", "zeropage")
+    [call] = graph_calls
+    assert call["scout_finding_id"] == fid
+    assert call["reference_photos"] == ["/refs/1.jpg", "/refs/2.jpg"]
+
+
+def test_brand_defaults_to_the_findings_and_a_wrong_one_is_refused(tmp_db, monkeypatch, graph_calls):
+    monkeypatch.setattr(db, "DB_PATH", tmp_db)
+    fid = _banked(tmp_db, brand="antihero")
+    mcp_server.run_graph(finding_id=fid)
+    assert graph_calls[0]["brand"] == "antihero"
+    with pytest.raises(ValueError, match="banked for 'antihero'"):
+        mcp_server.run_graph(brand="zeropage", finding_id=fid)
+
+
+def test_a_reworded_spark_does_not_inherit_a_findings_photographs(tmp_db, monkeypatch, graph_calls):
+    """The composer silently drops the bin when the idea walks away
+    from the spark; this door SAYS so, because an agent acts on the
+    message where a person would have seen a tile disappear."""
+    monkeypatch.setattr(db, "DB_PATH", tmp_db)
+    fid = _banked(tmp_db)
+    with pytest.raises(ValueError, match="is not finding"):
+        mcp_server.run_graph("a monster in the garage", "zeropage", finding_id=fid)
+    assert graph_calls == []
+
+
+def test_an_unbanked_spark_runs_on_the_asset_bank_alone(tmp_db, monkeypatch, graph_calls):
+    monkeypatch.setattr(db, "DB_PATH", tmp_db)
+    out = mcp_server.run_graph("a direction nobody banked", "zeropage")
+    [call] = graph_calls
+    assert call["reference_photos"] == [] and call["scout_finding_id"] is None
+    assert out["finding_id"] is None
+
+
+def test_generate_tool_resolves_the_finding_before_the_job_starts(tmp_db, monkeypatch):
+    """A bad id must come back as a ToolError now, not as a failed job
+    the agent has to poll for."""
+    import asyncio
+
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    monkeypatch.setenv("ZEROPAGE_MCP_ENGINE", "1")
+    server = mcp_server.build_server(path=tmp_db)
+    with pytest.raises(ToolError, match="no finding 4242"):
+        asyncio.run(server.call_tool("generate", {"finding_id": 4242}))
+    props = {t.name: t for t in _tools(server)}["generate"].input_schema["properties"]
+    assert "finding_id" in props
+
+
 def test_engine_tools_are_off_by_default(tmp_db, monkeypatch):
     monkeypatch.delenv(mcp_server.ENGINE_ENV, raising=False)
     server = mcp_server.build_server(path=tmp_db)
@@ -316,6 +409,8 @@ def test_caller_errors_reach_the_model(tmp_db):
     lambda p: mcp_server.list_ideas(brand="nope", path=p),
     lambda p: mcp_server.get_idea(999999, path=p),
     lambda p: mcp_server.shoot_idea(999999, path=p),
+    lambda p: mcp_server.run_graph(brand="zeropage", finding_id=999999),
+    lambda p: mcp_server.run_graph("", "zeropage"),
     lambda p: mcp_server.capture_idea("zeropage", "   ", path=p),
     lambda p: mcp_server.capture_idea("nope", "Title", path=p),
     lambda p: mcp_server.bank_spark("zeropage", "  ", path=p),

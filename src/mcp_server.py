@@ -498,10 +498,7 @@ def bank_reference(
         raise ValueError("source_url is required — an unattributed reference "
                          "is the wrong thing to put in front of a spend")
 
-    pass_id = (finding.get("pass_id") or "").strip()
-    if not pass_id:
-        pass_id = scout.agent_pass_id(finding["id"])
-        scout.set_pass_id(finding["id"], pass_id, path=path)
+    pass_id = scout.pass_id_for(finding, path=path)
 
     stored = refbin.fetch(image_url)
     if not stored:
@@ -613,8 +610,49 @@ def run_research(brand: str, count: int = 4, lanes=None,
     }
 
 
-def run_graph(spark: str, brand: str, goal: str = "",
-              channel: str = "",
+def resolve_finding(spark: str, brand: str, finding_id: Optional[int] = None,
+                    path: Path | str = db.DB_PATH) -> tuple[str, str, Optional[dict]]:
+    """Which banked finding, if any, a generate call is running FROM --
+    and therefore whose reference images ride along.
+
+    The server decides, the same way /api/scenes/run decides for the
+    composer: a client-side id is exactly what goes stale. Three cases.
+    An explicit `finding_id` with no spark runs that finding's spark. An
+    explicit id WITH a spark must be that finding's spark (on
+    `_spark_key`, so fixed capitals still match) -- a reworded direction
+    anchored on a stranger's thumbnail is not the caller's direction, and
+    rather than silently drop the photos the way the composer does, this
+    door says so, because an agent can act on a message and a person
+    can see a tile. No id: the spark text is looked up, so `add_spark`
+    -> `reference` -> `generate(spark)` finds its own photographs
+    without the agent having to carry an id between calls.
+
+    Returns (spark, brand, finding-or-None). Never spends.
+    """
+    spark = " ".join((spark or "").split())
+    finding = None
+    if finding_id is not None:
+        finding = scout.get_finding(int(finding_id), path=path)
+        if finding is None:
+            raise ValueError(f"no finding {finding_id}")
+        if spark and not scout.claims(finding["id"], spark, path=path):
+            raise ValueError(
+                f"spark {spark!r} is not finding {finding['id']}'s spark "
+                f"({finding['spark']!r}). Run the finding's own spark, or omit "
+                "finding_id to run a direction of your own -- its references "
+                "belong to the direction they were banked behind.")
+        spark = spark or " ".join((finding.get("spark") or "").split())
+        brand = brand or finding["brand"]
+        if brand != finding["brand"]:
+            raise ValueError(f"finding {finding['id']} was banked for "
+                             f"{finding['brand']!r}, not {brand!r}")
+    elif spark and brand:
+        finding = scout.find_by_spark(brand, spark, path=path)
+    return spark, brand, finding
+
+
+def run_graph(spark: str = "", brand: str = "", goal: str = "",
+              channel: str = "", finding_id: Optional[int] = None,
               account_id: Optional[int] = None,
 ) -> dict[str, Any]:
     """One pass through the LangGraph content graph: ground, generate,
@@ -624,6 +662,17 @@ def run_graph(spark: str, brand: str, goal: str = "",
     Parking IS the terminal state, and that is the point -- the graph
     ends at the spend gate rather than through it, so an agent can drive
     concept generation end to end without being able to buy anything.
+
+    THE REFERENCES COME FROM THE SPARK'S BIN (2026-09-03). This call
+    used to take a spark string and nothing else, and `orchestrator.run`
+    with an explicit spark never reads the bin (the scout node acts only
+    when asked to CHOOSE the direction) -- so an agent could bank six
+    photographs behind a spark with `reference` and then generate from
+    that spark with none of them. Now `resolve_finding` names the
+    finding, its bin becomes `reference_photos`, and the id rides the
+    run so `planner` claims the finding and the hold card says where
+    the idea came from. Same rule as the composer: the photos behind a
+    direction ride with THAT direction, never a reworded one.
 
     Refuses outright when ZEROPAGE_RENDER=1. That flag turns
     `generate_render` from a dry stub into real Veo spend, and the one
@@ -636,20 +685,29 @@ def run_graph(spark: str, brand: str, goal: str = "",
             "credit, and this surface is not allowed to be what trips "
             "it. Run the graph on the machine, or unset the flag."
         )
+    # db.DB_PATH read at CALL time, like _account above: a default bound
+    # at import is the path the process started with, not the one a
+    # test (or a later reconfiguration) points the module at.
+    spark, brand, finding = resolve_finding(spark, brand, finding_id, path=db.DB_PATH)
     _check(brand, preprod.BRANDS, "brand")
-    spark = " ".join((spark or "").split())
     if not spark:
         raise ValueError("spark is empty")
+    photos = [b["url"] for b in scout.bin_for_finding(finding["id"], path=db.DB_PATH)
+              if b.get("url")] if finding else []
 
     from . import orchestrator
 
     state = orchestrator.run(goal or spark, brand=brand, spark=spark,
-                             channel=channel or brand, account_id=account_id)
+                             channel=channel or brand, account_id=account_id,
+                             reference_photos=photos,
+                             scout_finding_id=finding["id"] if finding else None)
     concept_id = state.get("concept_id")
     out = {
         "concept_id": concept_id,
         "brand": brand,
         "spark": spark,
+        "finding_id": finding["id"] if finding else None,
+        "reference_photos": photos,
         "attempts": state.get("attempts"),
         "held_reason": state.get("held_reason") or "",
         "parked_reason": state.get("parked_reason") or "",
@@ -864,11 +922,24 @@ def build_server(path: Path | str = db.DB_PATH, name: str = "zeropage-ideas",
                         path=path, _label=f"research {brand}")
 
         @server.tool(annotations=writes)
-        def generate(spark: str, brand: str, goal: str = "") -> dict:
+        def generate(spark: str = "", brand: str = "", goal: str = "",
+                     finding_id: Optional[int] = None) -> dict:
             """Run the LangGraph content graph on a spark: ground,
             generate, evaluate, score, keyframe, and park the scene in
-            the Queue. Ends AT the spend gate, never through it."""
+            the Queue. Ends AT the spend gate, never through it.
+
+            References: the run grounds on the images banked behind the
+            spark (`reference`, or Studio uploads against it). Pass
+            `finding_id` from `sparks`/`tonight` to run that finding,
+            or just its spark text -- the server matches it. A spark
+            that was never banked runs on the asset bank alone."""
+            # Resolved HERE, before the job starts: a bad id or a
+            # reworded spark is a caller error, and one raised inside a
+            # background job is a failed job the agent has to poll for.
+            spark, brand, finding = _t(resolve_finding, spark, brand,
+                                       finding_id, path=path)
             return _run(run_graph, spark=spark, brand=brand, goal=goal,
+                        finding_id=finding["id"] if finding else None,
                         _label=f"graph {brand}")
 
     if job_status is not None:

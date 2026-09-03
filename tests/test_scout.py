@@ -550,3 +550,35 @@ def test_a_new_lane_must_opt_in_before_its_images_are_banked(tmp_db):
         {"lane": "some_new_lane", "detail": "x", "image": "https://x/y.jpg"}],
         path=tmp_db, fetch=lambda u: "/refs/a.jpg")
     assert rows == []
+
+
+# ---------- the bin, written from either door ----------
+
+def test_bank_urls_writes_only_refs_under_the_findings_pass(tmp_db):
+    fid = scout.record("zeropage", {"spark": "one glove", "score": 0.9}, path=tmp_db)
+    rows = scout.bank_urls(fid, ["/refs/a.jpg?thumb=1", "/locations/shop/photo/x.jpg",
+                                 "/refs/a.jpg", "/refs/b.jpg"],
+                           lane="composer", path=tmp_db)
+    assert [r["url"] for r in rows] == ["/refs/a.jpg", "/refs/b.jpg"]
+    assert {r["lane"] for r in rows} == {"composer"}
+    banked = scout.bin_for_finding(fid, path=tmp_db)
+    assert [b["url"] for b in banked] == ["/refs/a.jpg", "/refs/b.jpg"]
+    assert scout.get_finding(fid, path=tmp_db)["pass_id"] == f"agent-{fid}"
+
+
+def test_bank_urls_keeps_a_crawls_pass_and_never_raises(tmp_db):
+    fid = scout.record("zeropage", {"spark": "one glove", "score": 0.9},
+                       pass_id="crawl-7", path=tmp_db)
+    scout.bank_urls(fid, ["/refs/a.jpg"], lane="composer", path=tmp_db)
+    assert scout.get_finding(fid, path=tmp_db)["pass_id"] == "crawl-7"
+    assert scout.bank_urls(999999, ["/refs/a.jpg"], lane="composer", path=tmp_db) == []
+
+
+def test_find_by_spark_matches_on_the_claim_key_and_prefers_the_unused(tmp_db):
+    used = scout.record("zeropage", {"spark": "one glove", "score": 0.9}, path=tmp_db)
+    scout.mark_used(used, run_id="r1", path=tmp_db)
+    fresh = scout.record("zeropage", {"spark": "One Glove!", "score": 0.9}, path=tmp_db)
+    assert scout.find_by_spark("zeropage", "one glove", path=tmp_db)["id"] == fresh
+    assert scout.find_by_spark("antihero", "one glove", path=tmp_db) is None
+    assert scout.find_by_spark("zeropage", "two gloves", path=tmp_db) is None
+    assert scout.find_by_spark("zeropage", "", path=tmp_db) is None

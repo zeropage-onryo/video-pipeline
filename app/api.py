@@ -931,6 +931,16 @@ async def scenes_run(request: Request, account_id: int = Depends(auth.current_ac
                      scout.bin_for_finding(scout_finding_id, path=db.DB_PATH)}
 
     image_refs, refs, _ = await _collect_refs(form, drop_urls=drop_urls)
+    # The other half of the claim (2026-09-03): when this IS the spark,
+    # the photos attached here go into ITS bin too, so a later run on
+    # the same direction -- from the nightly graph or from a phone's
+    # `generate` -- sees what was uploaded against it. Before this, four
+    # uploads against spark #38 rode straight onto the shot and left the
+    # bin reading 0. Banked before the job rather than after it, since a
+    # generation that writes nothing leaves the spark to be served again
+    # and the photographs should still be waiting behind it.
+    if scout_claimed:
+        scout.bank_urls(scout_finding_id, refs, lane="composer", path=db.DB_PATH)
 
     def work(job):
         from google import genai

@@ -879,6 +879,73 @@ def bin_add(brand: str, pass_id: str, url: str, source_url: str = "",
         return None
 
 
+def pass_id_for(finding: dict, path=db.DB_PATH) -> str:
+    """The pass this finding's images hang off, minting agent-<id> when
+    it has none. One place for the rule, because two callers (the MCP
+    `reference` tool and the Studio composer) both bank against a
+    finding and a second copy of "which pass" is how one of them ends
+    up writing where nothing reads."""
+    pass_id = (finding.get("pass_id") or "").strip()
+    if not pass_id:
+        pass_id = agent_pass_id(finding["id"])
+        set_pass_id(finding["id"], pass_id, path=path)
+    return pass_id
+
+
+def bank_urls(finding_id: int, urls, lane: str, source_url: str = "",
+              path=db.DB_PATH) -> list[dict]:
+    """Put already-stored /refs/ images behind a finding, so a LATER run
+    from the same spark -- from either door -- sees them.
+
+    This is the composer's write into the bin (2026-09-03). Until now
+    only the crawl and the MCP `reference` tool wrote here; four photos
+    uploaded in Studio against spark #38 rode straight onto the shot and
+    left `spark_images(38)` reading 0, so a `generate` from a phone on
+    the same spark had nothing. Only /refs/ URLs are banked: an asset-
+    bank photo (a room, the cast) is grounding the graph already adds
+    for itself, not a reference behind THIS direction. Returns the rows
+    actually written; a full pass or a repeat photo writes nothing, and
+    nothing here can fail the run that called it.
+    """
+    finding = get_finding(int(finding_id), path=path)
+    if not finding:
+        return []
+    pass_id = pass_id_for(finding, path=path)
+    rows = []
+    for url in urls or []:
+        url = str(url).split("?")[0]
+        if not url.startswith("/refs/"):
+            continue
+        row = bin_add(finding["brand"], pass_id, url, source_url=source_url,
+                      lane=lane, path=path)
+        if row:
+            rows.append(row)
+    return rows
+
+
+def find_by_spark(brand: str, spark: str, path=db.DB_PATH) -> Optional[dict]:
+    """The banked finding this spark text IS, if it is one -- matched on
+    `_spark_key`, the same comparison `claims` makes for the composer,
+    so a capitalisation or punctuation difference still finds it and a
+    reworded direction does not. Newest first, and an unused finding
+    outranks a used one: the one still waiting to be served is the one
+    a fresh run means. None when the spark was never banked -- a typed
+    direction is a normal input, not an error."""
+    key = _spark_key(spark or "")
+    if not key:
+        return None
+    try:
+        init(path)
+        with db.connect(path) as conn:
+            row = conn.execute(
+                "SELECT * FROM scout_findings WHERE brand = ? AND spark_key = ? "
+                "ORDER BY (used_at IS NULL) DESC, id DESC LIMIT 1",
+                (brand, key)).fetchone()
+        return dict(row) if row else None
+    except Exception:
+        return None
+
+
 def set_pass_id(finding_id: int, pass_id: str, path=db.DB_PATH) -> None:
     """Give a finding a pass to hang images off. Only ever fills an
     EMPTY one -- a crawl's pass is the record of an act of research and

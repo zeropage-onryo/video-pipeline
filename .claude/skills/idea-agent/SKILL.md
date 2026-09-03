@@ -135,13 +135,27 @@ is correct — a person who types a direction means it.
 ### 4. Generate
 
 ```
-generate(spark, brand)        → returns a job id
-job(job_id)                   → poll until status "done"
+generate(spark, brand)                → returns a job id
+generate(finding_id=N)                → the same, from a banked spark
+job(job_id)                           → poll until status "done"
 ```
 
 One pass writes one scene: ground, generate, evaluate, retry if it
 fails, score the prompt, keyframe if it clears the gate, and **park it in
 the Queue**.
+
+**References ride with the spark, so bank them first.** The run grounds
+on whatever is behind the finding — `reference(finding_id, image_url,
+source_url)` for frames you found, or photos Mike uploaded in Studio
+against that spark. `add_spark` → `reference` → `generate(spark)` is
+the whole sequence: the server matches the spark text to its finding
+(fixed capitals still match), so you never carry an id between calls,
+though passing `finding_id` from `sparks` or `tonight` is fine too. A
+reworded spark does NOT inherit a finding's photographs — `generate`
+refuses rather than anchoring his direction on a stranger's frame; run
+the finding's own spark or drop the id. `images(finding_id)` shows what
+a run will see before you spend on it. A spark nobody banked runs on
+the asset bank alone, and says so with `reference_photos: []`.
 
 Report `parked_reason` and the `prompt_scores` honestly. A concept that
 parked with a low score is more useful to say out loud than a clean-

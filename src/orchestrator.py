@@ -1148,7 +1148,7 @@ def run(goal: str, *, brand: Optional[str] = None, spark: Optional[str] = None,
         client: Optional[str] = None, use_pov: bool = False,
         channel: str = "zeropage", picked_locations=None,
         picked_characters=None, picked_props=None, picked_references=None,
-        reference_photos=None,
+        reference_photos=None, scout_finding_id: Optional[int] = None,
         scout: bool = False, research: bool = False,
         account_id: Optional[int] = None) -> dict:
     """
@@ -1181,6 +1181,14 @@ def run(goal: str, *, brand: Optional[str] = None, spark: Optional[str] = None,
     crawled idea has to say so. The spark passed alongside it is still
     required -- it is what the run falls back to when the scout's bank
     is empty or every finding sits below scout.SCORE_FLOOR.
+
+    `scout_finding_id` is the OTHER way a banked finding seeds a run: the
+    caller already chose it (the MCP `generate` tool, resolving a spark
+    the agent banked and hung references on), so there is no crawl and
+    no fallback -- but the finding still gets claimed by `planner` with
+    this run's id, and it still rides to `hold` so the Queue card can
+    say where the idea came from. The photos behind it are the caller's
+    to pass as `reference_photos`; this only carries the id.
     """
     if brand is None:
         brand = channel
@@ -1209,4 +1217,5 @@ def run(goal: str, *, brand: Optional[str] = None, spark: Optional[str] = None,
         "picked_references": picked_references or [],
         "reference_photos": reference_photos or [],
         "attempts": 0,
+        **({"scout_finding_id": int(scout_finding_id)} if scout_finding_id else {}),
     })

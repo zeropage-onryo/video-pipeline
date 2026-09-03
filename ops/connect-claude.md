@@ -71,7 +71,7 @@ Behind `--engine` (spends model credit — cents):
 | tool | what it does |
 |---|---|
 | `research` | a scout crawl: bank scored sparks, download their images |
-| `generate` | one LangGraph pass, ending PARKED in the Queue |
+| `generate` | one LangGraph pass, ending PARKED in the Queue — grounded on the images banked behind its spark (`reference`, or Studio uploads against it); takes a spark or a `finding_id` |
 | `job` | poll either of the above, or a job /ui started |
 
 **Nothing here renders.** `generate` ends AT the spend gate: the graph's

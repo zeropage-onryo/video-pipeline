@@ -692,6 +692,21 @@ is yours, in Resolve, by hand.
   dry stub into real Veo spend, and a remote caller must never be what trips it. Both run
   through `app/jobs.py` and return a job id — a five-minute graph run must not sit on an
   open HTTP request.
+  **`generate` runs from the spark's bin (2026-09-03).** It took a spark string and nothing
+  else, and `orchestrator.run` with an explicit spark never reads the bin — the scout node
+  acts only when asked to CHOOSE the direction — so an agent could bank six frames behind a
+  spark with `reference` and generate from it with none; #169–#172 had references only when
+  started in Studio. `mcp_server.resolve_finding` now names the finding (an explicit
+  `finding_id`, or the spark text matched on `_spark_key`, the composer's `claims` rule), its
+  bin becomes `reference_photos`, and `orchestrator.run(scout_finding_id=)` carries the id so
+  `planner` claims it and the hold card says where the idea came from. A reworded spark with
+  a `finding_id` is refused rather than silently stripped of the photos the way the composer
+  does it — an agent acts on a message where a person would have seen a tile vanish. The
+  composer closes the same loop from its side: when a Create IS the spark, `scout.bank_urls`
+  writes every uploaded `/refs/` photo into the finding's bin (lane `composer`), so
+  `images(finding_id)` reads what Studio attached and a later run on that spark, from either
+  door, sees it. Asset-bank picks are not banked — a room or the cast is grounding the graph
+  adds for itself.
   **Two layers, and the split is the testable part.** The tool functions are plain Python
   against a database path (so the whole surface is testable with no `mcp` package
   installed); `build_server` wraps them lazily. `app/jobs.py` is injected as callables

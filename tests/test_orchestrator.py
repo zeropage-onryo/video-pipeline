@@ -974,3 +974,17 @@ def test_a_zeropage_run_is_handed_no_cast(tmp_db, monkeypatch):
     orchestrator.run("ritual", brand="zeropage", channel="zeropage")
 
     assert calls[0]["cast"] == "", "the faceless brand was handed a cast"
+
+
+def test_run_with_a_finding_id_claims_it_under_this_runs_id(tmp_db, monkeypatch):
+    """The MCP door names the finding instead of asking the scout node
+    to choose one; planner must still stamp it used, or the same spark
+    is served again tomorrow with its photographs."""
+    from src import scout
+    scout.init(tmp_db)
+    fid = scout.record("zeropage", {"spark": "gearing up ritual", "score": 0.9}, path=tmp_db)
+    stage_fakes(monkeypatch, [(make_concept(), [])])
+    result = orchestrator.run("gearing up ritual", scout_finding_id=fid)
+    assert result.get("scout_finding_id") == fid
+    row = scout.get_finding(fid, path=tmp_db)
+    assert row["used_at"] and row["run_id"] == result["run_id"]
