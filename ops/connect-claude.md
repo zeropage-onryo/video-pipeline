@@ -55,7 +55,7 @@ Always on, free:
 | tool | what it does |
 |---|---|
 | `board` | what is on the pre-production board |
-| `idea` | one concept in full, scene prompt included |
+| `idea` | one concept in full, scene prompt included, plus `origin` (which door wrote it) and `gate` (the graph's prompt-gate verdict; null for a Studio Create row, which is never scored) |
 | `search` | find a concept by any words in it |
 | `capture` | put a new idea on the board |
 | `pick` / `archive` | the two decisions, recorded as labels |

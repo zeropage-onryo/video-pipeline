@@ -162,3 +162,36 @@ def test_corrections_round_trip(tmp_db):
     assert pending["id"] == cid
     autonomy.consume_correction(cid, path=tmp_db)
     assert autonomy.pending_corrections(path=tmp_db) == []
+
+
+def test_hold_for_concept_is_the_latest_and_owner_scoped(tmp_db):
+    from src import accounts
+    mine = accounts.upsert_account("mine", "Mine", path=tmp_db)
+    theirs = accounts.upsert_account("theirs", "Theirs", path=tmp_db)
+    autonomy.to_hold("zeropage", "first", concept_id=7, path=tmp_db, account_id=mine)
+    autonomy.to_hold("zeropage", "second", concept_id=7,
+                     payload={"run_id": "r2"}, path=tmp_db, account_id=mine)
+    row = autonomy.hold_for_concept(7, path=tmp_db, account_id=mine)
+    assert row["reason"] == "second" and row["payload"] == {"run_id": "r2"}
+    assert autonomy.hold_for_concept(7, path=tmp_db, account_id=theirs) is None
+    assert autonomy.hold_for_concept(8, path=tmp_db, account_id=mine) is None
+
+
+def test_the_readers_answer_nothing_on_a_database_with_no_graph_history(tmp_path):
+    fresh = tmp_path / "fresh.db"
+    db.init_db(fresh)                      # no autonomy.init: no hold_queue yet
+    assert autonomy.hold_for_concept(1, path=fresh, account_id=None) is None
+    assert autonomy.prompt_scores_for_run("r", path=fresh) == []
+
+
+def test_prompt_scores_for_run_keeps_the_order_the_gate_scored_in(tmp_db):
+    autonomy.log_prompt_scores("r", [
+        {"prompt": "a", "score": 3, "pass": False, "reason": "thin",
+         "dims": {"subject": 1}},
+        {"prompt": "b", "score": 8, "pass": True, "reason": "", "dims": {}},
+    ], path=tmp_db)
+    rows = autonomy.prompt_scores_for_run("r", path=tmp_db)
+    assert [(r["score"], r["passed"]) for r in rows] == [(3, False), (8, True)]
+    assert rows[0]["dims"] == {"subject": 1}
+    assert autonomy.prompt_scores_for_run(None, path=tmp_db) == []
+    assert autonomy.prompt_scores_for_run("nope", path=tmp_db) == []

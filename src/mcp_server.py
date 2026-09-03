@@ -41,7 +41,7 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
-from . import accounts, db, preprod, refbin, scout
+from . import accounts, autonomy, db, preprod, refbin, scout
 
 # The board's filters. "open" is deliberately first and is the default:
 # it is the only one that answers "what is waiting on me".
@@ -127,11 +127,66 @@ def _card(concept: dict) -> dict[str, Any]:
     }
 
 
-def _full(concept: dict) -> dict[str, Any]:
+# What a null `judge_overall` means, said on the card rather than left
+# to be inferred. Two doors write concepts and only one of them scores
+# anything -- and neither writes THAT column.
+ORIGIN_NOTE = {
+    "graph": "ran through the LangGraph: `gate` is its verdict",
+    "studio": ("written by Studio's Create, which stops on the board by design "
+               "(2026-08-29) -- never scored; a null judge means unscored, not "
+               "scored badly. Pick it to put it in front of the Queue"),
+    "capture": "captured as an idea only -- no scene prompt yet, nothing to score",
+}
+
+
+def _gate(concept: dict, path, account_id: Optional[int]) -> dict[str, Any]:
+    """The verdict the graph actually reached on this concept, read from
+    where the graph actually writes it.
+
+    `judge_overall` on the row is the Dev Studio's TASTE judge -- a
+    manual per-click tool that no automated path has ever called -- so
+    reading it as "the graph scored this" is wrong in both directions:
+    #167 read 7.0 because somebody clicked, and every graph row reads
+    null however it scored. The prompt gate logs to `prompt_scores` by
+    run_id and the run's outcome is the hold row's reason, and until
+    2026-09-03 neither reached this surface, so an agent asked why #173
+    was held (5/10, "too many sequential character actions") had
+    nothing to say. Origin is derived from the hold row: a concept the
+    graph wrote always has one (`_park` runs on every terminal edge),
+    and one it did not write never does.
+    """
+    hold = autonomy.hold_for_concept(concept["id"], path=path, account_id=account_id)
+    if hold is None:
+        origin = "capture" if not concept.get("shots") else "studio"
+        return {"origin": origin, "note": ORIGIN_NOTE[origin], "gate": None}
+    run_id = (hold.get("payload") or {}).get("run_id") if isinstance(
+        hold.get("payload"), dict) else None
+    scores = autonomy.prompt_scores_for_run(run_id, path=path)
+    latest = scores[-1] if scores else None
+    return {
+        "origin": "graph",
+        "note": ORIGIN_NOTE["graph"],
+        "gate": {
+            "hold_id": hold["id"],
+            "status": hold.get("status") or "held",
+            "outcome": hold.get("reason") or "",
+            "run_id": run_id or "",
+            "score": latest["score"] if latest else None,
+            "passed": latest["passed"] if latest else None,
+            "reason": (latest.get("reason") or "") if latest else "",
+            "scores": [{"score": x["score"], "passed": x["passed"],
+                        "reason": x.get("reason") or ""} for x in scores],
+        },
+    }
+
+
+def _full(concept: dict, path=None, account_id: Optional[int] = None) -> dict[str, Any]:
     """The whole concept, prompts included. Shots are passed through
     rather than reshaped -- `shots_json` is the flexible column every
     other surface reads, and a second shape maintained here is a second
-    thing to forget to update."""
+    thing to forget to update. `judge_overall`/`judge_reason` are the
+    Dev Studio's manual taste judge and stay under that name; the
+    graph's own verdict is `gate` (see _gate)."""
     out = _card(concept)
     out.update(
         {
@@ -148,6 +203,8 @@ def _full(concept: dict) -> dict[str, Any]:
             "shots": concept.get("shots") or [],
         }
     )
+    if path is not None:
+        out.update(_gate(concept, path, account_id))
     return out
 
 
@@ -206,7 +263,7 @@ def get_idea(idea_id: int, path: Path | str = db.DB_PATH, account_id: Optional[i
     concept = preprod.get_concept(int(idea_id), path=path, account_id=account_id)
     if concept is None:
         raise ValueError(f"no idea {idea_id}")
-    return _full(concept)
+    return _full(concept, path=path, account_id=account_id)
 
 
 def search_ideas(
@@ -724,7 +781,11 @@ def run_graph(spark: str = "", brand: str = "", goal: str = "",
         "error": state.get("error"),
     }
     if concept_id:
-        out["idea"] = _card(preprod.get_concept(concept_id, account_id=account_id))
+        concept = preprod.get_concept(concept_id, path=db.DB_PATH, account_id=account_id)
+        out["idea"] = _card(concept)
+        # The verdict rides back with the run rather than waiting for a
+        # second call: a held run's whole point is the reason it held.
+        out["idea"].update(_gate(concept, db.DB_PATH, account_id))
     return out
 
 
@@ -824,7 +885,11 @@ def build_server(path: Path | str = db.DB_PATH, name: str = "zeropage-ideas",
 
     @server.tool(annotations=read_only)
     def idea(idea_id: int) -> dict:
-        """Read one concept in full, including its scene prompt."""
+        """One concept in full, scene prompt included. `origin` says
+        which door wrote it; `gate` is the graph's verdict (prompt-gate
+        score, pass/fail, reason, and how the run ended) and is null
+        for a Studio Create row, which is never scored -- `judge_*` is
+        the Dev Studio's manual taste judge, not the graph."""
         return _t(get_idea, idea_id, path=path)
 
     @server.tool(annotations=read_only)

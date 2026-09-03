@@ -162,6 +162,15 @@ parked with a low score is more useful to say out loud than a clean-
 sounding summary — the whole point of the scores is that a bad prompt is
 visible before anything is bought.
 
+**Read `gate`, not `judge_overall`.** `judge_*` on a card is the Dev
+Studio's manual taste judge; nothing automated writes it, so it is null
+on almost every row and says nothing about the run. `gate` is the
+graph's verdict — score out of 10, pass/fail, the judge's reason, and
+how the run ended — and `origin` says which door wrote the row. A
+Studio Create row (`origin: studio`) has `gate: null` because Create
+stops on the board by design: it was never scored, and must never be
+reported as having scored badly.
+
 ### 5. Report
 
 ```

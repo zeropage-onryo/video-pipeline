@@ -111,6 +111,66 @@ def test_get_idea_returns_the_prompt_a_card_omits(board):
     assert full["park_reason"] == "keyframe rendered"
 
 
+# ---------- the graph's verdict, on the card ----------
+#
+# `judge_overall` is the Dev Studio's manual taste judge and no automated
+# path writes it, so on 2026-09-02 an agent read four Studio Create rows
+# (never scored, by design) as unjudged graph runs, and would have read a
+# graph row held at 5/10 the same way. The verdict lives in hold_queue +
+# prompt_scores, and the card now says which door wrote the row.
+
+def test_a_graph_row_carries_the_gates_verdict(board):
+    from src import autonomy
+    path, ids = board
+    autonomy.init(path)
+    autonomy.log_prompt_scores("run-1", [
+        {"prompt": "v1", "score": 5, "pass": False, "reason": "too many beats", "dims": {}},
+        {"prompt": "v2", "score": 7, "pass": True, "reason": "", "dims": {}},
+    ], path=path)
+    autonomy.to_hold("zeropage", "keyframe rendered — approve in the Queue",
+                     concept_id=ids[3], payload={"run_id": "run-1"},
+                     path=path, account_id=None)
+    full = mcp_server.get_idea(ids[3], path=path)
+    assert full["origin"] == "graph"
+    assert full["gate"]["score"] == 7 and full["gate"]["passed"] is True
+    assert full["gate"]["outcome"].startswith("keyframe rendered")
+    assert [x["score"] for x in full["gate"]["scores"]] == [5, 7]   # the rework moved it
+    assert full["judge_overall"] is None                            # the taste judge, untouched
+
+
+def test_a_studio_row_says_it_was_never_scored(board):
+    path, ids = board
+    full = mcp_server.get_idea(ids[3], path=path)     # has a shot, no hold row
+    assert full["origin"] == "studio" and full["gate"] is None
+    assert "not scored badly" in full["note"]
+
+
+def test_a_captured_idea_has_nothing_to_score(tmp_db):
+    card = mcp_server.capture_idea("zeropage", "Just a title", path=tmp_db)
+    assert mcp_server.get_idea(card["id"], path=tmp_db)["origin"] == "capture"
+
+
+def test_a_held_run_reports_its_reason_with_the_run(tmp_db, monkeypatch):
+    """A phone that asked for a run must not need a second call to
+    learn why it held."""
+    from src import autonomy, orchestrator
+    monkeypatch.setattr(db, "DB_PATH", tmp_db)
+    autonomy.init(tmp_db)
+    (cid,) = preprod.save_concept_ideas([_idea("Held One")], brand="zeropage",
+                                        path=tmp_db, account_id=None)
+
+    def fake_run(goal, **kw):
+        autonomy.log_prompt_scores("run-2", [{"prompt": "p", "score": 4, "pass": False,
+                                              "reason": "vague", "dims": {}}], path=tmp_db)
+        autonomy.to_hold("zeropage", "prompt gate: vague (4/10)", concept_id=cid,
+                         payload={"run_id": "run-2"}, path=tmp_db, account_id=None)
+        return {"concept_id": cid, "held_reason": "prompt gate: vague (4/10)"}
+    monkeypatch.setattr(orchestrator, "run", fake_run)
+    out = mcp_server.run_graph("a direction", "zeropage")
+    assert out["idea"]["gate"]["score"] == 4 and out["idea"]["gate"]["passed"] is False
+    assert out["idea"]["gate"]["outcome"] == out["held_reason"]
+
+
 def test_search_reaches_into_the_scene_prompt(board):
     """The words worth searching for live in the prompt, not the title
     -- the title is three words the model chose."""

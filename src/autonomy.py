@@ -33,6 +33,7 @@ promoted with a one-row change.
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -242,6 +243,53 @@ def get_hold(hold_id: int, path=db.DB_PATH, *,
             (hold_id, account_id),
         ).fetchone()
     return _parse_payload(dict(row)) if row else None
+
+
+def hold_for_concept(concept_id: int, path=db.DB_PATH, *,
+                     account_id: Optional[int]) -> Optional[dict]:
+    """The latest graph run that ended on this concept, or None when no
+    run ever did -- which is how a Studio Create row (Create stops on
+    the board by design) or a phone capture reads. Owner predicate never
+    optional, the get_hold rule. A database with no hold table yet (a
+    fresh clone the graph has never run against) reads as "no run", not
+    as an error -- the same answer, for the same reason."""
+    try:
+        with db.connect(path) as conn:
+            row = conn.execute(
+                "SELECT * FROM hold_queue WHERE concept_id = ? AND account_id IS ? "
+                "ORDER BY id DESC LIMIT 1",
+                (concept_id, account_id),
+            ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    return _parse_payload(dict(row)) if row else None
+
+
+def prompt_scores_for_run(run_id: Optional[str], path=db.DB_PATH) -> list[dict]:
+    """Every gate verdict logged against one run, oldest first -- the
+    first-draft score and, after a rework, the revised one -- so the
+    reader can see whether the rewrite moved the number. Empty for a
+    run that never reached the gate."""
+    if not run_id:
+        return []
+    try:
+        with db.connect(path) as conn:
+            rows = conn.execute(
+                "SELECT id, created_at, score, passed, reason, dims, human_verdict "
+                "FROM prompt_scores WHERE run_id = ? ORDER BY id",
+                (run_id,)).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    out = []
+    for r in rows:
+        row = dict(r)
+        try:
+            row["dims"] = json.loads(row["dims"]) if row.get("dims") else {}
+        except (ValueError, TypeError):
+            row["dims"] = {}
+        row["passed"] = bool(row.get("passed"))
+        out.append(row)
+    return out
 
 
 def resolve_hold(hold_id: int, status: str, path=db.DB_PATH, *,

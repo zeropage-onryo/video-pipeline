@@ -707,6 +707,22 @@ is yours, in Resolve, by hand.
   `images(finding_id)` reads what Studio attached and a later run on that spark, from either
   door, sees it. Asset-bank picks are not banked — a room or the cast is grounding the graph
   adds for itself.
+  **The card says which door wrote a row, and what the graph decided (2026-09-03).**
+  Four rows (#169–#172) were read from a phone as "MCP-generated, never judged, never
+  keyframed" — but they were Studio Create pairs (one prompt hash per pair, no
+  `written_prompt`, no hold row), and Create stops on the board by Mike's 2026-08-29 call.
+  The score that made #167 look "judged" was `judge_overall`, which is the Dev Studio's
+  MANUAL taste judge (`/concepts/{id}/grade`); no automated path has ever written it, so on a
+  graph row it reads null however the run scored. The graph's real verdict lives in
+  `prompt_scores` (by `run_id`) and the hold row's reason, and neither reached the MCP
+  surface — an agent asked why #173 held at 5/10 had nothing to say. `idea` now carries
+  `origin` (`graph` / `studio` / `capture`, derived from whether a hold row exists — `_park`
+  runs on every terminal edge, so a graph row always has one) with a `note` saying what a
+  null judge means there, and `gate` (`autonomy.hold_for_concept` +
+  `prompt_scores_for_run`: score, passed, reason, every score the run logged so a rework's
+  effect is visible, and how the run ended). `generate` returns the same `gate` with the
+  run. `judge_*` keeps its name and its meaning. Nothing in `run_graph` returned early; the
+  diagnosis was two surfaces being read as one.
   **Two layers, and the split is the testable part.** The tool functions are plain Python
   against a database path (so the whole surface is testable with no `mcp` package
   installed); `build_server` wraps them lazily. `app/jobs.py` is injected as callables
