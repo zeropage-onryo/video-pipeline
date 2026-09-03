@@ -45,8 +45,8 @@ merged or deleted.
   (`docs/tasks/task-idea-agent-gaps.md`): `shoot` on the MCP surface,
   `generate` grounded on the spark's bin from either door, the card carrying
   `origin` + the graph's `gate`, and `archive` naming the counted vocabulary.
-  Fast-forwarded into `main` as `b01dab2`. Delete the branch once its
-  worktree is removed.
+  Fast-forwarded into `main` as `b01dab2`; the task doc followed as `c035cd4`.
+  Branch and worktree deleted 2026-09-03.
 
 ## Deleted (2026-09-02)
 
