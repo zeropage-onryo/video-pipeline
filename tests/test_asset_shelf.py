@@ -13,7 +13,7 @@ actually calls, and rag.connect is refused unless a test wires a fake.
 """
 import pytest
 
-from src import asset_shelf, db, entities, locations, preprod
+from src import asset_shelf, entities, locations, preprod
 
 SAMPLE_SPACE = {"space": "narrow hallway", "light_sources": ["overhead practical"],
                 "textures": ["scuffed paint"], "angles": ["low from the doorway"],
@@ -28,12 +28,11 @@ CHARACTER_VISION = {
 
 
 @pytest.fixture
-def tmp_db(tmp_path, monkeypatch):
-    path = tmp_path / "shelf.db"
-    db.init_db(path)
+def tmp_db(pg, monkeypatch):
+    path = pg
     preprod.init(path)
     entities.init(path)
-    monkeypatch.setattr(db, "DB_PATH", path)
+    monkeypatch.setenv("DATABASE_URL", path)
     return path
 
 
@@ -153,10 +152,10 @@ def test_describe_entity_refuses_an_unknown_kind():
 # --- the backfill -----------------------------------------------------------
 
 def _seed(tmp_db, photo_dirs, with_photos=True):
-    preprod.add_location("garage", SAMPLE_SPACE, photo_count=1, path=tmp_db, account_id=None)
+    preprod.add_location("garage", SAMPLE_SPACE, photo_count=1, dsn=tmp_db, account_id=None)
     cid = entities.add_character("Mike", role="protagonist", notes="deadpan",
-                                 path=tmp_db, account_id=None)
-    pid = entities.add_prop("Helmet", category="gear", path=tmp_db, account_id=None)
+                                 dsn=tmp_db, account_id=None)
+    pid = entities.add_prop("Helmet", category="gear", dsn=tmp_db, account_id=None)
     if with_photos:
         for kind, slug in (("character", "mike"), ("prop", "helmet")):
             d = photo_dirs[kind] / slug
@@ -203,7 +202,7 @@ def test_backfill_describes_undescribed_cast_and_stores_it(tmp_db, photo_dirs,
     assert result["described"] == 2                    # character + prop
     assert ("character", "Mike", 1) in seen
     # stored on the row...
-    assert entities.get_character(cid, path=tmp_db, account_id=None)["description"]["look"]
+    assert entities.get_character(cid, dsn=tmp_db, account_id=None)["description"]["look"]
     # ...and in the chunk, which is the whole point
     mike = next(r for r in shelf if r["source"] == "assets/character-mike")
     assert "leather jacket" in mike["text"]
@@ -213,7 +212,7 @@ def test_backfill_skips_already_described_assets(tmp_db, photo_dirs, shelf,
                                                  monkeypatch):
     """Re-describing is a billed call for no new information."""
     cid, _ = _seed(tmp_db, photo_dirs)
-    entities.set_description("character", cid, CHARACTER_VISION, path=tmp_db, account_id=None)
+    entities.set_description("character", cid, CHARACTER_VISION, dsn=tmp_db, account_id=None)
     calls = []
     monkeypatch.setattr(locations, "describe_entity",
                         lambda *a, **k: calls.append(a) or CHARACTER_VISION)
@@ -258,18 +257,18 @@ def test_backfill_survives_a_down_store(tmp_db, photo_dirs):
 
 def test_set_description_merges_over_typed_notes(tmp_db):
     cid = entities.add_character("Mike", description={"notes": "deadpan"},
-                                 path=tmp_db, account_id=None)
-    entities.set_description("character", cid, CHARACTER_VISION, path=tmp_db, account_id=None)
-    desc = entities.get_character(cid, path=tmp_db, account_id=None)["description"]
+                                 dsn=tmp_db, account_id=None)
+    entities.set_description("character", cid, CHARACTER_VISION, dsn=tmp_db, account_id=None)
+    desc = entities.get_character(cid, dsn=tmp_db, account_id=None)["description"]
     assert desc["notes"] == "deadpan"          # the human's text survives
     assert desc["look"].startswith("a man in a cracked")
 
 
 def test_set_description_rejects_unknown_kinds_and_ids(tmp_db):
     with pytest.raises(ValueError):
-        entities.set_description("spaceship", 1, {}, path=tmp_db, account_id=None)
+        entities.set_description("spaceship", 1, {}, dsn=tmp_db, account_id=None)
     with pytest.raises(ValueError):
-        entities.set_description("character", 999, {}, path=tmp_db, account_id=None)
+        entities.set_description("character", 999, {}, dsn=tmp_db, account_id=None)
 
 
 # ---------- "this failed, THIS is what worked" ----------
@@ -282,12 +281,11 @@ WORKED = "handheld, 35mm, a Ducati idling in a low-key garage; practical light"
 
 
 @pytest.fixture
-def winners_db(tmp_path, monkeypatch):
+def winners_db(pg, monkeypatch):
     from src import winners
-    path = tmp_path / "winners.db"
-    db.init_db(path)
+    path = pg
     winners.init(path)
-    monkeypatch.setattr(db, "DB_PATH", path)
+    monkeypatch.setenv("DATABASE_URL", path)
     return path
 
 
@@ -312,10 +310,10 @@ def rag_docs(monkeypatch):
 def test_record_pair_writes_both_halves_to_both_shelves(winners_db, rag_docs):
     from src import winners
     result = winners.record_pair("runway", FAILED, WORKED, note="too vague",
-                                 path=winners_db)
+                                 dsn=winners_db)
     assert result["paired"] and result["ingested"]
 
-    rows = {w["verdict"]: w for w in winners.list_all(path=winners_db)}
+    rows = {w["verdict"]: w for w in winners.list_all(dsn=winners_db)}
     assert rows["didnt_work"]["prompt"] == FAILED
     assert rows["worked"]["prompt"] == WORKED
     # linked both ways, so either half can render the other
@@ -329,7 +327,7 @@ def test_record_pair_writes_both_halves_to_both_shelves(winners_db, rag_docs):
 def test_each_paired_doc_names_the_other(winners_db, rag_docs):
     """The lesson is the contrast; a doc holding one side can't teach it."""
     from src import winners
-    winners.record_pair("runway", FAILED, WORKED, path=winners_db)
+    winners.record_pair("runway", FAILED, WORKED, dsn=winners_db)
     avoid = next(d for d in rag_docs if d["domain"] == "avoid_prompts")
     winning = next(d for d in rag_docs if d["domain"] == "winning_prompts")
 
@@ -343,7 +341,7 @@ def test_unpaired_entries_are_unchanged(winners_db, rag_docs):
     """A plain verdict must render exactly as before the pairing existed."""
     from src import winners
     winners.record_and_learn("runway", FAILED, verdict="didnt_work",
-                             path=winners_db)
+                             dsn=winners_db)
     [doc] = rag_docs
     assert doc["domain"] == "avoid_prompts"
     assert "What was written instead" not in doc["text"]
@@ -352,12 +350,12 @@ def test_unpaired_entries_are_unchanged(winners_db, rag_docs):
 def test_record_pair_requires_the_working_prompt(winners_db):
     from src import winners
     with pytest.raises(ValueError):
-        winners.record_pair("runway", FAILED, "   ", path=winners_db)
+        winners.record_pair("runway", FAILED, "   ", dsn=winners_db)
 
 
 def test_record_pair_survives_a_down_store(winners_db):
     """Both rows must persist even when neither can be embedded."""
     from src import winners
-    result = winners.record_pair("runway", FAILED, WORKED, path=winners_db)
+    result = winners.record_pair("runway", FAILED, WORKED, dsn=winners_db)
     assert result["ingested"] is False and result["error"]
-    assert len(winners.list_all(path=winners_db)) == 2
+    assert len(winners.list_all(dsn=winners_db)) == 2

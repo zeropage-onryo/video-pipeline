@@ -70,7 +70,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from . import db, scout
+from . import scout
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DIGEST_PROMPT_PATH = PROJECT_ROOT / "prompts" / "scout_digest_prompt.txt"
@@ -181,20 +181,19 @@ def build_model(name: str):
     return model, False
 
 
-def bank_is_full(brand: str, path=None, target: int = BANK_TARGET) -> bool:
+def bank_is_full(brand: str, dsn=None, target: int = BANK_TARGET) -> bool:
     """Enough unused sparks at or above the floor that researching more
     would be banking into a queue nothing will reach tonight."""
-    path = path if path is not None else db.DB_PATH
     try:
         rows = scout.list_findings(brand=brand, unused_only=True, limit=100,
-                                   path=path)
+                                   dsn=dsn)
     except Exception:
         return False          # unreadable bank -> research, don't skip
     return len([r for r in rows
                 if (r.get("score") or 0) >= scout.SCORE_FLOOR]) >= target
 
 
-def build_brief(brand: str, count: int, path=None, tools=None,
+def build_brief(brand: str, count: int, dsn=None, tools=None,
                 signals: str = "") -> str:
     """The agent's instructions: the digest prompt's rules verbatim,
     plus the part that is only true for an agent with tools.
@@ -205,13 +204,12 @@ def build_brief(brand: str, count: int, path=None, tools=None,
     alone here and explained instead, because the useful half of that
     file is its argument about what a spark is, not its template.
     """
-    path = path if path is not None else db.DB_PATH
     try:
         rules = DIGEST_PROMPT_PATH.read_text()
     except OSError:
         rules = ""
     try:
-        recent = scout.recent_sparks(brand, path=path)
+        recent = scout.recent_sparks(brand, dsn=dsn)
     except Exception:
         recent = []
     try:
@@ -352,24 +350,25 @@ def _signals(brand: str) -> str:
     return scout.format_signals(usable) if usable else ""
 
 
-async def _research(brand: str, count: int, path, *, python: str) -> dict:
+async def _research(brand: str, count: int, dsn, *, python: str) -> dict:
     from mcp import Client, StdioServerParameters
 
     signals = _signals(brand)
     server = StdioServerParameters(
         command=python,
         # No --engine. See the module docstring.
-        args=["-m", "src.mcp_server", "--db", str(path)],
+        # no --db when none was given: the child inherits DATABASE_URL
+        args=["-m", "src.mcp_server"] + (["--db", str(dsn)] if dsn else []),
         cwd=str(PROJECT_ROOT),
         env=_server_env(),
     )
-    banked_before = len(scout.list_findings(brand=brand, path=path))
+    banked_before = len(scout.list_findings(brand=brand, dsn=dsn))
     async with Client(server) as client:
-        return await _drive(client, brand, count, path, banked_before,
+        return await _drive(client, brand, count, dsn, banked_before,
                             signals=signals)
 
 
-async def _drive(client, brand: str, count: int, path, banked_before: int, *,
+async def _drive(client, brand: str, count: int, dsn, banked_before: int, *,
                  signals: str = "") -> dict:
     """The agent loop, given a connected client.
 
@@ -382,7 +381,7 @@ async def _drive(client, brand: str, count: int, path, banked_before: int, *,
     tools = await _as_tools(client)
     # Built here, with the tools in hand, so the brief names what the
     # server actually published rather than what this file guessed.
-    brief = build_brief(brand, count, path=path, signals=signals,
+    brief = build_brief(brand, count, dsn=dsn, signals=signals,
                         tools=(await client.list_tools()).tools)
 
     model, _has_search = build_model(provider())
@@ -393,14 +392,14 @@ async def _drive(client, brand: str, count: int, path, banked_before: int, *,
     # What it actually DID, read off the database rather than off its
     # closing message. An agent's own summary of its work is the least
     # reliable record of it, and this number is what the night depends on.
-    banked = len(scout.list_findings(brand=brand, path=path)) - banked_before
-    images = sum(len(scout.bin_for_finding(r["id"], path=path))
+    banked = len(scout.list_findings(brand=brand, dsn=dsn)) - banked_before
+    images = sum(len(scout.bin_for_finding(r["id"], dsn=dsn))
                  for r in scout.list_findings(brand=brand, unused_only=True,
-                                              limit=100, path=path))
+                                              limit=100, dsn=dsn))
     return {"ok": banked > 0, "banked": banked, "images": images}
 
 
-def run(brand: str, *, count: int = BANK_TARGET, path=None,
+def run(brand: str, *, count: int = BANK_TARGET, dsn=None,
         python: Optional[str] = None, force: bool = False) -> dict:
     """One research pass. Never raises.
 
@@ -411,11 +410,10 @@ def run(brand: str, *, count: int = BANK_TARGET, path=None,
 
     `force` skips the once-a-day stamp, for running this by hand.
     """
-    path = path if path is not None else db.DB_PATH
     ok, reason = ready()
     if not ok:
         return {"ok": False, "banked": 0, "images": 0, "note": reason}
-    if bank_is_full(brand, path=path):
+    if bank_is_full(brand, dsn=dsn):
         return {"ok": False, "banked": 0, "images": 0,
                 "note": f"bank already holds {BANK_TARGET}+ unused sparks"}
     stamp = _stamp(brand)
@@ -423,7 +421,7 @@ def run(brand: str, *, count: int = BANK_TARGET, path=None,
         return {"ok": False, "banked": 0, "images": 0,
                 "note": f"already researched {brand} today"}
     try:
-        build_brief(brand, count, path=path)      # fail fast on a bad template
+        build_brief(brand, count, dsn=dsn)      # fail fast on a bad template
     except Exception as e:
         return {"ok": False, "banked": 0, "images": 0, "note": f"no brief: {e}"}
 
@@ -442,7 +440,7 @@ def run(brand: str, *, count: int = BANK_TARGET, path=None,
     # interpreter and PATH holds whatever the plist inherited, which on
     # this machine is not the same one (see ops/connect-launchd notes).
     try:
-        result = _sync(_research(brand, count, path,
+        result = _sync(_research(brand, count, dsn,
                                  python=python or sys.executable))
     except Exception as e:
         return {"ok": False, "banked": 0, "images": 0,

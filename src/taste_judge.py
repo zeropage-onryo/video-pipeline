@@ -46,9 +46,9 @@ def _graded_concepts(status: str, limit: int, path, account_id=None) -> list[dic
         rows = conn.execute(
             "SELECT c.title, c.hook, c.logline FROM hold_queue h "
             "JOIN shoot_concepts c ON c.id = h.concept_id "
-            "WHERE h.status = ? AND h.concept_id IS NOT NULL "
-            "AND c.account_id IS ? "
-            "ORDER BY h.created_at DESC LIMIT ?",
+            "WHERE h.status = %s AND h.concept_id IS NOT NULL "
+            "AND c.account_id IS NOT DISTINCT FROM %s "
+            "ORDER BY h.created_at DESC LIMIT %s",
             (status, account_id, limit),
         ).fetchall()
     return [dict(r) for r in rows]
@@ -82,8 +82,8 @@ def _board_verdicts(kind: str, limit: int, path, account_id=None) -> list[dict]:
     with db.connect(path) as conn:
         rows = conn.execute(
             "SELECT title, hook, logline FROM shoot_concepts "
-            f"WHERE {where} AND account_id IS ? "
-            f"ORDER BY {order} DESC LIMIT ?",
+            f"WHERE {where} AND account_id IS NOT DISTINCT FROM %s "
+            f"ORDER BY {order} DESC LIMIT %s",
             (account_id, limit),
         ).fetchall()
     return [dict(r) for r in rows]
@@ -119,15 +119,15 @@ def board_taste(db_path=None, account_id=None) -> dict:
     number: it is what reaches the prompt, not what is in the table. A
     signal nobody can see is a signal nobody trusts is working -- same
     reason the Grade tab counts its pass reasons."""
-    path = db_path or db.DB_PATH
+    path = db_path
     return {kind: len(_board_verdicts(kind, HISTORY_LIMIT, path, account_id))
             for kind in _BOARD_VERDICTS}
 
 
 def gather_signals(db_path=None, account_id=None) -> dict:
     """Everything the judge scores against -- pure, no network."""
-    path = db_path or db.DB_PATH
-    wins = winners.list_all(path=path)
+    path = db_path
+    wins = winners.list_all(dsn=path)
     return {
         "liked": _merge(_board_verdicts("liked", HISTORY_LIMIT, path, account_id),
                         _graded_concepts("approved", HISTORY_LIMIT, path, account_id)),

@@ -57,7 +57,7 @@ def main(argv=None):
 
     import uuid
     pass_id = args.pass_id or f"saved-{uuid.uuid4().hex[:12]}"
-    scout.init(db.DB_PATH)
+    scout.init()
     banked = 0
 
     for f in files:
@@ -72,10 +72,10 @@ def main(argv=None):
         if not url:
             print(f"  skipped (not saved): {f.name}", file=sys.stderr)
             continue
-        with db.connect(db.DB_PATH) as conn:
+        with db.connect() as conn:
             conn.execute(
                 "INSERT INTO scout_bin (created_at, pass_id, brand, url, "
-                "source_url, title, lane, metric) VALUES (?,?,?,?,?,?,?,?)",
+                "source_url, title, lane, metric) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
                 (scout._now(), pass_id, args.brand, url, args.source,
                  f.stem[:120], "saved", ""),
             )

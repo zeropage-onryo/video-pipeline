@@ -26,9 +26,8 @@ from src import db, mcp_server, preprod, scout
 
 
 @pytest.fixture
-def tmp_db(tmp_path):
-    path = tmp_path / "test.db"
-    db.init_db(path)
+def tmp_db(pg):
+    path = pg
     preprod.init(path)
     scout.init(path)
     return path
@@ -45,20 +44,20 @@ def board(tmp_db):
     ids = preprod.save_concept_ideas(
         [_idea("Open One"), _idea("Picked One"), _idea("Archived One"),
          _idea("Parked One")],
-        brand="zeropage", spark="a bench with one glove", path=tmp_db,
+        brand="zeropage", spark="a bench with one glove", dsn=tmp_db,
     
         account_id=None,)
-    preprod.set_picked(ids[1], path=tmp_db, account_id=None)
-    preprod.set_archived(ids[2], path=tmp_db, account_id=None)
+    preprod.set_picked(ids[1], dsn=tmp_db, account_id=None)
+    preprod.set_archived(ids[2], dsn=tmp_db, account_id=None)
     preprod.update_concept_shots(
         ids[3],
         {"shots": [{"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
                     "prompt": "a glove on a bench, macro, one continuous take",
                     "location": "hallway"}]},
-        path=tmp_db,
+        dsn=tmp_db,
     
         account_id=None,)
-    preprod.set_shot_parked(ids[3], 1, reason="keyframe rendered", path=tmp_db, account_id=None)
+    preprod.set_shot_parked(ids[3], 1, reason="keyframe rendered", dsn=tmp_db, account_id=None)
     return tmp_db, ids
 
 
@@ -66,7 +65,7 @@ def board(tmp_db):
 
 def test_open_excludes_picked_and_archived(board):
     path, ids = board
-    open_ids = [c["id"] for c in mcp_server.list_ideas(path=path)["ideas"]]
+    open_ids = [c["id"] for c in mcp_server.list_ideas(dsn=path)["ideas"]]
     assert ids[0] in open_ids
     assert ids[1] not in open_ids
     assert ids[2] not in open_ids
@@ -77,9 +76,9 @@ def test_parked_is_still_open(board):
     of what is waiting on a person. It is a sub-state of open, not a
     fifth column beside it."""
     path, ids = board
-    assert ids[3] in [c["id"] for c in mcp_server.list_ideas(path=path)["ideas"]]
+    assert ids[3] in [c["id"] for c in mcp_server.list_ideas(dsn=path)["ideas"]]
     assert ids[3] in [c["id"] for c in
-                      mcp_server.list_ideas(status="parked", path=path)["ideas"]]
+                      mcp_server.list_ideas(status="parked", dsn=path)["ideas"]]
 
 
 def test_status_counts_reconcile_with_the_open_list(board):
@@ -87,16 +86,16 @@ def test_status_counts_reconcile_with_the_open_list(board):
     `list_ideas(status="open")` is not. The stats payload spells the
     second number out rather than leaving it to be derived wrongly."""
     path, _ = board
-    stats = mcp_server.pipeline_stats(path=path)
+    stats = mcp_server.pipeline_stats(dsn=path)
     assert sum(stats["board"].values()) == 4
     assert stats["waiting_on_you"] == len(
-        mcp_server.list_ideas(status="open", limit=100, path=path)["ideas"]
+        mcp_server.list_ideas(status="open", limit=100, dsn=path)["ideas"]
     )
 
 
 def test_card_carries_a_one_line_summary(board):
     path, _ = board
-    card = mcp_server.list_ideas(status="parked", path=path)["ideas"][0]
+    card = mcp_server.list_ideas(status="parked", dsn=path)["ideas"][0]
     assert card["summary"]
     assert "\n" not in card["summary"]
     assert len(card["summary"]) <= preprod.SUMMARY_CHARS + 1  # + the ellipsis
@@ -104,8 +103,8 @@ def test_card_carries_a_one_line_summary(board):
 
 def test_get_idea_returns_the_prompt_a_card_omits(board):
     path, ids = board
-    card = mcp_server.list_ideas(status="parked", path=path)["ideas"][0]
-    full = mcp_server.get_idea(ids[3], path=path)
+    card = mcp_server.list_ideas(status="parked", dsn=path)["ideas"][0]
+    full = mcp_server.get_idea(ids[3], dsn=path)
     assert "shots" not in card
     assert full["shots"][0]["prompt"].startswith("a glove on a bench")
     assert full["park_reason"] == "keyframe rendered"
@@ -126,11 +125,11 @@ def test_a_graph_row_carries_the_gates_verdict(board):
     autonomy.log_prompt_scores("run-1", [
         {"prompt": "v1", "score": 5, "pass": False, "reason": "too many beats", "dims": {}},
         {"prompt": "v2", "score": 7, "pass": True, "reason": "", "dims": {}},
-    ], path=path)
+    ], dsn=path)
     autonomy.to_hold("zeropage", "keyframe rendered — approve in the Queue",
                      concept_id=ids[3], payload={"run_id": "run-1"},
-                     path=path, account_id=None)
-    full = mcp_server.get_idea(ids[3], path=path)
+                     dsn=path, account_id=None)
+    full = mcp_server.get_idea(ids[3], dsn=path)
     assert full["origin"] == "graph"
     assert full["gate"]["score"] == 7 and full["gate"]["passed"] is True
     assert full["gate"]["outcome"].startswith("keyframe rendered")
@@ -140,30 +139,30 @@ def test_a_graph_row_carries_the_gates_verdict(board):
 
 def test_a_studio_row_says_it_was_never_scored(board):
     path, ids = board
-    full = mcp_server.get_idea(ids[3], path=path)     # has a shot, no hold row
+    full = mcp_server.get_idea(ids[3], dsn=path)     # has a shot, no hold row
     assert full["origin"] == "studio" and full["gate"] is None
     assert "not scored badly" in full["note"]
 
 
 def test_a_captured_idea_has_nothing_to_score(tmp_db):
-    card = mcp_server.capture_idea("zeropage", "Just a title", path=tmp_db)
-    assert mcp_server.get_idea(card["id"], path=tmp_db)["origin"] == "capture"
+    card = mcp_server.capture_idea("zeropage", "Just a title", dsn=tmp_db)
+    assert mcp_server.get_idea(card["id"], dsn=tmp_db)["origin"] == "capture"
 
 
 def test_a_held_run_reports_its_reason_with_the_run(tmp_db, monkeypatch):
     """A phone that asked for a run must not need a second call to
     learn why it held."""
     from src import autonomy, orchestrator
-    monkeypatch.setattr(db, "DB_PATH", tmp_db)
+    monkeypatch.setenv("DATABASE_URL", tmp_db)
     autonomy.init(tmp_db)
     (cid,) = preprod.save_concept_ideas([_idea("Held One")], brand="zeropage",
-                                        path=tmp_db, account_id=None)
+                                        dsn=tmp_db, account_id=None)
 
     def fake_run(goal, **kw):
         autonomy.log_prompt_scores("run-2", [{"prompt": "p", "score": 4, "pass": False,
-                                              "reason": "vague", "dims": {}}], path=tmp_db)
+                                              "reason": "vague", "dims": {}}], dsn=tmp_db)
         autonomy.to_hold("zeropage", "prompt gate: vague (4/10)", concept_id=cid,
-                         payload={"run_id": "run-2"}, path=tmp_db, account_id=None)
+                         payload={"run_id": "run-2"}, dsn=tmp_db, account_id=None)
         return {"concept_id": cid, "held_reason": "prompt gate: vague (4/10)"}
     monkeypatch.setattr(orchestrator, "run", fake_run)
     out = mcp_server.run_graph("a direction", "zeropage")
@@ -175,16 +174,16 @@ def test_search_reaches_into_the_scene_prompt(board):
     """The words worth searching for live in the prompt, not the title
     -- the title is three words the model chose."""
     path, ids = board
-    hits = mcp_server.search_ideas("continuous take", path=path)
+    hits = mcp_server.search_ideas("continuous take", dsn=path)
     assert [c["id"] for c in hits["ideas"]] == [ids[3]]
 
 
 def test_pick_and_archive_round_trip(board):
     path, ids = board
-    assert mcp_server.pick_idea(ids[0], path=path)["status"] == "picked"
-    assert mcp_server.archive_idea(ids[0], path=path)["status"] == "archived"
+    assert mcp_server.pick_idea(ids[0], dsn=path)["status"] == "picked"
+    assert mcp_server.archive_idea(ids[0], dsn=path)["status"] == "archived"
     assert mcp_server.archive_idea(ids[0], archived=False,
-                                   path=path)["status"] == "picked"
+                                   dsn=path)["status"] == "picked"
 
 
 def test_shoot_is_the_label_shoot_rate_reads(board):
@@ -192,27 +191,27 @@ def test_shoot_is_the_label_shoot_rate_reads(board):
     not "a render came back". It is the only way the system can see
     work that never passed through the Queue, and it must never spend."""
     path, ids = board
-    before = mcp_server.pipeline_stats(path=path)["shoot_rate"]
+    before = mcp_server.pipeline_stats(dsn=path)["shoot_rate"]
     assert before["shot"] == 0
 
-    mcp_server.pick_idea(ids[0], path=path)
-    card = mcp_server.shoot_idea(ids[0], path=path)
+    mcp_server.pick_idea(ids[0], dsn=path)
+    card = mcp_server.shoot_idea(ids[0], dsn=path)
     assert card["status"] == "shot"          # shot outranks picked on the card
 
-    after = mcp_server.pipeline_stats(path=path)["shoot_rate"]
+    after = mcp_server.pipeline_stats(dsn=path)["shoot_rate"]
     assert after["shot"] == before["shot"] + 1
     assert after["generated"] == before["generated"]
-    assert mcp_server.get_idea(ids[0], path=path)["status"] == "shot"
+    assert mcp_server.get_idea(ids[0], dsn=path)["status"] == "shot"
 
     # Reversible: un-shooting falls back to the pick that was still there.
-    assert mcp_server.shoot_idea(ids[0], shot=False, path=path)["status"] == "picked"
-    assert mcp_server.pipeline_stats(path=path)["shoot_rate"]["shot"] == before["shot"]
+    assert mcp_server.shoot_idea(ids[0], shot=False, dsn=path)["status"] == "picked"
+    assert mcp_server.pipeline_stats(dsn=path)["shoot_rate"]["shot"] == before["shot"]
 
 
 def test_shoot_tool_is_a_write_that_never_spends(tmp_db):
     """Registered beside pick, annotated as a write, and reachable with
     no engine flag -- recording that something got made costs nothing."""
-    server = mcp_server.build_server(path=tmp_db)
+    server = mcp_server.build_server(dsn=tmp_db)
     by_name = {t.name: t for t in _tools(server)}
     assert "shoot" in by_name
     assert by_name["shoot"].annotations.read_only_hint is False
@@ -224,22 +223,22 @@ def test_archive_records_the_reason_and_says_so_when_it_is_off_vocabulary(board)
     """A reason is never a gate, but the tally counts words, so an
     uncounted word is said back rather than silently filed."""
     path, ids = board
-    card = mcp_server.archive_idea(ids[0], reason="no turn", path=path)
+    card = mcp_server.archive_idea(ids[0], reason="no turn", dsn=path)
     assert card["status"] == "archived" and "reason_note" not in card
-    assert preprod.get_concept(ids[0], path=path, account_id=None)["archive_reason"] == "no turn"
+    assert preprod.get_concept(ids[0], dsn=path, account_id=None)["archive_reason"] == "no turn"
 
-    card = mcp_server.archive_idea(ids[1], reason="boring", path=path)
+    card = mcp_server.archive_idea(ids[1], reason="boring", dsn=path)
     assert card["status"] == "archived"                       # still archived
     assert "weak concept" in card["reason_note"]
-    assert preprod.get_concept(ids[1], path=path, account_id=None)["archive_reason"] == "boring"
+    assert preprod.get_concept(ids[1], dsn=path, account_id=None)["archive_reason"] == "boring"
 
-    assert "reason_note" not in mcp_server.archive_idea(ids[3], path=path)   # no word, no nag
+    assert "reason_note" not in mcp_server.archive_idea(ids[3], dsn=path)   # no word, no nag
 
 
 def test_archive_tool_names_every_counted_reason(tmp_db):
     """The description is what an agent writes from. Typed by hand it
     named a vocabulary the Grade tab had already retired."""
-    server = mcp_server.build_server(path=tmp_db)
+    server = mcp_server.build_server(dsn=tmp_db)
     desc = {t.name: t for t in _tools(server)}["archive"].description
     for word in preprod.ARCHIVE_REASONS:
         assert word in desc
@@ -250,19 +249,19 @@ def test_archiving_never_deletes(board):
     """pick_rate is generated-vs-picked, so a deleted row would make the
     rate read 100% forever and unfalsifiable."""
     path, ids = board
-    before = mcp_server.pipeline_stats(path=path)["pick_rate"]["generated"]
-    mcp_server.archive_idea(ids[0], path=path)
-    assert mcp_server.pipeline_stats(path=path)["pick_rate"]["generated"] == before
+    before = mcp_server.pipeline_stats(dsn=path)["pick_rate"]["generated"]
+    mcp_server.archive_idea(ids[0], dsn=path)
+    assert mcp_server.pipeline_stats(dsn=path)["pick_rate"]["generated"] == before
 
 
 def test_captured_idea_has_no_shots_so_it_cannot_move_pick_rate(tmp_db):
     """Capturing on a phone must not touch the number that measures
     generation quality: pick_rate counts one-shot concepts only, and a
     captured idea has none."""
-    before = mcp_server.pipeline_stats(path=tmp_db)["pick_rate"]["generated"]
-    card = mcp_server.capture_idea("zeropage", "From The Bus", path=tmp_db)
+    before = mcp_server.pipeline_stats(dsn=tmp_db)["pick_rate"]["generated"]
+    card = mcp_server.capture_idea("zeropage", "From The Bus", dsn=tmp_db)
     assert card["is_scene"] is False
-    after = mcp_server.pipeline_stats(path=tmp_db)["pick_rate"]["generated"]
+    after = mcp_server.pipeline_stats(dsn=tmp_db)["pick_rate"]["generated"]
     assert after == before
 
 
@@ -273,9 +272,9 @@ def test_human_spark_outranks_a_crawled_one(tmp_db):
     could outscore it, the night would prefer its own research to an
     explicit instruction."""
     scout.record("zeropage", {"spark": "crawled idea", "score": 0.95},
-                 lanes="web", path=tmp_db)
-    mcp_server.bank_spark("zeropage", "the one I actually want", path=tmp_db)
-    assert mcp_server.next_spark("zeropage", path=tmp_db)["spark"] == \
+                 lanes="web", dsn=tmp_db)
+    mcp_server.bank_spark("zeropage", "the one I actually want", dsn=tmp_db)
+    assert mcp_server.next_spark("zeropage", dsn=tmp_db)["spark"] == \
         "the one I actually want"
 
 
@@ -284,9 +283,9 @@ def test_repeat_spark_is_reported_not_refused(tmp_db):
     retyping a direction usually means it, so the collision is
     information, not a rejection."""
     first = mcp_server.bank_spark("zeropage", "a bench with one glove",
-                                  path=tmp_db)
+                                  dsn=tmp_db)
     second = mcp_server.bank_spark("zeropage", "A bench with one glove.",
-                                   path=tmp_db)
+                                   dsn=tmp_db)
     assert second["duplicate_of"] == [first["id"]]
     assert second["id"] != first["id"]
 
@@ -294,8 +293,8 @@ def test_repeat_spark_is_reported_not_refused(tmp_db):
 def test_no_servable_spark_is_a_note_not_an_error(tmp_db):
     """Falling back to the sparks.txt rotation is the healthy degraded
     path -- it is what the pipeline did before the scout existed."""
-    scout.record("zeropage", {"spark": "too weak", "score": 0.1}, path=tmp_db)
-    result = mcp_server.next_spark("zeropage", path=tmp_db)
+    scout.record("zeropage", {"spark": "too weak", "score": 0.1}, dsn=tmp_db)
+    result = mcp_server.next_spark("zeropage", dsn=tmp_db)
     assert result["spark"] is None
     assert "sparks.txt" in result["note"]
 
@@ -305,15 +304,15 @@ def test_spark_images_carry_their_source(tmp_db):
     unattributed tile in front of somebody about to spend a render is
     the wrong affordance."""
     finding_id = scout.record("zeropage", {"spark": "x", "score": 0.9},
-                              pass_id="p1", path=tmp_db)
+                              pass_id="p1", dsn=tmp_db)
     with db.connect(tmp_db) as conn:
         conn.execute(
             "INSERT INTO scout_bin (created_at, pass_id, brand, url, "
-            "source_url, title, lane) VALUES (?,?,?,?,?,?,?)",
+            "source_url, title, lane) VALUES (%s,%s,%s,%s,%s,%s,%s)",
             ("2026-08-31", "p1", "zeropage", "/refs/abc.jpg",
              "https://youtube.com/watch?v=1", "A Title", "shorts"),
         )
-    images = mcp_server.spark_images(finding_id, path=tmp_db)
+    images = mcp_server.spark_images(finding_id, dsn=tmp_db)
     assert images["count"] == 1
     assert images["images"][0]["source_url"] == "https://youtube.com/watch?v=1"
 
@@ -370,14 +369,14 @@ def graph_calls(monkeypatch):
 
 
 def _banked(tmp_db, spark="a bench with one glove", brand="zeropage"):
-    fid = scout.record(brand, {"spark": spark, "score": 0.9}, path=tmp_db)
+    fid = scout.record(brand, {"spark": spark, "score": 0.9}, dsn=tmp_db)
     for n in (1, 2):
-        scout.bank_urls(fid, [f"/refs/{n}.jpg"], lane="agent", path=tmp_db)
+        scout.bank_urls(fid, [f"/refs/{n}.jpg"], lane="agent", dsn=tmp_db)
     return fid
 
 
 def test_generate_by_finding_id_hands_the_graph_its_bin(tmp_db, monkeypatch, graph_calls):
-    monkeypatch.setattr(db, "DB_PATH", tmp_db)
+    monkeypatch.setenv("DATABASE_URL", tmp_db)
     fid = _banked(tmp_db)
     out = mcp_server.run_graph(brand="zeropage", finding_id=fid)
     [call] = graph_calls
@@ -391,7 +390,7 @@ def test_generate_by_spark_text_finds_its_own_photographs(tmp_db, monkeypatch, g
     """add_spark -> reference -> generate(spark) must work without the
     agent carrying an id between calls, and fixing the capitals must
     not lose the photos -- the composer's `claims` rule, same key."""
-    monkeypatch.setattr(db, "DB_PATH", tmp_db)
+    monkeypatch.setenv("DATABASE_URL", tmp_db)
     fid = _banked(tmp_db)
     mcp_server.run_graph("A Bench, With One Glove.", "zeropage")
     [call] = graph_calls
@@ -400,7 +399,7 @@ def test_generate_by_spark_text_finds_its_own_photographs(tmp_db, monkeypatch, g
 
 
 def test_brand_defaults_to_the_findings_and_a_wrong_one_is_refused(tmp_db, monkeypatch, graph_calls):
-    monkeypatch.setattr(db, "DB_PATH", tmp_db)
+    monkeypatch.setenv("DATABASE_URL", tmp_db)
     fid = _banked(tmp_db, brand="antihero")
     mcp_server.run_graph(finding_id=fid)
     assert graph_calls[0]["brand"] == "antihero"
@@ -412,7 +411,7 @@ def test_a_reworded_spark_does_not_inherit_a_findings_photographs(tmp_db, monkey
     """The composer silently drops the bin when the idea walks away
     from the spark; this door SAYS so, because an agent acts on the
     message where a person would have seen a tile disappear."""
-    monkeypatch.setattr(db, "DB_PATH", tmp_db)
+    monkeypatch.setenv("DATABASE_URL", tmp_db)
     fid = _banked(tmp_db)
     with pytest.raises(ValueError, match="is not finding"):
         mcp_server.run_graph("a monster in the garage", "zeropage", finding_id=fid)
@@ -420,7 +419,7 @@ def test_a_reworded_spark_does_not_inherit_a_findings_photographs(tmp_db, monkey
 
 
 def test_an_unbanked_spark_runs_on_the_asset_bank_alone(tmp_db, monkeypatch, graph_calls):
-    monkeypatch.setattr(db, "DB_PATH", tmp_db)
+    monkeypatch.setenv("DATABASE_URL", tmp_db)
     out = mcp_server.run_graph("a direction nobody banked", "zeropage")
     [call] = graph_calls
     assert call["reference_photos"] == [] and call["scout_finding_id"] is None
@@ -435,7 +434,7 @@ def test_generate_tool_resolves_the_finding_before_the_job_starts(tmp_db, monkey
     from mcp.server.mcpserver.exceptions import ToolError
 
     monkeypatch.setenv("ZEROPAGE_MCP_ENGINE", "1")
-    server = mcp_server.build_server(path=tmp_db)
+    server = mcp_server.build_server(dsn=tmp_db)
     with pytest.raises(ToolError, match="no finding 4242"):
         asyncio.run(server.call_tool("generate", {"finding_id": 4242}))
     props = {t.name: t for t in _tools(server)}["generate"].input_schema["properties"]
@@ -444,7 +443,7 @@ def test_generate_tool_resolves_the_finding_before_the_job_starts(tmp_db, monkey
 
 def test_engine_tools_are_off_by_default(tmp_db, monkeypatch):
     monkeypatch.delenv(mcp_server.ENGINE_ENV, raising=False)
-    server = mcp_server.build_server(path=tmp_db)
+    server = mcp_server.build_server(dsn=tmp_db)
     names = {t.name for t in _tools(server)}
     assert "board" in names
     assert "research" not in names and "generate" not in names
@@ -452,7 +451,7 @@ def test_engine_tools_are_off_by_default(tmp_db, monkeypatch):
 
 def test_engine_tools_register_under_the_flag(tmp_db, monkeypatch):
     monkeypatch.setenv(mcp_server.ENGINE_ENV, "1")
-    server = mcp_server.build_server(path=tmp_db)
+    server = mcp_server.build_server(dsn=tmp_db)
     names = {t.name for t in _tools(server)}
     assert {"research", "generate"} <= names
 
@@ -461,7 +460,7 @@ def test_path_is_never_published_to_the_model(tmp_db):
     """Every tool binds its database path in the closure. Publishing it
     as an argument would let a remote caller name the file the server
     reads and writes."""
-    server = mcp_server.build_server(path=tmp_db)
+    server = mcp_server.build_server(dsn=tmp_db)
     for tool in _tools(server):
         assert "path" not in (tool.input_schema.get("properties") or {})
 
@@ -469,7 +468,7 @@ def test_path_is_never_published_to_the_model(tmp_db):
 def test_read_only_tools_say_so(tmp_db):
     """The annotation is what lets a client show a confirmation before a
     write and none before a read."""
-    server = mcp_server.build_server(path=tmp_db)
+    server = mcp_server.build_server(dsn=tmp_db)
     by_name = {t.name: t for t in _tools(server)}
     assert by_name["board"].annotations.read_only_hint is True
     assert by_name["pick"].annotations.read_only_hint is False
@@ -483,7 +482,7 @@ def test_caller_errors_reach_the_model(tmp_db):
 
     from mcp.server.mcpserver.exceptions import ToolError
 
-    server = mcp_server.build_server(path=tmp_db)
+    server = mcp_server.build_server(dsn=tmp_db)
     with pytest.raises(ToolError, match="no idea 999999"):
         asyncio.run(server.call_tool("idea", {"idea_id": 999999}))
 
@@ -491,17 +490,17 @@ def test_caller_errors_reach_the_model(tmp_db):
 # ---------- bad input ----------
 
 @pytest.mark.parametrize("call", [
-    lambda p: mcp_server.list_ideas(status="bogus", path=p),
-    lambda p: mcp_server.list_ideas(brand="nope", path=p),
-    lambda p: mcp_server.get_idea(999999, path=p),
-    lambda p: mcp_server.shoot_idea(999999, path=p),
+    lambda p: mcp_server.list_ideas(status="bogus", dsn=p),
+    lambda p: mcp_server.list_ideas(brand="nope", dsn=p),
+    lambda p: mcp_server.get_idea(999999, dsn=p),
+    lambda p: mcp_server.shoot_idea(999999, dsn=p),
     lambda p: mcp_server.run_graph(brand="zeropage", finding_id=999999),
     lambda p: mcp_server.run_graph("", "zeropage"),
-    lambda p: mcp_server.capture_idea("zeropage", "   ", path=p),
-    lambda p: mcp_server.capture_idea("nope", "Title", path=p),
-    lambda p: mcp_server.bank_spark("zeropage", "  ", path=p),
-    lambda p: mcp_server.search_ideas("", path=p),
-    lambda p: mcp_server.run_research("zeropage", lanes=["moon"], path=p),
+    lambda p: mcp_server.capture_idea("zeropage", "   ", dsn=p),
+    lambda p: mcp_server.capture_idea("nope", "Title", dsn=p),
+    lambda p: mcp_server.bank_spark("zeropage", "  ", dsn=p),
+    lambda p: mcp_server.search_ideas("", dsn=p),
+    lambda p: mcp_server.run_research("zeropage", lanes=["moon"], dsn=p),
 ])
 def test_bad_input_raises_a_value_error(call, tmp_db):
     with pytest.raises(ValueError):
@@ -529,14 +528,14 @@ def test_main_runs_stdio_and_never_blocks_on_the_engine(tmp_db, monkeypatch):
         def run(self, transport):
             captured["transport"] = transport
 
-    def fake_build(path=None, start_job=None, job_status=None, **kw):
-        captured.update(path=path, start_job=start_job, job_status=job_status)
+    def fake_build(dsn=None, start_job=None, job_status=None, **kw):
+        captured.update(dsn=dsn, start_job=start_job, job_status=job_status)
         return FakeServer()
 
     monkeypatch.setattr(mcp_server, "build_server", fake_build)
     assert mcp_server.main(["--db", str(tmp_db)]) == 0
     assert captured["transport"] == "stdio"
-    assert captured["path"] == str(tmp_db)
+    assert captured["dsn"] == str(tmp_db)
     assert callable(captured["start_job"]) and callable(captured["job_status"])
 
 

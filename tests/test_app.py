@@ -41,10 +41,9 @@ def no_real_rag_store(monkeypatch):
 
 
 @pytest.fixture
-def tmp_db(tmp_path, monkeypatch):
-    path = tmp_path / "test.db"
-    db.init_db(path)
-    monkeypatch.setattr(db, "DB_PATH", path)
+def tmp_db(pg, monkeypatch):
+    path = pg
+    monkeypatch.setenv("DATABASE_URL", path)
     return path
 
 
@@ -167,7 +166,7 @@ def test_post_videos_new_creates_a_video(tmp_db):
     # rather than bouncing the user out to the marketing page
     assert response.headers["location"] == "/studio"
 
-    videos = db.list_videos(path=tmp_db, account_id=None)
+    videos = db.list_videos(dsn=tmp_db, account_id=None)
     assert len(videos) == 1
     assert videos[0]["title"] == "Test Video"
     assert videos[0]["platform"] == "youtube"
@@ -178,7 +177,7 @@ def test_post_videos_new_rejects_bad_platform(tmp_db):
         "title": "Test Video", "platform": "myspace", "posted_at": "2026-01-01",
     })
     assert response.status_code == 400
-    assert db.list_videos(path=tmp_db, account_id=None) == []
+    assert db.list_videos(dsn=tmp_db, account_id=None) == []
 
 
 # ---------- parse_metrics_form ----------
@@ -205,25 +204,25 @@ def test_metrics_new_get_returns_200(tmp_db):
 
 
 def test_post_metrics_new_records_snapshot_and_redirects(tmp_db):
-    vid = db.add_video("Test", "youtube", "2026-01-01", path=tmp_db, account_id=None)
+    vid = db.add_video("Test", "youtube", "2026-01-01", dsn=tmp_db, account_id=None)
     response = client.post(
         "/metrics/new", data={f"views_{vid}": "82"}, follow_redirects=False,
     )
     assert response.status_code in (302, 303, 307)
     assert "updated=1" in response.headers["location"]
 
-    history = db.get_video_history(vid, path=tmp_db, account_id=None)
+    history = db.get_video_history(vid, dsn=tmp_db, account_id=None)
     assert history[-1]["views"] == 82
 
 
 def test_post_metrics_new_skips_videos_with_nothing_typed(tmp_db):
-    v1 = db.add_video("A", "youtube", "2026-01-01", path=tmp_db, account_id=None)
-    v2 = db.add_video("B", "youtube", "2026-01-01", path=tmp_db, account_id=None)
+    v1 = db.add_video("A", "youtube", "2026-01-01", dsn=tmp_db, account_id=None)
+    v2 = db.add_video("B", "youtube", "2026-01-01", dsn=tmp_db, account_id=None)
     response = client.post(
         "/metrics/new", data={f"views_{v1}": "50"}, follow_redirects=False,
     )
     assert "updated=1" in response.headers["location"]
-    assert db.get_video_history(v2, path=tmp_db, account_id=None) == []
+    assert db.get_video_history(v2, dsn=tmp_db, account_id=None) == []
 
 
 def test_metrics_new_shows_updated_count(tmp_db):
@@ -256,10 +255,10 @@ def test_benchmark_class_missing_data_is_neutral():
 # discipline (same window for ranking and colouring) survives any skin.
 
 def test_performance_rows_colours_against_the_same_window(tmp_preprod_db):
-    v1 = db.add_video("Winner", "youtube", "2026-01-01", path=tmp_preprod_db, account_id=None)
-    v2 = db.add_video("Loser", "youtube", "2026-01-01", path=tmp_preprod_db, account_id=None)
-    db.record_metrics(v1, views=1000, captured_at="2026-01-08", path=tmp_preprod_db, account_id=None)
-    db.record_metrics(v2, views=10, captured_at="2026-01-08", path=tmp_preprod_db, account_id=None)
+    v1 = db.add_video("Winner", "youtube", "2026-01-01", dsn=tmp_preprod_db, account_id=None)
+    v2 = db.add_video("Loser", "youtube", "2026-01-01", dsn=tmp_preprod_db, account_id=None)
+    db.record_metrics(v1, views=1000, captured_at="2026-01-08", dsn=tmp_preprod_db, account_id=None)
+    db.record_metrics(v2, views=10, captured_at="2026-01-08", dsn=tmp_preprod_db, account_id=None)
 
     result = app_main.performance_rows(posted_within="all")
     classes = {r["title"]: r["css_class"] for r in result["rows"]}
@@ -270,8 +269,8 @@ def test_performance_rows_colours_against_the_same_window(tmp_preprod_db):
 def test_performance_rows_respects_the_posted_window(tmp_preprod_db):
     old_date = (date.today() - timedelta(days=400)).isoformat()
     old_measured = (date.today() - timedelta(days=393)).isoformat()
-    v_old = db.add_video("Old", "youtube", old_date, path=tmp_preprod_db, account_id=None)
-    db.record_metrics(v_old, views=99999, captured_at=old_measured, path=tmp_preprod_db, account_id=None)
+    v_old = db.add_video("Old", "youtube", old_date, dsn=tmp_preprod_db, account_id=None)
+    db.record_metrics(v_old, views=99999, captured_at=old_measured, dsn=tmp_preprod_db, account_id=None)
 
     titles = [r["title"] for r in app_main.performance_rows()["rows"]]
     assert "Old" not in titles          # default window: last 6 months
@@ -288,7 +287,7 @@ def test_video_detail_404s_for_missing_video(tmp_db):
 
 def test_video_detail_shows_metadata(tmp_db):
     vid = db.add_video("Night Run", "youtube", "2025-09-29",
-                       url="https://x", path=tmp_db, account_id=None)
+                       url="https://x", dsn=tmp_db, account_id=None)
     response = client.get(f"/videos/{vid}")
     assert response.status_code == 200
     assert "Night Run" in response.text
@@ -296,14 +295,14 @@ def test_video_detail_shows_metadata(tmp_db):
 
 
 def test_video_detail_shows_snapshot_history(tmp_db):
-    vid = db.add_video("Night Run", "youtube", "2025-09-29", path=tmp_db, account_id=None)
-    db.record_metrics(vid, views=82, captured_at="2026-07-29", path=tmp_db, account_id=None)
+    vid = db.add_video("Night Run", "youtube", "2025-09-29", dsn=tmp_db, account_id=None)
+    db.record_metrics(vid, views=82, captured_at="2026-07-29", dsn=tmp_db, account_id=None)
     response = client.get(f"/videos/{vid}")
     assert "82" in response.text
 
 
 def test_video_detail_no_originating_pitch(tmp_db):
-    vid = db.add_video("Night Run", "youtube", "2025-09-29", path=tmp_db, account_id=None)
+    vid = db.add_video("Night Run", "youtube", "2025-09-29", dsn=tmp_db, account_id=None)
     response = client.get(f"/videos/{vid}")
     assert "Not linked to a pitch" in response.text
 
@@ -311,13 +310,13 @@ def test_video_detail_no_originating_pitch(tmp_db):
 def test_video_detail_shows_originating_pitch_when_linked(tmp_db):
     run_id = db.save_pitch_run(
         [{"number": n, "title": f"S{n}", "logline": f"L{n}.", "story_note": "n"} for n in range(1, 11)],
-        path=tmp_db,
+        dsn=tmp_db,
     )
     with db.connect(tmp_db) as conn:
         idea_id = conn.execute(
-            "SELECT id FROM ideas WHERE run_id = ? AND number = 2", (run_id,)
+            "SELECT id FROM ideas WHERE run_id = %s AND number = 2", (run_id,)
         ).fetchone()[0]
-    vid = db.add_video("S2 video", "tiktok", "2026-01-01", idea_id=idea_id, path=tmp_db, account_id=None)
+    vid = db.add_video("S2 video", "tiktok", "2026-01-01", idea_id=idea_id, dsn=tmp_db, account_id=None)
 
     response = client.get(f"/videos/{vid}")
     assert "S2" in response.text
@@ -328,7 +327,7 @@ def test_video_detail_shows_originating_pitch_when_linked(tmp_db):
 
 def test_post_metrics_refresh_records_a_snapshot(tmp_db, monkeypatch):
     vid = db.add_video("Night Run", "youtube", "2025-09-29",
-                       url="https://www.youtube.com/watch?v=abc12345678", path=tmp_db, account_id=None)
+                       url="https://www.youtube.com/watch?v=abc12345678", dsn=tmp_db, account_id=None)
     monkeypatch.setattr(
         app_main.youtube, "fetch_video_stats",
         lambda video_id, api_key: {"views": 82, "likes": 5, "comments": 1},
@@ -339,7 +338,7 @@ def test_post_metrics_refresh_records_a_snapshot(tmp_db, monkeypatch):
 
     assert response.status_code in (302, 303, 307)
     assert "message=" in response.headers["location"]
-    history = db.get_video_history(vid, path=tmp_db, account_id=None)
+    history = db.get_video_history(vid, dsn=tmp_db, account_id=None)
     assert history[-1]["views"] == 82
 
 
@@ -350,13 +349,13 @@ def test_post_metrics_refresh_404s_for_missing_video(tmp_db):
 
 def test_post_metrics_refresh_reports_failure_without_breaking(tmp_db, monkeypatch):
     vid = db.add_video("Night Run", "youtube", "2025-09-29",
-                       url="https://www.youtube.com/watch?v=abc12345678", path=tmp_db, account_id=None)
+                       url="https://www.youtube.com/watch?v=abc12345678", dsn=tmp_db, account_id=None)
     monkeypatch.delenv("YOUTUBE_API_KEY", raising=False)
 
     response = client.post(f"/metrics/refresh/{vid}", follow_redirects=False)
 
     assert response.status_code in (302, 303, 307)
-    assert db.get_video_history(vid, path=tmp_db, account_id=None) == []
+    assert db.get_video_history(vid, dsn=tmp_db, account_id=None) == []
 
 
 def test_metrics_new_shows_refresh_message(tmp_db):
@@ -366,13 +365,13 @@ def test_metrics_new_shows_refresh_message(tmp_db):
 
 def test_metrics_new_shows_refresh_button_for_youtube(tmp_db):
     db.add_video("Night Run", "youtube", "2025-09-29",
-                 url="https://www.youtube.com/watch?v=abc", path=tmp_db, account_id=None)
+                 url="https://www.youtube.com/watch?v=abc", dsn=tmp_db, account_id=None)
     response = client.get("/metrics/new")
     assert "Refresh" in response.text
 
 
 def test_metrics_new_no_refresh_button_for_non_youtube(tmp_db):
-    db.add_video("Some TikTok video", "tiktok", "2025-09-29", path=tmp_db, account_id=None)
+    db.add_video("Some TikTok video", "tiktok", "2025-09-29", dsn=tmp_db, account_id=None)
     response = client.get("/metrics/new")
     # the page prose mentions Refresh; what must be absent is the button itself
     assert 'form="refresh-' not in response.text
@@ -413,7 +412,7 @@ def test_post_import_reports_failure_without_breaking(tmp_db, monkeypatch):
                            follow_redirects=False)
 
     assert response.status_code in (302, 303, 307)
-    assert db.list_videos(path=tmp_db, account_id=None) == []
+    assert db.list_videos(dsn=tmp_db, account_id=None) == []
 
 
 def test_post_import_requires_a_handle(tmp_db):
@@ -470,7 +469,7 @@ def test_grade_tab_grades_the_one_scene_prompt(tmp_dev_db):
     grading surface -- no separate idea form, three verdicts on it."""
     cid = preprod.save_concept(
         {"title": "The Waiting", "hook": "", "shots": SCENE_SHOT},
-        brand="antihero", path=tmp_dev_db,
+        brand="antihero", dsn=tmp_dev_db,
     
         account_id=None,)
     text = client.get(f"/studio?tab=grade&mode=shot&concept_id={cid}").text
@@ -491,7 +490,7 @@ def test_grade_tab_keeps_the_idea_form_for_legacy_shot_lists(tmp_dev_db):
             dict(SCENE_SHOT[0]),
             {"n": 2, "type": "BROLL", "source": "AI", "tool": "KLING",
              "desc": "d", "prompt": "second prompt"}]},
-        brand="antihero", path=tmp_dev_db, account_id=None)
+        brand="antihero", dsn=tmp_dev_db, account_id=None)
     text = client.get(f"/studio?tab=grade&mode=shot&concept_id={cid}").text
     assert "LEGACY SHOT LIST" in text
     assert "TEACH THE IDEA ITSELF" in text
@@ -500,7 +499,7 @@ def test_grade_tab_keeps_the_idea_form_for_legacy_shot_lists(tmp_dev_db):
 
 def test_grade_tab_says_so_when_a_concept_has_no_prompt(tmp_dev_db):
     cid = preprod.save_concept({"title": "Bare", "shots": CONCEPT_SHOTS},
-                               brand="antihero", path=tmp_dev_db, account_id=None)
+                               brand="antihero", dsn=tmp_dev_db, account_id=None)
     text = client.get(f"/studio?tab=grade&mode=shot&concept_id={cid}").text
     assert "no prompt yet" in text
 
@@ -508,26 +507,26 @@ def test_grade_tab_says_so_when_a_concept_has_no_prompt(tmp_dev_db):
 def test_stats_tab_shows_shoot_rate(tmp_dev_db):
     ids = [
         preprod.save_concept({"title": f"C{n}", "shots": CONCEPT_SHOTS},
-                             brand="antihero", path=tmp_dev_db, account_id=None)
+                             brand="antihero", dsn=tmp_dev_db, account_id=None)
         for n in range(4)
     ]
-    preprod.mark_shot(ids[0], path=tmp_dev_db, account_id=None)
+    preprod.mark_shot(ids[0], dsn=tmp_dev_db, account_id=None)
     response = client.get("/studio?tab=stats")
     assert "Shoot rate · 1/4" in response.text
 
 
 def test_post_mark_concept_shot_toggles_and_redirects(tmp_preprod_db):
     concept_id = preprod.save_concept(
-        {"title": "The Waiting", "shots": CONCEPT_SHOTS}, brand="antihero", path=tmp_preprod_db,
+        {"title": "The Waiting", "shots": CONCEPT_SHOTS}, brand="antihero", dsn=tmp_preprod_db,
     
         account_id=None,)
     response = client.post(f"/concepts/{concept_id}/shot", follow_redirects=False)
 
     assert response.status_code in (302, 303, 307)
-    assert preprod.get_concept(concept_id, path=tmp_preprod_db, account_id=None)["shot_done"] == 1
+    assert preprod.get_concept(concept_id, dsn=tmp_preprod_db, account_id=None)["shot_done"] == 1
 
     client.post(f"/concepts/{concept_id}/shot", follow_redirects=False)
-    assert preprod.get_concept(concept_id, path=tmp_preprod_db, account_id=None)["shot_done"] == 0
+    assert preprod.get_concept(concept_id, dsn=tmp_preprod_db, account_id=None)["shot_done"] == 0
 
 
 def test_post_mark_concept_shot_404s_for_missing_concept(tmp_preprod_db):
@@ -608,7 +607,7 @@ def test_promoting_a_channel_from_the_page(tmp_autonomy_db):
     response = client.post("/channels/zeropage/autonomy", data={"autonomy": "queue"},
                            follow_redirects=False)
     assert response.status_code == 303
-    assert autonomy.get_channel("zeropage", path=tmp_autonomy_db)["autonomy"] == "queue"
+    assert autonomy.get_channel("zeropage", dsn=tmp_autonomy_db)["autonomy"] == "queue"
 
     assert client.post("/channels/zeropage/autonomy",
                        data={"autonomy": "yolo"}).status_code == 400
@@ -621,11 +620,11 @@ def test_kill_toggle_round_trip(tmp_autonomy_db, monkeypatch):
     monkeypatch.delenv("ZEROPAGE_KILL", raising=False)
     response = client.post("/kill", follow_redirects=False)
     assert response.headers["location"].startswith("/studio?tab=settings")
-    assert autonomy.killed(path=tmp_autonomy_db) is True
+    assert autonomy.killed(dsn=tmp_autonomy_db) is True
     assert "Kill switch is ON" in client.get("/studio?tab=settings").text
 
     client.post("/kill", follow_redirects=False)
-    assert autonomy.killed(path=tmp_autonomy_db) is False
+    assert autonomy.killed(dsn=tmp_autonomy_db) is False
 
 
 def test_note_form_writes_a_pending_correction(tmp_autonomy_db):
@@ -633,15 +632,15 @@ def test_note_form_writes_a_pending_correction(tmp_autonomy_db):
     response = client.post("/holds/note", data={"note": "less neon, more silence"},
                            follow_redirects=False)
     assert response.status_code == 303
-    [pending] = autonomy.pending_corrections(path=tmp_autonomy_db)
+    [pending] = autonomy.pending_corrections(dsn=tmp_autonomy_db)
     assert pending["note"] == "less neon, more silence"
 
     client.post("/holds/note", data={"note": "  "}, follow_redirects=False)
-    assert len(autonomy.pending_corrections(path=tmp_autonomy_db)) == 1  # blanks dropped
+    assert len(autonomy.pending_corrections(dsn=tmp_autonomy_db)) == 1  # blanks dropped
 
 
 def test_video_detail_still_has_its_nav(tmp_preprod_db):
-    vid = db.add_video("Night Run", "youtube", "2025-09-29", path=tmp_preprod_db, account_id=None)
+    vid = db.add_video("Night Run", "youtube", "2025-09-29", dsn=tmp_preprod_db, account_id=None)
     response = client.get(f"/videos/{vid}")
     assert 'href="/analytics"' in response.text
 
@@ -759,8 +758,8 @@ def test_studio_renders_with_videos_logged_but_unmeasured(tmp_dev_db):
     """The old empty-state distinction lived in the strip the ZP home
     no longer renders; what must survive is that the page renders with
     data in every state and the video is correctly absent at 7 days."""
-    vid = db.add_video("Night Run", "youtube", "2025-09-29", path=tmp_dev_db, account_id=None)
-    db.record_metrics(vid, views=82, captured_at="2026-07-29", path=tmp_dev_db, account_id=None)
+    vid = db.add_video("Night Run", "youtube", "2025-09-29", dsn=tmp_dev_db, account_id=None)
+    db.record_metrics(vid, views=82, captured_at="2026-07-29", dsn=tmp_dev_db, account_id=None)
 
     response = client.get("/studio")
     assert response.status_code == 200
@@ -772,10 +771,10 @@ def test_studio_renders_with_videos_logged_but_unmeasured(tmp_dev_db):
 # ---------- /analytics ----------
 
 def test_analytics_page_renders_with_tiles_and_bars(tmp_db):
-    v1 = db.add_video("Big", "youtube", "2026-01-01", path=tmp_db, account_id=None)
-    v2 = db.add_video("Small", "youtube", "2026-01-02", path=tmp_db, account_id=None)
-    db.record_metrics(v1, views=1000, likes=10, captured_at="2026-01-08", path=tmp_db, account_id=None)
-    db.record_metrics(v2, views=250, likes=5, captured_at="2026-01-08", path=tmp_db, account_id=None)
+    v1 = db.add_video("Big", "youtube", "2026-01-01", dsn=tmp_db, account_id=None)
+    v2 = db.add_video("Small", "youtube", "2026-01-02", dsn=tmp_db, account_id=None)
+    db.record_metrics(v1, views=1000, likes=10, captured_at="2026-01-08", dsn=tmp_db, account_id=None)
+    db.record_metrics(v2, views=250, likes=5, captured_at="2026-01-08", dsn=tmp_db, account_id=None)
 
     response = client.get("/analytics")
     assert response.status_code == 200
@@ -1002,8 +1001,8 @@ def test_clean_title_keeps_a_title_that_is_only_hashtags():
 
 def test_analytics_page_shows_cleaned_titles(tmp_db):
     vid = db.add_video("Margarita Recipe #cocktail #margarita #fyp",
-                       "youtube", "2026-01-01", path=tmp_db, account_id=None)
-    db.record_metrics(vid, views=100, captured_at="2026-01-08", path=tmp_db, account_id=None)
+                       "youtube", "2026-01-01", dsn=tmp_db, account_id=None)
+    db.record_metrics(vid, views=100, captured_at="2026-01-08", dsn=tmp_db, account_id=None)
     response = client.get("/analytics")
     assert "Margarita Recipe" in response.text
     assert "#cocktail" not in response.text
@@ -1016,7 +1015,7 @@ def test_metrics_new_still_works_as_an_alias(tmp_db):
 
 
 def test_post_metrics_redirects_to_analytics(tmp_db):
-    vid = db.add_video("T", "youtube", "2026-01-01", path=tmp_db, account_id=None)
+    vid = db.add_video("T", "youtube", "2026-01-01", dsn=tmp_db, account_id=None)
     response = client.post("/metrics/new", data={f"views_{vid}": "5"},
                            follow_redirects=False)
     assert "/analytics?updated=1" in response.headers["location"]
@@ -1112,10 +1111,10 @@ def test_schema_uses_the_configured_site_url(monkeypatch):
 # ---------- inline actions land back on the canvas ----------
 
 def test_mark_shot_from_the_studio_returns_to_the_studio(tmp_preprod_db):
-    preprod.add_location("garage", {"space": "garage"}, path=tmp_preprod_db, account_id=None)
+    preprod.add_location("garage", {"space": "garage"}, dsn=tmp_preprod_db, account_id=None)
     cid = preprod.save_concept(
         {"title": "T", "hook": "h", "logline": "l", "shots": []},
-        brand="antihero", path=tmp_preprod_db,
+        brand="antihero", dsn=tmp_preprod_db,
     
         account_id=None,)
     response = client.post(f"/concepts/{cid}/shot", data={"next": "/studio"},
@@ -1124,10 +1123,10 @@ def test_mark_shot_from_the_studio_returns_to_the_studio(tmp_preprod_db):
 
 
 def test_mark_shot_without_next_still_returns_to_concepts(tmp_preprod_db):
-    preprod.add_location("garage", {"space": "garage"}, path=tmp_preprod_db, account_id=None)
+    preprod.add_location("garage", {"space": "garage"}, dsn=tmp_preprod_db, account_id=None)
     cid = preprod.save_concept(
         {"title": "T", "hook": "h", "logline": "l", "shots": []},
-        brand="antihero", path=tmp_preprod_db,
+        brand="antihero", dsn=tmp_preprod_db,
     
         account_id=None,)
     response = client.post(f"/concepts/{cid}/shot", follow_redirects=False)
@@ -1147,7 +1146,7 @@ def test_post_metrics_refresh_dispatches_instagram(tmp_db, monkeypatch):
     """An Instagram row refreshes through instagram.py, the same shape
     YouTube already has -- one dispatch on the stored platform."""
     vid = db.add_video("Reel", "instagram", "2026-08-01",
-                       url="ig://17912345678901234", path=tmp_db, account_id=None)
+                       url="ig://17912345678901234", dsn=tmp_db, account_id=None)
 
     seen = {}
 
@@ -1166,7 +1165,7 @@ def test_post_metrics_refresh_dispatches_instagram(tmp_db, monkeypatch):
 
 
 def test_metrics_page_offers_refresh_for_instagram(tmp_db):
-    db.add_video("Reel", "instagram", "2026-08-01", path=tmp_db, account_id=None)
+    db.add_video("Reel", "instagram", "2026-08-01", dsn=tmp_db, account_id=None)
     response = client.get("/metrics/new")
     assert 'form="refresh-' in response.text
 
@@ -1184,7 +1183,7 @@ def _planned_concept(path):
          "shots": [{"n": 1, "type": "BROLL", "source": "AI", "tool": "KLING",
                     "location": "hallway", "desc": "the handle turns",
                     "light": "spill", "prompt": "a handle turning in the dark"}]},
-        brand="antihero", path=path, account_id=None)
+        brand="antihero", dsn=path, account_id=None)
 
 
 def test_attach_reference_by_url_lands_on_the_shot(tmp_preprod_db):
@@ -1194,17 +1193,17 @@ def test_attach_reference_by_url_lands_on_the_shot(tmp_preprod_db):
         data={"reference_url": "https://cdn.example/take.jpg", "next": "/concepts"},
         follow_redirects=False)
     assert response.status_code == 303
-    shots = preprod.get_concept(cid, path=tmp_preprod_db, account_id=None)["shots"]
+    shots = preprod.get_concept(cid, dsn=tmp_preprod_db, account_id=None)["shots"]
     assert shots[0]["reference_image"] == "https://cdn.example/take.jpg"
 
 
 def test_clear_reference_detaches_it(tmp_preprod_db):
     cid = _planned_concept(tmp_preprod_db)
     preprod.set_shot_reference_image(cid, 1, "https://cdn.example/take.jpg",
-                                     path=tmp_preprod_db, account_id=None)
+                                     dsn=tmp_preprod_db, account_id=None)
     client.post(f"/concepts/{cid}/shots/1/reference",
                 data={"remove": "1"}, follow_redirects=False)
-    shots = preprod.get_concept(cid, path=tmp_preprod_db, account_id=None)["shots"]
+    shots = preprod.get_concept(cid, dsn=tmp_preprod_db, account_id=None)["shots"]
     assert "reference_image" not in shots[0]
 
 
@@ -1237,9 +1236,9 @@ def test_settings_post_saves_and_takes_effect(tmp_dev_db):
                            follow_redirects=False)
     assert response.status_code == 303
     assert response.headers["location"].startswith("/studio?tab=settings")
-    assert settings.get("prompt_gate_min", path=tmp_dev_db) == 9
-    assert settings.get("grade_threshold", path=tmp_dev_db) == 0.7
-    assert settings.get("eval_k", path=tmp_dev_db) == 8
+    assert settings.get("prompt_gate_min", dsn=tmp_dev_db) == 9
+    assert settings.get("grade_threshold", dsn=tmp_dev_db) == 0.7
+    assert settings.get("eval_k", dsn=tmp_dev_db) == 8
 
 
 def test_settings_post_rejects_out_of_range_without_saving(tmp_dev_db):
@@ -1247,25 +1246,25 @@ def test_settings_post_rejects_out_of_range_without_saving(tmp_dev_db):
     response = client.post("/studio/settings", data={"prompt_gate_min": "42"},
                            follow_redirects=False)
     assert "between" in unquote(response.headers["location"])
-    assert settings.get("prompt_gate_min", path=tmp_dev_db) == 7
+    assert settings.get("prompt_gate_min", dsn=tmp_dev_db) == 7
 
 
 # ---------- the Dev Studio: the Grade queue ----------
 
 def _drain_golden(path):
     from src import evalstore
-    for g in evalstore.list_golden(path=path):
-        evalstore.delete_golden(g["id"], path=path)
+    for g in evalstore.list_golden(dsn=path):
+        evalstore.delete_golden(g["id"], dsn=path)
 
 
 def test_grade_draw_shot_picks_only_ungraded_concepts(tmp_dev_db):
     graded = preprod.save_concept({"title": "Graded"}, brand="antihero",
-                                  path=tmp_dev_db, account_id=None)
+                                  dsn=tmp_dev_db, account_id=None)
     preprod.save_judge_score(graded, {"overall": 8, "taste_fit": 8,
                                       "performance": 8, "reasons": []},
-                             path=tmp_dev_db, account_id=None)
+                             dsn=tmp_dev_db, account_id=None)
     ungraded = preprod.save_concept({"title": "Fresh meat"}, brand="antihero",
-                                    path=tmp_dev_db, account_id=None)
+                                    dsn=tmp_dev_db, account_id=None)
     response = client.get("/grade/draw?mode=shot", follow_redirects=False)
     assert response.status_code == 303
     assert f"concept_id={ungraded}" in response.headers["location"]
@@ -1275,7 +1274,7 @@ def test_grade_draw_shot_picks_only_ungraded_concepts(tmp_dev_db):
 def test_grade_draw_golden_picks_a_golden_query(tmp_dev_db):
     from src import evalstore
     _drain_golden(tmp_dev_db)
-    gid = evalstore.add_golden("night lighting", ["notes.md"], path=tmp_dev_db)
+    gid = evalstore.add_golden("night lighting", ["notes.md"], dsn=tmp_dev_db)
     response = client.get("/grade/draw?mode=golden", follow_redirects=False)
     assert f"golden_id={gid}" in response.headers["location"]
 
@@ -1292,7 +1291,7 @@ def test_grade_tab_surfaces_concept_warnings(tmp_dev_db):
     cid = preprod.save_concept(
         {"title": "W", "shots": CONCEPT_SHOTS}, brand="antihero",
         warnings=["shot 1: location 'rooftop helipad' is not a described space"],
-        path=tmp_dev_db, account_id=None)
+        dsn=tmp_dev_db, account_id=None)
     assert "rooftop helipad" in client.get(
         f"/studio?tab=grade&mode=shot&concept_id={cid}").text
 
@@ -1312,7 +1311,7 @@ def test_grade_fresh_generates_without_saving_a_concept(tmp_dev_db, monkeypatch)
     assert response.status_code == 303
     location = unquote(response.headers["location"])
     assert "mode=fresh" in location and "Throwaway" in location
-    assert preprod.list_concepts(path=tmp_dev_db, account_id=None) == []   # nothing saved
+    assert preprod.list_concepts(dsn=tmp_dev_db, account_id=None) == []   # nothing saved
 
     # the redirect renders the item for grading
     follow = client.get(response.headers["location"]).text
@@ -1334,23 +1333,23 @@ def test_grade_fresh_verdict_teaches_winners(tmp_dev_db):
                            data={"text": "Throwaway idea", "verdict": "worked"},
                            follow_redirects=False)
     assert response.status_code == 303
-    [row] = winners.list_all(path=tmp_dev_db)
+    [row] = winners.list_all(dsn=tmp_dev_db)
     assert row["video_ref"] == "fresh-grade"
     assert row["prompt"] == "Throwaway idea"
-    assert preprod.list_concepts(path=tmp_dev_db, account_id=None) == []
+    assert preprod.list_concepts(dsn=tmp_dev_db, account_id=None) == []
 
 
 def test_grade_golden_mark_adds_and_removes_a_label(tmp_dev_db):
     from src import evalstore
-    gid = evalstore.add_golden("night lighting", ["a.md"], path=tmp_dev_db)
+    gid = evalstore.add_golden("night lighting", ["a.md"], dsn=tmp_dev_db)
     client.post(f"/grade/golden/{gid}/mark",
                 data={"source": "b.md", "action": "add"}, follow_redirects=False)
-    golden = {g["id"]: g for g in evalstore.list_golden(path=tmp_dev_db)}
+    golden = {g["id"]: g for g in evalstore.list_golden(dsn=tmp_dev_db)}
     assert set(golden[gid]["relevant"]) == {"a.md", "b.md"}
 
     client.post(f"/grade/golden/{gid}/mark",
                 data={"source": "b.md", "action": "remove"}, follow_redirects=False)
-    golden = {g["id"]: g for g in evalstore.list_golden(path=tmp_dev_db)}
+    golden = {g["id"]: g for g in evalstore.list_golden(dsn=tmp_dev_db)}
     assert golden[gid]["relevant"] == ["a.md"]
 
     # removing the last label is refused -- a golden query with no
@@ -1359,17 +1358,17 @@ def test_grade_golden_mark_adds_and_removes_a_label(tmp_dev_db):
                            data={"source": "a.md", "action": "remove"},
                            follow_redirects=False)
     assert "relevant" in unquote(response.headers["location"])
-    golden = {g["id"]: g for g in evalstore.list_golden(path=tmp_dev_db)}
+    golden = {g["id"]: g for g in evalstore.list_golden(dsn=tmp_dev_db)}
     assert golden[gid]["relevant"] == ["a.md"]
 
 
 def test_grade_golden_delete_removes_and_draws_next(tmp_dev_db):
     from src import evalstore
     _drain_golden(tmp_dev_db)
-    gid = evalstore.add_golden("gone soon", ["x.md"], path=tmp_dev_db)
+    gid = evalstore.add_golden("gone soon", ["x.md"], dsn=tmp_dev_db)
     response = client.post(f"/grade/golden/{gid}/delete", follow_redirects=False)
     assert response.headers["location"].startswith("/grade/draw?mode=golden")
-    assert evalstore.list_golden(path=tmp_dev_db) == []
+    assert evalstore.list_golden(dsn=tmp_dev_db) == []
 
 
 # ---------- the Dev Studio: dataset export ----------
@@ -1377,7 +1376,7 @@ def test_grade_golden_delete_removes_and_draws_next(tmp_dev_db):
 def test_dataset_export_golden_json_and_csv(tmp_dev_db):
     from src import evalstore
     _drain_golden(tmp_dev_db)
-    evalstore.add_golden("night lighting", ["notes.md"], path=tmp_dev_db)
+    evalstore.add_golden("night lighting", ["notes.md"], dsn=tmp_dev_db)
 
     as_json = client.get("/dataset/export?what=golden&fmt=json")
     assert as_json.status_code == 200
@@ -1394,7 +1393,7 @@ def test_dataset_export_golden_json_and_csv(tmp_dev_db):
 def test_dataset_export_runs_and_rejects_garbage(tmp_dev_db):
     from src import evalstore
     evalstore.save_run("r1", {"k": 5, "n": 2, "hit_rate": 0.5, "mrr": 0.4,
-                              "per_query": []}, p50_ms=12, path=tmp_dev_db)
+                              "per_query": []}, p50_ms=12, dsn=tmp_dev_db)
     as_csv = client.get("/dataset/export?what=runs&fmt=csv")
     assert "r1" in as_csv.text
     assert client.get("/dataset/export?what=bogus&fmt=json").status_code == 400
@@ -1402,9 +1401,9 @@ def test_dataset_export_runs_and_rejects_garbage(tmp_dev_db):
 
 def test_dataset_tab_lists_golden_and_runs(tmp_dev_db):
     from src import evalstore
-    evalstore.add_golden("tab query", ["notes.md"], path=tmp_dev_db)
+    evalstore.add_golden("tab query", ["notes.md"], dsn=tmp_dev_db)
     evalstore.save_run("tab run", {"k": 5, "n": 1, "hit_rate": 1.0, "mrr": 1.0,
-                                   "per_query": []}, path=tmp_dev_db)
+                                   "per_query": []}, dsn=tmp_dev_db)
     text = client.get("/studio?tab=dataset").text
     assert "tab query" in text
     assert "tab run" in text
@@ -1478,7 +1477,7 @@ def test_dev_studio_api_delegates_to_the_same_functions(tmp_dev_db, monkeypatch)
     from src import evalstore
     evalstore.save_run("delegated", {"k": 5, "n": 1, "hit_rate": 1.0,
                                      "mrr": 1.0, "per_query": []},
-                       path=tmp_dev_db)
+                       dsn=tmp_dev_db)
     assert client.get("/studio/api/evals/runs").json() == api_mod.evals_runs()
 
 
@@ -1493,7 +1492,7 @@ def test_dev_studio_exposes_shared_crag_telemetry_only_on_dev_route(
         "rewrite_attempted": True, "requery_triggered": True,
         "score_improved": True, "rewrite_adopted": True,
         "threshold": 0.55,
-    }, path=tmp_dev_db)
+    }, dsn=tmp_dev_db)
     response = client.get("/studio/api/evals/requeries")
     assert response.status_code == 200
     assert response.json()["requery_rate"] == 1.0
@@ -1570,9 +1569,9 @@ def test_teach_it_records_both_halves(tmp_dev_db, monkeypatch):
     from src import winners
     winners.init(tmp_dev_db)
     cid = preprod.save_concept({"title": "T", "shots": CONCEPT_SHOTS},
-                               brand="antihero", path=tmp_dev_db, account_id=None)
+                               brand="antihero", dsn=tmp_dev_db, account_id=None)
     monkeypatch.setattr(app_main.winners, "ingest_to_rag",
-                        lambda entry_id, path=None, project=None: {"ok": True, "chunks": 1})
+                        lambda entry_id, dsn=None, project=None: {"ok": True, "chunks": 1})
 
     response = client.post(
         f"/concepts/{cid}/shots/1/verdict",
@@ -1583,7 +1582,7 @@ def test_teach_it_records_both_halves(tmp_dev_db, monkeypatch):
     assert response.status_code == 303
     assert "Taught" in unquote(response.headers["location"])
 
-    rows = {w["verdict"]: w for w in winners.list_all(path=tmp_dev_db)}
+    rows = {w["verdict"]: w for w in winners.list_all(dsn=tmp_dev_db)}
     assert rows["didnt_work"]["prompt"] == "vague prompt"
     assert rows["worked"]["prompt"] == "the fixed prompt"
     assert rows["didnt_work"]["pair_id"] == rows["worked"]["id"]
@@ -1593,13 +1592,13 @@ def test_deny_without_a_replacement_is_unchanged(tmp_dev_db, monkeypatch):
     from src import winners
     winners.init(tmp_dev_db)
     cid = preprod.save_concept({"title": "T", "shots": CONCEPT_SHOTS},
-                               brand="antihero", path=tmp_dev_db, account_id=None)
+                               brand="antihero", dsn=tmp_dev_db, account_id=None)
     monkeypatch.setattr(app_main.winners, "ingest_to_rag",
-                        lambda entry_id, path=None, project=None: {"ok": True, "chunks": 1})
+                        lambda entry_id, dsn=None, project=None: {"ok": True, "chunks": 1})
     client.post(f"/concepts/{cid}/shots/1/verdict",
                 data={"text": "vague prompt", "verdict": "didnt_work"},
                 follow_redirects=False)
-    [row] = winners.list_all(path=tmp_dev_db)
+    [row] = winners.list_all(dsn=tmp_dev_db)
     assert row["verdict"] == "didnt_work" and row["pair_id"] is None
 
 
@@ -1609,14 +1608,14 @@ def test_approve_ignores_a_stray_replacement(tmp_dev_db, monkeypatch):
     from src import winners
     winners.init(tmp_dev_db)
     cid = preprod.save_concept({"title": "T", "shots": CONCEPT_SHOTS},
-                               brand="antihero", path=tmp_dev_db, account_id=None)
+                               brand="antihero", dsn=tmp_dev_db, account_id=None)
     monkeypatch.setattr(app_main.winners, "ingest_to_rag",
-                        lambda entry_id, path=None, project=None: {"ok": True, "chunks": 1})
+                        lambda entry_id, dsn=None, project=None: {"ok": True, "chunks": 1})
     client.post(f"/concepts/{cid}/shots/1/verdict",
                 data={"text": "good prompt", "replacement": "ignored",
                       "verdict": "worked"},
                 follow_redirects=False)
-    [row] = winners.list_all(path=tmp_dev_db)
+    [row] = winners.list_all(dsn=tmp_dev_db)
     assert row["prompt"] == "good prompt" and row["verdict"] == "worked"
 
 
@@ -1625,7 +1624,7 @@ def test_grade_tab_offers_the_better_prompt_field(tmp_dev_db):
         {"title": "T", "shots": [{"n": 1, "type": "BROLL", "source": "AI",
                                   "tool": "RUNWAY", "desc": "d",
                                   "prompt": "a prompt"}]},
-        brand="antihero", path=tmp_dev_db, account_id=None)
+        brand="antihero", dsn=tmp_dev_db, account_id=None)
     page = client.get(f"/studio?tab=grade&mode=shot&concept_id={cid}").text
     assert 'name="replacement"' in page
     assert "A BETTER PROMPT" in page
@@ -1638,7 +1637,7 @@ def _scene_concept(path):
         {"title": "T", "shots": [{"n": 1, "type": "BROLL", "source": "AI",
                                   "tool": "RUNWAY", "desc": "d",
                                   "prompt": "the model's prompt"}]},
-        brand="antihero", path=path, account_id=None)
+        brand="antihero", dsn=path, account_id=None)
 
 
 @pytest.fixture
@@ -1646,7 +1645,7 @@ def teachable(tmp_dev_db, monkeypatch):
     from src import winners
     winners.init(tmp_dev_db)
     monkeypatch.setattr(app_main.winners, "ingest_to_rag",
-                        lambda entry_id, path=None, project=None: {"ok": True, "chunks": 1})
+                        lambda entry_id, dsn=None, project=None: {"ok": True, "chunks": 1})
     return tmp_dev_db
 
 
@@ -1657,7 +1656,7 @@ def test_approve_teaches_the_prompt_as_written(teachable):
                            data={"text": "the model's prompt", "verdict": "approve"},
                            follow_redirects=False)
     assert "imitate it" in unquote(response.headers["location"])
-    [row] = winners.list_all(path=teachable)
+    [row] = winners.list_all(dsn=teachable)
     assert row["verdict"] == "worked" and row["pair_id"] is None
 
 
@@ -1670,7 +1669,7 @@ def test_teach_it_swaps_in_my_version_and_avoids_the_model_s(teachable):
               "verdict": "teach"},
         follow_redirects=False)
     assert "Taught" in unquote(response.headers["location"])
-    rows = {w["verdict"]: w for w in winners.list_all(path=teachable)}
+    rows = {w["verdict"]: w for w in winners.list_all(dsn=teachable)}
     assert rows["worked"]["prompt"] == "my better prompt"
     assert rows["didnt_work"]["prompt"] == "the model's prompt"
     assert rows["worked"]["pair_id"] == rows["didnt_work"]["id"]
@@ -1686,7 +1685,7 @@ def test_teach_it_without_a_better_prompt_records_nothing(teachable):
                                  "replacement": "   "},
                            follow_redirects=False)
     assert "needs the better prompt" in unquote(response.headers["location"])
-    assert winners.list_all(path=teachable) == []
+    assert winners.list_all(dsn=teachable) == []
 
 
 def test_deny_steers_away(teachable):
@@ -1696,7 +1695,7 @@ def test_deny_steers_away(teachable):
                            data={"text": "the model's prompt", "verdict": "deny"},
                            follow_redirects=False)
     assert "steer away" in unquote(response.headers["location"])
-    [row] = winners.list_all(path=teachable)
+    [row] = winners.list_all(dsn=teachable)
     assert row["verdict"] == "didnt_work"
 
 
@@ -1706,4 +1705,4 @@ def test_legacy_verdict_values_still_work(teachable):
     cid = _scene_concept(teachable)
     client.post(f"/concepts/{cid}/shots/1/verdict",
                 data={"text": "p", "verdict": "worked"}, follow_redirects=False)
-    assert winners.list_all(path=teachable)[0]["verdict"] == "worked"
+    assert winners.list_all(dsn=teachable)[0]["verdict"] == "worked"

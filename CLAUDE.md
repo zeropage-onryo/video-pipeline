@@ -90,7 +90,7 @@ venv/bin/python -m src.mcp_server --engine   # stdio; Claude Desktop launches th
 # Registering it: ops/connect-claude.md (paste ops/claude-desktop-mcp.json, ⌘Q, reopen)
 
 # SIGN-IN — seed the auth tables once (idempotent); real login guards /ui + /api
-venv/bin/python -m src.accounts seed you@example.com [--password '...']
+venv/bin/python -m src.accounts seed you@example.com   # identity is Supabase Auth's
 
 # WEB APP — /ui (behind sign-in) is the product; 127.0.0.1:8000/studio is
 # the Dev Studio (dev posture only): one page of Stats / Grade / RAG
@@ -115,25 +115,35 @@ Requires `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) in `.env` for shootgen/promptgen
 locations' vision step. `YOUTUBE_API_KEY` is optional — it enables auto-fetching
 public view counts and importing a channel's videos; without it manual entry still works.
 
-**Sign-in (`app/auth.py` + `src/accounts.py`).** `/ui` and every `/api/*` route
-require a session; `/signin` offers Google OAuth, Discord OAuth, and
-email/password (argon2). The session is one signed httpOnly cookie
-(`zp_session`, itsdangerous, 30 days) — no server-side session table.
-`users` / `auth_identities` / `accounts` / `account_members` are the schema:
-identities keep providers decoupled from users (adding Apple/X later is a
-provider registration, not a migration). **The gate:** a fresh signup gets
-zero `account_members` rows and sees "no account access yet" — membership is
-granted by members (manual INSERT for v1), never by signing up.
-`auth.current_account` resolves the active brand from real membership; the
-`brand` cookie is only a preference among accounts you belong to, and
-`POST /brand/{name}` still flips it exactly as before. The legacy `/studio`
-pages deliberately stay open as the dev console. OAuth email-collision rule:
-same email, different method = "sign in the way you first signed up," never a
-silent merge — except the seeded passwordless bootstrap user, which the first
-provider sign-in claims. Env: `SESSION_SECRET`, `GOOGLE_CLIENT_ID/SECRET`,
-`DISCORD_CLIENT_ID/SECRET` (see .env.example; ephemeral dev secret with a
-stderr note when unset). Not built yet, deliberately: password reset (needs
-email infra), email verification, invite UI, sign-out-everywhere.
+**Sign-in (`app/auth.py` + `src/accounts.py`) is Supabase Auth's** (2026-09-03,
+step 6 of `docs/tasks/task-postgres-migration.md`). `/ui` and every `/api/*` route
+require a session; `/signin` offers Google, Discord and email/password, all of
+which GoTrue does — the passwords, the verified-email rule, account linking.
+Server-side, no client library: the OAuth doors redirect to
+`{SUPABASE_URL}/auth/v1/authorize` (PKCE), Supabase sends the person back to
+`/auth/callback?code=`, the code is exchanged at `/auth/v1/token`, and the access
+token is verified once with PyJWT (`SUPABASE_JWT_SECRET`, or the project's JWKS).
+The session is still one signed httpOnly cookie (`zp_session`, itsdangerous, 30
+days) carrying the Supabase user id — no refresh token is stored, the app never
+acts as the user against Supabase afterwards. `users` is a PROFILE MIRROR of
+`auth.users` keyed by the same UUID (no FK: the `auth` schema is Supabase's and the
+throwaway test Postgres has none); `accounts` / `account_members` are ours.
+**The gate:** a fresh sign-in gets a mirror row and zero `account_members` rows and
+sees "no account access yet" — membership is granted by members (`src.accounts
+invite`), never by signing up. An invite creates the row by EMAIL with a placeholder
+id and `claimed_at` NULL; the first sign-in with that email (`accounts.claim`)
+rewrites the id to the real UUID (the membership follows through ON UPDATE CASCADE).
+Same for the seeded bootstrap user. An email already claimed by a different UUID is
+refused, never merged. `auth.current_account` resolves the active brand from real
+membership; the `brand` cookie is only a preference among accounts you belong to,
+and `POST /brand/{name}` still flips it exactly as before. The legacy `/studio`
+pages deliberately stay open as the dev console. Env: `SUPABASE_URL`,
+`SUPABASE_ANON_KEY`, `SUPABASE_JWT_SECRET`, `SUPABASE_PROVIDERS` (default
+`google,discord`; enabling them, and the Google/Discord client ids, is dashboard
+work — see .env.example), `SESSION_SECRET` (ephemeral dev secret with a stderr note
+when unset). Tests stand in for GoTrue behind the one seam `auth.gotrue` and sign
+real HS256 tokens with a test secret. Not built yet, deliberately: an invite UI,
+sign-out-everywhere; password reset and email verification are Supabase's now.
 
 ## Architecture
 

@@ -161,7 +161,7 @@ def build_plan(db_path=None, account_id: Optional[int] = None) -> dict[str, Any]
     enter the plan only once generated media exists to post -- the plan
     never invents deliverables.
     """
-    kwargs = {"path": db_path} if db_path is not None else {}
+    kwargs = {"dsn": db_path} if db_path is not None else {}
     actions: list[dict[str, Any]] = []
     for concept in preprod.list_concepts(**kwargs, account_id=account_id):
         if concept.get("shot_done"):

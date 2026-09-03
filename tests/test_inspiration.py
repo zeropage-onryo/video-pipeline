@@ -7,46 +7,45 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from src import db, inspiration
+from src import inspiration
 
 client = TestClient(app)
 
 
 @pytest.fixture
-def tmp_db(tmp_path, monkeypatch):
+def tmp_db(pg, monkeypatch):
     from src import preprod
-    path = tmp_path / "app.db"
-    db.init_db(path)
+    path = pg
     preprod.init(path)              # reference_block reads the described rooms
     inspiration.init(path)          # seeds the three researched defaults
-    monkeypatch.setattr(db, "DB_PATH", path)
+    monkeypatch.setenv("DATABASE_URL", path)
     return path
 
 
 def test_init_seeds_the_three_defaults_and_is_idempotent(tmp_db):
-    handles = {a["handle"] for a in inspiration.list_accounts(path=tmp_db)}
+    handles = {a["handle"] for a in inspiration.list_accounts(dsn=tmp_db)}
     assert {"layed_black", "manny.walkerrr", "alexisglere"} <= handles
-    n = len(inspiration.list_accounts(path=tmp_db))
+    n = len(inspiration.list_accounts(dsn=tmp_db))
     inspiration.init(tmp_db)        # re-init must not duplicate
-    assert len(inspiration.list_accounts(path=tmp_db)) == n
+    assert len(inspiration.list_accounts(dsn=tmp_db)) == n
 
 
 def test_add_cleans_the_handle_and_upserts(tmp_db):
-    inspiration.add("@Kaye.Creatives", "AI", "profile text", path=tmp_db)
-    a = inspiration.get("kaye.creatives", path=tmp_db)
+    inspiration.add("@Kaye.Creatives", "AI", "profile text", dsn=tmp_db)
+    a = inspiration.get("kaye.creatives", dsn=tmp_db)
     assert a and a["note"] == "AI"
-    inspiration.add("kaye.creatives", "AI v2", "new profile", path=tmp_db)
-    assert inspiration.get("kaye.creatives", path=tmp_db)["profile"] == "new profile"
+    inspiration.add("kaye.creatives", "AI v2", "new profile", dsn=tmp_db)
+    assert inspiration.get("kaye.creatives", dsn=tmp_db)["profile"] == "new profile"
 
 
 def test_grounding_block_wraps_with_the_no_copy_rule(tmp_db):
-    block = inspiration.grounding_block(inspiration.get("layed_black", path=tmp_db))
+    block = inspiration.grounding_block(inspiration.get("layed_black", dsn=tmp_db))
     assert "riff" in block.lower() and "never copy" in block.lower()
     assert "layed_black" in block
 
 
 def test_combined_grounding_lists_every_account(tmp_db):
-    block = inspiration.combined_grounding(path=tmp_db)
+    block = inspiration.combined_grounding(dsn=tmp_db)
     for h in ("layed_black", "manny.walkerrr", "alexisglere"):
         assert h in block
     assert "never copy" in block.lower()
@@ -92,6 +91,6 @@ def test_add_and_delete_routes(tmp_db):
     client.post("/inspiration/add",
                 data={"handle": "newone", "note": "n", "profile": "p"},
                 follow_redirects=False)
-    assert inspiration.get("newone", path=tmp_db) is not None
+    assert inspiration.get("newone", dsn=tmp_db) is not None
     client.post("/inspiration/newone/delete", follow_redirects=False)
-    assert inspiration.get("newone", path=tmp_db) is None
+    assert inspiration.get("newone", dsn=tmp_db) is None

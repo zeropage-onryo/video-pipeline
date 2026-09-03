@@ -15,7 +15,7 @@ import json
 
 import pytest
 
-from src import db, framebank, imagesearch, mcp_server, preprod, refbin, scout
+from src import framebank, imagesearch, mcp_server, preprod, refbin, scout
 
 JPEG = b"\xff\xd8\xff" + b"pretend jpeg"
 
@@ -33,14 +33,13 @@ def real_jpeg() -> bytes:
 
 
 @pytest.fixture
-def tmp_db(tmp_path, monkeypatch):
-    path = tmp_path / "test.db"
-    db.init_db(path)
+def tmp_db(pg, tmp_path, monkeypatch):
+    path = pg
     preprod.init(path)
     scout.init(path)
     imagesearch.init(path)
     framebank.init(path)
-    monkeypatch.setattr(db, "DB_PATH", path)
+    monkeypatch.setenv("DATABASE_URL", path)
     monkeypatch.setattr(refbin, "REFS_DIR", tmp_path / "refs")
     monkeypatch.setattr(framebank, "FRAMES_DIR", tmp_path / "frames")
     return path
@@ -49,7 +48,7 @@ def tmp_db(tmp_path, monkeypatch):
 @pytest.fixture
 def a_spark(tmp_db):
     return mcp_server.bank_spark("zeropage", "the door that stays shut",
-                                 path=tmp_db)["id"]
+                                 dsn=tmp_db)["id"]
 
 
 @pytest.fixture
@@ -72,7 +71,7 @@ def stock(monkeypatch):
 
 def test_the_search_hands_back_ids_and_no_urls(tmp_db, stock):
     out = mcp_server.find_images("cold light on wet tile", brand="zeropage",
-                                 path=tmp_db)
+                                 dsn=tmp_db)
 
     assert out["count"] == 2
     for img in out["images"]:
@@ -91,7 +90,7 @@ def test_an_id_nobody_issued_buys_nothing(tmp_db, a_spark, stock):
 
 def mcp_search_bank(path, finding_id, candidate_id):
     return mcp_server.bank_reference(finding_id, candidate_id=candidate_id,
-                                     path=path)
+                                     dsn=path)
 
 
 def test_the_url_banked_is_the_one_the_server_stored(tmp_db, a_spark, stock,
@@ -101,28 +100,28 @@ def test_the_url_banked_is_the_one_the_server_stored(tmp_db, a_spark, stock,
     monkeypatch.setattr(refbin, "fetch",
                         lambda url: fetched.append(url) or refbin.save(JPEG))
 
-    found = mcp_server.find_images("wet tile", brand="zeropage", path=tmp_db)
+    found = mcp_server.find_images("wet tile", brand="zeropage", dsn=tmp_db)
     cid = found["images"][0]["id"]
     out = mcp_server.bank_reference(a_spark, candidate_id=cid,
                                     image_url="https://evil.example/other.jpg",
                                     source_url="https://evil.example/page",
-                                    path=tmp_db)
+                                    dsn=tmp_db)
 
     assert out["ok"]
     assert fetched == ["https://images.example/a.jpg"]
-    banked = scout.bin_for_finding(a_spark, path=tmp_db)
+    banked = scout.bin_for_finding(a_spark, dsn=tmp_db)
     assert banked[0]["source_url"] == "https://unsplash.example/photos/real-a"
 
 
 def test_attribution_comes_from_the_candidate_not_the_caller(tmp_db, a_spark,
                                                              stock, monkeypatch):
     monkeypatch.setattr(refbin, "fetch", lambda url: refbin.save(JPEG))
-    found = mcp_server.find_images("corridor", brand="zeropage", path=tmp_db)
+    found = mcp_server.find_images("corridor", brand="zeropage", dsn=tmp_db)
     cid = found["images"][1]["id"]
 
-    mcp_server.bank_reference(a_spark, candidate_id=cid, path=tmp_db)
+    mcp_server.bank_reference(a_spark, candidate_id=cid, dsn=tmp_db)
 
-    row = scout.bin_for_finding(a_spark, path=tmp_db)[0]
+    row = scout.bin_for_finding(a_spark, dsn=tmp_db)[0]
     assert row["source_url"] == "https://unsplash.example/photos/real-b"
     assert row["title"] == "an empty corridor"
 
@@ -138,7 +137,7 @@ def test_a_source_page_that_404s_is_refused(tmp_db, a_spark, monkeypatch):
     with pytest.raises(ValueError, match="does not resolve"):
         mcp_server.bank_reference(a_spark, image_url="https://cdn.example/x.jpg",
                                   source_url="https://unsplash.example/gone",
-                                  path=tmp_db)
+                                  dsn=tmp_db)
 
 
 def test_a_redeemed_id_skips_the_reachability_check(tmp_db, a_spark, stock,
@@ -148,11 +147,11 @@ def test_a_redeemed_id_skips_the_reachability_check(tmp_db, a_spark, stock,
     monkeypatch.setattr(mcp_server, "_reachable",
                         lambda url: pytest.fail("checked a URL we issued"))
     monkeypatch.setattr(refbin, "fetch", lambda url: refbin.save(JPEG))
-    found = mcp_server.find_images("tile", brand="zeropage", path=tmp_db)
+    found = mcp_server.find_images("tile", brand="zeropage", dsn=tmp_db)
 
     assert mcp_server.bank_reference(a_spark,
                                      candidate_id=found["images"][0]["id"],
-                                     path=tmp_db)["ok"]
+                                     dsn=tmp_db)["ok"]
 
 
 def test_reachability_fails_open_on_a_flaky_network(monkeypatch):
@@ -168,7 +167,7 @@ def test_reachability_fails_open_on_a_flaky_network(monkeypatch):
 
 def test_neither_a_candidate_nor_a_url_is_a_caller_error(tmp_db, a_spark):
     with pytest.raises(ValueError, match="candidate_id"):
-        mcp_server.bank_reference(a_spark, path=tmp_db)
+        mcp_server.bank_reference(a_spark, dsn=tmp_db)
 
 
 # ---------- "nothing configured" is not "nothing matched" ----------
@@ -178,7 +177,7 @@ def test_an_unconfigured_lane_says_so(tmp_db, monkeypatch):
     monkeypatch.delenv("UNSPLASH_ACCESS_KEY", raising=False)
     monkeypatch.delenv("PEXELS_API_KEY", raising=False)
 
-    out = mcp_server.find_images("anything", brand="zeropage", path=tmp_db)
+    out = mcp_server.find_images("anything", brand="zeropage", dsn=tmp_db)
 
     assert out["count"] == 0
     assert "no image source is configured" in out["note"]
@@ -191,7 +190,7 @@ def test_a_configured_lane_that_matched_nothing_says_something_else(tmp_db,
     monkeypatch.setattr(imagesearch, "unsplash", lambda q, limit=6: [])
     monkeypatch.setattr(imagesearch, "pexels", lambda q, limit=6: [])
 
-    out = mcp_server.find_images("nothing at all", brand="zeropage", path=tmp_db)
+    out = mcp_server.find_images("nothing at all", brand="zeropage", dsn=tmp_db)
     assert out["count"] == 0 and "nothing matched" in out["note"]
 
 
@@ -204,7 +203,7 @@ def a_frame(tmp_db, tmp_path, caption, tags, clip="A037_C001.mov", t=30.0):
     f.write_bytes(real_jpeg())
     framebank.record({"id": framebank.frame_id(clip, t), "clip": clip,
                       "t_sec": t, "path": str(f), "caption": caption,
-                      "tags": tags}, brand="antihero", path=tmp_db)
+                      "tags": tags}, brand="antihero", dsn=tmp_db)
     return f
 
 
@@ -217,8 +216,8 @@ def test_zero_page_never_reaches_his_garage_footage(tmp_db, tmp_path,
     monkeypatch.delenv("UNSPLASH_ACCESS_KEY", raising=False)
     monkeypatch.delenv("PEXELS_API_KEY", raising=False)
 
-    assert imagesearch.search("hands", brand="zeropage", path=tmp_db) == []
-    assert imagesearch.search("hands", brand="antihero", path=tmp_db)
+    assert imagesearch.search("hands", brand="zeropage", dsn=tmp_db) == []
+    assert imagesearch.search("hands", brand="antihero", dsn=tmp_db)
 
 
 def test_a_frame_is_read_off_disk_not_fetched(tmp_db, tmp_path, monkeypatch,
@@ -230,14 +229,14 @@ def test_a_frame_is_read_off_disk_not_fetched(tmp_db, tmp_path, monkeypatch,
                         lambda url: pytest.fail("fetched a local frame"))
     monkeypatch.setattr(mcp_server, "_reachable", lambda url: True)
 
-    found = mcp_server.find_images("hands on tile", brand="antihero", path=tmp_db)
+    found = mcp_server.find_images("hands on tile", brand="antihero", dsn=tmp_db)
     assert found["images"][0]["source"] == "frames"
     out = mcp_server.bank_reference(a_spark,
                                     candidate_id=found["images"][0]["id"],
-                                    path=tmp_db)
+                                    dsn=tmp_db)
 
     assert out["ok"] and out["url"].startswith("/refs/")
-    assert scout.bin_for_finding(a_spark, path=tmp_db)[0]["source_url"].startswith(
+    assert scout.bin_for_finding(a_spark, dsn=tmp_db)[0]["source_url"].startswith(
         "footage/")
 
 
@@ -250,7 +249,7 @@ def test_an_unusable_frame_stays_in_the_bank_and_out_of_the_results(tmp_db,
     a_frame(tmp_db, tmp_path, "a hand on a blurred engine", ["hands", "blur"],
             clip="A037_C003.mov")
 
-    hits = framebank.search("blur hand", brand="antihero", path=tmp_db)
+    hits = framebank.search("blur hand", brand="antihero", dsn=tmp_db)
     assert len(hits) == 1 and "unusable" not in hits[0]["tags"]
 
 
@@ -258,7 +257,7 @@ def test_rebuilding_updates_a_frame_rather_than_duplicating_it(tmp_db, tmp_path)
     a_frame(tmp_db, tmp_path, "first guess", ["tile"])
     a_frame(tmp_db, tmp_path, "a better caption", ["tile", "overhead"])
 
-    hits = framebank.search("tile", brand="antihero", path=tmp_db)
+    hits = framebank.search("tile", brand="antihero", dsn=tmp_db)
     assert len(hits) == 1 and hits[0]["caption"] == "a better caption"
 
 

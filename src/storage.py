@@ -137,7 +137,7 @@ def publish_shot_media(concept_id: int, shot_n, local_path: Path | str,
     """
     from . import preprod
 
-    kwargs = {"path": db_path} if db_path is not None else {}
+    kwargs = {"dsn": db_path} if db_path is not None else {}
     try:
         url = upload_file(local_path, content_type=content_type)
     except Exception as e:

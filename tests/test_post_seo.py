@@ -14,11 +14,10 @@ from src import db, post_seo
 
 
 @pytest.fixture
-def seeded_db(tmp_path):
+def seeded_db(pg):
     """Six videos measured at the same age: three winners on one trait
     profile, three losers on another, so the split is unambiguous."""
-    path = tmp_path / "test.db"
-    db.init_db(path)
+    path = pg
     winners = [
         ("Wrench ritual at 3am", "workshop", "cold-open"),
         ("Engine teardown ritual", "workshop", "cold-open"),
@@ -31,12 +30,12 @@ def seeded_db(tmp_path):
     ]
     for i, (title, topic, hook) in enumerate(winners):
         vid = db.add_video(title, "youtube", "2026-01-01", topic=topic,
-                           hook_type=hook, path=path, account_id=None)
-        db.record_metrics(vid, views=1000 + i, captured_at="2026-01-08", path=path, account_id=None)
+                           hook_type=hook, dsn=path, account_id=None)
+        db.record_metrics(vid, views=1000 + i, captured_at="2026-01-08", dsn=path, account_id=None)
     for i, (title, topic, hook) in enumerate(losers):
         vid = db.add_video(title, "youtube", "2026-01-01", topic=topic,
-                           hook_type=hook, path=path, account_id=None)
-        db.record_metrics(vid, views=10 + i, captured_at="2026-01-08", path=path, account_id=None)
+                           hook_type=hook, dsn=path, account_id=None)
+        db.record_metrics(vid, views=10 + i, captured_at="2026-01-08", dsn=path, account_id=None)
     return path
 
 
@@ -58,9 +57,8 @@ def test_derive_signals_collects_winning_title_words(seeded_db):
     assert "at" not in signals["winning_title_words"]
 
 
-def test_derive_signals_empty_db_is_a_null_signal(tmp_path):
-    path = tmp_path / "empty.db"
-    db.init_db(path)
+def test_derive_signals_empty_db_is_a_null_signal(pg):
+    path = pg
     signals = post_seo.derive_signals(db_path=path)
     assert signals["sample"] == 0
 

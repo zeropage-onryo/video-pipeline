@@ -10,13 +10,12 @@ import json
 
 import pytest
 
-from src import db, locations, preprod
+from src import locations, preprod
 
 
 @pytest.fixture
-def tmp_db(tmp_path):
-    path = tmp_path / "test.db"
-    db.init_db(path)
+def tmp_db(pg):
+    path = pg
     preprod.init(path)
     return path
 
@@ -99,7 +98,7 @@ def test_describe_locations_saves_each_space(tmp_db, locations_dir, monkeypatch)
     )
 
     assert result["described"] == 2
-    saved = preprod.list_locations(path=tmp_db, account_id=None)
+    saved = preprod.list_locations(dsn=tmp_db, account_id=None)
     assert [loc["name"] for loc in saved] == ["garage", "hallway"]
     assert saved[0]["description"]["space"].startswith("narrow hallway")
     assert saved[0]["photo_count"] == 2
@@ -107,7 +106,7 @@ def test_describe_locations_saves_each_space(tmp_db, locations_dir, monkeypatch)
 
 def test_describe_locations_is_incremental(tmp_db, locations_dir, monkeypatch):
     """A space already described isn't re-sent to the model."""
-    preprod.add_location("hallway", {"space": "already known"}, photo_count=2, path=tmp_db, account_id=None)
+    preprod.add_location("hallway", {"space": "already known"}, photo_count=2, dsn=tmp_db, account_id=None)
 
     calls = []
 
@@ -122,19 +121,19 @@ def test_describe_locations_is_incremental(tmp_db, locations_dir, monkeypatch):
     assert len(calls) == 1  # garage only
     assert result["described"] == 1
     assert result["skipped"] == 1
-    assert preprod.get_location_by_name("hallway", path=tmp_db, account_id=None)["description"]["space"] == (
+    assert preprod.get_location_by_name("hallway", dsn=tmp_db, account_id=None)["description"]["space"] == (
         "already known"
     )
 
 
 def test_describe_locations_force_redescribes(tmp_db, locations_dir, monkeypatch):
-    preprod.add_location("hallway", {"space": "stale"}, photo_count=2, path=tmp_db, account_id=None)
+    preprod.add_location("hallway", {"space": "stale"}, photo_count=2, dsn=tmp_db, account_id=None)
     monkeypatch.setattr(locations, "generate_with_retry",
                         lambda *a, **kw: VALID_DESCRIPTION)
 
     locations.describe_locations(locations_dir, client=None, db_path=tmp_db, force=True)
 
-    updated = preprod.get_location_by_name("hallway", path=tmp_db, account_id=None)
+    updated = preprod.get_location_by_name("hallway", dsn=tmp_db, account_id=None)
     assert updated["description"]["space"].startswith("narrow hallway")
 
 
@@ -147,4 +146,4 @@ def test_describe_locations_survives_one_bad_response(tmp_db, locations_dir, mon
 
     assert result["described"] == 1
     assert result["failed"] == 1
-    assert [loc["name"] for loc in preprod.list_locations(path=tmp_db, account_id=None)] == ["hallway"]
+    assert [loc["name"] for loc in preprod.list_locations(dsn=tmp_db, account_id=None)] == ["hallway"]

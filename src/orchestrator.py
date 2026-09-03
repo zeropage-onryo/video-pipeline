@@ -96,7 +96,7 @@ def prompt_gate_min() -> int:
     """The gate's bar (of 10), read per run: the Dev Studio Settings tab
     (settings table) wins, then PROMPT_GATE_MIN in the env, then 7 --
     so raising the bar no longer needs a restart."""
-    return settings.prompt_gate_min(path=db.DB_PATH)
+    return settings.prompt_gate_min()
 MAX_PROMPT_REWORKS = 1  # one targeted rewrite per failing shot before it holds
 
 
@@ -263,7 +263,7 @@ def scout(state: GenState) -> GenState:
     if not state.get("scout"):
         return {}
     try:
-        finding = scout_mod.next_spark(state.get("brand") or "zeropage", path=db.DB_PATH)
+        finding = scout_mod.next_spark(state.get("brand") or "zeropage")
     except Exception as e:
         print(f"note: scout unavailable, keeping the rotated spark: {e}", file=sys.stderr)
         return {}
@@ -285,7 +285,7 @@ def scout(state: GenState) -> GenState:
     photos = list(state.get("reference_photos") or [])
     try:
         photos += [b["url"] for b in scout_mod.bin_for_finding(
-            finding["id"], path=db.DB_PATH)
+            finding["id"])
             if b.get("url") and b["url"] not in photos]
     except Exception as e:
         # Say so rather than swallow: a spark that arrives without its
@@ -310,14 +310,14 @@ def planner(state: GenState) -> GenState:
     the channel row (defaulting to shadow if the table isn't seeded).
     Also mints the run_id everything downstream logs against."""
     channel = state.get("channel") or "zeropage"
-    row = autonomy.get_channel(channel, path=db.DB_PATH)
+    row = autonomy.get_channel(channel)
     run_id = state.get("run_id") or uuid.uuid4().hex
     # Claim the scouted spark here, not in the scout node: the run_id it
     # is stamped with is minted on this line, and a finding marked used
     # before a run exists to point at is how the same spark gets served
     # twice after a crash between the two.
     if state.get("scout_finding_id"):
-        scout_mod.mark_used(state["scout_finding_id"], run_id=run_id, path=db.DB_PATH)
+        scout_mod.mark_used(state["scout_finding_id"], run_id=run_id)
     return {
         "channel": channel,
         "autonomy": (row or {}).get("autonomy", "shadow"),
@@ -333,15 +333,15 @@ def ground_entities(state: GenState) -> GenState:
     picked_chars = state.get("picked_characters") or []
     picked_props = state.get("picked_props") or []
     if picked_chars:
-        characters = [c for c in (entities.get_character(i, path=db.DB_PATH, account_id=account_id)
+        characters = [c for c in (entities.get_character(i, account_id=account_id)
                                   for i in picked_chars) if c]
     else:
-        characters = entities.list_characters(path=db.DB_PATH, account_id=account_id)
+        characters = entities.list_characters(account_id=account_id)
     if picked_props:
-        props = [p for p in (entities.get_prop(i, path=db.DB_PATH, account_id=account_id)
+        props = [p for p in (entities.get_prop(i, account_id=account_id)
                              for i in picked_props) if p]
     else:
-        props = entities.list_props(path=db.DB_PATH, account_id=account_id)
+        props = entities.list_props(account_id=account_id)
     # Brand-scoped: a faceless brand gets no cast block at all, or the
     # {cast} socket tells it to name people it must never name.
     return {"cast": shootgen.cast_for(state.get("brand", "antihero"),
@@ -375,7 +375,7 @@ def ground_rag(state: GenState) -> GenState:
     if query:
         craft = crag.retrieve_with_crag(
             query, _client(), GEMINI_MODEL, domain=shootgen.AUTO_IDEATION_DOMAINS,
-            prefer_project=accounts.slug_of(state.get("account_id"), path=db.DB_PATH))
+            prefer_project=accounts.slug_of(state.get("account_id")))
         if craft.get("ok") and craft.get("references"):
             print(f"Grounding in {len(craft['references'])} craft reference(s)", file=sys.stderr)
             references.extend(craft["references"])
@@ -416,16 +416,16 @@ def gen_concept(state: GenState) -> GenState:
     # prompt sees both, the row sees the direction.
     steer_parts: list[str] = []
 
-    notes = autonomy.pending_corrections(path=db.DB_PATH)
+    notes = autonomy.pending_corrections()
     if notes:
         steer_parts.append("Notes from the filmmaker: "
                            + "; ".join(n["note"] for n in notes))
         for n in notes:
-            autonomy.consume_correction(n["id"], path=db.DB_PATH)
+            autonomy.consume_correction(n["id"])
 
     # standing negative steer: patterns you've marked "didn't work" are
     # folded in so the next batch avoids repeating them (winners.avoid_guidance).
-    avoid = winners.avoid_guidance(path=db.DB_PATH)
+    avoid = winners.avoid_guidance()
     if avoid:
         steer_parts.append(avoid)
     steer = "\n".join(steer_parts)
@@ -452,7 +452,7 @@ def gen_concept(state: GenState) -> GenState:
         spark=spark,
         steer=steer,
         gemini_client=_client(),
-        db_path=db.DB_PATH,
+        db_path=None,
         references=state.get("references", ""),
         cast=state.get("cast"),
         image_refs=image_refs,
@@ -469,7 +469,7 @@ def gen_concept(state: GenState) -> GenState:
     refs = []
     try:
         refs = scene_chain.attach_refs(result["concept_id"], handed,
-                                       db_path=db.DB_PATH,
+                                       db_path=None,
                                        account_id=state.get("account_id"))
         if refs:
             concept["shots"][0]["refs"] = refs
@@ -539,7 +539,7 @@ def brand_gate(state: GenState) -> GenState:
     try:
         score = uncanny_judge.score_concept(state.get("concept") or {},
                                             gemini_client=_client())
-        preprod.save_uncanny_score(concept_id, score, path=db.DB_PATH,
+        preprod.save_uncanny_score(concept_id, score,
                                    account_id=state.get("account_id"))
     except Exception as e:                    # surfaced, never silent
         print(f"note: uncanny judge failed ({type(e).__name__}: {e}) -- concept "
@@ -578,7 +578,7 @@ def _technique_references(tool: str, account_id: Optional[int] = None) -> str:
              if tool else "AI video prompting technique for photorealistic generation")
     result = crag.retrieve_with_crag(
         query, _client(), GEMINI_MODEL, domain=promptgen.REFINE_DOMAIN,
-        prefer_project=accounts.slug_of(account_id, path=db.DB_PATH))
+        prefer_project=accounts.slug_of(account_id))
     if result.get("ok") and result.get("references"):
         return rag.format_references(result["references"])
     return ""
@@ -715,7 +715,7 @@ def score_prompts(state: GenState) -> GenState:
                        "pass": verdict["score"] >= prompt_gate_min(),
                        "reason": verdict["reason"], "dims": verdict["dims"],
                        **ref})
-    autonomy.log_prompt_scores(state.get("run_id"), scored, path=db.DB_PATH)
+    autonomy.log_prompt_scores(state.get("run_id"), scored)
     return {"prompt_scores": scored}
 
 
@@ -802,7 +802,7 @@ def revise_prompts(state: GenState) -> GenState:
             shots[ai_shot_indices[i]]["prompt"] = new_entry["prompt"]
 
     concept["shots"] = shots
-    autonomy.log_prompt_scores(state.get("run_id"), revised, path=db.DB_PATH)
+    autonomy.log_prompt_scores(state.get("run_id"), revised)
     return {
         "prompt_scores": revised,
         "prompts": prompts,
@@ -871,7 +871,7 @@ def keyframe(state: GenState) -> GenState:
         try:
             scene_chain.persist_prompt(concept_id, shot_n,
                                        refined.get("prompt", ""),
-                                       db_path=db.DB_PATH,
+                                       db_path=None,
                                        account_id=state.get("account_id"))
         except Exception as e:
             done.append({"n": shot_n, "ok": False, "error": f"prompt not stored: {e}"})
@@ -879,7 +879,7 @@ def keyframe(state: GenState) -> GenState:
         if os.environ.get("ZEROPAGE_KEYFRAME") == "0":
             done.append({"n": shot_n, "ok": False, "error": "keyframes disabled"})
             continue
-        result = scene_chain.keyframe_scene(concept_id, shot_n, db_path=db.DB_PATH,
+        result = scene_chain.keyframe_scene(concept_id, shot_n, db_path=None,
                                             account_id=state.get("account_id"))
         done.append({"n": shot_n, "ok": bool(result.get("ok")),
                      "url": result.get("media_url"),
@@ -892,7 +892,7 @@ def keyframe(state: GenState) -> GenState:
               "no keyframe: " + (failed[0].get("error") or "unknown")
               if failed else "no shot to keyframe")
     try:
-        scene_chain.park_scene(concept_id, reason, db_path=db.DB_PATH,
+        scene_chain.park_scene(concept_id, reason, db_path=None,
                                account_id=state.get("account_id"))
     except Exception:
         pass       # a scene that cannot be parked is still on the board
@@ -924,7 +924,7 @@ def generate_render(state: GenState) -> GenState:
 
     from . import higgsfield, runway, veo
     connectors = {"VEO": veo, "RUNWAY": runway, "HIGGSFIELD": higgsfield}
-    out_root = (Path(db.DB_PATH).parent.parent / "footage" / "generated"
+    out_root = (db.PROJECT_ROOT / "footage" / "generated"
                 / f"concept-{state.get('concept_id', 'x')}")
     clips = []
     for index, p in enumerate(prompts, start=1):
@@ -934,7 +934,7 @@ def generate_render(state: GenState) -> GenState:
                           "error": f"no adapter wired for {p.get('tool')}"})
             continue
         result = connector.generate_candidates(
-            p["prompt"], out_root / f"shot{index}", n=1, db_path=db.DB_PATH)
+            p["prompt"], out_root / f"shot{index}", n=1, db_path=None)
         if result["ok"] and result["candidates"]:
             clips.append({**p, "url": result["candidates"][0]["path"], "ok": True})
         else:
@@ -983,7 +983,7 @@ def caption(state: GenState) -> GenState:
     caption model being down."""
     concept = state.get("concept", {}) or {}
     fallback = " — ".join(x for x in (concept.get("title"), concept.get("hook")) if x)
-    return {"caption": scheduling.build_caption(fallback, db_path=db.DB_PATH)}
+    return {"caption": scheduling.build_caption(fallback, db_path=None)}
 
 
 def _post_gate(state: GenState, channel_row: dict) -> tuple[bool, str]:
@@ -997,7 +997,7 @@ def _post_gate(state: GenState, channel_row: dict) -> tuple[bool, str]:
     if (state.get("concept", {}) or {}).get("warnings"):
         return False, "concept carries warnings"
     cap = channel_row.get("rate_cap", 1)
-    if autonomy.posts_today(state.get("channel", ""), path=db.DB_PATH) >= cap:
+    if autonomy.posts_today(state.get("channel", "")) >= cap:
         return False, f"rate cap reached ({cap}/day)"
     return True, ""
 
@@ -1012,7 +1012,6 @@ def _park(state: GenState, reason: str) -> GenState:
                  "prompt_scores": state.get("prompt_scores", []),
                  "critique": state.get("critique"),
                  "error": state.get("error")},
-        path=db.DB_PATH,
         account_id=state.get("account_id"),
     )
     return {"hold_id": hold_id, "held_reason": reason}
@@ -1022,10 +1021,9 @@ def publish(state: GenState) -> GenState:
     """BUILD -- the autonomy gap. Reads the CHANNEL's autonomy, never a
     global flag. No posting API is wired yet, so even a channel promoted
     to auto parks with an explicit reason rather than pretending."""
-    channel_row = autonomy.get_channel(state.get("channel", "zeropage"),
-                                       path=db.DB_PATH) or {"autonomy": "shadow",
+    channel_row = autonomy.get_channel(state.get("channel", "zeropage")) or {"autonomy": "shadow",
                                                             "rate_cap": 1}
-    if autonomy.killed(path=db.DB_PATH):
+    if autonomy.killed():
         return _park(state, "kill switch is on")
 
     ok, why = _post_gate(state, channel_row)
@@ -1196,16 +1194,16 @@ def run(goal: str, *, brand: Optional[str] = None, spark: Optional[str] = None,
         print(f"note: channel={channel!r} but brand={brand!r} -- filing under "
               f"one channel, generating with the other engine, on purpose",
               file=sys.stderr)
-    autonomy.init(path=db.DB_PATH)
-    winners.init(path=db.DB_PATH)
-    scout_mod.init(path=db.DB_PATH)
+    autonomy.init()
+    winners.init()
+    scout_mod.init()
     # An unattended run has no session, so it acts as the bootstrap
     # account rather than as nobody. "Nobody" is not neutral here: after
     # the tenancy backfill every row has an owner, so a run with
     # account_id=None reads an empty database, writes rows no one can
     # see, and reports a night's work that isn't there.
     if account_id is None:
-        account_id = accounts.resolve_account(path=db.DB_PATH)
+        account_id = accounts.resolve_account()
     return GRAPH.invoke({
         "account_id": account_id,
         "goal": goal, "brand": brand, "spark": spark or goal, "scout": scout,

@@ -49,7 +49,6 @@ from pathlib import Path
 from typing import Optional
 
 from . import generative
-from .db import DB_PATH
 from .shot import Shot
 
 API_BASE = "https://api.acedata.cloud/midjourney"
@@ -86,7 +85,7 @@ def generations_today(db_path=None, *, account_id=None, everyone: bool = False) 
     DAILY_CAP counts against. `everyone=True` gives the installation-wide
     count that GLOBAL_DAILY_CAP counts against."""
     return generative.used_today(
-        "midjourney", db_path if db_path is not None else DB_PATH,
+        "midjourney", db_path,
         account_id=account_id, everyone=everyone,
     )
 
@@ -152,7 +151,7 @@ def _shot_row_for_prompt(prompt: str, db_path, account_id: Optional[int] = None)
     """A generations row needs a shot to hang off. The graph's AI shots
     don't have one, so synthesize a minimal Shot -- same pattern
     runway.py uses, the row exists to make the attempt countable."""
-    kwargs = {"path": db_path} if db_path is not None else {}
+    kwargs = {"dsn": db_path} if db_path is not None else {}
     generative.init(**kwargs)
     shot = Shot(subject=prompt[:100], action="still frame")
     return generative.add_shot(shot, notes="auto-created by midjourney.generate_stills",
@@ -170,7 +169,7 @@ def generate_stills(prompt: str, out_dir, *, shot_id: Optional[int] = None,
     down. Mirrors runway.generate_candidates exactly; one candidate per
     call, since a still is a single frame, not N takes.
     """
-    kwargs = {"path": db_path} if db_path is not None else {}
+    kwargs = {"dsn": db_path} if db_path is not None else {}
     try:
         if not spend_approved():
             return {"ok": False, "candidates": [],
@@ -180,7 +179,7 @@ def generate_stills(prompt: str, out_dir, *, shot_id: Optional[int] = None,
         refusal = generative.cap_error(
             "midjourney", 1, account_id=account_id,
             per_account=DAILY_CAP, ceiling=GLOBAL_DAILY_CAP,
-            path=db_path if db_path is not None else DB_PATH,
+            dsn=db_path,
             env_prefix="MIDJOURNEY", phrase="stills used",
             used=generations_today(db_path=db_path, account_id=account_id),
             used_everywhere=generations_today(db_path=db_path, everyone=True),

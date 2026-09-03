@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from src import db, entities, preprod, workflows
+from src import entities, preprod, workflows
 
 client = TestClient(app)
 
@@ -26,13 +26,12 @@ def signed_in(monkeypatch):
 
 
 @pytest.fixture
-def tmp_db(tmp_path, monkeypatch):
-    path = tmp_path / "test.db"
-    db.init_db(path)
+def tmp_db(pg, monkeypatch):
+    path = pg
     preprod.init(path)
     entities.init(path)
     workflows.init(path)
-    monkeypatch.setattr(db, "DB_PATH", path)
+    monkeypatch.setenv("DATABASE_URL", path)
     return path
 
 
@@ -41,7 +40,7 @@ def a_concept(path, prompt="the scene as written"):
         {"title": "The Garage Guest", "hook": "", "logline": "",
          "shots": [{"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
                     "desc": "d", "prompt": prompt}]},
-        brand="zeropage", path=path, account_id=None)
+        brand="zeropage", dsn=path, account_id=None)
 
 
 GRAPH = {"nodes": [{"id": 3, "type": "zpf/enhance", "pos": [640, 370],
@@ -84,7 +83,7 @@ def test_saving_twice_updates_one_row_instead_of_piling_up(tmp_db):
     second = client.put(f"/api/concepts/{cid}/shots/1/graph",
                         json={"graph": GRAPH, "states": STATES}).json()["id"]
     assert first == second
-    rows = workflows.get_shot_graph(cid, 1, path=tmp_db, account_id=None)
+    rows = workflows.get_shot_graph(cid, 1, dsn=tmp_db, account_id=None)
     assert rows["states"] == STATES
 
 
@@ -103,7 +102,7 @@ def test_each_shot_keeps_its_own_canvas(tmp_db):
         {"title": "two shots", "shots": [
             {"n": 1, "source": "AI", "prompt": "one"},
             {"n": 2, "source": "AI", "prompt": "two"}]},
-        brand="zeropage", path=tmp_db, account_id=None)
+        brand="zeropage", dsn=tmp_db, account_id=None)
     client.put(f"/api/concepts/{cid}/shots/1/graph", json={"graph": GRAPH})
     assert client.get(f"/api/concepts/{cid}/shots/2/graph").json()["graph"] is None
 
@@ -132,17 +131,17 @@ def test_better_references_underneath_retire_the_drawing_too(tmp_db):
     a hash over the prompt alone called the old drawing fresh and the
     next keyframe rendered against references nobody meant to use."""
     cid = a_concept(tmp_db)
-    concept = preprod.get_concept(cid, path=tmp_db, account_id=None)
+    concept = preprod.get_concept(cid, dsn=tmp_db, account_id=None)
     shots = [dict(s) for s in concept["shots"]]
     shots[0]["refs"] = ["/characters/michael/photo/a.jpg"]
-    preprod.update_concept_shots(cid, {"shots": shots}, path=tmp_db, account_id=None)
+    preprod.update_concept_shots(cid, {"shots": shots}, dsn=tmp_db, account_id=None)
 
     client.put(f"/api/concepts/{cid}/shots/1/graph", json={"graph": GRAPH})
     assert client.get(f"/api/concepts/{cid}/shots/1/graph").json()["stale"] is False
 
     shots[0]["refs"] = ["/characters/michael/photo/a.jpg",
                         "/characters/michael/photo/b.jpg"]
-    preprod.update_concept_shots(cid, {"shots": shots}, path=tmp_db, account_id=None)
+    preprod.update_concept_shots(cid, {"shots": shots}, dsn=tmp_db, account_id=None)
     assert client.get(f"/api/concepts/{cid}/shots/1/graph").json()["stale"] is True
 
 
@@ -152,10 +151,10 @@ def test_staleness_is_checked_on_read_not_invalidated_on_write(tmp_db):
     cid = a_concept(tmp_db, prompt="original")
     client.put(f"/api/concepts/{cid}/shots/1/graph", json={"graph": GRAPH})
     # a write that bypasses every API route entirely
-    concept = preprod.get_concept(cid, path=tmp_db, account_id=None)
+    concept = preprod.get_concept(cid, dsn=tmp_db, account_id=None)
     shots = [dict(s) for s in concept["shots"]]
     shots[0]["prompt"] = "changed behind the API's back"
-    preprod.update_concept_shots(cid, {"shots": shots}, path=tmp_db, account_id=None)
+    preprod.update_concept_shots(cid, {"shots": shots}, dsn=tmp_db, account_id=None)
     assert client.get(f"/api/concepts/{cid}/shots/1/graph").json()["stale"] is True
 
 
@@ -164,7 +163,7 @@ def test_the_reset_hatch_drops_every_saved_canvas(tmp_db):
         {"title": "two shots", "shots": [
             {"n": 1, "source": "AI", "prompt": "one"},
             {"n": 2, "source": "AI", "prompt": "two"}]},
-        brand="zeropage", path=tmp_db, account_id=None)
+        brand="zeropage", dsn=tmp_db, account_id=None)
     client.put(f"/api/concepts/{cid}/shots/1/graph", json={"graph": GRAPH})
     client.put(f"/api/concepts/{cid}/shots/2/graph", json={"graph": GRAPH})
     assert client.delete(f"/api/concepts/{cid}/graph").json()["removed"] == 2
@@ -189,7 +188,7 @@ def test_the_saved_canvas_is_what_run_all_executes(tmp_db):
     cid = a_concept(tmp_db)
     saved_id = client.put(f"/api/concepts/{cid}/shots/1/graph",
                           json={"graph": GRAPH}).json()["id"]
-    ran = workflows.get_workflow(saved_id, path=tmp_db, account_id=None)
+    ran = workflows.get_workflow(saved_id, dsn=tmp_db, account_id=None)
     assert ran["graph"]["nodes"][0]["id"] == 3
 
 

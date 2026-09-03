@@ -17,19 +17,18 @@ import json
 import pytest
 
 from ops import bank
-from src import db, entities, preprod, refbin, scout
+from src import entities, preprod, refbin, scout
 
 JPEG = b"\xff\xd8\xff" + b"pretend jpeg"
 
 
 @pytest.fixture
-def tmp_db(tmp_path, monkeypatch):
-    path = tmp_path / "test.db"
-    db.init_db(path)
+def tmp_db(pg, tmp_path, monkeypatch):
+    path = pg
     preprod.init(path)
     entities.init(path)
     scout.init(path)
-    monkeypatch.setattr(db, "DB_PATH", path)
+    monkeypatch.setenv("DATABASE_URL", path)
     monkeypatch.setattr(refbin, "REFS_DIR", tmp_path / "refs")
     return path
 
@@ -72,14 +71,14 @@ def test_a_plan_becomes_sparks_and_the_images_behind_them(tmp_db, plans,
                      "source_url": "https://example.com/other"}]},
     ]})
 
-    out = bank.ingest(d, path=tmp_db)
+    out = bank.ingest(d, dsn=tmp_db)
 
     assert out == {"plans": 1, "sparks": 1, "images": 2, "errors": []}
-    served = scout.next_spark("zeropage", path=tmp_db)
+    served = scout.next_spark("zeropage", dsn=tmp_db)
     assert served["spark"] == "a hand already on the handle"
     # and the images are reachable through the finding, which is what
     # orchestrator.scout reads to fill reference_photos
-    assert len(scout.bin_for_finding(served["id"], path=tmp_db)) == 2
+    assert len(scout.bin_for_finding(served["id"], dsn=tmp_db)) == 2
 
 
 def test_an_agent_spark_outranks_a_crawled_one(tmp_db, plans, offline_fetch):
@@ -87,18 +86,18 @@ def test_an_agent_spark_outranks_a_crawled_one(tmp_db, plans, offline_fetch):
     explicit instruction, which is the opposite of why anyone wrote one."""
     d, write = plans
     scout.record("zeropage", {"spark": "what the crawl found", "score": 0.95},
-                 pass_id="p", path=tmp_db)
+                 pass_id="p", dsn=tmp_db)
     write("plan.json", [{"brand": "zeropage", "spark": "what Claude found",
                          "stake": "recognition; anyone"}])
 
-    bank.ingest(d, path=tmp_db)
+    bank.ingest(d, dsn=tmp_db)
 
-    assert scout.next_spark("zeropage", path=tmp_db)["spark"] == "what Claude found"
+    assert scout.next_spark("zeropage", dsn=tmp_db)["spark"] == "what Claude found"
 
 
 def test_no_plan_is_a_normal_night_not_a_failure(tmp_db, plans):
     d, _ = plans
-    assert bank.ingest(d, path=tmp_db)["plans"] == 0
+    assert bank.ingest(d, dsn=tmp_db)["plans"] == 0
     assert bank.main(["--db", str(tmp_db), "ingest", str(d)]) == 0
 
 
@@ -109,10 +108,10 @@ def test_a_plan_is_never_ingested_twice(tmp_db, plans, offline_fetch):
     write("plan.json", [{"brand": "zeropage", "spark": "the only one",
                          "stake": "recognition; anyone"}])
 
-    bank.ingest(d, path=tmp_db)
+    bank.ingest(d, dsn=tmp_db)
     assert (d / "done" / "plan.json").is_file()
-    assert bank.ingest(d, path=tmp_db)["plans"] == 0
-    assert len(scout.list_findings(brand="zeropage", path=tmp_db)) == 1
+    assert bank.ingest(d, dsn=tmp_db)["plans"] == 0
+    assert len(scout.list_findings(brand="zeropage", dsn=tmp_db)) == 1
 
 
 def test_one_bad_entry_does_not_cost_the_rest_of_the_plan(tmp_db, plans,
@@ -127,11 +126,11 @@ def test_one_bad_entry_does_not_cost_the_rest_of_the_plan(tmp_db, plans,
                      "source_url": "https://example.com/p"}]},
     ])
 
-    out = bank.ingest(d, path=tmp_db)
+    out = bank.ingest(d, dsn=tmp_db)
 
     assert out["sparks"] == 1 and out["images"] == 0
     assert len(out["errors"]) == 3      # empty, bad brand, dead image
-    assert scout.next_spark("zeropage", path=tmp_db)["spark"] == "the good one"
+    assert scout.next_spark("zeropage", dsn=tmp_db)["spark"] == "the good one"
 
 
 def test_a_dead_image_is_a_missing_picture_not_a_failed_plan(tmp_db, plans,
@@ -144,8 +143,8 @@ def test_a_dead_image_is_a_missing_picture_not_a_failed_plan(tmp_db, plans,
                          "images": [{"url": "https://cdn.example/expired.jpg",
                                      "source_url": "https://example.com/p"}]}])
 
-    assert bank.ingest(d, path=tmp_db)["sparks"] == 1
-    assert scout.next_spark("zeropage", path=tmp_db)["spark"] == "still worth running"
+    assert bank.ingest(d, dsn=tmp_db)["sparks"] == 1
+    assert scout.next_spark("zeropage", dsn=tmp_db)["spark"] == "still worth running"
 
 
 def test_an_unreadable_plan_is_reported_and_skipped(tmp_db, plans, tmp_path):
@@ -154,7 +153,7 @@ def test_an_unreadable_plan_is_reported_and_skipped(tmp_db, plans, tmp_path):
     write("good.json", [{"brand": "zeropage", "spark": "the readable one",
                          "stake": "recognition; anyone"}])
 
-    out = bank.ingest(d, path=tmp_db)
+    out = bank.ingest(d, dsn=tmp_db)
 
     assert out["sparks"] == 1
     assert any("broken.json" in e for e in out["errors"])
@@ -169,10 +168,10 @@ def test_a_dry_run_touches_nothing(tmp_db, plans, offline_fetch):
                          "images": [{"url": "https://cdn.example/a.jpg",
                                      "source_url": "https://example.com/p"}]}])
 
-    out = bank.ingest(d, path=tmp_db, dry_run=True)
+    out = bank.ingest(d, dsn=tmp_db, dry_run=True)
 
     assert out["sparks"] == 1
-    assert scout.list_findings(brand="zeropage", path=tmp_db) == []
+    assert scout.list_findings(brand="zeropage", dsn=tmp_db) == []
     assert offline_fetch == [], "a dry run fetched an image"
     assert (d / "plan.json").is_file()
 
@@ -185,7 +184,7 @@ def test_attribution_is_required_of_an_agent_too(tmp_db, plans, offline_fetch):
                          "stake": "recognition; anyone",
                          "images": [{"url": "https://cdn.example/a.jpg"}]}])
 
-    out = bank.ingest(d, path=tmp_db)
+    out = bank.ingest(d, dsn=tmp_db)
 
     assert out["sparks"] == 1 and out["images"] == 0
     assert any("source_url" in e for e in out["errors"])
@@ -195,11 +194,11 @@ def test_the_cli_banks_one_spark_and_one_image(tmp_db, plans, offline_fetch,
                                                capsys):
     assert bank.main(["--db", str(tmp_db), "spark", "--brand", "antihero",
                       "--spark", "a hand already on the handle"]) == 0
-    fid = scout.next_spark("antihero", path=tmp_db)["id"]
+    fid = scout.next_spark("antihero", dsn=tmp_db)["id"]
     assert bank.main(["--db", str(tmp_db), "reference", "--finding", str(fid),
                       "--url", "https://cdn.example/a.jpg",
                       "--source", "https://example.com/post"]) == 0
-    assert len(scout.bin_for_finding(fid, path=tmp_db)) == 1
+    assert len(scout.bin_for_finding(fid, dsn=tmp_db)) == 1
 
 
 def test_a_spark_with_no_stake_is_refused(tmp_db, plans, offline_fetch):
@@ -216,11 +215,11 @@ def test_a_spark_with_no_stake_is_refused(tmp_db, plans, offline_fetch):
          "stake": "grief; anyone who has caught themselves doing it"},
     ])
 
-    out = bank.ingest(d, path=tmp_db)
+    out = bank.ingest(d, dsn=tmp_db)
 
     assert out["sparks"] == 1
     assert any("no stake" in e for e in out["errors"])
-    assert scout.next_spark("zeropage", path=tmp_db)["spark"] == \
+    assert scout.next_spark("zeropage", dsn=tmp_db)["spark"] == \
         "setting the table for one too many"
 
 
@@ -234,9 +233,9 @@ def test_turn_and_stake_survive_onto_the_board(tmp_db, plans, offline_fetch):
                          "stake": "compulsion; anyone whose brain does this at 2am",
                          "rationale": "the human beat under the signal"}])
 
-    bank.ingest(d, path=tmp_db)
+    bank.ingest(d, dsn=tmp_db)
 
-    row = scout.next_spark("zeropage", path=tmp_db)
+    row = scout.next_spark("zeropage", dsn=tmp_db)
     assert "TURN: the check repeats" in row["rationale"]
     assert "STAKE: compulsion" in row["rationale"]
     assert "the human beat under the signal" in row["rationale"]

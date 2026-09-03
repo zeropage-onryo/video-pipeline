@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS frames (
     id         TEXT PRIMARY KEY,
     created_at TEXT NOT NULL,
     clip       TEXT NOT NULL,
-    t_sec      REAL NOT NULL,
+    t_sec      DOUBLE PRECISION NOT NULL,
     path       TEXT NOT NULL,
     caption    TEXT,
     tags       TEXT,
@@ -80,9 +80,9 @@ CREATE INDEX IF NOT EXISTS idx_frames_clip ON frames (clip, t_sec);
 """
 
 
-def init(path=db.DB_PATH) -> None:
-    with db.connect(path) as conn:
-        conn.executescript(SCHEMA)
+def init(dsn=None) -> None:
+    with db.connect(dsn) as conn:
+        conn.execute(SCHEMA)
 
 
 def _now() -> str:
@@ -217,12 +217,12 @@ def caption(frames: list[dict], client, model: str, batch: int = 8) -> list[dict
     return out
 
 
-def record(frame: dict, brand: str = "antihero", path=db.DB_PATH) -> None:
-    init(path)
-    with db.connect(path) as conn:
+def record(frame: dict, brand: str = "antihero", dsn=None) -> None:
+    init(dsn)
+    with db.connect(dsn) as conn:
         conn.execute(
             "INSERT INTO frames (id, created_at, clip, t_sec, path, caption, "
-            "tags, brand) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "tags, brand) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
             "ON CONFLICT(id) DO UPDATE SET caption=excluded.caption, "
             "tags=excluded.tags, path=excluded.path",
             (frame["id"], _now(), frame["clip"], float(frame["t_sec"]),
@@ -249,17 +249,17 @@ def _score(query: str, caption: str, tags: list) -> float:
 
 
 def search(query: str, brand: Optional[str] = None, limit: int = 6,
-           path=db.DB_PATH) -> list[dict]:
+           dsn=None) -> list[dict]:
     """Best-matching frames, highest first. Never raises: a missing table
     means this lane contributes nothing, which is a thin search rather
     than a failed one."""
     try:
-        init(path)
-        with db.connect(path) as conn:
+        init(dsn)
+        with db.connect(dsn) as conn:
             sql = "SELECT * FROM frames"
             args: list = []
             if brand:
-                sql += " WHERE brand = ?"
+                sql += " WHERE brand = %s"
                 args.append(brand)
             rows = [dict(r) for r in conn.execute(sql, args)]
     except Exception:
@@ -282,12 +282,12 @@ def search(query: str, brand: Optional[str] = None, limit: int = 6,
 
 
 def build(brand: str = "antihero", client=None, model: str = "",
-          footage_dir: Optional[Path] = None, path=db.DB_PATH,
+          footage_dir: Optional[Path] = None, dsn=None,
           every: float = EVERY_SECONDS, limit_clips: int = 0) -> dict:
     """Extract, caption and record the whole bank. Idempotent: a frame
     already on disk is not re-cut, and `record` upserts, so a re-run
     after adding footage costs only the new clips."""
-    init(path)
+    init(dsn)
     found = clips(footage_dir)
     if limit_clips:
         found = found[:limit_clips]
@@ -300,6 +300,6 @@ def build(brand: str = "antihero", client=None, model: str = "",
     captioned = (caption(made, client, model) if client and made
                  else [{**f, "caption": None, "tags": []} for f in made])
     for f in captioned:
-        record(f, brand=brand, path=path)
+        record(f, brand=brand, dsn=dsn)
     return {"clips": len(found), "frames": len(captioned),
             "captioned": len([f for f in captioned if f.get("caption")])}

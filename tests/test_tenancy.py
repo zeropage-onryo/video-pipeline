@@ -1,123 +1,79 @@
 """
 Tenancy -- every owned row carries the account that owns it.
 
-Stage one: the schema and its migration. The ownership *predicates* get
-their own tests as the reads and writes land; what is proved here is
-that an existing database can grow the column without losing anything,
-which is the part that only gets one chance to be right.
+Stage one: the schema and its seed. The ownership *predicates* get their
+own tests further down; what is proved here is the shape every fresh
+install runs through -- init before seed, rows written unowned, the seed
+claiming them -- and the two properties the locations schema has to hold
+at once: two accounts can each own a place called "Garage", and one
+account cannot own two.
 
-The migration is the sharp edge. `locations.name` was globally UNIQUE,
-so no second account could ever own a place called "Garage", and a
-UNIQUE lives in the table definition where SQLite cannot ALTER it away.
-The rebuild that fixes it sits next to a foreign key -- concept_locations
-references locations -- and two plausible ways of writing it silently
-destroy data:
-
-* rename the old table aside, and SQLite (>= 3.25) rewrites
-  concept_locations to reference `locations_old`, which is then dropped;
-* drop the referenced table with foreign keys on, and ON DELETE CASCADE
-  takes every concept_locations row with it.
-
-Neither shows up in `PRAGMA foreign_key_check` on a database whose
-concept_locations happens to be empty -- which is exactly the state of
-the live one -- so these tests seed a row first. Both failures were
-observed for real before the current implementation.
+Until 2026-09-03 this block tested a SQLite table rebuild (UNIQUE(name)
+to UNIQUE(account_id, name), which SQLite could not ALTER away) and the
+repair for a join table that a RENAME had rewritten to reference
+`locations_old`. Both failure modes were real, both were observed on a
+copy of the live database, and both are in git history. Neither can
+occur on Postgres, where the final shape is simply the CREATE TABLE
+(src/preprod.py), so the tests that pinned the rebuild's *mechanics*
+went with it and the ones that pin its *properties* stayed, on the
+throwaway Postgres (conftest's `pg`).
 """
 import ast
 import pathlib
 import re
-import sqlite3
 
+import psycopg
 import pytest
 
 from src import accounts, autonomy, db, entities, generative, preprod, render_assets, workflows
 
-# The pre-tenancy shape, copied from the schema as it stood at a8fe240.
-# Written out rather than imported so that a later edit to preprod.SCHEMA
-# cannot quietly make this test stop testing the migration.
-PRE_TENANCY = """
-CREATE TABLE locations (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    created_at  TEXT    NOT NULL,
-    name        TEXT    NOT NULL UNIQUE,
-    photo_count INTEGER,
-    description_json TEXT,
-    notes       TEXT
-);
-CREATE TABLE shoot_concepts (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    created_at  TEXT    NOT NULL,
-    brand       TEXT    NOT NULL,
-    title       TEXT    NOT NULL,
-    shots_json  TEXT    NOT NULL,
-    shot_done   INTEGER NOT NULL DEFAULT 0,
-    use_pov     INTEGER NOT NULL DEFAULT 1
-);
-CREATE TABLE concept_locations (
-    concept_id  INTEGER NOT NULL REFERENCES shoot_concepts(id) ON DELETE CASCADE,
-    location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
-    UNIQUE (concept_id, location_id)
-);
-"""
 
-
-@pytest.fixture
-def legacy_db(tmp_path):
-    """A populated database in the shape that predates tenancy."""
-    path = tmp_path / "legacy.db"
-    conn = sqlite3.connect(path)
-    conn.executescript(PRE_TENANCY)
-    conn.execute("INSERT INTO locations (created_at, name) VALUES ('t', 'Garage')")
-    conn.execute("INSERT INTO locations (created_at, name) VALUES ('t', 'Alley')")
-    conn.execute(
-        "INSERT INTO shoot_concepts (created_at, brand, title, shots_json) "
-        "VALUES ('t', 'zeropage', 'A concept', '[]')"
-    )
-    conn.execute("INSERT INTO concept_locations (concept_id, location_id) VALUES (1, 1)")
-    conn.execute("INSERT INTO concept_locations (concept_id, location_id) VALUES (1, 2)")
-    conn.commit()
-    conn.close()
-    return path
-
-
-@pytest.fixture
-def migrated(legacy_db):
-    preprod.init(legacy_db)
-    accounts.seed("mike@example.com", path=legacy_db)
-    preprod.init(legacy_db)     # idempotence is part of the contract
-    return legacy_db
-
-
-def _sql(path, name):
-    with db.connect(path) as conn:
-        row = conn.execute(
-            "SELECT sql FROM sqlite_master WHERE name = ?", (name,)
-        ).fetchone()
-    return " ".join(row["sql"].split()) if row else None
-
-
-def _one(path, query, args=()):
-    with db.connect(path) as conn:
+def _one(dsn, query, args=()):
+    with db.connect(dsn) as conn:
         return conn.execute(query, args).fetchone()[0]
+
+
+@pytest.fixture
+def unowned(pg):
+    """A populated schema in the shape a database has BEFORE it is seeded:
+    preprod's tables exist, rows are in them, nothing owns them yet. On
+    SQLite this was a file that predated tenancy; on Postgres no such
+    file can exist, but init-before-seed is still the order every fresh
+    install runs in, and a row written under it is still unowned."""
+    preprod.init(pg)
+    with db.connect(pg) as conn:
+        conn.execute("INSERT INTO locations (created_at, name) VALUES ('t', 'Garage')")
+        conn.execute("INSERT INTO locations (created_at, name) VALUES ('t', 'Alley')")
+        conn.execute(
+            "INSERT INTO shoot_concepts (created_at, brand, title, shots_json) "
+            "VALUES ('t', 'zeropage', 'A concept', '[]')"
+        )
+        conn.execute("INSERT INTO concept_locations (concept_id, location_id) VALUES (1, 1)")
+        conn.execute("INSERT INTO concept_locations (concept_id, location_id) VALUES (1, 2)")
+    return pg
+
+
+@pytest.fixture
+def migrated(unowned):
+    accounts.seed("mike@example.com", dsn=unowned)
+    preprod.init(unowned)     # idempotence is part of the contract
+    return unowned
 
 
 # --------------------------------------------------------------------------
 # the column
 # --------------------------------------------------------------------------
 
-def test_every_owned_table_grows_an_account_id(tmp_path):
-    path = tmp_path / "fresh.db"
-    db.init_db(path)
-    preprod.init(path)
-    entities.init(path)
-    generative.init(path)
-    autonomy.init(path)
-    workflows.init(path)
-    render_assets.init(path)
-    with db.connect(path) as conn:
+def test_every_owned_table_grows_an_account_id(pg):
+    preprod.init(pg)
+    entities.init(pg)
+    generative.init(pg)
+    autonomy.init(pg)
+    workflows.init(pg)
+    render_assets.init(pg)
+    with db.connect(pg) as conn:
         for table in db.OWNED_TABLES:
-            cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
-            assert "account_id" in cols, f"{table} has no owner"
+            assert "account_id" in db.columns(conn, table), f"{table} has no owner"
 
 
 def test_existing_rows_are_claimed_by_the_bootstrap_account(migrated):
@@ -126,48 +82,35 @@ def test_existing_rows_are_claimed_by_the_bootstrap_account(migrated):
         unowned = _one(migrated, f"SELECT count(*) FROM {table} WHERE account_id IS NULL")
         assert unowned == 0, f"{table} left rows with no owner"
         assert _one(
-            migrated, f"SELECT count(*) FROM {table} WHERE account_id = ?", (owner,)
+            migrated, f"SELECT count(*) FROM {table} WHERE account_id = %s", (owner,)
         ) > 0
 
 
-def test_init_before_seed_leaves_rows_unowned_rather_than_guessing(legacy_db):
-    """There is no account yet, so there is no honest owner to write."""
-    preprod.init(legacy_db)
-    assert _one(legacy_db, "SELECT count(*) FROM locations WHERE account_id IS NULL") == 2
+def test_init_before_seed_leaves_rows_unowned_rather_than_guessing(unowned):
+    preprod.init(unowned)
+    assert _one(unowned, "SELECT count(*) FROM locations WHERE account_id IS NULL") == 2
 
 
-def test_seeding_afterwards_claims_them(legacy_db):
-    preprod.init(legacy_db)
-    accounts.seed("mike@example.com", path=legacy_db)
-    assert _one(legacy_db, "SELECT count(*) FROM locations WHERE account_id IS NULL") == 0
+def test_seeding_afterwards_claims_them(unowned):
+    accounts.seed("mike@example.com", dsn=unowned)
+    assert _one(unowned, "SELECT count(*) FROM locations WHERE account_id IS NULL") == 0
 
 
 # --------------------------------------------------------------------------
-# the locations rebuild -- the part that can eat data
+# the join table
 # --------------------------------------------------------------------------
 
-def test_the_join_table_survives_the_rebuild(migrated):
-    """Both destructive implementations left this at 0."""
-    assert _one(migrated, "SELECT count(*) FROM concept_locations") == 2
-
-
-def test_the_join_table_still_points_at_locations(migrated):
-    sql = _sql(migrated, "concept_locations")
-    assert "locations_old" not in sql
-    assert "REFERENCES locations(id)" in sql
-
-
-def test_no_table_references_a_table_that_does_not_exist(migrated):
-    """`PRAGMA foreign_key_check` says nothing about a REFERENCES clause
-    naming a missing table, so check the schema text itself."""
-    import re
+def test_the_join_table_points_at_the_real_tables(migrated):
+    """Both FKs name the table itself. On SQLite a rename once rewrote
+    this one to `locations_old`; pinned so the shape cannot drift to
+    anything that is not the real table, and so the rows are intact."""
     with db.connect(migrated) as conn:
-        names = {r["name"] for r in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table'")}
-        for table, sql in conn.execute(
-                "SELECT name, sql FROM sqlite_master WHERE type = 'table'"):
-            for ref in re.findall(r'REFERENCES\s+"?(\w+)"?', sql or ""):
-                assert ref in names, f"{table} references missing {ref}"
+        refs = {r[0] for r in conn.execute(
+            "SELECT confrelid::regclass::text FROM pg_constraint "
+            "WHERE conrelid = 'concept_locations'::regclass AND contype = 'f'"
+        )}
+    assert refs == {"locations", "shoot_concepts"}
+    assert _one(migrated, "SELECT count(*) FROM concept_locations") == 2
 
 
 def test_the_cascade_still_fires(migrated):
@@ -176,30 +119,15 @@ def test_the_cascade_still_fires(migrated):
     assert _one(migrated, "SELECT count(*) FROM concept_locations") == 1
 
 
-def test_rows_and_integrity_survive(migrated):
-    assert _one(migrated, "SELECT count(*) FROM locations") == 2
-    with db.connect(migrated) as conn:
-        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
-
-
-def test_no_scratch_tables_are_left_behind(migrated):
-    with db.connect(migrated) as conn:
-        leftovers = [r["name"] for r in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table' "
-            "AND (name LIKE '%_new' OR name LIKE '%_old')")]
-    assert leftovers == []
-
-
 # --------------------------------------------------------------------------
-# what the rebuild was for
+# two accounts, one name
 # --------------------------------------------------------------------------
 
 def test_two_accounts_can_each_own_a_garage(migrated):
     other = _one(migrated, "SELECT id FROM accounts WHERE slug = 'antihero'")
     with db.connect(migrated) as conn:
         conn.execute(
-            "INSERT INTO locations (created_at, name, account_id) VALUES ('t', 'Garage', ?)",
+            "INSERT INTO locations (created_at, name, account_id) VALUES ('t', 'Garage', %s)",
             (other,),
         )
     assert _one(migrated, "SELECT count(*) FROM locations WHERE name = 'Garage'") == 2
@@ -207,70 +135,34 @@ def test_two_accounts_can_each_own_a_garage(migrated):
 
 def test_one_account_still_cannot_own_two_garages(migrated):
     owner = _one(migrated, "SELECT account_id FROM locations WHERE name = 'Garage'")
-    with pytest.raises(sqlite3.IntegrityError):
+    with pytest.raises(psycopg.errors.UniqueViolation):
         with db.connect(migrated) as conn:
             conn.execute(
-                "INSERT INTO locations (created_at, name, account_id) "
-                "VALUES ('t', 'Garage', ?)",
+                "INSERT INTO locations (created_at, name, account_id) VALUES ('t', 'Garage', %s)",
                 (owner,),
             )
 
 
-def test_ownerless_rows_still_collide_the_way_they_used_to(tmp_path):
-    """The NULL-safe half of the index. SQLite treats NULLs as distinct
-    inside a UNIQUE, so without the COALESCE two unowned rows named
-    'hallway' would both exist and add_location's upsert would start
-    duplicating instead of updating."""
-    path = tmp_path / "fresh.db"
-    db.init_db(path)
-    preprod.init(path)
-    with db.connect(path) as conn:
+def test_ownerless_rows_still_collide_the_way_they_used_to(pg):
+    """NULLs are distinct inside a UNIQUE on Postgres exactly as on SQLite:
+    without the COALESCE in preprod.LOCATIONS_UNIQUE two unowned
+    "hallway"s would both exist, and add_location's upsert would quietly
+    stop upserting for every caller that has no account yet."""
+    preprod.init(pg)
+    with db.connect(pg) as conn:
         conn.execute("INSERT INTO locations (created_at, name) VALUES ('t', 'hallway')")
-    with pytest.raises(sqlite3.IntegrityError):
-        with db.connect(path) as conn:
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        with db.connect(pg) as conn:
             conn.execute("INSERT INTO locations (created_at, name) VALUES ('t', 'hallway')")
 
 
-def test_add_location_still_upserts_by_name(tmp_path):
-    path = tmp_path / "fresh.db"
-    db.init_db(path)
-    preprod.init(path)
-    first = preprod.add_location("hallway", photo_count=3, path=path, account_id=None)
-    again = preprod.add_location("hallway", photo_count=4, path=path, account_id=None)
+def test_add_location_still_upserts_by_name(pg):
+    preprod.init(pg)
+    first = preprod.add_location("hallway", photo_count=3, dsn=pg, account_id=None)
+    again = preprod.add_location("hallway", photo_count=4, dsn=pg, account_id=None)
     assert first == again
-    assert _one(path, "SELECT count(*) FROM locations") == 1
-    assert _one(path, "SELECT photo_count FROM locations WHERE id = ?", (first,)) == 4
-
-
-# --------------------------------------------------------------------------
-# the repair, for databases the first implementation already broke
-# --------------------------------------------------------------------------
-
-def test_a_join_table_pointing_at_locations_old_is_healed(legacy_db):
-    """Reproduces the damage the first rebuild caused, then proves init
-    fixes it. Without the repair, every save of a concept against a
-    location dies with `no such table: main.locations_old`."""
-    conn = sqlite3.connect(legacy_db)
-    conn.executescript("""
-        PRAGMA foreign_keys = OFF;
-        CREATE TABLE cl_broken (
-            concept_id  INTEGER NOT NULL REFERENCES shoot_concepts(id) ON DELETE CASCADE,
-            location_id INTEGER NOT NULL REFERENCES "locations_old"(id) ON DELETE CASCADE,
-            UNIQUE (concept_id, location_id)
-        );
-        INSERT INTO cl_broken SELECT * FROM concept_locations;
-        DROP TABLE concept_locations;
-        ALTER TABLE cl_broken RENAME TO concept_locations;
-    """)
-    conn.commit()
-    conn.close()
-    assert "locations_old" in _sql(legacy_db, "concept_locations")
-
-    preprod.init(legacy_db)
-
-    sql = _sql(legacy_db, "concept_locations")
-    assert "locations_old" not in sql
-    assert _one(legacy_db, "SELECT count(*) FROM concept_locations") == 2
+    assert _one(pg, "SELECT count(*) FROM locations") == 1
+    assert _one(pg, "SELECT photo_count FROM locations WHERE id = %s", (first,)) == 4
 
 
 # --------------------------------------------------------------------------
@@ -278,65 +170,64 @@ def test_a_join_table_pointing_at_locations_old_is_healed(legacy_db):
 # --------------------------------------------------------------------------
 
 @pytest.fixture
-def two_accounts(tmp_path):
+def two_accounts(pg):
     """Two accounts, one concept, one location and one character each."""
-    path = tmp_path / "shared.db"
-    db.init_db(path)
+    path = pg
     preprod.init(path)
     entities.init(path)
     generative.init(path)
-    accounts.seed("mike@example.com", path=path)
+    accounts.seed("mike@example.com", dsn=path)
     with db.connect(path) as conn:
         a = conn.execute("SELECT id FROM accounts WHERE slug='zeropage'").fetchone()["id"]
         b = conn.execute("SELECT id FROM accounts WHERE slug='antihero'").fetchone()["id"]
         for owner, tag in ((a, "A"), (b, "B")):
             conn.execute(
                 "INSERT INTO shoot_concepts (created_at, brand, title, shots_json, "
-                "account_id) VALUES ('t', 'zeropage', ?, '[]', ?)", (f"{tag} concept", owner))
+                "account_id) VALUES ('t', 'zeropage', %s, '[]', %s)", (f"{tag} concept", owner))
             conn.execute(
-                "INSERT INTO locations (created_at, name, account_id) VALUES ('t', ?, ?)",
+                "INSERT INTO locations (created_at, name, account_id) VALUES ('t', %s, %s)",
                 (f"{tag} place", owner))
             conn.execute(
-                "INSERT INTO characters (name, created_at, account_id) VALUES (?, 't', ?)",
+                "INSERT INTO characters (name, created_at, account_id) VALUES (%s, 't', %s)",
                 (f"{tag} person", owner))
     return path, a, b
 
 
 def test_a_list_returns_only_your_own(two_accounts):
     path, a, b = two_accounts
-    assert [c["title"] for c in preprod.list_concepts(path=path, account_id=a)] == ["A concept"]
-    assert [c["title"] for c in preprod.list_concepts(path=path, account_id=b)] == ["B concept"]
+    assert [c["title"] for c in preprod.list_concepts(dsn=path, account_id=a)] == ["A concept"]
+    assert [c["title"] for c in preprod.list_concepts(dsn=path, account_id=b)] == ["B concept"]
 
 
 def test_fetching_someone_elses_concept_by_id_is_indistinguishable_from_missing(two_accounts):
     """Ids are sequential integers. If "not yours" answered differently
     from "no such row", counting from 1 would map the whole table."""
     path, a, b = two_accounts
-    theirs = preprod.list_concepts(path=path, account_id=b)[0]["id"]
-    assert preprod.get_concept(theirs, path=path, account_id=a) is None
-    assert preprod.get_concept(999_999, path=path, account_id=a) is None
-    assert preprod.get_concept(theirs, path=path, account_id=b) is not None
+    theirs = preprod.list_concepts(dsn=path, account_id=b)[0]["id"]
+    assert preprod.get_concept(theirs, dsn=path, account_id=a) is None
+    assert preprod.get_concept(999_999, dsn=path, account_id=a) is None
+    assert preprod.get_concept(theirs, dsn=path, account_id=b) is not None
 
 
 def test_locations_and_cast_are_scoped_too(two_accounts):
     path, a, b = two_accounts
-    assert [x["name"] for x in preprod.list_locations(path=path, account_id=a)] == ["A place"]
-    assert [x["name"] for x in entities.list_characters(path=path, account_id=b)] == ["B person"]
-    theirs = entities.list_characters(path=path, account_id=b)[0]["id"]
-    assert entities.get_character(theirs, path=path, account_id=a) is None
+    assert [x["name"] for x in preprod.list_locations(dsn=path, account_id=a)] == ["A place"]
+    assert [x["name"] for x in entities.list_characters(dsn=path, account_id=b)] == ["B person"]
+    theirs = entities.list_characters(dsn=path, account_id=b)[0]["id"]
+    assert entities.get_character(theirs, dsn=path, account_id=a) is None
 
 
 def test_counts_do_not_leak_how_much_work_the_other_account_has_done(two_accounts):
     path, a, b = two_accounts
-    assert preprod.summary(path=path, account_id=a) == {"locations": 1, "shoot_concepts": 1}
-    assert entities.summary(path=path, account_id=b) == {"characters": 1, "props": 0}
+    assert preprod.summary(dsn=path, account_id=a) == {"locations": 1, "shoot_concepts": 1}
+    assert entities.summary(dsn=path, account_id=b) == {"characters": 1, "props": 0}
 
 
 def test_the_unowned_pool_is_its_own_scope(two_accounts):
     """account_id=None addresses rows that predate tenancy. It must not
     be a skeleton key onto everybody's."""
     path, a, b = two_accounts
-    assert preprod.list_concepts(path=path, account_id=None) == []
+    assert preprod.list_concepts(dsn=path, account_id=None) == []
 
 
 # --------------------------------------------------------------------------
@@ -346,9 +237,9 @@ def test_the_unowned_pool_is_its_own_scope(two_accounts):
 def test_a_new_concept_is_stamped_with_its_creator(two_accounts):
     path, a, b = two_accounts
     new_id = preprod.save_concept(
-        {"title": "Mine", "shots": []}, brand="zeropage", path=path, account_id=a)
-    assert preprod.get_concept(new_id, path=path, account_id=a)["title"] == "Mine"
-    assert preprod.get_concept(new_id, path=path, account_id=b) is None
+        {"title": "Mine", "shots": []}, brand="zeropage", dsn=path, account_id=a)
+    assert preprod.get_concept(new_id, dsn=path, account_id=a)["title"] == "Mine"
+    assert preprod.get_concept(new_id, dsn=path, account_id=b) is None
 
 
 def test_you_cannot_mutate_someone_elses_concept(two_accounts):
@@ -357,29 +248,29 @@ def test_you_cannot_mutate_someone_elses_concept(two_accounts):
     which is the right error, because it is the same one a genuinely
     missing id gives. The mutation must not land either way."""
     path, a, b = two_accounts
-    theirs = preprod.list_concepts(path=path, account_id=b)[0]["id"]
+    theirs = preprod.list_concepts(dsn=path, account_id=b)[0]["id"]
     with pytest.raises(ValueError):
-        preprod.set_picked(theirs, True, path=path, account_id=a)
-    assert preprod.get_concept(theirs, path=path, account_id=b)["picked_at"] is None
+        preprod.set_picked(theirs, True, dsn=path, account_id=a)
+    assert preprod.get_concept(theirs, dsn=path, account_id=b)["picked_at"] is None
 
-    preprod.set_picked(theirs, True, path=path, account_id=b)
-    assert preprod.get_concept(theirs, path=path, account_id=b)["picked_at"] is not None
+    preprod.set_picked(theirs, True, dsn=path, account_id=b)
+    assert preprod.get_concept(theirs, dsn=path, account_id=b)["picked_at"] is not None
 
 
 def test_you_cannot_delete_someone_elses_concept(two_accounts):
     path, a, b = two_accounts
-    theirs = preprod.list_concepts(path=path, account_id=b)[0]["id"]
-    preprod.delete_concept(theirs, path=path, account_id=a)
-    assert preprod.get_concept(theirs, path=path, account_id=b) is not None
+    theirs = preprod.list_concepts(dsn=path, account_id=b)[0]["id"]
+    preprod.delete_concept(theirs, dsn=path, account_id=a)
+    assert preprod.get_concept(theirs, dsn=path, account_id=b) is not None
 
 
 def test_clearing_the_slate_clears_only_your_own(two_accounts):
     """This one used to be `DELETE FROM shoot_concepts` with no argument."""
     path, a, b = two_accounts
-    removed = preprod.delete_all_concepts(path=path, account_id=a)
+    removed = preprod.delete_all_concepts(dsn=path, account_id=a)
     assert removed == 1
-    assert preprod.list_concepts(path=path, account_id=a) == []
-    assert len(preprod.list_concepts(path=path, account_id=b)) == 1
+    assert preprod.list_concepts(dsn=path, account_id=a) == []
+    assert len(preprod.list_concepts(dsn=path, account_id=b)) == 1
 
 
 def test_a_concept_cannot_be_pinned_to_someone_elses_location(two_accounts):
@@ -387,19 +278,19 @@ def test_a_concept_cannot_be_pinned_to_someone_elses_location(two_accounts):
     a guessed integer links your concept to a stranger's room -- and the
     concept card would then render its name."""
     path, a, b = two_accounts
-    theirs = preprod.list_locations(path=path, account_id=b)[0]["id"]
+    theirs = preprod.list_locations(dsn=path, account_id=b)[0]["id"]
     mine = preprod.save_concept(
         {"title": "Borrowed", "shots": []}, brand="zeropage",
-        location_ids=[theirs], path=path, account_id=a)
-    assert preprod.get_concept(mine, path=path, account_id=a)["locations"] == []
+        location_ids=[theirs], dsn=path, account_id=a)
+    assert preprod.get_concept(mine, dsn=path, account_id=a)["locations"] == []
 
 
 def test_cast_and_props_are_stamped_and_checked(two_accounts):
     path, a, b = two_accounts
-    cid = entities.add_character("Rider", path=path, account_id=a)
-    assert entities.get_character(cid, path=path, account_id=b) is None
-    entities.delete_character(cid, path=path, account_id=b)
-    assert entities.get_character(cid, path=path, account_id=a) is not None
+    cid = entities.add_character("Rider", dsn=path, account_id=a)
+    assert entities.get_character(cid, dsn=path, account_id=b) is None
+    entities.delete_character(cid, dsn=path, account_id=b)
+    assert entities.get_character(cid, dsn=path, account_id=a) is not None
 
 
 # --------------------------------------------------------------------------
@@ -409,10 +300,10 @@ def test_cast_and_props_are_stamped_and_checked(two_accounts):
 def _log_render(path, account_id, tool="runway", n=1):
     from src.shot import Shot
     shot_id = generative.add_shot(
-        Shot(subject="a bike", action="idles"), path=path, account_id=account_id)
+        Shot(subject="a bike", action="idles"), dsn=path, account_id=account_id)
     for _ in range(n):
         generative.record_generation(
-            shot_id, tool, "a prompt", path=path, account_id=account_id)
+            shot_id, tool, "a prompt", dsn=path, account_id=account_id)
 
 
 def test_one_accounts_renders_do_not_count_against_anothers_cap(two_accounts):
@@ -427,7 +318,7 @@ def test_the_per_account_cap_refuses_before_the_ceiling_does(two_accounts):
     _log_render(path, a, n=2)
     refusal = generative.cap_error(
         "runway", 1, account_id=a, per_account=2, ceiling=99,
-        path=path, env_prefix="RUNWAY")
+        dsn=path, env_prefix="RUNWAY")
     assert refusal is not None and "daily cap" in refusal
 
 
@@ -439,9 +330,9 @@ def test_the_global_ceiling_catches_what_per_account_caps_cannot(two_accounts):
     _log_render(path, a, n=3)
     _log_render(path, b, n=3)
     assert generative.cap_error("runway", 1, account_id=a, per_account=10,
-                                ceiling=99, path=path, env_prefix="RUNWAY") is None
+                                ceiling=99, dsn=path, env_prefix="RUNWAY") is None
     refusal = generative.cap_error("runway", 1, account_id=a, per_account=10,
-                                   ceiling=6, path=path, env_prefix="RUNWAY")
+                                   ceiling=6, dsn=path, env_prefix="RUNWAY")
     assert refusal is not None and "daily ceiling" in refusal
 
 
@@ -449,10 +340,10 @@ def test_a_generation_cannot_be_logged_against_someone_elses_shot(two_accounts):
     from src.shot import Shot
     path, a, b = two_accounts
     shot_id = generative.add_shot(
-        Shot(subject="a bike", action="idles"), path=path, account_id=a)
+        Shot(subject="a bike", action="idles"), dsn=path, account_id=a)
     with pytest.raises(ValueError):
         generative.record_generation(
-            shot_id, "runway", "a prompt", path=path, account_id=b)
+            shot_id, "runway", "a prompt", dsn=path, account_id=b)
 
 
 # --------------------------------------------------------------------------
@@ -463,14 +354,8 @@ def test_a_generation_cannot_be_logged_against_someone_elses_shot(two_accounts):
 # predicate. Each needs a reason, and the reason has to be about the
 # statement, not about convenience.
 UNSCOPED_ALLOWED = {
-    # migrations run before ownership exists, and operate on the whole table
-    "INSERT INTO locations_new",
-    "SELECT sql FROM sqlite_master",
-    "PRAGMA table_info",
     # db.own_table's own backfill: the statement that CREATES ownership
-    "SET account_id = ? WHERE account_id IS NULL",
-    # the FK-repair copy, a pure join-table rebuild
-    "INSERT INTO concept_locations_new",
+    "SET account_id = %s WHERE account_id IS NULL",
     # concept_locations is reached only through an owned concept, and its
     # rows cascade with one -- it has no account_id of its own by design
     "FROM concept_locations",
@@ -480,7 +365,7 @@ UNSCOPED_ALLOWED = {
     # query in the codebase that is SUPPOSED to count every account: it is
     # what stops ten pilot users, each inside their own cap, from putting
     # sixty renders on one card.
-    "SELECT COUNT(*) FROM generations WHERE tool = ? AND created_at >= ?",
+    "SELECT COUNT(*) FROM generations WHERE tool = %s AND created_at >= %s",
     # assembled in pieces: the owner predicate lives in a different
     # literal from the one that names the table, so the scan cannot see
     # them together. Both are checked by tests of their own --
@@ -490,12 +375,12 @@ UNSCOPED_ALLOWED = {
     # a channel's rate cap is on what reaches the DESTINATION per day,
     # whoever filed the run -- channels are the installation's
     # (db.SHARED_TABLES), so this count is meant to span every account
-    "SELECT COUNT(*) FROM hold_queue WHERE channel = ? AND status = 'posted'",
+    "SELECT COUNT(*) FROM hold_queue WHERE channel = %s AND status = 'posted'",
     # autonomy.init's one-time rename of the personal channel: a migration
     "UPDATE hold_queue SET channel='antihero'",
     # workflows.seed_default's idempotence checks: an installation-level
     # seed asking whether the starter canvas exists at all
-    "SELECT id FROM workflows WHERE name = ?",
+    "SELECT id FROM workflows WHERE name = %s",
     "SELECT id FROM workflows LIMIT 1",
 }
 
@@ -625,10 +510,10 @@ def test_the_brand_pill_does_not_empty_the_board(two_accounts, monkeypatch):
             "SELECT user_id FROM account_members ORDER BY account_id"
         ).fetchone()["user_id"]
         # both concepts to the tenant, the way the backfill leaves them
-        conn.execute("UPDATE shoot_concepts SET account_id = ?", (a,))
+        conn.execute("UPDATE shoot_concepts SET account_id = %s", (a,))
 
     monkeypatch.setattr(auth, "current_user", lambda request: {"id": user_id})
-    monkeypatch.setattr(auth.db, "DB_PATH", path)
+    monkeypatch.setenv("DATABASE_URL", path)
 
     class Request:
         def __init__(self, brand):
@@ -637,7 +522,7 @@ def test_the_brand_pill_does_not_empty_the_board(two_accounts, monkeypatch):
     for brand in ("zeropage", "antihero"):
         scoped_to = auth.current_account_id(Request(brand))
         assert scoped_to == a, f"the {brand} pill switched tenants"
-        assert len(preprod.list_concepts(path=path, account_id=scoped_to)) == 2
+        assert len(preprod.list_concepts(dsn=path, account_id=scoped_to)) == 2
 
 
 def test_the_brand_pill_does_not_empty_the_dev_console(two_accounts, monkeypatch):
@@ -659,10 +544,10 @@ def test_the_brand_pill_does_not_empty_the_dev_console(two_accounts, monkeypatch
         user_id = conn.execute(
             "SELECT user_id FROM account_members ORDER BY account_id"
         ).fetchone()["user_id"]
-        conn.execute("UPDATE shoot_concepts SET account_id = ?", (a,))
+        conn.execute("UPDATE shoot_concepts SET account_id = %s", (a,))
 
     monkeypatch.setattr(auth, "current_user", lambda request: {"id": user_id})
-    monkeypatch.setattr(auth.db, "DB_PATH", path)
+    monkeypatch.setenv("DATABASE_URL", path)
 
     class Request:
         def __init__(self, brand):
@@ -682,7 +567,7 @@ def test_the_dev_console_still_works_with_no_session(two_accounts, monkeypatch):
 
     path, a, _b = two_accounts
     monkeypatch.setattr(auth, "current_user", lambda request: None)
-    monkeypatch.setattr(auth.db, "DB_PATH", path)
+    monkeypatch.setenv("DATABASE_URL", path)
 
     class Request:
         cookies: dict = {}
@@ -690,7 +575,7 @@ def test_the_dev_console_still_works_with_no_session(two_accounts, monkeypatch):
     assert auth.dev_account_id(Request()) == a
 
 
-def test_a_user_with_no_membership_is_refused_not_defaulted(monkeypatch, tmp_path):
+def test_a_user_with_no_membership_is_refused_not_defaulted(monkeypatch, pg):
     """Signing in is not the same as having access -- a fresh signup gets
     zero account_members rows on purpose. That has to be a 403, not a
     fall-through to whichever account happens to be first."""
@@ -698,13 +583,12 @@ def test_a_user_with_no_membership_is_refused_not_defaulted(monkeypatch, tmp_pat
 
     from app import auth
 
-    path = tmp_path / "empty.db"
-    db.init_db(path)
+    path = pg
     accounts.init(path)
-    uid = accounts.create_user("stranger@example.com", path=path)
+    uid = accounts.create_user("stranger@example.com", dsn=path)
 
     monkeypatch.setattr(auth, "current_user", lambda request: {"id": uid})
-    monkeypatch.setattr(auth.db, "DB_PATH", path)
+    monkeypatch.setenv("DATABASE_URL", path)
 
     class Request:
         cookies: dict = {}
@@ -719,30 +603,29 @@ def test_an_entry_point_with_no_session_acts_as_the_bootstrap_account(two_accoun
     the backfill "nobody" owns nothing, so defaulting to None would make
     a night's work vanish rather than fail."""
     path, a, _b = two_accounts
-    assert accounts.resolve_account(path=path) == a
-    assert accounts.resolve_account("antihero", path=path) != a
+    assert accounts.resolve_account(dsn=path) == a
+    assert accounts.resolve_account("antihero", dsn=path) != a
     with pytest.raises(ValueError):
-        accounts.resolve_account("nosuchbrand", path=path)
+        accounts.resolve_account("nosuchbrand", dsn=path)
 
 
-def test_resolve_account_on_a_fresh_database_is_the_unowned_pool(tmp_path):
-    path = tmp_path / "fresh.db"
-    db.init_db(path)
-    assert accounts.resolve_account(path=path) is None
+def test_resolve_account_on_a_fresh_database_is_the_unowned_pool(pg):
+    assert accounts.resolve_account(dsn=pg) is None
 
 
-def test_resolve_account_before_the_table_exists_is_not_a_crash(tmp_path):
+def test_resolve_account_before_the_table_exists_is_not_a_crash(pg):
     """A database that predates accounts.init() is a fresh install, not an
     error. This raised sqlite3.OperationalError("no such table: accounts")
     until a full-suite run scheduled the mcp_server tests onto a worker
     whose database had never been seeded -- the two-halves runs never put
     them there, so it hid."""
-    path = tmp_path / "no-accounts-table.db"
-    with db.connect(path) as conn:
-        conn.execute("CREATE TABLE placeholder (id INTEGER)")
-    assert accounts.resolve_account(path=path) is None
+    # db.init_db creates the accounts table itself now (the FK target
+    # has to exist), so the table-less state is made, not found
+    with db.connect(pg) as conn:
+        conn.execute("DROP TABLE accounts CASCADE")
+    assert accounts.resolve_account(dsn=pg) is None
     with pytest.raises(ValueError):
-        accounts.resolve_account("zeropage", path=path)
+        accounts.resolve_account("zeropage", dsn=pg)
 
 
 # --------------------------------------------------------------------------
@@ -753,13 +636,13 @@ def test_an_invite_gives_them_their_own_account_not_yours(two_accounts):
     """The whole point, and the easy thing to get catastrophically wrong:
     a pilot user needs a workspace, not a membership in Mike's."""
     path, a, _b = two_accounts
-    result = accounts.invite("alex@example.com", "alex", path=path)
+    result = accounts.invite("alex@example.com", "alex", dsn=path)
 
     assert result["created_user"] and result["created_account"]
     assert result["account_id"] not in (a, _b)
     # their board is empty, and Mike's is untouched
-    assert preprod.list_concepts(path=path, account_id=result["account_id"]) == []
-    assert len(preprod.list_concepts(path=path, account_id=a)) == 1
+    assert preprod.list_concepts(dsn=path, account_id=result["account_id"]) == []
+    assert len(preprod.list_concepts(dsn=path, account_id=a)) == 1
 
 
 def test_inviting_someone_into_an_account_that_owns_rows_is_refused(two_accounts):
@@ -767,7 +650,7 @@ def test_inviting_someone_into_an_account_that_owns_rows_is_refused(two_accounts
     them Mike's board. The error has to say how much."""
     path, _a, _b = two_accounts
     with pytest.raises(ValueError) as raised:
-        accounts.invite("alex@example.com", "zeropage", path=path)
+        accounts.invite("alex@example.com", "zeropage", dsn=path)
     assert "owns" in str(raised.value)
     assert "join_existing" in str(raised.value)
 
@@ -775,42 +658,43 @@ def test_inviting_someone_into_an_account_that_owns_rows_is_refused(two_accounts
 def test_sharing_a_workspace_is_possible_but_has_to_be_asked_for(two_accounts):
     path, a, _b = two_accounts
     result = accounts.invite("alex@example.com", "zeropage",
-                             join_existing=True, path=path)
+                             join_existing=True, dsn=path)
     assert result["account_id"] == a
 
 
-def test_the_invited_row_is_unclaimed_so_oauth_can_take_it(two_accounts):
-    """auth._finish_oauth claims a user row by email when it has no
-    password and no identity. That is what makes an invite complete
-    before the person has ever visited -- and why there is no secret to
-    send them."""
+def test_the_invited_row_is_unclaimed_so_the_first_sign_in_can_take_it(two_accounts):
+    """accounts.claim takes an unclaimed row by email on the first
+    Supabase sign-in, and the membership follows the row's new id
+    (ON UPDATE CASCADE). That is what makes an invite complete before
+    the person has ever visited -- and why there is no secret to send."""
     path, _a, _b = two_accounts
-    accounts.invite("alex@example.com", "alex", path=path)
-    user = accounts.get_user_by_email("alex@example.com", path=path)
-    assert user["password_hash"] is None
-    with db.connect(path) as conn:
-        assert conn.execute(
-            "SELECT 1 FROM auth_identities WHERE user_id = ?", (user["id"],)
-        ).fetchone() is None
+    invited = accounts.invite("alex@example.com", "alex", dsn=path)
+    user = accounts.get_user_by_email("alex@example.com", dsn=path)
+    assert user["claimed_at"] is None and "password_hash" not in user
+    uid, error = accounts.claim("supabase-uuid-alex", "alex@example.com", "Alex", None,
+                                dsn=path)
+    assert error is None and uid == "supabase-uuid-alex"
+    assert accounts.get_user_by_email("alex@example.com", dsn=path)["claimed_at"]
+    assert [m["id"] for m in accounts.memberships(uid, dsn=path)] == [invited["account_id"]]
 
 
 def test_inviting_the_same_person_twice_is_not_an_error(two_accounts):
     path, _a, _b = two_accounts
-    first = accounts.invite("alex@example.com", "alex", path=path)
-    again = accounts.invite("alex@example.com", "alex", path=path)
+    first = accounts.invite("alex@example.com", "alex", dsn=path)
+    again = accounts.invite("alex@example.com", "alex", dsn=path)
     assert again["user_id"] == first["user_id"]
     assert again["account_id"] == first["account_id"]
     assert not again["created_user"] and not again["created_account"]
-    assert len(accounts.memberships(first["user_id"], path=path)) == 1
+    assert len(accounts.memberships(first["user_id"], dsn=path)) == 1
 
 
 def test_an_invite_needs_a_plausible_email_and_a_slug(two_accounts):
     path, _a, _b = two_accounts
     for bad_email in ("", "   ", "not-an-email"):
         with pytest.raises(ValueError):
-            accounts.invite(bad_email, "alex", path=path)
+            accounts.invite(bad_email, "alex", dsn=path)
     with pytest.raises(ValueError):
-        accounts.invite("alex@example.com", "  ", path=path)
+        accounts.invite("alex@example.com", "  ", dsn=path)
 
 
 # --------------------------------------------------------------------------
@@ -916,21 +800,21 @@ def _init_everything(path):
     render_assets.init(path)
 
 
-AUTH_SCHEMA = {"users", "auth_identities", "accounts", "account_members"}
+AUTH_SCHEMA = {"users", "accounts", "account_members"}
 
 
-def test_every_table_is_owned_or_declared_shared(tmp_path):
+def test_every_table_is_owned_or_declared_shared(pg):
     """BACKLOG #11's first bullet, as a test: the learning tables are
     global BY DECISION, and writing the decision down is what stops a
     future session reading twenty unscoped tables next to a tenancy
     suite and "finishing the migration". A table on neither list is a
     table nobody decided about."""
-    path = tmp_path / "whole.db"
+    path = pg
     _init_everything(path)
     with db.connect(path) as conn:
         tables = {r["name"] for r in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table' "
-            "AND name NOT LIKE 'sqlite_%'")}
+            "SELECT table_name AS name FROM information_schema.tables "
+            "WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'")}
         undecided = sorted(tables - set(db.OWNED_TABLES) - set(db.SHARED_TABLES))
         assert not undecided, (
             "tables that are neither owned nor declared shared (with a reason) "
@@ -940,67 +824,41 @@ def test_every_table_is_owned_or_declared_shared(tmp_path):
         gone = sorted(set(db.SHARED_TABLES) - tables)
         assert not gone, f"SHARED_TABLES names tables that do not exist: {gone}"
         for table in db.OWNED_TABLES:
-            cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+            cols = db.columns(conn, table)
             assert "account_id" in cols, f"{table} is listed as owned but has no owner column"
         for table, reason in db.SHARED_TABLES.items():
             assert reason.strip(), f"{table} is shared with no reason written down"
             if table in AUTH_SCHEMA:
                 continue     # account_members.account_id is the grant, not an owner
-            cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+            cols = db.columns(conn, table)
             assert "account_id" not in cols, (
                 f"{table} has an account_id column but is declared shared -- decide")
 
 
-PRE_TENANCY_HOLDS_AND_CANVASES = """
-CREATE TABLE hold_queue (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    created_at TEXT NOT NULL,
-    channel    TEXT NOT NULL,
-    status     TEXT NOT NULL DEFAULT 'held',
-    reason     TEXT,
-    concept_id INTEGER,
-    caption    TEXT,
-    payload    TEXT
-);
-CREATE TABLE workflows (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    brand      TEXT,
-    name       TEXT NOT NULL,
-    graph_json TEXT NOT NULL
-);
-"""
+def test_existing_holds_and_canvases_are_claimed_by_the_bootstrap_account(pg):
+    """The two tables the dry run found off the owned list (holds and
+    canvases) take the same path as locations above: init before seed,
+    rows written unowned, the seed claims them, and a second init
+    neither re-claims nor loses anything."""
+    autonomy.init(pg)
+    workflows.init(pg)
+    with db.connect(pg) as conn:
+        conn.execute("INSERT INTO hold_queue (created_at, channel) VALUES ('t', 'zeropage')")
+        conn.execute("INSERT INTO hold_queue (created_at, channel, status) "
+                     "VALUES ('t', 'antihero', 'posted')")
+        conn.execute("INSERT INTO workflows (created_at, updated_at, name, graph_json) "
+                     "VALUES ('t', 't', 'Midnight Evasion', '{}')")
+    assert _one(pg, "SELECT count(*) FROM hold_queue WHERE account_id IS NULL") == 2
+    assert _one(pg, "SELECT count(*) FROM workflows WHERE account_id IS NULL") == 1
 
-
-def test_existing_holds_and_canvases_are_claimed_by_the_bootstrap_account(tmp_path):
-    """The migration the dry run asked for: the additive path the other
-    eight tables took, every existing row to the bootstrap account.
-    Seeding after init (the fresh-database order) claims them too."""
-    path = tmp_path / "legacy-holds.db"
-    conn = sqlite3.connect(path)
-    conn.executescript(PRE_TENANCY_HOLDS_AND_CANVASES)
-    conn.execute("INSERT INTO hold_queue (created_at, channel) VALUES ('t', 'zeropage')")
-    conn.execute("INSERT INTO hold_queue (created_at, channel, status) "
-                 "VALUES ('t', 'antihero', 'posted')")
-    conn.execute("INSERT INTO workflows (created_at, updated_at, name, graph_json) "
-                 "VALUES ('t', 't', 'Midnight Evasion', '{}')")
-    conn.commit()
-    conn.close()
-
-    autonomy.init(path)
-    workflows.init(path)
-    assert _one(path, "SELECT count(*) FROM hold_queue WHERE account_id IS NULL") == 2
-    assert _one(path, "SELECT count(*) FROM workflows WHERE account_id IS NULL") == 1
-
-    accounts.seed("mike@example.com", path=path)
-    owner = _one(path, "SELECT MIN(id) FROM accounts")
-    assert _one(path, "SELECT count(*) FROM hold_queue WHERE account_id = ?", (owner,)) == 2
-    assert _one(path, "SELECT count(*) FROM workflows WHERE account_id = ?", (owner,)) == 1
-    assert _one(path, "SELECT name FROM workflows") == "Midnight Evasion"
-    autonomy.init(path)          # idempotent, and nothing re-claimed or lost
-    workflows.init(path)
-    assert _one(path, "SELECT count(*) FROM hold_queue") == 2
+    accounts.seed("mike@example.com", dsn=pg)
+    owner = _one(pg, "SELECT MIN(id) FROM accounts")
+    assert _one(pg, "SELECT count(*) FROM hold_queue WHERE account_id = %s", (owner,)) == 2
+    assert _one(pg, "SELECT count(*) FROM workflows WHERE account_id = %s", (owner,)) == 1
+    assert _one(pg, "SELECT name FROM workflows") == "Midnight Evasion"
+    autonomy.init(pg)          # idempotent, and nothing re-claimed or lost
+    workflows.init(pg)
+    assert _one(pg, "SELECT count(*) FROM hold_queue") == 2
 
 
 @pytest.fixture
@@ -1016,13 +874,13 @@ def two_tenants(two_accounts, monkeypatch):
     path, a, b = two_accounts
     autonomy.init(path)
     workflows.init(path)
-    monkeypatch.setattr(db, "DB_PATH", path)
+    monkeypatch.setenv("DATABASE_URL", path)
     jobs.clear_all_for_tests()
 
-    holds = {owner: autonomy.to_hold("zeropage", f"{tag} run", path=path, account_id=owner)
+    holds = {owner: autonomy.to_hold("zeropage", f"{tag} run", dsn=path, account_id=owner)
              for owner, tag in ((a, "A"), (b, "B"))}
     canvases = {owner: workflows.create_workflow(f"{tag} canvas", {"nodes": [{"id": 1}]},
-                                                 path=path, account_id=owner)
+                                                 dsn=path, account_id=owner)
                 for owner, tag in ((a, "A"), (b, "B"))}
     running = {owner: jobs.create("render", f"{tag}'s private render", account_id=owner)
                for owner, tag in ((a, "A"), (b, "B"))}
@@ -1040,7 +898,7 @@ def two_tenants(two_accounts, monkeypatch):
         """Signed in, zero memberships: the real dependency runs and
         must refuse, because nothing else will."""
         app_main.app.dependency_overrides.pop(auth.current_account_id, None)
-        uid = accounts.create_user("stranger@example.com", path=path)
+        uid = accounts.create_user("stranger@example.com", dsn=path)
         monkeypatch.setattr(auth, "current_user", lambda request: {"id": uid})
         return client
 
@@ -1059,7 +917,7 @@ def test_a_stranger_cannot_read_or_grade_your_holds(two_tenants):
     theirs = t["holds"][t["a"]]
     res = client.post(f"/api/holds/{theirs}/resolve", json={"status": "rejected"})
     assert res.status_code == 404
-    assert autonomy.get_hold(theirs, path=t["path"], account_id=t["a"])["status"] == "held"
+    assert autonomy.get_hold(theirs, dsn=t["path"], account_id=t["a"])["status"] == "held"
     # your own still works, and the grade lands on YOUR agreement number
     mine = t["holds"][t["b"]]
     assert client.post(f"/api/holds/{mine}/resolve",
@@ -1084,7 +942,7 @@ def test_post_now_takes_an_owner_and_never_reaches_the_gate_for_a_stranger(
     assert res.status_code == 404
 
 
-def test_posting_needs_the_per_run_approval_even_for_the_owner(two_tenants, monkeypatch):
+def test_posting_needs_the_per_run_approval_even_for_the_owner(two_tenants, tmp_path, monkeypatch):
     """The three standing switches are about the installation; the
     per-run yes is ZEROPAGE_POST_OK, in the render tools' SPEND_OK
     shape. Without it a live plan that would post reports so and
@@ -1092,7 +950,7 @@ def test_posting_needs_the_per_run_approval_even_for_the_owner(two_tenants, monk
     from src import autopilot
     monkeypatch.setenv(autopilot.ENABLE_ENV, "1")
     monkeypatch.delenv(autopilot.POST_ENV, raising=False)
-    monkeypatch.setattr(autopilot, "KILL_SWITCH_PATH", two_tenants["path"].parent / "off")
+    monkeypatch.setattr(autopilot, "KILL_SWITCH_PATH", tmp_path / "off")
     fired = []
     monkeypatch.setattr(autopilot, "EXECUTORS",
                         {"post": lambda a: fired.append(a), "generate": lambda a: fired.append(a)})
@@ -1121,7 +979,7 @@ def test_a_stranger_cannot_see_or_destroy_your_canvases(two_tenants):
     assert client.put(f"/api/workflows/{theirs}", json={"name": "overwritten"}).status_code == 404
     assert client.delete(f"/api/workflows/{theirs}").status_code == 404
     assert client.post(f"/api/workflows/{theirs}/run").status_code == 404
-    survivor = workflows.get_workflow(theirs, path=t["path"], account_id=t["a"])
+    survivor = workflows.get_workflow(theirs, dsn=t["path"], account_id=t["a"])
     assert survivor is not None and survivor["name"] == "A canvas"
     # brand is a label inside the tenant, never a way across it
     assert [w["id"] for w in
@@ -1132,12 +990,12 @@ def test_a_stranger_cannot_reset_the_canvases_of_your_concept(two_tenants):
     """DELETE /api/concepts/{id}/graph took no account at all."""
     t = two_tenants
     with db.connect(t["path"]) as conn:
-        theirs = conn.execute("SELECT id FROM shoot_concepts WHERE account_id = ?",
+        theirs = conn.execute("SELECT id FROM shoot_concepts WHERE account_id = %s",
                               (t["a"],)).fetchone()["id"]
-    workflows.save_shot_graph(theirs, 1, {"nodes": [{"id": 1}]}, path=t["path"],
+    workflows.save_shot_graph(theirs, 1, {"nodes": [{"id": 1}]}, dsn=t["path"],
                               account_id=t["a"])
     assert t["as"](t["b"]).delete(f"/api/concepts/{theirs}/graph").status_code == 404
-    assert workflows.get_shot_graph(theirs, 1, path=t["path"], account_id=t["a"]) is not None
+    assert workflows.get_shot_graph(theirs, 1, dsn=t["path"], account_id=t["a"]) is not None
     assert t["as"](t["a"]).delete(f"/api/concepts/{theirs}/graph").json()["removed"] == 1
 
 
@@ -1174,7 +1032,7 @@ def test_signed_in_with_no_membership_is_refused_everywhere(two_tenants):
     assert client.post(f"/api/holds/{theirs}/post").status_code == 403
     assert client.delete(f"/api/workflows/{t['canvases'][t['a']]}").status_code == 403
     assert client.post(f"/api/jobs/{t['jobs'][t['a']]['id']}/cancel").status_code == 403
-    assert autonomy.get_hold(theirs, path=t["path"], account_id=t["a"])["status"] == "held"
+    assert autonomy.get_hold(theirs, dsn=t["path"], account_id=t["a"])["status"] == "held"
 
 
 # --------------------------------------------------------------------------
@@ -1225,16 +1083,15 @@ def test_the_global_caps_are_set_deliberately_in_the_example_env():
 # written at every learning-shelf ingest and read at every retrieval site
 # --------------------------------------------------------------------------
 
-def test_slug_of_is_the_tenant_and_never_raises(two_accounts, tmp_path):
+def test_slug_of_is_the_tenant_and_never_raises(two_accounts):
     path, a, b = two_accounts
-    assert accounts.slug_of(a, path=path) == "zeropage"
-    assert accounts.slug_of(b, path=path) == "antihero"
-    assert accounts.slug_of(None, path=path) is None
-    assert accounts.slug_of(999, path=path) is None
-    fresh = tmp_path / "no-accounts.db"
-    with db.connect(fresh) as conn:
-        conn.execute("CREATE TABLE placeholder (id INTEGER)")
-    assert accounts.slug_of(1, path=fresh) is None
+    assert accounts.slug_of(a, dsn=path) == "zeropage"
+    assert accounts.slug_of(b, dsn=path) == "antihero"
+    assert accounts.slug_of(None, dsn=path) is None
+    assert accounts.slug_of(999, dsn=path) is None
+    with db.connect(path) as conn:
+        conn.execute("DROP TABLE accounts CASCADE")
+    assert accounts.slug_of(1, dsn=path) is None
 
 
 def test_a_denial_is_labelled_with_the_tenant_not_the_brand(two_accounts, monkeypatch):
@@ -1250,7 +1107,7 @@ def test_a_denial_is_labelled_with_the_tenant_not_the_brand(two_accounts, monkey
 
     path, a, b = two_accounts
     autonomy.init(path)
-    monkeypatch.setattr(db, "DB_PATH", path)
+    monkeypatch.setenv("DATABASE_URL", path)
     records = []
 
     class _Conn:
@@ -1264,9 +1121,9 @@ def test_a_denial_is_labelled_with_the_tenant_not_the_brand(two_accounts, monkey
     monkeypatch.setattr(auth, "current_user", lambda request: {"id": 1})
     app_main.app.dependency_overrides[auth.current_account_id] = lambda: b
     with db.connect(path) as conn:
-        theirs = conn.execute("SELECT id FROM shoot_concepts WHERE account_id = ?",
+        theirs = conn.execute("SELECT id FROM shoot_concepts WHERE account_id = %s",
                               (b,)).fetchone()["id"]
-        conn.execute("UPDATE shoot_concepts SET brand = 'zeropage' WHERE id = ?", (theirs,))
+        conn.execute("UPDATE shoot_concepts SET brand = 'zeropage' WHERE id = %s", (theirs,))
     res = TestClient(app_main.app).post(
         f"/api/concepts/{theirs}/deny", json={"reasons": ["off-tone"], "note": "no"})
     assert res.status_code == 200, res.text
@@ -1329,8 +1186,8 @@ def test_the_render_path_carries_the_owner(two_tenants, monkeypatch):
     concept_id = preprod.save_concept(
         {"title": "a take", "logline": "x",
          "shots": [{"n": 1, "ai_prompt": "a prompt"}]},
-        "zeropage", path=t["path"], account_id=owner)
-    preprod.set_picked(concept_id, True, path=t["path"], account_id=owner)
+        "zeropage", dsn=t["path"], account_id=owner)
+    preprod.set_picked(concept_id, True, dsn=t["path"], account_id=owner)
 
     client = t["as"](owner)
     for url in (f"/api/queue/{concept_id}/approve",

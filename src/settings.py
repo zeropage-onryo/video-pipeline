@@ -1,6 +1,6 @@
 """
 The tunables the Dev Studio Settings tab edits: the three knobs that
-actually govern generation/eval quality, in the shared SQLite
+actually govern generation/eval quality, in the shared
 `settings` table (the same key/value table autonomy's kill switch
 lives in -- one table, namespaced keys, no second store).
 
@@ -50,30 +50,28 @@ TUNABLES = {
 }
 
 
-def init(path=None) -> None:
-    path = db.DB_PATH if path is None else path
-    with db.connect(path) as conn:
-        conn.executescript(SCHEMA)
+def init(dsn=None) -> None:
+    with db.connect(dsn) as conn:
+        conn.execute(SCHEMA)
 
 
-def get_raw(key: str, path=None) -> Optional[str]:
+def get_raw(key: str, dsn=None) -> Optional[str]:
     """The stored value only -- None when nothing is saved (or the
-    table doesn't exist yet). path=None resolves db.DB_PATH at call
+    table doesn't exist yet). dsn=None resolves DATABASE_URL at call
     time, so a monkeypatched/relocated DB is honoured."""
-    path = db.DB_PATH if path is None else path
     try:
-        with db.connect(path) as conn:
+        with db.connect(dsn) as conn:
             row = conn.execute(
-                "SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+                "SELECT value FROM settings WHERE key = %s", (key,)).fetchone()
             return row["value"] if row else None
     except Exception:
         return None
 
 
-def get(key: str, path=None) -> Any:
+def get(key: str, dsn=None) -> Any:
     """The effective typed value: stored setting, else env, else default."""
     spec = TUNABLES[key]
-    raw = get_raw(key, path=path)
+    raw = get_raw(key, dsn=dsn)
     if raw is None and spec["env"]:
         raw = os.environ.get(spec["env"])
     if raw is None:
@@ -84,19 +82,18 @@ def get(key: str, path=None) -> Any:
         return spec["default"]
 
 
-def set_value(key: str, raw: str, path=None) -> Any:
+def set_value(key: str, raw: str, dsn=None) -> Any:
     """Validate and store one tunable. An empty string clears the stored
     row so the env/default fallback takes over again. Raises ValueError
     on an unknown key or an out-of-range value -- writes are the one
     place this module is strict."""
-    path = db.DB_PATH if path is None else path
     if key not in TUNABLES:
         raise ValueError(f"unknown setting {key!r}")
     spec = TUNABLES[key]
     raw = (raw or "").strip()
     if raw == "":
-        clear(key, path=path)
-        return get(key, path=path)
+        clear(key, dsn=dsn)
+        return get(key, dsn=dsn)
     try:
         value = spec["cast"](raw)
     except (TypeError, ValueError):
@@ -104,31 +101,30 @@ def set_value(key: str, raw: str, path=None) -> Any:
     if not (spec["lo"] <= value <= spec["hi"]):
         raise ValueError(
             f"{spec['label']} must be between {spec['lo']} and {spec['hi']}")
-    init(path=path)
-    with db.connect(path) as conn:
+    init(dsn=dsn)
+    with db.connect(dsn) as conn:
         conn.execute(
-            "INSERT INTO settings (key, value) VALUES (?, ?) "
+            "INSERT INTO settings (key, value) VALUES (%s, %s) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             (key, str(value)),
         )
     return value
 
 
-def clear(key: str, path=None) -> None:
-    path = db.DB_PATH if path is None else path
+def clear(key: str, dsn=None) -> None:
     try:
-        with db.connect(path) as conn:
-            conn.execute("DELETE FROM settings WHERE key = ?", (key,))
+        with db.connect(dsn) as conn:
+            conn.execute("DELETE FROM settings WHERE key = %s", (key,))
     except Exception:
         pass
 
 
-def describe(path=None) -> list:
+def describe(dsn=None) -> list:
     """The Settings form's rows: effective value plus where it came
     from, so the tab can say 'this is the env var talking' honestly."""
     rows = []
     for key, spec in TUNABLES.items():
-        stored = get_raw(key, path=path)
+        stored = get_raw(key, dsn=dsn)
         if stored is not None:
             source = "settings"
         elif spec["env"] and os.environ.get(spec["env"]) is not None:
@@ -136,20 +132,20 @@ def describe(path=None) -> list:
         else:
             source = "default"
         rows.append({"key": key, "label": spec["label"], "help": spec["help"],
-                     "value": get(key, path=path), "default": spec["default"],
+                     "value": get(key, dsn=dsn), "default": spec["default"],
                      "lo": spec["lo"], "hi": spec["hi"], "source": source})
     return rows
 
 
 # Typed conveniences for the three call sites.
 
-def prompt_gate_min(path=None) -> int:
-    return get("prompt_gate_min", path=path)
+def prompt_gate_min(dsn=None) -> int:
+    return get("prompt_gate_min", dsn=dsn)
 
 
-def grade_threshold(path=None) -> float:
-    return get("grade_threshold", path=path)
+def grade_threshold(dsn=None) -> float:
+    return get("grade_threshold", dsn=dsn)
 
 
-def eval_k(path=None) -> int:
-    return get("eval_k", path=path)
+def eval_k(dsn=None) -> int:
+    return get("eval_k", dsn=dsn)

@@ -25,7 +25,7 @@ from google import genai
 from google.genai import types
 
 from . import preprod
-from .db import DB_PATH, init_db
+from .db import init_db
 from .gemini_utils import generate_with_retry, strip_fences
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -164,7 +164,7 @@ def describe_locations(root: Path, client=None, db_path=None, force: bool = Fals
     what happened. One unusable response doesn't lose the rest of the
     run -- it's reported and the other spaces still land.
     """
-    kwargs = {"path": db_path} if db_path is not None else {}
+    kwargs = {"dsn": db_path} if db_path is not None else {}
     described = skipped = failed = 0
 
     for name, photos in find_location_dirs(root):
@@ -203,9 +203,9 @@ def main(db_path=None):
         print("GEMINI_API_KEY (or GOOGLE_API_KEY) not set", file=sys.stderr)
         sys.exit(1)
 
-    path = db_path if db_path is not None else DB_PATH
+    path = db_path
     init_db(path=path)
-    preprod.init(path=path)
+    preprod.init(dsn=path)
 
     if not Path(args.locations_dir).is_dir():
         print(f"No locations directory at {args.locations_dir} -- create it and add "

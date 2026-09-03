@@ -8,14 +8,14 @@ generation call.
 """
 import pytest
 
-from src import crag, db, evalstore
+from src import crag, evalstore
 
 
 @pytest.fixture(autouse=True)
-def telemetry_db(tmp_path, monkeypatch):
-    path = tmp_path / "telemetry.db"
-    evalstore.init(path=path)
-    monkeypatch.setattr(db, "DB_PATH", path)
+def telemetry_db(pg, monkeypatch):
+    path = pg
+    evalstore.init(dsn=path)
+    monkeypatch.setenv("DATABASE_URL", path)
     return path
 
 
@@ -66,7 +66,7 @@ def test_retrieve_with_crag_skips_rewrite_when_retrieval_is_strong(monkeypatch,
     assert result["rewritten_query"] is None
     assert result["grade"]["strong"] is True
     assert result["telemetry"]["requery_triggered"] is False
-    summary = evalstore.crag_summary(path=telemetry_db)
+    summary = evalstore.crag_summary(dsn=telemetry_db)
     assert summary["total"] == 1
     assert summary["requery_rate"] == 0.0
 
@@ -95,7 +95,7 @@ def test_retrieve_with_crag_rewrites_and_adopts_a_better_result(monkeypatch,
     assert result["telemetry"]["score_improved"] is True
     assert result["telemetry"]["rewrite_adopted"] is True
     assert result["telemetry"]["score_change"] == pytest.approx(0.7)
-    summary = evalstore.crag_summary(path=telemetry_db)
+    summary = evalstore.crag_summary(dsn=telemetry_db)
     assert summary["requery_rate"] == 1.0
     assert summary["requery_success_rate"] == 1.0
 
@@ -167,7 +167,7 @@ def test_retrieve_with_crag_forwards_k_domain_and_project(monkeypatch):
 
 
 def test_telemetry_logging_does_not_reseed_an_emptied_golden_set(telemetry_db):
-    for row in evalstore.list_golden(path=telemetry_db):
-        evalstore.delete_golden(row["id"], path=telemetry_db)
-    evalstore.log_crag_retrieval({"original_query": "q"}, path=telemetry_db)
-    assert evalstore.list_golden(path=telemetry_db) == []
+    for row in evalstore.list_golden(dsn=telemetry_db):
+        evalstore.delete_golden(row["id"], dsn=telemetry_db)
+    evalstore.log_crag_retrieval({"original_query": "q"}, dsn=telemetry_db)
+    assert evalstore.list_golden(dsn=telemetry_db) == []

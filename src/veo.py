@@ -48,7 +48,6 @@ from google import genai
 from google.genai import types
 
 from . import generative
-from .db import DB_PATH
 from .shot import Shot
 
 MODELS = ("veo-3.1-generate-preview", "veo-3", "veo-3-fast")
@@ -95,7 +94,7 @@ def generations_today(db_path=None, *, account_id=None, everyone: bool = False) 
     DAILY_CAP counts against. `everyone=True` gives the installation-wide
     count that GLOBAL_DAILY_CAP counts against."""
     return generative.used_today(
-        "veo", db_path if db_path is not None else DB_PATH,
+        "veo", db_path,
         account_id=account_id, everyone=everyone,
     )
 
@@ -167,7 +166,7 @@ def _shot_row_for_prompt(prompt: str, db_path, account_id: Optional[int] = None)
     has one from promptgen; the graph's AI shots don't, so synthesize a
     minimal Shot -- the row exists to make the attempt countable, and
     its notes say where it came from."""
-    kwargs = {"path": db_path} if db_path is not None else {}
+    kwargs = {"dsn": db_path} if db_path is not None else {}
     generative.init(**kwargs)
     shot = Shot(subject=prompt[:100], action="as prompted")
     return generative.add_shot(shot, notes="auto-created by veo.generate_candidates",
@@ -185,7 +184,7 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *, shot_id: Optional[i
     get the one (with the error noted).
     """
     n = int(os.environ.get("VEO_CANDIDATES", n))
-    kwargs = {"path": db_path} if db_path is not None else {}
+    kwargs = {"dsn": db_path} if db_path is not None else {}
 
     try:
         if not spend_approved():
@@ -196,7 +195,7 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *, shot_id: Optional[i
         refusal = generative.cap_error(
             "veo", n, account_id=account_id,
             per_account=DAILY_CAP, ceiling=GLOBAL_DAILY_CAP,
-            path=db_path if db_path is not None else DB_PATH,
+            dsn=db_path,
             env_prefix="VEO", phrase="generations used",
             used=generations_today(db_path=db_path, account_id=account_id),
             used_everywhere=generations_today(db_path=db_path, everyone=True),

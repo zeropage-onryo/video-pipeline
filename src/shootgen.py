@@ -25,9 +25,9 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
-from . import accounts, crag, db, entities, preprod, rag
+from . import accounts, crag, entities, preprod, rag
 from . import shot as shot_module
-from .db import DB_PATH, init_db
+from .db import init_db
 from .gemini_utils import generate_with_retry, strip_fences
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -223,7 +223,7 @@ def reference_block(spark=None, client=None, db_path=None, picked_sources=None,
     can otherwise show up twice -- once picked exactly, once surfaced
     again by the new LEARNED_IDEATION_DOMAINS semantic search.
     """
-    kwargs = {"path": db_path} if db_path is not None else {}
+    kwargs = {"dsn": db_path} if db_path is not None else {}
     locations = preprod.list_locations(**kwargs, account_id=account_id)
     query = build_reference_query(locations, spark=spark, client=client)
     # the caller's neighbourhood: own lessons first, nobody's excluded
@@ -1036,7 +1036,7 @@ def generate_concept_ideas(brand: str, client=None, spark=None, gemini_client=No
     (see _apply_location_lock) -- omit it and every location applies,
     same as before this existed.
     """
-    kwargs = {"path": db_path} if db_path is not None else {}
+    kwargs = {"dsn": db_path} if db_path is not None else {}
     locations = preprod.list_locations(**kwargs, account_id=account_id)
     if not locations:
         # Grounding is an enhancement, never a gate -- the same degrade
@@ -1167,7 +1167,7 @@ def generate_scene_concept(brand: str, spark=None, steer: str = "",
     No scene bible is prepended: it exists to hold SEPARATE shots to one
     look, and there are no separate shots to hold.
     """
-    kwargs = {"path": db_path} if db_path is not None else {}
+    kwargs = {"dsn": db_path} if db_path is not None else {}
     # cast=None means "everything on file", "" means explicitly none --
     # the same convention generate_concept keeps.
     if cast is None:
@@ -1345,7 +1345,7 @@ def generate_scene_concepts(idea: str, brand: str, count: int = 4,
     later. `image_refs` are those same photos as bytes for THIS call's
     vision input.
     """
-    kwargs = {"path": db_path} if db_path is not None else {}
+    kwargs = {"dsn": db_path} if db_path is not None else {}
     # Only the rooms attached to THIS run steer it. No stderr note when
     # there are none: an unpinned scene is the normal case now, not a
     # degraded one, and a note printed every single run is a note nobody
@@ -1428,7 +1428,7 @@ def write_scene_for_concept(concept_id: int, gemini_client=None,
     The picked title/hook/logline/card_line are the LABEL and are never rewritten;
     this fills in the shots only, through update_concept_shots.
     """
-    kwargs = {"path": db_path} if db_path is not None else {}
+    kwargs = {"dsn": db_path} if db_path is not None else {}
     concept = preprod.get_concept(concept_id, **kwargs, account_id=account_id)
     if concept is None:
         raise ValueError(f"no concept {concept_id}")
@@ -1617,7 +1617,7 @@ def generate_concept(brand: str, client=None, spark=None, gemini_client=None,
     locations.describe_location already uses elsewhere in this codebase.
     None/empty means text-only, exactly as before this parameter existed.
     """
-    kwargs = {"path": db_path} if db_path is not None else {}
+    kwargs = {"dsn": db_path} if db_path is not None else {}
     locations = preprod.list_locations(**kwargs, account_id=account_id)
     if not locations:
         print(NO_LOCATIONS_NOTE, file=sys.stderr)
@@ -1724,7 +1724,7 @@ def main(db_path=None, account_id: Optional[int] = None):
     args = parser.parse_args()
     if account_id is None:
         account_id = accounts.resolve_account(
-            args.account, path=db_path if db_path is not None else db.DB_PATH)
+            args.account, dsn=db_path)
 
 
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
@@ -1732,10 +1732,10 @@ def main(db_path=None, account_id: Optional[int] = None):
         print("GEMINI_API_KEY (or GOOGLE_API_KEY) not set", file=sys.stderr)
         sys.exit(1)
 
-    path = db_path if db_path is not None else DB_PATH
+    path = db_path
     init_db(path=path)
-    preprod.init(path=path)
-    entities.init(path=path)
+    preprod.init(dsn=path)
+    entities.init(dsn=path)
 
     gemini_client = genai.Client(api_key=api_key)
 
@@ -1751,7 +1751,7 @@ def main(db_path=None, account_id: Optional[int] = None):
             print(e, file=sys.stderr)
             sys.exit(1)
 
-        concept = preprod.get_concept(args.scene, path=path, account_id=account_id)
+        concept = preprod.get_concept(args.scene, dsn=path, account_id=account_id)
         print(f"\nConcept {args.scene}")
         print(format_concept_as_text(concept, result["warnings"]))
         return

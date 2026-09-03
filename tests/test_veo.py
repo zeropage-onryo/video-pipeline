@@ -9,13 +9,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from src import db, generative, veo
+from src import generative, veo
 
 
 @pytest.fixture
-def tmp_db(tmp_path):
-    path = tmp_path / "test.db"
-    db.init_db(path)
+def tmp_db(pg):
+    path = pg
     generative.init(path)
     return path
 

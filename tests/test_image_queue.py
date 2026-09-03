@@ -8,17 +8,16 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from src import autonomy, db
+from src import autonomy
 
 client = TestClient(app)
 
 
 @pytest.fixture
-def tmp_db(tmp_path, monkeypatch):
-    path = tmp_path / "app.db"
-    db.init_db(path)
+def tmp_db(pg, monkeypatch):
+    path = pg
     autonomy.init(path)          # seeds the zeropage channel + targets
-    monkeypatch.setattr(db, "DB_PATH", path)
+    monkeypatch.setenv("DATABASE_URL", path)
     return path
 
 
@@ -27,7 +26,7 @@ def test_queue_creates_a_held_zeropage_image_hold(tmp_db):
                     data={"image_url": "https://cdn.example/x.jpg", "caption": "night ride"},
                     follow_redirects=False)
     assert r.status_code == 303 and "/holds" in r.headers["location"]
-    held = autonomy.list_hold(status="held", path=tmp_db, account_id=None)
+    held = autonomy.list_hold(status="held", dsn=tmp_db, account_id=None)
     assert held and held[0]["channel"] == "zeropage"
     assert held[0]["payload"]["image_url"] == "https://cdn.example/x.jpg"
     assert held[0]["caption"] == "night ride"
@@ -37,7 +36,7 @@ def test_queue_without_an_image_is_rejected(tmp_db):
     r = client.post("/post-image/queue", data={"caption": "no image"},
                     follow_redirects=False)
     assert r.status_code == 303 and "/post-image" in r.headers["location"]
-    assert autonomy.list_hold(status="held", path=tmp_db, account_id=None) == []
+    assert autonomy.list_hold(status="held", dsn=tmp_db, account_id=None) == []
 
 
 def test_approving_an_image_hold_builds_an_image_action(tmp_db, monkeypatch):
@@ -49,7 +48,7 @@ def test_approving_an_image_hold_builds_an_image_action(tmp_db, monkeypatch):
     monkeypatch.setattr(auth, "current_user", lambda request: stub)
     hid = autonomy.to_hold("zeropage", "queued", caption="cap",
                            payload={"image_url": "https://cdn.example/x.jpg"},
-                           status="held", path=tmp_db, account_id=None)
+                           status="held", dsn=tmp_db, account_id=None)
     captured = {}
 
     def fake_execute(plan, approve=False, dry_run=True):

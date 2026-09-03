@@ -46,14 +46,13 @@ def fresh_jobs():
 
 
 @pytest.fixture
-def tmp_db(tmp_path, monkeypatch):
-    path = tmp_path / "test.db"
-    db.init_db(path)
+def tmp_db(pg, monkeypatch):
+    path = pg
     preprod.init(path)
     entities.init(path)
     autonomy.init(path)
     evalstore.init(path)
-    monkeypatch.setattr(db, "DB_PATH", path)
+    monkeypatch.setenv("DATABASE_URL", path)
     return path
 
 
@@ -101,9 +100,9 @@ def test_assets_empty_and_counts_come_from_db(tmp_db):
 
 
 def test_assets_unify_locations_characters_props(tmp_db):
-    preprod.add_location("garage", {"space": "low key garage"}, path=tmp_db, account_id=None)
-    entities.add_character(name="Michael", role="rider", path=tmp_db, account_id=None)
-    entities.add_prop(name="Ducati 959", category="vehicle", path=tmp_db, account_id=None)
+    preprod.add_location("garage", {"space": "low key garage"}, dsn=tmp_db, account_id=None)
+    entities.add_character(name="Michael", role="rider", dsn=tmp_db, account_id=None)
+    entities.add_prop(name="Ducati 959", category="vehicle", dsn=tmp_db, account_id=None)
 
     data = client.get("/api/assets").json()
     assert data["counts"] == {"all": 3, "location": 1, "character": 1,
@@ -161,7 +160,7 @@ def seed_concept(path, title="Vault", shots=None):
     return preprod.save_concept(
         {"title": title, "hook": "hook", "logline": "log",
          "duration": "30s", "shots": shots or []},
-        brand="antihero", spark="spark", path=path,
+        brand="antihero", spark="spark", dsn=path,
     
         account_id=None,)
 
@@ -222,7 +221,7 @@ def photo_root(tmp_path, monkeypatch):
 
 
 def test_media_lists_photos_with_real_dates(tmp_db, photo_root):
-    preprod.add_location("garage", {"space": "the garage"}, path=tmp_db, account_id=None)
+    preprod.add_location("garage", {"space": "the garage"}, dsn=tmp_db, account_id=None)
     media = client.get("/api/media").json()
     assert media["counts"] == {"all": 1, "location": 1, "character": 0,
                                "prop": 0, "generated": 0}
@@ -239,12 +238,12 @@ def test_generated_renders_join_assets_and_video_stays_out_of_image_pickers(
     image = render_assets.record(
         generation_id=101, tool="nano", model="gemini-3-pro-image-preview",
         media_kind="image", prompt="low angle bike portrait",
-        media_url="/renders/nano/a.png", path=tmp_db, account_id=None,
+        media_url="/renders/nano/a.png", dsn=tmp_db, account_id=None,
     )
     video = render_assets.record(
         generation_id=102, tool="runway", model="gen4.5",
         media_kind="video", prompt="camera pushes toward the motorcycle",
-        media_url="/renders/runway/b.mp4", path=tmp_db, account_id=None,
+        media_url="/renders/runway/b.mp4", dsn=tmp_db, account_id=None,
     )
 
     assets = client.get("/api/assets?category=generated").json()
@@ -262,7 +261,7 @@ def test_generated_renders_join_assets_and_video_stays_out_of_image_pickers(
 
 def test_pipeline_run_carries_picked_media_as_image_refs(tmp_db, photo_root,
                                                          monkeypatch):
-    preprod.add_location("garage", {"space": "the garage"}, path=tmp_db, account_id=None)
+    preprod.add_location("garage", {"space": "the garage"}, dsn=tmp_db, account_id=None)
     seen = {}
     import src.shootgen as shootgen
     monkeypatch.setattr(shootgen, "reference_block", lambda **k: "")
@@ -294,9 +293,9 @@ def test_deny_records_correction_and_deletes_even_when_store_is_down(tmp_db):
     body = response.json()
     assert body["chunks_written"] == 0 and body["chunk_error"]  # store down, said so
     # the correction landed regardless -- the label is never lost
-    notes = [c["note"] for c in autonomy.pending_corrections(path=tmp_db)]
+    notes = [c["note"] for c in autonomy.pending_corrections(dsn=tmp_db)]
     assert any("off-tone" in n and "wrong mood" in n for n in notes)
-    assert preprod.get_concept(concept_id, path=tmp_db, account_id=None) is None
+    assert preprod.get_concept(concept_id, dsn=tmp_db, account_id=None) is None
 
 
 def test_deny_validates_reasons(tmp_db):
@@ -304,7 +303,7 @@ def test_deny_validates_reasons(tmp_db):
     response = client.post(f"/api/concepts/{concept_id}/deny",
                            json={"reasons": ["not a reason"]})
     assert response.status_code == 400
-    assert preprod.get_concept(concept_id, path=tmp_db, account_id=None) is not None
+    assert preprod.get_concept(concept_id, dsn=tmp_db, account_id=None) is not None
 
 
 def test_approve_writes_the_scene_via_job(tmp_db, monkeypatch):
@@ -478,7 +477,7 @@ def test_shot_generate_surfaces_render_failure(tmp_db, monkeypatch):
 # --- holds ------------------------------------------------------------------
 
 def test_holds_resolve_roundtrip(tmp_db):
-    hold_id = autonomy.to_hold("antihero", "shadow run", path=tmp_db, account_id=None)
+    hold_id = autonomy.to_hold("antihero", "shadow run", dsn=tmp_db, account_id=None)
     data = client.get("/api/holds").json()
     assert [h["id"] for h in data["items"]] == [hold_id]
     response = client.post(f"/api/holds/{hold_id}/resolve",
@@ -489,7 +488,7 @@ def test_holds_resolve_roundtrip(tmp_db):
 
 
 def test_holds_resolve_rejects_bad_status(tmp_db):
-    hold_id = autonomy.to_hold("antihero", "x", path=tmp_db, account_id=None)
+    hold_id = autonomy.to_hold("antihero", "x", dsn=tmp_db, account_id=None)
     assert client.post(f"/api/holds/{hold_id}/resolve",
                        json={"status": "meh"}).status_code == 400
 
@@ -510,10 +509,10 @@ def test_golden_crud_and_seed(tmp_db):
 
 
 def test_eval_run_computes_and_stores_metrics(tmp_db, monkeypatch):
-    for g in evalstore.list_golden(path=tmp_db):
-        evalstore.delete_golden(g["id"], path=tmp_db)
-    evalstore.add_golden("find the brief", ["prompts/brief.txt"], path=tmp_db)
-    evalstore.add_golden("find nothing", ["missing.txt"], path=tmp_db)
+    for g in evalstore.list_golden(dsn=tmp_db):
+        evalstore.delete_golden(g["id"], dsn=tmp_db)
+    evalstore.add_golden("find the brief", ["prompts/brief.txt"], dsn=tmp_db)
+    evalstore.add_golden("find nothing", ["missing.txt"], dsn=tmp_db)
 
     class FakeConn:
         def close(self):
@@ -562,8 +561,8 @@ def test_eval_run_computes_and_stores_metrics(tmp_db, monkeypatch):
 
 
 def test_eval_run_refuses_empty_golden_set(tmp_db):
-    for g in evalstore.list_golden(path=tmp_db):
-        evalstore.delete_golden(g["id"], path=tmp_db)
+    for g in evalstore.list_golden(dsn=tmp_db):
+        evalstore.delete_golden(g["id"], dsn=tmp_db)
     assert client.post("/api/evals/run", json={}).status_code == 400
 
 
@@ -571,8 +570,8 @@ def test_eval_run_refuses_empty_golden_set(tmp_db):
 
 def test_analytics_summary_and_posts(tmp_db):
     vid = db.add_video(title="Night ride", platform="youtube",
-                       posted_at="2026-08-01", brand="antihero", path=tmp_db, account_id=None)
-    db.record_metrics(vid, views=1200, likes=80, path=tmp_db, account_id=None)
+                       posted_at="2026-08-01", brand="antihero", dsn=tmp_db, account_id=None)
+    db.record_metrics(vid, views=1200, likes=80, dsn=tmp_db, account_id=None)
     summary = client.get("/api/analytics/summary?brand=antihero").json()
     assert summary["tiles"]["views"] == 1200
     assert summary["tiles"]["videos"] == 1
@@ -584,7 +583,7 @@ def test_analytics_summary_and_posts(tmp_db):
 
 def test_video_refresh_maps_failure_to_502(tmp_db, monkeypatch):
     vid = db.add_video(title="v", platform="youtube",
-                       posted_at="2026-08-01", path=tmp_db, account_id=None)
+                       posted_at="2026-08-01", dsn=tmp_db, account_id=None)
     monkeypatch.setattr(api_mod.youtube, "refresh_metrics_for_video",
                         lambda video, api_key=None, db_path=None:
                             {"ok": False, "error": "no key"})
@@ -712,7 +711,7 @@ def test_create_character_describes_its_photos_and_shelves_the_look(
     # the vision step saw the photo that was just written
     assert fake_vision == [{"kind": "character", "name": "Mike", "photos": 1}]
 
-    [row] = entities.list_characters(path=tmp_db, account_id=None)
+    [row] = entities.list_characters(dsn=tmp_db, account_id=None)
     assert row["name"] == "Mike" and row["photo_count"] == 1
     assert row["description"]["look"].startswith("a man in a cracked")
     assert row["description"]["notes"] == "leather jacket, deadpan"
@@ -743,7 +742,7 @@ def test_create_character_survives_a_failed_vision_call(
     assert body["ok"] is True and body["described"] is False
     assert "vision unavailable" in body["note"]
     assert (tmp_path / "characters" / "mike" / "a.png").exists()
-    assert entities.list_characters(path=tmp_db, account_id=None)[0]["name"] == "Mike"
+    assert entities.list_characters(dsn=tmp_db, account_id=None)[0]["name"] == "Mike"
     assert rag_recorder                       # still shelved, just thinner
 
 
@@ -801,7 +800,7 @@ def test_create_location_describes_and_teaches(tmp_db, tmp_path, monkeypatch,
     assert res.status_code == 200
     body = res.json()
     assert body["ok"] and body["described"] is True
-    saved = preprod.get_location_by_name("garage", path=tmp_db, account_id=None)
+    saved = preprod.get_location_by_name("garage", dsn=tmp_db, account_id=None)
     assert saved is not None and saved["photo_count"] == 2
     [record] = rag_recorder
     assert record["source"] == "assets/location-garage"
@@ -848,10 +847,10 @@ def test_delete_character_drops_the_shelf_chunk(tmp_db, monkeypatch):
     monkeypatch.setattr(api_mod.rag, "connect", lambda db_url=None: _RagConn())
     monkeypatch.setattr(api_mod.rag, "delete_source",
                         lambda conn, source: dropped.append(source) or 1)
-    cid = entities.add_character("Mike", role="protagonist", path=tmp_db, account_id=None)
+    cid = entities.add_character("Mike", role="protagonist", dsn=tmp_db, account_id=None)
     res = client.delete(f"/api/assets/characters/{cid}")
     assert res.json()["deleted"] == cid
-    assert entities.list_characters(path=tmp_db, account_id=None) == []
+    assert entities.list_characters(dsn=tmp_db, account_id=None) == []
     assert dropped == ["assets/character-mike"]
     assert client.delete(f"/api/assets/characters/{cid}").status_code == 404
 
@@ -865,7 +864,7 @@ def test_create_asset_survives_a_down_store(tmp_db, tmp_path, monkeypatch):
     body = res.json()
     assert body["ok"] is True
     assert body["rag"]["ok"] is False
-    assert entities.list_props(path=tmp_db, account_id=None)[0]["name"] == "Helmet"
+    assert entities.list_props(dsn=tmp_db, account_id=None)[0]["name"] == "Helmet"
 
 
 def test_holds_resolve_writes_the_prompt_verdict(tmp_db):
@@ -874,10 +873,10 @@ def test_holds_resolve_writes_the_prompt_verdict(tmp_db):
     page's route to the API twin)."""
     autonomy.log_prompt_scores("runX", [
         {"prompt": "p", "score": 9, "pass": True, "reason": "", "dims": {}}],
-        path=tmp_db)
+        dsn=tmp_db)
     hold_id = autonomy.to_hold("zeropage", "shadow", payload={"run_id": "runX"},
-                               path=tmp_db, account_id=None)
+                               dsn=tmp_db, account_id=None)
     client.post(f"/api/holds/{hold_id}/resolve", json={"status": "rejected"})
-    gate = autonomy.prompt_gate_agreement(path=tmp_db)
+    gate = autonomy.prompt_gate_agreement(dsn=tmp_db)
     assert gate["graded"] == 1
     assert gate["passed_but_rejected"] == 1

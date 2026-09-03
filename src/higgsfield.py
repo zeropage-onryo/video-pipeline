@@ -70,7 +70,6 @@ from pathlib import Path
 from typing import Optional
 
 from . import generative
-from .db import DB_PATH
 from .shot import Shot
 
 HOST = os.environ.get("HIGGSFIELD_HOST", "https://api.higgsfield.ai").rstrip("/")
@@ -312,7 +311,7 @@ def generations_today(db_path=None, *, account_id=None, everyone: bool = False) 
     DAILY_CAP counts against. `everyone=True` gives the installation-wide
     count that GLOBAL_DAILY_CAP counts against."""
     return generative.used_today(
-        "higgsfield", db_path if db_path is not None else DB_PATH,
+        "higgsfield", db_path,
         account_id=account_id, everyone=everyone,
     )
 
@@ -581,7 +580,7 @@ def _shot_row_for_prompt(prompt: str, db_path, note: str, account_id: Optional[i
     """A generations row needs a shot to hang off. The graph's AI shots
     do not have one, so synthesize a minimal Shot -- the row exists to
     make the attempt countable, and its notes say where it came from."""
-    kwargs = {"path": db_path} if db_path is not None else {}
+    kwargs = {"dsn": db_path} if db_path is not None else {}
     generative.init(**kwargs)
     shot = Shot(subject=prompt[:100], action="as prompted")
     return generative.add_shot(shot, notes=note, **kwargs, account_id=account_id)
@@ -603,7 +602,7 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *,
     takes the night down. Partial success is success.
     """
     n = int(os.environ.get("HIGGSFIELD_CANDIDATES", n))
-    kwargs = {"path": db_path} if db_path is not None else {}
+    kwargs = {"dsn": db_path} if db_path is not None else {}
     duration = int(cfg.get("duration", DEFAULT_DURATION))
 
     try:
@@ -626,7 +625,7 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *,
         refusal = generative.cap_error(
             "higgsfield", n, account_id=account_id,
             per_account=DAILY_CAP, ceiling=GLOBAL_DAILY_CAP,
-            path=db_path if db_path is not None else DB_PATH,
+            dsn=db_path,
             env_prefix="HIGGSFIELD", phrase="generations used",
             used=generations_today(db_path=db_path, account_id=account_id),
             used_everywhere=generations_today(db_path=db_path, everyone=True),
@@ -695,13 +694,13 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
     can claim an anchor that never left the building.
     """
     from . import preprod
-    kwargs = {"path": db_path} if db_path is not None else {}
+    kwargs = {"dsn": db_path} if db_path is not None else {}
 
     try:
         refusal = generative.cap_error(
             "higgsfield", 1, account_id=account_id,
             per_account=DAILY_CAP, ceiling=GLOBAL_DAILY_CAP,
-            path=db_path if db_path is not None else DB_PATH,
+            dsn=db_path,
             env_prefix="HIGGSFIELD", phrase="generations used",
             used=generations_today(db_path=db_path, account_id=account_id),
             used_everywhere=generations_today(db_path=db_path, everyone=True),
@@ -760,7 +759,7 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
     The free-standing render behind the Workflows canvas's Generate node
     -- generate_for_shot's walls without its concept/shot coupling.
     """
-    kwargs = {"path": db_path} if db_path is not None else {}
+    kwargs = {"dsn": db_path} if db_path is not None else {}
 
     try:
         prompt = (prompt or "").strip()
@@ -773,7 +772,7 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
         refusal = generative.cap_error(
             "higgsfield", 1, account_id=account_id,
             per_account=DAILY_CAP, ceiling=GLOBAL_DAILY_CAP,
-            path=db_path if db_path is not None else DB_PATH,
+            dsn=db_path,
             env_prefix="HIGGSFIELD", phrase="generations used",
             used=generations_today(db_path=db_path, account_id=account_id),
             used_everywhere=generations_today(db_path=db_path, everyone=True),
@@ -813,7 +812,7 @@ def generate_image_from_prompt(prompt: str, *, db_path=None, http=None, account_
     image-post path. Same walls; the image lands on R2 when configured
     (Instagram needs a public URL) else the app's /renders mount.
     """
-    kwargs = {"path": db_path} if db_path is not None else {}
+    kwargs = {"dsn": db_path} if db_path is not None else {}
 
     try:
         prompt = (prompt or "").strip()
@@ -824,7 +823,7 @@ def generate_image_from_prompt(prompt: str, *, db_path=None, http=None, account_
         refusal = generative.cap_error(
             "higgsfield", 1, account_id=account_id,
             per_account=DAILY_CAP, ceiling=GLOBAL_DAILY_CAP,
-            path=db_path if db_path is not None else DB_PATH,
+            dsn=db_path,
             env_prefix="HIGGSFIELD", phrase="generations used",
             used=generations_today(db_path=db_path, account_id=account_id),
             used_everywhere=generations_today(db_path=db_path, everyone=True),

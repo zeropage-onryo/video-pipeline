@@ -19,18 +19,18 @@ from src import accounts, db, preprod
 
 
 def main():
-    account_id = accounts.resolve_account(path=db.DB_PATH)
+    account_id = accounts.resolve_account()
     # Scoped by account_id, like every other write against an owned
     # table -- tests/test_tenancy.py scans ops/ for exactly this and it
     # caught the unscoped version of this line.
-    with db.connect(db.DB_PATH) as conn:
+    with db.connect() as conn:
         n = conn.execute(
             "UPDATE shoot_concepts SET archive_reason = 'weak concept' "
             "WHERE archive_reason = 'other' AND account_id IS ?",
             (account_id,),
         ).rowcount
     print(f"relabelled {n} row(s)")
-    print("tally now:", preprod.reason_counts(path=db.DB_PATH, account_id=account_id))
+    print("tally now:", preprod.reason_counts(account_id=account_id))
     return 0
 
 

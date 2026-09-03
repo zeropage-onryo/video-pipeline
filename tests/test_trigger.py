@@ -2,11 +2,11 @@
 Tests for src/trigger.py -- the scheduled shadow-run trigger.
 
 Hermetic: orchestrator.run is patched, so nothing generates; the crash
-path runs against a throwaway DB via db.DB_PATH.
+path runs against a throwaway schema via DATABASE_URL.
 """
 import pytest
 
-from src import autonomy, db, trigger
+from src import autonomy, trigger
 
 # ---------- spark rotation ----------
 
@@ -39,11 +39,10 @@ def test_repo_sparks_file_has_material():
 # ---------- main ----------
 
 @pytest.fixture
-def tmp_db(tmp_path, monkeypatch):
-    path = tmp_path / "test.db"
-    db.init_db(path)
+def tmp_db(pg, monkeypatch):
+    path = pg
     autonomy.init(path)
-    monkeypatch.setattr(db, "DB_PATH", path)
+    monkeypatch.setenv("DATABASE_URL", path)
     return path
 
 
@@ -103,6 +102,6 @@ def test_main_crash_still_writes_the_dead_man_row(tmp_db, monkeypatch):
     monkeypatch.setattr(orchestrator, "run", boom)
 
     assert trigger.main([]) == 1
-    [row] = autonomy.list_hold(path=tmp_db, account_id=None)
+    [row] = autonomy.list_hold(dsn=tmp_db, account_id=None)
     assert "trigger crashed" in row["reason"]
     assert "gemini fell over" in row["reason"]

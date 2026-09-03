@@ -26,14 +26,14 @@ from pathlib import Path as _P
 # is not on sys.path unless the project happens to be pip-installed.
 sys.path.insert(0, str(_P(__file__).resolve().parent.parent))
 
-from src import accounts, db, preprod, scene_chain
+from src import accounts, preprod, scene_chain
 
 CITES = re.compile(r"@Image\s*\d+")
 
 
 def find(path, account_id):
     broken = []
-    for concept in preprod.list_concepts(limit=1000, path=path, account_id=account_id):
+    for concept in preprod.list_concepts(limit=1000, dsn=path, account_id=account_id):
         shots = concept.get("shots") or []
         if not shots:
             continue
@@ -48,8 +48,8 @@ def main(argv=None):
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
 
-    account_id = accounts.resolve_account(path=db.DB_PATH)
-    broken = find(db.DB_PATH, account_id)
+    account_id = accounts.resolve_account()
+    broken = find(None, account_id)
     if not broken:
         print("nothing to repair")
         return 0
@@ -60,21 +60,20 @@ def main(argv=None):
             if args.dry_run:
                 print(f"  [{cid}] {title:34} zeropage -> would archive (off-brand)")
                 continue
-            preprod.set_archived(cid, path=db.DB_PATH, account_id=account_id,
+            preprod.set_archived(cid, account_id=account_id,
                                  reason="off-brand")
             print(f"  [{cid}] {title:34} archived (off-brand) — row kept")
         else:
             if args.dry_run:
                 print(f"  [{cid}] {title:34} {brand} -> would attach refs")
                 continue
-            refs = scene_chain.attach_refs(cid, [], db_path=db.DB_PATH,
+            refs = scene_chain.attach_refs(cid, [], db_path=None,
                                            account_id=account_id)
             anchor = refs[0] if refs else "NONE — nothing matched, left as-is"
             print(f"  [{cid}] {title:34} {len(refs)} refs, anchor {anchor}")
 
     if not args.dry_run:
-        print("\ntally now:", preprod.reason_counts(path=db.DB_PATH,
-                                                    account_id=account_id))
+        print("\ntally now:", preprod.reason_counts(account_id=account_id))
     return 0
 
 

@@ -42,6 +42,5 @@ langchain-anthropic      # optional: RESEARCH_PROVIDER=anthropic, needs its own 
 # src/research_agent.py talks to it with the mcp 2.x client instead, in
 # about forty lines, reading tool schemas off list_tools().
 mcp>=2   # the MCP surface (src/mcp_server.py). v2 renamed FastMCP to MCPServer and moved stateless_http onto streamable_http_app(); code written against 1.x imports a module that no longer exists, so this pin is load-bearing -- verify src/mcp_server.build_server on a major bump
-authlib
+pyjwt   # verifies Supabase Auth's JWT on sign-in (app/auth.py)
 itsdangerous
-argon2-cffi

@@ -4,7 +4,7 @@ Tests for src/orchestrator.py -- the autonomous content graph.
 Hermetic: the billed seams (shootgen.generate_concept, CRAG retrieval,
 scheduling.build_caption, the judge client) are patched at their
 modules; entities/locations/autonomy run against a throwaway SQLite
-file via db.DB_PATH. Every graph test drives the compiled GRAPH through
+database via DATABASE_URL. Every graph test drives the compiled GRAPH through
 run(), so the edges and all three conditionals are exercised. The
 publish gates are driven directly -- with generate_render a dry-run
 stub, the wired graph can't reach publish until renders are real, and
@@ -16,16 +16,15 @@ from src import autonomy, db, entities, orchestrator, preprod
 
 
 @pytest.fixture
-def tmp_db(tmp_path, monkeypatch):
-    """The orchestrator's nodes read db.DB_PATH directly (same as the web
+def tmp_db(pg, monkeypatch):
+    """The orchestrator's nodes read DATABASE_URL directly (same as the web
     routes), so point it at a throwaway database."""
-    path = tmp_path / "test.db"
-    db.init_db(path)
+    path = pg
     preprod.init(path)
     entities.init(path)
     autonomy.init(path)
-    monkeypatch.setattr(db, "DB_PATH", path)
-    preprod.add_location("hallway", {"space": "narrow hallway"}, photo_count=2, path=path, account_id=None)
+    monkeypatch.setenv("DATABASE_URL", path)
+    preprod.add_location("hallway", {"space": "narrow hallway"}, photo_count=2, dsn=path, account_id=None)
     # graph tests must not reach the real library or Gemini
     monkeypatch.setattr(orchestrator.crag, "retrieve_with_crag",
                         lambda *a, **k: {"ok": False, "references": [],
@@ -93,7 +92,7 @@ def stage_fakes(monkeypatch, results):
                       "references": references,
                       "cast": cast, "image_refs": list(image_refs or [])})
         concept, warnings = queue.pop(0)
-        concept_id = _save_scene(db.DB_PATH, concept, brand)
+        concept_id = _save_scene(None, concept, brand)
         return {"concept_id": concept_id, "concept": concept, "warnings": warnings}
 
     monkeypatch.setattr(orchestrator.shootgen, "generate_scene_concept", fake_generate)
@@ -118,7 +117,7 @@ def _save_scene(path, concept, brand):
     """A real row, because the keyframe node reads the concept back out
     of the DB to persist its prompt and attach its still."""
     return preprod.save_concept(concept, brand=brand, spark="test",
-                                prompt_template="T", path=path, account_id=None)
+                                prompt_template="T", dsn=path, account_id=None)
 
 
 # ---------- brand defaults to channel: the hold_queue-13 regression ----------
@@ -175,13 +174,13 @@ def test_clean_run_keyframes_the_scene_and_parks_it_for_approval(tmp_db, monkeyp
 
     # and the scene itself is now waiting where the money gets spent:
     # its prompt stored, its still attached, parked but not picked
-    concept = preprod.get_concept(result["concept_id"], path=tmp_db, account_id=None)
+    concept = preprod.get_concept(result["concept_id"], dsn=tmp_db, account_id=None)
     shot = concept["shots"][0]
     assert shot["prompt"] == GOOD_PROMPT
     assert shot["reference_image"].startswith("https://cdn/key-")
     assert concept["parked"] is True
     assert concept["picked"] is False
-    [row] = autonomy.list_hold(path=tmp_db, account_id=None)
+    [row] = autonomy.list_hold(dsn=tmp_db, account_id=None)
     assert row["status"] == "held"
     assert row["concept_id"] == 1
     assert row["payload"]["prompts"][0]["tool"] == "KLING"
@@ -247,7 +246,7 @@ def test_out_of_retries_parks_with_the_eval_reason(tmp_db, monkeypatch):
     assert result["attempts"] == orchestrator.MAX_ATTEMPTS
     assert "eval stop" in result["held_reason"]
     assert "concept has no shots" in result["held_reason"]
-    [row] = autonomy.list_hold(path=tmp_db, account_id=None)
+    [row] = autonomy.list_hold(dsn=tmp_db, account_id=None)
     assert row["status"] == "held"
 
 
@@ -266,9 +265,9 @@ def test_no_locations_still_generates(tmp_db, monkeypatch):
     the run still gets that fixture's no-network patches -- a test that
     reaches ground_rag without them builds a real genai client.
     """
-    with db.connect(db.DB_PATH) as conn:
+    with db.connect() as conn:
         conn.execute("DELETE FROM locations")
-    assert preprod.list_locations(path=db.DB_PATH, account_id=None) == []
+    assert preprod.list_locations(account_id=None) == []
     calls = stage_fakes(monkeypatch, [(make_concept(), [])])
 
     result = orchestrator.run("ritual")
@@ -293,8 +292,8 @@ def test_camera_only_concept_parks_with_its_own_reason(tmp_db, monkeypatch):
 # ---------- grounding ----------
 
 def test_ground_entities_uses_only_the_picked_character(tmp_db, monkeypatch):
-    mike = entities.add_character("Mike — on camera", role="protagonist", path=tmp_db, account_id=None)
-    entities.add_character("Guest — bartender", role="guest", path=tmp_db, account_id=None)
+    mike = entities.add_character("Mike — on camera", role="protagonist", dsn=tmp_db, account_id=None)
+    entities.add_character("Guest — bartender", role="guest", dsn=tmp_db, account_id=None)
     calls = stage_fakes(monkeypatch, [(make_concept(), [])])
 
     # antihero explicitly: this covers picked-vs-default, and Zero Page
@@ -308,8 +307,8 @@ def test_ground_entities_uses_only_the_picked_character(tmp_db, monkeypatch):
 
 
 def test_ground_entities_defaults_to_everything_on_file(tmp_db, monkeypatch):
-    entities.add_character("Mike — on camera", path=tmp_db, account_id=None)
-    entities.add_prop("Ducati Panigale V2", category="vehicle", path=tmp_db, account_id=None)
+    entities.add_character("Mike — on camera", dsn=tmp_db, account_id=None)
+    entities.add_prop("Ducati Panigale V2", category="vehicle", dsn=tmp_db, account_id=None)
     calls = stage_fakes(monkeypatch, [(make_concept(), [])])
 
     orchestrator.run("ritual", brand="antihero", channel="antihero")
@@ -471,13 +470,13 @@ def test_pending_corrections_steer_once_and_never_touch_the_spark(tmp_db, monkey
     steers exactly once. They ride in `steer`, not `spark` (2026-09-01):
     the spark column is the direction the board prints and _spark_key
     hashes, and a note folded into it made the same idea look new."""
-    autonomy.add_correction("less neon, more silence", path=tmp_db)
+    autonomy.add_correction("less neon, more silence", dsn=tmp_db)
     calls = stage_fakes(monkeypatch, [(make_concept(), []), (make_concept(), [])])
 
     orchestrator.run("ritual")
     assert "less neon, more silence" in calls[0]["steer"]
     assert "less neon" not in (calls[0]["spark"] or ""), "note leaked into the spark"
-    assert autonomy.pending_corrections(path=tmp_db) == []   # consumed
+    assert autonomy.pending_corrections(dsn=tmp_db) == []   # consumed
 
     orchestrator.run("ritual")                               # next night
     assert "less neon" not in (calls[1]["steer"] or "")      # steered once
@@ -654,7 +653,7 @@ def test_every_score_is_logged_before_any_credit(tmp_db, monkeypatch):
     assert row["run_id"] == result["run_id"]
     assert row["passed"] == 1
     assert row["human_verdict"] is None       # yours comes later, on /holds
-    assert autonomy.first_try_pass_rate(path=tmp_db)["rate"] == 1.0
+    assert autonomy.first_try_pass_rate(dsn=tmp_db)["rate"] == 1.0
 
 
 def test_judge_parses_fenced_json_and_clamps_dims():
@@ -699,7 +698,7 @@ def ready_state(tmp_db, channel="zeropage", **overrides):
 
 def test_publish_holds_when_killed(tmp_db, monkeypatch):
     monkeypatch.delenv("ZEROPAGE_KILL", raising=False)
-    autonomy.kill("bad night", path=tmp_db)
+    autonomy.kill("bad night", dsn=tmp_db)
 
     result = orchestrator.publish(ready_state(tmp_db))
 
@@ -716,14 +715,14 @@ def test_publish_shadow_holds_for_grading(tmp_db, monkeypatch):
 
 def test_publish_queue_holds_for_approval(tmp_db, monkeypatch):
     monkeypatch.delenv("ZEROPAGE_KILL", raising=False)
-    autonomy.set_autonomy("zeropage", "queue", path=tmp_db)
+    autonomy.set_autonomy("zeropage", "queue", dsn=tmp_db)
     result = orchestrator.publish(ready_state(tmp_db))
     assert "awaiting your approval" in result["held_reason"]
 
 
 def test_publish_auto_still_parks_because_no_api_is_wired(tmp_db, monkeypatch):
     monkeypatch.delenv("ZEROPAGE_KILL", raising=False)
-    autonomy.set_autonomy("zeropage", "auto", path=tmp_db)
+    autonomy.set_autonomy("zeropage", "auto", dsn=tmp_db)
     result = orchestrator.publish(ready_state(tmp_db))
     assert "posting adapter not wired" in result["held_reason"]
     assert "instagram + youtube" in result["held_reason"]
@@ -743,7 +742,7 @@ def test_post_gate_rejects_failed_qc_empty_caption_and_warnings(tmp_db, monkeypa
 
 def test_post_gate_enforces_the_rate_cap(tmp_db, monkeypatch):
     monkeypatch.delenv("ZEROPAGE_KILL", raising=False)
-    autonomy.to_hold("zeropage", "already posted", status="posted", path=tmp_db, account_id=None)
+    autonomy.to_hold("zeropage", "already posted", status="posted", dsn=tmp_db, account_id=None)
 
     result = orchestrator.publish(ready_state(tmp_db))
 
@@ -779,7 +778,7 @@ def test_every_shot_with_a_prompt_is_ai_eligible(tmp_db, monkeypatch):
     # a shot with no capture carries no key at all, same as the shot dict
     assert "reference_image" not in plain
     # the capture reaches the hold card next to the prompt it anchors
-    [row] = autonomy.list_hold(path=tmp_db, account_id=None)
+    [row] = autonomy.list_hold(dsn=tmp_db, account_id=None)
     assert row["payload"]["prompts"][0]["reference_image"] == "https://cdn.example/take.jpg"
     scores = row["payload"].get("prompt_scores") or []
     if scores:
@@ -827,7 +826,7 @@ def test_a_zeropage_run_leaves_the_concept_judged(tmp_db, monkeypatch):
     result = orchestrator.run("ritual", brand="zeropage", channel="zeropage")
 
     assert calls, "the uncanny judge was never called"
-    row = preprod.get_concept(result["concept_id"], path=db.DB_PATH, account_id=None)
+    row = preprod.get_concept(result["concept_id"], account_id=None)
     assert row["uncanny_passed"], "the verdict never reached the row autopilot reads"
 
 
@@ -852,7 +851,7 @@ def test_a_failed_verdict_does_not_park_the_run(tmp_db, monkeypatch):
     result = orchestrator.run("ritual", brand="zeropage", channel="zeropage")
 
     assert result["concept_id"], "a failed brand verdict stopped the run"
-    row = preprod.get_concept(result["concept_id"], path=db.DB_PATH, account_id=None)
+    row = preprod.get_concept(result["concept_id"], account_id=None)
     assert row["uncanny_passed"] == 0
 
 
@@ -867,7 +866,7 @@ def test_a_broken_judge_leaves_the_concept_unjudged(tmp_db, monkeypatch):
 
     result = orchestrator.run("ritual", brand="zeropage", channel="zeropage")
 
-    row = preprod.get_concept(result["concept_id"], path=db.DB_PATH, account_id=None)
+    row = preprod.get_concept(result["concept_id"], account_id=None)
     assert not row["uncanny_passed"]
 
 
@@ -897,9 +896,9 @@ def test_a_scouted_run_writes_the_scene_from_the_images_it_researched(
     banked = refbin.save(jpeg)
 
     scout.record("zeropage", {"spark": "a hand already on the handle",
-                              "score": 0.9}, pass_id="p", path=tmp_db)
+                              "score": 0.9}, pass_id="p", dsn=tmp_db)
     scout.bin_add("zeropage", "p", banked,
-                  source_url="https://example.com/post", path=tmp_db)
+                  source_url="https://example.com/post", dsn=tmp_db)
 
     calls = stage_fakes(monkeypatch, [(make_concept(), [])])
     out = orchestrator.run("the rotation", brand="zeropage", channel="zeropage",
@@ -913,7 +912,7 @@ def test_a_scouted_run_writes_the_scene_from_the_images_it_researched(
     assert data == jpeg
     # and it landed on the shot, which is what the keyframe and clip read
     assert banked in preprod.get_concept(
-        out["concept_id"], path=tmp_db, account_id=None)["shots"][0]["refs"]
+        out["concept_id"], dsn=tmp_db, account_id=None)["shots"][0]["refs"]
 
 
 def test_a_rotation_night_is_untouched_by_any_of_this(tmp_db, monkeypatch):
@@ -922,7 +921,7 @@ def test_a_rotation_night_is_untouched_by_any_of_this(tmp_db, monkeypatch):
     from src import scout
 
     scout.record("zeropage", {"spark": "a crawled idea", "score": 0.99},
-                 pass_id="p", path=tmp_db)
+                 pass_id="p", dsn=tmp_db)
     calls = stage_fakes(monkeypatch, [(make_concept(), [])])
     out = orchestrator.run("the last check before leaving", brand="zeropage",
                            channel="zeropage")
@@ -966,8 +965,8 @@ def test_a_zeropage_run_is_handed_no_cast(tmp_db, monkeypatch):
     the uploaded photos as the EXACT face ... name them", flatly against
     concept_zeropage.txt's "FACELESS -- no recurring person".
     """
-    entities.add_character("Mike — on camera", path=tmp_db, account_id=None)
-    entities.add_prop("Ducati Panigale V2", category="vehicle", path=tmp_db,
+    entities.add_character("Mike — on camera", dsn=tmp_db, account_id=None)
+    entities.add_prop("Ducati Panigale V2", category="vehicle", dsn=tmp_db,
                       account_id=None)
     calls = stage_fakes(monkeypatch, [(make_concept(), [])])
 
@@ -982,9 +981,9 @@ def test_run_with_a_finding_id_claims_it_under_this_runs_id(tmp_db, monkeypatch)
     is served again tomorrow with its photographs."""
     from src import scout
     scout.init(tmp_db)
-    fid = scout.record("zeropage", {"spark": "gearing up ritual", "score": 0.9}, path=tmp_db)
+    fid = scout.record("zeropage", {"spark": "gearing up ritual", "score": 0.9}, dsn=tmp_db)
     stage_fakes(monkeypatch, [(make_concept(), [])])
     result = orchestrator.run("gearing up ritual", scout_finding_id=fid)
     assert result.get("scout_finding_id") == fid
-    row = scout.get_finding(fid, path=tmp_db)
+    row = scout.get_finding(fid, dsn=tmp_db)
     assert row["used_at"] and row["run_id"] == result["run_id"]

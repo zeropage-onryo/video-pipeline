@@ -21,7 +21,7 @@ asset's own save must never be lost because the vector store is down.
 from pathlib import Path
 from typing import Optional
 
-from . import db, entities, preprod, rag
+from . import entities, preprod, rag
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 LOCATIONS_DIR = PROJECT_ROOT / "locations"
@@ -234,23 +234,22 @@ def catalogue(db_path=None, account_id: Optional[int] = None) -> list[dict]:
     that is where they actually are -- photo_count on the row is a
     counter, not a listing.
     """
-    from . import db as _db
     from . import entities, preprod
 
-    path = db_path if db_path is not None else _db.DB_PATH
+    path = db_path
     items: list[dict] = []
 
     def photos(kind: str, name: str) -> list:
         slug = slugify(name)
         return [photo_url(kind, slug, f.name) for f in photos_for(kind, slug)]
 
-    for loc in preprod.list_locations(path=path, account_id=account_id):
+    for loc in preprod.list_locations(dsn=path, account_id=account_id):
         items.append({"category": "location", "name": loc["name"],
                       "photos": photos("location", loc["name"])})
-    for c in entities.list_characters(path=path, account_id=account_id):
+    for c in entities.list_characters(dsn=path, account_id=account_id):
         items.append({"category": "character", "name": c["name"],
                       "photos": photos("character", c["name"])})
-    for pr in entities.list_props(path=path, account_id=account_id):
+    for pr in entities.list_props(dsn=path, account_id=account_id):
         items.append({"category": "prop", "name": pr["name"],
                       "photos": photos("prop", pr["name"])})
     return items
@@ -285,18 +284,18 @@ def backfill(db_path=None, describe: bool = False, gemini_client=None, account_i
     Never raises: per-asset failures are counted and reported so one
     bad photo can't lose the rest of the run.
     """
-    path = db.DB_PATH if db_path is None else db_path
+    path = db_path
     result = {"ingested": 0, "described": 0, "failed": 0,
               "skipped_no_photos": 0, "errors": []}
     from . import accounts
-    project = accounts.slug_of(account_id, path=path)
+    project = accounts.slug_of(account_id, dsn=path)
 
     def record_error(what: str, error: str) -> None:
         result["failed"] += 1
         if len(result["errors"]) < 10:
             result["errors"].append(f"{what}: {error}")
 
-    for loc in preprod.list_locations(path=path, account_id=account_id):
+    for loc in preprod.list_locations(dsn=path, account_id=account_id):
         name = loc["name"]
         outcome = ingest_one("location", slugify(name), name,
                              {"description": loc.get("description") or {}},
@@ -307,8 +306,8 @@ def backfill(db_path=None, describe: bool = False, gemini_client=None, account_i
             record_error(f"location {name}", outcome["error"])
 
     entity_rows = (
-        [("character", r) for r in entities.list_characters(path=path, account_id=account_id)]
-        + [("prop", r) for r in entities.list_props(path=path, account_id=account_id)]
+        [("character", r) for r in entities.list_characters(dsn=path, account_id=account_id)]
+        + [("prop", r) for r in entities.list_props(dsn=path, account_id=account_id)]
     )
     for kind, row in entity_rows:
         name = row["name"]
@@ -323,7 +322,7 @@ def backfill(db_path=None, describe: bool = False, gemini_client=None, account_i
                 from .locations import describe_entity
                 try:
                     vision = describe_entity(gemini_client, kind, name, photos)
-                    entities.set_description(kind, row["id"], vision, path=path, account_id=account_id)
+                    entities.set_description(kind, row["id"], vision, dsn=path, account_id=account_id)
                     row = {**row, "description": {**(row.get("description") or {}),
                                                   **vision}}
                     result["described"] += 1
