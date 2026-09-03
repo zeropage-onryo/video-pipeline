@@ -12,13 +12,18 @@ its locks on the mounted filesystem this runs over (every open raises
 'disk I/O error'). The copy-back is guarded on mtime: if anything wrote
 to the real DB while we worked, we refuse rather than clobber it.
 """
-import json, os, pathlib, shutil, sys, tempfile
+import json
+import os
+import pathlib
+import shutil
+import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import requests
-from src import refbin, scout
+import requests  # noqa: E402  (after the sys.path line above)
+
+from src import refbin, scout  # noqa: E402
 
 LIVE = ROOT / "data" / "pipeline.db"
 SCRATCH = pathlib.Path(os.environ.get("ZP_SCRATCH", "/tmp")) / "pinbank.db"
@@ -50,9 +55,9 @@ def main(payload_path):
         cand["evidence"] = item.get("evidence", "")
         cand["sources"] = item.get("sources", [])
         fid = scout.record(item["brand"], cand, lanes="pinterest",
-                           path=str(SCRATCH))
+                           dsn=str(SCRATCH))
         pass_id = scout.agent_pass_id(fid)
-        scout.set_pass_id(fid, pass_id, path=str(SCRATCH))
+        scout.set_pass_id(fid, pass_id, dsn=str(SCRATCH))
 
         banked = 0
         for tail, pin_id in item["images"]:
@@ -63,7 +68,7 @@ def main(payload_path):
                 item["brand"], pass_id, url,
                 source_url=f"https://www.pinterest.com/pin/{pin_id}/",
                 title=item["spark"][:60], lane="pinterest",
-                path=str(SCRATCH))
+                dsn=str(SCRATCH))
             if row:
                 banked += 1
         report.append({"finding": fid, "pass": pass_id,

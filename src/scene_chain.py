@@ -49,13 +49,25 @@ def _note(notes: list, text: str) -> None:
         notes.append(text)
 
 
-def ground(idea: str, *, brand: str = "", db_path=None, account_id: Optional[int] = None) -> dict:
-    """The reference library and the cast, as plain text blocks.
+def ground(idea: str, *, brand: str = "", db_path=None, account_id: Optional[int] = None,
+          refs: Optional[list] = None) -> dict:
+    """The reference library, the cast, and the rooms this run may draw
+    on -- all scoped to ONE rule (2026-09-03, Mike's call): named in
+    `idea`, or explicitly picked via `refs` (a photo attached through
+    the composer's / picker, an upload, or the asset carousel). Nothing
+    on the shelf is offered just because it exists any more -- this
+    replaces the old default of handing the writer EVERY character and
+    prop on file on every single run (cast_for's unfiltered
+    entities.list_characters/list_props), the same "always broadcast
+    the whole roster" shape generate_scene_concept's cast=None default
+    carried on the Director brief path.
 
     reference_block is the edge helper (never called from inside a
     generator, so the generators stay hermetic in tests) and never
     raises: no Postgres means an ungrounded run with a stderr note.
     Naming the cast is grounding too, and fails the same way -- softly.
+    An asset with no photos was never eligible either way -- see
+    shootgen.named_assets, which asset_shelf.in_scope calls underneath.
     """
     path = db_path
     references = ""
@@ -63,28 +75,61 @@ def ground(idea: str, *, brand: str = "", db_path=None, account_id: Optional[int
         references = shootgen.reference_block(spark=idea or None, db_path=path)
     except Exception:
         references = ""
-    cast = None
+
+    cast, locations = None, []
     try:
-        from . import entities
-        # Brand-scoped, same rule the graph follows: a faceless brand
-        # gets no cast block, or the {cast} socket instructs it to name
-        # a recurring person its own brief forbids.
-        cast = shootgen.cast_for(
-            brand,
-            entities.list_characters(dsn=path, account_id=account_id),
-            entities.list_props(dsn=path, account_id=account_id), detail=True)
+        cast, locations = scoped_cast_and_locations(
+            idea, brand, refs, db_path=path, account_id=account_id)
     except Exception:
-        cast = None
-    return {"references": references, "cast": cast}
+        cast, locations = None, []
+    return {"references": references, "cast": cast, "locations": locations}
+
+
+def scoped_cast_and_locations(idea: str, brand: str, refs, *, db_path=None,
+                              account_id: Optional[int] = None) -> tuple:
+    """The cast text block and the in-scope rooms, on their own --
+    split out of ground() so a caller that already has its own
+    reference_block (app.api.pipeline_run's scene_grounding, which adds
+    the brand's inspiration accounts) doesn't have to query RAG twice
+    to also get this half. ground() calls this; don't duplicate its
+    body at a second call site."""
+    from . import asset_shelf, entities
+
+    path = db_path
+    items = asset_shelf.catalogue(db_path=path, account_id=account_id)
+    scope = asset_shelf.in_scope(idea, refs, items)
+    scoped_names: dict = {"character": set(), "prop": set(), "location": set()}
+    for a in scope:
+        scoped_names.setdefault(a["category"], set()).add(a["name"])
+    characters = [c for c in entities.list_characters(dsn=path, account_id=account_id)
+                 if c["name"] in scoped_names["character"]]
+    props = [p for p in entities.list_props(dsn=path, account_id=account_id)
+            if p["name"] in scoped_names["prop"]]
+    # Brand-scoped, same rule the graph follows: a faceless brand gets
+    # no cast block, or the {cast} socket instructs it to name a
+    # recurring person its own brief forbids -- unchanged by what got
+    # named or picked, since the brand rule is the stricter one.
+    cast = shootgen.cast_for(brand, characters, props, detail=True)
+    locations = [loc for loc in preprod.list_locations(dsn=path, account_id=account_id)
+                if loc["name"] in scoped_names["location"]]
+    return cast, locations
 
 
 def write_scenes(idea: str, brand: str, *, count: int = 1, references: str = "",
-                 cast=None, refs=None, image_refs=None, db_path=None,
+                 cast=None, refs=None, locations=None, image_refs=None, db_path=None,
                  gemini_client=None, template_tag: str = "",
                  on_retry=None, account_id: Optional[int] = None) -> dict:
     """N standalone takes on one idea, in ONE call so they are varied
     against each other rather than rolled independently. Raises: with no
     scene there is nothing to work on, and the caller must say so.
+
+    `locations` is ground()'s already-computed in-scope set (named in
+    the idea, or picked via refs) -- passed through so
+    generate_scene_concepts does not recompute a narrower answer with
+    picked_locations(refs, on_file), which only ever saw the pick half.
+    None (the default for any other caller) falls back to that old
+    behaviour, so tests and callers that never adopted ground() keep
+    working unchanged.
 
     `template_tag` rides into the hashed prompt template, so pick_rate's
     by_prompt breakdown can separate rows produced by different
@@ -93,8 +138,8 @@ def write_scenes(idea: str, brand: str, *, count: int = 1, references: str = "",
         idea, brand, count=max(1, min(MAX_SCENES, count)),
         gemini_client=gemini_client, references=references, cast=cast,
         db_path=db_path,
-        refs=list(refs or []), image_refs=image_refs or None,
-        template_tag=template_tag, on_retry=on_retry, account_id=account_id)
+        refs=list(refs or []), locations=locations, image_refs=image_refs or None,
+        template_tag=template_tag, account_id=account_id, on_retry=on_retry)
 
 
 # How many photos of ONE character are worth a reference slot. A face
@@ -578,7 +623,7 @@ def run(idea: str, brand: str, *, count: int = 1, refs=None, image_refs=None,
     notes: list = []
 
     say(0.15, "grounding in references")
-    grounded = ground(idea, brand=brand, db_path=path, account_id=account_id)
+    grounded = ground(idea, brand=brand, db_path=path, account_id=account_id, refs=refs)
 
     say(0.4, f"writing {max(1, min(MAX_SCENES, count))} scene(s)")
     # A busy model and a thinking model look identical from outside, and
@@ -587,6 +632,7 @@ def run(idea: str, brand: str, *, count: int = 1, refs=None, image_refs=None,
     written = write_scenes(idea, brand, count=count,
                            references=grounded["references"],
                            cast=grounded["cast"], refs=refs,
+                           locations=grounded["locations"],
                            image_refs=image_refs, db_path=path,
                            gemini_client=gemini_client,
                            on_retry=lambda note: say(0.4, note),

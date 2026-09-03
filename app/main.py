@@ -403,8 +403,8 @@ DEV_TABS = ("stats", "grade", "graded", "library", "settings", "dataset")
 # rows read as strong.
 GOOD_SCORE = 7.0
 
-GRADE_EMPTY = ("Nothing to grade right now — every concept is scored and "
-               "the golden set is empty.")
+GRADE_EMPTY = ("Nothing waiting on you right now — every concept has your "
+               "verdict, and the golden set is empty.")
 
 
 def _pipeline_metrics(account_id: int) -> dict:
@@ -479,24 +479,79 @@ def _golden_probe(query: str) -> dict:
     return out
 
 
-def _ungraded_concepts(account_id: int) -> list[dict]:
-    """The grade queue: not yet scored, and not passed on.
+def _concept_refs(c: dict) -> list[str]:
+    """Every video_ref a verdict on this concept can be filed under: the
+    idea-level one, plus one per scene. Both spellings predate this and
+    both are still written, so both have to be read."""
+    refs = [f"concept-{c['id']}"]
+    shots = c.get("shots") or []
+    refs += [f"concept-{c['id']}-shot-{s.get('n') or i}"
+             for i, s in enumerate(shots, start=1)]
+    return refs
 
-    ONE definition, used by the list, the random draw and grade-all, so
-    those three can never disagree about what is waiting.
 
-    Archived rows are excluded (2026-09-02). `set_archived` leaves
-    judge_overall NULL, so before this a concept passed on from this tab
-    stayed in the queue and could be drawn again forever -- and grade-all
-    would spend a billed call scoring something already rejected. Passing
-    is a decision; the queue is for concepts still undecided.
+def _concept_states(account_id: int) -> dict:
+    """The one place that decides where a concept is in the loop.
+
+    Three states, and a concept is in exactly one (2026-09-02, Mike's
+    design):
+
+      QUEUE   -- you have not ruled on it. Waiting for approve/teach/deny.
+      GRADED  -- your verdict is RECORDED but not yet taught. It sits here
+                 until the scoring pass, which is also the window in which
+                 you can still change your mind.
+      TAUGHT  -- scored by the judge AND every one of its entries embedded
+                 into RAG. The lesson is in memory, so the concept leaves
+                 every surface; only the count remains.
+
+    Derived, not stored: `judge_overall` plus the winners rows keyed by
+    video_ref. One list_concepts and one winners.list_all, bucketed in
+    Python -- no migration, and no way for a stored flag to drift out of
+    step with the rows that are the actual evidence.
+
+    Passing is where the two surfaces differ, on purpose (2026-09-02):
+
+      - the board's X rules as it archives -- it records a DENY on the
+        scene prompt, so the concept comes here as GRADED, gets scored,
+        and its prompt reaches the RAG avoid shelf. See api.concept_archive.
+      - the Grade tab's "Pass · reason" buttons archive and teach nothing.
+        A pass there means "not even worth teaching", and the three
+        verdicts are right beside it if it is.
+
+    So an archived concept appears here only if it carries a verdict.
+    Archived with nothing recorded against it is in none of these states.
+
+    A concept is NOT retired while any entry failed to embed. If the RAG
+    store is down, ingest fails, the entries stay pending, and the concept
+    stays on the Graded tab saying so -- rather than vanishing having
+    taught nothing, which is the one failure this ordering must not have.
     """
-    return [c for c in preprod.list_concepts(account_id=account_id)
-            if c.get("judge_overall") is None and not c.get("archived")]
+    by_ref: dict[str, list[dict]] = {}
+    for w in winners.list_all(dsn=None):
+        by_ref.setdefault((w.get("video_ref") or "").strip(), []).append(w)
+
+    queue, graded, taught = [], [], []
+    for c in preprod.list_concepts(account_id=account_id):
+        entries = [w for ref in _concept_refs(c) for w in by_ref.get(ref, [])]
+        if not entries:
+            if not c.get("archived"):
+                queue.append(c)
+            continue
+        pending = [w for w in entries if not w.get("ingested")]
+        if c.get("judge_overall") is not None and not pending:
+            taught.append(c)
+        else:
+            graded.append({**c, "_entries": entries, "_pending": len(pending)})
+    return {"queue": queue, "graded": graded, "taught": taught}
+
+
+def _ungraded_concepts(account_id: int) -> list[dict]:
+    """The queue: no verdict from you yet, and not passed on."""
+    return _concept_states(account_id)["queue"]
 
 
 def _concept_line(c: dict) -> dict:
-    """One concept as one scannable row, shared by both queue lists."""
+    """One concept as one scannable row, shared by both lists."""
     shots = [s for s in (c.get("shots") or []) if s.get("prompt")]
     return {
         "id": c["id"],
@@ -516,28 +571,41 @@ def _concept_line(c: dict) -> dict:
 
 
 def _ungraded_rows(account_id: int) -> list[dict]:
-    """Every concept waiting to be graded, newest first."""
+    """The queue, newest first, as one scannable line each."""
     return [_concept_line(c) for c in _ungraded_concepts(account_id)]
 
 
+VERDICT_LABEL = {"worked": "APPROVED", "didnt_work": "DENIED"}
+
+
+def _verdict_label(entries: list[dict]) -> str:
+    """What you said, in one word. A pair (teach) is both rows at once --
+    your fix on the winning shelf and the model's on the avoid shelf --
+    so it reads as TAUGHT rather than as one of its halves."""
+    if any(w.get("pair_id") for w in entries):
+        return "TAUGHT"
+    verdicts = {w.get("verdict") for w in entries}
+    if len(verdicts) == 1:
+        return VERDICT_LABEL.get(verdicts.pop(), "RECORDED")
+    return "MIXED"
+
+
 def _graded_rows(account_id: int) -> list[dict]:
-    """Everything already scored, best first -- where a concept goes when
-    it leaves the queue. Sorting by score rather than by id is the point:
-    this is the tab that answers "what did the judge actually like".
-    """
+    """Concepts carrying your verdict, waiting on the scoring pass.
+    Oldest first: this is a queue to clear, not a leaderboard."""
     rows = []
-    for c in preprod.list_concepts(account_id=account_id):
-        if c.get("judge_overall") is None:
-            continue
-        reason = (c.get("judge_reason") or "").strip()
+    for c in reversed(_concept_states(account_id)["graded"]):
+        entries = c.get("_entries") or []
         rows.append({**_concept_line(c),
+                     "archived": bool(c.get("archived")),
+                     "verdict": _verdict_label(entries),
+                     "entries": len(entries),
+                     "pending": c.get("_pending") or 0,
                      "overall": c.get("judge_overall"),
                      "taste": c.get("judge_taste"),
                      "perf": c.get("judge_perf"),
-                     "reason": reason,
-                     "good": (c.get("judge_overall") or 0) >= GOOD_SCORE,
-                     "archived": bool(c.get("archived"))})
-    rows.sort(key=lambda r: (r["overall"] or 0, r["id"]), reverse=True)
+                     "reason": (c.get("judge_reason") or "").strip(),
+                     "good": (c.get("judge_overall") or 0) >= GOOD_SCORE})
     return rows
 
 
@@ -560,16 +628,14 @@ def _grade_context(mode: Optional[str], concept_id: Optional[int],
                # see is a number nobody acts on -- this is the payoff
                # that makes working the queue feel like it did something.
                "reason_counts": preprod.reason_counts(account_id=account_id),
-               # the board's check/X, as the judge sees them -- the two
-               # clicks feed taste_judge.gather_signals, and this says
-               # how many are reaching it (capped at HISTORY_LIMIT)
-               "board_taste": taste_judge.board_taste(db_path=None,
-                                                      account_id=account_id),
                # the whole queue, not just its size: the draw is random,
                # so without a list there is no way to see what is waiting
                # or to grade in a deliberate order.
                "ungraded": ungraded,
                "ungraded_count": len(ungraded),
+               # what is waiting on the scoring pass, so the Grade tab can
+               # point at the next step instead of dead-ending
+               "graded_count": len(_graded_rows(account_id)),
                "concept_id": concept_id,
                "golden_count": len(evalstore.list_golden())}
     if mode == "shot" and concept_id is not None:
@@ -612,7 +678,13 @@ def studio(request: Request, tab: Optional[str] = None, message: Optional[str] =
     elif active_tab == "grade":
         context["grade"] = _grade_context(mode, concept_id, golden_id, fresh, account_id)
     elif active_tab == "graded":
+        states = _concept_states(account_id)
         context["graded"] = _graded_rows(account_id)
+        context["taught_count"] = len(states["taught"])
+        # the board's check/X, as the judge sees them -- next to the button
+        # that runs the judge (moved off the Grade tab 2026-09-02)
+        context["board_taste"] = taste_judge.board_taste(db_path=None,
+                                                         account_id=account_id)
         context["good_score"] = GOOD_SCORE
     elif active_tab == "library":
         context["library"] = _library_context(q, domain)
@@ -706,9 +778,18 @@ async def grade_fresh(request: Request, account_id: int = Depends(auth.dev_accou
 VERDICTS = ("approve", "teach", "deny")
 
 
-def teach_verdict(tool, text, form, *, video_ref, subject, path, project=None):
+def teach_verdict(tool, text, form, *, video_ref, subject, path, project=None,
+                  ingest: bool = True):
     """
     One teaching submission from any grade form. Returns the message.
+
+    `ingest=False` records the verdict and stops there, which is the
+    concept loop as of 2026-09-02: your verdict moves the concept to the
+    Graded tab, and the scoring pass on that tab is what embeds it into
+    RAG and retires it. Until then nothing has been taught, so a verdict
+    you regret is still recallable -- which is the point of the two
+    steps, not an accident of them. Throwaway fresh prompts never reach a
+    tab, so they keep teaching immediately.
 
     "Teach it" is the valuable one: the model's prompt and the better one
     you wrote are recorded as a linked PAIR -- yours on the winning shelf
@@ -736,7 +817,10 @@ def teach_verdict(tool, text, form, *, video_ref, subject, path, project=None):
     if replacement and verdict in ("teach", "deny"):
         result = winners.record_pair(
             tool, text, replacement, note=note, video_ref=video_ref, dsn=path,
-            project=project)
+            project=project, ingest=ingest)
+        if result.get("deferred"):
+            return (f"Recorded your verdict on {subject} — it moves to Graded. "
+                    "Score the tab to teach it and clear it.")
         if result.get("ingested"):
             return (f"Taught {subject} — future generations imitate your version "
                     "and avoid the one it wrote.")
@@ -744,7 +828,10 @@ def teach_verdict(tool, text, form, *, video_ref, subject, path, project=None):
         result = winners.record_and_learn(
             tool, text, note=note, video_ref=video_ref,
             verdict="didnt_work" if verdict == "deny" else "worked", dsn=path,
-            project=project)
+            project=project, ingest=ingest)
+        if result.get("deferred"):
+            return (f"Recorded your verdict on {subject} — it moves to Graded. "
+                    "Score the tab to teach it and clear it.")
         if result.get("ingested"):
             verb = "steer away from" if verdict == "deny" else "imitate"
             return f"Recorded {subject} — future generations will {verb} it."
@@ -1717,16 +1804,20 @@ async def concept_verdict(concept_id: int, request: Request,
     message = teach_verdict("concept", text, form,
                             video_ref=f"concept-{concept_id}",
                             subject=f"SHOOT-{concept_id:02d}", path=None,
-                            project=accounts_mod.slug_of(account_id))
+                            project=accounts_mod.slug_of(account_id), ingest=False)
     return _redirect_with_message(destination, message)
 
 
 @dev.post("/concepts/{concept_id}/shots/{shot_n}/verdict")
 async def concept_shot_verdict(concept_id: int, shot_n: int, request: Request,
                                account_id: int = Depends(auth.dev_account_id)):
-    """Subtle approve/deny on one AI shot's render prompt, with the prompt
-    text editable right there before it's taught -- same winners.py loop as
-    above, scoped to the exact prompt that would go to Runway/Higgsfield."""
+    """Your verdict on one scene's render prompt, with the prompt text
+    editable right there before it is taught -- same winners.py loop as
+    above, scoped to the exact prompt that would go to Runway/Higgsfield.
+
+    RECORDED, not yet ingested (2026-09-02): the verdict moves the concept
+    to the Graded tab, and the scoring pass there teaches RAG and retires
+    it. See teach_verdict."""
     form = dict(await request.form())
     destination = safe_next(form.get("next") or "", "/concepts")
     text = (form.get("text") or "").strip()
@@ -1736,7 +1827,7 @@ async def concept_shot_verdict(concept_id: int, shot_n: int, request: Request,
     message = teach_verdict(tool, text, form,
                             video_ref=f"concept-{concept_id}-shot-{shot_n}",
                             subject=f"shot {shot_n}", path=None,
-                            project=accounts_mod.slug_of(account_id))
+                            project=accounts_mod.slug_of(account_id), ingest=False)
     return _redirect_with_message(destination, message)
 
 
@@ -1760,7 +1851,13 @@ def concepts_grade(concept_id: int, next: str = Form(""), account_id: int = Depe
     concept = preprod.get_concept(concept_id, account_id=account_id)
     if concept is None:
         raise HTTPException(status_code=404, detail="no such concept")
-    judge = taste_judge.score_concept(concept, db_path=None)
+    # signals gathered FOR THIS TENANT (2026-09-02). score_concept takes no
+    # account_id and gather_signals defaults it to None -- the unowned pool
+    # -- so calling it bare scored every concept against an empty board
+    # while the UI said the judge was reading it. Rule 1 of [[account_scoping]]
+    # applied to a helper rather than a route.
+    signals = taste_judge.gather_signals(db_path=None, account_id=account_id)
+    judge = taste_judge.score_concept(concept, signals=signals, db_path=None)
     preprod.save_judge_score(concept_id, judge, account_id=account_id)
     if judge.get("graded"):
         msg = (f"Graded SHOOT-{concept_id:02d}: {judge['overall']:.0f}/10 "
@@ -1796,10 +1893,23 @@ def concepts_pass(concept_id: int, reason: str = Form(""), next: str = Form(""),
     reason = (reason or "").strip()
     preprod.set_archived(concept_id, account_id=account_id,
                          reason=reason)
+    # A pass HERE means "not even worth teaching" -- the three verdicts are
+    # right beside this button if it is. So it also withdraws any verdict
+    # not yet taught, or the concept would sit on the Teach tab waiting to
+    # teach a prompt you just passed on (2026-09-02). Anything already
+    # ingested stays: that lesson is taught, and this is not an unteach.
+    # The board's X is the opposite by design -- it RULES as it archives.
+    concept = preprod.get_concept(concept_id, account_id=account_id)
+    withdrawn = 0
+    if concept is not None:
+        for ref in _concept_refs(concept):
+            withdrawn += winners.discard_pending(ref)
     said = f" — {reason}" if reason else ""
+    note = (" Your verdict on it was withdrawn before it taught anything."
+            if withdrawn else "")
     return _redirect_with_message(safe_next(next, "/studio?tab=grade"),
                                   f"Passed on SHOOT-{concept_id:02d}{said}. "
-                                  "Archived, not deleted.")
+                                  f"Archived, not deleted.{note}")
 
 
 @dev.post("/concepts/discard-all")
@@ -1815,18 +1925,60 @@ def concepts_discard_all(request: Request, account_id: Optional[int] = None):
 
 @dev.post("/concepts/grade-all")
 def concepts_grade_all(account_id: int = Depends(auth.dev_account_id)):
-    """Grade every concept in the queue against your history. Each is one
-    billed call, so this is an explicit button, not automatic. Signals are
-    gathered once and reused across the batch. Concepts passed on are not
-    in the queue and so are never billed for (2026-09-02)."""
-    signals = taste_judge.gather_signals(db_path=None)
-    graded = 0
-    for c in _ungraded_concepts(account_id):
+    """The scoring pass: teach everything on the Graded tab, score it, and
+    retire it. One button, one pass, the end of a concept's life on the
+    surface (2026-09-02).
+
+    Order matters. Ingest FIRST, then score: your verdicts are on the RAG
+    shelves before the judge reads them, so the judge scores against the
+    most-taught version of your history there is. Signals are gathered
+    once and reused, which is also what keeps the batch cheap -- every
+    call shares the same long prefix and only the concept at the end
+    differs, so all but the first hit the prompt cache.
+
+    Only concepts on that tab are touched: nothing in the queue (you have
+    not ruled on it), nothing passed on (archived), nothing already
+    retired. A concept whose entries fail to embed is scored but NOT
+    retired -- it stays on the tab with its verdict intact, and pressing
+    the button again finishes the job.
+    """
+    waiting = _concept_states(account_id)["graded"]
+    if not waiting:
+        return _redirect_with_message(
+            "/studio?tab=graded",
+            "Nothing waiting — grade some concepts on the Grade tab first.")
+
+    taught, failed = 0, 0
+    for c in waiting:
+        result = {"ok": True}
+        for ref in _concept_refs(c):
+            one = winners.ingest_pending(ref)
+            if not one.get("ok"):
+                result = one
+        if result.get("ok"):
+            taught += 1
+        else:
+            failed += 1
+
+    # FOR THIS TENANT -- see concepts_grade. Bare, this read the unowned
+    # pool: zero picks, zero passes, and a judge scoring against nothing
+    # while the line above the button promised his board.
+    signals = taste_judge.gather_signals(db_path=None, account_id=account_id)
+    scored = 0
+    for c in waiting:
+        if c.get("judge_overall") is not None:
+            continue     # already scored, only the ingest was outstanding
         judge = taste_judge.score_concept(c, signals=signals, db_path=None)
         preprod.save_judge_score(c["id"], judge, account_id=account_id)
-        graded += 1
-    return RedirectResponse(
-        "/concepts?message=" + quote(f"Graded {graded} concept(s)."), status_code=303)
+        scored += 1
+
+    retired = len(_concept_states(account_id)["taught"])
+    msg = (f"Scored {scored} and taught {taught} concept(s) — "
+           f"{retired} retired into RAG.")
+    if failed:
+        msg += (f" {failed} could not reach the RAG store and stayed on the tab "
+                "with your verdict — press the button again once it is up.")
+    return _redirect_with_message("/studio?tab=graded", msg)
 
 
 @dev.post("/concepts/scene-brief/{brief_id}/delete")

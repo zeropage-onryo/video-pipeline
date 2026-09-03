@@ -25,7 +25,17 @@ import re
 import psycopg
 import pytest
 
-from src import accounts, autonomy, db, entities, generative, preprod, render_assets, workflows
+from src import (
+    account_keys,
+    accounts,
+    autonomy,
+    db,
+    entities,
+    generative,
+    preprod,
+    render_assets,
+    workflows,
+)
 
 
 def _one(dsn, query, args=()):
@@ -71,6 +81,7 @@ def test_every_owned_table_grows_an_account_id(pg):
     autonomy.init(pg)
     workflows.init(pg)
     render_assets.init(pg)
+    account_keys.init(pg)
     with db.connect(pg) as conn:
         for table in db.OWNED_TABLES:
             assert "account_id" in db.columns(conn, table), f"{table} has no owner"
@@ -461,7 +472,7 @@ def test_no_query_against_an_owned_table_forgets_its_owner():
     """The test that would have caught this whole class of bug.
 
     `list_concepts` was `SELECT * FROM shoot_concepts ORDER BY id DESC
-    LIMIT ?` for as long as there was only one user, and nothing failed,
+    LIMIT %s` for as long as there was only one user, and nothing failed,
     because nothing was wrong yet. This fails the moment a new query
     reaches an owned table without saying whose rows it wants.
     """
@@ -798,6 +809,7 @@ def _init_everything(path):
     imagesearch.init(path)
     framebank.init(path)
     render_assets.init(path)
+    account_keys.init(path)
 
 
 AUTH_SCHEMA = {"users", "accounts", "account_members"}

@@ -97,7 +97,16 @@ def prompt_gate_min() -> int:
     (settings table) wins, then PROMPT_GATE_MIN in the env, then 7 --
     so raising the bar no longer needs a restart."""
     return settings.prompt_gate_min()
-MAX_PROMPT_REWORKS = 1  # one targeted rewrite per failing shot before it holds
+# Two targeted rewrites per failing shot before it holds. Raised from 1
+# to 2 on 2026-09-03: five held concepts (173, 177, 180, 183, 187) all
+# failed the SAME judge dimension -- "too many sequential actions /
+# multi-stage choreography for a single render" -- and every one of
+# them used its one rework attempt without changing the verdict (180's
+# reason came back byte-for-byte identical). One attempt was not the
+# constraint; the REWRITE not addressing the actual failure shape was.
+# See _rework_shot_prompt's STAGE_MARKERS handling below for the fix
+# that makes a second attempt worth having.
+MAX_PROMPT_REWORKS = 2  # one targeted rewrite per failing shot before it holds
 
 
 class GenState(TypedDict, total=False):
@@ -326,26 +335,36 @@ def planner(state: GenState) -> GenState:
 
 
 def ground_entities(state: GenState) -> GenState:
-    """The chosen characters/props (or everything on file when nothing
-    was picked), formatted the way the concept prompt's {cast} section
-    expects. Data layer was already live; this is the socket."""
+    """The chosen characters/props, formatted the way the concept
+    prompt's {cast} section expects -- never "everything on file" any
+    more (2026-09-03, Mike's call). Explicit picks (picked_characters/
+    picked_props, or a photo in reference_photos) still win outright;
+    with nobody there to pick anything on an unattended run, the spark
+    text itself is name-matched against the catalogue instead of
+    falling back to the whole roster -- the same rule
+    scene_chain.scoped_cast_and_locations gives the Studio Create button
+    and Director's brief composer, so a nightly concept only ever gets
+    a face it actually has reason to use."""
     account_id = state.get("account_id")
     picked_chars = state.get("picked_characters") or []
     picked_props = state.get("picked_props") or []
-    if picked_chars:
+    if picked_chars or picked_props:
         characters = [c for c in (entities.get_character(i, account_id=account_id)
                                   for i in picked_chars) if c]
-    else:
-        characters = entities.list_characters(account_id=account_id)
-    if picked_props:
         props = [p for p in (entities.get_prop(i, account_id=account_id)
                              for i in picked_props) if p]
+        cast = shootgen.cast_for(state.get("brand", "antihero"), characters, props)
     else:
-        props = entities.list_props(account_id=account_id)
+        try:
+            cast, _locs = scene_chain.scoped_cast_and_locations(
+                state.get("spark") or "", state.get("brand", "antihero"),
+                state.get("reference_photos"), db_path=None,
+                account_id=account_id)
+        except Exception:
+            cast = ""
     # Brand-scoped: a faceless brand gets no cast block at all, or the
     # {cast} socket tells it to name people it must never name.
-    return {"cast": shootgen.cast_for(state.get("brand", "antihero"),
-                                      characters, props)}
+    return {"cast": cast}
 
 
 def ground_rag(state: GenState) -> GenState:
@@ -747,28 +766,84 @@ def score_prompts(state: GenState) -> GenState:
     return {"prompt_scores": scored}
 
 
+# The failure this pattern-matches: shootgen's own scene-brief template
+# asks for "4-7 sequential beats" (see [[spark_format]] in project
+# memory -- the spark-vs-prompt contradiction), so a first-draft AI shot
+# prompt often carries literal "Stage 1 @ 00:00 -- ...", "Stage 2 -- ..."
+# staging or timestamps. The judge's `motion` dimension wants ONE clear
+# action, and a generic "resolve the competing actions" instruction
+# evidently isn't enough to make the model actually drop that scaffold
+# -- concept 180's one rework attempt (2026-09-02 night batch) came back
+# with the identical score AND the identical reason string, meaning the
+# rewrite changed nothing that mattered. Detecting the pattern in code
+# and naming it explicitly, rather than trusting the model to infer it
+# from "resolve competing actions", is what makes a second attempt
+# worth having.
+_STAGE_PATTERN = re.compile(
+    r"stage\s*\d|\bstages?\b\s*:|@\s*\d{1,2}:\d{2}|\d{1,2}:\d{2}\s*(?:—|--|-)",
+    re.IGNORECASE,
+)
+
+
 def _rework_shot_prompt(original_prompt: str, verdict: dict) -> str:
     """Rewrite ONE AI shot prompt to fix exactly what the judge flagged --
     the named weak dimension(s) and its reason -- rather than regenerating
     the concept from scratch. Keeps the fix as small and targeted as the
-    diagnosis it's based on."""
+    diagnosis it's based on.
+
+    Escalates on the second pass (MAX_PROMPT_REWORKS=2): a prompt whose
+    reason names sequential/multi-stage/choreography trouble, or that
+    still carries literal "Stage N" / timestamp scaffolding, gets an
+    explicit COLLAPSE instruction instead of the generic one -- pick the
+    single most visually striking beat and describe only that, start to
+    finish, as one uninterrupted motion. Everything else the story
+    implied stays implied, not depicted; that's what the logline is for."""
     weak = [d for d, v in (verdict.get("dims") or {}).items() if v < 2]
-    weakness = f"{', '.join(weak) or 'unspecified'} -- {verdict.get('reason', '')}".strip(" -")
-    instruction = (
-        "Rewrite the following AI video generation prompt to fix EXACTLY the "
-        "weakness named below. Keep the same subject, setting, tool, and "
-        "grade -- change only how precisely it's specified (add the missing "
-        "camera/lens/framing, resolve the competing actions into one clear "
-        "action, add the missing light/mood, whatever the weakness names). "
-        "Keep the same grounded-realism recipe: handheld imperfection, "
-        "practical light, diegetic sound, and the negative clause at the end "
-        "(no glossy CGI, no plastic AI sheen, no dramatic slow motion, no "
-        "smooth commercial camera moves, no over-grading).\n\n"
-        f"WEAKNESS TO FIX: {weakness}\n\n"
-        f"ORIGINAL PROMPT:\n{original_prompt}\n\n"
-        "Return ONLY the rewritten prompt text -- no preamble, no quotes, no "
-        "markdown fences."
-    )
+    reason = verdict.get("reason", "")
+    weakness = f"{', '.join(weak) or 'unspecified'} -- {reason}".strip(" -")
+
+    staged = bool(_STAGE_PATTERN.search(original_prompt)) or bool(
+        re.search(r"sequential|multi-?stage|multiple.{0,20}actions?|choreograph|"
+                  r"simultaneous|too many|overloaded",
+                  reason, re.IGNORECASE))
+
+    if staged:
+        instruction = (
+            "This AI video prompt was REJECTED for describing too many "
+            "sequential actions / stages for one continuous shot -- the "
+            "judge's exact words: "
+            f"{weakness}\n\n"
+            "Rewrite it by COLLAPSING to a single beat: pick the ONE most "
+            "visually striking action in the prompt below and describe "
+            "ONLY that, start to finish, as one uninterrupted physical "
+            "motion. Delete every numbered stage, timestamp like 'Stage "
+            "1 @ 00:00' or '@ 00:07' and every beat that isn't the one "
+            "you kept -- do not summarize the dropped beats, just remove "
+            "them. Keep the same subject, setting, tool, and grade, and "
+            "keep the same grounded-realism recipe: handheld imperfection, "
+            "practical light, diegetic sound, and the negative clause at "
+            "the end (no glossy CGI, no plastic AI sheen, no dramatic slow "
+            "motion, no smooth commercial camera moves, no over-grading).\n\n"
+            f"ORIGINAL PROMPT:\n{original_prompt}\n\n"
+            "Return ONLY the rewritten prompt text -- no preamble, no "
+            "quotes, no markdown fences, no 'Stage' labels or timestamps."
+        )
+    else:
+        instruction = (
+            "Rewrite the following AI video generation prompt to fix EXACTLY the "
+            "weakness named below. Keep the same subject, setting, tool, and "
+            "grade -- change only how precisely it's specified (add the missing "
+            "camera/lens/framing, resolve the competing actions into one clear "
+            "action, add the missing light/mood, whatever the weakness names). "
+            "Keep the same grounded-realism recipe: handheld imperfection, "
+            "practical light, diegetic sound, and the negative clause at the end "
+            "(no glossy CGI, no plastic AI sheen, no dramatic slow motion, no "
+            "smooth commercial camera moves, no over-grading).\n\n"
+            f"WEAKNESS TO FIX: {weakness}\n\n"
+            f"ORIGINAL PROMPT:\n{original_prompt}\n\n"
+            "Return ONLY the rewritten prompt text -- no preamble, no quotes, no "
+            "markdown fences."
+        )
     return generate_with_retry(_client(), GEMINI_MODEL, instruction).strip()
 
 

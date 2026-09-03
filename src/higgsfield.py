@@ -635,7 +635,8 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *,
 
         if shot_id is None:
             shot_id = _shot_row_for_prompt(
-                prompt, db_path, "auto-created by higgsfield.generate_candidates")
+                prompt, db_path, "auto-created by higgsfield.generate_candidates",
+                account_id)
 
         out_dir = Path(out_dir)
         candidates, errors = [], []
@@ -729,7 +730,8 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                        http=http, db_path=db_path)
 
         shot_row_id = _shot_row_for_prompt(
-            prompt, db_path, "auto-created by higgsfield.generate_for_shot")
+            prompt, db_path, "auto-created by higgsfield.generate_for_shot",
+            account_id)
         generation_id = generative.record_generation(
             shot_row_id, "higgsfield", prompt,
             params={"model": model, "aspect_ratio": DEFAULT_ASPECT,
@@ -788,7 +790,8 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
                        http=http, db_path=db_path)
 
         shot_row_id = _shot_row_for_prompt(
-            prompt, db_path, "auto-created by higgsfield.generate_from_prompt")
+            prompt, db_path, "auto-created by higgsfield.generate_from_prompt",
+            account_id)
         generation_id = generative.record_generation(
             shot_row_id, "higgsfield", prompt,
             params={"model": model, "aspect_ratio": DEFAULT_ASPECT,
@@ -836,7 +839,8 @@ def generate_image_from_prompt(prompt: str, *, db_path=None, http=None, account_
         generate_image(prompt, out_path, http=http, db_path=db_path)
 
         shot_row_id = _shot_row_for_prompt(
-            prompt, db_path, "auto-created by higgsfield.generate_image_from_prompt")
+            prompt, db_path, "auto-created by higgsfield.generate_image_from_prompt",
+            account_id)
         generation_id = generative.record_generation(
             shot_row_id, "higgsfield", prompt,
             params={"model": "soul-standard", "source": "workflow"},

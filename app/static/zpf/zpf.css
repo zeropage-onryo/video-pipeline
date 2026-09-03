@@ -577,6 +577,9 @@ html[data-v="studio"] #gl{opacity:1;transition:opacity .5s}
 .swipe.yes:hover{color:#5fd08a;border-color:#5fd08a;background:rgb(95 208 138 / .12)}
 /* already picked: the check stays lit, and clicking it again unpicks */
 .swipe.yes.on{color:#5fd08a;border-color:#5fd08a;background:rgb(95 208 138 / .18)}
+/* the Queue's camera: shot by hand, not rendered by the pipeline --
+   amber so it reads as neither the pick green nor the reject red */
+.swipe.shot:hover{color:#e0a94e;border-color:#e0a94e;background:rgb(224 169 78 / .12)}
 /* the hero composer's note, dropped on narrow screens where the count
    select and the button need the room more */
 .cfnote{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

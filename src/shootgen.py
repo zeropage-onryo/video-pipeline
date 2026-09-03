@@ -1438,7 +1438,7 @@ def generate_scene_concepts(idea: str, brand: str, count: int = 4,
                             gemini_client=None, model: str = MODEL,
                             references: str = "", cast=None, db_path=None,
                             tool: str = DEFAULT_SCENE_TOOL,
-                            refs=None, image_refs=None,
+                            refs=None, locations=None, image_refs=None,
                             template_tag: str = "", on_retry=None,
                             account_id: Optional[int] = None,
 ) -> dict:
@@ -1462,12 +1462,18 @@ def generate_scene_concepts(idea: str, brand: str, count: int = 4,
     vision input.
     """
     kwargs = {"dsn": db_path} if db_path is not None else {}
-    # Only the rooms attached to THIS run steer it. No stderr note when
-    # there are none: an unpinned scene is the normal case now, not a
-    # degraded one, and a note printed every single run is a note nobody
-    # reads on the one night it would have meant something.
+    # `locations` arriving pre-computed (scene_chain.ground(), via
+    # asset_shelf.in_scope) means "named in the idea, or picked" --
+    # strictly narrower than the old refs-only picked_locations() gate,
+    # which never saw a room the idea merely NAMED. None (any caller
+    # that hasn't adopted ground()) falls back to that old behaviour.
+    # No stderr note when there are none: an unpinned scene is the
+    # normal case now, not a degraded one, and a note printed every
+    # single run is a note nobody reads on the one night it would have
+    # meant something.
     on_file = preprod.list_locations(**kwargs, account_id=account_id)
-    locations = picked_locations(refs, on_file)
+    if locations is None:
+        locations = picked_locations(refs, on_file)
     prompt = build_scenes_prompt(idea, brand, count, locations,
                                  references=references, cast=cast)
     contents = prompt

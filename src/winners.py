@@ -58,6 +58,7 @@ def add(tool, prompt, note="", video_ref="", verdict="worked", dsn=None) -> int:
     prompt = (prompt or "").strip()
     if not prompt:
         raise ValueError("a prompt cannot be empty")
+    init(dsn)   # same on-demand guard list_all and avoid_guidance use
     with db.connect(dsn) as conn:
         row = conn.execute(
             "INSERT INTO winning_prompts (created_at, tool, prompt, note, "
@@ -76,6 +77,11 @@ def get(entry_id, dsn=None):
 
 
 def list_all(dsn=None) -> list:
+    # ensure the table exists before querying, same as avoid_guidance:
+    # this is read on every Grade/Graded render to work out which
+    # concepts carry a verdict, and a database that has not seen a
+    # verdict yet should read as "none", not raise (2026-09-02).
+    init(dsn)
     with db.connect(dsn) as conn:
         return [dict(r) for r in conn.execute(
             "SELECT * FROM winning_prompts ORDER BY created_at DESC")]
@@ -140,17 +146,85 @@ def ingest_to_rag(entry_id, dsn=None, project: Optional[str] = None) -> dict:
         return {"ok": False, "error": str(e)}
 
 
+def pending(video_ref: str, dsn=None) -> list[dict]:
+    """This subject's recorded-but-not-yet-embedded entries.
+
+    `ingest` was always separable from `add` -- ingest_to_rag takes an id
+    and the row carries an `ingested` flag precisely so a store that is
+    down loses nothing. This exposes the other half of that contract: a
+    verdict can be RECORDED now and TAUGHT later, which is what lets a
+    concept sit on the Graded tab carrying your verdict before the
+    scoring pass ingests it (2026-09-02).
+    """
+    init(dsn)   # on-demand guard, same as list_all and add
+    with db.connect(dsn) as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM winning_prompts WHERE video_ref = %s AND ingested = 0 "
+            "ORDER BY id", ((video_ref or "").strip(),))]
+
+
+def recorded(video_ref: str, dsn=None) -> list[dict]:
+    """Every entry filed against this subject, ingested or not."""
+    init(dsn)   # on-demand guard, same as list_all and add
+    with db.connect(dsn) as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM winning_prompts WHERE video_ref = %s ORDER BY id",
+            ((video_ref or "").strip(),))]
+
+
+def discard_pending(video_ref: str, dsn=None) -> int:
+    """Drop this subject's not-yet-embedded entries, and return how many.
+
+    The ONLY safe deletion in this table, and only because of what
+    `ingested = 0` means: nothing has reached the RAG shelves, so there is
+    no lesson to unteach. Used when a board pass is undone -- putting a
+    card back on the board must take its deny with it, or the shelves
+    learn from a decision that was reversed. An ingested row is never
+    touched here (2026-09-02).
+    """
+    init(dsn)   # on-demand guard, same as list_all and add
+    with db.connect(dsn) as conn:
+        cur = conn.execute(
+            "DELETE FROM winning_prompts WHERE video_ref = %s AND ingested = 0",
+            ((video_ref or "").strip(),))
+        return cur.rowcount
+
+
+def ingest_pending(video_ref: str, dsn=None) -> dict:
+    """Embed everything still waiting for this subject. Best-effort, the
+    standing contract: a failure leaves the rows saved and re-ingestable,
+    and the caller can tell because `ok` is False."""
+    rows = pending(video_ref, dsn=dsn)
+    errors = []
+    done = 0
+    for r in rows:
+        result = ingest_to_rag(r["id"], dsn=dsn)
+        if result.get("ok"):
+            done += 1
+        else:
+            errors.append(result.get("error") or "store unavailable")
+    return {"ok": not errors, "ingested": done, "pending": len(rows),
+            "error": errors[0] if errors else None}
+
+
 def record_and_learn(tool, prompt, note="", video_ref="", verdict="worked",
-                     dsn=None, project: Optional[str] = None) -> dict:
+                     dsn=None, project: Optional[str] = None,
+                     ingest: bool = True) -> dict:
+    """Record one verdict. `ingest=False` records it and stops -- see
+    pending() for why the two halves are separable."""
     entry_id = add(tool, prompt, note=note, video_ref=video_ref,
                    verdict=verdict, dsn=dsn)
+    if not ingest:
+        return {"id": entry_id, "verdict": _norm_verdict(verdict),
+                "ingested": False, "deferred": True, "error": None}
     result = ingest_to_rag(entry_id, dsn=dsn, project=project)
     return {"id": entry_id, "verdict": _norm_verdict(verdict),
             "ingested": result.get("ok", False), "error": result.get("error")}
 
 
 def record_pair(tool, failed_prompt, working_prompt, note="", video_ref="",
-                dsn=None, project: Optional[str] = None) -> dict:
+                dsn=None, project: Optional[str] = None,
+                ingest: bool = True) -> dict:
     """
     The strongest feedback shape there is: "this one failed, and THIS is
     what I wrote instead that worked."
@@ -178,6 +252,10 @@ def record_pair(tool, failed_prompt, working_prompt, note="", video_ref="",
                      (worked_id, failed_id))
         conn.execute("UPDATE winning_prompts SET pair_id = %s WHERE id = %s",
                      (failed_id, worked_id))
+    if not ingest:
+        return {"id": worked_id, "failed_id": failed_id, "worked_id": worked_id,
+                "verdict": "pair", "paired": True, "ingested": False,
+                "deferred": True, "error": None}
     failed_result = ingest_to_rag(failed_id, dsn=dsn, project=project)
     worked_result = ingest_to_rag(worked_id, dsn=dsn, project=project)
     return {

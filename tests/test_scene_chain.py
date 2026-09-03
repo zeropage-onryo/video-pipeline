@@ -491,3 +491,75 @@ def test_a_sibling_shot_is_not_erased_by_the_strip(tmp_db, seams, monkeypatch):
     shots = preprod.get_concept(scene_id, dsn=tmp_db, account_id=None)["shots"]
     assert [s["n"] for s in shots] == [1, 2]
     assert shots[1]["prompt"] == "two"
+
+
+
+# --- ground() / scoped_cast_and_locations() ---------------------------------
+# 2026-09-03, Mike's call: a Create run should ground only on what the
+# idea names or what was explicitly picked -- never the whole asset
+# bank by default, which is what cast_for's unfiltered
+# entities.list_characters/list_props always did before this.
+
+TINY_PNG = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06"
+    b"\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05"
+    b"\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+
+
+@pytest.fixture
+def cast_photo_dirs(tmp_path, monkeypatch):
+    from src import asset_shelf
+    dirs = {}
+    for kind in ("location", "character", "prop"):
+        d = tmp_path / ("ground-" + kind + "s")
+        d.mkdir()
+        dirs[kind] = d
+    monkeypatch.setattr(asset_shelf, "PHOTO_DIRS", dirs)
+    return dirs
+
+
+def _with_photo(dirs, kind, slug):
+    d = dirs[kind] / slug
+    d.mkdir(parents=True)
+    (d / "a.png").write_bytes(TINY_PNG)
+
+
+def test_ground_only_offers_a_character_the_idea_names(tmp_db, cast_photo_dirs, monkeypatch):
+    from src import entities
+    entities.add_character("Mike", role="protagonist", dsn=tmp_db, account_id=None)
+    entities.add_character("Guest", role="bartender", dsn=tmp_db, account_id=None)
+    _with_photo(cast_photo_dirs, "character", "mike")
+    _with_photo(cast_photo_dirs, "character", "guest")
+    monkeypatch.setattr(shootgen, "reference_block", lambda **kw: "")
+
+    grounded = scene_chain.ground("Mike gears up for the ride", brand="antihero",
+                                  db_path=tmp_db, account_id=None)
+
+    assert "Mike" in grounded["cast"]
+    assert "Guest" not in grounded["cast"]
+
+
+def test_ground_offers_nothing_when_nothing_is_named_or_picked(tmp_db, cast_photo_dirs, monkeypatch):
+    from src import entities
+    entities.add_character("Mike", role="protagonist", dsn=tmp_db, account_id=None)
+    _with_photo(cast_photo_dirs, "character", "mike")
+    monkeypatch.setattr(shootgen, "reference_block", lambda **kw: "")
+
+    grounded = scene_chain.ground("a ritual at dusk", brand="antihero",
+                                  db_path=tmp_db, account_id=None)
+
+    assert "Mike" not in grounded["cast"]
+
+
+def test_ground_honours_an_explicit_pick(tmp_db, cast_photo_dirs, monkeypatch):
+    from src import entities
+    entities.add_character("Mike", role="protagonist", dsn=tmp_db, account_id=None)
+    _with_photo(cast_photo_dirs, "character", "mike")
+    monkeypatch.setattr(shootgen, "reference_block", lambda **kw: "")
+
+    grounded = scene_chain.ground("a ritual at dusk", brand="antihero",
+                                  db_path=tmp_db, account_id=None,
+                                  refs=["/characters/mike/photo/a.png"])
+
+    assert "Mike" in grounded["cast"]

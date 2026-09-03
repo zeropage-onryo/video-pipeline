@@ -19,6 +19,15 @@ Post-production (footage ingest -> pitches -> cut lists) was cut in Aug 2026: th
 the pre-production loop, and the edit happens by hand in Resolve.
 Experimental — the loop is structurally in place but needs weeks of real use to mean anything.
 
+## Backlog
+
+Parked ideas, known bugs and next builds live in `docs/BACKLOG.md`.
+Read it before proposing new work — several obvious-looking gaps are
+already recorded there with the reasoning, and some already have a
+script (e.g. `ops/ingest-saved-images.py` is the local-file route into
+the reference bin that `bank_reference`'s URL-only signature implies is
+missing).
+
 ## Commands
 
 All Python commands run through the project's venv, not system Python:

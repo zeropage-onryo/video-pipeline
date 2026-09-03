@@ -76,7 +76,7 @@
     <div>
       <div class="rule">Dev Studio // stats + system improvement // nothing here ships to users</div>
       <h1>Dev Studio</h1>
-      <p class="vsub">Grading, RAG teaching, and threshold tuning done here change what
+      <p class="vsub">Grading, teaching, and threshold tuning done here change what
         <span class="mono">/ui</span>'s next generation does — the improvement shows up in the
         product's output, never as a dev-only number surfaced to a user.</p>
     </div>
@@ -84,8 +84,13 @@
   </div>
 
   <nav class="devtabs">
-    {% for t, label in [("stats", "Stats"), ("grade", "Grade"), ("graded", "Graded"),
-                        ("library", "RAG Library"),
+    {# The tab SLUGS stay "grade"/"graded" -- they are in every route, link
+       and test. Only the labels change (2026-09-02). GRADE is where the
+       ungraded concepts wait for Mike's verdict; TEACH is where he presses
+       the one button that scores them and ingests them into RAG. He grades;
+       the system teaches. #}
+    {% for t, label in [("stats", "Stats"), ("grade", "Grade"),
+                        ("graded", "Teach"), ("library", "RAG Library"),
                         ("settings", "Settings"), ("dataset", "Dataset")] %}
     <a class="devtab" href="/studio?tab={{ t }}" {{ 'aria-current=page' if active_tab == t }}>{{ label }}</a>
     {% endfor %}

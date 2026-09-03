@@ -82,6 +82,8 @@ async function renderPending() {
         ? `<img class="scshot" src="${esc(c.reference_image)}" alt="">` : ''}
       <p class="scprompt">${esc(c.prompt)}</p>
       <div class="scfoot">
+        <button class="swipe shot" data-act="shot" title="Shot it yourself"
+                aria-label="Mark shot -- you made this outside the render pipeline">📷</button>
         <button class="tag" data-act="reject">Reject</button>
         <span class="m">${c.reference_image
           ? 'anchors on the keyframe above'
@@ -98,8 +100,22 @@ async function renderPending() {
   list.querySelectorAll('.scene').forEach(el => {
     const id = Number(el.dataset.id);
     el.querySelectorAll('[data-act]').forEach(btn => btn.onclick = async () => {
-      const approve = btn.dataset.act === 'approve';
+      const act = btn.dataset.act;
       btn.disabled = true;
+      // the camera doesn't render or reject -- it just marks the card
+      // as made by hand and drops it off the pending list, so its label
+      // never needs a "…" render state the other two do
+      if (act === 'shot') {
+        try {
+          await api(`/api/queue/${id}/shot`, { method: 'POST', body: { shot: true } });
+          renderPending();
+        } catch (e) {
+          btn.disabled = false;
+          stateline($('pendstate'), 'error', e.message);
+        }
+        return;
+      }
+      const approve = act === 'approve';
       btn.textContent = approve ? 'Rendering…' : '…';
       try {
         await api(`/api/queue/${id}/${approve ? 'approve' : 'reject'}`,

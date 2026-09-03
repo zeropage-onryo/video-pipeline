@@ -272,7 +272,10 @@ def test_the_brief_carries_the_digest_prompt_verbatim(tmp_db):
 
     assert "A SPARK IS A SITUATION, NOT AN IMAGE" in rules      # guard the guard
     assert "A SPARK IS A SITUATION, NOT AN IMAGE" in brief
-    assert "THE STAKE IS THE POINT" in brief
+    # the five-part spine (2026-09-03) that replaced turn/stake -- same
+    # rewrite the idea-agent skill got, so the crawl stops handing back
+    # moments dressed as stories
+    assert "RE-READS THE OPENING" in brief
     assert scout.BRAND_NOTES["zeropage"] in brief
     assert str(scout.MAX_BIN_IMAGES) in brief
 

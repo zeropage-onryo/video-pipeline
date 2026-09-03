@@ -373,7 +373,7 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
 
         # the row logs the prompt the person wrote, not the constant
         # wrapper around it -- the flag says which framing was applied
-        shot_row_id = _shot_row_for_prompt(prompt, db_path)
+        shot_row_id = _shot_row_for_prompt(prompt, db_path, account_id)
         generation_params = {"model": model, "source": "workflow",
                              "framing": "still", "references": len(references),
                              **({"beat": beat} if beat else {}),

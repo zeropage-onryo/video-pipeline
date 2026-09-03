@@ -1231,3 +1231,109 @@ def test_capabilities_report_nano(tmp_db, monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     assert client.get("/api/capabilities").json()["nano.generate"] is False
+
+
+# --- the synthesized shot row belongs to the caller -------------------------
+#
+# Regression, 2026-09-03. `/api/workflows/exec/nano` -- the Nano Banana
+# node's own Run -- passes the signed-in account down. The shot row
+# generate_from_prompt synthesizes to hang the attempt off was created
+# WITHOUT it (`_shot_row_for_prompt(prompt, db_path)`, an account_id
+# parameter no call site passed), so record_generation's ownership check
+# looked up an account-1 row that had been written NULL and raised
+# "no shot with id N" on a row that plainly existed.
+#
+# It failed AFTER generate_image, so every attempt left a paid-for PNG
+# with no generations row: billed, invisible, uncounted by the cap.
+#
+# Every other nano caller (Run all, scene_chain, the enhance route)
+# passes no account_id, so shot and generation were both NULL and
+# self-consistent -- which is why Run all worked and single-node Run did
+# not, and why every test above this one passed throughout.
+
+def test_nano_generate_stamps_the_shot_with_the_callers_account(
+        tmp_db, tmp_path, monkeypatch):
+    from src import accounts, nano_banana
+
+    # shots.account_id is a real foreign key, so the owner has to exist --
+    # which is itself half the point: an unowned write only looks harmless
+    # because NULL skips the constraint.
+    accounts.seed("mike@example.com", dsn=tmp_db)
+    with generative.connect(tmp_db) as conn:
+        owner = conn.execute("SELECT MIN(id) AS id FROM accounts").fetchone()["id"]
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(nano_banana, "RENDER_DIR", tmp_path / "nano")
+    monkeypatch.setattr("src.storage.configured", lambda: False)
+
+    result = nano_banana.generate_from_prompt(
+        "a red bike", db_path=tmp_db, client=FakeGeminiImageClient(),
+        account_id=owner)
+
+    assert result["ok"], result["error"]
+    with generative.connect(tmp_db) as conn:
+        shots = conn.execute(
+            "SELECT id, account_id FROM shots").fetchall()
+        gens = conn.execute(
+            "SELECT shot_id, account_id FROM generations").fetchall()
+    # one shot, one generation, both owned by the caller and joined
+    assert [r["account_id"] for r in shots] == [owner]
+    assert [(r["shot_id"], r["account_id"]) for r in gens] == [(shots[0]["id"], owner)]
+    assert nano_banana.generations_today(db_path=tmp_db, account_id=owner) == 1
+
+
+def test_nano_generate_leaves_an_unowned_caller_unowned(
+        tmp_db, tmp_path, monkeypatch):
+    """The other three callers pass no account_id on purpose. Both rows
+    stay NULL -- consistent with each other, which is all the ownership
+    check asks."""
+    from src import nano_banana
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(nano_banana, "RENDER_DIR", tmp_path / "nano")
+    monkeypatch.setattr("src.storage.configured", lambda: False)
+
+    result = nano_banana.generate_from_prompt(
+        "a red bike", db_path=tmp_db, client=FakeGeminiImageClient())
+
+    assert result["ok"], result["error"]
+    with generative.connect(tmp_db) as conn:
+        assert conn.execute(
+            "SELECT account_id FROM shots").fetchone()["account_id"] is None
+        assert conn.execute(
+            "SELECT account_id FROM generations").fetchone()["account_id"] is None
+
+
+def test_every_shot_row_call_site_forwards_the_account():
+    """The guard the two tests above cannot give on their own.
+
+    The bug was one dropped argument at one of eight call sites across
+    three renderer modules -- and runway's and higgsfield's were dropped
+    the same way, reachable the moment their spend gates open. A
+    keyword-only `account_id` that defaults to None turns a missed call
+    site into a silent mis-write, so assert on the source: nothing may
+    call _shot_row_for_prompt without forwarding an account.
+    """
+    import ast
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    unstamped = []
+    for name in ("nano_banana", "runway", "higgsfield"):
+        path = root / "src" / f"{name}.py"
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if getattr(node.func, "id", None) != "_shot_row_for_prompt":
+                continue
+            forwards = any(
+                isinstance(a, ast.Name) and a.id == "account_id"
+                for a in node.args
+            ) or any(kw.arg == "account_id" for kw in node.keywords)
+            if not forwards:
+                unstamped.append(f"{path.name}:{node.lineno}")
+    assert not unstamped, (
+        "these call sites drop account_id, so the shot is written unowned "
+        "while record_generation looks it up per account: "
+        + ", ".join(unstamped))

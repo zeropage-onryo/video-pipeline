@@ -479,7 +479,11 @@ def test_grade_tab_grades_the_one_scene_prompt(tmp_dev_db):
     for value in ('value="approve"', 'value="teach"', 'value="deny"'):
         assert value in text, value
     assert "TEACH THE IDEA ITSELF" not in text     # nothing to grade apart from it
-    assert "Grade taste + perf" in text
+    # the per-card score button is gone (2026-09-02): scoring is the
+    # Graded tab's one pass, after your verdict, not a second billed
+    # button on the card you are still deciding about
+    assert "Grade taste + perf" not in text
+    assert "Pass · " in text                       # the free half stayed
 
 
 def test_grade_tab_keeps_the_idea_form_for_legacy_shot_lists(tmp_dev_db):
@@ -1257,17 +1261,23 @@ def _drain_golden(path):
         evalstore.delete_golden(g["id"], dsn=path)
 
 
-def test_grade_draw_shot_picks_only_ungraded_concepts(tmp_dev_db):
-    graded = preprod.save_concept({"title": "Graded"}, brand="antihero",
-                                  dsn=tmp_dev_db, account_id=None)
-    preprod.save_judge_score(graded, {"overall": 8, "taste_fit": 8,
-                                      "performance": 8, "reasons": []},
-                             dsn=tmp_dev_db, account_id=None)
-    ungraded = preprod.save_concept({"title": "Fresh meat"}, brand="antihero",
-                                    dsn=tmp_dev_db, account_id=None)
+def test_grade_draw_shot_picks_only_concepts_you_have_not_ruled_on(tmp_dev_db):
+    """The queue is defined by YOUR verdict, not the judge's score
+    (2026-09-02) -- so a concept you have already ruled on is waiting on
+    the scoring pass and must not be dealt again."""
+    ruled = preprod.save_concept(
+        {"title": "Ruled on", "shots": [{"n": 1, "type": "BROLL", "source": "AI",
+                                         "tool": "RUNWAY", "desc": "d",
+                                         "prompt": "a prompt"}]},
+        brand="antihero", dsn=tmp_dev_db, account_id=None)
+    client.post(f"/concepts/{ruled}/shots/1/verdict",
+                data={"text": "a prompt", "verdict": "approve", "tool": "runway"},
+                follow_redirects=False)
+    waiting = preprod.save_concept({"title": "Fresh meat"}, brand="antihero",
+                                   dsn=tmp_dev_db, account_id=None)
     response = client.get("/grade/draw?mode=shot", follow_redirects=False)
     assert response.status_code == 303
-    assert f"concept_id={ungraded}" in response.headers["location"]
+    assert f"concept_id={waiting}" in response.headers["location"]
     assert "mode=shot" in response.headers["location"]
 
 
@@ -1284,7 +1294,7 @@ def test_grade_draw_with_nothing_to_grade_says_so(tmp_dev_db):
     response = client.get("/grade/draw?mode=any", follow_redirects=False)
     location = unquote(response.headers["location"])
     assert location.startswith("/studio?tab=grade")
-    assert "Nothing to grade" in location
+    assert "Nothing waiting on you" in location
 
 
 def test_grade_tab_surfaces_concept_warnings(tmp_dev_db):
@@ -1580,7 +1590,8 @@ def test_teach_it_records_both_halves(tmp_dev_db, monkeypatch):
               "next": "/studio?tab=grade"},
         follow_redirects=False)
     assert response.status_code == 303
-    assert "Taught" in unquote(response.headers["location"])
+    # recorded, not taught: the scoring pass on the Graded tab ingests it
+    assert "it moves to Graded" in unquote(response.headers["location"])
 
     rows = {w["verdict"]: w for w in winners.list_all(dsn=tmp_dev_db)}
     assert rows["didnt_work"]["prompt"] == "vague prompt"
@@ -1655,7 +1666,7 @@ def test_approve_teaches_the_prompt_as_written(teachable):
     response = client.post(f"/concepts/{cid}/shots/1/verdict",
                            data={"text": "the model's prompt", "verdict": "approve"},
                            follow_redirects=False)
-    assert "imitate it" in unquote(response.headers["location"])
+    assert "it moves to Graded" in unquote(response.headers["location"])
     [row] = winners.list_all(dsn=teachable)
     assert row["verdict"] == "worked" and row["pair_id"] is None
 
@@ -1668,7 +1679,7 @@ def test_teach_it_swaps_in_my_version_and_avoids_the_model_s(teachable):
         data={"text": "the model's prompt", "replacement": "my better prompt",
               "verdict": "teach"},
         follow_redirects=False)
-    assert "Taught" in unquote(response.headers["location"])
+    assert "it moves to Graded" in unquote(response.headers["location"])
     rows = {w["verdict"]: w for w in winners.list_all(dsn=teachable)}
     assert rows["worked"]["prompt"] == "my better prompt"
     assert rows["didnt_work"]["prompt"] == "the model's prompt"
@@ -1694,7 +1705,7 @@ def test_deny_steers_away(teachable):
     response = client.post(f"/concepts/{cid}/shots/1/verdict",
                            data={"text": "the model's prompt", "verdict": "deny"},
                            follow_redirects=False)
-    assert "steer away" in unquote(response.headers["location"])
+    assert "it moves to Graded" in unquote(response.headers["location"])
     [row] = winners.list_all(dsn=teachable)
     assert row["verdict"] == "didnt_work"
 

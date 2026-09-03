@@ -1,0 +1,14 @@
+venv/
+venv-studio/
+footage/
+characters/
+locations/
+props/
+data/renders/
+data/refs/
+data/thumbs/
+data/_to_delete/
+.git/
+.claude/
+*.pyc
+__pycache__/

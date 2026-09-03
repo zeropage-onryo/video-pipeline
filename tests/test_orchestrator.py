@@ -306,15 +306,44 @@ def test_ground_entities_uses_only_the_picked_character(tmp_db, monkeypatch):
     assert "Guest — bartender" not in calls[0]["cast"]
 
 
-def test_ground_entities_defaults_to_everything_on_file(tmp_db, monkeypatch):
+def test_ground_entities_defaults_to_nothing_on_file(tmp_db, monkeypatch):
+    """2026-09-03, Mike's call: an unattended run should stay only as
+    wide as the spark actually calls for -- it must not default to
+    showing the writer every character and prop on file just because
+    nobody picked anything. Neither asset has a photo here, so a name
+    match wouldn't fire either way; see the sibling test below for that
+    half."""
     entities.add_character("Mike — on camera", dsn=tmp_db, account_id=None)
     entities.add_prop("Ducati Panigale V2", category="vehicle", dsn=tmp_db, account_id=None)
     calls = stage_fakes(monkeypatch, [(make_concept(), [])])
 
     orchestrator.run("ritual", brand="antihero", channel="antihero")
 
+    assert "Mike — on camera" not in calls[0]["cast"]
+    assert "Ducati Panigale V2" not in calls[0]["cast"]
+
+
+def test_ground_entities_names_an_asset_the_spark_mentions(tmp_db, monkeypatch, tmp_path):
+    """With nobody there to pick anything, the spark text itself is the
+    only other way an unattended run can reach for a real asset -- the
+    same in_scope() rule scene_chain.ground() gives Studio's Create
+    button and Director's brief composer."""
+    from src import asset_shelf
+    dirs = {}
+    for kind in ("location", "character", "prop"):
+        d = tmp_path / (kind + "s")
+        d.mkdir()
+        dirs[kind] = d
+    monkeypatch.setattr(asset_shelf, "PHOTO_DIRS", dirs)
+    entities.add_character("Mike — on camera", dsn=tmp_db, account_id=None)
+    (dirs["character"] / "mike--on-camera").mkdir(parents=True)
+    (dirs["character"] / "mike--on-camera" / "a.png").write_bytes(b"\x89PNG\r\n")
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    orchestrator.run("Mike — on camera gears up for the ritual",
+                     brand="antihero", channel="antihero")
+
     assert "Mike — on camera" in calls[0]["cast"]
-    assert "Ducati Panigale V2" in calls[0]["cast"]
 
 
 def test_ground_rag_auto_grounds_only_in_craft_advice_domains(tmp_db, monkeypatch):
@@ -554,16 +583,24 @@ def test_unreadable_judge_fails_closed(tmp_db, monkeypatch):
     assert "prompt gate" in result["held_reason"]
 
 
-def test_a_failed_shot_gets_one_rework_pass_before_holding(tmp_db, monkeypatch):
+def test_a_failed_shot_gets_two_rework_passes_before_holding(tmp_db, monkeypatch):
     """A bad score isn't an automatic hold: the judge already names what's
-    weak, so the failing shot earns one rewrite pass against that exact
+    weak, so the failing shot earns rewrite passes against that exact
     diagnosis before the whole concept -- including the shot that already
     passed -- gets thrown away over one fixable line. If the rework still
-    doesn't clear the bar, THEN it holds (bounded, not infinite)."""
+    doesn't clear the bar after MAX_PROMPT_REWORKS attempts, THEN it holds
+    (bounded, not infinite) -- raised 1 -> 2 on 2026-09-03: a single generic
+    rework attempt was landing on the SAME verdict for the "too many
+    sequential actions" failure shape (concept 180 in the live database,
+    byte-for-byte identical reason before and after its one rework), so one
+    attempt was never enough to prove the mechanism works; see
+    _rework_shot_prompt's staged-prompt handling for the other half of
+    that fix."""
     scores = iter([
         {"score": 10, "reason": "", "dims": {}},                             # shot 1, first pass
         {"score": 3, "reason": "competing motions", "dims": {"motion": 0}},  # shot 2, first pass
-        {"score": 4, "reason": "still ambiguous", "dims": {"motion": 0}},    # shot 2, after rework
+        {"score": 4, "reason": "still ambiguous", "dims": {"motion": 0}},    # shot 2, after rework 1
+        {"score": 5, "reason": "still ambiguous", "dims": {"motion": 0}},    # shot 2, after rework 2
     ])
     monkeypatch.setattr(orchestrator, "_judge_prompt", lambda p: next(scores))
     monkeypatch.setattr(orchestrator, "generate_with_retry",
@@ -585,7 +622,7 @@ def test_a_failed_shot_gets_one_rework_pass_before_holding(tmp_db, monkeypatch):
     bible = orchestrator.shootgen.derive_scene_bible(
         two_ai["title"], two_ai["logline"], two_ai.get("grade"))
     assert result["prompt_scores"][1]["prompt"] == f"{bible}. {REWORKED_PROMPT}"
-    assert result["prompt_rework_attempts"] == 1          # exactly one bounded attempt, not infinite
+    assert result["prompt_rework_attempts"] == 2          # exactly two bounded attempts, not infinite
     assert "still ambiguous" in result["held_reason"]      # no half-rendered credit burn
 
 

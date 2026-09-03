@@ -644,6 +644,21 @@ def build_digest_prompt(brand: str, signals: list[dict], count: int,
             .replace("{signals}", format_signals(signals) or "(the crawl came back empty)"))
 
 
+# The crawl grades its own homework -- every digest candidate is a
+# self-score from the same call that wrote the spark, and it has been
+# landing at 0.85-0.95 on sparks that are moments wearing a trend
+# headline as a costume, not stories (see [[feedback_stories]],
+# 2026-09-03). A hand-typed spark banked through `add_spark` is
+# HUMAN_SPARK_SCORE=1.0 (src/mcp_server.py) and is meant to always
+# outrank a crawled one in `next_spark`'s ORDER BY score DESC -- but a
+# self-graded 0.95 sitting one tick under a typed 1.0 is not a
+# meaningful gap in practice (ties and near-ties are common; a 0.95
+# still reads as "trust this"). Capped here, not at SCORE_FLOOR,
+# because the floor decides whether a crawled spark is served AT ALL --
+# this decides whether it can ever outrank something Mike typed himself.
+CRAWL_SCORE_CEILING = 0.8
+
+
 def parse_digest_response(text: str) -> list[dict]:
     """Tolerant of the usual model output shapes -- fenced JSON, a bare
     list, a stray leading word. Returns [] rather than raising: a
@@ -670,12 +685,34 @@ def parse_digest_response(text: str) -> list[dict]:
             score = float(c.get("score", 0.0))
         except (TypeError, ValueError):
             score = 0.0
+        rationale = (c.get("rationale") or "").strip()
+        # want/rule/reversal/one_sentence are the digest prompt's spine
+        # fields (2026-09-03, same spine the idea-agent skill was
+        # rewritten around) -- there is no dedicated scout_findings
+        # column for them and this is not the place to add one (see
+        # [[verifying]] on live schema migrations against Mike's real
+        # DB), so they ride into `rationale`, the one field every
+        # reader of a finding already surfaces (`sparks`, `board`,
+        # spark_images). The alternative -- request them and drop them
+        # on the floor -- is exactly what happened to this prompt's old
+        # `turn`/`stake` fields, which this replaces.
+        spine = " · ".join(
+            f"{label}: {(c.get(key) or '').strip()}"
+            for label, key in (("want", "want"), ("rule", "rule"),
+                               ("reversal", "reversal"))
+            if (c.get(key) or "").strip()
+        )
+        if spine:
+            rationale = f"{rationale} — {spine}" if rationale else spine
+        one_sentence = (c.get("one_sentence") or "").strip()
+        if one_sentence:
+            rationale = f"{rationale} · retell: {one_sentence}" if rationale else one_sentence
         out.append({
             "spark": c["spark"].strip(),
-            "rationale": (c.get("rationale") or "").strip(),
+            "rationale": rationale,
             "evidence": (c.get("evidence") or "").strip(),
             "sources": [s for s in (c.get("sources") or []) if isinstance(s, str)],
-            "score": max(0.0, min(1.0, score)),
+            "score": max(0.0, min(CRAWL_SCORE_CEILING, score)),
         })
     return out
 

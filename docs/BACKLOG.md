@@ -454,6 +454,13 @@ security.
   `tests/test_tenancy_routes.py` keep working and become the second line rather
   than the only one.
 - Exit is `pg_dump`. Cost is a flat monthly fee in the tens.
+- **Done 2026-09-03 — the RAG half only.** `rag_documents` (316 rows) now lives on
+  Supabase project `zeropage-studio` (Free plan, us-east-1); `RAG_DATABASE_URL` is the
+  session-pooler string (direct is IPv6-only, the transaction pooler breaks psycopg's
+  prepared statements). Copy tool: `ops/migrate_rag_to_supabase.py`. `pipeline.db`,
+  accounts and auth are untouched — that is the rest of this item, still gated on a
+  second person. Automatic RLS was switched on at project creation, so any table
+  created there is closed by default; the app bypasses it today as the owner role.
 
 ### Move two — one always-on box for the app and the scheduler
 Fly or Railway; a small machine running the FastAPI app and the nightly.
@@ -649,3 +656,110 @@ choose from a shelf that isn't described yet.
 
 Parked deliberately: Mike wants to keep testing the current loop first
 (2026-09-02).
+
+---
+
+## Idea-agent findings from a remote Cowork session  (2026-09-03)
+
+Found while running spark #38 ("Sixteen Missed Calls") end to end from a phone-
+linked session. Items below are proven from the source or from failed calls,
+not inferred from tool signatures. Board at the time: 52 generated, 4 picked,
+**0 shot**, 45 archived, 2 parked.
+
+### A. No way to write the `shot` column  (highest priority)
+Schema supports it (`stats` reports it, `board(status="shot")` filters on it);
+nothing in the tool surface sets it. Only board write exposed is
+`pick(idea_id, picked=bool)`.
+
+Every piece is currently produced by hand in Mike's own studio, so the one
+thing the system most needs to learn — what actually got made — is exactly what
+it cannot record. Shoot rate reads 0.0% while work ships.
+
+Fix: `shoot(idea_id, shot=True, note="")` beside `pick`. Settle the definition
+first — **`shot` means made by any means**, not "a render came back," or manual
+production stays invisible.
+
+Rejected: binding `shot` to the Queue's approve button. It misses studio work
+entirely (never passes through the Queue), it fires before the output exists
+(approve is a spend authorisation), and it couples the column to the renderer
+that is currently missing. If a counter on approve is wanted, add a separate
+`approved` one.
+
+### B. MCP `generate` stops short of judge and keyframe  (3 for 3)
+Ideas 169, 170, 171, 172 all return `judge_overall: null`, empty
+`judge_reason`, empty `park_reason`, status `open`. #167 — created through
+another route — has `judge_overall: 7.0`, a written reason, a rendered keyframe
+and a park reason.
+
+Two consequences: nothing generated over MCP can ever park in the Queue, and no
+MCP-generated row can be read as "scored badly" because it was never scored.
+
+### C. The composer binds refs to a generation, not to a spark
+`orchestrator.py:287` → `bin_for_finding`; `scene_chain.py:355` →
+`bin_for_pass`. The graph reads reference photos from the **spark's bin**.
+`bank_reference` writes there, keyed `agent-<finding_id>`.
+
+The Studio composer does not. Four images uploaded before a run left the newest
+`scout_bin` row at id 39 from 14:58 — hours earlier; the files landed in
+`data/refs/` at 23:49 and rode into the shot's `refs` list directly.
+
+So `spark_images(38)` reads 0 no matter how much is uploaded through Studio,
+and `generate(spark, brand, goal)` — no refs parameter — cannot be handed
+references by a remote agent at all. Running a concept *with* references
+currently means starting it in Studio.
+
+Fix: a refs argument on `generate`, or have the composer also write
+`scout_bin` rows against the matching finding.
+
+### D. `archive()` records no reason
+`archive(idea_id, archived=True)`. Archiving is the only negative signal this
+system collects, and it stores *that* a concept was killed, never *why*.
+169/170/172 were all archived for **no turn** — a verdict that points straight
+at a failed prompt field — and that survives nowhere but a chat log.
+
+Fix: `archive(idea_id, reason="")`, vocabulary `weak concept · no turn ·
+no stake · off-brand · unshootable · seen it`.
+
+### E. `reference()` refuses the CDN every reference comes from
+`bank_reference` → `refbin.fetch` → `public_host` guard. Tested against
+`cdn.midjourney.com` at full size and at 640px webp; both refused with
+*"not a readable image, too large, or a refused host"*.
+
+**Mostly already solved:** `ops/ingest-saved-images.py` is the local-file route
+and takes `--pass-id`, so a folder can be banked straight onto a spark's pass.
+What is missing is only that the *agent* has no tool for it —
+`reference_local(finding_id, path, source_url)` would be the same code behind
+an MCP door. Worth noting in the tool docstring that the script exists, since
+an agent reading `bank_reference` alone concludes there is no local route.
+
+### F. SQLite is unwritable over the Cowork folder mount
+Reads work (`file:...?mode=ro`). Writes fail
+`sqlite3.OperationalError: disk I/O error` — the mount does not provide the
+locking SQLite needs. The failed transaction rolled back cleanly; nothing lost.
+Backup at `data/pipeline.db.bak-before-agentrefs-2153`.
+
+Stacked with A/D/E this is the real constraint: **a remote session can put
+files into `data/refs/` but cannot write the row that makes them count.**
+
+### G. Leftovers to clear
+`data/_agent_inbox/` — `mj_cavity_hand.png`, `mj_torn_wall.png`,
+`mj_phone_uplight.png` (staged Midjourney stills for spark #38).
+Orphans in `data/refs/` with no row: `2efac6ac92b59c014848e9cd.jpg`,
+`f6a451326dafc03657b27b93.jpg`. Keep `ea48535973dc26b7d4ef616c.jpg` — a
+composer upload picked it up and it is in live use on #171/#172.
+
+### H. Also
+- `#135`'s spark field holds ~1,200 chars of Runway/Wan failure notes (one
+  duplicated verbatim) instead of a spark. Good notes, wrong column — they are
+  being fed to the generator as creative direction.
+- The Midjourney MCP connector fails every `imagine` call with
+  `unexpected keyword argument 'async'`. Server-side; unrelated to this repo.
+- Keyframes DO render — #167's is live on R2. Only the clip step lacks a
+  renderer, so the two parked items cannot be approved. One renderer short,
+  not two. Do not archive them: they were never tested, and a false archive
+  poisons the only negative signal there is.
+
+### Order
+A first — it is small and it is the only thing that lets the system see the
+work Mike is actually making. Then C (references are what separate #171 from
+the 48 rows before it), then B. D and E are cheap. F is not fixable here.
