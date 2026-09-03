@@ -220,6 +220,32 @@ def test_shoot_tool_is_a_write_that_never_spends(tmp_db):
     assert set(by_name["shoot"].input_schema["properties"]) == {"idea_id", "shot"}
 
 
+def test_archive_records_the_reason_and_says_so_when_it_is_off_vocabulary(board):
+    """A reason is never a gate, but the tally counts words, so an
+    uncounted word is said back rather than silently filed."""
+    path, ids = board
+    card = mcp_server.archive_idea(ids[0], reason="no turn", path=path)
+    assert card["status"] == "archived" and "reason_note" not in card
+    assert preprod.get_concept(ids[0], path=path, account_id=None)["archive_reason"] == "no turn"
+
+    card = mcp_server.archive_idea(ids[1], reason="boring", path=path)
+    assert card["status"] == "archived"                       # still archived
+    assert "weak concept" in card["reason_note"]
+    assert preprod.get_concept(ids[1], path=path, account_id=None)["archive_reason"] == "boring"
+
+    assert "reason_note" not in mcp_server.archive_idea(ids[3], path=path)   # no word, no nag
+
+
+def test_archive_tool_names_every_counted_reason(tmp_db):
+    """The description is what an agent writes from. Typed by hand it
+    named a vocabulary the Grade tab had already retired."""
+    server = mcp_server.build_server(path=tmp_db)
+    desc = {t.name: t for t in _tools(server)}["archive"].description
+    for word in preprod.ARCHIVE_REASONS:
+        assert word in desc
+    assert "boring" not in desc and "other" not in desc.split(" · ")
+
+
 def test_archiving_never_deletes(board):
     """pick_rate is generated-vs-picked, so a deleted row would make the
     rate read 100% forever and unfalsifiable."""

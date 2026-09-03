@@ -43,6 +43,14 @@ from typing import Any, Optional
 
 from . import accounts, autonomy, db, preprod, refbin, scout
 
+ARCHIVE_DESCRIPTION = (
+    "Take a concept off the board. Hides it; never deletes. `reason` is WHY "
+    "-- the only record this pipeline keeps of why anything was rejected, "
+    "and what avoid_guidance learns from. One of: "
+    f"{' · '.join(preprod.ARCHIVE_REASONS)}. Never required: an archive with "
+    "no word still archives."
+)
+
 # The board's filters. "open" is deliberately first and is the default:
 # it is the only one that answers "what is waiting on me".
 STATUSES = ("open", "picked", "archived", "parked", "shot", "all")
@@ -397,9 +405,21 @@ def archive_idea(idea_id: int, archived: bool = True, reason: str = "",
     the board forever.
     """
     account_id = _account(account_id, path)
+    reason = (reason or "").strip()
     preprod.set_archived(int(idea_id), archived=archived, path=path,
                          account_id=account_id, reason=reason)
-    return _card(preprod.get_concept(int(idea_id), path=path, account_id=account_id))
+    card = _card(preprod.get_concept(int(idea_id), path=path, account_id=account_id))
+    if archived and reason and reason not in preprod.ARCHIVE_REASONS:
+        # Recorded as given -- never a gate -- but said back, because the
+        # tally counts WORDS: "boring" and "other" (the vocabulary the
+        # old docstring named) are buckets of one beside "weak concept",
+        # and a bucket of one teaches nothing. The live tally on
+        # 2026-09-03 held 1 boring and 7 other for exactly this reason.
+        card["reason_note"] = (
+            f"recorded {reason!r}; the counted vocabulary is "
+            f"{', '.join(preprod.ARCHIVE_REASONS)} -- use one next time so "
+            "the tally can move")
+    return card
 
 
 # --- the night's direction -------------------------------------------------
@@ -922,11 +942,15 @@ def build_server(path: Path | str = db.DB_PATH, name: str = "zeropage-ideas",
         output). `shoot_rate` is the label it moves. Never spends."""
         return _t(shoot_idea, idea_id, shot=shot, path=path)
 
-    @server.tool(annotations=writes)
+    # The description is built from the constant, not typed: the
+    # docstring used to name "boring ... other", a vocabulary the Grade
+    # tab had already retired, and an agent that reads the description
+    # writes what it names. Three concepts archived from a phone on
+    # 2026-09-02/03 for "no turn" recorded nothing -- and that word IS in
+    # the vocabulary. (Passed to the decorator: the SDK reads the
+    # docstring at registration, so setting __doc__ afterwards is silent.)
+    @server.tool(annotations=writes, description=ARCHIVE_DESCRIPTION)
     def archive(idea_id: int, archived: bool = True, reason: str = "") -> dict:
-        """Take a concept off the board. Hides it; never deletes. `reason`
-        is one of boring, off-brand, unshootable, seen it, other -- the
-        only record this pipeline keeps of WHY anything was rejected."""
         return _t(archive_idea, idea_id, archived=archived, reason=reason,
                   path=path)
 

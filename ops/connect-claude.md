@@ -58,7 +58,7 @@ Always on, free:
 | `idea` | one concept in full, scene prompt included, plus `origin` (which door wrote it) and `gate` (the graph's prompt-gate verdict; null for a Studio Create row, which is never scored) |
 | `search` | find a concept by any words in it |
 | `capture` | put a new idea on the board |
-| `pick` / `archive` | the two decisions, recorded as labels |
+| `pick` / `archive` | the two decisions, recorded as labels — `archive` takes a `reason` (weak concept · no turn · no stake · off-brand · unshootable · seen it), the only record of WHY |
 | `shoot` | record that a concept actually got made, by any means — studio, Higgsfield, a camera |
 | `add_spark` | hand the nightly run a direction |
 | `tonight` | what direction the 03:30 run would take |

@@ -182,6 +182,21 @@ and why. Do not hedge across four — the value here is a recommendation
 he can accept or overrule in a second, and "they all have merit" is the
 non-answer that sends him back to the machine.
 
+## When he kills one
+
+```
+archive(idea_id, reason="no turn")
+```
+
+Always pass the reason, in his words mapped onto the counted
+vocabulary: **weak concept · no turn · no stake · off-brand ·
+unshootable · seen it**. It is the only record this pipeline keeps of
+WHY anything was rejected, and the tally counts words — "boring" is a
+bucket of one beside "weak concept". If he gives a reason that fits
+none of them, archive with the closest and say which you chose. Never
+withhold the archive for want of a word: an archive that waits on
+vocabulary is an archive that does not happen.
+
 ## When he says he made one
 
 ```
