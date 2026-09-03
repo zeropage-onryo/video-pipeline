@@ -24,6 +24,28 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # The suite runs against a real Postgres since 2026-09-03 (pipeline.db
+    # moved off SQLite -- docs/tasks/task-postgres-migration.md). conftest's
+    # `pg` fixture gives every test its own schema on this box and drops it
+    # after, so one database serves the whole run. Same image, role and
+    # database name as docker-compose.yml, so a green run here means the
+    # same thing as a green run on a laptop.
+    env:
+      TEST_DATABASE_URL: postgresql://zeropage:zeropage@localhost:5432/zeropage
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: zeropage
+          POSTGRES_PASSWORD: zeropage
+          POSTGRES_DB: zeropage
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
