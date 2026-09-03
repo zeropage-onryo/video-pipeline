@@ -1,34 +1,52 @@
 """
-Real sign-in for the /ui shell: Google OAuth, Discord OAuth, and
-email/password. Three doors into one `users` table; membership in
-`account_members` -- not the fact of being signed in -- is what opens
-Mike's two real accounts (see require gate notes below).
+Real sign-in for the /ui shell, on Supabase Auth (2026-09-03, step 6 of
+docs/tasks/task-postgres-migration.md, Mike's call).
+
+Supabase's GoTrue does the identity work -- Google, Discord and
+email+password, the passwords, the verified-email rule, account linking
+-- and this module does the two things that are ours:
+
+  1. get a person from GoTrue to a verified identity, and
+  2. decide which of OUR accounts they may enter (accounts.py's
+     membership gate -- signing in is not the same as having access).
+
+Server-side, two HTTP calls, no client library: the OAuth doors redirect
+to `{SUPABASE_URL}/auth/v1/authorize` (PKCE, the verifier kept in the
+starlette session cookie); Supabase sends the person back to
+`/auth/callback?code=...`; the code is exchanged at `/auth/v1/token`
+and the returned access token -- a JWT signed by the project -- is
+verified with PyJWT (HS256 on SUPABASE_JWT_SECRET, or the project's
+JWKS when no secret is configured). Email+password is the same
+`/auth/v1/token` with grant_type=password; sign-up is `/auth/v1/signup`.
 
 Session = one signed, httpOnly cookie (itsdangerous URLSafeTimedSerializer)
-carrying the user id, expiry-checked on every request -- consistent with
-how the app already treats the `brand` cookie, no server-side session
-table for v1. Logout clears the cookie (this device only).
+carrying the Supabase user id, expiry-checked on every request -- the
+same cookie as before, so current_user / current_account_id and every
+route behind them are untouched. We verify the JWT ONCE at sign-in and
+never act as the user against Supabase afterwards, so no refresh token
+is stored. Logout clears the cookie (this device only).
 
-Identity resolution on an OAuth callback, in order:
-  1. (provider, subject) identity exists        -> sign that user in.
-  2. email matches a user with NO password and
-     NO identities (the seeded bootstrap user)  -> attach the identity.
-  3. email matches any other user               -> "already exists, sign
-     in the way you first signed up" (never silently merged).
-  4. brand-new email                            -> new user + identity,
-     zero memberships (the gate).
+Identity resolution after any successful GoTrue sign-in is
+accounts.claim: existing mirror row -> sign in; unclaimed row with this
+email (an invite, the seeded bootstrap user) -> claim it; claimed by a
+different id -> refuse; new -> new mirror row, zero memberships (the
+gate).
 
-Secrets (client ids/secrets, the signing key) come from env only.
-Without a SESSION_SECRET an ephemeral key is generated with a loud
-stderr note -- dev keeps working, sessions just don't survive restarts.
+Config (env): SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_JWT_SECRET
+(optional when the project uses asymmetric signing keys),
+SUPABASE_PROVIDERS (comma list, default "google,discord" -- what the
+sign-in page offers; enabling them is done in the Supabase dashboard),
+SESSION_SECRET. Google/Discord client ids live in the dashboard now.
 """
+import base64
+import hashlib
 import os
 import secrets as _secrets
 import sys
 import time
 from collections import defaultdict, deque
 from typing import Any, Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 import httpx
 from fastapi import APIRouter, Form, Request
@@ -42,11 +60,9 @@ router = APIRouter(prefix="/auth")
 SESSION_COOKIE = "zp_session"
 SESSION_MAX_AGE = 60 * 60 * 24 * 30          # 30 days
 MIN_PASSWORD_LEN = 8
-
-DISCORD_AUTHORIZE = "https://discord.com/oauth2/authorize"
-DISCORD_TOKEN = "https://discord.com/api/oauth2/token"
-DISCORD_ME = "https://discord.com/api/users/@me"
-GOOGLE_DISCOVERY = "https://accounts.google.com/.well-known/openid-configuration"
+PKCE_SESSION_KEY = "sb_pkce_verifier"
+JWT_AUDIENCE = "authenticated"
+DEFAULT_PROVIDERS = ("google", "discord")
 
 
 def _session_secret() -> str:
@@ -63,8 +79,8 @@ def _serializer() -> URLSafeTimedSerializer:
     return URLSafeTimedSerializer(_session_secret(), salt="zp-session")
 
 
-def issue_session(response, user_id: int, request: Request) -> None:
-    token = _serializer().dumps({"user_id": user_id})
+def issue_session(response, user_id: str, request: Request) -> None:
+    token = _serializer().dumps({"uid": str(user_id)})
     response.set_cookie(
         SESSION_COOKIE, token,
         max_age=SESSION_MAX_AGE, httponly=True, samesite="lax",
@@ -81,8 +97,9 @@ def clear_session(response) -> None:
 # --------------------------------------------------------------------------
 
 def current_user(request: Request) -> Optional[dict[str, Any]]:
-    """The signed-in user, or None. Signature + age checked; a stale or
-    tampered cookie is simply an anonymous request, never a 500."""
+    """The signed-in user (the mirror row), or None. Signature + age
+    checked; a stale or tampered cookie is simply an anonymous request,
+    never a 500."""
     token = request.cookies.get(SESSION_COOKIE)
     if not token:
         return None
@@ -90,7 +107,8 @@ def current_user(request: Request) -> Optional[dict[str, Any]]:
         data = _serializer().loads(token, max_age=SESSION_MAX_AGE)
     except BadSignature:
         return None
-    return accounts.get_user(int(data["user_id"]), path=db.DB_PATH)
+    uid = data.get("uid")
+    return accounts.get_user(str(uid)) if uid else None
 
 
 def current_account(request: Request,
@@ -105,7 +123,7 @@ def current_account(request: Request,
         user = current_user(request)
     if user is None:
         return None
-    member_of = accounts.memberships(user["id"], path=db.DB_PATH)
+    member_of = accounts.memberships(user["id"])
     if not member_of:
         return None
     preferred = request.cookies.get("brand")
@@ -161,7 +179,7 @@ def current_account_id(request: Request) -> int:
     if user is None:
         from fastapi import HTTPException
         raise HTTPException(status_code=401, detail="sign in first")
-    member_of = accounts.memberships(user["id"], path=db.DB_PATH)
+    member_of = accounts.memberships(user["id"])
     if not member_of:
         from fastapi import HTTPException
         raise HTTPException(status_code=403, detail="no account access")
@@ -203,10 +221,10 @@ def dev_account_id(request: Request) -> int:
     """
     user = current_user(request)
     if user is not None:
-        member_of = accounts.memberships(user["id"], path=db.DB_PATH)
+        member_of = accounts.memberships(user["id"])
         if member_of:
             return min(int(a["id"]) for a in member_of)
-    with db.connect(db.DB_PATH) as conn:
+    with db.connect() as conn:
         bootstrap = db.bootstrap_account_id(conn)
     if bootstrap is None:
         from fastapi import HTTPException
@@ -244,7 +262,8 @@ def _redirect(url: str) -> Exception:
 
 # --------------------------------------------------------------------------
 # rate limiting -- in-process sliding window; the brute-force brake the
-# password endpoints need, without a new dependency
+# password endpoints keep even though GoTrue has its own, so a flood
+# never reaches Supabase's quota in the first place
 # --------------------------------------------------------------------------
 
 _hits: dict[tuple, deque] = defaultdict(deque)
@@ -265,53 +284,139 @@ def _rate_limited(request: Request, bucket: str) -> bool:
 
 
 # --------------------------------------------------------------------------
-# password hashing (argon2)
+# Supabase: configuration, the HTTP seam, the JWT
 # --------------------------------------------------------------------------
 
-def hash_password(password: str) -> str:
-    from argon2 import PasswordHasher
-    return PasswordHasher().hash(password)
+def supabase_url() -> str:
+    return (os.environ.get("SUPABASE_URL") or "").rstrip("/")
 
 
-def verify_password(password_hash: str, password: str) -> bool:
-    from argon2 import PasswordHasher
-    from argon2.exceptions import VerificationError
+def configured() -> bool:
+    """Whether sign-in can work at all: the project URL and its anon key.
+    Live key presence, the /api/capabilities rule."""
+    return bool(supabase_url() and os.environ.get("SUPABASE_ANON_KEY"))
+
+
+def providers_available() -> dict[str, bool]:
+    """Which OAuth buttons the sign-in page renders. A provider is
+    switched on in the Supabase dashboard, which the app cannot read, so
+    SUPABASE_PROVIDERS says which ones are; nothing renders when Supabase
+    itself is not configured."""
+    raw = os.environ.get("SUPABASE_PROVIDERS")
+    enabled = {p.strip().lower() for p in raw.split(",")} if raw is not None \
+        else set(DEFAULT_PROVIDERS)
+    return {p: configured() and p in enabled for p in DEFAULT_PROVIDERS}
+
+
+def gotrue(method: str, path: str, *, json: Optional[dict] = None,
+           params: Optional[dict] = None) -> tuple[int, dict]:
+    """ONE call to GoTrue. The seam the tests patch -- every HTTP
+    request this module makes to Supabase goes through here, so a test
+    that stubs it can be sure nothing reaches the network (conftest's
+    guard catches anything that slips). Returns (status, body)."""
+    anon = os.environ.get("SUPABASE_ANON_KEY") or ""
+    with httpx.Client(timeout=10) as client:
+        response = client.request(
+            method, f"{supabase_url()}/auth/v1{path}", json=json, params=params,
+            headers={"apikey": anon, "Authorization": f"Bearer {anon}",
+                     "Content-Type": "application/json"})
     try:
-        return PasswordHasher().verify(password_hash, password)
-    except VerificationError:
-        return False
+        body = response.json()
+    except ValueError:
+        body = {}
+    return response.status_code, body if isinstance(body, dict) else {}
 
 
-# --------------------------------------------------------------------------
-# email + password routes
-# --------------------------------------------------------------------------
+def verify_token(token: str) -> Optional[dict]:
+    """The claims of a Supabase access token, or None when it does not
+    verify. HS256 on SUPABASE_JWT_SECRET when one is configured; the
+    project's JWKS otherwise (newer projects sign asymmetrically).
+    Audience "authenticated" -- an anon or service token is not a
+    person."""
+    import jwt
+    try:
+        secret = os.environ.get("SUPABASE_JWT_SECRET")
+        if secret:
+            return jwt.decode(token, secret, algorithms=["HS256"],
+                              audience=JWT_AUDIENCE)
+        key = jwt.PyJWKClient(f"{supabase_url()}/auth/v1/.well-known/jwks.json") \
+            .get_signing_key_from_jwt(token)
+        return jwt.decode(token, key.key, algorithms=["ES256", "RS256"],
+                          audience=JWT_AUDIENCE)
+    except Exception:
+        return None
+
+
+def _error_text(body: dict, fallback: str) -> str:
+    """GoTrue's error shapes vary by version and endpoint: {msg}, {message},
+    {error_description}, {error}. Read whichever is there."""
+    for key in ("msg", "message", "error_description", "error"):
+        value = body.get(key)
+        if value and isinstance(value, str):
+            return value
+    return fallback
+
 
 def _signin_error(message: str, mode: str = "signin") -> RedirectResponse:
     return RedirectResponse(
         f"/signin?error={quote(message)}&mode={mode}", status_code=303)
 
 
+def _not_configured() -> RedirectResponse:
+    return _signin_error("sign-in isn't configured yet "
+                         "(SUPABASE_URL / SUPABASE_ANON_KEY)")
+
+
+def _finish(request: Request, session: dict) -> RedirectResponse:
+    """A GoTrue session (the token response) -> a verified identity ->
+    accounts.claim -> our cookie. Every door ends here."""
+    claims = verify_token(session.get("access_token") or "")
+    if not claims or not claims.get("sub"):
+        return _signin_error("sign-in could not be verified -- try again")
+    meta = claims.get("user_metadata") or {}
+    user_id, error = accounts.claim(
+        claims["sub"], claims.get("email"),
+        meta.get("full_name") or meta.get("name") or meta.get("user_name"),
+        meta.get("avatar_url") or meta.get("picture"))
+    if error:
+        return _signin_error(error)
+    response = RedirectResponse("/ui/accounts", status_code=303)
+    issue_session(response, user_id, request)
+    return response
+
+
+# --------------------------------------------------------------------------
+# email + password
+# --------------------------------------------------------------------------
+
 @router.post("/signup")
 async def signup(request: Request, email: str = Form(...),
                  password: str = Form(...)):
     if _rate_limited(request, "signup"):
         return _signin_error("too many attempts -- wait a minute", "signup")
+    if not configured():
+        return _not_configured()
     email = email.strip().lower()
     if "@" not in email or "." not in email.split("@")[-1]:
         return _signin_error("enter a real email address", "signup")
     if len(password) < MIN_PASSWORD_LEN:
         return _signin_error(
             f"password needs at least {MIN_PASSWORD_LEN} characters", "signup")
-    if accounts.get_user_by_email(email, path=db.DB_PATH):
-        return _signin_error(
-            "an account with this email already exists -- try signing in "
-            "the other way", "signin")
 
-    user_id = accounts.create_user(email, password_hash=hash_password(password),
-                                   path=db.DB_PATH)
-    response = RedirectResponse("/ui/accounts", status_code=303)
-    issue_session(response, user_id, request)
-    return response
+    status, body = gotrue("POST", "/signup", json={"email": email, "password": password})
+    if status >= 400:
+        text = _error_text(body, "sign-up failed")
+        if "already" in text.lower() or body.get("error_code") == "user_already_exists":
+            return _signin_error(
+                "an account with this email already exists -- try signing in "
+                "the other way", "signin")
+        return _signin_error(text, "signup")
+    if not body.get("access_token"):
+        # confirmation email on: Supabase made the user, no session yet
+        return RedirectResponse(
+            f"/signin?error={quote('check your email to confirm the address, then sign in')}"
+            f"&mode=signin&email={quote(email)}", status_code=303)
+    return _finish(request, body)
 
 
 @router.post("/login")
@@ -319,16 +424,15 @@ async def login(request: Request, email: str = Form(...),
                 password: str = Form(...)):
     if _rate_limited(request, "login"):
         return _signin_error("too many attempts -- wait a minute")
-    user = accounts.get_user_by_email(email, path=db.DB_PATH)
+    if not configured():
+        return _not_configured()
+    status, body = gotrue("POST", "/token", params={"grant_type": "password"},
+                          json={"email": email.strip().lower(), "password": password})
     # One generic error for every failure mode -- never reveal whether
     # the email exists or the password was wrong.
-    if not user or not user["password_hash"] \
-            or not verify_password(user["password_hash"], password):
+    if status >= 400 or not body.get("access_token"):
         return _signin_error("invalid email or password")
-
-    response = RedirectResponse("/ui/accounts", status_code=303)
-    issue_session(response, user["id"], request)
-    return response
+    return _finish(request, body)
 
 
 @router.post("/logout")
@@ -339,153 +443,73 @@ async def logout():
 
 
 # --------------------------------------------------------------------------
-# OAuth -- Authlib clients. Google is OIDC (discovery + JWKS-verified id
-# token); Discord is plain OAuth2 (no OIDC): the trust boundary is the
-# authenticated /users/@me call over the token Discord itself issued.
+# OAuth through Supabase (PKCE)
 # --------------------------------------------------------------------------
 
-_oauth = None
+def _pkce_pair() -> tuple[str, str]:
+    verifier = _secrets.token_urlsafe(64)
+    digest = hashlib.sha256(verifier.encode()).digest()
+    challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+    return verifier, challenge
 
 
-def _get_oauth():
-    global _oauth
-    if _oauth is None:
-        from authlib.integrations.starlette_client import OAuth
-        _oauth = OAuth()
-        _oauth.register(
-            name="google",
-            client_id=os.environ.get("GOOGLE_CLIENT_ID"),
-            client_secret=os.environ.get("GOOGLE_CLIENT_SECRET"),
-            server_metadata_url=GOOGLE_DISCOVERY,
-            client_kwargs={"scope": "openid email profile"},
-        )
-        _oauth.register(
-            name="discord",
-            client_id=os.environ.get("DISCORD_CLIENT_ID"),
-            client_secret=os.environ.get("DISCORD_CLIENT_SECRET"),
-            authorize_url=DISCORD_AUTHORIZE,
-            access_token_url=DISCORD_TOKEN,
-            client_kwargs={"scope": "identify email"},
-        )
-    return _oauth
-
-
-def _provider_configured(provider: str) -> bool:
-    prefix = provider.upper()
-    return bool(os.environ.get(f"{prefix}_CLIENT_ID")
-                and os.environ.get(f"{prefix}_CLIENT_SECRET"))
-
-
-def _resolve_oauth_user(provider: str, subject: str, email: Optional[str],
-                        display_name: Optional[str],
-                        avatar_url: Optional[str]) -> tuple:
-    """The identity-resolution ladder from the module docstring.
-    Returns (user_id, error) -- exactly one is set."""
-    identity = accounts.get_identity(provider, subject, path=db.DB_PATH)
-    if identity:
-        accounts.update_profile(identity["user_id"], display_name, avatar_url,
-                                path=db.DB_PATH)
-        return identity["user_id"], None
-
-    if not email:
-        return None, (f"{provider} did not return a verified email for this "
-                      "account -- verify your email there and try again")
-    user = accounts.get_user_by_email(email, path=db.DB_PATH)
-    if user:
-        with db.connect(db.DB_PATH) as conn:
-            has_identities = conn.execute(
-                "SELECT 1 FROM auth_identities WHERE user_id = ?",
-                (user["id"],)).fetchone()
-        if user["password_hash"] is None and not has_identities:
-            # the seeded bootstrap user: first provider sign-in claims it
-            accounts.add_identity(user["id"], provider, subject, path=db.DB_PATH)
-            accounts.update_profile(user["id"], display_name, avatar_url,
-                                    path=db.DB_PATH)
-            return user["id"], None
-        return None, ("an account with this email already exists -- sign in "
-                      "the way you first signed up")
-
-    user_id = accounts.create_user(email, display_name=display_name,
-                                   avatar_url=avatar_url, path=db.DB_PATH)
-    accounts.add_identity(user_id, provider, subject, path=db.DB_PATH)
-    return user_id, None
+def _oauth_login(request: Request, provider: str):
+    if not providers_available().get(provider):
+        return _signin_error(f"{provider.title()} sign-in isn't configured yet "
+                             "(SUPABASE_URL / SUPABASE_PROVIDERS)")
+    verifier, challenge = _pkce_pair()
+    request.session[PKCE_SESSION_KEY] = verifier
+    query = urlencode({
+        "provider": provider,
+        "redirect_to": str(request.url_for("auth_callback")),
+        "code_challenge": challenge,
+        "code_challenge_method": "s256",
+    })
+    return RedirectResponse(f"{supabase_url()}/auth/v1/authorize?{query}",
+                            status_code=303)
 
 
 @router.get("/google/login")
 async def google_login(request: Request):
-    if not _provider_configured("google"):
-        return _signin_error("Google sign-in isn't configured yet "
-                             "(GOOGLE_CLIENT_ID/SECRET)")
-    redirect_uri = str(request.url_for("google_callback"))
-    return await _get_oauth().google.authorize_redirect(request, redirect_uri)
-
-
-@router.get("/google/callback")
-async def google_callback(request: Request):
-    try:
-        token = await _get_oauth().google.authorize_access_token(request)
-    except Exception:
-        return _signin_error("Google sign-in was cancelled or failed -- try again")
-    # authorize_access_token verifies the ID token against Google's JWKS
-    # (state param included) -- the claims below are authenticated.
-    claims = token.get("userinfo") or {}
-    return _finish_oauth(request, "google", claims.get("sub"),
-                         claims.get("email"), claims.get("name"),
-                         claims.get("picture"))
+    return _oauth_login(request, "google")
 
 
 @router.get("/discord/login")
 async def discord_login(request: Request):
-    if not _provider_configured("discord"):
-        return _signin_error("Discord sign-in isn't configured yet "
-                             "(DISCORD_CLIENT_ID/SECRET)")
-    redirect_uri = str(request.url_for("discord_callback"))
-    return await _get_oauth().discord.authorize_redirect(request, redirect_uri)
+    return _oauth_login(request, "discord")
+
+
+@router.get("/callback", name="auth_callback")
+async def auth_callback(request: Request, code: Optional[str] = None,
+                        error: Optional[str] = None,
+                        error_description: Optional[str] = None):
+    """Where Supabase sends the person back. One callback for every
+    provider: which one they used is in the token's app_metadata, and
+    accounts.claim does not care."""
+    if error or not code:
+        return _signin_error(error_description or error
+                             or "sign-in was cancelled or failed -- try again")
+    verifier = request.session.pop(PKCE_SESSION_KEY, None)
+    if not verifier:
+        return _signin_error("sign-in session expired -- try again")
+    status, body = gotrue("POST", "/token", params={"grant_type": "pkce"},
+                          json={"auth_code": code, "code_verifier": verifier})
+    if status >= 400 or not body.get("access_token"):
+        return _signin_error(_error_text(body, "sign-in was cancelled or failed -- try again"))
+    return _finish(request, body)
+
+
+# The URLs the rollout checklist registered before Supabase: kept as
+# aliases so an old bookmark or dashboard entry still lands.
+@router.get("/google/callback")
+async def google_callback(request: Request, code: Optional[str] = None,
+                          error: Optional[str] = None,
+                          error_description: Optional[str] = None):
+    return await auth_callback(request, code, error, error_description)
 
 
 @router.get("/discord/callback")
-async def discord_callback(request: Request):
-    try:
-        token = await _get_oauth().discord.authorize_access_token(request)
-    except Exception:
-        return _signin_error("Discord sign-in was cancelled or failed -- try again")
-    # Discord doesn't put the profile in the token response -- it comes
-    # from the authenticated /users/@me call, which IS the trust boundary.
-    profile = await fetch_discord_profile(token["access_token"])
-    if profile is None:
-        return _signin_error("could not read your Discord profile -- try again")
-    avatar = None
-    if profile.get("avatar"):
-        avatar = (f"https://cdn.discordapp.com/avatars/{profile['id']}/"
-                  f"{profile['avatar']}.png")
-    # Discord's email can be null (e.g. unverified) -- resolve treats
-    # that as a clear failure, never a NULL users.email row.
-    email = profile.get("email") if profile.get("verified") else None
-    return _finish_oauth(request, "discord", profile.get("id"), email,
-                         profile.get("global_name") or profile.get("username"),
-                         avatar)
-
-
-async def fetch_discord_profile(access_token: str) -> Optional[dict]:
-    """Separate + async so tests patch it and no test ever hits Discord."""
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.get(
-                DISCORD_ME, headers={"Authorization": f"Bearer {access_token}"})
-            response.raise_for_status()
-            return response.json()
-    except Exception:
-        return None
-
-
-def _finish_oauth(request: Request, provider: str, subject, email,
-                  display_name, avatar_url):
-    if not subject:
-        return _signin_error(f"{provider} returned no account id -- try again")
-    user_id, error = _resolve_oauth_user(provider, str(subject), email,
-                                         display_name, avatar_url)
-    if error:
-        return _signin_error(error)
-    response = RedirectResponse("/ui/accounts", status_code=303)
-    issue_session(response, user_id, request)
-    return response
+async def discord_callback(request: Request, code: Optional[str] = None,
+                           error: Optional[str] = None,
+                           error_description: Optional[str] = None):
+    return await auth_callback(request, code, error, error_description)

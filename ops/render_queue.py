@@ -24,48 +24,30 @@ left in footage/generated/ 404s in the Queue however real it is. import
 copies whatever you hand it into data/renders/higgsfield/ (the same
 folder src/higgsfield.py writes to) and derives the URL from there.
 
-DELIBERATELY STDLIB-ONLY. It imports src.preprod / src.generative (which
-are themselves stdlib) and nothing else, so it runs under any python3 --
+NO THIRD-PARTY IMPORT OF ITS OWN. It imports src.preprod / src.generative
+and nothing else, so it ran under any python3 while those were stdlib --
 the repo venvs are macOS builds and a Claude session's shell is Linux.
-No third-party import may be added here without breaking that.
+Since the move to Postgres (2026-09-03) src.db needs psycopg, so the
+interpreter running this must have it; the script itself still adds
+nothing on top.
 
-THE SQLITE PRAGMA, and why it is not a hack. Writing to data/pipeline.db
-over the desktop bridge's FUSE mount fails at COMMIT with "disk I/O
-error" -- the mount cannot do what SQLite's rollback journal needs.
-`PRAGMA journal_mode=MEMORY` is per-CONNECTION and, unlike WAL, is not
-persisted in the file header, so it changes nothing about the database
-his Mac opens and does not touch the plain-file-copy backups. It costs
-crash-safety mid-transaction, which for one INSERT of one already-
-downloaded clip is the right trade. Applied always: harmless natively.
+The SQLite journal-mode fuse that used to sit above the imports (a
+per-connection PRAGMA so a COMMIT over the desktop bridge's FUSE mount
+would not die with "disk I/O error") went with SQLite: a network
+database has no journal file on the mount to protect.
 """
 from __future__ import annotations
 
 import argparse
 import json
-import sqlite3
 import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-_real_connect = sqlite3.connect
-
-
-def _fuse_safe_connect(*args, **kwargs):
-    conn = _real_connect(*args, **kwargs)
-    try:
-        conn.execute("PRAGMA journal_mode=MEMORY")
-    except sqlite3.Error:
-        pass          # a read-only open, or a mount that does not need it
-    return conn
-
-
-sqlite3.connect = _fuse_safe_connect          # before src.db is imported
-
-# ruff: noqa: I001 -- these imports MUST come after the patch above, so
-# they cannot be hoisted into the sorted block at the top of the file.
-from src import accounts, db, generative, preprod       # noqa: E402
+# ruff: noqa: I001 -- these imports must come after the sys.path line.
+from src import accounts, generative, preprod       # noqa: E402
 from src.shot import Shot                     # noqa: E402
 
 
@@ -75,7 +57,7 @@ def pending(brand=None, account_id: int | None = None) -> list[dict]:
     clip yet. Duplicated deliberately in ONE place only -- if that rule
     changes, this is the line to change with it."""
     out = []
-    for concept in preprod.list_concepts(path=db.DB_PATH, account_id=account_id):
+    for concept in preprod.list_concepts(account_id=account_id):
         if brand and concept.get("brand") != brand:
             continue
         if not (concept.get("picked") or concept.get("parked")):
@@ -145,7 +127,7 @@ def import_clip(concept_id: int, shot_n, file: str, model: str,
     if path.stat().st_size < 1024:
         raise SystemExit(f"clip is {path.stat().st_size} bytes -- that is not a video")
 
-    concept = preprod.get_concept(concept_id, path=db.DB_PATH, account_id=account_id)
+    concept = preprod.get_concept(concept_id, account_id=account_id)
     if concept is None:
         raise SystemExit(f"no concept {concept_id}")
     shot = next((s for s in concept.get("shots") or []
@@ -158,12 +140,11 @@ def import_clip(concept_id: int, shot_n, file: str, model: str,
         raise SystemExit("no prompt to log this attempt against")
 
     path = _place(path)
-    generative.init(path=db.DB_PATH)
+    generative.init()
     shot_row_id = generative.add_shot(
         Shot(subject=text[:100], action="as prompted"),
         notes=f"rendered via the Higgsfield MCP on subscription credits "
-              f"(concept {concept_id} shot {shot_n})",
-        path=db.DB_PATH, account_id=account_id)
+              f"(concept {concept_id} shot {shot_n})", account_id=account_id)
     generation_id = generative.record_generation(
         shot_row_id, "higgsfield", text,
         params={"model": model, "source": "mcp-subscription",
@@ -171,11 +152,10 @@ def import_clip(concept_id: int, shot_n, file: str, model: str,
                 "shot_n": shot_n, "prompt_image": bool(anchored)},
         output_path=str(path),
         cost_usd=None,
-        notes="subscription credits, not API credits",
-        path=db.DB_PATH, account_id=account_id)
+        notes="subscription credits, not API credits", account_id=account_id)
 
     media_url = "/renders/" + str(path.relative_to(RENDERS_ROOT.resolve())).replace("\\", "/")
-    preprod.set_shot_media_url(concept_id, shot_n, media_url, path=db.DB_PATH, account_id=account_id)
+    preprod.set_shot_media_url(concept_id, shot_n, media_url, account_id=account_id)
     return {"ok": True, "generation_id": generation_id,
             "media_url": media_url, "path": str(path)}
 

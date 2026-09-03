@@ -120,7 +120,7 @@ def refresh_metrics_for_video(video: dict, api_key=None, db_path=None, account_i
     except Exception as e:
         return {"ok": False, "error": _safe_error(e, api_key)}
 
-    kwargs = {"path": db_path} if db_path is not None else {}
+    kwargs = {"dsn": db_path} if db_path is not None else {}
     db.record_metrics(video["id"], **stats, **kwargs, account_id=account_id)
     return {"ok": True, **stats}
 
@@ -292,7 +292,7 @@ def import_channel_videos(handle: str, api_key=None, db_path=None, account_id: O
     if not api_key:
         return {"ok": False, "error": "YOUTUBE_API_KEY not set", "added": 0}
 
-    kwargs = {"path": db_path} if db_path is not None else {}
+    kwargs = {"dsn": db_path} if db_path is not None else {}
 
     try:
         channel_videos = list_channel_videos(handle, api_key)

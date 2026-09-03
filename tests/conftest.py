@@ -81,3 +81,78 @@ def account_scope():
     for target in targets.values():
         target.dependency_overrides.pop(auth.current_account_id, None)
         target.dependency_overrides.pop(auth.dev_account_id, None)
+
+
+# ---------------------------------------------------------------------------
+# the throwaway Postgres (docs/tasks/task-postgres-migration.md)
+# ---------------------------------------------------------------------------
+
+# Where the port's tests run. NEVER DATABASE_URL: that is the live database
+# in any real .env, and this fixture creates and drops schemas. The default
+# is the docker-compose box, which is also the throwaway on Mike's machine
+# (a role+database of that name on Postgres.app, 2026-09-03).
+TEST_DSN = os.environ.get("TEST_DATABASE_URL") or "postgresql://zeropage:zeropage@localhost:5432/zeropage"
+
+
+@pytest.fixture
+def pg():
+    """A connection URL onto a fresh, private schema, torn down after.
+
+    Isolation is the schema, carried in the URL itself (`options=-c
+    search_path=...`), so the code under test needs no notion of "which
+    schema" -- CREATE TABLE IF NOT EXISTS, to_regclass() and
+    information_schema all resolve on search_path -- and tests can run in
+    parallel against one database. Every id sequence starts at 1 in a
+    new schema, which is what the `run_id == 1` assertions rely on.
+    """
+    import uuid
+
+    import psycopg
+    from psycopg.conninfo import make_conninfo
+
+    from src import db
+
+    schema = f"t_{uuid.uuid4().hex[:12]}"
+    try:
+        admin = psycopg.connect(TEST_DSN, autocommit=True)
+    except psycopg.OperationalError as e:  # pragma: no cover - environment
+        pytest.fail(
+            f"no throwaway Postgres at {TEST_DSN!r} ({e}). Start it "
+            "(`docker compose up -d`) or point TEST_DATABASE_URL at one."
+        )
+    admin.execute(f"CREATE SCHEMA {schema}")
+    dsn = make_conninfo(TEST_DSN, options=f"-c search_path={schema}")
+    try:
+        db.init_db(dsn)
+        yield dsn
+    finally:
+        admin.execute(f"DROP SCHEMA {schema} CASCADE")
+        admin.close()
+
+
+@pytest.fixture
+def pg_factory():
+    """More throwaway schemas on demand, for a test that needs a SECOND
+    database beside `pg` -- an empty one to prove a read degrades, a
+    fresh one to prove a seed. Each call is a new schema with NOTHING in
+    it (not even db.init_db), torn down with the test."""
+    import uuid
+
+    import psycopg
+    from psycopg.conninfo import make_conninfo
+
+    admin = psycopg.connect(TEST_DSN, autocommit=True)
+    made: list[str] = []
+
+    def make() -> str:
+        schema = f"t_{uuid.uuid4().hex[:12]}"
+        admin.execute(f"CREATE SCHEMA {schema}")
+        made.append(schema)
+        return make_conninfo(TEST_DSN, options=f"-c search_path={schema}")
+
+    try:
+        yield make
+    finally:
+        for schema in made:
+            admin.execute(f"DROP SCHEMA {schema} CASCADE")
+        admin.close()

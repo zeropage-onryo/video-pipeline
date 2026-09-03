@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import crag, post_seo, preprod, rag, shootgen
-from .db import DB_PATH, init_db
+from .db import init_db
 from .gemini_utils import generate_with_retry, strip_fences
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -123,7 +123,7 @@ def evidence_block(signals: dict, gemini_client=None, db_path=None,
         parts.extend((signals.get(key) or {}).keys())
     query = " ".join(parts) or "proven winning short-form video concepts"
     from . import accounts
-    mine = accounts.slug_of(account_id, path=db_path if db_path is not None else DB_PATH)
+    mine = accounts.slug_of(account_id, dsn=db_path)
 
     references = []
 
@@ -173,7 +173,7 @@ def propose_slate(brand: str, signals: Optional[dict] = None, gemini_client=None
     evidence sentence that ties it to the numbers. Saved through
     preprod.save_concept_ideas so the pick stays the measured label.
     """
-    kwargs = {"path": db_path} if db_path is not None else {}
+    kwargs = {"dsn": db_path} if db_path is not None else {}
     signals = signals or {"sample": 0}
     if not signals.get("sample"):
         print(NO_SIGNALS_NOTE, file=sys.stderr)
@@ -213,9 +213,9 @@ def main(db_path=None):
         sys.exit(1)
 
     from google import genai
-    path = db_path if db_path is not None else DB_PATH
+    path = db_path
     init_db(path=path)
-    preprod.init(path=path)
+    preprod.init(dsn=path)
     gemini_client = genai.Client(api_key=api_key)
 
     signals = post_seo.derive_signals(

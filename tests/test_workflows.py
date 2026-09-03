@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 
 from app import jobs, workflow_runner
 from app.main import app
-from src import db, generative, imagery, render_assets, runway, workflows
+from src import generative, imagery, render_assets, runway, workflows
 
 client = TestClient(app)
 
@@ -49,12 +49,11 @@ def fresh_jobs():
 
 
 @pytest.fixture
-def tmp_db(tmp_path, monkeypatch):
-    path = tmp_path / "test.db"
-    db.init_db(path)
+def tmp_db(pg, monkeypatch):
+    path = pg
     workflows.init(path)
     generative.init(path)
-    monkeypatch.setattr(db, "DB_PATH", path)
+    monkeypatch.setenv("DATABASE_URL", path)
     return path
 
 
@@ -106,32 +105,32 @@ def reference_shape_graph():
 def test_workflow_crud_roundtrip(tmp_db):
     graph = {"nodes": [node(1, "zpf/user_prompt")], "links": []}
     wf_id = workflows.create_workflow("night ride", graph,
-                                      brand="antihero", path=tmp_db, account_id=None)
+                                      brand="antihero", dsn=tmp_db, account_id=None)
 
-    listed = workflows.list_workflows(path=tmp_db, account_id=None)
+    listed = workflows.list_workflows(dsn=tmp_db, account_id=None)
     assert [w["name"] for w in listed] == ["night ride"]
     assert listed[0]["node_count"] == 1
     assert "graph" not in listed[0]          # the list stays light
 
-    loaded = workflows.get_workflow(wf_id, path=tmp_db, account_id=None)
+    loaded = workflows.get_workflow(wf_id, dsn=tmp_db, account_id=None)
     assert loaded["graph"] == graph
 
-    assert workflows.update_workflow(wf_id, name="garage ritual", path=tmp_db, account_id=None)
-    assert workflows.get_workflow(wf_id, path=tmp_db, account_id=None)["name"] == "garage ritual"
+    assert workflows.update_workflow(wf_id, name="garage ritual", dsn=tmp_db, account_id=None)
+    assert workflows.get_workflow(wf_id, dsn=tmp_db, account_id=None)["name"] == "garage ritual"
     # graph untouched by a name-only update
-    assert workflows.get_workflow(wf_id, path=tmp_db, account_id=None)["graph"] == graph
+    assert workflows.get_workflow(wf_id, dsn=tmp_db, account_id=None)["graph"] == graph
 
-    assert workflows.delete_workflow(wf_id, path=tmp_db, account_id=None)
-    assert workflows.get_workflow(wf_id, path=tmp_db, account_id=None) is None
-    assert not workflows.delete_workflow(wf_id, path=tmp_db, account_id=None)
+    assert workflows.delete_workflow(wf_id, dsn=tmp_db, account_id=None)
+    assert workflows.get_workflow(wf_id, dsn=tmp_db, account_id=None) is None
+    assert not workflows.delete_workflow(wf_id, dsn=tmp_db, account_id=None)
 
 
 def test_workflow_list_scopes_by_brand(tmp_db):
-    workflows.create_workflow("a", {}, brand="antihero", path=tmp_db, account_id=None)
-    workflows.create_workflow("z", {}, brand="zeropage", path=tmp_db, account_id=None)
+    workflows.create_workflow("a", {}, brand="antihero", dsn=tmp_db, account_id=None)
+    workflows.create_workflow("z", {}, brand="zeropage", dsn=tmp_db, account_id=None)
     assert [w["name"] for w in
-            workflows.list_workflows(brand="zeropage", path=tmp_db, account_id=None)] == ["z"]
-    assert len(workflows.list_workflows(path=tmp_db, account_id=None)) == 2
+            workflows.list_workflows(brand="zeropage", dsn=tmp_db, account_id=None)] == ["z"]
+    assert len(workflows.list_workflows(dsn=tmp_db, account_id=None)) == 2
 
 
 # --- runway.generate_from_prompt --------------------------------------------
@@ -196,7 +195,7 @@ def test_generate_from_prompt_renders_and_logs(tmp_db, tmp_path, monkeypatch,
         row = conn.execute("SELECT tool, params_json FROM generations").fetchone()
     assert row["tool"] == "runway"
     assert '"source": "workflow"' in row["params_json"]
-    asset = render_assets.list_all(path=tmp_db, account_id=None)[0]
+    asset = render_assets.list_all(dsn=tmp_db, account_id=None)[0]
     assert result["asset_id"] == asset["id"]
     assert asset["media_kind"] == "video"
     assert asset["prompt"] == "a drawer closing"
@@ -582,11 +581,11 @@ def test_evals_url_redirects_into_the_dev_studio(tmp_db):
 # --- the seeded default template --------------------------------------------
 
 def test_seed_default_plants_the_template_once(tmp_db):
-    wf_id = workflows.seed_default(path=tmp_db)
+    wf_id = workflows.seed_default(dsn=tmp_db)
     assert wf_id is not None
-    assert workflows.seed_default(path=tmp_db) is None   # idempotent
+    assert workflows.seed_default(dsn=tmp_db) is None   # idempotent
 
-    template = workflows.get_workflow(wf_id, path=tmp_db, account_id=None)
+    template = workflows.get_workflow(wf_id, dsn=tmp_db, account_id=None)
     assert template["name"] == "Prompt enhancement"
     assert template["brand"] is None                     # shared across brands
     types = [n["type"] for n in template["graph"]["nodes"]]
@@ -602,18 +601,18 @@ def test_seed_default_plants_the_template_once(tmp_db):
 
 
 def test_seed_default_respects_an_intentionally_emptied_slate(tmp_db):
-    wf_id = workflows.seed_default(path=tmp_db)
-    workflows.create_workflow("mine", {}, brand="antihero", path=tmp_db, account_id=None)
-    workflows.delete_workflow(wf_id, path=tmp_db, account_id=None)
+    wf_id = workflows.seed_default(dsn=tmp_db)
+    workflows.create_workflow("mine", {}, brand="antihero", dsn=tmp_db, account_id=None)
+    workflows.delete_workflow(wf_id, dsn=tmp_db, account_id=None)
     # other workflows exist -> the deleted template stays deleted
-    assert workflows.seed_default(path=tmp_db) is None
+    assert workflows.seed_default(dsn=tmp_db) is None
 
 
 def test_brandless_template_shows_up_under_every_brand(tmp_db):
-    workflows.seed_default(path=tmp_db)
-    workflows.create_workflow("z", {}, brand="zeropage", path=tmp_db, account_id=None)
+    workflows.seed_default(dsn=tmp_db)
+    workflows.create_workflow("z", {}, brand="zeropage", dsn=tmp_db, account_id=None)
     for brand in ("antihero", "zeropage"):
-        names = [w["name"] for w in workflows.list_workflows(brand=brand, path=tmp_db, account_id=None)]
+        names = [w["name"] for w in workflows.list_workflows(brand=brand, dsn=tmp_db, account_id=None)]
         assert "Prompt enhancement" in names
 
 
@@ -680,7 +679,7 @@ def test_nano_generate_renders_and_logs(tmp_db, tmp_path, monkeypatch):
         rows = conn.execute("SELECT tool FROM generations").fetchall()
     assert [r[0] for r in rows] == ["nano"]
     assert nano_banana.generations_today(db_path=tmp_db) == 1
-    asset = render_assets.list_all(path=tmp_db, account_id=None)[0]
+    asset = render_assets.list_all(dsn=tmp_db, account_id=None)[0]
     assert result["asset_id"] == asset["id"]
     assert asset["media_kind"] == "image"
     assert asset["prompt"] == "a red bike"

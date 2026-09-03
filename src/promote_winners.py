@@ -146,7 +146,7 @@ def candidate_winners(
     assumed (used by tests and by callers that only care about the
     db.py side).
     """
-    kwargs = {"path": db_path} if db_path is not None else {}
+    kwargs = {"dsn": db_path} if db_path is not None else {}
     bench = db.benchmark(
         at_days=at_days, posted_within_days=posted_within_days,
         platform=platform, metric=metric, **kwargs,
@@ -206,7 +206,7 @@ def _project_for(kwargs: dict) -> Optional[str]:
     proven_results chunks carry (src/rag.py)."""
     from . import accounts
     return accounts.slug_of(kwargs.get("account_id"),
-                            path=kwargs.get("db_path") or db.DB_PATH)
+                            dsn=kwargs.get("db_path"))
 
 
 def _ingest_candidates(candidates: list, signals: Optional[dict] = None,

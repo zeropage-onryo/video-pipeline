@@ -120,7 +120,7 @@ def retrieve_with_crag(
     def finish(response: dict) -> dict:
         if record_telemetry:
             try:
-                evalstore.log_crag_retrieval(event, path=telemetry_path)
+                evalstore.log_crag_retrieval(event, dsn=telemetry_path)
             except Exception:
                 # Observability must never turn a usable retrieval into a
                 # failed generation. The returned telemetry still exposes it.

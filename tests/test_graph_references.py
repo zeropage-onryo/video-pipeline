@@ -15,20 +15,19 @@ onto the composer or a crawl downloaded it.
 
 import pytest
 
-from src import asset_shelf, db, entities, preprod, refbin, scene_chain, shootgen
+from src import asset_shelf, entities, preprod, refbin, scene_chain, shootgen
 
 JPEG = b"\xff\xd8\xff" + b"pretend jpeg"
 
 
 @pytest.fixture
-def tmp_db(tmp_path, monkeypatch):
+def tmp_db(pg, monkeypatch):
     from src import generative
-    path = tmp_path / "test.db"
-    db.init_db(path)
+    path = pg
     preprod.init(path)
     entities.init(path)
     generative.init(path)
-    monkeypatch.setattr(db, "DB_PATH", path)
+    monkeypatch.setenv("DATABASE_URL", path)
     return path
 
 
@@ -56,7 +55,7 @@ def a_scene(path, prompt, title="Cold Open"):
         {"title": title, "hook": "", "logline": "",
          "shots": [{"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
                     "desc": title, "prompt": prompt}]},
-        brand="antihero", prompt_template="T", path=path, account_id=None)
+        brand="antihero", prompt_template="T", dsn=path, account_id=None)
 
 
 # --- the resolver, which is the wall as well as the lookup ------------------
@@ -91,10 +90,10 @@ def test_the_scene_gets_the_photos_of_what_it_named(tmp_db, photo_bank):
     photo_bank("character", "michael", "a.jpg", "b.jpg", "c.jpg")
     photo_bank("prop", "ducati", "bike.jpg")
     photo_bank("location", "garage", "room.jpg")
-    entities.add_character("Michael", path=tmp_db, account_id=None)
-    entities.add_prop("Ducati", path=tmp_db, account_id=None)
+    entities.add_character("Michael", dsn=tmp_db, account_id=None)
+    entities.add_prop("Ducati", dsn=tmp_db, account_id=None)
     preprod.add_location(name="garage", photo_count=1,
-                         description={"space": "a garage"}, path=tmp_db, account_id=None)
+                         description={"space": "a garage"}, dsn=tmp_db, account_id=None)
 
     scene_id = a_scene(tmp_db, "Michael wheels the Ducati into the garage.")
     refs = scene_chain.attach_refs(scene_id, db_path=tmp_db)
@@ -107,14 +106,14 @@ def test_the_scene_gets_the_photos_of_what_it_named(tmp_db, photo_bank):
     # more angles of the FACE, because a three-quarter turn grounded on
     # one frontal portrait ages the subject about ten years
     assert "/characters/michael/photo/b.jpg" in refs
-    assert preprod.get_concept(scene_id, path=tmp_db, account_id=None)["shots"][0]["refs"] == refs
+    assert preprod.get_concept(scene_id, dsn=tmp_db, account_id=None)["shots"][0]["refs"] == refs
 
 
 def test_research_images_never_take_the_anchor_slot(tmp_db, photo_bank):
     """The scout's crawled material should inform a render, not become
     its subject — and the anchor frame IS the subject."""
     photo_bank("character", "michael", "a.jpg")
-    entities.add_character("Michael", path=tmp_db, account_id=None)
+    entities.add_character("Michael", dsn=tmp_db, account_id=None)
     scouted = refbin.save(JPEG)
 
     scene_id = a_scene(tmp_db, "Michael zips the jacket.")
@@ -126,7 +125,7 @@ def test_research_images_never_take_the_anchor_slot(tmp_db, photo_bank):
 
 def test_refs_are_capped_at_what_one_generation_carries(tmp_db, photo_bank):
     photo_bank("character", "michael", *[f"{i}.jpg" for i in range(8)])
-    entities.add_character("Michael", path=tmp_db, account_id=None)
+    entities.add_character("Michael", dsn=tmp_db, account_id=None)
     extra = [refbin.save(JPEG + bytes([i])) for i in range(6)]
     scene_id = a_scene(tmp_db, "Michael waits.")
     refs = scene_chain.attach_refs(scene_id, extra, db_path=tmp_db)
@@ -160,7 +159,7 @@ def test_the_keyframe_finds_a_resolver_on_its_own(tmp_db, photo_bank, monkeypatc
     at all" while the Queue card still said the scene was grounded."""
     from src import nano_banana
     photo_bank("character", "michael", "a.jpg")
-    entities.add_character("Michael", path=tmp_db, account_id=None)
+    entities.add_character("Michael", dsn=tmp_db, account_id=None)
     scene_id = a_scene(tmp_db, "Michael zips the jacket.")
     scene_chain.attach_refs(scene_id, db_path=tmp_db)
 
@@ -190,17 +189,17 @@ def test_an_agent_can_bank_a_reference_behind_its_spark(tmp_db, photo_bank,
 
     monkeypatch.setattr(refbin, "fetch", lambda url: refbin.save(JPEG))
     fid = mcp_server.bank_spark("antihero", "a hand already on the handle",
-                                rationale="r", evidence="e", path=tmp_db)["id"]
+                                rationale="r", evidence="e", dsn=tmp_db)["id"]
 
     out = mcp_server.bank_reference(fid, "https://cdn.example/a.jpg",
                                     source_url="https://example.com/post",
-                                    title="a post", path=tmp_db)
+                                    title="a post", dsn=tmp_db)
     assert out["ok"] and out["url"].startswith("/refs/")
     assert out["banked"] == 1
 
     # a hand-banked spark has no crawl pass, so it gets one of its own --
     # and spark_images, which reads through the finding, keeps working
-    tiles = mcp_server.spark_images(fid, path=tmp_db)
+    tiles = mcp_server.spark_images(fid, dsn=tmp_db)
     urls = [t["url"] for t in (tiles.get("images") or tiles.get("tiles") or [])]
     assert out["url"] in urls
 
@@ -210,18 +209,18 @@ def test_attribution_is_required_and_the_bin_is_capped(tmp_db, photo_bank,
     from src import mcp_server, refbin, scout
 
     fid = mcp_server.bank_spark("antihero", "the door that stays shut",
-                                path=tmp_db)["id"]
+                                dsn=tmp_db)["id"]
     with pytest.raises(ValueError, match="source_url"):
         mcp_server.bank_reference(fid, "https://cdn.example/a.jpg",
-                                  source_url="  ", path=tmp_db)
+                                  source_url="  ", dsn=tmp_db)
 
     seq = iter(range(50))
     monkeypatch.setattr(refbin, "fetch",
                         lambda url: refbin.save(JPEG + bytes([next(seq)])))
     for _ in range(scout.MAX_BIN_IMAGES + 3):
         mcp_server.bank_reference(fid, "https://cdn.example/x.jpg",
-                                  source_url="https://example.com/p", path=tmp_db)
-    banked = scout.bin_for_pass(scout.agent_pass_id(fid), path=tmp_db)
+                                  source_url="https://example.com/p", dsn=tmp_db)
+    banked = scout.bin_for_pass(scout.agent_pass_id(fid), dsn=tmp_db)
     assert len(banked) == scout.MAX_BIN_IMAGES
 
 
@@ -235,10 +234,10 @@ def test_an_agent_supplied_url_still_cannot_reach_this_machine(tmp_db, photo_ban
     assert refbin.fetch("http://169.254.169.254/latest/meta-data") is None
     assert refbin.fetch("file:///etc/passwd") is None
 
-    fid = mcp_server.bank_spark("antihero", "a spark", path=tmp_db)["id"]
+    fid = mcp_server.bank_spark("antihero", "a spark", dsn=tmp_db)["id"]
     out = mcp_server.bank_reference(fid, "http://127.0.0.1/secret.jpg",
                                     source_url="https://example.com/p",
-                                    path=tmp_db)
+                                    dsn=tmp_db)
     assert out["ok"] is False and out["banked"] == 0
 
 
@@ -254,10 +253,10 @@ def test_the_node_carries_the_photographs_behind_its_spark(tmp_db, photo_bank):
 
     banked = [refbin.save(JPEG + bytes([i])) for i in range(3)]
     fid = scout.record("zeropage", {"spark": "a crawled idea", "score": 0.9},
-                       pass_id="p", path=tmp_db)
+                       pass_id="p", dsn=tmp_db)
     for url in banked:
         scout.bin_add("zeropage", "p", url, source_url="https://example.com/p",
-                      path=tmp_db)
+                      dsn=tmp_db)
 
     out = orchestrator.scout({"brand": "zeropage", "spark": "the rotation",
                               "scout": True})
@@ -277,9 +276,9 @@ def test_photos_the_caller_handed_in_are_never_displaced(tmp_db, photo_bank):
     mine = refbin.save(JPEG + b"mine")
     theirs = refbin.save(JPEG + b"theirs")
     scout.record("zeropage", {"spark": "a crawled idea", "score": 0.9},
-                 pass_id="p", path=tmp_db)
+                 pass_id="p", dsn=tmp_db)
     scout.bin_add("zeropage", "p", theirs, source_url="https://example.com/p",
-                  path=tmp_db)
+                  dsn=tmp_db)
 
     out = orchestrator.scout({"brand": "zeropage", "spark": "the rotation",
                               "scout": True, "reference_photos": [mine]})
@@ -293,7 +292,7 @@ def test_a_spark_banked_with_no_images_is_a_normal_night(tmp_db, photo_bank):
     from src import orchestrator, scout
 
     scout.record("zeropage", {"spark": "a crawled idea", "score": 0.9},
-                 pass_id="p", path=tmp_db)
+                 pass_id="p", dsn=tmp_db)
     out = orchestrator.scout({"brand": "zeropage", "spark": "the rotation",
                               "scout": True})
     assert out["spark"] == "a crawled idea"
@@ -310,9 +309,9 @@ def test_research_survives_a_scene_that_names_the_whole_cast(tmp_db, photo_bank)
     photo_bank("character", "michael", "a.jpg", "b.jpg", "c.jpg")
     photo_bank("prop", "ducati", "bike.jpg")
     photo_bank("prop", "jacket", "coat.jpg")
-    entities.add_character("Michael", path=tmp_db, account_id=None)
-    entities.add_prop("Ducati", path=tmp_db, account_id=None)
-    entities.add_prop("jacket", path=tmp_db, account_id=None)
+    entities.add_character("Michael", dsn=tmp_db, account_id=None)
+    entities.add_prop("Ducati", dsn=tmp_db, account_id=None)
+    entities.add_prop("jacket", dsn=tmp_db, account_id=None)
     scouted = [refbin.save(JPEG + bytes([i])) for i in range(3)]
 
     scene_id = a_scene(tmp_db, "Michael zips the jacket beside the Ducati.")
@@ -331,8 +330,8 @@ def test_a_run_with_no_research_still_spends_every_slot_on_the_cast(tmp_db, phot
     slots on every rotation night."""
     photo_bank("character", "michael", *[f"{i}.jpg" for i in range(4)])
     photo_bank("prop", "ducati", "bike.jpg")
-    entities.add_character("Michael", path=tmp_db, account_id=None)
-    entities.add_prop("Ducati", path=tmp_db, account_id=None)
+    entities.add_character("Michael", dsn=tmp_db, account_id=None)
+    entities.add_prop("Ducati", dsn=tmp_db, account_id=None)
 
     scene_id = a_scene(tmp_db, "Michael wheels the Ducati out.")
     refs = scene_chain.attach_refs(scene_id, [], db_path=tmp_db)
@@ -351,10 +350,10 @@ def test_the_cast_still_wins_when_they_actually_compete(tmp_db, photo_bank):
         photo_bank("character", slug, "a.jpg")
     for slug in ("ducati", "jacket", "helmet", "gloves"):
         photo_bank("prop", slug, f"{slug}.jpg")
-    entities.add_character("Michael", path=tmp_db, account_id=None)
-    entities.add_character("Cyclops", path=tmp_db, account_id=None)
+    entities.add_character("Michael", dsn=tmp_db, account_id=None)
+    entities.add_character("Cyclops", dsn=tmp_db, account_id=None)
     for prop in ("Ducati", "jacket", "helmet", "gloves"):
-        entities.add_prop(prop, path=tmp_db, account_id=None)
+        entities.add_prop(prop, dsn=tmp_db, account_id=None)
     scouted = [refbin.save(JPEG + b"s")]
 
     scene_id = a_scene(

@@ -95,7 +95,7 @@ https` at the app with exactly the flags `ops/serve.sh` uses.
 Thirteen secret-shaped keys have lived in `.env` on a dev machine:
 `GEMINI_API_KEY`, `YOUTUBE_API_KEY`, `LANGSMITH_API_KEY`, `IG_ACCESS_TOKEN`,
 `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `SESSION_SECRET`,
-`GOOGLE_CLIENT_SECRET`, `RAG_DATABASE_URL`, `HIGGSFIELD_API_KEY_ID`,
+`SUPABASE_JWT_SECRET`, `SUPABASE_ANON_KEY`, `RAG_DATABASE_URL`, `HIGGSFIELD_API_KEY_ID`,
 `HIGGSFIELD_API_KEY_SECRET`, `ZEROPAGE_MCP_TOKEN`.
 
 Rotating `SESSION_SECRET` signs everyone out. Do it before the invites, not

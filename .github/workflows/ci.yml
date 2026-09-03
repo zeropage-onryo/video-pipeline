@@ -24,12 +24,38 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # The suite runs against a real Postgres since 2026-09-03 (pipeline.db
+    # moved off SQLite -- docs/tasks/task-postgres-migration.md). conftest's
+    # `pg` fixture gives every test its own schema on this box and drops it
+    # after, so one database serves the whole run. Same image, role and
+    # database name as docker-compose.yml, so a green run here means the
+    # same thing as a green run on a laptop.
+    env:
+      TEST_DATABASE_URL: postgresql://zeropage:zeropage@localhost:5432/zeropage
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: zeropage
+          POSTGRES_PASSWORD: zeropage
+          POSTGRES_DB: zeropage
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.9"
+          # 3.12, not the 3.9 this used to pin: `mcp>=2` (2026-08-31) and psycopg
+          # 3.3 both require 3.10+, so the install step had no version to
+          # resolve. The laptop venv is 3.13; 3.12 is the newest with wheels
+          # for everything torch/whisper drag in.
+          python-version: "3.12"
 
       - name: Install dependencies
         run: |
@@ -46,7 +72,11 @@ jobs:
         run: ruff check .
 
       - name: Test with pytest
-        run: pytest tests/ -q
+        # `python -m pytest`, not the `pytest` entrypoint: two test modules
+        # import the repo's top-level `ops/` scripts, which only resolves
+        # when the working directory is on sys.path -- `-m` puts it there,
+        # the entrypoint does not. Same command CLAUDE.md gives for a laptop.
+        run: python -m pytest tests/ -q
 
   # Everything in this job needs a real GEMINI_API_KEY -- it makes real
   # embedding, generation, and judge-model calls, unlike the hermetic
@@ -103,7 +133,11 @@ jobs:
       - uses: actions/setup-python@v5
         if: ${{ env.GEMINI_API_KEY != '' }}
         with:
-          python-version: "3.9"
+          # 3.12, not the 3.9 this used to pin: `mcp>=2` (2026-08-31) and psycopg
+          # 3.3 both require 3.10+, so the install step had no version to
+          # resolve. The laptop venv is 3.13; 3.12 is the newest with wheels
+          # for everything torch/whisper drag in.
+          python-version: "3.12"
 
       - name: Install dependencies
         if: ${{ env.GEMINI_API_KEY != '' }}
@@ -123,4 +157,4 @@ jobs:
 
       - name: Generation quality gate (faithfulness / relevancy / contextual precision & recall)
         if: ${{ env.GEMINI_API_KEY != '' }}
-        run: pytest evals/ -q --reruns 2 --reruns-delay 15
+        run: python -m pytest evals/ -q --reruns 2 --reruns-delay 15

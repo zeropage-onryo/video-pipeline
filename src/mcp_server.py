@@ -28,7 +28,7 @@ connectors rather than trusting this paragraph -- a docstring cannot
 fail CI.
 
 TWO LAYERS, ON PURPOSE. The functions here are plain Python against a
-database path; the FastMCP wrapper around them is built lazily in
+database URL; the FastMCP wrapper around them is built lazily in
 `build_server`. So the whole tool surface stays testable with no `mcp`
 package installed, and a machine that never serves MCP does not grow an
 import-time dependency on one -- the same degrade-don't-break rule the
@@ -147,7 +147,7 @@ ORIGIN_NOTE = {
 }
 
 
-def _gate(concept: dict, path, account_id: Optional[int]) -> dict[str, Any]:
+def _gate(concept: dict, dsn, account_id: Optional[int]) -> dict[str, Any]:
     """The verdict the graph actually reached on this concept, read from
     where the graph actually writes it.
 
@@ -163,13 +163,13 @@ def _gate(concept: dict, path, account_id: Optional[int]) -> dict[str, Any]:
     graph wrote always has one (`_park` runs on every terminal edge),
     and one it did not write never does.
     """
-    hold = autonomy.hold_for_concept(concept["id"], path=path, account_id=account_id)
+    hold = autonomy.hold_for_concept(concept["id"], dsn=dsn, account_id=account_id)
     if hold is None:
         origin = "capture" if not concept.get("shots") else "studio"
         return {"origin": origin, "note": ORIGIN_NOTE[origin], "gate": None}
     run_id = (hold.get("payload") or {}).get("run_id") if isinstance(
         hold.get("payload"), dict) else None
-    scores = autonomy.prompt_scores_for_run(run_id, path=path)
+    scores = autonomy.prompt_scores_for_run(run_id, dsn=dsn)
     latest = scores[-1] if scores else None
     return {
         "origin": "graph",
@@ -188,7 +188,7 @@ def _gate(concept: dict, path, account_id: Optional[int]) -> dict[str, Any]:
     }
 
 
-def _full(concept: dict, path=None, account_id: Optional[int] = None) -> dict[str, Any]:
+def _full(concept: dict, dsn=None, account_id: Optional[int] = None) -> dict[str, Any]:
     """The whole concept, prompts included. Shots are passed through
     rather than reshaped -- `shots_json` is the flexible column every
     other surface reads, and a second shape maintained here is a second
@@ -211,8 +211,7 @@ def _full(concept: dict, path=None, account_id: Optional[int] = None) -> dict[st
             "shots": concept.get("shots") or [],
         }
     )
-    if path is not None:
-        out.update(_gate(concept, path, account_id))
+    out.update(_gate(concept, dsn, account_id))
     return out
 
 
@@ -224,7 +223,7 @@ def _check(value: str, allowed, label: str) -> str:
 
 # --- the board -------------------------------------------------------------
 
-def _account(account_id: Optional[int], path) -> Optional[int]:
+def _account(account_id: Optional[int], dsn) -> Optional[int]:
     """Which account an MCP call acts as.
 
     There is no session here: the MCP surface is reached from a Claude
@@ -234,26 +233,26 @@ def _account(account_id: Optional[int], path) -> Optional[int]:
     acting as nobody means reading an empty database and reporting it as
     an empty board.
     """
-    return account_id if account_id is not None else accounts.resolve_account(path=path)
+    return account_id if account_id is not None else accounts.resolve_account(dsn=dsn)
 
 
 def list_ideas(
     brand: Optional[str] = None,
     status: str = "open",
     limit: int = LIST_LIMIT,
-    path: Path | str = db.DB_PATH,
+    dsn: Optional[str] = None,
     account_id: Optional[int] = None,
 ) -> dict[str, Any]:
     """The board. Newest first, because the ones just generated are the
     ones being decided about."""
-    account_id = _account(account_id, path)
+    account_id = _account(account_id, dsn)
     _check(status, STATUSES, "status")
     if brand:
         _check(brand, preprod.BRANDS, "brand")
     limit = max(1, min(int(limit), 100))
 
     cards = []
-    for concept in preprod.list_concepts(limit=SEARCH_SCAN, path=path, account_id=account_id):
+    for concept in preprod.list_concepts(limit=SEARCH_SCAN, dsn=dsn, account_id=account_id):
         if brand and concept["brand"] != brand:
             continue
         if not _matches(concept, status):
@@ -265,20 +264,20 @@ def list_ideas(
             "count": len(cards), "ideas": cards}
 
 
-def get_idea(idea_id: int, path: Path | str = db.DB_PATH, account_id: Optional[int] = None) -> dict[str, Any]:
+def get_idea(idea_id: int, dsn: Optional[str] = None, account_id: Optional[int] = None) -> dict[str, Any]:
     """One concept in full, including the scene prompt."""
-    account_id = _account(account_id, path)
-    concept = preprod.get_concept(int(idea_id), path=path, account_id=account_id)
+    account_id = _account(account_id, dsn)
+    concept = preprod.get_concept(int(idea_id), dsn=dsn, account_id=account_id)
     if concept is None:
         raise ValueError(f"no idea {idea_id}")
-    return _full(concept, path=path, account_id=account_id)
+    return _full(concept, dsn=dsn, account_id=account_id)
 
 
 def search_ideas(
     query: str,
     brand: Optional[str] = None,
     limit: int = LIST_LIMIT,
-    path: Path | str = db.DB_PATH,
+    dsn: Optional[str] = None,
     account_id: Optional[int] = None,
 ) -> dict[str, Any]:
     """Substring search across title, hook, logline, spark and the scene
@@ -290,7 +289,7 @@ def search_ideas(
     The RAG library is where similarity search belongs; this is a
     find-the-one-I-mean.
     """
-    account_id = _account(account_id, path)
+    account_id = _account(account_id, dsn)
     needle = (query or "").strip().lower()
     if not needle:
         raise ValueError("query is empty")
@@ -299,7 +298,7 @@ def search_ideas(
     limit = max(1, min(int(limit), 100))
 
     hits = []
-    for concept in preprod.list_concepts(limit=SEARCH_SCAN, path=path, account_id=account_id):
+    for concept in preprod.list_concepts(limit=SEARCH_SCAN, dsn=dsn, account_id=account_id):
         if brand and concept["brand"] != brand:
             continue
         hay = " ".join(
@@ -324,7 +323,7 @@ def capture_idea(
     hook: str = "",
     logline: str = "",
     spark: str = "",
-    path: Path | str = db.DB_PATH,
+    dsn: Optional[str] = None,
     account_id: Optional[int] = None,
 ) -> dict[str, Any]:
     """Put an idea on the board from wherever you are.
@@ -336,7 +335,7 @@ def capture_idea(
     metric that measures generation quality. Writing its scene is a
     separate, model-costing step on the machine.
     """
-    account_id = _account(account_id, path)
+    account_id = _account(account_id, dsn)
     _check(brand, preprod.BRANDS, "brand")
     title = (title or "").strip()
     if not title:
@@ -344,10 +343,10 @@ def capture_idea(
 
     idea = {"title": title, "hook": hook or "", "logline": logline or ""}
     (idea_id,) = preprod.save_concept_ideas(
-        [idea], brand=brand, spark=(spark or "").strip() or None, path=path,
+        [idea], brand=brand, spark=(spark or "").strip() or None, dsn=dsn,
         account_id=account_id,
     )
-    card = _card(preprod.get_concept(idea_id, path=path, account_id=account_id))
+    card = _card(preprod.get_concept(idea_id, dsn=dsn, account_id=account_id))
     card["next"] = (
         "Idea only -- no scene prompt yet. Write one on the machine with "
         f"`venv/bin/python -m src.shootgen --scene {idea_id}`."
@@ -356,7 +355,7 @@ def capture_idea(
 
 
 def pick_idea(idea_id: int, picked: bool = True,
-              path: Path | str = db.DB_PATH,
+              dsn: Optional[str] = None,
               account_id: Optional[int] = None,
 ) -> dict[str, Any]:
     """Mark a concept worth rendering -- the label `pick_rate` reads.
@@ -364,13 +363,13 @@ def pick_idea(idea_id: int, picked: bool = True,
     Picking does NOT render. It puts the concept in front of the Queue's
     spend gate, where approving is what calls Runway, on the machine.
     """
-    account_id = _account(account_id, path)
-    preprod.set_picked(int(idea_id), picked=picked, path=path, account_id=account_id)
-    return _card(preprod.get_concept(int(idea_id), path=path, account_id=account_id))
+    account_id = _account(account_id, dsn)
+    preprod.set_picked(int(idea_id), picked=picked, dsn=dsn, account_id=account_id)
+    return _card(preprod.get_concept(int(idea_id), dsn=dsn, account_id=account_id))
 
 
 def shoot_idea(idea_id: int, shot: bool = True,
-               path: Path | str = db.DB_PATH,
+               dsn: Optional[str] = None,
                account_id: Optional[int] = None,
 ) -> dict[str, Any]:
     """Record that this one actually got made -- by ANY means.
@@ -384,13 +383,13 @@ def shoot_idea(idea_id: int, shot: bool = True,
     the only way the system can see that work: `shoot_rate` read 0.0%
     across 52 concepts while things shipped. Never spends.
     """
-    account_id = _account(account_id, path)
-    preprod.mark_shot(int(idea_id), shot=shot, path=path, account_id=account_id)
-    return _card(preprod.get_concept(int(idea_id), path=path, account_id=account_id))
+    account_id = _account(account_id, dsn)
+    preprod.mark_shot(int(idea_id), shot=shot, dsn=dsn, account_id=account_id)
+    return _card(preprod.get_concept(int(idea_id), dsn=dsn, account_id=account_id))
 
 
 def archive_idea(idea_id: int, archived: bool = True, reason: str = "",
-                 path: Path | str = db.DB_PATH,
+                 dsn: Optional[str] = None,
                  account_id: Optional[int] = None,
 ) -> dict[str, Any]:
     """Take a concept off the board. Hides, never deletes -- an unpicked
@@ -404,11 +403,11 @@ def archive_idea(idea_id: int, archived: bool = True, reason: str = "",
     picked a word is an archive that does not happen, and the row sits on
     the board forever.
     """
-    account_id = _account(account_id, path)
+    account_id = _account(account_id, dsn)
     reason = (reason or "").strip()
-    preprod.set_archived(int(idea_id), archived=archived, path=path,
+    preprod.set_archived(int(idea_id), archived=archived, dsn=dsn,
                          account_id=account_id, reason=reason)
-    card = _card(preprod.get_concept(int(idea_id), path=path, account_id=account_id))
+    card = _card(preprod.get_concept(int(idea_id), dsn=dsn, account_id=account_id))
     if archived and reason and reason not in preprod.ARCHIVE_REASONS:
         # Recorded as given -- never a gate -- but said back, because the
         # tally counts WORDS: "boring" and "other" (the vocabulary the
@@ -430,7 +429,7 @@ def bank_spark(
     rationale: str = "",
     evidence: str = "",
     score: float = HUMAN_SPARK_SCORE,
-    path: Path | str = db.DB_PATH,
+    dsn: Optional[str] = None,
 ) -> dict[str, Any]:
     """Hand the nightly run a direction, in the scout's own bank.
 
@@ -451,7 +450,7 @@ def bank_spark(
     key = scout._spark_key(spark)
     clashes = [
         row["id"]
-        for row in scout.list_findings(brand=brand, path=path)
+        for row in scout.list_findings(brand=brand, dsn=dsn)
         if row.get("spark_key") == key
     ]
     finding_id = scout.record(
@@ -459,7 +458,7 @@ def bank_spark(
         {"spark": spark, "rationale": rationale, "evidence": evidence,
          "sources": [], "score": float(score)},
         lanes="human",
-        path=path,
+        dsn=dsn,
     )
     return {"id": finding_id, "brand": brand, "spark": spark,
             "score": float(score), "lanes": "human",
@@ -467,13 +466,13 @@ def bank_spark(
             "serves_next": float(score) >= scout.SCORE_FLOOR}
 
 
-def next_spark(brand: str, path: Path | str = db.DB_PATH) -> dict[str, Any]:
+def next_spark(brand: str, dsn: Optional[str] = None) -> dict[str, Any]:
     """What tonight's `--scout` run would take: the highest-scoring
     unused finding at or above the floor. None means it falls back to
     the `prompts/sparks.txt` rotation, which is the healthy degraded
     path, not an error."""
     _check(brand, scout.BRANDS, "brand")
-    row = scout.next_spark(brand, path=path)
+    row = scout.next_spark(brand, dsn=dsn)
     if row is None:
         return {"brand": brand, "spark": None,
                 "note": f"nothing unused at or above the {scout.SCORE_FLOOR} "
@@ -484,12 +483,12 @@ def next_spark(brand: str, path: Path | str = db.DB_PATH) -> dict[str, Any]:
 
 
 def list_sparks(brand: Optional[str] = None, unused_only: bool = True,
-                limit: int = 20, path: Path | str = db.DB_PATH) -> dict[str, Any]:
+                limit: int = 20, dsn: Optional[str] = None) -> dict[str, Any]:
     """The scout's bank, highest-scoring first."""
     if brand:
         _check(brand, scout.BRANDS, "brand")
     rows = scout.list_findings(brand=brand, unused_only=unused_only,
-                               limit=max(1, min(int(limit), 100)), path=path)
+                               limit=max(1, min(int(limit), 100)), dsn=dsn)
     return {
         "brand": brand or "all",
         "unused_only": unused_only,
@@ -506,7 +505,7 @@ def list_sparks(brand: Optional[str] = None, unused_only: bool = True,
 
 # --- the numbers -----------------------------------------------------------
 
-def pipeline_stats(path: Path | str = db.DB_PATH, account_id: Optional[int] = None) -> dict[str, Any]:
+def pipeline_stats(dsn: Optional[str] = None, account_id: Optional[int] = None) -> dict[str, Any]:
     """The two surviving labels plus what is sitting on the board.
 
     `by_prompt` is dropped on purpose: it is the per-prompt-hash
@@ -514,11 +513,11 @@ def pipeline_stats(path: Path | str = db.DB_PATH, account_id: Optional[int] = No
     "how are we doing" wants the headline. The Stats tab is where the
     breakdown belongs.
     """
-    account_id = _account(account_id, path)
-    pick = preprod.pick_rate(path=path, account_id=account_id)
-    shoot = preprod.shoot_rate(path=path, account_id=account_id)
+    account_id = _account(account_id, dsn)
+    pick = preprod.pick_rate(dsn=dsn, account_id=account_id)
+    shoot = preprod.shoot_rate(dsn=dsn, account_id=account_id)
     board = {s: 0 for s in STATUSES if s != "all"}
-    for concept in preprod.list_concepts(limit=SEARCH_SCAN, path=path, account_id=account_id):
+    for concept in preprod.list_concepts(limit=SEARCH_SCAN, dsn=dsn, account_id=account_id):
         board[_status_of(concept)] += 1
     return {
         "pick_rate": {k: pick[k] for k in ("generated", "picked", "rate")},
@@ -530,7 +529,7 @@ def pipeline_stats(path: Path | str = db.DB_PATH, account_id: Optional[int] = No
         # spelled out here rather than left to be derived wrongly.
         "waiting_on_you": board["open"] + board["parked"],
         "sparks_unused": len(
-            scout.list_findings(unused_only=True, limit=100, path=path)
+            scout.list_findings(unused_only=True, limit=100, dsn=dsn)
         ),
     }
 
@@ -542,7 +541,7 @@ def bank_reference(
     image_url: str,
     source_url: str,
     title: str = "",
-    path: Path | str = db.DB_PATH,
+    dsn: Optional[str] = None,
 ) -> dict[str, Any]:
     """Put ONE reference image behind a banked spark.
 
@@ -568,25 +567,25 @@ def bank_reference(
     Capped at MAX_BIN_IMAGES per pass, same as the crawl: a bin bigger
     than one generation carries has a tail that can never be used.
     """
-    finding = scout.get_finding(int(finding_id), path=path)
+    finding = scout.get_finding(int(finding_id), dsn=dsn)
     if finding is None:
         raise ValueError(f"no finding {finding_id}")
     if not (source_url or "").strip():
         raise ValueError("source_url is required — an unattributed reference "
                          "is the wrong thing to put in front of a spend")
 
-    pass_id = scout.pass_id_for(finding, path=path)
+    pass_id = scout.pass_id_for(finding, dsn=dsn)
 
     stored = refbin.fetch(image_url)
     if not stored:
         return {"ok": False, "finding_id": finding["id"], "pass_id": pass_id,
                 "error": "not a readable image, too large, or a refused host",
-                "banked": len(scout.bin_for_pass(pass_id, path=path))}
+                "banked": len(scout.bin_for_pass(pass_id, dsn=dsn))}
 
     row = scout.bin_add(finding["brand"], pass_id, stored,
                         source_url=source_url.strip(), title=title.strip(),
-                        lane="agent", path=path)
-    banked = scout.bin_for_pass(pass_id, path=path)
+                        lane="agent", dsn=dsn)
+    banked = scout.bin_for_pass(pass_id, dsn=dsn)
     if row is None:
         return {"ok": False, "finding_id": finding["id"], "pass_id": pass_id,
                 "url": stored, "banked": len(banked),
@@ -597,7 +596,7 @@ def bank_reference(
             "banked": len(banked), "cap": scout.MAX_BIN_IMAGES}
 
 
-def spark_images(finding_id: int, path: Path | str = db.DB_PATH) -> dict[str, Any]:
+def spark_images(finding_id: int, dsn: Optional[str] = None) -> dict[str, Any]:
     """The reference images the scout downloaded on the pass this spark
     came out of.
 
@@ -612,7 +611,7 @@ def spark_images(finding_id: int, path: Path | str = db.DB_PATH) -> dict[str, An
     and an unattributed one in front of somebody about to spend a render
     is the wrong affordance.
     """
-    rows = scout.bin_for_finding(int(finding_id), path=path)
+    rows = scout.bin_for_finding(int(finding_id), dsn=dsn)
     return {
         "finding_id": int(finding_id),
         "count": len(rows),
@@ -653,7 +652,7 @@ def engine_enabled() -> bool:
 
 
 def run_research(brand: str, count: int = 4, lanes=None,
-                 path: Path | str = db.DB_PATH) -> dict[str, Any]:
+                 dsn: Optional[str] = None) -> dict[str, Any]:
     """One full scout pass: crawl the lanes, digest to scored sparks,
     bank them, and stash the images behind them.
 
@@ -669,7 +668,7 @@ def run_research(brand: str, count: int = 4, lanes=None,
         raise ValueError(f"unknown lanes {unknown}; known: {list(LANES)}")
 
     result = scout.scout(brand=brand, count=max(1, min(int(count), 8)),
-                         lanes=lanes, path=path)
+                         lanes=lanes, dsn=dsn)
     return {
         "ok": result["ok"],
         "brand": brand,
@@ -688,7 +687,7 @@ def run_research(brand: str, count: int = 4, lanes=None,
 
 
 def resolve_finding(spark: str, brand: str, finding_id: Optional[int] = None,
-                    path: Path | str = db.DB_PATH) -> tuple[str, str, Optional[dict]]:
+                    dsn: Optional[str] = None) -> tuple[str, str, Optional[dict]]:
     """Which banked finding, if any, a generate call is running FROM --
     and therefore whose reference images ride along.
 
@@ -709,10 +708,10 @@ def resolve_finding(spark: str, brand: str, finding_id: Optional[int] = None,
     spark = " ".join((spark or "").split())
     finding = None
     if finding_id is not None:
-        finding = scout.get_finding(int(finding_id), path=path)
+        finding = scout.get_finding(int(finding_id), dsn=dsn)
         if finding is None:
             raise ValueError(f"no finding {finding_id}")
-        if spark and not scout.claims(finding["id"], spark, path=path):
+        if spark and not scout.claims(finding["id"], spark, dsn=dsn):
             raise ValueError(
                 f"spark {spark!r} is not finding {finding['id']}'s spark "
                 f"({finding['spark']!r}). Run the finding's own spark, or omit "
@@ -724,7 +723,7 @@ def resolve_finding(spark: str, brand: str, finding_id: Optional[int] = None,
             raise ValueError(f"finding {finding['id']} was banked for "
                              f"{finding['brand']!r}, not {brand!r}")
     elif spark and brand:
-        finding = scout.find_by_spark(brand, spark, path=path)
+        finding = scout.find_by_spark(brand, spark, dsn=dsn)
     return spark, brand, finding
 
 
@@ -755,21 +754,21 @@ def run_graph(spark: str = "", brand: str = "", goal: str = "",
     `generate_render` from a dry stub into real Veo spend, and the one
     thing this surface must never be is the caller that trips it.
     """
-    account_id = _account(account_id, db.DB_PATH)
+    account_id = _account(account_id, None)      # None: DATABASE_URL, read at call time
     if os.environ.get("ZEROPAGE_RENDER") == "1":
         raise Refused(
             "refusing: ZEROPAGE_RENDER=1 makes the graph spend render "
             "credit, and this surface is not allowed to be what trips "
             "it. Run the graph on the machine, or unset the flag."
         )
-    # db.DB_PATH read at CALL time, like _account above: a default bound
+    # DATABASE_URL read at CALL time, like _account above: a default bound
     # at import is the path the process started with, not the one a
     # test (or a later reconfiguration) points the module at.
-    spark, brand, finding = resolve_finding(spark, brand, finding_id, path=db.DB_PATH)
+    spark, brand, finding = resolve_finding(spark, brand, finding_id)
     _check(brand, preprod.BRANDS, "brand")
     if not spark:
         raise ValueError("spark is empty")
-    photos = [b["url"] for b in scout.bin_for_finding(finding["id"], path=db.DB_PATH)
+    photos = [b["url"] for b in scout.bin_for_finding(finding["id"])
               if b.get("url")] if finding else []
 
     from . import orchestrator
@@ -801,11 +800,11 @@ def run_graph(spark: str = "", brand: str = "", goal: str = "",
         "error": state.get("error"),
     }
     if concept_id:
-        concept = preprod.get_concept(concept_id, path=db.DB_PATH, account_id=account_id)
+        concept = preprod.get_concept(concept_id, account_id=account_id)
         out["idea"] = _card(concept)
         # The verdict rides back with the run rather than waiting for a
         # second call: a held run's whole point is the reason it held.
-        out["idea"].update(_gate(concept, db.DB_PATH, account_id))
+        out["idea"].update(_gate(concept, None, account_id))
     return out
 
 
@@ -826,7 +825,7 @@ TOOLS = (
 ENGINE_TOOLS = (run_research, run_graph)
 
 
-def build_server(path: Path | str = db.DB_PATH, name: str = "zeropage-ideas",
+def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
                  start_job=None, job_status=None):
     """Wrap the functions above as an MCP server.
 
@@ -891,7 +890,7 @@ def build_server(path: Path | str = db.DB_PATH, name: str = "zeropage-ideas",
         if start_job is None:
             return _t(fn, *args, **kwargs)
         job = start_job("mcp", label, lambda job: {"result": fn(*args, **kwargs)},
-                        account_id=_account(None, path))
+                        account_id=_account(None, dsn))
         return {"job_id": job["id"], "status": job["status"], "label": label,
                 "note": "started; poll with the `job` tool"}
 
@@ -901,7 +900,7 @@ def build_server(path: Path | str = db.DB_PATH, name: str = "zeropage-ideas",
         """List concepts on the pre-production board. status is one of
         open, picked, archived, parked, shot, all. brand is antihero or
         zeropage."""
-        return _t(list_ideas, brand=brand, status=status, limit=limit, path=path)
+        return _t(list_ideas, brand=brand, status=status, limit=limit, dsn=dsn)
 
     @server.tool(annotations=read_only)
     def idea(idea_id: int) -> dict:
@@ -910,14 +909,14 @@ def build_server(path: Path | str = db.DB_PATH, name: str = "zeropage-ideas",
         score, pass/fail, reason, and how the run ended) and is null
         for a Studio Create row, which is never scored -- `judge_*` is
         the Dev Studio's manual taste judge, not the graph."""
-        return _t(get_idea, idea_id, path=path)
+        return _t(get_idea, idea_id, dsn=dsn)
 
     @server.tool(annotations=read_only)
     def search(query: str, brand: Optional[str] = None,
                limit: int = LIST_LIMIT) -> dict:
         """Find concepts whose title, hook, logline, spark or scene
         prompt contains this text."""
-        return _t(search_ideas, query, brand=brand, limit=limit, path=path)
+        return _t(search_ideas, query, brand=brand, limit=limit, dsn=dsn)
 
     @server.tool(annotations=writes)
     def capture(brand: str, title: str, hook: str = "", logline: str = "",
@@ -925,14 +924,14 @@ def build_server(path: Path | str = db.DB_PATH, name: str = "zeropage-ideas",
         """Put a new idea on the board. Saves an idea with no scene
         prompt; writing the scene is a separate step."""
         return _t(capture_idea, brand=brand, title=title, hook=hook,
-                            logline=logline, spark=spark, path=path)
+                            logline=logline, spark=spark, dsn=dsn)
 
     @server.tool(annotations=writes)
     def pick(idea_id: int, picked: bool = True) -> dict:
         """Mark a concept worth rendering. Does NOT render or spend --
         it puts the concept in front of the Queue's spend gate, which a
         human approves on the machine."""
-        return _t(pick_idea, idea_id, picked=picked, path=path)
+        return _t(pick_idea, idea_id, picked=picked, dsn=dsn)
 
     @server.tool(annotations=writes)
     def shoot(idea_id: int, shot: bool = True) -> dict:
@@ -940,7 +939,7 @@ def build_server(path: Path | str = db.DB_PATH, name: str = "zeropage-ideas",
         render lane, Higgsfield, the studio, a camera. Not tied to the
         Queue's approve (that authorises a spend; this records an
         output). `shoot_rate` is the label it moves. Never spends."""
-        return _t(shoot_idea, idea_id, shot=shot, path=path)
+        return _t(shoot_idea, idea_id, shot=shot, dsn=dsn)
 
     # The description is built from the constant, not typed: the
     # docstring used to name "boring ... other", a vocabulary the Grade
@@ -952,7 +951,7 @@ def build_server(path: Path | str = db.DB_PATH, name: str = "zeropage-ideas",
     @server.tool(annotations=writes, description=ARCHIVE_DESCRIPTION)
     def archive(idea_id: int, archived: bool = True, reason: str = "") -> dict:
         return _t(archive_idea, idea_id, archived=archived, reason=reason,
-                  path=path)
+                  dsn=dsn)
 
     @server.tool(annotations=writes)
     def add_spark(brand: str, spark: str, rationale: str = "",
@@ -960,25 +959,25 @@ def build_server(path: Path | str = db.DB_PATH, name: str = "zeropage-ideas",
         """Bank a one-line direction for the nightly run to generate
         from."""
         return _t(bank_spark, brand=brand, spark=spark, rationale=rationale,
-                          evidence=evidence, path=path)
+                          evidence=evidence, dsn=dsn)
 
     @server.tool(annotations=read_only)
     def tonight(brand: str) -> dict:
         """What direction tonight's scheduled run would take."""
-        return _t(next_spark, brand, path=path)
+        return _t(next_spark, brand, dsn=dsn)
 
     @server.tool(annotations=read_only)
     def sparks(brand: Optional[str] = None, unused_only: bool = True,
                limit: int = 20) -> dict:
         """List banked sparks, highest-scoring first."""
         return _t(list_sparks, brand=brand, unused_only=unused_only,
-                           limit=limit, path=path)
+                           limit=limit, dsn=dsn)
 
     @server.tool(annotations=read_only)
     def images(finding_id: int) -> dict:
         """The reference images the scout banked alongside a spark, each
         with the source URL it came from."""
-        return _t(spark_images, finding_id, path=path)
+        return _t(spark_images, finding_id, dsn=dsn)
 
     @server.tool(annotations=writes)
     def reference(finding_id: int, image_url: str, source_url: str,
@@ -993,12 +992,12 @@ def build_server(path: Path | str = db.DB_PATH, name: str = "zeropage-ideas",
         they are already on file and get attached automatically to any
         scene that names them, ahead of anything banked."""
         return _t(bank_reference, finding_id, image_url=image_url,
-                  source_url=source_url, title=title, path=path)
+                  source_url=source_url, title=title, dsn=dsn)
 
     @server.tool(annotations=read_only)
     def stats() -> dict:
         """Pick rate, shoot rate, and what is sitting on the board."""
-        return _t(pipeline_stats, path=path)
+        return _t(pipeline_stats, dsn=dsn)
 
     if engine_enabled():
         @server.tool(annotations=writes)
@@ -1008,7 +1007,7 @@ def build_server(path: Path | str = db.DB_PATH, name: str = "zeropage-ideas",
             and download the reference images behind them. Spends a
             grounded search and one digest call."""
             return _run(run_research, brand=brand, count=count, lanes=lanes,
-                        path=path, _label=f"research {brand}")
+                        dsn=dsn, _label=f"research {brand}")
 
         @server.tool(annotations=writes)
         def generate(spark: str = "", brand: str = "", goal: str = "",
@@ -1026,7 +1025,7 @@ def build_server(path: Path | str = db.DB_PATH, name: str = "zeropage-ideas",
             # reworded spark is a caller error, and one raised inside a
             # background job is a failed job the agent has to poll for.
             spark, brand, finding = _t(resolve_finding, spark, brand,
-                                       finding_id, path=path)
+                                       finding_id, dsn=dsn)
             return _run(run_graph, spark=spark, brand=brand, goal=goal,
                         finding_id=finding["id"] if finding else None,
                         _label=f"graph {brand}")
@@ -1039,7 +1038,7 @@ def build_server(path: Path | str = db.DB_PATH, name: str = "zeropage-ideas",
             was injected, engine tools or not -- reading the progress of
             a render somebody kicked off in Studio is exactly the thing
             worth having on a phone."""
-            snap = job_status(int(job_id), account_id=_account(None, path))
+            snap = job_status(int(job_id), account_id=_account(None, dsn))
             if snap is None:
                 raise ToolError(
                     f"no job {job_id} -- the registry is in-process and a "
@@ -1075,7 +1074,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         description="The Zero Page idea board as an MCP server.")
     parser.add_argument("--db", default=None,
-                        help="database path (default: data/pipeline.db)")
+                        help="database URL (default: DATABASE_URL)")
     parser.add_argument("--engine", action="store_true",
                         help=f"register the two tools that spend model credit "
                              f"(same as {ENGINE_ENV}=1)")
@@ -1091,13 +1090,13 @@ def main(argv=None) -> int:
     if args.engine:
         os.environ[ENGINE_ENV] = "1"
 
-    path = args.db or db.DB_PATH
+    dsn = args.db or None
     # Tables the tools read must exist before the first call: a desktop
     # that launches this on a fresh clone would otherwise answer its
     # first `board` with "no such table" instead of an empty board.
-    db.init_db(path)
-    preprod.init(path)
-    scout.init(path)
+    db.init_db(dsn)
+    preprod.init(dsn)
+    scout.init(dsn)
 
     # The job registry, injected here for the same reason app/mcp_mount.py
     # injects it: a graph run takes minutes, and a tool call that blocks
@@ -1119,7 +1118,7 @@ def main(argv=None) -> int:
               "tools will run inline and may time out", file=sys.stderr)
         start_job = job_status = None
 
-    build_server(path=path, start_job=start_job, job_status=job_status).run("stdio")
+    build_server(dsn=dsn, start_job=start_job, job_status=job_status).run("stdio")
     return 0
 
 

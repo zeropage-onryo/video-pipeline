@@ -35,7 +35,7 @@ from __future__ import annotations
 import sys
 from typing import Callable, Optional
 
-from . import db, imagery, nano_banana, preprod, shootgen
+from . import imagery, nano_banana, preprod, shootgen
 
 # Enhancing and keyframing are per-scene model calls, so a batch of 4 is
 # 4 of each. The cap that actually bites is nano_banana.DAILY_CAP (20/day,
@@ -57,7 +57,7 @@ def ground(idea: str, *, brand: str = "", db_path=None, account_id: Optional[int
     raises: no Postgres means an ungrounded run with a stderr note.
     Naming the cast is grounding too, and fails the same way -- softly.
     """
-    path = db_path if db_path is not None else db.DB_PATH
+    path = db_path
     references = ""
     try:
         references = shootgen.reference_block(spark=idea or None, db_path=path)
@@ -71,8 +71,8 @@ def ground(idea: str, *, brand: str = "", db_path=None, account_id: Optional[int
         # a recurring person its own brief forbids.
         cast = shootgen.cast_for(
             brand,
-            entities.list_characters(path=path, account_id=account_id),
-            entities.list_props(path=path, account_id=account_id), detail=True)
+            entities.list_characters(dsn=path, account_id=account_id),
+            entities.list_props(dsn=path, account_id=account_id), detail=True)
     except Exception:
         cast = None
     return {"references": references, "cast": cast}
@@ -92,7 +92,7 @@ def write_scenes(idea: str, brand: str, *, count: int = 1, references: str = "",
     return shootgen.generate_scene_concepts(
         idea, brand, count=max(1, min(MAX_SCENES, count)),
         gemini_client=gemini_client, references=references, cast=cast,
-        db_path=db_path if db_path is not None else db.DB_PATH,
+        db_path=db_path,
         refs=list(refs or []), image_refs=image_refs or None,
         template_tag=template_tag, on_retry=on_retry, account_id=account_id)
 
@@ -166,8 +166,8 @@ def attach_refs(concept_id: int, extra: list | None = None, *, db_path=None, acc
     Grounding shapes, it never gates: no match, no assets, or a broken
     catalogue all just mean the scene renders on its text.
     """
-    path = db_path if db_path is not None else db.DB_PATH
-    concept = preprod.get_concept(concept_id, path=path, account_id=account_id)
+    path = db_path
+    concept = preprod.get_concept(concept_id, dsn=path, account_id=account_id)
     if concept is None or not concept.get("shots"):
         return []
     shots = [dict(s) for s in concept["shots"]]
@@ -222,7 +222,7 @@ def attach_refs(concept_id: int, extra: list | None = None, *, db_path=None, acc
     shot["refs"] = picked
     preprod.update_concept_shots(
         concept_id, {"shots": shots, "duration": concept.get("duration")},
-        warnings=concept.get("warnings") or [], path=path, account_id=account_id)
+        warnings=concept.get("warnings") or [], dsn=path, account_id=account_id)
     return picked
 
 
@@ -260,11 +260,11 @@ def persist_prompt(concept_id: int, shot_n, text: str, *, db_path=None, account_
     Returns False when there is nothing to store (same text, or empty);
     never raises on a missing concept -- polish is an enhancement.
     """
-    path = db_path if db_path is not None else db.DB_PATH
+    path = db_path
     text = (text or "").strip()
     if not text:
         return False
-    concept = preprod.get_concept(concept_id, path=path, account_id=account_id)
+    concept = preprod.get_concept(concept_id, dsn=path, account_id=account_id)
     if concept is None or not concept.get("shots"):
         return False
     shots = [dict(s) for s in concept["shots"]]
@@ -275,12 +275,12 @@ def persist_prompt(concept_id: int, shot_n, text: str, *, db_path=None, account_
     shot["prompt"] = text
     warnings = shootgen.validate_concept(
         {**concept, "shots": shots},
-        [loc["name"] for loc in preprod.list_locations(path=path, account_id=account_id)],
+        [loc["name"] for loc in preprod.list_locations(dsn=path, account_id=account_id)],
         use_pov=bool(concept.get("use_pov")),
         allowed_tools=shootgen.ZEROPAGE_AI_TOOLS
         if concept.get("brand") == "zeropage" else None)
     preprod.update_concept_shots(concept_id, {"shots": shots},
-                                 warnings=warnings, path=path, account_id=account_id)
+                                 warnings=warnings, dsn=path, account_id=account_id)
     return True
 
 
@@ -317,7 +317,7 @@ def visual_target(concept_id: int, shot: dict, *, db_path=None,
     """
     from . import midjourney, refbin
 
-    path = db_path if db_path is not None else db.DB_PATH
+    path = db_path
     prompt = (shot.get("prompt") or "").strip()
     if not prompt or not midjourney.spend_approved():
         return ""
@@ -337,7 +337,7 @@ def visual_target(concept_id: int, shot: dict, *, db_path=None,
         existing = list(shot.get("refs") or [])
         preprod.update_concept_shots(
             concept_id, {"shots": [dict(shot, refs=existing + [url])]},
-            path=path, account_id=account_id)
+            dsn=path, account_id=account_id)
         return url
     except Exception as e:                      # surfaced, never fatal
         print(f"note: no visual target ({type(e).__name__}: {e}) -- "
@@ -359,8 +359,8 @@ def keyframe_scene(concept_id: int, shot_n=None, *, db_path=None,
     sort out. Never raises -- nano_banana.generate_from_prompt returns
     its failure as a result, and a scene with no still is still a scene.
     """
-    path = db_path if db_path is not None else db.DB_PATH
-    concept = preprod.get_concept(concept_id, path=path, account_id=account_id)
+    path = db_path
+    concept = preprod.get_concept(concept_id, dsn=path, account_id=account_id)
     if concept is None or not concept.get("shots"):
         return {"ok": False, "error": f"no scene {concept_id}"}
     shots = concept["shots"]
@@ -409,7 +409,7 @@ def keyframe_scene(concept_id: int, shot_n=None, *, db_path=None,
         concept_id=concept_id)
     if result.get("ok") and result.get("media_url"):
         preprod.set_shot_reference_image(concept_id, shot.get("n", 1),
-                                         result["media_url"], path=path, account_id=account_id)
+                                         result["media_url"], dsn=path, account_id=account_id)
     return result
 
 
@@ -418,11 +418,11 @@ def park_scene(concept_id: int, reason: str = "", *, db_path=None, account_id: O
     to spend. An explicit marker, never inferred from having a keyframe
     -- see preprod.set_shot_parked. Only the automation parks; a scene
     Michael made by hand reaches the Queue by being picked."""
-    path = db_path if db_path is not None else db.DB_PATH
-    concept = preprod.get_concept(concept_id, path=path, account_id=account_id)
+    path = db_path
+    concept = preprod.get_concept(concept_id, dsn=path, account_id=account_id)
     shot_n = (concept["shots"][0].get("n", 1)
               if concept and concept.get("shots") else 1)
-    preprod.set_shot_parked(concept_id, shot_n, reason, path=path, account_id=account_id)
+    preprod.set_shot_parked(concept_id, shot_n, reason, dsn=path, account_id=account_id)
 
 
 def run(idea: str, brand: str, *, count: int = 1, refs=None, image_refs=None,
@@ -447,7 +447,7 @@ def run(idea: str, brand: str, *, count: int = 1, refs=None, image_refs=None,
             except Exception:
                 pass
 
-    path = db_path if db_path is not None else db.DB_PATH
+    path = db_path
     notes: list = []
 
     say(0.15, "grounding in references")

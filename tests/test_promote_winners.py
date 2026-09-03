@@ -17,9 +17,8 @@ from src import promote_winners as pw
 
 
 @pytest.fixture
-def tmp_db(tmp_path):
-    p = tmp_path / "t.db"
-    db.init_db(p)
+def tmp_db(pg):
+    p = pg
     return p
 
 
@@ -44,13 +43,13 @@ def seed_winner_and_dud(db_path, posted_at="2026-06-01"):
     what the other did, so benchmark() has a real median to compare
     against and only one candidate clears MIN_MULTIPLE.
     """
-    winner_id = db.add_video("Winner", "youtube", posted_at, path=db_path, account_id=None)
-    dud_id = db.add_video("Dud", "youtube", posted_at, path=db_path, account_id=None)
+    winner_id = db.add_video("Winner", "youtube", posted_at, dsn=db_path, account_id=None)
+    dud_id = db.add_video("Dud", "youtube", posted_at, dsn=db_path, account_id=None)
     # captured 7 days after posted_at, matching the default at_days=7
     db.record_metrics(winner_id, views=10_000, captured_at="2026-06-08T00:00:00",
-                      path=db_path, account_id=None)
+                      dsn=db_path, account_id=None)
     db.record_metrics(dud_id, views=1_000, captured_at="2026-06-08T00:00:00",
-                      path=db_path, account_id=None)
+                      dsn=db_path, account_id=None)
     return winner_id, dud_id
 
 
@@ -221,12 +220,12 @@ def test_run_auto_promotes_candidates_that_clear_the_bar(tmp_db, no_rag_network,
     # three videos so the median (the middle one, 2_000) sits far enough
     # below the winner to clear AUTO_THRESHOLD -- with only two videos
     # the median is their average and a winner can never reach 2x it.
-    winner_id = db.add_video("Blowout", "youtube", "2026-06-01", path=tmp_db, account_id=None)
-    mid_id = db.add_video("Mid", "youtube", "2026-06-01", path=tmp_db, account_id=None)
-    dud_id = db.add_video("Dud", "youtube", "2026-06-01", path=tmp_db, account_id=None)
-    db.record_metrics(winner_id, views=100_000, captured_at="2026-06-08T00:00:00", path=tmp_db, account_id=None)
-    db.record_metrics(mid_id, views=2_000, captured_at="2026-06-08T00:00:00", path=tmp_db, account_id=None)
-    db.record_metrics(dud_id, views=1_000, captured_at="2026-06-08T00:00:00", path=tmp_db, account_id=None)
+    winner_id = db.add_video("Blowout", "youtube", "2026-06-01", dsn=tmp_db, account_id=None)
+    mid_id = db.add_video("Mid", "youtube", "2026-06-01", dsn=tmp_db, account_id=None)
+    dud_id = db.add_video("Dud", "youtube", "2026-06-01", dsn=tmp_db, account_id=None)
+    db.record_metrics(winner_id, views=100_000, captured_at="2026-06-08T00:00:00", dsn=tmp_db, account_id=None)
+    db.record_metrics(mid_id, views=2_000, captured_at="2026-06-08T00:00:00", dsn=tmp_db, account_id=None)
+    db.record_metrics(dud_id, views=1_000, captured_at="2026-06-08T00:00:00", dsn=tmp_db, account_id=None)
 
     captured = {}
     monkeypatch.setattr(

@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from src import db, preprod, uncanny_judge
+from src import preprod, uncanny_judge
 
 
 def _fake_client(payload):
@@ -75,11 +75,10 @@ def test_bad_json_fails_closed(monkeypatch):
 
 
 @pytest.fixture
-def tmp_db(tmp_path, monkeypatch):
-    path = tmp_path / "app.db"
-    db.init_db(path)
+def tmp_db(pg, monkeypatch):
+    path = pg
     preprod.init(path)
-    monkeypatch.setattr(db, "DB_PATH", path)
+    monkeypatch.setenv("DATABASE_URL", path)
     return path
 
 
@@ -89,11 +88,11 @@ def test_save_uncanny_score_persists_pass_and_reason(tmp_db):
          "logline": "a room that's upside down but nobody reacts",
          "shots": [{"n": 1, "type": "BROLL", "source": "AI",
                     "tool": "VEO", "prompt": "x"}]},
-        brand="zeropage", path=tmp_db, account_id=None)
+        brand="zeropage", dsn=tmp_db, account_id=None)
     preprod.save_uncanny_score(
         cid, {"overall": 8.5, "passed": True, "reasons": ["frame 1 is wrong"]},
-        path=tmp_db, account_id=None)
-    got = preprod.get_concept(cid, path=tmp_db, account_id=None)
+        dsn=tmp_db, account_id=None)
+    got = preprod.get_concept(cid, dsn=tmp_db, account_id=None)
     assert got["uncanny_overall"] == 8.5
     assert got["uncanny_passed"] == 1
     assert "frame 1 is wrong" in got["uncanny_reason"]

@@ -8,13 +8,11 @@ call is monkeypatched out at storage._client().
 import pytest
 
 from src import preprod, storage
-from src.db import init_db
 
 
 @pytest.fixture
-def tmp_db(tmp_path):
-    path = tmp_path / "test.db"
-    init_db(path)
+def tmp_db(pg):
+    path = pg
     preprod.init(path)
     return path
 
@@ -118,7 +116,7 @@ def test_publish_shot_media_writes_media_url_onto_matching_shot(
         {"n": 1, "type": "BROLL", "source": "AI", "tool": "seedance", "prompt": "p"},
     ]
     concept_id = preprod.save_concept(
-        {"title": "Gold Drip", "shots": shots}, brand="antihero", path=tmp_db
+        {"title": "Gold Drip", "shots": shots}, brand="antihero", dsn=tmp_db
     , account_id=None)
     clip = tmp_path / "gold-drip.mp4"
     clip.write_bytes(b"x")
@@ -126,7 +124,7 @@ def test_publish_shot_media_writes_media_url_onto_matching_shot(
     result = storage.publish_shot_media(concept_id, 1, clip, db_path=tmp_db)
 
     assert result == {"ok": True, "url": "https://pub-abc123.r2.dev/clips/gold-drip.mp4"}
-    concept = preprod.get_concept(concept_id, path=tmp_db, account_id=None)
+    concept = preprod.get_concept(concept_id, dsn=tmp_db, account_id=None)
     assert concept["shots"][0]["media_url"] == "https://pub-abc123.r2.dev/clips/gold-drip.mp4"
 
 
@@ -135,7 +133,7 @@ def test_publish_shot_media_never_raises_on_upload_failure(tmp_db, tmp_path, mon
                 "R2_BUCKET", "R2_PUBLIC_BASE_URL"):
         monkeypatch.delenv(var, raising=False)
     concept_id = preprod.save_concept(
-        {"title": "T", "shots": [{"n": 1, "source": "AI"}]}, brand="antihero", path=tmp_db
+        {"title": "T", "shots": [{"n": 1, "source": "AI"}]}, brand="antihero", dsn=tmp_db
     , account_id=None)
     clip = tmp_path / "clip.mp4"
     clip.write_bytes(b"x")
@@ -150,7 +148,7 @@ def test_publish_shot_media_never_raises_on_unknown_shot(configured_env, tmp_db,
     fake = _FakeS3Client()
     monkeypatch.setattr(storage, "_client", lambda: fake)
     concept_id = preprod.save_concept(
-        {"title": "T", "shots": [{"n": 1, "source": "AI"}]}, brand="antihero", path=tmp_db
+        {"title": "T", "shots": [{"n": 1, "source": "AI"}]}, brand="antihero", dsn=tmp_db
     , account_id=None)
     clip = tmp_path / "clip.mp4"
     clip.write_bytes(b"x")
@@ -166,23 +164,23 @@ def test_publish_shot_media_never_raises_on_unknown_shot(configured_env, tmp_db,
 
 def test_set_shot_media_url_raises_for_unknown_concept(tmp_db):
     with pytest.raises(ValueError, match="no concept"):
-        preprod.set_shot_media_url(999, 1, "https://example.com/x.mp4", path=tmp_db, account_id=None)
+        preprod.set_shot_media_url(999, 1, "https://example.com/x.mp4", dsn=tmp_db, account_id=None)
 
 
 def test_set_shot_media_url_raises_for_unknown_shot(tmp_db):
     concept_id = preprod.save_concept(
-        {"title": "T", "shots": [{"n": 1, "source": "AI"}]}, brand="antihero", path=tmp_db
+        {"title": "T", "shots": [{"n": 1, "source": "AI"}]}, brand="antihero", dsn=tmp_db
     , account_id=None)
     with pytest.raises(ValueError, match="no shot"):
-        preprod.set_shot_media_url(concept_id, 7, "https://example.com/x.mp4", path=tmp_db, account_id=None)
+        preprod.set_shot_media_url(concept_id, 7, "https://example.com/x.mp4", dsn=tmp_db, account_id=None)
 
 
 def test_set_shot_media_url_requires_a_url(tmp_db):
     concept_id = preprod.save_concept(
-        {"title": "T", "shots": [{"n": 1, "source": "AI"}]}, brand="antihero", path=tmp_db
+        {"title": "T", "shots": [{"n": 1, "source": "AI"}]}, brand="antihero", dsn=tmp_db
     , account_id=None)
     with pytest.raises(ValueError, match="media_url is required"):
-        preprod.set_shot_media_url(concept_id, 1, "  ", path=tmp_db, account_id=None)
+        preprod.set_shot_media_url(concept_id, 1, "  ", dsn=tmp_db, account_id=None)
 
 
 def test_set_shot_media_url_leaves_other_shots_untouched(tmp_db):
@@ -191,9 +189,9 @@ def test_set_shot_media_url_leaves_other_shots_untouched(tmp_db):
         {"n": 2, "source": "AI", "prompt": "b"},
     ]
     concept_id = preprod.save_concept(
-        {"title": "T", "shots": shots}, brand="antihero", path=tmp_db
+        {"title": "T", "shots": shots}, brand="antihero", dsn=tmp_db
     , account_id=None)
-    preprod.set_shot_media_url(concept_id, 2, "https://example.com/b.mp4", path=tmp_db, account_id=None)
-    concept = preprod.get_concept(concept_id, path=tmp_db, account_id=None)
+    preprod.set_shot_media_url(concept_id, 2, "https://example.com/b.mp4", dsn=tmp_db, account_id=None)
+    concept = preprod.get_concept(concept_id, dsn=tmp_db, account_id=None)
     assert "media_url" not in concept["shots"][0]
     assert concept["shots"][1]["media_url"] == "https://example.com/b.mp4"

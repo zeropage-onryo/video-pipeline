@@ -49,7 +49,7 @@ def main(argv=None) -> int:
     parser.add_argument("--no-captions", action="store_true")
     args = parser.parse_args(argv)
 
-    from src import db, framebank
+    from src import framebank
 
     client = None
     model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
@@ -71,7 +71,6 @@ def main(argv=None) -> int:
           f"{' (probe)' if args.probe else ''}…")
 
     out = framebank.build(brand=args.brand, client=client, model=model,
-                          path=db.DB_PATH,
                           every=args.every or framebank.EVERY_SECONDS,
                           limit_clips=2 if args.probe else args.clips)
 

@@ -9,13 +9,12 @@ that the per-day cap holds. Queue management itself is not gated.
 """
 import pytest
 
-from src import autopilot, db, instagram, scheduling
+from src import autopilot, instagram, scheduling
 
 
 @pytest.fixture
-def tmp_db(tmp_path):
-    path = tmp_path / "test.db"
-    db.init_db(path)
+def tmp_db(pg):
+    path = pg
     scheduling.init(path)
     return path
 

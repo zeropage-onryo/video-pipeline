@@ -30,7 +30,7 @@ import sys
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from src import db, mcp_server
+from src import mcp_server
 
 ENABLED_ENV = "ZEROPAGE_MCP"
 TOKEN_ENV = "ZEROPAGE_MCP_TOKEN"
@@ -126,7 +126,7 @@ def build(path=None, start_job=None, job_status=None):
 
     try:
         server = mcp_server.build_server(
-            path=path or db.DB_PATH,
+            path=path,
             start_job=start_job,
             job_status=job_status,
         )

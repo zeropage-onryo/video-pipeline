@@ -10,20 +10,19 @@ from fastapi.testclient import TestClient
 
 import app.main as app_main
 from app.main import app
-from src import autopilot, db, entities, inspiration, preprod, winners
+from src import autopilot, entities, inspiration, preprod, winners
 
 client = TestClient(app)
 
 
 @pytest.fixture
-def tmp_db(tmp_path, monkeypatch):
-    path = tmp_path / "app.db"
-    db.init_db(path)
+def tmp_db(pg, monkeypatch):
+    path = pg
     preprod.init(path)
     entities.init(path)
     inspiration.init(path)
     winners.init(path)
-    monkeypatch.setattr(db, "DB_PATH", path)
+    monkeypatch.setenv("DATABASE_URL", path)
     return path
 
 
@@ -95,13 +94,13 @@ def _concept_with_rendered_shot(brand, tmp_db):
         {"title": f"{brand} clip", "hook": "h", "logline": "l",
          "shots": [{"n": 1, "type": "BROLL", "source": "AI", "tool": "VEO",
                     "prompt": "p", "media_url": "https://cdn/x.mp4"}]},
-        brand=brand, path=tmp_db, account_id=None)
+        brand=brand, dsn=tmp_db, account_id=None)
 
 
 def test_antihero_never_enters_an_autopost_plan(tmp_db):
     cid = _concept_with_rendered_shot("antihero", tmp_db)
     preprod.save_uncanny_score(cid, {"overall": 9, "passed": True, "reasons": []},
-                               path=tmp_db, account_id=None)  # even if (wrongly) marked passed
+                               dsn=tmp_db, account_id=None)  # even if (wrongly) marked passed
     posts = [a for a in autopilot.build_plan(db_path=tmp_db)["actions"]
              if a["kind"] == "post"]
     assert posts == []   # review-gated forever
@@ -110,7 +109,7 @@ def test_antihero_never_enters_an_autopost_plan(tmp_db):
 def test_zeropage_held_concept_is_not_post_eligible(tmp_db):
     cid = _concept_with_rendered_shot("zeropage", tmp_db)
     preprod.save_uncanny_score(cid, {"overall": 4, "passed": False, "reasons": ["glossy"]},
-                               path=tmp_db, account_id=None)
+                               dsn=tmp_db, account_id=None)
     posts = [a for a in autopilot.build_plan(db_path=tmp_db)["actions"]
              if a["kind"] == "post"]
     assert posts == []
@@ -131,7 +130,7 @@ def test_nothing_auto_posts_while_the_hold_is_on(tmp_db):
     point of the hold, and the case worth pinning."""
     cid = _concept_with_rendered_shot("zeropage", tmp_db)
     preprod.save_uncanny_score(cid, {"overall": 9, "passed": True, "reasons": []},
-                               path=tmp_db, account_id=None)
+                               dsn=tmp_db, account_id=None)
     assert autopilot.AUTO_POST_BRANDS == ()
     posts = [a for a in autopilot.build_plan(db_path=tmp_db)["actions"]
              if a["kind"] == "post"]
@@ -144,7 +143,7 @@ def test_the_hold_can_be_lifted_for_zeropage(tmp_db, monkeypatch):
     path covered while nothing is allowed to use it."""
     cid = _concept_with_rendered_shot("zeropage", tmp_db)
     preprod.save_uncanny_score(cid, {"overall": 9, "passed": True, "reasons": []},
-                               path=tmp_db, account_id=None)
+                               dsn=tmp_db, account_id=None)
     monkeypatch.setattr(autopilot, "AUTO_POST_BRANDS", ("zeropage",))
     posts = [a for a in autopilot.build_plan(db_path=tmp_db)["actions"]
              if a["kind"] == "post"]
@@ -168,7 +167,7 @@ def test_antihero_stays_gated_even_if_someone_whitelists_it(tmp_db, monkeypatch)
     Michael's face and name post only when he approves."""
     cid = _concept_with_rendered_shot("antihero", tmp_db)
     preprod.save_uncanny_score(cid, {"overall": 9, "passed": True, "reasons": []},
-                               path=tmp_db, account_id=None)
+                               dsn=tmp_db, account_id=None)
     monkeypatch.setattr(autopilot, "AUTO_POST_BRANDS", ("zeropage",))
     posts = [a for a in autopilot.build_plan(db_path=tmp_db)["actions"]
              if a["kind"] == "post"]

@@ -77,9 +77,8 @@ def test_format_examples_mentions_tool_and_prompt():
 # ---------- generate_prompts_for_slot (network mocked) ----------
 
 @pytest.fixture
-def tmp_db(tmp_path):
-    path = tmp_path / "test.db"
-    db.init_db(path)
+def tmp_db(pg):
+    path = pg
     gen.init(path)
     return path
 
@@ -109,11 +108,11 @@ def test_generate_prompts_for_slot_links_idea_and_slot(tmp_db, monkeypatch):
                         lambda *a, **kw: VALID_RESPONSE)
     run_id = db.save_pitch_run(
         [{"number": 1, "title": "T", "logline": "L", "story_note": "N"}],
-        path=tmp_db,
+        dsn=tmp_db,
     )
     with db.connect(tmp_db) as conn:
         idea_id = conn.execute(
-            "SELECT id FROM ideas WHERE run_id = ?", (run_id,)
+            "SELECT id FROM ideas WHERE run_id = %s", (run_id,)
         ).fetchone()[0]
 
     result = promptgen.generate_prompts_for_slot(

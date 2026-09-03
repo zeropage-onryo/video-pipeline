@@ -19,7 +19,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from src import db, imagery, nano_banana, preprod, scene_chain, shootgen
+from src import imagery, nano_banana, preprod, scene_chain, shootgen
 
 client = TestClient(app)
 
@@ -35,14 +35,13 @@ def signed_in(monkeypatch):
 
 
 @pytest.fixture
-def tmp_db(tmp_path, monkeypatch):
+def tmp_db(pg, monkeypatch):
     from src import entities, generative
-    path = tmp_path / "test.db"
-    db.init_db(path)
+    path = pg
     preprod.init(path)
     entities.init(path)
     generative.init(path)
-    monkeypatch.setattr(db, "DB_PATH", path)
+    monkeypatch.setenv("DATABASE_URL", path)
     return path
 
 
@@ -110,7 +109,7 @@ def test_create_writes_concepts_and_stops(tmp_db, seams):
     job = create()
     assert job["status"] == "done", job.get("error")
 
-    concepts = preprod.list_concepts(path=tmp_db, account_id=None)
+    concepts = preprod.list_concepts(dsn=tmp_db, account_id=None)
     assert len(concepts) == 2
     assert seams["write"] == 1          # ONE call for both takes, not two
     assert seams["enhance"] == []       # nothing enhanced
@@ -131,7 +130,7 @@ def test_no_scene_at_all_is_a_failed_run_not_a_silent_one(tmp_db, seams, monkeyp
     job = create()
     assert job["status"] == "failed"
     assert "no usable scene" in (job["error"] or "")
-    assert preprod.list_concepts(path=tmp_db, account_id=None) == []
+    assert preprod.list_concepts(dsn=tmp_db, account_id=None) == []
 
 
 # --- the stages the other two callers use -----------------------------------
@@ -141,7 +140,7 @@ def a_scene(path, prompt="a rider suits up", refs=None):
         {"title": "Cold Open", "hook": "", "logline": "",
          "shots": [{"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
                     "desc": "x", "prompt": prompt, "refs": list(refs or [])}]},
-        brand="zeropage", prompt_template="T", path=path, account_id=None)
+        brand="zeropage", prompt_template="T", dsn=path, account_id=None)
 
 
 def test_persist_prompt_keeps_the_generators_own_words(tmp_db):
@@ -154,13 +153,13 @@ def test_persist_prompt_keeps_the_generators_own_words(tmp_db):
     scene_id = a_scene(tmp_db, prompt="the draft")
     assert scene_chain.persist_prompt(scene_id, 1, "the polished version",
                                       db_path=tmp_db) is True
-    shot = preprod.get_concept(scene_id, path=tmp_db, account_id=None)["shots"][0]
+    shot = preprod.get_concept(scene_id, dsn=tmp_db, account_id=None)["shots"][0]
     assert shot["prompt"] == "the polished version"
     assert shot["written_prompt"] == "the draft"
 
     # polishing twice must not lose the original under the first polish
     scene_chain.persist_prompt(scene_id, 1, "polished again", db_path=tmp_db)
-    shot = preprod.get_concept(scene_id, path=tmp_db, account_id=None)["shots"][0]
+    shot = preprod.get_concept(scene_id, dsn=tmp_db, account_id=None)["shots"][0]
     assert shot["prompt"] == "polished again"
     assert shot["written_prompt"] == "the draft"
 
@@ -187,7 +186,7 @@ def test_keyframe_attaches_the_still_and_names_every_reference(tmp_db, seams,
     assert seams["nano"][0]["refs"] == [(shootgen.reference_label(photo),
                                          b"\xff\xd8jacket")]
     assert seams["nano"][0]["concept_id"] == scene_id     # names its own file
-    shot = preprod.get_concept(scene_id, path=tmp_db, account_id=None)["shots"][0]
+    shot = preprod.get_concept(scene_id, dsn=tmp_db, account_id=None)["shots"][0]
     assert shot["reference_image"] == f"https://cdn/key-{scene_id}.png"
 
 
@@ -220,7 +219,7 @@ def test_the_keyframe_prompt_names_only_references_that_resolved(
     assert "Motorcycle" not in prompt          # dropped, so never promised
     assert len(seams["nano"][0]["refs"]) == 1  # and never sent either
     # the stored shot keeps the writer's text; only the render is rebound
-    shot = preprod.get_concept(scene_id, path=tmp_db, account_id=None)["shots"][0]
+    shot = preprod.get_concept(scene_id, dsn=tmp_db, account_id=None)["shots"][0]
     assert "@Image 1" in shot["prompt"]
 
 
@@ -232,11 +231,11 @@ def test_a_failed_keyframe_is_a_result_not_an_exception(tmp_db, monkeypatch):
     result = scene_chain.keyframe_scene(scene_id, 1, db_path=tmp_db)
     assert result["ok"] is False and "daily cap" in result["error"]
     assert "reference_image" not in preprod.get_concept(scene_id,
-                                                        path=tmp_db, account_id=None)["shots"][0]
+                                                        dsn=tmp_db, account_id=None)["shots"][0]
     # a scene with no prompt has nothing to render, and says so
     empty = preprod.save_concept(
         {"title": "Empty", "shots": [{"n": 1, "source": "AI", "tool": "RUNWAY"}]},
-        brand="zeropage", path=tmp_db, account_id=None)
+        brand="zeropage", dsn=tmp_db, account_id=None)
     assert "no prompt" in scene_chain.keyframe_scene(empty, 1,
                                                      db_path=tmp_db)["error"]
 
@@ -250,7 +249,7 @@ def test_parking_is_what_puts_a_scene_in_the_queue(tmp_db):
 
     mid_work = a_scene(tmp_db)
     preprod.set_shot_reference_image(mid_work, 1, "https://cdn/other.png",
-                                     path=tmp_db, account_id=None)
+                                     dsn=tmp_db, account_id=None)
 
     items = client.get("/api/queue/pending?brand=zeropage").json()["items"]
     assert [c["id"] for c in items] == [parked]
@@ -289,7 +288,7 @@ def _scene_without_refs(tmp_db):
             {"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
              "prompt": "a sponge on a wall that bruises under pressure"},
         ]},
-        brand="zeropage", path=tmp_db, account_id=None)
+        brand="zeropage", dsn=tmp_db, account_id=None)
 
 
 def test_no_target_without_spend_approval(tmp_db, monkeypatch):
@@ -297,7 +296,7 @@ def test_no_target_without_spend_approval(tmp_db, monkeypatch):
     always on isn't an approval". Unapproved, behaviour is unchanged."""
     monkeypatch.delenv("MIDJOURNEY_SPEND_OK", raising=False)
     cid = _scene_without_refs(tmp_db)
-    shot = preprod.get_concept(cid, path=tmp_db, account_id=None)["shots"][0]
+    shot = preprod.get_concept(cid, dsn=tmp_db, account_id=None)["shots"][0]
 
     assert scene_chain.visual_target(cid, shot, db_path=tmp_db,
                                      account_id=None) == ""
@@ -325,11 +324,11 @@ def test_an_approved_run_gets_a_target_attached(tmp_db, monkeypatch):
     monkeypatch.setattr(refbin, "save", lambda data: "/refs/generated.jpg")
 
     cid = _scene_without_refs(tmp_db)
-    shot = preprod.get_concept(cid, path=tmp_db, account_id=None)["shots"][0]
+    shot = preprod.get_concept(cid, dsn=tmp_db, account_id=None)["shots"][0]
 
     url = scene_chain.visual_target(cid, shot, db_path=tmp_db, account_id=None)
     assert url == "/refs/generated.jpg"
-    after = preprod.get_concept(cid, path=tmp_db, account_id=None)
+    after = preprod.get_concept(cid, dsn=tmp_db, account_id=None)
     assert after["shots"][0]["refs"] == ["/refs/generated.jpg"]
 
 
@@ -346,7 +345,7 @@ def test_a_failed_target_is_never_fatal(tmp_db, monkeypatch):
 
     monkeypatch.setattr(midjourney, "generate_image", boom)
     cid = _scene_without_refs(tmp_db)
-    shot = preprod.get_concept(cid, path=tmp_db, account_id=None)["shots"][0]
+    shot = preprod.get_concept(cid, dsn=tmp_db, account_id=None)["shots"][0]
 
     assert scene_chain.visual_target(cid, shot, db_path=tmp_db,
                                      account_id=None) == ""

@@ -17,16 +17,15 @@ import json
 import pytest
 
 from ops import render_queue as rq
-from src import db, generative, preprod
+from src import generative, preprod
 
 
 @pytest.fixture
-def tmp_db(tmp_path, monkeypatch):
-    path = tmp_path / "test.db"
-    db.init_db(path)
+def tmp_db(pg, monkeypatch):
+    path = pg
     preprod.init(path)
     generative.init(path)
-    monkeypatch.setattr(db, "DB_PATH", path)
+    monkeypatch.setenv("DATABASE_URL", path)
     return path
 
 
@@ -44,7 +43,7 @@ def a_scene(path, title="Cold Open", prompt="a close shot"):
         {"title": title, "hook": "", "logline": "",
          "shots": [{"n": 1, "type": "BROLL", "source": "AI", "tool": "HIGGSFIELD",
                     "desc": title, "prompt": prompt}]},
-        brand="zeropage", prompt_template="T", path=path, account_id=None)
+        brand="zeropage", prompt_template="T", dsn=path, account_id=None)
 
 
 def a_clip(tmp_path, name="clip.mp4", size=200_000):
@@ -62,7 +61,7 @@ def test_an_unpicked_concept_is_not_waiting(tmp_db):
 
 def test_a_picked_scene_is_waiting(tmp_db):
     cid = a_scene(tmp_db, title="The Bronze Debt")
-    preprod.set_picked(cid, True, path=tmp_db, account_id=None)
+    preprod.set_picked(cid, True, dsn=tmp_db, account_id=None)
     waiting = rq.pending()
     assert [w["concept_id"] for w in waiting] == [cid]
     assert waiting[0]["title"] == "The Bronze Debt"
@@ -71,21 +70,21 @@ def test_a_picked_scene_is_waiting(tmp_db):
 
 def test_an_archived_scene_is_not_waiting(tmp_db):
     cid = a_scene(tmp_db)
-    preprod.set_picked(cid, True, path=tmp_db, account_id=None)
-    preprod.set_archived(cid, True, path=tmp_db, account_id=None)
+    preprod.set_picked(cid, True, dsn=tmp_db, account_id=None)
+    preprod.set_archived(cid, True, dsn=tmp_db, account_id=None)
     assert rq.pending() == []
 
 
 def test_a_scene_that_already_has_a_clip_is_not_waiting(tmp_db, tmp_path):
     cid = a_scene(tmp_db)
-    preprod.set_picked(cid, True, path=tmp_db, account_id=None)
-    preprod.set_shot_media_url(cid, 1, "/renders/higgsfield/x.mp4", path=tmp_db, account_id=None)
+    preprod.set_picked(cid, True, dsn=tmp_db, account_id=None)
+    preprod.set_shot_media_url(cid, 1, "/renders/higgsfield/x.mp4", dsn=tmp_db, account_id=None)
     assert rq.pending() == []
 
 
 def test_brand_filter(tmp_db):
     cid = a_scene(tmp_db)
-    preprod.set_picked(cid, True, path=tmp_db, account_id=None)
+    preprod.set_picked(cid, True, dsn=tmp_db, account_id=None)
     assert rq.pending(brand="zeropage")
     assert rq.pending(brand="antihero") == []
 
@@ -96,7 +95,7 @@ def test_a_clip_lands_where_renders_can_serve_it(tmp_db, tmp_path, renders_in_tm
     """app/main.py mounts /renders on data/renders/. A clip left anywhere
     else 404s in the Queue however real the render was."""
     cid = a_scene(tmp_db)
-    preprod.set_picked(cid, True, path=tmp_db, account_id=None)
+    preprod.set_picked(cid, True, dsn=tmp_db, account_id=None)
     out = rq.import_clip(cid, 1, str(a_clip(tmp_path)), "seedance1_5", 4.8, None, True)
     assert out["media_url"] == "/renders/higgsfield/clip.mp4"
     assert (renders_in_tmp / "higgsfield" / "clip.mp4").is_file()
@@ -104,10 +103,10 @@ def test_a_clip_lands_where_renders_can_serve_it(tmp_db, tmp_path, renders_in_tm
 
 def test_a_second_clip_does_not_overwrite_the_first(tmp_db, tmp_path, renders_in_tmp):
     cid = a_scene(tmp_db)
-    preprod.set_picked(cid, True, path=tmp_db, account_id=None)
+    preprod.set_picked(cid, True, dsn=tmp_db, account_id=None)
     rq.import_clip(cid, 1, str(a_clip(tmp_path)), "seedance1_5", 4.8, None, True)
     cid2 = a_scene(tmp_db, title="Second")
-    preprod.set_picked(cid2, True, path=tmp_db, account_id=None)
+    preprod.set_picked(cid2, True, dsn=tmp_db, account_id=None)
     out = rq.import_clip(cid2, 1, str(a_clip(tmp_path)), "seedance1_5", 4.8, None, True)
     assert out["media_url"] == "/renders/higgsfield/clip-1.mp4"
 
@@ -116,7 +115,7 @@ def test_the_attempt_is_logged_in_credits_not_invented_dollars(tmp_db, tmp_path)
     """The clip came out of a subscription already paid for. A cost_usd
     here would be a number nobody spent."""
     cid = a_scene(tmp_db)
-    preprod.set_picked(cid, True, path=tmp_db, account_id=None)
+    preprod.set_picked(cid, True, dsn=tmp_db, account_id=None)
     rq.import_clip(cid, 1, str(a_clip(tmp_path)), "seedance1_5", 4.8, None, True)
     with generative.connect(tmp_db) as conn:
         row = conn.execute("SELECT tool, cost_usd, params_json FROM generations "
@@ -131,7 +130,7 @@ def test_the_attempt_is_logged_in_credits_not_invented_dollars(tmp_db, tmp_path)
 
 def test_importing_takes_the_scene_out_of_the_queue(tmp_db, tmp_path):
     cid = a_scene(tmp_db)
-    preprod.set_picked(cid, True, path=tmp_db, account_id=None)
+    preprod.set_picked(cid, True, dsn=tmp_db, account_id=None)
     assert len(rq.pending()) == 1
     rq.import_clip(cid, 1, str(a_clip(tmp_path)), "seedance1_5", 4.8, None, True)
     assert rq.pending() == []
@@ -141,7 +140,7 @@ def test_a_truncated_download_is_refused(tmp_db, tmp_path):
     """A 200-byte 'mp4' is a failed download, and logging it as a render
     would put a broken clip on the board with a row saying it worked."""
     cid = a_scene(tmp_db)
-    preprod.set_picked(cid, True, path=tmp_db, account_id=None)
+    preprod.set_picked(cid, True, dsn=tmp_db, account_id=None)
     with pytest.raises(SystemExit, match="not a video"):
         rq.import_clip(cid, 1, str(a_clip(tmp_path, size=200)), "seedance1_5",
                        4.8, None, True)
@@ -154,7 +153,7 @@ def test_an_unknown_concept_refuses(tmp_db, tmp_path):
 
 def test_the_anchor_is_recorded_as_what_was_actually_sent(tmp_db, tmp_path):
     cid = a_scene(tmp_db)
-    preprod.set_picked(cid, True, path=tmp_db, account_id=None)
+    preprod.set_picked(cid, True, dsn=tmp_db, account_id=None)
     rq.import_clip(cid, 1, str(a_clip(tmp_path)), "seedance1_5", 4.8, None, False)
     with generative.connect(tmp_db) as conn:
         params = json.loads(conn.execute(

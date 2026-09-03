@@ -67,9 +67,9 @@ CREATE TABLE IF NOT EXISTS image_candidates (
 """
 
 
-def init(path=db.DB_PATH) -> None:
-    with db.connect(path) as conn:
-        conn.executescript(SCHEMA)
+def init(dsn=None) -> None:
+    with db.connect(dsn) as conn:
+        conn.execute(SCHEMA)
 
 
 def _now() -> str:
@@ -159,10 +159,10 @@ def pexels(query: str, limit: int = 6) -> list[dict]:
     return out
 
 
-def _frames(query: str, brand: Optional[str], limit: int, path) -> list[dict]:
+def _frames(query: str, brand: Optional[str], limit: int, dsn) -> list[dict]:
     from . import framebank
     out = []
-    for f in framebank.search(query, brand=brand, limit=limit, path=path):
+    for f in framebank.search(query, brand=brand, limit=limit, dsn=dsn):
         # A local frame's "url" is its path on disk; refbin never fetches
         # it over the network -- see mcp_server.bank_reference, which
         # reads the file directly for this source.
@@ -173,7 +173,7 @@ def _frames(query: str, brand: Optional[str], limit: int, path) -> list[dict]:
     return out
 
 
-def remember(candidates: list[dict], query: str = "", path=db.DB_PATH) -> list[dict]:
+def remember(candidates: list[dict], query: str = "", dsn=None) -> list[dict]:
     """Store what we served, so an id can be redeemed later.
 
     This is the hinge of the whole design. The model is handed ids; the
@@ -181,14 +181,14 @@ def remember(candidates: list[dict], query: str = "", path=db.DB_PATH) -> list[d
     MCP tool call is its own request -- an id that only lived in the
     process that served it would be unredeemable by the next call.
     """
-    init(path)
+    init(dsn)
     out = []
-    with db.connect(path) as conn:
+    with db.connect(dsn) as conn:
         for c in candidates:
             cid = _cid(c["source"], c["image_url"])
             conn.execute(
                 "INSERT INTO image_candidates (id, created_at, query, source, "
-                "image_url, source_url, title, credit) VALUES (?,?,?,?,?,?,?,?) "
+                "image_url, source_url, title, credit) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) "
                 "ON CONFLICT(id) DO UPDATE SET query=excluded.query",
                 (cid, _now(), query, c["source"], c["image_url"],
                  c["source_url"], c.get("title") or "", c.get("credit") or ""))
@@ -196,13 +196,13 @@ def remember(candidates: list[dict], query: str = "", path=db.DB_PATH) -> list[d
     return out
 
 
-def get(candidate_id: str, path=db.DB_PATH) -> Optional[dict]:
+def get(candidate_id: str, dsn=None) -> Optional[dict]:
     """Redeem an id. None for anything we did not serve -- which is what
     an invented id looks like, and the caller must be able to say so."""
     try:
-        init(path)
-        with db.connect(path) as conn:
-            row = conn.execute("SELECT * FROM image_candidates WHERE id = ?",
+        init(dsn)
+        with db.connect(dsn) as conn:
+            row = conn.execute("SELECT * FROM image_candidates WHERE id = %s",
                                (str(candidate_id or "").strip(),)).fetchone()
         return dict(row) if row else None
     except Exception:
@@ -215,7 +215,7 @@ BRAND_LANES = {"antihero": ("frames", "stock"), "zeropage": ("stock",)}
 
 
 def search(query: str, brand: Optional[str] = None, limit: int = 6,
-           path=db.DB_PATH) -> list[dict]:
+           dsn=None) -> list[dict]:
     """Candidates for one query, stored and returned with ids.
 
     Never raises. Returns [] when no lane is configured or nothing
@@ -227,7 +227,7 @@ def search(query: str, brand: Optional[str] = None, limit: int = 6,
     lanes = BRAND_LANES.get(brand or "", ("frames", "stock"))
     found: list[dict] = []
     if "frames" in lanes:
-        found += _frames(query, brand, limit, path)
+        found += _frames(query, brand, limit, dsn)
     if "stock" in lanes:
         # Interleaved rather than concatenated: whichever lane answers
         # first would otherwise fill a short list on its own.
@@ -240,4 +240,4 @@ def search(query: str, brand: Optional[str] = None, limit: int = 6,
             continue
         seen.add(c["image_url"])
         unique.append(c)
-    return remember(unique[:max(1, limit)], query=query, path=path)
+    return remember(unique[:max(1, limit)], query=query, dsn=dsn)

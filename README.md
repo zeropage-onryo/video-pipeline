@@ -99,7 +99,7 @@ that evidence rather than from scratch.
 - **Assets gallery** — date-grouped media panel.
 - **Holds** — every parked run with a human-readable reason, graded approved / rejected.
 - **Jobs** — long-running work streamed over SSE rather than polled.
-- **Sign-in** — **Google OAuth (just added)**, Discord OAuth, and email/password with argon2. The
+- **Sign-in** — Supabase Auth (Google, Discord, email/password), verified server-side with PyJWT. The
   modal renders only the providers actually configured, so a missing client secret hides a button
   instead of breaking the page.
 
@@ -224,7 +224,7 @@ attempts) · PostgreSQL + pgvector (retrieval library) · Google Gemini — visi
 generation, embeddings, **Gemini 3 Flash** for enhancement and director notes, **Nano Banana Pro**
 (`gemini-3-pro-image-preview`) for keyframes · LangGraph + LangSmith (orchestration and tracing) ·
 DeepEval (judge metrics) · Runway / Veo / Midjourney connectors · Instagram + YouTube metrics ·
-Cloudflare R2 · ffprobe · argon2 + OAuth · pytest + ruff in CI · Docker Compose
+Cloudflare R2 · ffprobe · Supabase Auth · pytest + ruff in CI · Docker Compose
 
 ## Where this actually is
 
@@ -455,7 +455,7 @@ keyframe to Runway so the clip starts from an approved still instead of from tex
 This README described a one-operator, CLI-first pre-production tool whose central rule was that
 everything is grounded in photographed rooms. Twenty commits since 2026-08-11 made that wrong in
 both halves. What shipped meanwhile: the **ZPF Studio** UI (`/ui`, capability-gated JSON API, jobs
-over SSE, an eval store), **real sign-in** (Google and Discord OAuth plus argon2 email/password) and
+over SSE, an eval store), **real sign-in** (Supabase Auth: Google, Discord and email/password) and
 an accounts model, **gated render connectors** for Runway, Veo, Midjourney and Nano Banana, the
 **scene board** and **director mode**, **brand-scoped inspiration lanes**, and **opt-in asset
 grounding** — which demoted grounding from the thesis of the product to a toggle on it. The clearest

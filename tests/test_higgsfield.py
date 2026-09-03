@@ -19,13 +19,12 @@ What these actually guard:
 """
 import pytest
 
-from src import db, generative, higgsfield
+from src import generative, higgsfield
 
 
 @pytest.fixture
-def tmp_db(tmp_path):
-    path = tmp_path / "test.db"
-    db.init_db(path)
+def tmp_db(pg):
+    path = pg
     generative.init(path)
     return path
 

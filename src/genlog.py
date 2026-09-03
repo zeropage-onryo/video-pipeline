@@ -58,9 +58,9 @@ def main(argv=None, db_path=None, account_id: Optional[int] = None):
         # not the module default -- otherwise --db reads one database
         # and takes its account id from another
         account_id = accounts.resolve_account(
-            args.account, path=db_path if db_path is not None else db.DB_PATH)
+            args.account, dsn=db_path)
 
-    kwargs = {"path": db_path} if db_path is not None else {}
+    kwargs = {"dsn": db_path} if db_path is not None else {}
 
     db.init_db(**kwargs)
     gen.init(**kwargs)

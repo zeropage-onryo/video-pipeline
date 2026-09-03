@@ -85,7 +85,7 @@ def read_plan(path: Path) -> list[dict]:
     return [s for s in data if isinstance(s, dict)]
 
 
-def bank_one(entry: dict, *, path, dry_run: bool = False) -> dict:
+def bank_one(entry: dict, *, dsn=None, dry_run: bool = False) -> dict:
     """One spark and the images behind it. Never raises: a bad entry in
     a plan of eight must not cost the other seven."""
     from src import mcp_server, scout
@@ -133,7 +133,7 @@ def bank_one(entry: dict, *, path, dry_run: bool = False) -> dict:
                 "rationale": (entry.get("rationale") or "").strip()}),
             evidence=(entry.get("evidence") or "").strip(),
             score=float(entry.get("score", mcp_server.HUMAN_SPARK_SCORE)),
-            path=path)
+            dsn=dsn)
     except Exception as e:
         out["errors"].append(f"{type(e).__name__}: {e}")
         return out
@@ -151,7 +151,7 @@ def bank_one(entry: dict, *, path, dry_run: bool = False) -> dict:
             result = mcp_server.bank_reference(
                 out["id"], (image.get("url") or "").strip(),
                 source_url=(image.get("source_url") or "").strip(),
-                title=(image.get("title") or "").strip(), path=path)
+                title=(image.get("title") or "").strip(), dsn=dsn)
         except Exception as e:
             out["errors"].append(f"{type(e).__name__}: {e}")
             continue
@@ -163,7 +163,7 @@ def bank_one(entry: dict, *, path, dry_run: bool = False) -> dict:
     return out
 
 
-def ingest(source: Path, *, path, dry_run: bool = False,
+def ingest(source: Path, *, dsn=None, dry_run: bool = False,
            keep: bool = False) -> dict:
     """Bank every plan in a directory and file it away.
 
@@ -181,7 +181,7 @@ def ingest(source: Path, *, path, dry_run: bool = False,
             summary["errors"].append(f"{plan.name}: unreadable ({e})")
             continue
         for entry in entries:
-            result = bank_one(entry, path=path, dry_run=dry_run)
+            result = bank_one(entry, dsn=dsn, dry_run=dry_run)
             if result["id"] or dry_run:
                 summary["sparks"] += 1
             summary["images"] += result["images"]
@@ -202,11 +202,11 @@ def ingest(source: Path, *, path, dry_run: bool = False,
 
 def main(argv=None) -> int:
     load_dotenv()
-    from src import db, mcp_server, scout
+    from src import mcp_server, scout
 
     parser = argparse.ArgumentParser(
         description="Put an agent's research into the scout's bank.")
-    parser.add_argument("--db", default=None, help="database path (testing)")
+    parser.add_argument("--db", default=None, help="database URL (testing; default DATABASE_URL)")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_spark = sub.add_parser("spark", help="bank one direction")
@@ -236,14 +236,14 @@ def main(argv=None) -> int:
     p_list.add_argument("--unused", action="store_true")
 
     args = parser.parse_args(argv)
-    path = Path(args.db) if args.db else db.DB_PATH
-    scout.init(path)
+    dsn = args.db or None      # None resolves DATABASE_URL
+    scout.init(dsn)
 
     if args.command == "spark":
         out = mcp_server.bank_spark(args.brand, args.spark,
                                     rationale=args.rationale,
                                     evidence=args.evidence, score=args.score,
-                                    path=path)
+                                    dsn=dsn)
         print(f"banked #{out['id']} [{out['score']:.2f}] {out['spark']}")
         if out["duplicate_of"]:
             print(f"  note: repeats {out['duplicate_of']}", file=sys.stderr)
@@ -255,7 +255,7 @@ def main(argv=None) -> int:
     if args.command == "reference":
         out = mcp_server.bank_reference(args.finding, args.url,
                                         source_url=args.source,
-                                        title=args.title, path=path)
+                                        title=args.title, dsn=dsn)
         if not out.get("ok"):
             print(f"not banked: {out.get('error')}", file=sys.stderr)
             return 1
@@ -264,7 +264,7 @@ def main(argv=None) -> int:
         return 0
 
     if args.command == "ingest":
-        summary = ingest(Path(args.source), path=path, dry_run=args.dry_run,
+        summary = ingest(Path(args.source), dsn=dsn, dry_run=args.dry_run,
                          keep=args.keep)
         for err in summary["errors"]:
             print(f"  note: {err}", file=sys.stderr)
@@ -281,12 +281,12 @@ def main(argv=None) -> int:
 
     if args.command == "list":
         rows = scout.list_findings(brand=args.brand, unused_only=args.unused,
-                                   path=path)
+                                   dsn=dsn)
         if not rows:
             print("nothing banked yet")
         for r in rows:
             mark = "used" if r.get("used_at") else "open"
-            images = len(scout.bin_for_finding(r["id"], path=path))
+            images = len(scout.bin_for_finding(r["id"], dsn=dsn))
             print(f"[{r['score']:.2f}] {r['brand']:9s} {mark:4s} "
                   f"{images} img  {r['spark']}")
         return 0

@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-from src import db, imagery, runway
+from src import imagery, runway
 
 # The reference->bytes layer and the enhance call moved to
 # src/imagery.py (2026-08-29) so the Studio's scene chain could reach
@@ -148,7 +148,7 @@ def shot_reference_urls(properties, db_path=None, account_id: Optional[int] = No
     try:
         from src import preprod
         concept = preprod.get_concept(int(concept_id),
-                                      path=db_path or db.DB_PATH, account_id=account_id)
+                                      dsn=db_path, account_id=account_id)
     except Exception:
         return []
     for shot in (concept or {}).get("shots") or []:
@@ -251,7 +251,7 @@ def execute_graph(graph: dict, *, gemini_client=None, resolve_photo=None,
                 kind = "text"
                 value = shootgen.reference_block(
                     spark=spark.strip() or None,
-                    db_path=db_path if db_path is not None else db.DB_PATH)
+                    db_path=db_path)
             elif node_type == ENHANCE_TYPE:
                 if gemini_client is None:
                     raise RuntimeError("GEMINI_API_KEY not set")
@@ -273,7 +273,7 @@ def execute_graph(graph: dict, *, gemini_client=None, resolve_photo=None,
                     from src import shootgen
                     refs = shootgen.reference_block(
                         spark=user.strip() or None,
-                        db_path=db_path if db_path is not None else db.DB_PATH)
+                        db_path=db_path)
                 if refs:
                     extra["references"] = refs
                 value = enhance(

@@ -26,7 +26,6 @@ from pathlib import Path
 from typing import Optional
 
 from . import generative, render_assets
-from .db import DB_PATH
 from .gemini_utils import sniff_mime
 from .shot import Shot
 
@@ -116,7 +115,7 @@ def generations_today(db_path=None, *, account_id=None, everyone: bool = False) 
     DAILY_CAP counts against. `everyone=True` gives the installation-wide
     count that GLOBAL_DAILY_CAP counts against."""
     return generative.used_today(
-        "nano", db_path if db_path is not None else DB_PATH,
+        "nano", db_path,
         account_id=account_id, everyone=everyone,
     )
 
@@ -125,7 +124,7 @@ def _shot_row_for_prompt(prompt: str, db_path, account_id: Optional[int] = None)
     """A generations row needs a shot to hang off; a free-standing
     canvas prompt doesn't have one, so synthesize a minimal Shot --
     the row exists to make the attempt countable."""
-    kwargs = {"path": db_path} if db_path is not None else {}
+    kwargs = {"dsn": db_path} if db_path is not None else {}
     generative.init(**kwargs)
     shot = Shot(subject=prompt[:100], action="as prompted")
     return generative.add_shot(shot, notes="auto-created by nano_banana.generate_from_prompt",
@@ -305,7 +304,7 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
     wrapper stays literal for callers who mean exactly what they typed.
     """
     from . import storage
-    kwargs = {"path": db_path} if db_path is not None else {}
+    kwargs = {"dsn": db_path} if db_path is not None else {}
 
     try:
         prompt = (prompt or "").strip()
@@ -318,7 +317,7 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
         refusal = generative.cap_error(
             "nano", 1, account_id=account_id,
             per_account=DAILY_CAP, ceiling=GLOBAL_DAILY_CAP,
-            path=db_path if db_path is not None else DB_PATH,
+            dsn=db_path,
             env_prefix="NANO", phrase="images generated",
             used=generations_today(db_path=db_path, account_id=account_id),
             used_everywhere=generations_today(db_path=db_path, everyone=True),
@@ -367,7 +366,7 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
             generation_id=generation_id, tool="nano", model=model,
             media_kind="image", prompt=prompt, media_url=media_url,
             output_path=str(out_path), metadata=generation_params,
-            path=db_path if db_path is not None else DB_PATH,
+            dsn=db_path,
         )
 
         return {"ok": True, "media_url": media_url,

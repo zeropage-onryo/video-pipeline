@@ -63,7 +63,7 @@ def derive_signals(
     string can always say *why* -- "3 of the window's winners" -- rather
     than just asserting goodness.
     """
-    kwargs = {"path": db_path} if db_path is not None else {}
+    kwargs = {"dsn": db_path} if db_path is not None else {}
     bench = db.benchmark(
         at_days=at_days, posted_within_days=posted_within_days,
         metric=metric, **kwargs,

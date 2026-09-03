@@ -150,7 +150,7 @@ def generate_prompts_for_slot(
     resolved Shot as an open shot in the database (generative.add_shot)
     so later generation attempts (G3) can be logged against it.
     """
-    kwargs = {"path": db_path} if db_path is not None else {}
+    kwargs = {"dsn": db_path} if db_path is not None else {}
     examples = gen.winning_prompts(limit=5, **kwargs, account_id=account_id)
 
     shot = structure_shot(description, examples, client, model=model)
@@ -179,7 +179,7 @@ def main(db_path=None):
         print("GOOGLE_API_KEY (or GEMINI_API_KEY) not set", file=sys.stderr)
         sys.exit(1)
 
-    kwargs = {"path": db_path} if db_path is not None else {}
+    kwargs = {"dsn": db_path} if db_path is not None else {}
     db.init_db(**kwargs)
     gen.init(**kwargs)
 

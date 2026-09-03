@@ -21,7 +21,7 @@ from fastapi.testclient import TestClient
 
 from app import api, jobs
 from app.main import app
-from src import db, entities, generative, preprod, presets, shootgen, workflows
+from src import entities, generative, preprod, presets, shootgen, workflows
 
 client = TestClient(app)
 
@@ -44,14 +44,13 @@ def fresh_jobs():
 
 
 @pytest.fixture
-def tmp_db(tmp_path, monkeypatch):
-    path = tmp_path / "test.db"
-    db.init_db(path)
+def tmp_db(pg, monkeypatch):
+    path = pg
     preprod.init(path)
     entities.init(path)
     workflows.init(path)
     generative.init(path)
-    monkeypatch.setattr(db, "DB_PATH", path)
+    monkeypatch.setenv("DATABASE_URL", path)
     return path
 
 
@@ -70,7 +69,7 @@ def seed_concept(path, shots=None, brand="antihero"):
                "shots": shots if shots is not None else [
                    {"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
                     "desc": "tank badge macro", "prompt": "macro of the tank badge"}]}
-    return preprod.save_concept(concept, brand=brand, spark="spark", path=path, account_id=None)
+    return preprod.save_concept(concept, brand=brand, spark="spark", dsn=path, account_id=None)
 
 
 # --- presets ----------------------------------------------------------------
@@ -100,9 +99,9 @@ def test_api_presets(tmp_db):
 # --- @ mention asset search -------------------------------------------------
 
 def test_assets_search_is_cross_category_and_prefix_first(tmp_db):
-    preprod.add_location("garage", {"space": "a dim garage"}, path=tmp_db, account_id=None)
-    entities.add_character("Juno", role="the dog", path=tmp_db, account_id=None)
-    entities.add_prop("Ducati Monster", category="vehicle", path=tmp_db, account_id=None)
+    preprod.add_location("garage", {"space": "a dim garage"}, dsn=tmp_db, account_id=None)
+    entities.add_character("Juno", role="the dog", dsn=tmp_db, account_id=None)
+    entities.add_prop("Ducati Monster", category="vehicle", dsn=tmp_db, account_id=None)
 
     res = client.get("/api/assets/search?q=ju").json()
     assert [i["name"] for i in res["items"]] == ["Juno"]
@@ -145,7 +144,7 @@ def test_shot_prompt_update_persists_and_leaves_the_pick_alone(tmp_db):
     res = client.post(f"/api/concepts/{concept_id}/shots/1/prompt",
                       json={"prompt": "a much better prompt"})
     assert res.status_code == 200
-    stored = preprod.get_concept(concept_id, path=tmp_db, account_id=None)
+    stored = preprod.get_concept(concept_id, dsn=tmp_db, account_id=None)
     assert stored["shots"][0]["prompt"] == "a much better prompt"
     assert stored["title"] == "Night ride"          # the pick is never rewritten
     assert stored["hook"] == "the hook"
@@ -166,12 +165,12 @@ def test_shot_reference_attach_and_clear(tmp_db):
     res = client.post(f"/api/concepts/{concept_id}/shots/1/reference",
                       json={"url": "https://example.com/frame.png"})
     assert res.status_code == 200
-    assert preprod.get_concept(concept_id, path=tmp_db, account_id=None)["shots"][0][
+    assert preprod.get_concept(concept_id, dsn=tmp_db, account_id=None)["shots"][0][
         "reference_image"] == "https://example.com/frame.png"
     # empty clears -- a reference is an enhancement, never a gate
     client.post(f"/api/concepts/{concept_id}/shots/1/reference", json={"url": ""})
     assert "reference_image" not in \
-        preprod.get_concept(concept_id, path=tmp_db, account_id=None)["shots"][0]
+        preprod.get_concept(concept_id, dsn=tmp_db, account_id=None)["shots"][0]
     assert client.post(f"/api/concepts/{concept_id}/shots/1/reference",
                        json={"url": "ftp://nope"}).status_code == 400
 
@@ -213,7 +212,7 @@ def test_generate_run_saves_a_real_one_shot_concept(tmp_db, hermetic_generate,
     job = wait_for_job(job_id)
     assert job["status"] == "done"
 
-    concept = preprod.get_concept(job["ref_id"], path=tmp_db, account_id=None)
+    concept = preprod.get_concept(job["ref_id"], dsn=tmp_db, account_id=None)
     assert concept is not None
     assert len(concept["shots"]) == 1
     shot = concept["shots"][0]
@@ -238,7 +237,7 @@ def test_generate_run_attaches_to_an_existing_concept(tmp_db, hermetic_generate)
     }).json()["job_id"])
     assert job["status"] == "done"
     assert job["ref_id"] == concept_id
-    concept = preprod.get_concept(concept_id, path=tmp_db, account_id=None)
+    concept = preprod.get_concept(concept_id, dsn=tmp_db, account_id=None)
     assert [s["n"] for s in concept["shots"]] == [1, 2]
     assert concept["shots"][1]["prompt"] == "ENHANCED[one more angle]"
     assert concept["title"] == "Night ride"
@@ -252,7 +251,7 @@ def test_generate_run_video_degrades_without_runway(tmp_db, hermetic_generate,
     }).json()["job_id"])
     assert job["status"] == "done"                    # the concept still saved
     assert "skipped" in job["detail"]
-    shot = preprod.get_concept(job["ref_id"], path=tmp_db, account_id=None)["shots"][0]
+    shot = preprod.get_concept(job["ref_id"], dsn=tmp_db, account_id=None)["shots"][0]
     assert "media_url" not in shot
 
 

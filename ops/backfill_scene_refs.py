@@ -16,7 +16,7 @@ import sys
 from typing import Optional
 
 from app import api
-from src import accounts, db, preprod
+from src import accounts, preprod
 
 
 def main(write: bool, account_id: Optional[int] = None) -> int:
@@ -27,7 +27,7 @@ def main(write: bool, account_id: Optional[int] = None) -> int:
         account_id = accounts.resolve_account()
     touched = 0
     failed = 0
-    for concept in preprod.list_concepts(limit=1000, path=db.DB_PATH,
+    for concept in preprod.list_concepts(limit=1000,
                                          account_id=account_id):
         shots = concept.get("shots") or []
         if not shots or shots[0].get("refs"):

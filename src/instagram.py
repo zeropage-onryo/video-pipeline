@@ -279,7 +279,7 @@ def refresh_metrics_for_video(video: dict, token=None, db_path=None, account_id:
         "saves": insights.get("saved"),
         "shares": insights.get("shares"),
     }
-    kwargs = {"path": db_path} if db_path is not None else {}
+    kwargs = {"dsn": db_path} if db_path is not None else {}
     db.record_metrics(video["id"], **stats, **kwargs, account_id=account_id)
     return {"ok": True, **stats}
 
@@ -331,10 +331,9 @@ CREATE TABLE IF NOT EXISTS ig_hashtag_ids (
 """
 
 
-def init(path=None) -> None:
-    kwargs = {"path": path} if path is not None else {}
-    with db.connect(**kwargs) as conn:
-        conn.executescript(SCHEMA)
+def init(dsn=None) -> None:
+    with db.connect(dsn) as conn:
+        conn.execute(SCHEMA)
 
 
 def graph_token():
@@ -403,7 +402,7 @@ def business_discovery(handle: str, limit: int = 6, token=None,
         return {"ok": False, "posts": [], "error": _safe_error(e, token)}
 
 
-def hashtag_id(tag: str, token=None, user_id=None, path=None) -> dict:
+def hashtag_id(tag: str, token=None, user_id=None, dsn=None) -> dict:
     """A hashtag's stable id, cached forever.
 
     The cache IS the rate-limit strategy -- see HASHTAG_WINDOW_MAX. A
@@ -417,18 +416,17 @@ def hashtag_id(tag: str, token=None, user_id=None, path=None) -> dict:
     clean = (tag or "").strip().lstrip("#").lower()
     if not clean:
         return {"ok": False, "error": "empty tag"}
-    kwargs = {"path": path} if path is not None else {}
     try:
-        init(path)
-        with db.connect(**kwargs) as conn:
-            row = conn.execute("SELECT hashtag_id FROM ig_hashtag_ids WHERE tag = ?",
+        init(dsn)
+        with db.connect(dsn) as conn:
+            row = conn.execute("SELECT hashtag_id FROM ig_hashtag_ids WHERE tag = %s",
                                (clean,)).fetchone()
             if row:
                 return {"ok": True, "id": row["hashtag_id"], "cached": True, "error": ""}
             since = (datetime.now(timezone.utc)
                      - timedelta(days=HASHTAG_WINDOW_DAYS)).isoformat()
             spent = conn.execute(
-                "SELECT COUNT(*) FROM ig_hashtag_ids WHERE looked_up_at >= ?",
+                "SELECT COUNT(*) FROM ig_hashtag_ids WHERE looked_up_at >= %s",
                 (since,)).fetchone()[0]
     except Exception as e:
         return {"ok": False, "error": f"hashtag cache unavailable: {type(e).__name__}: {e}"}
@@ -456,9 +454,11 @@ def hashtag_id(tag: str, token=None, user_id=None, path=None) -> dict:
         return {"ok": False, "error": _safe_error(e, token)}
 
     try:
-        with db.connect(**kwargs) as conn:
-            conn.execute("INSERT OR REPLACE INTO ig_hashtag_ids "
-                         "(tag, hashtag_id, looked_up_at) VALUES (?, ?, ?)",
+        with db.connect(dsn) as conn:
+            conn.execute("INSERT INTO ig_hashtag_ids "
+                         "(tag, hashtag_id, looked_up_at) VALUES (%s, %s, %s) "
+                         "ON CONFLICT (tag) DO UPDATE SET hashtag_id = excluded.hashtag_id, "
+                         "looked_up_at = excluded.looked_up_at",
                          (clean, found, datetime.now(timezone.utc).isoformat()))
     except Exception:
         pass          # an uncached id costs budget next time, never this call
@@ -466,7 +466,7 @@ def hashtag_id(tag: str, token=None, user_id=None, path=None) -> dict:
 
 
 def hashtag_top_media(tag: str, limit: int = 6, token=None, user_id=None,
-                      path=None) -> dict:
+                      dsn=None) -> dict:
     """Meta's own "top" ranking for a hashtag right now.
 
     Note what is NOT here: `username`. Meta strips it from hashtag
@@ -476,7 +476,7 @@ def hashtag_top_media(tag: str, limit: int = 6, token=None, user_id=None,
     """
     token = token or graph_token()
     user_id = user_id or graph_user_id()
-    found = hashtag_id(tag, token=token, user_id=user_id, path=path)
+    found = hashtag_id(tag, token=token, user_id=user_id, dsn=dsn)
     if not found.get("ok"):
         return {"ok": False, "media": [], "error": found.get("error", "")}
     fields = ("caption,like_count,comments_count,media_type,media_url,"

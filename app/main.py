@@ -136,14 +136,14 @@ def seed_gold_standard():
         return
     try:
         already = any((w.get("note") or "").startswith("gold standard")
-                      for w in winners.list_all(path=db.DB_PATH))
+                      for w in winners.list_all())
         if not already:
-            with db.connect(db.DB_PATH) as conn:
+            with db.connect() as conn:
                 owner = db.bootstrap_account_id(conn)
             winners.record_and_learn(
                 "runway", text, note="gold standard structural exemplar",
-                verdict="worked", path=db.DB_PATH,
-                project=accounts_mod.slug_of(owner, path=db.DB_PATH))
+                verdict="worked",
+                project=accounts_mod.slug_of(owner))
     except Exception:
         pass
 
@@ -153,25 +153,25 @@ def seed_gold_standard():
 # served open when ZEROPAGE_MCP_TOKEN is unset -- see app/mcp_mount.py.
 # jobs.start/jobs.get are injected because src/ never imports app/.
 MCP_APP, MCP_SESSIONS = mcp_mount.build(
-    path=db.DB_PATH, start_job=jobs.start, job_status=jobs.get
+    path=None, start_job=jobs.start, job_status=jobs.get
 )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    db.init_db(path=db.DB_PATH)
-    preprod.init(path=db.DB_PATH)
-    entities.init(path=db.DB_PATH)
-    autonomy.init(path=db.DB_PATH)
-    winners.init(path=db.DB_PATH)
-    inspiration.init(path=db.DB_PATH)   # seeds the researched accounts if empty
-    evalstore.init(path=db.DB_PATH)     # golden set seeded from eval_cases.json
-    workflows.init(path=db.DB_PATH)     # saved node graphs for /ui Workflows
-    workflows.seed_default(path=db.DB_PATH)  # "Prompt enhancement" starter canvas
-    render_assets.init(path=db.DB_PATH)  # generated_assets, owned (merged 2026-09-02)
-    generative.init(path=db.DB_PATH)    # generations log the render caps count
-    accounts_mod.init(path=db.DB_PATH)  # users / identities / accounts / members
-    settings_mod.init(path=db.DB_PATH)  # the Dev Studio tunables (gate/threshold/k)
+    db.init_db()
+    preprod.init()
+    entities.init()
+    autonomy.init()
+    winners.init()
+    inspiration.init()   # seeds the researched accounts if empty
+    evalstore.init()     # golden set seeded from eval_cases.json
+    workflows.init()     # saved node graphs for /ui Workflows
+    workflows.seed_default()  # "Prompt enhancement" starter canvas
+    render_assets.init()  # generated_assets, owned (merged 2026-09-02)
+    generative.init()    # generations log the render caps count
+    accounts_mod.init()  # users / identities / accounts / members
+    settings_mod.init()  # the Dev Studio tunables (gate/threshold/k)
     seed_gold_standard()                # records the canonical example as a winner
     # The MCP transport is not self-starting: its session manager has
     # to be entered by whoever hosts it. A no-op when MCP is off.
@@ -235,8 +235,7 @@ def signin(request: Request, error: Optional[str] = None,
          "email": email,
          # live key presence, the /api/capabilities rule applied to the
          # modal: a provider button only renders when it can actually work
-         "providers": {"google": auth._provider_configured("google"),
-                       "discord": auth._provider_configured("discord")}})
+         "providers": auth.providers_available()})
 
 
 @app.get("/ui/accounts")
@@ -247,7 +246,7 @@ def ui_accounts(request: Request):
     user = auth.current_user(request)
     if user is None:
         return RedirectResponse("/signin", status_code=303)
-    member_of = accounts_mod.memberships(user["id"], path=db.DB_PATH)
+    member_of = accounts_mod.memberships(user["id"])
     return templates.TemplateResponse(
         request, "accounts.html", {"user": user, "member_of": member_of})
 
@@ -300,16 +299,16 @@ def performance_rows(at_days: int = 7, posted_within: str = "6",
     """
     posted_within_days = POSTED_WINDOWS.get(posted_within, 180)
     top = db.get_top_performers(
-        at_days=at_days, posted_within_days=posted_within_days, limit=5, path=db.DB_PATH,
+        at_days=at_days, posted_within_days=posted_within_days, limit=5,
     
         account_id=account_id,)
     bench = db.benchmark(
-        at_days=at_days, posted_within_days=posted_within_days, path=db.DB_PATH,
+        at_days=at_days, posted_within_days=posted_within_days,
     
         account_id=account_id,)
     rows = []
     for t in top:
-        history = db.get_video_history(t["video_id"], path=db.DB_PATH, account_id=account_id)
+        history = db.get_video_history(t["video_id"], account_id=account_id)
         rows.append({
             **t,
             "sparkline": render_sparkline(history),
@@ -417,12 +416,12 @@ def _pipeline_metrics(account_id: int) -> dict:
     scenes were worth rendering, which is the decision actually being
     made now."""
     return {
-        "pick": preprod.pick_rate(path=db.DB_PATH, account_id=account_id),
-        "shoot": preprod.shoot_rate(path=db.DB_PATH, account_id=account_id),
-        "agreement": autonomy.evaluator_agreement(path=db.DB_PATH, account_id=account_id),
-        "gate": autonomy.prompt_gate_agreement(path=db.DB_PATH),
-        "pass_rate": autonomy.first_try_pass_rate(path=db.DB_PATH),
-        "killed": autonomy.killed(path=db.DB_PATH),
+        "pick": preprod.pick_rate(account_id=account_id),
+        "shoot": preprod.shoot_rate(account_id=account_id),
+        "agreement": autonomy.evaluator_agreement(account_id=account_id),
+        "gate": autonomy.prompt_gate_agreement(),
+        "pass_rate": autonomy.first_try_pass_rate(),
+        "killed": autonomy.killed(),
     }
 
 
@@ -468,7 +467,7 @@ def _golden_probe(query: str) -> dict:
         conn = rag.connect()
         try:
             out["hits"] = rag.query(query, rag.make_client(), conn,
-                                    k=settings_mod.eval_k(path=db.DB_PATH))
+                                    k=settings_mod.eval_k())
             out["available"] = True
         finally:
             try:
@@ -492,7 +491,7 @@ def _ungraded_concepts(account_id: int) -> list[dict]:
     would spend a billed call scoring something already rejected. Passing
     is a decision; the queue is for concepts still undecided.
     """
-    return [c for c in preprod.list_concepts(path=db.DB_PATH, account_id=account_id)
+    return [c for c in preprod.list_concepts(account_id=account_id)
             if c.get("judge_overall") is None and not c.get("archived")]
 
 
@@ -527,7 +526,7 @@ def _graded_rows(account_id: int) -> list[dict]:
     this is the tab that answers "what did the judge actually like".
     """
     rows = []
-    for c in preprod.list_concepts(path=db.DB_PATH, account_id=account_id):
+    for c in preprod.list_concepts(account_id=account_id):
         if c.get("judge_overall") is None:
             continue
         reason = (c.get("judge_reason") or "").strip()
@@ -560,12 +559,11 @@ def _grade_context(mode: Optional[str], concept_id: Optional[int],
                # rather than in the template because a number nobody can
                # see is a number nobody acts on -- this is the payoff
                # that makes working the queue feel like it did something.
-               "reason_counts": preprod.reason_counts(path=db.DB_PATH,
-                                                      account_id=account_id),
+               "reason_counts": preprod.reason_counts(account_id=account_id),
                # the board's check/X, as the judge sees them -- the two
                # clicks feed taste_judge.gather_signals, and this says
                # how many are reaching it (capped at HISTORY_LIMIT)
-               "board_taste": taste_judge.board_taste(db_path=db.DB_PATH,
+               "board_taste": taste_judge.board_taste(db_path=None,
                                                       account_id=account_id),
                # the whole queue, not just its size: the draw is random,
                # so without a list there is no way to see what is waiting
@@ -573,13 +571,13 @@ def _grade_context(mode: Optional[str], concept_id: Optional[int],
                "ungraded": ungraded,
                "ungraded_count": len(ungraded),
                "concept_id": concept_id,
-               "golden_count": len(evalstore.list_golden(path=db.DB_PATH))}
+               "golden_count": len(evalstore.list_golden())}
     if mode == "shot" and concept_id is not None:
-        concept = preprod.get_concept(concept_id, path=db.DB_PATH, account_id=account_id)
+        concept = preprod.get_concept(concept_id, account_id=account_id)
         if concept is not None:
             context["concept"] = _with_director_prompts([concept])[0]
     elif mode == "golden" and golden_id is not None:
-        golden = next((g for g in evalstore.list_golden(path=db.DB_PATH)
+        golden = next((g for g in evalstore.list_golden()
                        if g["id"] == golden_id), None)
         if golden is not None:
             context["golden"] = golden
@@ -619,12 +617,12 @@ def studio(request: Request, tab: Optional[str] = None, message: Optional[str] =
     elif active_tab == "library":
         context["library"] = _library_context(q, domain)
     elif active_tab == "settings":
-        context["settings_rows"] = settings_mod.describe(path=db.DB_PATH)
-        context["channels"] = autonomy.list_channels(path=db.DB_PATH)
-        context["killed"] = autonomy.killed(path=db.DB_PATH)
+        context["settings_rows"] = settings_mod.describe()
+        context["channels"] = autonomy.list_channels()
+        context["killed"] = autonomy.killed()
     elif active_tab == "dataset":
-        context["golden"] = evalstore.list_golden(path=db.DB_PATH)
-        context["runs"] = list(reversed(evalstore.list_runs(path=db.DB_PATH)))
+        context["golden"] = evalstore.list_golden()
+        context["runs"] = list(reversed(evalstore.list_runs()))
     return templates.TemplateResponse(request, "dev_studio.html", context)
 
 
@@ -643,7 +641,7 @@ def grade_draw(mode: str = "any", message: Optional[str] = None, account_id: int
         if ungraded:
             pools.append(("shot", ungraded))
     if mode in ("golden", "any"):
-        golden_ids = [g["id"] for g in evalstore.list_golden(path=db.DB_PATH)]
+        golden_ids = [g["id"] for g in evalstore.list_golden()]
         if golden_ids:
             pools.append(("golden", golden_ids))
     if not pools:
@@ -677,11 +675,11 @@ async def grade_fresh(request: Request, account_id: int = Depends(auth.dev_accou
     try:
         from src.gemini_utils import generate_with_retry
 
-        references = shootgen.reference_block(spark=spark, db_path=db.DB_PATH)
+        references = shootgen.reference_block(spark=spark, db_path=None)
         prompt = shootgen.build_ideas_prompt(
-            preprod.list_locations(path=db.DB_PATH, account_id=account_id), brand, None, spark, 1,
+            preprod.list_locations(account_id=account_id), brand, None, spark, 1,
             references=references,
-            formats=shootgen.ranked_formats(path=db.DB_PATH))
+            formats=shootgen.ranked_formats(dsn=None))
         ideas = shootgen.parse_ideas_response(
             generate_with_retry(genai.Client(api_key=api_key),
                                 shootgen.MODEL, prompt))
@@ -737,7 +735,7 @@ def teach_verdict(tool, text, form, *, video_ref, subject, path, project=None):
 
     if replacement and verdict in ("teach", "deny"):
         result = winners.record_pair(
-            tool, text, replacement, note=note, video_ref=video_ref, path=path,
+            tool, text, replacement, note=note, video_ref=video_ref, dsn=path,
             project=project)
         if result.get("ingested"):
             return (f"Taught {subject} — future generations imitate your version "
@@ -745,7 +743,7 @@ def teach_verdict(tool, text, form, *, video_ref, subject, path, project=None):
     else:
         result = winners.record_and_learn(
             tool, text, note=note, video_ref=video_ref,
-            verdict="didnt_work" if verdict == "deny" else "worked", path=path,
+            verdict="didnt_work" if verdict == "deny" else "worked", dsn=path,
             project=project)
         if result.get("ingested"):
             verb = "steer away from" if verdict == "deny" else "imitate"
@@ -767,8 +765,8 @@ async def grade_fresh_verdict(request: Request,
             "/studio?tab=grade&message="
             + quote("Nothing to record — the text was empty."), status_code=303)
     message = teach_verdict("concept", text, form, video_ref="fresh-grade",
-                            project=accounts_mod.slug_of(account_id, path=db.DB_PATH),
-                            subject="the throwaway", path=db.DB_PATH)
+                            project=accounts_mod.slug_of(account_id),
+                            subject="the throwaway", path=None)
     return RedirectResponse(
         f"/studio?tab=grade&message={quote(message)}", status_code=303)
 
@@ -782,7 +780,7 @@ async def grade_golden_mark(golden_id: int, request: Request):
     form = dict(await request.form())
     source = (form.get("source") or "").strip()
     action = (form.get("action") or "add").strip()
-    row = next((g for g in evalstore.list_golden(path=db.DB_PATH)
+    row = next((g for g in evalstore.list_golden()
                 if g["id"] == golden_id), None)
     back = f"/studio?tab=grade&mode=golden&golden_id={golden_id}"
     if row is None or not source:
@@ -796,7 +794,7 @@ async def grade_golden_mark(golden_id: int, request: Request):
         relevant.append(source)
     try:
         evalstore.add_golden(row["query"], relevant,
-                             source=row.get("source") or "manual", path=db.DB_PATH)
+                             source=row.get("source") or "manual")
         message = ("Marked wrong — label removed." if action == "remove"
                    else "Marked right — label added.")
     except ValueError as e:
@@ -806,7 +804,7 @@ async def grade_golden_mark(golden_id: int, request: Request):
 
 @dev.post("/grade/golden/{golden_id}/delete")
 def grade_golden_delete(golden_id: int):
-    evalstore.delete_golden(golden_id, path=db.DB_PATH)
+    evalstore.delete_golden(golden_id)
     return RedirectResponse(
         "/grade/draw?mode=golden&message=" + quote("Removed from the golden set."),
         status_code=303)
@@ -822,7 +820,7 @@ async def studio_settings(request: Request):
     for key in settings_mod.TUNABLES:
         if key in form:
             try:
-                settings_mod.set_value(key, form.get(key) or "", path=db.DB_PATH)
+                settings_mod.set_value(key, form.get(key) or "")
             except ValueError as e:
                 errors.append(str(e))
     message = ("; ".join(errors) if errors
@@ -847,10 +845,10 @@ def dataset_export(what: str = "golden", fmt: str = "json"):
         rows = [{"id": g["id"], "created_at": g["created_at"],
                  "query": g["query"], "relevant": g["relevant"],
                  "source": g["source"]}
-                for g in evalstore.list_golden(path=db.DB_PATH)]
+                for g in evalstore.list_golden()]
     else:
         rows = [{**r, "config": r.get("config")}
-                for r in evalstore.list_runs(path=db.DB_PATH)]
+                for r in evalstore.list_runs()]
     filename = f"zeropage-{what}.{fmt}"
     if fmt == "json":
         body = json.dumps(rows, indent=2)
@@ -897,7 +895,7 @@ def dev_evals_run_detail(run_id: int):
 def dev_evals_requeries():
     """Production CRAG telemetry is dev-only even though it observes the
     shared retrieval path used by the product at /ui."""
-    return evalstore.crag_summary(path=db.DB_PATH)
+    return evalstore.crag_summary()
 
 
 @dev.get("/studio/api/evals/golden")
@@ -963,8 +961,8 @@ def videos_new_form(request: Request, account_id: int = Depends(auth.dev_account
         "videos_new.html",
         {
             "platforms": db.PLATFORMS,
-            "topics": db.distinct_video_field_values("topic", path=db.DB_PATH, account_id=account_id),
-            "hook_types": db.distinct_video_field_values("hook_type", path=db.DB_PATH, account_id=account_id),
+            "topics": db.distinct_video_field_values("topic", account_id=account_id),
+            "hook_types": db.distinct_video_field_values("hook_type", account_id=account_id),
         },
     )
 
@@ -975,7 +973,7 @@ async def videos_new_submit(request: Request, account_id: Optional[int] = None):
     parsed = parse_video_form(form)
     parsed.setdefault("brand", active_brand(request))  # tag to the active brand
     try:
-        db.add_video(**parsed, path=db.DB_PATH, account_id=account_id)
+        db.add_video(**parsed, account_id=account_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return RedirectResponse("/studio", status_code=303)
@@ -989,7 +987,7 @@ async def videos_import_youtube(request: Request):
         raise HTTPException(status_code=400, detail="a channel handle is required")
 
     api_key = os.environ.get("YOUTUBE_API_KEY")
-    result = youtube.import_channel_videos(handle, api_key=api_key, db_path=db.DB_PATH)
+    result = youtube.import_channel_videos(handle, api_key=api_key, db_path=None)
 
     if result["ok"]:
         message = f"Imported {result['added']} video(s) from {handle}"
@@ -1113,7 +1111,7 @@ def library_backfill_assets(describe: str = Form("")):
                 + quote("GEMINI_API_KEY not set — untick describe to ingest text only"),
                 status_code=303)
         client = genai.Client(api_key=api_key)
-    result = asset_shelf.backfill(db_path=db.DB_PATH, describe=want_describe,
+    result = asset_shelf.backfill(db_path=None, describe=want_describe,
                                   gemini_client=client)
     message = f"{result['ingested']} asset(s) on the shelf"
     if result["described"]:
@@ -1186,12 +1184,12 @@ def references_pick(request: Request, message: Optional[str] = None, account_id:
     # upload form -- one picker for everything a generation can be
     # grounded on, not two separate systems. Photo resolution mirrors
     # /studio's Workflow library exactly.
-    characters = entities.list_characters(path=db.DB_PATH, account_id=account_id)
+    characters = entities.list_characters(account_id=account_id)
     for c in characters:
         slug = safe_space_name(c["name"])
         c["photos"] = [f"/characters/{slug}/photo/{fn}?thumb=1"
                        for fn in _entity_photos(CHARACTERS_DIR, slug)]
-    props = entities.list_props(path=db.DB_PATH, account_id=account_id)
+    props = entities.list_props(account_id=account_id)
     for p in props:
         slug = safe_space_name(p["name"])
         p["photos"] = [f"/props/{slug}/photo/{fn}?thumb=1"
@@ -1327,7 +1325,7 @@ async def post_image_queue(request: Request,
 
     hold_id = autonomy.to_hold(
         channel, "Midjourney image queued for approval", caption=caption,
-        payload={"image_url": image_url}, status="held", path=db.DB_PATH,
+        payload={"image_url": image_url}, status="held",
         account_id=account_id)
     return RedirectResponse(
         "/holds?message=" + quote(f"Queued image post #{hold_id} for approval."),
@@ -1343,10 +1341,10 @@ def winners_page(request: Request, prompt: Optional[str] = None,
     -- and it is saved and taught to the pipeline via the RAG
     'winning_prompts' shelf shootgen grounds on. Arrives prefilled when
     you hand a prompt over from /holds (?prompt=...)."""
-    winners.init(path=db.DB_PATH)
+    winners.init()
     return templates.TemplateResponse(
         request, "winners.html",
-        {"winners": winners.list_all(path=db.DB_PATH),
+        {"winners": winners.list_all(),
          "prefill_prompt": prompt or "",
          "prefill_tool": (tool or "runway").lower(),
          "prefill_verdict": (verdict or "worked").lower(),
@@ -1360,7 +1358,7 @@ async def winners_add(request: Request,
     """Save the winner durably, then teach it to the pipeline. Saving
     always succeeds; the RAG ingest is best-effort so a down store never
     loses the winner -- it just re-ingests later."""
-    winners.init(path=db.DB_PATH)
+    winners.init()
     form = dict(await request.form())
     prompt = (form.get("prompt") or "").strip()
     if not prompt:
@@ -1370,8 +1368,8 @@ async def winners_add(request: Request,
     result = winners.record_and_learn(
         form.get("tool") or "runway", prompt,
         note=form.get("note") or "", video_ref=form.get("video_ref") or "",
-        verdict=form.get("verdict") or "worked", path=db.DB_PATH,
-        project=accounts_mod.slug_of(account_id, path=db.DB_PATH))
+        verdict=form.get("verdict") or "worked",
+        project=accounts_mod.slug_of(account_id))
     verb = "avoid" if result.get("verdict") == "didnt_work" else "imitate"
     if result.get("ingested"):
         message = f"Saved and taught — future generations will {verb} it."
@@ -1399,7 +1397,7 @@ async def holds_note(request: Request):
     form = dict(await request.form())
     note = (form.get("note") or "").strip()
     if note:
-        autonomy.add_correction(note, path=db.DB_PATH)
+        autonomy.add_correction(note)
         message = "Noted — the next run folds it in."
     else:
         message = "An empty note steers nothing."
@@ -1414,10 +1412,10 @@ async def channels_autonomy(name: str, request: Request):
     is a deliberate click, never a default."""
     form = dict(await request.form())
     level = (form.get("autonomy") or "").strip()
-    if autonomy.get_channel(name, path=db.DB_PATH) is None:
+    if autonomy.get_channel(name) is None:
         raise HTTPException(status_code=404, detail="no such channel")
     try:
-        autonomy.set_autonomy(name, level, path=db.DB_PATH)
+        autonomy.set_autonomy(name, level)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return RedirectResponse(
@@ -1429,11 +1427,11 @@ async def channels_autonomy(name: str, request: Request):
 async def kill_toggle():
     """One place to pull the plug -- and to put it back. Global on
     purpose: every channel holds while it's on."""
-    if autonomy.killed(path=db.DB_PATH):
-        autonomy.unkill(path=db.DB_PATH)
+    if autonomy.killed():
+        autonomy.unkill()
         message = "Kill switch OFF — channels follow their own autonomy again."
     else:
-        autonomy.kill("killed from the dev studio", path=db.DB_PATH)
+        autonomy.kill("killed from the dev studio")
         message = "Kill switch ON — everything holds."
     return RedirectResponse(
         f"/studio?tab=settings&message={quote(message)}", status_code=303)
@@ -1446,7 +1444,7 @@ def analytics(request: Request, updated: Optional[int] = None, message: Optional
     # Scope to the active brand (NULL-inclusive: untagged legacy videos still
     # show, so nothing disappears while the pipeline tags new posts).
     brand = active_brand(request)
-    rows = [r for r in db.latest_metrics_by_video(path=db.DB_PATH, account_id=account_id)
+    rows = [r for r in db.latest_metrics_by_video(account_id=account_id)
             if r.get("brand") in (None, brand)]
 
     # One measure (views) across named videos: a sorted bar list, each
@@ -1478,10 +1476,10 @@ def analytics(request: Request, updated: Optional[int] = None, message: Optional
 @dev.post("/metrics/new")
 async def metrics_new_submit(request: Request, account_id: int = Depends(auth.dev_account_id)):
     form = dict(await request.form())
-    video_ids = [r["video_id"] for r in db.latest_metrics_by_video(path=db.DB_PATH, account_id=account_id)]
+    video_ids = [r["video_id"] for r in db.latest_metrics_by_video(account_id=account_id)]
     changed = parse_metrics_form(form, video_ids)
     for vid, fields in changed.items():
-        db.record_metrics(vid, path=db.DB_PATH, **fields, account_id=account_id)
+        db.record_metrics(vid, **fields, account_id=account_id)
     return RedirectResponse(f"/analytics?updated={len(changed)}", status_code=303)
 
 
@@ -1490,18 +1488,18 @@ def metrics_refresh(video_id: int, account_id: int = Depends(auth.dev_account_id
     """One dispatch on the video's platform; every branch returns a
     result dict, so a missing key or failed call is a message on the
     analytics page and manual entry keeps working."""
-    video = db.get_video(video_id, path=db.DB_PATH, account_id=account_id)
+    video = db.get_video(video_id, account_id=account_id)
     if video is None:
         raise HTTPException(status_code=404, detail="video not found")
 
     if video["platform"] == "instagram":
         result = instagram.refresh_metrics_for_video(
-            video, token=instagram.access_token(), db_path=db.DB_PATH,
+            video, token=instagram.access_token(), db_path=None,
         )
     else:
         api_key = os.environ.get("YOUTUBE_API_KEY")
         result = youtube.refresh_metrics_for_video(video, api_key=api_key,
-                                                   db_path=db.DB_PATH)
+                                                   db_path=None)
 
     if result["ok"]:
         message = f"Refreshed {video['title']}: {result['views']} views"
@@ -1513,10 +1511,10 @@ def metrics_refresh(video_id: int, account_id: int = Depends(auth.dev_account_id
 
 @dev.get("/videos/{video_id}")
 def video_detail(request: Request, video_id: int, account_id: int = Depends(auth.dev_account_id)):
-    video = db.get_video(video_id, path=db.DB_PATH, account_id=account_id)
+    video = db.get_video(video_id, account_id=account_id)
     if video is None:
         raise HTTPException(status_code=404, detail="video not found")
-    history = db.get_video_history(video_id, path=db.DB_PATH, account_id=account_id)
+    history = db.get_video_history(video_id, account_id=account_id)
     return templates.TemplateResponse(
         request,
         "video_detail.html",
@@ -1673,7 +1671,7 @@ async def concept_shot_reference(concept_id: int, shot_n: int, request: Request,
 
     try:
         if form.get("remove"):
-            preprod.set_shot_reference_image(concept_id, shot_n, "", path=db.DB_PATH, account_id=account_id)
+            preprod.set_shot_reference_image(concept_id, shot_n, "", account_id=account_id)
             return back(f"Reference cleared from shot {shot_n}.")
 
         image_url = (form.get("reference_url") or "").strip()
@@ -1696,7 +1694,7 @@ async def concept_shot_reference(concept_id: int, shot_n: int, request: Request,
                 return back(f"Reference upload failed: {e}")
         if not image_url:
             return back("Attach a capture — a file, or a public image URL.")
-        preprod.set_shot_reference_image(concept_id, shot_n, image_url, path=db.DB_PATH, account_id=account_id)
+        preprod.set_shot_reference_image(concept_id, shot_n, image_url, account_id=account_id)
     except ValueError as e:
         return back(str(e))
     return back(f"Reference attached to shot {shot_n} — the AI generation anchors on it.")
@@ -1718,8 +1716,8 @@ async def concept_verdict(concept_id: int, request: Request,
         return _redirect_with_message(destination, "Nothing to record — the text was empty.")
     message = teach_verdict("concept", text, form,
                             video_ref=f"concept-{concept_id}",
-                            subject=f"SHOOT-{concept_id:02d}", path=db.DB_PATH,
-                            project=accounts_mod.slug_of(account_id, path=db.DB_PATH))
+                            subject=f"SHOOT-{concept_id:02d}", path=None,
+                            project=accounts_mod.slug_of(account_id))
     return _redirect_with_message(destination, message)
 
 
@@ -1737,8 +1735,8 @@ async def concept_shot_verdict(concept_id: int, shot_n: int, request: Request,
     tool = (form.get("tool") or "runway").strip().lower()
     message = teach_verdict(tool, text, form,
                             video_ref=f"concept-{concept_id}-shot-{shot_n}",
-                            subject=f"shot {shot_n}", path=db.DB_PATH,
-                            project=accounts_mod.slug_of(account_id, path=db.DB_PATH))
+                            subject=f"shot {shot_n}", path=None,
+                            project=accounts_mod.slug_of(account_id))
     return _redirect_with_message(destination, message)
 
 
@@ -1759,11 +1757,11 @@ def concepts_grade(concept_id: int, next: str = Form(""), account_id: int = Depe
     """Score one concept on taste fit + predicted performance (BACKLOG #5)
     against your own history, and store it so the card shows it. One billed
     model call, on your click -- never automatic."""
-    concept = preprod.get_concept(concept_id, path=db.DB_PATH, account_id=account_id)
+    concept = preprod.get_concept(concept_id, account_id=account_id)
     if concept is None:
         raise HTTPException(status_code=404, detail="no such concept")
-    judge = taste_judge.score_concept(concept, db_path=db.DB_PATH)
-    preprod.save_judge_score(concept_id, judge, path=db.DB_PATH, account_id=account_id)
+    judge = taste_judge.score_concept(concept, db_path=None)
+    preprod.save_judge_score(concept_id, judge, account_id=account_id)
     if judge.get("graded"):
         msg = (f"Graded SHOOT-{concept_id:02d}: {judge['overall']:.0f}/10 "
                f"(taste {judge['taste_fit']:.0f}, perf {judge['performance']:.0f})")
@@ -1793,10 +1791,10 @@ def concepts_pass(concept_id: int, reason: str = Form(""), next: str = Form(""),
     what makes this cheap enough to actually use, unlike the billed
     Grade button beside it.
     """
-    if preprod.get_concept(concept_id, path=db.DB_PATH, account_id=account_id) is None:
+    if preprod.get_concept(concept_id, account_id=account_id) is None:
         raise HTTPException(status_code=404, detail="no such concept")
     reason = (reason or "").strip()
-    preprod.set_archived(concept_id, path=db.DB_PATH, account_id=account_id,
+    preprod.set_archived(concept_id, account_id=account_id,
                          reason=reason)
     said = f" — {reason}" if reason else ""
     return _redirect_with_message(safe_next(next, "/studio?tab=grade"),
@@ -1809,7 +1807,7 @@ def concepts_discard_all(request: Request, account_id: Optional[int] = None):
     """Clear every concept for the active brand -- a fresh slate when the
     generator's slate isn't landing."""
     brand = active_brand(request)
-    n = preprod.delete_all_concepts(brand=brand, path=db.DB_PATH, account_id=account_id)
+    n = preprod.delete_all_concepts(brand=brand, account_id=account_id)
     return RedirectResponse(
         "/concepts?message=" + quote(f"Discarded all {n} {brand} concept(s)."),
         status_code=303)
@@ -1821,11 +1819,11 @@ def concepts_grade_all(account_id: int = Depends(auth.dev_account_id)):
     billed call, so this is an explicit button, not automatic. Signals are
     gathered once and reused across the batch. Concepts passed on are not
     in the queue and so are never billed for (2026-09-02)."""
-    signals = taste_judge.gather_signals(db_path=db.DB_PATH)
+    signals = taste_judge.gather_signals(db_path=None)
     graded = 0
     for c in _ungraded_concepts(account_id):
-        judge = taste_judge.score_concept(c, signals=signals, db_path=db.DB_PATH)
-        preprod.save_judge_score(c["id"], judge, path=db.DB_PATH, account_id=account_id)
+        judge = taste_judge.score_concept(c, signals=signals, db_path=None)
+        preprod.save_judge_score(c["id"], judge, account_id=account_id)
         graded += 1
     return RedirectResponse(
         "/concepts?message=" + quote(f"Graded {graded} concept(s)."), status_code=303)
@@ -1833,7 +1831,7 @@ def concepts_grade_all(account_id: int = Depends(auth.dev_account_id)):
 
 @dev.post("/concepts/scene-brief/{brief_id}/delete")
 def scene_brief_delete(brief_id: int, account_id: Optional[int] = None):
-    preprod.delete_scene_brief(brief_id, path=db.DB_PATH, account_id=account_id)
+    preprod.delete_scene_brief(brief_id, account_id=account_id)
     return RedirectResponse(
         "/concepts?message=" + quote(f"Discarded scene brief #{brief_id}."),
         status_code=303)
@@ -1844,7 +1842,7 @@ def inspiration_add(handle: str = Form(...), note: str = Form(""), profile: str 
     """Add or update an inspiration account -- e.g. once you've pasted posts
     for an account I couldn't reach."""
     try:
-        inspiration.add(handle, note, profile, path=db.DB_PATH)
+        inspiration.add(handle, note, profile)
         msg = f"Saved inspiration @{handle.lstrip('@').strip().lower()}."
     except ValueError as e:
         msg = str(e)
@@ -1853,7 +1851,7 @@ def inspiration_add(handle: str = Form(...), note: str = Form(""), profile: str 
 
 @dev.post("/inspiration/{handle}/delete")
 def inspiration_delete(handle: str):
-    inspiration.delete(handle, path=db.DB_PATH)
+    inspiration.delete(handle)
     return RedirectResponse(
         "/concepts?message=" + quote(f"Removed inspiration @{handle}."), status_code=303)
 
@@ -1872,11 +1870,11 @@ def safe_next(value: Optional[str], default: str) -> str:
 
 @dev.post("/concepts/{concept_id}/shot")
 def concepts_mark_shot(concept_id: int, next: str = Form(""), account_id: int = Depends(auth.dev_account_id)):
-    concept = preprod.get_concept(concept_id, path=db.DB_PATH, account_id=account_id)
+    concept = preprod.get_concept(concept_id, account_id=account_id)
     if concept is None:
         raise HTTPException(status_code=404, detail="concept not found")
 
-    preprod.mark_shot(concept_id, shot=not concept["shot_done"], path=db.DB_PATH, account_id=account_id)
+    preprod.mark_shot(concept_id, shot=not concept["shot_done"], account_id=account_id)
     return RedirectResponse(safe_next(next, "/concepts"), status_code=303)
 
 

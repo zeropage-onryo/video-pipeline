@@ -43,7 +43,7 @@ def _win_score(name: str, worked_text: str) -> int:
     return sum(worked_text.count(kw) for kw in kws)
 
 
-def rank_formats(path=None, spice=None, limit: int | None = None) -> list[tuple[str, str]]:
+def rank_formats(dsn=None, spice=None, limit: int | None = None) -> list[tuple[str, str]]:
     """
     The skeleton menu Zero Page rides, ranked. Proven formats (those whose
     signatures show up most in worked winners) float to the top; the rest keep
@@ -54,8 +54,7 @@ def rank_formats(path=None, spice=None, limit: int | None = None) -> list[tuple[
 
     ranked = evergreen
     try:
-        kwargs = {"path": path} if path is not None else {}
-        rows = winners.list_all(**kwargs)
+        rows = winners.list_all(dsn=dsn)
         blob = " ".join(
             f"{(w.get('prompt') or '')} {(w.get('note') or '')}".lower()
             for w in rows

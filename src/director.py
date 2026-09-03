@@ -87,7 +87,7 @@ def direct_scene(concept_id: int, note: str, gemini_client=None,
     from . import shootgen
 
     note = (note or "").strip()
-    kwargs = {"path": db_path} if db_path is not None else {}
+    kwargs = {"dsn": db_path} if db_path is not None else {}
     try:
         if not note:
             return {"ok": False, "error": "an empty note directs nothing"}
@@ -161,7 +161,7 @@ def refine_shot_prompt(concept_id: int, shot_n, gemini_client=None,
                 "error": "prompt polish (promptgen.refine_prompt) hasn't "
                          "landed in this build yet"}
 
-    kwargs = {"path": db_path} if db_path is not None else {}
+    kwargs = {"dsn": db_path} if db_path is not None else {}
     try:
         concept = preprod.get_concept(concept_id, **kwargs, account_id=account_id)
         if concept is None:

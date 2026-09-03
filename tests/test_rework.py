@@ -11,15 +11,14 @@ import json
 
 import pytest
 
-from src import db, preprod, rework
+from src import preprod, rework
 
 
 @pytest.fixture
-def tmp_db(tmp_path):
-    path = tmp_path / "test.db"
-    db.init_db(path)
+def tmp_db(pg):
+    path = pg
     preprod.init(path)
-    preprod.add_location("garage", {"space": "cold garage"}, path=path, account_id=None)
+    preprod.add_location("garage", {"space": "cold garage"}, dsn=path, account_id=None)
     return path
 
 
@@ -50,7 +49,7 @@ def test_format_signals_with_no_sample_says_so():
 
 
 def test_build_rework_prompt_fills_every_placeholder(tmp_db):
-    locations = preprod.list_locations(path=tmp_db, account_id=None)
+    locations = preprod.list_locations(dsn=tmp_db, account_id=None)
     prompt = rework.build_rework_prompt(
         locations, brand="antihero", signals=SIGNALS, count=4,
         references="REF BLOCK",
@@ -70,7 +69,7 @@ def test_propose_slate_saves_ideas_with_their_evidence(tmp_db, monkeypatch):
     assert result["ideas"][0]["evidence"].startswith("workshop")
     # proposals are ordinary concept ideas -- the human pick (planning
     # one) stays the recorded label, measured by shortlist_rate
-    saved = preprod.list_concepts(path=tmp_db, account_id=None)
+    saved = preprod.list_concepts(dsn=tmp_db, account_id=None)
     assert {c["title"] for c in saved} == {"Ritual Two", "Ritual Three"}
 
 

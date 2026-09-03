@@ -12,13 +12,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from src import db, generative, runway
+from src import generative, runway
 
 
 @pytest.fixture
-def tmp_db(tmp_path):
-    path = tmp_path / "test.db"
-    db.init_db(path)
+def tmp_db(pg):
+    path = pg
     generative.init(path)
     return path
 
@@ -188,7 +187,7 @@ def seed_scene(path, reference=""):
     if reference:
         shot["reference_image"] = reference
     return preprod.save_concept(
-        {"title": "Vault", "shots": [shot]}, brand="antihero", path=path, account_id=None)
+        {"title": "Vault", "shots": [shot]}, brand="antihero", dsn=path, account_id=None)
 
 
 def test_for_shot_respects_the_spend_gate(scene_db, monkeypatch, tmp_path):
@@ -218,7 +217,7 @@ def test_for_shot_renders_logs_and_attaches(scene_db, approved, fake_download,
     assert "prompt_image" not in client.calls[0]     # no reference -> text-to-video
     # served from /renders, logged, and attached to the shot
     assert result["media_url"].startswith("/renders/runway/")
-    concept = preprod.get_concept(concept_id, path=scene_db, account_id=None)
+    concept = preprod.get_concept(concept_id, dsn=scene_db, account_id=None)
     assert concept["shots"][0]["media_url"] == result["media_url"]
     assert runway.generations_today(db_path=scene_db) == 1
 
@@ -301,7 +300,7 @@ def test_for_shot_missing_pieces_are_results(scene_db, approved, monkeypatch, tm
         {"title": "Cam only",
          "shots": [{"n": 1, "type": "CHARACTER", "source": "CAMERA",
                     "cam": "BMPCC", "location": "garage"}]},
-        brand="antihero", path=scene_db, account_id=None)
+        brand="antihero", dsn=scene_db, account_id=None)
     assert "no shot 9" in runway.generate_for_shot(
         concept_id, 9, db_path=scene_db, client=FakeClient())["error"]
     assert "no AI prompt" in runway.generate_for_shot(
@@ -382,7 +381,7 @@ def test_a_flagged_asset_name_is_swapped_for_its_alias(asset_db):
     from src import entities
     entities.add_character(
         "Cyclops", description=json.dumps({"render_alias": "one-eyed humanoid"}),
-        path=asset_db, account_id=None)
+        dsn=asset_db, account_id=None)
     out = runway.safe_prompt("A Cyclops polishes a spoon. The cyclops sighs.",
                              db_path=asset_db)
     assert "yclops" not in out
@@ -396,7 +395,7 @@ def test_an_asset_without_an_alias_is_left_alone(asset_db):
 
     from src import entities
     entities.add_character("Michael", description=json.dumps({"look": "a man"}),
-                           path=asset_db, account_id=None)
+                           dsn=asset_db, account_id=None)
     assert runway.safe_prompt("Michael rides", db_path=asset_db) == "Michael rides"
 
 
@@ -409,7 +408,7 @@ def test_the_swap_happens_before_the_length_check(asset_db, approved,
 
     from src import entities
     entities.add_character(
-        "Cyclops", description=json.dumps({"render_alias": "x"}), path=asset_db, account_id=None)
+        "Cyclops", description=json.dumps({"render_alias": "x"}), dsn=asset_db, account_id=None)
     prompt = "Cyclops " * 130          # 1040 chars, 260 once swapped
     assert len(prompt) > 1000
     seen = {}

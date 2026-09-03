@@ -29,7 +29,7 @@ from typing import Optional
 from dotenv import load_dotenv
 from google import genai
 
-from src import accounts, db, preprod, shootgen
+from src import accounts, preprod, shootgen
 
 
 def needs_one(concept: dict) -> bool:
@@ -63,8 +63,8 @@ def main(write: bool, account_id: Optional[int] = None) -> int:
     client = genai.Client(api_key=api_key)
 
     wanted, titles = {}, {}
-    for row in preprod.list_concepts(limit=1000, path=db.DB_PATH, account_id=account_id):
-        concept = preprod.get_concept(row["id"], path=db.DB_PATH, account_id=account_id)
+    for row in preprod.list_concepts(limit=1000, account_id=account_id):
+        concept = preprod.get_concept(row["id"], account_id=account_id)
         if needs_one(concept):
             wanted[concept["id"]] = concept["shots"][0]["prompt"]
             titles[concept["id"]] = concept["title"]
@@ -83,10 +83,10 @@ def main(write: bool, account_id: Optional[int] = None) -> int:
         flag = " (still long — the card will trim it)" if fitted.endswith("…") else ""
         print(f"  SHOOT-{concept_id:02d} {titles[concept_id][:26]:<28} — {line}{flag}")
         if write:
-            with preprod.connect(db.DB_PATH) as conn:
+            with preprod.connect() as conn:
                 conn.execute(
-                    "UPDATE shoot_concepts SET card_line = ? "
-                    "WHERE id = ? AND account_id IS ?",
+                    "UPDATE shoot_concepts SET card_line = %s "
+                    "WHERE id = %s AND account_id IS NOT DISTINCT FROM %s",
                     (line, concept_id, account_id))
         touched += 1
     print(f"\n{touched} concept(s) {'updated' if write else 'would be updated'}")

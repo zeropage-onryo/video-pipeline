@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 
 from app import api, workflow_runner
 from app.main import app
-from src import db, entities, imagery, preprod, refbin, shootgen
+from src import entities, imagery, preprod, refbin, shootgen
 
 client = TestClient(app)
 
@@ -34,12 +34,11 @@ def signed_in(monkeypatch):
 
 
 @pytest.fixture
-def tmp_db(tmp_path, monkeypatch):
-    path = tmp_path / "test.db"
-    db.init_db(path)
+def tmp_db(pg, monkeypatch):
+    path = pg
     preprod.init(path)
     entities.init(path)
-    monkeypatch.setattr(db, "DB_PATH", path)
+    monkeypatch.setenv("DATABASE_URL", path)
     return path
 
 
@@ -235,20 +234,20 @@ def test_a_manual_pick_outranks_an_inferred_one(tmp_db, monkeypatch):
     monkeypatch.setattr(api, "_assets_all", lambda account_id=None: CAST)
     scene_id = preprod.save_concept(
         {"title": "t", "shots": [{"n": 1, "source": "AI", "prompt": SCENE}]},
-        brand="zeropage", path=tmp_db, account_id=None)
+        brand="zeropage", dsn=tmp_db, account_id=None)
     refs = api._attach_scene_refs(scene_id, ["/locations/living-room/photo/a.jpg"])
     assert refs[0] == "/locations/living-room/photo/a.jpg"
     assert "/characters/michael/photo/a.jpg" in refs
-    assert preprod.get_concept(scene_id, path=tmp_db, account_id=None)["refs"] == refs
+    assert preprod.get_concept(scene_id, dsn=tmp_db, account_id=None)["refs"] == refs
 
 
 def test_attaching_never_rewrites_the_prompt(tmp_db, monkeypatch):
     monkeypatch.setattr(api, "_assets_all", lambda account_id=None: CAST)
     scene_id = preprod.save_concept(
         {"title": "t", "shots": [{"n": 1, "source": "AI", "prompt": SCENE}]},
-        brand="zeropage", path=tmp_db, account_id=None)
+        brand="zeropage", dsn=tmp_db, account_id=None)
     api._attach_scene_refs(scene_id, [])
-    assert preprod.get_concept(scene_id, path=tmp_db, account_id=None)["shots"][0]["prompt"] == SCENE
+    assert preprod.get_concept(scene_id, dsn=tmp_db, account_id=None)["shots"][0]["prompt"] == SCENE
 
 
 def test_no_assets_at_all_leaves_the_scene_alone(tmp_db, monkeypatch):
@@ -257,7 +256,7 @@ def test_no_assets_at_all_leaves_the_scene_alone(tmp_db, monkeypatch):
     monkeypatch.setattr(api, "_assets_all", lambda account_id=None: [])
     scene_id = preprod.save_concept(
         {"title": "t", "shots": [{"n": 1, "source": "AI", "prompt": SCENE}]},
-        brand="zeropage", path=tmp_db, account_id=None)
+        brand="zeropage", dsn=tmp_db, account_id=None)
     assert api._attach_scene_refs(scene_id, []) == []
 
 
@@ -326,7 +325,7 @@ def test_an_empty_ref_list_reads_the_shot_back(tmp_path, monkeypatch):
     refs = ["/characters/michael/photo/a.jpg", "/props/motorcycle/photo/b.jpg"]
     monkeypatch.setattr(
         "src.preprod.get_concept",
-        lambda concept_id, path=None, account_id=None: {"shots": [{"n": 1, "refs": refs}]})
+        lambda concept_id, dsn=None, account_id=None: {"shots": [{"n": 1, "refs": refs}]})
     urls = workflow_runner.node_reference_urls(
         {"id": 1}, {"concept_id": 121, "shot_n": 1,
                     "ref_urls": [], "image_url": ""}, {}, {})
