@@ -86,11 +86,24 @@ def init_all(dsn: str) -> list[str]:
     return ran
 
 
+def pipeline_tables() -> set[str]:
+    """The tables this script may read, count, truncate or write: the
+    tenancy ledger (every pipeline table is OWNED or declared SHARED --
+    tests/test_tenancy.py fails on one that is neither) plus the auth
+    tables. Anything else living in the target schema is somebody
+    else's -- on the Supabase project that is `rag_documents`, the RAG
+    library, which shares the `public` schema and must never be
+    truncated by a data copy that has no business with it."""
+    return set(db.OWNED_TABLES) | set(db.SHARED_TABLES) | {"users", "accounts", "account_members"}
+
+
 def target_tables(conn) -> list[str]:
-    return [r[0] for r in conn.execute(
+    """The pipeline tables that exist on the target, and only those."""
+    present = [r[0] for r in conn.execute(
         "SELECT table_name FROM information_schema.tables "
         "WHERE table_schema = current_schema() AND table_type = 'BASE TABLE' "
         "ORDER BY table_name")]
+    return [t for t in present if t in pipeline_tables()]
 
 
 def target_columns(conn, table: str) -> list[str]:
@@ -137,11 +150,19 @@ def copy(sqlite_path: pathlib.Path, dsn: str, *, dry_run: bool = False,
     counts = {t: src.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
               for t in source_tables if t not in DROPPED}
 
-    # the refusal happens before a single CREATE TABLE
+    # the refusal happens before a single CREATE TABLE; foreign tables in
+    # the same schema (the RAG library on Supabase) are neither counted
+    # here nor touched below
     with psycopg.connect(dsn) as probe:
         existing = target_tables(probe)
         occupied = {t: rows_in(probe, t) for t in existing}
         occupied = {t: n for t, n in occupied.items() if n}
+        foreign = [r[0] for r in probe.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'")
+            if r[0] not in pipeline_tables()]
+    if foreign:
+        print(f"leaving alone: {sorted(foreign)} (not pipeline tables)", file=out)
     if occupied and not truncate:
         raise SystemExit(
             f"refusing: the target already holds rows in {sorted(occupied)} -- "

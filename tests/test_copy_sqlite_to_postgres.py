@@ -135,3 +135,18 @@ def test_a_target_with_rows_is_refused_unless_told_to_truncate(old_db, pg):
 def test_main_refuses_to_guess_the_target(old_db, monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     assert copier.main(["--sqlite", str(old_db), "--dry-run"]) == 2
+
+
+def test_a_foreign_table_in_the_same_schema_is_never_touched(old_db, pg):
+    """On Supabase the pipeline shares `public` with rag_documents. A data
+    copy that truncated it would delete the reference library."""
+    with db.connect(pg) as conn:
+        conn.execute("CREATE TABLE rag_documents (id BIGINT PRIMARY KEY, body TEXT)")
+        conn.execute("INSERT INTO rag_documents VALUES (1, 'the library')")
+    out = io.StringIO()
+    result = copier.copy(old_db, pg, out=out)      # not refused: rag_documents is not ours
+    assert not result["problems"]
+    assert "leaving alone: ['rag_documents']" in out.getvalue()
+    assert _q(pg, "SELECT body FROM rag_documents") == [("the library",)]
+    copier.copy(old_db, pg, truncate=True, out=io.StringIO())
+    assert _q(pg, "SELECT body FROM rag_documents") == [("the library",)]
