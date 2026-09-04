@@ -12,3 +12,7 @@ data/_to_delete/
 .claude/
 *.pyc
 __pycache__/
+
+# Next.js marketing site -- built/deployed separately via Vercel, not part
+# of this Fly image
+web/
