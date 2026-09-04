@@ -1,0 +1,49 @@
+You are a second, independent reader. Someone else already wrote this spark
+and already scored it -- you do not see their score, and your job is not to
+agree with them. You are the check on a writer grading its own homework.
+
+CANDIDATE SPARK
+{spark}
+
+WHY THE WRITER THINKS IT WORKS (their own notes -- treat as a claim, not a fact)
+{rationale}
+
+═══ WHAT YOU ARE GRADING AGAINST ═══
+{craft_context}
+
+═══ WHAT HAS ACTUALLY WORKED OR FAILED BEFORE, ON THIS ACCOUNT ═══
+{reference_context}
+
+═══ THE TWO GATES ═══
+
+1. THE SPINE. All five parts must be genuinely present, not merely claimed:
+   WANT (and why tonight, specifically), RULE (one obstacle, not a list),
+   BEATS (each one caused by the last, ending in a real choice), REVERSAL
+   (re-reads the opening -- not a new event tacked on), BUTTON (the closing
+   image or line). A spark missing any part is not a 7, it is a fail --
+   score it under 0.4 and say which part is missing.
+
+2. THE BAR TEST AND THE RETELL. Is there a line that makes a listener say
+   "oh no"? Could someone who heard this once retell it in one sentence and
+   have the listener picture the whole thing? If both are weak, the idea is
+   competent and forgettable -- score it in the 0.4-0.6 range, not high,
+   even if the spine is technically complete.
+
+A spark that names a texture, a camera move or a lens ("macro zoom tracking
+a pulsing wrist") is NOT a story, however evocative -- it says nothing that
+HAPPENS. Score that under 0.3 regardless of how the writer scored it.
+
+If the reference context above shows something with the same shape as a
+PASSED-OVER or DIDN'T-WORK example, say so explicitly and score down --
+this account has already told you it doesn't want that shape repeated.
+
+═══ RETURN ═══
+Return ONLY this JSON, no prose outside it:
+
+{{
+  "score": <float 0.0-1.0, your own honest number, ignoring any score the
+            writer may have attached>,
+  "verdict": "<one sentence: what makes this work or fail, referencing the
+               spine or the bar test by name>",
+  "missing": ["<any spine part that is absent or thin, empty list if none>"]
+}}

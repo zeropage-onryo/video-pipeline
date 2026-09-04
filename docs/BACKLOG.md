@@ -311,6 +311,55 @@ user. The binding constraint is distribution, not architecture: none of section 
 of the task doc gets a single user. If the next session has to choose, the demo
 in front of ten people beats BYOK, and BYOK gets built the week someone asks.
 
+**STATUS UPDATE (2026-09-04) — BYOK is now half-shipped, discovered mid-session.**
+`src/account_keys.py` (the encrypted `account_keys` table + `key_for()` resolver
+this section specced) already existed and was already wired into
+`runway._make_client()` before today — the write-up above was stale on that
+point. Veo and Higgsfield were not: `veo._make_client()` took no `account_id`
+at all, and `higgsfield._credentials()`/`_request()`/`_submit_and_wait()` read
+`os.environ` directly. Wired both today, mirroring runway's exact shape
+(`_make_client`/`_credentials` resolve via `account_keys.key_for()` first, env
+fallback unchanged) — `has_key(account_id)` added to `veo.py` (was missing
+entirely). Midjourney and nano_banana/Gemini deliberately left untouched: this
+section's own "recommended shape" already decided Mike's keys pay for the cheap
+high-frequency steps and Midjourney's no-API resale case, so wiring those would
+have contradicted the decision already on record here.
+
+Wiring it in surfaced three real, independent bugs in `account_keys.py` itself
+— it had never actually been exercised end-to-end before (no
+`tests/test_account_keys.py` exists):
+1. `PROVIDER_ENV_FALLBACK`'s env-name fallback was a flat tuple zipped
+   positionally against `PROVIDER_FIELDS`. Fine for a single-field provider,
+   silently broken for higgsfield's two fields with four candidate names
+   (`HIGGSFIELD_*` + legacy `HF_*`) — `key_for()` returned `None` even with
+   the primary env vars set, because `len(fields) != len(env_names)`. Fixed:
+   `PROVIDER_ENV_FALLBACK` now groups candidate names *per field* and
+   `key_for()` resolves each field independently.
+2. `account_keys.init()` took a live `sqlite3.Connection`, the only schema
+   module in the repo that doesn't take `(path)` and open its own connection
+   — broke `tests/test_tenancy_routes.py`'s generic schema-module discovery
+   the moment `account_keys.py` (which has a `CREATE TABLE`) was picked up by
+   it. Renamed the connection-level function to `_init_schema(conn)`; `init()`
+   now takes `path` like every other module.
+3. `account_keys` itself was never added to `db.OWNED_TABLES` — added, with
+   its own comment; `tests/test_tenancy.py`'s fixture updated to init it
+   alongside the other owned-table modules.
+
+Verified: full suite (cloud copy, per [[verifying]]) — 1460 passed, 9 xfailed,
+zero regressions from any of the above. Ten remaining failures are pre-existing
+and unrelated (`test_imagesearch.py`, `test_scout_separation.py`, one flaky
+`test_scenes_pick.py` order-dependency, and two `test_runway.py` tests whose
+mocks predate runway's own earlier BYOK wiring and were never updated — not
+today's changes, worth a follow-up pass).
+
+Still open from the original write-up: the two acknowledged bugs above
+(`*_GLOBAL_DAILY_CAP` defaults, both fixed now — Veo's SPEND_OK was #12; the
+cap-sizing decision itself is still unmade), encryption-at-rest operational
+concerns (`ACCOUNT_KEYS_SECRET` handling, backup exposure), and no UI yet for a
+user to actually enter a key (`account_keys` CLI only). The distribution
+argument above still holds — this was worth finishing once found half-done,
+not a signal to prioritize the rest of BYOK yet.
+
 ## 2. Cost-efficiency tracker  (NEXT — scoped 2026-09-01, not started)
 "Build a tracker to make cost efficiency issues visible."
 
@@ -763,3 +812,56 @@ composer upload picked it up and it is in live use on #171/#172.
 A first — it is small and it is the only thing that lets the system see the
 work Mike is actually making. Then C (references are what separate #171 from
 the 48 rows before it), then B. D and E are cheap. F is not fixable here.
+
+## 15. Review-queue UI — ML-labeling / editorial-CMS pattern, not a video-tool pattern  (parked — Mike's ask, 2026-09-04)
+
+From the UI-revamp research thread (2026-09-04, see the landing-page mood board
+artifact from that session): none of the AI production comps studied — LTX
+Studio, Krea, Runway, Higgsfield — have solved the actual decision layer of this
+app well. They're all built to *generate and browse*, not to *decide and
+record why*. Zero Page's real differentiator is the opposite half: Pipeline is
+a board of concept cards awaiting a verdict, and every unpicked row is a
+training label (`pick_rate`, per [[studio_shape]] — archive, never delete). The
+closer analogs for *that* screen are ML data-labeling tools (Label Studio,
+Scale) and editorial CMS review queues (a WordPress moderation queue, a
+code-review diff-approve UI, Airtable's row-expand + status-field pattern) —
+not anything in the AI-video-tool category.
+
+**Why this is worth a dedicated pass instead of folding into the general UI
+readability item (#1):** labeling/review UIs share a specific vocabulary the
+current Pipeline board doesn't have —
+
+- **Focus mode, one card at a time**, entered from the grid, with keyboard
+  shortcuts for the verdict (`a` approve, `x` reject/archive, `->` next) so a
+  fast reviewer never touches the mouse. The board stays the overview; focus
+  mode is where the actual grading happens.
+- **The verdict always asks "why," inline, at the moment of the decision** —
+  not a free-text box after the fact. This is the same gap as backlog item
+  13-D (`archive()` records no reason): a short reason-tag picker
+  (`weak concept - no turn - no stake - off-brand - unshootable - seen it`,
+  the vocabulary already proposed there) shown the instant you reject, not a
+  separate flow. Item 13-D is the backend half of this; this item is the UI
+  half — they should ship together.
+- **Batch actions on a filtered slice** (select all "3 concepts, ungraded,
+  this week" -> archive with one reason applied to all) — the thing Airtable
+  and every labeling tool get right that a card grid doesn't: most of a
+  review session is bulk-clearing the obvious no's, not agonizing over one
+  card.
+- **Progress as a visible number, not implied** — "14 of 52 graded" the way a
+  labeling tool always shows queue depth, so a review session has a visible
+  end instead of infinite scroll.
+- **The diff/before-after habit from code review** applies directly to a
+  concept that was revised (Direct/Polish per [[director_canvas]]) — show
+  what changed since last seen, not just the current state, so a reviewer
+  isn't re-reading a card they already passed on.
+
+**Where this touches existing surfaces:** Pipeline (the board) stays the
+overview grid it already is — per [[studio_shape]], no new surface, no tabs.
+This is a *mode* on Pipeline (grid <-> focus-review), plus the reason-tag capture
+on Queue's reject/archive action and the Dev Studio grading flow ([[grade_queue]]
+— 7+ is a mark, not a gate; this doesn't change that rule, it changes how the
+mark gets entered).
+
+Not scoped yet — this is a direction, not a build plan. Revisit after #1 (UI
+readability pass) and #13-D/B are settled, since the reason-tag vocabulary and
+the `shot` column both feed the same review moment this would touch.
