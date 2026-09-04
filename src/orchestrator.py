@@ -1020,28 +1020,47 @@ def generate_render(state: GenState) -> GenState:
 
     tool==VEO keeps the legacy veo.py path for when Veo
     returns to the registry; anything else is honestly "no adapter
-    wired"."""
+    wired" -- unless the aggregator registry (providers.py, 2026-09-04)
+    has a usable fallback: a missing adapter, a provider without a key/
+    spend approval, or a failed attempt no longer parks the shot
+    outright. choose_provider() picks the next-best usable tool by this
+    account's real cost-per-keeper and one retry is made through it.
+    This is failover only -- shootgen's upstream tool choice still wins
+    whenever the assigned connector actually works, so creative
+    selection is untouched; the registry only steps in on failure."""
     prompts = state.get("prompts", [])
     if os.environ.get("ZEROPAGE_RENDER") != "1":
         return {"clips": [{**p, "url": None, "ok": False} for p in prompts]}
 
-    from . import higgsfield, runway, veo
+    from . import higgsfield, providers, runway, veo
     connectors = {"VEO": veo, "RUNWAY": runway, "HIGGSFIELD": higgsfield}
     out_root = (db.PROJECT_ROOT / "footage" / "generated"
                 / f"concept-{state.get('concept_id', 'x')}")
+    account_id = state.get("account_id")
     clips = []
     for index, p in enumerate(prompts, start=1):
-        connector = connectors.get((p.get("tool") or "").upper())
-        if connector is None:
-            clips.append({**p, "url": None, "ok": False,
-                          "error": f"no adapter wired for {p.get('tool')}"})
-            continue
-        result = connector.generate_candidates(
-            p["prompt"], out_root / f"shot{index}", n=1, db_path=None)
-        if result["ok"] and result["candidates"]:
+        tool_name = (p.get("tool") or "").upper()
+        connector = connectors.get(tool_name)
+        tried = {tool_name.lower()} if tool_name else set()
+        result = None
+        if connector is not None:
+            result = connector.generate_candidates(
+                p["prompt"], out_root / f"shot{index}", n=1, db_path=None)
+        if result and result["ok"] and result["candidates"]:
             clips.append({**p, "url": result["candidates"][0]["path"], "ok": True})
-        else:
-            clips.append({**p, "url": None, "ok": False, "error": result.get("error")})
+            continue
+        fallback = providers.choose_provider(account_id, exclude=tuple(tried))
+        if fallback is not None:
+            fb_result = providers.VIDEO_PROVIDERS[fallback].generate_candidates(
+                p["prompt"], out_root / f"shot{index}", n=1, db_path=None)
+            if fb_result["ok"] and fb_result["candidates"]:
+                clips.append({**p, "url": fb_result["candidates"][0]["path"],
+                              "ok": True, "tool": fallback.upper(),
+                              "failover_from": tool_name or None})
+                continue
+        error = (result.get("error") if result
+                 else f"no adapter wired for {p.get('tool')}")
+        clips.append({**p, "url": None, "ok": False, "error": error})
     return {"clips": clips}
 
 
