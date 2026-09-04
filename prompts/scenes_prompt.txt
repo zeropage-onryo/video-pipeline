@@ -12,8 +12,17 @@ the hook against each other.
 THE IDEA FROM THE FILMMAKER — every scene must be a distinct take on THIS:
 {idea}
 
-BRAND:
-{brand}
+RUN-SPECIFIC CREATIVE AUTHORITY:
+- The filmmaker's idea above is the primary brief. Preserve its subject,
+  premise, characters, genre, setting and emotional turn.
+- Any images attached to this run are direct visual evidence. Let what they
+  actually show define the relevant identity, environment, wardrobe, objects,
+  composition, palette and mood; do not replace them with a familiar channel
+  motif.
+- The selected reference library supports the idea and attached images.
+- The channel note below is only broad background. Use it to fill details the
+  run leaves open, never to override, narrow or redirect the run. If anything
+  conflicts, the idea and attached images win.
 
 CAST & PROPS ON FILE (reference the uploaded photos as the EXACT face / EXACT
 clothing where they apply; name them, don't redescribe their appearance):
@@ -25,6 +34,9 @@ it needs; you are NOT limited to real rooms, and no room has to appear:
 
 REFERENCE LIBRARY (tone and structure to echo):
 {references}
+
+CHANNEL DIRECTION (rough context, not strict generation rules):
+{brand}
 
 GOLD-STANDARD EXAMPLE — match the SHAPE and craft of this proven prompt (its
 hook, grounded style block, sequential beats, diegetic-sound block, and hard
@@ -39,7 +51,8 @@ Write each "prompt" as a single cohesive directive with these five parts, in ord
 2. STYLE: raw handheld, close wide-angle placement, natural camera shake,
    imperfect framing that drifts and re-centres, muted colour, practical light,
    real locations, grounded and rough — NOT glossy, epic or stylized. Fold in
-   the brand's grade here so it still belongs to that world.
+   the run's references and stated mood here. Use the channel's fallback grade
+   only where those inputs leave the look unspecified.
 3. BEATS: 4-7 sequential beats in prose. Open on an uncomfortable or arresting
    image (the frame-1 hook), turn/reveal, escalate with grounded physical
    comedy or tension, and END ABRUPTLY. Reactions are serious and physically
