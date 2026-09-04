@@ -508,8 +508,29 @@ Mike's hands on the dashboard.
       /auth/google/callback and /auth/discord/callback" bullet is now the
       Supabase allow-list bullet above.
 
-**The data copy, still to write.** Every `users` row copied from
-`data/pipeline.db` lands with a placeholder id and `claimed_at` NULL, so
-each person's first Supabase sign-in claims their row and memberships —
-no re-invite needed. `password_hash` and `auth_identities` are not
-copied; Supabase has them the moment the person signs in there.
+**The data copy** is `ops/copy_sqlite_to_postgres.py` (2026-09-04). It
+reads the SQLite file with the standard library, runs every schema
+owner's `init()` on the target, copies table by table in the order the
+target's own foreign keys dictate with ids preserved, resets the
+identity sequences past the highest id copied, and prints source-vs-
+target counts. Every `users` row lands with a placeholder id and
+`claimed_at` NULL, so each person's first Supabase sign-in claims their
+row and memberships — no re-invite; `password_hash` and
+`auth_identities` are not copied, Supabase has them the moment the
+person signs in there. The seeds the inits plant (channels, the
+inspiration accounts, the golden set) lose to the file. A target that
+already holds rows is refused unless `--truncate`; `--dsn` or
+`DATABASE_URL` is required, never the compose default. Verified on a
+copy of the live file: 414 rows in 32 tables, every count matching,
+concepts and holds reading back through `preprod` and `autonomy`, the
+next concept id continuing at 168. Tables the target has no owner for
+are reported as a problem and skipped (on 2026-09-04 that was
+`llm_calls`, the cost tracker still on the other session's local
+`main`; it copies once that owner reaches `origin/main`).
+
+**Cutover order, when the time comes:** stop every process that writes
+`data/pipeline.db` (the app, the nightly launchd job, any session's
+worktree), rename the file aside so nothing can keep writing it, run
+the copy into the real Postgres with `DATABASE_URL` set, start
+everything back up on `DATABASE_URL`. The copy is idempotent with
+`--truncate`, so a rehearsal against a scratch database costs nothing.

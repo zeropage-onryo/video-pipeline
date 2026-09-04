@@ -98,6 +98,10 @@ venv/bin/python -m src.rag_eval <cases.json> [--k 5]   # hit@k + MRR over labele
 venv/bin/python -m src.mcp_server --engine   # stdio; Claude Desktop launches this itself
 # Registering it: ops/connect-claude.md (paste ops/claude-desktop-mcp.json, ⌘Q, reopen)
 
+# THE DATA COPY — data/pipeline.db (SQLite) into Postgres, once, at cutover.
+# Refuses a non-empty target and never guesses the DSN; --dry-run counts.
+venv/bin/python -m ops.copy_sqlite_to_postgres --dsn "$DATABASE_URL" [--dry-run] [--truncate]
+
 # SIGN-IN — seed the auth tables once (idempotent); real login guards /ui + /api
 venv/bin/python -m src.accounts seed you@example.com   # identity is Supabase Auth's
 
