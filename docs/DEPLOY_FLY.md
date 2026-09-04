@@ -1,16 +1,15 @@
 # Deploying to Fly.io — backlog #14 phase 5
 
-Written 2026-09-03 alongside the Dockerfile / fly.toml / ops/fly/*. Nothing
-here has been run — no Fly account was created, no image was built, no
-machine exists yet. This is the guide for when phase 4 (Postgres + RLS) is
-done and it's time to leave the Mac.
+Written 2026-09-03 alongside the Dockerfile / fly.toml / ops/fly/* and
+updated after the Supabase Postgres/Auth cutover. No Fly machine has been
+launched from this repository yet.
 
 ## Before this phase, not during it
 
-Do not launch this while `data/pipeline.db` is still SQLite. The Dockerfile
-copies the app, not the database, and a box pointed at a file that only
-exists on the Mac is "the worst of both" (backlog #14's own words). Phase 4
-first.
+The application schema and live data are now in Supabase. The final copy
+matched all 32 pipeline tables, including 17 `llm_calls` rows, and left the
+353-row `rag_documents` library alone. Do not point a Fly deployment back at
+the old SQLite file.
 
 ## What's already written
 
@@ -21,7 +20,8 @@ first.
 - `ops/fly/supervisord.conf` — the two processes (web, cron).
 - `ops/fly/entrypoint.sh` — dumps the container's real environment (Fly
   secrets included) to a file the cron jobs source, because cron does not
-  inherit environment variables the way a shell does.
+  inherit environment variables the way a shell does. It runs
+  `ops/fly/preflight.sh` first and refuses a partial production config.
 - `fly.toml` — one shared-cpu-1x machine, `iad` (Virginia, same region as
   the Supabase project), `auto_stop_machines = false` because this machine
   also runs the 22:00 / 03:30 nightly jobs — letting Fly sleep it would
@@ -38,26 +38,44 @@ first.
 3. `fly volumes create zeropage_data --region iad --size 3` — the mount
    `fly.toml` expects, for `data/renders` / `data/refs` / `data/thumbs`.
    Not the footage bank; size to what those three actually hold.
-4. Secrets, one call per name (values from your current `.env`):
+4. Set the required production secrets (values from the current `.env` and
+   Supabase dashboard). `DATABASE_URL` and `RAG_DATABASE_URL` can use the
+   same Supabase session-pooler URL. Keep the existing
+   `ACCOUNT_KEYS_SECRET`; replacing it makes migrated encrypted provider
+   keys unreadable.
    ```
    fly secrets set \
      DATABASE_URL="postgresql://...supabase..." \
      RAG_DATABASE_URL="postgresql://...supabase..." \
+     SUPABASE_URL="https://<project-ref>.supabase.co" \
+     SUPABASE_ANON_KEY="..." \
      SESSION_SECRET="..." \
      ACCOUNT_KEYS_SECRET="..." \
+     SUPABASE_PROVIDERS="google,discord" \
      GEMINI_API_KEY="..." \
      RUNWAYML_API_SECRET="..." \
      HIGGSFIELD_API_KEY_ID="..." HIGGSFIELD_API_KEY_SECRET="..." \
-     GOOGLE_CLIENT_ID="..." GOOGLE_CLIENT_SECRET="..." \
      SITE_URL="https://zeropage-studio.fly.dev"
    ```
-   (full list: everything currently in `.env` that isn't a comment or blank)
+   `SUPABASE_JWT_SECRET` is optional on projects using asymmetric signing;
+   without it the app verifies tokens against Supabase's JWKS endpoint.
+   Add the active providers' keys and the global daily caps from `.env`, but
+   do **not** copy `DEV_TOOLS=1`, per-run spend approvals, or local-only MCP
+   settings into the public deployment.
 5. `fly deploy`
-6. Register `https://<app>.fly.dev/auth/google/callback` (and Discord's
-   equivalent) in their consoles — this is the same step phase 2's tunnel
-   needed, just against the Fly hostname instead of the tunnel's.
+6. In Supabase Authentication -> URL Configuration, set the Site URL to the
+   Fly origin and allow `https://<app>.fly.dev/auth/callback`. Google and
+   Discord client credentials live under Supabase Authentication ->
+   Providers; each provider console uses Supabase's own callback,
+   `https://<project-ref>.supabase.co/auth/v1/callback`.
 7. Watch the first two scheduled runs: `fly logs`, or
    `fly ssh console -C "cat /var/log/zeropage/morning_prompts.log"`
+
+After deploy, `fly checks list` should show the `/healthz` liveness probe
+passing before traffic is considered healthy.
+
+The first successful sign-in using the migrated email claims its placeholder
+profile and preserves its existing account membership.
 
 ## What does NOT change
 
@@ -66,8 +84,8 @@ logic — all of it already works behind a proxy (`request.url_for` +
 uvicorn's `--proxy-headers`, which `supervisord.conf` passes). Nothing in
 the application code needs to know it's running on Fly instead of a Mac.
 
-## Cost
+## Billing
 
-Free tier for CPU/RAM at this size (`shared-cpu-1x`, 512MB) plus roughly
-$0.15/GB-month for the volume. The real number: none of this bills anything
-until step 2. Writing these files did not create an account or spend money.
+The committed configuration requests one always-on shared CPU machine with
+512 MB RAM and a persistent volume. Check Fly's current dashboard estimate
+before launch; writing these files alone did not create infrastructure.
