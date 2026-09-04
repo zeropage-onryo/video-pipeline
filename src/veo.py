@@ -47,7 +47,7 @@ from typing import Optional
 from google import genai
 from google.genai import types
 
-from . import generative
+from . import account_keys, generative
 from .shot import Shot
 
 MODELS = ("veo-3.1-generate-preview", "veo-3", "veo-3-fast")
@@ -99,17 +99,28 @@ def generations_today(db_path=None, *, account_id=None, everyone: bool = False) 
     )
 
 
-def _make_client() -> genai.Client:
-    key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+def _make_client(account_id: Optional[int] = None) -> genai.Client:
+    """
+    account_id's own stored key (BYOK, backlog #10) if it has one, else
+    GEMINI_API_KEY/GOOGLE_API_KEY from the environment -- same fallback
+    shape as runway._make_client(), via account_keys.key_for().
+    """
+    creds = account_keys.key_for(account_id, "veo")
+    key = creds["api_key"] if creds else None
     if not key:
         raise RuntimeError("GEMINI_API_KEY (or GOOGLE_API_KEY) not set")
     return genai.Client(api_key=key)
 
 
+def has_key(account_id: Optional[int] = None) -> bool:
+    return account_keys.key_for(account_id, "veo") is not None
+
+
 def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
                    aspect_ratio: str = "9:16", resolution: str = DEFAULT_RESOLUTION,
                    duration: int = 8, image=None, client=None,
-                   poll_delay: float = 10.0, timeout_s: float = 600.0) -> Path:
+                   poll_delay: float = 10.0, timeout_s: float = 600.0,
+                   account_id: Optional[int] = None) -> Path:
     """
     The thin wrapper: submit -> poll until done or timeout -> download.
     Raises on anything; generate_candidates is the layer that catches.
@@ -128,7 +139,7 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
             f"credit spend not approved: set {SPEND_ENV}=1 on this run to "
             f"approve Veo spend (~${COST_PER_CLIP_USD:.2f} per clip)"
         )
-    client = client or _make_client()
+    client = client or _make_client(account_id)
     kwargs = {"image": image} if image is not None else {}
     operation = client.models.generate_videos(
         model=model,
@@ -211,7 +222,8 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *, shot_id: Optional[i
         for i in range(1, n + 1):
             out_path = out_dir / f"cand{i}.mp4"
             try:
-                generate_video(prompt, out_path, model=model, client=client, **cfg)
+                generate_video(prompt, out_path, model=model, client=client,
+                             account_id=account_id, **cfg)
             except Exception as e:
                 errors.append(f"candidate {i}: {_safe_error(e)}")
                 continue

@@ -1082,7 +1082,7 @@ def mark_used(finding_id: int, run_id: str = "", dsn=None) -> None:
 
 def scout(brand: str = "zeropage", count: int = 4, *, client=None, model=None,
           lanes=("web", "shorts", "feeds", "instagram", "creators"),
-          dsn=None) -> dict:
+          judge: bool = False, dsn=None) -> dict:
     """One full research pass. Returns
     {"ok", "findings": [...], "errors": [...], "signals": <int>}.
 
@@ -1101,6 +1101,25 @@ def scout(brand: str = "zeropage", count: int = 4, *, client=None, model=None,
         client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY")
                               or os.environ.get("GOOGLE_API_KEY"))
 
+    from . import story_judge
+    rag_client = rag_conn = None
+    errors_setup = None
+    if judge:
+        try:
+            from . import rag
+            rag_client = rag.make_client()
+            rag_conn = rag.connect()
+        except Exception as e:
+            errors_setup = f"story judge disabled this pass: {type(e).__name__}: {e}"
+            rag_client = rag_conn = None
+
+    def _close_rag():
+        if rag_conn is not None:
+            try:
+                rag_conn.close()
+            except Exception:
+                pass
+
     signals: list[dict] = []
     if "web" in lanes:
         signals += gather_web(brand, client, model)
@@ -1114,14 +1133,18 @@ def scout(brand: str = "zeropage", count: int = 4, *, client=None, model=None,
         signals += gather_creators(brand, dsn=dsn)
 
     errors = [s["error"] for s in signals if s.get("error")]
+    if errors_setup:
+        errors.append(errors_setup)
     usable = [s for s in signals if s.get("detail")]
     if not usable:
+        _close_rag()
         return {"ok": False, "findings": [], "signals": 0, "pass_id": pass_id,
                 "bin": [], "errors": errors or ["every lane came back empty"]}
 
     try:
         candidates = digest(brand, usable, client, model, count=count, dsn=dsn)
     except Exception as e:
+        _close_rag()
         return {"ok": False, "findings": [], "signals": len(usable),
                 "pass_id": pass_id, "bin": [],
                 "errors": errors + [f"digest failed: {type(e).__name__}: {e}"]}
@@ -1136,9 +1159,38 @@ def scout(brand: str = "zeropage", count: int = 4, *, client=None, model=None,
             errors.append(f"dropped as a repeat: {c['spark']!r}")
             continue
         seen.add(key)
+
+        # Real engagement evidence, no network: what the crawl actually
+        # measured this pass behind the signal this spark claims to be
+        # grounded in. Always on -- it is arithmetic over numbers already
+        # in memory, so it costs nothing extra to compute every candidate
+        # every night, unlike judge below.
+        vs = story_judge.virality_signal(c, usable)
+        story_score = None
+        if judge:
+            jr = story_judge.judge_spark(c["spark"], c.get("rationale", ""),
+                                         client, model,
+                                         rag_client=rag_client, rag_conn=rag_conn)
+            if jr.get("ok"):
+                story_score = jr["score"]
+                note = f"story-judge {jr['score']:.2f}: {jr['verdict']}"
+                if jr.get("missing"):
+                    note += f" (missing: {', '.join(jr['missing'])})"
+                c["rationale"] = f"{c.get('rationale', '')} · {note}".strip(" ·")
+            else:
+                errors.append(f"story judge unavailable for {c['spark']!r}: "
+                             f"{jr.get('error')}")
+        if vs["score"] > 0:
+            c["rationale"] = (f"{c.get('rationale', '')} · virality: "
+                              f"{vs['score']:.2f} ({vs['detail']})").strip(" ·")
+        c["score"] = max(0.0, min(CRAWL_SCORE_CEILING,
+                                  story_judge.blend(story_score, vs["score"])
+                                  if story_score is not None else c["score"]))
+
         c["id"] = record(brand, c, lanes=",".join(lanes), pass_id=pass_id, dsn=dsn)
         stored.append(c)
 
+    _close_rag()
     if not stored:
         return {"ok": False, "findings": [], "signals": len(usable),
                 "pass_id": pass_id, "bin": [],
@@ -1165,6 +1217,11 @@ def main(argv=None) -> int:
     p_run.add_argument("--count", type=int, default=4)
     p_run.add_argument("--lanes", default="web,shorts,feeds,instagram,creators",
                        help="comma-separated subset to run")
+    p_run.add_argument("--judge", action="store_true",
+                       help="grade each candidate with the independent RAG-grounded "
+                            "story judge (src/story_judge.py) instead of trusting the "
+                            "digest's self-score alone -- costs one extra model call "
+                            "and two RAG lookups per candidate")
 
     p_list = sub.add_parser("list", help="show banked findings")
     p_list.add_argument("--brand", choices=BRANDS, default=None)
@@ -1177,7 +1234,8 @@ def main(argv=None) -> int:
 
     if args.command == "run":
         result = scout(args.brand, args.count,
-                       lanes=tuple(x.strip() for x in args.lanes.split(",") if x.strip()))
+                       lanes=tuple(x.strip() for x in args.lanes.split(",") if x.strip()),
+                       judge=args.judge)
         for e in result["errors"]:
             print(f"  note: {e}", file=sys.stderr)
         if not result["ok"]:

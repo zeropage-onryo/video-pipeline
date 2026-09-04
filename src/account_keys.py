@@ -44,13 +44,22 @@ from . import db as _db
 # has not entered its own key, in the order the provider's own _make_client
 # / _credentials functions already read them. Order matters for higgsfield
 # (HIGGSFIELD_* is the documented name, HF_* is the historical fallback).
-PROVIDER_ENV_FALLBACK: dict[str, tuple[str, ...]] = {
-    "runway": ("RUNWAYML_API_SECRET",),
-    "veo": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
-    "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
-    "higgsfield": ("HIGGSFIELD_API_KEY_ID", "HIGGSFIELD_API_KEY_SECRET",
-                   "HF_API_KEY_ID", "HF_API_KEY_SECRET"),
-    "midjourney": ("ACEDATA_API_KEY",),
+# One tuple of candidate env names PER FIELD, in fallback order -- NOT a
+# flat list. veo/gemini have one field with two candidate names (either
+# is fine); higgsfield has two fields, each with its own two candidates
+# (HIGGSFIELD_* documented, HF_* the historical alias) -- a flat 4-name
+# tuple here was a real bug: the old zip-by-position logic required
+# len(fields) == len(env_names) and silently returned None whenever only
+# the primary names were set, which was every real case (found wiring
+# BYOK into higgsfield.py, 2026-09-04; the two zip-based tests were never
+# exercised because higgsfield.py had not called key_for() until then).
+PROVIDER_ENV_FALLBACK: dict[str, tuple[tuple[str, ...], ...]] = {
+    "runway": (("RUNWAYML_API_SECRET",),),
+    "veo": (("GEMINI_API_KEY", "GOOGLE_API_KEY"),),
+    "gemini": (("GEMINI_API_KEY", "GOOGLE_API_KEY"),),
+    "higgsfield": (("HIGGSFIELD_API_KEY_ID", "HF_API_KEY_ID"),
+                   ("HIGGSFIELD_API_KEY_SECRET", "HF_API_KEY_SECRET")),
+    "midjourney": (("ACEDATA_API_KEY",),),
 }
 
 # how many key fields each provider needs from account_keys.set(), in the
@@ -102,6 +111,7 @@ def init(dsn: Optional[str] = None) -> None:
     lifespan and the schema audit."""
     with _db.connect(dsn) as conn:
         _ensure(conn)
+
 
 
 def set_key(account_id: int, provider: str, *values: str,
@@ -178,14 +188,14 @@ def key_for(account_id: Optional[int], provider: str,
             if all(payload.get(f) for f in fields):
                 return payload
 
-    env_names = PROVIDER_ENV_FALLBACK.get(provider, ())
-    env_values = [os.environ.get(n) for n in env_names]
-    if len(fields) == 1:
-        value = next((v for v in env_values if v), None)
-        return {fields[0]: value} if value else None
-    if len(fields) == len(env_names) and all(env_values):
-        return dict(zip(fields, env_values))
-    return None
+    per_field_names = PROVIDER_ENV_FALLBACK.get(provider, ())
+    resolved = {}
+    for field, candidates in zip(fields, per_field_names):
+        value = next((os.environ.get(n) for n in candidates if os.environ.get(n)), None)
+        if not value:
+            return None
+        resolved[field] = value
+    return resolved if len(resolved) == len(fields) else None
 
 
 def redact(provider: str) -> str:

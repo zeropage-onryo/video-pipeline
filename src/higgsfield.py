@@ -69,7 +69,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from . import generative
+from . import account_keys, generative
 from .shot import Shot
 
 HOST = os.environ.get("HIGGSFIELD_HOST", "https://api.higgsfield.ai").rstrip("/")
@@ -245,18 +245,20 @@ def build_body(prompt: str, *, model: str = DEFAULT_MODEL,
 # --------------------------------------------------------------------------
 # credentials, gates, cost
 # --------------------------------------------------------------------------
-def _credentials() -> Optional[tuple[str, str]]:
-    """Key id + secret. HIGGSFIELD_* names first, the docs' own HF_*
+def _credentials(account_id: Optional[int] = None) -> Optional[tuple[str, str]]:
+    """Key id + secret. account_id's own stored key (BYOK, backlog #10)
+    first, via account_keys.key_for() -- same fallback shape as
+    runway._make_client(): HIGGSFIELD_* names first, the docs' own HF_*
     names as a fallback (HF_ collides with Hugging Face conventions, so
     it is not what .env.example teaches)."""
-    key_id = os.environ.get("HIGGSFIELD_API_KEY_ID") or os.environ.get("HF_API_KEY_ID")
-    secret = (os.environ.get("HIGGSFIELD_API_KEY_SECRET")
-              or os.environ.get("HF_API_KEY_SECRET"))
-    return (key_id, secret) if key_id and secret else None
+    creds = account_keys.key_for(account_id, "higgsfield")
+    if creds:
+        return (creds.get("api_key_id"), creds.get("api_key_secret"))
+    return None
 
 
-def has_key() -> bool:
-    return _credentials() is not None
+def has_key(account_id: Optional[int] = None) -> bool:
+    return _credentials(account_id) is not None
 
 
 def spend_approved() -> bool:
@@ -333,10 +335,11 @@ USER_AGENT = os.environ.get(
     "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
 
 
-def _request(url: str, payload: Optional[dict] = None) -> dict:
+def _request(url: str, payload: Optional[dict] = None, *,
+             account_id: Optional[int] = None) -> dict:
     """One authenticated JSON round-trip. POST when there is a payload,
     else GET. Injected as `http` in tests so nothing here needs a key."""
-    creds = _credentials()
+    creds = _credentials(account_id)
     if creds is None:
         raise RuntimeError(
             "HIGGSFIELD_API_KEY_ID / HIGGSFIELD_API_KEY_SECRET not set "
@@ -409,10 +412,11 @@ def _download(url: str, out_path: Path) -> None:
 
 
 def _submit_and_wait(path: str, body: dict, *, http=None,
-                     timeout_s: int = TIMEOUT_SECONDS) -> tuple[dict, set]:
+                     timeout_s: int = TIMEOUT_SECONDS,
+                     account_id: Optional[int] = None) -> tuple[dict, set]:
     """Submit -> poll to a terminal state -> (final payload, control
     URLs to skip). Raises on failure or timeout."""
-    http = http or _request
+    http = http or (lambda u, p=None: _request(u, p, account_id=account_id))
     submitted = http(HOST + path, body)
     status_url = submitted.get("status_url")
     if not status_url:
@@ -443,7 +447,8 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
                    aspect_ratio: str = DEFAULT_ASPECT,
                    resolution: str = DEFAULT_RESOLUTION,
                    negative_prompt: str = "",
-                   http=None, db_path=None) -> Path:
+                   http=None, db_path=None,
+                   account_id: Optional[int] = None) -> Path:
     """
     The thin wrapper: submit -> poll -> download. Raises on anything --
     including a missing spend approval, which is checked HERE so no
@@ -461,7 +466,7 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
     path, body = build_body(prompt, model=model, image_url=image_url,
                             duration=duration, aspect_ratio=aspect_ratio,
                             resolution=resolution, negative_prompt=negative_prompt)
-    state, skip = _submit_and_wait(path, body, http=http)
+    state, skip = _submit_and_wait(path, body, http=http, account_id=account_id)
     url = _output_url(state, skip)
     if not url:
         raise RuntimeError(
@@ -473,7 +478,8 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
 
 
 def generate_image(prompt: str, out_path, *, http=None, db_path=None,
-                   aspect_ratio: str = DEFAULT_ASPECT) -> Path:
+                   aspect_ratio: str = DEFAULT_ASPECT,
+                   account_id: Optional[int] = None) -> Path:
     """A Soul still, same wall. The documented completed payload is
     {"images": [{"url": ...}]} (docs.higgsfield.ai quickstart,
     2026-08-31)."""
@@ -485,7 +491,8 @@ def generate_image(prompt: str, out_path, *, http=None, db_path=None,
         )
     prompt = safe_prompt(prompt, db_path)
     state, skip = _submit_and_wait(
-        SOUL_PATH, {"prompt": prompt, "aspect_ratio": aspect_ratio}, http=http)
+        SOUL_PATH, {"prompt": prompt, "aspect_ratio": aspect_ratio}, http=http,
+        account_id=account_id)
     url = _output_url(state, skip)
     if not url:
         raise RuntimeError(
@@ -610,7 +617,7 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *,
             return {"ok": False, "candidates": [],
                     "error": f"unknown Higgsfield model {model!r} "
                              f"(HIGGSFIELD_MODEL); known: {', '.join(MODELS)}"}
-        if not has_key():
+        if not has_key(account_id):
             return {"ok": False, "candidates": [],
                     "error": "Higgsfield not configured — "
                              "HIGGSFIELD_API_KEY_ID / _SECRET are unset"}
@@ -644,7 +651,7 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *,
             out_path = out_dir / f"cand{i}.mp4"
             try:
                 generate_video(prompt, out_path, model=model, http=http,
-                               db_path=db_path, **cfg)
+                               db_path=db_path, account_id=account_id, **cfg)
             except Exception as e:
                 errors.append(f"candidate {i}: {_safe_error(e)}")
                 continue
@@ -727,7 +734,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"c{concept_id}-s{shot_n}-{stamp}.mp4"
         generate_video(prompt, out_path, model=model, image_url=image_url,
-                       http=http, db_path=db_path)
+                       http=http, db_path=db_path, account_id=account_id)
 
         shot_row_id = _shot_row_for_prompt(
             prompt, db_path, "auto-created by higgsfield.generate_for_shot",
@@ -787,7 +794,7 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"wf-{stamp}.mp4"
         generate_video(prompt, out_path, model=model, image_url=image_url,
-                       http=http, db_path=db_path)
+                       http=http, db_path=db_path, account_id=account_id)
 
         shot_row_id = _shot_row_for_prompt(
             prompt, db_path, "auto-created by higgsfield.generate_from_prompt",
@@ -836,7 +843,8 @@ def generate_image_from_prompt(prompt: str, *, db_path=None, http=None, account_
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"soul-{stamp}.jpg"
-        generate_image(prompt, out_path, http=http, db_path=db_path)
+        generate_image(prompt, out_path, http=http, db_path=db_path,
+                       account_id=account_id)
 
         shot_row_id = _shot_row_for_prompt(
             prompt, db_path, "auto-created by higgsfield.generate_image_from_prompt",

@@ -586,3 +586,56 @@ def test_find_by_spark_matches_on_the_claim_key_and_prefers_the_unused(tmp_db):
     assert scout.find_by_spark("antihero", "one glove", dsn=tmp_db) is None
     assert scout.find_by_spark("zeropage", "two gloves", dsn=tmp_db) is None
     assert scout.find_by_spark("zeropage", "", dsn=tmp_db) is None
+
+
+# ---------- the story judge, wired into the pass (src/story_judge.py) ----------
+
+def test_scout_defaults_to_the_self_score_when_judge_is_off(tmp_db, monkeypatch):
+    """judge=False is the default -- every existing call site (the dev
+    console, the nightly walk without --judge) must see unchanged
+    behaviour, at zero extra network or model cost."""
+    monkeypatch.setattr(scout, "gather_web", lambda *a, **k: [
+        {"lane": "web", "detail": "night rituals everywhere"}])
+
+    result = scout.scout("zeropage", 2, client=FakeClient(DIGEST_JSON), model="fake",
+                         lanes=("web",), dsn=tmp_db)
+
+    assert result["ok"]
+    scores = {f["spark"]: f["score"] for f in result["findings"]}
+    # unchanged from the pre-judge behaviour: self-score capped at the ceiling
+    assert scores["the last check before leaving"] == scout.CRAWL_SCORE_CEILING
+    assert all("story-judge" not in f["rationale"] for f in result["findings"])
+
+
+def test_scout_with_judge_blends_the_independent_score(tmp_db, monkeypatch):
+    from src import story_judge
+
+    monkeypatch.setattr(scout, "gather_web", lambda *a, **k: [
+        {"lane": "web", "detail": "night rituals everywhere"}])
+    monkeypatch.setattr(story_judge, "judge_spark", lambda *a, **k: {
+        "ok": True, "score": 0.9, "verdict": "the spine is all there", "missing": []})
+
+    result = scout.scout("zeropage", 2, client=FakeClient(DIGEST_JSON), model="fake",
+                         lanes=("web",), judge=True, dsn=tmp_db)
+
+    assert result["ok"]
+    finding = next(f for f in result["findings"] if f["spark"] == "the last check before leaving")
+    # blend(0.9, 0.0) == 0.65 * 0.9, still capped by the ceiling
+    assert finding["score"] == pytest.approx(min(scout.CRAWL_SCORE_CEILING, 0.65 * 0.9))
+    assert "story-judge 0.90" in finding["rationale"]
+
+
+def test_scout_with_judge_falls_back_to_self_score_when_the_judge_cant_run(tmp_db, monkeypatch):
+    """A dead RAG connection or a bad key must not fail a night -- same
+    contract as every other lane. rag.connect/make_client are not
+    reachable under no_network, so this proves the pass still bank"""
+    monkeypatch.setattr(scout, "gather_web", lambda *a, **k: [
+        {"lane": "web", "detail": "night rituals everywhere"}])
+
+    result = scout.scout("zeropage", 2, client=FakeClient(DIGEST_JSON), model="fake",
+                         lanes=("web",), judge=True, dsn=tmp_db)
+
+    assert result["ok"]
+    assert [f["spark"] for f in result["findings"]] == [
+        "the last check before leaving", "a routine performed wrong"]
+    assert any("story judge" in e for e in result["errors"])
