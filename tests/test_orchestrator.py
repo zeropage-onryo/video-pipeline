@@ -485,6 +485,70 @@ def test_render_gate_open_but_unadapted_tool_stays_dry(tmp_db, monkeypatch):
     assert "no adapter" in result["clips"][0]["error"]
 
 
+def test_render_failover_switches_to_a_usable_provider_when_the_assigned_one_fails(
+    tmp_db, monkeypatch, tmp_path,
+):
+    """The aggregator registry (providers.py, 2026-09-04) is wired into
+    generate_render as a FAILOVER, not a tool-choice override: shootgen
+    still names RUNWAY, runway.generate_candidates still runs first and
+    still fails on its own here (no key in tests) -- but instead of
+    parking the shot, the router's next-best usable provider gets one
+    retry, and the clip records which tool actually rendered it."""
+    monkeypatch.setenv("ZEROPAGE_RENDER", "1")
+    from src import providers as providers_module
+    from src import veo as veo_module
+
+    clip = tmp_path / "fallback.mp4"
+    clip.write_bytes(b"\x00" * 2048)
+    monkeypatch.setattr(
+        veo_module, "generate_candidates",
+        lambda prompt, out_dir, n=1, **k:
+            {"ok": True, "candidates": [{"path": str(clip)}], "error": None},
+    )
+    monkeypatch.setattr(providers_module, "choose_provider",
+                        lambda account_id, exclude=(): "veo")
+    monkeypatch.setattr(orchestrator, "_clip_passes_qc", lambda url: bool(url))
+    runway_concept = make_concept(shots=[
+        {"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
+         "location": "hallway", "desc": "x", "prompt": GOOD_PROMPT},
+    ])
+    stage_fakes(monkeypatch, [(runway_concept, [])])
+
+    result = orchestrator.run("ritual")
+
+    clip_result = result["clips"][0]
+    assert clip_result["ok"] is True
+    assert clip_result["tool"] == "VEO"
+    assert clip_result["failover_from"] == "RUNWAY"
+
+
+def test_render_failover_leaves_the_original_error_when_nothing_else_is_usable(
+    tmp_db, monkeypatch,
+):
+    """No usable fallback (the router's real usable() check, unmocked --
+    no key/spend approval in tests) means the shot parks on the
+    ORIGINAL failure's own reason, same as before the registry existed."""
+    monkeypatch.setenv("ZEROPAGE_RENDER", "1")
+    from src import runway as runway_module
+
+    monkeypatch.setattr(
+        runway_module, "generate_candidates",
+        lambda prompt, out_dir, n=1, **k:
+            {"ok": False, "candidates": [], "error": "credit spend not approved"},
+    )
+    runway_concept = make_concept(shots=[
+        {"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
+         "location": "hallway", "desc": "x", "prompt": GOOD_PROMPT},
+    ])
+    stage_fakes(monkeypatch, [(runway_concept, [])])
+
+    result = orchestrator.run("ritual")
+
+    clip_result = result["clips"][0]
+    assert clip_result["ok"] is False
+    assert clip_result["error"] == "credit spend not approved"
+
+
 def test_qc_rejects_missing_and_tiny_files(tmp_path):
     assert orchestrator._clip_passes_qc(None) is False
     assert orchestrator._clip_passes_qc(str(tmp_path / "nope.mp4")) is False
