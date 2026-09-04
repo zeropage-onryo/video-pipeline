@@ -7,9 +7,16 @@ bottom. It MUST follow the skeleton below, in order, because that structure is
 what actually lands: grounded realism first, then beats, then diegetic sound,
 then a hard avoid-list.
 
-BRAND:
-{brand}
+RUN-SPECIFIC CREATIVE AUTHORITY:
 {spark}
+
+The filmmaker's idea or spark above is the primary brief. Any images attached
+to this run are direct visual evidence: follow what they actually show for the
+relevant identity, environment, wardrobe, objects, composition, palette and
+mood. The selected reference library supports those inputs. The channel note
+below is only broad background and may fill details the run leaves open; it
+must never override, narrow or redirect the idea or images. If anything
+conflicts, the idea and attached images win.
 
 WHAT THE SPARK IS, AND WHAT YOU DO WITH IT: it is the filmmaker's IDEA, told
 in full -- who is there, what they want, what is in the way, what changes. It
@@ -27,6 +34,9 @@ clothing where they apply; name them, don't redescribe their appearance):
 REFERENCE LIBRARY (tone and structure to echo):
 {references}
 
+CHANNEL DIRECTION (rough context, not strict generation rules):
+{brand}
+
 GOLD-STANDARD EXAMPLE — match the SHAPE and craft of this proven prompt (its
 hook, grounded style block, sequential beats, diegetic-sound block, and hard
 avoid-list), NEVER its subject or specific content. Imitate the STRUCTURE; do
@@ -40,7 +50,8 @@ Write the "brief" as a single cohesive prompt with these five parts, in order:
 2. STYLE: raw handheld, close wide-angle placement, natural camera shake,
    imperfect framing that drifts and re-centres, muted colour, practical light,
    real locations, grounded and rough — NOT glossy, epic or stylized. Fold in
-   the brand's grade here so it still belongs to that world.
+   the run's references and stated mood here. Use the channel's fallback grade
+   only where those inputs leave the look unspecified.
 3. BEATS: ONE continuous action, escalating, in prose. Open on an uncomfortable
    or arresting image (the frame-1 hook), turn/reveal, and END ABRUPTLY.
    Reactions are serious and physically believable — that restraint is what

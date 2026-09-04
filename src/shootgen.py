@@ -1303,6 +1303,8 @@ def generate_scene_concept(brand: str, spark=None, steer: str = "",
     steered = f"{spark or ''}\n{steer}".strip() if steer else spark
     prompt = build_scene_brief_prompt(brand, spark=steered, references=references,
                                       cast=cast)
+    if image_refs:
+        prompt += IMAGE_REFS_NOTE
     contents = prompt
     if image_refs:
         from google.genai import types
@@ -1478,6 +1480,8 @@ def generate_scene_concepts(idea: str, brand: str, count: int = 4,
         locations = picked_locations(refs, on_file)
     prompt = build_scenes_prompt(idea, brand, count, locations,
                                  references=references, cast=cast)
+    if image_refs:
+        prompt += IMAGE_REFS_NOTE
     contents = prompt
     if image_refs:
         from google.genai import types

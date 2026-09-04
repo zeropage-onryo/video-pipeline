@@ -59,6 +59,8 @@ def test_load_brand_returns_antihero_block():
     text = shootgen.load_brand("antihero")
     assert "ANTIHERO" in text
     assert "crushed shadows" in text
+    assert "ROUGH CHANNEL DIRECTION" in text
+    assert "always take priority" in text
 
 
 def test_load_brand_returns_zeropage_block():
@@ -83,6 +85,16 @@ def test_build_concept_prompt_includes_locations_and_brand(tmp_db):
     assert "someone at the door" in prompt
     for placeholder in ("{locations}", "{brand}", "{client}", "{spark}"):
         assert placeholder not in prompt
+
+
+def test_run_specific_inputs_outrank_the_channel_note(tmp_db):
+    locations = preprod.list_locations(dsn=tmp_db, account_id=None)
+    prompt = shootgen.build_concept_prompt(
+        locations, "antihero", None, "a bright daytime family comedy")
+
+    assert prompt.index("a bright daytime family comedy") < prompt.index(
+        "CHANNEL DIRECTION")
+    assert "idea and attached images win" in prompt
 
 
 def test_build_concept_prompt_without_spark_or_client(tmp_db):

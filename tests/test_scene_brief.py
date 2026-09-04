@@ -40,6 +40,13 @@ def test_build_scene_brief_prompt_has_the_full_skeleton():
         assert marker in p
 
 
+def test_scene_brief_marks_brand_as_fallback_context():
+    p = shootgen.build_scene_brief_prompt(
+        "antihero", spark="a sunlit romantic comedy")
+    assert p.index("a sunlit romantic comedy") < p.index("CHANNEL DIRECTION")
+    assert "idea and attached images win" in p
+
+
 def test_generate_scene_brief_parses_json(monkeypatch):
     monkeypatch.setattr(
         shootgen, "generate_with_retry",

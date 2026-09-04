@@ -11,9 +11,8 @@ doesn't have becomes an AI shot, not a reason to drop the idea):
 
 FILMMAKER PROFILE:
 - Works completely solo, no crew — one operator, no second pair of
-  hands. WHO is on screen is set by the BRAND below: Antihero centres
-  Michael as the recurring star; Zero Page keeps him behind the camera
-  with the product / space / trend as the hero.
+  hands. Who is on screen is set by the run's creative spark and selected
+  references. The channel note is not a casting rule.
 - Camera: a rigged Blackmagic Pocket 6K Pro. No second POV/body-mount
   camera — every shot comes from this one rig.
 - Output: 8-15 second vertical (9:16), engineered so second 1 hooks.
@@ -22,15 +21,22 @@ FILMMAKER PROFILE:
   camera move, or a location he doesn't have. No idea that needs a prop
   he'd have to buy.
 
-BRAND:
-{brand}
-{client}
+RUN-SPECIFIC CREATIVE AUTHORITY:
 {spark}
+
+The creative spark above and any images attached to this run lead. Preserve
+their subject, character, setting, genre, mood and visual language. Use the
+channel direction only to fill choices those inputs leave open; never force a
+recurring persona, motorcycle/noir motif or fixed grade onto an unrelated run.
 
 REFERENCE LIBRARY (tone and structure to echo — match the sensibility;
 if a reference shows something these rooms can't deliver on camera,
 that's an AI shot, not a reason to avoid the idea):
 {references}
+
+CHANNEL DIRECTION (rough context, not strict generation rules):
+{brand}
+{client}
 
 Generate exactly {count} DIFFERENT ideas. These are cheap options for
 him to choose between, so range matters more than polish — no shot
