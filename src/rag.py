@@ -51,12 +51,16 @@ import argparse
 import hashlib
 import json
 import os
+import sys
+import time
 from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+
+from . import gemini_utils
 
 EMBED_MODEL = "gemini-embedding-001"
 EMBED_DIM = 768
@@ -137,16 +141,54 @@ def chunk_text(text: str, max_chars: int = 800, overlap: int = 100) -> list:
 
 
 def embed_texts(texts: list, client, task_type: str = "RETRIEVAL_DOCUMENT") -> list:
-    """One 768-dim vector per text, batched under the API's request cap."""
+    """One 768-dim vector per text, batched under the API's request cap.
+
+    RETRIES A SPENT QUOTA (2026-09-02). `gemini-embedding` is rate-limited
+    PER MINUTE (global_embed_content_requests_per_minute_per_base_model),
+    and the nightly walk is 16 runs fired back to back -- so the ceiling is
+    hit by bunching, not by volume, and it clears in under a minute. Two
+    runs in data/morning_prompts.log lost their grounding to a 429 that
+    would have succeeded seconds later, and each one is invisible: a
+    concept written without its references looks exactly like a concept
+    written with them.
+
+    There is no fallback model to fall through to the way
+    generate_with_retry has one -- an index embedded with a different
+    model is not searchable by this one -- so this waits and asks again,
+    honouring the "retry in Xs" the 429 states rather than guessing under
+    it. A non-transient error still raises immediately: retrying a bad key
+    just spends the same failure six times.
+
+    Retried PER BATCH, so a long ingest that trips the quota on batch nine
+    resumes at batch nine instead of re-embedding the eight that already
+    landed.
+
+    Still raises once the budget is spent. Callers own the degrade --
+    retrieve_references turns it into {"ok": False} and an ungrounded run,
+    which is the right outcome after we have actually waited.
+    """
     vectors: list = []
     config = types.EmbedContentConfig(
         task_type=task_type, output_dimensionality=EMBED_DIM
     )
     for start in range(0, len(texts), EMBED_BATCH):
         batch = texts[start:start + EMBED_BATCH]
-        response = client.models.embed_content(
-            model=EMBED_MODEL, contents=batch, config=config
-        )
+        for attempt in range(gemini_utils.MAX_RETRIES):
+            try:
+                response = client.models.embed_content(
+                    model=EMBED_MODEL, contents=batch, config=config
+                )
+                break
+            except Exception as e:
+                if not gemini_utils.is_retriable(e):
+                    raise
+                if attempt == gemini_utils.MAX_RETRIES - 1:
+                    raise
+                delay = gemini_utils.retry_delay(e, attempt)
+                print(f"  embedding quota spent, retrying in {delay:.0f}s "
+                      f"({attempt + 2}/{gemini_utils.MAX_RETRIES})",
+                      file=sys.stderr)
+                time.sleep(delay)
         vectors.extend(e.values for e in response.embeddings)
     return vectors
 

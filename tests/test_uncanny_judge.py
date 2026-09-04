@@ -20,7 +20,7 @@ def test_a_strong_concept_passes(monkeypatch):
     monkeypatch.setattr(
         uncanny_judge, "generate_with_retry",
         lambda *a, **k: json.dumps({"uncanny_hook": 9, "grounded": 8,
-                                    "format_fit": 8, "faceless": 9,
+                                    "format_fit": 8, "no_recurring_star": 9,
                                     "overall": 8.5, "reasons": ["frame 1 is wrong"]}))
     out = uncanny_judge.score_concept({"title": "x", "hook": "h"}, gemini_client=object())
     assert out["graded"] is True
@@ -33,7 +33,7 @@ def test_glossy_concept_is_gated_even_with_high_overall(monkeypatch):
     monkeypatch.setattr(
         uncanny_judge, "generate_with_retry",
         lambda *a, **k: json.dumps({"uncanny_hook": 9, "grounded": 3,
-                                    "format_fit": 8, "faceless": 9,
+                                    "format_fit": 8, "no_recurring_star": 9,
                                     "overall": 8.0, "reasons": ["too polished"]}))
     out = uncanny_judge.score_concept({"title": "x"}, gemini_client=object())
     assert out["graded"] is True
@@ -44,16 +44,16 @@ def test_no_uncanny_hook_is_gated(monkeypatch):
     monkeypatch.setattr(
         uncanny_judge, "generate_with_retry",
         lambda *a, **k: json.dumps({"uncanny_hook": 2, "grounded": 9,
-                                    "format_fit": 8, "faceless": 9,
+                                    "format_fit": 8, "no_recurring_star": 9,
                                     "overall": 7.5, "reasons": ["pretty, not wrong"]}))
     assert uncanny_judge.gate({"title": "x"}, gemini_client=object()) is False
 
 
-def test_face_star_is_gated(monkeypatch):
+def test_a_recurring_star_is_gated(monkeypatch):
     monkeypatch.setattr(
         uncanny_judge, "generate_with_retry",
         lambda *a, **k: json.dumps({"uncanny_hook": 8, "grounded": 8,
-                                    "format_fit": 8, "faceless": 2,
+                                    "format_fit": 8, "no_recurring_star": 2,
                                     "overall": 8.0, "reasons": ["a recurring star"]}))
     assert uncanny_judge.gate({"title": "x"}, gemini_client=object()) is False
 
@@ -101,10 +101,55 @@ def test_save_uncanny_score_persists_pass_and_reason(tmp_db):
 def test_rank_orders_best_first(monkeypatch):
     replies = iter([
         json.dumps({"uncanny_hook": 5, "grounded": 5, "format_fit": 5,
-                    "faceless": 5, "overall": 5.0, "reasons": []}),
+                    "no_recurring_star": 5, "overall": 5.0, "reasons": []}),
         json.dumps({"uncanny_hook": 9, "grounded": 9, "format_fit": 9,
-                    "faceless": 9, "overall": 9.0, "reasons": []}),
+                    "no_recurring_star": 9, "overall": 9.0, "reasons": []}),
     ])
     monkeypatch.setattr(uncanny_judge, "generate_with_retry", lambda *a, **k: next(replies))
     ranked = uncanny_judge.rank([{"title": "low"}, {"title": "high"}], gemini_client=object())
     assert ranked[0]["title"] == "high"
+
+
+# --- what the judge actually READS (2026-09-02) -----------------------------
+#
+# The gate scored four summary lines and nothing else, which made it a grader
+# of loglines. Concept 167 passed faceless at 8.0 -- "maintains faceless
+# anonymity through POV" -- over a prompt reading "end on his wide-eyed
+# reaction", and the keyframe came back with a face across the top third.
+# These pin the prompts into the payload, and pin the camera move staying in.
+
+def test_shot_prompts_reach_the_judge():
+    concept = {
+        "title": "Internal Proof", "hook": "a phone screen",
+        "logline": "a package and a photo taken from the wrong side",
+        "shots": [{"n": 1, "type": "BROLL",
+                   "prompt": "Tilt up from the hand to his wide-eyed face."}],
+    }
+    payload = uncanny_judge.build_prompt(concept)
+    assert "wide-eyed face" in payload      # the thing that gets rendered
+    assert "SHOT PROMPTS" in payload
+
+
+def test_the_camera_move_is_not_stripped():
+    """Moves inform the image and stay in the prompt verbatim -- the judge is
+    told to score where the move LANDS, not to penalise having one."""
+    concept = {"title": "x", "shots": [
+        {"n": 1, "prompt": "Slow push in past the doorway, then whip pan."}]}
+    payload = uncanny_judge.build_prompt(concept)
+    assert "Slow push in past the doorway, then whip pan." in payload
+    assert "CAMERA MOVES ARE EXPECTED" in payload
+
+
+def test_a_concept_with_no_prompts_yet_is_still_judgeable():
+    """brand_gate can run before any prompt is written. Failing closed is for
+    ERRORS; an early concept still gets scored on its summary."""
+    payload = uncanny_judge.build_prompt(
+        {"title": "x", "hook": "h", "logline": "l"})
+    assert "none written yet" in payload
+
+
+def test_shots_without_a_prompt_are_skipped():
+    concept = {"title": "x", "shots": [
+        {"n": 1, "prompt": ""}, {"n": 2, "prompt": "the real one"}]}
+    payload = uncanny_judge.build_prompt(concept)
+    assert "Shot 2" in payload and "Shot 1" not in payload

@@ -143,7 +143,10 @@ def test_parse_digest_accepts_a_fenced_response():
     out = scout.parse_digest_response("```json\n" + DIGEST_JSON + "\n```")
     assert [c["spark"] for c in out] == ["the last check before leaving",
                                          "a routine performed wrong"]
-    assert out[0]["score"] == pytest.approx(0.82)
+    # DIGEST_JSON's first candidate self-scores 0.82; CRAWL_SCORE_CEILING
+    # (0.8, added 2026-09-03) caps every crawl score below a typed spark's
+    # HUMAN_SPARK_SCORE=1.0, so the raw 0.82 never survives parsing.
+    assert out[0]["score"] == pytest.approx(scout.CRAWL_SCORE_CEILING)
 
 
 def test_parse_digest_of_garbage_is_empty_not_an_exception():
@@ -155,7 +158,9 @@ def test_parse_digest_clamps_a_score_outside_the_range():
     out = scout.parse_digest_response(json.dumps(
         {"candidates": [{"spark": "x y z", "score": 7.5},
                         {"spark": "p q r", "score": "not a number"}]}))
-    assert out[0]["score"] == 1.0
+    # ceiling is CRAWL_SCORE_CEILING (0.8), not 1.0 -- see
+    # test_parse_digest_accepts_a_fenced_response
+    assert out[0]["score"] == scout.CRAWL_SCORE_CEILING
     assert out[1]["score"] == 0.0
 
 

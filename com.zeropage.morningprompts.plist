@@ -8,8 +8,16 @@
     <string>/bin/bash</string>
     <string>/Users/iphone/Documents/PRODUCTION PIPLINE .GIT/run_morning_prompts.sh</string>
   </array>
+  <!-- 22:00 local (Eastern), moved 2026-09-02 from 06:00.
+       NANO_DAILY_CAP counts from UTC MIDNIGHT, which is 20:00 Eastern.
+       At 06:00 ET the walk started ten hours into its own budget day,
+       behind whatever the previous evening had already spent: on
+       2026-09-02 it got 15 of 20 images and the rest of the working day
+       fought over four. 22:00 ET is 02:00 UTC -- early in a fresh cap
+       day, so the walk has first claim, and it still finishes before
+       morning, which is the whole point of the job. -->
   <key>StartCalendarInterval</key>
-  <dict><key>Hour</key><integer>6</integer><key>Minute</key><integer>0</integer></dict>
+  <dict><key>Hour</key><integer>22</integer><key>Minute</key><integer>0</integer></dict>
   <key>StandardOutPath</key><string>/Users/iphone/Library/Logs/zeropage/morning_prompts.out</string>
   <key>StandardErrorPath</key><string>/Users/iphone/Library/Logs/zeropage/morning_prompts.err</string>
 </dict>

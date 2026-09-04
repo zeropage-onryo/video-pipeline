@@ -266,13 +266,40 @@ renders. Veo is $3.20/clip against runway's $0.25 and midjourney's $0.27, and at
 the shipped defaults one account's theoretical daily max is ~$26 with veo ~74% of
 it.
 
+**What the providers actually offer (checked 2026-09-02).** Three of the four
+are bearer keys with no delegation, which shapes the whole connector story:
+
+| provider | auth | OAuth for third-party apps? |
+|---|---|---|
+| Runway | API key, **organization-scoped**, displayed once | no |
+| Higgsfield | key id + secret | no |
+| Veo | Gemini Developer API = key; **Vertex AI = Google Cloud IAM** | **yes, via Vertex** |
+| Midjourney | no official API exists | n/a |
+
+So onboarding is "paste your API key" for two of them, not "connect your
+account" -- a bigger trust ask, and users feel it. A Runway key hands over the
+whole organization's API access unscoped, and Runway's own docs warn that
+removing a user does not revoke their key: revocation is manual and on the
+tenant's side, which makes blast-radius limiting Mike's job. The per-account
+`DAILY_CAP` is already exactly that instrument.
+
+**Midjourney breaks the model outright.** With no official API, the AceDataCloud
+route means tenants are not handing over *their* credentials -- Mike is reselling
+his own access and carrying the cost. "One key per tenant across all platforms"
+has an exception, and it is the one where he pays. Decide it deliberately.
+
+Veo is the only place a real "Connect your Google account" button is possible,
+and only by moving off the Gemini Developer API onto Vertex AI. Not a pilot-week
+change, but it is the one provider where the good version exists.
+
 **Two things that are bugs regardless of the BYOK decision:**
 - Every `*_GLOBAL_DAILY_CAP` defaults to `str(DAILY_CAP)`, so the *installation*
   ceiling equals *one account's* allowance — the second pilot user gets nothing
   once the first has used the day. Numbers still unchosen from the last session.
-- **Veo has no `SPEND_OK` gate.** Runway, midjourney and higgsfield all need an
-  explicit per-command approval Mike controls; the most expensive tool needs only
-  to be under the cap.
+- ~~**Veo has no `SPEND_OK` gate.**~~ FIXED 2026-09-02 (#12): `VEO_SPEND_OK`,
+  checked inside `generate_video` so nothing can spend around it. Six clips at
+  $3.20 is $19.20 that used to leave on a dry run while the cheaper tools all
+  stopped and asked.
 
 **The caveat, and it is the real answer to the second question.** Higgsfield and
 Runway are model companies; reselling their inference is their business, not a
@@ -324,6 +351,159 @@ without `account_id`, so the per-account count is always against `None` (and
 approve fails with `no concept N` for every owned row); and Veo has no spend
 gate at all. Starting globals proposed there: runway 18, veo 8, higgsfield 18,
 midjourney 30, nano 60.
+## 12. The tenancy gap the dry run found  (SHIPPED 2026-09-02 -- one route left, blocked on #11)
+`docs/PILOT_DRY_RUN.md`. `hold_queue` and `workflows` had no `account_id`, and
+`holds_post` takes no account dependency at all -- so any signed-in user, with
+or without a membership, read Mike's hold queue and Director canvases, could
+reject a hold, delete a canvas, and could fire "post now" against the autopilot
+gate. The concept and asset surface is clean; this was the tables tenancy never
+listed. **This is the gate on the pilot, ahead of the cost tracker.** It also
+measured #2's two bugs (the global caps, veo's missing SPEND_OK) and reproduced
+#11's `corrections` bug end to end.
+
+### Done (the half that does not touch app/api.py)
+- **`hold_queue` and `workflows` are in `db.OWNED_TABLES`**, with the column
+  added and every store function taking an owner: `autonomy.to_hold` /
+  `list_hold` / `resolve_hold` (now returns False rather than raising, so a
+  caller 404s on somebody else's hold) / `posts_today` / `evaluator_agreement`,
+  and `workflows.create` / `update` / `delete` / `list` / `get` plus the
+  concept-keyed canvas path (`save_shot_graph` / `get_shot_graph` /
+  `delete_shot_graphs`).
+- **The backfill is deliberately NOT run yet.** Claiming the existing rows for
+  the bootstrap account while the routes still ask with no account would empty
+  Mike's own queue and canvas list. The rows stay NULL -- which is what "nobody
+  has said who owns them" honestly looks like -- and one word in each `init()`
+  (`add_account_column` -> `own_table`) finishes it, in the same commit that
+  converts the routes.
+- **`app/jobs.py` carries an owner** (`_account_id`, underscore-prefixed so it
+  never reaches the wire), matched in the three places that face a caller: the
+  list, the per-job lookup, and the SSE fan-out.
+- **`VEO_SPEND_OK`.** Veo was the one generator that spent without being asked:
+  six clips at $3.20 is $19.20 leaving on a dry run while the cheaper tools all
+  stopped at the gate. Same shape as runway/midjourney/higgsfield.
+- **`.env.example`** documents all five `*_GLOBAL_DAILY_CAP` values and what one
+  account can spend in a day at the defaults (~$25.80).
+- **Two guards, in `tests/test_tenancy_routes.py`**, because the failure here
+  was omission and no behavioural test can see an omission:
+  - every table in a freshly built database must appear in exactly one of
+    `OWNED_TABLES` / `SHARED_TABLES` / `PENDING_OWNERSHIP` / `INFRA_TABLES`;
+  - every `/api` route must declare `current_account_id` or be listed with a
+    reason -- and `PENDING_SCOPE` in that file is the exact remaining ledger.
+  The old static SQL scan in `tests/test_tenancy.py` now builds its regex from
+  `db.OWNED_TABLES` instead of repeating it, which is why it never saw these
+  two tables: they were not in the list, so no query against them could offend.
+
+### Done (the routes, second commit)
+All 23. **54 of 66 routes declare an owner, up from 29.** The backfill flipped on
+in the same commit, so the pairing test passes with both halves moved.
+
+Three routes were the interesting case: `asset_create_location`,
+`shot_media_attach` and `shot_reference_attach` already had an `account_id`
+parameter -- as a bare `Optional[int] = None`, which FastAPI reads as a **query
+parameter**, not the dependency. Every real request arrived with `None` and
+`AND account_id IS ?` matched nothing. Strictly worse than no owner at all,
+because it reads as done in review; it is the same shape that made
+`concept_archive` 404 every card on the real board. There is now a test for that
+exact shape.
+
+Four routes touch only shared tables and take an owner anyway -- `/scout/run`,
+`/evals/run`, `/workflows/exec/enhance`, the harness. They start jobs, and the
+job rail is per-account.
+
+### Left: one route, and it is not about effort
+`GET /analytics/accounts` reports the autonomy channels, and `channels` is itself
+in `db.PENDING_OWNERSHIP`. Its rows are installation-wide, so a dependency there
+would be decoration rather than scoping. It closes when `channels` does, which
+needs per-account seeding of `DEFAULT_CHANNELS` -- a design decision, and part of
+#11 rather than of this item.
+
+## 14. Off the laptop, onto Postgres — the substrate decision  (to build — Mike's ask, 2026-09-02)
+
+**The trigger is a person, not a date.** If the REST API product (#10) does not
+happen and this stays Mike's own studio, the Mac with the launchd walls now
+fixed is adequate and every migration below is pure cost. The moment somebody
+else's concepts depend on his laptop being open, it is not.
+
+Two moves. They are independent and get conflated constantly — Supabase does not
+run `src/orchestrator.py`, and a box does not give you row-level security.
+
+### Move one — Supabase for the data layer
+Postgres, which this repo already runs for pgvector, plus auth and row-level
+security.
+
+- **Replaces:** `src/accounts.py` + `app/auth.py` (users, `account_members`,
+  `auth_identities`, the Google/Discord OAuth dance), `data/pipeline.db`, and the
+  hand-maintained half of #8/#12 — every `WHERE account_id IS ?` becomes belt
+  and braces behind a policy the database enforces. **RLS is the structural fix
+  for the exact bug the dry run found:** a query that forgets its owner returns
+  nothing, so there is no such thing as a table nobody added to a list.
+- **Consolidates `rag_documents` into the same database**, which unblocks the
+  provenance third of #11 — the `project` label that is written at exactly one
+  site and read by nobody.
+- **The trap, and it is the whole thing.** RLS only protects a request that
+  carries tenant identity into the database. A FastAPI server connecting with the
+  service-role key — which the nightly orchestrator must — **bypasses RLS
+  entirely**, and you are back to remembering `account_id` in every query with a
+  false sense of safety. Getting the benefit means setting the claim per request
+  (`SET LOCAL request.jwt.claims`, or a per-request role) and treating
+  service-key paths as a small, deliberate, audited set. Plenty of teams adopt
+  Supabase, route everything through the service key, and ship the leak they
+  thought they had bought their way out of.
+- **What #12 already bought:** every route knows its account, so there is
+  somewhere obvious to set that claim. The guard tests in
+  `tests/test_tenancy_routes.py` keep working and become the second line rather
+  than the only one.
+- Exit is `pg_dump`. Cost is a flat monthly fee in the tens.
+- **Done 2026-09-03 — the RAG half only.** `rag_documents` (316 rows) now lives on
+  Supabase project `zeropage-studio` (Free plan, us-east-1); `RAG_DATABASE_URL` is the
+  session-pooler string (direct is IPv6-only, the transaction pooler breaks psycopg's
+  prepared statements). Copy tool: `ops/migrate_rag_to_supabase.py`. `pipeline.db`,
+  accounts and auth are untouched — that is the rest of this item, still gated on a
+  second person. Automatic RLS was switched on at project creation, so any table
+  created there is closed by default; the app bypasses it today as the owner role.
+
+### Move two — one always-on box for the app and the scheduler
+Fly or Railway; a small machine running the FastAPI app and the nightly.
+
+- **This is what kills launchd and TCC.** The 6am walk failed silently for
+  eleven nights on two macOS walls plus a plist that drifted after a folder
+  rename — failure modes that exist only because of *where* it runs. It is
+  uptime, not throughput: nothing here is about load, and SQLite on the laptop
+  would serve hundreds of readers without noticing.
+- It is also where the #10 REST API answers from, since inbound requests arrive
+  whenever a customer sends them.
+- It also decouples the dev server from production. A save currently runs
+  migrations against the live DB seconds later, which is how `concept_locations`
+  got damaged once.
+- **It is a split, not a move.** `framebank` cuts stills from 149GB of ProRes in
+  `footage/`, and the asset shelf reads local photo roots. A cloud orchestrator
+  can see neither. Those lanes stay local, or get pre-ingested to R2 first.
+
+### Considered and rejected
+- **AWS.** Better in exactly two places: Secrets Manager + KMS for #10's tenant
+  credentials (per-tenant encryption context, and a CloudTrail record of every
+  decrypt, which Supabase Vault has no equivalent of), and Step Functions for the
+  render pipeline's submit → poll → download. Against that: Cognito is the weak
+  link where auth is the piece most worth handing off, there is no "just
+  connect" (IAM, VPC, RDS Proxy, CDK), the floor is roughly $30/month for a NAT
+  gateway alone, and S3 bills the video egress that R2 gives away. **If one AWS
+  piece is ever taken it should be KMS on its own** — an SDK call from wherever
+  the app runs, committing to nothing else.
+- **Neon.** Excellent Postgres with real branching, genuinely appealing given the
+  live-migration scar. No auth, no storage, so more pieces to assemble.
+- **Cloudflare D1 + Workers.** Coherent, and R2 is already here, but D1 is
+  SQLite-flavoured and gives no pgvector — it would split the RAG layer off from
+  everything else.
+- **Modal / Replicate.** Solve GPU problems this repo does not have; it calls
+  other people's APIs rather than running models.
+
+### Order
+1. Nothing until there is a second person, or until #10 is decided.
+2. **Move secrets once.** If BYOK (#10) is happening, pick the substrate *before*
+   building the connector layer — tenant credentials are the one thing not to
+   migrate twice.
+3. Supabase, then the box. Not the reverse: a box still pointed at a SQLite file
+   on a laptop is the worst of both.
 
 ## 11. The shared brain — global learning, made deliberate  (to build — Mike's decision, 2026-09-01)
 Full write-up: `docs/tasks/task-shared-brain.md`. Raised as a tenancy gap — nine
@@ -387,3 +567,199 @@ Still open, both choices rather than defects: `corrections` is cross-tenant
 (item 4) and `active_brand` never looks at membership (item 5). Everything
 else left before an invite is deployment, not code.
 
+## 13. Three bins, told apart  (to build — Mike's ask, 2026-09-02)
+
+Mike, after watching a Pinterest crawl feed a keyframe end to end:
+
+> "I want a separate bin that the idea agent crawls from specifically, the
+> asset bank that I can pull from personally, and the generated content that
+> goes in the asset bank."
+
+Three stores with three different owners, three lifetimes and three trust
+levels. Today there is **one**.
+
+### What actually exists now
+
+`data/refs/<sha>.jpg` is a single content-addressed pool, and everything
+writes to it through the same `refbin.save`/`refbin.fetch` door:
+
+| writer | what it puts there | who owns it |
+|---|---|---|
+| `scout.stash_images` | crawl thumbnails, feed lead images | the agent |
+| `mcp_server.bank_reference` | a URL the idea agent chose | the agent |
+| `ops/ingest-saved-images.py` | a folder Mike saved by hand | Mike |
+| `app/api.py:1333` | a composer upload | Mike |
+| `scene_chain.visual_target` | a generated still | the machine |
+
+They come out the far end identical: `/refs/<sha>.jpg`, indistinguishable.
+That sameness was a deliberate and good decision — it is why a scouted image
+resolves through `_resolve_asset_photo`, attaches as an `image_ref` and rides
+into a generation with no new route. It is also why there is no query that
+answers "show me only what I put there", or "only what the agent crawled",
+or "only what we made".
+
+The discriminator half-exists and is unused: `scout_bin.lane` already records
+`pinterest` / `agent` / `target` / the crawl lanes. But a composer upload gets
+no `scout_bin` row at all — it attaches straight to a shot — so the one thing
+Mike most wants to pull from personally is the one thing with no row anywhere.
+
+The asset shelf (`locations/`, `characters/`, `props/` + the `assets` RAG
+domain) is a separate, permanent, *named* store — and nothing automatic reads
+it. Characters and props reach a prompt only through `{cast}`, which
+`cast_for` returns `""` for on Zero Page; locations only through a manual
+`picked_locations`; the RAG shelf only through an opt-in `picked_references`.
+An unattended 03:30 run has never touched any of it.
+
+### The three bins
+
+1. **Crawl bin — the agent's.** What the idea agent found tonight, keyed by
+   pass, capped at `MAX_BIN_IMAGES`, disposable. This is what `scout_bin` is
+   today and it can stay exactly as it is. Attribution (`source_url`) is
+   load-bearing here: these are other people's frames.
+2. **Asset bank — Mike's.** Named, permanent, curated, pulled from
+   deliberately: `warehouse-corridor`, not `<sha>.jpg`. Midjourney
+   environments and characters land here. Described once on ingest so the
+   agent can *search* it and propose picks for a spark, rather than crawling
+   for something already on the shelf. No cap — a library is not a bin.
+3. **Generated content → promoted into the asset bank.** A keyframe or render
+   that turned out well becomes a reusable asset. This is the loop that makes
+   the bank compound instead of Mike re-sourcing the same corridor forever.
+   Promotion is an explicit act, not automatic: the whole value of the bank is
+   that everything in it was chosen.
+
+### What this needs (rough)
+
+- **Provenance on every reference.** An `origin` the pool can be queried by —
+  `crawl` / `mine` / `generated` — written at every `refbin` door including the
+  composer upload, which currently records nothing. Cheapest correct version
+  is a row per stored ref, not a new directory: the flat `/refs/<sha>.jpg`
+  shape is what makes everything downstream work and must not change.
+- **The asset bank as a real store**, per the folder + describe-on-ingest
+  sketch (a `library/environments/<slug>/` convention, vision description on
+  ingest, into the `assets` RAG domain).
+- **An MCP tool that can see it.** The idea agent's whole surface is
+  `bank_spark`, `bank_reference`, `spark_images`, `next_spark`,
+  `list_sparks` + idea CRUD. Nothing lists or searches the shelf, so the agent
+  cannot pick from it even when it is the right answer. `bank_reference` also
+  takes a URL, not a file — a Midjourney PNG on Mike's disk has no URL, which
+  is why `ops/ingest-saved-images.py` had to exist at all.
+- **A promote step** from a rendered keyframe to a named asset.
+- **A pick step in the scout node**, so chosen bank assets ride into
+  `reference_photos` alongside the crawl rather than instead of it.
+
+### Order
+
+Provenance first — it is small, it unblocks every "show me only X" question,
+and without it bins 2 and 3 have nowhere to record what they are. The bank and
+the promote loop after. The MCP tool last, since the agent can't usefully
+choose from a shelf that isn't described yet.
+
+Parked deliberately: Mike wants to keep testing the current loop first
+(2026-09-02).
+
+---
+
+## Idea-agent findings from a remote Cowork session  (2026-09-03)
+
+Found while running spark #38 ("Sixteen Missed Calls") end to end from a phone-
+linked session. Items below are proven from the source or from failed calls,
+not inferred from tool signatures. Board at the time: 52 generated, 4 picked,
+**0 shot**, 45 archived, 2 parked.
+
+### A. No way to write the `shot` column  (highest priority)
+Schema supports it (`stats` reports it, `board(status="shot")` filters on it);
+nothing in the tool surface sets it. Only board write exposed is
+`pick(idea_id, picked=bool)`.
+
+Every piece is currently produced by hand in Mike's own studio, so the one
+thing the system most needs to learn — what actually got made — is exactly what
+it cannot record. Shoot rate reads 0.0% while work ships.
+
+Fix: `shoot(idea_id, shot=True, note="")` beside `pick`. Settle the definition
+first — **`shot` means made by any means**, not "a render came back," or manual
+production stays invisible.
+
+Rejected: binding `shot` to the Queue's approve button. It misses studio work
+entirely (never passes through the Queue), it fires before the output exists
+(approve is a spend authorisation), and it couples the column to the renderer
+that is currently missing. If a counter on approve is wanted, add a separate
+`approved` one.
+
+### B. MCP `generate` stops short of judge and keyframe  (3 for 3)
+Ideas 169, 170, 171, 172 all return `judge_overall: null`, empty
+`judge_reason`, empty `park_reason`, status `open`. #167 — created through
+another route — has `judge_overall: 7.0`, a written reason, a rendered keyframe
+and a park reason.
+
+Two consequences: nothing generated over MCP can ever park in the Queue, and no
+MCP-generated row can be read as "scored badly" because it was never scored.
+
+### C. The composer binds refs to a generation, not to a spark
+`orchestrator.py:287` → `bin_for_finding`; `scene_chain.py:355` →
+`bin_for_pass`. The graph reads reference photos from the **spark's bin**.
+`bank_reference` writes there, keyed `agent-<finding_id>`.
+
+The Studio composer does not. Four images uploaded before a run left the newest
+`scout_bin` row at id 39 from 14:58 — hours earlier; the files landed in
+`data/refs/` at 23:49 and rode into the shot's `refs` list directly.
+
+So `spark_images(38)` reads 0 no matter how much is uploaded through Studio,
+and `generate(spark, brand, goal)` — no refs parameter — cannot be handed
+references by a remote agent at all. Running a concept *with* references
+currently means starting it in Studio.
+
+Fix: a refs argument on `generate`, or have the composer also write
+`scout_bin` rows against the matching finding.
+
+### D. `archive()` records no reason
+`archive(idea_id, archived=True)`. Archiving is the only negative signal this
+system collects, and it stores *that* a concept was killed, never *why*.
+169/170/172 were all archived for **no turn** — a verdict that points straight
+at a failed prompt field — and that survives nowhere but a chat log.
+
+Fix: `archive(idea_id, reason="")`, vocabulary `weak concept · no turn ·
+no stake · off-brand · unshootable · seen it`.
+
+### E. `reference()` refuses the CDN every reference comes from
+`bank_reference` → `refbin.fetch` → `public_host` guard. Tested against
+`cdn.midjourney.com` at full size and at 640px webp; both refused with
+*"not a readable image, too large, or a refused host"*.
+
+**Mostly already solved:** `ops/ingest-saved-images.py` is the local-file route
+and takes `--pass-id`, so a folder can be banked straight onto a spark's pass.
+What is missing is only that the *agent* has no tool for it —
+`reference_local(finding_id, path, source_url)` would be the same code behind
+an MCP door. Worth noting in the tool docstring that the script exists, since
+an agent reading `bank_reference` alone concludes there is no local route.
+
+### F. SQLite is unwritable over the Cowork folder mount
+Reads work (`file:...?mode=ro`). Writes fail
+`sqlite3.OperationalError: disk I/O error` — the mount does not provide the
+locking SQLite needs. The failed transaction rolled back cleanly; nothing lost.
+Backup at `data/pipeline.db.bak-before-agentrefs-2153`.
+
+Stacked with A/D/E this is the real constraint: **a remote session can put
+files into `data/refs/` but cannot write the row that makes them count.**
+
+### G. Leftovers to clear
+`data/_agent_inbox/` — `mj_cavity_hand.png`, `mj_torn_wall.png`,
+`mj_phone_uplight.png` (staged Midjourney stills for spark #38).
+Orphans in `data/refs/` with no row: `2efac6ac92b59c014848e9cd.jpg`,
+`f6a451326dafc03657b27b93.jpg`. Keep `ea48535973dc26b7d4ef616c.jpg` — a
+composer upload picked it up and it is in live use on #171/#172.
+
+### H. Also
+- `#135`'s spark field holds ~1,200 chars of Runway/Wan failure notes (one
+  duplicated verbatim) instead of a spark. Good notes, wrong column — they are
+  being fed to the generator as creative direction.
+- The Midjourney MCP connector fails every `imagine` call with
+  `unexpected keyword argument 'async'`. Server-side; unrelated to this repo.
+- Keyframes DO render — #167's is live on R2. Only the clip step lacks a
+  renderer, so the two parked items cannot be approved. One renderer short,
+  not two. Do not archive them: they were never tested, and a false archive
+  poisons the only negative signal there is.
+
+### Order
+A first — it is small and it is the only thing that lets the system see the
+work Mike is actually making. Then C (references are what separate #171 from
+the 48 rows before it), then B. D and E are cheap. F is not fixable here.

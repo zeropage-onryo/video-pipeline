@@ -1,16 +1,16 @@
 """
 Zero Page runs its OWN generation engine, not a brand-block swap on ANTIHERO's
 solo-filmmaker-at-home prompt. These lock the separation: Zero Page's prompts
-are faceless, format-driven, and uncanny; ANTIHERO's stay room-and-star
-grounded. Generation is mocked; the template selection and skeleton injection
+carry no recurring star and are format-driven and uncanny; ANTIHERO's stay
+room-and-star grounded. Generation is mocked; the template selection and skeleton injection
 run for real.
 """
 from src import shootgen
 
 
-def test_zeropage_ideas_prompt_is_faceless_and_format_driven():
+def test_zeropage_ideas_prompt_bars_a_recurring_star_and_drives_on_format():
     p = shootgen.build_ideas_prompt([], "zeropage", count=5)
-    assert "FACELESS" in p
+    assert "NO RECURRING STAR" in p
     assert "GROUNDED-UNCANNY BEAT" in p
     assert "HOT FORMAT SKELETONS" in p
     # the evergreen skeletons are injected
@@ -28,7 +28,7 @@ def test_antihero_ideas_prompt_stays_room_and_star_grounded():
 
 def test_zeropage_concept_prompt_is_all_ai_and_roomless():
     p = shootgen.build_concept_prompt([], "zeropage")
-    assert "faceless" in p.lower()
+    assert "no recurring star" in p.lower()
     assert "ships WITHOUT a shoot" in p or "WITHOUT a shoot" in p
     assert "Freeze on the Wrong Thing" in p   # a skeleton is injected
     assert 'source "AI"' in p   # every shot is AI-generated, no camera
@@ -58,10 +58,10 @@ def test_zeropage_ideas_prompt_bans_named_ip():
     assert "never name films" in p.lower() or "Never name films" in p
 
 
-# --- the faceless brand stops being handed a cast (2026-09-01) --------------
+# --- the no-star brand stops being handed a cast (2026-09-01) --------------
 #
-# prompts/concept_zeropage.txt: "FACELESS -- no recurring person; any human is
-# anonymous (hand, back, silhouette), never a repeating character."
+# prompts/concept_zeropage.txt: "NO RECURRING STAR -- faces are fine, THIS face
+# is not ... never Michael, never the Antihero persona."
 # prompts/scenes_prompt.txt:    "reference the uploaded photos as the EXACT
 #                                face ... name them, don't redescribe them."
 # Two instructions in direct contradiction, and the cast block won: every Zero
@@ -85,7 +85,7 @@ def test_antihero_still_gets_its_cast():
 
 
 def test_an_empty_cast_tells_the_model_to_describe_plainly():
-    """A faceless brand must not just lose the block silently -- the
+    """A brand with no cast must not just lose the block silently -- the
     prompt has to say what to do instead, or the model invents a
     recurring person to fill the gap."""
     prompt = shootgen.build_scene_brief_prompt(
@@ -102,3 +102,28 @@ def test_an_empty_cast_tells_the_model_to_describe_plainly():
     section = prompt[start:prompt.index("\n\n", start)]
     assert "Michael" not in section
     assert "Ducati" not in section
+
+
+# --- faces were never the rule (Mike, 2026-09-02) ---------------------------
+#
+# "I don't want zeropage to not show faces. That's not the point. I just
+# wanted it to not be directly tied to my personal account." The word FACELESS
+# had been read literally all the way down -- by the generator AND by the
+# uncanny gate, which held a concept for ending on a stranger's reaction. What
+# Zero Page must not carry is a RECURRING star; a one-off stranger, face and
+# all, is fine.
+
+def test_zeropage_does_not_ban_faces():
+    for prompt in (shootgen.build_concept_prompt([], "zeropage"),
+                   shootgen.build_ideas_prompt([], "zeropage", count=5)):
+        low = prompt.lower()
+        assert "faces are fine" in low
+        # and the old absolute is gone from the rule it used to state
+        assert "faceless" not in low
+
+
+def test_zeropage_still_bars_the_person_the_channel_must_not_be_about():
+    p = shootgen.build_concept_prompt([], "zeropage").lower()
+    assert "never michael" in p
+    assert "antihero persona" in p
+    assert "recurring" in p

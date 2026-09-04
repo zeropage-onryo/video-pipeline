@@ -1,60 +1,91 @@
-{# The Graded tab: where a concept goes when it leaves the queue.
+{# The Teach tab: concepts you have graded, waiting on the one pass.
 
-   A concept leaves the Grade queue two ways -- passed on (archived, with
-   a reason) or graded (scored by the taste + performance judge). Passing
-   was always visible in the reason tally; scoring vanished, because the
-   only thing a score did was remove the concept from the draw. So the
-   scores are the data now (2026-09-02): every graded concept, best
-   first, so the tab answers "what did the judge actually like" rather
-   than "what is left to do".
+   The loop, end to end (2026-09-02, Mike's design):
 
-   Sorted by score, not by id, and NOT filtered by it -- the threshold
-   below only decides which rows read as strong. Every row still links
-   into the Grade tab's forms: a score is not the end of a concept, and
-   teaching the prompt is still the work. #}
+     Grade tab   you approve / teach / deny        -> recorded, not taught
+     Teach tab   one billed pass: ingest, score    -> taught, then retired
+     gone        the lesson lives in RAG; a count is all that is left
+
+   Two things follow from that ordering, and both are the point rather
+   than side effects. Your verdict is recallable right up until you press
+   the button -- nothing has reached the shelves yet. And a concept that
+   cannot reach the RAG store is scored but NOT retired: it stays here,
+   verdict intact, saying so. A concept that vanished having taught
+   nothing would be the one unacceptable outcome of this design. #}
+
+<div class="drawrow">
+  {% if graded %}
+  <form method="post" action="/concepts/grade-all">
+    <button type="submit" class="primary">Score &amp; teach all {{ graded | length }} · billed</button>
+  </form>
+  {% endif %}
+  <span class="mono dim" style="font-size:11.5px">
+    {{ taught_count }} retired into RAG so far</span>
+</div>
+
+{# What the judge will actually read when you press it: the board's picks
+   and passes as a taste label, capped at HISTORY_LIMIT, so this is what
+   reaches the prompt rather than what is in the table. Shown beside the
+   button because a signal nobody can see is a signal nobody trusts.
+
+   Careful with the wording here. Two different things come off that
+   board and they go to different places (2026-09-02): the ✓/✗ COUNTS
+   weight the judge's score and never touch RAG, while each tap separately
+   records a VERDICT on the scene prompt -- ✓ to the winning shelf, ✗ to
+   the avoid shelf -- which is what the BOARD tags on the rows mean. #}
+{% if board_taste.liked or board_taste.disliked %}
+<p class="dim" style="margin-top:-8px; margin-bottom:16px; font-size:12px">
+  Board taste the judge will read — {{ board_taste.liked }} picked ·
+  {{ board_taste.disliked }} passed. Those counts weight the score and never
+  reach the shelves; the taps themselves also file a verdict that does — ✓ to
+  the winning shelf, ✗ to the avoid shelf, marked BOARD on the rows below.</p>
+{% endif %}
 
 {% if not graded %}
 <div class="panel">
-  <div class="panel-head"><span class="id">GRADED</span><span class="m">NOTHING SCORED YET</span></div>
+  <div class="panel-head"><span class="id">TEACH</span><span class="m">NOTHING WAITING</span></div>
   <div class="panel-body">
-    <p class="dim">No concept has been scored yet. Grade one from the
-      <a href="/studio?tab=grade">Grade tab</a> — each is one billed model call —
-      and it moves here with its taste and performance marks.</p>
+    <p class="dim">Nothing is waiting on a score. Approve, teach or deny a concept on the
+      <a href="/studio?tab=grade">Grade tab</a> and it lands here; one pass then teaches it
+      to RAG, scores it, and clears it off the surface for good.
+      {% if taught_count %}{{ taught_count }} concept(s) have been through the loop —
+      what they taught is on the <a href="/studio?tab=library">RAG Library</a> tab.{% endif %}</p>
   </div>
 </div>
 {% else %}
-{% set strong = graded | selectattr("good") | list | length %}
 <div class="panel">
   <div class="panel-head">
-    <span class="id">GRADED CONCEPTS</span>
-    <span class="m">{{ graded | length }} SCORED · {{ strong }} AT {{ "%.0f"|format(good_score) }}+ · BEST FIRST</span>
+    <span class="id">YOUR VERDICT RECORDED</span>
+    <span class="m">{{ graded | length }} GRADED · OLDEST FIRST · NOT YET TAUGHT</span>
   </div>
   <div>
     {% for g in graded %}
     <a class="uq scored{{ ' strong' if g.good }}"
        href="/studio?tab=grade&amp;mode=shot&amp;concept_id={{ g.id }}"
-       title="{{ g.reason }}">
+       title="{{ g.reason or 'Click to reopen it on the Grade tab — nothing is taught yet, so you can still change your verdict.' }}">
       <span class="uid">{{ g.n }}</span>
       <span class="ut">{{ g.title }}
         {% if g.reason %}<span class="us">{{ g.reason }}</span>
         {% elif g.summary %}<span class="us">{{ g.summary }}</span>{% endif %}
       </span>
       <span class="utags">
-        <span class="tag faint">{{ g.brand|upper }}</span>
-        {% if g.picked %}<span class="tag bone" title="You picked this on the board">✓ PICKED</span>{% endif %}
-        {% if g.archived %}<span class="tag" title="Passed on after it was graded">PASSED</span>{% endif %}
+        <span class="tag {{ 'red' if g.verdict == 'DENIED' else 'bone' }}">{{ g.verdict }}</span>
+        {% if g.archived %}<span class="tag faint" title="Denied by the X on the board — one tap, no reason box">✗ BOARD</span>
+        {% elif g.picked %}<span class="tag faint" title="Approved by the ✓ on the board — its prompt is bound for the winning shelf">✓ BOARD</span>{% endif %}
       </span>
       <span class="ug">
-        {%- if g.taste is not none %}taste {{ "%.0f"|format(g.taste) }}{% endif %}
-        {%- if g.perf is not none %} · perf {{ "%.0f"|format(g.perf) }}{% endif -%}
+        {%- if g.overall is none %}awaiting score
+        {%- else %}taste {{ "%.0f"|format(g.taste) }} · perf {{ "%.0f"|format(g.perf) }}{% endif -%}
       </span>
-      <span class="sc">{{ "%.0f"|format(g.overall) }}<small>/10</small></span>
+      <span class="sc">{% if g.overall is not none %}{{ "%.0f"|format(g.overall) }}<small>/10</small>{% else %}—{% endif %}</span>
     </a>
     {% endfor %}
   </div>
 </div>
 
-<p class="dim" style="margin-top:12px; font-size:12px">A score is a weight, not a verdict —
-  nothing is gated on {{ "%.0f"|format(good_score) }}+. Click a row to open it in the Grade tab,
-  where approve / teach / deny is what actually reaches the RAG shelves.</p>
+<p class="dim" style="margin-top:12px; font-size:12px">Nothing here has taught RAG yet — click any
+  row to reopen it on the Grade tab and change your verdict. The button above ingests every
+  verdict, then scores each concept against your history <em>including</em> what it just
+  ingested, then retires them. {{ "%.0f"|format(good_score) }}+ reads as strong; nothing is
+  gated on it.</p>
 {% endif %}

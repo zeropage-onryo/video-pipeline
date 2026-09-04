@@ -71,7 +71,28 @@ STILL_FRAME_TEMPLATE = (
     "how this one frame is composed and where the movement is caught "
     "mid-move -- never as a sequence to play out. Output the image itself, "
     "with no commentary.\n\n"
-    "{reference}THE SHOT\n{prompt}"
+    "{beat}{reference}THE SHOT\n{prompt}"
+)
+
+# One frame, one moment. A shot prompt describes a MOVE -- "tilt up from
+# the hand to his face" -- and the move is kept, deliberately: it is how
+# the shot is directed and the generator reads it (Mike, 2026-09-02).
+# But handed the whole move and asked for one picture, the model obliges
+# by fitting BOTH ends into the same frame. Concept 167 came back with a
+# hallway, a phone, and a disembodied head floating across the top third.
+#
+# So the move stays in the prompt and the FRAME gets pinned separately:
+# each still names the one moment it is, and says in as many ways as the
+# failure takes that the other moments are context, not co-subjects.
+BEAT_NOTE = (
+    "THE MOMENT TO RENDER -- this frame and only this one:\n{beat}\n\n"
+    "The shot below describes a movement that travels through several "
+    "moments. Render ONLY the moment named above. Everything else in the "
+    "shot -- the grade, the lens, the room, the texture, where the camera "
+    "came from and where it is going -- is context for how THIS frame "
+    "looks, never a second subject to fit into the same picture. Do not "
+    "composite, collage, inset, split-screen, stack or overlay two moments "
+    "in one image. One moment, one frame.\n\n"
 )
 
 # Attaching a reference is not the same as saying what it is FOR. Bytes
@@ -86,10 +107,15 @@ REFERENCE_NOTE = (
 )
 
 
-def as_still_frame(prompt: str, *, has_reference=False) -> str:
+def as_still_frame(prompt: str, *, has_reference=False, beat: str = "") -> str:
     """The video prompt, re-framed as a single-frame brief. Pure -- no
     model call goes near it, so a refusal is either a bad framing
-    (visible here) or a bad prompt, never both at once."""
+    (visible here) or a bad prompt, never both at once.
+
+    `beat` names the ONE moment of the move this frame is. Empty means
+    the whole shot, which is what every caller did before beats existed
+    and what a single-moment shot still wants.
+    """
     prompt = (prompt or "").strip()
     if not prompt:
         return ""
@@ -98,7 +124,10 @@ def as_still_frame(prompt: str, *, has_reference=False) -> str:
         subject="IMAGE is" if count == 1 else f"{count} IMAGES are",
         them="it" if count == 1 else "them",
         their="its" if count == 1 else "their")
-    return STILL_FRAME_TEMPLATE.format(prompt=prompt, reference=note)
+    beat = (beat or "").strip()
+    return STILL_FRAME_TEMPLATE.format(
+        prompt=prompt, reference=note,
+        beat=BEAT_NOTE.format(beat=beat) if beat else "")
 
 
 def has_key() -> bool:
@@ -288,6 +317,7 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
                          aspect_ratio: str = ASPECT_RATIO,
                          image_size: str = IMAGE_SIZE,
                          concept_id=None,
+                         beat: str = "",
                          account_id: Optional[int] = None,
 ) -> dict:
     """
@@ -335,16 +365,18 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         who = f"c{concept_id}-" if concept_id else "wf-"
         out_path = RENDER_DIR / f"{who}{stamp}.png"
-        generate_image(as_still_frame(prompt, has_reference=len(references)),
+        generate_image(as_still_frame(prompt, has_reference=len(references),
+                                      beat=beat),
                        out_path, model=model,
                        reference_bytes=references, client=client,
                        aspect_ratio=aspect_ratio, image_size=image_size)
 
         # the row logs the prompt the person wrote, not the constant
         # wrapper around it -- the flag says which framing was applied
-        shot_row_id = _shot_row_for_prompt(prompt, db_path)
+        shot_row_id = _shot_row_for_prompt(prompt, db_path, account_id)
         generation_params = {"model": model, "source": "workflow",
                              "framing": "still", "references": len(references),
+                             **({"beat": beat} if beat else {}),
                              **({"concept_id": concept_id} if concept_id else {})}
         generation_id = generative.record_generation(
             shot_row_id, "nano", prompt,

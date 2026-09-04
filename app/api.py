@@ -48,6 +48,7 @@ from src import (
     runway,
     scout,
     settings,
+    winners,
     workflows,
     youtube,
 )
@@ -658,6 +659,7 @@ def _concept_card(c: dict) -> dict:
         "parked": c.get("parked", False),
         "park_reason": c.get("park_reason") or "",
         "graded": c.get("graded", False),
+        "shot_done": c.get("shot_done", False),
         "refs": c.get("refs") or [],
         "prompt": ((c.get("shots") or [{}])[0].get("prompt") or "")
                   if c.get("is_scene") else "",
@@ -1053,12 +1055,30 @@ class PickBody(BaseModel):
 
 @router.post("/concepts/{concept_id}/pick")
 def concept_pick(concept_id: int, body: PickBody, account_id: int = Depends(auth.current_account_id)):
-    """The label: this scene is worth rendering."""
+    """The label: this scene is worth rendering -- and, as of 2026-09-02,
+    a verdict.
+
+    The ✓ records an APPROVE on the scene prompt, the mirror of what the ✗
+    does, so the concept lands on the Teach tab and its prompt reaches the
+    RAG *winning* shelf on the next pass. Without this the board taught
+    only negatives, and on a pick rate near 1 in 29 that is a writer being
+    told what to avoid twenty times for every example of what to aim at.
+
+    The pick still does everything it did: picked_at is the label
+    pick_rate reads, and the Queue is still what decides on spending.
+    Teaching is added beside that, not instead of it."""
     try:
         preprod.set_picked(concept_id, body.picked, account_id=account_id)
     except ValueError as e:
         return _error(404, "not_found", str(e))
-    return {"ok": True, "picked": body.picked,
+    concept = preprod.get_concept(concept_id, account_id=account_id)
+    ruled = False
+    if concept is not None:
+        if body.picked:
+            ruled = _board_verdict(concept, "worked", BOARD_PICK_NOTE)
+        else:
+            _withdraw_board_verdict(concept)
+    return {"ok": True, "picked": body.picked, "ruled": ruled,
             "pick": preprod.pick_rate(account_id=account_id)}
 
 
@@ -1066,11 +1086,82 @@ class ArchiveBody(BaseModel):
     archived: bool = True
 
 
+BOARD_PASS_NOTE = "passed on the board"
+BOARD_PICK_NOTE = "picked on the board"
+BOARD_NOTES = (BOARD_PASS_NOTE, BOARD_PICK_NOTE)
+
+
+def _board_verdict(concept: dict, verdict: str, note: str) -> bool:
+    """Record the board's ruling on a concept's scene prompt. True if one
+    was filed.
+
+    Both board buttons are verdicts as of 2026-09-02: ✓ files the prompt
+    to be imitated, ✗ files it to be avoided. Neither ingests -- they land
+    on the Teach tab and the pass there embeds them, so a tap is
+    reversible right up until you teach it.
+
+    Two rules about replacing what is already there, and the asymmetry
+    between them is the whole point:
+
+      - a previous BOARD verdict is replaced. Picking something you
+        X'd has to flip the lesson, not stack a second one against it.
+      - a verdict from the Grade tab is NOT touched. That one was
+        considered -- you read the prompt, maybe rewrote it -- and a
+        one-tap board click must not quietly overwrite it.
+
+    Anything already ingested is never replaced either way: that lesson is
+    taught, and no button here is an unteach.
+    """
+    shots = [sh for sh in (concept.get("shots") or []) if sh.get("prompt")]
+    if not shots:
+        return False        # nothing to teach; the tap is just a tap
+    ref = f"concept-{concept['id']}-shot-{shots[0].get('n') or 1}"
+    existing = winners.recorded(ref)
+    if any(w.get("ingested") for w in existing):
+        return False
+    if any((w.get("note") or "") not in BOARD_NOTES for w in existing):
+        return False        # a considered verdict from the Grade tab wins
+    winners.discard_pending(ref)
+    winners.record_and_learn(
+        (shots[0].get("tool") or "runway"), shots[0]["prompt"], note=note,
+        video_ref=ref, verdict=verdict, ingest=False)
+    return True
+
+
+def _withdraw_board_verdict(concept: dict) -> int:
+    """Undo a board ruling that has not taught anything yet. Un-picking or
+    un-archiving must take its verdict with it, or the shelves learn from
+    a decision that was reversed."""
+    withdrawn = 0
+    for sh in (concept.get("shots") or []):
+        if not sh.get("prompt"):
+            continue
+        ref = f"concept-{concept['id']}-shot-{sh.get('n') or 1}"
+        if all((w.get("note") or "") in BOARD_NOTES
+               for w in winners.recorded(ref)):
+            withdrawn += winners.discard_pending(ref)
+    return withdrawn
+
+
 @router.post("/concepts/{concept_id}/archive")
 def concept_archive(concept_id: int, body: ArchiveBody,
                     account_id: int = Depends(auth.current_account_id)):
-    """Take a concept off the board. Not a delete: the row stays for
-    pick_rate and stays in the Dev Studio's ungraded pool.
+    """Take a concept off the board -- and, as of 2026-09-02, RULE on it.
+
+    The X is a verdict now, not just a tidy-up. It archives the row (never
+    a delete: it still counts for pick_rate) and records a DENY against
+    the scene prompt, so the concept lands on the Teach tab and its prompt
+    reaches the RAG avoid shelf on the next pass. One tap, no reason box --
+    Mike's standing rule for this button.
+
+    Deliberately entering territory he named himself: he passes on most of
+    what is generated, so this puts many more negatives than positives on
+    the shelves. Chosen with that known. If generations start reading
+    timid, this is the first thing to look at.
+
+    See _board_verdict for the guards -- no prompt, an already-ingested
+    lesson, and a considered verdict from the Grade tab are all left
+    alone -- and for why un-archiving takes the deny with it.
 
     account_id comes from the dependency, NOT from a bare default
     (2026-09-02). Written as `account_id: Optional[int] = None` it was a
@@ -1079,11 +1170,20 @@ def concept_archive(concept_id: int, body: ArchiveBody,
     the X on the board 404'd on every card that had an owner while Pick,
     which took the dependency, worked. Same scoping as pick or the two
     buttons disagree about whose rows they are."""
+    concept = preprod.get_concept(concept_id, account_id=account_id)
+    if concept is None:
+        return _error(404, "not_found", f"no concept {concept_id}")
     try:
         preprod.set_archived(concept_id, body.archived, account_id=account_id)
     except ValueError as e:
         return _error(404, "not_found", str(e))
-    return {"ok": True, "archived": body.archived}
+
+    if body.archived:
+        ruled = _board_verdict(concept, "didnt_work", BOARD_PASS_NOTE)
+    else:
+        _withdraw_board_verdict(concept)
+        ruled = False
+    return {"ok": True, "archived": body.archived, "ruled": ruled}
 
 
 # --- the approval gate ------------------------------------------------------
@@ -1126,7 +1226,10 @@ def queue_pending(brand: Optional[str] = None, account_id: int = Depends(auth.cu
              for c in preprod.list_concepts(account_id=account_id, brand=brand)]
     pending = [c for c in cards
                if (c["picked"] or c["parked"]) and not c["archived"]
-               and c["is_scene"] and not c["media_url"]]
+               and c["is_scene"] and not c["media_url"]
+               # marked shot by hand (the camera button) -- a card you
+               # already made yourself isn't waiting on you to spend
+               and not c["shot_done"]]
     return {"items": pending, "runway": _runway_state()}
 
 
@@ -1193,6 +1296,43 @@ def queue_reject(concept_id: int, account_id: int = Depends(auth.current_account
     preprod.set_picked(concept_id, False, account_id=account_id)
     preprod.set_archived(concept_id, True, account_id=account_id)
     return {"ok": True, "pick": preprod.pick_rate(account_id=account_id)}
+
+
+class ShotBody(BaseModel):
+    shot: bool = True
+
+
+@router.post("/queue/{concept_id}/shot")
+def queue_mark_shot(concept_id: int, body: ShotBody,
+                    account_id: int = Depends(auth.current_account_id)):
+    """The camera: you made this yourself, outside the render pipeline --
+    a manual Runway session, a hand-tweaked prompt, your own stills, cut
+    together by hand -- and it worked. `shot_done` is the ground-truth
+    column shoot_rate() has always read (preprod.py's own docstring:
+    "you generate several concepts and go shoot some of them; that
+    choice is ground truth about what's actually worth making"). It
+    predates the render pipeline and was never wired to a button on
+    /ui -- this is that wire, not a new label.
+
+    Deliberately does nothing else. It does NOT touch picked_at (a
+    manual shoot proves the idea, not that the system's OWN automated
+    render was good -- queue_approve already owns that meaning and
+    stays as-is). It does NOT attach media -- paste the finished clip's
+    URL through /concepts/{id}/shots/{n}/media, same as any manual
+    Runway render. And it does NOT rule for RAG -- grade the corrected
+    prompt and the reason it worked on the Grade/Teach tabs same as
+    anything else; this button only marks that the shoot happened, not
+    what it taught. Toggleable, so a wrong click un-marks it.
+
+    Marking it shot takes the card off the Queue's pending list (see
+    queue_pending's filter) -- one you already made by hand isn't
+    waiting on you to spend anything."""
+    try:
+        preprod.mark_shot(concept_id, body.shot, account_id=account_id)
+    except ValueError as e:
+        return _error(404, "not_found", str(e))
+    return {"ok": True, "shot_done": body.shot,
+            "shoot": preprod.shoot_rate(account_id=account_id)}
 
 
 class ConceptRefsBody(BaseModel):
@@ -1530,10 +1670,22 @@ async def pipeline_run(request: Request, account_id: int = Depends(auth.current_
     def work(job):
         from google import genai
 
-        from src import shootgen
+        from src import scene_chain, shootgen
         gemini_client = genai.Client(api_key=api_key)
         jobs.progress(job, 0.15, "grounding in references")
         references = scene_grounding(brand, prompt, client=gemini_client)
+        # Named in the prompt, or picked (asset_photos/uploads) -- the
+        # same rule Studio's Create button follows, not the old
+        # cast=None default that showed this brief every character and
+        # prop on file regardless of whether the brief named any of
+        # them (2026-09-03, Mike's call). Split out of scene_chain.ground()
+        # so this doesn't also re-run reference_block, which scene_grounding
+        # already queried above.
+        try:
+            cast, _locs = scene_chain.scoped_cast_and_locations(
+                prompt, brand, refs, db_path=None, account_id=account_id)
+        except Exception:
+            cast = None
         jobs.progress(job, 0.35,
                       "writing the scene prompt"
                       + (f" · {len(image_refs)} image ref(s)" if image_refs else ""))
@@ -1543,7 +1695,7 @@ async def pipeline_run(request: Request, account_id: int = Depends(auth.current_
         result = shootgen.generate_scene_concept(
             brand=brand, spark=prompt,
             gemini_client=gemini_client,
-            db_path=None, references=references,
+            db_path=None, references=references, cast=cast,
             image_refs=image_refs or None,
         )
         title = (result.get("concept") or {}).get("title") or "untitled"

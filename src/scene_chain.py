@@ -35,7 +35,7 @@ from __future__ import annotations
 import sys
 from typing import Callable, Optional
 
-from . import imagery, nano_banana, preprod, shootgen
+from . import db, imagery, nano_banana, preprod, shootgen
 
 # Enhancing and keyframing are per-scene model calls, so a batch of 4 is
 # 4 of each. The cap that actually bites is nano_banana.DAILY_CAP (20/day,
@@ -49,13 +49,25 @@ def _note(notes: list, text: str) -> None:
         notes.append(text)
 
 
-def ground(idea: str, *, brand: str = "", db_path=None, account_id: Optional[int] = None) -> dict:
-    """The reference library and the cast, as plain text blocks.
+def ground(idea: str, *, brand: str = "", db_path=None, account_id: Optional[int] = None,
+          refs: Optional[list] = None) -> dict:
+    """The reference library, the cast, and the rooms this run may draw
+    on -- all scoped to ONE rule (2026-09-03, Mike's call): named in
+    `idea`, or explicitly picked via `refs` (a photo attached through
+    the composer's / picker, an upload, or the asset carousel). Nothing
+    on the shelf is offered just because it exists any more -- this
+    replaces the old default of handing the writer EVERY character and
+    prop on file on every single run (cast_for's unfiltered
+    entities.list_characters/list_props), the same "always broadcast
+    the whole roster" shape generate_scene_concept's cast=None default
+    carried on the Director brief path.
 
     reference_block is the edge helper (never called from inside a
     generator, so the generators stay hermetic in tests) and never
     raises: no Postgres means an ungrounded run with a stderr note.
     Naming the cast is grounding too, and fails the same way -- softly.
+    An asset with no photos was never eligible either way -- see
+    shootgen.named_assets, which asset_shelf.in_scope calls underneath.
     """
     path = db_path
     references = ""
@@ -63,28 +75,61 @@ def ground(idea: str, *, brand: str = "", db_path=None, account_id: Optional[int
         references = shootgen.reference_block(spark=idea or None, db_path=path)
     except Exception:
         references = ""
-    cast = None
+
+    cast, locations = None, []
     try:
-        from . import entities
-        # Brand-scoped, same rule the graph follows: a faceless brand
-        # gets no cast block, or the {cast} socket instructs it to name
-        # a recurring person its own brief forbids.
-        cast = shootgen.cast_for(
-            brand,
-            entities.list_characters(dsn=path, account_id=account_id),
-            entities.list_props(dsn=path, account_id=account_id), detail=True)
+        cast, locations = scoped_cast_and_locations(
+            idea, brand, refs, db_path=path, account_id=account_id)
     except Exception:
-        cast = None
-    return {"references": references, "cast": cast}
+        cast, locations = None, []
+    return {"references": references, "cast": cast, "locations": locations}
+
+
+def scoped_cast_and_locations(idea: str, brand: str, refs, *, db_path=None,
+                              account_id: Optional[int] = None) -> tuple:
+    """The cast text block and the in-scope rooms, on their own --
+    split out of ground() so a caller that already has its own
+    reference_block (app.api.pipeline_run's scene_grounding, which adds
+    the brand's inspiration accounts) doesn't have to query RAG twice
+    to also get this half. ground() calls this; don't duplicate its
+    body at a second call site."""
+    from . import asset_shelf, entities
+
+    path = db_path
+    items = asset_shelf.catalogue(db_path=path, account_id=account_id)
+    scope = asset_shelf.in_scope(idea, refs, items)
+    scoped_names: dict = {"character": set(), "prop": set(), "location": set()}
+    for a in scope:
+        scoped_names.setdefault(a["category"], set()).add(a["name"])
+    characters = [c for c in entities.list_characters(dsn=path, account_id=account_id)
+                 if c["name"] in scoped_names["character"]]
+    props = [p for p in entities.list_props(dsn=path, account_id=account_id)
+            if p["name"] in scoped_names["prop"]]
+    # Brand-scoped, same rule the graph follows: a faceless brand gets
+    # no cast block, or the {cast} socket instructs it to name a
+    # recurring person its own brief forbids -- unchanged by what got
+    # named or picked, since the brand rule is the stricter one.
+    cast = shootgen.cast_for(brand, characters, props, detail=True)
+    locations = [loc for loc in preprod.list_locations(dsn=path, account_id=account_id)
+                if loc["name"] in scoped_names["location"]]
+    return cast, locations
 
 
 def write_scenes(idea: str, brand: str, *, count: int = 1, references: str = "",
-                 cast=None, refs=None, image_refs=None, db_path=None,
+                 cast=None, refs=None, locations=None, image_refs=None, db_path=None,
                  gemini_client=None, template_tag: str = "",
                  on_retry=None, account_id: Optional[int] = None) -> dict:
     """N standalone takes on one idea, in ONE call so they are varied
     against each other rather than rolled independently. Raises: with no
     scene there is nothing to work on, and the caller must say so.
+
+    `locations` is ground()'s already-computed in-scope set (named in
+    the idea, or picked via refs) -- passed through so
+    generate_scene_concepts does not recompute a narrower answer with
+    picked_locations(refs, on_file), which only ever saw the pick half.
+    None (the default for any other caller) falls back to that old
+    behaviour, so tests and callers that never adopted ground() keep
+    working unchanged.
 
     `template_tag` rides into the hashed prompt template, so pick_rate's
     by_prompt breakdown can separate rows produced by different
@@ -93,8 +138,8 @@ def write_scenes(idea: str, brand: str, *, count: int = 1, references: str = "",
         idea, brand, count=max(1, min(MAX_SCENES, count)),
         gemini_client=gemini_client, references=references, cast=cast,
         db_path=db_path,
-        refs=list(refs or []), image_refs=image_refs or None,
-        template_tag=template_tag, on_retry=on_retry, account_id=account_id)
+        refs=list(refs or []), locations=locations, image_refs=image_refs or None,
+        template_tag=template_tag, account_id=account_id, on_retry=on_retry)
 
 
 # How many photos of ONE character are worth a reference slot. A face
@@ -284,80 +329,157 @@ def persist_prompt(concept_id: int, shot_n, text: str, *, db_path=None, account_
     return True
 
 
-def visual_target(concept_id: int, shot: dict, *, db_path=None,
-                  account_id: Optional[int] = None,
-                  gemini_client=None) -> str:
-    """Give a scene with NO references something to look at, by
-    generating one (2026-09-02).
+# How many targets one spark gets. Two, not one: a single reference is a
+# picture the model copies, two are a range it interpolates within --
+# and the second costs the same as the first only once per spark now.
+TARGETS_PER_SPARK = 2
+
+
+def visual_target(concept_id: int, shot: dict, *, spark: str = "",
+                  db_path=None, account_id: Optional[int] = None,
+                  gemini_client=None, count: int = TARGETS_PER_SPARK) -> list:
+    """Give a scene with NO references something to look at, generated
+    once PER SPARK and reused by every concept that spark produces.
 
     THE FAILURE THIS FIXES. keyframe_scene builds its reference list from
-    `shot["refs"]` and passes `reference_image=None` when that list is
-    empty -- so the still is rendered from the prompt text alone. For
-    Antihero that rarely happens: the scene names Michael and the Ducati
-    and attach_refs hangs their photos on it. For Zero Page it happens
-    EVERY time, because a faceless brand has no cast to attach and the
-    scout's image bin has been empty since Instagram's public-content
-    endpoint started refusing (2026-09-02: "0 reference image(s)
-    binned"). So the brand whose whole register is grounded uncanny
-    TEXTURE was the one keyframing with nothing to look at.
+    `shot["refs"]` and passes reference_image=None when that list is
+    empty -- so Nano renders the still from prompt text alone. For
+    Antihero that is rare: the scene names Michael and attach_refs hangs
+    his photo on it. For Zero Page it was EVERY scene -- a faceless brand
+    has no cast to attach, and the scout's image bin has been empty since
+    Instagram's public-content endpoint started refusing (2026-09-02:
+    "8 spark(s) from 33 signals - 0 reference image(s) binned"). The
+    brand whose whole register is grounded uncanny TEXTURE was the one
+    keyframing with nothing to look at.
 
-    A generated still is not the same object as a banked one and must
-    not be confused with it. The bin holds EVIDENCE -- a frame from a
-    video that actually travelled, carrying the source_url that says so.
-    This is a VISUAL TARGET: what this specific scene should look like.
-    It is written from the shot's own prompt, so it matches the scene
-    rather than merely resembling its mood, which is the thing a found
-    image can never do.
+    WHY PER SPARK AND NOT PER CONCEPT (2026-09-02). One spark produces
+    several concepts and they share a world -- same room, same light,
+    same materials. Generating per concept paid for that world once per
+    concept AND made the batch visually incoherent, since each concept
+    got its own unrelated reference. Banking under a spark-derived
+    pass_id means the second concept from a spark costs nothing and
+    looks like it belongs beside the first.
 
-    Gated by midjourney.spend_approved(), which reads MIDJOURNEY_SPEND_OK
-    and is deliberately per-run rather than a .env line -- "an approval
-    that's always on isn't an approval". Unapproved, this returns "" and
-    the keyframe behaves exactly as it did before. Never raises: a scene
-    with no target is still a scene.
+    The bin is where they go because that is the path that already
+    exists: bin_for_pass reads it, the composer renders it, and the URL
+    shape is the same /refs/<sha>.jpg a dragged-on photo gets.
+
+    A generated target is NOT a banked crawl image and the row says so
+    -- lane="target", source_url="" -- because the bin's other rows are
+    EVIDENCE (a frame from a video that travelled, carrying the URL that
+    proves it) and this is a visual target for one idea. Conflating them
+    would turn a mood board into a citation.
+
+    WHY HIGGSFIELD AND NOT MIDJOURNEY (2026-09-02). This was wired to
+    midjourney.generate_image first, because _midjourney_still was
+    sitting there half-built. Running it showed the flaw: that path goes
+    through AceDataCloud, a paid reseller, and ACEDATA_API_KEY is not
+    set -- so it could never have produced an image, and a Midjourney
+    subscription would not have helped, since the subscription and the
+    reseller are separate bills. Higgsfield is already configured, costs
+    $0.05 against Midjourney-via-reseller's $0.27, and returns its
+    failures rather than raising.
+
+    Gated by higgsfield.spend_approved() (HIGGSFIELD_SPEND_OK, per-run by
+    design -- "an approval that's always on isn't an approval"), and by
+    HIGGSFIELD_DAILY_CAP (6) underneath it. Returns [] on anything going
+    wrong: a scene with no target keyframes the way it always did.
     """
-    from . import midjourney, refbin
+    from . import higgsfield, scout
 
     path = db_path
     prompt = (shot.get("prompt") or "").strip()
-    if not prompt or not midjourney.spend_approved():
-        return ""
+    if not prompt:
+        return []
+
+    # Reuse before spending. Keyed on the spark's normalised form, so a
+    # capitalisation difference does not buy the same pictures twice.
+    pass_id = f"target-{scout._spark_key(spark)}" if (spark or "").strip() else ""
+    if pass_id:
+        banked = [r["url"] for r in scout.bin_for_pass(pass_id, dsn=path)]
+        if banked:
+            return banked
+
+    if not higgsfield.spend_approved():
+        return []
+
+    made = []
     try:
         line = shootgen.still_prompt(prompt, gemini_client=gemini_client)
         if not line:
-            return ""
-        out = refbin.REFS_DIR / f"mj-{concept_id}-{shot.get('n', 1)}.jpg"
-        out.parent.mkdir(parents=True, exist_ok=True)
-        midjourney.generate_image(line, out)
-        url = refbin.save(out.read_bytes())
-        if not url:
-            return ""
-        # Stored on the shot, not held in a local: the Queue card reads
-        # refs to show what the spend is anchored on, and a target
-        # nobody can see is a target nobody can veto.
-        existing = list(shot.get("refs") or [])
-        preprod.update_concept_shots(
-            concept_id, {"shots": [dict(shot, refs=existing + [url])]},
-            dsn=path, account_id=account_id)
-        return url
+            return []
+        for _ in range(max(1, count)):
+            # Never raises; a refusal (cap, no key, upstream error) comes
+            # back as ok=False, which is a reason to stop rather than to
+            # keep paying for the same failure.
+            result = higgsfield.generate_image_from_prompt(
+                line, db_path=path, account_id=account_id)
+            if not result.get("ok"):
+                print(f"note: no visual target — {result.get('error')}",
+                      file=sys.stderr)
+                break
+            url = result.get("media_url") or ""
+            if url:
+                made.append(url)
     except Exception as e:                      # surfaced, never fatal
-        print(f"note: no visual target ({type(e).__name__}: {e}) -- "
-              "the still renders from text alone", file=sys.stderr)
-        return ""
+        print(f"note: visual target stopped ({type(e).__name__}: {e})",
+              file=sys.stderr)
+
+    if made and pass_id:
+        scout.init(path)
+        with db.connect(path) as conn:
+            for url in made:
+                conn.execute(
+                    "INSERT INTO scout_bin (created_at, pass_id, brand, url, "
+                    "source_url, title, lane, metric) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                    (scout._now(), pass_id, "", url, "", (spark or "")[:120],
+                     "target", ""),
+                )
+    return made
+
+
+def _replace_shot(shots: list, shot: dict) -> list:
+    """This shot updated, every other shot left alone.
+
+    update_concept_shots REPLACES shots_json wholesale, so handing it
+    `[shot]` deletes every other shot on the concept. That was survivable
+    while Zero Page concepts came back with one shot; it stops being
+    survivable the moment they come back with the two-to-four the brand
+    prompt asks for.
+    """
+    n = shot.get("n")
+    return [dict(shot) if s.get("n") == n else s for s in shots]
 
 
 def keyframe_scene(concept_id: int, shot_n=None, *, db_path=None,
-                   resolve_photo=None,
+                   resolve_photo=None, gemini_client=None,
                    account_id: Optional[int] = None,
 ) -> dict:
-    """One still for the scene, attached as the shot's reference_image.
+    """A still per BEAT for the scene, compiled onto the shot.
 
-    That field is what Runway anchors the clip on, so this is the frame
-    the whole spend hangs off -- which is exactly why it gets looked at
-    before anyone approves. Every reference goes in NAMED (label, bytes)
-    rather than as a bare picture: four references are four named things
-    the model can bind to the prompt's words, not four images it has to
-    sort out. Never raises -- nano_banana.generate_from_prompt returns
-    its failure as a result, and a scene with no still is still a scene.
+    SEPARATE IMAGES, NOT ONE COMBINED ONE (Mike, 2026-09-02). A shot
+    prompt describes a move -- "tilt up from the hand to his wide-eyed
+    face" -- and the move stays, because it is how the shot is directed
+    and the generator reads it. But one call asking for one picture of
+    that whole move returns one picture OF THE WHOLE MOVE: concept 167
+    came back with the hallway, the phone, and a head floating across
+    the top third of the frame. So the move is split into its moments
+    and each is rendered on its own call, with the full prompt behind it
+    for grade, lens and texture and only the beat line saying which
+    instant this frame is.
+
+    The FIRST beat becomes the shot's reference_image -- the frame
+    Runway anchors the clip on, so the whole spend hangs off it, which
+    is exactly why it gets looked at before anyone approves. The rest
+    ride on the shot as `frames`, the strip a person scrolls in the
+    Queue. A shot the splitter reads as a single moment renders exactly
+    one still, the way it always did.
+
+    Every reference goes in NAMED (label, bytes) rather than as a bare
+    picture: four references are four named things the model can bind to
+    the prompt's words, not four images it has to sort out. Never raises
+    -- nano_banana.generate_from_prompt returns its failure as a result,
+    and a scene with no still is still a scene.
     """
     path = db_path
     concept = preprod.get_concept(concept_id, dsn=path, account_id=account_id)
@@ -382,10 +504,13 @@ def keyframe_scene(concept_id: int, shot_n=None, *, db_path=None,
     # prompt text alone -- which is every Zero Page scene, every night.
     # Generate a target first when the spend is approved.
     if not (shot.get("refs") or []):
-        made = visual_target(concept_id, shot, db_path=path,
-                             account_id=account_id)
+        made = visual_target(concept_id, shot, spark=concept.get("spark") or "",
+                             db_path=path, account_id=account_id)
         if made:
-            shot = dict(shot, refs=[made])
+            shot = dict(shot, refs=made)
+            preprod.update_concept_shots(
+                concept_id, {"shots": _replace_shot(shots, shot)},
+                dsn=path, account_id=account_id)
 
     references = []
     resolved: list = []
@@ -404,13 +529,60 @@ def keyframe_scene(concept_id: int, shot_n=None, *, db_path=None,
     # naming it would promise a picture that never rode along.
     prompt = shootgen.bind_references(prompt, resolved)
 
-    result = nano_banana.generate_from_prompt(
-        prompt, reference_image=references or None, db_path=path,
-        concept_id=concept_id)
-    if result.get("ok") and result.get("media_url"):
-        preprod.set_shot_reference_image(concept_id, shot.get("n", 1),
-                                         result["media_url"], dsn=path, account_id=account_id)
-    return result
+    # The moments this shot's move travels through. [] means the shot
+    # holds one moment -- render it once, exactly as before beats.
+    beats = shootgen.beat_moments(prompt, gemini_client=gemini_client)
+
+    frames: list = []
+    result: dict = {}
+    for beat in (beats or [""]):
+        # No account_id, deliberately: nano's own shot row is created
+        # unowned by _shot_row_for_prompt, and record_generation scopes
+        # its lookup by account -- so passing one here raises "no shot
+        # with id N" on a row that plainly exists. The whole path is
+        # account-None and self-consistent; making it tenanted is a
+        # change to generative.py, not something to do sideways here.
+        result = nano_banana.generate_from_prompt(
+            prompt, reference_image=references or None, db_path=path,
+            concept_id=concept_id, beat=beat)
+        if not (result.get("ok") and result.get("media_url")):
+            # Usually NANO_DAILY_CAP. Stop rather than spend the rest of
+            # the strip against a wall we have already hit -- and keep
+            # the beats that DID render: half a strip is worth looking
+            # at, and a failure on beat one is still the failure this
+            # function has always returned.
+            break
+        frames.append({"beat": beat, "url": result["media_url"]})
+
+    if not frames:
+        return result or {"ok": False, "error": "no frame rendered"}
+
+    shot_n_actual = shot.get("n", 1)
+    preprod.set_shot_reference_image(concept_id, shot_n_actual,
+                                     frames[0]["url"], dsn=path,
+                                     account_id=account_id)
+    if len(frames) > 1:
+        try:
+            # Re-read: set_shot_reference_image just wrote the anchor,
+            # and the in-memory `shot` predates it. Building the strip
+            # from the stale copy would erase the frame Runway anchors
+            # on -- with the strip's own first entry, silently.
+            fresh = preprod.get_concept(concept_id, dsn=path,
+                                        account_id=account_id)["shots"]
+            current = next(s for s in fresh if s.get("n") == shot_n_actual)
+            preprod.update_concept_shots(
+                concept_id,
+                {"shots": _replace_shot(fresh, dict(current, frames=frames))},
+                dsn=path, account_id=account_id)
+        except Exception:
+            pass       # the anchor frame is stored; the strip is a bonus
+
+    return {"ok": True, "media_url": frames[0]["url"],
+            "frames": frames,
+            "generation_id": result.get("generation_id"),
+            "path": result.get("path"),
+            "error": (result.get("error")
+                      if len(frames) < len(beats or [""]) else None)}
 
 
 def park_scene(concept_id: int, reason: str = "", *, db_path=None, account_id: Optional[int] = None) -> None:
@@ -451,7 +623,7 @@ def run(idea: str, brand: str, *, count: int = 1, refs=None, image_refs=None,
     notes: list = []
 
     say(0.15, "grounding in references")
-    grounded = ground(idea, brand=brand, db_path=path, account_id=account_id)
+    grounded = ground(idea, brand=brand, db_path=path, account_id=account_id, refs=refs)
 
     say(0.4, f"writing {max(1, min(MAX_SCENES, count))} scene(s)")
     # A busy model and a thinking model look identical from outside, and
@@ -460,6 +632,7 @@ def run(idea: str, brand: str, *, count: int = 1, refs=None, image_refs=None,
     written = write_scenes(idea, brand, count=count,
                            references=grounded["references"],
                            cast=grounded["cast"], refs=refs,
+                           locations=grounded["locations"],
                            image_refs=image_refs, db_path=path,
                            gemini_client=gemini_client,
                            on_retry=lambda note: say(0.4, note),

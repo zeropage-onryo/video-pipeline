@@ -306,23 +306,53 @@ def test_ground_entities_uses_only_the_picked_character(tmp_db, monkeypatch):
     assert "Guest — bartender" not in calls[0]["cast"]
 
 
-def test_ground_entities_defaults_to_everything_on_file(tmp_db, monkeypatch):
+def test_ground_entities_defaults_to_nothing_on_file(tmp_db, monkeypatch):
+    """2026-09-03, Mike's call: an unattended run should stay only as
+    wide as the spark actually calls for -- it must not default to
+    showing the writer every character and prop on file just because
+    nobody picked anything. Neither asset has a photo here, so a name
+    match wouldn't fire either way; see the sibling test below for that
+    half."""
     entities.add_character("Mike — on camera", dsn=tmp_db, account_id=None)
     entities.add_prop("Ducati Panigale V2", category="vehicle", dsn=tmp_db, account_id=None)
     calls = stage_fakes(monkeypatch, [(make_concept(), [])])
 
     orchestrator.run("ritual", brand="antihero", channel="antihero")
 
+    assert "Mike — on camera" not in calls[0]["cast"]
+    assert "Ducati Panigale V2" not in calls[0]["cast"]
+
+
+def test_ground_entities_names_an_asset_the_spark_mentions(tmp_db, monkeypatch, tmp_path):
+    """With nobody there to pick anything, the spark text itself is the
+    only other way an unattended run can reach for a real asset -- the
+    same in_scope() rule scene_chain.ground() gives Studio's Create
+    button and Director's brief composer."""
+    from src import asset_shelf
+    dirs = {}
+    for kind in ("location", "character", "prop"):
+        d = tmp_path / (kind + "s")
+        d.mkdir()
+        dirs[kind] = d
+    monkeypatch.setattr(asset_shelf, "PHOTO_DIRS", dirs)
+    entities.add_character("Mike — on camera", dsn=tmp_db, account_id=None)
+    (dirs["character"] / "mike--on-camera").mkdir(parents=True)
+    (dirs["character"] / "mike--on-camera" / "a.png").write_bytes(b"\x89PNG\r\n")
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    orchestrator.run("Mike — on camera gears up for the ritual",
+                     brand="antihero", channel="antihero")
+
     assert "Mike — on camera" in calls[0]["cast"]
-    assert "Ducati Panigale V2" in calls[0]["cast"]
 
 
 def test_ground_rag_auto_grounds_only_in_craft_advice_domains(tmp_db, monkeypatch):
     """
-    The marketing shelf (platform mechanics, structuring advice) is the
-    automatic layer -- never the brand's own assets (personal_brand,
-    cinematography, proven_results, winning_prompts), which stay
-    opt-in via picked_references (narrowed 2026-08-20).
+    The marketing shelf (platform mechanics, structuring advice) is one
+    automatic layer. The STYLE shelves (personal_brand, cinematography)
+    stay opt-in via picked_references (narrowed 2026-08-20); performance
+    history joined the automatic side 2026-09-02 and has its own tests
+    below.
     """
     calls = []
 
@@ -553,16 +583,24 @@ def test_unreadable_judge_fails_closed(tmp_db, monkeypatch):
     assert "prompt gate" in result["held_reason"]
 
 
-def test_a_failed_shot_gets_one_rework_pass_before_holding(tmp_db, monkeypatch):
+def test_a_failed_shot_gets_two_rework_passes_before_holding(tmp_db, monkeypatch):
     """A bad score isn't an automatic hold: the judge already names what's
-    weak, so the failing shot earns one rewrite pass against that exact
+    weak, so the failing shot earns rewrite passes against that exact
     diagnosis before the whole concept -- including the shot that already
     passed -- gets thrown away over one fixable line. If the rework still
-    doesn't clear the bar, THEN it holds (bounded, not infinite)."""
+    doesn't clear the bar after MAX_PROMPT_REWORKS attempts, THEN it holds
+    (bounded, not infinite) -- raised 1 -> 2 on 2026-09-03: a single generic
+    rework attempt was landing on the SAME verdict for the "too many
+    sequential actions" failure shape (concept 180 in the live database,
+    byte-for-byte identical reason before and after its one rework), so one
+    attempt was never enough to prove the mechanism works; see
+    _rework_shot_prompt's staged-prompt handling for the other half of
+    that fix."""
     scores = iter([
         {"score": 10, "reason": "", "dims": {}},                             # shot 1, first pass
         {"score": 3, "reason": "competing motions", "dims": {"motion": 0}},  # shot 2, first pass
-        {"score": 4, "reason": "still ambiguous", "dims": {"motion": 0}},    # shot 2, after rework
+        {"score": 4, "reason": "still ambiguous", "dims": {"motion": 0}},    # shot 2, after rework 1
+        {"score": 5, "reason": "still ambiguous", "dims": {"motion": 0}},    # shot 2, after rework 2
     ])
     monkeypatch.setattr(orchestrator, "_judge_prompt", lambda p: next(scores))
     monkeypatch.setattr(orchestrator, "generate_with_retry",
@@ -584,7 +622,7 @@ def test_a_failed_shot_gets_one_rework_pass_before_holding(tmp_db, monkeypatch):
     bible = orchestrator.shootgen.derive_scene_bible(
         two_ai["title"], two_ai["logline"], two_ai.get("grade"))
     assert result["prompt_scores"][1]["prompt"] == f"{bible}. {REWORKED_PROMPT}"
-    assert result["prompt_rework_attempts"] == 1          # exactly one bounded attempt, not infinite
+    assert result["prompt_rework_attempts"] == 2          # exactly two bounded attempts, not infinite
     assert "still ambiguous" in result["held_reason"]      # no half-rendered credit burn
 
 
@@ -987,3 +1025,75 @@ def test_run_with_a_finding_id_claims_it_under_this_runs_id(tmp_db, monkeypatch)
     assert result.get("scout_finding_id") == fid
     row = scout.get_finding(fid, dsn=tmp_db)
     assert row["used_at"] and row["run_id"] == result["run_id"]
+
+
+# --- performance history grounds every run (Mike, 2026-09-02) ---------------
+#
+# proven_results and winning_prompts sat in the opt-in set, which made them
+# dead on the only path that matters: an unattended run picks nothing, so
+# fetch_by_sources was never called, so no nightly concept was ever written
+# against what actually travelled. refresh_metrics -> promote_winners -> RAG
+# filled the shelf every morning and nothing read it.
+
+def test_performance_history_is_pulled_with_nothing_picked(tmp_db, monkeypatch):
+    def fake_crag(query, client, model, domain=None, **kwargs):
+        if domain == orchestrator.shootgen.PERFORMANCE_DOMAINS:
+            return {"ok": True, "references": [
+                {"source": "proven_results/video-42.txt",
+                 "chunk": "the loop cut on the wrong beat -- 4.1x median"}]}
+        return {"ok": False, "references": [], "error": "not exercised"}
+
+    monkeypatch.setattr(orchestrator.crag, "retrieve_with_crag", fake_crag)
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    orchestrator.run("gearing up ritual")          # nothing picked
+
+    assert "proven_results/video-42.txt" in calls[0]["references"]
+    assert "4.1x median" in calls[0]["references"]
+
+
+def test_performance_history_is_evidence_not_style(tmp_db, monkeypatch):
+    """Only the two evidence shelves went automatic. Voice and look are
+    still a person's choice, so they must not ride along."""
+    assert orchestrator.shootgen.PERFORMANCE_DOMAINS == (
+        "proven_results", "winning_prompts")
+    for style in ("personal_brand", "cinematography"):
+        assert style not in orchestrator.shootgen.PERFORMANCE_DOMAINS
+        assert style in orchestrator.shootgen.ASSET_IDEATION_DOMAINS
+
+
+def test_both_automatic_layers_are_retrieved_separately(tmp_db, monkeypatch):
+    """Craft and performance are two retrievals, not one query against a
+    merged shelf: "how do videos travel" and "how did OURS travel" are
+    different questions and rank differently."""
+    domains = []
+
+    def fake_crag(query, client, model, domain=None, **kwargs):
+        domains.append(domain)
+        return {"ok": False, "references": [], "error": "not exercised"}
+
+    monkeypatch.setattr(orchestrator.crag, "retrieve_with_crag", fake_crag)
+    stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    orchestrator.run("gearing up ritual")
+
+    assert orchestrator.shootgen.AUTO_IDEATION_DOMAINS in domains
+    assert orchestrator.shootgen.PERFORMANCE_DOMAINS in domains
+
+
+def test_a_dead_performance_shelf_still_generates(tmp_db, monkeypatch):
+    """Same never-raises contract as the craft layer: an unreachable store
+    means this layer contributes nothing, never a crash."""
+    def fake_crag(query, client, model, domain=None, **kwargs):
+        if domain == orchestrator.shootgen.PERFORMANCE_DOMAINS:
+            raise RuntimeError("this must never reach the caller")
+        return {"ok": False, "references": [], "error": "not exercised"}
+
+    monkeypatch.setattr(
+        orchestrator.crag, "retrieve_with_crag",
+        lambda *a, **k: {"ok": False, "references": [], "error": "no store"})
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    orchestrator.run("ritual")
+
+    assert calls, "the run must still produce a concept"

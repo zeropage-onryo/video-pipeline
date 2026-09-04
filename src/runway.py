@@ -44,7 +44,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from . import generative, render_assets
+from . import account_keys, generative, render_assets
 from .shot import Shot
 
 MODELS = ("gen4_turbo", "gen4.5")
@@ -175,8 +175,15 @@ def generations_today(db_path=None, *, account_id=None, everyone: bool = False) 
     )
 
 
-def _make_client():
-    key = os.environ.get("RUNWAYML_API_SECRET")
+def _make_client(account_id: Optional[int] = None):
+    """
+    account_id's own stored key (BYOK, backlog #10) if it has one, else
+    RUNWAYML_API_SECRET from the environment -- account_keys.key_for()
+    does that fallback, so an account with nothing stored renders on
+    Mike's key exactly as before BYOK existed.
+    """
+    creds = account_keys.key_for(account_id, "runway")
+    key = creds["api_secret"] if creds else None
     if not key:
         raise RuntimeError("RUNWAYML_API_SECRET not set")
     try:
@@ -200,7 +207,8 @@ def _download(url: str, out_path: Path) -> None:
 
 def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
                    ratio: str = DEFAULT_RATIO, duration: int = DEFAULT_DURATION,
-                   prompt_image=None, client=None, db_path=None) -> Path:
+                   prompt_image=None, client=None, db_path=None,
+                   account_id: Optional[int] = None) -> Path:
     """
     The thin wrapper: create -> wait -> download. Raises on anything --
     including a missing spend approval, which is checked HERE so no
@@ -217,7 +225,7 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
     # what we check has to be what we send.
     prompt = safe_prompt(prompt, db_path)
     check_prompt_length(prompt, model)
-    client = client or _make_client()
+    client = client or _make_client(account_id)
     kwargs = {"prompt_image": prompt_image} if prompt_image is not None else {}
     task = client.image_to_video.create(
         model=model,
@@ -279,7 +287,7 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *, shot_id: Optional[i
             return {"ok": False, "candidates": [], "error": refusal}
 
         if shot_id is None:
-            shot_id = _shot_row_for_prompt(prompt, db_path)
+            shot_id = _shot_row_for_prompt(prompt, db_path, account_id)
 
         out_dir = Path(out_dir)
         duration = int(cfg.get("duration", DEFAULT_DURATION))
@@ -288,7 +296,7 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *, shot_id: Optional[i
             out_path = out_dir / f"cand{i}.mp4"
             try:
                 generate_video(prompt, out_path, model=model, client=client,
-                               db_path=db_path, **cfg)
+                               db_path=db_path, account_id=account_id, **cfg)
             except Exception as e:
                 errors.append(f"candidate {i}: {_safe_error(e)}")
                 continue
@@ -314,8 +322,8 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *, shot_id: Optional[i
 RENDER_DIR = Path(__file__).resolve().parent.parent / "data" / "renders" / "runway"
 
 
-def has_key() -> bool:
-    return bool(os.environ.get("RUNWAYML_API_SECRET"))
+def has_key(account_id: Optional[int] = None) -> bool:
+    return account_keys.key_for(account_id, "runway") is not None
 
 
 RENDERS_ROOT = Path(__file__).resolve().parent.parent / "data" / "renders"
@@ -447,7 +455,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                        prompt_image=prompt_image, client=client,
                        db_path=db_path)
 
-        shot_row_id = _shot_row_for_prompt(prompt, db_path)
+        shot_row_id = _shot_row_for_prompt(prompt, db_path, account_id)
         generation_params = {"model": model, "ratio": DEFAULT_RATIO,
                              "duration": DEFAULT_DURATION,
                              "concept_id": concept_id, "shot_n": shot_n,
@@ -534,7 +542,7 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
                        prompt_image=prompt_image, client=client,
                        db_path=db_path)
 
-        shot_row_id = _shot_row_for_prompt(prompt, db_path)
+        shot_row_id = _shot_row_for_prompt(prompt, db_path, account_id)
         generation_params = {"model": model, "ratio": DEFAULT_RATIO,
                              "duration": DEFAULT_DURATION,
                              "source": "workflow",

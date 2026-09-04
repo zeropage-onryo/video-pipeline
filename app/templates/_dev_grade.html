@@ -6,9 +6,13 @@
    The whole queue is listed above the drawn card (2026-09-02): the draw
    is random, so without a list there is no way to see what is waiting or
    to work it in a deliberate order. Clicking a row deals that concept
-   instead of a random one -- same screen, same forms. A concept leaves
-   this queue two ways: pass on it, or grade it -- and a graded one is on
-   the Graded tab with its score.
+   instead of a random one -- same screen, same forms.
+
+   A concept leaves this queue two ways: pass on it (archived, teaches
+   nothing, costs nothing), or rule on it -- approve, teach or deny --
+   which RECORDS your verdict and moves it to the TEACH tab. Nothing is
+   taught here any more; the one pass on that tab scores it, ingests it
+   into RAG, and retires it.
 
    A concept is ONE scene and one prompt now (2026-08-26), so the prompt
    IS the grading surface: approve it, teach a better one, or deny it.
@@ -27,7 +31,7 @@
 {%- endmacro %}
 
 <div class="drawrow">
-  <a class="btnw" href="/grade/draw?mode=shot">Draw ungraded concept ({{ grade.ungraded_count }})</a>
+  <a class="btnw" href="/grade/draw?mode=shot">Draw an ungraded concept ({{ grade.ungraded_count }})</a>
   <a class="btnw" href="/grade/draw?mode=golden">Draw golden query ({{ grade.golden_count }})</a>
   {# What the passes have taught so far. The tally is the payoff that
      makes working this queue feel like it did something -- and it is the
@@ -37,16 +41,17 @@
     {% for rc in grade.reason_counts %}{{ rc.reason }}: {{ rc.n }}{% if not loop.last %} · {% endif %}{% endfor %}
   </p>
   {% endif %}
-  {# The Pipeline board's check and X are the taste label the judge
-     scores against. Shown here so the loop is visible from the room
-     that consumes it -- otherwise the two clicks look like they only
-     move cards around. #}
-  {% if grade.board_taste.liked or grade.board_taste.disliked %}
-  <p style="margin-top:8px; opacity:.75">Board taste the judge is reading —
-    {{ grade.board_taste.liked }} picked · {{ grade.board_taste.disliked }} passed
-  </p>
+  {# The board-taste line moved to the Teach tab (2026-09-02). It was put
+     here when scoring happened on this tab; the judge runs on the Teach
+     tab's pass now, so the count of what it is reading belongs beside the
+     button that runs it, not beside a queue that bills nothing. #}
+  <a class="btnw" href="/grade/draw?mode=any">Draw anything</a>
+  {# the loop's next step, from the room that feeds it #}
+  {% if grade.graded_count %}
+  <a class="btnw" href="/studio?tab=graded" title="Graded — waiting in Teach for the one pass that scores and ingests them"
+     style="background:transparent; color:var(--ink); border:1px solid var(--line2)">
+    {{ grade.graded_count }} waiting in Teach →</a>
   {% endif %}
-  <a class="btnw" href="/grade/draw?mode=any">Grade anything</a>
   <form method="post" action="/grade/fresh" style="display:flex; gap:8px; flex:1; min-width:280px">
     <input type="text" name="spark" placeholder="Optional spark for a fresh throwaway prompt…" style="flex:1">
     <button type="submit" class="primary">Fresh prompt · billed</button>
@@ -61,8 +66,8 @@
 {% if grade.ungraded %}
 <details class="panel" open style="margin-bottom:18px">
   <summary class="panel-head" style="cursor:pointer; list-style:none">
-    <span class="id">UNGRADED QUEUE</span>
-    <span class="m">{{ grade.ungraded_count }} WAITING · CLICK ONE TO GRADE IT</span>
+    <span class="id">UNGRADED · WAITING ON YOU</span>
+    <span class="m">{{ grade.ungraded_count }} CONCEPTS · CLICK ONE TO GRADE IT</span>
   </summary>
   <div class="uqwrap">
     {% for u in grade.ungraded %}
@@ -156,10 +161,10 @@ HOOK: {{ c.hook }}{% endif %}{% if c.logline %}
     {% endif %}
 
     <div style="margin-top:16px; display:flex; gap:8px; flex-wrap:wrap">
-      <form method="post" action="/concepts/{{ c.id }}/grade">
-        <input type="hidden" name="next" value="/grade/draw?mode=shot">
-        <button type="submit" class="primary">Grade taste + perf · billed</button>
-      </form>
+      {# The single-concept score button is gone (2026-09-02). Scoring is
+         the Teach tab's one pass now: a score taken before your verdict
+         would be advice you did not ask for and a billed call per card.
+         The route still exists for /api and the tests. #}
       {# Pass, with a reason. One click each, no model call -- the cheap
          half of the Grade tab, and the only place the system ever hears
          WHY something was rejected. Archives; nothing here deletes. #}
@@ -238,13 +243,15 @@ HOOK: {{ f.hook }}{% endif %}{% if f.logline %}
 
 {% else %}
 <div class="panel">
-  <div class="panel-head"><span class="id">THE QUEUE</span></div>
+  <div class="panel-head"><span class="id">PICK SOMETHING UP</span></div>
   <div class="panel-body">
-    <p class="dim">Draw something to grade: a random ungraded concept
-      ({{ grade.ungraded_count }} waiting), a random golden query
-      ({{ grade.golden_count }} in the set), or generate a fresh throwaway
-      prompt above. Approve teaches the prompt as written, Teach it swaps in
-      your version and files the model's as what to avoid, Deny steers away.</p>
+    <p class="dim">Click a row above, or draw at random: a concept waiting on you
+      ({{ grade.ungraded_count }}), a golden query ({{ grade.golden_count }} in the
+      set), or a fresh throwaway prompt. Approve keeps the prompt as written,
+      Teach it swaps in your version and files the model's as what to avoid,
+      Deny steers away — all three RECORD your verdict and move the concept to
+      the Teach tab, where one pass scores it, ingests it into RAG, and clears
+      it. Nothing here bills until that pass.</p>
   </div>
 </div>
 {% endif %}

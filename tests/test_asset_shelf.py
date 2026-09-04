@@ -129,6 +129,78 @@ def test_drop_one_never_raises_when_the_store_is_down():
     asset_shelf.drop_one("prop", "helmet")      # must not raise
 
 
+# --- catalogue() and in_scope() ---------------------------------------------
+# 2026-09-03, Mike's call: a Create run (and the nightly graph) should
+# ground only on what the idea/spark names, or what was explicitly
+# picked -- never the whole asset bank by default. catalogue() is the
+# candidate list; in_scope() is the filter.
+
+def test_catalogue_carries_text_for_alias_matching(tmp_db, photo_dirs):
+    """named_assets/asset_aliases read asset["text"] for multi-word
+    proper nouns -- a catalogue missing it silently loses every alias
+    beyond a bare name (the same gap _assets_all() in app/api.py never
+    had)."""
+    _seed(tmp_db, photo_dirs)
+    (photo_dirs["location"] / "garage").mkdir(parents=True)
+    (photo_dirs["location"] / "garage" / "a.png").write_bytes(TINY_PNG)
+
+    items = asset_shelf.catalogue(db_path=tmp_db)
+    mike = next(i for i in items if i["name"] == "Mike")
+    assert mike["category"] == "character"
+    assert mike["text"] == "deadpan"          # notes win over role
+    assert mike["photos"]
+    garage = next(i for i in items if i["name"] == "garage")
+    assert "narrow hallway" in garage["text"]  # flattened location description
+
+
+def test_in_scope_matches_a_name_in_the_text(tmp_db, photo_dirs):
+    _seed(tmp_db, photo_dirs)
+    (photo_dirs["location"] / "garage").mkdir(parents=True)
+    (photo_dirs["location"] / "garage" / "a.png").write_bytes(TINY_PNG)
+    items = asset_shelf.catalogue(db_path=tmp_db)
+
+    scope = asset_shelf.in_scope("Mike walks into the garage", [], items)
+    assert {a["name"] for a in scope} == {"Mike", "garage"}
+
+
+def test_in_scope_is_empty_when_nothing_is_named_or_picked(tmp_db, photo_dirs):
+    _seed(tmp_db, photo_dirs)
+    items = asset_shelf.catalogue(db_path=tmp_db)
+    assert asset_shelf.in_scope("a ritual at dusk", [], items) == []
+
+
+def test_in_scope_honours_an_explicit_pick_even_when_unnamed(tmp_db, photo_dirs):
+    """The / picker -- or a composer upload/carousel click -- attaches a
+    photo whose URL names the asset's slug, the same shape a picked
+    location photo has always used. That has to pull the asset in even
+    when the idea text never says its name."""
+    _seed(tmp_db, photo_dirs)
+    items = asset_shelf.catalogue(db_path=tmp_db)
+    helmet = next(i for i in items if i["name"] == "Helmet")
+
+    scope = asset_shelf.in_scope("a ritual at dusk", helmet["photos"][:1], items)
+    assert {a["name"] for a in scope} == {"Helmet"}
+
+
+def test_in_scope_does_not_double_count_a_named_and_picked_asset(tmp_db, photo_dirs):
+    _seed(tmp_db, photo_dirs)
+    items = asset_shelf.catalogue(db_path=tmp_db)
+    mike = next(i for i in items if i["name"] == "Mike")
+
+    scope = asset_shelf.in_scope("Mike gears up", mike["photos"][:1], items)
+    assert [a["name"] for a in scope] == ["Mike"]
+
+
+def test_in_scope_ignores_an_asset_with_no_photos(tmp_db, photo_dirs):
+    """Named in the text is not enough on its own -- named_assets has
+    always required a photo to attach, and in_scope must not relax
+    that just because the caller is a pre-generation cast check now
+    instead of a post-generation ref-attach."""
+    _seed(tmp_db, photo_dirs, with_photos=False)
+    items = asset_shelf.catalogue(db_path=tmp_db)
+    assert asset_shelf.in_scope("Mike gears up", [], items) == []
+
+
 # --- the vision step --------------------------------------------------------
 
 def test_entity_prompt_asks_for_visible_facts_only():

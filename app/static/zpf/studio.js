@@ -7,7 +7,7 @@
    picked here (uploads, or photos out of the asset bank) ride into the
    generation as vision input AND are stored on each concept's shot, so
    they reach the keyframe and the clip later. */
-import { api, esc, loadAssets, openAssetDetail, state, stateline, wireScrub } from './shared.js';
+import { api, esc, loadAssets, openAssetDetail, state, stateline, wireMentions, wireScrub } from './shared.js';
 
 const promptEl = () => document.getElementById('prompt');
 let debounceTimer = null;
@@ -26,6 +26,14 @@ export function initStudio(go) {
     if (!state.caps.retrieve) return;
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(retrieve, 300);
+  });
+
+  // @asset mentions: naming a character/prop/room in the idea attaches its
+  // photo as a reference for THIS call, the same pathway the + menu and
+  // scout bin use -- so a run grounds only on what's typed or attached,
+  // never the whole bank (src/asset_shelf.in_scope on the server side).
+  wireMentions(prompt, document.getElementById('promptmentions'), item => {
+    if (item.thumb) addAttachment({ kind: 'asset', url: item.thumb, origin: 'mention' });
   });
 
   goBtn.addEventListener('click', async () => {

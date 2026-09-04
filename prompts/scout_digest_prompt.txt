@@ -31,11 +31,27 @@ So for each signal, find the HUMAN BEAT underneath it and stage that:
   good     "the lamp is the only thing with colour left"
 
 ═══ WHAT A SPARK IS ═══
-An IDEA, told properly. Not a title, not a logline, not a prompt — a small
-story someone could tell you in a bar and you would picture the whole thing.
-Three to five sentences. Name who is there, what they are doing and why they
-are doing it, what is in the way, and what changes. Ordinary room, ordinary
-objects, one continuous situation.
+An IDEA, told properly — the same spine the filmmaker's own ideas are held to
+(the idea-agent skill was rewritten around it 2026-09-03, and this crawl was
+still handing back moments wearing a trend headline as a costume after that
+landed everywhere else — this section is that fix). Not a title, not a
+logline, not a prompt: a short STORY someone could tell you in a bar and you
+would picture the whole thing. Five parts, all present, three to five
+sentences total:
+
+  WANT       what the person wants, and why TONIGHT specifically — not "he
+             brushes his teeth" but "he needs the cup to look the way it
+             always did."
+  RULE       ONE obstacle, stated as a rule that holds or breaks. Not a list
+             of things that could go wrong — one.
+  BEATS      what happens BECAUSE of what came before, never "and then."
+             Each beat is the last beat's consequence, ending in a real
+             reaction and a CHOICE the person makes — not something that
+             just happens to them.
+  REVERSAL   the turn that RE-READS THE OPENING. Not a new event tacked on
+             the end — something that makes the first sentence mean
+             something different than it did on the first read.
+  BUTTON     the last image or line, held a beat, that closes it.
 
 A SPARK IS A SITUATION, NOT AN IMAGE. A phrase that names a texture, a camera
 move or a lens is NOT a spark, however evocative it sounds -- "macro zoom
@@ -56,33 +72,35 @@ BUT IT IS STILL ONE SITUATION. Complex is not the same as long. One room, one
 stretch of time, one thing going wrong. If telling it needs "and then later" or
 a second location, it is two ideas -- pick the better one.
 
-THE STAKE IS THE POINT. Grounded-uncanny with no human feeling under it is just
-a weird GIF. The idea must be about something the viewer has ALREADY FELT --
-grief, compulsion, dread about their own home, the sense of being outnumbered
-in a room they own. That recognition is the entire reason anyone forwards a
-video to somebody they know, and it is what separates 170K shares from 30K.
-State it in `stake`, plainly, as the feeling and who recognises it. A candidate
-you cannot write a stake for is a candidate to throw away.
+  good — the whole idea, and you can see it (this is the skill's own worked
+  example, told as a spark):
+    "Every night since the funeral he brushes his teeth and then wets her
+     toothbrush too, so the cup looks the way it always did. Tonight her
+     brush is already wet when he reaches for it. He stands there holding
+     it, dripping, and checks the obvious — the shower, the hall, the
+     bathroom door he knows he locked. Nothing. So he dries her brush
+     carefully on the towel, puts it back dry, and turns off the light.
+     From the dark hallway, the tap turns on."
+       WANT — keep the ritual so nothing about the apartment admits she's
+              gone, tonight the same as every other night this has worked.
+       RULE — he is the only one who wets that brush. One rule, breakable
+              exactly one way.
+       BEATS — he wets it, routine; therefore he reaches for it dry,
+              expecting his own last night's work; therefore finding it
+              already wet forces the check; therefore finding nothing
+              forces the choice to dry it and let it go rather than wait up.
+       REVERSAL — the tap turning on reframes the whole ritual: he wasn't
+              keeping her presence alive alone. Something else just took
+              a turn in it.
+       BUTTON — the tap, alone, in the dark, right after he decided to
+              stop looking.
+       ONE-SENTENCE RETELL — a grieving man's nightly ritual for his dead
+              wife gets performed back at him by something in the dark.
 
-  good — the whole idea, and you can see it:
-    "He sets the table for four the way he has every night for thirty years.
-     Halfway through folding the last napkin he stops, looks at the fourth
-     place, and starts clearing it — plate, glass, cutlery, chair pushed back
-     under. He does it neatly and without hurrying, the way you tidy something
-     that was never a mistake. Then he sits down and eats facing the gap."
-       TURN: the extra place is cleared away mid-routine, deliberately.
-       STAKE: grief; anyone who has caught themselves setting it out of habit.
-
-    "She checks the front door is locked before bed. It is. She gets halfway
-     down the hall, turns around, and checks it again. The third time she is
-     walking faster. By the fifth she is not really looking at the lock any
-     more, just touching it, and the hallway behind her has gone very quiet."
-       TURN: the check repeats, faster and less useful each time.
-       STAKE: compulsion; anyone whose brain does this at 2am.
-
-  bad — the same ideas starved down to a label:
-    "setting the table for one too many"      (a title, not an idea)
-    "locking a door that is already locked"   (a premise with nothing in it)
+  bad — the same idea starved down to a label:
+    "a man wets his dead wife's toothbrush"      (a premise: no rule, no reversal)
+    "setting the table for one too many"          (a title, not an idea)
+    "locking a door that is already locked"       (a premise with nothing in it)
 
 FORBIDDEN as the subject of a spark, in every case: screens, phones, feeds,
 scrolling, apps, cameras-as-topic, algorithms, analytics, views, monetisation,
@@ -99,28 +117,45 @@ ALREADY USED RECENTLY — do not propose these or a near-restatement:
 {signals}
 
 ═══ SCORING ═══
-Score each 0.0-1.0 for whether it is worth spending a render on.
+Score each 0.0-1.0 for whether it is worth spending a render on. This is
+capped at 0.8 in code regardless of what you return here (src/scout.py,
+CRAWL_SCORE_CEILING) — a self-graded score from the same call that wrote the
+spark should never be able to outrank a direction the filmmaker typed
+himself, which always scores 1.0.
+
 Score DOWN: needs a crew, a second person, a location he does not have, or
 daylight exteriors on demand; restates a recent spark; keeps the internet as
 its subject; or its only argument is that something is trending.
+
 Score 0.0 -- not low, ZERO: it names a lens, a camera move, a shot type or a
 material instead of an action ("macro", "zoom", "tracking", "POV", "handheld",
 "latex", "seam"); it is a bare phrase or title rather than an idea somebody
-could picture; or you cannot state a stake for it. Nothing in this file
-penalised the first of those before 2026-08-31, which is how four camera specs
-came to sit in the bank scored 0.80 and above -- and nothing penalised the
-second before 2026-09-02, which is how a night of one-line premises read as
-thin even when every one of them was a real situation.
-Score UP: a visible physical action; a TURN (the thing that goes wrong or
-changes, not just the setup); a stake a stranger would recognise as their own
-life; enough written down that the next stage has something to choose a shot
-FROM; and the crawl gives a reason it lands NOW.
+could picture; or you cannot state all five parts of the spine for it — a
+want with no rule, beats that only chain with "and then," or a reversal that
+is just one more event tacked on rather than something that changes how the
+opening reads. Nothing in this file penalised the first of those before
+2026-08-31, which is how four camera specs came to sit in the bank scored
+0.80 and above; nothing penalised the second before 2026-09-02, which is how
+a night of one-line premises read as thin even when every one was a real
+situation; and nothing penalised the third — a moment with a feeling but no
+turn — before this rewrite.
+
+BEFORE YOU SCORE, run the bar test: read the spark back and find the ONE line
+that would make someone go "oh no." If you can't point to it, this is a
+premise, not a story yet — keep working it or drop it.
+
+Score UP: a visible physical action; beats that are causally linked
+(because/therefore, never "and then"); a reversal that actually
+recontextualises the want or the rule, not just a final beat; a button, held;
+and the crawl gives a reason it lands NOW.
 
 Return ONLY JSON, no prose and no code fence:
 {"candidates": [
-  {"spark": "<the whole idea, 3-5 sentences -- who, doing what, what is in the way, what changes>",
-   "turn": "<one line: what goes wrong, changes, or repeats>",
-   "stake": "<one line: the feeling this is about, and who recognises it>",
+  {"spark": "<the whole idea, 3-5 sentences -- want, rule, causal beats, reversal, button>",
+   "want": "<one line: what they want, and why tonight specifically>",
+   "rule": "<one line: the single obstacle/rule this idea turns on>",
+   "reversal": "<one line: what re-reads the opening>",
+   "one_sentence": "<the idea retold in one sentence -- the version a stranger would forward>",
    "rationale": "<one sentence: the human beat you found under the signal>",
    "evidence": "<one sentence a human can check: what in the crawl argues for it>",
    "sources": ["<url or @handle the evidence came from>", ...],

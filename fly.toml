@@ -1,0 +1,29 @@
+# Launch with: fly launch --copy-config --no-deploy   (review, then `fly deploy`)
+# Not run yet -- this file describes the machine, it does not create one.
+app = "zeropage-studio"          # pick a globally-unique name at launch time
+primary_region = "iad"           # Virginia -- same region as the Supabase project
+
+[build]
+
+[env]
+  PORT = "8000"
+  # Everything secret (SITE_URL, DATABASE_URL, RAG_DATABASE_URL, every API
+  # key, SESSION_SECRET, ACCOUNT_KEYS_SECRET) goes in via
+  #   fly secrets set KEY=value
+  # never in this file -- fly.toml is meant to be committed.
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = false     # this machine also runs the nightly cron --
+  auto_start_machines = true     # letting Fly sleep it would silently skip 22:00/03:30
+  min_machines_running = 1
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 512                # bump if the nightly walk OOMs; start small
+
+[mounts]
+  source = "zeropage_data"
+  destination = "/app/data"      # renders/refs/thumbs -- NOT the footage bank

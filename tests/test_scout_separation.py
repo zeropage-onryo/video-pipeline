@@ -38,11 +38,19 @@ def tmp_db(pg, monkeypatch):
 
 
 def _imports(module_path: Path) -> set:
-    """Every name this module imports, read structurally rather than by
-    grepping -- a comment mentioning the scout is not a dependency on it."""
+    """Every name this module imports AT MODULE LEVEL, read structurally
+    rather than by grepping -- a comment mentioning the scout is not a
+    dependency on it, and neither is a lazy import inside one function.
+
+    Module-level only (Mike's call, 2026-09-04): scene_chain.visual_target
+    banks the stills it generates on a scout pass, through an import made
+    inside that function, so the Create engine's module never depends on
+    the scout and the rest of it cannot reach it by accident. This is the
+    same exception the reverse test below has always granted the scout
+    for its one lazy shootgen import."""
     tree = ast.parse(module_path.read_text())
     names = set()
-    for node in ast.walk(tree):
+    for node in tree.body:
         if isinstance(node, ast.Import):
             names.update(a.name.split(".")[0] for a in node.names)
         elif isinstance(node, ast.ImportFrom):

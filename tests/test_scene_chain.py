@@ -19,7 +19,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from src import imagery, nano_banana, preprod, scene_chain, shootgen
+from src import db, imagery, nano_banana, preprod, scene_chain, shootgen
 
 client = TestClient(app)
 
@@ -67,9 +67,9 @@ def seams(monkeypatch):
         return f"ENHANCED[{user}]"
 
     def fake_nano(prompt, *, reference_image=None, db_path=None, concept_id=None,
-                  **kw):
+                  beat="", **kw):
         calls["nano"].append({"prompt": prompt, "refs": list(reference_image or []),
-                              "concept_id": concept_id})
+                              "concept_id": concept_id, "beat": beat})
         return {"ok": True, "media_url": f"https://cdn/key-{concept_id}.png",
                 "generation_id": 1, "path": "x", "error": None}
 
@@ -77,6 +77,10 @@ def seams(monkeypatch):
     monkeypatch.setattr(shootgen, "reference_block", fake_ground)
     monkeypatch.setattr(imagery, "enhance", fake_enhance)
     monkeypatch.setattr(nano_banana, "generate_from_prompt", fake_nano)
+    # The beat splitter is a billed call too, and it runs on the way into
+    # every keyframe. [] is "this shot holds one moment", so an unpatched
+    # test keeps exactly the single-still behaviour it was written against.
+    monkeypatch.setattr(shootgen, "beat_moments", lambda prompt, **kw: [])
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     return calls
 
@@ -291,61 +295,271 @@ def _scene_without_refs(tmp_db):
         brand="zeropage", dsn=tmp_db, account_id=None)
 
 
-def test_no_target_without_spend_approval(tmp_db, monkeypatch):
-    """MIDJOURNEY_SPEND_OK is per-run by design -- "an approval that's
-    always on isn't an approval". Unapproved, behaviour is unchanged."""
-    monkeypatch.delenv("MIDJOURNEY_SPEND_OK", raising=False)
-    cid = _scene_without_refs(tmp_db)
-    shot = preprod.get_concept(cid, dsn=tmp_db, account_id=None)["shots"][0]
+def _fake_generator(monkeypatch, calls):
+    from src import higgsfield
 
-    assert scene_chain.visual_target(cid, shot, db_path=tmp_db,
-                                     account_id=None) == ""
+    def fake_generate(prompt, **k):
+        calls.append(prompt)
+        return {"ok": True, "media_url": f"/refs/target-{len(calls)}.jpg"}
 
-
-def test_an_approved_run_gets_a_target_attached(tmp_db, monkeypatch):
-    """The target lands on the shot's refs, not in a local -- the Queue
-    card reads refs to show what the spend is anchored on, and a target
-    nobody can see is a target nobody can veto."""
-    monkeypatch.setenv("MIDJOURNEY_SPEND_OK", "1")
+    monkeypatch.setattr(higgsfield, "generate_image_from_prompt", fake_generate)
     monkeypatch.setattr(scene_chain.shootgen, "still_prompt",
                         lambda *a, **k: "a bruised wall --ar 9:16 --style raw")
 
-    from pathlib import Path
 
-    from src import midjourney, refbin
-
-    def fake_generate(prompt, out, **k):
-        out = Path(out)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_bytes(b"jpegbytes")
-        return out
-
-    monkeypatch.setattr(midjourney, "generate_image", fake_generate)
-    monkeypatch.setattr(refbin, "save", lambda data: "/refs/generated.jpg")
-
+def test_no_target_without_spend_approval(tmp_db, monkeypatch):
+    """HIGGSFIELD_SPEND_OK is per-run by design -- "an approval that's
+    always on isn't an approval". Unapproved, behaviour is unchanged."""
+    monkeypatch.delenv("HIGGSFIELD_SPEND_OK", raising=False)
     cid = _scene_without_refs(tmp_db)
     shot = preprod.get_concept(cid, dsn=tmp_db, account_id=None)["shots"][0]
 
-    url = scene_chain.visual_target(cid, shot, db_path=tmp_db, account_id=None)
-    assert url == "/refs/generated.jpg"
-    after = preprod.get_concept(cid, dsn=tmp_db, account_id=None)
-    assert after["shots"][0]["refs"] == ["/refs/generated.jpg"]
+    assert scene_chain.visual_target(cid, shot, spark="a wall that bruises",
+                                     db_path=tmp_db, account_id=None) == []
+
+
+def test_a_spark_pays_once_and_the_batch_reuses_it(tmp_db, monkeypatch):
+    """The point of moving this off per-concept: a spark produces several
+    concepts sharing one world, so the second must cost nothing AND look
+    like it belongs beside the first."""
+    monkeypatch.setenv("HIGGSFIELD_SPEND_OK", "1")
+    calls = []
+    _fake_generator(monkeypatch, calls)
+
+    first = _scene_without_refs(tmp_db)
+    second = _scene_without_refs(tmp_db)
+    shot_a = preprod.get_concept(first, dsn=tmp_db, account_id=None)["shots"][0]
+    shot_b = preprod.get_concept(second, dsn=tmp_db, account_id=None)["shots"][0]
+
+    made = scene_chain.visual_target(first, shot_a, spark="a wall that bruises",
+                                     db_path=tmp_db, account_id=None)
+    assert len(made) == scene_chain.TARGETS_PER_SPARK
+    spent = len(calls)
+
+    again = scene_chain.visual_target(second, shot_b, spark="a wall that bruises",
+                                      db_path=tmp_db, account_id=None)
+    assert again == made, "the batch did not reuse the spark's targets"
+    assert len(calls) == spent, "it paid twice for the same spark"
+
+
+def test_reuse_survives_a_capitalisation_difference(tmp_db, monkeypatch):
+    """Keyed on _spark_key, the same normalisation novelty uses -- or the
+    same idea typed twice buys the same pictures twice."""
+    monkeypatch.setenv("HIGGSFIELD_SPEND_OK", "1")
+    calls = []
+    _fake_generator(monkeypatch, calls)
+    cid = _scene_without_refs(tmp_db)
+    shot = preprod.get_concept(cid, dsn=tmp_db, account_id=None)["shots"][0]
+
+    scene_chain.visual_target(cid, shot, spark="A wall that bruises.",
+                              db_path=tmp_db, account_id=None)
+    spent = len(calls)
+    scene_chain.visual_target(cid, shot, spark="a wall that bruises",
+                              db_path=tmp_db, account_id=None)
+    assert len(calls) == spent
+
+
+def test_a_target_row_is_not_evidence(tmp_db, monkeypatch):
+    """The bin's other rows carry a source_url proving a frame came from
+    a video that travelled. A generated target has no such claim and must
+    not look like it does."""
+    monkeypatch.setenv("HIGGSFIELD_SPEND_OK", "1")
+    _fake_generator(monkeypatch, [])
+    cid = _scene_without_refs(tmp_db)
+    shot = preprod.get_concept(cid, dsn=tmp_db, account_id=None)["shots"][0]
+    scene_chain.visual_target(cid, shot, spark="a wall that bruises",
+                              db_path=tmp_db, account_id=None)
+
+    with db.connect(tmp_db) as conn:
+        rows = list(conn.execute("SELECT lane, source_url FROM scout_bin"))
+    assert rows and all(r["lane"] == "target" for r in rows)
+    assert all(not r["source_url"] for r in rows)
 
 
 def test_a_failed_target_is_never_fatal(tmp_db, monkeypatch):
-    """A scene with no target is still a scene -- it keyframes the way
-    it always did."""
-    monkeypatch.setenv("MIDJOURNEY_SPEND_OK", "1")
-    from src import midjourney
+    """A scene with no target keyframes the way it always did."""
+    monkeypatch.setenv("HIGGSFIELD_SPEND_OK", "1")
+    from src import higgsfield
     monkeypatch.setattr(scene_chain.shootgen, "still_prompt",
                         lambda *a, **k: "a bruised wall")
-
-    def boom(prompt, out, **k):
-        raise RuntimeError("midjourney is down")
-
-    monkeypatch.setattr(midjourney, "generate_image", boom)
+    monkeypatch.setattr(higgsfield, "generate_image_from_prompt",
+                        lambda prompt, **k: {"ok": False, "error": "cap reached"})
     cid = _scene_without_refs(tmp_db)
     shot = preprod.get_concept(cid, dsn=tmp_db, account_id=None)["shots"][0]
 
-    assert scene_chain.visual_target(cid, shot, db_path=tmp_db,
-                                     account_id=None) == ""
+    assert scene_chain.visual_target(cid, shot, spark="x", db_path=tmp_db,
+                                     account_id=None) == []
+
+
+# --- separate images, not one combined one (Mike, 2026-09-02) --------------
+#
+# A shot prompt describes a MOVE and the move stays -- it is how the shot is
+# directed and the generator reads it. But one call asking for one picture of
+# the whole move returns one picture OF the whole move: concept 167 came back
+# with the hallway, the phone, and a head floating across the top third. So
+# each moment of the move gets its own call and its own image.
+
+def test_each_beat_is_its_own_image(tmp_db, seams, monkeypatch):
+    monkeypatch.setattr(
+        shootgen, "beat_moments",
+        lambda prompt, **kw: ["the hand holding the phone, screen lit",
+                              "the face the tilt lands on"])
+    scene_id = a_scene(tmp_db)
+
+    result = scene_chain.keyframe_scene(scene_id, 1, db_path=tmp_db)
+
+    assert result["ok"]
+    assert len(seams["nano"]) == 2                  # two calls, two images
+    assert [c["beat"] for c in seams["nano"]] == [
+        "the hand holding the phone, screen lit", "the face the tilt lands on"]
+    assert len(result["frames"]) == 2
+    shot = preprod.get_concept(scene_id, dsn=tmp_db, account_id=None)["shots"][0]
+    assert len(shot["frames"]) == 2
+    # the FIRST beat is the anchor Runway builds the clip from
+    assert shot["reference_image"] == result["frames"][0]["url"]
+
+
+def test_the_move_stays_in_every_beats_prompt(tmp_db, seams, monkeypatch):
+    """The beat pins the FRAME. It does not edit the shot -- each call
+    still carries the full prompt, camera move included, because that is
+    what carries the grade, the lens and the texture."""
+    monkeypatch.setattr(shootgen, "beat_moments",
+                        lambda prompt, **kw: ["the hand", "the face"])
+    scene_id = a_scene(tmp_db, prompt="Tilt up from the hand to his face. Handheld.")
+
+    scene_chain.keyframe_scene(scene_id, 1, db_path=tmp_db)
+
+    for call in seams["nano"]:
+        assert "Tilt up from the hand to his face. Handheld." == call["prompt"]
+
+
+def test_one_moment_renders_one_still_exactly_as_before(tmp_db, seams,
+                                                        monkeypatch):
+    """[] from the splitter means "this shot holds one moment" -- and a
+    single-moment shot must cost exactly one call, the way it always did."""
+    monkeypatch.setattr(shootgen, "beat_moments", lambda prompt, **kw: [])
+    scene_id = a_scene(tmp_db)
+
+    result = scene_chain.keyframe_scene(scene_id, 1, db_path=tmp_db)
+
+    assert result["ok"] and len(seams["nano"]) == 1
+    assert seams["nano"][0]["beat"] == ""
+    shot = preprod.get_concept(scene_id, dsn=tmp_db, account_id=None)["shots"][0]
+    assert "frames" not in shot        # no strip, nothing to scroll
+
+
+def test_the_cap_stops_the_strip_and_keeps_what_rendered(tmp_db, monkeypatch):
+    """Beat two hitting NANO_DAILY_CAP must not throw away beat one, and
+    must not keep spending against a wall we already hit."""
+    calls = []
+
+    def capped(prompt, *, beat="", concept_id=None, **kw):
+        calls.append(beat)
+        if len(calls) == 1:
+            return {"ok": True, "media_url": "https://cdn/beat1.png",
+                    "generation_id": 1, "path": "x", "error": None}
+        return {"ok": False, "media_url": None, "error": "daily cap: 20/20 images"}
+
+    monkeypatch.setattr(nano_banana, "generate_from_prompt", capped)
+    monkeypatch.setattr(shootgen, "beat_moments",
+                        lambda prompt, **kw: ["a", "b", "c"])
+    scene_id = a_scene(tmp_db)
+
+    result = scene_chain.keyframe_scene(scene_id, 1, db_path=tmp_db)
+
+    assert result["ok"] is True
+    assert len(result["frames"]) == 1
+    assert len(calls) == 2                    # stopped, did not try "c"
+    assert "daily cap" in result["error"]     # and says why the strip is short
+    shot = preprod.get_concept(scene_id, dsn=tmp_db, account_id=None)["shots"][0]
+    assert shot["reference_image"] == "https://cdn/beat1.png"
+
+
+def test_a_sibling_shot_is_not_erased_by_the_strip(tmp_db, seams, monkeypatch):
+    """update_concept_shots replaces shots_json wholesale, so writing the
+    strip back as [shot] would delete every other shot on the concept."""
+    monkeypatch.setattr(shootgen, "beat_moments",
+                        lambda prompt, **kw: ["a", "b"])
+    scene_id = preprod.save_concept(
+        {"title": "Two Shots", "shots": [
+            {"n": 1, "source": "AI", "tool": "RUNWAY", "prompt": "one"},
+            {"n": 2, "source": "AI", "tool": "RUNWAY", "prompt": "two"}]},
+        brand="zeropage", dsn=tmp_db, account_id=None)
+
+    scene_chain.keyframe_scene(scene_id, 1, db_path=tmp_db)
+
+    shots = preprod.get_concept(scene_id, dsn=tmp_db, account_id=None)["shots"]
+    assert [s["n"] for s in shots] == [1, 2]
+    assert shots[1]["prompt"] == "two"
+
+
+
+# --- ground() / scoped_cast_and_locations() ---------------------------------
+# 2026-09-03, Mike's call: a Create run should ground only on what the
+# idea names or what was explicitly picked -- never the whole asset
+# bank by default, which is what cast_for's unfiltered
+# entities.list_characters/list_props always did before this.
+
+TINY_PNG = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06"
+    b"\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05"
+    b"\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+
+
+@pytest.fixture
+def cast_photo_dirs(tmp_path, monkeypatch):
+    from src import asset_shelf
+    dirs = {}
+    for kind in ("location", "character", "prop"):
+        d = tmp_path / ("ground-" + kind + "s")
+        d.mkdir()
+        dirs[kind] = d
+    monkeypatch.setattr(asset_shelf, "PHOTO_DIRS", dirs)
+    return dirs
+
+
+def _with_photo(dirs, kind, slug):
+    d = dirs[kind] / slug
+    d.mkdir(parents=True)
+    (d / "a.png").write_bytes(TINY_PNG)
+
+
+def test_ground_only_offers_a_character_the_idea_names(tmp_db, cast_photo_dirs, monkeypatch):
+    from src import entities
+    entities.add_character("Mike", role="protagonist", dsn=tmp_db, account_id=None)
+    entities.add_character("Guest", role="bartender", dsn=tmp_db, account_id=None)
+    _with_photo(cast_photo_dirs, "character", "mike")
+    _with_photo(cast_photo_dirs, "character", "guest")
+    monkeypatch.setattr(shootgen, "reference_block", lambda **kw: "")
+
+    grounded = scene_chain.ground("Mike gears up for the ride", brand="antihero",
+                                  db_path=tmp_db, account_id=None)
+
+    assert "Mike" in grounded["cast"]
+    assert "Guest" not in grounded["cast"]
+
+
+def test_ground_offers_nothing_when_nothing_is_named_or_picked(tmp_db, cast_photo_dirs, monkeypatch):
+    from src import entities
+    entities.add_character("Mike", role="protagonist", dsn=tmp_db, account_id=None)
+    _with_photo(cast_photo_dirs, "character", "mike")
+    monkeypatch.setattr(shootgen, "reference_block", lambda **kw: "")
+
+    grounded = scene_chain.ground("a ritual at dusk", brand="antihero",
+                                  db_path=tmp_db, account_id=None)
+
+    assert "Mike" not in grounded["cast"]
+
+
+def test_ground_honours_an_explicit_pick(tmp_db, cast_photo_dirs, monkeypatch):
+    from src import entities
+    entities.add_character("Mike", role="protagonist", dsn=tmp_db, account_id=None)
+    _with_photo(cast_photo_dirs, "character", "mike")
+    monkeypatch.setattr(shootgen, "reference_block", lambda **kw: "")
+
+    grounded = scene_chain.ground("a ritual at dusk", brand="antihero",
+                                  db_path=tmp_db, account_id=None,
+                                  refs=["/characters/mike/photo/a.png"])
+
+    assert "Mike" in grounded["cast"]

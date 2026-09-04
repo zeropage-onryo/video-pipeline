@@ -753,6 +753,20 @@ def run_graph(spark: str = "", brand: str = "", goal: str = "",
     Refuses outright when ZEROPAGE_RENDER=1. That flag turns
     `generate_render` from a dry stub into real Veo spend, and the one
     thing this surface must never be is the caller that trips it.
+
+    `finding_id` closes a gap the composer already closed for itself
+    (`/api/scenes/run`'s `scout_finding_id`): a spark run straight
+    through here -- Mike pasting a banked spark's text into `generate`,
+    or an agent firing on one it read from `sparks`/`tonight` -- never
+    claimed the bank row, because `orchestrator.planner` only stamps
+    `used_at` when its OWN `scout` node pulled the finding
+    (state["scout"]=True, the nightly path only). A finding that sits
+    unused at its original score is what the next `next_spark` call, or
+    tonight's batch, hands back out as a "new" direction -- the same
+    idea generated twice. Same guard as the composer's: `scout.claims()`
+    checks the text still matches this finding (a stale id is not
+    silently trusted), and the claim lands only once a concept actually
+    exists, so a run that errored or held burns nothing.
     """
     account_id = _account(account_id, None)      # None: DATABASE_URL, read at call time
     if os.environ.get("ZEROPAGE_RENDER") == "1":
@@ -778,6 +792,9 @@ def run_graph(spark: str = "", brand: str = "", goal: str = "",
                              reference_photos=photos,
                              scout_finding_id=finding["id"] if finding else None)
     concept_id = state.get("concept_id")
+    claimed = bool(finding_id) and scout.claims(finding_id, spark)
+    if claimed and concept_id:
+        scout.mark_used(finding_id, run_id=f"concept:{concept_id}")
     out = {
         "concept_id": concept_id,
         "brand": brand,
@@ -787,6 +804,7 @@ def run_graph(spark: str = "", brand: str = "", goal: str = "",
         "attempts": state.get("attempts"),
         "held_reason": state.get("held_reason") or "",
         "parked_reason": state.get("parked_reason") or "",
+        "finding_claimed": bool(claimed and concept_id),
         "keyframes": [
             {"n": k.get("n"), "ok": k.get("ok"), "url": k.get("url") or "",
              "error": k.get("error") or ""}

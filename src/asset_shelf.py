@@ -225,14 +225,20 @@ def resolve_photo(url_path: str, roots=None, refs_dir=None):
 
 
 def catalogue(db_path=None, account_id: Optional[int] = None) -> list[dict]:
-    """Every asset on file, in the shape shootgen.named_assets reads:
-    {"category", "name", "photos"} with photos as URLs.
+    """Every asset on file, in the shape shootgen.named_assets AND
+    in_scope() read: {"category", "name", "photos", "text"}, photos as
+    URLs and text as whatever notes/description asset_aliases can pull
+    multi-word proper nouns out of.
 
     Same catalogue the Studio's media panel shows, built from src/ so
     the graph can have it too. Locations come from the locations table,
     characters and props from entities; the photos come off disk, since
     that is where they actually are -- photo_count on the row is a
-    counter, not a listing.
+    counter, not a listing. `text` mirrors app/api.py's _assets_all()
+    field for field (notes/role/category, or a flattened location
+    description) -- named_assets is written against that shape, and a
+    catalogue that fed it a thinner one would silently lose every alias
+    beyond a bare name.
     """
     from . import entities, preprod
 
@@ -245,14 +251,57 @@ def catalogue(db_path=None, account_id: Optional[int] = None) -> list[dict]:
 
     for loc in preprod.list_locations(dsn=path, account_id=account_id):
         items.append({"category": "location", "name": loc["name"],
-                      "photos": photos("location", loc["name"])})
+                      "photos": photos("location", loc["name"]),
+                      "text": flatten_description(
+                          loc.get("description") or loc.get("description_json") or "")})
     for c in entities.list_characters(dsn=path, account_id=account_id):
         items.append({"category": "character", "name": c["name"],
-                      "photos": photos("character", c["name"])})
+                      "photos": photos("character", c["name"]),
+                      "text": c.get("notes") or c.get("role") or ""})
     for pr in entities.list_props(dsn=path, account_id=account_id):
         items.append({"category": "prop", "name": pr["name"],
-                      "photos": photos("prop", pr["name"])})
+                      "photos": photos("prop", pr["name"]),
+                      "text": pr.get("notes") or pr.get("category") or ""})
     return items
+
+
+def in_scope(text: str, refs, catalogue_items: list) -> list:
+    """Which assets ONE generation is allowed to ground on: named in
+    `text` (a typed idea/spark, or a spark rotated in with nobody
+    typing), or explicitly picked -- a photo attached via `refs`, the
+    same /<kind>/<slug>/photo/... URL shape a composer click, a / pick,
+    or an upload all ride on. Nothing else is offered.
+
+    Replaces the old default everywhere a generator was shown the WHOLE
+    asset bank on every single run (shootgen.cast_for's unfiltered
+    entities.list_characters/list_props, generate_scene_concept's
+    cast=None meaning "everything", the old picked_locations-only gate
+    on rooms). A Create run now stays only as wide as the idea actually
+    calls for, or as wide as what was deliberately attached to it --
+    2026-09-03, Mike's call: "I want every create call to ONLY use the
+    idea/spark that is written and references attached."
+
+    Order matches shootgen.named_assets (character, then prop, then
+    location, then first mention) since named() already carries that
+    ordering; explicitly picked assets NOT already named are appended
+    after, so a named + picked duplicate isn't listed twice and the
+    anchor-priority order named() computed is never disturbed by a pick
+    that agrees with it.
+    """
+    from . import shootgen  # local: shootgen pulls in the heavier deps
+
+    named = shootgen.named_assets(text or "", catalogue_items)
+    picked_slugs = set()
+    for ref in refs or []:
+        parts = str(ref).split("?")[0].strip("/").split("/")
+        if len(parts) >= 2 and parts[0] in ("locations", "characters", "props"):
+            picked_slugs.add(parts[1])
+    if not picked_slugs:
+        return named
+    named_names = {a["name"] for a in named}
+    picked = [a for a in catalogue_items
+             if a["name"] not in named_names and slugify(a["name"]) in picked_slugs]
+    return named + picked
 
 
 def entity_fields(kind: str, row: dict) -> dict:

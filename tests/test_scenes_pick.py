@@ -198,7 +198,11 @@ def test_refs_round_trip_on_the_shot(tmp_db):
 # --- leaving the board ------------------------------------------------------
 # Archiving hides a concept; it never deletes one. The row is the label:
 # pick_rate is generated-vs-picked, so the ones passed over are half the
-# measurement, and they stay in the Dev Studio's ungraded pool besides.
+# measurement.
+#
+# The X also RULES as of 2026-09-02: it records a deny on the scene prompt,
+# so the concept lands on the Teach tab and its prompt reaches the RAG
+# avoid shelf on the next pass. One tap, no reason box.
 
 def test_archiving_hides_the_card_but_keeps_the_row(tmp_db):
     ids = [a_scene(tmp_db, f"S{i}") for i in range(3)]
@@ -217,7 +221,7 @@ def test_archiving_hides_the_card_but_keeps_the_row(tmp_db):
     archived = preprod.get_concept(ids[0], dsn=tmp_db, account_id=None)
     assert archived["archived"] is True
     assert archived["archived_at"]
-    assert archived["graded"] is False        # the Dev Studio still owes it a grade
+    assert archived["graded"] is False        # the judge has not scored it yet
 
 
 def test_archiving_is_reversible(tmp_db):
@@ -228,13 +232,126 @@ def test_archiving_is_reversible(tmp_db):
     assert len(client.get("/api/pipeline/concepts?brand=zeropage").json()["items"]) == 1
 
 
+# --- the X is a verdict -----------------------------------------------------
+
+def test_the_x_records_a_deny_on_the_scene_prompt(tmp_db):
+    """One tap off the board is a ruling now: the prompt is filed to be
+    taught as something to avoid, and the concept turns up on the Teach
+    tab rather than vanishing having taught nothing."""
+    import app.main as app_main
+    from src import winners
+    scene_id = a_scene(tmp_db, prompt="a prompt that did not land")
+
+    res = client.post(f"/api/concepts/{scene_id}/archive", json={"archived": True})
+    assert res.json()["ruled"] is True
+
+    [row] = winners.recorded(f"concept-{scene_id}-shot-1", dsn=tmp_db)
+    assert row["verdict"] == "didnt_work"
+    assert row["prompt"] == "a prompt that did not land"
+    assert row["ingested"] == 0, "the X taught RAG before the Teach pass"
+    assert [r["id"] for r in app_main._graded_rows(None)] == [scene_id]
+
+
+def test_putting_a_card_back_takes_its_deny_with_it(tmp_db):
+    """Un-archiving must undo the ruling, or the shelves learn from a
+    decision that was reversed."""
+    import app.main as app_main
+    from src import winners
+    scene_id = a_scene(tmp_db)
+    client.post(f"/api/concepts/{scene_id}/archive", json={"archived": True})
+    client.post(f"/api/concepts/{scene_id}/archive", json={"archived": False})
+    assert winners.recorded(f"concept-{scene_id}-shot-1", dsn=tmp_db) == []
+    assert app_main._graded_rows(None) == []
+    assert [c["id"] for c in app_main._concept_states(None)["queue"]] == [scene_id]
+
+
+def test_the_x_never_stacks_a_second_verdict(tmp_db):
+    """Archiving twice must leave ONE ruling on the prompt, not two."""
+    from src import winners
+    scene_id = a_scene(tmp_db)
+    client.post(f"/api/concepts/{scene_id}/archive", json={"archived": True})
+    client.post(f"/api/concepts/{scene_id}/archive", json={"archived": True})
+    assert len(winners.recorded(f"concept-{scene_id}-shot-1", dsn=tmp_db)) == 1
+
+
+def test_the_check_records_an_approve_on_the_scene_prompt(tmp_db):
+    """The ✓ is the mirror of the ✗ (2026-09-02): it files the prompt to
+    be imitated, so the board teaches the winning shelf too and not only
+    the avoid shelf."""
+    import app.main as app_main
+    from src import winners
+    scene_id = a_scene(tmp_db, prompt="the one that worked")
+
+    res = client.post(f"/api/concepts/{scene_id}/pick", json={"picked": True})
+    assert res.json()["ruled"] is True
+    assert res.json()["picked"] is True
+
+    [row] = winners.recorded(f"concept-{scene_id}-shot-1", dsn=tmp_db)
+    assert row["verdict"] == "worked"
+    assert row["prompt"] == "the one that worked"
+    assert row["ingested"] == 0, "the check taught RAG before the Teach pass"
+    assert [r["id"] for r in app_main._graded_rows(None)] == [scene_id]
+
+
+def test_unpicking_takes_the_approve_with_it(tmp_db):
+    import app.main as app_main
+    from src import winners
+    scene_id = a_scene(tmp_db)
+    client.post(f"/api/concepts/{scene_id}/pick", json={"picked": True})
+    client.post(f"/api/concepts/{scene_id}/pick", json={"picked": False})
+    assert winners.recorded(f"concept-{scene_id}-shot-1", dsn=tmp_db) == []
+    assert app_main._graded_rows(None) == []
+
+
+def test_changing_your_mind_on_the_board_flips_the_lesson(tmp_db):
+    """Pick something you X'd and the shelf it is bound for has to flip.
+    Stacking a second, opposite ruling would teach both at once."""
+    from src import winners
+    scene_id = a_scene(tmp_db)
+    client.post(f"/api/concepts/{scene_id}/archive", json={"archived": True})
+    client.post(f"/api/concepts/{scene_id}/pick", json={"picked": True})
+    [row] = winners.recorded(f"concept-{scene_id}-shot-1", dsn=tmp_db)
+    assert row["verdict"] == "worked"
+
+
+def test_a_board_tap_never_overwrites_a_verdict_you_considered(tmp_db):
+    """A verdict from the Grade tab means you read the prompt and maybe
+    rewrote it. One tap on the board must not quietly replace that."""
+    from src import winners
+    scene_id = a_scene(tmp_db, prompt="the model's prompt")
+    client.post(f"/concepts/{scene_id}/shots/1/verdict",
+                data={"text": "the model's prompt", "replacement": "my version",
+                      "verdict": "teach", "tool": "runway"},
+                follow_redirects=False)
+    before = winners.recorded(f"concept-{scene_id}-shot-1", dsn=tmp_db)
+
+    res = client.post(f"/api/concepts/{scene_id}/archive", json={"archived": True})
+    assert res.json()["ruled"] is False
+    after = winners.recorded(f"concept-{scene_id}-shot-1", dsn=tmp_db)
+    assert [w["id"] for w in after] == [w["id"] for w in before]
+    assert {w["prompt"] for w in after} == {"the model's prompt", "my version"}
+
+
+def test_a_concept_with_no_prompt_just_archives(tmp_db):
+    """Nothing to teach, so nothing is filed -- and it does not land on the
+    Teach tab with an empty verdict."""
+    import app.main as app_main
+    from src import winners
+    cid = preprod.save_concept({"title": "no prompt", "shots": []}, brand="zeropage",
+                               dsn=tmp_db, account_id=None)
+    res = client.post(f"/api/concepts/{cid}/archive", json={"archived": True})
+    assert res.json()["ruled"] is False
+    assert winners.recorded(f"concept-{cid}-shot-1", dsn=tmp_db) == []
+    assert app_main._graded_rows(None) == []
+
+
 def test_archiving_a_row_that_has_an_owner_works(tmp_db):
     """The X on the board archives a concept that belongs to an account.
 
     Regression, 2026-09-02. `concept_archive` declared
     `account_id: Optional[int] = None`, which to FastAPI is a *query
     parameter*, not the auth dependency -- so every archive arrived as
-    None and set_archived's `WHERE ... AND account_id IS ?` matched
+    None and set_archived's `WHERE ... AND account_id IS NOT DISTINCT FROM %s` matched
     nothing. Every card on the real board 404'd on "Not this one" while
     "Pick this", which took `Depends(current_account_id)`, worked.
 
