@@ -82,6 +82,8 @@ def test_every_owned_table_grows_an_account_id(pg):
     workflows.init(pg)
     render_assets.init(pg)
     account_keys.init(pg)
+    from src import spend
+    spend.init(pg)
     with db.connect(pg) as conn:
         for table in db.OWNED_TABLES:
             assert "account_id" in db.columns(conn, table), f"{table} has no owner"
@@ -393,6 +395,9 @@ UNSCOPED_ALLOWED = {
     # seed asking whether the starter canvas exists at all
     "SELECT id FROM workflows WHERE name = %s",
     "SELECT id FROM workflows LIMIT 1",
+    # spend.spent_today_everyone: the installation-wide LLM spend, the
+    # number the ceilings are a ceiling ON -- generative.used_today's twin
+    "SELECT COUNT(*), COALESCE(SUM(cost_usd), 0) FROM llm_calls WHERE created_at >= %s",
 }
 
 # Built from the list, not written out beside it: adding a table to
@@ -810,6 +815,8 @@ def _init_everything(path):
     framebank.init(path)
     render_assets.init(path)
     account_keys.init(path)
+    from src import spend
+    spend.init(path)
 
 
 AUTH_SCHEMA = {"users", "accounts", "account_members"}
@@ -1077,12 +1084,18 @@ def test_the_global_caps_are_set_deliberately_in_the_example_env():
     day ends the day for everyone. .env.example carries the decision
     -- (per-account cap x people) -- so a deployment copies a ceiling
     that was chosen, not the one-operator default."""
-    from src import higgsfield, midjourney, nano_banana, runway, veo
-    text = (pathlib.Path(__file__).resolve().parent.parent / ".env.example").read_text()
+    root = pathlib.Path(__file__).resolve().parent.parent
+    text = (root / ".env.example").read_text()
     values = dict(re.findall(r"^([A-Z_]+_GLOBAL_DAILY_CAP)=(\d+)", text, re.M))
-    per_account = {"RUNWAY": runway.DAILY_CAP, "VEO": veo.DAILY_CAP,
-                   "HIGGSFIELD": higgsfield.DAILY_CAP, "MIDJOURNEY": midjourney.DAILY_CAP,
-                   "NANO": nano_banana.DAILY_CAP}
+    # the SHIPPED per-account default, read off the module source: the
+    # module attribute is whatever the local .env set today, and a raised
+    # NANO_DAILY_CAP there is not a reason for this test to move
+    per_account = {}
+    for prefix, module in (("RUNWAY", "runway"), ("VEO", "veo"), ("HIGGSFIELD", "higgsfield"),
+                           ("MIDJOURNEY", "midjourney"), ("NANO", "nano_banana")):
+        source = (root / "src" / f"{module}.py").read_text()
+        per_account[prefix] = int(re.search(
+            rf'environ\.get\("{prefix}_DAILY_CAP", "(\d+)"\)', source).group(1))
     for prefix, cap in per_account.items():
         key = f"{prefix}_GLOBAL_DAILY_CAP"
         assert key in values, f"{key} is not set in .env.example"

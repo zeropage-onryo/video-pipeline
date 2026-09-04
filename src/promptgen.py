@@ -80,7 +80,8 @@ def refine_prompt(raw_prompt: str, tool: str, gemini_client, model: str = MODEL,
         return raw_prompt
     prompt = build_refine_prompt(raw_prompt, tool, references)
     try:
-        refined = generate_with_retry(gemini_client, model, prompt).strip()
+        refined = generate_with_retry(gemini_client, model, prompt,
+                                      stage="shot_prompt").strip()
     except Exception as e:
         print(f"note: prompt refinement failed, keeping original: {e}", file=sys.stderr)
         return raw_prompt
@@ -132,7 +133,7 @@ def parse_shot_response(text: str) -> Shot:
 
 def structure_shot(description: str, examples: list[dict], client, model: str = MODEL) -> Shot:
     prompt = build_shot_prompt(description, examples)
-    response_text = generate_with_retry(client, model, prompt)
+    response_text = generate_with_retry(client, model, prompt, stage="shot_prompt")
     return parse_shot_response(response_text)
 
 

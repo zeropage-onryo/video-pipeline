@@ -757,7 +757,8 @@ def still_prompt(shot_prompt: str, gemini_client=None, model: str = MODEL) -> st
                 return ""
             gemini_client = genai.Client(api_key=key)
         raw = generate_with_retry(gemini_client, model,
-                                  STILL_RUBRIC + "\n\nVIDEO SHOT:\n" + shot_prompt)
+                                  STILL_RUBRIC + "\n\nVIDEO SHOT:\n" + shot_prompt,
+                                  stage="shot_prompt")
         line = next((ln.strip() for ln in (raw or "").splitlines() if ln.strip()), "")
         if line and "--ar" not in line:
             line = line + " --ar 9:16 --style raw"
@@ -1167,7 +1168,7 @@ def generate_concept_ideas(brand: str, client=None, spark=None, gemini_client=No
     prompt = build_ideas_prompt(locations, brand, client, spark, count,
                                 references=references, formats=formats,
                                 lock_location=lock_location)
-    ideas = parse_ideas_response(generate_with_retry(gemini_client, model, prompt))
+    ideas = parse_ideas_response(generate_with_retry(gemini_client, model, prompt, stage="concepts"))
 
     concept_ids = preprod.save_concept_ideas(
         ideas, brand=brand, client=client, spark=spark,
@@ -1251,7 +1252,8 @@ def generate_scene_brief(brand: str, spark=None, gemini_client=None,
     Kling / OpenArt Director). Pure w.r.t. the reference library: `references`
     arrives already retrieved by the caller."""
     prompt = build_scene_brief_prompt(brand, spark=spark, references=references, cast=cast)
-    return parse_scene_brief_response(generate_with_retry(gemini_client, model, prompt))
+    return parse_scene_brief_response(generate_with_retry(gemini_client, model, prompt,
+                                                          stage="concepts"))
 
 
 DEFAULT_SCENE_TOOL = "RUNWAY"
@@ -1318,7 +1320,7 @@ def generate_scene_concept(brand: str, spark=None, steer: str = "",
             contents.append(types.Part.from_bytes(data=data, mime_type=mime))
         contents.append(prompt)
     parsed = parse_scene_brief_response(
-        generate_with_retry(gemini_client, model, contents))
+        generate_with_retry(gemini_client, model, contents, stage="concepts"))
 
     shot = {"n": 1, "type": "BROLL", "source": "AI",
             "tool": (tool or DEFAULT_SCENE_TOOL).upper(),
@@ -1377,7 +1379,7 @@ def write_card_lines(scene_prompts: dict, gemini_client=None,
     if not scene_prompts:
         return {}
     return parse_card_lines_response(generate_with_retry(
-        gemini_client, model, build_card_lines_prompt(scene_prompts)))
+        gemini_client, model, build_card_lines_prompt(scene_prompts), stage="logline"))
 
 
 def build_scenes_prompt(idea: str, brand: str, count: int, locations: list,
@@ -1493,7 +1495,8 @@ def generate_scene_concepts(idea: str, brand: str, count: int = 4,
             contents.append(types.Part.from_bytes(data=data, mime_type=mime))
         contents.append(prompt)
     scenes = parse_scenes_response(
-        generate_with_retry(gemini_client, model, contents, on_retry=on_retry))
+        generate_with_retry(gemini_client, model, contents, on_retry=on_retry,
+                            stage="concepts"))
 
     # Validated against every described room, not just the picked ones:
     # a scene that names a real space it was not handed is fine, and a
@@ -1565,7 +1568,7 @@ def write_scene_for_concept(concept_id: int, gemini_client=None,
     prompt = build_scene_brief_prompt(concept.get("brand") or "antihero",
                                       spark=spark, references=references, cast=cast)
     parsed = parse_scene_brief_response(
-        generate_with_retry(gemini_client, model, prompt))
+        generate_with_retry(gemini_client, model, prompt, stage="concepts"))
 
     shot = {"n": 1, "type": "BROLL", "source": "AI",
             "tool": (tool or DEFAULT_SCENE_TOOL).upper(),
@@ -1764,7 +1767,8 @@ def generate_concept(brand: str, client=None, spark=None, gemini_client=None,
             for data, mime_type in image_refs
         ] + [prompt + IMAGE_REFS_NOTE]
 
-    concept = parse_concept_response(generate_with_retry(gemini_client, model, contents))
+    concept = parse_concept_response(generate_with_retry(gemini_client, model, contents,
+                                                         stage="concepts"))
 
     bible = derive_scene_bible(concept.get("title"), concept.get("logline"), concept.get("grade"))
     concept["shots"] = apply_scene_bible(concept.get("shots"), bible)

@@ -41,4 +41,5 @@ def generate_grounded_answer(query: str, retrieval_context: list,
     if client is None:
         api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
         client = genai.Client(api_key=api_key)
-    return strip_fences(generate_with_retry(client, model, build_prompt(query, retrieval_context)))
+    return strip_fences(generate_with_retry(client, model, build_prompt(query, retrieval_context),
+                                             stage="answer"))

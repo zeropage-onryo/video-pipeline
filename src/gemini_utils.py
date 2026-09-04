@@ -4,6 +4,8 @@ import time
 
 from google import genai
 
+from . import spend
+
 # The budget for the LAST model in the chain, which has nowhere to fall
 # through to and may as well keep asking.
 MAX_RETRIES = 6
@@ -78,10 +80,18 @@ def retry_delay(error, attempt: int) -> float:
 
 
 def generate_with_retry(client: genai.Client, model: str, contents,
-                        *, on_retry=None) -> str:
+                        *, on_retry=None, stage: str = "unknown",
+                        account_id=None, run_id=None) -> str:
     """Retries transient errors on `model`; if it stays unavailable for the
     whole retry budget, falls through to FALLBACK_MODELS in order rather
     than failing the run outright.
+
+    Every answer is metered (src/spend.py: one llm_calls row with the
+    model that ACTUALLY replied, which after a fallback is not the one
+    asked for -- the reason the meter is here and not at the callers).
+    `stage` labels the call (spend.STAGES; "unknown" until a caller is
+    labelled); `account_id`/`run_id` default to whatever spend.bind()
+    attached to this job or graph run. The meter never raises.
 
     `on_retry` is called with a one-line note each time this decides to
     wait or to change models. Optional and keyword-only, so every
@@ -103,16 +113,26 @@ def generate_with_retry(client: genai.Client, model: str, contents,
         last = model_index == len(models_to_try) - 1
         budget = MAX_RETRIES if last else FALLTHROUGH_RETRIES
         for attempt in range(budget):
+            started = time.monotonic()
             try:
                 response = client.models.generate_content(model=current_model, contents=contents)
                 if current_model != model:
                     print(f"  (used fallback model {current_model})", file=sys.stderr)
+                spend.record_call(stage=stage, model_asked=model, model_used=current_model,
+                                  response=response, account_id=account_id, run_id=run_id,
+                                  ms=int((time.monotonic() - started) * 1000))
                 return response.text.strip()
             except Exception as e:
                 if not is_retriable(e):
+                    spend.record_call(stage=stage, model_asked=model, model_used=current_model,
+                                      ok=False, account_id=account_id, run_id=run_id,
+                                      ms=int((time.monotonic() - started) * 1000))
                     raise
                 if attempt == budget - 1:
                     if last:
+                        spend.record_call(stage=stage, model_asked=model,
+                                          model_used=current_model, ok=False,
+                                          account_id=account_id, run_id=run_id)
                         raise
                     note(f"{current_model} still unavailable, trying a fallback model...")
                     break

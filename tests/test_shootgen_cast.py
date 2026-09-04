@@ -99,7 +99,7 @@ def test_the_scene_writer_grounds_in_appearance_and_ideation_does_not(tmp_db,
         description=MIKE_ON_FILE["description"], dsn=tmp_db, account_id=None)
     captured = {}
 
-    def fake_generate(client, model, prompt):
+    def fake_generate(client, model, prompt, **_):
         captured["prompt"] = prompt
         return json.dumps({"plan": {"duration": "12s", "shots": [
             {"n": 1, "type": "CHARACTER", "source": "CAMERA", "cam": "BMPCC",
@@ -113,7 +113,7 @@ def test_the_scene_writer_grounds_in_appearance_and_ideation_does_not(tmp_db,
     shootgen.write_scene_for_concept(concept_id, gemini_client=None, db_path=tmp_db)
     assert "short mustache" in captured["prompt"]
 
-    def fake_concept(client, model, prompt):
+    def fake_concept(client, model, prompt, **_):
         captured["prompt"] = prompt
         return response_for({
             "title": "T", "hook": "h", "logline": "l", "duration": "12s",
@@ -170,7 +170,7 @@ def test_generate_concept_grounds_in_named_cast(tmp_db, monkeypatch):
 
     captured = {}
 
-    def fake_generate(client, model, prompt):
+    def fake_generate(client, model, prompt, **_):
         captured["prompt"] = prompt
         return response_for({
             "title": "T", "hook": "h", "logline": "l", "duration": "12s",
@@ -190,7 +190,7 @@ def test_generate_concept_grounds_in_named_cast(tmp_db, monkeypatch):
 def test_generate_concept_degrades_to_no_cast_note_when_nothing_on_file(tmp_db, monkeypatch):
     captured = {}
 
-    def fake_generate(client, model, prompt):
+    def fake_generate(client, model, prompt, **_):
         captured["prompt"] = prompt
         return response_for({
             "title": "T", "hook": "h", "logline": "l", "duration": "12s",
@@ -215,7 +215,7 @@ def test_write_scene_grounds_in_named_cast(tmp_db, monkeypatch):
 
     captured = {}
 
-    def fake_generate(client, model, prompt):
+    def fake_generate(client, model, prompt, **_):
         captured["prompt"] = prompt
         return json.dumps({"plan": {"duration": "12s", "shots": [
             {"n": 1, "type": "CHARACTER", "source": "CAMERA", "cam": "BMPCC",

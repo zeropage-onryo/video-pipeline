@@ -79,6 +79,7 @@ from . import (
     scheduling,
     settings,
     shootgen,
+    spend,
     uncanny_judge,
     winners,
 )
@@ -190,6 +191,7 @@ def _judge(concept: dict) -> tuple[float, list[str]]:
             + json.dumps(payload)
         )
         resp = _client().models.generate_content(model=GEMINI_MODEL, contents=prompt)
+        spend.record_call(stage="evaluate", model_asked=GEMINI_MODEL, response=resp)
         text = (resp.text or "").strip().strip("`")
         if text.lower().startswith("json"):
             text = text[4:].strip()
@@ -321,6 +323,10 @@ def planner(state: GenState) -> GenState:
     channel = state.get("channel") or "zeropage"
     row = autonomy.get_channel(channel)
     run_id = state.get("run_id") or uuid.uuid4().hex
+    # from here every metered Gemini call carries this run's uuid and the
+    # run's account (src/spend.py) -- per-night cost keys on THIS id, the
+    # uuid, never on pitch_runs' integer id
+    spend.bind(account_id=state.get("account_id"), run_id=run_id)
     # Claim the scouted spark here, not in the scout node: the run_id it
     # is stamped with is minted on this line, and a finding marked used
     # before a run exists to point at is how the same spark gets served
@@ -727,7 +733,8 @@ def _judge_prompt(prompt: str) -> dict:
     judgment. The model can only ever be stricter than the floor."""
     try:
         raw = generate_with_retry(_client(), GEMINI_MODEL,
-                                  _PROMPT_RUBRIC + "\n\nPROMPT:\n" + prompt)
+                                  _PROMPT_RUBRIC + "\n\nPROMPT:\n" + prompt,
+                                  stage="prompt_gate")
         data = json.loads(_extract_json(raw))
         vals = {k: max(0, min(2, int(data.get(k, 0)))) for k in _PROMPT_DIMS}
         return {"score": sum(vals.values()), "dims": vals,
@@ -844,7 +851,8 @@ def _rework_shot_prompt(original_prompt: str, verdict: dict) -> str:
             "Return ONLY the rewritten prompt text -- no preamble, no quotes, no "
             "markdown fences."
         )
-    return generate_with_retry(_client(), GEMINI_MODEL, instruction).strip()
+    return generate_with_retry(_client(), GEMINI_MODEL, instruction,
+                               stage="shot_prompt").strip()
 
 
 def revise_prompts(state: GenState) -> GenState:
@@ -1326,8 +1334,18 @@ def run(goal: str, *, brand: Optional[str] = None, spark: Optional[str] = None,
     # see, and reports a night's work that isn't there.
     if account_id is None:
         account_id = accounts.resolve_account()
-    return GRAPH.invoke({
-        "account_id": account_id,
+    # The run's uuid is minted HERE and bound with the account before the
+    # graph starts, because LangGraph executes each node in a copy of the
+    # calling context: a spend.bind() inside a node reaches nothing after
+    # it (measured 2026-09-04 -- a night's six metered calls landed with
+    # no run id). Bound in the parent, every node inherits it; unbound
+    # after, so nothing leaks into whatever this thread does next.
+    run_id = uuid.uuid4().hex
+    token = spend.bind(account_id=account_id, run_id=run_id)
+    try:
+        return GRAPH.invoke({
+            "run_id": run_id,
+            "account_id": account_id,
         "goal": goal, "brand": brand, "spark": spark or goal, "scout": scout,
         "research": research, "research_note": "",
         "client": client, "use_pov": use_pov, "channel": channel,
@@ -1338,4 +1356,6 @@ def run(goal: str, *, brand: Optional[str] = None, spark: Optional[str] = None,
         "reference_photos": reference_photos or [],
         "attempts": 0,
         **({"scout_finding_id": int(scout_finding_id)} if scout_finding_id else {}),
-    })
+        })
+    finally:
+        spend.unbind(token)

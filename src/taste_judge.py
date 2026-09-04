@@ -220,7 +220,8 @@ def score_concept(concept: dict, signals=None, gemini_client=None, db_path=None)
                 "graded": False}
     try:
         client = gemini_client or _client()
-        raw = generate_with_retry(client, MODEL, build_prompt(concept, signals))
+        raw = generate_with_retry(client, MODEL, build_prompt(concept, signals),
+                                  stage="taste_judge")
         data = json.loads(strip_fences(raw))
         taste, perf = _clamp(data.get("taste_fit")), _clamp(data.get("performance"))
         overall = _clamp(data.get("overall", (taste + perf) / 2))

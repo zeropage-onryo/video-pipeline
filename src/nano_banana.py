@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from . import generative, render_assets
+from . import generative, render_assets, spend
 from .gemini_utils import sniff_mime
 from .shot import Shot
 
@@ -291,12 +291,17 @@ def generate_image(prompt: str, out_path: Path, *, model: str = MODEL,
                        else sniff_mime(data))))
     parts.append(prompt)
     config = image_config(types, aspect_ratio, image_size)
+    started = time.monotonic()
     try:
         response = _generate_content(client, model, parts, config=config)
     except Exception as e:
         if config is None or not _rejected_the_config(e):
             raise
         response = _generate_content(client, model, parts)
+    # metered as one image (src/spend.py prices the image models per
+    # image, not per token); the token counts ride along raw
+    spend.record_call(stage="nano_image", model_asked=model, response=response,
+                      images=1, ms=int((time.monotonic() - started) * 1000))
     for candidate in response.candidates or []:
         for part in (candidate.content.parts or []) if candidate.content else []:
             inline = getattr(part, "inline_data", None)

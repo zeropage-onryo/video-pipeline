@@ -285,6 +285,8 @@ def gather_web(brand: str, client, model: str, queries=None) -> list[dict]:
     for query in (queries or WEB_QUERIES.get(brand) or WEB_QUERIES["zeropage"]):
         try:
             from google.genai import types
+
+            from . import spend
             resp = client.models.generate_content(
                 model=model,
                 contents=(
@@ -295,6 +297,7 @@ def gather_web(brand: str, client, model: str, queries=None) -> list[dict]:
                 config=types.GenerateContentConfig(
                     tools=[types.Tool(google_search=types.GoogleSearch())]),
             )
+            spend.record_call(stage="scout", model_asked=model, response=resp)
             text = (getattr(resp, "text", "") or "").strip()
             urls = _grounding_urls(resp)
             for line in [_plain(ln) for ln in text.splitlines() if ln.strip()][:5]:
@@ -727,6 +730,8 @@ def digest(brand: str, signals: list[dict], client, model: str, count: int = 4,
         avoid=winners.avoid_guidance(dsn=dsn),
         recent=recent_sparks(brand, dsn=dsn))
     resp = client.models.generate_content(model=model, contents=prompt)
+    from . import spend
+    spend.record_call(stage="scout", model_asked=model, response=resp)
     return parse_digest_response(getattr(resp, "text", "") or "")
 
 

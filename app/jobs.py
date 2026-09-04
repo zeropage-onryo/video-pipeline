@@ -123,6 +123,11 @@ def start(kind: str, label: str, fn: Callable[[dict], Optional[dict]],
     job = create(kind, label, cancellable=cancellable, account_id=account_id)
 
     def runner():
+        # every Gemini call this job makes is metered to its account
+        # (src/spend.py) -- bound here, in the worker thread, because a
+        # contextvar set in the request thread never reaches it
+        from src import spend
+        spend.bind(account_id=account_id)
         update(job["id"], status="running")
         try:
             result = fn(job) or {}

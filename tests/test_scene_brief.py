@@ -88,7 +88,7 @@ def test_scene_concept_saves_exactly_one_prompt(pg, monkeypatch):
     entities.init(path)
     monkeypatch.setattr(
         shootgen, "generate_with_retry",
-        lambda client, model, contents:
+        lambda client, model, contents, **_:
         '{"title": "Concrete Camouflage", "brief": "Ultra-realistic grounded video in 9:16…"}')
 
     result = shootgen.generate_scene_concept(
@@ -112,7 +112,7 @@ def test_scene_concept_does_not_prepend_the_scene_bible(pg, monkeypatch):
     entities.init(path)
     monkeypatch.setattr(
         shootgen, "generate_with_retry",
-        lambda client, model, contents: '{"title": "T", "brief": "the prompt text"}')
+        lambda client, model, contents, **_: '{"title": "T", "brief": "the prompt text"}')
 
     result = shootgen.generate_scene_concept(
         brand="antihero", gemini_client=object(), db_path=path)
@@ -130,7 +130,7 @@ def test_scene_concept_validates_the_tool_per_brand(pg, monkeypatch):
     entities.init(path)
     monkeypatch.setattr(
         shootgen, "generate_with_retry",
-        lambda client, model, contents: '{"title": "T", "brief": "b"}')
+        lambda client, model, contents, **_: '{"title": "T", "brief": "b"}')
 
     result = shootgen.generate_scene_concept(
         brand="zeropage", gemini_client=object(), db_path=path, tool="VEO")

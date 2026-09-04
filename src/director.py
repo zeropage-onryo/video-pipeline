@@ -103,7 +103,7 @@ def direct_scene(concept_id: int, note: str, gemini_client=None,
         prompt = build_direct_prompt(
             concept, note, shootgen.format_locations(locations))
 
-        text = generate_with_retry(gemini_client, model, prompt)
+        text = generate_with_retry(gemini_client, model, prompt, stage="director")
         try:
             plan = json.loads(strip_fences(text))
         except (ValueError, TypeError) as e:

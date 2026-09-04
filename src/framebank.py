@@ -198,6 +198,8 @@ def caption(frames: list[dict], client, model: str, batch: int = 8) -> list[dict
             parts.append(types.Part.from_bytes(data=data, mime_type="image/jpeg"))
         try:
             resp = client.models.generate_content(model=model, contents=parts)
+            from . import spend
+            spend.record_call(stage="frame_caption", model_asked=model, response=resp)
             lines = [ln for ln in (getattr(resp, "text", "") or "").splitlines()
                      if ln.strip().startswith("{")]
         except Exception:

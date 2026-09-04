@@ -35,7 +35,7 @@ def seed_scene(path):
 
 def fake_model(response_text):
     """Patch point: director calls generate_with_retry(client, model, prompt)."""
-    def _fake(client, model, contents):
+    def _fake(client, model, contents, **_):
         fake_model.last_prompt = contents
         return response_text
     return _fake

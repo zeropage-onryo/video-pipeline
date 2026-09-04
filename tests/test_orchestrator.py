@@ -201,7 +201,7 @@ def test_structure_prompt_refines_against_technique_references(tmp_db, monkeypat
 
     monkeypatch.setattr(orchestrator.crag, "retrieve_with_crag", fake_crag)
     monkeypatch.setattr(orchestrator.promptgen, "generate_with_retry",
-                        lambda client, model, prompt: "REFINED: " + GOOD_PROMPT + ", mid-motion start")
+                        lambda client, model, prompt, **_: "REFINED: " + GOOD_PROMPT + ", mid-motion start")
     monkeypatch.setattr(orchestrator, "generate_with_retry", lambda *a, **k: "")  # keep stills harmless
     stage_fakes(monkeypatch, [(make_concept(), [])])
 
@@ -635,7 +635,7 @@ def test_unreadable_judge_fails_closed(tmp_db, monkeypatch):
     # still not JSON -- proves fail-closed survives a rework attempt rather
     # than being masked by the structural check short-circuiting it.
     monkeypatch.setattr(orchestrator, "generate_with_retry",
-                        lambda client, model, contents: (
+                        lambda client, model, contents, **_: (
                             "I think it's pretty good actually, no notes, ship it "
                             "as-is, looks totally fine to me honestly"))
     stage_fakes(monkeypatch, [(make_concept(), [])])
@@ -668,7 +668,7 @@ def test_a_failed_shot_gets_two_rework_passes_before_holding(tmp_db, monkeypatch
     ])
     monkeypatch.setattr(orchestrator, "_judge_prompt", lambda p: next(scores))
     monkeypatch.setattr(orchestrator, "generate_with_retry",
-                        lambda client, model, contents: REWORKED_PROMPT)
+                        lambda client, model, contents, **_: REWORKED_PROMPT)
     two_ai = make_concept(shots=[
         {"n": 1, "type": "BROLL", "source": "AI", "tool": "KLING",
          "location": "hallway", "desc": "x", "prompt": GOOD_PROMPT},
@@ -701,7 +701,7 @@ def test_a_successful_rework_rescues_the_run(tmp_db, monkeypatch):
     ])
     monkeypatch.setattr(orchestrator, "_judge_prompt", lambda p: next(scores))
     monkeypatch.setattr(orchestrator, "generate_with_retry",
-                        lambda client, model, contents: REWORKED_PROMPT)
+                        lambda client, model, contents, **_: REWORKED_PROMPT)
     two_ai = make_concept(shots=[
         {"n": 1, "type": "BROLL", "source": "AI", "tool": "KLING",
          "location": "hallway", "desc": "x", "prompt": GOOD_PROMPT},
@@ -761,7 +761,7 @@ def test_every_score_is_logged_before_any_credit(tmp_db, monkeypatch):
 def test_judge_parses_fenced_json_and_clamps_dims():
     class FakeOK:
         pass
-    def fake_retry(client, model, contents):
+    def fake_retry(client, model, contents, **_):
         return 'sure thing:\n```json\n{"subject":2,"camera":9,"motion":-3,' \
                '"lighting":2,"coherence":2,"reason":"camera overclaimed"}\n```'
     import src.orchestrator as o

@@ -213,4 +213,5 @@ def enhance(system: str, user: str, images=None, *, gemini_client,
             # rather than pretending the reference landed
             text += f"\nReference image (could not be loaded): {image}"
     parts.append(text)
-    return generate_with_retry(gemini_client, model or shootgen.MODEL, parts)
+    return generate_with_retry(gemini_client, model or shootgen.MODEL, parts,
+                               stage="enhance")

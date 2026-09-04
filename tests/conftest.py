@@ -46,6 +46,20 @@ def no_network(monkeypatch, request):
 
 
 @pytest.fixture(autouse=True)
+def no_spend_context():
+    """The LLM meter's attribution is a contextvar (src/spend.py). A test
+    that drives the orchestrator or binds one must not leave it set for
+    the next test in the same worker."""
+    from src import spend
+    token = spend._context.set(None)
+    yield
+    try:
+        spend._context.reset(token)
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
 def account_scope():
     """Give every route an account to act as.
 

@@ -404,7 +404,7 @@ def test_enhance_defaults_to_the_enhancement_instruction(monkeypatch):
     default, so a bare user prompt is actually ENHANCED."""
     captured = {}
 
-    def fake_generate(client, model, parts):
+    def fake_generate(client, model, parts, **_):
         captured["text"] = parts[-1]
         return "OUT"
 
@@ -418,7 +418,7 @@ def test_enhance_defaults_to_the_enhancement_instruction(monkeypatch):
 def test_enhance_folds_references_as_grounding_not_instruction(monkeypatch):
     captured = {}
 
-    def fake_generate(client, model, parts):
+    def fake_generate(client, model, parts, **_):
         captured["text"] = parts[-1]
         return "OUT"
 
@@ -873,7 +873,7 @@ def test_a_remote_reference_reaches_gemini_as_vision_not_as_a_url(monkeypatch):
                         lambda url: PNG_BYTES if url == R2_URL else None)
     captured = {}
     monkeypatch.setattr("src.gemini_utils.generate_with_retry",
-                        lambda client, model, contents:
+                        lambda client, model, contents, **_:
                         captured.setdefault("parts", contents) and "ENHANCED")
 
     workflow_runner.enhance("SYS", "a watch macro", images=[R2_URL],
@@ -889,7 +889,7 @@ def test_an_unreachable_reference_says_so_instead_of_pretending(monkeypatch):
     monkeypatch.setattr(imagery, "fetch_image_bytes", lambda url: None)
     captured = {}
     monkeypatch.setattr("src.gemini_utils.generate_with_retry",
-                        lambda client, model, contents:
+                        lambda client, model, contents, **_:
                         captured.setdefault("parts", contents) and "E")
     workflow_runner.enhance("SYS", "a watch macro", images=[R2_URL],
                             gemini_client=object(), resolve_photo=lambda v: None)

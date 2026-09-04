@@ -1,8 +1,15 @@
 # Task — make cost efficiency visible (the `/costs` tracker)
 
-**Status: not started.** Written 2026-09-01. This is BACKLOG #2, which has sat
-unbuilt since it was written, scoped into one block against what the code
-actually looks like today:
+**Status: SHIPPED 2026-09-04** (`claude/cost-tracker` -> `main`). Steps 1-4
+built as written: `src/spend.py` (the meter: `llm_calls`, owned; prices read
+off the pricing page that day; the meter never raises), `src/costs.py` (the
+four numbers), `/costs` on the dev router + `GET /api/costs`, the stage label
+on all 23 `generate_with_retry` callers plus the five raw sites and the
+research agent. Step 5 had already landed on 2026-09-02 (`VEO_SPEND_OK`, the
+caps in `.env.example`); the code defaults stay one-account-sized on purpose
+-- see BACKLOG #2 for the one real night that was measured. Written
+2026-09-01. This is BACKLOG #2, which had sat unbuilt since it was written,
+scoped into one block against what the code looked like that day:
 
 > "Build a tracker to make cost efficiency issues visible."
 

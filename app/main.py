@@ -49,6 +49,7 @@ from src import (
     rag,
     render_assets,
     shootgen,
+    spend,
     taste_judge,
     winners,
     workflows,
@@ -169,6 +170,7 @@ async def lifespan(app: FastAPI):
     workflows.init()     # saved node graphs for /ui Workflows
     workflows.seed_default()  # "Prompt enhancement" starter canvas
     render_assets.init()  # generated_assets, owned (merged 2026-09-02)
+    spend.init()          # llm_calls, the LLM meter (2026-09-04)
     generative.init()    # generations log the render caps count
     accounts_mod.init()  # users / identities / accounts / members
     settings_mod.init()  # the Dev Studio tunables (gate/threshold/k)
@@ -754,7 +756,8 @@ async def grade_fresh(request: Request, account_id: int = Depends(auth.dev_accou
             formats=shootgen.ranked_formats(dsn=None))
         ideas = shootgen.parse_ideas_response(
             generate_with_retry(genai.Client(api_key=api_key),
-                                shootgen.MODEL, prompt))
+                                shootgen.MODEL, prompt, stage="concepts",
+                                account_id=account_id))
         if not ideas:
             raise ValueError("the model returned no ideas")
         idea = ideas[0]
@@ -1417,6 +1420,20 @@ async def post_image_queue(request: Request,
     return RedirectResponse(
         "/holds?message=" + quote(f"Queued image post #{hold_id} for approval."),
         status_code=303)
+
+
+@dev.get("/costs")
+def costs_page(request: Request, message: Optional[str] = None,
+               account_id: int = Depends(auth.dev_account_id)):
+    """The cost tracker (BACKLOG #2, docs/tasks/task-cost-tracker.md):
+    four numbers over tables that already exist, rendered from the same
+    src/costs.summary GET /api/costs serves, so the page and the JSON
+    cannot disagree. Estimates, labelled as such -- never an invoice."""
+    from src import costs
+    return templates.TemplateResponse(
+        request, "costs.html",
+        {"c": costs.summary(account_id=account_id),
+         "message": message, "active_nav": "costs"})
 
 
 @dev.get("/winners")

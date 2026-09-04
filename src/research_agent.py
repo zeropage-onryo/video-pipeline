@@ -386,8 +386,12 @@ async def _drive(client, brand: str, count: int, dsn, banked_before: int, *,
 
     model, _has_search = build_model(provider())
     agent = create_react_agent(model, tools)
-    await agent.ainvoke({"messages": [{"role": "user", "content": brief}]},
-                        config={"recursion_limit": MAX_STEPS})
+    result = await agent.ainvoke({"messages": [{"role": "user", "content": brief}]},
+                                 config={"recursion_limit": MAX_STEPS})
+    # the agent reaches the model through langchain, not gemini_utils, so
+    # it reports its own spend: one llm_calls row per model turn, read off
+    # the AIMessages' usage_metadata (src/spend.py; never raises)
+    _meter_turns(result, model_id(provider()))
 
     # What it actually DID, read off the database rather than off its
     # closing message. An agent's own summary of its work is the least
@@ -397,6 +401,24 @@ async def _drive(client, brand: str, count: int, dsn, banked_before: int, *,
                  for r in scout.list_findings(brand=brand, unused_only=True,
                                               limit=100, dsn=dsn))
     return {"ok": banked > 0, "banked": banked, "images": images}
+
+
+def _meter_turns(result, model: str) -> int:
+    """Record every model turn of an agent run. Returns rows written."""
+    from . import spend
+    written = 0
+    try:
+        for message in (result or {}).get("messages", []):
+            if getattr(message, "type", None) != "ai":
+                continue
+            if not getattr(message, "usage_metadata", None):
+                continue
+            if spend.record_call(stage="research", model_asked=model,
+                                 usage=spend.usage_from_langchain(message)) is not None:
+                written += 1
+    except Exception:
+        pass
+    return written
 
 
 def run(brand: str, *, count: int = BANK_TARGET, dsn=None,

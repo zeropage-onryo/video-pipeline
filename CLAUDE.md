@@ -980,6 +980,19 @@ is yours, in Resolve, by hand.
   saves successfully and then resolves to nothing. `app/api.py`'s `_to_jpeg`/`_save_upload_ref`/
   `_resolve_asset_photo` now delegate. **The URL shape is the point**: a scouted image comes out
   as `/refs/<sha>.jpg`, so it rides the composer path with no new route or resolver.
+- **`src/spend.py`** / **`src/costs.py`** — the cost tracker (BACKLOG #2, 2026-09-04).
+  `spend.record_call` writes one OWNED `llm_calls` row per Gemini call -- the model that
+  actually answered, raw token counts, an estimated `cost_usd` from `DEFAULT_PRICES` (read off
+  the pricing page that day; `SPEND_PRICES_JSON` overrides), a `stage` from the closed
+  `STAGES` list, and the account + graph run id from `spend.bind()` (jobs.start binds the
+  job's account in its worker thread, the orchestrator's planner binds the run's uuid). It
+  lives INSIDE `generate_with_retry` because only that function knows which model replied
+  after a fallback; the five raw sites and the research agent call it themselves. **The meter
+  never raises.** No usage counts = UNPRICED (NULL), never $0; a render with `cost_usd` NULL
+  is FREE (subscription), never backfilled. `costs.summary` is the four numbers on `/costs`
+  and `GET /api/costs`: cost per kept clip per tool, cost per stage per night, wasted spend,
+  today against the caps. Every figure is an estimate and the page says so; embeddings are
+  not metered.
 - **`src/gemini_utils.py`** — shared `generate_with_retry` (retries on `RESOURCE_EXHAUSTED`/
   `UNAVAILABLE`, falls through to `FALLBACK_MODELS` if the primary model stays down for the whole
   retry budget) and `strip_fences` (strips markdown code fences from model JSON output).

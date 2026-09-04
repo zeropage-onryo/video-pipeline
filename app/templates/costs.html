@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}Costs — Zero Page{% endblock %}
+{% block content %}
+<div class="sk"><div class="page">
+  <div class="vhead"><div>
+    <div class="rule">Cost efficiency // estimates, never an invoice // where money goes and where it is wasted</div>
+    <h1>Costs</h1>
+    <p class="vsub">Four numbers, each of which can change a decision: dollars per <em>usable</em> clip per tool, which stage is the token hog, what was spent on things that never shipped, and today against the caps. Same data as <span class="mono">GET /api/costs</span>.</p>
+  </div></div>
+
+  {% if message %}<div class="toast">{{ message }}</div>{% endif %}
+
+  <div class="panel">
+    <div class="panel-head"><span class="id">1 · COST PER KEPT CLIP</span><span class="m">PER TOOL · {{ c.render.attempts }} ATTEMPTS · {{ c.render.kept }} KEPT · {{ c.render.free }} FREE (SUBSCRIPTION)</span></div>
+    <div class="panel-body">
+      {% if c.render.scoreboard %}
+      <table class="tbl">
+        <thead><tr><th>tool</th><th>attempts</th><th>kept</th><th>hit rate</th><th>spend</th><th>per keeper</th></tr></thead>
+        <tbody>
+        {% for t in c.render.scoreboard %}
+          <tr><td class="mono">{{ t.tool }}</td><td>{{ t.attempts }}</td><td>{{ t.kept }}</td>
+              <td>{{ "%.0f"|format(t.hit_rate * 100) if t.hit_rate is not none else "—" }}%</td>
+              <td>${{ "%.2f"|format(t.spend) }}</td>
+              <td><strong>{{ "$%.2f"|format(t.cost_per_keeper) if t.cost_per_keeper is not none else "—" }}</strong></td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="dim">No shot has a keeper yet. The scoreboard only counts shots where something was eventually kept, so a tool tried and abandoned is not punished. {{ c.render.attempts }} attempt(s) logged{% if c.render.free %}, {{ c.render.free }} of them free (subscription renders, no per-call price){% endif %}.</p>
+      {% endif %}
+      {% if c.render.keepers %}
+      <p class="dim" style="margin-top:8px">Per resolved shot — the winner, its attempt number, and the total spent on that shot <em>including the losers</em>:</p>
+      <table class="tbl">
+        <thead><tr><th>shot</th><th>subject</th><th>won by</th><th>attempt</th><th>attempts (all tools)</th><th>total cost</th></tr></thead>
+        <tbody>
+        {% for k in c.render.keepers %}
+          <tr><td class="mono">{{ k.shot_id }}</td><td>{{ k.subject }}</td><td class="mono">{{ k.tool }}</td><td>{{ k.attempts }}</td><td>{{ k.total_attempts_all_tools }}</td><td>${{ "%.2f"|format(k.total_cost) }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><span class="id">2 · COST PER STAGE</span><span class="m">THE LLM METER · {{ c.llm.by_stage|length }} STAGE(S) SEEN</span></div>
+    <div class="panel-body">
+      {% if c.llm.by_stage %}
+      <table class="tbl">
+        <thead><tr><th>stage</th><th>calls</th><th>prompt tok</th><th>output tok</th><th>thinking tok</th><th>est. spend</th><th>unpriced</th><th>failed</th></tr></thead>
+        <tbody>
+        {% for s in c.llm.by_stage %}
+          <tr><td class="mono">{{ s.stage }}</td><td>{{ s.calls }}</td><td>{{ s.prompt_tokens }}</td><td>{{ s.output_tokens }}</td><td>{{ s.thought_tokens }}</td>
+              <td><strong>${{ "%.4f"|format(s.cost_usd) }}</strong></td><td>{{ s.unpriced or 0 }}</td><td>{{ s.failed or 0 }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="dim">No metered call yet. Every Gemini call through <span class="mono">gemini_utils.generate_with_retry</span>, the image model, the scout and the research agent writes a row here from now on.</p>
+      {% endif %}
+
+      {% if c.llm.by_run %}
+      <p class="dim" style="margin-top:12px">Per night (the orchestrator's run id; request-path calls grouped by day):</p>
+      <table class="tbl">
+        <thead><tr><th>run</th><th>started</th><th>calls</th><th>tokens</th><th>est. spend</th><th>top stage</th></tr></thead>
+        <tbody>
+        {% for r in c.llm.by_run %}
+          <tr><td class="mono">{{ (r.run_id or r.run_key)[:12] }}</td><td class="mono">{{ r.started[:16] }}</td><td>{{ r.calls }}</td><td>{{ r.tokens }}</td>
+              <td><strong>${{ "%.4f"|format(r.cost_usd) }}</strong>{% if r.unpriced %} <span class="dim">(+{{ r.unpriced }} unpriced)</span>{% endif %}</td>
+              <td class="mono">{{ r.top_stage or "—" }}{% if r.top_stage %} <span class="dim">${{ "%.4f"|format(r.top_stage_cost) }}</span>{% endif %}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><span class="id">3 · WASTED SPEND</span><span class="m">WHAT WAS PAID FOR AND NEVER USED</span></div>
+    <div class="panel-body">
+      <table class="tbl">
+        <tbody>
+          <tr><td>Prompt gate passed, you rejected <span class="dim">(a credit burned on a clip never used)</span></td><td><strong>{{ c.waste.gate.passed_but_rejected }}</strong> of {{ c.waste.gate.graded }} graded</td></tr>
+          <tr><td>Prompt gate held, you would have posted <span class="dim">(only cost an approval)</span></td><td>{{ c.waste.gate.held_but_posted }}</td></tr>
+          <tr><td>Rejected render attempts</td><td>{{ c.waste.rejected_attempts }} · ${{ "%.2f"|format(c.waste.rejected_spend) }}</td></tr>
+          <tr><td>Runs in the hold queue never posted</td><td>{{ c.waste.never_posted }} <span class="dim mono">{% for s, n in c.waste.holds.items() %}{{ s }}={{ n }} {% endfor %}</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><span class="id">4 · TODAY AGAINST THE CAPS</span><span class="m">UTC DAY · PER ACCOUNT / INSTALLATION</span></div>
+    <div class="panel-body">
+      <table class="tbl">
+        <thead><tr><th>tool</th><th>you today</th><th>your cap</th><th>everyone today</th><th>ceiling</th><th>per-run approval</th></tr></thead>
+        <tbody>
+        {% for t in c.today.tools %}
+          <tr><td class="mono">{{ t.tool }}</td>
+              <td{% if t.used >= t.cap %} style="color:var(--red)"{% endif %}>{{ t.used }}</td><td>{{ t.cap }}</td>
+              <td{% if t.everyone >= t.ceiling %} style="color:var(--red)"{% endif %}>{{ t.everyone }}</td><td>{{ t.ceiling }}</td>
+              <td class="mono dim">{{ t.spend_env or "cap only" }}</td></tr>
+        {% endfor %}
+          <tr><td class="mono">llm (gemini)</td><td colspan="2">{{ c.today.llm.calls }} calls · ${{ "%.4f"|format(c.today.llm.cost_usd) }}{% if c.today.llm.unpriced %} <span class="dim">(+{{ c.today.llm.unpriced }} unpriced)</span>{% endif %}</td>
+              <td colspan="2">{{ c.today.llm_everyone.calls }} calls · ${{ "%.4f"|format(c.today.llm_everyone.cost_usd) }}</td><td class="mono dim">no cap</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <p class="dim mono" style="margin-top:14px">{% for n in c.notes %}{{ n }}<br>{% endfor %}</p>
+</div></div>
+{% endblock %}

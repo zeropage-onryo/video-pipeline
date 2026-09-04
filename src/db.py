@@ -275,6 +275,8 @@ OWNED_TABLES = (
     # A credential is the one row that must never be readable across the
     # boundary, so it is owned like everything else, not declared shared.
     "account_keys",
+    # the LLM meter (2026-09-04): a metered call is one account's spend
+    "llm_calls",
 )
 
 # The tables that are global BY DECISION, each with the reason. This is

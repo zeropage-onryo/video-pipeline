@@ -130,7 +130,7 @@ def test_rank_orders_best_first(pg, monkeypatch):
     sig = taste_judge.gather_signals(db_path=path)
     scores = {"A": 3, "B": 9, "C": 6}
 
-    def fake(client, model, prompt):
+    def fake(client, model, prompt, **_):
         for title, s in scores.items():
             if f"Title: {title}\n" in prompt:
                 return json.dumps({"taste_fit": s, "performance": s, "overall": s, "reasons": []})

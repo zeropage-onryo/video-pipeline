@@ -184,7 +184,8 @@ def propose_slate(brand: str, signals: Optional[dict] = None, gemini_client=None
 
     prompt = build_rework_prompt(locations, brand, signals, count,
                                  references=references)
-    ideas = parse_slate_response(generate_with_retry(gemini_client, model, prompt))
+    ideas = parse_slate_response(generate_with_retry(gemini_client, model, prompt,
+                                                     stage="rework"))
 
     concept_ids = preprod.save_concept_ideas(
         ideas, brand=brand, spark="rework: evidence-grounded slate",

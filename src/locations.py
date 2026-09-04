@@ -98,7 +98,8 @@ def describe_location(client, name: str, photos: list) -> dict:
         for photo in photos
     ]
     parts.append(build_location_prompt(name, len(photos)))
-    return parse_description(generate_with_retry(client, VISION_MODEL, parts))
+    return parse_description(generate_with_retry(client, VISION_MODEL, parts,
+                                                 stage="location"))
 
 
 # --- cast & props ----------------------------------------------------------
@@ -154,7 +155,8 @@ def describe_entity(client, kind: str, name: str, photos: list) -> dict:
         for photo in photos
     ]
     parts.append(build_entity_prompt(kind, name, len(photos)))
-    return parse_entity_description(generate_with_retry(client, VISION_MODEL, parts))
+    return parse_entity_description(generate_with_retry(client, VISION_MODEL, parts,
+                                                        stage="location"))
 
 
 def describe_locations(root: Path, client=None, db_path=None, force: bool = False,

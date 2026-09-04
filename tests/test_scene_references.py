@@ -595,7 +595,7 @@ def _fake_gemini(monkeypatch, scene_text):
         "src.shootgen.generate_with_retry",
         # both response shapes: `brief` for the one-scene route
         # (parse_scene_brief_response), `scenes[]` for the N-scene one
-        lambda c, m, p: json.dumps({"title": "The Garage Guest", "hook": "",
+        lambda c, m, p, **_: json.dumps({"title": "The Garage Guest", "hook": "",
                                     "logline": "", "brief": scene_text,
                                     "scenes": [{"title": "The Garage Guest",
                                                 "prompt": scene_text}]}))

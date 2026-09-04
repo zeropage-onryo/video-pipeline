@@ -360,8 +360,20 @@ user to actually enter a key (`account_keys` CLI only). The distribution
 argument above still holds — this was worth finishing once found half-done,
 not a signal to prioritize the rest of BYOK yet.
 
-## 2. Cost-efficiency tracker  (NEXT — scoped 2026-09-01, not started)
+## 2. Cost-efficiency tracker  (SHIPPED 2026-09-04, `claude/cost-tracker`)
 "Build a tracker to make cost efficiency issues visible."
+
+Built as `docs/tasks/task-cost-tracker.md` specifies. `src/spend.py` meters
+every Gemini call (one `llm_calls` row: the model that ANSWERED, the four raw
+token counts, an estimated `cost_usd` from a price table read off
+ai.google.dev on 2026-09-04, the stage, the account, the graph run's uuid) --
+from inside `gemini_utils.generate_with_retry`, so a fallback answer is priced
+as what it was, plus the five raw sites and the research agent. `src/costs.py`
+answers the four questions; `/costs` (dev) and `GET /api/costs` show them. The
+honest check -- one real night of the graph, metered on a copy of the live
+database -- is in the shipping commit's message; compare it against the Google
+Cloud console for that window before trusting the price table. Embeddings are
+deliberately not metered. The original entry, for the record:
 
 Full write-up: `docs/tasks/task-cost-tracker.md` — a 4–5 hour block. The two
 findings that shape it: `tool_scoreboard` and `attempts_to_keeper` already

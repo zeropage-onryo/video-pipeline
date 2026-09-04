@@ -1314,7 +1314,7 @@ def test_grade_fresh_generates_without_saving_a_concept(tmp_dev_db, monkeypatch)
     monkeypatch.setattr(app_main.genai, "Client", lambda **k: object())
     monkeypatch.setattr(
         gemini_utils, "generate_with_retry",
-        lambda client_, model, prompt: '{"ideas": [{"title": "Throwaway", "hook": "H", "logline": "L"}]}')
+        lambda client_, model, prompt, **_: '{"ideas": [{"title": "Throwaway", "hook": "H", "logline": "L"}]}')
 
     response = client.post("/grade/fresh", data={"spark": "night ritual"},
                            follow_redirects=False)

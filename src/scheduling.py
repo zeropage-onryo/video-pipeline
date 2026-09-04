@@ -163,7 +163,7 @@ def build_caption(fallback: str, db_path=None) -> str:
         )
         lines = [ln.strip("-• ").strip() for ln in
                  strip_fences(generate_with_retry(client, "gemini-3-flash-preview",
-                                                  prompt)).splitlines()]
+                                                  prompt, stage="caption")).splitlines()]
         candidates = [ln for ln in lines if ln]
         if not candidates:
             return fallback

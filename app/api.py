@@ -1801,7 +1801,7 @@ def _enhance_generate_prompt(gemini_client, prompt: str, *, preset=None,
         if part is not None:
             parts.append(part)
     parts.append("\n\n".join(blocks))
-    return generate_with_retry(gemini_client, shootgen.MODEL, parts).strip()
+    return generate_with_retry(gemini_client, shootgen.MODEL, parts, stage="enhance").strip()
 
 
 def _generate_title(prompt: str) -> str:
@@ -2485,6 +2485,16 @@ def analytics_posts(brand: Optional[str] = None, platform: Optional[str] = None,
         {**r, "pct": round((r["views"] or 0) / max_views * 100, 1) if max_views else 0}
         for r in ranked
     ]}
+
+
+@router.get("/costs")
+def costs_summary(runs: int = 14, account_id: int = Depends(auth.current_account_id)):
+    """The cost tracker's numbers for this account (src/costs.summary):
+    cost per kept clip per tool, cost per stage per night from the LLM
+    meter, wasted spend, and today against the caps. Estimates."""
+    from src import costs
+    return costs.summary(account_id=account_id,
+                         runs=max(1, min(int(runs), 90)))
 
 
 @router.get("/analytics/accounts")

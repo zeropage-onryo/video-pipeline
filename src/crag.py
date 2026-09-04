@@ -68,7 +68,7 @@ def grade_retrieval(references: list, threshold: Optional[float] = None) -> dict
 
 def rewrite_query(original_query: str, best_score: float, client, model: str) -> str:
     prompt = REWRITE_PROMPT.format(score=best_score, query=original_query)
-    return strip_fences(generate_with_retry(client, model, prompt)).strip()
+    return strip_fences(generate_with_retry(client, model, prompt, stage="crag")).strip()
 
 
 def retrieve_with_crag(

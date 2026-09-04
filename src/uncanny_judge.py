@@ -137,7 +137,8 @@ def score_concept(concept: dict, gemini_client=None) -> dict:
     whether it clears the gate. Never raises; a failure fails CLOSED."""
     try:
         client = gemini_client or _client()
-        raw = generate_with_retry(client, MODEL, build_prompt(concept))
+        raw = generate_with_retry(client, MODEL, build_prompt(concept),
+                                  stage="uncanny_judge")
         data = json.loads(strip_fences(raw))
         scores = {
             "uncanny_hook": _clamp(data.get("uncanny_hook")),

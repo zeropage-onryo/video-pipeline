@@ -337,7 +337,7 @@ def test_generate_concept_saves_and_links_locations(tmp_db, monkeypatch):
 def test_generate_concept_only_locations_locks_prompt_and_linked_rooms(tmp_db, monkeypatch):
     seen = {}
 
-    def fake_generate(client, model, prompt):
+    def fake_generate(client, model, prompt, **_):
         seen["prompt"] = prompt
         return response_for(make_concept())
 
@@ -441,7 +441,7 @@ def test_generate_concept_sends_attached_images_as_vision_parts(tmp_db, monkeypa
 
     seen = {}
 
-    def fake_generate_with_retry(client, model, contents):
+    def fake_generate_with_retry(client, model, contents, **_):
         seen["contents"] = contents
         return response_for(make_concept())
 
@@ -465,7 +465,7 @@ def test_generate_concept_without_images_sends_a_plain_string(tmp_db, monkeypatc
     feature existed (a bare prompt string, not a one-item list)."""
     seen = {}
 
-    def fake_generate_with_retry(client, model, contents):
+    def fake_generate_with_retry(client, model, contents, **_):
         seen["contents"] = contents
         return response_for(make_concept())
 
@@ -582,7 +582,7 @@ def test_generate_concept_ideas_degrades_without_locations(pg, capsys, monkeypat
 def test_generate_concept_ideas_only_locations_locks_the_prompt(tmp_db, monkeypatch):
     seen = {}
 
-    def fake_generate(client, model, prompt):
+    def fake_generate(client, model, prompt, **_):
         seen["prompt"] = prompt
         return IDEAS_RESPONSE
 
@@ -599,7 +599,7 @@ def test_generate_concept_ideas_only_locations_locks_the_prompt(tmp_db, monkeypa
 def test_generate_concept_ideas_without_only_locations_uses_everything(tmp_db, monkeypatch):
     seen = {}
 
-    def fake_generate(client, model, prompt):
+    def fake_generate(client, model, prompt, **_):
         seen["prompt"] = prompt
         return IDEAS_RESPONSE
 
@@ -682,7 +682,7 @@ def test_write_scene_seeds_the_prompt_with_the_idea(tmp_db, monkeypatch):
         brand="antihero", dsn=tmp_db, account_id=None)
     seen = {}
 
-    def fake(client, model, contents):
+    def fake(client, model, contents, **_):
         seen["prompt"] = contents
         return SCENE_RESPONSE
 
@@ -768,7 +768,7 @@ def test_validate_allows_the_pov_camera_when_it_is_on():
 def test_generate_concept_threads_the_pov_setting_through(tmp_db, monkeypatch):
     seen = {}
 
-    def fake(client, model, prompt):
+    def fake(client, model, prompt, **_):
         seen["prompt"] = prompt
         return response_for(make_concept(shots=[
             {"n": 1, "type": "CHARACTER", "cam": "BMPCC", "location": "hallway",
