@@ -68,3 +68,16 @@ data/*.tar.gz
 # says what it is. Ignored because c02fd3a swept 18 of them into history
 # before this rule existed.
 data/_to_delete/
+
+# Worktree plumbing, never source (2026-09-04): a worktree's data/refs,
+# data/renders and data/thumbs are SYMLINKS to the main checkout's, and
+# the `venv` shortcut points at the main checkout's interpreter. The
+# directory rules above end in "/" and so do not match a symlink, which is
+# why these kept showing as untracked. Same for the symlink-backout and
+# local-refs scratch folders the 2026-09-03 symlink work left behind.
+data/refs
+data/renders
+data/thumbs
+data/refs.local-*
+data.symlink-backout-*
+venv
