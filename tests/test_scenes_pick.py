@@ -87,6 +87,26 @@ def test_one_idea_writes_several_one_shot_concepts(tmp_db, monkeypatch):
     assert saved[0]["shots"][0]["location"] == "garage"
 
 
+def test_attached_images_are_explicit_creative_authority(tmp_db, monkeypatch):
+    captured = {}
+
+    def fake_model(client_, model, contents, **_):
+        captured["prompt"] = contents[-1]
+        return '{"scenes": [{"title": "Reference Led", "prompt": "P"}]}'
+
+    monkeypatch.setattr("src.shootgen.generate_with_retry", fake_model)
+    shootgen.generate_scene_concepts(
+        "a bright daytime reunion", "antihero", count=1, db_path=tmp_db,
+        image_refs=[(b"image bytes", "image/jpeg")])
+
+    prompt = captured["prompt"]
+    assert "a bright daytime reunion" in prompt
+    assert "reference images are attached above" in prompt
+    assert "Don't ignore them and write a generic idea" in prompt
+    assert prompt.index("a bright daytime reunion") < prompt.index(
+        "CHANNEL DIRECTION")
+
+
 def test_the_run_route_refuses_an_empty_idea_and_a_missing_key(tmp_db, monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     assert client.post("/api/scenes/run", data={"idea": "  "}).status_code == 400
