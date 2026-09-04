@@ -87,8 +87,8 @@ def test_presets_file_loads_real_scaffolds():
 def test_presets_loader_degrades_on_a_broken_file(tmp_path):
     broken = tmp_path / "presets.json"
     broken.write_text("{not json")
-    assert presets.load_presets(dsn=broken) == []
-    assert presets.load_presets(dsn=tmp_path / "absent.json") == []
+    assert presets.load_presets(path=broken) == []
+    assert presets.load_presets(path=tmp_path / "absent.json") == []
 
 
 def test_api_presets(tmp_db):

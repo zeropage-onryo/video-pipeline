@@ -357,7 +357,7 @@ def test_a_prompt_at_the_cap_is_let_through(approved, tmp_db, fake_download,
             return SimpleNamespace(wait_for_task_output=lambda: FakeTask())
 
     monkeypatch.setattr(runway, "_make_client",
-                        lambda: SimpleNamespace(image_to_video=FakeCreate()))
+                        lambda *a, **k: SimpleNamespace(image_to_video=FakeCreate()))
     runway.generate_video("y" * 1000, "/tmp/ok.mp4", db_path=tmp_db)
     assert seen["prompt_text"] == "y" * 1000
 
@@ -418,7 +418,7 @@ def test_the_swap_happens_before_the_length_check(asset_db, approved,
 
     monkeypatch.setattr(
         runway, "_make_client",
-        lambda: SimpleNamespace(image_to_video=SimpleNamespace(
+        lambda *a, **k: SimpleNamespace(image_to_video=SimpleNamespace(
             create=lambda **kw: seen.update(kw) or SimpleNamespace(
                 wait_for_task_output=lambda: FakeTask()))))
     monkeypatch.setattr(runway, "_download", lambda url, path: None)

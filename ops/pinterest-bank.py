@@ -7,15 +7,14 @@ ordinary /refs/<sha>.jpg, record the spark as a scout finding, and hang
 the images off that finding's own pass. Nothing new downstream --
 bin_for_finding already knows how to read it.
 
-The DB is copied to scratch and copied back because SQLite cannot take
-its locks on the mounted filesystem this runs over (every open raises
-'disk I/O error'). The copy-back is guarded on mtime: if anything wrote
-to the real DB while we worked, we refuse rather than clobber it.
+Writes straight to the database named by DATABASE_URL (Postgres since
+2026-09-03). This used to copy the SQLite file to scratch and back with an
+mtime guard, because SQLite could not take its locks over the mounted
+filesystem this runs on; a network database has no such lock, and each
+call below is its own transaction.
 """
 import json
-import os
 import pathlib
-import shutil
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -24,9 +23,6 @@ sys.path.insert(0, str(ROOT))
 import requests  # noqa: E402  (after the sys.path line above)
 
 from src import refbin, scout  # noqa: E402
-
-LIVE = ROOT / "data" / "pipeline.db"
-SCRATCH = pathlib.Path(os.environ.get("ZP_SCRATCH", "/tmp")) / "pinbank.db"
 
 HEADERS = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.pinterest.com/"}
 
@@ -46,18 +42,14 @@ def fetch_pin(tail: str):
 
 def main(payload_path):
     payload = json.loads(pathlib.Path(payload_path).read_text())
-    before = LIVE.stat().st_mtime_ns
-    shutil.copy2(LIVE, SCRATCH)
-
     report = []
     for item in payload:
         cand = {k: item[k] for k in ("spark", "turn", "stake", "score")}
         cand["evidence"] = item.get("evidence", "")
         cand["sources"] = item.get("sources", [])
-        fid = scout.record(item["brand"], cand, lanes="pinterest",
-                           dsn=str(SCRATCH))
+        fid = scout.record(item["brand"], cand, lanes="pinterest")
         pass_id = scout.agent_pass_id(fid)
-        scout.set_pass_id(fid, pass_id, dsn=str(SCRATCH))
+        scout.set_pass_id(fid, pass_id)
 
         banked = 0
         for tail, pin_id in item["images"]:
@@ -67,18 +59,12 @@ def main(payload_path):
             row = scout.bin_add(
                 item["brand"], pass_id, url,
                 source_url=f"https://www.pinterest.com/pin/{pin_id}/",
-                title=item["spark"][:60], lane="pinterest",
-                dsn=str(SCRATCH))
+                title=item["spark"][:60], lane="pinterest")
             if row:
                 banked += 1
         report.append({"finding": fid, "pass": pass_id,
                        "banked": banked, "spark": item["spark"][:60]})
 
-    if LIVE.stat().st_mtime_ns != before:
-        print("REFUSED: pipeline.db changed while we worked; nothing written.")
-        print(json.dumps(report, indent=2))
-        return 1
-    shutil.copy2(SCRATCH, LIVE)
     print(json.dumps(report, indent=2))
     return 0
 
