@@ -93,12 +93,10 @@ needs a live URL and working OAuth callback to click through to.
       `julianday()`→`extract(epoch from ...)`, `lastrowid`→`RETURNING id`,
       AUTOINCREMENT→IDENTITY), the module order (db.py first, auth last), and
       a worked RLS policy on the one schema fully verified tonight (`videos`).
-- [ ] Execute the plan, one module at a time, tests green after each —
-      NOT done tonight. This is genuinely multi-day; 15 modules, ~300
-      sqlite3 call sites. See the task doc for the ordered list.
-- [ ] `accounts` / `account_members` / `auth_identities` → Supabase Auth
-      (decided over "keep app/auth.py" — bigger rewrite, chosen for
-      `auth.uid()` inside RLS policies)
+- [x] Execute the Postgres port, one module at a time (`23d764e`, merged in
+      `2a6eacd`; follow-up reconciliation in `da8c21d`).
+- [x] `users` / `accounts` / `account_members` integrated with Supabase Auth;
+      legacy password hashes and `auth_identities` were not copied.
 - [ ] RLS policies on every owned table using the worked `videos` pattern;
       **set the tenant claim per request** — a service-role connection
       bypasses RLS and re-creates the exact leak tenancy fixed
@@ -117,8 +115,9 @@ needs a live URL and working OAuth callback to click through to.
       so DST is handled the same way the Mac handles it).
       `.dockerignore` excludes `footage/` and the local asset roots.
 - [ ] Launch: `fly launch`, `fly volumes create`, `fly secrets set ...`,
-      `fly deploy` — see docs/DEPLOY_FLY.md step by step. **Blocked on phase 4**
-      (`pipeline.db` still SQLite; the box has nothing to point at yet).
+      `fly deploy` — see docs/DEPLOY_FLY.md step by step. The Supabase data
+      copy completed on 2026-09-04: all 32 pipeline tables matched, including
+      17 `llm_calls` rows; `rag_documents` remained untouched at 353 rows.
 - [ ] launchd plists retired (`com.zeropage.morningprompts`, `ops/com.zeropage.shadowrun`)
       once the Fly cron jobs are confirmed running for a few nights
 - [ ] Dev server no longer runs migrations against production seconds after a save

@@ -339,6 +339,12 @@ def landing(request: Request):
     )
 
 
+@app.get("/healthz", include_in_schema=False)
+def healthz():
+    """Fly liveness probe: startup already proves the database schemas init."""
+    return {"ok": True}
+
+
 @app.get("/robots.txt", response_class=PlainTextResponse)
 def robots_txt():
     """Public page open to everyone including the AI crawlers; the app

@@ -19,6 +19,13 @@ primary_region = "iad"           # Virginia -- same region as the Supabase proje
   auto_start_machines = true     # letting Fly sleep it would silently skip 22:00/03:30
   min_machines_running = 1
 
+  [[http_service.checks]]
+    grace_period = "30s"
+    interval = "30s"
+    method = "GET"
+    path = "/healthz"
+    timeout = "5s"
+
 [[vm]]
   cpu_kind = "shared"
   cpus = 1

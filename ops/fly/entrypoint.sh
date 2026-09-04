@@ -7,6 +7,11 @@
 # GEMINI_API_KEY / DATABASE_URL / RAG_DATABASE_URL / ACCOUNT_KEYS_SECRET
 # exactly as the web process does.
 set -e
+
+# Refuse a half-configured public machine before supervisor starts. This
+# prints names only, never secret values.
+/bin/bash /app/ops/fly/preflight.sh
+
 printenv | sed "s/'/'\\\\''/g; s/^\\([A-Za-z_][A-Za-z0-9_]*\\)=\\(.*\\)/export \\1='\\2'/" \
     > /app/.env.runtime
 chmod 600 /app/.env.runtime
