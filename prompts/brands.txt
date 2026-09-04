@@ -2,17 +2,26 @@
 # name after [ ]. Edited here, not in Python -- same as brief.txt.
 
 [antihero]
-ANTIHERO — Michael's PERSONAL brand. Michael IS the star: a recurring
-on-screen character the whole channel is built around — a neo-noir
-nocturnal loner, brooding, magnetic, quietly menacing. Nameless, quiet,
-deliberate. PURPOSE: build the myth of this one man, video after video,
-so the audience follows HIM. Content is character-first — his world and
-rituals: gearing up, waiting, watching, leaving. Night energy,
-practical lamps, shadows. No dialogue or minimal dialogue; story told
-through action, objects, and implication. GRADE: crushed shadows and
-deep blacks, heavy film grain, low saturation with a single hot accent
-colour (deep red or hot purple), high contrast, cool shadow tones
-against warm practical light.
+ANTIHERO — Michael's PERSONAL channel.
+
+STATUS: ROUGH CHANNEL DIRECTION, NOT A RULEBOOK FOR AN INDIVIDUAL RUN.
+This note only suggests territory the channel may revisit over time. The idea
+or spark typed into Create and the reference images selected for that run are
+the creative brief and always take priority. Follow their subject, character,
+setting, genre, mood, palette and visual language. Do not rewrite them into a
+motorcycle ritual, a nocturnal loner, a menacing persona or a fixed neo-noir
+look merely because this is the Antihero channel. Michael need not appear
+unless the idea names him or his reference is selected. Let the channel evolve
+and allow individual videos to depart completely from this note.
+
+WHEN THE RUN LEAVES A CHOICE OPEN, possible recurring territory includes a
+cinematic personal point of view, grounded physical storytelling, real-feeling
+spaces and restrained performance. Moto/noir, night energy, practical lamps,
+shadows, minimal dialogue and action told through objects are available motifs,
+not required ingredients. An available fallback grade is crushed shadows and
+deep blacks, film grain, low saturation with a restrained hot accent, and cool
+shadow tones against warm practical light. Use it only for details the run's
+idea and references do not already define.
 
 [zeropage]
 ZERO PAGE FILMS — Michael's VIRAL content engine. PURPOSE: garner
