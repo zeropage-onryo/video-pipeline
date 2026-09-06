@@ -479,7 +479,8 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
 
 def generate_image(prompt: str, out_path, *, http=None, db_path=None,
                    aspect_ratio: str = DEFAULT_ASPECT,
-                   account_id: Optional[int] = None) -> Path:
+                   account_id: Optional[int] = None,
+                   soul_id: Optional[str] = None) -> Path:
     """A Soul still, same wall. The documented completed payload is
     {"images": [{"url": ...}]} (docs.higgsfield.ai quickstart,
     2026-08-31)."""
@@ -490,9 +491,21 @@ def generate_image(prompt: str, out_path, *, http=None, db_path=None,
             f"~${estimate_image_cost(1)} of API credits"
         )
     prompt = safe_prompt(prompt, db_path)
-    state, skip = _submit_and_wait(
-        SOUL_PATH, {"prompt": prompt, "aspect_ratio": aspect_ratio}, http=http,
-        account_id=account_id)
+    body = {"prompt": prompt, "aspect_ratio": aspect_ratio}
+    if soul_id is None:
+        soul_id = os.environ.get("HIGGSFIELD_SOUL_ID", "").strip()
+    if soul_id:
+        # A trained Soul ("Mike Antihero v2") is the only thing that has
+        # produced his face (2026-09-06 test: Soul Cinema = him, Soul V2 =
+        # close, an Element hint in Nano = someone else). Field names are
+        # the JS SDK's for /v1/text2image/soul (custom_reference_id,
+        # custom_reference_strength); verify against SOUL_PATH on the first
+        # live call -- an unknown field is a 400, not a silent drop.
+        body["custom_reference_id"] = soul_id
+        body["custom_reference_strength"] = float(
+            os.environ.get("HIGGSFIELD_SOUL_STRENGTH", "1.0"))
+    state, skip = _submit_and_wait(SOUL_PATH, body, http=http,
+                                   account_id=account_id)
     url = _output_url(state, skip)
     if not url:
         raise RuntimeError(
