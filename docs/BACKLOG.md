@@ -55,7 +55,51 @@ concepts, with no manual step. Still open:
   `FB_PAGE_ACCESS_TOKEN`, scopes `pages_read_engagement` + `read_insights`).
 - **Instagram token refresh** — the long-lived token expires ~60 days and
   auto-refresh isn't built, so the automation goes silently stale without it.
-- **TikTok** — separate, gated follow-up (developer-app approval required).
+- **TikTok** — SHIPPED as a module 2026-09-07, still dark as a lane.
+  `src/tiktok.py` is the third platform beside instagram.py and youtube.py,
+  same public surface: `has_key`, `post_video` (Content Posting API Direct
+  Post — `/v2/post/publish/video/init/` with a PULL_FROM_URL source, then
+  `/v2/post/publish/status/fetch/` polled until PUBLISH_COMPLETE),
+  `refresh_metrics_for_video` (`/v2/video/query/` → view/like/comment/share
+  counts; there is no save count, so `saves` stays NULL rather than 0), and
+  `execute_post_action`. Every endpoint is a module constant and every HTTP
+  call goes through one `_request`, so a spec change is a one-line fix and a
+  test cannot pass while a real call escapes. Wired into autopilot's post
+  dispatch, the scheduling queue's platforms, the refresh_metrics sweep, and
+  the Stats tab's Distribution block. Env: `TIKTOK_ACCESS_TOKEN` (+
+  `TIKTOK_OPEN_ID` for TikTok's user-scoped reads).
+  **WHAT IS STILL REQUIRED, and it is not code:** TikTok's own app review
+  for the `video.publish` scope. Until it clears, an unaudited app can only
+  send a video to the creator's inbox as a draft — which is why
+  `DEFAULT_PRIVACY` is `SELF_ONLY` — and the pull URL's domain must be
+  verified on the developer app or init fails with
+  `url_ownership_unverified`. The module is finished; the approval is
+  Mike's to file.
+
+### The corpus the loop learns from  (2026-09-07)
+The whole of items 4 and 5 assumes the numbers being learned from describe
+posts the pipeline made. They did not. All ten rows in `videos` are hand-made
+YouTube uploads from 2020–2026 — short films, cocktail recipes, a haircut, a
+motovlog — with `concept_id` NULL, and they were feeding `promote_winners`
+(→ the `proven_results` shelf), `post_seo.derive_signals`, `taste_judge` and
+the performance grounding the graph reads, as if the machine had produced them.
+So the loop's "what works for us" was a portrait of a practice the generator
+cannot repeat: a winning short film teaches nothing about the next concept, and
+it moved the median every real candidate is measured against.
+
+`videos.legacy` marks them (`db.add_legacy_column`, backfilled from
+`concept_id IS NULL` once, at migration time only). The rule: **only posts the
+pipeline produced may teach the loop.** Every reader that TEACHES excludes
+them — candidate winners, the derived signals, the taste judge's evidence, the
+promote step of the nightly sweep, and proven_results docs already promoted from
+a legacy row (`crag.drop_legacy_references`). Every reader that SHOWS keeps
+them: Analytics, the library, metric refresh, the winners listing. They are not
+bad data, they are the wrong data for one question. `ZEROPAGE_LEARN_FROM_LEGACY=1`
+puts them back for a before/after measurement, and `db.mark_legacy` corrects a
+single row by hand — the backfill is one guess made once, and a guess needs a
+correction. Note the honest consequence: with no pipeline post measured yet,
+the teaching readers now legitimately return nothing, the same "nothing clears
+the bar" the promote step already reports.
 
 ## 5. Taste + performance judge on the concept generator  (SHIPPED — verified 2026-08-27)
 An LLM judge that scores each new concept against Michael's OWN history — his

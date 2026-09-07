@@ -145,12 +145,19 @@ def candidate_winners(
     propose/run call; without one, nothing has been promoted yet is
     assumed (used by tests and by callers that only care about the
     db.py side).
+
+    Legacy posts are excluded from BOTH halves (2026-09-07): a hand-made
+    short film promoted onto proven_results tells every future pitch to
+    imitate something the pipeline never made and cannot repeat, and
+    leaving it in the median moves the bar the real candidates are
+    measured against. The window is the same field on both sides or the
+    multiple is meaningless -- see db.benchmark.
     """
     kwargs = {"dsn": db_path} if db_path is not None else {}
     bench = db.benchmark(
         at_days=at_days, posted_within_days=posted_within_days,
-        platform=platform, metric=metric, **kwargs,
-    
+        platform=platform, metric=metric, include_legacy=False, **kwargs,
+
         account_id=account_id,)
     if not bench["median"]:
         return []
@@ -159,8 +166,8 @@ def candidate_winners(
 
     rows = db.get_top_performers(
         at_days=at_days, posted_within_days=posted_within_days,
-        platform=platform, metric=metric, limit=limit, **kwargs,
-    
+        platform=platform, metric=metric, limit=limit, include_legacy=False, **kwargs,
+
         account_id=account_id,)
     out = []
     for row in rows:

@@ -151,23 +151,21 @@ done
 # that is already full, so runs two through eight cost a database read. With
 # no ANTHROPIC_API_KEY the node reports that and the night is exactly the
 # night it was before.
-SPARKS=()
-while IFS= read -r line || [ -n "$line" ]; do
-  case "$line" in ''|\#*) continue ;; esac
-  SPARKS+=("$line")
-done < prompts/sparks.txt
-
-for PAIR in "antihero antihero" "zeropage zeropage"; do
-  read -r CHANNEL BRAND <<< "$PAIR"
-  i=0
-  for spark in "${SPARKS[@]}"; do
-    if [ "$i" -lt "$SCOUT_PER_BRAND" ]; then
-      python3 -m src.trigger --channel "$CHANNEL" --brand "$BRAND" --research \
-        --spark "$spark" >> data/morning_prompts.log 2>&1
-    else
-      python3 -m src.trigger --channel "$CHANNEL" --brand "$BRAND" --spark "$spark" \
-        >> data/morning_prompts.log 2>&1
-    fi
-    i=$((i + 1))
-  done
-done
+# THE WALK ITSELF IS PYTHON NOW (src/nightly.py, 2026-09-07). Everything
+# above this line is unchanged; the bash loop that used to live here is
+# not, because bash had no opinion about failure. One DNS miss to the
+# Supabase pooler used to run the other fifteen sparks into the same dead
+# socket; a depleted Gemini card was retried six times per call in all
+# sixteen; a spent image cap produced sixteen identical "no keyframe"
+# holds. The runner asks those questions ONCE (preflight), stops on a
+# systemic failure while continuing past a content one (the breaker),
+# stops at NIGHTLY_BUDGET_USD, drops keyframes rather than the night when
+# the image cap is already gone, and writes a nightly_runs row so a night
+# that never started can be told from a night that produced nothing.
+#
+# Same knobs: SCOUT_PER_BRAND is read from this environment (exported
+# below so the runner sees the value this script resolved), the sparks
+# still come from prompts/sparks.txt, and the pairing is still
+# antihero/antihero + zeropage/zeropage.
+export SCOUT_PER_BRAND
+python3 -m src.nightly walk >> data/morning_prompts.log 2>&1

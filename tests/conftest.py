@@ -10,9 +10,14 @@ was the suite getting slower.
 So: no test may reach the network. Anything that wants to talk to
 Gemini or YouTube has to patch the function it actually calls, and
 gets a loud, immediate failure naming the offender if it doesn't.
+
+`output_roots_in_tmp` below is the same idea for the OTHER thing a test
+can do to a real machine: write to it. See its docstring.
 """
+import importlib
 import os
 import socket
+from pathlib import Path
 
 import pytest
 
@@ -43,6 +48,73 @@ def no_network(monkeypatch, request):
     monkeypatch.setattr(socket.socket, "connect", blocked)
     monkeypatch.setattr(socket.socket, "connect_ex", blocked)
     monkeypatch.setattr(socket, "create_connection", blocked)
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# Every module-level path that names somewhere this project WRITES on the
+# real machine: (module, attribute, where it lives under the project root).
+# The last field is what makes the redirect faithful -- RENDER_DIR has to
+# stay *inside* RENDERS_ROOT or `_local_render_bytes`'s containment check
+# refuses the very file the test just wrote.
+#
+# A test that drives a render patches the HTTP layer, not the output path,
+# and the fake downloader writes 2048 zero bytes because that is what
+# passes the size QC. Nothing about that is wrong -- but with RENDER_DIR
+# still pointing at data/renders/higgsfield/, every one of those stubs
+# landed in the owner's real render directory, named wf-<stamp>.mp4 like
+# any real clip and indistinguishable from one in a listing or in the
+# Queue. Twenty had accumulated there before anyone noticed.
+OUTPUT_ROOTS = (
+    ("src.higgsfield", "RENDERS_ROOT", "data/renders"),
+    ("src.higgsfield", "RENDER_DIR", "data/renders/higgsfield"),
+    ("src.runway", "RENDERS_ROOT", "data/renders"),
+    ("src.runway", "RENDER_DIR", "data/renders/runway"),
+    ("src.nano_banana", "RENDER_DIR", "data/renders/nano"),
+    ("src.orchestrator", "GENERATED_ROOT", "footage/generated"),
+    ("src.autopilot", "GENERATED_DIR", "footage/generated"),
+    ("src.autopilot", "KILL_SWITCH_PATH", "data/autopilot.off"),
+    ("src.framebank", "FOOTAGE_DIR", "footage"),
+    ("src.framebank", "FRAMES_DIR", "data/frames"),
+    ("src.refbin", "REFS_DIR", "data/refs"),
+    ("src.research_agent", "STAMP_DIR", "data/.research"),
+    ("src.promote_winners", "QUEUE_PATH", "data/promotion_queue.json"),
+    ("src.db", "DB_PATH", "data/pipeline.db"),
+    ("app.main", "RENDERS_DIR", "data/renders"),
+    ("app.main", "UPLOAD_REFS_DIR", "data/refs"),
+    ("app.main", "THUMB_DIR", "data/thumbs"),
+    ("app.api", "UPLOAD_REFS_DIR", "data/refs"),
+    ("ops.render_queue", "RENDERS_ROOT", "data/renders"),
+    ("ops.render_queue", "RENDER_DIR", "data/renders/higgsfield"),
+    ("ops.bank", "PLANS_DIR", "data/idea_agent"),
+)
+
+
+@pytest.fixture(autouse=True)
+def output_roots_in_tmp(tmp_path, monkeypatch):
+    """No test writes into the real data/ or footage/ tree.
+
+    Autouse on purpose, and the reason is the whole point: the tests that
+    littered data/renders/higgsfield/ with 2048-byte stubs were not tests
+    that got the redirect wrong, they were tests that never thought about
+    output paths at all. An opt-in fixture is exactly the thing they would
+    not have opted into. So the default is tmp_path and a module has to be
+    *registered* (OUTPUT_ROOTS above) rather than remembered.
+
+    A test that already points one of these at its own tmp dir keeps
+    working: it patches the same attribute afterwards, so its value wins,
+    and monkeypatch unwinds both in order.
+
+    tests/test_output_roots.py is the other half -- it fails if a new
+    output root appears that nobody added here.
+    """
+    root = tmp_path / "project"
+    for name in ("data", "footage"):
+        (root / name).mkdir(parents=True, exist_ok=True)
+    for module_name, attr, relative in OUTPUT_ROOTS:
+        module = importlib.import_module(module_name)
+        monkeypatch.setattr(module, attr, root / relative, raising=True)
+    return root
 
 
 @pytest.fixture(autouse=True)

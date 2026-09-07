@@ -27,7 +27,27 @@ def test_refresh_all_empty_db_is_an_empty_summary(pg):
 
 
 def test_unwired_platform_is_reported_not_raised(pg):
+    """Facebook is the last stub (BACKLOG #4); TikTok left this branch
+    on 2026-09-07 when src/tiktok.py landed."""
     path = pg
-    results = refresh_metrics._refresh_platform("tiktok", [{"id": 1}], db_path=path)
+    results = refresh_metrics._refresh_platform("facebook", [{"id": 1}], db_path=path)
     assert results and results[0]["ok"] is False
     assert "not wired" in results[0]["error"]
+
+
+def test_tiktok_is_in_the_sweep_and_reports_a_missing_token(pg, monkeypatch):
+    """Wired means it goes through tiktok.refresh_metrics_for_video --
+    which, with no token, is a recorded failure, not a stub message and
+    not an exception."""
+    monkeypatch.delenv("TIKTOK_ACCESS_TOKEN", raising=False)
+    monkeypatch.delenv("TIKTOK_TOKEN", raising=False)
+    path = pg
+    db.add_video("a tok", "tiktok", "2026-09-01",
+                 url="https://www.tiktok.com/@zp/video/7300000000000000001",
+                 dsn=path, account_id=None)
+
+    summary = refresh_metrics.refresh_all(platform="tiktok", db_path=path)
+    assert summary["tiktok"]["videos"] == 1
+    assert summary["tiktok"]["failed"] == 1
+    assert any("TIKTOK_ACCESS_TOKEN" in e for e in summary["tiktok"]["errors"])
+    assert "tiktok" in refresh_metrics.WIRED_PLATFORMS

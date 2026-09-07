@@ -370,11 +370,14 @@ def test_metrics_new_shows_refresh_button_for_youtube(tmp_db):
     assert "Refresh" in response.text
 
 
-def test_metrics_new_no_refresh_button_for_non_youtube(tmp_db):
+def test_metrics_new_offers_refresh_for_every_wired_platform(tmp_db):
+    """This asserted the OPPOSITE until 2026-09-07: a TikTok row had no
+    Refresh button because nothing could fetch its numbers. src/tiktok.py
+    wired that lane, so the button is now correct -- and the page must
+    follow the adapters rather than a hardcoded pair of names."""
     db.add_video("Some TikTok video", "tiktok", "2025-09-29", dsn=tmp_db, account_id=None)
     response = client.get("/metrics/new")
-    # the page prose mentions Refresh; what must be absent is the button itself
-    assert 'form="refresh-' not in response.text
+    assert 'form="refresh-' in response.text
 
 
 # ---------- /videos/import/youtube ----------
@@ -1717,3 +1720,96 @@ def test_legacy_verdict_values_still_work(teachable):
     client.post(f"/concepts/{cid}/shots/1/verdict",
                 data={"text": "p", "verdict": "worked"}, follow_redirects=False)
     assert winners.list_all(dsn=teachable)[0]["verdict"] == "worked"
+
+
+# ---------- the Stats tab's Distribution block (2026-09-07) ----------
+
+def test_distribution_leads_the_stats_tab_with_zero_posts(tmp_dev_db):
+    """A pipeline that reasons beautifully and publishes nothing has a
+    zero here, and nothing else on the page would say so. Cost per post
+    is a dash, never a division by zero."""
+    text = client.get("/studio?tab=stats").text
+    assert "DISTRIBUTION" in text
+    assert "No pipeline posts in the last" in text
+    assert text.index("DISTRIBUTION") < text.index("PIPELINE")   # it LEADS
+    assert "Cost per post" in text
+
+
+def test_distribution_counts_posts_per_brand_per_platform(tmp_dev_db):
+    today = date.today().isoformat()
+    db.add_video("a reel", "instagram", today, brand="zeropage",
+                 dsn=tmp_dev_db, account_id=None)
+    db.add_video("a tok", "tiktok", today, brand="zeropage",
+                 dsn=tmp_dev_db, account_id=None)
+    db.add_video("a short", "youtube", today, brand="antihero",
+                 dsn=tmp_dev_db, account_id=None)
+
+    dist = app_main._distribution(None)
+    counted = {(r["brand"], r["platform"]): r["total"] for r in dist["rows"]}
+    assert counted == {("zeropage", "instagram"): 1, ("zeropage", "tiktok"): 1,
+                       ("antihero", "youtube"): 1}
+    assert dist["posts"] == 3
+    text = client.get("/studio?tab=stats").text
+    assert "tiktok" in text
+
+
+def test_distribution_counts_only_pipeline_posts(tmp_dev_db):
+    """videos.legacy marks the hand-made uploads that predate the loop;
+    counting them here would credit the machine with Mike's own back
+    catalogue."""
+    today = date.today().isoformat()
+    db.add_video("pipeline", "instagram", today, brand="zeropage",
+                 dsn=tmp_dev_db, account_id=None)
+    old = db.add_video("hand-made", "instagram", today, brand="zeropage",
+                       dsn=tmp_dev_db, account_id=None)
+    db.mark_legacy(old, True, dsn=tmp_dev_db, account_id=None)
+
+    assert app_main._distribution(None)["posts"] == 1
+
+
+def test_distribution_is_windowed_to_four_weeks(tmp_dev_db):
+    old = (date.today() - timedelta(days=60)).isoformat()
+    db.add_video("ancient", "instagram", old, brand="zeropage",
+                 dsn=tmp_dev_db, account_id=None)
+    assert app_main._distribution(None)["posts"] == 0
+
+
+def test_distribution_renders_without_a_nightly_runs_table(tmp_dev_db):
+    """The table landed in parallel with this block, so the read is
+    to_regclass-guarded: absent, the line is simply not shown and the
+    page is still correct."""
+    with db.connect(tmp_dev_db) as conn:
+        conn.execute("DROP TABLE IF EXISTS nightly_runs")
+    assert app_main._distribution(None)["nightly"] is None
+    assert client.get("/studio?tab=stats").status_code == 200
+    assert "Last night ·" not in client.get("/studio?tab=stats").text
+
+
+def test_distribution_reads_last_night_when_the_table_exists(tmp_dev_db):
+    with db.connect(tmp_dev_db) as conn:
+        db.add_nightly_runs_table(conn)
+        conn.execute(
+            "INSERT INTO nightly_runs (started_at, finished_at, attempted, "
+            "succeeded, failed, spent_usd, stopped_reason) "
+            "VALUES ('2026-09-07T03:30:00', '2026-09-07T04:10:00', 8, 6, 2, "
+            "1.25, 'daily cap')")
+
+    night = app_main._distribution(None)["nightly"]
+    assert night["attempted"] == 8 and night["succeeded"] == 6
+    text = client.get("/studio?tab=stats").text
+    assert "Last night ·" in text
+    assert "daily cap" in text
+
+
+def test_cost_per_post_divides_the_windows_spend(tmp_dev_db, monkeypatch):
+    today = date.today().isoformat()
+    db.add_video("a reel", "instagram", today, brand="zeropage",
+                 dsn=tmp_dev_db, account_id=None)
+    db.add_video("a tok", "tiktok", today, brand="zeropage",
+                 dsn=tmp_dev_db, account_id=None)
+    monkeypatch.setattr(app_main.spend, "by_stage",
+                        lambda **k: [{"cost_usd": 3.0}, {"cost_usd": 1.0}])
+
+    dist = app_main._distribution(None)
+    assert dist["spend_usd"] == 4.0
+    assert dist["cost_per_post"] == 2.0

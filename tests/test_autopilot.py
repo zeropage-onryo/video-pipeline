@@ -211,3 +211,87 @@ def test_live_mode_calls_the_instagram_adapter(tmp_path, monkeypatch):
     assert result["mode"] == "live"
     assert result["executed"] == 1
     assert len(calls) == 1
+
+
+# ---------- the fan-out: one approved concept, every target ----------
+
+def _rendered_concept(path, brand="zeropage"):
+    """A concept the plan will emit a post for: rendered media and a
+    passed uncanny score, which are the two gates before the fan-out."""
+    from src import preprod
+    preprod.init(path)
+    preprod.add_location("garage", {"space": "g"}, dsn=path, account_id=None)
+    cid = preprod.save_concept(
+        {"title": "Rendered", "hook": "the hook", "shots": [
+            {"n": 1, "type": "BROLL", "source": "AI", "tool": "VEO",
+             "location": "garage", "desc": "d", "prompt": "p",
+             "media_url": "https://cdn.example/rendered.mp4"},
+        ]},
+        brand=brand, dsn=path, account_id=None)
+    preprod.save_uncanny_score(
+        cid, {"overall": 9, "passed": True, "reasons": []}, dsn=path, account_id=None)
+    return cid
+
+
+def test_plan_fans_one_concept_out_to_every_channel_target(pg, monkeypatch):
+    """The channel's `targets` column was decoration: the plan named
+    Instagram and nothing else, so a channel set to instagram,youtube
+    published to half of them. One post action per target now, and the
+    same column /api/holds/{id}/post has always fanned out on."""
+    from src import autonomy
+    path = pg
+    autonomy.init(path)
+    autonomy.set_targets("zeropage", "instagram,youtube,tiktok", dsn=path)
+    monkeypatch.setattr(autopilot, "AUTO_POST_BRANDS", ("zeropage",))
+    _rendered_concept(path)
+
+    posts = [a for a in autopilot.build_plan(db_path=path)["actions"]
+             if a["kind"] == "post"]
+    assert [a["platform"] for a in posts] == ["instagram", "youtube", "tiktok"]
+    assert {a["video_url"] for a in posts} == {"https://cdn.example/rendered.mp4"}
+    assert {a["caption"] for a in posts} == {"the hook"}
+
+
+def test_the_fan_out_does_not_weaken_a_single_gate(pg, monkeypatch, tmp_path):
+    """Fanning out multiplies what a plan DESCRIBES, never what it may
+    do: the brand hold, the kill switch and the enable env all still
+    stop it."""
+    from src import autonomy
+    path = pg
+    autonomy.init(path)
+    autonomy.set_targets("zeropage", "instagram,youtube,tiktok", dsn=path)
+    _rendered_concept(path)
+
+    # the brand hold (AUTO_POST_BRANDS is empty by default) -- no posts at all
+    assert not [a for a in autopilot.build_plan(db_path=path)["actions"]
+                if a["kind"] == "post"]
+
+    monkeypatch.setattr(autopilot, "AUTO_POST_BRANDS", ("zeropage",))
+    plan = autopilot.build_plan(db_path=path)
+    monkeypatch.setattr(autopilot, "KILL_SWITCH_PATH", tmp_path / "autopilot.off")
+    (tmp_path / "autopilot.off").write_text("off")
+    monkeypatch.setenv(autopilot.ENABLE_ENV, "1")
+    monkeypatch.setenv(autopilot.POST_ENV, "1")
+    result = autopilot.execute(plan, approve=True, dry_run=False)
+    assert result["mode"] == "killed"
+    assert result["executed"] == 0
+
+
+def test_no_channel_row_keeps_the_original_single_instagram_action(pg, monkeypatch):
+    """The plan is a read-only preview and must still work on a database
+    with no channels table at all."""
+    monkeypatch.setattr(autopilot, "AUTO_POST_BRANDS", ("zeropage",))
+    path = pg
+    _rendered_concept(path)
+    posts = [a for a in autopilot.build_plan(db_path=path)["actions"]
+             if a["kind"] == "post"]
+    assert [a["platform"] for a in posts] == ["instagram"]
+
+
+def test_post_dispatch_routes_tiktok(monkeypatch):
+    from src import tiktok
+    monkeypatch.setenv(autopilot.POST_ENV, "1")
+    seen = []
+    monkeypatch.setattr(tiktok, "execute_post_action", lambda a: seen.append(a))
+    autopilot._post_dispatch({"platform": "tiktok"})
+    assert len(seen) == 1

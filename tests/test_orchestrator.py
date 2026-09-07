@@ -24,6 +24,11 @@ def tmp_db(pg, monkeypatch):
     entities.init(path)
     autonomy.init(path)
     monkeypatch.setenv("DATABASE_URL", path)
+    # ADVISORY IS THE DEFAULT (2026-09-07), and the suite says so by
+    # clearing the switch rather than by setting it: a machine with
+    # ZEROPAGE_GATES exported would otherwise pass tests that describe
+    # behaviour it isn't running. The hard-mode tests set it themselves.
+    monkeypatch.delenv("ZEROPAGE_GATES", raising=False)
     preprod.add_location("hallway", {"space": "narrow hallway"}, photo_count=2, dsn=path, account_id=None)
     # graph tests must not reach the real library or Gemini
     monkeypatch.setattr(orchestrator.crag, "retrieve_with_crag",
@@ -599,7 +604,15 @@ def test_structural_floor_has_no_upper_length_bound():
     assert ok and why == ""
 
 
+# The gate tests below run in HARD mode (ZEROPAGE_GATES=hard), which is
+# what they always tested -- the pre-2026-09-07 hold-on-judge behaviour,
+# kept as the way back. They are not stale: the whole argument for the
+# inversion is that reverting it is one env var, and an untested way back
+# is not one. The advisory-mode behaviour they used to describe has its
+# own section further down.
+
 def test_thin_prompt_fails_the_floor_without_a_judge_call(tmp_db, monkeypatch):
+    monkeypatch.setenv("ZEROPAGE_GATES", "hard")
     judged = []
     monkeypatch.setattr(orchestrator, "_judge_prompt",
                         lambda p: judged.append(p) or {"score": 10, "reason": "", "dims": {}})
@@ -618,6 +631,7 @@ def test_thin_prompt_fails_the_floor_without_a_judge_call(tmp_db, monkeypatch):
 
 
 def test_low_judge_score_holds_with_the_judges_reason(tmp_db, monkeypatch):
+    monkeypatch.setenv("ZEROPAGE_GATES", "hard")
     monkeypatch.setattr(orchestrator, "_judge_prompt",
                         lambda p: {"score": 4, "reason": "no camera direction",
                                    "dims": {"camera": 0}})
@@ -630,6 +644,7 @@ def test_low_judge_score_holds_with_the_judges_reason(tmp_db, monkeypatch):
 
 
 def test_unreadable_judge_fails_closed(tmp_db, monkeypatch):
+    monkeypatch.setenv("ZEROPAGE_GATES", "hard")
     monkeypatch.setattr(orchestrator, "_judge_prompt", REAL_JUDGE_PROMPT)
     # Long enough to clear the structural floor on the rework pass too, but
     # still not JSON -- proves fail-closed survives a rework attempt rather
@@ -660,6 +675,7 @@ def test_a_failed_shot_gets_two_rework_passes_before_holding(tmp_db, monkeypatch
     attempt was never enough to prove the mechanism works; see
     _rework_shot_prompt's staged-prompt handling for the other half of
     that fix."""
+    monkeypatch.setenv("ZEROPAGE_GATES", "hard")
     scores = iter([
         {"score": 10, "reason": "", "dims": {}},                             # shot 1, first pass
         {"score": 3, "reason": "competing motions", "dims": {"motion": 0}},  # shot 2, first pass
@@ -722,6 +738,7 @@ def test_a_successful_rework_rescues_the_run(tmp_db, monkeypatch):
 
 
 def test_rework_that_errors_keeps_the_original_score_and_still_holds(tmp_db, monkeypatch):
+    monkeypatch.setenv("ZEROPAGE_GATES", "hard")
     """A rework call that blows up (bad JSON, network error, whatever)
     must not crash the run -- it degrades to the original failing score,
     same as every other best-effort seam in this pipeline."""
@@ -781,6 +798,402 @@ def test_judge_parses_fenced_json_and_clamps_dims():
     assert verdict["dims"]["camera"] == 2      # clamped to 0..2
     assert verdict["dims"]["motion"] == 0
     assert verdict["score"] == 8
+
+
+# ---------- the inversion: advisory gates (the default since 2026-09-07) ----------
+#
+# The measured fact behind all of this: over the graded holds, the prompt
+# gate agreed with Mike's own would-post verdict ~38% of the time -- near
+# chance -- and no dimension of its rubric separated what he would post
+# from what he would not. Predicting the clip from the prompt is the wrong
+# lever, so the judges still score, still store, and no longer route; the
+# selection moves after the render. What stays hard is everything code
+# enforces.
+
+def test_gates_mode_defaults_to_advisory(monkeypatch):
+    monkeypatch.delenv("ZEROPAGE_GATES", raising=False)
+    assert orchestrator.gates_mode() == orchestrator.GATES_ADVISORY
+
+
+def test_gates_mode_reads_hard_case_and_whitespace_insensitively(monkeypatch):
+    monkeypatch.setenv("ZEROPAGE_GATES", "  HARD ")
+    assert orchestrator.gates_mode() == orchestrator.GATES_HARD
+
+
+def test_a_typo_never_silently_re_arms_the_gate(monkeypatch):
+    """Fails toward advisory, deliberately. Every other gate in this
+    pipeline fails closed because the cost of being wrong is a spent
+    credit; here the cost of being wrong is re-arming a judge that agreed
+    with Mike 38% of the time, and "hard" is a decision somebody makes on
+    purpose, not something a mistyped env var does to a night."""
+    for value in ("hardd", "Hard mode", "1", "true", "strict", ""):
+        monkeypatch.setenv("ZEROPAGE_GATES", value)
+        assert orchestrator.gates_mode() == orchestrator.GATES_ADVISORY, value
+
+
+def test_advisory_lets_a_failing_prompt_reach_the_keyframe_with_the_verdict_on_the_card(
+        tmp_db, monkeypatch):
+    """The whole inversion in one run: a 4/10 prompt still gets its
+    bounded rework, still fails, and then gets an image anyway -- with
+    the judge's verdict in the parked reason, so /holds shows what the
+    gate thought beside the still Mike is actually judging."""
+    monkeypatch.setattr(orchestrator, "_judge_prompt",
+                        lambda p: {"score": 4, "reason": "no camera direction",
+                                   "dims": {"camera": 0}})
+    monkeypatch.setattr(orchestrator, "generate_with_retry",
+                        lambda client, model, contents, **_: REWORKED_PROMPT)
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    result = orchestrator.run("ritual")
+
+    assert result["prompt_scores"][0]["pass"] is False          # the judge still says no
+    assert len(calls.keyframes) == 1                            # and the still gets rendered
+    assert "keyframe rendered" in result["held_reason"]
+    assert "advisory: prompt gate 4/10 — no camera direction" in result["held_reason"]
+    # the same text is on the scene's own card, not only in the hold row
+    concept = preprod.get_concept(result["concept_id"], dsn=tmp_db, account_id=None)
+    assert "advisory: prompt gate 4/10" in concept["shots"][0]["park_reason"]
+
+
+def test_advisory_still_spends_the_bounded_rework_before_it_proceeds(tmp_db, monkeypatch):
+    """The rework pass is kept in advisory mode on purpose: it is two
+    cheap text calls and it measurably improves the prompt, which is
+    worth having whether or not anything is gated on the result."""
+    monkeypatch.setattr(orchestrator, "_judge_prompt",
+                        lambda p: {"score": 4, "reason": "no camera direction",
+                                   "dims": {"camera": 0}})
+    monkeypatch.setattr(orchestrator, "generate_with_retry",
+                        lambda client, model, contents, **_: REWORKED_PROMPT)
+    stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    result = orchestrator.run("ritual")
+
+    assert result["prompt_rework_attempts"] == orchestrator.MAX_PROMPT_REWORKS
+    assert "keyframe rendered" in result["held_reason"]
+
+
+def test_advisory_keeps_the_gate_vs_you_number_honest(tmp_db, monkeypatch):
+    """The statistic must keep measuring the JUDGE, not the pipeline.
+
+    A run that proceeds through advisory still logs `passed = 0` for the
+    shot the gate failed, so `prompt_gate_agreement` compares the gate's
+    verdict against the human grade exactly as before. If the row said
+    "passed" because the run carried on, gate-vs-you would drift to 100%
+    and the evidence that justified the inversion would erase itself."""
+    monkeypatch.setattr(orchestrator, "_judge_prompt",
+                        lambda p: {"score": 4, "reason": "no camera direction",
+                                   "dims": {"camera": 0}})
+    monkeypatch.setattr(orchestrator, "generate_with_retry",
+                        lambda client, model, contents, **_: REWORKED_PROMPT)
+    stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    result = orchestrator.run("ritual")
+
+    with db.connect(tmp_db) as conn:
+        rows = conn.execute("SELECT passed FROM prompt_scores ORDER BY id").fetchall()
+    assert rows and all(r["passed"] == 0 for r in rows)
+    assert autonomy.first_try_pass_rate(dsn=tmp_db)["rate"] == 0.0
+
+    # and the human grade lands next to it, so the disagreement is counted
+    autonomy.set_prompt_verdicts(result["run_id"], "post", dsn=tmp_db)
+    gate = autonomy.prompt_gate_agreement(dsn=tmp_db)
+    assert gate["held_but_posted"] == len(rows)      # the cheap disagreement
+    assert gate["agreement"] == 0.0
+
+
+def test_a_structurally_broken_prompt_still_holds_in_advisory(tmp_db, monkeypatch):
+    """Layer 1 is not part of the inversion. `_structural_check` is code
+    -- empty, too thin, a leftover {token} -- and a prompt with an
+    unfilled placeholder renders garbage whatever the judge thinks of the
+    writing. Same line route_after_eval draws around validate_concept's
+    warnings: structure is not taste. It still gets its rework first,
+    because a rewrite that fills the token is the cheapest possible fix."""
+    judged = []
+    monkeypatch.setattr(orchestrator, "_judge_prompt",
+                        lambda p: judged.append(p) or {"score": 10, "reason": "", "dims": {}})
+    # every rework comes back just as broken -- a leftover template token
+    monkeypatch.setattr(orchestrator, "generate_with_retry",
+                        lambda client, model, contents, **_: (
+                            "a brass door handle turning in a dark {location} at night "
+                            "with one warm practical light under the door, film grain"))
+    thin = make_concept(shots=[
+        {"n": 1, "type": "BROLL", "source": "AI", "tool": "KLING",
+         "location": "hallway", "desc": "x", "prompt": "a door"},
+    ])
+    calls = stage_fakes(monkeypatch, [(thin, [])])
+
+    result = orchestrator.run("ritual")
+
+    assert judged == []                      # layer 1 never billed layer 2
+    assert result["prompt_rework_attempts"] == orchestrator.MAX_PROMPT_REWORKS
+    assert calls.keyframes == []             # no still for a broken prompt
+    assert "prompt gate" in result["held_reason"]
+    assert "placeholder" in result["held_reason"]
+    # and it isn't dressed up as an advisory note on a run that carried on
+    assert result.get("advisory", []) == []
+
+
+def test_only_the_taste_judge_goes_advisory(tmp_db, monkeypatch):
+    """The two layers, side by side, in one mode: a 4/10 rubric verdict
+    proceeds to the keyframe, a structurally broken prompt holds."""
+    monkeypatch.setattr(orchestrator, "generate_with_retry",
+                        lambda client, model, contents, **_: REWORKED_PROMPT)
+
+    monkeypatch.setattr(orchestrator, "_judge_prompt",
+                        lambda p: {"score": 4, "reason": "no camera direction",
+                                   "dims": {"camera": 0}})
+    stage_fakes(monkeypatch, [(make_concept(), [])])
+    judged_low = orchestrator.run("ritual")
+
+    thin = make_concept(shots=[
+        {"n": 1, "type": "BROLL", "source": "AI", "tool": "KLING",
+         "location": "hallway", "desc": "x", "prompt": "a door"},
+    ])
+    # the rework returns something long enough but still not a prompt
+    monkeypatch.setattr(orchestrator, "generate_with_retry",
+                        lambda client, model, contents, **_: "TODO " * 40)
+    stage_fakes(monkeypatch, [(thin, [])])
+    structurally_broken = orchestrator.run("ritual")
+
+    assert "keyframe rendered" in judged_low["held_reason"]
+    assert "prompt gate" in structurally_broken["held_reason"]
+    assert "keyframe" not in structurally_broken["held_reason"]
+
+
+def test_a_rework_that_fixes_the_structure_still_reaches_the_keyframe(tmp_db, monkeypatch):
+    """The flag follows the CURRENT text, not the run: a prompt that was
+    too thin and comes back whole is judged on its merits like any
+    other, and a merely low score no longer holds."""
+    monkeypatch.setattr(orchestrator, "_judge_prompt",
+                        lambda p: {"score": 4, "reason": "no camera direction",
+                                   "dims": {"camera": 0}})
+    monkeypatch.setattr(orchestrator, "generate_with_retry",
+                        lambda client, model, contents, **_: REWORKED_PROMPT)
+    thin = make_concept(shots=[
+        {"n": 1, "type": "BROLL", "source": "AI", "tool": "KLING",
+         "location": "hallway", "desc": "x", "prompt": "a door"},
+    ])
+    calls = stage_fakes(monkeypatch, [(thin, [])])
+
+    result = orchestrator.run("ritual")
+
+    assert result["prompt_scores"][0].get("structural") is None   # rebuilt, not inherited
+    assert len(calls.keyframes) == 1
+    assert "advisory: prompt gate 4/10 — no camera direction" in result["held_reason"]
+
+
+def test_advisory_still_holds_a_camera_only_concept(tmp_db, monkeypatch):
+    """Nothing to keyframe, nothing to render -- that hold is code, not
+    taste, so the inversion leaves it exactly where it was."""
+    camera_only = make_concept(shots=[
+        {"n": 1, "type": "CHARACTER", "source": "CAMERA", "cam": "BMPCC",
+         "location": "hallway", "desc": "x"},
+    ])
+    calls = stage_fakes(monkeypatch, [(camera_only, [])])
+
+    result = orchestrator.run("ritual")
+
+    assert result["prompts"] == []
+    assert calls.keyframes == []
+    assert "no AI shots" in result["held_reason"]
+
+
+def test_advisory_still_retries_and_holds_on_code_enforced_warnings(tmp_db, monkeypatch):
+    """`warnings` is validate_concept's, not a judge's: a shot naming a
+    room that doesn't exist is broken output. It retries in both modes,
+    and still holds when the retries run out."""
+    bad = (make_concept(), ["shot 1: unknown location 'rooftop'"])
+    calls = stage_fakes(monkeypatch, [bad] * orchestrator.MAX_ATTEMPTS)
+
+    result = orchestrator.run("ritual")
+
+    assert result["attempts"] == orchestrator.MAX_ATTEMPTS
+    assert calls.keyframes == []
+    assert "eval stop" in result["held_reason"]
+
+
+def test_a_low_concept_judge_score_alone_no_longer_holds(tmp_db, monkeypatch):
+    """The other half of route_after_eval: with JUDGE=1 and no warnings,
+    a failing LLM verdict is recorded in `critique` and carried onto the
+    card, and the run goes on."""
+    monkeypatch.setenv("JUDGE", "1")
+    monkeypatch.setattr(orchestrator, "_judge",
+                        lambda concept: (0.1, ["needs a crew"]))
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    result = orchestrator.run("ritual")
+
+    assert result["attempts"] == 1                     # no corrective re-run
+    assert result["critique"]["ok"] is False           # the verdict is unchanged
+    assert result["critique"]["issues"] == ["needs a crew"]
+    assert len(calls.keyframes) == 1
+    assert "advisory: concept judge" in result["held_reason"]
+    assert "needs a crew" in result["held_reason"]
+
+
+def test_hard_mode_still_retries_and_holds_on_a_low_concept_judge_score(tmp_db, monkeypatch):
+    monkeypatch.setenv("ZEROPAGE_GATES", "hard")
+    monkeypatch.setenv("JUDGE", "1")
+    monkeypatch.setattr(orchestrator, "_judge",
+                        lambda concept: (0.1, ["needs a crew"]))
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])] * orchestrator.MAX_ATTEMPTS)
+
+    result = orchestrator.run("ritual")
+
+    assert result["attempts"] == orchestrator.MAX_ATTEMPTS
+    assert calls.keyframes == []
+    assert "eval stop" in result["held_reason"]
+    assert "needs a crew" in result["held_reason"]
+
+
+def test_the_advisory_verdicts_reach_the_hold_payload(tmp_db, monkeypatch):
+    """Nothing is lost for the grade queue: the payload is the replayable
+    record of a run, and a gate that stops routing must not also stop
+    being visible."""
+    monkeypatch.setattr(orchestrator, "_judge_prompt",
+                        lambda p: {"score": 4, "reason": "no camera direction",
+                                   "dims": {"camera": 0}})
+    monkeypatch.setattr(orchestrator, "generate_with_retry",
+                        lambda client, model, contents, **_: REWORKED_PROMPT)
+    stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    orchestrator.run("ritual")
+
+    [row] = autonomy.list_hold(dsn=tmp_db, account_id=None)
+    assert row["payload"]["advisory"] == [
+        "advisory: prompt gate 4/10 — no camera direction"]
+    assert row["payload"]["prompt_scores"][0]["pass"] is False
+
+
+def test_a_rework_replaces_its_own_advisory_note_rather_than_stacking_one(
+        tmp_db, monkeypatch):
+    """Two contradictory lines on one card is worse than none, so the
+    latest verdict replaces the previous one."""
+    scores = iter([
+        {"score": 3, "reason": "competing motions", "dims": {"motion": 0}},
+        {"score": 5, "reason": "still ambiguous", "dims": {"motion": 1}},
+        {"score": 6, "reason": "still ambiguous", "dims": {"motion": 1}},
+    ])
+    monkeypatch.setattr(orchestrator, "_judge_prompt", lambda p: next(scores))
+    monkeypatch.setattr(orchestrator, "generate_with_retry",
+                        lambda client, model, contents, **_: REWORKED_PROMPT)
+    stage_fakes(monkeypatch, [(make_concept(), [])])
+
+    result = orchestrator.run("ritual")
+
+    assert result["advisory"] == ["advisory: prompt gate 6/10 — still ambiguous"]
+    assert "competing motions" not in result["held_reason"]
+
+
+# ---------- select_clip: the selection, moved after the render ----------
+
+def _fake_clip(tmp_path, name, size, ok=True):
+    path = tmp_path / name
+    path.write_bytes(b"0" * size)
+    return {"tool": "RUNWAY", "prompt": "p", "url": str(path), "ok": ok}
+
+
+def test_select_clip_is_a_no_op_on_one_clip(tmp_path):
+    one = [_fake_clip(tmp_path, "a.mp4", 2048)]
+    out = orchestrator.select_clip({"clips": one})
+    assert out == {"clip_candidates": one}       # clips untouched, nothing chosen
+
+
+def test_select_clip_prefers_the_longest_and_keeps_every_candidate(tmp_path, monkeypatch):
+    """Duration outranks size deliberately: a short render is usually a
+    generation that gave up early, while a big file is often just a
+    noisier one."""
+    short_big = _fake_clip(tmp_path, "a.mp4", 4096)
+    long_small = _fake_clip(tmp_path, "b.mp4", 1024)
+    monkeypatch.setattr(orchestrator, "_clip_duration",
+                        lambda url: 6.0 if url.endswith("b.mp4") else 2.0)
+
+    out = orchestrator.select_clip({"clips": [short_big, long_small]})
+
+    assert out["clips"] == [long_small]
+    assert out["clip_candidates"] == [short_big, long_small]   # the losers survive
+
+
+def test_select_clip_breaks_a_duration_tie_on_size(tmp_path, monkeypatch):
+    small = _fake_clip(tmp_path, "a.mp4", 1024)
+    big = _fake_clip(tmp_path, "b.mp4", 8192)
+    monkeypatch.setattr(orchestrator, "_clip_duration", lambda url: 4.0)
+
+    out = orchestrator.select_clip({"clips": [small, big]})
+
+    assert out["clips"] == [big]
+
+
+def test_select_clip_never_picks_a_clip_that_failed_qc(tmp_path, monkeypatch):
+    """QC is code and it comes first: a file that isn't a video can't be
+    the pick however long it claims to be."""
+    failed = _fake_clip(tmp_path, "a.mp4", 8192, ok=False)
+    passed = _fake_clip(tmp_path, "b.mp4", 1024)
+    monkeypatch.setattr(orchestrator, "_clip_duration",
+                        lambda url: 30.0 if url.endswith("a.mp4") else 1.0)
+
+    out = orchestrator.select_clip({"clips": [failed, passed]})
+
+    assert out["clips"] == [passed]
+
+
+def test_a_video_judge_can_take_over_the_pick(tmp_path, monkeypatch):
+    """The documented seam for the model that can actually answer the
+    question the prompt gate was guessing at."""
+    first = _fake_clip(tmp_path, "a.mp4", 1024)
+    second = _fake_clip(tmp_path, "b.mp4", 8192)
+    monkeypatch.setattr(orchestrator, "_clip_duration", lambda url: 4.0)
+    seen = []
+
+    def judge(candidates):
+        seen.append(list(candidates))
+        return candidates[0]                       # not what the heuristic would pick
+
+    monkeypatch.setattr(orchestrator, "JUDGE", judge)
+
+    out = orchestrator.select_clip({"clips": [first, second]})
+
+    assert out["clips"] == [first]
+    assert len(seen[0]) == 2                       # it sees every candidate
+
+
+def test_a_broken_video_judge_loses_its_say_rather_than_the_run(tmp_path, monkeypatch, capsys):
+    first = _fake_clip(tmp_path, "a.mp4", 1024)
+    second = _fake_clip(tmp_path, "b.mp4", 8192)
+    monkeypatch.setattr(orchestrator, "_clip_duration", lambda url: 4.0)
+
+    def judge(candidates):
+        raise RuntimeError("upstream 503")
+
+    monkeypatch.setattr(orchestrator, "JUDGE", judge)
+
+    out = orchestrator.select_clip({"clips": [first, second]})
+
+    assert out["clips"] == [second]                 # the code pick stands
+    assert "clip judge failed" in capsys.readouterr().err
+
+
+def test_a_video_judge_answering_off_the_menu_is_ignored(tmp_path, monkeypatch, capsys):
+    first = _fake_clip(tmp_path, "a.mp4", 1024)
+    second = _fake_clip(tmp_path, "b.mp4", 8192)
+    monkeypatch.setattr(orchestrator, "_clip_duration", lambda url: 4.0)
+    monkeypatch.setattr(orchestrator, "JUDGE",
+                        lambda candidates: {"url": "/somewhere/else.mp4", "ok": True})
+
+    out = orchestrator.select_clip({"clips": [first, second]})
+
+    assert out["clips"] == [second]
+    assert "not one of the candidates" in capsys.readouterr().err
+
+
+def test_select_clip_sits_between_qc_and_caption(tmp_db):
+    """Wired, not just defined -- a node nothing routes through is a
+    function with a docstring."""
+    graph = orchestrator.GRAPH.get_graph()
+    edges = {(e.source, e.target) for e in graph.edges}
+    assert ("qc_clip", "select_clip") in edges
+    assert ("select_clip", "caption") in edges
+    assert ("qc_clip", "caption") not in edges
 
 
 # ---------- the publish gates (driven directly; render stub blocks the wire) ----------

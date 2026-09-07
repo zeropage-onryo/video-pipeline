@@ -16,6 +16,7 @@ import os
 import random
 import re
 from contextlib import asynccontextmanager
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
@@ -415,6 +416,113 @@ GRADE_EMPTY = ("Nothing waiting on you right now — every concept has your "
                "verdict, and the golden set is empty.")
 
 
+# --- distribution: the number the Stats tab now leads with ------------------
+# (2026-09-07) Every other figure on this page measures how well the
+# machine THINKS. This one measures whether anything came out of it:
+# posts per week per brand per platform, what each one cost, and what
+# last night actually did. It leads because a pipeline that reasons
+# beautifully and publishes nothing is a pipeline with a zero here, and
+# no agreement percentage below would say so.
+DISTRIBUTION_WEEKS = 4
+
+
+def _week_starts(weeks: int = DISTRIBUTION_WEEKS) -> list:
+    """The Monday of each of the last `weeks` weeks, oldest first. Weeks
+    are Mondays rather than rolling 7-day windows so two page loads a day
+    apart show the same buckets -- a chart whose columns move under you
+    cannot be compared with yesterday's."""
+    today = date.today()
+    monday = today - timedelta(days=today.weekday())
+    return [monday - timedelta(weeks=n) for n in range(weeks - 1, -1, -1)]
+
+
+def _distribution(account_id: Optional[int], weeks: int = DISTRIBUTION_WEEKS) -> dict:
+    """Posts per week per brand per platform, cost per post, and last
+    night -- read-only, and every part of it degrades rather than 500s.
+
+    Only PIPELINE posts count. `videos.legacy` marks the hand-made
+    uploads that predate the loop (db.add_legacy_column), and counting
+    them here would credit the machine with Mike's own back catalogue --
+    so the query carries db.excludes_legacy's predicate, the same one
+    the teaching readers use, rather than a second hand-rolled filter
+    that could disagree with it.
+
+    `nightly_runs` is queried through to_regclass because another agent
+    is landing that table in parallel: absent, the line is simply not
+    shown, and the page is correct either way.
+    """
+    starts = _week_starts(weeks)
+    since = starts[0].isoformat()
+    dist = {
+        "weeks": [{"start": s.isoformat(), "label": s.strftime("%b %-d")} for s in starts],
+        "rows": [], "posts": 0, "since": since,
+        "spend_usd": 0.0, "cost_per_post": None, "nightly": None,
+        "available": True,
+    }
+
+    counts: dict = {}
+    try:
+        with db.connect() as conn:
+            rows = conn.execute(
+                "SELECT COALESCE(v.brand, '—') AS brand, v.platform, "
+                "substr(v.posted_at, 1, 10) AS day FROM videos v "
+                "WHERE v.account_id IS NOT DISTINCT FROM %s "
+                "AND substr(v.posted_at, 1, 10) >= %s"
+                + (" AND NOT v.legacy" if db.excludes_legacy(False) else ""),
+                (account_id, since),
+            ).fetchall()
+            for r in rows:
+                key = (r["brand"], r["platform"])
+                bucket = counts.setdefault(key, [0] * weeks)
+                for i, start in enumerate(starts):
+                    end = start + timedelta(days=7)
+                    if start.isoformat() <= r["day"] < end.isoformat():
+                        bucket[i] += 1
+                        break
+            if db.table_exists(conn, "nightly_runs"):
+                night = conn.execute(
+                    "SELECT * FROM nightly_runs ORDER BY started_at DESC LIMIT 1"
+                ).fetchone()
+                dist["nightly"] = dict(night) if night else None
+    except Exception:
+        dist["available"] = False
+        return dist
+
+    dist["rows"] = [
+        {"brand": brand, "platform": platform, "counts": bucket,
+         "total": sum(bucket)}
+        for (brand, platform), bucket in sorted(counts.items())
+    ]
+    dist["posts"] = sum(r["total"] for r in dist["rows"])
+
+    # What those posts cost: the LLM meter plus metered renders over the
+    # same window. Both are estimates written at call time (src/costs.py's
+    # honesty rules), and a render with no price was paid for by a
+    # subscription -- it is missing from this sum rather than counted as
+    # $0, which is the same call /costs makes.
+    spent = 0.0
+    try:
+        spent += sum(float(s["cost_usd"] or 0)
+                     for s in spend.by_stage(account_id=account_id, since=since))
+    except Exception:
+        pass
+    try:
+        with db.connect() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(cost_usd), 0) FROM generations "
+                "WHERE created_at >= %s AND account_id IS NOT DISTINCT FROM %s",
+                (since, account_id),
+            ).fetchone()
+            spent += float(row[0] or 0)
+    except Exception:
+        pass
+    dist["spend_usd"] = round(spent, 2)
+    # Zero posts shows "—", never a division: "$18.40 per post" with no
+    # posts is either a crash or a lie, and both are worse than a dash.
+    dist["cost_per_post"] = round(spent / dist["posts"], 2) if dist["posts"] else None
+    return dist
+
+
 def _pipeline_metrics(account_id: int) -> dict:
     """The numbers about how well the system is working, computed
     server-side. shortlist_rate went with the shot-list stage
@@ -683,6 +791,7 @@ def studio(request: Request, tab: Optional[str] = None, message: Optional[str] =
                "message": message}
     if active_tab == "stats":
         context["metrics"] = _pipeline_metrics(account_id)
+        context["distribution"] = _distribution(account_id)
     elif active_tab == "grade":
         context["grade"] = _grade_context(mode, concept_id, golden_id, fresh, account_id)
     elif active_tab == "graded":
@@ -1605,6 +1714,11 @@ def metrics_refresh(video_id: int, account_id: int = Depends(auth.dev_account_id
     if video["platform"] == "instagram":
         result = instagram.refresh_metrics_for_video(
             video, token=instagram.access_token(), db_path=None,
+        )
+    elif video["platform"] == "tiktok":
+        from src import tiktok
+        result = tiktok.refresh_metrics_for_video(
+            video, token=tiktok.access_token(), db_path=None,
         )
     else:
         api_key = os.environ.get("YOUTUBE_API_KEY")

@@ -21,6 +21,11 @@ evaluator; this just keeps the queue fed.
 Exit 0 with the hold row printed, exit 1 on anything unexpected -- a
 cron/launchd line has no one watching stderr, so the outcome lands in
 the dead-man log either way (even a crashed run writes a hold row).
+Since 2026-09-07 a crash is also CLASSIFIED (`nightly.classify_error`):
+the hold reason and the exit code say whether the failure was about
+this concept or about the world, which is what lets src/nightly.py stop
+a walk instead of running fifteen more runs into the same dead socket.
+Exit 2 is the systemic one.
 """
 import argparse
 import sys
@@ -51,6 +56,49 @@ def pick_spark(sparks: list, day: int) -> str:
     return sparks[day % len(sparks)]
 
 
+def run_once(spark: str, *, channel: str = "zeropage", brand=None,
+             scout: bool = False, research: bool = False) -> dict:
+    """One graph run, as a result dict instead of an exit code.
+
+    The shape the nightly runner needs and the CLI wraps: `ok`, the
+    `held` reason a shadow run always has, and on a crash the `kind`
+    (`nightly.SYSTEMIC` / `CONTENT`) that decides whether the rest of
+    the walk is worth attempting. One implementation, so a run fired by
+    cron and a run inside the walk cannot behave differently.
+    """
+    # Imported here, not at module top: orchestrator pulls in the whole
+    # generation stack, and `--help` on a cron box shouldn't need it.
+    from . import autonomy, nightly, orchestrator
+
+    try:
+        result = orchestrator.run(spark, brand=brand, channel=channel,
+                                  scout=scout or research, research=research)
+    except Exception as e:
+        kind = nightly.classify_error(e)
+        # the dead-man log gets the crash too -- a silent night looks
+        # exactly like a healthy night unless failures leave a row. The
+        # write itself is best-effort: a systemic crash is usually the
+        # database, and the explanation must not die of the thing it is
+        # explaining.
+        try:
+            autonomy.init()
+            from . import accounts
+            autonomy.to_hold(channel, f"trigger crashed ({kind}): {e}",
+                             account_id=accounts.resolve_account())
+        except Exception:
+            pass
+        return {"ok": False, "kind": kind, "error": str(e), "spark": spark}
+
+    return {
+        "ok": True,
+        "kind": None,
+        # the spark the run actually used, which --scout may have replaced
+        "spark": result.get("spark") or spark,
+        "held": result.get("held_reason"),
+        "result": result,
+    }
+
+
 def main(argv=None) -> int:
     load_dotenv()
     parser = argparse.ArgumentParser(
@@ -76,27 +124,19 @@ def main(argv=None) -> int:
 
     spark = args.spark or pick_spark(load_sparks(), date.today().timetuple().tm_yday)
 
-    # Imported here, not at module top: orchestrator pulls in the whole
-    # generation stack, and `--help` on a cron box shouldn't need it.
-    from . import autonomy, orchestrator
+    outcome = run_once(spark, channel=args.channel, brand=args.brand,
+                       scout=args.scout, research=args.research)
+    if not outcome["ok"]:
+        print(f"trigger: run crashed ({outcome['kind']}): {outcome['error']}",
+              file=sys.stderr)
+        # 2 is the systemic one: a caller looping over sparks can tell
+        # "this concept broke" from "the world is broken" without
+        # parsing stderr.
+        from . import nightly
+        return 2 if outcome["kind"] == nightly.SYSTEMIC else 1
 
-    try:
-        result = orchestrator.run(spark, brand=args.brand, channel=args.channel,
-                                  scout=args.scout or args.research,
-                                  research=args.research)
-    except Exception as e:
-        # the dead-man log gets the crash too -- a silent night looks
-        # exactly like a healthy night unless failures leave a row
-        autonomy.init()
-        from . import accounts
-        autonomy.to_hold(args.channel, f"trigger crashed: {e}",
-                         account_id=accounts.resolve_account())
-        print(f"trigger: run crashed: {e}", file=sys.stderr)
-        return 1
-
-    # the spark the run actually used, which --scout may have replaced --
-    # printing the requested one would make the log disagree with the concept
-    used = result.get("spark") or spark
+    result = outcome["result"]
+    used = outcome["spark"]
     print(f"trigger: spark={used!r} channel={args.channel} "
           f"attempts={result.get('attempts')} "
           f"concept_id={result.get('concept_id')} "

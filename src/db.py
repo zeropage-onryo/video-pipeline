@@ -130,7 +130,15 @@ CREATE TABLE IF NOT EXISTS videos (
     -- accounts(id) is not inline because accounts.SCHEMA lives in
     -- accounts.py, which imports this module -- own_table() below adds
     -- the constraint right after, once _ensure_accounts_table has run.
-    account_id BIGINT
+    account_id BIGINT,
+    -- A hand-made upload that predates the pipeline (2026-09-07). The
+    -- ten rows on the live database are short films, cocktail recipes,
+    -- a haircut, a motovlog -- none of them pipeline output, all of them
+    -- feeding the learning loop as if they were. The analytics pages
+    -- still show them (every reader defaults to include_legacy=True);
+    -- the readers that TEACH ask to be spared them. add_legacy_column
+    -- is the migration that marks the pre-existing rows.
+    legacy     BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE TABLE IF NOT EXISTS metrics (
@@ -330,6 +338,11 @@ SHARED_TABLES = {
                    "#8): a pilot's denial steers Mike's night once. Listed "
                    "here so the schema test passes; fix order item 4",
     "ig_hashtag_ids": "a cache of Meta's hashtag ids; the tag is the key",
+    "nightly_runs": "one receipt per run of the operator's nightly walk "
+                    "(src/nightly.py). The cron is the installation's, like "
+                    "`scheduled_posts`; the row exists to tell a night that "
+                    "produced nothing from a night that never started, and "
+                    "scoping it to an account would hide exactly that",
     # -- the legacy pitch pipeline, removed Aug 2026; nothing writes them
     "pitch_runs": "historical rows from the removed post-production chain",
     "ideas": "historical rows from the removed post-production chain",
@@ -447,6 +460,178 @@ def own_table(conn: psycopg.Connection, table: str) -> None:
     backfill_owner(conn, table)
 
 
+# --------------------------------------------------------------------------
+# legacy posts -- what the loop is allowed to learn from
+# --------------------------------------------------------------------------
+
+# The one way back in. Set it and every teaching reader sees the
+# hand-made uploads again -- for a before/after measurement, or for an
+# installation whose back catalogue really is the model to imitate.
+LEARN_FROM_LEGACY_ENV = "ZEROPAGE_LEARN_FROM_LEGACY"
+
+
+def learn_from_legacy() -> bool:
+    """Whether the readers that TEACH may see legacy rows.
+
+    Read from the environment on every call, never cached at import:
+    the dev server re-imports on save, and a test flips it with
+    monkeypatch.setenv around one assertion. Same truthy set as
+    autopilot's enable flag, so one habit covers both.
+    """
+    return (os.environ.get(LEARN_FROM_LEGACY_ENV) or "").strip().lower() in {"1", "true", "yes"}
+
+
+def excludes_legacy(include_legacy: bool) -> bool:
+    """Whether a query should carry the `NOT v.legacy` predicate.
+
+    The env override is checked HERE, once, rather than at each of the
+    six call sites -- an escape hatch honoured in five places out of six
+    is worse than none, because the one that forgot is the one nobody
+    tests.
+    """
+    return not include_legacy and not learn_from_legacy()
+
+
+def add_legacy_column(conn: psycopg.Connection) -> bool:
+    """Additive ALTER TABLE + one-time backfill. True if added now.
+
+    The dev server re-runs init_db on every save, so this has to be
+    safe to call a hundred times: the column is added only when absent,
+    and -- the part that matters -- the backfill runs ONLY in that same
+    first pass. `concept_id IS NULL` means "not pipeline output" at
+    migration time and nothing else; re-running it later would re-mark
+    every video posted by hand from the Queue since, and un-do a
+    mark_legacy(id, False) somebody made deliberately.
+
+    db.SCHEMA carries the column inline too, so a brand-new database
+    gets it from the CREATE TABLE and this returns False having done
+    nothing -- correct either way, and there is nothing to backfill
+    there because a fresh database has no pre-pipeline uploads.
+    """
+    if "legacy" in columns(conn, "videos"):
+        return False
+    conn.execute(
+        "ALTER TABLE videos ADD COLUMN legacy BOOLEAN NOT NULL DEFAULT FALSE"
+    )
+    conn.execute("UPDATE videos SET legacy = TRUE WHERE concept_id IS NULL")
+    return True
+
+
+# --------------------------------------------------------------------------
+# the nightly walk's receipt (2026-09-07)
+# --------------------------------------------------------------------------
+
+# One row per invocation of `python -m src.nightly walk`. Kept here rather
+# than in nightly.py because a table is schema and schema lives with the
+# spine, and kept as its own idempotent block (the add_legacy_column
+# pattern) rather than folded into SCHEMA because SCHEMA is the original
+# four tables and this is a migration a live database needs.
+#
+# It exists because of eleven silent nights: launchd was refused by TCC,
+# nothing ran, and a night with no runs reads exactly like a healthy one
+# unless something writes down that it started. The log said so; a log
+# on a Fly machine is gone with the machine. A row survives, and
+# `SELECT * FROM nightly_runs ORDER BY id DESC LIMIT 7` is the whole
+# health check -- a missing row is a missing night, and a row with
+# finished_at NULL is a walk that died mid-flight.
+NIGHTLY_RUNS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS nightly_runs (
+    id             BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    started_at     TEXT    NOT NULL,
+    finished_at    TEXT,
+    attempted      INTEGER NOT NULL DEFAULT 0,
+    succeeded      INTEGER NOT NULL DEFAULT 0,
+    failed         INTEGER NOT NULL DEFAULT 0,
+    spent_usd      DOUBLE PRECISION NOT NULL DEFAULT 0,
+    stopped_reason TEXT
+);
+"""
+
+
+def add_nightly_runs_table(conn: psycopg.Connection) -> bool:
+    """Create nightly_runs if it isn't there. True if it was created now.
+
+    Installation bookkeeping, not anyone's row -- declared in
+    SHARED_TABLES with that reason. There is no account_id and no
+    backfill: the walk is the operator's cron, the same way `settings`
+    and `scheduled_posts` are.
+    """
+    existed = table_exists(conn, "nightly_runs")
+    conn.execute(NIGHTLY_RUNS_SCHEMA)
+    return not existed
+
+
+def start_nightly_run(dsn: Optional[str] = None) -> Optional[int]:
+    """Write the "a walk began" half of the receipt and return its id.
+
+    NEVER RAISES (returns None): the bookkeeping must not be the thing
+    that kills the night it is bookkeeping. A None id means finish() is
+    a no-op and the log line is the only record -- degraded, not fatal.
+    """
+    try:
+        with connect(dsn) as conn:
+            add_nightly_runs_table(conn)
+            row = conn.execute(
+                "INSERT INTO nightly_runs (started_at) VALUES (%s) RETURNING id",
+                (_now(),),
+            ).fetchone()
+            return int(row["id"])
+    except Exception:
+        return None
+
+
+def finish_nightly_run(run_id: Optional[int], *, attempted: int, succeeded: int,
+                       failed: int, spent_usd: float,
+                       stopped_reason: Optional[str] = None,
+                       dsn: Optional[str] = None) -> bool:
+    """Close the receipt. False when there was nothing to close (a
+    database that was down when the walk started -- the case this row
+    exists to make visible) or when the write itself failed."""
+    if run_id is None:
+        return False
+    try:
+        with connect(dsn) as conn:
+            cur = conn.execute(
+                "UPDATE nightly_runs SET finished_at = %s, attempted = %s, "
+                "succeeded = %s, failed = %s, spent_usd = %s, stopped_reason = %s "
+                "WHERE id = %s",
+                (_now(), attempted, succeeded, failed, round(float(spent_usd), 4),
+                 stopped_reason, run_id),
+            )
+            return cur.rowcount > 0
+    except Exception:
+        return False
+
+
+def recent_nightly_runs(limit: int = 7, dsn: Optional[str] = None) -> list[dict[str, Any]]:
+    """The last few nights, newest first -- what the runbook's health
+    check reads to tell a quiet night from a missing one."""
+    with connect(dsn) as conn:
+        add_nightly_runs_table(conn)
+        rows = conn.execute(
+            "SELECT * FROM nightly_runs ORDER BY id DESC LIMIT %s", (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def mark_legacy(video_id: int, legacy: bool = True, dsn: Optional[str] = None, *,
+                account_id: Optional[int] = None) -> bool:
+    """Flip one video's legacy flag by hand. True if a row changed.
+
+    The backfill is a guess made once from `concept_id IS NULL`, and a
+    guess needs a correction: an old upload worth teaching from, or a
+    pipeline post imported without its concept. Scoped like every other
+    write -- you cannot re-label a stranger's post.
+    """
+    with connect(dsn) as conn:
+        cur = conn.execute(
+            "UPDATE videos SET legacy = %s "
+            "WHERE id = %s AND account_id IS NOT DISTINCT FROM %s",
+            (bool(legacy), video_id, account_id),
+        )
+        return cur.rowcount > 0
+
+
 def init_db(dsn: Optional[str] = None) -> None:
     """Create the tables. Safe to run repeatedly.
 
@@ -455,11 +640,19 @@ def init_db(dsn: Optional[str] = None) -> None:
     those columns, and no Postgres database predates anything -- both
     are in the CREATE TABLE. own_table stays: it is what declares the
     FK to accounts(id), which cannot be inline (see SCHEMA).
+
+    add_legacy_column is the exception that proves the rule: a live
+    Postgres database DOES predate it (ten hand-made uploads, 2026-09-07),
+    and the backfill it carries is the whole point of the migration.
     """
     with connect(dsn) as conn:
         conn.execute(SCHEMA)
         # tenancy: a posted video belongs to the account that made it
         own_table(conn, "videos")
+        # only pipeline posts may teach the loop (docs/BACKLOG.md, 2026-09-07)
+        add_legacy_column(conn)
+        # the nightly walk's receipt (src/nightly.py, 2026-09-07)
+        add_nightly_runs_table(conn)
 
 
 # --------------------------------------------------------------------------
@@ -831,6 +1024,7 @@ def get_top_performers(
     limit: int = 5,
     metric: str = "views",
     ascending: bool = False,
+    include_legacy: bool = True,
     dsn: Optional[str] = None,
     *,
     account_id: int,
@@ -857,6 +1051,14 @@ def get_top_performers(
     ascending=True flips it to worst-first. Feed both ends to an LLM and ask
     what separates them; that is the "why did this work" analysis, and it
     needs the losers as much as the winners.
+
+    include_legacy defaults to True because this is also what the
+    Analytics page reads, and a dashboard that quietly hides ten of your
+    posts is lying about the channel. The readers that TEACH pass False:
+    a hand-made short film has nothing to say about what the pipeline
+    should generate next, and the median it moves is the bar every
+    candidate winner is measured against. ZEROPAGE_LEARN_FROM_LEGACY=1
+    puts them back (see learn_from_legacy).
 
     Returns the originating pitch text where there is one.
     """
@@ -889,6 +1091,7 @@ def get_top_performers(
             WHERE m.{metric} IS NOT NULL
               AND v.account_id IS NOT DISTINCT FROM %s
               AND ABS({_AGE_DAYS} - %s) <= %s
+              {"AND NOT v.legacy" if excludes_legacy(include_legacy) else ""}
               {"AND substr(v.posted_at, 1, 10) >= %s" if cutoff else ""}
         )
         SELECT video_id, title, platform, posted_at, topic, hook_type,
@@ -919,6 +1122,7 @@ def benchmark(
     posted_since: Optional[str] = None,
     platform: Optional[str] = None,
     metric: str = "views",
+    include_legacy: bool = True,
     dsn: Optional[str] = None,
     *,
     account_id: int,
@@ -929,7 +1133,11 @@ def benchmark(
 
     The dashboard needs this: colouring a row green for "above median"
     requires knowing the median of a comparable set, not of everything ever
-    posted. Same two knobs as get_top_performers.
+    posted. Same two knobs as get_top_performers -- and the same
+    include_legacy, which has to be passed in step with the query it
+    grades: a median taken over the hand-made uploads and a candidate
+    list taken without them are two different fields, and the multiple
+    between them means nothing.
     """
     rows = get_top_performers(
         at_days=at_days,
@@ -938,6 +1146,7 @@ def benchmark(
         platform=platform,
         limit=100_000,
         metric=metric,
+        include_legacy=include_legacy,
         dsn=dsn,
         account_id=account_id,
     )

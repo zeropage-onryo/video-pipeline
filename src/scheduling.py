@@ -24,7 +24,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from . import autopilot, instagram, post_seo
+from . import autopilot, instagram, post_seo, tiktok
 from .db import connect
 
 SCHEMA = """
@@ -48,6 +48,12 @@ CREATE INDEX IF NOT EXISTS idx_sched_due ON scheduled_posts (status, publish_at)
 # quota -- a runaway queue should hit our brake long before theirs.
 DAILY_CAP = 20
 
+# What a queued row may name. The same list autopilot._post_dispatch can
+# route and autonomy.POST_TARGETS lets a channel choose -- a row naming
+# anything else is a post that will raise in live mode at 3am, so it is
+# refused at add_post, where a person is still watching.
+PLATFORMS = ("instagram", "youtube", "tiktok")
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
@@ -61,7 +67,12 @@ def init(dsn: Optional[str] = None) -> None:
 
 def add_post(video_ref: str, caption: Optional[str], publish_at: str,
              platform: str = "instagram", db_path=None) -> int:
-    """Queue a post. Not gated -- a row is an intention, not a publish."""
+    """Queue a post. Not gated -- a row is an intention, not a publish.
+    The platform IS checked: an intention nothing can execute is not an
+    intention, it is a row that fails in live mode hours later."""
+    platform = (platform or "").strip().lower()
+    if platform not in PLATFORMS:
+        raise ValueError(f"platform must be one of {PLATFORMS}, got {platform!r}")
     with connect(db_path) as conn:
         row = conn.execute(
             "INSERT INTO scheduled_posts (created_at, video_ref, caption, "
@@ -201,10 +212,16 @@ def run_due(now: Optional[str] = None, approve: bool = False, live: bool = False
     would_publish: list[str] = []
 
     for row in due:
+        ref = row["video_ref"] or ""
         action = {
             "kind": "post",
             "platform": row["platform"],
-            "video_url": row["video_ref"],
+            "video_url": ref,
+            # YouTube uploads bytes rather than fetching a URL, so a row
+            # whose ref is a local path is postable there and nowhere
+            # else. Carrying both lets one queue serve all three
+            # platforms; each executor takes the one it can use.
+            "video_path": ref if not ref.startswith("http") else "",
             "caption": row["caption"] or "(caption generated at publish)",
             "scheduled_id": row["id"],
         }
@@ -223,7 +240,11 @@ def run_due(now: Optional[str] = None, approve: bool = False, live: bool = False
         if _posted_in_last_day(now, db_path=db_path) >= DAILY_CAP:
             deferred.append(f"{row['id']}: daily cap ({DAILY_CAP}) reached")
             continue
-        if _quota_remaining() <= 0:
+        # Meta's quota is Meta's: asking it about a YouTube or TikTok row
+        # answers 0 whenever no IG credential is configured, which would
+        # defer every non-Instagram row forever with a reason naming the
+        # wrong platform. Our own DAILY_CAP above still covers all three.
+        if row["platform"] == "instagram" and _quota_remaining() <= 0:
             deferred.append(f"{row['id']}: publishing quota exhausted or unverifiable")
             continue
 
@@ -238,9 +259,13 @@ def run_due(now: Optional[str] = None, approve: bool = False, live: bool = False
                         db_path=db_path)
             published += 1
         except Exception as e:
-            token = instagram.access_token()
-            mark_status(row["id"], "failed",
-                        error=instagram._safe_error(e, token), db_path=db_path)
+            # Redact BOTH credentials, whatever the row's platform says:
+            # a failure can be raised anywhere in the dispatch, and a
+            # stored error is read on a page. Cheap, and the alternative
+            # is a token in a db row the day the routing surprises us.
+            error = instagram._safe_error(e, instagram.access_token())
+            error = tiktok._safe_error(Exception(error), tiktok.access_token())
+            mark_status(row["id"], "failed", error=error, db_path=db_path)
             failed.append(str(row["id"]))
 
     return {"mode": mode, "due": len(due), "published": published,
@@ -251,7 +276,8 @@ def run_due(now: Optional[str] = None, approve: bool = False, live: bool = False
 def main(argv: Optional[list] = None) -> None:
     parser = argparse.ArgumentParser(
         prog="scheduling",
-        description="The Instagram publish queue. `run` is dry-run by default "
+        description="The publish queue (instagram / youtube / tiktok). `run` is "
+                    "dry-run by default "
                     "and only ever publishes through autopilot's gate.",
     )
     sub = parser.add_subparsers(dest="command", required=True)

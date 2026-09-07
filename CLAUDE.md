@@ -358,6 +358,62 @@ is 16 runs a night against `NANO_DAILY_CAP` of 20, which is also shared with eve
 Director render. A keyframe that fails parks the scene as text-to-video with the reason on
 its card. `ZEROPAGE_KEYFRAME=0` turns the step off without touching the graph.
 
+**THE GATES ARE INVERTED (2026-09-07, Mike's call).** Measured over the graded holds, the
+prompt gate agreed with his own would-post verdict **~38% of the time** — coin-flip
+territory — and **no dimension of its rubric separated** what he would post from what he
+would not. Predicting from the PROMPT whether a clip will be worth posting is therefore the
+wrong lever, so the graph stopped doing it and selects **after the render** instead.
+`ZEROPAGE_GATES` (`orchestrator.gates_mode()`, read per call) is the one switch:
+
+- **`advisory` (the default)** — the LLM judges still score and still store: `critique`,
+  `prompt_scores`, the hold payload, the parked reason on the scene. They just never route
+  to `hold`. A failing prompt still gets its bounded rework (`MAX_PROMPT_REWORKS`, cheap and
+  it measurably improves the prompt) and then proceeds to `keyframe` carrying its verdict —
+  `"advisory: prompt gate 4/10 — no camera direction"` — into `park_scene`'s reason, the
+  hold row's reason and the payload's `advisory` list. The morning review sees what the
+  judge thought *beside the still it is judging*. Same for a low concept-judge score in
+  `route_after_eval`: recorded in `critique`, no corrective re-run. **Only layer 2 — the
+  rubric — stops routing.** The gate's deterministic layer 1 is code and still holds; see
+  "what stays hard" below.
+- **`hard`** — the pre-2026-09-07 hold-on-judge behaviour, byte for byte, kept tested (the
+  gate tests in `tests/test_orchestrator.py` set it) because **an untested way back is not
+  one**. Anything that is not literally `hard` reads as advisory: this is the one gate in
+  the repo that fails *open*, deliberately — the cost of being wrong here is re-arming a
+  judge that agreed 38% of the time, and that should be a decision somebody makes, not
+  something a typo does to a night.
+
+**What stays hard in BOTH modes**, because code enforces it and none of it is taste: the
+`concept["warnings"]` retry loop (`validate_concept`'s — a shot naming a room that doesn't
+exist is broken output), **the prompt gate's layer 1** (`_structural_check`: empty, under
+fifteen words, a leftover `{token}` or TODO — a prompt with an unfilled placeholder renders
+garbage whatever a judge thinks of the writing, so a `structural` failure still holds, after
+its rework pass, exactly the line `route_after_eval` draws around `warnings`; the score
+entry carries `structural: True`, an explicit flag rather than "score 0 with empty dims",
+because the fail-closed judge produces that same shape and those are opposite things), clip
+QC, `_post_gate`, the likeness rule, the uncanny/on-brand
+judge (which records and never routed anyway), the kill switch, and every credit/spend gate
+(`ZEROPAGE_RENDER`, the `*_SPEND_OK` approvals, the daily caps). A camera-only concept still
+holds — there is nothing to keyframe and nothing to render.
+
+**The statistic stays honest, which is the part worth checking on any edit here.**
+`log_prompt_scores` still writes `passed = 0` for a shot the gate failed, whatever the run
+then did, so `autonomy.prompt_gate_agreement` keeps measuring **the judge against Mike's
+grade** rather than quietly measuring whether the pipeline let the run through — which, in
+advisory mode, it always does. If an advisory run recorded itself as passed, gate-vs-you
+would drift to 100% and the evidence that justified this inversion would erase itself.
+`held_but_posted` (the cheap disagreement) is where advisory runs Mike would have posted now
+show up.
+
+**Selection moved to where it can actually be made: `select_clip`**, a node between
+`qc_clip` and `caption`. With several candidates it picks by a code-only heuristic — QC pass
+first, then longest duration (`framebank.duration`, the existing ffprobe wrapper), then
+largest file — keeps every candidate in `clip_candidates` and the hold payload (the losers
+are the only evidence of what was passed over), and is a no-op on one clip, which is every
+run today. `orchestrator.JUDGE` is the documented seam for the video-level judge that can
+answer the question the prompt gate was guessing at: set it and it is called with the
+candidates and returns one of them; a judge that raises, or answers off the menu, loses its
+say and the code pick stands.
+
 **`gen_concept` writes ONE scene now**, through `shootgen.generate_scene_concept` rather
 than the legacy multi-shot `generate_concept`. That divergence stopped being cosmetic the
 moment the night's output started parking in the Queue: the Queue, `pick_rate` and the
@@ -456,7 +512,7 @@ is yours, in Resolve, by hand.
 - **`src/orchestrator.py`** — the autonomous content graph (LangGraph, registered as `zeropage`
   in `langgraph.json`): `planner -> ground_entities -> ground_rag ->
   gen_concept -> evaluate -> structure_prompt -> score_prompts -> generate_render ->
-  qc_clip -> caption -> publish`, with the corrective `evaluate -> gen_concept` retry edge and
+  qc_clip -> select_clip -> caption -> publish`, with the corrective `evaluate -> gen_concept` retry edge and
   a `hold` sink. `score_prompts` is the credit gate proper: a deterministic floor (thin /
   leftover template tokens, zero model calls — **no upper length bound**, removed 2026-08-14:
   a 130-word ceiling never fired across the first 17 scored prompts while six of eight judge
@@ -464,8 +520,14 @@ is yours, in Resolve, by hand.
   dimension owns, not a broken-output signal this layer should reject on) under a strict LLM judge
   (subject/camera/motion/lighting/coherence, 0–2 each, bar `PROMPT_GATE_MIN`, default 7/10)
   that **fails closed** — an unreadable verdict scores 0, so a credit is never spent on a
-  judgment nobody could read. One failing prompt holds the whole run, reason = the judge's own
-  one-liner. Every score is a `prompt_scores` row logged before any spend; grading a hold on
+  judgment nobody could read. One failing prompt used to hold the whole run, reason = the
+  judge's own one-liner; **since 2026-09-07 that happens only under `ZEROPAGE_GATES=hard`** —
+  by default the verdict is recorded and the run proceeds to the keyframe carrying it on the
+  card, with the selection moved after the render into `select_clip` (see "THE GATES ARE
+  INVERTED" above for the 38%-agreement measurement behind it, what stays hard, and the way
+  back). Every score is still a `prompt_scores` row logged before any spend — an advisory run
+  logs `passed = 0` exactly as a held one did, so the number below keeps measuring the judge
+  rather than the pipeline. Grading a hold on
   `/holds` writes the human verdict next to the gate's, and `autonomy.prompt_gate_agreement`
   splits disagreement by cost (passed-but-rejected burns a credit; held-but-posted only costs
   an approval — drive the first near zero before lowering the bar, on 20–30 graded rows, not a

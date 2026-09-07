@@ -53,6 +53,36 @@ def sniff_mime(data) -> str:
 FALLBACK_MODELS = ["gemini-3.1-flash-lite", "gemini-pro-latest"]
 
 
+# The 429 that is not a rate limit. Google returns RESOURCE_EXHAUSTED for
+# both "you are going too fast" (waits it out) and "the card is empty"
+# (waiting changes nothing). The strings below are the billing half,
+# read off the owner's own 2026-09-07 log -- one depleted account cost
+# six retries per call across all sixteen runs of the walk, which is
+# every model call in a night spent asleep waiting for a payment nobody
+# was making at 3am.
+DEPLETED_MARKERS = (
+    "prepayment credits are depleted",
+    "billing account",
+    "billing is not enabled",
+    # deliberately NOT "quota exceeded for quota metric": that is Google's
+    # wording for an ordinary per-minute limit, which is exactly the 429
+    # that DOES clear by waiting. Only the money strings belong here.
+    "check your plan and billing details",
+)
+
+
+def is_depleted(error) -> bool:
+    """A 429 that says the money ran out rather than that we are early.
+
+    Kept separate from is_retriable because the two need opposite
+    behaviour from the same status code, and because the nightly
+    breaker (src/nightly.py) asks the same question to decide whether
+    the whole walk is pointless -- one opinion, two callers.
+    """
+    text = str(error).lower()
+    return any(marker in text for marker in DEPLETED_MARKERS)
+
+
 def is_retriable(error) -> bool:
     """Transient, so waiting is worth it -- a busy model (UNAVAILABLE) or a
     spent quota (RESOURCE_EXHAUSTED). Everything else (a bad key, a
@@ -61,8 +91,17 @@ def is_retriable(error) -> bool:
 
     Lifted out of generate_with_retry 2026-09-02 so the embedding path can
     hold the same opinion. Two copies of "which errors are worth a second
-    try" is the shape of bug where one of them quietly forgets 429."""
+    try" is the shape of bug where one of them quietly forgets 429.
+
+    A DEPLETED 429 is the exception (2026-09-07): it wears the retriable
+    status code and is the least retriable error there is -- no wait
+    tops up a card, and the fallback models bill the same account. It
+    raises on the first attempt so the caller learns the truth in one
+    second instead of five minutes.
+    """
     text = str(error)
+    if is_depleted(error):
+        return False
     return "RESOURCE_EXHAUSTED" in text or "UNAVAILABLE" in text
 
 

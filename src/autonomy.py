@@ -143,6 +143,65 @@ def set_autonomy(name: str, autonomy: str, dsn=None) -> None:
         conn.execute("UPDATE channels SET autonomy = %s WHERE name = %s", (autonomy, name))
 
 
+# The platforms a channel may name as a post target. A target is a
+# promise that an adapter exists: autopilot._post_dispatch routes on
+# exactly these names, and a typo'd one would fan a post action out to a
+# platform that raises NotImplementedError in live mode -- which is a
+# gate failure discovered at the worst possible moment. Validated on the
+# way IN (set_targets) and again on the way OUT (channel_targets), since
+# the seed and any hand-edited row bypass the setter.
+POST_TARGETS = ("instagram", "youtube", "tiktok")
+
+
+def parse_targets(value) -> list[str]:
+    """The stored comma list as a clean, ordered, de-duplicated list.
+    Order is kept because it is the order a fan-out posts in, and a
+    person who wrote "instagram,youtube" meant Instagram first."""
+    seen: list[str] = []
+    for part in str(value or "").split(","):
+        name = part.strip().lower()
+        if name and name not in seen:
+            seen.append(name)
+    return seen
+
+
+def validate_targets(value) -> list[str]:
+    """Parse and refuse anything without an adapter. Raises ValueError
+    naming the offender -- the caller is a person editing a channel, and
+    "instgram" should fail at the edit, not at 3am."""
+    targets = parse_targets(value)
+    unknown = [t for t in targets if t not in POST_TARGETS]
+    if unknown:
+        raise ValueError(
+            f"unknown post target(s) {', '.join(unknown)} -- "
+            f"must be one of {', '.join(POST_TARGETS)}")
+    return targets
+
+
+def set_targets(name: str, targets, dsn=None) -> list[str]:
+    """Set a channel's post targets. Validated first, so an unroutable
+    target can never reach the row the fan-out reads."""
+    clean = validate_targets(targets if isinstance(targets, str) else ",".join(targets))
+    with db.connect(dsn) as conn:
+        conn.execute("UPDATE channels SET targets = %s WHERE name = %s",
+                     (",".join(clean), name))
+    return clean
+
+
+def channel_targets(name: str, dsn=None) -> list[str]:
+    """Where this channel posts, as a list an executor can be dispatched
+    on. NEVER RAISES, and that is the whole point: it is read from
+    autopilot.build_plan, which is a read-only preview that must work on
+    a database with no channels table at all (every preprod-only test
+    fixture) and must not be taken down by a hand-edited row naming a
+    platform we cannot reach. Unknown names are dropped, not honoured."""
+    try:
+        row = get_channel(name, dsn=dsn) or {}
+    except Exception:
+        return []
+    return [t for t in parse_targets(row.get("targets")) if t in POST_TARGETS]
+
+
 def list_channels(dsn=None) -> list[dict]:
     with db.connect(dsn) as conn:
         return [dict(r) for r in conn.execute("SELECT * FROM channels ORDER BY name")]

@@ -392,23 +392,103 @@ def upload_video(file_path, title, description="", privacy_status="private",
         return {"ok": False, "video_id": None, "url": None, "error": str(e)}
 
 
+# --------------------------------------------------------------------------
+# Shorts -- the tag, and how a clip earns it
+# --------------------------------------------------------------------------
+# YouTube decides Shorts placement itself from the file (vertical, under
+# a minute), but the #Shorts tag in the title or description is what it
+# has always used as the creator's own signal, and it costs nothing to
+# be explicit. Every clip this pipeline renders IS a 9:16 short, so the
+# tag would be right ~always -- which is exactly why it is CHECKED
+# instead of assumed: the day a horizontal cut goes out, a title reading
+# "#Shorts" is a lie told to the algorithm.
+SHORTS_TAG = "#Shorts"
+SHORTS_MAX_SECONDS = 60
+
+
+def probe_shape(path) -> tuple:
+    """(width, height, seconds) via ffprobe, or (0, 0, 0.0) for anything
+    it cannot read. Never raises: an unreadable file must not stop a
+    publish -- it just doesn't earn the tag."""
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height", "-show_entries",
+             "format=duration", "-of", "csv=p=0", str(path)],
+            capture_output=True, text=True, timeout=60)
+        width = height = 0
+        seconds = 0.0
+        for line in (out.stdout or "").splitlines():
+            parts = [p for p in line.strip().split(",") if p]
+            if len(parts) >= 2 and parts[0].isdigit():
+                width, height = int(parts[0]), int(parts[1])
+            elif len(parts) == 1:
+                seconds = float(parts[0])
+        return (width, height, seconds)
+    except Exception:
+        return (0, 0, 0.0)
+
+
+def is_short(path=None, shape=None) -> bool:
+    """Whether a clip is a Short: taller than it is wide, and at most a
+    minute. `shape` is the injectable seam so a test never needs a real
+    file or ffprobe."""
+    width, height, seconds = shape if shape is not None else probe_shape(path)
+    if not (width and height):
+        return False
+    return height > width and 0 < seconds <= SHORTS_MAX_SECONDS
+
+
+def shorts_caption(text: str) -> str:
+    """Add the tag to a caption the caption builder wrote, once. Case
+    insensitive because "#shorts" counts and two tags read as spam."""
+    text = (text or "").strip()
+    if SHORTS_TAG.lower() in text.lower():
+        return text
+    return f"{text} {SHORTS_TAG}".strip()
+
+
 def execute_post_action(action: dict) -> None:
     """The YouTube half of autopilot's post dispatch, mirroring
     instagram.execute_post_action: only ever reached in live mode, so it
     raises on failure and writes the result back onto the action. Needs a
-    LOCAL file (video_path) -- YouTube uploads bytes, not a public URL
-    like Meta."""
+    LOCAL file -- YouTube uploads bytes, not a public URL like Meta.
+
+    THE PATH THE GRAPH ACTUALLY PRODUCES (2026-09-07). A rendered clip
+    reaches an action as `video_path` when the caller already knew it
+    was local (app/api.py's holds_post), but the plan and the queue
+    carry it as `video_url` -- and on any machine without R2 that value
+    is a filesystem path, not a URL. Reading only `video_path` meant a
+    real rendered clip was refused with "has no video_path" while the
+    file sat right there in the action. Both fields are read now, and
+    only something that starts with http:// is rejected, because that
+    genuinely is unuploadable here.
+
+    A vertical clip under a minute gets #Shorts appended to its title
+    and description, so a Short posted by the machine is filed as one.
+    """
     cid, secret, refresh = _oauth_env()
     if not (cid and secret and refresh):
         raise RuntimeError("YT_CLIENT_ID / YT_CLIENT_SECRET / YT_REFRESH_TOKEN "
                            "not set -- live YouTube posting needs all three")
     path = (action.get("video_path") or "").strip()
     if not path:
-        raise RuntimeError("youtube post action has no video_path (a local "
-                           "rendered file); YouTube uploads a file, not a URL")
+        candidate = (action.get("video_url") or action.get("clip_path") or "").strip()
+        path = "" if candidate.startswith("http") else candidate
+    if not path:
+        raise RuntimeError("youtube post action has no local video file "
+                           "(video_path, or a video_url that is a path); "
+                           "YouTube uploads a file, not a URL")
+
+    caption = action.get("caption") or ""
+    title = action.get("title") or caption or "Untitled"
+    if is_short(path):
+        caption = shorts_caption(caption)
+        title = shorts_caption(title)
     result = upload_video(
-        path, action.get("title") or action.get("caption") or "Untitled",
-        description=action.get("caption") or "",
+        path, title,
+        description=caption,
         privacy_status=action.get("privacy") or "private")
     if not result["ok"]:
         raise RuntimeError(f"youtube upload failed: {result['error']}")

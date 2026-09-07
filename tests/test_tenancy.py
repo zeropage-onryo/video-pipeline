@@ -395,6 +395,18 @@ UNSCOPED_ALLOWED = {
     # seed asking whether the starter canvas exists at all
     "SELECT id FROM workflows WHERE name = %s",
     "SELECT id FROM workflows LIMIT 1",
+    # db.add_legacy_column's backfill (2026-09-07): a migration, like
+    # autonomy.init's channel rename below. It marks every pre-pipeline
+    # row on the database once, at the moment the column appears, and an
+    # owner predicate would leave half the table unmarked and teaching.
+    "UPDATE videos SET legacy = TRUE WHERE concept_id IS NULL",
+    # the two legacy filters, and both are deliberately installation-wide:
+    # they read `videos` only to build a set of rows to LEAVE OUT of a
+    # SHARED learning surface (winning_prompts, the proven_results shelf),
+    # nothing from them reaches a caller, and erring wide excludes a row
+    # that might have taught rather than teaching from one that must not.
+    "SELECT id, url FROM videos WHERE legacy",
+    "SELECT id FROM videos WHERE legacy AND id = ANY(%s)",
     # spend.spent_today_everyone: the installation-wide LLM spend, the
     # number the ceilings are a ceiling ON -- generative.used_today's twin
     "SELECT COUNT(*), COALESCE(SUM(cost_usd), 0) FROM llm_calls WHERE created_at >= %s",
