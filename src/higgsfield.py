@@ -495,10 +495,14 @@ def generate_image(prompt: str, out_path, *, http=None, db_path=None,
     if soul_id is None:
         soul_id = os.environ.get("HIGGSFIELD_SOUL_ID", "").strip()
     if soul_id:
-        # A trained Soul ("Mike Antihero v2") is the only thing that has
-        # produced his face (2026-09-06 test: Soul Cinema = him, Soul V2 =
-        # close, an Element hint in Nano = someone else). Field names are
-        # the JS SDK's for /v1/text2image/soul (custom_reference_id,
+        # NOT THE LIKENESS PATH ANY MORE (2026-09-06, Mike's call after
+        # seeing the renders): the trained Soul "Mike Antihero v2" on Soul
+        # Cinema / Soul V2 produced a different actor -- thick mustache,
+        # pompadour. His face comes from nano_banana with his real photos
+        # attached (refgen.identity_references); HIGGSFIELD_SOUL_ID is
+        # left unset in .env so this branch is opt-in for someone else's
+        # Soul, never his default. Field names are the JS SDK's for
+        # /v1/text2image/soul (custom_reference_id,
         # custom_reference_strength); verify against SOUL_PATH on the first
         # live call -- an unknown field is a 400, not a silent drop.
         body["custom_reference_id"] = soul_id

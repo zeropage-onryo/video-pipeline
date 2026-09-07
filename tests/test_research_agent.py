@@ -278,6 +278,9 @@ def test_the_brief_carries_the_digest_prompt_verbatim(tmp_db):
     assert "RE-READS THE OPENING" in brief
     assert scout.BRAND_NOTES["zeropage"] in brief
     assert str(scout.MAX_BIN_IMAGES) in brief
+    # the look and the world gate reach the agent the same way (2026-09-05)
+    assert scout.look_block("zeropage") in brief
+    assert "BUILD THE WORLD" in brief
 
 
 def test_the_brief_names_what_is_already_banked(tmp_db):

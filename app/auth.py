@@ -34,7 +34,7 @@ gate).
 
 Config (env): SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_JWT_SECRET
 (optional when the project uses asymmetric signing keys),
-SUPABASE_PROVIDERS (comma list, default "google,discord" -- what the
+SUPABASE_PROVIDERS (comma list, default "google,discord,apple" -- what the
 sign-in page offers; enabling them is done in the Supabase dashboard),
 SESSION_SECRET. Google/Discord client ids live in the dashboard now.
 """
@@ -62,7 +62,7 @@ SESSION_MAX_AGE = 60 * 60 * 24 * 30          # 30 days
 MIN_PASSWORD_LEN = 8
 PKCE_SESSION_KEY = "sb_pkce_verifier"
 JWT_AUDIENCE = "authenticated"
-DEFAULT_PROVIDERS = ("google", "discord")
+DEFAULT_PROVIDERS = ("google", "discord", "apple")
 
 
 def _session_secret() -> str:
@@ -477,6 +477,11 @@ async def google_login(request: Request):
 @router.get("/discord/login")
 async def discord_login(request: Request):
     return _oauth_login(request, "discord")
+
+
+@router.get("/apple/login")
+async def apple_login(request: Request):
+    return _oauth_login(request, "apple")
 
 
 @router.get("/callback", name="auth_callback")

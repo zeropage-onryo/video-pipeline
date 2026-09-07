@@ -228,6 +228,7 @@ def build_brief(brand: str, count: int, dsn=None, tools=None,
     return brief.format(
         brand=brand,
         brand_note=scout.BRAND_NOTES.get(brand, ""),
+        look=scout.look_block(brand),
         count=count,
         max_images=scout.MAX_BIN_IMAGES,
         rules=rules,
@@ -470,3 +471,25 @@ def run(brand: str, *, count: int = BANK_TARGET, dsn=None,
     result["note"] = (f"banked {result['banked']} spark(s)"
                       if result["ok"] else "the agent banked nothing")
     return result
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    """`python -m src.research_agent --brand antihero` -- one pass by hand
+    or from run_morning_prompts.sh. Exit 0 whatever happened: a skipped
+    pass ("already researched today", "bank already full", "no key") is a
+    normal night, and the script treats a non-zero as a crash."""
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--brand", required=True, choices=("antihero", "zeropage"))
+    parser.add_argument("--count", type=int, default=BANK_TARGET)
+    parser.add_argument("--force", action="store_true",
+                        help="ignore the once-a-day stamp")
+    args = parser.parse_args(argv)
+    result = run(args.brand, count=args.count, force=args.force)
+    print(f"research: {args.brand} — {result['note']} "
+          f"(banked={result['banked']} images={result['images']})")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

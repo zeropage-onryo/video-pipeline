@@ -38,6 +38,10 @@ def test_build_scene_brief_prompt_has_the_full_skeleton():
     p = shootgen.build_scene_brief_prompt("antihero")
     for marker in ("OPEN LINE", "STYLE", "BEATS", "SOUND", "AVOID", "9:16"):
         assert marker in p
+    # the per-brand look (2026-09-05) replaces the "raw handheld, matte"
+    # house style that flattened every reference carrying it
+    assert "{look}" not in p and "ANTIHERO LOOK" in p
+    assert "raw handheld, close wide-angle" not in p
 
 
 def test_scene_brief_marks_brand_as_fallback_context():

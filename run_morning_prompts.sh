@@ -80,6 +80,30 @@ python3 -m ops.bank ingest data/idea_agent >> data/morning_prompts.log 2>&1 || \
   echo "$(date -u +%FT%TZ) morning: idea-agent plans failed to ingest (falling back to the crawl)" \
     >> data/morning_prompts.log
 
+# Generated references (src/refgen.py, 2026-09-06): every banked spark gets
+# one still rendered from its hook frame in the brand's look, Midjourney
+# first. Midjourney keeps its own per-run approval gate; uncomment the
+# export to let the NIGHT spend AceData credits (~$0.27/still, capped by
+# REFGEN_DAILY_CAP, default 8). Without it the night renders on Gemini's
+# image model (NANO), which needs no approval and no extra key.
+# export MIDJOURNEY_SPEND_OK=1
+
+# 2b) The research agent (src/research_agent.py) -- Claude/Gemini with the
+#    board's own MCP tools, banking sparks WITH reference images picked from
+#    images_for's closed set. Turned on 2026-09-05. It runs HERE, before the
+#    crawl, and not only via --research on the runs below, because
+#    research_agent.bank_is_full() skips when the bank already holds
+#    RESEARCH_BANK_TARGET unused sparks -- and step 3 fills exactly that many.
+#    With --research alone the node was a no-op every night it was ever
+#    passed. Order is therefore: agent, then crawl tops up what is left, then
+#    sparks.txt. Never fatal; once a day per brand (data/.research stamp).
+for BRAND in antihero zeropage; do
+  python3 -m src.research_agent --brand "$BRAND" \
+    >> data/morning_prompts.log 2>&1 || \
+    echo "$(date -u +%FT%TZ) morning: research agent failed for $BRAND (the crawl still runs)" \
+      >> data/morning_prompts.log
+done
+
 # 3) The research scout. One pass per brand banks scored sparks crawled off
 #    the web / YouTube / feeds (src/scout.py). Never fatal and never
 #    retried: a failed crawl leaves an empty bank, --scout below finds
@@ -138,7 +162,7 @@ for PAIR in "antihero antihero" "zeropage zeropage"; do
   i=0
   for spark in "${SPARKS[@]}"; do
     if [ "$i" -lt "$SCOUT_PER_BRAND" ]; then
-      python3 -m src.trigger --channel "$CHANNEL" --brand "$BRAND" --scout \
+      python3 -m src.trigger --channel "$CHANNEL" --brand "$BRAND" --research \
         --spark "$spark" >> data/morning_prompts.log 2>&1
     else
       python3 -m src.trigger --channel "$CHANNEL" --brand "$BRAND" --spark "$spark" \

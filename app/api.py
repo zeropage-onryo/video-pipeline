@@ -765,8 +765,16 @@ async def _collect_refs(form, want_video: bool = False, drop_urls=None):
 
 
 def _auto_refs(text: str, already: list,
-               account_id: Optional[int] = None) -> list:
+               account_id: Optional[int] = None, *, idea: Optional[str] = None) -> list:
     """The photos of the assets this scene actually names.
+
+    `idea` (2026-09-05): when given, the assets in scope are the ones
+    the IDEA names or `already` explicitly picks -- asset_shelf.in_scope,
+    the same rule that decided what the writer was offered -- and the
+    finished scene's own text is not scanned. Scanning it back had been
+    attaching Michael's photos to scenes whose idea never named him,
+    because the writer volunteers his name on his own channel. Without
+    `idea` the legacy scene-text scan still runs.
 
     `format_cast` tells the generator that Michael and the Ducati have
     "(reference photos on file)", and the scene it writes says so in as
@@ -790,7 +798,11 @@ def _auto_refs(text: str, already: list,
     except Exception:
         return []
     picked = list(already)
-    named = shootgen.named_assets(text, assets)
+    if idea is not None:
+        from src import asset_shelf
+        named = asset_shelf.in_scope(idea, already, assets)
+    else:
+        named = shootgen.named_assets(text, assets)
     for asset in named:
         if len(picked) >= MAX_IMAGE_REFS:
             return picked
@@ -842,7 +854,8 @@ def _asset_photos(photos: list, limit: int) -> list:
 
 
 def _attach_scene_refs(concept_id: int, manual: list,
-                       account_id: Optional[int] = None) -> list:
+                       account_id: Optional[int] = None, *,
+                       idea: Optional[str] = None) -> list:
     """Store a scene's references on its shot, manual picks first.
 
     On the shot rather than on the concept because that is what the
@@ -856,7 +869,7 @@ def _attach_scene_refs(concept_id: int, manual: list,
     shots = [dict(sh) for sh in concept["shots"]]
     text = " ".join(str(shots[0].get(k) or "")
                     for k in ("desc", "prompt", "location"))
-    refs = _auto_refs(text, manual, account_id)[:MAX_IMAGE_REFS]
+    refs = _auto_refs(text, manual, account_id, idea=idea)[:MAX_IMAGE_REFS]
     if not refs:
         return []
     shots[0]["refs"] = refs
@@ -1708,7 +1721,8 @@ async def pipeline_run(request: Request, account_id: int = Depends(auth.current_
         # much as a Create-written one
         try:
             if result.get("concept_id"):
-                attached = _attach_scene_refs(result["concept_id"], refs, account_id)
+                attached = _attach_scene_refs(result["concept_id"], refs, account_id,
+                                              idea=prompt)
                 if attached:
                     detail += f" · {len(attached)} reference(s)"
         except Exception:

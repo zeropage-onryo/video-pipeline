@@ -41,7 +41,7 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
-from . import accounts, autonomy, db, preprod, refbin, scout
+from . import accounts, autonomy, db, imagesearch, preprod, refbin, scout
 
 ARCHIVE_DESCRIPTION = (
     "Take a concept off the board. Hides it; never deletes. `reason` is WHY "
@@ -536,11 +536,84 @@ def pipeline_stats(dsn: Optional[str] = None, account_id: Optional[int] = None) 
 
 # --- the research bin ------------------------------------------------------
 
+def _reachable(url: str) -> bool:
+    """Does this page actually exist? A HEAD, five seconds, fail-open on
+    anything that is not a definite 4xx.
+
+    Fail-open because the job here is catching FABRICATION, not policing
+    the web: a timeout or a bot-wall is not evidence the page is fake,
+    and refusing on one would make the bank hostage to a flaky network.
+    A 404 is evidence.
+    """
+    import requests
+    try:
+        resp = requests.head(url, timeout=5, allow_redirects=True)
+        if resp.status_code == 405:              # HEAD not allowed; try GET
+            resp = requests.get(url, timeout=5, stream=True)
+        return not (400 <= resp.status_code < 500)
+    except Exception:
+        return True
+
+
+def _store_local(path_str: str) -> Optional[str]:
+    """A frame off his own disk into the bin, through refbin's own
+    normalisation so it is addressed exactly like every other reference
+    and resolves through the same reader."""
+    try:
+        data = Path(path_str).read_bytes()
+    except OSError:
+        return None
+    jpeg = refbin.to_jpeg(data)
+    return refbin.save(jpeg) if jpeg else None
+
+
+def find_images(
+    query: str,
+    brand: str = "",
+    limit: int = 6,
+    dsn: Optional[str] = None,
+) -> dict[str, Any]:
+    """Look for reference images, and hand back ids -- never URLs.
+
+    THE OMITTED FIELD IS THE FEATURE. On 2026-09-02 an agent with no
+    image search banked eleven references by writing stock URLs from
+    memory; the CDNs served *something* for every guess, so a sunny tree
+    was banked as "bark texture" and six of the source pages 404. It was
+    not lying, it was recalling -- and no prompt fixes recall.
+
+    So the candidate keeps the URL and the caller only ever holds an
+    `id`. There is no address here to invent, and `bank_reference`
+    accepts an id that this function issued or nothing at all.
+    """
+    found = imagesearch.search(query, brand=brand or None,
+                               limit=max(1, min(int(limit), 12)), dsn=dsn)
+    live = imagesearch.sources()
+    return {
+        "query": " ".join((query or "").split()),
+        "sources": live,
+        "count": len(found),
+        # "no lane is configured" and "nothing matched" are different
+        # problems with the same empty list, and the second one wasted
+        # two days when the scout bin was silently unfillable.
+        "note": ("" if found else
+                 ("no image source is configured — Openverse is off "
+                  "(OPENVERSE_LANE=0) and no GOOGLE_CSE_ID / REDDIT_CLIENT_ID / "
+                  "UNSPLASH_ACCESS_KEY / PEXELS_API_KEY is set"
+                  if not (imagesearch.any_web(live) or live.get("frames"))
+                  else "nothing matched; try plainer words for the light and "
+                       "the surfaces rather than the story")),
+        "images": [{"id": c["id"], "shows": c.get("title") or "(no description)",
+                    "source": c["source"], "credit": c.get("credit") or ""}
+                   for c in found],
+    }
+
+
 def bank_reference(
     finding_id: int,
-    image_url: str,
-    source_url: str,
+    image_url: str = "",
+    source_url: str = "",
     title: str = "",
+    candidate_id: str = "",
     dsn: Optional[str] = None,
 ) -> dict[str, Any]:
     """Put ONE reference image behind a banked spark.
@@ -566,17 +639,56 @@ def bank_reference(
 
     Capped at MAX_BIN_IMAGES per pass, same as the crawl: a bin bigger
     than one generation carries has a tail that can never be used.
+
+    TWO WAYS IN, AND ONLY ONE OF THEM IS FOR AGENTS.
+
+    `candidate_id` redeems something `find_images` served: the URL and
+    the attribution come out of the row WE wrote, so neither can be
+    invented. That is the path the research agent takes.
+
+    A bare `image_url` is the composer's path -- a photo Michael dragged
+    on, where a person vouched for it. Left open for that reason, but it
+    now has to survive `_reachable(source_url)`: on 2026-09-02 six of
+    eleven agent-banked references cited Unsplash pages that 404, and
+    nothing had ever resolved one. A HEAD request would have caught
+    every one.
     """
     finding = scout.get_finding(int(finding_id), dsn=dsn)
     if finding is None:
         raise ValueError(f"no finding {finding_id}")
+
+    local_path = ""
+    if candidate_id:
+        candidate = imagesearch.get(candidate_id, dsn=dsn)
+        if candidate is None:
+            # An id nobody issued is what a guess looks like now, and it
+            # has to say so rather than falling through to a fetch.
+            raise ValueError(
+                f"no candidate {candidate_id!r} — ids come from find_images "
+                f"and cannot be composed; search again and pick one")
+        image_url = candidate["image_url"]
+        source_url = candidate["source_url"]
+        title = title or candidate.get("title") or ""
+        if candidate["source"] == "frames":
+            # His own footage never leaves this machine, so there is no
+            # URL to fetch and no host to guard -- the "url" is a path.
+            local_path, image_url = candidate["image_url"], ""
+    elif not (image_url or "").strip():
+        raise ValueError("give either a candidate_id from find_images or an "
+                         "image_url")
+
     if not (source_url or "").strip():
         raise ValueError("source_url is required — an unattributed reference "
                          "is the wrong thing to put in front of a spend")
+    if not candidate_id and not _reachable(source_url):
+        raise ValueError(f"source_url {source_url!r} does not resolve — an "
+                         f"attribution nobody can check is worse than none")
+
 
     pass_id = scout.pass_id_for(finding, dsn=dsn)
 
-    stored = refbin.fetch(image_url)
+    stored = (_store_local(local_path) if local_path
+              else refbin.fetch(image_url))
     if not stored:
         return {"ok": False, "finding_id": finding["id"], "pass_id": pass_id,
                 "error": "not a readable image, too large, or a refused host",
@@ -837,8 +949,8 @@ def run_graph(spark: str = "", brand: str = "", goal: str = "",
 
 TOOLS = (
     list_ideas, get_idea, search_ideas, capture_idea, pick_idea,
-    archive_idea, bank_spark, bank_reference, next_spark, list_sparks, spark_images,
-    pipeline_stats,
+    archive_idea, bank_spark, bank_reference, find_images, next_spark,
+    list_sparks, spark_images, pipeline_stats,
 )
 ENGINE_TOOLS = (run_research, run_graph)
 
@@ -998,19 +1110,60 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
         return _t(spark_images, finding_id, dsn=dsn)
 
     @server.tool(annotations=writes)
-    def reference(finding_id: int, image_url: str, source_url: str,
+    def reference(finding_id: int, candidate_id: str = "",
+                  image_url: str = "", source_url: str = "",
                   title: str = "") -> dict:
         """Bank one reference image behind a spark, so the run it feeds
         has something to render against and not just words.
 
-        Hand over the image's URL and the page it came from -- this
-        downloads it here, through the same guards and into the same
-        /refs/<sha>.jpg bin a composer upload lands in. Attribution is
-        required. Your own cast and prop photos do NOT go through here:
-        they are already on file and get attached automatically to any
-        scene that names them, ahead of anything banked."""
-        return _t(bank_reference, finding_id, image_url=image_url,
-                  source_url=source_url, title=title, dsn=dsn)
+        Pass a `candidate_id` from `find_images`. That is the whole
+        interface for you: the image and its attribution come from the
+        row the search wrote, so nothing here can be mistyped or
+        remembered wrong. An id that did not come from a search is
+        refused rather than fetched.
+
+        (`image_url` + `source_url` exist for a person dragging a photo
+        onto the composer, where someone has actually looked at it.)
+
+        Your own cast and prop photos do NOT go through here: they are
+        already on file and get attached automatically to any scene that
+        names them, ahead of anything banked."""
+        return _t(bank_reference, finding_id, candidate_id=candidate_id,
+                  image_url=image_url, source_url=source_url, title=title,
+                  dsn=dsn)
+
+    @server.tool(annotations=writes)
+    def imagine_reference(finding_id: int, hook_frame: str) -> dict:
+        """Render ONE reference still for a spark, in the brand's look,
+        from its hook frame -- and bank it behind the spark.
+
+        This is how an invented world gets a reference: no photograph
+        of a flooded mall lit by generators exists, so one is rendered.
+        Pass the `hook_frame` you wrote for the spark (what is on screen
+        in frame one), nothing else -- the look is added here. Midjourney
+        first, then Gemini's image model, then Higgsfield; the result
+        says which one rendered. One call per spark; there is a daily
+        cap and the note tells you when it is reached. Do this BEFORE
+        `images_for`, and then add one or two real photographs for the
+        light and the surfaces."""
+        from . import refgen
+        return _t(refgen.render_for_finding, finding_id, hook_frame, dsn=dsn)
+
+    @server.tool(annotations=read_only)
+    def images_for(query: str, brand: str = "", limit: int = 6) -> dict:
+        """Search for reference images and get back ids to bank.
+
+        Describe the LIGHT and the SURFACES you want, not the story --
+        "cold fluorescent on wet tile, overhead" finds more than "a man
+        regretting something". Then pass an id straight to `reference`.
+
+        You never see or supply a URL: results carry an id, what the
+        image shows, and who it belongs to. Results are images pulled
+        off the internet for THIS spark -- Reddit posts, web image
+        search, the open index -- so name the WORLD and the LOOK
+        together: "flooded mall generator light teal" finds more than
+        either half alone. Two or three searches beat one."""
+        return _t(find_images, query, brand=brand, limit=limit, dsn=dsn)
 
     @server.tool(annotations=read_only)
     def stats() -> dict:

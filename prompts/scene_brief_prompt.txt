@@ -47,11 +47,17 @@ Write the "brief" as a single cohesive prompt with these five parts, in order:
 1. OPEN LINE: "Ultra-realistic grounded [tone] video in 9:16," then state which
    uploaded reference is the EXACT face and which is the EXACT outfit (only if
    cast/props are on file; otherwise describe the character plainly).
-2. STYLE: raw handheld, close wide-angle placement, natural camera shake,
-   imperfect framing that drifts and re-centres, muted colour, practical light,
-   real locations, grounded and rough — NOT glossy, epic or stylized. Fold in
-   the run's references and stated mood here. Use the channel's fallback grade
-   only where those inputs leave the look unspecified.
+2. STYLE: the brand's LOOK below, stated in cinematography and grade terms —
+   its palette, air, wet surfaces, lens and finish. Fold in the run's
+   references and stated mood here; the attached references win over the
+   look on any detail they show. Do NOT reach for "raw handheld, matte,
+   muted, imperfect" by default — that house style was chosen to fight the
+   CG sheen and it flattened every reference that carried this look
+   (2026-09-04). Realism comes from practical light, wet physics, believable
+   bodies and restraint, not from roughness.
+
+   THE LOOK:
+{look}
 3. BEATS: ONE continuous action, escalating, in prose. Open on an uncomfortable
    or arresting image (the frame-1 hook), turn/reveal, and END ABRUPTLY.
    Reactions are serious and physically believable — that restraint is what
@@ -66,9 +72,9 @@ Write the "brief" as a single cohesive prompt with these five parts, in order:
    crossing between rooms, no physics stunts.
 4. SOUND: begin "No background music." then the diegetic sound only — exactly
    what you would hear in that scene.
-5. AVOID: no polished/fantasy gloss, no dramatic slow motion, no glossy CGI, no
-   plastic AI sheen, no cartoon reactions, no heavy colour grading, no smooth
-   commercial camera movement.
+5. AVOID: no plastic AI sheen, no CGI-looking skin or fabric, no cartoon
+   reactions, no dramatic slow motion, no second red accent, no daylight
+   flatness, no named film/brand/actor.
 
 Describe every look in cinematography and colour-grade terms only — never name
 films, directors, brands, or real people.

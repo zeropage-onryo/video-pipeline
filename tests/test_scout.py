@@ -179,6 +179,8 @@ def test_digest_prompt_carries_the_avoid_list_and_the_recent_sparks(tmp_db):
     assert "an old idea" in prompt
     assert "something found" in prompt
     assert "{signals}" not in prompt and "{brand}" not in prompt
+    # the per-brand look (2026-09-05) is injected, not left as a placeholder
+    assert "{look}" not in prompt and "LOOK" in prompt
 
 
 def test_format_signals_omits_lanes_that_only_reported_an_error():
@@ -639,3 +641,34 @@ def test_scout_with_judge_falls_back_to_self_score_when_the_judge_cant_run(tmp_d
     assert [f["spark"] for f in result["findings"]] == [
         "the last check before leaving", "a routine performed wrong"]
     assert any("story judge" in e for e in result["errors"])
+
+
+def test_variety_is_enforced_in_code_not_just_asked():
+    """Mike, 2026-09-06: different wardrobe, faces and worlds throughout.
+    The second spark to reuse a world (this slate or the recent bank), a
+    wardrobe or a face is dropped and named; a candidate without the
+    fields passes."""
+    cands = [
+        {"spark": "a", "world": "rain-neon future, adverts know your name",
+         "wardrobe": "white and red leathers", "face": "Michael, visor down"},
+        {"spark": "b", "world": "a rain-soaked neon future",
+         "wardrobe": "sealed hazmat", "face": "Michael, respirator"},
+        {"spark": "c", "world": "the floodline, generator light",
+         "wardrobe": "white leathers", "face": "Michael, hood"},
+        {"spark": "d", "world": "salt desert", "wardrobe": "hide-wrapped coat",
+         "face": "an old woman, grey braid"},
+        {"spark": "f", "world": "orbital dock", "wardrobe": "grey issued coat",
+         "face": "an old woman with a grey braid"},
+        {"spark": "e"},
+    ]
+    kept, dropped = scout.enforce_variety(cands, [scout._variety_key("the floodline")])
+    assert [c["spark"] for c in kept] == ["a", "d", "e"]
+    assert [(c["spark"], why) for c, why in dropped] == [("b", "world"), ("c", "world"), ("f", "face")]
+
+
+def test_the_digest_keeps_world_wardrobe_and_face_raw_and_folded():
+    text = ('{"candidates": [{"spark": "s", "world": "salt desert", "wardrobe": "hide coat",'
+            ' "face": "an old woman", "hook_frame": "h", "score": 0.7}]}')
+    c = scout.parse_digest_response(text)[0]
+    assert (c["world"], c["wardrobe"], c["face"]) == ("salt desert", "hide coat", "an old woman")
+    assert "wardrobe: hide coat" in c["rationale"] and "face: an old woman" in c["rationale"]

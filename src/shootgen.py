@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
-from . import accounts, crag, entities, preprod, rag
+from . import accounts, crag, entities, looks, preprod, rag
 from . import shot as shot_module
 from .db import init_db
 from .gemini_utils import generate_with_retry, strip_fences
@@ -1223,6 +1223,7 @@ def build_scene_brief_prompt(brand: str, spark=None, references: str = "",
     return (template
             .replace("{card_line_rules}", CARD_LINE_RULES)
             .replace("{brand}", load_brand(brand))
+            .replace("{look}", looks.look_block(brand))
             .replace("{spark}", f"CREATIVE SPARK FROM THE FILMMAKER: {spark}" if spark else "")
             .replace("{references}", references or NO_REFERENCES_NOTE)
             .replace("{cast}", cast or NO_CAST_NOTE)

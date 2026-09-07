@@ -117,7 +117,7 @@ from typing import Optional
 import requests
 from dotenv import load_dotenv
 
-from . import db, inspiration, refbin, winners
+from . import db, inspiration, looks, refbin, winners
 from .gemini_utils import strip_fences
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -216,16 +216,19 @@ CREATE INDEX IF NOT EXISTS idx_scout_bin_pass ON scout_bin (pass_id);
 # spark can actually be made of.
 WEB_QUERIES = {
     "antihero": [
-        "what night photography and moody motorcycle imagery is resonating "
-        "right now, and what makes those images work",
-        "small human rituals and gestures people are responding to in "
-        "short film and photography this month",
+        "what dystopian, outbreak and rain-soaked neon future worlds are "
+        "landing in short film and AI video right now, and what one rule "
+        "makes each world feel real",
+        "what night motorcycle and rider imagery inside sci-fi or horror "
+        "worlds is resonating this month, and what makes it work",
     ],
     "zeropage": [
-        "what unsettling or uncanny imagery is landing right now in short "
-        "film, and what staging makes it work",
-        "quiet domestic-interior imagery and small strange details people "
-        "are responding to this month",
+        "what creature designs, monsters and invented in-world products are "
+        "landing in short horror and sci-fi film right now, and what one "
+        "detail makes them unsettling",
+        "what imagined worlds -- zombie, cyberpunk, flooded city, company "
+        "town -- are people building in AI video this month, and what "
+        "hook frame opens them",
     ],
 }
 # Ordered by RELEVANCE, not view count. Sorting a broad keyword by views
@@ -233,20 +236,32 @@ WEB_QUERIES = {
 # the first run of this came back with an Encanto clip and a football
 # meme against "ai video shorts" -- which is noise, not format signal.
 SHORTS_QUERIES = {
-    "antihero": ["motorcycle night cinematic short", "garage detail macro moody"],
+    "antihero": ["motorcycle cyberpunk night short film", "rider zombie apocalypse cinematic"],
     # NOT "faceless channel format" -- that returns videos ABOUT running a
     # faceless channel (monetisation, policy, how-to), which is the
     # business, not the look. These ask for the look itself.
-    "zeropage": ["liminal empty room short film", "unsettling quiet interior short"],
+    "zeropage": ["creature design short film ai", "dystopian world short film cinematic"],
 }
 BRAND_NOTES = {
-    "antihero": ("Moto/noir personal brand. A real person, real machine, real "
-                 "rooms. Low-key night grade. The machine is a recurring "
-                 "character, not a subject."),
-    "zeropage": ("Format-driven, uncanny. People may appear, but never the "
-                 "same person twice -- no recurring star. The format itself "
-                 "is the hook."),
+    "antihero": ("Michael's PERSONAL brand. He is the character and the "
+                 "world is happening to him: Michael and the white Ducati "
+                 "inside an outbreak, a rain-neon future, a flooded city. "
+                 "Personal stakes -- what he wants, what he loses -- carried "
+                 "by the world's rule. The machine rides with him; it is not "
+                 "the subject. Same face, different world, different wardrobe, "
+                 "different thing covering him -- every time."),
+    "zeropage": ("The viral engine. Worlds, creatures and invented products "
+                 "are the star; no recurring person. A stranger, a monster or "
+                 "the product itself is the character -- a new face and a new "
+                 "wardrobe every spark, never the same one twice. Ad-shaped "
+                 "beats welcome: the product does something on screen. Built "
+                 "to stop a thumb in frame one."),
 }
+
+
+def look_block(brand: str) -> str:
+    """See src/looks.py -- kept here as the name both producers call."""
+    return looks.look_block(brand)
 
 
 def _now() -> str:
@@ -622,6 +637,72 @@ def format_signals(signals: list[dict]) -> str:
     return "\n".join(lines)
 
 
+_VARIETY_STOP = {"a", "an", "the", "of", "in", "at", "where", "with", "and", "is",
+                 "its", "it", "one", "night", "city", "world", "his", "her", "he",
+                 "she", "on", "to", "by", "that", "this", "under", "over", "or"}
+
+
+def _variety_key(text: str) -> frozenset:
+    """The content words of a world / wardrobe / face line."""
+    return frozenset(w for w in re.findall(r"[a-z0-9]+", (text or "").lower())
+                     if w not in _VARIETY_STOP and len(w) > 2)
+
+
+def _variety_same(a: frozenset, b: frozenset) -> bool:
+    """"rain-neon future, adverts know your name" and "a rain-soaked
+    neon future" are the same world; "floodline" and "flooded church"
+    are not (yet). Two shared content words, or half of the shorter
+    line, is the line."""
+    if not a or not b:
+        return False
+    shared = len(a & b)
+    return shared >= 2 or shared >= max(1, min(len(a), len(b)) / 2)
+
+
+def recent_worlds(brand: str, days: int = NOVELTY_DAYS, dsn=None) -> list:
+    """The `world:` lines folded into recent rationales -- the crawl's
+    memory of which worlds it has already spent."""
+    out = []
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    try:
+        with db.connect(dsn) as conn:
+            rows = conn.execute(
+                "SELECT rationale FROM scout_findings WHERE brand = %s AND created_at >= %s",
+                (brand, since)).fetchall()
+    except Exception:
+        return out
+    for r in rows:
+        m = re.search(r"world:\s*([^·]+)", r["rationale"] or "")
+        if m:
+            out.append(_variety_key(m.group(1)))
+    return out
+
+
+def enforce_variety(candidates: list[dict], recent=()) -> tuple[list, list]:
+    """Mike, 2026-09-06: different wardrobe, faces and worlds throughout.
+    The prompt is asked; this makes it true -- the SECOND spark to reuse
+    a world (this slate or the recent bank), a wardrobe or a face is
+    dropped, and the caller logs why. Candidates without the fields are
+    let through: an older digest shape is thin, not a repeat."""
+    kept, dropped = [], []
+    seen = {"world": [k for k in recent if k], "wardrobe": [], "face": []}
+    for c in candidates:
+        why = ""
+        for field in ("world", "wardrobe", "face"):
+            key = _variety_key(c.get(field, ""))
+            if not key:
+                continue
+            if any(_variety_same(key, k) for k in seen[field]):
+                why = field
+                break
+            seen[field].append(key)
+        if why:
+            dropped.append((c, why))
+        else:
+            kept.append(c)
+    return kept, dropped
+
+
 def recent_sparks(brand: str, days: int = NOVELTY_DAYS, dsn=None) -> list[str]:
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     try:
@@ -641,6 +722,7 @@ def build_digest_prompt(brand: str, signals: list[dict], count: int,
     return (template
             .replace("{brand}", brand)
             .replace("{brand_note}", BRAND_NOTES.get(brand, ""))
+            .replace("{look}", look_block(brand))
             .replace("{count}", str(count))
             .replace("{avoid}", avoid or "")
             .replace("{recent}", "\n".join(f"- {s}" for s in recent) or "(nothing yet)")
@@ -699,9 +781,16 @@ def parse_digest_response(text: str) -> list[dict]:
         # spark_images). The alternative -- request them and drop them
         # on the floor -- is exactly what happened to this prompt's old
         # `turn`/`stake` fields, which this replaces.
+        # world / cast / hook_frame joined the spine 2026-09-05 with the
+        # world-building rewrite; they ride into rationale for the same
+        # reason want/rule/reversal do -- no column, and every reader of
+        # a finding already surfaces rationale.
         spine = " · ".join(
             f"{label}: {(c.get(key) or '').strip()}"
-            for label, key in (("want", "want"), ("rule", "rule"),
+            for label, key in (("world", "world"), ("cast", "cast"),
+                               ("wardrobe", "wardrobe"), ("face", "face"),
+                               ("hook", "hook_frame"),
+                               ("want", "want"), ("rule", "rule"),
                                ("reversal", "reversal"))
             if (c.get(key) or "").strip()
         )
@@ -712,6 +801,12 @@ def parse_digest_response(text: str) -> list[dict]:
             rationale = f"{rationale} · retell: {one_sentence}" if rationale else one_sentence
         out.append({
             "spark": c["spark"].strip(),
+            # kept raw as well as folded into rationale: refgen renders
+            # the spark's reference from exactly this line
+            "hook_frame": (c.get("hook_frame") or "").strip(),
+            "world": (c.get("world") or "").strip(),
+            "wardrobe": (c.get("wardrobe") or "").strip(),
+            "face": (c.get("face") or "").strip(),
             "rationale": rationale,
             "evidence": (c.get("evidence") or "").strip(),
             "sources": [s for s in (c.get("sources") or []) if isinstance(s, str)],
@@ -928,6 +1023,16 @@ def pass_id_for(finding: dict, dsn=None) -> str:
     if not pass_id:
         pass_id = agent_pass_id(finding["id"])
         set_pass_id(finding["id"], pass_id, dsn=dsn)
+        return pass_id
+    # A crawl finding's pass is the CRAWL's bin, shared by the eight
+    # sparks of that pass -- so a photo a person or the agent picks for
+    # THIS spark must not land there (2026-09-06: two Pinterest picks
+    # for spark 93 attached themselves to every spark of its pass).
+    # Hand-banked images go on the finding's own agent-<id> pass;
+    # bin_for_finding reads that ahead of the crawl's. The crawl's own
+    # pass id stays on the finding, so `research` history is intact.
+    if not pass_id.startswith(("agent-", "gen-")):
+        return agent_pass_id(finding["id"])
     return pass_id
 
 
@@ -1041,7 +1146,21 @@ def bin_for_finding(finding_id: int, dsn=None) -> list[dict]:
                                (finding_id,)).fetchone()
     except Exception:
         return []
-    return bin_for_pass(row["pass_id"] if row else "", dsn=dsn)
+    # A crawl pass banks eight sparks against ONE bin, so anything that
+    # belongs to a single spark -- the still src/refgen.py renders from
+    # its hook frame (2026-09-06) -- lives on its own pass, gen-<id>, and
+    # comes FIRST: refs[0] is the frame the clip anchors on, and a still
+    # rendered for this exact spark beats a photo crawled for the pass.
+    crawl = (row["pass_id"] if row else "") or ""
+    own = bin_for_pass(generated_pass_id(finding_id), dsn=dsn)
+    picked = agent_pass_id(finding_id)
+    if crawl != picked:
+        own += bin_for_pass(picked, dsn=dsn)
+    return own + bin_for_pass(crawl, dsn=dsn)
+
+
+def generated_pass_id(finding_id: int) -> str:
+    return f"gen-{int(finding_id)}"
 
 
 def list_findings(brand=None, unused_only=False, limit=50, dsn=None) -> list[dict]:
@@ -1157,6 +1276,8 @@ def scout(brand: str = "zeropage", count: int = 4, *, client=None, model=None,
     # Novelty, enforced in code. The prompt was given the recent list and
     # asked to avoid it; this is what makes that true.
     seen = {_spark_key(s) for s in recent_sparks(brand, dsn=dsn)}
+    candidates, dropped = enforce_variety(candidates, recent_worlds(brand, dsn=dsn))
+    errors += [f"dropped for repeating {why}: {c['spark'][:60]!r}" for c, why in dropped]
     stored = []
     for c in candidates:
         key = _spark_key(c["spark"])
@@ -1194,6 +1315,15 @@ def scout(brand: str = "zeropage", count: int = 4, *, client=None, model=None,
 
         c["id"] = record(brand, c, lanes=",".join(lanes), pass_id=pass_id, dsn=dsn)
         stored.append(c)
+        # The spark's own reference, rendered in the look from its hook
+        # frame (src/refgen.py, 2026-09-06). Capped and never fatal: a
+        # night over the cap or with no renderer banks text-only sparks
+        # exactly as before, and says so once per spark below.
+        if c.get("hook_frame"):
+            from . import refgen
+            gen = refgen.render_for_finding(c["id"], c["hook_frame"], dsn=dsn)
+            if not gen.get("ok"):
+                errors.append(f"no generated reference for finding {c['id']}: {gen.get('note')}")
 
     _close_rag()
     if not stored:

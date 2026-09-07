@@ -180,7 +180,8 @@ def _ordered(photos: list, limit: int) -> list:
     return (native + [u for u in urls if u not in native])[:max(0, limit)]
 
 
-def attach_refs(concept_id: int, extra: list | None = None, *, db_path=None, account_id: Optional[int] = None) -> list:
+def attach_refs(concept_id: int, extra: list | None = None, *, idea: str | None = None,
+                db_path=None, account_id: Optional[int] = None) -> list:
     """Store the photos this scene should render against, on its shot.
 
     Closes the loop `format_cast` opens. The cast block tells the
@@ -210,6 +211,18 @@ def attach_refs(concept_id: int, extra: list | None = None, *, db_path=None, acc
 
     Grounding shapes, it never gates: no match, no assets, or a broken
     catalogue all just mean the scene renders on its text.
+
+    WHICH assets qualify as "named" depends on `idea` (2026-09-05, Mike:
+    "the crawl is still using my asset reference"). With `idea` given --
+    the spark or typed idea the scene was WRITTEN from -- the scope is
+    asset_shelf.in_scope(idea, extra, catalogue): exactly the set the
+    writer was offered, i.e. assets the idea names or a caller
+    explicitly attached. The finished scene's own text is NOT scanned:
+    the writer had been putting "Michael" and "his motorcycle" into a
+    scene whose spark said only "he" and "his bike", and reading the
+    scene back then attached three photos of his face and one of the
+    Ducati to a crawled idea that never asked for either. With `idea`
+    None (legacy callers, tests) the scene text is scanned as before.
     """
     path = db_path
     concept = preprod.get_concept(concept_id, dsn=path, account_id=account_id)
@@ -223,8 +236,11 @@ def attach_refs(concept_id: int, extra: list | None = None, *, db_path=None, acc
     picked: list = []
     try:
         from . import asset_shelf
-        named = shootgen.named_assets(
-            text, asset_shelf.catalogue(db_path=path, account_id=account_id))
+        catalogue = asset_shelf.catalogue(db_path=path, account_id=account_id)
+        if idea is not None:
+            named = asset_shelf.in_scope(idea, extra, catalogue)
+        else:
+            named = shootgen.named_assets(text, catalogue)
     except Exception as e:
         # Say so. This except swallowed an account-scoping mistake for
         # two nights: the catalogue came back empty, every scene "named
@@ -648,7 +664,7 @@ def run(idea: str, brand: str, *, count: int = 1, refs=None, image_refs=None,
             continue
         try:
             if attach_refs(scene["concept_id"], list(refs or []),
-                           account_id=account_id):
+                           idea=idea, account_id=account_id):
                 grounded_count += 1
         except Exception:
             pass          # a missing photo never fails a written scene

@@ -519,9 +519,22 @@ def gen_concept(state: GenState) -> GenState:
     # assets it NAMED first (identity holds the anchor slot Runway reads),
     # the handed-in research images after. Never fatal -- an ungrounded
     # scene is still a scene, and attach_refs says so by returning [].
+    # Scoped on the SPARK the scene was written from plus any explicit
+    # pick -- the same set ground_entities offered the writer -- never on
+    # the finished scene's own words (2026-09-05): reading the scene
+    # back had been attaching Michael's face to crawled ideas that only
+    # ever said "he".
+    scope_text = state.get("spark") or ""
+    for getter, ids in ((entities.get_character, state.get("picked_characters")),
+                        (entities.get_prop, state.get("picked_props"))):
+        for i in ids or []:
+            row = getter(i, account_id=state.get("account_id"))
+            if row and row.get("name"):
+                scope_text += f" {row['name']}"
     refs = []
     try:
         refs = scene_chain.attach_refs(result["concept_id"], handed,
+                                       idea=scope_text,
                                        db_path=None,
                                        account_id=state.get("account_id"))
         if refs:
