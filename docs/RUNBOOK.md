@@ -73,6 +73,51 @@ derived from `params_json` — so rows imported before the field existed
 are covered with no backfill). It matters when a clip is about to be used
 somewhere a consumer plan's terms bite.
 
+### The lane on `/ui` (added 2026-09-08)
+
+The Queue view carries a **Subscription lane** section for an operator
+account, and the terminal is no longer part of the loop:
+
+- each waiting shot shows its **gate-passed prompt with a Copy button**
+  (that is what gets pasted into Runway), the **keyframe** (drag it
+  straight into the start-image slot, or click to save it first), and the
+  **duration and ratio to set** — the duration is printed on every card
+  because the web app resets that chip to 5s on every reload;
+- the finished mp4 goes back by **dropping it on the card** (clicking the
+  drop area opens a file picker instead) — `POST /api/queue/manual/{id}/clip`.
+
+The section is **server-rendered behind the operator flag**, so a
+non-operator's page does not contain it at all, and `/api/capabilities`
+reports `manual_lane` for the same reason. Both are presentation: the
+upload route re-asks `manual_lane.require` against the account
+`auth.current_account_id` resolved server-side, and refuses with the same
+404 and the same `REFUSAL` bytes as `GET /api/queue/manual`. Faking the
+capability gets you a section full of cards that refuse.
+
+**The route does not verify anything itself.** It calls
+`ops/render_queue.py`'s `import_clip`, which stays the single
+implementation of filing a lane clip — the model/ratio/duration claims
+checked against `src/render_specs.py` and refused rather than clamped,
+the ffprobe measurement, `_place` into `data/renders/runway/`, and the
+`generations` row with `cost_usd` NULL and the `manual-unlimited` marker.
+What the route owns is the upload: **mp4 by magic number** (the `ftyp`
+box, not the filename, and a QuickTime brand is refused), a **256MB cap
+enforced while the body streams**, and a server-chosen filename
+(`concept<id>-shot<n>.mp4`).
+
+**A second drop on the same shot is refused, not applied** (409,
+"this shot already has a clip"). Dropping is a gesture and gestures
+repeat; replacing would leave a second `generations` row for one render —
+which is what the tool scoreboard counts — and the first mp4 orphaned in
+`data/renders/`. Clear the shot's `media_url` and drop again if a replace
+is really what you meant. The CLI keeps its overwrite behaviour: a
+command line naming `--concept` and `--shot` is a stated intention.
+
+**The operator flag is still CLI-only.** There is no UI to grant it and
+there must not be — an account that can turn on its own lane is not
+gated. `/api/capabilities` may say you do not have it; only
+`python -m src.accounts operator <slug> --on` changes that.
+
 ### Driving the Runway app (measured 2026-09-06)
 
 Four things cost real time or a wasted round that day:

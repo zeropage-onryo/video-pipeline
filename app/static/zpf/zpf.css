@@ -1105,3 +1105,25 @@ html[data-v="studio"] #gl{opacity:1;transition:opacity .5s}
 /* cleaner canvas chrome */
 #dircanvas .wfwrap{height:calc(100vh - 330px)}
 #dircanvas .wfhint{margin-top:14px}
+
+/* The subscription lane's drop target (Queue, operator only). Same
+   dashed-tile language as the composer's .mdrop -- one idiom for "put a
+   file here", not a second one. */
+.lanedrop{
+  display:grid;place-items:center;padding:18px 12px;cursor:pointer;
+  border:1px dashed var(--line-hi);border-radius:var(--r1);
+  background:rgb(255 255 255 / .02);color:var(--dim);
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;
+  transition:color var(--t),border-color var(--t),background var(--t);
+}
+.lanedrop:hover{color:var(--text)}
+.lanedrop.over{color:var(--text);border-color:var(--signal);background:var(--signal-soft)}
+/* A refused drop, said on the card that was refused. The refusals are
+   sentences ("that is not an mp4 -- the file's own header says so"), so
+   this drops the tile's uppercase mono tracking: the tile is a label
+   until it has to carry a reason, and a reason has to be readable. */
+.lanedrop.bad{
+  color:var(--signal);border-color:var(--signal);background:var(--signal-soft);
+  font-family:var(--body);font-size:12px;letter-spacing:0;text-transform:none;
+  text-align:center;line-height:1.45;
+}

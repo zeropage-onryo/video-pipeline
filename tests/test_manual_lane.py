@@ -638,3 +638,379 @@ def test_the_cli_makes_you_say_which_way(tmp_db):
     a half-typed command."""
     with pytest.raises(SystemExit):
         accounts.main(["operator", "zeropage"])
+
+
+# ---------- surface 3: the drop target on /ui ----------
+#
+# The lane became reachable without a terminal on 2026-09-08: the Queue
+# view lists what is waiting with the prompt to paste and the keyframe to
+# drag in, and the finished mp4 goes back by dropping it on the card.
+#
+# A new door onto an operator-only lane is only safe if it is the SAME
+# door, so what is under test here is sameness: the same gate on the same
+# server-resolved account, the same byte-identical refusal, and the same
+# `import_clip` doing the verification and writing the row. The upload's
+# own hazards -- a file that is not an mp4, a file that is enormous, a
+# gesture that fires twice -- are the route's own and are tested here
+# because nothing else in the repo has ever had to think about them.
+
+MP4_HEADER = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom"
+
+
+def an_mp4(size: int = 200_000) -> bytes:
+    """Bytes that a magic-number check reads as an mp4. Deliberately not
+    a real video: what the route checks is the ftyp box, and ffprobe's
+    verdict on the rest is recorded rather than required."""
+    return MP4_HEADER + b"\x00" * max(0, size - len(MP4_HEADER))
+
+
+def a_waiting_scene(path, account_id, title="The Bronze Debt"):
+    cid = a_scene(path, account_id, title=title)
+    preprod.set_picked(cid, True, dsn=path, account_id=account_id)
+    return cid
+
+
+def drop(client, concept_id, data=None, blob=None, filename="clip.mp4"):
+    fields = {"shot_n": "1", "model": "gen4_turbo", "duration": "10",
+              "anchored": "1"}
+    fields.update(data or {})
+    return client.post(
+        f"/api/queue/manual/{concept_id}/clip",
+        files={"file": (filename, blob if blob is not None else an_mp4(),
+                        "video/mp4")},
+        data=fields)
+
+
+def test_a_dropped_clip_is_filed_free_with_the_lane_marker(tmp_db, monkeypatch,
+                                                           api, renders_in_tmp):
+    """The whole point, end to end: drop the mp4 and the shot has a clip
+    /renders can serve, a FREE generations row, and no place in the
+    queue any more."""
+    account_id = an_operator(tmp_db, monkeypatch)
+    cid = a_waiting_scene(tmp_db, account_id)
+    client = api(account_id)
+    assert len(client.get("/api/queue/manual").json()["items"]) == 1
+
+    res = drop(client, cid)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["media_url"] == f"/renders/runway/concept{cid}-shot1.mp4"
+    assert (renders_in_tmp / "runway" / f"concept{cid}-shot1.mp4").is_file()
+
+    with generative.connect(tmp_db) as conn:
+        row = conn.execute("SELECT tool, cost_usd, params_json FROM generations "
+                           "ORDER BY id DESC LIMIT 1").fetchone()
+    assert row["tool"] == "runway"
+    assert row["cost_usd"] is None            # FREE, never $0
+    params = json.loads(row["params_json"])
+    assert params["source"] == manual_lane.SOURCE
+    assert params["lane"] == manual_lane.LANES["runway"]
+    assert params["model"] == "gen4_turbo"
+    assert params["duration"] == 10
+    assert params["key_source"] is None
+    # ffprobe ran or honestly said it could not -- never a silent zero
+    assert "duration_source" in params and "duration_measured_s" in params
+
+    # and it is out of both queues, by the one predicate
+    assert client.get("/api/queue/manual").json()["items"] == []
+    assert client.get("/api/queue/pending").json()["items"] == []
+
+
+def test_the_served_name_is_the_servers_own_not_the_uploaders(tmp_db, monkeypatch,
+                                                              api, renders_in_tmp):
+    """`_place` names the served file after the file it is handed, and a
+    filename is caller-supplied text."""
+    account_id = an_operator(tmp_db, monkeypatch)
+    cid = a_waiting_scene(tmp_db, account_id)
+    res = drop(api(account_id), cid, filename="../../etc/passwd.mp4")
+    assert res.status_code == 200, res.text
+    assert res.json()["media_url"] == f"/renders/runway/concept{cid}-shot1.mp4"
+
+
+def test_the_drop_route_refuses_a_non_operator(tmp_db, monkeypatch, api):
+    """The same 404 and the same bytes as GET /queue/manual. A second
+    surface onto the lane must not be a weaker one."""
+    an_operator(tmp_db, monkeypatch)
+    other = accounts.upsert_account("pilot", "Pilot", dsn=tmp_db)
+    cid = a_waiting_scene(tmp_db, other)
+    res = drop(api(other), cid)
+    assert res.status_code == 404
+    assert manual_lane.REFUSAL in res.text
+    assert "pilot" not in res.text and "zeropage" not in res.text
+    with generative.connect(tmp_db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM generations").fetchone()[0] == 0
+
+
+def test_the_drop_route_refuses_everyone_when_nothing_is_configured(tmp_db, api):
+    account_id = accounts.upsert_account("zeropage", "Zero Page", dsn=tmp_db)
+    cid = a_waiting_scene(tmp_db, account_id)
+    refused = drop(api(account_id), cid)
+    assert refused.status_code == 404
+    assert manual_lane.REFUSAL in refused.text
+    assert drop(api(None), cid).status_code == 404
+
+
+def test_the_drop_refusals_are_indistinguishable(tmp_db, monkeypatch, api):
+    other = accounts.upsert_account("pilot", "Pilot", dsn=tmp_db)
+    cid = a_waiting_scene(tmp_db, other)
+    unconfigured = drop(api(other), cid)
+    an_operator(tmp_db, monkeypatch)
+    not_allowed = drop(api(other), cid)
+    assert unconfigured.status_code == not_allowed.status_code == 404
+    assert unconfigured.text == not_allowed.text
+
+
+def test_faking_the_capability_does_not_open_the_route(tmp_db, monkeypatch, api):
+    """The capability flag is PRESENTATION. It rides in a JSON response
+    the caller can edit, so the route must not read it -- it re-asks
+    manual_lane about the account it resolved itself."""
+    from app import api as api_mod
+    other = accounts.upsert_account("pilot", "Pilot", dsn=tmp_db)
+    cid = a_waiting_scene(tmp_db, other)
+    # the strongest form of the fake: the server itself claiming yes
+    monkeypatch.setattr(api_mod, "compute_capabilities",
+                        lambda account_id=None: {"manual_lane": True})
+    client = api(other)
+    assert drop(client, cid).status_code == 404
+    assert client.get("/api/queue/manual").status_code == 404
+
+
+def test_a_file_that_is_not_an_mp4_is_refused_on_its_magic_number(tmp_db, monkeypatch,
+                                                                  api, renders_in_tmp):
+    """Named .mp4, sent as video/mp4, and a zip inside. Both of those are
+    strings the caller wrote; the ftyp box is the file itself."""
+    account_id = an_operator(tmp_db, monkeypatch)
+    cid = a_waiting_scene(tmp_db, account_id)
+    res = drop(api(account_id), cid, blob=b"PK\x03\x04" + b"\x00" * 5000)
+    assert res.status_code == 400
+    assert res.json()["error"]["code"] == "not_an_mp4"
+    assert not (renders_in_tmp / "runway").exists()
+    with generative.connect(tmp_db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM generations").fetchone()[0] == 0
+
+
+def test_a_quicktime_movie_is_not_an_mp4(tmp_db, monkeypatch, api):
+    """A .mov carries the same ftyp box under a different brand, which is
+    the one case a bare `ftyp` check would wave through."""
+    account_id = an_operator(tmp_db, monkeypatch)
+    cid = a_waiting_scene(tmp_db, account_id)
+    mov = b"\x00\x00\x00\x14ftypqt  " + b"\x00" * 5000
+    assert drop(api(account_id), cid, blob=mov).json()["error"]["code"] == "not_an_mp4"
+
+
+def test_an_oversized_clip_is_refused(tmp_db, monkeypatch, api, renders_in_tmp):
+    """The cap is enforced while the body streams, so a file over it is
+    never fully accepted in order to be rejected."""
+    from app import api as api_mod
+    monkeypatch.setattr(api_mod, "MANUAL_CLIP_MAX_BYTES", 4096)
+    account_id = an_operator(tmp_db, monkeypatch)
+    cid = a_waiting_scene(tmp_db, account_id)
+    res = drop(api(account_id), cid, blob=an_mp4(200_000))
+    assert res.status_code == 413
+    assert res.json()["error"]["code"] == "clip_too_large"
+    assert not (renders_in_tmp / "runway").exists()
+
+
+def test_a_second_drop_on_the_same_shot_is_refused(tmp_db, monkeypatch, api,
+                                                   renders_in_tmp):
+    """THE DOUBLE-DROP DECISION: refuse, do not replace.
+
+    Dropping is a gesture and gestures repeat -- a browser firing twice, a
+    hand dropping again because the card did not visibly change. Applying
+    the second one would leave a second generations row for one render
+    (the tool scoreboard counts those) and the first mp4 orphaned in
+    data/renders/ with nothing naming it. The refusal says what to do
+    instead, and clearing the media_url is one click away; an overwrite
+    would not have been undoable.
+    """
+    account_id = an_operator(tmp_db, monkeypatch)
+    cid = a_waiting_scene(tmp_db, account_id)
+    client = api(account_id)
+    assert drop(client, cid).status_code == 200
+
+    again = drop(client, cid)
+    assert again.status_code == 409
+    assert again.json()["error"]["code"] == "already_filed"
+    assert "already has a clip" in again.json()["error"]["message"]
+
+    # one row, one file: nothing was written the second time
+    with generative.connect(tmp_db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM generations").fetchone()[0] == 1
+    assert sorted(p.name for p in (renders_in_tmp / "runway").iterdir()) == [
+        f"concept{cid}-shot1.mp4"]
+
+
+def test_the_route_refuses_an_illegal_claim_exactly_as_the_cli_does(tmp_db, monkeypatch,
+                                                                    api, tmp_path,
+                                                                    renders_in_tmp):
+    """The shared verification, exercised from BOTH surfaces, and the
+    refusal compared byte for byte: `ops/render_queue.import_clip` is the
+    single implementation and the route is a caller, so a length neither
+    gen4 model generates has to come back the same way from each."""
+    account_id = an_operator(tmp_db, monkeypatch)
+    for_cli = a_waiting_scene(tmp_db, account_id, title="CLI")
+    for_route = a_waiting_scene(tmp_db, account_id, title="Route")
+
+    with pytest.raises(SystemExit) as refused:
+        rq.import_clip(for_cli, 1, str(a_clip(tmp_path)), "gen4_turbo", None, None,
+                       True, account_id=account_id, provider="runway", duration=7)
+    from_cli = str(refused.value)
+
+    res = drop(api(account_id), for_route, data={"duration": "7"})
+    assert res.status_code == 400
+    assert res.json()["error"]["message"] == from_cli
+    assert "does not generate 7s" in from_cli
+
+    # refused BEFORE anything is copied or written, on both surfaces
+    assert not (renders_in_tmp / "runway").exists()
+    with generative.connect(tmp_db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM generations").fetchone()[0] == 0
+
+
+def test_an_unknown_model_is_refused_through_the_route_too(tmp_db, monkeypatch, api):
+    account_id = an_operator(tmp_db, monkeypatch)
+    cid = a_waiting_scene(tmp_db, account_id)
+    res = drop(api(account_id), cid, data={"model": "gen9_ultra"})
+    assert res.status_code == 400
+    assert "unknown runway model" in res.json()["error"]["message"]
+
+
+def test_the_route_does_not_reimplement_the_verification(tmp_db):
+    """Static, because the failure is invisible at runtime: a second copy
+    of "is this claim legal" in app/api.py would pass every test above
+    and then drift away from the CLI's copy. The route may name
+    render_specs only to OFFER the legal values on the card; the checking
+    and the measuring stay in ops/render_queue.py.
+
+    Read off the AST rather than the raw text, so the docstrings and
+    comments that EXPLAIN where the verification lives -- which is most
+    of why this route is readable -- do not read as the route doing it.
+    """
+    import ast
+
+    tree = ast.parse(pathlib.Path("app/api.py").read_text())
+    holders = (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+    docstrings = {id(ast.get_docstring(node, clean=False))
+                  for node in ast.walk(tree) if isinstance(node, holders)}
+    used = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            used.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            used.add(node.attr)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if id(node.value) not in docstrings:
+                used.add(node.value)
+    for forbidden in ("check_duration", "check_ratio", "check_model",
+                      "ffprobe", "duration_measured_s", "duration_source"):
+        assert forbidden not in used, (
+            f"app/api.py uses {forbidden} -- the lane's verification has "
+            f"one implementation, ops/render_queue.import_clip")
+
+
+def test_the_models_offered_are_the_ones_the_import_accepts(tmp_db, monkeypatch, api):
+    """The card's controls are filled from the server's own table, so it
+    cannot offer a claim the import would then refuse."""
+    from src import render_specs
+    account_id = an_operator(tmp_db, monkeypatch)
+    a_waiting_scene(tmp_db, account_id)
+    body = api(account_id).get("/api/queue/manual").json()
+    assert [m["id"] for m in body["models"]] == sorted(render_specs.RUNWAY_MODELS)
+    assert body["default_model"] in render_specs.RUNWAY_MODELS
+    for offered in body["models"]:
+        assert render_specs.check_model("runway", offered["id"]) is True
+        for seconds in offered["durations"]:
+            assert render_specs.check_duration("runway", offered["id"], seconds) is True
+
+
+# ---------- the section, and who sees it ----------
+
+@pytest.fixture
+def shell(tmp_db, monkeypatch):
+    """A signed-in session on a real account, for the /ui page itself --
+    the lane's section is server-rendered behind the operator flag, so
+    the only honest test of "is it there" is the bytes of the page."""
+    from fastapi.testclient import TestClient
+
+    def sign_in(slug):
+        account_id = accounts.upsert_account(slug, slug.title(), dsn=tmp_db)
+        uid = accounts.create_user(f"{slug}@example.com", user_id=f"uid-{slug}",
+                                   claimed=True, dsn=tmp_db)
+        accounts.add_member(account_id, uid, dsn=tmp_db)
+        user = accounts.get_user(uid, dsn=tmp_db)
+        monkeypatch.setattr(auth, "current_user", lambda request: user)
+        return account_id, TestClient(app_main.app)
+
+    return sign_in
+
+
+def test_the_queue_view_carries_the_lane_for_an_operator(tmp_db, monkeypatch, shell):
+    account_id, client = shell("zeropage")
+    accounts.set_manual_lane_operator("zeropage", True, dsn=tmp_db)
+    assert manual_lane.manual_lane_allowed(account_id, tmp_db) is True
+    page = client.get("/ui")
+    assert page.status_code == 200
+    assert 'id="lanelist"' in page.text
+    assert "Subscription lane" in page.text
+
+
+def test_the_queue_view_has_no_lane_section_for_anybody_else(tmp_db, shell):
+    """Not hidden with a class -- absent. The markup is never served, so
+    there is nothing to un-hide in a console."""
+    _, client = shell("pilot")
+    page = client.get("/ui")
+    assert page.status_code == 200
+    assert 'id="lanelist"' not in page.text
+    assert "Subscription lane" not in page.text
+    # and the rest of the Queue is untouched
+    assert 'id="pendlist"' in page.text
+
+
+def test_the_capability_answers_for_the_account_and_nobody_else(tmp_db, monkeypatch):
+    from app import api as api_mod
+    operator_account = an_operator(tmp_db, monkeypatch)
+    other = accounts.upsert_account("pilot", "Pilot", dsn=tmp_db)
+    assert api_mod.compute_capabilities(operator_account)["manual_lane"] is True
+    assert api_mod.compute_capabilities(other)["manual_lane"] is False
+    # signed out, or signed in with no membership: no lane, fail-closed
+    assert api_mod.compute_capabilities(None)["manual_lane"] is False
+    assert api_mod.compute_capabilities()["manual_lane"] is False
+
+
+def test_the_capabilities_route_reports_the_lane(tmp_db, monkeypatch, api):
+    """/api/capabilities does not take `current_account_id` on purpose:
+    the shell asks it before it knows whether the person has an account,
+    and a 403 there would blank the UI. So the tenant is resolved SOFTLY
+    -- a signed-in user with no membership gets an answer, and the answer
+    about the lane is no."""
+    from app import api as api_mod
+    account_id = an_operator(tmp_db, monkeypatch)
+    client = api(None)              # signed in, no membership resolves
+    assert client.get("/api/capabilities").json()["manual_lane"] is False
+
+    app_main.app.dependency_overrides[auth.optional_account_id] = lambda: account_id
+    try:
+        assert client.get("/api/capabilities").json()["manual_lane"] is True
+    finally:
+        app_main.app.dependency_overrides.pop(auth.optional_account_id, None)
+    assert api_mod.compute_capabilities(account_id)["manual_lane"] is True
+
+
+def test_there_is_no_browser_route_that_grants_the_lane(tmp_db):
+    """The operator flag stays CLI-only. An account that can turn its own
+    lane on is not gated at all, so no route may write the column -- the
+    only writer is `python -m src.accounts operator <slug> --on`."""
+    from fastapi.routing import APIRoute
+
+    from app import api as api_mod
+    from app import main as main_mod
+
+    writers = [r.path for r in list(api_mod.router.routes) + list(main_mod.app.routes)
+               if isinstance(r, APIRoute)
+               and "operator" in r.path.lower()]
+    assert writers == []
+    for path in ("app/api.py", "app/main.py"):
+        source = pathlib.Path(path).read_text()
+        assert "set_manual_lane_operator" not in source, (
+            f"{path} can grant the lane -- that has to stay a command "
+            f"somebody runs against the database")
