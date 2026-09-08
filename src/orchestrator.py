@@ -128,6 +128,46 @@ GENERATED_ROOT = db.PROJECT_ROOT / "footage" / "generated"
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", shootgen.MODEL)  # match the other stages
 
 
+# --- the two input-side nodes, and who decides they run -------------------
+# `research` fills the spark bank; `scout` drains it. Both used to be off
+# unless a caller said otherwise, which meant the only path that ever ran
+# them was the nightly walk. These two env flags make "on" the default for
+# a caller with no opinion (the cron path, `src.trigger` with no flags)
+# WITHOUT touching the doors where a person already typed the direction --
+# Studio, Director, the MCP `generate` tool. The scout node REPLACES the
+# direction; defaulting it on for a typed idea would answer a different
+# question than the one asked.
+GRAPH_SCOUT_ENV = "ZEROPAGE_GRAPH_SCOUT"
+GRAPH_RESEARCH_ENV = "ZEROPAGE_GRAPH_RESEARCH"
+
+
+def _env_on(name: str) -> bool:
+    return (os.environ.get(name) or "").strip() == "1"
+
+
+def resolve_nodes(scout=None, research=None, *, spark=None,
+                  scout_finding_id=None) -> tuple[bool, bool]:
+    """Which of the two input-side nodes a run gets.
+
+    Tri-state on purpose. `True`/`False` from the caller always wins --
+    `--scout` still forces it on, and a caller that passes False still
+    gets a run with no crawl in it. `None` means "no opinion", and then
+    the env flags above decide, unless the caller NAMED its direction
+    (an explicit `spark=`, or a `scout_finding_id` it already resolved),
+    in which case both stay off.
+
+    `research` implies `scout`: filling a bank nothing will read is spend
+    with no output, and the node itself is gated on both, so the state
+    says up front what will actually happen.
+    """
+    named = bool(spark) or bool(scout_finding_id)
+    if research is None:
+        research = _env_on(GRAPH_RESEARCH_ENV) and not named
+    if scout is None:
+        scout = bool(research) or (_env_on(GRAPH_SCOUT_ENV) and not named)
+    return bool(scout), bool(research) and bool(scout)
+
+
 def prompt_gate_min() -> int:
     """The gate's bar (of 10), read per run: the Dev Studio Settings tab
     (settings table) wins, then PROMPT_GATE_MIN in the env, then 7 --
@@ -1598,7 +1638,7 @@ def run(goal: str, *, brand: Optional[str] = None, spark: Optional[str] = None,
         channel: str = "zeropage", picked_locations=None,
         picked_characters=None, picked_props=None, picked_references=None,
         reference_photos=None, scout_finding_id: Optional[int] = None,
-        scout: bool = False, research: bool = False,
+        scout: Optional[bool] = None, research: Optional[bool] = None,
         account_id: Optional[int] = None) -> dict:
     """
     `brand` defaults to `channel` rather than a hardcoded value on
@@ -1617,19 +1657,19 @@ def run(goal: str, *, brand: Optional[str] = None, spark: Optional[str] = None,
     what's wanted -- this only changes what happens when brand is
     omitted.
 
-    `research=True` lets a Claude agent fill the bank before it is read.
-    It requires `scout=True` as well -- filling a bank nothing will read
-    is spend with no output -- and is off by default for the same reason
-    scout is: an explicit spark already knows what it wants, and a node
-    that quietly spent Anthropic credit on every Director re-fire would
-    be a surprise on a bill.
+    `research=True` lets a Claude agent fill the bank before it is read;
+    `scout=True` then asks that bank for the direction instead of using
+    the one passed in. Both are TRI-STATE (see resolve_nodes): an
+    explicit True or False wins, and `None` -- the default -- hands the
+    decision to ZEROPAGE_GRAPH_RESEARCH / ZEROPAGE_GRAPH_SCOUT, which
+    are what turn the pair on for the unattended path without turning
+    them on for a caller that typed its own direction. Passing `spark=`
+    or `scout_finding_id` IS naming a direction, so Studio, Director and
+    the MCP `generate` tool keep theirs no matter what the env says.
 
-    `scout=True` asks the research agent for the direction instead of
-    using the one passed in. Off by default and never inferred: an
-    explicit spark stays authoritative, and a caller that wants a
-    crawled idea has to say so. The spark passed alongside it is still
-    required -- it is what the run falls back to when the scout's bank
-    is empty or every finding sits below scout.SCORE_FLOOR.
+    A scouted run still wants its `goal` spark: that is what it falls
+    back to when the bank is empty or every finding sits below
+    scout.SCORE_FLOOR.
 
     `scout_finding_id` is the OTHER way a banked finding seeds a run: the
     caller already chose it (the MCP `generate` tool, resolving a spark
@@ -1645,6 +1685,8 @@ def run(goal: str, *, brand: Optional[str] = None, spark: Optional[str] = None,
         print(f"note: channel={channel!r} but brand={brand!r} -- filing under "
               f"one channel, generating with the other engine, on purpose",
               file=sys.stderr)
+    scout, research = resolve_nodes(scout, research, spark=spark,
+                                    scout_finding_id=scout_finding_id)
     autonomy.init()
     winners.init()
     scout_mod.init()

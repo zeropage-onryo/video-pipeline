@@ -304,7 +304,7 @@ def quiet_langsmith(log: Callable[[str], None] = print) -> bool:
     return changed
 
 
-def run_one(channel: str, brand: str, spark: str, *, research: bool = True) -> dict:
+def run_one(channel: str, brand: str, spark: str, *, research=True) -> dict:
     """One trigger run, IN PROCESS.
 
     In process rather than as a subprocess so the breaker can see the
@@ -314,7 +314,8 @@ def run_one(channel: str, brand: str, spark: str, *, research: bool = True) -> d
     """
     from . import trigger
     return trigger.run_once(spark, channel=channel, brand=brand,
-                            scout=research, research=research)
+                            scout=None if research is None else research,
+                            research=research)
 
 
 def walk(*, sparks: Optional[list] = None, pairs=PAIRS,
@@ -368,8 +369,11 @@ def walk(*, sparks: Optional[list] = None, pairs=PAIRS,
                            f"({BUDGET_ENV} to raise)")
                 break
             summary["attempted"] += 1
+            # None past the quota, not False: those runs express no
+            # opinion and let the env flags decide, the same as any
+            # other caller that names nothing.
             result = run_one(channel, brand, spark,
-                             research=index < scout_per_brand)
+                             research=(index < scout_per_brand) or None)
             if result.get("ok"):
                 summary["succeeded"] += 1
                 if result.get("held"):

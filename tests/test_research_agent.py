@@ -94,9 +94,27 @@ def test_the_node_never_returns_a_spark(tmp_db, monkeypatch):
     assert "spark" not in out and "goal" not in out
 
 
-def test_run_defaults_to_not_researching():
+def test_run_defers_the_research_decision_instead_of_hardcoding_it():
+    """None, not False: False would put the node out of reach of
+    ZEROPAGE_GRAPH_RESEARCH from every caller that never names it."""
     import inspect
-    assert inspect.signature(orchestrator.run).parameters["research"].default is False
+    assert inspect.signature(orchestrator.run).parameters["research"].default is None
+
+
+def test_nothing_researches_with_the_env_unset(monkeypatch):
+    monkeypatch.delenv(orchestrator.GRAPH_RESEARCH_ENV, raising=False)
+    monkeypatch.delenv(orchestrator.GRAPH_SCOUT_ENV, raising=False)
+    assert orchestrator.resolve_nodes()[1] is False
+
+
+def test_a_typed_direction_still_never_pays_the_agent(monkeypatch):
+    """The bill surprise this has always guarded against: a Director
+    re-fire or an MCP generate must not quietly spend Anthropic credit,
+    env flag or no env flag."""
+    monkeypatch.setenv(orchestrator.GRAPH_RESEARCH_ENV, "1")
+    monkeypatch.setenv(orchestrator.GRAPH_SCOUT_ENV, "1")
+    assert orchestrator.resolve_nodes(spark="a monster in the garage")[1] is False
+    assert orchestrator.resolve_nodes(scout_finding_id=7)[1] is False
 
 
 # ---------- what it will not hand the agent ----------

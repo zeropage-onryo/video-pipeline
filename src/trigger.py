@@ -57,7 +57,7 @@ def pick_spark(sparks: list, day: int) -> str:
 
 
 def run_once(spark: str, *, channel: str = "zeropage", brand=None,
-             scout: bool = False, research: bool = False) -> dict:
+             scout=None, research=None) -> dict:
     """One graph run, as a result dict instead of an exit code.
 
     The shape the nightly runner needs and the CLI wraps: `ok`, the
@@ -71,8 +71,15 @@ def run_once(spark: str, *, channel: str = "zeropage", brand=None,
     from . import autonomy, nightly, orchestrator
 
     try:
+        # Tri-state, passed through rather than collapsed: None means
+        # "no flag was given", which is what lets ZEROPAGE_GRAPH_SCOUT /
+        # _RESEARCH turn the pair on for a cron run that names nothing.
+        # Collapsing it to False here (`scout or research`) would have
+        # made this the one caller the env could never reach.
+        if scout is None and research:
+            scout = True
         result = orchestrator.run(spark, brand=brand, channel=channel,
-                                  scout=scout or research, research=research)
+                                  scout=scout, research=research)
     except Exception as e:
         kind = nightly.classify_error(e)
         # the dead-man log gets the crash too -- a silent night looks
@@ -114,12 +121,21 @@ def main(argv=None) -> int:
     # hold_queue row 13 / concept 111 on 2026-08-14). Pass --brand
     # explicitly only when you actually want it to differ from --channel.
     parser.add_argument("--brand", default=None)
-    parser.add_argument("--scout", action="store_true",
+    # default=None, not False: an absent flag means "no opinion" and
+    # defers to ZEROPAGE_GRAPH_SCOUT / ZEROPAGE_GRAPH_RESEARCH. --no-scout
+    # / --no-research are the way to force them off for one run.
+    parser.add_argument("--scout", action="store_true", default=None,
                         help="use a spark from src.scout's bank, falling back "
-                             "to the rotation when it has nothing servable")
-    parser.add_argument("--research", action="store_true",
+                             "to the rotation when it has nothing servable "
+                             "(default: ZEROPAGE_GRAPH_SCOUT)")
+    parser.add_argument("--no-scout", dest="scout", action="store_false",
+                        help="keep the spark passed in, whatever the env says")
+    parser.add_argument("--research", action="store_true", default=None,
                         help="let the Claude agent fill the bank first (implies "
-                             "--scout; no-op without ANTHROPIC_API_KEY)")
+                             "--scout; no-op without ANTHROPIC_API_KEY; "
+                             "default: ZEROPAGE_GRAPH_RESEARCH)")
+    parser.add_argument("--no-research", dest="research", action="store_false",
+                        help="skip the agent for this run")
     args = parser.parse_args(argv)
 
     spark = args.spark or pick_spark(load_sparks(), date.today().timetuple().tm_yday)
