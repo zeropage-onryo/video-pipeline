@@ -686,6 +686,147 @@ def test_reap_ignores_holds_already_closed(led):
 
 
 # --------------------------------------------------------------------------
+# the invariant, attacked directly
+# --------------------------------------------------------------------------
+#
+# `credit_lots.credits_remaining` is derived by the triggers
+# `db.add_ledger_balance_trigger` installs, so these tests do not go
+# through the module at all: they write the corruption by hand, in raw
+# SQL, the way a future writer who forgot the entry would, and then ask
+# the database what it thinks the lot is worth.
+
+
+def _remaining(dsn, lot_id):
+    with db.connect(dsn) as conn:
+        return int(conn.execute(
+            "SELECT credits_remaining FROM credit_lots WHERE id = %s "
+            "AND account_id IS NOT NULL", (lot_id,)).fetchone()["credits_remaining"])
+
+
+def test_a_lot_updated_without_its_entry_does_not_keep_the_number(led):
+    """THE TEST THE TRIGGERS EXIST FOR. Before them this UPDATE stood:
+    the column was a denormalisation kept in step by careful code, and
+    a writer who skipped the entry gave an account credit that no
+    movement paid for -- silently, and in money."""
+    dsn, account = led
+    lot = ledger.grant(account, 500, "subscription", dsn=dsn)
+    with db.connect(dsn) as conn:
+        conn.execute(
+            "UPDATE credit_lots SET credits_remaining = 999999 "
+            "WHERE id = %s AND account_id IS NOT DISTINCT FROM %s", (lot, account))
+    assert _remaining(dsn, lot) == 500, "the entries are the truth and they said 500"
+    assert ledger.available(account, dsn) == 500
+    assert all(r["drift"] == 0 for r in ledger.reconcile(account, dsn))
+
+
+def test_a_lot_inserted_with_credit_nothing_granted_is_worth_nothing(led):
+    """The same violation at INSERT: a lot conjured with a balance and
+    no `grant` entry behind it. The lot is written -- rows are not the
+    ledger's business to refuse -- and it is worth exactly the zero its
+    entries say."""
+    dsn, account = led
+    with db.connect(dsn) as conn:
+        lot = conn.execute(
+            "INSERT INTO credit_lots (account_id, kind, credits_granted, "
+            "credits_remaining, granted_at) VALUES (%s, 'promo', 500, 500, 't') "
+            "RETURNING id", (account,)).fetchone()["id"]
+    assert _remaining(dsn, lot) == 0
+    assert ledger.available(account, dsn) == 0
+    with pytest.raises(ledger.InsufficientCredit):
+        ledger.hold(account, 10, ref="render-1", provider="runway", dsn=dsn)
+
+
+def test_reconcile_still_catches_the_lot_nobody_wrote_an_entry_for(led):
+    """What reconciliation is for now. Drift can no longer be non-zero,
+    so the check was re-pointed at the one corruption a derived column
+    cannot express: a lot with no entries behind it derives a perfectly
+    consistent zero, and is still a row somebody wrote wrong."""
+    dsn, account = led
+    good = ledger.grant(account, 500, "subscription", dsn=dsn)
+    with db.connect(dsn) as conn:
+        bad = conn.execute(
+            "INSERT INTO credit_lots (account_id, kind, credits_granted, "
+            "credits_remaining, granted_at) VALUES (%s, 'promo', 500, 0, 't') "
+            "RETURNING id", (account,)).fetchone()["id"]
+    rows = {r["lot_id"]: r for r in ledger.reconcile(account, dsn)}
+    assert all(r["drift"] == 0 for r in rows.values())
+    assert rows[good]["orphan"] is False and rows[good]["entry_count"] == 1
+    assert rows[bad]["orphan"] is True, "a lot with no movement behind it"
+
+
+def test_deleting_an_entry_takes_its_credit_with_it(led):
+    """The append-only rule is the module's, not the database's. If a
+    row is deleted anyway -- a cleanup script, a hand-typed DELETE --
+    the lot follows the entries rather than keeping a figure that now
+    has nothing behind it."""
+    dsn, account = led
+    lot = ledger.grant(account, 500, "subscription", dsn=dsn)
+    hold_id = ledger.hold(account, 200, ref="render-1", provider="runway", dsn=dsn)
+    assert _remaining(dsn, lot) == 300
+    with db.connect(dsn) as conn:
+        conn.execute("DELETE FROM credit_entries WHERE id = %s "
+                     "AND account_id IS NOT DISTINCT FROM %s", (hold_id, account))
+    assert _remaining(dsn, lot) == 500
+    assert ledger.available(account, dsn) == 500
+    assert all(r["drift"] == 0 for r in ledger.reconcile(account, dsn))
+
+
+def test_stamping_a_submit_does_not_disturb_the_balance(led):
+    """`mark_submitted` is the one UPDATE the entries table takes, and
+    the trigger that watches for a moved delta is deliberately not
+    armed on it -- a submit stamp is not money."""
+    dsn, account = led
+    lot = ledger.grant(account, 500, "subscription", dsn=dsn)
+    hold_id = ledger.hold(account, 200, ref="render-1", provider="runway", dsn=dsn)
+    ledger.mark_submitted(hold_id, dsn=dsn)
+    assert _remaining(dsn, lot) == 300
+    assert ledger.available(account, dsn) == 300
+
+
+def test_installing_the_triggers_is_idempotent_and_says_what_it_did(led):
+    """`add_nightly_runs_table`'s contract: True the first time, False
+    when they were already there, and safe on every dev-server reload
+    in between."""
+    dsn, account = led
+    with db.connect(dsn) as conn:
+        assert db.add_ledger_balance_trigger(conn) is False, "ledger.init put them in"
+        assert db.add_ledger_balance_trigger(conn) is False
+    ledger.grant(account, 100, "subscription", dsn=dsn)
+    assert ledger.available(account, dsn) == 100
+
+
+def test_the_triggers_are_installed_on_a_database_that_predates_them(pg):
+    """The migration half. A database whose ledger tables were created
+    before the triggers existed gets them from `init()` -- the additive
+    shape `submitted_at` already uses, because the CREATEs cover a fresh
+    database and this covers the one on the machine you are typing on."""
+    accounts.init(pg)
+    accounts.seed("mike@example.com", dsn=pg)
+    ledger.init(pg)
+    with db.connect(pg) as conn:
+        conn.execute("DROP TRIGGER ledger_lot_balance ON credit_lots")
+        conn.execute("DROP TRIGGER ledger_entry_syncs_lot_ins ON credit_entries")
+        conn.execute("DROP TRIGGER ledger_entry_syncs_lot_del ON credit_entries")
+        conn.execute("DROP TRIGGER ledger_entry_syncs_lot_upd ON credit_entries")
+        assert db.add_ledger_balance_trigger(conn) is True
+        account = conn.execute("SELECT MIN(id) AS id FROM accounts").fetchone()["id"]
+    ledger.grant(int(account), 500, "subscription", dsn=pg)
+    with db.connect(pg) as conn:
+        conn.execute("UPDATE credit_lots SET credits_remaining = 4 "
+                     "WHERE account_id IS NOT DISTINCT FROM %s", (account,))
+    assert ledger.available(int(account), pg) == 500
+
+
+def test_a_trigger_on_a_database_without_the_tables_is_a_no_op(pg_factory):
+    """Order is not this function's to enforce: a trigger cannot be put
+    on a table that is not there, and saying so with False is better
+    than raising at somebody else's init."""
+    dsn = pg_factory()
+    with db.connect(dsn) as conn:
+        assert db.add_ledger_balance_trigger(conn) is False
+
+
+# --------------------------------------------------------------------------
 # it raises, and the two views agree
 # --------------------------------------------------------------------------
 
@@ -733,6 +874,7 @@ def test_the_entries_and_the_running_figure_never_disagree(led):
 
     rows = ledger.reconcile(account, dsn)
     assert rows and all(r["drift"] == 0 for r in rows), rows
+    assert not any(r["orphan"] for r in rows), "every lot got its grant entry"
     assert sum(e["delta"] for e in ledger.entries(account, dsn)) == \
         sum(r["credits_remaining"] for r in rows)
 

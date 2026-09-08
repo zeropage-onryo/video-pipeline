@@ -35,10 +35,12 @@ from src import (
     db,
     entities,
     evalstore,
+    generative,
     higgsfield,
     imagery,
     inspiration,
     instagram,
+    manual_lane,
     preprod,
     presets,
     rag,
@@ -615,7 +617,7 @@ def retrieve(body: RetrieveBody, account_id: int = Depends(auth.current_account_
 
 # --- pipeline (adapted to pre-production) -----------------------------------
 
-def _concept_card(c: dict) -> dict:
+def _concept_card(c: dict, subscription_ids: Optional[set] = None) -> dict:
     status = "shot" if c.get("shot_done") else (
         "planned" if c.get("has_shot_list") else "idea")
     location_names = [loc["name"] for loc in c.get("locations") or []]
@@ -667,6 +669,14 @@ def _concept_card(c: dict) -> dict:
                      if c.get("is_scene") else "",
         "reference_image": ((c.get("shots") or [{}])[0].get("reference_image") or "")
                            if c.get("is_scene") else "",
+        # WHO PAID FOR THIS CLIP. A hand-rendered clip off the operator's
+        # subscription and an API-rendered one billed to somebody's credit
+        # are the same mp4 in the same folder; only `params.source` on the
+        # generations row tells them apart, and until this field nobody
+        # ever saw it. The board renders it as one word beside RENDERED.
+        # Absent set = not asked (a single-card read), which is why the
+        # default is False rather than unknown.
+        "subscription": bool(subscription_ids and c["id"] in subscription_ids),
     }
 
 
@@ -683,7 +693,10 @@ def pipeline_concepts(brand: Optional[str] = None, status: Optional[str] = None,
     # takes the newest 100 of THIS ACCOUNT, and both brands live in one
     # account, so filtering afterwards meant one brand could eat the
     # whole limit and quietly shorten the other's board.
-    cards = [_concept_card(c) for c in preprod.list_concepts(account_id=account_id, brand=brand)]
+    # one query for the whole board rather than one per card
+    subscription_ids = generative.subscription_rendered(account_id=account_id)
+    cards = [_concept_card(c, subscription_ids)
+             for c in preprod.list_concepts(account_id=account_id, brand=brand)]
     if status in ("idea", "planned", "shot"):
         cards = [c for c in cards if c["status"] == status]
     if not archived:
@@ -1223,6 +1236,28 @@ def _runway_state() -> dict:
             "today": today}
 
 
+def _waiting(account_id: Optional[int], brand: Optional[str]) -> list[tuple[dict, dict]]:
+    """The queue predicate -- parked by the chain or picked on the board,
+    not archived, a scene, no clip yet -- as (concept, card) pairs.
+
+    ONE definition of "waiting" for every surface that reads it: the
+    Queue page and the manual-lane list must not be able to disagree
+    about which shots are outstanding, or a human renders something the
+    Queue never asked for. (ops/render_queue.py keeps its own copy on
+    purpose and says so; it has to run without importing app/.)"""
+    # scoped in SQL, see above
+    out = []
+    for concept in preprod.list_concepts(account_id=account_id, brand=brand):
+        card = _concept_card(concept)
+        if ((card["picked"] or card["parked"]) and not card["archived"]
+                and card["is_scene"] and not card["media_url"]
+                # marked shot by hand (the camera button) -- a card you
+                # already made yourself isn't waiting on you to spend
+                and not card["shot_done"]):
+            out.append((concept, card))
+    return out
+
+
 @router.get("/queue/pending")
 def queue_pending(brand: Optional[str] = None, account_id: int = Depends(auth.current_account_id)):
     """What is waiting on you to spend: parked by the chain or picked on
@@ -1234,16 +1269,66 @@ def queue_pending(brand: Optional[str] = None, account_id: int = Depends(auth.cu
     Studio chain parks it (concept written, prompt enhanced, keyframe
     rendered -- the next step is the one that costs money), or you pick
     a text-only concept off the board yourself."""
-    # scoped in SQL, see above
-    cards = [_concept_card(c)
-             for c in preprod.list_concepts(account_id=account_id, brand=brand)]
-    pending = [c for c in cards
-               if (c["picked"] or c["parked"]) and not c["archived"]
-               and c["is_scene"] and not c["media_url"]
-               # marked shot by hand (the camera button) -- a card you
-               # already made yourself isn't waiting on you to spend
-               and not c["shot_done"]]
-    return {"items": pending, "runway": _runway_state()}
+    return {"items": [card for _, card in _waiting(account_id, brand)],
+            "runway": _runway_state()}
+
+
+@router.get("/queue/manual")
+def queue_manual(brand: Optional[str] = None,
+                 account_id: int = Depends(auth.current_account_id)):
+    """The same waiting shots, addressed to a pair of hands in Chrome.
+
+    THE OPERATOR'S LANE, AND ONLY THE OPERATOR'S. Runway's free Explore
+    Mode is a web-app toggle with no API parameter, so the only way to
+    spend the Unlimited plan is a human driving the app -- and that plan
+    is the operator's personal consumer subscription, so rendering a
+    paying tenant's shot on it would be reselling it. That is an
+    account-termination risk which, on a shared install, takes every
+    tenant's renders down at once.
+
+    So the gate is `manual_lane.manual_lane_allowed(account_id)`, called
+    on the TENANT resolved server-side by `auth.current_account_id` --
+    never a query parameter, a header or a body field, because all three
+    are things a caller writes. Since 2026-09-08 that reads ONE column on
+    the account's own row (`accounts.manual_lane_operator`, set by hand
+    with `python -m src.accounts operator <slug> --on`) rather than an
+    env var this process could have been started with, and membership of
+    an operator's account grants nothing. A database nobody has been
+    turned on in allows nobody.
+
+    The refusal is a 404 carrying `manual_lane.REFUSAL` and nothing
+    else, the same for every caller: it must read like a route that does
+    not exist, and must never let someone learn from the difference
+    between two refusals whether the lane exists for somebody else.
+
+    Read-only on purpose. There is no POST twin: filing a clip needs the
+    file itself, which arrives on the machine the human is sitting at,
+    so `ops/render_queue.py import` is the only writing surface and the
+    web app never grows one.
+    """
+    if not manual_lane.manual_lane_allowed(account_id):
+        return _error(404, "not_found", manual_lane.REFUSAL)
+    items = []
+    for concept, card in _waiting(account_id, brand):
+        shot = (concept.get("shots") or [{}])[0]
+        try:
+            duration = int(shot.get("duration"))
+        except (TypeError, ValueError):
+            duration = manual_lane.LANE_DURATION
+        items.append({
+            "concept_id": card["id"],
+            "title": card["title"],
+            "brand": card["brand"],
+            "shot_n": shot.get("n", 1),
+            "prompt": card["prompt"],
+            # the frame that gets dragged into the start-image slot
+            "keyframe_url": card["reference_image"],
+            "duration": duration,
+            "ratio": shot.get("ratio") or manual_lane.LANE_RATIO,
+            "lane": manual_lane.LANES["runway"],
+        })
+    return {"items": items, "lane": manual_lane.LANES["runway"],
+            "import_with": "ops/render_queue.py --provider runway import"}
 
 
 @router.post("/queue/{concept_id}/approve")

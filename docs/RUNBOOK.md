@@ -3,6 +3,129 @@
 Operational notes, newest first. Each section is dated and is about a
 thing that has actually gone wrong.
 
+## 2026-09-08 — the manual render lanes (`ops/render_queue.py`)
+
+Two lanes spend a subscription instead of API credits, and neither can
+run unattended — an MCP server and a browser both need a session, so
+**this is deliberately not on the 03:30 walk and cannot be.**
+
+```bash
+python3 ops/render_queue.py --account zeropage list    # higgsfield (MCP)
+python3 ops/render_queue.py --provider runway --account zeropage list
+python3 ops/render_queue.py --provider runway --account zeropage import \
+    --concept 131 --shot 1 --file ~/Downloads/clip.mp4 \
+    --model gen4_turbo --duration 10 --anchored
+```
+
+`list` prints the prompt, the keyframe URL to drag into the start-image
+slot, and the duration/ratio to set. `import` copies the mp4 into
+`data/renders/runway/` (where `src/runway.py` already writes, so
+`/renders` serves it unchanged) and writes the `generations` row with
+`cost_usd` NULL — FREE with a count on `/costs`, never `$0`, never
+backfilled — and `params.source = "manual-unlimited"`, which is what
+makes `ledger.is_billable` refuse to take a hold.
+
+**Both lanes are operator-only, and that is a security property.** Each
+spends one of Mike's personal consumer plans; rendering a paying tenant's
+shot on either is reselling a consumer subscription, and the penalty is
+the account, which is every tenant's renders at once. `src/manual_lane.py`
+holds the allowlist, checked server-side against the account id at every
+surface (the CLI, `GET /api/queue/manual`). It **fails closed**: unset
+means nobody, including the bootstrap account and including the unowned
+pool a fresh database hands a CLI.
+
+**The gate is a column on `accounts`, not an environment variable
+(changed 2026-09-08).** `accounts.manual_lane_operator`, moved with an
+idempotent `ALTER TABLE` in `src/db.py` and **no backfill** — every
+account, including the bootstrap one, comes out of the migration OFF.
+`ZEROPAGE_OPERATOR_ACCOUNTS` / `_EMAILS` are **removed, not deprecated**:
+anything that can set an env var on the process could name itself
+operator, and a gate with two doors is one door.
+
+**RUN THIS ONCE, or both lanes — including the Higgsfield one you use
+now — refuse everything:**
+
+```bash
+venv/bin/python -m src.accounts operator zeropage --on
+```
+
+It prints what changed (`OFF -> ON`, or `already ON`) and lists any other
+account that is on. `--off` revokes. Do it for `antihero` too if you
+render from that brand's account. The refusal names the command, so if
+`list` starts refusing this is what it is telling you to run.
+
+**The Higgsfield lane needs this too, and that is a deliberate break.**
+It used to run with no configuration at all. It is the same exposure — a
+consumer app subscription spent on any account's shot — and gating one
+lane while leaving the other open is worse than gating neither, because
+it reads as though the question had been asked and answered.
+
+The **API-billed adapters are untouched** by any of this: `src/runway.py`,
+`src/higgsfield.py`, `src/veo.py` and `src/fal.py` spend a credential a
+tenant can own, metered per call, under their own `*_SPEND_OK` gates and
+daily caps. This allowlist is about the subscription lanes only.
+
+**Provenance is visible on the board.** A subscription clip and an
+API-billed clip are the same mp4 in the same folder with the same URL
+shape, so the scene board's status now reads `RENDERED · SUBSCRIPTION`
+when the row carries a lane marker (`generative.subscription_rendered`,
+derived from `params_json` — so rows imported before the field existed
+are covered with no backfill). It matters when a clip is about to be used
+somewhere a consumer plan's terms bite.
+
+### Driving the Runway app (measured 2026-09-06)
+
+Four things cost real time or a wasted round that day:
+
+- **Two generations in flight, and extra clicks are dropped silently.**
+  Unlimited queues 2 at a time; a third Generate does nothing but raise a
+  "wait or switch to Credits Mode" toast. Queue two, then wait.
+- **Duration resets to 5s on every page reload.** Set it and *zoom in to
+  read the chip* before every Generate — one whole round went out at 5s
+  because the control looked set and was not. This is why `list` prints
+  the target duration on every row.
+- **The gallery is stale until reload, and slow to fill.** Give it ~15s,
+  reload, then "View latest". A clip that is not there yet looks exactly
+  like a failed generation.
+- **Uploading a 9:16 image flips the ratio chip.** Check it after the
+  upload, not before.
+
+### The four shared-box problems, and what was done about them
+
+All four were recorded here as known-and-unfixed on 2026-09-08 and fixed
+the same day. Kept as a record of what the failure actually was:
+
+- **The environment was the whole gate.** Anyone who could set env vars
+  on the process — a deploy config, a `.env` on a shared box, a wrapper
+  script — could name themselves operator, with no record of who was on
+  the list when a clip was rendered. Now a column, above, and the env
+  vars are gone rather than left as a fallback.
+- **Membership was transitive.** An operator EMAIL resolved to every
+  account that person was a member of, so adding Mike to a pilot user's
+  account to debug something silently gave that account the lane. Gone by
+  construction: the flag is on the account row, so membership no longer
+  says anything about it. A test acts as an operator who is *also* a
+  member of a second, non-operator account and expects the refusal.
+- **`import` believed what it was told.** `--model`, `--ratio` and
+  `--duration` were unverified strings landing in a `generations` row the
+  tool scoreboard reads, so a 1am typo became a measurement of a model
+  that never ran. The runway lane's claims are now checked against
+  `src/render_specs.py`'s per-model legal values and **refused, not
+  clamped** — a value outside the set means the row and the clip have
+  come apart, and rounding hides exactly that. `import` also asks
+  **ffprobe** how long the file really is and writes
+  `duration_measured_s` beside the claimed `duration`; with no ffprobe on
+  PATH the row says so in `duration_source` rather than implying a
+  measurement nobody took. The Higgsfield lane's model names are the
+  MCP's own and published nowhere this repo can read, so they are
+  recorded with `model_verified: false` instead of being checked against
+  a list this repo invented.
+- **`manual_lane.LANE_RATIO` duplicated `runway.DEFAULT_RATIO`**, with a
+  drift test standing in for a shared source. Both now read
+  `src/render_specs.py` — a module that imports nothing at all, so the
+  script that must run under a bare `python3` can have it too. The drift
+  test is deleted: a shared constant cannot drift.
+
 ## 2026-09-07 — the nightly walk (`src/nightly.py`)
 
 Step 4 of `run_morning_prompts.sh` is `python3 -m src.nightly walk` now.

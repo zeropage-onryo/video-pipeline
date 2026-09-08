@@ -44,12 +44,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from . import account_keys, generative, render_assets
+from . import account_keys, generative, render_assets, render_specs
 from .shot import Shot
 
-MODELS = ("gen4_turbo", "gen4.5")
+# The model list, the frame and the legal durations all come from
+# src/render_specs.py, which imports nothing at all -- so ops/render_queue.py
+# can check what a by-hand render CLAIMS against the same numbers this
+# adapter renders by, without importing this module (google-genai comes in
+# here through render_assets, and that script must run on a bare python3).
+# Before 2026-09-08 the manual lane held a second copy of the ratio and a
+# test asserted the two had not drifted; a shared constant cannot drift.
+MODELS = tuple(render_specs.RUNWAY_MODELS)
 DEFAULT_MODEL = os.environ.get("RUNWAY_MODEL", "gen4_turbo")   # cheapest first spend
-DEFAULT_RATIO = "720:1280"   # 9:16, the platform vertical
+DEFAULT_RATIO = render_specs.RATIO_9_16   # 9:16, the platform vertical
 DEFAULT_DURATION = 5
 DAILY_CAP = int(os.environ.get("RUNWAY_DAILY_CAP", "6"))
 # The installation-wide wall, beside the per-account one. Defaults to the

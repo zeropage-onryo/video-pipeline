@@ -89,7 +89,42 @@ DAILY_CAP = int(os.environ.get("HIGGSFIELD_DAILY_CAP", "6"))
 # whose card is paying, instead of the total quietly doubling.
 GLOBAL_DAILY_CAP = int(os.environ.get("HIGGSFIELD_GLOBAL_DAILY_CAP", str(DAILY_CAP)))
 POLL_SECONDS = 3
+# The shipped default and the fallback `timeout_seconds()` reads when the
+# environment says nothing. Bound at import like every other constant
+# here -- what must NOT be bound at import is the value the poll loop
+# actually uses; see timeout_seconds().
 TIMEOUT_SECONDS = int(os.environ.get("HIGGSFIELD_TIMEOUT_S", "600"))
+
+
+def timeout_seconds() -> int:
+    """How long a poll loop may wait, resolved PER CALL.
+
+    `_submit_and_wait` used to carry `timeout_s: int = TIMEOUT_SECONDS`,
+    and a default argument binds at import: once this module was
+    imported, `HIGGSFIELD_TIMEOUT_S` could never be changed again.
+    Setting it in the environment afterwards did nothing, and a test
+    that patched the constant patched a name the function no longer
+    read -- so the failure mode was a poll loop hanging for the OLD
+    timeout while the operator believed they had shortened it, with
+    nothing anywhere saying otherwise. `src/fal.py::_submit_and_wait`
+    was written against that trap (it reads its constant inside the
+    function); this is the same fix with the environment read live as
+    well, so `settings.py`'s rule -- env beats the shipped default,
+    resolved when it is needed rather than when the process started --
+    holds for the one number that decides how long money can sit in
+    flight.
+
+    A junk value falls back to the constant rather than raising: this is
+    a deadline, and refusing to render because someone typed
+    `HIGGSFIELD_TIMEOUT_S=soon` would be a worse answer than using 600.
+    """
+    raw = os.environ.get("HIGGSFIELD_TIMEOUT_S")
+    if raw is None:
+        return int(TIMEOUT_SECONDS)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return int(TIMEOUT_SECONDS)
 
 # Not published on the docs (checked 2026-08-31) -- estimates for the
 # confirm dialog, not a promise. Override once a real invoice is known.
@@ -423,10 +458,20 @@ def _download(url: str, out_path: Path) -> None:
 
 
 def _submit_and_wait(path: str, body: dict, *, http=None,
-                     timeout_s: int = TIMEOUT_SECONDS,
+                     timeout_s: Optional[int] = None,
                      account_id: Optional[int] = None) -> tuple[dict, set]:
     """Submit -> poll to a terminal state -> (final payload, control
-    URLs to skip). Raises on failure or timeout."""
+    URLs to skip). Raises on failure or timeout.
+
+    The deadline is resolved HERE, through `timeout_seconds()`, and not
+    as a default argument: a default binds at import, so the value would
+    be whatever `HIGGSFIELD_TIMEOUT_S` said the first time anything
+    imported this module and nothing could change it afterwards. This is
+    the only wall between a stuck job and a night held open; it has to
+    be the one actually in force. fal.py's `_submit_and_wait` carries
+    the same shape and the same comment.
+    """
+    timeout_s = timeout_seconds() if timeout_s is None else int(timeout_s)
     http = http or (lambda u, p=None: _request(u, p, account_id=account_id))
     submitted = http(HOST + path, body)
     status_url = submitted.get("status_url")

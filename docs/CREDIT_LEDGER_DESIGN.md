@@ -95,10 +95,32 @@ the substring `account_id`, and uses `IS NOT DISTINCT FROM` rather than `=`.
     granted_at, expires_at, source_ref, note
 
 `kind` is one of `subscription`, `purchase`, `refund`, `promo`, `adjustment`.
-`credits_remaining` is a denormalised running figure, and the entries table below is
-the truth — a reconciliation test asserts they agree. `source_ref` holds the Stripe
-payment intent or the subscription period id, and is **unique per (account, kind,
-source_ref)** so a webhook delivered twice cannot grant twice.
+`credits_remaining` is **derived, not maintained** (2026-09-08): two triggers
+installed by `db.add_ledger_balance_trigger` keep it equal to `SUM(delta)` over that
+lot's entries — writing an entry re-derives its lot, and a write to a lot's
+`credits_remaining` is overwritten with what the entries actually say. It began as a
+denormalisation kept in step by careful code with a reconciliation test behind it;
+that made the invariant *observed* rather than *enforced*, and a future writer who
+updated a lot without writing the matching entry would have been believed, silently,
+in money. The entries table below is the truth in the strong sense now: writing the
+entry is the whole of writing the movement.
+
+The two alternatives, and why not. **Dropping the column** and reading `SUM(delta)`
+off an index is the purest answer — it deletes the invariant rather than enforcing it
+— and was the close call; it was rejected because the aggregate moves into `hold`'s
+critical section (the lot-picking SELECT runs under the per-account advisory lock,
+the one place this ledger trades concurrency for money) and rewrites every
+lot-picking query for a property the trigger gives with neither cost. **A deferred
+CHECK** is not available at all: Postgres CHECK constraints cannot be `DEFERRABLE`
+and cannot contain a subquery, so the constraint can never see `credit_entries`; what
+that usually means in practice is a deferred constraint *trigger*, which is this
+answer with a later firing time and a worse failure mode — it raises at COMMIT, and
+the transaction it aborts may be somebody's settle rather than the write that was
+wrong.
+
+`source_ref` holds the Stripe payment intent or the subscription period id, and is
+**unique per (account, kind, source_ref)** so a webhook delivered twice cannot grant
+twice.
 
 ### `credit_entries` — append-only, every movement
 
@@ -186,6 +208,15 @@ same estimate today — so the check is that they match *within tolerance* and t
 drift is not growing. When a provider invoice can actually be read per render (fal
 publishes real per-second rates; Runway and Higgsfield do not), settle switches to the
 invoice and this becomes a real check instead of a consistency one.
+
+`ledger.reconcile()` is the module's own, per-lot check, and it was re-pointed when
+`credits_remaining` became derived. Its `drift` figure can no longer be non-zero
+through any write path, so it stays as the belt to the triggers' braces — a non-zero
+drift now means the triggers are *missing* from that database (an `init()` that never
+ran, a restore that dropped them), which is the only way it can be read from Python.
+What it actually catches is `orphan`: a lot with **no entries behind it**, which a
+derived column cannot express (it derives a perfectly consistent zero) and which is
+still a `credit_lots` row somebody wrote without its `grant`.
 
 Three figures surface on `/costs`, per account and in total:
 `outstanding_credits` (your liability), `waste_usd` (refunded failures — your cost of

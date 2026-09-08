@@ -89,6 +89,54 @@ class FakeHttp:
         return state
 
 
+# ---------- the deadline, which must be the one actually in force ----------
+
+def test_the_timeout_env_var_still_works_after_the_module_is_imported(
+        tmp_path, approved, keys, monkeypatch):
+    """THE BUG THIS PINS. `_submit_and_wait` carried
+    `timeout_s: int = TIMEOUT_SECONDS`, and a default argument binds at
+    IMPORT: setting HIGGSFIELD_TIMEOUT_S afterwards silently did nothing
+    and a test that patched the constant patched a name the poll loop no
+    longer read. The operator shortens the timeout, the loop hangs for
+    the old one, and nothing anywhere says so.
+
+    Set to zero, the very first poll is past the deadline -- so this
+    test either raises immediately or hangs for ten minutes, which is
+    exactly the difference it is here to detect.
+    """
+    monkeypatch.setenv("HIGGSFIELD_TIMEOUT_S", "0")
+    http = FakeHttp(statuses=("queued",))
+    with pytest.raises(RuntimeError, match="still queued after 0s"):
+        higgsfield.generate_video("x", tmp_path / "a.mp4", http=http)
+    assert higgsfield.timeout_seconds() == 0
+
+
+def test_the_shipped_default_stands_when_the_environment_says_nothing(
+        monkeypatch):
+    monkeypatch.delenv("HIGGSFIELD_TIMEOUT_S", raising=False)
+    assert higgsfield.timeout_seconds() == higgsfield.TIMEOUT_SECONDS
+    monkeypatch.setattr(higgsfield, "TIMEOUT_SECONDS", 7)
+    assert higgsfield.timeout_seconds() == 7, "the constant is still patchable"
+
+
+def test_a_junk_timeout_falls_back_rather_than_refusing_to_render(monkeypatch):
+    """A deadline is not worth failing a render over: `soon` is not a
+    number, and 600 seconds is a better answer than a stack trace."""
+    monkeypatch.setenv("HIGGSFIELD_TIMEOUT_S", "soon")
+    assert higgsfield.timeout_seconds() == higgsfield.TIMEOUT_SECONDS
+
+
+def test_an_explicit_timeout_argument_still_wins(tmp_path, approved, keys,
+                                                 monkeypatch):
+    """The env var is the fallback, not an override -- a caller that
+    passes a deadline gets the one it asked for."""
+    monkeypatch.setenv("HIGGSFIELD_TIMEOUT_S", "9999")
+    http = FakeHttp(statuses=("queued",))
+    with pytest.raises(RuntimeError, match="still queued after 0s"):
+        higgsfield._submit_and_wait("/v1/text2video", {}, http=http, timeout_s=0)
+
+
+
 # ---------- the request body: the registry is the point ----------
 
 def test_body_carries_only_fields_the_endpoint_declares():

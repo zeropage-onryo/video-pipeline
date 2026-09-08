@@ -50,14 +50,43 @@ tests/test_tenancy.py cannot see a predicate assembled next door.
 THREE THINGS THAT LOOK WRONG AND ARE KNOWN, so the next reader spends
 their afternoon on something else:
 
-- `credit_lots.credits_remaining` IS A DENORMALISATION. The entries are
-  the truth; that column is the running figure the lot-picking queries
-  read, and `reconcile()` plus a test assert the two never disagree.
-  Nothing at the database level enforces it, which is the real gap --
-  a trigger, or dropping the column and reading `SUM(delta)` off an
-  index, would make the invariant unfalsifiable rather than merely
-  tested. Left as it is on purpose: the check has teeth today and the
-  fix is cheap the day it does not.
+- `credit_lots.credits_remaining` IS DERIVED, NOT MAINTAINED (fixed
+  2026-09-08). It was a denormalisation kept in step by careful code
+  here, with `reconcile()` to spot the day it drifted -- an invariant
+  that was observed rather than enforced, and whose failure mode was
+  silent and financial. Two triggers now own the column
+  (`db.add_ledger_balance_trigger`, installed by `init()`): writing an
+  entry re-derives its lot, and a write to a lot's
+  `credits_remaining` is overwritten with `SUM(delta)` over that lot's
+  entries. A future writer who updates a lot without writing the entry
+  does not corrupt anything; their number is simply not believed.
+
+  WHY A TRIGGER AND NOT THE OTHER TWO OPTIONS. *Dropping the column*
+  and reading `SUM(delta)` off an index is the purest answer and was
+  the close call -- it deletes the invariant instead of enforcing it.
+  It was rejected because the aggregate would move into `hold`'s
+  critical section (the lot-picking SELECT runs under the per-account
+  advisory lock, and it is the one place this module trades
+  concurrency for money), and because it rewrites every lot-picking
+  query in the module for a property a trigger gives with none of
+  that. *A deferred CHECK* is not available: Postgres CHECK
+  constraints cannot be DEFERRABLE and cannot contain a subquery, so
+  the constraint cannot see `credit_entries` at all -- what people
+  usually mean by it is a deferred constraint TRIGGER, which is this
+  answer with a later firing time and a worse failure mode (it would
+  RAISE at commit, and the commit it aborted might be somebody's
+  settle). The trigger keeps every existing write path, keeps the
+  raise-never-swallow rule (a trigger that fails aborts the caller's
+  transaction, and `db.connect` re-raises), and holds no lock the
+  writer was not already holding on that row.
+
+  `reconcile()` KEPT ITS JOB by being re-pointed. Its drift figure can
+  no longer be non-zero -- it stays as the belt to the triggers'
+  braces, and as the thing that reads meaningfully if somebody ever
+  drops them -- and it now also reports the case triggers cannot
+  catch: a lot with NO entries behind it. That is the real orphan
+  (a `credit_lots` row written without its grant), and the trigger
+  happily derives zero for it.
 
 - THE RECONCILIATION FIGURE THE DESIGN DOC DESCRIBES IS CIRCULAR while
   settle runs on the same estimate `generations.cost_usd` records --
@@ -81,7 +110,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
 
-from . import account_keys, db
+from . import account_keys, db, manual_lane
 
 # --------------------------------------------------------------------------
 # the vocabulary
@@ -194,35 +223,66 @@ def ref_params(ref: str) -> dict:
 
 
 # --------------------------------------------------------------------------
-# BYOK -- one place, because every caller would get it wrong differently
+# UNBILLABLE RENDERS -- one place, because every caller would get it
+# wrong differently
 # --------------------------------------------------------------------------
 
 # What `account_keys.key_and_source` returns when the account rendered on
 # its own stored credential rather than on the installation's env key.
 BYOK_KEY_SOURCE = account_keys.SOURCE_ACCOUNT
 
+# What an adapter writes into `generations.params_json` as `source` when
+# the clip came off a subscription instead of a metered API call --
+# `src/manual_lane.py` owns the vocabulary and the lane behind it.
+SUBSCRIPTION_SOURCES = manual_lane.SUBSCRIPTION_SOURCES
 
-def is_billable(key_source: Optional[str]) -> bool:
-    """Whether a render on this credential may be debited. THE ONE PLACE
-    that rule lives.
 
-    A render whose credential resolved to `key_source == "account"` --
-    the BYOK case `src/account_keys.py` made visible on 2026-09-07 --
-    takes no hold and no debit: the customer's card was charged by the
-    provider directly, and billing them again is charging twice for one
-    clip. Every adapter already writes `key_source` into
-    `generations.params_json`, so the fact is on the row; what must not
-    happen is four call sites each deciding what to do with it, because
-    the one that spells the constant wrong bills a BYOK customer and
-    nothing fails.
+def is_billable(key_source: Optional[str], *, source: Optional[str] = None) -> bool:
+    """Whether a render may be debited. THE ONE PLACE that rule lives.
 
-    An UNKNOWN source (None -- no credential resolved at all, or
-    `key_source()` swallowed a decrypt error) reads as billable. That is
-    the deliberate direction to be wrong in: it holds credit for a
+    TWO WAYS A RENDER IS NOT THIS LEDGER'S BUSINESS, and they are the
+    same structural fact wearing different clothes: **somebody already
+    paid for this clip somewhere the ledger cannot see, so a debit here
+    is a second charge for one render.**
+
+    1. **BYOK** -- `key_source == "account"`, the case
+       `src/account_keys.py` made visible on 2026-09-07. The customer's
+       card was charged by the provider directly.
+    2. **THE SUBSCRIPTION LANE** -- `source` in `SUBSCRIPTION_SOURCES`,
+       the marker `ops/render_queue.py` writes when a human rendered the
+       shot by hand in a vendor's web app on a plan that was bought
+       before the render existed (`src/manual_lane.py`). Runway Explore
+       Mode and the Higgsfield MCP are both this. There is no per-render
+       price to debit -- `cost_usd` on that row is NULL on purpose and
+       `src/costs.py` reports it as FREE with a count, never $0 -- and a
+       hold would be worse than merely wrong: it would debit a CUSTOMER'S
+       credit for a clip rendered on the OPERATOR'S personal plan.
+
+    Both facts are already on the row -- every adapter writes
+    `key_source` into `generations.params_json`, and the lane writes
+    `source` beside it -- so what must not happen is four call sites each
+    deciding what to do with them, because the one that spells a constant
+    wrong bills a BYOK customer, or a customer for the operator's
+    subscription, and nothing fails.
+
+    Note that these two arguments do NOT read the same way round, and
+    that is deliberate. `key_source` is unbillable on ONE known value and
+    billable otherwise; `source` is unbillable on a known SET and
+    billable otherwise. Both directions point the same way: the caller
+    has to positively demonstrate that a render was already paid for.
+
+    An UNKNOWN credential (`key_source` None -- nothing resolved at all,
+    or `key_source()` swallowed a decrypt error) reads as billable. That
+    is the deliberate direction to be wrong in: it holds credit for a
     render that may not happen, which `release()` and the reaper give
     back, rather than rendering for free on the installation's key and
-    finding out at the invoice.
+    finding out at the invoice. A manual-lane row carries `key_source`
+    None for the honest reason that no API credential was used, which is
+    exactly why the LANE MARKER and not the missing credential is what
+    makes it unbillable.
     """
+    if manual_lane.is_subscription_source(source):
+        return False
     return key_source != BYOK_KEY_SOURCE
 
 
@@ -326,6 +386,10 @@ def init(dsn: Optional[str] = None) -> None:
         db.own_table(conn, "credit_lots")
         db.own_table(conn, "credit_entries")
         conn.execute(INDEXES)
+        # LAST, because the triggers name both tables and the account_id
+        # column own_table adds. This is what makes credits_remaining
+        # derived rather than merely tested -- see the module docstring.
+        db.add_ledger_balance_trigger(conn)
 
 
 # --------------------------------------------------------------------------
@@ -517,23 +581,42 @@ def outstanding_everyone(dsn: Optional[str] = None) -> int:
 
 
 def reconcile(account_id: Optional[int], dsn: Optional[str] = None) -> list[dict[str, Any]]:
-    """Per lot: `SUM(delta)` from the entries against the denormalised
-    `credit_lots.credits_remaining`, and the drift between them.
+    """Per lot: `SUM(delta)` from the entries against
+    `credit_lots.credits_remaining`, the drift between them, and whether
+    the lot has any entries behind it at all.
 
-    The entries are the truth and `credits_remaining` is a running
-    figure kept for the queries that pick lots to spend from. They must
-    agree; a test asserts they do after every operation in this module.
-    An empty result from a non-empty account means someone wrote a lot
-    without its grant entry.
+    TWO CHECKS NOW, AND ONLY THE SECOND ONE CAN STILL FIRE.
+
+    `drift` is the belt to the triggers' braces. Since 2026-09-08
+    `credits_remaining` is DERIVED by `db.add_ledger_balance_trigger`
+    -- entries in, running figure out -- so a non-zero drift is no
+    longer a bookkeeping slip somebody made, it means the triggers are
+    missing from this database (an `init()` that never ran, a restore
+    that dropped them, a hand-edited schema). Keeping the figure costs
+    one subquery and is the only way that condition is visible from
+    Python; a test still asserts it is zero after every operation in
+    this module, and it is now a test of the schema rather than of the
+    code's care.
+
+    `orphan` is what reconciliation is FOR now: a lot with no entries
+    behind it. The triggers cannot catch that one -- a lot with no
+    entries derives a perfectly consistent `credits_remaining` of zero
+    -- and it is a real failure, a `credit_lots` row written without
+    the `grant` entry that puts the credit in it. `grant()` writes both
+    in one transaction; anything that does not is this row.
     """
     with db.connect(dsn) as conn:
         rows = conn.execute(
             """
-            SELECT l.id, l.kind, l.credits_remaining,
+            SELECT l.id, l.kind, l.credits_remaining, l.credits_granted,
                    COALESCE((SELECT SUM(e.delta) FROM credit_entries e
                              WHERE e.lot_id = l.id
                                AND e.account_id IS NOT DISTINCT FROM l.account_id), 0)
-                   AS entry_sum
+                   AS entry_sum,
+                   (SELECT COUNT(*) FROM credit_entries e
+                    WHERE e.lot_id = l.id
+                      AND e.account_id IS NOT DISTINCT FROM l.account_id)
+                   AS entry_count
             FROM credit_lots l
             WHERE l.account_id IS NOT DISTINCT FROM %s
             ORDER BY l.id
@@ -543,6 +626,8 @@ def reconcile(account_id: Optional[int], dsn: Optional[str] = None) -> list[dict
         return [{"lot_id": r["id"], "kind": r["kind"],
                  "credits_remaining": int(r["credits_remaining"]),
                  "entry_sum": int(r["entry_sum"]),
+                 "entry_count": int(r["entry_count"]),
+                 "orphan": int(r["entry_count"]) == 0,
                  "drift": int(r["credits_remaining"]) - int(r["entry_sum"])}
                 for r in rows]
 
@@ -554,13 +639,19 @@ def reconcile(account_id: Optional[int], dsn: Optional[str] = None) -> list[dict
 def _entry(conn, *, account_id: Optional[int], lot_id: Optional[int], delta: int,
            kind: str, ref: Optional[str], generation_id: Optional[int] = None,
            provider: Optional[str] = None) -> int:
-    """One append-only movement, plus the lot's running figure.
+    """One append-only movement. The lot's running figure follows it.
 
-    The pair is deliberately inseparable and deliberately in the same
-    transaction as its caller: an entry without its
-    `credits_remaining` update is a drift `reconcile()` would find
-    tomorrow, and an update without its entry is a balance with no audit
-    trail behind it.
+    The UPDATE below is no longer what keeps `credits_remaining` right
+    -- `db.add_ledger_balance_trigger` derives that column from these
+    entries, so the AFTER trigger has already set the lot by the time
+    the UPDATE runs, and the BEFORE trigger on `credit_lots` replaces
+    whatever this statement computes with the same figure. It is kept
+    on purpose, as the one behaviour that still works on a database
+    whose triggers are missing: with them it is a redundant write of
+    an identical number, without them it is exactly the careful code
+    this module shipped with. Writing the ENTRY is now the whole of
+    writing the movement, which is the property that makes the
+    invariant unfalsifiable rather than merely tested.
     """
     if kind not in ENTRY_KINDS:
         raise LedgerError(f"entry kind must be one of {ENTRY_KINDS}, got {kind!r}")
@@ -1194,6 +1285,7 @@ def reap(older_than=DEFAULT_REAP_AGE, *, account_id: Optional[int] = None,
 
 def hold_for_render(account_id: Optional[int], *, ref: str, provider: str,
                     estimate_usd, key_source: Optional[str] = None,
+                    source: Optional[str] = None,
                     dsn: Optional[str] = None) -> Optional[int]:
     """Take the hold for one render, or None when the render is not
     billable. THE SEAM -- NOTHING CALLS IT YET, ON PURPOSE.
@@ -1238,11 +1330,14 @@ def hold_for_render(account_id: Optional[int], *, ref: str, provider: str,
     like a free refund.
 
     `key_source` is what `account_keys.key_source(account_id, provider)`
-    returned for this render -- the same value the adapter already
-    writes into `generations.params_json`. On "account" this returns
-    None and takes NO hold: see `is_billable`.
+    returned for this render, and `source` is the `params["source"]` the
+    adapter is about to write -- the same two values that land in
+    `generations.params_json`. On BYOK ("account") or on a subscription
+    lane marker this returns None and takes NO hold: see `is_billable`.
+    A manual-lane import is the second case, and it is why
+    `ops/render_queue.py` can file a clip without ever touching credit.
     """
-    if not is_billable(key_source):
+    if not is_billable(key_source, source=source):
         return None
     return hold(account_id, credits_for_usd(estimate_usd), ref=ref,
                 provider=provider, estimate_usd=estimate_usd, dsn=dsn)
@@ -1250,7 +1345,7 @@ def hold_for_render(account_id: Optional[int], *, ref: str, provider: str,
 
 __all__ = [
     "EXPIRY_MONTHS", "LAPSE_POLICY", "LOT_KINDS", "ENTRY_KINDS",
-    "GENERATION_REF_KEY", "BYOK_KEY_SOURCE",
+    "GENERATION_REF_KEY", "BYOK_KEY_SOURCE", "SUBSCRIPTION_SOURCES",
     "LedgerError", "InsufficientCredit",
     "credits_for_usd", "is_billable", "ref_params",
     "init", "grant", "available", "lots", "entries", "outstanding",

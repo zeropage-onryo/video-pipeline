@@ -42,7 +42,14 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from .db import OWNED_TABLES, backfill_owner, columns, connect, table_exists
+from .db import (
+    OWNED_TABLES,
+    add_manual_lane_operator_column,
+    backfill_owner,
+    columns,
+    connect,
+    table_exists,
+)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -66,7 +73,13 @@ CREATE TABLE IF NOT EXISTS accounts (
     house_look     TEXT,
     house_negative TEXT,
     house_aspect   TEXT DEFAULT '9:16',
-    never_list     TEXT
+    never_list     TEXT,
+    -- may this account spend the OPERATOR'S personal consumer plans
+    -- (src/manual_lane.py)? FALSE for every account that has ever been
+    -- created, including the bootstrap one: the lane fails closed and
+    -- the only way in is somebody turning it on by hand. db.py carries
+    -- the ALTER for databases that predate the column.
+    manual_lane_operator BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE TABLE IF NOT EXISTS account_members (
@@ -86,6 +99,11 @@ def init(dsn: Optional[str] = None) -> None:
     """Create the auth tables. Run after db.init_db()."""
     with connect(dsn) as conn:
         conn.execute(SCHEMA)
+        # a live database predates manual_lane_operator (2026-09-08); the
+        # CREATE TABLE above carries it for a fresh one, and db.init_db
+        # runs before this table exists at all, so the ALTER is asked for
+        # here as well as there -- both are no-ops once it has landed.
+        add_manual_lane_operator_column(conn)
 
 
 # --------------------------------------------------------------------------
@@ -232,6 +250,65 @@ def memberships(user_id: str, dsn: Optional[str] = None) -> list[dict[str, Any]]
             (str(user_id),),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+# --------------------------------------------------------------------------
+# the manual render lane's gate -- a column, not an environment
+# --------------------------------------------------------------------------
+
+def set_manual_lane_operator(slug: str, on: bool,
+                             dsn: Optional[str] = None) -> dict[str, Any]:
+    """Turn the manual render lane on or off for ONE account.
+
+    The write half of src/manual_lane.py's gate, which is a column on
+    this table and nothing else since 2026-09-08. It is here rather than
+    in manual_lane.py because this module owns `accounts`, and it is a
+    deliberate, auditable act with a person behind it: there is no route,
+    no env var and no API -- somebody has to be able to reach the
+    database and run `python -m src.accounts operator <slug> --on`.
+
+    Idempotent, and it reports the BEFORE as well as the after, because
+    "already on" and "just turned on" are different facts about an
+    install and the operator should not have to guess which one happened.
+
+    Raises ValueError for an unknown slug -- naming an account that does
+    not exist must not read as success.
+    """
+    init(dsn)
+    slug = (slug or "").strip().lower()
+    if not slug:
+        raise ValueError("which account? -- pass the slug, e.g. zeropage")
+    with connect(dsn) as conn:
+        row = conn.execute(
+            "SELECT id, manual_lane_operator FROM accounts WHERE slug = %s",
+            (slug,)).fetchone()
+        if row is None:
+            known = [r["slug"] for r in conn.execute(
+                "SELECT slug FROM accounts ORDER BY slug")]
+            raise ValueError(
+                f"no account {slug!r}" + (f" -- try one of {known}" if known else ""))
+        was = bool(row["manual_lane_operator"])
+        now = bool(on)
+        if was != now:
+            conn.execute(
+                "UPDATE accounts SET manual_lane_operator = %s WHERE id = %s",
+                (now, int(row["id"])))
+        return {"slug": slug, "account_id": int(row["id"]),
+                "was": was, "now": now, "changed": was != now}
+
+
+def manual_lane_operators(dsn: Optional[str] = None) -> list[dict[str, Any]]:
+    """Every account the column names, for the CLI to print. The GATE
+    does not read this -- it asks about one account id (see
+    manual_lane.manual_lane_allowed), because a gate that builds a set
+    is a gate that can be widened by anything that widens the set."""
+    with connect(dsn) as conn:
+        if not table_exists(conn, "accounts"):
+            return []
+        rows = conn.execute(
+            "SELECT id, slug FROM accounts WHERE manual_lane_operator "
+            "ORDER BY slug").fetchall()
+        return [{"account_id": int(r["id"]), "slug": r["slug"]} for r in rows]
 
 
 # --------------------------------------------------------------------------
@@ -439,7 +516,40 @@ def main(argv=None) -> None:
 
     sub.add_parser("members", help="who can enter what")
 
+    p_op = sub.add_parser(
+        "operator",
+        help="turn the manual (subscription) render lanes on or off for one "
+             "account -- the whole gate, and the only way to move it")
+    p_op.add_argument("slug", help="the account slug, e.g. zeropage")
+    door = p_op.add_mutually_exclusive_group(required=True)
+    door.add_argument("--on", dest="on", action="store_true",
+                      help="this account may spend the operator's own "
+                           "Runway/Higgsfield subscriptions by hand")
+    door.add_argument("--off", dest="on", action="store_false",
+                      help="it may not (the state every account starts in)")
+    p_op.set_defaults(on=None)
+
     args = parser.parse_args(argv)
+
+    if args.command == "operator":
+        try:
+            result = set_manual_lane_operator(args.slug, args.on)
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            sys.exit(1)
+        state = "ON" if result["now"] else "OFF"
+        where = f"{result['slug']!r} (account {result['account_id']})"
+        if result["changed"]:
+            print(f"manual render lane {'OFF -> ON' if result['now'] else 'ON -> OFF'} "
+                  f"for {where}")
+        else:
+            print(f"manual render lane already {state} for {where} -- nothing changed")
+        others = [o for o in manual_lane_operators()
+                  if o["account_id"] != result["account_id"]]
+        if others:
+            print("also on: " + ", ".join(
+                f"{o['slug']} (account {o['account_id']})" for o in others))
+        return
 
     if args.command == "members":
         with connect() as conn:

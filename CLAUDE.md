@@ -98,6 +98,21 @@ venv/bin/python -m src.rag_eval <cases.json> [--k 5]   # hit@k + MRR over labele
 venv/bin/python -m src.mcp_server --engine   # stdio; Claude Desktop launches this itself
 # Registering it: ops/connect-claude.md (paste ops/claude-desktop-mcp.json, ⌘Q, reopen)
 
+# THE MANUAL RENDER LANES — a subscription spent by hand, never by the nightly.
+# The Higgsfield MCP (a Claude session) and Runway Explore Mode (a human in
+# Chrome; free on Unlimited, a web-app toggle with NO API parameter). `list`
+# says what is waiting, `import` files the mp4 into data/renders/<provider>/
+# and writes a FREE row (cost_usd NULL, params.source = the lane marker, so
+# ledger.is_billable takes no hold). BOTH lanes are OPERATOR-ONLY —
+# src/manual_lane.py's gate is the accounts.manual_lane_operator COLUMN (the
+# env vars are gone), checked server-side against the account id on every
+# surface, fails closed (nobody, until somebody is turned on). Turn it on:
+venv/bin/python -m src.accounts operator <slug> --on   # --off to revoke
+# The API-billed adapters are untouched by it. See docs/RUNBOOK.md 2026-09-08.
+python3 ops/render_queue.py --account <slug> [--provider runway] list
+python3 ops/render_queue.py --provider runway --account <slug> import \
+    --concept N --shot 1 --file clip.mp4 --model gen4_turbo --duration 10
+
 # THE DATA COPY — data/pipeline.db (SQLite) into Postgres, once, at cutover.
 # Refuses a non-empty target and never guesses the DSN; --dry-run counts.
 venv/bin/python -m ops.copy_sqlite_to_postgres --dsn "$DATABASE_URL" [--dry-run] [--truncate]

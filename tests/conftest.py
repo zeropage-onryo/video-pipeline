@@ -88,6 +88,7 @@ OUTPUT_ROOTS = (
     ("app.api", "UPLOAD_REFS_DIR", "data/refs"),
     ("ops.render_queue", "RENDERS_ROOT", "data/renders"),
     ("ops.render_queue", "RENDER_DIR", "data/renders/higgsfield"),
+    ("ops.render_queue", "RUNWAY_RENDER_DIR", "data/renders/runway"),
     ("ops.bank", "PLANS_DIR", "data/idea_agent"),
 )
 

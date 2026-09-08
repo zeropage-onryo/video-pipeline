@@ -524,6 +524,54 @@ def add_legacy_column(conn: psycopg.Connection) -> bool:
 
 
 # --------------------------------------------------------------------------
+# who may spend the operator's own subscription (2026-09-08)
+# --------------------------------------------------------------------------
+
+# The manual render lanes (ops/render_queue.py, src/manual_lane.py) spend
+# the OPERATOR'S personal consumer plans, so who may use them is a
+# security decision. Until this column it was `ZEROPAGE_OPERATOR_ACCOUNTS`
+# / `_EMAILS`: anyone who could set an env var on the process -- a deploy
+# config, a `.env` on a shared box, a wrapper script -- could name
+# themselves operator, with no record anywhere of who was on the list
+# when a clip was rendered. A column on the account row is a thing you
+# have to be inside the database to change, and it is the same row every
+# other tenancy decision already hangs off.
+#
+# The env vars were REMOVED rather than kept as a fallback. A gate with
+# two doors is one door: the weaker door decides, and a reader of either
+# half believes the wrong thing about the whole.
+MANUAL_LANE_COLUMN = "manual_lane_operator"
+
+
+def add_manual_lane_operator_column(conn: psycopg.Connection) -> bool:
+    """Additive ALTER TABLE on `accounts`. True if added now.
+
+    Deliberately NO BACKFILL, which is the one way this migration differs
+    from add_legacy_column's shape: the gate fails closed, so a migration
+    that named anybody an operator would be the migration quietly making
+    the security decision the column exists to make deliberately. Every
+    account comes out of it FALSE, including the bootstrap one, and the
+    operator turns their own account on once by hand
+    (`python -m src.accounts operator <slug> --on`).
+
+    `accounts` belongs to src/accounts.py's own SCHEMA and does not exist
+    on a database where only db.init_db() has run, so a missing table is
+    "not yet", not an error -- accounts.init() calls this again the
+    moment there is a table to alter. The CREATE TABLE carries the column
+    inline too, so a fresh database gets it there and this does nothing.
+    """
+    if not table_exists(conn, "accounts"):
+        return False
+    if MANUAL_LANE_COLUMN in columns(conn, "accounts"):
+        return False
+    conn.execute(
+        f"ALTER TABLE accounts ADD COLUMN {MANUAL_LANE_COLUMN} "
+        "BOOLEAN NOT NULL DEFAULT FALSE"
+    )
+    return True
+
+
+# --------------------------------------------------------------------------
 # the nightly walk's receipt (2026-09-07)
 # --------------------------------------------------------------------------
 
@@ -659,6 +707,9 @@ def init_db(dsn: Optional[str] = None) -> None:
         add_legacy_column(conn)
         # the nightly walk's receipt (src/nightly.py, 2026-09-07)
         add_nightly_runs_table(conn)
+        # who may spend the operator's subscription (src/manual_lane.py,
+        # 2026-09-08) -- a no-op until accounts.init() has made the table
+        add_manual_lane_operator_column(conn)
 
 
 # --------------------------------------------------------------------------
@@ -1274,6 +1325,133 @@ def import_pitches_file(
     """
     pitches = json.loads(Path(pitches_path).read_text())
     return save_pitch_run(pitches, dsn=dsn)
+
+
+# --------------------------------------------------------------------------
+# BEGIN credit-ledger balance trigger (src/ledger.py, 2026-09-08)
+# --------------------------------------------------------------------------
+
+# `credit_lots.credits_remaining` used to be a denormalisation kept in
+# step by careful code in `ledger._entry`, with `ledger.reconcile()` to
+# spot the day it drifted. Nothing stopped a future writer from updating
+# a lot without writing the matching entry, and that failure is silent
+# and financial. These two triggers make the column DERIVED: it is
+# always `SUM(delta)` over the lot's own entries, whoever writes and
+# however they write it.
+#
+#   ledger_lot_balance      BEFORE INSERT OR UPDATE ON credit_lots
+#       overwrites whatever the writer put in credits_remaining with the
+#       figure the entries actually say. A raw `UPDATE credit_lots SET
+#       credits_remaining = 999999` therefore self-corrects rather than
+#       being believed.
+#   ledger_entry_syncs_lot  AFTER INSERT/UPDATE/DELETE ON credit_entries
+#       re-derives the affected lot (both of them, when an entry moves
+#       between lots), so writing the entry is the whole of writing the
+#       movement.
+#
+# Both bodies scope the sum by `account_id IS NOT DISTINCT FROM` as well
+# as by lot id -- lot ids are unique, so it is not needed for
+# correctness, but an entry filed against the wrong account must not
+# fund somebody else's lot, and it is the same predicate
+# `ledger.reconcile()` compares against.
+#
+# It lives in db.py rather than in ledger.py because this is schema
+# machinery of the kind `add_nightly_runs_table` and `add_legacy_column`
+# already are, and `ledger.init()` calls it exactly like those.
+LEDGER_BALANCE_TRIGGER_SQL = """
+CREATE OR REPLACE FUNCTION ledger_lot_balance() RETURNS trigger
+LANGUAGE plpgsql AS $fn$
+BEGIN
+    NEW.credits_remaining := COALESCE((
+        SELECT SUM(e.delta) FROM credit_entries e
+        WHERE e.lot_id = NEW.id
+          AND e.account_id IS NOT DISTINCT FROM NEW.account_id), 0);
+    RETURN NEW;
+END;
+$fn$;
+
+CREATE OR REPLACE FUNCTION ledger_entry_syncs_lot() RETURNS trigger
+LANGUAGE plpgsql AS $fn$
+DECLARE
+    touched BIGINT[] := '{}';
+BEGIN
+    IF TG_OP <> 'INSERT' AND OLD.lot_id IS NOT NULL THEN
+        touched := array_append(touched, OLD.lot_id);
+    END IF;
+    IF TG_OP <> 'DELETE' AND NEW.lot_id IS NOT NULL THEN
+        touched := array_append(touched, NEW.lot_id);
+    END IF;
+    IF array_length(touched, 1) IS NULL THEN
+        RETURN NULL;
+    END IF;
+    UPDATE credit_lots l
+       SET credits_remaining = COALESCE((
+               SELECT SUM(e.delta) FROM credit_entries e
+               WHERE e.lot_id = l.id
+                 AND e.account_id IS NOT DISTINCT FROM l.account_id), 0)
+     WHERE l.id = ANY(touched);
+    RETURN NULL;
+END;
+$fn$;
+
+DROP TRIGGER IF EXISTS ledger_lot_balance ON credit_lots;
+CREATE TRIGGER ledger_lot_balance
+    BEFORE INSERT OR UPDATE ON credit_lots
+    FOR EACH ROW EXECUTE FUNCTION ledger_lot_balance();
+
+DROP TRIGGER IF EXISTS ledger_entry_syncs_lot_ins ON credit_entries;
+CREATE TRIGGER ledger_entry_syncs_lot_ins
+    AFTER INSERT ON credit_entries
+    FOR EACH ROW EXECUTE FUNCTION ledger_entry_syncs_lot();
+
+DROP TRIGGER IF EXISTS ledger_entry_syncs_lot_del ON credit_entries;
+CREATE TRIGGER ledger_entry_syncs_lot_del
+    AFTER DELETE ON credit_entries
+    FOR EACH ROW EXECUTE FUNCTION ledger_entry_syncs_lot();
+
+-- Only when the MONEY moved. `ledger.mark_submitted` updates every hold
+-- entry of a render to stamp submitted_at, and re-deriving a lot on a
+-- column that cannot change its balance is work for nothing.
+DROP TRIGGER IF EXISTS ledger_entry_syncs_lot_upd ON credit_entries;
+CREATE TRIGGER ledger_entry_syncs_lot_upd
+    AFTER UPDATE ON credit_entries
+    FOR EACH ROW
+    WHEN (OLD.delta IS DISTINCT FROM NEW.delta
+          OR OLD.lot_id IS DISTINCT FROM NEW.lot_id
+          OR OLD.account_id IS DISTINCT FROM NEW.account_id)
+    EXECUTE FUNCTION ledger_entry_syncs_lot();
+"""
+
+
+def add_ledger_balance_trigger(conn: psycopg.Connection) -> bool:
+    """Install the credit-ledger balance triggers. True if they were
+    installed now (they were missing before this call).
+
+    `add_nightly_runs_table`'s shape: safe to run on every import of the
+    dev server, because CREATE OR REPLACE FUNCTION and DROP TRIGGER IF
+    EXISTS say what the state should be rather than assuming what it is.
+    Replacing the triggers rather than skipping them when present is
+    deliberate -- an installation carrying an older body gets the current
+    one, which an `IF NOT EXISTS` would leave in place forever.
+
+    Called from `ledger.init()`, which is where both tables are created;
+    on a database without them it is a no-op that returns False, because
+    a trigger on a table that does not exist cannot be created and
+    nothing else in this module should have to care about the order.
+    """
+    if not (table_exists(conn, "credit_lots") and table_exists(conn, "credit_entries")):
+        return False
+    existed = bool(conn.execute(
+        "SELECT 1 FROM pg_trigger WHERE tgrelid = to_regclass('credit_lots') "
+        "AND NOT tgisinternal AND tgname = 'ledger_lot_balance'"
+    ).fetchone())
+    conn.execute(LEDGER_BALANCE_TRIGGER_SQL)
+    return not existed
+
+
+# --------------------------------------------------------------------------
+# END credit-ledger balance trigger
+# --------------------------------------------------------------------------
 
 
 if __name__ == "__main__":
