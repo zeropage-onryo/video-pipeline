@@ -10,11 +10,15 @@ has_key and generations_today with the same signatures. Nothing enforced
 that shape until now -- conforms() below is what catches the next one
 drifting the way veo.has_key() was simply missing until 2026-09-04.
 
-kling, seedance, ltx and wan already have prompt-compilation support in
-shot.PLATFORMS (the vocabulary a Shot renders into) but no execution
-adapter -- they are not registered here until one exists. Adding one is
-"write the module to this shape, add one line to VIDEO_PROVIDERS", not
-"invent a new interface".
+kling, seedance, ltx and wan had prompt-compilation support in
+shot.PLATFORMS (the vocabulary a Shot renders into) and no execution
+adapter, for as long as this file has existed. fal.py (2026-09-08) is
+that adapter: ONE entry here, because fal is one vendor, one key and one
+queue API -- the four platform names are bindings of it
+(fal.connector(name)) that orchestrator.generate_render holds, not four
+registry entries pretending to be four vendors. Adding the next provider
+is still "write the module to this shape, add one line to
+VIDEO_PROVIDERS", not "invent a new interface".
 
 Not wired into the render path yet. orchestrator.py and scene_chain.py
 still name a tool explicitly (from a shot's Platform or a config default);
@@ -26,7 +30,7 @@ from __future__ import annotations
 from types import ModuleType
 from typing import Optional
 
-from . import generative, higgsfield, runway, veo
+from . import fal, generative, higgsfield, runway, veo
 
 # The contract: every callable a router or a future BYOK/cap check needs.
 # estimate_cost is checked with arity 1 in mind (n) -- runway and
@@ -47,16 +51,21 @@ VIDEO_PROVIDERS: dict[str, ModuleType] = {
     "runway": runway,
     "veo": veo,
     "higgsfield": higgsfield,
+    "fal": fal,
 }
 
 # Cheapest-first static fallback for a provider choose_provider() has no
 # history for yet. Real per-clip figures (2026-08/09 dev-portal pricing,
 # see each module's own COST_PER_CLIP_USD / CREDITS_PER_SECOND):
-# runway ~$0.25 (gen4_turbo, 5s), higgsfield ~$0.40+ (duration-scaled),
-# veo $3.20 flat. Not used once an account has real kept/rejected data --
-# tool_scoreboard's cost_per_keeper replaces guessed sticker price with
-# what this account actually paid per usable clip.
-DEFAULT_ORDER: tuple[str, ...] = ("runway", "higgsfield", "veo")
+# runway ~$0.25 (gen4_turbo, 5s), fal ~$0.30 (LTX-2.3 at $0.06/s x 5s,
+# its DEFAULT_MODEL and the cheapest clip in the repo), higgsfield ~$0.40+
+# (duration-scaled), veo $3.20 flat. fal sits second on that number and
+# nothing else: its per-second rate card is published and dated in
+# fal.VIDEO_MODELS, so this is one of the few entries here that is a price
+# rather than an estimate. Not used once an account has real
+# kept/rejected data -- tool_scoreboard's cost_per_keeper replaces guessed
+# sticker price with what this account actually paid per usable clip.
+DEFAULT_ORDER: tuple[str, ...] = ("runway", "fal", "higgsfield", "veo")
 
 
 def conforms(module: ModuleType) -> list[str]:

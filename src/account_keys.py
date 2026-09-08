@@ -60,6 +60,10 @@ PROVIDER_ENV_FALLBACK: dict[str, tuple[tuple[str, ...], ...]] = {
     "higgsfield": (("HIGGSFIELD_API_KEY_ID", "HF_API_KEY_ID"),
                    ("HIGGSFIELD_API_KEY_SECRET", "HF_API_KEY_SECRET")),
     "midjourney": (("ACEDATA_API_KEY",),),
+    # ONE secret, so ONE candidate tuple. fal names it FAL_KEY everywhere
+    # in its own docs and SDKs; FAL_API_KEY is accepted as the spelling
+    # people reach for by habit from every other provider in this dict.
+    "fal": (("FAL_KEY", "FAL_API_KEY"),),
 }
 
 # how many key fields each provider needs from account_keys.set(), in the
@@ -71,6 +75,7 @@ PROVIDER_FIELDS: dict[str, tuple[str, ...]] = {
     "gemini": ("api_key",),
     "higgsfield": ("api_key_id", "api_key_secret"),
     "midjourney": ("api_key",),
+    "fal": ("api_key",),
 }
 
 

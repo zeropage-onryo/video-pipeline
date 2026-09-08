@@ -35,7 +35,14 @@ from .shot import TOOLS, Shot
 # nano_banana.py) that log attempts here but never render a Shot --
 # they must not join shot.PLATFORMS or they'd be offered as AI-shot
 # video tools in concepts.
-IMAGE_TOOLS = ("midjourney", "nano")
+#
+# "fal" is here for fal.py's FLUX stills ONLY. fal's video renders log
+# under the PLATFORM they rendered for (kling / ltx / wan / seedance,
+# already in TOOLS), because the scoreboard's question is which model
+# makes keepable clips and "fal" would average four models that cost
+# $0.30 and $1.51 into one meaningless row. The split is also what keeps
+# fal's video daily cap from moving when someone renders a still.
+IMAGE_TOOLS = ("midjourney", "nano", "fal")
 LOG_TOOLS = TOOLS + IMAGE_TOOLS
 
 SCHEMA = """

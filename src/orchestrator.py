@@ -1210,6 +1210,13 @@ def generate_render(state: GenState) -> GenState:
     HIGGSFIELD" and parked, though shootgen names HIGGSFIELD first in
     ZEROPAGE_AI_TOOLS and shot.py already compiled its prompt.
 
+    tool==KLING / LTX / WAN / SEEDANCE route through fal.py (wired
+    2026-09-08), one adapter over fal.ai's queue API bound to one model
+    each. Those four platforms have had prompt renderers in shot.PLATFORMS
+    since the registry existed and no execution adapter at all, so every
+    shot planned for one of them came back "no adapter wired" -- half the
+    tool vocabulary was writable and unrenderable.
+
     tool==VEO keeps the legacy veo.py path for when Veo
     returns to the registry; anything else is honestly "no adapter
     wired" -- unless the aggregator registry (providers.py, 2026-09-04)
@@ -1224,8 +1231,20 @@ def generate_render(state: GenState) -> GenState:
     if os.environ.get("ZEROPAGE_RENDER") != "1":
         return {"clips": [{**p, "url": None, "ok": False} for p in prompts]}
 
-    from . import higgsfield, providers, runway, veo
-    connectors = {"VEO": veo, "RUNWAY": runway, "HIGGSFIELD": higgsfield}
+    from . import fal, higgsfield, providers, runway, veo
+    connectors = {
+        "VEO": veo, "RUNWAY": runway, "HIGGSFIELD": higgsfield,
+        # The four that had prompt renderers in shot.PLATFORMS and no way
+        # to execute them since the registry was written. Each is this one
+        # fal adapter bound to one model (fal.PLATFORM_MODELS), so a shot
+        # shootgen planned for KLING renders on Kling rather than parking
+        # -- and the row it writes is logged under "kling", the tool that
+        # actually made the clip.
+        "KLING": fal.connector("kling"),
+        "LTX": fal.connector("ltx"),
+        "WAN": fal.connector("wan"),
+        "SEEDANCE": fal.connector("seedance"),
+    }
     out_root = GENERATED_ROOT / f"concept-{state.get('concept_id', 'x')}"
     account_id = state.get("account_id")
     clips = []
@@ -1233,6 +1252,12 @@ def generate_render(state: GenState) -> GenState:
         tool_name = (p.get("tool") or "").upper()
         connector = connectors.get(tool_name)
         tried = {tool_name.lower()} if tool_name else set()
+        # A connector may BE a provider under another name: the four fal
+        # platforms are all provider "fal". Excluding the tool name alone
+        # would let the failover "retry" on the same vendor that just
+        # failed, through a different door.
+        if connector is not None:
+            tried.add(getattr(connector, "PROVIDER", tool_name.lower()))
         result = None
         if connector is not None:
             # account_id, or the clip is billed to nobody: the row lands

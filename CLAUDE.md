@@ -572,6 +572,33 @@ is yours, in Resolve, by hand.
   (unadapted tools — KLING/RUNWAY/... — honestly stay dry), and `autopilot.EXECUTORS["generate"]`
   only in live mode through the full L4 gate. Config verified against the *installed*
   google-genai (2026-08): `duration_seconds`, not the docs snippet's `duration`.
+- **`src/fal.py`** — the fal.ai connector, and the module that woke the four dormant
+  platforms (2026-09-08). `shot.PLATFORMS` had carried prompt renderers for `kling`,
+  `ltx`, `wan` and `seedance` since the registry was written with **no execution
+  adapter**, so half the tool vocabulary was writable and unrenderable: a shot planned
+  for KLING came back "no adapter wired for KLING" every night. fal hosts all four
+  behind one queue API and one key, so **one** adapter (one entry in
+  `providers.VIDEO_PROVIDERS`, a dated `VIDEO_MODELS` table, `fal.connector(platform)`
+  bindings in `orchestrator.generate_render`'s connectors dict) closes all four gaps —
+  not four registry entries pretending to be four vendors. higgsfield.py's shape exactly:
+  thin raising `generate_video` (submit → poll → **fetch the response_url** → download)
+  under never-raises edges, `FAL_SPEND_OK=1` per run, `FAL_DAILY_CAP` /
+  `FAL_GLOBAL_DAILY_CAP` through `generative.cap_error`, BYOK via `account_keys`
+  (`FAL_KEY`), `key_source` on every row, and `_safe_error` redacting the account's own
+  stored key resolved with the account_id. **A row is logged under the PLATFORM that
+  rendered it** (kling/ltx/wan/seedance), never under "fal" — the scoreboard asks which
+  model makes keepable clips, and one "fal" row would average a $0.30 LTX clip with a
+  $1.51 Seedance one. `generations_today` therefore sums the four. Two contract facts
+  worth carrying: the result is a **second request** (fal's terminal status payload is a
+  receipt, higgsfield's carries the asset), and **fal documents no FAILED status** — a
+  dead job answers `COMPLETED` with `error`/`error_type`, so failure is detected by
+  looking for the fields and by the deadline, never by waiting for a status string.
+  FLUX rides the same queue under the image tool name `fal` (`generative.IMAGE_TOOLS`),
+  deliberately outside the video cap. Every model id and per-second price is dated
+  2026-09-08 with its source URL in the table; re-check before trusting one, and note
+  the vendor namespaces (`alibaba/wan-3.0/*`, `bytedance/seedance-2.0/*`, not `fal-ai/`).
+  Veo is available on fal and deliberately NOT registered here — veo.py owns that
+  platform and two adapters sharing one daily cap is a surprise bill.
 - **`src/shot.py`** / **`src/promptgen.py`** / **`src/genlog.py`** / **`src/generative.py`** — the
   generative-clip side, for the one shot per edit the footage can't cover. `shot.py` is a `Shot`
   dataclass with a controlled camera/size vocabulary and one **pure** renderer per tool; no model
@@ -1153,6 +1180,9 @@ zero warnings, rendered on the studio canvas. L4 exists as `src.autopilot` — g
 default off, executors unwired.
 
 **Known gaps, in rough priority:**
+- `src/fal.py`'s image-to-video field name is `image_url` for every model in the table;
+  that is documented for Seedance 2.0 and inferred from the playground's "Start Image
+  Url" label for Wan 3.0 and LTX-2.3. Verify on the first live i2v render for those two.
 - `shot.py`'s `RUNWAY_CAMERA`/`VEO_CAMERA`/`KLING_CAMERA` maps and the AI-slot prompt phrasing are
   general patterns, not current documentation. Check each tool's prompt guide before relying on a
   generated prompt, and date the comment above each map.

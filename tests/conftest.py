@@ -68,6 +68,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 OUTPUT_ROOTS = (
     ("src.higgsfield", "RENDERS_ROOT", "data/renders"),
     ("src.higgsfield", "RENDER_DIR", "data/renders/higgsfield"),
+    ("src.fal", "RENDERS_ROOT", "data/renders"),
+    ("src.fal", "RENDER_DIR", "data/renders/fal"),
     ("src.runway", "RENDERS_ROOT", "data/renders"),
     ("src.runway", "RENDER_DIR", "data/renders/runway"),
     ("src.nano_banana", "RENDER_DIR", "data/renders/nano"),

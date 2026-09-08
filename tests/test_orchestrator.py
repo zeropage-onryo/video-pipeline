@@ -480,14 +480,41 @@ def test_render_gate_open_routes_veo_prompts_through_the_connector(tmp_db, monke
     assert "instagram + youtube" in result["held_reason"]
 
 
-def test_render_gate_open_but_unadapted_tool_stays_dry(tmp_db, monkeypatch):
+def test_render_gate_open_but_a_tool_with_no_connector_stays_dry(tmp_db, monkeypatch):
+    """OPENART is the last platform with a prompt renderer and no
+    execution adapter (it has no public API -- see CLAUDE.md), so it is
+    what "no adapter wired" now means. This test used to use KLING, which
+    stopped being unadapted on 2026-09-08 when fal.py wired it, along with
+    LTX, WAN and SEEDANCE."""
     monkeypatch.setenv("ZEROPAGE_RENDER", "1")
-    stage_fakes(monkeypatch, [(make_concept(), [])])   # KLING shot
+    concept = make_concept()
+    concept["shots"][0]["tool"] = "OPENART"
+    stage_fakes(monkeypatch, [(concept, [])])
 
     result = orchestrator.run("ritual")
 
     assert result["clips"][0]["ok"] is False
     assert "no adapter" in result["clips"][0]["error"]
+
+
+def test_an_adapted_tool_with_no_key_stays_dry_but_says_so_honestly(tmp_db, monkeypatch):
+    """A KLING shot reaches fal.py now instead of parking as unadapted --
+    and with no FAL_KEY and no spend approval in a test run it still costs
+    nothing. The difference that matters is the REASON on the card: "not
+    configured", something someone can act on, rather than "no adapter
+    wired for KLING", which was a standing indictment of the pipeline."""
+    monkeypatch.setenv("ZEROPAGE_RENDER", "1")
+    monkeypatch.delenv("FAL_KEY", raising=False)
+    monkeypatch.delenv("FAL_API_KEY", raising=False)
+    monkeypatch.delenv("FAL_SPEND_OK", raising=False)
+    stage_fakes(monkeypatch, [(make_concept(), [])])   # KLING shot
+
+    result = orchestrator.run("ritual")
+
+    clip = result["clips"][0]
+    assert clip["ok"] is False
+    assert "no adapter" not in clip["error"]
+    assert "fal" in clip["error"]
 
 
 def test_render_failover_switches_to_a_usable_provider_when_the_assigned_one_fails(
