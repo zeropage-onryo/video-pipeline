@@ -1266,7 +1266,11 @@ def queue_approve(concept_id: int, account_id: int = Depends(auth.current_accoun
     nondeterministically, since it ran after Runway returned ~90s later.
     Rejecting archives explicitly, and that is the honest signal.
     """
-    if not runway.has_key():
+    # the CALLER's key, not the operator's: a BYOK account with its own
+    # stored Runway secret is available even on a server whose
+    # RUNWAYML_API_SECRET is unset, and generate_for_shot is going to
+    # resolve it per account anyway (2026-09-08)
+    if not runway.has_key(account_id):
         return _error(503, "runway_unavailable", "RUNWAYML_API_SECRET is not set")
     concept = preprod.get_concept(concept_id, account_id=account_id)
     if concept is None:
@@ -1498,7 +1502,8 @@ def shot_generate(concept_id: int, shot_n: int, account_id: int = Depends(auth.c
     Billed, capped, and spend-gated -- generate_video refuses without
     RUNWAY_SPEND_OK=1 on the server's run, so nothing here can spend
     around the module's own gate."""
-    if not runway.has_key():
+    # the caller's key, not the operator's -- see queue_approve
+    if not runway.has_key(account_id):
         return _error(503, "runway_unavailable", "RUNWAYML_API_SECRET is not set")
     concept = preprod.get_concept(concept_id, account_id=account_id)
     if concept is None:

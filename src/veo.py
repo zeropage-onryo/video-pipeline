@@ -68,13 +68,23 @@ SPEND_ENV = "VEO_SPEND_OK"
 COST_PER_CLIP_USD = 3.20
 
 
-def _safe_error(e: Exception) -> str:
-    """The key must never reach a page, a log line, or a DB row."""
+def _safe_error(e: Exception, account_id: Optional[int] = None) -> str:
+    """The key must never reach a page, a log line, or a DB row -- and
+    since BYOK that includes the account's OWN stored key, which is
+    never in this process's environment and so was never being redacted
+    (runway._safe_error had the same hole). Best-effort on the account
+    lookup: this runs on the failure path and must not raise there."""
     text = str(e)
     for name in ("GEMINI_API_KEY", "GOOGLE_API_KEY"):
         value = os.environ.get(name)
         if value:
             text = text.replace(value, f"<{name}>")
+    try:
+        creds = account_keys.key_for(account_id, "veo")
+    except Exception:
+        creds = None
+    if creds and creds.get("api_key"):
+        text = text.replace(creds["api_key"], "<GEMINI_API_KEY>")
     return re.sub(r"key=[A-Za-z0-9_\-]+", "key=<redacted>", text)
 
 
@@ -215,7 +225,7 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *, shot_id: Optional[i
             return {"ok": False, "candidates": [], "error": refusal}
 
         if shot_id is None:
-            shot_id = _shot_row_for_prompt(prompt, db_path)
+            shot_id = _shot_row_for_prompt(prompt, db_path, account_id)
 
         out_dir = Path(out_dir)
         candidates, errors = [], []
@@ -225,11 +235,13 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *, shot_id: Optional[i
                 generate_video(prompt, out_path, model=model, client=client,
                              account_id=account_id, **cfg)
             except Exception as e:
-                errors.append(f"candidate {i}: {_safe_error(e)}")
+                errors.append(f"candidate {i}: {_safe_error(e, account_id)}")
                 continue
             generation_id = generative.record_generation(
                 shot_id, "veo", prompt,
-                params={"model": model, **cfg},
+                params={"model": model,
+                        "key_source": account_keys.key_source(account_id, "veo", db_path),
+                        **cfg},
                 output_path=str(out_path),
                 cost_usd=COST_PER_CLIP_USD,
                 notes=None,
@@ -241,4 +253,4 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *, shot_id: Optional[i
         return {"ok": bool(candidates), "candidates": candidates, "shot_id": shot_id,
                 "error": "; ".join(errors) if errors else None}
     except Exception as e:
-        return {"ok": False, "candidates": [], "error": _safe_error(e)}
+        return {"ok": False, "candidates": [], "error": _safe_error(e, account_id)}

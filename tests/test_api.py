@@ -445,7 +445,7 @@ def test_concept_detail_carries_runway_availability(tmp_db, monkeypatch):
 
 def test_shot_generate_runs_the_render_as_a_job(tmp_db, monkeypatch):
     concept_id = seed_concept(tmp_db)
-    monkeypatch.setattr(api_mod.runway, "has_key", lambda: True)
+    monkeypatch.setattr(api_mod.runway, "has_key", lambda account_id=None: True)
     monkeypatch.setattr(
         api_mod.runway, "generate_for_shot",
         # account_id in the stub because the route passes it (2026-09-02):
@@ -462,7 +462,7 @@ def test_shot_generate_runs_the_render_as_a_job(tmp_db, monkeypatch):
 
 def test_shot_generate_surfaces_render_failure(tmp_db, monkeypatch):
     concept_id = seed_concept(tmp_db)
-    monkeypatch.setattr(api_mod.runway, "has_key", lambda: True)
+    monkeypatch.setattr(api_mod.runway, "has_key", lambda account_id=None: True)
     monkeypatch.setattr(
         api_mod.runway, "generate_for_shot",
         lambda cid, n, db_path=None, resolve_photo=None, account_id=None: {

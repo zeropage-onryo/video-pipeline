@@ -45,6 +45,7 @@ from src import (
     generative,
     inspiration,
     instagram,
+    ledger,
     locations,
     preprod,
     rag,
@@ -172,6 +173,7 @@ async def lifespan(app: FastAPI):
     workflows.seed_default()  # "Prompt enhancement" starter canvas
     render_assets.init()  # generated_assets, owned (merged 2026-09-02)
     spend.init()          # llm_calls, the LLM meter (2026-09-04)
+    ledger.init()         # credit_lots / credit_entries, the prepaid ledger
     generative.init()    # generations log the render caps count
     accounts_mod.init()  # users / identities / accounts / members
     settings_mod.init()  # the Dev Studio tunables (gate/threshold/k)

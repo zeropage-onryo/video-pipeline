@@ -1235,15 +1235,24 @@ def generate_render(state: GenState) -> GenState:
         tried = {tool_name.lower()} if tool_name else set()
         result = None
         if connector is not None:
+            # account_id, or the clip is billed to nobody: the row lands
+            # with account_id=NULL, its cap counts against the unowned
+            # pool instead of this account's, and the provider key is
+            # resolved from the environment even when the account has
+            # its own stored one (BYOK). choose_provider() below was
+            # already being told whose run this is -- the render itself
+            # was not.
             result = connector.generate_candidates(
-                p["prompt"], out_root / f"shot{index}", n=1, db_path=None)
+                p["prompt"], out_root / f"shot{index}", n=1, db_path=None,
+                account_id=account_id)
         if result and result["ok"] and result["candidates"]:
             clips.append({**p, "url": result["candidates"][0]["path"], "ok": True})
             continue
         fallback = providers.choose_provider(account_id, exclude=tuple(tried))
         if fallback is not None:
             fb_result = providers.VIDEO_PROVIDERS[fallback].generate_candidates(
-                p["prompt"], out_root / f"shot{index}", n=1, db_path=None)
+                p["prompt"], out_root / f"shot{index}", n=1, db_path=None,
+                account_id=account_id)
             if fb_result["ok"] and fb_result["candidates"]:
                 clips.append({**p, "url": fb_result["candidates"][0]["path"],
                               "ok": True, "tool": fallback.upper(),

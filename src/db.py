@@ -285,6 +285,12 @@ OWNED_TABLES = (
     "account_keys",
     # the LLM meter (2026-09-04): a metered call is one account's spend
     "llm_calls",
+    # the prepaid credit ledger (2026-09-08, docs/CREDIT_LEDGER_DESIGN.md).
+    # A balance and its movements are the one thing on this list where a
+    # missing owner predicate is not a leak of information but a transfer
+    # of money -- src/ledger.py.
+    "credit_lots",
+    "credit_entries",
 )
 
 # The tables that are global BY DECISION, each with the reason. This is

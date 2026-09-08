@@ -150,12 +150,25 @@ def spend_approved() -> bool:
     return (os.environ.get(SPEND_ENV) or "").strip() == "1"
 
 
-def _safe_error(e: Exception) -> str:
-    """The key must never reach a page, a log line, or a DB row."""
+def _safe_error(e: Exception, account_id: Optional[int] = None) -> str:
+    """The key must never reach a page, a log line, or a DB row -- and
+    since BYOK the key that would leak is often NOT the one in the
+    environment. So redact whatever this account actually rendered on
+    (its own stored secret when it has one, the env fallback otherwise)
+    as well as the env value, then any Bearer token the text still
+    carries. Resolving the account key is best-effort: redaction runs on
+    the failure path and must never be the thing that raises there."""
     text = str(e)
-    secret = os.environ.get("RUNWAYML_API_SECRET")
-    if secret:
-        text = text.replace(secret, "<RUNWAYML_API_SECRET>")
+    secrets = [os.environ.get("RUNWAYML_API_SECRET")]
+    try:
+        creds = account_keys.key_for(account_id, "runway")
+    except Exception:
+        creds = None
+    if creds:
+        secrets.append(creds.get("api_secret"))
+    for secret in secrets:
+        if secret:
+            text = text.replace(secret, "<RUNWAYML_API_SECRET>")
     return re.sub(r"(Bearer\s+)[A-Za-z0-9_\-.]+", r"\1<redacted>", text)
 
 
@@ -298,11 +311,13 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *, shot_id: Optional[i
                 generate_video(prompt, out_path, model=model, client=client,
                                db_path=db_path, account_id=account_id, **cfg)
             except Exception as e:
-                errors.append(f"candidate {i}: {_safe_error(e)}")
+                errors.append(f"candidate {i}: {_safe_error(e, account_id)}")
                 continue
             generation_id = generative.record_generation(
                 shot_id, "runway", prompt,
-                params={"model": model, **cfg},
+                params={"model": model,
+                        "key_source": account_keys.key_source(account_id, "runway", db_path),
+                        **cfg},
                 output_path=str(out_path),
                 cost_usd=estimate_cost(1, model=model, duration=duration),
                 notes=None,
@@ -314,7 +329,7 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *, shot_id: Optional[i
         return {"ok": bool(candidates), "candidates": candidates, "shot_id": shot_id,
                 "error": "; ".join(errors) if errors else None}
     except Exception as e:
-        return {"ok": False, "candidates": [], "error": _safe_error(e)}
+        return {"ok": False, "candidates": [], "error": _safe_error(e, account_id)}
 
 
 # --- the scene board's one-click render (added 2026-08-21) -----------------
@@ -453,13 +468,15 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
         out_path = RENDER_DIR / f"c{concept_id}-s{shot_n}-{stamp}.mp4"
         generate_video(prompt, out_path, model=model,
                        prompt_image=prompt_image, client=client,
-                       db_path=db_path)
+                       db_path=db_path, account_id=account_id)
 
         shot_row_id = _shot_row_for_prompt(prompt, db_path, account_id)
         generation_params = {"model": model, "ratio": DEFAULT_RATIO,
                              "duration": DEFAULT_DURATION,
                              "concept_id": concept_id, "shot_n": shot_n,
-                             "prompt_image": bool(prompt_image)}
+                             "prompt_image": bool(prompt_image),
+                             "key_source": account_keys.key_source(
+                                 account_id, "runway", db_path)}
         generation_id = generative.record_generation(
             shot_row_id, "runway", prompt,
             params=generation_params,
@@ -490,7 +507,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                 "asset_id": asset["id"], "asset_rag": asset["rag"],
                 "error": None}
     except Exception as e:
-        return {"ok": False, "error": _safe_error(e)}
+        return {"ok": False, "error": _safe_error(e, account_id)}
 
 
 def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
@@ -540,13 +557,15 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
         out_path = RENDER_DIR / f"wf-{stamp}.mp4"
         generate_video(prompt, out_path, model=model,
                        prompt_image=prompt_image, client=client,
-                       db_path=db_path)
+                       db_path=db_path, account_id=account_id)
 
         shot_row_id = _shot_row_for_prompt(prompt, db_path, account_id)
         generation_params = {"model": model, "ratio": DEFAULT_RATIO,
                              "duration": DEFAULT_DURATION,
                              "source": "workflow",
-                             "prompt_image": bool(prompt_image)}
+                             "prompt_image": bool(prompt_image),
+                             "key_source": account_keys.key_source(
+                                 account_id, "runway", db_path)}
         generation_id = generative.record_generation(
             shot_row_id, "runway", prompt,
             params=generation_params,
@@ -575,4 +594,4 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
                 "asset_id": asset["id"], "asset_rag": asset["rag"],
                 "error": None}
     except Exception as e:
-        return {"ok": False, "error": _safe_error(e)}
+        return {"ok": False, "error": _safe_error(e, account_id)}

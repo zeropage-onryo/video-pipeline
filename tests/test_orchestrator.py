@@ -1574,3 +1574,70 @@ def test_a_dead_performance_shelf_still_generates(tmp_db, monkeypatch):
     orchestrator.run("ritual")
 
     assert calls, "the run must still produce a concept"
+
+
+# ---------- the nightly render bills the account that asked for it ----------
+
+def _one_prompt_state(account_id):
+    return {"concept_id": 7, "account_id": account_id,
+            "prompts": [{"n": 1, "tool": "RUNWAY", "prompt": GOOD_PROMPT}]}
+
+
+def test_the_nightly_render_carries_the_owner_into_the_connector(monkeypatch):
+    """generate_render read account_id off the state and handed it to
+    choose_provider, then called the connector WITHOUT it -- so every
+    nightly clip wrote generations.account_id = NULL, counted its cap
+    against the unowned pool rather than this account's, and resolved
+    the provider key from the environment even for an account with its
+    own stored one (BYOK). The owner has to reach the call that spends
+    the money, not only the one that picks who spends it.
+    """
+    monkeypatch.setenv("ZEROPAGE_RENDER", "1")
+    from src import runway as runway_module
+
+    seen = {}
+
+    def fake_candidates(prompt, out_dir, n=1, **kwargs):
+        seen.update(kwargs)
+        return {"ok": False, "candidates": [], "error": "no key in tests"}
+
+    monkeypatch.setattr(runway_module, "generate_candidates", fake_candidates)
+    monkeypatch.setattr("src.providers.choose_provider",
+                        lambda account_id=None, **k: None)
+
+    orchestrator.generate_render(_one_prompt_state(42))
+
+    assert seen.get("account_id") == 42, (
+        "the assigned connector was called with account_id="
+        f"{seen.get('account_id')!r} -- the clip is billed to nobody")
+
+
+def test_the_failover_render_carries_the_owner_too(monkeypatch, tmp_path):
+    """The retry through the registry spends exactly as much money as
+    the first attempt, so it needs exactly as much ownership."""
+    monkeypatch.setenv("ZEROPAGE_RENDER", "1")
+    from src import providers as providers_module
+    from src import runway as runway_module
+    from src import veo as veo_module
+
+    clip = tmp_path / "fallback.mp4"
+    clip.write_bytes(b"\x00" * 2048)
+    seen = {}
+
+    def fake_veo(prompt, out_dir, n=1, **kwargs):
+        seen.update(kwargs)
+        return {"ok": True, "candidates": [{"path": str(clip)}], "error": None}
+
+    monkeypatch.setattr(
+        runway_module, "generate_candidates",
+        lambda prompt, out_dir, n=1, **k: {"ok": False, "candidates": [],
+                                           "error": "no key in tests"})
+    monkeypatch.setattr(veo_module, "generate_candidates", fake_veo)
+    monkeypatch.setattr(providers_module, "choose_provider",
+                        lambda account_id=None, exclude=(), db_path=None: "veo")
+
+    orchestrator.generate_render(_one_prompt_state(42))
+
+    assert seen.get("account_id") == 42, (
+        "the failover connector was called with account_id="
+        f"{seen.get('account_id')!r} -- the retry is billed to nobody")

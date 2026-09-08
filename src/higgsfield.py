@@ -279,10 +279,21 @@ def estimate_image_cost(n: int) -> float:
     return round(n * COST_PER_IMAGE_USD, 2)
 
 
-def _safe_error(e: Exception) -> str:
-    """Neither credential may reach a page, a log line, or a DB row."""
+def _safe_error(e: Exception, account_id: Optional[int] = None) -> str:
+    """Neither credential may reach a page, a log line, or a DB row.
+
+    It takes the account because _credentials() does: called with no
+    account this resolved the OPERATOR's env credentials and redacted
+    those, so a BYOK customer's own stored key -- the one the failing
+    request was actually signed with -- passed straight through into an
+    error string that reaches a Queue card and a generations row. Best
+    effort on the lookup: redaction runs on the failure path and must
+    never be the thing that raises there."""
     text = str(e)
-    creds = _credentials()
+    try:
+        creds = _credentials(account_id)
+    except Exception:
+        creds = None
     if creds:
         for secret in creds:
             if secret:
@@ -670,11 +681,14 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *,
                 generate_video(prompt, out_path, model=model, http=http,
                                db_path=db_path, account_id=account_id, **cfg)
             except Exception as e:
-                errors.append(f"candidate {i}: {_safe_error(e)}")
+                errors.append(f"candidate {i}: {_safe_error(e, account_id)}")
                 continue
             generation_id = generative.record_generation(
                 shot_id, "higgsfield", prompt,
-                params={"model": model, **cfg},
+                params={"model": model,
+                        "key_source": account_keys.key_source(
+                            account_id, "higgsfield", db_path),
+                        **cfg},
                 output_path=str(out_path),
                 cost_usd=estimate_cost(1, model=model, duration=duration),
                 notes=None,
@@ -687,7 +701,7 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *,
                 "shot_id": shot_id,
                 "error": "; ".join(errors) if errors else None}
     except Exception as e:
-        return {"ok": False, "candidates": [], "error": _safe_error(e)}
+        return {"ok": False, "candidates": [], "error": _safe_error(e, account_id)}
 
 
 def _publish(out_path: Path, content_type: str) -> str:
@@ -761,7 +775,9 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
             params={"model": model, "aspect_ratio": DEFAULT_ASPECT,
                     "duration": DEFAULT_DURATION,
                     "concept_id": concept_id, "shot_n": shot_n,
-                    "prompt_image": bool(image_url)},
+                    "prompt_image": bool(image_url),
+                    "key_source": account_keys.key_source(
+                        account_id, "higgsfield", db_path)},
             output_path=str(out_path),
             cost_usd=estimate_cost(1, model=model),
             **kwargs,
@@ -772,7 +788,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                 "generation_id": generation_id, "path": str(out_path),
                 "error": None}
     except Exception as e:
-        return {"ok": False, "error": _safe_error(e)}
+        return {"ok": False, "error": _safe_error(e, account_id)}
 
 
 def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
@@ -820,7 +836,9 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
             shot_row_id, "higgsfield", prompt,
             params={"model": model, "aspect_ratio": DEFAULT_ASPECT,
                     "duration": DEFAULT_DURATION, "source": "workflow",
-                    "prompt_image": bool(image_url)},
+                    "prompt_image": bool(image_url),
+                    "key_source": account_keys.key_source(
+                        account_id, "higgsfield", db_path)},
             output_path=str(out_path),
             cost_usd=estimate_cost(1, model=model),
             **kwargs,
@@ -829,7 +847,7 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
                 "generation_id": generation_id, "path": str(out_path),
                 "error": None}
     except Exception as e:
-        return {"ok": False, "error": _safe_error(e)}
+        return {"ok": False, "error": _safe_error(e, account_id)}
 
 
 def generate_image_from_prompt(prompt: str, *, db_path=None, http=None, account_id: Optional[int] = None) -> dict:
@@ -868,7 +886,9 @@ def generate_image_from_prompt(prompt: str, *, db_path=None, http=None, account_
             account_id)
         generation_id = generative.record_generation(
             shot_row_id, "higgsfield", prompt,
-            params={"model": "soul-standard", "source": "workflow"},
+            params={"model": "soul-standard", "source": "workflow",
+                    "key_source": account_keys.key_source(
+                        account_id, "higgsfield", db_path)},
             output_path=str(out_path),
             cost_usd=estimate_image_cost(1),
             **kwargs,
@@ -877,4 +897,4 @@ def generate_image_from_prompt(prompt: str, *, db_path=None, http=None, account_
                 "generation_id": generation_id, "path": str(out_path),
                 "error": None}
     except Exception as e:
-        return {"ok": False, "error": _safe_error(e)}
+        return {"ok": False, "error": _safe_error(e, account_id)}

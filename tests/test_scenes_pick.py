@@ -478,7 +478,7 @@ def test_approving_something_not_in_the_queue_is_refused(tmp_db, monkeypatch):
     """The gate did not go away when approval became the pick: a concept
     that is neither parked by the chain nor picked on the board still
     cannot be rendered."""
-    monkeypatch.setattr("src.runway.has_key", lambda: True)
+    monkeypatch.setattr("src.runway.has_key", lambda account_id=None: True)
     scene_id = a_scene(tmp_db)
     res = client.post(f"/api/queue/{scene_id}/approve")
     assert res.status_code == 400
@@ -499,7 +499,7 @@ def test_approving_one_take_leaves_its_siblings_in_the_queue(tmp_db, monkeypatch
     for scene_id in takes:
         preprod.set_shot_parked(scene_id, 1, "keyframe rendered", dsn=tmp_db, account_id=None)
 
-    monkeypatch.setattr("src.runway.has_key", lambda: True)
+    monkeypatch.setattr("src.runway.has_key", lambda account_id=None: True)
     rendered = {}
 
     def fake_render(concept_id, shot_n, db_path=None, resolve_photo=None,
@@ -527,7 +527,7 @@ def test_approving_one_take_leaves_its_siblings_in_the_queue(tmp_db, monkeypatch
 
 
 def test_approving_without_a_runway_key_says_so(tmp_db, monkeypatch):
-    monkeypatch.setattr("src.runway.has_key", lambda: False)
+    monkeypatch.setattr("src.runway.has_key", lambda account_id=None: False)
     scene_id = a_scene(tmp_db)
     client.post(f"/api/concepts/{scene_id}/pick", json={"picked": True})
     assert client.post(f"/api/queue/{scene_id}/approve").status_code == 503

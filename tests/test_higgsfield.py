@@ -376,3 +376,40 @@ def test_an_unreachable_model_refuses_before_the_round_trip():
 
 def test_only_kling_is_currently_reachable():
     assert set(higgsfield.AVAILABLE_MODELS) == {"kling2.5", "kling2.1"}
+
+
+def test_a_byok_accounts_own_credentials_never_reach_an_error_string(
+    pg, approved, monkeypatch,
+):
+    """_safe_error resolved _credentials() with NO account, so it
+    redacted the OPERATOR's env credentials and let the account's own
+    stored secret -- the one the failing request was actually signed
+    with -- through into the error string this function returns, which
+    reaches a Queue card and a generations row. A credential leak, not
+    a cosmetic one, so it is asserted on the render path and not only
+    on the helper.
+    """
+    from cryptography.fernet import Fernet
+
+    from src import account_keys, accounts, db, generative
+
+    monkeypatch.setenv("DATABASE_URL", pg)
+    monkeypatch.setenv("ACCOUNT_KEYS_SECRET", Fernet.generate_key().decode())
+    monkeypatch.setenv("HIGGSFIELD_API_KEY_ID", "operator-id")
+    monkeypatch.setenv("HIGGSFIELD_API_KEY_SECRET", "operator-secret")
+    generative.init(pg)
+    accounts.seed("mike@example.com", dsn=pg)
+    with db.connect(pg) as conn:
+        owner = conn.execute(
+            "SELECT id FROM accounts WHERE slug = 'zeropage'").fetchone()["id"]
+    account_keys.set_key(owner, "higgsfield", "tenant-id", "tenant-secret", dsn=pg)
+
+    def boom(url, payload=None):
+        raise RuntimeError("401 for tenant-id / tenant-secret")
+
+    result = higgsfield.generate_from_prompt("a prompt", db_path=pg,
+                                             account_id=owner, http=boom)
+
+    assert result["ok"] is False
+    assert "tenant-secret" not in result["error"]
+    assert "tenant-id" not in result["error"]

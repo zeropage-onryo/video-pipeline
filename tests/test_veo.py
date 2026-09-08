@@ -153,3 +153,46 @@ def test_partial_failure_keeps_what_landed(tmp_db, tmp_path):
 
 def test_estimate_cost_scales(tmp_db):
     assert veo.estimate_cost(3) == round(3 * veo.COST_PER_CLIP_USD, 2)
+
+
+def test_a_candidate_row_carries_the_owner_and_says_whose_key_paid(
+    tmp_db, tmp_path, monkeypatch,
+):
+    """Two halves of the same fix. The synthesized shot row every
+    candidate hangs off was created WITHOUT the account (the one
+    _shot_row_for_prompt call in this module that forgot it), and the
+    row said nothing about which credential the clip went on -- which
+    is what the prepaid ledger has to read before it debits anyone.
+    """
+    import json
+
+    from cryptography.fernet import Fernet
+
+    from src import account_keys, accounts, db
+
+    monkeypatch.setenv("DATABASE_URL", tmp_db)
+    monkeypatch.setenv("ACCOUNT_KEYS_SECRET", Fernet.generate_key().decode())
+    monkeypatch.setenv("GEMINI_API_KEY", "OPERATOR-KEY")
+    accounts.seed("mike@example.com", dsn=tmp_db)
+    with db.connect(tmp_db) as conn:
+        owner = conn.execute(
+            "SELECT id FROM accounts WHERE slug = 'zeropage'").fetchone()["id"]
+    account_keys.set_key(owner, "veo", "TENANT-KEY", dsn=tmp_db)
+
+    result = veo.generate_candidates("x", tmp_path / "out", n=1,
+                                     db_path=tmp_db, client=FakeClient(),
+                                     account_id=owner)
+
+    assert result["ok"] is True, result["error"]
+    with db.connect(tmp_db) as conn:
+        row = conn.execute(
+            "SELECT params_json, shot_id FROM generations "
+            "WHERE id = %s AND account_id = %s",
+            (result["candidates"][0]["generation_id"], owner),
+        ).fetchone()
+        shot_owner = conn.execute(
+            "SELECT account_id FROM shots WHERE id = %s AND account_id = %s",
+            (row["shot_id"], owner),
+        ).fetchone()
+    assert json.loads(row["params_json"])["key_source"] == account_keys.SOURCE_ACCOUNT
+    assert shot_owner is not None, "the synthesized shot row belongs to nobody"
