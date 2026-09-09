@@ -28,6 +28,7 @@ from fastapi.responses import (
     RedirectResponse,
     Response,
 )
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from google import genai
@@ -200,6 +201,24 @@ app = FastAPI(lifespan=lifespan)
 # separate signed zp_session cookie in app/auth.py.
 app.add_middleware(SessionMiddleware, secret_key=auth._session_secret(),
                    same_site="lax", https_only=False)
+# Cross-origin access for a separate frontend (the Next.js app). Its
+# fetches are credentialed (the zp_session cookie), so the allow-list must
+# be explicit origins -- a wildcard is illegal with credentials -- and
+# allow_credentials must be on. FRONTEND_ORIGIN_REGEX adds dynamic hosts an
+# explicit list can't enumerate (per-deploy Vercel preview URLs). Neither
+# set => no cross-origin frontend registered, i.e. the API's own /ui only,
+# exactly as before.
+_frontend_origins = auth.frontend_origins()
+_frontend_origin_regex = auth.frontend_origin_regex()
+if _frontend_origins or _frontend_origin_regex:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_frontend_origins,
+        allow_origin_regex=_frontend_origin_regex,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 app.mount("/static", NoCacheStaticFiles(directory=str(APP_DIR / "static")), name="static")
 # Rendered clips (data/renders/, gitignored with the rest of data/) --
 # what the scene board plays when no public R2 URL exists yet.
@@ -226,11 +245,21 @@ app.include_router(auth.router)
 
 @app.get("/signin")
 def signin(request: Request, error: Optional[str] = None,
-           mode: Optional[str] = None, email: Optional[str] = None):
+           mode: Optional[str] = None, email: Optional[str] = None,
+           next: Optional[str] = None):
     """The sign-in screen: Google + Discord + email/password. Already
-    signed in -> straight to the shell."""
+    signed in -> straight to the shell.
+
+    `next` lets a trusted external frontend (FRONTEND_ORIGINS) ask to be
+    returned to itself after sign-in: stashed in the starlette session so
+    it survives both the email/password POST and the OAuth round-trip, and
+    validated against frontend_origins in auth._post_login_redirect -- so
+    it is never an open redirect."""
+    if next:
+        request.session["post_login_redirect"] = next
     if auth.current_user(request):
-        return RedirectResponse("/ui", status_code=303)
+        return RedirectResponse(
+            auth._post_login_redirect(request) or "/ui", status_code=303)
     return templates.TemplateResponse(
         request, "signin.html",
         {"error": error, "mode": mode if mode in ("signin", "signup") else "signin",
