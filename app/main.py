@@ -204,13 +204,17 @@ app.add_middleware(SessionMiddleware, secret_key=auth._session_secret(),
 # Cross-origin access for a separate frontend (the Next.js app). Its
 # fetches are credentialed (the zp_session cookie), so the allow-list must
 # be explicit origins -- a wildcard is illegal with credentials -- and
-# allow_credentials must be on. Empty FRONTEND_ORIGINS => no cross-origin
-# frontend registered, i.e. the API's own /ui only, exactly as before.
+# allow_credentials must be on. FRONTEND_ORIGIN_REGEX adds dynamic hosts an
+# explicit list can't enumerate (per-deploy Vercel preview URLs). Neither
+# set => no cross-origin frontend registered, i.e. the API's own /ui only,
+# exactly as before.
 _frontend_origins = auth.frontend_origins()
-if _frontend_origins:
+_frontend_origin_regex = auth.frontend_origin_regex()
+if _frontend_origins or _frontend_origin_regex:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_frontend_origins,
+        allow_origin_regex=_frontend_origin_regex,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

@@ -88,10 +88,32 @@ def frontend_origins() -> list[str]:
     return [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
 
 
+def frontend_origin_regex() -> Optional[str]:
+    """Optional regex matching additional trusted frontend origins, for
+    dynamic hosts an explicit list can't enumerate -- e.g. per-deploy
+    Vercel preview URLs. FRONTEND_ORIGIN_REGEX is a full-origin pattern
+    like r"https://zpf-web-[a-z0-9-]+\\.vercel\\.app"; empty disables it."""
+    return os.environ.get("FRONTEND_ORIGIN_REGEX", "").strip() or None
+
+
+def _origin_trusted(origin: str) -> bool:
+    """True if `origin` is one we let use the API cross-site -- either in
+    the explicit FRONTEND_ORIGINS list or matching FRONTEND_ORIGIN_REGEX."""
+    if origin in frontend_origins():
+        return True
+    pattern = frontend_origin_regex()
+    if pattern:
+        import re
+        # fullmatch: the pattern must cover the entire origin, so a stray
+        # substring match can't smuggle in an untrusted host.
+        return re.fullmatch(pattern, origin) is not None
+    return False
+
+
 def _post_login_redirect(request: Request) -> Optional[str]:
     """A validated place to send the browser after sign-in: the `next`
     stashed at /signin, honoured only when its origin is one we trust
-    (frontend_origins). Never an arbitrary URL -- an open redirect on an
+    (_origin_trusted). Never an arbitrary URL -- an open redirect on an
     auth endpoint would hand a fresh session to anywhere."""
     from urllib.parse import urlsplit
     target = request.session.pop("post_login_redirect", None)
@@ -99,7 +121,7 @@ def _post_login_redirect(request: Request) -> Optional[str]:
         return None
     parts = urlsplit(target)
     origin = f"{parts.scheme}://{parts.netloc}"
-    return target if origin in frontend_origins() else None
+    return target if _origin_trusted(origin) else None
 
 
 def issue_session(response, user_id: str, request: Request) -> None:
