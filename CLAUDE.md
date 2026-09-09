@@ -5,14 +5,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Overview
 
 An AI pre-production studio for Zero Page Films (a one-person brand), aimed at running more of
-itself over time. It generates concepts and shot lists from described real rooms, writes
-platform-native AI video prompts for every shot, and feeds posted-video analytics back into the
-next slate. Since 2026-08-20 every shot is AI-generated: a shot's `source` says whether Michael
-captures real reference material (an acting take, a room plate) that anchors the generation via
-the shot's `reference_image`, not whether the shot escapes the pipeline — a reference is an
-enhancement, never a gate, same as RAG grounding. Prompts are also rendered in OpenArt Director's
-conversational natural-language shape (`shot.render_openart`, `shootgen.director_prompt`) for
-hand-pasting into Director, which has no public API (checked 2026-08-20). The autonomy ladder: L1 assisted -> L2
+itself over time. **It is a creative studio, not a location scout.** It writes short stories
+worth shooting, turns each into ONE paste-ready scene prompt, renders them, and feeds
+posted-video analytics back into the next slate. Since 2026-08-20 every shot is AI-generated
+and no camera is involved: a shot's `source` is a label on where its reference material came
+from, never a claim that the shot escapes the pipeline. What grounds a scene is the reference
+IMAGES attached to it (`shot["refs"]`) plus the RAG library — and since 2026-09-08 a scene with
+no refs at all never reaches the board (see `preprod.reference_gate`). The photographed rooms in
+`locations/` are optional material a scene MAY pick, not the frame it must be generated
+inside. Prompts are also rendered in OpenArt Director's conversational natural-language shape
+(`shot.render_openart`, `shootgen.director_prompt`) for hand-pasting into Director, which has
+no public API (checked 2026-08-20). The autonomy ladder: L1 assisted -> L2
 grounded generation + measurement -> L3 self-improving ideation -> L4 supervised
 generate-and-post (gated, default off). Editing stays manual — an explicit L1 hold.
 Post-production (footage ingest -> pitches -> cut lists) was cut in Aug 2026: the product is
@@ -36,12 +39,13 @@ All Python commands run through the project's venv, not system Python:
 venv/bin/pip install -r requirements.txt
 venv/bin/pip install -e .
 
-# PRE-PRODUCTION (before anything is shot)
-# 0a. Describe the spaces in locations/<name>/*.jpg -> locations table
+# IDEATION -> ONE SCENE PROMPT (nothing here is shot; nothing here spends render credit)
+# 0a. OPTIONAL: describe the rooms in locations/<name>/*.jpg -> locations table.
+#     Material a scene may pick, never a constraint it must satisfy. The
+#     nightly generator has no {locations} placeholder at all.
 venv/bin/python -m src.locations [--locations-dir locations] [--force]
 
-# 0b. Generate concepts grounded in those spaces -> shoot_concepts table.
-#     Two stages: cheap ideas first, then ONE scene prompt for the ones you pick.
+# 0b. Generate concepts -> shoot_concepts table. Each is ONE scene and ONE prompt.
 venv/bin/python -m src.shootgen [--brand antihero|zeropage] [--client ...] [--spark ...] [--count 8]
 venv/bin/python -m src.shootgen --scene <concept_id>   # write THAT idea's scene prompt
 
@@ -71,7 +75,7 @@ venv/bin/python -m src.scout next --brand zeropage       # the servable spark, o
 # when the bank is empty or under scout.SCORE_FLOOR.
 venv/bin/python -m src.trigger [--spark ...] [--channel zeropage] [--scout]
 
-# GENERATIVE CLIPS (for a shot the footage can't cover)
+# GENERATIVE CLIPS — the Shot dataclass and its per-tool prompt renderers
 venv/bin/python -m src.promptgen "<loose shot description>" [--idea-id N] [--slot-index N]
 venv/bin/python -m src.genlog record|keep|reject ...
 
@@ -184,8 +188,10 @@ sign-out-everywhere; password reset and email verification are Supabase's now.
 
 ## Architecture
 
-One phase, before the shoot: everything reasons about **spaces you have**. State lives in
-SQLite (`data/pipeline.db`).
+One phase, and it ends at a rendered clip: everything reasons about **an idea worth shooting
+and the reference images that ground it**. State lives in **Postgres** (`DATABASE_URL`, Supabase
+since 2026-09-03). `data/pipeline.db` is a 0-byte leftover of the SQLite era — `db.DB_PATH`
+survives only as the name a few call sites still pass; do not write to it.
 
 **A concept is ONE scene and ONE prompt (2026-08-26, Mike's call.)** The two-stage
 idea -> shot-list shape split a concept across up to six independently-rendered prompts,
@@ -545,25 +551,31 @@ into the hashed prompt template so `by_prompt` does not average two meanings of 
   healthy night, which is why the `cd` now logs and exits 1.
 
 ```
-locations/<name>/*.jpg  --locations.py-->  locations table (vision description per space)
+a spark (typed, or scouted)  +  reference IMAGES  +  RAG library  +  brand brief
                                                   |
-                            shootgen.py ideas <---+  (+ brand, spark, POV on/off)
+                        shootgen.generate_scene_concept(s)   <-- Studio Create, or the
+                                                  |               nightly graph's gen_concept
+                          shoot_concepts row: ONE scene, ONE prompt, refs on the shot
                                                   |
-                                    shoot_concepts rows, shots = []   <-- cheap ideas
+                        no refs? -> archived immediately (preprod.NO_REFERENCE, never boards)
                                                   |
-                            shootgen.py --shotlist <id>   (human picks: THE LABEL)
+              Pipeline board: Pick (draws the keyframe) / Not this one (archives + reason)
                                                   |
-                                    same row, now with <=6 shots, AI shots, edit, grade
+                          Queue: Approve -> THE ONLY PLACE MONEY IS SPENT
                                                   |
-                                         [ you go shoot it ]  -> shot_done (SECOND LABEL)
+                       a rendered clip on the shot; shot_done marks one that got MADE
 ```
 
-**Two-stage on purpose.** Generate cheap options, a human picks, and only the picks get
-expensive detail — `generate_concept_ideas`→`generate_shot_list`. The pick is recorded
-(`shoot_concepts.shots != []`), which is what makes a prompt change measurable rather than
-arguable. `shootgen` can still produce one full concept in a single call (`generate_concept`)
-— that's what the web app's main button does — and `src/graph.py` wraps that single-call path
-in a LangGraph evaluate-and-retry loop.
+**Cheap first, expensive on the picks — the shape survived, the unit changed.** A concept is
+now ONE scene and ONE prompt, so the old `generate_concept_ideas`→`generate_shot_list` pair is
+not the path any more: `generate_shot_list` became `write_scene_for_concept` (approve an idea →
+write ITS one scene), `generate_concept` is gone entirely, and `generate_concept_ideas` survives
+with no caller outside `shootgen`'s own CLI. The two live entry points are
+`generate_scene_concept` (one scene) and `generate_scene_concepts` (N takes off one idea in a
+single call, so they vary against each other). **The recorded labels are `picked_at` and
+`shot_done`** — `pick_rate` and `shoot_rate`, both per prompt hash, which is what makes a prompt
+change measurable rather than arguable. `shortlist_rate` was deleted with the shot-list stage
+and is not coming back; with one scene per concept it could only ever read 100%.
 
 Post-production (ingest -> pitch -> editgen, the manifest.json/pitches.json/concepts.json
 chain) was removed in Aug 2026. The pipeline's output is a shot plan you go shoot; the edit
@@ -572,11 +584,15 @@ is yours, in Resolve, by hand.
 - **`src/locations.py`** — scans `locations/<name>/`, sends each space's photos to Gemini vision,
   stores `{space, light_sources, textures, angles, constraints}` per location. Incremental: a
   space already described is skipped unless `--force`.
-- **`src/shootgen.py`** — three entry points over the same described locations plus a brand block
-  from `prompts/brands.txt`: `generate_concept_ideas` (N cheap ideas in **one** call, so they're
-  varied against each other rather than rolled independently), `generate_shot_list` (the shot plan
-  for an idea you picked, leaving its title/hook/logline untouched), and `generate_concept` (both
-  at once, what the web app's main button uses). `validate_concept` advises (never blocks): shot
+- **`src/shootgen.py`** — the scene writer, over a brand block from `prompts/brands.txt` plus
+  whatever grounding the edge handed it. **Two live entry points:**
+  `generate_scene_concept` (ONE scene, ONE prompt — the single-concept Create and the nightly
+  graph's `gen_concept`) and `generate_scene_concepts` (N takes off one idea in a single call,
+  so they vary against each other rather than being rolled independently — what Studio's Create
+  button posts). `write_scene_for_concept` writes THAT idea's scene once it is approved, which
+  is what keeps an idea from anywhere — including `rework`'s evidence-grounded slate — from
+  being a dead end. `generate_concept_ideas` survives with no caller outside this module's own
+  CLI; `generate_shot_list` and `generate_concept` are gone. `validate_concept` advises (never blocks): shot
   `type` in `CHARACTER`/`BROLL`, per-shot `source` in `CAMERA`/`AI`, camera shots' `cam` in
   `BMPCC`/`ACTION5`, AI shots' `tool` in the `shot.PLATFORMS` registry with a non-empty prompt,
   and — the one that matters — that every shot's `location` is a described space. Everything is
@@ -592,9 +608,12 @@ is yours, in Resolve, by hand.
   plain argument defaulting to `""`. That split is what keeps the generators hermetic in tests.
 - **`src/preprod.py`** — `locations`, `shoot_concepts`, `concept_locations` tables. Extends
   `db.py` in its own module (own `SCHEMA`, own `init()`), same pattern as `generative.py`.
-  Two labels, not one: `shortlist_rate()` is which ideas were worth planning (derived from
-  `shots != []`, never stored, so it can't drift), `shoot_rate()` is which ones actually got shot.
-  Both break down per prompt hash.
+  Two labels, not one: `pick_rate()` is how many generated scenes were worth rendering
+  (derived from `picked_at`, counting only one-shot concepts), `shoot_rate()` is how many
+  actually got MADE, by any means — the render lane, Higgsfield, a hand edit. Both break down
+  per prompt hash. `reason_counts()` tallies why the rest were passed over, and
+  `ungrounded_count()` reports the machine-archived ungrounded rows separately, deliberately
+  outside both rates. `shortlist_rate` no longer exists.
 - **`src/orchestrator.py`** — the autonomous content graph (LangGraph, registered as `zeropage`
   in `langgraph.json`): `planner -> ground_entities -> ground_rag ->
   gen_concept -> evaluate -> structure_prompt -> score_prompts -> generate_render ->
@@ -686,7 +705,7 @@ is yours, in Resolve, by hand.
   Veo is available on fal and deliberately NOT registered here — veo.py owns that
   platform and two adapters sharing one daily cap is a surprise bill.
 - **`src/shot.py`** / **`src/promptgen.py`** / **`src/genlog.py`** / **`src/generative.py`** — the
-  generative-clip side, for the one shot per edit the footage can't cover. `shot.py` is a `Shot`
+  generative-clip side: the typed vocabulary every tool prompt compiles from. `shot.py` is a `Shot`
   dataclass with a controlled camera/size vocabulary and one **pure** renderer per tool; no model
   call goes near it. `promptgen.py` is the only place an LLM turns a loose description into a
   `Shot`. That split is deliberate: a bad prompt is then either a bad `Shot` (visible in the JSON,
@@ -1248,10 +1267,13 @@ is yours, in Resolve, by hand.
   catalogue, because naming a real space you were not handed is fine and naming one that does
   not exist is the thing worth flagging. `format_locations` is untouched — `rework.py` and
   `director.py` still want the catalogue.
-- **The human choice is the label, and it gets recorded.** `shootgen.py` generates ideas, a human
-  plans some (`shortlist_rate`), and shoots fewer still (`shoot_done`). Stored with the prompt's
-  hash, so a prompt change can be measured against the rate it produced rather than argued about.
-  That selection is also the only manual gate.
+- **The human choice is the label, and it gets recorded.** `shootgen.py` writes scenes, a human
+  picks some (`picked_at` → `pick_rate`), and fewer still actually get made (`shot_done` →
+  `shoot_rate`). Stored with the prompt's hash, so a prompt change can be measured against the
+  rate it produced rather than argued about. **Passing is a label too:** `archive_reason`
+  (`preprod.ARCHIVE_REASONS`) is the only idea-level negative signal this system collects, which
+  is why leaving the board archives and never deletes. The pick and the Queue's Approve are the
+  two manual gates; Approve is the one that spends.
 - **Anything that calls a model degrades instead of breaking.** A missing API key or a failed call
   returns a result the caller can report, not an exception that takes the page or the run with it
   — `/metrics/new` still accepts typed numbers, `/concepts`
@@ -1277,28 +1299,34 @@ is yours, in Resolve, by hand.
 
 Everything below is current as of the last commit on `main`. Update it when it stops being true.
 
-**Working and verified against real data:** the pre-production loop runs end to end, including
-real Gemini calls. One location described from real photos, 50+ concepts (5+ with shot lists),
-1 posted video with one metric snapshot. Reference-grounded ideation is
+**Working and verified against real data** (counts read off the live Postgres 2026-09-09):
+the ideation loop runs end to end on real Gemini calls. **232 concepts** written, **107**
+carrying reference images on the shot, **68** with a keyframe drawn, **178 archived** with a
+reason, **4 picked**, **9 marked shot**, **274 recorded graph runs**, 100 generation attempts,
+1610 metered LLM calls, 10 posted videos, 3 described rooms. Reference-grounded ideation is
 verified live both ways: `src.shootgen --spark "gearing up ritual"` printed "Grounding in 5
 retrieved reference(s)" against the real library, and the same command with the store pointed at
-a dead URL printed the ungrounded note and still produced ideas (exit 0). The evaluate-and-retry
-graph is verified live too: a `src.graph`-era run produced Concept 55, grounded in 5 references,
-clean on attempt 1. ~490 tests, ruff clean, CI green on every push.
+a dead URL printed the ungrounded note and still produced ideas (exit 0). **1956 tests pass, 8
+xfail**, ruff clean, CI green on every push.
+
+**The number that matters and is not moving: 0 concepts carry a `media_url`.** Nothing has been
+rendered onto a concept row. 4 picks against 232 written is the real shape of this project —
+generation is cheap and abundant, selection is the bottleneck, and the spend gate has barely
+been used. Read every rate below in that light.
 
 Post-production (ingest/pitch/editgen, `/pitches`, the assistant's `cut` intent) was removed in
 Aug 2026 — the DB keeps historical pitch-run rows, but nothing generates new ones.
 
 **Structurally complete, statistically empty:** the L2→L3 loop is built and verified live —
 `promote_winners propose` honestly reports nothing clears the bar (no videos measured at equal
-age yet), and `src.rework` generates an evidence-free slate with the note. The rates
-(`shortlist_rate`, `shoot_rate`, `selection_rate`) and `post_seo`'s signals are structurally
-correct and currently meaningless — they need weeks of real posting before a prompt change can be
-measured or a slate genuinely reworked from evidence. The most valuable next step is not code: it
-is shooting one of the generated concepts, marking it shot, posting it, and recording metrics.
-The de-cap is verified live: SHOOT-25 generated with 2 AI shots (WAN, RUNWAY) + 2 camera shots,
-zero warnings, rendered on the studio canvas. L4 exists as `src.autopilot` — gated, dry-run,
-default off, executors unwired.
+age yet), and `src.rework` generates an evidence-free slate with the note. `pick_rate`,
+`shoot_rate` and `post_seo`'s signals are structurally correct and currently close to
+meaningless — they need weeks of real posting before a prompt change can be measured or a slate
+genuinely reworked from evidence. (`db.selection_rate` is a different, surviving thing: it
+measures kept-vs-attempted on generative CLIPS, not concepts.) **The most valuable next step is
+still not code** — it is taking one written concept all the way through Approve to a rendered
+clip, posting it, and recording metrics. L4 exists as `src.autopilot` — gated, dry-run, default
+off, executors unwired.
 
 **Known gaps, in rough priority:**
 - `src/fal.py`'s image-to-video field name is `image_url` for every model in the table;
