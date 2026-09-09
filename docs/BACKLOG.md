@@ -596,9 +596,8 @@ Fly or Railway; a small machine running the FastAPI app and the nightly.
 - It also decouples the dev server from production. A save currently runs
   migrations against the live DB seconds later, which is how `concept_locations`
   got damaged once.
-- **It is a split, not a move.** `framebank` cuts stills from 149GB of ProRes in
-  `footage/`, and the asset shelf reads local photo roots. A cloud orchestrator
-  can see neither. Those lanes stay local, or get pre-ingested to R2 first.
+- **It is a split, not a move.** The asset shelf reads local photo roots a cloud
+  orchestrator cannot see. Those lanes stay local, or get pre-ingested to R2 first.
 
 ### Considered and rejected
 - **AWS.** Better in exactly two places: Secrets Manager + KMS for #10's tenant

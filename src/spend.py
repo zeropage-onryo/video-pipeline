@@ -14,7 +14,7 @@ FALLBACK_MODELS and is the only place that knows WHICH model replied --
 a caller pricing its own call would price gemini-3-flash-preview for an
 answer that came from gemini-pro-latest. The five sites that bypass it
 (nano_banana's image call, the scout's two, the orchestrator's evaluate
-judge, framebank's captions) and the research agent (a different SDK
+judge) and the research agent (a different SDK
 entirely) call `record_call` themselves. That is why the pricing and the
 write live HERE and not inside gemini_utils: a second SDK wrapper reports
 a call without importing the retry helper.
@@ -73,7 +73,9 @@ STAGES = (
     "rework",
     "nano_image",      # the image model
     "answer",          # grounded_answer
-    "frame_caption",   # framebank captions
+    "frame_caption",   # RETIRED 2026-09-09 with the frame-bank lane.
+                       # Kept in the closed set so historical llm_calls
+                       # rows still validate; nothing writes it now.
     "unknown",
 )
 

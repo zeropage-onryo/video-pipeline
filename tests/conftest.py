@@ -141,8 +141,6 @@ OUTPUT_ROOTS = (
     ("src.orchestrator", "GENERATED_ROOT", "footage/generated"),
     ("src.autopilot", "GENERATED_DIR", "footage/generated"),
     ("src.autopilot", "KILL_SWITCH_PATH", "data/autopilot.off"),
-    ("src.framebank", "FOOTAGE_DIR", "footage"),
-    ("src.framebank", "FRAMES_DIR", "data/frames"),
     ("src.refbin", "REFS_DIR", "data/refs"),
     ("src.research_agent", "STAMP_DIR", "data/.research"),
     ("src.promote_winners", "QUEUE_PATH", "data/promotion_queue.json"),

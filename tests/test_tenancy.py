@@ -815,7 +815,6 @@ def _init_everything(path):
     schema under test is the whole schema."""
     from src import (
         evalstore,
-        framebank,
         imagesearch,
         inspiration,
         instagram,
@@ -839,7 +838,6 @@ def _init_everything(path):
     scout.init(path)
     instagram.init(path)
     imagesearch.init(path)
-    framebank.init(path)
     render_assets.init(path)
     account_keys.init(path)
     from src import ledger, spend

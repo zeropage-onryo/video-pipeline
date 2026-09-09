@@ -15,7 +15,7 @@ import json
 
 import pytest
 
-from src import framebank, imagesearch, mcp_server, preprod, refbin, scout
+from src import imagesearch, mcp_server, preprod, refbin, scout
 
 JPEG = b"\xff\xd8\xff" + b"pretend jpeg"
 
@@ -54,22 +54,13 @@ def no_web(monkeypatch):
 
 
 @pytest.fixture
-def frames_lane(monkeypatch):
-    """His footage is opt-in now (FRAMES_LANE=1); the frame-bank tests
-    below still prove the bank, so they turn it on."""
-    monkeypatch.setenv("FRAMES_LANE", "1")
-
-
-@pytest.fixture
 def tmp_db(pg, tmp_path, monkeypatch):
     path = pg
     preprod.init(path)
     scout.init(path)
     imagesearch.init(path)
-    framebank.init(path)
     monkeypatch.setenv("DATABASE_URL", path)
     monkeypatch.setattr(refbin, "REFS_DIR", tmp_path / "refs")
-    monkeypatch.setattr(framebank, "FRAMES_DIR", tmp_path / "frames")
     return path
 
 
@@ -209,7 +200,7 @@ def test_an_unconfigured_lane_says_so(tmp_db, monkeypatch):
 
     assert out["count"] == 0
     assert "no image source is configured" in out["note"]
-    assert out["sources"] == {"frames": False, "openverse": False, "google": False,
+    assert out["sources"] == {"openverse": False, "google": False,
                               "reddit": False, "pinterest": False,
                               "unsplash": False, "pexels": False}
 
@@ -303,97 +294,3 @@ def test_a_configured_lane_that_matched_nothing_says_something_else(tmp_db,
 
     out = mcp_server.find_images("nothing at all", brand="zeropage", dsn=tmp_db)
     assert out["count"] == 0 and "nothing matched" in out["note"]
-
-
-# ---------- his own footage, and which brand may have it ----------
-
-def a_frame(tmp_db, tmp_path, caption, tags, clip="A037_C001.mov", t=30.0):
-    d = tmp_path / "frames"
-    d.mkdir(parents=True, exist_ok=True)
-    f = d / f"{framebank.frame_id(clip, t)}.jpg"
-    f.write_bytes(real_jpeg())
-    framebank.record({"id": framebank.frame_id(clip, t), "clip": clip,
-                      "t_sec": t, "path": str(f), "caption": caption,
-                      "tags": tags}, brand="antihero", dsn=tmp_db)
-    return f
-
-
-def test_zero_page_never_reaches_his_garage_footage(frames_lane, tmp_db, tmp_path,
-                                                    monkeypatch):
-    """All 37 clips are motorcycle build. Zero Page is faceless and its
-    cast never attaches either, so stock is its whole grounding budget —
-    serving it a garage frame would be worse than serving it nothing."""
-    a_frame(tmp_db, tmp_path, "gloved hands on a bike engine", ["garage", "hands"])
-    monkeypatch.delenv("UNSPLASH_ACCESS_KEY", raising=False)
-    monkeypatch.delenv("PEXELS_API_KEY", raising=False)
-
-    assert imagesearch.search("hands", brand="zeropage", dsn=tmp_db) == []
-    assert imagesearch.search("hands", brand="antihero", dsn=tmp_db)
-
-
-def test_zero_page_reaches_its_own_look_stills(frames_lane, tmp_db, tmp_path, monkeypatch):
-    """The frames lane opened for Zero Page on 2026-09-05 -- for the
-    reference-look stills ops/ingest-look-frames.py files under that
-    brand, never the garage (the brand column keeps that promise)."""
-    from src import framebank
-    f = tmp_path / "horror_01.jpg"
-    f.write_bytes(b"\xff\xd8\xff\xd9")
-    framebank.record({"id": "look0001", "clip": "reference-look/horror_01.jpg",
-                      "t_sec": 0.0, "path": str(f),
-                      "caption": "blue hour wet street amber window",
-                      "tags": ["reference look", "blue hour", "rain"]},
-                     brand="zeropage", dsn=tmp_db)
-    a_frame(tmp_db, tmp_path, "gloved hands on a bike engine", ["garage", "hands"])
-    monkeypatch.delenv("UNSPLASH_ACCESS_KEY", raising=False)
-    monkeypatch.delenv("PEXELS_API_KEY", raising=False)
-
-    hits = imagesearch.search("blue hour rain", brand="zeropage", dsn=tmp_db)
-    assert [h["source"] for h in hits] == ["frames"]
-    assert imagesearch.search("hands", brand="zeropage", dsn=tmp_db) == []
-
-
-def test_a_frame_is_read_off_disk_not_fetched(frames_lane, tmp_db, tmp_path, monkeypatch,
-                                              a_spark):
-    """His own footage never leaves the machine: there is no URL to
-    fetch and no host to guard."""
-    a_frame(tmp_db, tmp_path, "gloved hands on a tiled floor", ["tile", "hands"])
-    monkeypatch.setattr(refbin, "fetch",
-                        lambda url: pytest.fail("fetched a local frame"))
-    monkeypatch.setattr(mcp_server, "_reachable", lambda url: True)
-
-    found = mcp_server.find_images("hands on tile", brand="antihero", dsn=tmp_db)
-    assert found["images"][0]["source"] == "frames"
-    out = mcp_server.bank_reference(a_spark,
-                                    candidate_id=found["images"][0]["id"],
-                                    dsn=tmp_db)
-
-    assert out["ok"] and out["url"].startswith("/refs/")
-    assert scout.bin_for_finding(a_spark, dsn=tmp_db)[0]["source_url"].startswith(
-        "footage/")
-
-
-def test_an_unusable_frame_stays_in_the_bank_and_out_of_the_results(frames_lane, tmp_db,
-                                                                    tmp_path):
-    """Kept so the next build does not re-cut it; hidden so it never
-    eats a reference slot."""
-    a_frame(tmp_db, tmp_path, "a hand over the lens, pure blur",
-            ["unusable", "blur"], clip="A037_C002.mov")
-    a_frame(tmp_db, tmp_path, "a hand on a blurred engine", ["hands", "blur"],
-            clip="A037_C003.mov")
-
-    hits = framebank.search("blur hand", brand="antihero", dsn=tmp_db)
-    assert len(hits) == 1 and "unusable" not in hits[0]["tags"]
-
-
-def test_rebuilding_updates_a_frame_rather_than_duplicating_it(tmp_db, tmp_path):
-    a_frame(tmp_db, tmp_path, "first guess", ["tile"])
-    a_frame(tmp_db, tmp_path, "a better caption", ["tile", "overhead"])
-
-    hits = framebank.search("tile", brand="antihero", dsn=tmp_db)
-    assert len(hits) == 1 and hits[0]["caption"] == "a better caption"
-
-
-def test_sampling_skips_the_hand_still_on_the_camera(tmp_db):
-    assert framebank.sample_times(225) == [30, 60, 90, 120, 150, 180, 210]
-    assert framebank.sample_times(1.08) == [0.5]     # a one-second take
-    assert framebank.sample_times(0) == []

@@ -352,10 +352,9 @@ SHARED_TABLES = {
     # -- the legacy pitch pipeline, removed Aug 2026; nothing writes them
     "pitch_runs": "historical rows from the removed post-production chain",
     "ideas": "historical rows from the removed post-production chain",
-    # -- the closed reference set (src/imagesearch.py, src/framebank.py)
+    # -- the closed reference set (src/imagesearch.py)
     "image_candidates": "server-found image search results the agent may "
                         "only reference by id; a search cache, not authorship",
-    "frames": "stills cut from the operator's own footage; the frame bank",
 }
 
 

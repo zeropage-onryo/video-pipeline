@@ -922,8 +922,8 @@ def _auto_refs(text: str, already: list,
     because the writer volunteers his name on his own channel. Without
     `idea` the legacy scene-text scan still runs.
 
-    `format_cast` tells the generator that Michael and the Ducati have
-    "(reference photos on file)", and the scene it writes says so in as
+    `format_cast` tells the generator that the cast and props on file
+    have "(reference photos on file)", and the scene it writes says so in as
     many words -- but nothing was ever attaching those files, so the
     renderer got the sentence and not the face (2026-08-28). This
     closes that loop: read the finished scene back, find the assets it
@@ -970,7 +970,7 @@ def _auto_refs(text: str, already: list,
 
 # How many photos of one character are worth spending reference slots
 # on. A face is the case the one-photo rule below was not written for:
-# the Garage Guest keyframe grounded a three-quarter head turn on a
+# a guest-character keyframe grounded a three-quarter head turn on a
 # single frontal portrait and aged him about ten years, while the
 # three-quarter frame it needed sat unused in the same folder
 # (2026-08-29). A prop gains almost nothing from a second angle; an

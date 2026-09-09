@@ -26,11 +26,8 @@ copy; `reference` takes an id and banks the row the server itself wrote.
 An invented id resolves to nothing and says so. There is no path left
 through which a made-up address reaches the bin.
 
-TWO LANES, WEIGHTED BY BRAND, because the material is not interchangeable:
+ONE KIND OF MATERIAL: images pulled off the internet for the spark.
 
-- **frames** -- src/framebank.py, his own 70 minutes of ProRes. Owned,
-  licence-free, his camera and his rooms. All of it is garage and
-  motorcycle work, so it carries ANTIHERO and does nothing for Zero Page.
 - **stock** -- Unsplash and Pexels, through their real search endpoints.
   The same two sources the agent was hallucinating, except the results
   exist, the ids are real and the attribution is theirs rather than
@@ -93,14 +90,13 @@ def sources() -> dict:
     empty bin look like a working crawl for two days.
 
     2026-09-05: Mike's call -- references are IMAGES PULLED OFF THE
-    INTERNET for the spark, not his footage. So the web lanes lead and
-    the frame bank is opt-in (FRAMES_LANE=1), kept because it is built
-    and costs nothing dark. Openverse needs no key and is on unless
-    OPENVERSE_LANE=0; Google image search and Reddit light up when their
-    keys exist.
+    INTERNET for the spark. 2026-09-09: the operator-footage lane that
+    sat behind FRAMES_LANE was removed outright rather than left dark,
+    so every lane here is a web lane. Openverse needs no key and is on
+    unless OPENVERSE_LANE=0; Google image search and Reddit light up
+    when their keys exist.
     """
     return {
-        "frames": _on("FRAMES_LANE", "0"),
         "openverse": _on("OPENVERSE_LANE", "1"),
         "google": bool(os.environ.get("GOOGLE_CSE_ID")
                        and (os.environ.get("GOOGLE_CSE_KEY") or os.environ.get("GEMINI_API_KEY"))),
@@ -436,26 +432,6 @@ def pexels(query: str, limit: int = 6) -> list[dict]:
     return out
 
 
-def _frames(query: str, brand: Optional[str], limit: int, dsn) -> list[dict]:
-    from . import framebank
-    out = []
-    for f in framebank.search(query, brand=brand, limit=limit, dsn=dsn):
-        # A local frame's "url" is its path on disk; refbin never fetches
-        # it over the network -- see mcp_server.bank_reference, which
-        # reads the file directly for this source.
-        # The stored path is wherever the bank was BUILT (2026-09-05 it
-        # was built over the mount, so rows carried a /sessions/... path
-        # no 6am run on the Mac could open). data/frames/<id>.jpg is the
-        # contract; the stored path is a hint.
-        local = framebank.FRAMES_DIR / f"{f['id']}.jpg"
-        path = str(local) if local.is_file() else f["path"]
-        out.append({"source": "frames", "image_url": path,
-                    "source_url": f"footage/{f['clip']}@{f['t_sec']:g}s",
-                    "title": f.get("caption") or f"{f['clip']} at {f['t_sec']:g}s",
-                    "credit": "own footage"})
-    return out
-
-
 def remember(candidates: list[dict], query: str = "", dsn=None) -> list[dict]:
     """Store what we served, so an id can be redeemed later.
 
@@ -492,19 +468,18 @@ def get(candidate_id: str, dsn=None) -> Optional[dict]:
         return None
 
 
-# How the two lanes split per brand. Antihero has owned footage that IS
-# its world; Zero Page has none and lives on the outside lanes.
+# How the lanes split per brand. Both brands run the same two, and the
+# dict is kept rather than inlined because per-brand weighting is the
+# thing most likely to come back.
 # 2026-09-05, Mike: "I don't want it connected to footage, just images
-# pulled off the internet through ideas/sparks." So both brands run the
-# web lanes, and "frames" (his own footage + the reference-look stills,
-# see ops/build-frame-bank.py / ops/ingest-look-frames.py) joins only
-# when FRAMES_LANE=1. The bank stays built; it just is not the default.
+# pulled off the internet through ideas/sparks." 2026-09-09, Mike: the
+# operator-footage lane is gone from the studio entirely -- not opt-in,
+# not dark, removed. Do not reintroduce a lane that reads local video.
 BRAND_LANES = {"antihero": ("web", "stock"), "zeropage": ("web", "stock")}
 
 
 def lanes_for(brand: Optional[str]) -> tuple:
-    base = BRAND_LANES.get(brand or "", ("web", "stock"))
-    return (("frames",) + base) if _on("FRAMES_LANE", "0") else base
+    return BRAND_LANES.get(brand or "", ("web", "stock"))
 
 
 def _interleave(*lists: list) -> list:
@@ -529,8 +504,6 @@ def search(query: str, brand: Optional[str] = None, limit: int = 6,
         return []
     lanes = lanes_for(brand)
     found: list[dict] = []
-    if "frames" in lanes:
-        found += _frames(query, brand, limit, dsn)
     if "web" in lanes:
         # Reddit first (people's own frames of exactly these worlds),
         # then the whole web, then the open index; interleaved so no one

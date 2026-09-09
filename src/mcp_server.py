@@ -640,7 +640,7 @@ def find_images(
                  ("no image source is configured — Openverse is off "
                   "(OPENVERSE_LANE=0) and no GOOGLE_CSE_ID / REDDIT_CLIENT_ID / "
                   "UNSPLASH_ACCESS_KEY / PEXELS_API_KEY is set"
-                  if not (imagesearch.any_web(live) or live.get("frames"))
+                  if not imagesearch.any_web(live)
                   else "nothing matched; try plainer words for the light and "
                        "the surfaces rather than the story")),
         "images": [{"id": c["id"], "shows": c.get("title") or "(no description)",

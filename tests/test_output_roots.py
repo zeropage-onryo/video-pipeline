@@ -40,7 +40,7 @@ WRITE_TREES = (PROJECT_ROOT / "data", PROJECT_ROOT / "footage")
 def _modules():
     """Every importable module in the three packages, by dotted name.
 
-    Hyphenated ops scripts (`ops/build-frame-bank.py`) are not importable
+    Hyphenated ops scripts (`ops/ig_token.sh`-style one-shots) are not importable
     names and are skipped -- they are one-shot scripts run by hand, never
     imported by the app, so nothing in a test run can touch their paths.
     """

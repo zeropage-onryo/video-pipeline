@@ -105,10 +105,6 @@ This is the "split, not a move" the Dockerfile header already names, and
 the walk does not fail over it — those lanes report themselves absent and
 the night carries on:
 
-- **The frame bank / footage cutting** (`src/framebank.py`,
-  `ops/build-frame-bank.py`). 149GB of ProRes is on the Mac and is
-  excluded by `.dockerignore`. `FRAMES_LANE=0` is already the default in
-  `.env.example`; leave it there. The lane needs ffmpeg *and* the media.
 - **Local photo roots** — `characters/`, `props/`, `locations/`, the
   asset shelf, `data/refs/`. Grounding, likeness photos and any reference
   read off disk are unavailable in the image. Pre-ingest anything the

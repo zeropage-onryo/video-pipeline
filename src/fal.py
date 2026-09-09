@@ -148,7 +148,24 @@ def _price_env(key: str, prices: dict[str, float]) -> dict[str, float]:
 VIDEO_MODELS: dict[str, dict] = {
     # $0.06/s at 1080p makes this the cheapest real clip in the whole
     # repo (5s = $0.30, against runway's $0.25 and higgsfield's $0.40),
-    # which is why it is DEFAULT_MODEL. Apache-2.0 weights, 9:16 native.
+    # which is why it is DEFAULT_MODEL. 9:16 native.
+    #
+    # THE WEIGHTS ARE OPEN, THE LICENSE IS NOT APACHE-2.0 (this comment
+    # said Apache-2.0 until 2026-09-09; it was never true for any LTX-2
+    # release). It is the LTX-2 Community License: free commercial use
+    # INCLUDING hosting for third parties (SaaS) under $10,000,000
+    # annual revenue, counted across all affiliates and entities under
+    # common control; a paid agreement above that line. Three terms that
+    # bind a fine-tune rather than a rented API call, which is the only
+    # reason this belongs in a price table: a Derivative -- explicitly
+    # including fine-tuned weights AND models trained on LTX Outputs --
+    # must be distributed under THIS license, the use restrictions
+    # (Attachment A) must be passed to anyone we distribute or serve to,
+    # and modified files must carry a notice saying they were changed.
+    # Nothing here constrains billing fal for a render; all of it
+    # constrains shipping a LoRA trained on our own footage.
+    # https://huggingface.co/Lightricks/LTX-2.3/blob/main/LICENSE
+    # checked 2026-09-09
     "ltx2.3": {
         "t2v": "fal-ai/ltx-2.3/text-to-video",
         "i2v": "fal-ai/ltx-2.3/image-to-video",

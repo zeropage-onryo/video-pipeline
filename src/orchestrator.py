@@ -1469,15 +1469,21 @@ JUDGE = None
 
 
 def _clip_duration(url) -> float:
-    """Seconds, 0.0 for anything unreadable. framebank.duration is the
-    existing ffprobe wrapper -- imported here rather than reimplemented,
-    because two spellings of "ask ffprobe how long this is" is how one of
-    them quietly stops matching the other."""
+    """Seconds, 0.0 for anything unreadable. Never raises -- an
+    unreadable clip is one candidate scored 0, not a failed run.
+
+    Inlined here on 2026-09-09. It used to call framebank.duration,
+    which was the same ffprobe invocation living in the frame-bank
+    module; that module went with the operator-footage lane, and this
+    is now the only place the pipeline asks how long a clip is."""
     if not url:
         return 0.0
     try:
-        from . import framebank
-        return framebank.duration(Path(url))
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "csv=p=0", str(Path(url))],
+            capture_output=True, text=True, timeout=60)
+        return float((out.stdout or "0").strip() or 0)
     except Exception:
         return 0.0
 

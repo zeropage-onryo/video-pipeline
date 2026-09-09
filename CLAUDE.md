@@ -244,8 +244,8 @@ Three parts to closing it:
 
 - `shootgen.named_assets(text, assets)` reads a finished scene back and returns the assets
   it named — the mirror of `format_cast`. Matching is on the asset's name **plus multi-word
-  proper nouns from its own notes** (`asset_aliases`), because the prop is stored as
-  "Motorcycle" and every scene calls it a Ducati Panigale 959. Two consecutive capitalised
+  proper nouns from its own notes** (`asset_aliases`), because a prop is stored under a
+  generic name while every scene calls it by its make and model. Two consecutive capitalised
   words, never one: a missed alias costs a photo, a false one attaches a reference the shot
   was never meant to resemble.
 - **Order is load-bearing, not cosmetic.** Runway anchors a clip on exactly ONE frame
@@ -491,7 +491,8 @@ show up.
 
 **Selection moved to where it can actually be made: `select_clip`**, a node between
 `qc_clip` and `caption`. With several candidates it picks by a code-only heuristic — QC pass
-first, then longest duration (`framebank.duration`, the existing ffprobe wrapper), then
+first, then longest duration (`_clip_duration`, the ffprobe wrapper inlined in the
+orchestrator when the frame bank was removed), then
 largest file — keeps every candidate in `clip_candidates` and the hold payload (the losers
 are the only evidence of what was passed over), and is a no-op on one clip, which is every
 run today. `orchestrator.JUDGE` is the documented seam for the video-level judge that can
@@ -823,7 +824,7 @@ is yours, in Resolve, by hand.
   the reference is FOR — match subject/wardrobe/props/location, do NOT copy its framing —
   since bytes with no instruction leave it guessing between copy/continue/ignore. Verified
   live: Flash asked what it can see answered "a man in a workshop looks at a weathered
-  watch", and a keyframe fed back in produced the same man in the same jacket and garage
+  watch", and a keyframe fed back in produced the same man in the same jacket and room
   under a new camera setup. Evals moved OFF `/ui` (2026-08-25) into the dev console — now
   the Dev Studio's Stats tab (`/evals` redirects there) — golden set still in SQLite via
   `src/evalstore.py`, seeded once from
@@ -965,7 +966,8 @@ is yours, in Resolve, by hand.
   file to the shared `{cast}` socket regardless of brand, and that socket says *"reference the
   uploaded photos as the EXACT face … name them"* — flatly against `concept_zeropage.txt`'s
   *"FACELESS — no recurring person; any human is anonymous."* The cast block won: **every Zero
-  Page concept on the board named Michael, Cyclops or the Ducati**, in the brand whose whole
+  Page concept on the board named a recurring character or prop off the asset shelf**, in
+  the brand whose whole
   identity is that nobody recurs. `shootgen.cast_for(brand, ...)` gates it on `CAST_BRANDS`,
   applied in BOTH the graph and the Create path (`scene_chain.ground`). Scoped by brand rather
   than by a column on `characters` on purpose: an asset is not owned by a brand — the same
