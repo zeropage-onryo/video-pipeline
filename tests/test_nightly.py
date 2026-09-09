@@ -436,3 +436,62 @@ def test_spent_since_counts_llm_calls_and_renders_after_a_timestamp(nightly_db):
     assert out["llm_usd"] == 0.25, "the January row is not this walk's spend"
     assert out["render_usd"] == 0.04
     assert out["total_usd"] == 0.29
+
+
+# --------------------------------------------------------------------------
+# how many sparks a night walks
+# --------------------------------------------------------------------------
+# 2026-09-08, Mike's call: 5 per brand, "we'll increase it once I see it
+# gets better". Before this the walk took every line in sparks.txt, which
+# had grown to 20 -- a 40-run night nobody had finished grading.
+
+def test_the_default_is_five_sparks_per_brand(monkeypatch):
+    monkeypatch.delenv(nightly.SPARKS_ENV, raising=False)
+    assert nightly.sparks_per_pair() == 5
+
+
+def test_the_limit_is_read_per_call(monkeypatch):
+    monkeypatch.setenv(nightly.SPARKS_ENV, "12")
+    assert nightly.sparks_per_pair() == 12
+
+
+@pytest.mark.parametrize("value", ["", "0", "-3", "lots"])
+def test_a_useless_limit_falls_back_to_the_default_not_to_nothing(monkeypatch, value):
+    """A night that walks zero sparks is worse than one that walks five."""
+    monkeypatch.setenv(nightly.SPARKS_ENV, value)
+    assert nightly.sparks_per_pair() == 5
+
+
+def test_the_walk_takes_only_that_many_of_each_brand(nightly_db, healthy_preflight,
+                                                    monkeypatch):
+    monkeypatch.setenv(nightly.SPARKS_ENV, "2")
+    ran = []
+    monkeypatch.setattr(nightly, "run_one",
+                        lambda channel, brand, spark, **kw: ran.append((brand, spark))
+                        or {"ok": True, "spark": spark, "held": "h"})
+
+    summary = _walk(nightly_db, sparks=["a", "b", "c", "d", "e"])
+
+    assert summary["attempted"] == 4                    # 2 sparks x 2 pairs
+    assert [s for _, s in ran] == ["a", "b", "a", "b"]
+    assert "walking 2 of 5 sparks per brand" in summary["log"]
+
+
+def test_an_explicit_per_pair_beats_the_environment(nightly_db, healthy_preflight,
+                                                    monkeypatch):
+    monkeypatch.setenv(nightly.SPARKS_ENV, "2")
+    monkeypatch.setattr(nightly, "run_one",
+                        lambda channel, brand, spark, **kw: {"ok": True,
+                                                             "spark": spark})
+    assert _walk(nightly_db, sparks=["a", "b", "c"],
+                 per_pair=3)["attempted"] == 6
+
+
+def test_a_short_list_is_not_padded_or_trimmed(nightly_db, healthy_preflight,
+                                               monkeypatch):
+    monkeypatch.setattr(nightly, "run_one",
+                        lambda channel, brand, spark, **kw: {"ok": True,
+                                                             "spark": spark})
+    summary = _walk(nightly_db, sparks=["a", "b"])
+    assert summary["attempted"] == 4
+    assert "walking" not in summary["log"]

@@ -37,7 +37,7 @@ def stub_renderers(monkeypatch, **behaviour):
     """behaviour[name] is bytes to write, or an Exception to raise."""
     calls = []
     def make(name):
-        def run(prompt, out):
+        def run(prompt, out, *extra):
             calls.append((name, prompt))
             b = behaviour.get(name, RuntimeError("not configured"))
             if isinstance(b, Exception):
@@ -64,7 +64,11 @@ def test_the_prompt_is_the_hook_frame_plus_the_look(tmp_db, a_spark, monkeypatch
     assert out["ok"] and out["provider"] == "midjourney"
     prompt = calls[0][1]
     assert prompt.startswith("a drowned escalator under generator light.")
-    assert "teal" in prompt.lower() and "--ar 9:16" in prompt
+    # the look block, not the Midjourney flag: `--ar 9:16 --style raw --s
+    # 150` is appended by _midjourney itself, so it is not in what the
+    # renderer is HANDED. prompts/look_antihero.txt carries the framing
+    # in prose ("vertical 9:16") for the providers that take no flags.
+    assert "teal" in prompt.lower() and "9:16" in prompt
 
 
 def test_the_render_is_banked_on_its_own_pass_and_read_first(tmp_db, a_spark, monkeypatch):
@@ -147,7 +151,8 @@ def test_a_still_of_michael_goes_to_nano_with_his_photos(monkeypatch, tmp_path):
 
     prompt = refgen.build_prompt("Michael at the gate, visor up", "antihero")
     assert prompt.startswith(refgen.LIKENESS_OPENER)
-    assert "sparse mustache" in prompt
+    assert "even light stubble" in prompt
+    assert "NOT have a grown or" in prompt
     assert not refgen.build_prompt("a stranger at the gate", "antihero").startswith(
         refgen.LIKENESS_OPENER)
 

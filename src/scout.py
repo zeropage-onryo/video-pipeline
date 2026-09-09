@@ -603,6 +603,47 @@ def _ig_signal(post: dict, source: str) -> dict:
             "metric": metric}
 
 
+# --- lane: pinterest (his own curated board, replaces "feeds" 2026-09-08) --
+# The RSS feeds lane (nofilmschool/petapixel/premiumbeat/fxguide) was
+# generic film-industry/gear news with zero overlap with the world-building
+# direction -- checked live 2026-09-08, every headline was a camera review
+# or an industry retrospective, none of it usable spark material. This
+# reads material Mike actually picked instead: `imagesearch.pinterest()`
+# already does the real work (Pinterest exposes no public pin search, so
+# it reads his own board through the v5 API and ranks pins by keyword
+# overlap with the query below). See [[scout_sources_audit_2026-09-08]].
+PINTEREST_QUERIES = {
+    "antihero": "motorcycle rain neon outbreak apocalypse night rider",
+    "zeropage": "creature monster dystopian uncanny invented product world",
+}
+
+
+def gather_pinterest(brand: str, limit: int = MAX_PER_LANE) -> list[dict]:
+    """Pins off the brand's own board. Dark until both `PINTEREST_ACCESS_TOKEN`
+    and `PINTEREST_BOARD_<BRAND>` exist, same "report the precise reason"
+    contract `gather_instagram` keeps -- a lane that needs a credential
+    should say so once, not fail silently or crash the pass."""
+    from . import imagesearch
+    if not os.environ.get("PINTEREST_ACCESS_TOKEN"):
+        return [{"lane": "pinterest", "error": "PINTEREST_ACCESS_TOKEN not set"}]
+    if not os.environ.get(f"PINTEREST_BOARD_{brand.upper()}"):
+        return [{"lane": "pinterest",
+                "error": f"PINTEREST_BOARD_{brand.upper()} not set"}]
+    query = PINTEREST_QUERIES.get(brand, "")
+    try:
+        pins = imagesearch.pinterest(query, brand=brand, limit=limit)
+    except Exception as e:
+        return [{"lane": "pinterest", "error": f"{type(e).__name__}: {e}"}]
+    if not pins:
+        return [{"lane": "pinterest", "error": "no pins on that board matched the query"}]
+    return [{"lane": "pinterest",
+             "detail": (p.get("title") or "").strip() or "(untitled pin)",
+             "url": p.get("source_url", ""),
+             "image": p.get("image_url", ""),
+             "metric": p.get("credit", "")}
+            for p in pins]
+
+
 # --- lane 4: the accounts already on file ----------------------------------
 
 def gather_creators(brand: str, dsn=None) -> list[dict]:
@@ -715,8 +756,27 @@ def recent_sparks(brand: str, days: int = NOVELTY_DAYS, dsn=None) -> list[str]:
         return []
 
 
+def format_image_manifest(images: list[dict]) -> str:
+    """The numbered list the digest prompt points at (2026-09-08, Mike:
+    a spark must be grounded in a real found image, not free invention).
+    Numbers here are exactly the numbers the model is told to cite in its
+    "image" field, and exactly the order the Part objects ride into the
+    multimodal call in -- see digest()."""
+    if not images:
+        return "(no reference images this pass)"
+    lines = []
+    for i, img in enumerate(images, 1):
+        bits = [f"IMAGE {i}:", img.get("title") or "(untitled)"]
+        if img.get("metric"):
+            bits.append(f"({img['metric']})")
+        if img.get("source_url"):
+            bits.append(f"<{img['source_url']}>")
+        lines.append(" ".join(bits))
+    return "\n".join(lines)
+
+
 def build_digest_prompt(brand: str, signals: list[dict], count: int,
-                        avoid: str = "", recent=None) -> str:
+                        avoid: str = "", recent=None, images=None) -> str:
     template = DIGEST_PROMPT_PATH.read_text()
     recent = recent or []
     return (template
@@ -726,7 +786,8 @@ def build_digest_prompt(brand: str, signals: list[dict], count: int,
             .replace("{count}", str(count))
             .replace("{avoid}", avoid or "")
             .replace("{recent}", "\n".join(f"- {s}" for s in recent) or "(nothing yet)")
-            .replace("{signals}", format_signals(signals) or "(the crawl came back empty)"))
+            .replace("{signals}", format_signals(signals) or "(the crawl came back empty)")
+            .replace("{images}", format_image_manifest(images or [])))
 
 
 # The crawl grades its own homework -- every digest candidate is a
@@ -801,6 +862,11 @@ def parse_digest_response(text: str) -> list[dict]:
             rationale = f"{rationale} · retell: {one_sentence}" if rationale else one_sentence
         out.append({
             "spark": c["spark"].strip(),
+            # which numbered reference IMAGE this spark is grounded in
+            # (2026-09-08) -- carried through raw (int or whatever the
+            # model actually sent) so scout()'s grounding backstop can
+            # check it; not folded into rationale, it isn't prose.
+            "image": c.get("image"),
             # kept raw as well as folded into rationale: refgen renders
             # the spark's reference from exactly this line
             "hook_frame": (c.get("hook_frame") or "").strip(),
@@ -816,15 +882,32 @@ def parse_digest_response(text: str) -> list[dict]:
 
 
 def digest(brand: str, signals: list[dict], client, model: str, count: int = 4,
-           dsn=None) -> list[dict]:
+           dsn=None, images=None) -> list[dict]:
     """One call, wide in and narrow out. The gates the prompt is asked
     to respect are re-checked in code by `scout()` -- the prompt is the
-    request, not the enforcement."""
+    request, not the enforcement.
+
+    `images` (2026-09-08, Mike: a spark must relate to a real reference
+    image, not be invented from crawl text alone) are {"bytes", "mime",
+    "title", "metric", "source_url"} dicts, already fetched -- this is
+    the same Part.from_bytes + text pattern locations.describe_location
+    and nano_banana.generate_image use, so the model actually SEES each
+    photo rather than guessing from its caption. Sent in the same order
+    format_image_manifest numbers them in, so "IMAGE 2" in the prompt is
+    unambiguously the second Part here."""
+    from google.genai import types
+
     prompt = build_digest_prompt(
         brand, signals, count,
         avoid=winners.avoid_guidance(dsn=dsn),
-        recent=recent_sparks(brand, dsn=dsn))
-    resp = client.models.generate_content(model=model, contents=prompt)
+        recent=recent_sparks(brand, dsn=dsn),
+        images=images)
+    contents = [
+        types.Part.from_bytes(data=img["bytes"], mime_type=img.get("mime", "image/jpeg"))
+        for img in (images or [])
+    ]
+    contents.append(prompt)
+    resp = client.models.generate_content(model=model, contents=contents)
     from . import spend
     spend.record_call(stage="scout", model_asked=model, response=resp)
     return parse_digest_response(getattr(resp, "text", "") or "")
@@ -894,9 +977,9 @@ def stash_images(brand: str, pass_id: str, signals: list[dict],
     """
     fetch = fetch or refbin.fetch
     init(dsn)
-    # WHICH LANES MAY CONTRIBUTE A PICTURE. Instagram only, and that is a
-    # finding, not a default (2026-08-31 -- every image below was opened
-    # and looked at, which is the only way any of this surfaced).
+    # WHICH LANES MAY CONTRIBUTE A PICTURE. Instagram and Pinterest only,
+    # and that is a finding, not a default (2026-08-31 -- every image below
+    # was opened and looked at, which is the only way any of this surfaced).
     #
     # The sources that give good TEXT signal do not give good IMAGE
     # signal, because an article's lead image illustrates the article's
@@ -905,24 +988,28 @@ def stash_images(brand: str, pass_id: str, signals: list[dict],
     #           face + huge text + UI screenshot. The first real bin was
     #           three monetisation-guru thumbnails ("MONETIZED $5,000",
     #           a Studio revenue graph, a man screaming over "$203,523.43").
-    #   feeds   gear journalism yields product shots (a hand holding a
-    #           camera, a woman at an editing desk beside a NAS); craft
-    #           explainers yield copyrighted film stills with recognisable
-    #           actors. Two of six useless, one legally awkward, none
-    #           usable as an anchor.
+    #   feeds   (replaced by pinterest 2026-09-08, kept selectable) gear
+    #           journalism yields product shots (a hand holding a camera,
+    #           a woman at an editing desk beside a NAS); craft explainers
+    #           yield copyrighted film stills with recognisable actors.
+    #           Two of six useless, one legally awkward, none usable as an
+    #           anchor.
     #   web     grounded search returns prose, no images at all.
     #
-    # Instagram is different in kind: there the image IS the post -- a
-    # creator's own frame, the creative artefact itself rather than an
-    # illustration of an article about one. That is the only source where
-    # an automatic bin is defensible.
+    # Instagram and Pinterest are different in kind: there the image IS the
+    # post -- a creator's own frame (Instagram) or Mike's own pin off his
+    # own curated board (Pinterest) -- the creative artefact itself rather
+    # than an illustration of an article about one. Those are the only
+    # sources where an automatic bin is defensible.
     #
-    # So the bin is EMPTY until IG_GRAPH_TOKEN exists. That is the correct
-    # answer, not a degraded one, and the composer already renders it as
-    # "No reference images in this pass" and attaches nothing. refs[0] is
-    # the frame Runway anchors the whole clip on; no reference beats a
-    # wrong one.
-    image_lanes = {"instagram"}
+    # So the instagram half of the bin is EMPTY until IG_GRAPH_TOKEN exists
+    # (still true 2026-09-08 -- see [[scout_sources_audit_2026-09-08]]), and
+    # the pinterest half is empty until PINTEREST_ACCESS_TOKEN + a per-brand
+    # PINTEREST_BOARD_<BRAND> exist. That is the correct answer, not a
+    # degraded one, and the composer already renders it as "No reference
+    # images in this pass" and attaches nothing. refs[0] is the frame
+    # Runway anchors the whole clip on; no reference beats a wrong one.
+    image_lanes = {"instagram", "pinterest"}
     stored: list[dict] = []
     seen: set[str] = set()
     for s in signals:
@@ -1055,10 +1142,13 @@ def bank_urls(finding_id: int, urls, lane: str, source_url: str = "",
     if not finding:
         return []
     pass_id = pass_id_for(finding, dsn=dsn)
+    from . import asset_shelf
+
     rows = []
     for url in urls or []:
         url = str(url).split("?")[0]
-        if not url.startswith("/refs/"):
+        parsed = asset_shelf.parse_ref(url)
+        if not parsed or parsed["kind"] != "refs":
             continue
         row = bin_add(finding["brand"], pass_id, url, source_url=source_url,
                       lane=lane, dsn=dsn)
@@ -1104,14 +1194,40 @@ def set_pass_id(finding_id: int, pass_id: str, dsn=None) -> None:
         pass
 
 
-def get_finding(finding_id: int, dsn=None) -> Optional[dict]:
+class Unreadable(RuntimeError):
+    """The database could not be asked. NOT the same as "no such row"."""
+
+
+def get_finding(finding_id: int, dsn=None, *, strict: bool = False
+                ) -> Optional[dict]:
+    """One finding, or None.
+
+    `strict=True` raises `Unreadable` when the QUERY failed, instead of
+    answering None. The difference is not academic: on the night of
+    2026-09-07 four `reference` calls came back to the research agent as
+    "no finding 159/160/161/162" while all four rows sat in the table --
+    the database had blinked under a doubled walk, the bare `except`
+    turned that into "this spark does not exist", and the agent did the
+    only sane thing with that answer and abandoned the images. Twenty of
+    twenty-nine sparks went unillustrated that night.
+
+    The default stays lenient because most callers are on never-raises
+    edges (`claims`, `bin_for_finding`, the API) where degrading is
+    right. The callers that TELL SOMEBODY a spark is missing pass strict.
+    """
     try:
+        # init first, the way list_findings does: on a database that has
+        # never held a finding the honest answer is "no such finding",
+        # not "unreadable" -- the missing table is not a blink.
+        init(dsn)
         with db.connect(dsn) as conn:
             row = conn.execute("SELECT * FROM scout_findings WHERE id = %s",
                                (finding_id,)).fetchone()
-        return dict(row) if row else None
-    except Exception:
+    except Exception as e:
+        if strict:
+            raise Unreadable(f"could not read finding {finding_id}: {e}") from e
         return None
+    return dict(row) if row else None
 
 
 def claims(finding_id: int, idea: str, dsn=None) -> bool:
@@ -1135,6 +1251,163 @@ def claims(finding_id: int, idea: str, dsn=None) -> bool:
     if not finding:
         return False
     return _spark_key(finding.get("spark") or "") == _spark_key(idea or "")
+
+
+def bank_candidate(finding: dict, candidate: dict, dsn=None) -> dict:
+    """Put one image-search candidate in a finding's bin.
+
+    The tail both banking paths share: `mcp_server.bank_reference`, which
+    validates an agent's id first, and `illustrate` below, which picks
+    for itself. One implementation, because the two used to be one
+    function's worth of steps written twice, and the half that drifts is
+    always the one nobody watches -- here, the automatic one.
+
+    Never raises. `ok` False carries the reason.
+    """
+    pass_id = pass_id_for(finding, dsn=dsn)
+    image_url = (candidate.get("image_url") or "").strip()
+    source_url = (candidate.get("source_url") or "").strip()
+    if not source_url:
+        return {"ok": False, "pass_id": pass_id,
+                "error": "source_url is required — an unattributed reference "
+                         "is attribution nobody can check"}
+    if candidate.get("source") == "frames":
+        # His own footage never leaves this machine, so there is no URL to
+        # fetch and no host to guard -- the "url" is a path on disk.
+        stored = _store_local(image_url)
+    else:
+        stored = refbin.fetch(image_url)
+    if not stored:
+        return {"ok": False, "pass_id": pass_id,
+                "error": "not a readable image, too large, or a refused host",
+                "banked": len(bin_for_pass(pass_id, dsn=dsn))}
+    row = bin_add(finding["brand"], pass_id, stored,
+                  source_url=source_url,
+                  title=(candidate.get("title") or "").strip(),
+                  lane=candidate.get("lane") or "agent", dsn=dsn)
+    banked = bin_for_pass(pass_id, dsn=dsn)
+    if row is None:
+        return {"ok": False, "pass_id": pass_id, "url": stored,
+                "banked": len(banked),
+                "error": f"already banked, or the pass is full "
+                         f"({MAX_BIN_IMAGES} images)"}
+    return {"ok": True, "finding_id": finding["id"], "pass_id": pass_id,
+            "url": stored, "source_url": row["source_url"],
+            "banked": len(banked), "cap": MAX_BIN_IMAGES}
+
+
+def _store_local(path_str: str) -> Optional[str]:
+    """A frame off his own disk into the bin, through refbin's own
+    normalisation so it is addressed exactly like every other reference
+    and resolves through the same reader."""
+    try:
+        data = Path(path_str).read_bytes()
+    except OSError:
+        return None
+    jpeg = refbin.to_jpeg(data)
+    return refbin.save(jpeg) if jpeg else None
+
+
+ILLUSTRATE_LIMIT = 2
+
+
+def look_query(spark: str) -> str:
+    """A picture search from a story.
+
+    An image lane indexes LIGHT and SURFACES, not plot: searching a five
+    sentence spark verbatim returns nothing, which is how a lane that
+    works looks exactly like a lane that is dark. So this keeps the
+    concrete nouns and the light words from the opening of the spark and
+    drops the rest -- the same instruction `images_for` gives the agent
+    in words, applied in code for the sparks the agent never got to.
+    """
+    words = [w.strip(".,;:!?\u2014\u2019'\"()") for w in (spark or "").split()]
+    kept = [w for w in words if len(w) > 3 and w.lower() not in _STOPWORDS]
+    return " ".join(kept[:12])
+
+
+_STOPWORDS = {
+    "that", "this", "with", "into", "from", "they", "them", "their", "there",
+    "then", "than", "when", "what", "which", "while", "where", "because",
+    "wants", "want", "rule", "realizes", "realises", "tries", "still",
+    "himself", "herself", "itself", "have", "been", "will", "would", "could",
+    "about", "after", "before", "again", "only", "just", "like", "does",
+    "doesn", "isn", "hasn", "each", "every", "cannot",
+}
+
+
+def illustrate(finding_id: int, *, limit: int = 1, dsn=None,
+               search=None) -> dict:
+    """Put at least one photograph behind a spark that has none.
+
+    THE BACKSTOP, added 2026-09-08. Banking a spark and illustrating it
+    were both the research agent's job, and it only ever did the first
+    reliably: of 29 sparks banked on the night of 09-07, 9 had a picture
+    behind them. Since 2026-09-08 a spark with no picture is not served
+    at all (`refs_required`), so the shortfall stopped being cosmetic --
+    it is the difference between a night that generates and one that
+    holds ten times.
+
+    Deliberately CODE and not a better brief. "Attach an image to each"
+    is exactly the kind of instruction a model follows for the first
+    three items of eight, and the failure is silent: the pass reports
+    success either way. This runs after the agent, over whatever it left
+    bare, and cannot decide to skip one.
+
+    Never raises. Returns {"ok", "banked", "note"} -- `ok` False with
+    `banked` 0 is the honest answer when no lane is configured, and the
+    caller's response to it is the same as to any other thin pass.
+    """
+    finding = get_finding(finding_id, dsn=dsn)
+    if not finding:
+        return {"ok": False, "banked": 0, "note": f"no finding {finding_id}"}
+    if bin_for_finding(finding_id, dsn=dsn):
+        return {"ok": True, "banked": 0, "note": "already illustrated"}
+    query = look_query(finding.get("spark") or "")
+    if not query:
+        return {"ok": False, "banked": 0, "note": "nothing to search on"}
+    if search is None:
+        from . import imagesearch
+        search = imagesearch.search
+    try:
+        candidates = search(query, finding["brand"], limit=max(1, limit) * 3,
+                            dsn=dsn)
+    except Exception as e:                      # pragma: no cover - defensive
+        return {"ok": False, "banked": 0, "note": f"search failed: {e}"}
+    banked = 0
+    for candidate in candidates:
+        if banked >= max(1, limit):
+            break
+        if bank_candidate(finding, candidate, dsn=dsn).get("ok"):
+            banked += 1
+    if banked:
+        return {"ok": True, "banked": banked, "note": f"{banked} image(s)"}
+    return {"ok": False, "banked": 0,
+            "note": "no lane returned a usable image" if candidates
+                    else "no lane configured, or nothing matched"}
+
+
+def illustrate_bare(brand: str, *, limit: int = 1, dsn=None, log=None) -> dict:
+    """Illustrate every unused spark of a brand that has no pictures.
+
+    Returns {"illustrated", "bare", "checked"} -- `bare` is what is still
+    unservable afterwards, and it is the number worth printing: a
+    research pass that banks eight sparks and illustrates two now says so
+    instead of reporting eight and leaving the night to find out.
+    """
+    checked = illustrated = bare = 0
+    for row in list_findings(brand=brand, unused_only=True, limit=100, dsn=dsn):
+        if bin_for_finding(row["id"], dsn=dsn):
+            continue
+        checked += 1
+        result = illustrate(row["id"], limit=limit, dsn=dsn)
+        if result.get("banked"):
+            illustrated += 1
+        else:
+            bare += 1
+            if log:
+                log(f"scout: spark {row['id']} left bare — {result['note']}")
+    return {"checked": checked, "illustrated": illustrated, "bare": bare}
 
 
 def bin_for_finding(finding_id: int, dsn=None) -> list[dict]:
@@ -1181,13 +1454,50 @@ def list_findings(brand=None, unused_only=False, limit=50, dsn=None) -> list[dic
         return []
 
 
-def next_spark(brand: str, dsn=None, floor: float = SCORE_FLOOR) -> Optional[dict]:
-    """The highest-scoring unused finding at or above the floor, or None
-    -- which is the caller's signal to fall back to sparks.txt. Does not
-    claim it; `mark_used` does, once the run it seeded actually exists."""
+REQUIRE_REFS_ENV = "ZEROPAGE_REQUIRE_REFS"   # preprod owns the reader
+
+
+def refs_required() -> bool:
+    """Must a spark have reference images before anything is written from
+    it? Mike's rule, 2026-09-08: yes.
+
+    Read per call rather than at import, the way `orchestrator.gates_mode`
+    is, so `ZEROPAGE_REQUIRE_REFS=0 python -m src.trigger` is a whole
+    configuration change for one run.
+
+    This DOES contradict the standing convention that grounding shapes
+    and never gates ("a crawl is an enhancement, never a dependency"),
+    and the contradiction is deliberate and his: measured on the night of
+    2026-09-07, 9 of 29 banked sparks had a photo behind them, and the
+    other 20 produced scenes written from words alone. The convention
+    protects a night from a dead crawl; it was also letting the crawl
+    stay dead, because nothing downstream ever noticed.
+    """
+    from . import preprod
+    return preprod.refs_required()
+
+
+def next_spark(brand: str, dsn=None, floor: float = SCORE_FLOOR,
+               require_refs: Optional[bool] = None) -> Optional[dict]:
+    """The highest-scoring unused finding at or above the floor that has
+    pictures behind it, or None -- which is the caller's signal to fall
+    back to sparks.txt. Does not claim it; `mark_used` does, once the run
+    it seeded actually exists.
+
+    Skipping the reference-less ones here rather than only refusing them
+    later is what keeps the bank honest: a finding nobody can illustrate
+    is passed over and stays unclaimed, so the next research pass can
+    still put images behind it and it becomes servable. Claiming and then
+    refusing it would burn the research instead.
+    """
+    if require_refs is None:
+        require_refs = refs_required()
     for row in list_findings(brand=brand, unused_only=True, dsn=dsn):
-        if (row.get("score") or 0.0) >= floor:
-            return row
+        if (row.get("score") or 0.0) < floor:
+            continue
+        if require_refs and not bin_for_finding(row["id"], dsn=dsn):
+            continue
+        return row
     return None
 
 
@@ -1205,8 +1515,8 @@ def mark_used(finding_id: int, run_id: str = "", dsn=None) -> None:
 # --- the pass --------------------------------------------------------------
 
 def scout(brand: str = "zeropage", count: int = 4, *, client=None, model=None,
-          lanes=("web", "shorts", "feeds", "instagram", "creators"),
-          judge: bool = False, dsn=None) -> dict:
+          lanes=("web", "shorts", "pinterest", "creators"),
+          judge: bool = False, dsn=None, fetch=None) -> dict:
     """One full research pass. Returns
     {"ok", "findings": [...], "errors": [...], "signals": <int>}.
 
@@ -1249,6 +1559,8 @@ def scout(brand: str = "zeropage", count: int = 4, *, client=None, model=None,
         signals += gather_web(brand, client, model)
     if "shorts" in lanes:
         signals += gather_shorts(brand)
+    if "pinterest" in lanes:
+        signals += gather_pinterest(brand)
     if "feeds" in lanes:
         signals += gather_feeds(brand)
     if "instagram" in lanes:
@@ -1265,13 +1577,63 @@ def scout(brand: str = "zeropage", count: int = 4, *, client=None, model=None,
         return {"ok": False, "findings": [], "signals": 0, "pass_id": pass_id,
                 "bin": [], "errors": errors or ["every lane came back empty"]}
 
+    # Images now come BEFORE digest (2026-09-08, Mike: a spark must relate
+    # to a real reference image, not be invented from crawl text alone) --
+    # the reverse of this pass's old order, where the bin was filled only
+    # after something was banked. stash_images already restricts itself to
+    # the lanes vetted as real photographic evidence (instagram and
+    # pinterest) rather than a marketing thumbnail or an illustration --
+    # see its own big comment. No images this pass means no usable
+    # material to ground a spark in, so this returns exactly like "every
+    # lane came back empty" does above, before spending a digest call on
+    # nothing.
+    bin_rows = stash_images(brand, pass_id, usable, dsn=dsn, fetch=fetch)
+    pass_images = []
+    for row in bin_rows:
+        try:
+            path = refbin.resolve(row["url"])
+            data = path.read_bytes() if path else None
+        except Exception:
+            data = None
+        if not data:
+            continue
+        pass_images.append({"bytes": data, "mime": "image/jpeg",
+                            "title": row.get("title", ""),
+                            "metric": row.get("metric", ""),
+                            "source_url": row.get("source_url", "")})
+    if not pass_images:
+        _close_rag()
+        return {"ok": False, "findings": [], "signals": len(usable),
+                "pass_id": pass_id, "bin": bin_rows,
+                "errors": errors + ["no reference images this pass -- nothing "
+                                    "real to ground a concept in, so none was "
+                                    "written (instagram and pinterest are the "
+                                    "only trusted image lanes; see stash_images)"]}
+
     try:
-        candidates = digest(brand, usable, client, model, count=count, dsn=dsn)
+        candidates = digest(brand, usable, client, model, count=count, dsn=dsn,
+                           images=pass_images)
     except Exception as e:
         _close_rag()
         return {"ok": False, "findings": [], "signals": len(usable),
-                "pass_id": pass_id, "bin": [],
+                "pass_id": pass_id, "bin": bin_rows,
                 "errors": errors + [f"digest failed: {type(e).__name__}: {e}"]}
+
+    # The model is told to cite which IMAGE grounds each spark; this is
+    # the code-side backstop that makes that true, the same pattern
+    # enforce_variety already uses below for the diversity gates -- the
+    # prompt is the request, not the enforcement.
+    grounded, ungrounded = [], []
+    for c in candidates:
+        n = c.get("image")
+        if isinstance(n, int) and 1 <= n <= len(pass_images):
+            c["_image_ref"] = pass_images[n - 1]
+            grounded.append(c)
+        else:
+            ungrounded.append(c)
+    errors += [f"dropped, not grounded in a real image: {c.get('spark', '')[:60]!r}"
+              for c in ungrounded]
+    candidates = grounded
 
     # Novelty, enforced in code. The prompt was given the recent list and
     # asked to avoid it; this is what makes that true.
@@ -1328,15 +1690,8 @@ def scout(brand: str = "zeropage", count: int = 4, *, client=None, model=None,
     _close_rag()
     if not stored:
         return {"ok": False, "findings": [], "signals": len(usable),
-                "pass_id": pass_id, "bin": [],
+                "pass_id": pass_id, "bin": bin_rows,
                 "errors": errors + ["every candidate was a repeat"]}
-
-    # The bin is filled AFTER the digest, and only once something was
-    # banked. Fetching images for a pass that produced no usable spark
-    # would be writing files nothing can ever reference.
-    bin_rows = stash_images(brand, pass_id, usable, dsn=dsn)
-    if not bin_rows:
-        errors.append("no reference images in this crawl")
 
     return {"ok": True, "findings": stored, "signals": len(usable),
             "pass_id": pass_id, "bin": bin_rows, "errors": errors}
@@ -1350,7 +1705,7 @@ def main(argv=None) -> int:
     p_run = sub.add_parser("run", help="one research pass; banks scored sparks")
     p_run.add_argument("--brand", choices=BRANDS, default="zeropage")
     p_run.add_argument("--count", type=int, default=4)
-    p_run.add_argument("--lanes", default="web,shorts,feeds,instagram,creators",
+    p_run.add_argument("--lanes", default="web,shorts,pinterest,creators",
                        help="comma-separated subset to run")
     p_run.add_argument("--judge", action="store_true",
                        help="grade each candidate with the independent RAG-grounded "

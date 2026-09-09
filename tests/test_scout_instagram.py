@@ -241,7 +241,14 @@ def test_the_lane_is_brand_scoped(tmp_db, monkeypatch):
     assert "faceless_guy" in seen and "moto_guy" not in seen
 
 
-def test_instagram_is_in_the_default_lane_set():
+def test_instagram_is_off_by_default_but_still_runs_if_asked_for():
+    """Turned off 2026-09-08 -- Mike's call, until the business is far
+    enough along to justify Meta's App Review for it (see
+    scout_sources_audit_2026-09-08 in project memory). The lane itself
+    is untouched: --lanes web,shorts,pinterest,instagram,creators still
+    runs it, this only changes what a bare `scout run` does."""
     import inspect
     default = inspect.signature(scout.scout).parameters["lanes"].default
-    assert "instagram" in default
+    assert "instagram" not in default
+    [signal] = scout.gather_instagram("zeropage")
+    assert signal["lane"] == "instagram"

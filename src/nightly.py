@@ -261,6 +261,32 @@ DEFAULT_BUDGET_USD = 5.00
 # rather than crossed).
 PAIRS = (("antihero", "antihero"), ("zeropage", "zeropage"))
 
+# HOW MANY SPARKS A NIGHT WALKS, per pair. 2026-09-08, Mike's call: cut
+# to 5 (so 5 antihero + 5 zeropage = 10 runs) until the concepts are
+# worth more than they cost -- "we'll increase it once I see it gets
+# better". Before this the walk took every line in prompts/sparks.txt,
+# which had grown to 20, so a night was 40 runs and roughly $1.70 of
+# Gemini for a queue nobody had finished grading.
+#
+# Deliberately a per-PAIR limit and not a total: a total of five, walked
+# brand by brand, would spend the whole night on antihero and leave Zero
+# Page's queue empty -- the exact failure the paired loop was written to
+# fix.
+SPARKS_ENV = "NIGHTLY_SPARKS"
+DEFAULT_SPARKS_PER_PAIR = 5
+
+
+def sparks_per_pair() -> int:
+    """Read per call, so `NIGHTLY_SPARKS=20 python -m src.nightly walk` is
+    a whole configuration change. Zero or unparseable falls back to the
+    default rather than to a night that walks nothing."""
+    raw = (os.environ.get(SPARKS_ENV) or "").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_SPARKS_PER_PAIR
+    return value if value > 0 else DEFAULT_SPARKS_PER_PAIR
+
 # LangSmith's client retries a failed export and prints a traceback per
 # call. On a night with no network to it that is thousands of lines
 # between the sixteen lines anybody wants. The runner turns tracing off
@@ -319,6 +345,7 @@ def run_one(channel: str, brand: str, spark: str, *, research=True) -> dict:
 
 
 def walk(*, sparks: Optional[list] = None, pairs=PAIRS,
+         per_pair: Optional[int] = None,
          scout_per_brand: Optional[int] = None,
          budget: Optional[float] = None,
          dsn: Optional[str] = None, account_id: Optional[int] = None,
@@ -330,6 +357,11 @@ def walk(*, sparks: Optional[list] = None, pairs=PAIRS,
     quiet_langsmith(log)
     if sparks is None:
         sparks = trigger.load_sparks()
+    limit = per_pair if per_pair is not None else sparks_per_pair()
+    if limit and len(sparks) > limit:
+        log(f"nightly: walking {limit} of {len(sparks)} sparks per brand "
+            f"({SPARKS_ENV} to change)")
+        sparks = sparks[:limit]
     if scout_per_brand is None:
         scout_per_brand = int(os.environ.get("SCOUT_PER_BRAND", "8") or 8)
     if budget is None:

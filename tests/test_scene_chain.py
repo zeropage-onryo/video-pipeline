@@ -139,11 +139,21 @@ def test_no_scene_at_all_is_a_failed_run_not_a_silent_one(tmp_db, seams, monkeyp
 
 # --- the stages the other two callers use -----------------------------------
 
+SEED_REF = "/refs/seed.jpg"
+
+
 def a_scene(path, prompt="a rider suits up", refs=None):
+    # The default carries ONE reference on purpose (2026-09-08): the
+    # board and the Queue now refuse a scene with no photographs behind
+    # it, and these tests are about parking, picking and rendering --
+    # not about grounding. `refs=[]` still builds an ungrounded one, so
+    # the gate itself stays testable; that is why this is a sentinel
+    # check and not `refs or [SEED]`.
     return preprod.save_concept(
         {"title": "Cold Open", "hook": "", "logline": "",
          "shots": [{"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
-                    "desc": "x", "prompt": prompt, "refs": list(refs or [])}]},
+                    "desc": "x", "prompt": prompt,
+                    "refs": [SEED_REF] if refs is None else list(refs)}]},
         brand="zeropage", prompt_template="T", dsn=path, account_id=None)
 
 

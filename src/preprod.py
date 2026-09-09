@@ -30,6 +30,7 @@ ownerless rows still collide, the cascade still fires.
 from __future__ import annotations
 
 import json
+import os
 import re
 from typing import Any, Optional
 
@@ -876,6 +877,133 @@ def set_picked(concept_id: int, picked: bool = True,
 ARCHIVE_REASONS = ("weak concept", "no turn", "no stake", "off-brand",
                    "unshootable", "seen it")
 
+# The reasons a MACHINE archived something, kept apart from the six
+# above on purpose (2026-09-08, Mike's call: no reference, no board).
+#
+# ARCHIVE_REASONS is taste -- every one of them is Michael saying no,
+# and reason_counts tallies them as the board's one idea-level signal
+# about generation quality. NO_REFERENCE is not a verdict at all: it
+# means the scene never got the photographs it was supposed to render
+# against, so nobody ever judged it. Pooling the two would corrupt both
+# numbers at once -- "weak concept" would drown in plumbing failures,
+# and pick_rate would read a grounding bug as Michael passing on ideas.
+#
+# So machine reasons are excluded from pick_rate, shoot_rate and
+# reason_counts, and counted separately by ungrounded_count(). The row
+# itself still survives, exactly as an archived row always has.
+NO_REFERENCE = "no reference"
+MACHINE_REASONS = (NO_REFERENCE,)
+
+# Appended to any rate that must not count a row the machine took
+# off the board. `<> ALL(%s)` with a LIST, never `NOT IN %s` with a
+# tuple: psycopg3 adapts a tuple as a composite row.
+_MACHINE_SQL = "AND coalesce(archive_reason, '') <> ALL(%s)"
+
+
+REQUIRE_REFS_ENV = "ZEROPAGE_REQUIRE_REFS"
+
+
+def refs_required() -> bool:
+    """Is the reference rule on? Mike's call, 2026-09-08: yes.
+
+    THE ONE SWITCH FOR BOTH ENDS OF THE PIPE (reconciled 2026-09-08).
+    The rule grew from two directions on the same day -- `scout.next_spark`
+    and `orchestrator.planner` refuse to GENERATE from a direction with no
+    pictures, `reference_gate` below refuses to keep or RENDER a concept
+    with none -- and two independent switches would have been the worst
+    possible arrangement: turning the rule "off" would still have left
+    half of it on, holding every run at the far end for a reason the near
+    end had been told to ignore. `scout.refs_required` is this function.
+
+    Read per call, the way `orchestrator.gates_mode()` is, so
+    `ZEROPAGE_REQUIRE_REFS=0 python -m src.trigger` is a whole
+    configuration change for one run.
+    """
+    return (os.environ.get(REQUIRE_REFS_ENV) or "1").strip().lower() \
+        not in {"0", "false", "no", "off"}
+
+
+def reference_gate(concept: Optional[dict[str, Any]]) -> Optional[str]:
+    """Why this concept is NOT grounded in reference photos, or None.
+
+    Pure apart from the switch above -- `refs_required()` is asked HERE
+    rather than at each caller so that a fourth door added later cannot
+    forget it, and so "the rule is off" means off everywhere.
+
+    Otherwise: every door asks the same question -- the writers ask it to
+    decide whether a fresh concept belongs on the board at all, the
+    Queue asks it before letting a scene near a spend, and
+    ops/render_queue.py asks it so the manual lane cannot render
+    something the Queue page refuses.
+
+    ONE rule: the shot carries at least one reference photo. Not the
+    keyframe -- `reference_image` is a still this pipeline DREW from the
+    prompt, so requiring it would be checking our own homework, and a
+    text-to-video scene with real photographs behind it is grounded
+    whether or not Nano was up that night. Not the prompt either: by
+    the time a prompt is stored on a shot it has already been through
+    score_prompts, and re-judging it here would be a second bar that
+    disagrees with the first.
+    """
+    if not refs_required():
+        return None
+    if not concept:
+        return "no concept"
+    shots = concept.get("shots") or []
+    if not shots:
+        return "no shot to ground"
+    # get_concept surfaces this at the top level; a raw shots dict is
+    # read straight off the shot. Same list either way.
+    refs = concept.get("refs")
+    if refs is None:
+        refs = shots[0].get("refs") or []
+    if not [r for r in refs if str(r or "").strip()]:
+        return "no reference photos attached"
+    return None
+
+
+def archive_ungrounded(concept_id: int, dsn: Optional[str] = None, *,
+                       account_id: int) -> Optional[str]:
+    """Take a concept with no reference photos off the board. Returns the
+    reason it was archived for, or None if it was grounded and stays.
+
+    Called by both writers straight after they attach references, so an
+    ungrounded scene never reaches the board rather than sitting there
+    looking like a candidate. Archiving, never deleting: the row still
+    counts, still holds its prompt, and still teaches the grade queue
+    what the generator produced -- it is just not something to choose
+    between.
+    """
+    concept = get_concept(concept_id, dsn=dsn, account_id=account_id)
+    if concept is None:
+        return None
+    if concept.get("archived"):
+        return None            # already off the board; don't relabel it
+    if reference_gate(concept) is None:
+        return None
+    set_archived(concept_id, True, dsn=dsn, account_id=account_id,
+                 reason=NO_REFERENCE)
+    return NO_REFERENCE
+
+
+def ungrounded_count(dsn: Optional[str] = None, *,
+                     account_id: int) -> int:
+    """How many concepts the reference gate took off the board.
+
+    Reported separately from reason_counts because it measures the
+    plumbing, not the taste -- and because a number that climbs is the
+    signal that the crawl stopped attaching photos, which otherwise
+    looks exactly like a quiet night.
+    """
+    with connect(dsn) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM shoot_concepts "
+            "WHERE archived_at IS NOT NULL AND archive_reason = ANY(%s) "
+            "AND account_id IS NOT DISTINCT FROM %s",
+            (list(MACHINE_REASONS), account_id),
+        ).fetchone()
+    return int(row["n"] or 0)
+
 
 def set_archived(concept_id: int, archived: bool = True,
                  dsn: Optional[str] = None, *,
@@ -985,8 +1113,9 @@ def reason_counts(dsn: Optional[str] = None, *,
             "FROM shoot_concepts "
             "WHERE archived_at IS NOT NULL AND archive_reason IS NOT NULL "
             "AND account_id IS NOT DISTINCT FROM %s "
-            "GROUP BY archive_reason ORDER BY n DESC, reason",
-            (account_id,),
+            + _MACHINE_SQL +
+            " GROUP BY archive_reason ORDER BY n DESC, reason",
+            (account_id, list(MACHINE_REASONS)),
         ).fetchall()
     return [{"reason": r["reason"], "n": r["n"]} for r in rows]
 
@@ -1008,9 +1137,10 @@ def pick_rate(dsn: Optional[str] = None, *, account_id: int) -> dict[str, Any]:
                    SUM(CASE WHEN picked_at IS NOT NULL THEN 1 ELSE 0 END) AS picked
             FROM shoot_concepts
             WHERE json_array_length(shots_json::json) = 1 AND account_id IS NOT DISTINCT FROM %s
+            """ + _MACHINE_SQL + """
             GROUP BY prompt_hash
             """,
-            (account_id,),
+            (account_id, list(MACHINE_REASONS)),
         ).fetchall()
 
     by_prompt = [
@@ -1057,9 +1187,10 @@ def shoot_rate(dsn: Optional[str] = None, *, account_id: int) -> dict[str, Any]:
                    SUM(shot_done)  AS shot
             FROM shoot_concepts
             WHERE account_id IS NOT DISTINCT FROM %s
+            """ + _MACHINE_SQL + """
             GROUP BY prompt_hash
             """,
-            (account_id,),
+            (account_id, list(MACHINE_REASONS)),
         ).fetchall()
 
     by_prompt = [

@@ -49,14 +49,24 @@ PROVIDERS = ("midjourney", "nano", "higgsfield")
 # the Soul path stays callable but is no longer where his face comes from.
 LIKENESS_SLUG = "michael"
 LIKENESS_PHOTOS = tuple(p.strip() for p in os.environ.get(
-    "LIKENESS_PHOTOS", "IMG_0586.JPG,IMG_0593.JPG,IMG_0599.JPG").split(",") if p.strip())
+    # 2026-09-07: the old default (IMG_0586/0593/0599) was three wide,
+    # full-body shots where his face is a small fraction of the frame --
+    # AND all three happen to have him in the moto jacket, so identity lock
+    # was drifting to a generic archetype AND dragging the jacket into every
+    # scene regardless of what it called for. 07 is an actual tight
+    # headshot; 08 is a clear front angle in a plain shirt, no jacket.
+    "LIKENESS_PHOTOS",
+    "07-headshot-frontal-neutral.jpg,08-frontal-indoor-seated.jpg,IMG_0593.JPG",
+).split(",") if p.strip())
 LIKENESS_MODEL = os.environ.get("NANO_LIKENESS_MODEL", "gemini-3-pro-image-preview")
 LIKENESS_OPENER = (
     "This is the same man as in the attached reference photos: reproduce his "
-    "face exactly -- same features, skin, hair, brows, the thin sparse "
-    "mustache and light stubble -- and his exact jacket where the scene "
-    "keeps it. New scene, new framing, new light: do not copy the photos' "
-    "backgrounds or poses. ")
+    "face exactly -- same features, skin, hair, brows, and his even light "
+    "stubble across the whole jaw and upper lip. He does NOT have a grown or "
+    "shaped mustache -- do not add one. Do not default to any particular "
+    "jacket or outfit from the reference photos unless the scene text below "
+    "specifically calls for it. New scene, new framing, new light, new "
+    "wardrobe: do not copy the photos' backgrounds, poses, or clothing. ")
 
 
 def enabled() -> bool:

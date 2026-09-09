@@ -113,6 +113,15 @@ python3 ops/render_queue.py --account <slug> [--provider runway] list
 python3 ops/render_queue.py --provider runway --account <slug> import \
     --concept N --shot 1 --file clip.mp4 --model gen4_turbo --duration 10
 
+# THE REFERENCE PHOTOS — the bytes behind every ref URL, pushed to R2 so they
+# resolve on the deployed site too (characters/props/locations/data/refs are
+# gitignored AND dockerignored). Re-runnable; run it after adding photos to a
+# folder BY HAND -- the app's own upload routes mirror as they save.
+venv/bin/python ops/backfill_reference_photos_r2.py
+# ... then rewrite refs already stored on a shot to those public URLs. Reports
+# first; --write to do it. A ref whose bytes are not in the bucket is left alone.
+venv/bin/python -m ops.canonicalize_shot_refs [--account <slug>] [--write]
+
 # THE DATA COPY — data/pipeline.db (SQLite) into Postgres, once, at cutover.
 # Refuses a non-empty target and never guesses the DSN; --dry-run counts.
 venv/bin/python -m ops.copy_sqlite_to_postgres --dsn "$DATABASE_URL" [--dry-run] [--truncate]
@@ -252,6 +261,41 @@ Three parts to closing it:
 `_resolve_asset_photo` like any asset photo). An uploaded photo used to ground one Gemini call
 and then cease to exist, so it could never reach the keyframe or the clip.
 
+**A REFERENCE URL IS THE PUBLIC ONE (2026-09-08, Mike: "the reference photos aren't
+appearing").** A Queue card showed four empty tiles above a scene whose shot carried four
+refs. The refs were right; the URLs were `/characters/michael/photo/...` and
+`/refs/<sha>.jpg`, which are true only on the machine holding the folder —
+`characters/`, `props/`, `locations/` and `data/refs/` are gitignored AND dockerignored, and
+`data/` on Fly is a fresh volume, so the deployed site 404s every one of them. Worse than the
+tiles: a renderer running there reaches for a face it cannot fetch, and the card still says
+the clip anchors on a reference.
+
+So what goes ON a shot is `asset_shelf.canonical_url(...)` — the public R2 URL when R2 is
+configured, the local route when it is not. Three parts, and the third is the one to keep in
+mind when adding a fourth writer:
+
+- **One parser, `asset_shelf.parse_ref`.** Half a dozen callers each did
+  `url.strip("/").split("/")` and read `parts[0]` as the kind —
+  `shootgen.reference_label`'s caption binding, `in_scope`'s picked assets,
+  `picked_locations`' room lock, `resolve_photo`'s wall. An absolute URL splits with
+  `parts[0] == "https:"`, so every one of them fails **quietly**: a caption not written, a
+  room not locked, a face not attached. They all ask `parse_ref` now, which reads both shapes.
+- **The bytes go up where they are written.** `refbin.mirror_to_r2` on every bin save (a
+  composer upload, a scouted image), `api._mirror_photos_to_r2` on every asset-photo upload.
+  Both best-effort: an unconfigured or unreachable R2 leaves the local file exactly as it was.
+  **Photos dropped into `characters/<slug>/` BY HAND still need
+  `ops/backfill_reference_photos_r2.py`** — it is re-runnable and skips nothing.
+- **The old rows keep working two ways.** `ops/canonicalize_shot_refs.py` rewrote the 104
+  live concepts that carried local paths (a ref is only rewritten when `storage.key_exists`
+  says the bytes are really there; 12 refs on #350/#351 point at bin files that exist nowhere
+  and were left alone). And `app/main.py`'s photo routes plus the `/refs` mount fall back to a
+  302 into R2 when the local file is missing, so a path written before today, or typed by
+  hand, still renders on the deployed site.
+
+`resolve_photo` still resolves an R2 URL back to the local file when this machine has it, so
+his Mac reads its own photos off disk rather than over the network; `_photo_bytes` in
+`app/api.py` is the fetch fallback for the machine that does not.
+
 **`.heic` decodes now** (`pillow-heif`, registered in `_to_jpeg`, degrading if absent), and
 `_best_photo` prefers a natively-decodable sibling regardless. `IMAGE_EXTENSIONS` has always
 listed `.heic` and the gallery has always shown it, but Pillow could not read one — so a HEIC
@@ -318,8 +362,24 @@ row is called:
   with the merge — denying a concept is what the Dev Studio's grade queue does, against
   every archived row, with the teach-to-RAG shelves behind it.
 - **Queue** is the spend gate. Rendering is the only step that costs money, so it is the
-  only one with a gate in front of it, and **approving in Queue is what calls Runway**
-  (`POST /api/queue/{id}/approve`). `GET /api/queue/pending` is derived from the rows
+  only one with a gate in front of it, and **approving in Queue is what calls the
+  renderer** (`POST /api/queue/{id}/approve`). **Which renderer is picked on the card**
+  (2026-09-08, Mike's call): the route dispatches through `providers.VIDEO_PROVIDERS`, so
+  every registered adapter — Runway, fal (kling / ltx / wan / seedance), Higgsfield, Veo —
+  is reachable from it, with a model, a length and a frame chosen per approve. It named
+  `runway` in the route body before that, which meant the one surface that spends money
+  could reach one of four working adapters, and a concept shootgen planned for KLING was
+  rendered on Kling by the nightly graph and on Runway by this button, silently. The
+  card's default is now the shot's own `tool` through `providers.platform_default`, the
+  same binding `orchestrator.generate_render`'s connectors dict holds, so the two doors
+  cannot disagree about what a tool name means. `providers.render_options()` is the menu
+  and is a PROJECTION of each adapter's own dated spec table, never a copy;
+  `check_render_choice()` REFUSES a length or a frame outside the model's legal set rather
+  than clamping it (the adapters clamp internally — that is their contract with the graph,
+  which has no human to refuse to). Every gate that was there is unchanged and in the same
+  order: no prompt, not queued, no reference photos, the pick recorded before the spend,
+  and the per-run `*_SPEND_OK` approval still checked inside the adapter's own
+  `generate_video` so no caller can spend around it. `GET /api/queue/pending` is derived from the rows
   (**parked or picked**, not archived, no `media_url`) rather than from the jobs registry,
   which is an in-process dict a restart clears — an approval queue that quietly emptied
   itself on restart would be a queue that lies. The live job registry stays underneath it,
@@ -367,11 +427,21 @@ new `keyframe` node sits between the prompt gate and the (still dry) render:
   with its still, and the hold row says what the night produced instead of describing the
   stub.
 
-**The prompt gate is what earns a keyframe.** Only a scene whose prompt cleared the judge
-(`score_prompts`, bar `prompt_gate_min`, fails closed) gets an image — 8 sparks × 2 brands
-is 16 runs a night against `NANO_DAILY_CAP` of 20, which is also shared with every
-Director render. A keyframe that fails parks the scene as text-to-video with the reason on
-its card. `ZEROPAGE_KEYFRAME=0` turns the step off without touching the graph.
+**THE NIGHT NO LONGER DRAWS ANYTHING (2026-09-08, Mike's call).** `ZEROPAGE_KEYFRAME=0`
+is the standing posture, not a temporary cut: a walk that draws every scene spends the
+whole Nano cap on concepts nobody has looked at, and the night of 09-07 produced 75 stills'
+worth of scenes with 0 stills and nobody the wiser. **The PICK draws the still instead** —
+`scene_chain.draw_on_pick`, called from the board (`POST /api/concepts/{id}/pick`, as a
+background job) and from the MCP `pick`, guarded by one shared `scene_chain.pick_skip_reason`
+so the two doors cannot drift into billing a scene twice. It is skipped for a scene that
+already has a `reference_image` (re-picking must not re-bill, and Director's own keyframe is
+the one a person chose) and `ZEROPAGE_KEYFRAME_ON_PICK=0` turns it off. `NANO_DAILY_CAP` is
+60: a pick draws one still per BEAT, not one per scene.
+**A walk is 5 sparks × 2 brands = 10 runs** (`NIGHTLY_SPARKS`, cut from every line of
+sparks.txt — 20 — on the same day, "we'll increase it once I see it gets better").
+The historical note: while the night did draw, only a scene whose prompt cleared the judge
+(`score_prompts`, bar `prompt_gate_min`, fails closed) earned an image, and a keyframe that
+failed parked the scene as text-to-video with the reason on its card.
 
 **THE GATES ARE INVERTED (2026-09-07, Mike's call).** Measured over the graded holds, the
 prompt gate agreed with his own would-post verdict **~38% of the time** — coin-flip
@@ -801,10 +871,17 @@ is yours, in Resolve, by hand.
   `scout`, and `data/pipeline.db` stays the one source of truth — a synced second store is
   the mistake `asset_shelf` exists to fix. The read/decide tools (`board`, `idea`,
   `search`, `capture`, `pick`, `shoot`, `archive`, `add_spark`, `tonight`, `sparks`,
-  `images`, `stats`, `job`) are always on; **nothing on them spends**. Picking still only
-  puts a concept in front of the Queue, and approving there is still what calls Runway,
-  still on this machine — the single spend gate is load-bearing, and a second door onto it
-  from a phone is exactly how it stops being one. **`shoot` records that a concept got
+  `images`, `stats`, `job`) are always on. **`pick` is the ONE that spends, and only
+  cents** (2026-09-08, Mike's call — a deliberate amendment to "nothing on them spends",
+  not an oversight): it draws the scene's keyframe through `scene_chain.draw_on_pick`,
+  because the night stopped drawing and the pick is what earns a still, so a pick from a
+  phone that produced nothing meant the two doors disagreed about what picking means. A
+  failure comes back as `keyframe.note` on the card and NEVER as a tool error — an agent
+  that sees an error retries the identical call, and the retry is what would spend twice.
+  Everything else there still spends nothing. Picking still only
+  puts a concept in front of the Queue, and approving there is still what calls the
+  renderer, still on this machine — the single spend gate for the CLIP is load-bearing, and a second
+  door onto it from a phone is exactly how it stops being one. **`shoot` records that a concept got
   MADE, by any means** (2026-09-03): the render lane, Higgsfield, Mike's own studio, a
   camera. `preprod.mark_shot` had existed since the start and nothing reachable from a
   phone called it, so `shoot_rate` read 0.0% across 52 concepts while pieces shipped by
@@ -1113,12 +1190,39 @@ is yours, in Resolve, by hand.
   every mismatch surfaces as a visible warning on a saved result. Nothing is rejected: the
   checks exist because models hallucinate rooms and vocabularies, and the human
   deciding needs to see that, not because output "doesn't count" until it validates.
+  (ONE exception since 2026-09-08: the reference gate above rejects, because "was this scene
+  handed photographs" is a fact about the row rather than a judgment about the writing. If you
+  are adding a second exception, you are probably not — write a warning instead.)
   (The orchestrator adds one twist: it *uses* the warnings to retry, but the saved result
   still carries them.)
-- **Grounded in what exists — grounding shapes, it doesn't gate.** Every stage generates *from*
-  real material: the cast and props on file, the reference library, proven winners, and the
-  photos attached to the run. A mismatch is a warning, and a missing grounding source degrades
-  to an ungrounded run with a note.
+- **Grounded in what exists — and since 2026-09-08, NO PHOTOS MEANS NO BOARD.** Every stage
+  generates *from* real material: the cast and props on file, the reference library, proven
+  winners, and the photos attached to the run. A mismatch is still only a warning, and a missing
+  grounding SOURCE still degrades to an ungrounded run with a note — the rule below about
+  advising rather than rejecting is intact for everything except this one thing.
+  **The exception, and it is deliberate (Mike's call).** A finished scene carrying no
+  `shot["refs"]` at all is archived the moment it is written, with `preprod.NO_REFERENCE`, and
+  can never reach the Queue. `preprod.reference_gate(concept)` is the single predicate; the two
+  writers (`scene_chain.run`, `orchestrator.gen_concept`) apply it, and `app/api.py`'s `_waiting`
+  + `queue_approve` and `ops/render_queue.py`'s `pending` all ask it again at the spend.
+  `ops/archive_ungrounded.py` is the repair pass for rows written before it (87 archived on the
+  day, of 152 live).
+  What made this worth breaking the convention for: the board was showing cards reading
+  "KEYFRAMED · AWAITING APPROVAL IN QUEUE" beside "NO REFERENCES". That keyframe is a still
+  Nano drew **from the prompt**, so approving one spends a Runway credit anchoring the clip on
+  the pipeline's own guess — and the whole point of the reference layer is that it should not.
+  Hence `reference_gate` reads `refs` and NOT `reference_image`: a frame this pipeline drew is
+  not evidence that anything grounded it.
+  It deliberately does **not** check the prompt as well. A prompt is on `shots_json` only
+  because `score_prompts` put it there, and a second bar at the spend gate would be a second
+  opinion disagreeing with the first — see "THE GATES ARE INVERTED" for why re-arming that judge
+  is a decision somebody makes on purpose.
+  `NO_REFERENCE` is a MACHINE reason, kept out of `ARCHIVE_REASONS` and excluded from
+  `pick_rate`, `shoot_rate` and `reason_counts` (`preprod.MACHINE_REASONS`). Nobody judged these
+  concepts, so counting them as ones Michael passed over would read a grounding failure as a
+  verdict on the writing — and `pick_rate` is the number that decision rests on.
+  `preprod.ungrounded_count` reports them separately, which is the figure to watch: it climbing
+  means the crawl stopped attaching photos, and that otherwise looks exactly like a quiet night.
   **Rooms are material you may pick, not the frame you must generate inside**
   (2026-08-31, Mike's call, both brands). Concepts used to be generated *from* photographed
   spaces, because a camera can only film where you actually are. Since 2026-08-20 every shot is

@@ -163,9 +163,104 @@ def photos_for(kind: str, slug: str) -> list:
 URL_ROOTS = {"characters": "character", "props": "prop", "locations": "location"}
 
 
+def parse_ref(url: str) -> Optional[dict]:
+    """Any reference URL this pipeline stores -> what it points at.
+
+    THE one parser (2026-09-08). A reference used to travel in exactly
+    one shape, so half a dozen callers each did
+    `url.strip("/").split("/")` and read parts[0] as the kind:
+    reference_label's caption binding, in_scope's picked assets,
+    picked_locations' room lock, resolve_photo's wall. The moment
+    photo_url started returning an R2 URL for the same photo, every one
+    of those silently stopped matching -- `https://pub-x.r2.dev/...`
+    splits with parts[0] == "https:" -- and each failure is quiet: a
+    caption not written, a room not locked, a face not attached. So the
+    shapes are read in ONE place and the callers ask for fields.
+
+    Returns {"kind": "refs", "filename": ...} for a bin image, or
+    {"kind": "character"|"prop"|"location", "plural", "slug",
+    "filename"} for an asset photo. None for anything else -- a render
+    URL, a data: URI, a path that climbs.
+    """
+    from urllib.parse import urlparse
+
+    raw = (url or "").split("?")[0].strip()
+    if not raw:
+        return None
+    if "://" in raw:
+        raw = urlparse(raw).path
+    parts = [p for p in raw.strip("/").split("/") if p]
+    if not parts or any(p in (".", "..") for p in parts):
+        return None
+    # the local route carries a "photo" segment the R2 key does not
+    if len(parts) == 4 and parts[2] == "photo":
+        parts = [parts[0], parts[1], parts[3]]
+    if len(parts) == 2 and parts[0] == "refs":
+        return {"kind": "refs", "plural": "refs", "slug": "",
+                "filename": parts[1]}
+    if len(parts) == 3 and parts[0] in URL_ROOTS:
+        return {"kind": URL_ROOTS[parts[0]], "plural": parts[0],
+                "slug": parts[1], "filename": parts[2]}
+    return None
+
+
+def r2_key(url: str) -> Optional[str]:
+    """The R2 key a reference URL's bytes live under -- the exact scheme
+    photo_url() builds and ops/backfill_reference_photos_r2.py uploads.
+    None for a URL with no key, and for one that is already absolute:
+    canonicalising an R2 URL a second time is a no-op, not a nesting."""
+    if (url or "").startswith(("http://", "https://", "data:")):
+        return None
+    ref = parse_ref(url)
+    if not ref:
+        return None
+    if ref["kind"] == "refs":
+        return f"refs/{ref['filename']}"
+    return f"{ref['plural']}/{ref['slug']}/{ref['filename']}"
+
+
+def canonical_url(url: str) -> str:
+    """The form of a reference URL that is true on EVERY machine.
+
+    A stored `/characters/michael/photo/x.jpg` is only true where that
+    folder is -- characters/, props/, locations/ and data/refs/ are all
+    gitignored and dockerignored, so the deployed site 404s every one of
+    them (2026-09-08, Mike: "the reference photos aren't appearing" --
+    four empty tiles on a Queue card whose shot carried four refs). What
+    goes ON a shot is therefore the public R2 URL when R2 is on, since
+    that is the same string on his Mac, on Fly, and in a renderer's
+    fetch. Unchanged when R2 is off, so a local-only setup keeps working.
+
+    The bytes must already BE in R2; this is a string map, not an upload.
+    Callers that write a NEW file (refbin.save, the upload handlers) push
+    it up first."""
+    key = r2_key(url)
+    if not key:
+        return url
+    from . import storage
+    return storage.url_for_key(key) or url
+
+
 def photo_url(kind: str, slug: str, filename: str) -> str:
-    """The URL a photo on disk rides on. The inverse of resolve_photo."""
+    """The URL a photo on disk rides on. The inverse of resolve_photo.
+
+    2026-09-08 (Mike, "images don't load on the deployed site"): a
+    reference photo saved on one machine (usually his Mac) never
+    reaches the Fly deploy's own disk -- characters/props/locations are
+    both gitignored and dockerignored, and there's no volume for them.
+    When R2 is configured, every photo is pushed there by the upload
+    handlers (app/api.py) or a one-off backfill (ops/backfill_reference_
+    photos_r2.py), so the URL a photo rides on can just be the public R2
+    URL directly -- true on every machine, not just the one that saved
+    it. Falls back to the local `/characters/.../photo/...` route (still
+    served by app/main.py) when R2 isn't set, so nothing breaks for a
+    local dev setup that never turns R2 on.
+    """
     plural = next(k for k, v in URL_ROOTS.items() if v == kind)
+    from . import storage
+    r2_url = storage.url_for_key(f"{plural}/{slug}/{filename}")
+    if r2_url:
+        return r2_url
     return f"/{plural}/{slug}/photo/{filename}"
 
 
@@ -198,27 +293,30 @@ def resolve_photo(url_path: str, roots=None, refs_dir=None):
 
     roots = roots if roots is not None else photo_roots()
     refs_root = refs_dir if refs_dir is not None else refbin.REFS_DIR
-    clean = (url_path or "").split("?")[0].strip("/")
-    if not clean:
+    # The shape comes from parse_ref, which reads the local route AND
+    # the public R2 URL of the same photo (2026-09-08) -- a canonicalised
+    # ref should still resolve to the file on the machine that HAS it,
+    # rather than making his own Mac fetch its own photos over the
+    # network. The wall below is unchanged and stays here: parse_ref
+    # says what a URL means, this says what it is allowed to reach.
+    ref = parse_ref(url_path)
+    if not ref:
         return None
-    parts = clean.split("/")
 
     # /refs/<sha>.jpg -- composer uploads and scouted research images
-    if len(parts) == 2 and parts[0] == "refs":
+    if ref["kind"] == "refs":
         root = Path(refs_root).resolve()
-        target = (root / parts[1]).resolve()
+        target = (root / ref["filename"]).resolve()
         if target.parent != root or not target.is_file():
             return None
         return target
 
     # /<characters|props|locations>/<slug>/photo/<file>
-    if len(parts) != 4 or parts[2] != "photo":
-        return None
-    base = roots.get(parts[0])
+    base = roots.get(ref["plural"])
     if base is None:
         return None
     root = Path(base).resolve()
-    target = (root / parts[1] / parts[3]).resolve()
+    target = (root / ref["slug"] / ref["filename"]).resolve()
     if root not in target.parents or not target.is_file():
         return None
     return target
@@ -293,9 +391,9 @@ def in_scope(text: str, refs, catalogue_items: list) -> list:
     named = shootgen.named_assets(text or "", catalogue_items)
     picked_slugs = set()
     for ref in refs or []:
-        parts = str(ref).split("?")[0].strip("/").split("/")
-        if len(parts) >= 2 and parts[0] in ("locations", "characters", "props"):
-            picked_slugs.add(parts[1])
+        parsed = parse_ref(str(ref))
+        if parsed and parsed["kind"] != "refs":
+            picked_slugs.add(parsed["slug"])
     if not picked_slugs:
         return named
     named_names = {a["name"] for a in named}

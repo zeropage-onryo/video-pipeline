@@ -2,6 +2,22 @@
 
 Parked ideas and next builds. Nothing here is in progress.
 
+## 0. Reference tiles are full-size photos  (2026-09-08, small)
+Now that a ref is a public R2 URL, the Queue and board cards draw the
+ORIGINAL file — `characters/michael/IMG_0586.JPG` is 4.6 MB, and a card
+carries four of them. Before today they were `?thumb=1`, a cached 480px
+JPEG the app made; R2 has no such handler, so the thumbnail step was lost
+along with the 404s.
+
+The shape, when it starts to hurt on his phone: upload a 480px variant
+under `thumbs/<same key>` in `ops/backfill_reference_photos_r2.py` and in
+both mirror helpers, add `asset_shelf.thumb_url(ref)` (thumbs key when R2
+is on, `?thumb=1` when it is not), and serve a `ref_thumbs` list beside
+`refs` for `queue.js` / `scenes.js` to draw. Deliberately NOT sharing one
+list: `refs[0]` is what Runway anchors the clip on, and anchoring a clip
+on a thumbnail is the kind of quiet downgrade this reference layer keeps
+being bitten by.
+
 ## 1. UI readability pass  (parked — hold until Mike says go)
 Make the app simpler and easier to read. Same density problem on both pages:
 dense monospace prompt blocks, warnings, shot lists, and multiple button
@@ -921,3 +937,89 @@ mark gets entered).
 Not scoped yet — this is a direction, not a build plan. Revisit after #1 (UI
 readability pass) and #13-D/B are settled, since the reason-tag vocabulary and
 the `shot` column both feed the same review moment this would touch.
+
+## 16. Media storage at Runway-scale — CDN, signed URLs, video transcoding  (parked — Mike's ask, 2026-09-08: getting real users soon, no time to build this now)
+Context: the same session that found the deployed site showing blank images
+everywhere (`characters`/`props`/`locations` are both gitignored and
+dockerignored with no volume, and `render_assets.media_url` fell back to a
+bare local path with R2 unconfigured — see `ops/r2-setup.md`) also asked what
+a site like Runway does for storage at scale. The answer split into "already
+have it once R2 credentials are in" and "genuinely later" — recorded here so
+neither gets confused with the other when this gets picked back up.
+
+**Already shipped, just needs Mike's R2 credentials to turn on** (not part of
+this backlog item — see `ops/r2-setup.md` and the two backfill scripts):
+object storage as the source of truth (`src/storage.py`), `asset_shelf.
+photo_url()` and the upload handlers in `app/api.py` pushing new reference
+photos to R2, `render_assets.update_media_url()` for repointing old local
+renders. CDN caching comes free the moment the bucket is served off a real
+custom domain instead of the default `r2.dev` one (Cloudflare's own edge
+network) — no separate CDN to build.
+
+**What's actually parked here, in priority order once this gets picked up:**
+
+- **Signed/private URLs for reference photos.** The one real gap: R2 URLs
+  as wired are public — fine for generated renders meant to be posted, wrong
+  for the character/prop/location photos the `.gitignore` itself already
+  calls "personal reference photos -- not public yet." Needs a presigned URL
+  (boto3 `generate_presigned_url`, R2 supports the same S3-compatible call)
+  with an expiry, swapped in on those three routes specifically. Smallest of
+  the parked items — maybe an hour once it's prioritized.
+- **Video transcoding / HLS-DASH streaming.** Solves a problem Zero Page
+  doesn't have yet (adaptive bitrate, instant-start playback) — worth it once
+  clips get longer or volume is high enough that a plain MP4 download stops
+  being fast enough. Real infra work (transcode step, packager, different
+  player) — do not start this speculatively.
+- **Lifecycle / cost rules** (auto-demote or expire old unused renders) — an
+  R2 dashboard setting, not code, whenever the bucket is actually costing
+  something.
+- **Multi-region replication** — a non-issue until there's a real, globally
+  spread user base; Cloudflare's edge already covers the caching half of
+  this for free regardless.
+
+Not scoped into tickets yet — revisit once there are real users generating
+enough volume that the current R2-only setup (public URLs, no transcoding)
+visibly isn't enough, not before.
+
+## 17. Pinterest reference lane (`gather_pinterest`)  (parked — Mike's ask, 2026-09-08: backlogged pending domain + Pinterest app review)
+Context: `src/scout.py`'s `gather_pinterest` and `src/imagesearch.pinterest()`
+have been code-complete and dark since 2026-09-08 (see
+`.research/scout_sources_audit_2026-09-08.md`) — `pinterest` replaced the
+generic RSS `feeds` lane in `scout()`'s default set, and pins earn the same
+trust as Instagram in `stash_images` (own curated source, not an article's
+illustration of one). `ops/pinterest_token.sh` (full OAuth flow) and
+`ops/pinterest_token_paste.sh` (paste a dashboard-generated token directly)
+are both in place and tested end-to-end mechanically.
+
+What's actually blocking it is Pinterest's own app review, not the code:
+
+- The developer app ("ZeroPage-AI", App ID 1609439) is stuck in
+  **trial-access-pending**. The app secret key is unavailable until this
+  clears, and it's the same review that bounced the "Company website" field
+  ("Make sure ... its URL is registered with an entity in your company") —
+  `https://zeropage-studio.fly.dev/ui` is a shared Fly.io subdomain, not a
+  domain registered to Mike/ZeroPage, and it's also behind the sign-in wall.
+- Fix requires a real domain (candidates floated: `zeropagestudio.com`,
+  `zeropage.studio`, `zeropageai.com`) pointed at the Fly app — DNS + `fly
+  certs add` + `SITE_URL` — then resubmitting the app with the corrected
+  Company website field. Mike doesn't own a domain yet; this needs a
+  purchase only he can make.
+- Separately: a "Production Limited" token generated from the app's
+  Configure page authenticates with `HTTP 401 {"code":3,"message":"Your
+  application consumer type is not supported, please contact support."}` —
+  a **Sandbox** token generated the same way authenticates fine but only
+  returns fake test-account data, not Mike's real board. Unclear whether
+  this clears automatically once trial-access review passes, or needs its
+  own support ticket (Pinterest's rejection email points at Help Center →
+  Pinterest API → Developer Tools for exactly this).
+- `app/templates/privacy.html` + the `/privacy` route on `zeropage-studio`
+  were added 2026-09-08 so there's a real, branded privacy-policy URL once
+  the app has a real domain to serve it from — not deployed yet, sitting
+  alongside other uncommitted changes in this working tree.
+
+Next actions, once picked back up: (1) buy a domain, tell Claude/whoever's
+driving which one, wire it to Fly; (2) resubmit the Pinterest app with the
+new Company website URL; (3) if the Production-Limited-token error persists
+after approval, file the Pinterest support ticket. Then run
+`ops/pinterest_token_paste.sh` (or the full `pinterest_token.sh` flow) for
+real and set `PINTEREST_BOARD_ANTIHERO` / `PINTEREST_BOARD_ZEROPAGE`.

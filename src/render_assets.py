@@ -168,6 +168,29 @@ def record_best_effort(**kwargs) -> dict[str, Any]:
                                       "error": str(exc)}}
 
 
+def update_media_url(id: int, media_url: str, dsn: Optional[str] = None, *,
+                     account_id: Optional[int]) -> None:
+    """Repoint an existing row at a new media_url (2026-09-08) -- used by
+    ops/backfill_renders_r2.py after it uploads the local file a row
+    still points at (a bare `/renders/...` path, only ever resolvable on
+    the machine that rendered it) to R2 and gets back a public URL that
+    works everywhere, the deployed Fly site included.
+
+    `account_id` is required and not optional-with-a-default (2026-09-09,
+    caught by tests/test_tenancy.py): a write addressed by bare id is one
+    caller's typo away from repointing another tenant's render, and the
+    one caller that legitimately spans accounts already reads the row --
+    so it can hand back that row's own owner rather than being trusted to
+    remember. A row whose owner does not match is simply not updated.
+    """
+    init(dsn)
+    with db.connect(dsn) as conn:
+        conn.execute(
+            "UPDATE generated_assets SET media_url = %s WHERE id = %s "
+            "AND account_id IS NOT DISTINCT FROM %s",
+            (media_url, id, account_id))
+
+
 def list_all(dsn: Optional[str] = None, *,
              account_id: Optional[int]) -> list[dict[str, Any]]:
     """This account's generated assets, newest first."""

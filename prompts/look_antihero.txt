@@ -22,15 +22,25 @@ and prompt for this brand matches THIS, whatever world it is set in.
             hazmat with a cracked visor; a soaked undershirt; a 70s
             waxed jacket) and changes what covers his face — helmet, mask,
             respirator, hood, rain, blood, age.
-  LIKENESS  Michael: early thirties, fair skin, soft rounded face, thin
-            sparse mustache with light stubble, medium dark-brown hair loosely
-            parted to one side, dark straight brows. Wardrobe when the scene
-            keeps it: the white cafe-racer jacket with red quilted shoulders,
-            black sleeves and a round chest patch. Write this line into every
-            prompt that has him in it; the PHOTOS carry the face, the line
-            stops the hair and wardrobe drifting. (Corrected 2026-09-06 --
-            the old "dark mustache, wavy hair swept back, strong brow" line
-            described the wrong man.)
+  LIKENESS  Michael: early thirties, fair skin, an EVEN light stubble across
+            the whole jaw and upper lip -- NOT a grown or shaped mustache, he
+            does not have one -- medium dark-brown hair, side-swept, dark
+            straight brows, hazel-brown eyes. Wardrobe: no default jacket.
+            The white cafe-racer jacket (red quilted shoulders, black
+            sleeves, round chest patch) is ONE option among the CAST line's
+            per-world wardrobes above -- reach for it only when a scene
+            specifically wants it, never automatically. Write this line into
+            every prompt that has him in it; the PHOTOS carry the face, the
+            line stops the hair drifting.
+  NOTE      (2026-09-07) the prior LIKENESS wording was also wrong -- it is
+            why every EIGHT EXITS keyframe grew a mustache he does not
+            have. Verified against a real tight headshot,
+            characters/michael/07-headshot-frontal-neutral.jpg -- the old
+            reference set (IMG_0586/0593/0599) was three wide, full-body
+            shots with no close crop of his face, which is likely WHY the
+            wording drifted wrong twice: with little facial detail in the
+            photos to lock onto, the text line was doing most of the work.
+            refgen.LIKENESS_PHOTOS now leads with that headshot.
   FRAMING   whenever Michael is the subject his face is at least a third of
             frame height -- medium or closer, the world BEHIND him. The
             SCALE line above is for world shots without him; a face at 50px

@@ -25,6 +25,7 @@ from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import (
     FileResponse,
+    HTMLResponse,
     PlainTextResponse,
     RedirectResponse,
     Response,
@@ -32,6 +33,7 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from google import genai
+from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from src import accounts as accounts_mod
@@ -47,6 +49,7 @@ from src import (
     instagram,
     ledger,
     locations,
+    manual_lane,
     preprod,
     rag,
     render_assets,
@@ -197,7 +200,45 @@ class NoCacheStaticFiles(StaticFiles):
         return response
 
 
+def r2_fallback(key: str):
+    """A redirect to the same file in R2, or None.
+
+    Registered behind every route that serves a reference photo off
+    local disk. characters/, props/, locations/ and data/refs/ are
+    gitignored and dockerignored, and data/ on Fly is a fresh volume --
+    so on the deployed site NONE of these files exist and every
+    reference tile came back 404 (2026-09-08, Mike: "the reference
+    photos aren't appearing"). New rows now store the canonical R2 URL
+    outright; this covers the rest -- every row written before today,
+    every /ui gallery, and any hand-typed path -- with a 302 rather than
+    a second copy of the serving logic.
+    """
+    from src import storage
+
+    url = storage.url_for_key(key)
+    return RedirectResponse(url, status_code=302) if url else None
+
+
 app = FastAPI(lifespan=lifespan)
+
+# CORS: only needed once the frontend is on a different origin than this
+# API (e.g. a Vercel-hosted refine app calling the Fly-hosted API). Same-
+# origin deployments (frontend served from this app) don't need this at
+# all, but it's harmless to leave on. Origins come from FRONTEND_ORIGINS
+# in .env, comma-separated, no trailing slashes -- empty by default so
+# nothing cross-site is allowed until you set it.
+_frontend_origins = [
+    o.strip() for o in os.environ.get("FRONTEND_ORIGINS", "").split(",") if o.strip()
+]
+if _frontend_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_frontend_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
 # Starlette session middleware: used ONLY for the OAuth state/nonce dance
 # (Authlib stores its CSRF state here). The login session itself is the
 # separate signed zp_session cookie in app/auth.py.
@@ -214,7 +255,22 @@ app.mount("/renders", NoCacheStaticFiles(directory=str(RENDERS_DIR)), name="rend
 # call and nothing after it.
 UPLOAD_REFS_DIR = PROJECT_ROOT / "data" / "refs"
 UPLOAD_REFS_DIR.mkdir(parents=True, exist_ok=True)
-app.mount("/refs", NoCacheStaticFiles(directory=str(UPLOAD_REFS_DIR)), name="refs")
+class RefsStaticFiles(NoCacheStaticFiles):
+    """The bin, with R2 behind it. A composer upload or a scouted image
+    saved on one machine is not on the next one's disk; the bytes were
+    mirrored up at save time (refbin.mirror_to_r2), so a miss here is a
+    redirect rather than a broken tile."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        if response.status_code == 404 and "/" not in path and path not in (".", ".."):
+            redirect = r2_fallback(f"refs/{path}")
+            if redirect is not None:
+                return redirect
+        return response
+
+
+app.mount("/refs", RefsStaticFiles(directory=str(UPLOAD_REFS_DIR)), name="refs")
 # Every /api route now requires a session -- the /ui shell is gated, so
 # its backing endpoints are too (401 JSON, which shared.js surfaces as a
 # stateline). The legacy /studio pages stay open as the dev console.
@@ -263,6 +319,14 @@ def ui(request: Request):
     shell, client-side views, every control backed by /api and gated by
     /api/capabilities. Requires a session; the active brand comes from
     real membership (current_account), not the raw cookie.
+
+    One block of the page is decided HERE rather than by a data-cap
+    attribute: the Queue's manual-lane section. `data-cap` hides markup
+    that was still served, and this lane is operator-only for a reason
+    that is not cosmetic (src/manual_lane.py) -- so a non-operator's page
+    does not contain the section at all. The flag is read from the
+    account's own row, server-side, and the lane's routes re-ask the same
+    gate anyway; nothing here is what protects it.
     """
     user = auth.current_user(request)
     if user is None:
@@ -272,8 +336,13 @@ def ui(request: Request):
         # signed in, zero memberships: the no-access state, never a
         # silent grant into the real accounts
         return RedirectResponse("/ui/accounts", status_code=303)
+    # the TENANT, not the brand -- the lane is a property of the account
+    # that owns the rows, the same id every /api route acts as
     return templates.TemplateResponse(
-        request, "zpf.html", {"brand": account["slug"], "user": user})
+        request, "zpf.html",
+        {"brand": account["slug"], "user": user,
+         "manual_lane": manual_lane.manual_lane_allowed(
+             auth.optional_account_id(request))})
 
 
 def benchmark_class(score, median) -> str:
@@ -346,6 +415,15 @@ def landing(request: Request):
 def healthz():
     """Fly liveness probe: startup already proves the database schemas init."""
     return {"ok": True}
+
+
+@app.get("/privacy", response_class=HTMLResponse)
+def privacy_policy(request: Request):
+    """Public legal page -- also doubles as the privacy-policy URL every
+    OAuth app registration (Instagram, Pinterest, ...) needs on file."""
+    return templates.TemplateResponse(
+        request, "privacy.html", {"site_url": seo.site_url()},
+    )
 
 
 @app.get("/robots.txt", response_class=PlainTextResponse)
@@ -1826,7 +1904,13 @@ def location_photo(space: str, filename: str, thumb: Optional[int] = None):
     root = LOCATIONS_DIR.resolve()
     if root not in target.parents:
         raise HTTPException(status_code=404, detail="not found")
-    if not target.is_file() or target.suffix.lower() not in locations.IMAGE_EXTENSIONS:
+    if target.suffix.lower() not in locations.IMAGE_EXTENSIONS:
+        raise HTTPException(status_code=404, detail="not found")
+    if not target.is_file():
+        # the wall above has already passed: space/filename cannot climb
+        redirect = r2_fallback(f"locations/{space}/{filename}")
+        if redirect is not None:
+            return redirect
         raise HTTPException(status_code=404, detail="not found")
     return FileResponse(thumbnail_for(target) if thumb else target)
 
@@ -1846,7 +1930,13 @@ def _entity_photo_response(base_dir, slug, filename, thumb):
     root = base_dir.resolve()
     if root not in target.parents:
         raise HTTPException(status_code=404, detail="not found")
-    if not target.is_file() or target.suffix.lower() not in locations.IMAGE_EXTENSIONS:
+    if target.suffix.lower() not in locations.IMAGE_EXTENSIONS:
+        raise HTTPException(status_code=404, detail="not found")
+    if not target.is_file():
+        plural = "characters" if base_dir == CHARACTERS_DIR else "props"
+        redirect = r2_fallback(f"{plural}/{slug}/{filename}")
+        if redirect is not None:
+            return redirect
         raise HTTPException(status_code=404, detail="not found")
     return FileResponse(thumbnail_for(target) if thumb else target)
 

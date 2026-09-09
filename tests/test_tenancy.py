@@ -375,6 +375,14 @@ UNSCOPED_ALLOWED = {
     "FROM concept_locations",
     "INTO concept_locations",
     "DELETE FROM concept_locations",
+    # ops/backfill_renders_r2.py's scan (2026-09-08). An operator-run
+    # one-off that repoints local render paths at R2 from the machine
+    # holding the files: it has no session and no account, and a row it
+    # skipped is a permanently blank tile on the deployed site. It reads
+    # across accounts and selects `account_id` so the UPDATE it feeds
+    # (render_assets.update_media_url) is scoped -- the write is where
+    # the damage would be, and that one is checked by this scan.
+    "SELECT id, media_url, output_path, account_id FROM generated_assets",
     # the global ceiling in generative.used_today(everyone=True). The one
     # query in the codebase that is SUPPOSED to count every account: it is
     # what stops ten pilot users, each inside their own cap, from putting

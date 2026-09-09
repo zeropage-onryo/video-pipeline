@@ -23,7 +23,6 @@ from typing import Optional
 
 from dotenv import load_dotenv
 from google import genai
-from google.genai import types
 
 from . import accounts, crag, entities, looks, preprod, rag
 from . import shot as shot_module
@@ -399,9 +398,9 @@ def picked_locations(refs, locations: list) -> list:
 
     slugs = set()
     for ref in refs or []:
-        parts = str(ref).split("?")[0].strip("/").split("/")
-        if len(parts) >= 2 and parts[0] == "locations":
-            slugs.add(parts[1])
+        parsed = asset_shelf.parse_ref(str(ref))
+        if parsed and parsed["kind"] == "location":
+            slugs.add(parsed["slug"])
     if not slugs:
         return []
     return [loc for loc in locations
@@ -523,15 +522,17 @@ def reference_label(url: str) -> str:
     since been renamed. "" for anything unrecognised -- an unlabelled
     reference is the old behaviour, never an error.
     """
-    parts = (url or "").split("?")[0].strip("/").split("/")
-    if len(parts) == 2 and parts[0] == "refs":
-        return "Reference photo supplied with this prompt:"
-    if len(parts) != 4 or parts[2] != "photo":
+    from . import asset_shelf
+
+    ref = asset_shelf.parse_ref(url)
+    if not ref:
         return ""
-    role = _LABEL_ROLE.get(parts[0])
+    if ref["kind"] == "refs":
+        return "Reference photo supplied with this prompt:"
+    role = _LABEL_ROLE.get(ref["plural"])
     if role is None:
         return ""
-    name = parts[1].replace("-", " ").replace("_", " ").strip().title()
+    name = ref["slug"].replace("-", " ").replace("_", " ").strip().title()
     return f"Reference photo — {name}, {role}:"
 
 
@@ -1246,17 +1247,6 @@ def parse_scene_brief_response(text: str) -> dict:
             "brief": (data.get("brief") or "").strip()}
 
 
-def generate_scene_brief(brand: str, spark=None, gemini_client=None,
-                         model: str = MODEL, references: str = "", cast=None) -> dict:
-    """One cohesive whole-scene prompt in the proven skeleton -- for a video
-    model that renders a full scene from a single description (Veo / Sora /
-    Kling / OpenArt Director). Pure w.r.t. the reference library: `references`
-    arrives already retrieved by the caller."""
-    prompt = build_scene_brief_prompt(brand, spark=spark, references=references, cast=cast)
-    return parse_scene_brief_response(generate_with_retry(gemini_client, model, prompt,
-                                                          stage="concepts"))
-
-
 DEFAULT_SCENE_TOOL = "RUNWAY"
 
 
@@ -1716,82 +1706,6 @@ def director_prompt(shot: dict, concept=None) -> str:
         sentences.append(_sentence(f"Grade: {grade}"))
 
     return " ".join(sentences)
-
-
-def generate_concept(brand: str, client=None, spark=None, gemini_client=None,
-                     model: str = MODEL, use_pov: bool = False, db_path=None,
-                     references: str = "", cast=None, formats=None,
-                     only_locations=None, image_refs=None,
-                     account_id: Optional[int] = None,
-) -> dict:
-    """
-    One concept, grounded in the described locations, validated and
-    saved. Returns {"concept_id", "concept", "warnings"}.
-
-    Like generate_concept_ideas, `references` arrives already retrieved
-    from the edge rather than being fetched here. `cast` follows the
-    same contract: None means "everything on file" (the default the CLI
-    keeps); a caller that picked specific characters/props passes the
-    already-formatted block, and "" explicitly means no cast.
-
-    `only_locations` pins this one run to a subset of locations on file
-    (see _apply_location_lock) -- omit it and every location applies,
-    same as before this existed.
-
-    `image_refs` is an optional list of (image_bytes, mime_type) pairs --
-    ad hoc reference photos attached for this one generation (see
-    app/main.py's studio composer / _split_studio_references). When
-    present they ride into the same Gemini call as real vision input --
-    the model actually sees them, not just a text description -- using
-    the same Part.from_bytes-then-text-last shape
-    locations.describe_location already uses elsewhere in this codebase.
-    None/empty means text-only, exactly as before this parameter existed.
-    """
-    kwargs = {"dsn": db_path} if db_path is not None else {}
-    locations = preprod.list_locations(**kwargs, account_id=account_id)
-    if not locations:
-        print(NO_LOCATIONS_NOTE, file=sys.stderr)
-
-    locations, lock_location = _apply_location_lock(locations, only_locations)
-
-    if cast is None:
-        cast = format_cast(entities.list_characters(**kwargs, account_id=account_id), entities.list_props(**kwargs,
-                account_id=account_id))
-
-    if formats is None:
-        formats = ranked_formats(**kwargs)
-
-    prompt = build_concept_prompt(locations, brand, client, spark, use_pov=use_pov,
-                                  references=references, cast=cast, formats=formats,
-                                  lock_location=lock_location)
-
-    contents = prompt
-    if image_refs:
-        contents = [
-            types.Part.from_bytes(data=data, mime_type=mime_type)
-            for data, mime_type in image_refs
-        ] + [prompt + IMAGE_REFS_NOTE]
-
-    concept = parse_concept_response(generate_with_retry(gemini_client, model, contents,
-                                                         stage="concepts"))
-
-    bible = derive_scene_bible(concept.get("title"), concept.get("logline"), concept.get("grade"))
-    concept["shots"] = apply_scene_bible(concept.get("shots"), bible)
-
-    location_names = [loc["name"] for loc in locations]
-    allowed_tools = ZEROPAGE_AI_TOOLS if brand == "zeropage" else None
-    warnings = validate_concept(concept, location_names, use_pov=use_pov, allowed_tools=allowed_tools)
-
-    used = {shot.get("location") for shot in concept.get("shots") or []}
-    location_ids = [loc["id"] for loc in locations if loc["name"] in used]
-
-    concept_id = preprod.save_concept(
-        concept, brand=brand, client=client, spark=spark,
-        location_ids=location_ids, prompt_template=prompt,
-        warnings=warnings, use_pov=use_pov, **kwargs,
-    
-        account_id=account_id,)
-    return {"concept_id": concept_id, "concept": concept, "warnings": warnings}
 
 
 def format_concept_as_text(concept: dict, warnings=None) -> str:

@@ -60,6 +60,9 @@ REWORKED_PROMPT = ("Extreme macro close-up of a brass door handle slowly turning
 REAL_JUDGE_PROMPT = orchestrator._judge_prompt
 
 
+SEED_REF = "/refs/seed.jpg"
+
+
 def make_concept(**overrides):
     """ONE scene, ONE prompt -- what gen_concept has written since
     2026-08-29. A multi-shot concept would be generated, scored and
@@ -114,7 +117,25 @@ def stage_fakes(monkeypatch, results):
 
     monkeypatch.setattr(orchestrator.scene_chain.nano_banana,
                         "generate_from_prompt", fake_keyframe)
+
+    # The reference gate (2026-09-08) holds any run whose scene came out
+    # with no photographs, so a graph test that wants to reach the right
+    # half of the graph has to have something attach. These tests are
+    # about the gates and the render lanes, not about grounding -- the
+    # gate itself is tested in test_reference_gate.py and in
+    # test_an_ungrounded_run_is_archived_and_held below. Patched by NAME
+    # for the same reason the keyframe is: a miss here would silently
+    # change which branch every one of these tests takes.
+    attached = []
+
+    def fake_attach(concept_id, extra=None, *, idea=None, db_path=None,
+                    account_id=None):
+        attached.append(concept_id)
+        return [SEED_REF]
+
+    monkeypatch.setattr(orchestrator.scene_chain, "attach_refs", fake_attach)
     calls.keyframes = keyframes
+    calls.attached = attached
     return calls
 
 
@@ -1425,7 +1446,12 @@ def test_a_broken_judge_leaves_the_concept_unjudged(tmp_db, monkeypatch):
 
 def test_a_scouted_run_writes_the_scene_from_the_images_it_researched(
         tmp_db, monkeypatch, tmp_path):
-    from src import asset_shelf, refbin, scout
+    from src import asset_shelf, refbin, scene_chain, scout
+
+    # Captured BEFORE stage_fakes stubs it out -- reading it afterwards
+    # off the module hands back the stub, which is how the first attempt
+    # at this "restore" quietly restored the fake onto itself.
+    real_attach_refs = scene_chain.attach_refs
 
     monkeypatch.setattr(refbin, "REFS_DIR", tmp_path / "refs")
     # an empty asset bank on disk: this scene names nothing, so the only
@@ -1443,6 +1469,13 @@ def test_a_scouted_run_writes_the_scene_from_the_images_it_researched(
                   source_url="https://example.com/post", dsn=tmp_db)
 
     calls = stage_fakes(monkeypatch, [(make_concept(), [])])
+    # THIS test is the one that needs the real attacher: stage_fakes
+    # stubs attach_refs out (it returns SEED_REF and writes nothing) so
+    # the other graph tests clear the reference gate without a bank, and
+    # with the stub in place the assertion below reads a shot nothing
+    # ever attached to -- a KeyError, not a grounding failure.
+    monkeypatch.setattr(orchestrator.scene_chain, "attach_refs",
+                        real_attach_refs)
     out = orchestrator.run("the rotation", brand="zeropage", channel="zeropage",
                            scout=True)
 

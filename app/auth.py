@@ -81,10 +81,16 @@ def _serializer() -> URLSafeTimedSerializer:
 
 def issue_session(response, user_id: str, request: Request) -> None:
     token = _serializer().dumps({"uid": str(user_id)})
+    is_https = request.url.scheme == "https"
+    # Cross-site frontend (e.g. a Vercel-hosted refine app calling this
+    # API on another origin) needs SameSite=None or the browser drops the
+    # cookie on every fetch. SameSite=None requires Secure, which only
+    # makes sense over https -- so local http dev keeps Lax.
     response.set_cookie(
         SESSION_COOKIE, token,
-        max_age=SESSION_MAX_AGE, httponly=True, samesite="lax",
-        secure=request.url.scheme == "https",
+        max_age=SESSION_MAX_AGE, httponly=True,
+        samesite="none" if is_https else "lax",
+        secure=is_https,
     )
 
 
@@ -184,6 +190,29 @@ def current_account_id(request: Request) -> int:
         from fastapi import HTTPException
         raise HTTPException(status_code=403, detail="no account access")
     return min(int(a["id"]) for a in member_of)
+
+
+def optional_account_id(request: Request) -> Optional[int]:
+    """`current_account_id`, asked as a question instead of enforced as a
+    gate: the tenant, or None when there is not one.
+
+    Exactly one caller, and it should stay that way: GET /api/capabilities,
+    which the shell asks before it knows whether the person has an account
+    at all. `current_account_id` raises 401/403 there, which would blank
+    the UI for the very states -- signed out, signed in with no membership
+    -- that have their own screens.
+
+    NOT a softer door onto anybody's rows. It answers "who is this, if
+    anyone", and the only thing built on it is which sections the shell
+    draws; every route that READS OR WRITES rows keeps
+    `Depends(current_account_id)`, so a None here can never widen
+    anything. In particular the manual lane's capability flag is computed
+    from this, and the lane's own routes re-ask the gate themselves.
+    """
+    try:
+        return current_account_id(request)
+    except Exception:
+        return None
 
 
 def dev_account_id(request: Request) -> int:

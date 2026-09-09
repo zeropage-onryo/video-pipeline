@@ -417,6 +417,8 @@ def as_prompt_image(value, *, resolve_photo=None):
 
 def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                       model: str = DEFAULT_MODEL, client=None,
+                      duration: int = DEFAULT_DURATION,
+                      ratio: str = DEFAULT_RATIO,
                       resolve_photo=None,
                       account_id: Optional[int] = None,
 ) -> dict:
@@ -474,12 +476,17 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"c{concept_id}-s{shot_n}-{stamp}.mp4"
         generate_video(prompt, out_path, model=model,
+                       duration=duration, ratio=ratio,
                        prompt_image=prompt_image, client=client,
                        db_path=db_path, account_id=account_id)
 
         shot_row_id = _shot_row_for_prompt(prompt, db_path, account_id)
-        generation_params = {"model": model, "ratio": DEFAULT_RATIO,
-                             "duration": DEFAULT_DURATION,
+        # what was ACTUALLY asked for, not the module defaults: the
+        # Queue lets a person pick a length and a frame per approve, and
+        # a row that records the default instead would make the tool
+        # scoreboard a measurement of a render nobody ran
+        generation_params = {"model": model, "ratio": ratio,
+                             "duration": duration,
                              "concept_id": concept_id, "shot_n": shot_n,
                              "prompt_image": bool(prompt_image),
                              "key_source": account_keys.key_source(
@@ -488,7 +495,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
             shot_row_id, "runway", prompt,
             params=generation_params,
             output_path=str(out_path),
-            cost_usd=estimate_cost(1, model=model),
+            cost_usd=estimate_cost(1, model=model, duration=duration),
             **kwargs,
          account_id=account_id)
 

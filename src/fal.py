@@ -811,6 +811,107 @@ def _publish(out_path: Path, content_type: str) -> str:
     return f"/renders/fal/{out_path.name}"
 
 
+def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
+                      model: str = DEFAULT_MODEL,
+                      duration: int = DEFAULT_DURATION,
+                      resolution: Optional[str] = None,
+                      resolve_photo=None, http=None,
+                      account_id: Optional[int] = None,
+) -> dict:
+    """
+    Never raises: {"ok", "media_url", "generation_id", "path", "error"}.
+    One render for one concept shot -- runway.generate_for_shot's contract
+    on this vendor, so the Queue's approve can dispatch to either without
+    caring which. Every wall this module already has still applies: the
+    spend gate lives inside generate_video so this layer cannot spend
+    around it, the cap is checked before any call, and the attempt is a
+    generations row either way the pick later goes.
+
+    THE ROW IS LOGGED UNDER THE PLATFORM, never under "fal" -- the tool
+    scoreboard asks which model makes keepable clips, and one "fal" row
+    would average a $0.30 LTX clip with a $1.51 Seedance one. That is the
+    module's standing rule (see VIDEO_LOG_TOOLS); this caller is not an
+    exception to it.
+
+    `duration` and `resolution` are the operator's, passed through to
+    build_body, which clamps duration into the model's own range. The
+    Queue refuses out-of-range values before it gets here
+    (providers.check_render_choice) precisely because there is a human
+    to refuse TO; the clamp stays for the graph, which has none.
+    """
+    from . import preprod, render_assets
+    kwargs = {"dsn": db_path} if db_path is not None else {}
+
+    try:
+        generative.init(**kwargs)
+        refusal = _cap_refusal(1, db_path, account_id)
+        if refusal:
+            return {"ok": False, "error": refusal}
+
+        concept = preprod.get_concept(concept_id, **kwargs, account_id=account_id)
+        if concept is None:
+            return {"ok": False, "error": f"no concept {concept_id}"}
+        shot = next((s for s in concept.get("shots") or []
+                     if s.get("n") == shot_n), None)
+        if shot is None:
+            return {"ok": False, "error": f"concept {concept_id} has no shot {shot_n}"}
+        prompt = (shot.get("prompt") or "").strip()
+        if not prompt:
+            return {"ok": False,
+                    "error": f"shot {shot_n} has no AI prompt to render from"}
+
+        # as_image_url, not runway's as_prompt_image: fal fetches an
+        # image_url server-side, so a local keyframe with no R2 behind it
+        # is dropped and prompt_image records False -- nothing downstream
+        # gets to claim an anchor that never left the building.
+        image_url = as_image_url(shot.get("reference_image"),
+                                 resolve_photo=resolve_photo)
+
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        out_path = RENDER_DIR / f"c{concept_id}-s{shot_n}-{stamp}.mp4"
+        generate_video(prompt, out_path, model=model, image_url=image_url,
+                       duration=duration, resolution=resolution,
+                       http=http, db_path=db_path, account_id=account_id)
+
+        platform = model_spec(model)["platform"]
+        shot_row_id = _shot_row_for_prompt(
+            prompt, db_path, "auto-created by fal.generate_for_shot", account_id)
+        generation_params = {"provider": "fal", "model": model,
+                             "duration": duration,
+                             "resolution": resolution or model_spec(model)["default_resolution"],
+                             "concept_id": concept_id, "shot_n": shot_n,
+                             "prompt_image": bool(image_url),
+                             "key_source": account_keys.key_source(
+                                 account_id, "fal", db_path)}
+        generation_id = generative.record_generation(
+            shot_row_id, platform, prompt,
+            params=generation_params,
+            output_path=str(out_path),
+            cost_usd=estimate_cost(1, model=model, duration=duration,
+                                   resolution=resolution),
+            **kwargs,
+            account_id=account_id)
+
+        media_url = _publish(out_path, "video/mp4")
+        preprod.set_shot_media_url(concept_id, shot_n, media_url,
+                                   **kwargs, account_id=account_id)
+        asset = render_assets.record_best_effort(
+            account_id=account_id,
+            generation_id=generation_id, tool=platform, model=model,
+            media_kind="video", prompt=prompt, media_url=media_url,
+            output_path=str(out_path), project=concept.get("brand"),
+            concept_id=concept_id, shot_n=shot_n,
+            metadata=generation_params,
+            dsn=db_path,
+        )
+        return {"ok": True, "media_url": media_url,
+                "generation_id": generation_id, "path": str(out_path),
+                "asset_id": asset["id"], "asset_rag": asset["rag"],
+                "error": None}
+    except Exception as e:
+        return {"ok": False, "error": _safe_error(e, account_id)}
+
+
 def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
                          model: str = DEFAULT_MODEL, resolve_photo=None,
                          http=None,
@@ -950,6 +1051,13 @@ class _PlatformConnector:
     def generate_candidates(self, prompt, out_dir, n: int = 3, **kw):
         kw.setdefault("model", self.model)
         return generate_candidates(prompt, out_dir, n, **kw)
+
+    def generate_for_shot(self, concept_id, shot_n, **kw):
+        # part of the providers.REQUIRED contract since 2026-09-08, and a
+        # binding that did not carry it would be a router's "module"
+        # missing the one function the spend gate calls
+        kw.setdefault("model", self.model)
+        return generate_for_shot(concept_id, shot_n, **kw)
 
     def estimate_cost(self, n: int, **kw):
         kw.setdefault("model", self.model)

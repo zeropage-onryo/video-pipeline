@@ -35,6 +35,52 @@ fi
 source venv/bin/activate
 mkdir -p data
 
+# ONE WALK PER NIGHT (added 2026-09-08). On the night of 09-07 this script
+# ran twice: two nightly_runs rows, 76 graph runs, ~$3.25 of Gemini instead
+# of ~$1.70. The audit found exactly ONE LaunchAgent installed (22:00, no
+# RunAtLoad, no KeepAlive, a single StartCalendarInterval), nothing in
+# /Library, and no crontab -- while launchd itself reported runs = 2. So the
+# second start comes from launchd (a wake-from-sleep catch-up is the usual
+# cause) and NO plist edit can prevent it. The script defends itself instead.
+#
+# Two guards, because they fail differently:
+#   * the lock directory is atomic and catches a CONCURRENT second start.
+#     mkdir is the portable test-and-set -- macOS ships no flock binary.
+#   * the night marker catches a SEQUENTIAL second start, after the first
+#     finished and released the lock (which is what actually happened: walk
+#     two began three seconds after walk one wrote its row). A "night" runs
+#     midday to midday, so a 22:00 walk and a 03:30 catch-up are one night.
+# Both exit 0: a refused duplicate is the correct outcome, not a failure for
+# a scheduler to report. FORCE_NIGHTLY=1 runs anyway, for a deliberate
+# manual walk.
+#
+# The marker is written BEFORE the walk, so a crash mid-walk consumes the
+# night. That is the safe direction: skipping a night costs nothing, and
+# double-spending is the bug being fixed.
+LOCK="data/.nightly.lock"
+MARK="data/.nightly-night"
+NIGHT="$(date -v-12H +%F 2>/dev/null || date -d '-12 hours' +%F)"
+if [ "${FORCE_NIGHTLY:-0}" != "1" ]; then
+  # A kill -9 leaves the lock behind and would block every future night.
+  if [ -d "$LOCK" ] && [ -z "$(find "$LOCK" -maxdepth 0 -mmin -480 2>/dev/null)" ]; then
+    rmdir "$LOCK" 2>/dev/null \
+      && echo "$(date -u +%FT%TZ) morning: cleared a stale lock" >> data/morning_prompts.log
+  fi
+  if ! mkdir "$LOCK" 2>/dev/null; then
+    echo "$(date -u +%FT%TZ) morning: another run holds $LOCK -- skipping (FORCE_NIGHTLY=1 to override)" \
+      >> data/morning_prompts.log
+    exit 0
+  fi
+  trap 'rmdir "$LOCK" 2>/dev/null' EXIT
+  if [ -f "$MARK" ] && [ "$(cat "$MARK")" = "$NIGHT" ]; then
+    echo "$(date -u +%FT%TZ) morning: night $NIGHT already walked -- skipping (FORCE_NIGHTLY=1 to override)" \
+      >> data/morning_prompts.log
+    exit 0
+  fi
+  echo "$NIGHT" > "$MARK"
+fi
+
+
 # 1) Pull the latest post analytics (YouTube + Instagram) and promote the
 #    fresh top performers into the proven_results RAG shelf, so tonight's
 #    concepts ground on what's actually working. Never fatal: a missing key
@@ -82,11 +128,14 @@ python3 -m ops.bank ingest data/idea_agent >> data/morning_prompts.log 2>&1 || \
 
 # Generated references (src/refgen.py, 2026-09-06): every banked spark gets
 # one still rendered from its hook frame in the brand's look, Midjourney
-# first. Midjourney keeps its own per-run approval gate; uncomment the
-# export to let the NIGHT spend AceData credits (~$0.27/still, capped by
-# REFGEN_DAILY_CAP, default 8). Without it the night renders on Gemini's
-# image model (NANO), which needs no approval and no extra key.
-# export MIDJOURNEY_SPEND_OK=1
+# first. Midjourney keeps its own per-run approval gate; this export lets
+# the NIGHT spend AceData credits (~$0.27/still, capped by REFGEN_DAILY_CAP,
+# default 8, and by MIDJOURNEY_DAILY_CAP/MIDJOURNEY_GLOBAL_DAILY_CAP,
+# default 10). Turned on 2026-09-08 (Mike's call) -- still a no-op until
+# ACEDATA_API_KEY exists in .env (sign up at platform.acedata.cloud); until
+# then this falls straight through to Gemini's image model (NANO) exactly
+# as before, and says so in the note.
+export MIDJOURNEY_SPEND_OK=1
 
 # 2b) The research agent (src/research_agent.py) -- Claude/Gemini with the
 #    board's own MCP tools, banking sparks WITH reference images picked from

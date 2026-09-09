@@ -214,7 +214,13 @@ def test_the_written_scene_comes_out_carrying_its_references(tmp_db, monkeypatch
 
     job = wait_for_job(client.post(
         "/api/scenes/run",
-        data={"idea": "a rider suits up", "count": "1", "brand": "zeropage"},
+        # the IDEA names the cast, not just the scene the writer returns:
+        # since 2026-09-05 asset_shelf.in_scope decides what a run may
+        # ground on from the idea plus explicit picks, and reading the
+        # finished scene back was attaching Michael's face to crawled
+        # ideas that only ever said "he".
+        data={"idea": "Michael and the Cyclops suit up by the motorcycle",
+              "count": "1", "brand": "zeropage"},
     ).json()["job_id"])
     assert job["status"] == "done", job.get("error")
     assert "1 grounded in references" in job["detail"]

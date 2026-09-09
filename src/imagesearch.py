@@ -509,10 +509,10 @@ def lanes_for(brand: Optional[str]) -> tuple:
 
 def _interleave(*lists: list) -> list:
     out, i = [], 0
-    while any(i < len(l) for l in lists):
-        for l in lists:
-            if i < len(l):
-                out.append(l[i])
+    while any(i < len(each) for each in lists):
+        for each in lists:
+            if i < len(each):
+                out.append(each[i])
         i += 1
     return out
 

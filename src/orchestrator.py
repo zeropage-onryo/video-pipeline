@@ -257,6 +257,7 @@ class GenState(TypedDict, total=False):
     prompt_scores: list             # [{prompt, score, pass, reason, dims}]
     prompt_rework_attempts: int     # bounded per-shot rewrite passes, not concept retries
     refs: list                      # the photo urls attached to the scene's shot
+    ungrounded: str                 # set when the reference gate took the concept off the board
     keyframes: list                 # [{"n", "ok", "url", "error"}] -- the stills
     parked_reason: str              # what the Queue card says it is waiting on
     advisory: list                  # the verdicts that would have held in hard mode
@@ -434,6 +435,26 @@ def planner(state: GenState) -> GenState:
     # is stamped with is minted on this line, and a finding marked used
     # before a run exists to point at is how the same spark gets served
     # twice after a crash between the two.
+    if scout_mod.refs_required() and not state.get("reference_photos"):
+        # MIKE'S RULE, 2026-09-08: a concept with no reference images is a
+        # no-go. Measured the night before, 20 of 29 banked sparks had no
+        # picture behind them and every one of them still produced a scene
+        # written from words alone -- so nothing downstream ever noticed
+        # that the crawl was reaching the WORDS and not the pictures.
+        #
+        # The finding is deliberately NOT claimed on this path. An
+        # unclaimed spark can still have images put behind it by the next
+        # research pass and become servable; claiming it here would refuse
+        # it AND throw the research away, which is the worst of both.
+        # `scout.next_spark` already skips these, so reaching this line
+        # means the direction came from somewhere else -- the sparks.txt
+        # rotation, a typed spark, an agent's `generate`.
+        return {
+            "channel": channel,
+            "autonomy": (row or {}).get("autonomy", "shadow"),
+            "run_id": run_id,
+            "error": NO_REFS_REASON,
+        }
     if state.get("scout_finding_id"):
         scout_mod.mark_used(state["scout_finding_id"], run_id=run_id)
     return {
@@ -441,6 +462,19 @@ def planner(state: GenState) -> GenState:
         "autonomy": (row or {}).get("autonomy", "shadow"),
         "run_id": run_id,
     }
+
+
+NO_REFS_REASON = ("no reference images behind this spark — a scene is not "
+                  "written from words alone (ZEROPAGE_REQUIRE_REFS=0 to allow it)")
+
+
+def route_after_planner(state: GenState) -> str:
+    """The one gate in front of the whole generation, and it is code, not
+    taste: either there are pictures behind this direction or there are
+    not. Every other gate in this graph went advisory on 2026-09-07 --
+    this one is deliberately hard, because it is not predicting anything.
+    """
+    return "hold" if state.get("error") else "plan"
 
 
 def ground_entities(state: GenState) -> GenState:
@@ -645,8 +679,50 @@ def gen_concept(state: GenState) -> GenState:
     except Exception as e:
         print(f"note: references not attached: {e}", file=sys.stderr)
 
+    # THE REFERENCE GATE (2026-09-08, Mike's call). A scene with no
+    # photographs behind it is not a candidate: it renders on its own
+    # text, which is the thing this pipeline was built to stop doing.
+    # So it comes off the board here, one step after the only step that
+    # could have grounded it.
+    #
+    # Archive, never delete -- the row keeps its prompt and still
+    # teaches the grade queue. And the reason is preprod.NO_REFERENCE, a
+    # MACHINE reason kept out of pick_rate and the taste tally: nobody
+    # judged this concept, so counting it as one Michael passed over
+    # would read a grounding failure as a verdict on the writing.
+    #
+    # No retry edge. Regenerating cannot conjure photographs -- what the
+    # writer is offered is fixed by the spark and the attached picks
+    # (asset_shelf.in_scope), so a second pass produces another
+    # ungrounded scene at full price.
+    # Asked through preprod.refs_required(), the ONE switch (2026-09-08):
+    # this gate and `planner`'s and the Queue's are the same rule at three
+    # depths, and a switch that turned off only some of them would leave a
+    # night holding at the far end for a reason the near end was told to
+    # ignore.
+    #
+    # Why BOTH this and planner's, which look redundant: planner refuses a
+    # DIRECTION that arrived with no photographs, before a generation is
+    # paid for. This catches the scene that was written from a direction
+    # that HAD photographs and still ended up attaching none -- nothing
+    # the writer named resolved to a file. Neither can see the other's
+    # case, and the cheap one runs first on purpose.
+    ungrounded = ""
+    if not refs and preprod.refs_required():
+        ungrounded = preprod.NO_REFERENCE
+        try:
+            preprod.archive_ungrounded(result["concept_id"],
+                                       account_id=state.get("account_id"))
+        except Exception as e:
+            # The routing above does NOT depend on this write. A row
+            # that could not be archived is a row still on the board,
+            # which is visible and fixable; a run that kept going
+            # because the archive failed would be neither.
+            print(f"note: ungrounded concept not archived: {e}", file=sys.stderr)
+
     return {"concept": concept, "concept_id": result["concept_id"],
-            "refs": refs, "attempts": state.get("attempts", 0) + 1}
+            "refs": refs, "ungrounded": ungrounded,
+            "attempts": state.get("attempts", 0) + 1}
 
 
 def evaluate(state: GenState) -> GenState:
@@ -691,6 +767,14 @@ def route_after_eval(state: GenState) -> str:
     Retrying on it bought nothing measurable -- the same rubric that
     agreed with Mike 38% of the time was deciding whether to spend
     another generation."""
+    # The reference gate is HARD in both modes, and it is asked first.
+    # It belongs beside `warnings` on the list of things code enforces:
+    # whether a scene was handed photographs is a fact, not an opinion,
+    # so ZEROPAGE_GATES has no say in it. gen_concept has already taken
+    # the row off the board; this is the run declining to spend a
+    # keyframe and a credit on it.
+    if state.get("ungrounded"):
+        return "hold"
     critique = state.get("critique", {}) or {}
     if critique.get("ok"):
         return "pass"
@@ -1523,6 +1607,12 @@ def hold(state: GenState) -> GenState:
     failed_scores = [x for x in state.get("prompt_scores", []) if not x.get("pass")]
     if state.get("error"):
         reason = state["error"]
+    elif state.get("ungrounded"):
+        # Ahead of every judge branch: this run stopped before any of
+        # them ran, and "prompt gate" on a scene that was never scored
+        # would send the morning review looking at the wrong thing.
+        reason = ("reference gate: no photos attached — archived off the board. "
+                  "Bank references for this spark and run it again.")
     elif state.get("parked_reason"):
         # THE RUN GOT AS FAR AS IT CAN. The scene is in the Queue with
         # (usually) a still, waiting on a human, and `parked_reason`
@@ -1584,7 +1674,10 @@ def _build():
     # so a room is named material the scene MAY use, exactly like cast
     # -- and an empty table means "nothing filed under places yet", not
     # a reason to refuse to think.
-    g.add_edge("planner", "ground_entities")
+    g.add_conditional_edges("planner", route_after_planner, {
+        "plan": "ground_entities",
+        "hold": "hold",
+    })
     g.add_edge("ground_entities", "ground_rag")
     g.add_edge("ground_rag", "gen_concept")
     g.add_edge("gen_concept", "evaluate")

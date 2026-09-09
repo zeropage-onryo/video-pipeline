@@ -761,7 +761,10 @@ def _publish(out_path: Path, content_type: str) -> str:
 
 
 def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
-                      model: str = DEFAULT_MODEL, resolve_photo=None,
+                      model: str = DEFAULT_MODEL,
+                      duration: int = DEFAULT_DURATION,
+                      resolution: str = DEFAULT_RESOLUTION,
+                      resolve_photo=None,
                       http=None,
                       account_id: Optional[int] = None,
 ) -> dict:
@@ -810,6 +813,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"c{concept_id}-s{shot_n}-{stamp}.mp4"
         generate_video(prompt, out_path, model=model, image_url=image_url,
+                       duration=duration, resolution=resolution,
                        http=http, db_path=db_path, account_id=account_id)
 
         shot_row_id = _shot_row_for_prompt(
@@ -818,13 +822,15 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
         generation_id = generative.record_generation(
             shot_row_id, "higgsfield", prompt,
             params={"model": model, "aspect_ratio": DEFAULT_ASPECT,
-                    "duration": DEFAULT_DURATION,
+                    # the length actually asked for, not the module
+                    # default -- see runway.generate_for_shot
+                    "duration": duration, "resolution": resolution,
                     "concept_id": concept_id, "shot_n": shot_n,
                     "prompt_image": bool(image_url),
                     "key_source": account_keys.key_source(
                         account_id, "higgsfield", db_path)},
             output_path=str(out_path),
-            cost_usd=estimate_cost(1, model=model),
+            cost_usd=estimate_cost(1, model=model, duration=duration),
             **kwargs,
          account_id=account_id)
         media_url = _publish(out_path, "video/mp4")

@@ -235,9 +235,12 @@ def _measure_duration(path: Path) -> tuple[float | None, str]:
 def pending(brand=None, account_id: int | None = None,
             provider: str = "higgsfield") -> list[dict]:
     """What is waiting on a spend, by exactly the rule app/api.py's
-    /queue/pending uses: picked or parked, not archived, a scene, and no
-    clip yet. Duplicated deliberately in ONE place only -- if that rule
-    changes, this is the line to change with it.
+    /queue/pending uses: picked or parked, not archived, a scene, no clip
+    yet, and reference photos attached. Duplicated deliberately in ONE
+    place only -- if that rule changes, this is the line to change with
+    it. The reference half is not duplicated at all: both surfaces call
+    preprod.reference_gate, which is why the manual lane cannot hand a
+    human a shot the Queue page would refuse to render.
 
     ONE rule for both lanes, on purpose: which provider renders a shot is
     a decision made at the keyboard, not a property of the queue, and a
@@ -260,6 +263,13 @@ def pending(brand=None, account_id: int | None = None,
         if not (concept.get("picked") or concept.get("parked")):
             continue
         if concept.get("archived") or not concept.get("is_scene"):
+            continue
+        # The lane is free, so the instinct is to let anything through.
+        # It is not the credit this protects: a human dragging a
+        # reference-less shot into Runway by hand produces the same
+        # ungrounded clip, and then it is in data/renders looking like
+        # output somebody chose.
+        if preprod.reference_gate(concept):
             continue
         for shot in concept.get("shots") or []:
             if shot.get("media_url"):

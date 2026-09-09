@@ -328,48 +328,6 @@ def test_validate_allows_a_concept_with_no_ai_slot():
     assert shootgen.validate_concept(concept, LOCATION_NAMES) == []
 
 
-# ---------- generate_concept ----------
-
-def test_generate_concept_saves_and_links_locations(tmp_db, monkeypatch):
-    monkeypatch.setattr(shootgen, "generate_with_retry",
-                        lambda *a, **kw: response_for(make_concept()))
-
-    result = shootgen.generate_concept(
-        brand="antihero", spark="someone at the door",
-        client=None, gemini_client=None, db_path=tmp_db,
-    )
-
-    assert result["warnings"] == []
-    saved = preprod.get_concept(result["concept_id"], dsn=tmp_db, account_id=None)
-    assert saved["title"] == "The Waiting"
-    assert saved["brand"] == "antihero"
-    assert {loc["name"] for loc in saved["locations"]} == {"hallway", "garage"}
-
-
-def test_generate_concept_only_locations_locks_prompt_and_linked_rooms(tmp_db, monkeypatch):
-    seen = {}
-
-    def fake_generate(client, model, prompt, **_):
-        seen["prompt"] = prompt
-        return response_for(make_concept())
-
-    monkeypatch.setattr(shootgen, "generate_with_retry", fake_generate)
-
-    result = shootgen.generate_concept(
-        brand="antihero", client=None, gemini_client=None, db_path=tmp_db,
-        only_locations=["garage"],
-    )
-
-    assert "LOCATION LOCK" in seen["prompt"]
-    # format_locations renders each room as "- name: ..." -- check the
-    # described-rooms block specifically, since the gold-standard exemplar
-    # text elsewhere in the prompt is free to say "hallway" as scene-setting.
-    assert "- garage:" in seen["prompt"]
-    assert "- hallway:" not in seen["prompt"]
-    saved = preprod.get_concept(result["concept_id"], dsn=tmp_db, account_id=None)
-    assert {loc["name"] for loc in saved["locations"]} == {"garage"}
-
-
 # ---------- scene bible: cross-shot consistency for independently-rendered AI shots ----------
 
 def test_derive_scene_bible_combines_title_logline_grade():
@@ -401,113 +359,6 @@ def test_apply_scene_bible_does_not_double_prepend():
 def test_apply_scene_bible_is_a_noop_without_a_bible():
     shots = [{"source": "AI", "prompt": "unchanged"}]
     assert shootgen.apply_scene_bible(shots, "")[0]["prompt"] == "unchanged"
-
-
-def test_generate_concept_anchors_every_ai_shot_to_the_scene_bible(tmp_db, monkeypatch):
-    concept = make_concept(shots=[
-        {"n": 1, "type": "CHARACTER", "source": "CAMERA", "cam": "BMPCC",
-         "location": "hallway", "desc": "he steps into frame"},
-        {"n": 2, "type": "BROLL", "source": "AI", "tool": "KLING",
-         "location": "garage", "desc": "the handle turns on its own",
-         "prompt": "a brass door handle turning slowly in the dark"},
-    ], grade="crushed shadows, one warm accent")
-    monkeypatch.setattr(shootgen, "generate_with_retry", lambda *a, **kw: response_for(concept))
-
-    result = shootgen.generate_concept(
-        brand="antihero", client=None, gemini_client=None, db_path=tmp_db,
-    )
-
-    ai_prompt = result["concept"]["shots"][1]["prompt"]
-    assert ai_prompt.startswith("Scene: The Waiting")
-    assert "crushed shadows, one warm accent" in ai_prompt
-    assert ai_prompt.endswith("a brass door handle turning slowly in the dark")
-    # the CAMERA shot never gets a generation prompt in the first place
-    assert "prompt" not in result["concept"]["shots"][0]
-
-
-def test_generate_concept_saves_even_with_warnings(tmp_db, monkeypatch):
-    """
-    A concept that breaks a rule is still worth keeping and looking at
-    -- the warnings ride along on it rather than throwing the whole
-    generation away.
-    """
-    bad = make_concept()
-    bad["shots"][0]["location"] = "rooftop helipad"
-    monkeypatch.setattr(shootgen, "generate_with_retry", lambda *a, **kw: response_for(bad))
-
-    result = shootgen.generate_concept(
-        brand="antihero", client=None, gemini_client=None, db_path=tmp_db,
-    )
-
-    assert result["warnings"]
-    assert preprod.get_concept(result["concept_id"], dsn=tmp_db, account_id=None) is not None
-
-
-@pytest.mark.xfail(reason="image_refs vision Part support not implemented yet in generate_concept", strict=False)
-def test_generate_concept_sends_attached_images_as_vision_parts(tmp_db, monkeypatch):
-    """image_refs (bytes, mime_type) pairs from the Studio composer must
-    actually reach the model as multimodal content, not just get
-    mentioned in the text -- otherwise "ground this in the photo I
-    attached" would silently do nothing."""
-    from google.genai import types
-
-    seen = {}
-
-    def fake_generate_with_retry(client, model, contents, **_):
-        seen["contents"] = contents
-        return response_for(make_concept())
-
-    monkeypatch.setattr(shootgen, "generate_with_retry", fake_generate_with_retry)
-
-    shootgen.generate_concept(
-        brand="antihero", spark="someone at the door", client=None,
-        gemini_client=None, db_path=tmp_db,
-        image_refs=[(b"fake-jpeg-bytes", "image/jpeg")],
-    )
-
-    contents = seen["contents"]
-    assert isinstance(contents, list)
-    assert isinstance(contents[0], str)  # the text prompt comes first
-    assert "someone at the door" in contents[0]
-    assert isinstance(contents[1], types.Part)
-
-
-def test_generate_concept_without_images_sends_a_plain_string(tmp_db, monkeypatch):
-    """No attachments -- the call shape is unchanged from before this
-    feature existed (a bare prompt string, not a one-item list)."""
-    seen = {}
-
-    def fake_generate_with_retry(client, model, contents, **_):
-        seen["contents"] = contents
-        return response_for(make_concept())
-
-    monkeypatch.setattr(shootgen, "generate_with_retry", fake_generate_with_retry)
-    shootgen.generate_concept(brand="antihero", client=None, gemini_client=None, db_path=tmp_db)
-    assert isinstance(seen["contents"], str)
-
-
-def test_generate_concept_degrades_without_locations(pg, capsys):
-    """No described spaces means an ungrounded run with a stderr note,
-    not a dead one -- the same contract reference_block keeps for a
-    missing library. Grounding is an enhancement, never a gate."""
-    empty = pg
-    preprod.init(empty)
-    entities.init(empty)
-
-    def fake_generate(*a, **kw):
-        return response_for(make_concept())
-
-    import unittest.mock
-    with unittest.mock.patch.object(shootgen, "generate_with_retry", fake_generate):
-        result = shootgen.generate_concept(
-            brand="antihero", client=None, gemini_client=None, db_path=empty,
-        )
-
-    assert result["concept"]["title"] == "The Waiting"
-    assert "ungrounded" in capsys.readouterr().err
-    # every location the model used is unknown to an empty db -- that's
-    # a visible warning, not a rejection
-    assert any("location" in w for w in result["warnings"])
 
 
 # ---------- stage one: ideas ----------
@@ -704,8 +555,6 @@ def test_write_scene_seeds_the_prompt_with_the_idea(tmp_db, monkeypatch):
     assert "a hand on the handle" in seen["prompt"]
 
 
-
-
 def test_write_scene_validates_and_still_saves(tmp_db, monkeypatch):
     """Prompts request, code advises: a warning never loses the scene."""
     concept_id = preprod.save_concept({"title": "T"}, brand="zeropage", dsn=tmp_db, account_id=None)
@@ -775,36 +624,6 @@ def test_validate_rejects_the_pov_camera_by_default():
 def test_validate_allows_the_pov_camera_when_it_is_on():
     assert shootgen.validate_concept(make_pov_concept(), LOCATION_NAMES,
                                      use_pov=True) == []
-
-
-def test_generate_concept_threads_the_pov_setting_through(tmp_db, monkeypatch):
-    seen = {}
-
-    def fake(client, model, prompt, **_):
-        seen["prompt"] = prompt
-        return response_for(make_concept(shots=[
-            {"n": 1, "type": "CHARACTER", "cam": "BMPCC", "location": "hallway",
-             "desc": "d", "light": "l"},
-        ]))
-
-    monkeypatch.setattr(shootgen, "generate_with_retry", fake)
-    shootgen.generate_concept(
-        brand="antihero", client=None, gemini_client=None, use_pov=False, db_path=tmp_db,
-    )
-    assert "ACTION5" not in seen["prompt"]
-
-
-def test_generated_concept_keeps_its_warnings_in_the_database(tmp_db, monkeypatch):
-    """The docs promise "saved, warnings attached" -- prove the second half."""
-    bad = make_concept()
-    bad["shots"][0]["location"] = "rooftop helipad"
-    monkeypatch.setattr(shootgen, "generate_with_retry", lambda *a, **kw: response_for(bad))
-
-    result = shootgen.generate_concept(
-        brand="antihero", client=None, gemini_client=None, db_path=tmp_db,
-    )
-    stored = preprod.get_concept(result["concept_id"], dsn=tmp_db, account_id=None)["warnings"]
-    assert any("rooftop helipad" in w for w in stored)
 
 
 def test_scene_warnings_survive_on_the_row(tmp_db, monkeypatch):

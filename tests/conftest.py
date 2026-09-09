@@ -28,12 +28,75 @@ import pytest
 # which reload app.main under DEV_TOOLS=0.
 os.environ["DEV_TOOLS"] = "1"
 
+# The reference rule (2026-09-08): in production a spark with no pictures
+# behind it does not get written from at all -- `orchestrator.planner`
+# holds the run. Pinned OFF here, deliberately, and for one reason: every
+# graph test in this suite was written to exercise something else (the
+# retry edge, the prompt gate, the keyframe, tenancy) and hands the graph
+# a bare spark, so leaving it on would turn eighty-odd unrelated tests
+# into assertions about reference images. The rule has its own tests,
+# which turn it ON explicitly -- tests/test_reference_rule.py -- the same
+# arrangement ZEROPAGE_GATES uses, where the default is what the suite
+# runs under and the other mode is pinned per test.
+os.environ["ZEROPAGE_REQUIRE_REFS"] = "0"
+
 
 from app.main import app as _APP_AT_IMPORT  # noqa: E402  (see account_scope)
+
+# Modules that are ABOUT the reference rule turn it back on for
+# themselves. Keeping the list here rather than a fixture in each file is
+# deliberate: the rule grew from two directions on the same day and the
+# thing that would actually go wrong is a third enforcement point landing
+# with its tests written under the suite default, passing, and testing
+# nothing. A module named for the rule is opted in by being named.
+REFS_RULE_MODULES = {"test_reference_gate", "test_reference_rule"}
+
+
+@pytest.fixture(autouse=True)
+def _refs_rule(request, monkeypatch):
+    """ZEROPAGE_REQUIRE_REFS on for the rule's own tests, off elsewhere.
+
+    A test whose NAME says it is about an ungrounded scene opts in too --
+    those live in files that are mostly about something else (the queue,
+    the board), and splitting them out would separate them from the
+    fixtures they share."""
+    module = request.module.__name__.rsplit(".", 1)[-1]
+    if module in REFS_RULE_MODULES or "ungrounded" in request.node.name:
+        monkeypatch.setenv("ZEROPAGE_REQUIRE_REFS", "1")
 
 
 class NetworkUseInTest(RuntimeError):
     pass
+
+
+# THE SUITE RUNS AS CI RUNS IT (2026-09-08). Everything below is a
+# DEPLOYMENT POSTURE that lives in .env on Mike's machine and nowhere in
+# CI, so a suite that inherits it is two different suites -- eleven
+# orchestrator tests fail on his Mac and pass on GitHub, and the one that
+# actually mattered (a reference photo's canonical URL) silently swapped
+# what a dozen assertions were checking without either run saying which
+# it got. A test that is ABOUT one of these sets it itself; monkeypatch
+# unwinds these deletes in order, so a setenv inside a test still wins.
+#
+# A fixture and not a module-level pop, because app.main calls
+# load_dotenv() at import and would put every one of them straight back.
+R2_ENV = ("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY",
+          "R2_BUCKET", "R2_PUBLIC_BASE_URL")
+
+POSTURE_ENV = R2_ENV + (
+    "ZEROPAGE_KEYFRAME",         # the night's stills, off since 2026-09-08
+    "ZEROPAGE_UNCANNY",          # the on-brand judge, off on his machine
+    "ZEROPAGE_GRAPH_SCOUT",      # a run that names no direction reads the bank
+    "ZEROPAGE_GRAPH_RESEARCH",   # ... and the research agent runs
+    "LANGSMITH_TRACING",         # tracing is a live POST; the guard fails it
+)
+
+
+@pytest.fixture(autouse=True)
+def r2_off(monkeypatch):
+    """Shipped defaults, not this machine's .env."""
+    for name in POSTURE_ENV:
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -72,6 +135,8 @@ OUTPUT_ROOTS = (
     ("src.fal", "RENDER_DIR", "data/renders/fal"),
     ("src.runway", "RENDERS_ROOT", "data/renders"),
     ("src.runway", "RENDER_DIR", "data/renders/runway"),
+    ("src.veo", "RENDERS_ROOT", "data/renders"),
+    ("src.veo", "RENDER_DIR", "data/renders/veo"),
     ("src.nano_banana", "RENDER_DIR", "data/renders/nano"),
     ("src.orchestrator", "GENERATED_ROOT", "footage/generated"),
     ("src.autopilot", "GENERATED_DIR", "footage/generated"),

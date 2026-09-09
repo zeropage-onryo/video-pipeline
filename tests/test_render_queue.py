@@ -60,7 +60,10 @@ def a_scene(path, account_id, title="Cold Open", prompt="a close shot"):
     return preprod.save_concept(
         {"title": title, "hook": "", "logline": "",
          "shots": [{"n": 1, "type": "BROLL", "source": "AI", "tool": "HIGGSFIELD",
-                    "desc": title, "prompt": prompt}]},
+                    "desc": title, "prompt": prompt,
+                    # the lane shares the Queue's predicate, which since
+                    # 2026-09-08 requires reference photos
+                    "refs": ["/refs/seed.jpg"]}]},
         brand="zeropage", prompt_template="T", dsn=path, account_id=account_id)
 
 

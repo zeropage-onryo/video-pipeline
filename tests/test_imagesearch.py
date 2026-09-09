@@ -19,6 +19,13 @@ from src import framebank, imagesearch, mcp_server, preprod, refbin, scout
 
 JPEG = b"\xff\xd8\xff" + b"pretend jpeg"
 
+# Captured at import, before the autouse `no_web` fixture stubs the lane
+# out. A test that wants the REAL pinterest ranking has to put this back:
+# patching `_pinterest_pins` alone leaves `pinterest` itself stubbed to
+# return [], so the test reads as "the board ranked nothing" and nothing
+# in it is actually exercised.
+REAL_PINTEREST = imagesearch.pinterest
+
 
 def real_jpeg() -> bytes:
     """An actual decodable JPEG. The local-frame path runs refbin's real
@@ -223,12 +230,36 @@ def test_openverse_is_the_keyless_floor(tmp_db, monkeypatch):
 
 def test_web_lanes_interleave_reddit_google_openverse(monkeypatch):
     monkeypatch.setattr(imagesearch, "reddit", lambda q, brand=None, limit=6: [
-        {"source": "reddit", "image_url": "https://i.example/r1.jpg", "source_url": "https://www.reddit.com/r/x/1", "title": "", "credit": ""}])
+        {
+          "source": "reddit",
+          "image_url": "https://i.example/r1.jpg",
+          "source_url": "https://www.reddit.com/r/x/1",
+          "title": "",
+          "credit": ""
+         }])
     monkeypatch.setattr(imagesearch, "google_images", lambda q, limit=6: [
-        {"source": "google", "image_url": "https://i.example/g1.jpg", "source_url": "https://p.example/g1", "title": "", "credit": ""},
-        {"source": "google", "image_url": "https://i.example/g2.jpg", "source_url": "https://p.example/g2", "title": "", "credit": ""}])
+        {
+          "source": "google",
+          "image_url": "https://i.example/g1.jpg",
+          "source_url": "https://p.example/g1",
+          "title": "",
+          "credit": ""
+         },
+        {
+          "source": "google",
+          "image_url": "https://i.example/g2.jpg",
+          "source_url": "https://p.example/g2",
+          "title": "",
+          "credit": ""
+         }])
     monkeypatch.setattr(imagesearch, "openverse", lambda q, limit=6: [
-        {"source": "openverse", "image_url": "https://i.example/o1.jpg", "source_url": "https://p.example/o1", "title": "", "credit": ""}])
+        {
+          "source": "openverse",
+          "image_url": "https://i.example/o1.jpg",
+          "source_url": "https://p.example/o1",
+          "title": "",
+          "credit": ""
+         }])
     monkeypatch.setattr(imagesearch, "remember", lambda c, query="", dsn=None: c)
     got = [c["source"] for c in imagesearch.search("q", brand="antihero", limit=6)]
     assert got == ["reddit", "google", "openverse", "google"]
@@ -239,6 +270,7 @@ def test_his_own_pinterest_board_comes_first(monkeypatch):
     ranked by pin text against the query, ahead of every other lane."""
     monkeypatch.setenv("PINTEREST_ACCESS_TOKEN", "t")
     monkeypatch.setenv("PINTEREST_BOARD_ZEROPAGE", "zeropage refs")
+    monkeypatch.setattr(imagesearch, "pinterest", REAL_PINTEREST)
     monkeypatch.setattr(imagesearch, "_pinterest_pins", lambda brand: [
         {"id": "1", "title": "flooded mall generator light", "description": "",
          "media": {"images": {"1200x": {"url": "https://i.pinimg.com/1200x/a.jpg"}}}},
@@ -247,7 +279,13 @@ def test_his_own_pinterest_board_comes_first(monkeypatch):
          "media": {"images": {"originals": {"url": "https://i.pinimg.com/originals/c.jpg"}}}},
     ])
     monkeypatch.setattr(imagesearch, "openverse", lambda q, limit=6: [
-        {"source": "openverse", "image_url": "https://i.example/o1.jpg", "source_url": "https://p.example/o1", "title": "", "credit": ""}])
+        {
+          "source": "openverse",
+          "image_url": "https://i.example/o1.jpg",
+          "source_url": "https://p.example/o1",
+          "title": "",
+          "credit": ""
+         }])
     monkeypatch.setattr(imagesearch, "remember", lambda c, query="", dsn=None: c)
     got = imagesearch.search("flooded mall", brand="zeropage", limit=6)
     assert [c["source"] for c in got] == ["pinterest", "pinterest", "openverse"]

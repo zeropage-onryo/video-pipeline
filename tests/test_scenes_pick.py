@@ -11,6 +11,7 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
+from app import api
 from app.main import app
 from src import preprod, shootgen
 
@@ -45,11 +46,42 @@ def wait_for_job(job_id, timeout=5.0):
     raise AssertionError(f"job {job_id} never finished")
 
 
+SEED_REF = "/refs/seed.jpg"
+
+
+def _grounds_everything(concept_id, manual, account_id=None, *, idea=None):
+    """A stand-in for api._attach_scene_refs that always grounds.
+
+    The real one reads the asset bank and the composer's picks, neither
+    of which a route test has; without it the reference gate archives
+    every scene the route just wrote and the test is measuring the gate
+    instead of the route. Signature matches the real one exactly -- a
+    stub the code can call with kwargs it does not accept is a test that
+    fails for a reason the test is not about.
+    """
+    concept = preprod.get_concept(concept_id, dsn=None, account_id=account_id)
+    if not concept or not concept.get("shots"):
+        return []
+    shots = [dict(s) for s in concept["shots"]]
+    shots[0]["refs"] = list(manual or []) or [SEED_REF]
+    preprod.update_concept_shots(
+        concept_id, {"shots": shots, "duration": concept.get("duration")},
+        warnings=concept.get("warnings") or [], account_id=account_id)
+    return shots[0]["refs"]
+
+
 def a_scene(path, title="Cold Open", refs=None, prompt="P"):
+    # The default carries ONE reference on purpose (2026-09-08): the
+    # board and the Queue now refuse a scene with no photographs behind
+    # it, and these tests are about parking, picking and rendering --
+    # not about grounding. `refs=[]` still builds an ungrounded one, so
+    # the gate itself stays testable; that is why this is a sentinel
+    # check and not `refs or [SEED]`.
     return preprod.save_concept(
         {"title": title, "hook": "", "logline": "",
          "shots": [{"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
-                    "desc": title, "prompt": prompt, "refs": list(refs or [])}]},
+                    "desc": title, "prompt": prompt,
+                    "refs": [SEED_REF] if refs is None else list(refs)}]},
         brand="zeropage", prompt_template="T", dsn=path, account_id=None)
 
 
@@ -124,6 +156,11 @@ def test_the_run_route_saves_and_reports(tmp_db, monkeypatch):
         "src.shootgen.generate_with_retry",
         lambda c, m, p, **_: json.dumps({"scenes": [
             {"title": f"S{i}", "prompt": f"P{i}"} for i in range(3)]}))
+    # Something has to ground them or the reference gate archives all
+    # three and they leave the board (2026-09-08). This test is about the
+    # route saving and reporting; what happens to an UNgrounded Create is
+    # test_create_archives_a_scene_it_could_not_ground.
+    monkeypatch.setattr(api, "_attach_scene_refs", _grounds_everything)
 
     job = wait_for_job(client.post(
         "/api/scenes/run",
@@ -485,6 +522,60 @@ def test_approving_something_not_in_the_queue_is_refused(tmp_db, monkeypatch):
     assert res.json()["error"]["code"] == "not_queued"
 
 
+def test_an_ungrounded_scene_never_reaches_the_queue(tmp_db):
+    """The reference gate at the spend door (2026-09-08, Mike's call).
+
+    This is the case that prompted it: a scene the nightly graph parked
+    with a keyframe, whose card read "KEYFRAMED · AWAITING APPROVAL IN
+    QUEUE" beside "NO REFERENCES". The still was drawn by Nano from the
+    prompt, so approving would have anchored a paid Runway clip on the
+    pipeline's own guess. Grounded siblings are unaffected.
+    """
+    grounded = a_scene(tmp_db, "has photos")
+    blind = a_scene(tmp_db, "no photos", refs=[])
+    for scene_id in (grounded, blind):
+        preprod.set_shot_reference_image(scene_id, 1, "https://cdn/key.png",
+                                         dsn=tmp_db, account_id=None)
+        preprod.set_shot_parked(scene_id, 1, "keyframe rendered",
+                                dsn=tmp_db, account_id=None)
+
+    items = client.get("/api/queue/pending?brand=zeropage").json()["items"]
+    assert [c["id"] for c in items] == [grounded]
+
+
+def test_approving_an_ungrounded_scene_is_refused_before_it_spends(tmp_db, monkeypatch):
+    """Asked at the route too, not only in the listing. This one is
+    reachable by id without ever reading the queue, and a concept can
+    lose its refs between the two requests -- so the check has to sit
+    where the money is actually spent.
+    """
+    monkeypatch.setattr("src.runway.has_key", lambda account_id=None: True)
+    called = []
+    monkeypatch.setattr("src.runway.generate_for_shot",
+                        lambda *a, **k: called.append(a) or {"ok": True})
+
+    blind = a_scene(tmp_db, "no photos", refs=[])
+    preprod.set_shot_parked(blind, 1, "keyframe rendered", dsn=tmp_db,
+                            account_id=None)
+    res = client.post(f"/api/queue/{blind}/approve")
+    assert res.status_code == 400
+    assert res.json()["error"]["code"] == "no_reference"
+    assert called == []          # the point: nothing was billed
+
+
+def test_the_prompt_is_not_re_judged_at_the_queue(tmp_db, monkeypatch):
+    """Deliberately NOT a second bar. A prompt is on the row only
+    because score_prompts put it there; re-judging it here would be a
+    different opinion from the one that already ran, at the one place
+    where disagreeing is expensive."""
+    monkeypatch.setattr("src.runway.has_key", lambda account_id=None: True)
+    thin = a_scene(tmp_db, "thin prompt", prompt="x")
+    preprod.set_shot_parked(thin, 1, "keyframe rendered", dsn=tmp_db,
+                            account_id=None)
+    items = client.get("/api/queue/pending?brand=zeropage").json()["items"]
+    assert [c["id"] for c in items] == [thin]
+
+
 def test_approving_one_take_leaves_its_siblings_in_the_queue(tmp_db, monkeypatch):
     """Approving used to archive every unpicked sibling from the same
     spark, inferring "you have answered this batch". That was safe while
@@ -494,7 +585,7 @@ def test_approving_one_take_leaves_its_siblings_in_the_queue(tmp_db, monkeypatch
     Runway returned. Rejecting is the only thing that archives now."""
     takes = [preprod.save_concept(
         {"title": f"take{i}", "shots": [{"n": 1, "source": "AI", "tool": "RUNWAY",
-                                         "prompt": "p"}]},
+                                         "prompt": "p", "refs": [SEED_REF]}]},
         brand="zeropage", spark="night ride", dsn=tmp_db, account_id=None) for i in range(3)]
     for scene_id in takes:
         preprod.set_shot_parked(scene_id, 1, "keyframe rendered", dsn=tmp_db, account_id=None)
@@ -503,10 +594,14 @@ def test_approving_one_take_leaves_its_siblings_in_the_queue(tmp_db, monkeypatch
     rendered = {}
 
     def fake_render(concept_id, shot_n, db_path=None, resolve_photo=None,
-                    account_id=None):
+                    account_id=None, **picked):
         # account_id because the route passes it now (2026-09-02). This
         # test runs in conftest's unowned pool, where it is None; the
         # owned case is test_the_render_path_carries_the_owner.
+        # **picked because the route also passes the renderer choice now
+        # (2026-09-08): model, duration and the frame, under whichever
+        # name that vendor calls it. What lands in them is
+        # test_queue_renderers.py's subject, not this test's.
         rendered["args"] = (concept_id, shot_n)
         preprod.set_shot_media_url(concept_id, shot_n, "https://x/clip.mp4",
                                    dsn=db_path, account_id=account_id)
@@ -795,3 +890,109 @@ def test_validation_still_knows_every_real_room(tmp_db, monkeypatch):
                     "cam": "BMPCC", "location": "Garage"}]},
         [loc["name"] for loc in preprod.list_locations(dsn=tmp_db, account_id=None)])
     assert not any("unknown location" in w for w in warnings)
+
+
+# --- the still is drawn for the ones you pick -------------------------------
+# 2026-09-08, Mike's call. The nightly graph's keyframe step stays off
+# (ZEROPAGE_KEYFRAME=0): a 40-spark walk that draws every scene spends the
+# whole Nano cap on concepts nobody has looked at. The pick is the first
+# moment a human has said this one is worth something, so that is where the
+# cents get spent -- one step before the Queue, which is where the dollars do.
+
+def a_drawn_scene(path, title="Already drawn"):
+    return preprod.save_concept(
+        {"title": title, "hook": "", "logline": "",
+         "shots": [{"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
+                    "desc": title, "prompt": "P",
+                    "reference_image": "https://example.test/still.jpg"}]},
+        brand="zeropage", prompt_template="T", dsn=path, account_id=None)
+
+
+@pytest.fixture
+def keyframes(monkeypatch):
+    """Records every keyframe_scene call instead of making one."""
+    from src import scene_chain
+    calls = []
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.delenv("ZEROPAGE_KEYFRAME_ON_PICK", raising=False)
+    monkeypatch.setattr("google.genai.Client", lambda api_key=None: object())
+
+    def fake(concept_id, shot_n=None, **kw):
+        calls.append((concept_id, shot_n))
+        return {"ok": True, "media_url": "https://example.test/k.jpg", "frames": []}
+
+    monkeypatch.setattr(scene_chain, "keyframe_scene", fake)
+    return calls
+
+
+def test_picking_draws_the_still(tmp_db, keyframes):
+    cid = a_scene(tmp_db, "Cold Open")
+    res = client.post(f"/api/concepts/{cid}/pick", json={"picked": True}).json()
+    assert res["picked"] is True
+    assert res["job_id"], "the pick should have started a keyframe job"
+    job = wait_for_job(res["job_id"])
+    assert job["status"] == "done", job.get("error")
+    assert keyframes == [(cid, 1)]
+
+
+def test_unpicking_draws_nothing(tmp_db, keyframes):
+    cid = a_scene(tmp_db, "Cold Open")
+    assert client.post(f"/api/concepts/{cid}/pick",
+                       json={"picked": False}).json()["job_id"] is None
+    assert keyframes == []
+
+
+def test_a_scene_that_already_has_a_still_is_not_re_billed(tmp_db, keyframes):
+    """Unpicking and re-picking a card must not quietly buy a second image,
+    and the Director canvas's own keyframe is the one a person chose."""
+    cid = a_drawn_scene(tmp_db)
+    assert client.post(f"/api/concepts/{cid}/pick",
+                       json={"picked": True}).json()["job_id"] is None
+    assert keyframes == []
+
+
+def test_a_legacy_multi_shot_concept_draws_nothing(tmp_db, keyframes):
+    """Six stills off one tap is not what the pick means."""
+    cid = preprod.save_concept(
+        {"title": "old", "hook": "", "logline": "",
+         "shots": [{"n": 1, "type": "BROLL", "source": "AI", "prompt": "x"},
+                   {"n": 2, "type": "BROLL", "source": "AI", "prompt": "y"}]},
+        brand="zeropage", dsn=tmp_db, account_id=None)
+    assert client.post(f"/api/concepts/{cid}/pick",
+                       json={"picked": True}).json()["job_id"] is None
+    assert keyframes == []
+
+
+def test_the_drawing_can_be_turned_off_without_touching_the_route(tmp_db, keyframes,
+                                                                 monkeypatch):
+    monkeypatch.setenv("ZEROPAGE_KEYFRAME_ON_PICK", "0")
+    cid = a_scene(tmp_db, "Cold Open")
+    assert client.post(f"/api/concepts/{cid}/pick",
+                       json={"picked": True}).json()["job_id"] is None
+    assert keyframes == []
+
+
+def test_no_key_means_no_job_rather_than_a_500(tmp_db, keyframes, monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    cid = a_scene(tmp_db, "Cold Open")
+    res = client.post(f"/api/concepts/{cid}/pick", json={"picked": True})
+    assert res.status_code == 200
+    assert res.json()["picked"] is True and res.json()["job_id"] is None
+
+
+def test_a_keyframe_that_fails_still_leaves_the_scene_picked(tmp_db, keyframes,
+                                                             monkeypatch):
+    """The cap, a 503, a missing prompt -- the pick is already recorded by
+    the time the job runs, and a scene nobody drew is what every scene
+    looked like before this existed."""
+    from src import scene_chain
+    monkeypatch.setattr(scene_chain, "keyframe_scene",
+                        lambda *a, **k: {"ok": False,
+                                         "error": "daily ceiling: 60/60 images"})
+    cid = a_scene(tmp_db, "Cold Open")
+    res = client.post(f"/api/concepts/{cid}/pick", json={"picked": True}).json()
+    job = wait_for_job(res["job_id"])
+    assert job["status"] == "failed"
+    assert "60/60" in (job.get("error") or "")
+    assert preprod.get_concept(cid, dsn=tmp_db, account_id=None)["picked"] is True

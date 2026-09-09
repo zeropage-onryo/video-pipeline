@@ -43,9 +43,21 @@ def public_base_url() -> Optional[str]:
     """The public domain the bucket is served from -- either R2's own
     pub-<hash>.r2.dev dev domain or a custom domain you attached to the
     bucket in the Cloudflare dashboard. Trailing slash stripped so key
-    joining below never double-slashes."""
+    joining below never double-slashes.
+
+    2026-09-08: a pasted value once landed in .env (and the matching Fly
+    secret) with a stray control byte and trailing space baked into the
+    middle of the hostname -- config still "set" by every check here,
+    but every URL built from it was silently unreachable, and it took a
+    live curl to notice. Every non-printable byte is stripped before
+    anything else touches this value, so a bad paste fails loudly (a
+    visibly wrong URL, or R2 rejecting the request) instead of quietly
+    producing broken links no one looks at until a user reports it."""
     url = os.environ.get("R2_PUBLIC_BASE_URL")
-    return url.rstrip("/") if url else None
+    if not url:
+        return None
+    cleaned = "".join(ch for ch in url if ch.isprintable()).strip()
+    return cleaned.rstrip("/") if cleaned else None
 
 
 def configured() -> bool:
@@ -82,6 +94,38 @@ def _client():
         aws_secret_access_key=secret,
         region_name="auto",
     )
+
+
+def url_for_key(key: str) -> Optional[str]:
+    """The public URL for a key already known to be in the bucket, with
+    no upload and no network call -- just string-building off
+    `public_base_url()`. Returns None if R2 isn't configured, so a
+    caller can fall back to the local route in one line rather than
+    wrapping this in its own configured() check every time. Used by
+    asset_shelf.photo_url() for reference photos that were pushed up by
+    the upload handlers or a backfill script, not by this call."""
+    if not configured():
+        return None
+    return f"{public_base_url()}/{key}"
+
+
+def key_exists(key: str) -> bool:
+    """Is this key actually in the bucket? False when R2 is off or the
+    head fails for any reason.
+
+    Used by the one-off that rewrites stored references to their R2
+    URLs: a rewrite is only an improvement if the bytes are up there,
+    and "the URL is built from a template" is not evidence that they
+    are. Never raises -- a caller deciding whether to rewrite a row
+    should leave it alone on doubt, not crash mid-pass.
+    """
+    if not configured():
+        return False
+    try:
+        _client().head_object(Bucket=bucket(), Key=key)
+        return True
+    except Exception:                                   # noqa: BLE001
+        return False
 
 
 def upload_file(local_path: Path | str, key: Optional[str] = None,

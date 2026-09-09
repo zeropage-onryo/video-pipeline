@@ -19,12 +19,33 @@ hands-only stories in beige rooms. The look is not decoration applied later;
 it is a constraint on what you may invent. If the idea cannot open on a wet,
 hazed, teal-and-amber frame with one red accent, it is the wrong idea.
 
+═══ THE IMAGES — what you are allowed to build from (Mike, 2026-09-08) ═══
+Every spark below MUST be grounded in one of the numbered reference images
+attached to this message — real photographs found this pass, not a mood, not
+a headline. A spark is not permitted to invent a world with nothing behind
+it: pick ONE image, describe what is actually depicted in it (the setting,
+the light, the subject, an object in frame), and build the WANT / RULE /
+REVERSAL as something that could genuinely happen in that photographed place
+-- an extension of what is really there, not a departure from it. Say which
+image in the required image field (its number, exactly as labelled).
+
+{images}
+
+If no images are attached to this pass, return no candidates at all --
+{candidates: []} -- rather than inventing a world from the crawl text
+alone. A well-told story with no photograph behind it is not this job.
+
 ═══ THE WORLD, WHICH IS WHAT CHANGED ═══
 Every spark is set in a WORLD with its own rule, and names at least two of:
 
-  CHARACTER  who this is happening to. Antihero: Michael, on or near the
-             Ducati, inside the world. Zero Page: a stranger, never the same
-             one twice — or the creature or the product IS the character.
+  CHARACTER  who this is happening to. Antihero: Michael, inside the world —
+             described by what he is doing and wearing there, never by a
+             vehicle. Do not mention the Ducati, a bike, or riding at all
+             unless IMAGE grounding this spark (below) actually shows one
+             (Mike, 2026-09-08: take the bike wording out entirely — a
+             concept follows the image, not a habit). Zero Page: a stranger,
+             never the same one twice — or the creature or the product IS
+             the character.
   CREATURE   a monster, an infected, a machine, a thing behind the glass —
              with ONE specific design detail (it counts doors; its teeth are
              the wrong colour; it is polite), never "a scary monster".
@@ -197,8 +218,10 @@ call that wrote the spark never outranks a direction the filmmaker typed.
 Score 0.0 — not low, ZERO: no world (a real room tonight with nothing outside
 it); no hook frame you can name; no visible turn inside the shot; it names a
 lens, a camera move or a material instead of an action; it is a bare phrase
-or title; you cannot state all five parts of the spine; it names real IP; or
-it keeps the internet as its subject.
+or title; you cannot state all five parts of the spine; it names real IP; it
+keeps the internet as its subject; OR it is not grounded in one of the
+numbered IMAGES above -- a strong story invented with no photograph behind
+it scores 0.0 exactly like a bare phrase does, however well told.
 
 Score DOWN: it repeats another spark's world, wardrobe or face in this slate
 (the second one pays); the world is a label with no rule ("zombies" and nothing else);
@@ -217,7 +240,9 @@ or drop it.
 
 Return ONLY JSON, no prose and no code fence:
 {"candidates": [
-  {"spark": "<the whole idea, 3-5 sentences — world, want, rule, causal beats, reversal, button>",
+  {"image": <integer — which numbered IMAGE above this spark is grounded in;
+             required, and it must be a real image number from this pass>,
+   "spark": "<the whole idea, 3-5 sentences — world, want, rule, causal beats, reversal, button>",
    "world": "<one line: the world and its one rule>",
    "cast": "<one line: character / creature / product / place this uses>",
    "wardrobe": "<one line: what they wear, specific to this world>",

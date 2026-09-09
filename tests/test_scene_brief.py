@@ -51,17 +51,6 @@ def test_scene_brief_marks_brand_as_fallback_context():
     assert "idea and attached images win" in p
 
 
-def test_generate_scene_brief_parses_json(monkeypatch):
-    monkeypatch.setattr(
-        shootgen, "generate_with_retry",
-        lambda *a, **k: '{"title": "Portal Room", "brief": "Ultra-realistic grounded ..."}')
-    out = shootgen.generate_scene_brief("antihero", spark="s", gemini_client=object())
-    assert out["title"] == "Portal Room"
-    assert out["brief"].startswith("Ultra-realistic")
-
-
-
-
 def test_gold_standard_is_injected_into_the_scene_brief_prompt():
     p = shootgen.build_scene_brief_prompt("antihero")
     assert "GOLD-STANDARD EXAMPLE" in p and "match the SHAPE" in p

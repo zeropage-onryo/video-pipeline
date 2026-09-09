@@ -358,14 +358,55 @@ def pick_idea(idea_id: int, picked: bool = True,
               dsn: Optional[str] = None,
               account_id: Optional[int] = None,
 ) -> dict[str, Any]:
-    """Mark a concept worth rendering -- the label `pick_rate` reads.
+    """Mark a concept worth rendering -- the label `pick_rate` reads --
+    and draw its still.
 
-    Picking does NOT render. It puts the concept in front of the Queue's
-    spend gate, where approving is what calls Runway, on the machine.
+    THE ONE PLACE THIS SURFACE SPENDS (2026-09-08, Mike's call), and a
+    deliberate amendment to "the read/decide tools never spend", not an
+    oversight. The rule it serves is the budget one: the night writes
+    text and the PICK draws the image, so a pick from a phone that
+    produced no still meant the board and the phone disagreed about what
+    picking means -- and the card Mike opens next has nothing on it.
+
+    It is still not the RENDER gate. A keyframe is cents on the existing
+    Gemini key under NANO_DAILY_CAP; the clip is dollars through Runway,
+    and approving in the Queue, on the machine, is still the only thing
+    that calls it. `scene_chain.pick_skip_reason` is the same guard the
+    board uses -- one predicate, so the two doors cannot drift into
+    billing a scene twice.
     """
     account_id = _account(account_id, dsn)
     preprod.set_picked(int(idea_id), picked=picked, dsn=dsn, account_id=account_id)
-    return _card(preprod.get_concept(int(idea_id), dsn=dsn, account_id=account_id))
+    card = _card(preprod.get_concept(int(idea_id), dsn=dsn, account_id=account_id))
+    if picked:
+        card["keyframe"] = draw_pick_still(idea_id, dsn=dsn, account_id=account_id)
+    return card
+
+
+def draw_pick_still(idea_id: int, dsn: Optional[str] = None,
+                    account_id: Optional[int] = None) -> dict[str, Any]:
+    """Render the picked scene's still, reporting rather than raising.
+
+    The pick has already been recorded by the time this runs, and it is
+    the label that matters; a still that could not be drawn (the daily
+    cap, no key, a 503) leaves a scene that is picked, prompted and not
+    yet drawn -- which is what every scene looked like before this
+    existed. So this never raises: the tool result carries what
+    happened instead, because an agent that sees a tool error retries
+    the identical call, and the retry is what would spend twice.
+    """
+    from . import scene_chain
+    try:
+        result = scene_chain.draw_on_pick(int(idea_id), db_path=dsn,
+                                          account_id=account_id)
+    except Exception as e:                      # pragma: no cover - defensive
+        return {"ok": False, "note": f"still not drawn: {e}"}
+    if result.get("skipped"):
+        return {"ok": False, "note": result["skipped"]}
+    if not result.get("ok"):
+        return {"ok": False, "note": result.get("error") or "keyframe failed"}
+    return {"ok": True, "url": result.get("media_url"),
+            "frames": len(result.get("frames") or [])}
 
 
 def shoot_idea(idea_id: int, shot: bool = True,
@@ -653,7 +694,13 @@ def bank_reference(
     nothing had ever resolved one. A HEAD request would have caught
     every one.
     """
-    finding = scout.get_finding(int(finding_id), dsn=dsn)
+    # strict: a database that could not be asked must not come back as
+    # "this spark does not exist" -- the agent's only move on that answer
+    # is to give up on the images, which is what happened on 2026-09-07.
+    try:
+        finding = scout.get_finding(int(finding_id), dsn=dsn, strict=True)
+    except scout.Unreadable as e:
+        raise Refused(str(e)) from e
     if finding is None:
         raise ValueError(f"no finding {finding_id}")
 
@@ -685,27 +732,18 @@ def bank_reference(
                          f"attribution nobody can check is worse than none")
 
 
-    pass_id = scout.pass_id_for(finding, dsn=dsn)
-
-    stored = (_store_local(local_path) if local_path
-              else refbin.fetch(image_url))
-    if not stored:
-        return {"ok": False, "finding_id": finding["id"], "pass_id": pass_id,
-                "error": "not a readable image, too large, or a refused host",
-                "banked": len(scout.bin_for_pass(pass_id, dsn=dsn))}
-
-    row = scout.bin_add(finding["brand"], pass_id, stored,
-                        source_url=source_url.strip(), title=title.strip(),
-                        lane="agent", dsn=dsn)
-    banked = scout.bin_for_pass(pass_id, dsn=dsn)
-    if row is None:
-        return {"ok": False, "finding_id": finding["id"], "pass_id": pass_id,
-                "url": stored, "banked": len(banked),
-                "error": f"already banked, or the pass is full "
-                         f"({scout.MAX_BIN_IMAGES} images)"}
-    return {"ok": True, "finding_id": finding["id"], "pass_id": pass_id,
-            "url": stored, "source_url": row["source_url"],
-            "banked": len(banked), "cap": scout.MAX_BIN_IMAGES}
+    # The fetch-and-bank tail is scout's, shared with the automatic
+    # backstop (`scout.illustrate`). Everything above this line is what
+    # is specific to an AGENT asking: the id has to have been issued, and
+    # the attribution has to resolve.
+    result = scout.bank_candidate(
+        finding,
+        {"image_url": local_path or image_url,
+         "source_url": source_url, "title": title,
+         "source": "frames" if local_path else "", "lane": "agent"},
+        dsn=dsn)
+    result.setdefault("finding_id", finding["id"])
+    return result
 
 
 def spark_images(finding_id: int, dsn: Optional[str] = None) -> dict[str, Any]:
@@ -820,7 +858,10 @@ def resolve_finding(spark: str, brand: str, finding_id: Optional[int] = None,
     spark = " ".join((spark or "").split())
     finding = None
     if finding_id is not None:
-        finding = scout.get_finding(int(finding_id), dsn=dsn)
+        try:
+            finding = scout.get_finding(int(finding_id), dsn=dsn, strict=True)
+        except scout.Unreadable as e:
+            raise Refused(str(e)) from e
         if finding is None:
             raise ValueError(f"no finding {finding_id}")
         if spark and not scout.claims(finding["id"], spark, dsn=dsn):
@@ -1058,9 +1099,17 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
 
     @server.tool(annotations=writes)
     def pick(idea_id: int, picked: bool = True) -> dict:
-        """Mark a concept worth rendering. Does NOT render or spend --
-        it puts the concept in front of the Queue's spend gate, which a
-        human approves on the machine."""
+        """Mark a concept worth rendering, and draw its keyframe.
+
+        The still costs cents and is the point of picking: the nightly
+        run writes text, and the image is drawn for the ones a person
+        chose. `keyframe` in the result says whether one was drawn and
+        why not when it was not -- it is never an error, so do NOT
+        retry a pick that came back without a still.
+
+        This is still not the video: the CLIP is dollars, and approving
+        in the Queue on the machine is the only thing that spends
+        them."""
         return _t(pick_idea, idea_id, picked=picked, dsn=dsn)
 
     @server.tool(annotations=writes)
