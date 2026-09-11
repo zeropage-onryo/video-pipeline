@@ -1438,7 +1438,7 @@ def test_a_single_link_refs_slot_still_reads_as_one_wire(tmp_db, monkeypatch):
     that is a list of one, not nothing."""
     graph = reference_set_graph()
     del graph["nodes"][4]["inputs"][4]["links"]
-    graph["links"] = [l for l in graph["links"] if l[0] != 4]
+    graph["links"] = [link for link in graph["links"] if link[0] != 4]
     seen = {}
     monkeypatch.setattr(workflow_runner, "enhance",
                         lambda s, u, images=None, **kw: seen.update(images=images) or "OK")
@@ -1465,3 +1465,19 @@ def test_the_runway_block_says_what_a_clip_is(tmp_db):
     assert data["ratio"] == runway.DEFAULT_RATIO
     assert data["duration"] == runway.DEFAULT_DURATION
     assert "estimate_usd" in data and "model" in data
+
+
+# --- the React shell's account block (2026-09-11) ----------------------------
+
+def test_api_me_names_the_signed_in_user_and_the_active_account(tmp_db):
+    """/api/me composes identity + membership from the same helpers the
+    Jinja shell reads, so the two shells cannot disagree about who is
+    signed in. The test client's session is whatever conftest signs."""
+    data = client.get("/api/me").json()
+    assert set(data) == {"user", "account", "accounts"}
+    assert data["user"]["id"]
+    assert data["user"]["display_name"]
+    for account in data["accounts"]:
+        assert set(account) >= {"id", "slug", "label", "role"}
+    if data["account"] is not None:
+        assert data["account"]["slug"] in {a["slug"] for a in data["accounts"]}

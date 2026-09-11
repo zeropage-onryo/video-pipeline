@@ -152,6 +152,36 @@ def capabilities():
     return compute_capabilities()
 
 
+def _account_card(a: dict) -> dict:
+    """accounts rows name the label display_name and the accent
+    accent_color; the shell wants the shorter names."""
+    return {"id": a["id"], "slug": a["slug"],
+            "label": a.get("display_name") or a["slug"],
+            "accent": a.get("accent_color"), "role": a.get("role")}
+
+
+@router.get("/me")
+def me(request: Request, account_id: int = Depends(auth.current_account_id)):
+    """Who is signed in and which account they are acting as -- the
+    account block at the bottom of the React shell's rail (2026-09-11).
+    Composed from the same helpers the Jinja shell reads
+    (auth.current_user / current_account / accounts.memberships), so the
+    two shells can never disagree about who you are. Identity fields
+    are the profile mirror's; the active account is real membership,
+    with the `brand` cookie only a preference among the accounts you
+    belong to."""
+    user = auth.current_user(request) or {}
+    member_of = accounts.memberships(user["id"]) if user.get("id") else []
+    active = next((a for a in member_of if a["id"] == account_id), None)
+    return {
+        "user": {"id": user.get("id"), "email": user.get("email"),
+                 "display_name": user.get("display_name") or (user.get("email") or "").split("@")[0],
+                 "avatar_url": user.get("avatar_url")},
+        "account": _account_card(active) if active else None,
+        "accounts": [_account_card(a) for a in member_of],
+    }
+
+
 # --- assets -----------------------------------------------------------------
 # Path helpers mirror app/main.py's (photos_for / _entity_photos /
 # safe_space_name); duplicated rather than imported to keep main -> api
