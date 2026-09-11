@@ -691,6 +691,29 @@ is yours, in Resolve, by hand.
   survives. `refine_shot_prompt` is per-shot technique polish via `promptgen.
   refine_prompt` against the `ai_prompting` shelf; the template is
   `prompts/direct_prompt.txt`.
+- **The Director canvas is the Gen Space (2026-09-10, from the "ZPF Gen Space" design;
+  the shape LTX Studio's gen space has).** `app/static/zpf/genspace.js` replaced
+  `workflows.js` and the vendored LiteGraph: ONE shot's chain drawn as DOM cards on an
+  infinite dot-grid canvas -- the prompt and its instructions, the scene's reference sets
+  (a character's frames, a room's plates, the composer's uploads) as their own cards,
+  the Gemini enhance, the Nano keyframe, the Runway model and a derived Output card --
+  wired with real links; a floating prompt bar underneath edits the shot's prompt and
+  an `@`-mention drops the element on the canvas already wired in; zoom/pan/fit, a cut
+  tool, a minimap, a per-node inspector (camera presets fold into the prompt -- the
+  runner has no camera parameter), and **Send to Queue**, which only PICKS: approving
+  in Queue is still the one spend gate. A bitmap canvas could name a face but never
+  show one, which is why LiteGraph went. **The JSON is still LiteGraph's serialize()
+  shape** -- the runner, the saved shot graphs and the seeded template are untouched by
+  the swap -- with one addition on both sides: `zpf/reference_set` (a pure node whose
+  value is its url list) and a `refs` input port that takes SEVERAL wires
+  (`workflow_runner.MULTI_LINK_PORTS`; the slot carries `links: [...]` beside the
+  single-link `link`, and `node_reference_urls` reads the port right after the wired
+  keyframe). The billed nodes' frozen `ref_urls` are rewritten from the wires before
+  every save (`freezeRefs`), so the drawing and the run never disagree. The rail
+  hover-expands with labels, a Queue badge (`GET /api/queue/pending` count, refreshed on
+  picks, decisions and finished jobs) and the account row; the bar carries Director's
+  own controls only while the canvas is up (`html[data-gs="canvas"]`). Not built from
+  the same design set: the Elements page (the rail keeps Analytics until it exists).
 - **`src/mcp_server.py`** + **`app/mcp_mount.py`** — the MCP surface (2026-08-31), so the
   board can be read and decided on from a phone or an agent instead of only from this
   machine. **An adapter, never a store:** every tool is a thin call into `preprod` or

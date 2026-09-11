@@ -1,11 +1,11 @@
 /* Boot: capabilities first (everything gates on them), then the field,
    the router, the palette, the brand pill, and the jobs SSE feed. */
-import { api, applyCaps, bus, closeDetail, esc, state, stateline } from './shared.js';
+import { api, applyCaps, bus, closeDetail, esc, refreshQueueBadge, state, stateline } from './shared.js';
 import { initField } from './field.js';
 import { initStudio, renderStudio } from './studio.js';
 import { renderAssets } from './assets.js';
 import { initPipeline, renderPipeline } from './pipeline.js';
-import { initWorkflows, renderDirectorTab, closeWorkflowModal } from './workflows.js';
+import { initWorkflows, renderDirectorTab, closeWorkflowModal } from './genspace.js';
 import { renderAnalytics } from './analytics.js';
 import { initQueue, renderQueue } from './queue.js';
 
@@ -38,6 +38,28 @@ const BRAND_LABEL = { antihero: 'ANTIHERO', zeropage: 'Zero Page Films' };
 function paintBrand() {
   document.getElementById('brandpill').textContent =
     `${BRAND_LABEL[state.brand] || state.brand} · switch`;
+  const role = document.getElementById('rrole');
+  if (role) role.textContent = `${BRAND_LABEL[state.brand] || state.brand} · owner`;
+}
+
+/* ── the rail: hover expands it; the pin keeps it open ── */
+function initRail() {
+  const rail = document.getElementById('rail');
+  const pin = document.getElementById('railpin');
+  let pinned = false;
+  try { pinned = localStorage.getItem('zp.rail') === 'open'; } catch { /* private mode */ }
+  const paint = () => {
+    rail.classList.toggle('pinned', pinned);
+    pin.setAttribute('aria-pressed', String(pinned));
+    pin.title = pinned ? 'Let the rail collapse' : 'Keep the rail open';
+  };
+  pin.onclick = () => {
+    pinned = !pinned;
+    try { localStorage.setItem('zp.rail', pinned ? 'open' : 'closed'); } catch { /* fine */ }
+    paint();
+  };
+  paint();
+  document.getElementById('racct').onclick = openAccountPicker;
 }
 
 function openAccountPicker() {
@@ -58,6 +80,8 @@ function connectJobs() {
     state.jobs.set(job.id, job);
     paintJobsRail();
     bus.dispatchEvent(new CustomEvent('job', { detail: job }));
+    // a finished render or pick changes what is waiting in the Queue
+    if (['done', 'failed'].includes(job.status)) refreshQueueBadge();
   });
   source.onerror = () => {
     source.close();
@@ -149,6 +173,7 @@ initStudio(go);
 initPipeline();
 initWorkflows();
 initQueue();
+initRail();
 paintBrand();
 document.getElementById('brandpill').onclick = openAccountPicker;
 document.getElementById('mark').onclick = () => go('studio');
@@ -197,5 +222,6 @@ if (!matchMedia('(prefers-reduced-motion:reduce)').matches) {
     applyCaps({});
   }
   connectJobs();
+  refreshQueueBadge();
   go('studio');
 })();

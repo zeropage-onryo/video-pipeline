@@ -8,30 +8,72 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@300;400;500;600&family=Inter:wght@300;400;500&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/zpf/vendor/litegraph.css">
 <link rel="stylesheet" href="/static/zpf/zpf.css">
 </head>
 <body data-brand="{{ brand }}">
 
 <canvas id="gl"></canvas><div class="fb"></div>
 
-<nav class="rail">
-  <button class="mark" id="mark" title="Studio">ZP</button>
-  <div class="rnav">
-    <a data-view="studio" data-label="Studio" aria-current="page"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5V21H3z"/></svg></a>
-    <a data-view="assets" data-label="Assets"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="3"/><path d="M3 9h18M9 9v9"/></svg></a>
-    <a data-view="pipeline" data-label="Pipeline"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="18" cy="18" r="2.4"/><path d="M8.4 6H16a2 2 0 0 1 2 2v7.6"/></svg></a>
-    <a data-view="director" data-label="Director"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="18" cy="6" r="2.4"/><circle cx="12" cy="18" r="2.4"/><path d="M8.4 6h7.2M6.8 8.2 11 15.8M17.2 8.2 13 15.8"/></svg></a>
-    <a data-view="analytics" data-label="Analytics"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v8.5h8.5"/></svg></a>
-    <a data-view="queue" data-label="Queue"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 14h5l2 3h4l2-3h5"/></svg></a>
+<nav class="rail" id="rail" aria-label="Primary">
+  <div class="rhead">
+    <button class="mark" id="mark" title="Studio">ZP</button>
+    <span class="rl rtitle">Studio</span>
+    <button class="rpin" id="railpin" title="Keep the rail open" aria-pressed="false">
+      <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg>
+    </button>
   </div>
-  <div class="rfoot"><a class="legacy" href="/studio" title="The old workspace" data-cap="dev_tools" hidden>legacy</a> <kbd>⌘K</kbd></div>
+  <div class="rnav">
+    <a data-view="studio" data-label="Studio" aria-current="page"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5V21H3z"/></svg><span class="rl">Studio</span></a>
+    <a data-view="assets" data-label="Assets"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 4.5-9 4.5-9-4.5z"/><path d="m3 12 9 4.5 9-4.5"/><path d="m3 16.5 9 4.5 9-4.5"/></svg><span class="rl">Assets</span></a>
+    <a data-view="pipeline" data-label="Pipeline"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="18" cy="18" r="2.4"/><path d="M8.4 6H16a2 2 0 0 1 2 2v7.6"/></svg><span class="rl">Pipeline</span></a>
+    <a data-view="director" data-label="Director"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11h16v9a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z"/><path d="m4 11-1.5-4 15.5-4 1.5 4z"/><path d="m8 9.5 3-6M13 8.3l3-6"/></svg><span class="rl">Director</span></a>
+    <a data-view="analytics" data-label="Analytics"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v8.5h8.5"/></svg><span class="rl">Analytics</span></a>
+    <a data-view="queue" data-label="Queue"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h11M3 12h11M3 18h7"/><path d="m16 11 5 3-5 3z"/></svg><span class="rl">Queue</span><span class="rbadge" id="qbadge" hidden>0</span></a>
+  </div>
+  <div class="rfoot">
+    <span class="rl rkbd"><kbd>⌘K</kbd></span>
+    <a class="legacy" href="/studio" title="The old workspace" data-cap="dev_tools" hidden>legacy</a>
+    <button class="racct" id="racct" title="{{ user.display_name or user.email }} · switch account">
+      <span class="ravatar">{% if user.avatar_url %}<img src="{{ user.avatar_url }}" alt="">{% else %}{{ (user.display_name or user.email)[:1] | upper }}{% endif %}</span>
+      <span class="rl rwho">
+        <span class="rname">{{ user.display_name or user.email }}</span>
+        <span class="rrole" id="rrole">{{ brand }} · owner</span>
+      </span>
+      <svg class="rl rchev" viewBox="0 0 24 24"><path d="m7 9 5-5 5 5M7 15l5 5 5-5"/></svg>
+    </button>
+  </div>
 </nav>
 
 <div class="shell">
   <div class="bar">
     <span class="brand" id="brandname">ZPF</span><span class="sep">/</span><span class="cur">Studio</span>
+    <span class="dironly sep">/</span>
+    <button class="dironly wtbicon" id="wfback" title="Back to the brief" aria-label="Back to the brief">
+      <svg viewBox="0 0 24 24"><path d="M14 6l-6 6 6 6"/></svg>
+    </button>
+    <span class="dironly tag chip" id="dirchip" hidden>
+      <svg viewBox="0 0 24 24"><path d="M4 11h16v9a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z"/><path d="m4 11-1.5-4 15.5-4 1.5 4z"/></svg>
+      <span id="wfconcept">—</span>
+    </span>
+    <details class="dironly wfmore" id="wfmore">
+      <summary aria-label="Workflow library" title="Workflow library">…</summary>
+      <div class="wfmenu">
+        <input class="wtbtitle" id="wfname" placeholder="Untitled workflow">
+        <select class="wfselect" id="wfpick"><option value="">Open…</option></select>
+        <div class="genrow">
+          <button class="wtbpill" id="wfnew">New</button>
+          <button class="wtbpill" id="wfsave">Save</button>
+          <button class="wtbpill" id="wfdel">Delete</button>
+        </div>
+      </div>
+    </details>
     <div class="spacer"></div>
+    <span class="dironly wtbsaved" id="wfsaved"></span>
+    <button class="dironly wtbpill" id="wfsaveconcept" hidden>Save to concept</button>
+    <button class="dironly gsqueue" id="sendqueue" hidden>
+      <svg viewBox="0 0 24 24"><path d="M3 6h11M3 12h11M3 18h7"/><path d="m16 11 5 3-5 3z"/></svg>
+      <span>Send to Queue</span>
+    </button>
     <button class="tag" id="brandpill" title="Switch active brand">—</button>
   </div>
 
@@ -180,44 +222,63 @@
         <div class="stateline" id="dirstate" hidden></div>
       </div>
 
+      <!-- ══ GEN SPACE · the node canvas (2026-09-10, "ZPF Gen Space")
+           One shot's chain as DOM cards on an infinite canvas: the
+           prompt and its instructions, the reference sets the scene was
+           written against (a character's frames, a room's plates, the
+           composer's uploads), the enhance, the keyframe, the Runway
+           model and its output. Wires are real links the runner
+           executes; the prompt bar underneath edits the shot's prompt
+           and @-mentions drop an element on the canvas already wired
+           in. Nothing here spends around the module gates. -->
       <div id="dircanvas" hidden>
-        <div class="wftopbar">
-          <button class="wtbicon" id="wfback" title="Back to the brief" aria-label="Back to the brief">
-            <svg viewBox="0 0 24 24"><path d="M14 6l-6 6 6 6"/></svg>
-          </button>
-          <span class="wtbpriv">
-            <svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
-            Private
-          </span>
-          <span class="wtbsep">/</span>
-          <input class="wtbtitle" id="wfname" placeholder="Untitled workflow">
-          <span class="wtbmeta" id="wfconcept"></span>
-          <details class="wfmore" id="wfmore">
-            <summary aria-label="Workflow library">…</summary>
-            <div class="wfmenu">
-              <select class="wfselect" id="wfpick"><option value="">Open…</option></select>
-              <button class="wtbpill" id="wfnew">New</button>
-              <button class="wtbpill" id="wfdel">Delete</button>
+        <div class="gs" id="gs">
+          <div class="gscanvas" id="gscanvas" data-tool="select">
+            <div class="gsworld" id="gsworld">
+              <svg class="gswires" id="gswires"><g id="gswireg"></g><path id="gsdragwire" class="gsdrag" hidden/></svg>
+              <div class="gsnodes" id="gsnodes"></div>
+              <div class="gsmenu" id="gsmenu" hidden>
+                <button data-act="run" title="Run this node"><svg viewBox="0 0 24 24"><path d="M7 4l12 8-12 8z"/></svg></button>
+                <button data-act="open" title="Open the output"><svg viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9"/><path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5"/></svg></button>
+                <button data-act="delete" title="Delete node"><svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>
+              </div>
             </div>
-          </details>
-          <span class="spacer"></span>
-          <span class="wtbsaved" id="wfsaved"></span>
-          <button class="wtbpill" id="wfsave">Save</button>
-          <button class="wtbpill" id="wfsaveconcept" hidden>Save to concept</button>
-          <button class="wtbrun" id="wfrunall">Run all <i>ⓘ</i></button>
-        </div>
-        <div class="stateline" id="wfstate" hidden></div>
-        <div class="wfwrap">
-          <canvas id="wfcanvas"></canvas>
-          <button class="railplus" id="wfaddbtn" title="Add a node" aria-label="Add a node" aria-expanded="false">+</button>
-          <div class="wfrail">
-            <button class="railbtn" id="wffit" title="Fit the graph in view" aria-label="Fit the graph in view">
-              <svg viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg>
-            </button>
-            <button class="railbtn" id="wffolder" title="Workflow library" aria-label="Workflow library">
-              <svg viewBox="0 0 24 24"><path d="M4 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/></svg>
-            </button>
           </div>
+
+          <div class="stateline gstoast" id="wfstate" hidden></div>
+
+          <div class="gszoom">
+            <button id="gszoomout" title="Zoom out"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5M8 11h6"/></svg></button>
+            <button id="gszoomin" title="Zoom in"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5M8 11h6M11 8v6"/></svg></button>
+            <button id="wffit" title="Fit to view"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button>
+            <span class="gszl" id="gszoomlabel">100%</span>
+          </div>
+
+          <div class="gsbottom">
+            <div class="gsdock" id="shotdock" hidden></div>
+            <div class="gsbar glass">
+              <div class="gstools">
+                <button class="railplus" id="wfaddbtn" title="Add node" aria-expanded="false"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+                <span class="gsdiv"></span>
+                <button class="gstool" data-tool="select" title="Select" aria-pressed="true"><svg viewBox="0 0 24 24"><path d="M5 3l14 8.5-6.5 1.5L10 20z"/></svg></button>
+                <button class="gstool" data-tool="pan" title="Pan · hold space" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M18 11V6.5a1.5 1.5 0 0 0-3 0V11M15 10V4.5a1.5 1.5 0 0 0-3 0V11M12 10.5V5.5a1.5 1.5 0 0 0-3 0V13M9 12.5l-2-2a1.6 1.6 0 0 0-2.3 2.2l4.2 5.6A6 6 0 0 0 13.8 21h.7a5 5 0 0 0 5-5v-5"/></svg></button>
+                <button class="gstool" data-tool="cut" title="Cut a wire" aria-pressed="false"><svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.1 15.9M14.5 14.5 20 20M8.1 8.1 12 12"/></svg></button>
+                <button class="gstool" id="gsframe" title="Frame all"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></button>
+              </div>
+              <div class="gsprompt mentionwrap">
+                <textarea id="gsprompttext" rows="1" placeholder="Describe the shot… (@ to bring an element onto the canvas)"></textarea>
+                <div class="mentiondrop up" id="gsmentions" hidden></div>
+              </div>
+              <div class="gschips" id="gschips">
+                <span class="gschip" id="gschipmodel" title="Model"><svg viewBox="0 0 24 24"><path d="m12 3 1.8 4.6L18.5 9l-4.7 1.4L12 15l-1.8-4.6L5.5 9l4.7-1.4z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg><span>Runway</span></span>
+                <span class="gschip" id="gschipratio" title="Aspect ratio"><svg viewBox="0 0 24 24"><rect x="7" y="3" width="10" height="18" rx="2"/></svg><span>9:16</span></span>
+                <span class="gschip" id="gschipdur" title="Duration"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg><span>5 sec</span></span>
+              </div>
+              <button class="gsgo" id="wfrunall" title="Run the whole chain"><svg viewBox="0 0 24 24"><path d="m12 3 1.8 4.6L18.5 9l-4.7 1.4L12 15l-1.8-4.6L5.5 9l4.7-1.4z"/></svg><span>Generate</span></button>
+            </div>
+            <div class="gsmini" id="gsmini"><span class="gsminilabel">gen space</span></div>
+          </div>
+
           <div class="wfpalette" id="wfpalette" hidden>
             <div class="wfpsearch">
               <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
@@ -232,9 +293,30 @@
               <button class="wfptoggle" id="wfpkeep" role="switch" aria-checked="false" aria-label="Keep open to add multiple nodes"><i></i></button>
             </div>
           </div>
+
+          <aside class="gsinspect" id="gsinspect" hidden>
+            <div class="gsihead">
+              <span class="m">node</span>
+              <b id="gsititle">—</b>
+              <span class="spacer"></span>
+              <button class="gsix" id="gsiclose" title="Close" aria-label="Close inspector"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+            </div>
+            <div class="gsibody">
+              <div class="gsisec"><span class="m">what it does</span><p id="gsinote"></p></div>
+              <div class="gsisec"><span class="m">name</span><input id="gsiname" class="gsiinput"></div>
+              <div class="gsisec" id="gsitextsec" hidden><span class="m" id="gsitextlabel">text</span><textarea id="gsitext" class="gsiinput gsita"></textarea></div>
+              <div class="gsisec" id="gsicamsec" hidden><span class="m">camera motion · folds a preset into the prompt</span><div class="gsicam" id="gsicam"></div></div>
+              <div class="gsisec" id="gsispendsec" hidden><span class="m">spend</span><div class="gsispend"><b id="gsispend">—</b><span id="gsispendnote"></span></div><span class="m gsigate" id="gsigate"></span></div>
+              <div class="gsisec" id="gsioutsec" hidden><span class="m">output</span><pre id="gsiout" class="gsiout"></pre></div>
+              <div class="gsisec"><span class="m">connections</span><span id="gsiwires" class="gsiwires">—</span></div>
+            </div>
+            <div class="gsifoot">
+              <button class="gsqueue wide" id="gsisend"><svg viewBox="0 0 24 24"><path d="M3 6h11M3 12h11M3 18h7"/><path d="m16 11 5 3-5 3z"/></svg><span>Send to Queue</span></button>
+            </div>
+          </aside>
+
+          <span class="gstip" id="gstip" hidden></span>
         </div>
-        <div class="shotdock" id="shotdock" hidden></div>
-        <div class="wfhint m">The + adds a node · right-click the canvas also works · drag from a port dot to wire · double-click a node to edit it</div>
       </div>
   </div><!-- /v-director -->
 
@@ -369,7 +451,6 @@
   </div>
 </div>
 
-<script src="/static/zpf/vendor/litegraph.js"></script>
 <script type="module" src="/static/zpf/app.js"></script>
 </body>
 </html>

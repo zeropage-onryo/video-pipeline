@@ -539,15 +539,45 @@ def test_ui_shell_is_one_board_per_rail_view(tmp_db):
     concepts were always the same row, so they are one board; the idea
     is typed on Studio and the spend is approved in Queue. The node
     canvas stays its OWN rail view, Director -- the nodes must never be
-    buried behind a tab -- and the canvas (LiteGraph) still ships with
-    the shell."""
+    buried behind a tab -- and the canvas (the Gen Space, 2026-09-10)
+    still ships with the shell. LiteGraph is gone with it: a bitmap
+    canvas could name a face but never show one."""
     html = client.get("/ui").text
     assert 'data-view="workflows"' not in html
     assert 'data-view="director"' in html
     assert 'data-view="queue"' in html
     assert "data-ptab=" not in html            # the tab strip is gone entirely
     assert 'data-view="evals"' not in html
-    assert "vendor/litegraph.js" in html
+    assert "vendor/litegraph.js" not in html
+    assert client.get("/static/zpf/genspace.js").status_code == 200
+    assert client.get("/static/zpf/workflows.js").status_code == 404
+
+
+def test_the_gen_space_is_the_director_canvas(tmp_db):
+    """The ZPF Gen Space design (2026-09-10): DOM cards on an infinite
+    canvas, a floating prompt bar with @-mentions, a zoom cluster, a
+    minimap, an inspector, and Send to Queue in the bar -- which only
+    PICKS; approving in Queue is still the one spend gate."""
+    html = client.get("/ui").text
+    for marker in ('id="gscanvas"', 'id="gsworld"', 'id="gswires"', 'id="gsnodes"',
+                   'id="gsprompttext"', 'id="gsmentions"', 'id="gsinspect"',
+                   'id="gsmini"', 'id="gszoomlabel"', 'id="sendqueue"',
+                   'id="wfrunall"', 'id="wfpalette"', 'data-tool="cut"'):
+        assert marker in html, marker
+    assert "Send to Queue" in html
+    assert 'id="wfcanvas"' not in html          # the <canvas> element is gone
+
+
+def test_the_rail_carries_labels_a_badge_and_the_account(tmp_db):
+    """The rail hover-expands with a label beside every icon, the Queue
+    entry carries a pending-count badge, and the footer names who is
+    signed in (the design's account row), opening the account picker."""
+    html = client.get("/ui").text
+    assert '<span class="rl">Director</span>' in html
+    assert 'id="qbadge"' in html
+    assert 'id="racct"' in html
+    assert 'id="railpin"' in html
+    assert "vendor/litegraph.css" not in html
 
 
 def test_the_idea_composer_lives_only_on_studio(tmp_db):
@@ -1337,3 +1367,101 @@ def test_every_shot_row_call_site_forwards_the_account():
         "these call sites drop account_id, so the shot is written unowned "
         "while record_generation looks it up per account: "
         + ", ".join(unstamped))
+
+
+# --- the Gen Space's reference sets (2026-09-10) -----------------------------
+
+def reference_set_graph():
+    """Two reference sets (a character's frames, a room's plates) both
+    wired into ONE enhance node's `refs` port -- the multi-link slot
+    carries `links` beside the single-link `link`, exactly what
+    genspace.js serializes."""
+    return {
+        "nodes": [
+            {"id": 1, "type": "zpf/system_prompt", "properties": {"text": "SYS"},
+             "outputs": [{"name": "text", "type": "text", "links": [1]}]},
+            {"id": 2, "type": "zpf/user_prompt", "properties": {"text": "USER"},
+             "outputs": [{"name": "text", "type": "text", "links": [2]}]},
+            {"id": 3, "type": "zpf/reference_set",
+             "properties": {"kind": "character", "label": "Michael",
+                            "urls": ["/characters/michael/photo/a.jpg",
+                                     "/characters/michael/photo/b.jpg", "", 7]},
+             "outputs": [{"name": "images", "type": "images", "links": [3]}]},
+            {"id": 4, "type": "zpf/reference_set",
+             "properties": {"kind": "location", "label": "Studio bedroom",
+                            "urls": ["/locations/studio-bedroom/photo/r.jpg"]},
+             "outputs": [{"name": "images", "type": "images", "links": [4]}]},
+            {"id": 5, "type": "zpf/enhance", "properties": {"auto_ground": False},
+             "inputs": [{"name": "system", "type": "text", "link": 1},
+                        {"name": "user", "type": "text", "link": 2},
+                        {"name": "image", "type": "image", "link": None},
+                        {"name": "references", "type": "text", "link": None},
+                        {"name": "refs", "type": "images", "link": 3, "links": [3, 4]}],
+             "outputs": [{"name": "text", "type": "text", "links": []}]},
+        ],
+        "links": [[1, 1, 0, 5, 0, "text"], [2, 2, 0, 5, 1, "text"],
+                  [3, 3, 0, 5, 4, "images"], [4, 4, 0, 5, 4, "images"]],
+    }
+
+
+def test_a_reference_set_node_is_its_list_of_urls(tmp_db):
+    result = workflow_runner.execute_graph(
+        {"nodes": [reference_set_graph()["nodes"][2]], "links": []},
+        gemini_client=None, db_path=tmp_db)
+    assert result["nodes"]["3"] == {
+        "status": "done", "kind": "images",
+        "output": ["/characters/michael/photo/a.jpg", "/characters/michael/photo/b.jpg"],
+        "error": None}          # the blank and the non-string are dropped
+
+
+def test_every_reference_set_wired_into_refs_reaches_the_enhance(tmp_db, monkeypatch):
+    """The face AND the room, through one port, in wire order -- and
+    frozen ref_urls no longer needed for the drawing to ground."""
+    seen = {}
+
+    def fake_enhance(system, user, images=None, *, gemini_client,
+                     resolve_photo=None, model=None, **kw):
+        seen["images"] = images
+        return "OK"
+
+    monkeypatch.setattr(workflow_runner, "enhance", fake_enhance)
+    result = workflow_runner.execute_graph(reference_set_graph(),
+                                           gemini_client=object(), db_path=tmp_db)
+    assert result["nodes"]["5"]["status"] == "done", result["nodes"]["5"]
+    assert seen["images"] == ["/characters/michael/photo/a.jpg",
+                              "/characters/michael/photo/b.jpg",
+                              "/locations/studio-bedroom/photo/r.jpg"]
+
+
+def test_a_single_link_refs_slot_still_reads_as_one_wire(tmp_db, monkeypatch):
+    """An older row written before `links` existed carries only `link`;
+    that is a list of one, not nothing."""
+    graph = reference_set_graph()
+    del graph["nodes"][4]["inputs"][4]["links"]
+    graph["links"] = [l for l in graph["links"] if l[0] != 4]
+    seen = {}
+    monkeypatch.setattr(workflow_runner, "enhance",
+                        lambda s, u, images=None, **kw: seen.update(images=images) or "OK")
+    workflow_runner.execute_graph(graph, gemini_client=object(), db_path=tmp_db)
+    assert seen["images"] == ["/characters/michael/photo/a.jpg",
+                              "/characters/michael/photo/b.jpg"]
+
+
+def test_a_saved_gen_space_graph_round_trips_through_the_api(tmp_db):
+    """The multi-link `links` key survives the save -> run path -- the
+    JSON column is opaque to the store, and the runner reads it."""
+    response = client.post("/api/workflows", json={"name": "refs", "graph": reference_set_graph()})
+    assert response.status_code == 200
+    saved = client.get(f"/api/workflows/{response.json()['id']}").json()
+    assert saved["graph"]["nodes"][4]["inputs"][4]["links"] == [3, 4]
+
+
+def test_the_runway_block_says_what_a_clip_is(tmp_db):
+    """The Gen Space's model chips (duration, ratio) read the same block
+    the Queue prices from, on both the queue and the concept detail."""
+    from src import preprod
+    preprod.init(tmp_db)                 # the queue reads the concept rows
+    data = client.get("/api/queue/pending").json()["runway"]
+    assert data["ratio"] == runway.DEFAULT_RATIO
+    assert data["duration"] == runway.DEFAULT_DURATION
+    assert "estimate_usd" in data and "model" in data

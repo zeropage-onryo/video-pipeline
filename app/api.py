@@ -1207,6 +1207,10 @@ def _runway_state() -> dict:
             "spend_ok": runway.spend_approved(),
             "model": runway.DEFAULT_MODEL,
             "estimate_usd": runway.estimate_cost(1),
+            # the Gen Space's model chips say what a clip IS before the
+            # spend, not just what it costs
+            "ratio": runway.DEFAULT_RATIO,
+            "duration": runway.DEFAULT_DURATION,
             "today": today}
 
 
@@ -1385,10 +1389,7 @@ def concept_detail(concept_id: int, account_id: int = Depends(auth.current_accou
             "shots": shots,
             # the render button's copy is server-sourced: availability,
             # the spend gate's state, and what one clip would cost
-            "runway": {"available": runway.has_key(),
-                       "spend_ok": runway.spend_approved(),
-                       "model": runway.DEFAULT_MODEL,
-                       "estimate_usd": runway.estimate_cost(1)}}
+            "runway": _runway_state()}
 
 
 class ShotMediaBody(BaseModel):
