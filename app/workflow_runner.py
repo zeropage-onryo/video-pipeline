@@ -45,13 +45,27 @@ enhance = imagery.enhance
 # until real workflows ask for it.
 PURE_TEXT_TYPES = ("zpf/system_prompt", "zpf/user_prompt")
 REFERENCE_TYPE = "zpf/reference_image"
+# A SET of reference frames -- one asset's photos (a character's three
+# frames, a room's two plates) or the composer's uploads -- as one node
+# on the Gen Space canvas (2026-09-10). Pure: its value is the list of
+# urls it carries. Before it, a scene's references rode invisibly as
+# `ref_urls` on every billed node, so the canvas showed a face being
+# named in the prompt and nothing that looked like a face.
+REFERENCE_SET_TYPE = "zpf/reference_set"
 GROUND_TYPE = "zpf/ground"
 ENHANCE_TYPE = "zpf/enhance"
 GENERATE_TYPE = "zpf/generate"
 NANO_TYPE = "zpf/nano_banana"
 
-NODE_TYPES = PURE_TEXT_TYPES + (REFERENCE_TYPE, GROUND_TYPE,
+NODE_TYPES = PURE_TEXT_TYPES + (REFERENCE_TYPE, REFERENCE_SET_TYPE, GROUND_TYPE,
                                 ENHANCE_TYPE, GENERATE_TYPE, NANO_TYPE)
+
+# The one port that takes MORE than one wire. Several reference sets
+# (the character, the room, the uploads) all feed one billed node, and
+# a port that holds a single link would force them through a chain of
+# hubs nobody drew. The canvas emits `links: [...]` beside the usual
+# `link` on this slot; every other port stays single-link.
+MULTI_LINK_PORTS = ("refs",)
 
 
 def _link_row(link) -> Optional[dict]:
@@ -105,6 +119,30 @@ def _input_value(node: dict, name: str, links: dict, outputs: dict):
         upstream = outputs.get(link["origin_id"])
         return upstream["value"] if upstream else None
     return None
+
+
+def _input_values(node: dict, name: str, links: dict, outputs: dict) -> list:
+    """Every value wired into a MULTI_LINK port, in wire order, with
+    list-valued upstreams (a reference set) flattened. A slot carrying
+    only the single-link `link` key still works -- one wire is a list
+    of one."""
+    for slot in node.get("inputs") or []:
+        if slot.get("name") != name:
+            continue
+        ids = list(slot.get("links") or [])
+        if not ids and slot.get("link") is not None:
+            ids = [slot["link"]]
+        values: list = []
+        for link_id in ids:
+            link = links.get(link_id)
+            upstream = outputs.get(link["origin_id"]) if link else None
+            value = upstream["value"] if upstream else None
+            if isinstance(value, (list, tuple)):
+                values.extend(value)
+            elif value:
+                values.append(value)
+        return values
+    return []
 
 
 def image_for_runway(value, resolve_photo=None):
@@ -170,6 +208,9 @@ def node_reference_urls(node, properties, links, outputs, port="image",
     wiring the keyframe in does not send it twice."""
     urls, seen = [], set()
     candidates = [_input_value(node, port, links, outputs)]
+    # the reference sets wired in on the canvas (2026-09-10) come right
+    # after the keyframe port: what is drawn as a wire IS a reference
+    candidates.extend(_input_values(node, "refs", links, outputs))
     # the drawing's own list first; only when it is EMPTY is the shot
     # read back (see shot_reference_urls) -- a graph that carries
     # references is never second-guessed
@@ -244,6 +285,10 @@ def execute_graph(graph: dict, *, gemini_client=None, resolve_photo=None,
                 kind, value = "text", properties.get("text") or ""
             elif node_type == REFERENCE_TYPE:
                 kind, value = "image", properties.get("url") or ""
+            elif node_type == REFERENCE_SET_TYPE:
+                kind = "images"
+                value = [u for u in (properties.get("urls") or [])
+                         if isinstance(u, str) and u]
             elif node_type == GROUND_TYPE:
                 from src import shootgen
                 spark = _input_value(node, "spark", links, outputs) \

@@ -13,7 +13,7 @@
    in-process dict that a restart clears, and an approval queue that
    quietly emptied itself on restart would be a queue that lies. The
    Jobs list underneath IS that registry, and says so. */
-import { api, bus, esc, state, stateline } from './shared.js';
+import { api, bus, esc, refreshQueueBadge, state, stateline } from './shared.js';
 
 let wired = false;
 
@@ -109,6 +109,7 @@ async function renderPending() {
         try {
           await api(`/api/queue/${id}/shot`, { method: 'POST', body: { shot: true } });
           renderPending();
+          refreshQueueBadge();
         } catch (e) {
           btn.disabled = false;
           stateline($('pendstate'), 'error', e.message);
@@ -121,6 +122,7 @@ async function renderPending() {
         await api(`/api/queue/${id}/${approve ? 'approve' : 'reject'}`,
           { method: 'POST', body: {} });
         renderPending();
+        refreshQueueBadge();
       } catch (e) {
         btn.disabled = false;
         btn.textContent = approve ? 'Approve · render' : 'Reject';

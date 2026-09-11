@@ -24,8 +24,8 @@
    forever and a prompt change could never be measured. So an archived
    concept stops being a card, keeps counting, and keeps sitting in the
    Dev Studio's ungraded pool until it is graded. */
-import { api, bus, esc, state, stateline } from './shared.js';
-import { openConceptInDirector } from './workflows.js';
+import { api, bus, esc, refreshQueueBadge, state, stateline } from './shared.js';
+import { openConceptInDirector } from './genspace.js';
 
 let wired = false;
 let filter = '';               // '' open | picked | archived
@@ -166,6 +166,7 @@ export async function renderBoard() {
             { method: 'POST', body: { archived: act === 'archive' } });
         }
         renderBoard();
+        refreshQueueBadge();
       } catch (e) {
         btn.disabled = false;
         boardState('error', e.message);

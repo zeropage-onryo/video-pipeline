@@ -1,0 +1,182 @@
+/* The studio surfaces' calls into FastAPI, typed against what app/api.py
+   returns today. Everything goes through the same-origin proxy
+   (next.config.ts rewrites /api, /ui, /brand, the photo routes) so the
+   zp_session cookie rides along untouched. Nothing here spends: the
+   billed routes (scenes/run, the exec/* nodes) are the same gated ones
+   the Jinja shell calls, and Send to Queue only PICKS. */
+import { API_URL, ApiError, apiFetch } from "@/lib/api";
+
+export { ApiError };
+
+/* ── who ── */
+export type Account = {
+  id: number;
+  slug: string;
+  label: string;
+  accent?: string | null;
+  role?: string | null;
+};
+export type Me = {
+  user: {
+    id: string;
+    email: string | null;
+    display_name: string;
+    avatar_url: string | null;
+  };
+  account: Account | null;
+  accounts: Account[];
+};
+export const getMe = () => apiFetch<Me>("/me");
+
+/* ── what may be drawn ── */
+export type Capabilities = Record<string, boolean>;
+export const getCapabilities = () => apiFetch<Capabilities>("/capabilities");
+
+/* ── assets (elements) ── */
+export type AssetCategory = "character" | "location" | "prop";
+export type Asset = {
+  id: string;
+  category: AssetCategory;
+  name: string;
+  photos: string[];
+  poster: string | null;
+  text: string;
+  meta: Record<string, unknown>;
+  created_at?: string | null;
+};
+export const getAssets = (q?: string) =>
+  apiFetch<{ items: Asset[] }>(`/assets${q ? `?q=${encodeURIComponent(q)}` : ""}`);
+
+export type AssetHit = { name: string; category: AssetCategory; thumb: string | null };
+export const searchAssets = (q: string) =>
+  apiFetch<{ items: AssetHit[] }>(`/assets/search?q=${encodeURIComponent(q)}`);
+
+/* multipart: apiFetch pins a JSON content-type, so uploads go direct */
+async function apiForm<T>(path: string, form: FormData): Promise<T> {
+  const res = await fetch(`${API_URL}/api${path}`, {
+    method: "POST",
+    credentials: "include",
+    body: form,
+  });
+  if (!res.ok) {
+    let message = res.statusText || `request failed (${res.status})`;
+    try {
+      const body = await res.clone().json();
+      message = body?.error?.message ?? body?.detail ?? message;
+    } catch {
+      /* not JSON */
+    }
+    throw new ApiError(message, res.status);
+  }
+  return (await res.json()) as T;
+}
+
+export type AssetCreated = {
+  ok: boolean;
+  slug: string;
+  photos: number;
+  described?: boolean;
+  note?: string | null;
+};
+/** POST /api/assets/{characters|locations|props} — the always-on create
+ *  path; every save also teaches the RAG assets shelf. */
+export const createAsset = (
+  kind: "characters" | "locations" | "props",
+  form: FormData,
+) => apiForm<AssetCreated>(`/assets/${kind}`, form);
+
+/* ── the board and the queue ── */
+export type Concept = {
+  id: number;
+  n: string;
+  title: string;
+  summary: string;
+  logline: string;
+  brand: string;
+  spark: string | null;
+  status: "idea" | "planned" | "shot";
+  is_scene: boolean;
+  picked: boolean;
+  parked: boolean;
+  archived: boolean;
+  park_reason: string;
+  refs: string[];
+  prompt: string;
+  media_url: string;
+  reference_image: string;
+  created_at?: string;
+};
+export type RunwayState = {
+  available: boolean;
+  spend_ok: boolean;
+  model: string;
+  estimate_usd: number;
+  ratio?: string;
+  duration?: number;
+  today?: number | null;
+};
+export const boardConcepts = (brand?: string) =>
+  apiFetch<{ items: Concept[] }>(
+    `/pipeline/concepts${brand ? `?brand=${encodeURIComponent(brand)}` : ""}`,
+  );
+export const queuePending = (brand?: string) =>
+  apiFetch<{ items: Concept[]; runway: RunwayState }>(
+    `/queue/pending${brand ? `?brand=${encodeURIComponent(brand)}` : ""}`,
+  );
+/** The pick. Puts a concept in front of the Queue's approval gate;
+ *  approving THERE is what renders. */
+export const pickConcept = (id: number, picked = true) =>
+  apiFetch<{ ok: boolean }>(`/concepts/${id}/pick`, {
+    method: "POST",
+    body: JSON.stringify({ picked }),
+  });
+
+/* ── creating ── */
+export type Job = {
+  id: number;
+  kind: string;
+  label: string;
+  status: "queued" | "running" | "done" | "failed" | "cancelled";
+  progress: number;
+  detail: string;
+  output?: string | null;
+  error?: string | null;
+  ref_id?: number | null;
+  ended_at?: string | null;
+};
+/** POST /api/scenes/run — multipart: idea, brand, count (1–4), refs
+ *  (asset photo urls) and files (uploads), exactly what the Jinja
+ *  composer posts. */
+export const runScenes = (form: FormData) => apiForm<{ job_id: number }>("/scenes/run", form);
+export const getJob = (id: number) => apiFetch<Job>(`/jobs/${id}`);
+export async function waitForJob(id: number, onTick?: (job: Job) => void, everyMs = 1500) {
+  for (;;) {
+    const job = await getJob(id);
+    onTick?.(job);
+    if (["done", "failed", "cancelled"].includes(job.status)) return job;
+    await new Promise((r) => setTimeout(r, everyMs));
+  }
+}
+
+/* ── presets (the camera chips) ── */
+export type Preset = { id: string; label: string; how: string };
+export const getPresets = () =>
+  apiFetch<{ items: Preset[]; enhance_system: string }>("/presets");
+
+/* ── the account switch and sign-out live at the API root ── */
+export async function switchAccount(slug: string) {
+  const body = new FormData();
+  body.append("next", "/studio");
+  await fetch(`${API_URL}/brand/${encodeURIComponent(slug)}`, {
+    method: "POST",
+    credentials: "include",
+    body,
+    redirect: "manual",
+  }).catch(() => {});
+  window.location.reload();
+}
+
+/* the queue badge listens for this; anything that picks or decides fires it */
+export const QUEUE_EVENT = "zpf:queue";
+export const announceQueueChange = () =>
+  window.dispatchEvent(new Event(QUEUE_EVENT));

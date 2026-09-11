@@ -222,3 +222,19 @@ export function openAssetDetail(asset) {
 }
 
 export function closeDetail() { detail().removeAttribute('data-open'); }
+
+/* The rail's Queue badge: how many scenes are waiting on an approval.
+   Read from the rows (GET /api/queue/pending), never counted from the
+   jobs registry, for the same reason the Queue view is. */
+export async function refreshQueueBadge() {
+  const badge = document.getElementById('qbadge');
+  if (!badge) return;
+  try {
+    const res = await api('/api/queue/pending?brand=' + encodeURIComponent(state.brand));
+    const n = (res.items || []).length;
+    badge.textContent = n > 9 ? '9+' : String(n);
+    badge.hidden = n === 0;
+  } catch {
+    badge.hidden = true;
+  }
+}

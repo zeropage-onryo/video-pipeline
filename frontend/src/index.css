@@ -1,0 +1,104 @@
+@import 'tailwindcss';
+
+/* Self-hosted, not Google-hosted: the app is behind sign-in, so a
+   third-party font request on every first paint buys a round trip, a
+   flash of fallback text, and an outbound call this product does not
+   need. @fontsource ships the woff2 through Vite, hashed and cached. */
+@import '@fontsource-variable/manrope';
+@import '@fontsource-variable/jetbrains-mono';
+
+/* ── Type ────────────────────────────────────────────────────────────
+   LTX's brand face is Aeonik (Cotype Foundry) — checked against their
+   own stylesheet, 2026-09-10. It is licensed, so it is not something to
+   ship here. Manrope is the closest free geometric grotesque: same tall
+   x-height and near-circular bowls. If you ever license Aeonik, this is
+   a one-line change — add it in front of Manrope below.
+
+   Oswald is gone with it: LTX sets headings in the same grotesque as the
+   body rather than a condensed face, and "match LTX" is what was asked
+   for. Put 'Oswald' back at the front of --font-display to undo that
+   without touching anything else. */
+
+/* ── Colour ──────────────────────────────────────────────────────────
+   Black and white, no hue anywhere (2026-09-10, Mike's call). The old
+   signal red is gone, so the accent is now WHITE — which means the one
+   control that carries it has to earn it. Today that is the send button
+   and the current rail item, and nothing else. */
+@theme {
+  --color-void: #08080a;
+  --color-panel: #161618;
+  --color-raised: #1e1e21;
+  --color-text: #f5f5f5;
+  --color-dim: #9a9a9a;
+  --color-dimmer: #5c5c5c;
+  /* the accent, named by role rather than by colour so a future theme
+     can move it without a find-and-replace through every component */
+  --color-accent: #ffffff;
+  --color-on-accent: #08080a;
+
+  --color-line: rgb(255 255 255 / 0.09);
+  --color-line-hi: rgb(255 255 255 / 0.18);
+
+  --radius-r1: 12px;
+  --radius-r2: 16px;
+  --radius-r3: 20px;
+
+  --font-display: 'Manrope Variable', 'Manrope', -apple-system, sans-serif;
+  --font-body: 'Manrope Variable', 'Manrope', -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;
+
+  --ease-zpf: cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+  body {
+    @apply bg-void text-text font-body text-sm antialiased;
+  }
+  ::selection {
+    @apply bg-accent text-on-accent;
+  }
+  :focus-visible {
+    outline: 1px solid var(--color-line-hi);
+    outline-offset: 3px;
+    border-radius: var(--radius-r1);
+  }
+  ::-webkit-scrollbar {
+    width: 7px;
+    height: 7px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgb(255 255 255 / 0.09);
+    border-radius: 999px;
+  }
+}
+
+@utility label-mono {
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 10px;
+  color: var(--color-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The field behind everything. With the red pool gone it is a plain
+   luminance wash: two soft grey pools over a faint diagonal weave,
+   masked away before the fold so the composer sits on near-black. */
+.zpf-field {
+  background-image:
+    repeating-linear-gradient(
+      121deg,
+      rgb(255 255 255 / 0.035) 0 1px,
+      transparent 1px 5px,
+      rgb(0 0 0 / 0.35) 5px 10px
+    ),
+    radial-gradient(70% 55% at 78% 22%, rgb(255 255 255 / 0.07), transparent 62%),
+    radial-gradient(90% 70% at 18% 68%, rgb(255 255 255 / 0.045), transparent 70%);
+  mask-image: linear-gradient(180deg, #000 56%, transparent 94%);
+}

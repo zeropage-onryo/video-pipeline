@@ -1,0 +1,1286 @@
+/* The Director canvas, in the ZPF tokens (the "ZPF Gen Space" design):
+   red-edged cards on a dot grid, Inter body, JetBrains Mono labels. The
+   workspace fills the shell's stage under the bar. */
+.flows-workspace {
+  --void: #040405;
+  --line: rgb(255 255 255 / 0.08);
+  --line-hi: rgb(255 255 255 / 0.2);
+  --text: #f4f3f2;
+  --dim: #8e8c8a;
+  --dimmer: #55534f;
+  --signal: #e4002b;
+  --signal-soft: rgb(228 0 43 / 0.12);
+  --node-bg: rgb(14 14 17 / 0.92);
+  --node-line: rgb(228 0 43 / 0.4);
+  --mono: var(--font-jetbrains), "JetBrains Mono", ui-monospace, monospace;
+  --body: var(--font-inter), "Inter", -apple-system, sans-serif;
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--body);
+  font-size: 13px;
+  isolation: isolate;
+}
+.flows-workspace * {
+  box-sizing: border-box;
+}
+.flows-workspace button,
+.flows-workspace a,
+.flows-workspace input,
+.flows-workspace textarea,
+.flows-workspace select {
+  font: inherit;
+  color: inherit;
+}
+.flows-workspace button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.flows-workspace button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.flows-workspace button:focus-visible,
+.flows-workspace a:focus-visible {
+  outline: 1px solid var(--signal);
+  outline-offset: 3px;
+}
+.flows-workspace input:focus,
+.flows-workspace textarea:focus {
+  outline: none;
+}
+.flows-workspace .m {
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 8.5px;
+  color: var(--dimmer);
+  font-variant-numeric: tabular-nums;
+}
+.flows-workspace .spacer {
+  flex: 1;
+}
+.flows-workspace .spin {
+  animation: flow-spin 1s linear infinite;
+}
+@keyframes flow-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.flows-workspace .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 8px;
+  background: rgb(255 255 255 / 0.05);
+  padding: 6px 9px;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+/* ── top bar (inside the stage, under the shell's bar) ── */
+.flow-topbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 52px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--line);
+  background: rgb(4 4 5 / 0.6);
+  backdrop-filter: blur(16px);
+}
+.flow-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.flow-breadcrumb > button {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  color: var(--dim);
+}
+.flow-breadcrumb > button:hover {
+  color: var(--text);
+  background: rgb(255 255 255 / 0.06);
+}
+.flow-breadcrumb .chip {
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+}
+.flow-breadcrumb input {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 14px;
+  font-weight: 600;
+  min-width: 120px;
+}
+.flow-breadcrumb input:hover,
+.flow-breadcrumb input:focus {
+  border-color: var(--line);
+}
+.flow-breadcrumb select {
+  background: rgb(255 255 255 / 0.04);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.flow-breadcrumb select option {
+  background: #141417;
+}
+.flow-top-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.save-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dimmer);
+  white-space: nowrap;
+}
+.save-indicator i {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: #5fd08a;
+}
+.pill-btn {
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: rgb(255 255 255 / 0.05);
+  padding: 0 14px;
+  font-size: 12.5px;
+}
+.pill-btn:hover {
+  background: rgb(255 255 255 / 0.08);
+}
+.queue-btn {
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: rgb(255 255 255 / 0.05);
+  padding: 0 14px;
+  font-size: 12.5px;
+  transition:
+    background 180ms,
+    border-color 180ms;
+}
+.queue-btn:hover {
+  background: rgb(255 255 255 / 0.08);
+}
+.queue-btn.lit {
+  border-color: rgb(228 0 43 / 0.5);
+  background: var(--signal-soft);
+}
+.queue-btn.wide {
+  width: 100%;
+  height: 40px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--signal);
+  color: #fff;
+  font-weight: 600;
+}
+.queue-btn.wide:hover {
+  filter: brightness(1.1);
+}
+.queue-btn.wide.lit {
+  background: rgb(255 255 255 / 0.08);
+  color: var(--text);
+}
+.flow-top-actions > button:not(.pill-btn):not(.queue-btn) {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  color: var(--dim);
+}
+.flow-top-actions > button:not(.pill-btn):not(.queue-btn):hover {
+  color: var(--text);
+  background: rgb(255 255 255 / 0.06);
+}
+
+/* ── the stage ── */
+.flow-stage {
+  position: absolute;
+  inset: 52px 0 0;
+}
+.flows-workspace .react-flow {
+  background: transparent;
+}
+.flows-workspace .react-flow__attribution {
+  display: none;
+}
+.flows-workspace .react-flow__minimap {
+  right: 22px;
+  bottom: 22px;
+  width: 190px;
+  height: 120px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgb(4 4 5 / 0.82);
+  backdrop-filter: blur(16px);
+  overflow: hidden;
+}
+.flows-workspace .react-flow__minimap svg {
+  background: transparent;
+}
+.flows-workspace .react-flow__edge-path {
+  stroke: rgb(255 255 255 / 0.28);
+  stroke-width: 1.5;
+}
+.flows-workspace .react-flow__edge.selected .react-flow__edge-path,
+.flows-workspace .react-flow__edge:hover .react-flow__edge-path {
+  stroke: var(--signal);
+}
+.flows-workspace.tool-cut .react-flow__edge {
+  cursor: crosshair;
+}
+.flows-workspace.tool-cut .react-flow__edge:hover .react-flow__edge-path {
+  stroke: var(--signal);
+  stroke-width: 2.5;
+}
+.flows-workspace.tool-hand .react-flow__pane {
+  cursor: grab;
+}
+.flows-workspace .react-flow__node {
+  z-index: 1;
+}
+.flows-workspace .react-flow__node.selected {
+  z-index: 3;
+}
+
+/* ── a card ── */
+.flow-card {
+  position: relative;
+  width: 360px;
+  border-radius: 16px;
+  border: 2px solid var(--node-line);
+  background: var(--node-bg);
+  box-shadow: 0 24px 70px -40px rgb(0 0 0 / 0.9);
+  backdrop-filter: blur(20px);
+  color: var(--text);
+  transition:
+    box-shadow 180ms,
+    border-color 180ms;
+}
+.flow-card.kind-enhance,
+.flow-card.kind-image,
+.flow-card.kind-video {
+  width: 380px;
+}
+.flow-card.kind-video {
+  border-color: rgb(228 0 43 / 0.55);
+}
+.flow-card.is-selected {
+  box-shadow:
+    0 0 0 1px rgb(228 0 43 / 0.7),
+    0 30px 80px -40px rgb(0 0 0 / 0.9);
+}
+.flow-card.is-busy {
+  border-color: rgb(228 0 43 / 0.75);
+}
+.flow-card.is-done {
+  border-color: rgb(95 208 138 / 0.45);
+}
+.flow-card.is-failed {
+  border-color: rgb(228 0 43 / 0.9);
+}
+.node-header {
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 14px;
+  font-size: 12.5px;
+  font-weight: 600;
+  border-bottom: 1px solid rgb(255 255 255 / 0.06);
+}
+.node-header > svg {
+  color: var(--dim);
+  flex: none;
+}
+.flow-card.is-busy .node-header > svg,
+.flow-card.is-done .node-header > svg {
+  color: var(--text);
+}
+.node-header > span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.node-menu-toggle {
+  margin-left: auto;
+  color: var(--dimmer);
+  padding: 5px;
+  border-radius: 8px;
+}
+.node-menu-toggle:hover {
+  color: var(--text);
+  background: rgb(255 255 255 / 0.06);
+}
+.node-menu {
+  position: absolute;
+  top: 38px;
+  right: 10px;
+  z-index: 6;
+  padding: 4px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgb(14 14 17 / 0.97);
+  box-shadow: 0 30px 90px -30px rgb(0 0 0 / 0.95);
+}
+.node-menu button {
+  display: flex;
+  width: 100%;
+  justify-content: flex-start;
+  padding: 8px 14px;
+  border-radius: 9px;
+  font-size: 12px;
+  color: var(--dim);
+}
+.node-menu button:hover {
+  background: rgb(255 255 255 / 0.08);
+  color: var(--text);
+}
+.prompt-field {
+  display: block;
+  resize: none;
+  min-height: 120px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  padding: 12px 14px 6px;
+  font-size: 13px;
+  font-weight: 300;
+  line-height: 1.6;
+}
+.prompt-field::placeholder {
+  color: var(--dimmer);
+}
+.prompt-field[readonly] {
+  color: var(--text);
+  min-height: 160px;
+}
+.kind-enhance .prompt-field,
+.kind-ground .prompt-field {
+  font-size: 12.5px;
+}
+.prompt-footer,
+.node-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px 12px;
+  border-top: 1px solid rgb(255 255 255 / 0.06);
+}
+.prompt-footer > .m:first-child,
+.node-footer > .m:first-child {
+  flex: 1;
+}
+.flow-card .ghost,
+.flow-card .pri {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  border-radius: 10px;
+  padding: 0 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.flow-card .ghost {
+  color: var(--dim);
+  border: 1px solid transparent;
+}
+.flow-card .ghost:hover {
+  background: rgb(255 255 255 / 0.06);
+  color: var(--text);
+}
+.flow-card .pri {
+  border: 0;
+  border-radius: 999px;
+  background: var(--signal);
+  color: #fff;
+  font-weight: 600;
+  font-size: 12.5px;
+  padding: 0 14px;
+  box-shadow: 0 6px 22px -12px rgb(228 0 43 / 0.9);
+}
+.flow-card .pri:hover {
+  filter: brightness(1.1);
+}
+.flow-card a.ghost {
+  text-decoration: none;
+}
+.node-error {
+  margin: 0;
+  padding: 8px 14px 4px;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  line-height: 1.6;
+  color: var(--signal);
+  user-select: text;
+}
+.node-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 12px 14px 0;
+}
+.node-preview {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  margin: 12px 12px 0;
+  overflow: hidden;
+  border-radius: 10px;
+  border: 1px solid rgb(255 255 255 / 0.06);
+  background: #0d0d0f;
+  display: grid;
+  place-items: center;
+}
+.node-preview img,
+.node-preview video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.node-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 12px;
+  background: rgb(4 4 5 / 0.6);
+  backdrop-filter: blur(3px);
+  color: var(--text);
+}
+.node-overlay .m {
+  color: var(--text);
+}
+.preview-tag {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line-hi);
+  background: rgb(4 4 5 / 0.6);
+  font-family: var(--mono);
+  font-size: 8px;
+  letter-spacing: 0.14em;
+  color: var(--dim);
+}
+.empty-media {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 18px;
+  color: var(--dim);
+  text-align: center;
+}
+.empty-media span {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.empty-media.small {
+  padding: 22px;
+}
+.node-preview .empty-media::before {
+  content: "";
+  position: absolute;
+  inset: -100px;
+  z-index: -1;
+  opacity: 0.35;
+  background-image:
+    linear-gradient(45deg, #2a2a2e 25%, transparent 25%, transparent 75%, #2a2a2e 75%),
+    linear-gradient(45deg, #2a2a2e 25%, transparent 25%, transparent 75%, #2a2a2e 75%);
+  background-size: 24px 24px;
+  background-position:
+    0 0,
+    12px 12px;
+}
+.reference-body {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.reference-body img {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid rgb(255 255 255 / 0.06);
+  display: block;
+}
+.reference-body label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.reference-body input {
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: rgb(255 255 255 / 0.03);
+  padding: 0 10px;
+  font-size: 12px;
+}
+.element-body {
+  padding: 12px 12px 0;
+}
+.element-frames {
+  display: grid;
+  gap: 6px;
+}
+.element-frames.c3 {
+  grid-template-columns: repeat(3, 1fr);
+}
+.element-frames.c2 {
+  grid-template-columns: repeat(2, 1fr);
+}
+.element-frame {
+  position: relative;
+  display: block;
+  aspect-ratio: 1;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 0.06);
+  background: #0d0d0f;
+}
+.element-frames.wide .element-frame {
+  aspect-ratio: 4 / 3;
+}
+.element-frame:first-child {
+  border-color: var(--line-hi);
+}
+.element-frame img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.frame-x {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid var(--line-hi);
+  background: rgb(4 4 5 / 0.8);
+  color: var(--dim);
+  opacity: 0;
+  transition: opacity 180ms;
+}
+.element-frame:hover .frame-x {
+  opacity: 1;
+}
+.frame-x:hover {
+  color: var(--text);
+  border-color: var(--signal);
+}
+.element-body .node-footer {
+  margin: 10px -12px 0;
+}
+.element-body label.ghost {
+  position: relative;
+  color: var(--dim);
+  cursor: text;
+}
+.element-body label.ghost input {
+  width: 130px;
+  height: 22px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  font-size: 11px;
+  padding: 0 4px;
+}
+.element-body label.ghost input::placeholder {
+  color: var(--dimmer);
+}
+
+/* ports sit ON the card edge */
+.flow-card .react-flow__handle {
+  width: 11px;
+  height: 11px;
+  border-radius: 999px;
+  border: 2px solid #08080a;
+  background: var(--dim);
+  transition:
+    transform 180ms,
+    background 180ms;
+}
+.flow-card .react-flow__handle.connectionindicator:hover,
+.flow-card .react-flow__handle:hover {
+  transform: scale(1.35);
+  background: var(--signal);
+}
+.flow-card .react-flow__handle.port-image {
+  background: #f4f3f2;
+}
+.flow-card .react-flow__handle.port-images {
+  background: rgb(228 0 43 / 0.85);
+}
+.flow-card .react-flow__handle-left {
+  left: -7px;
+}
+.flow-card .react-flow__handle-right {
+  right: -7px;
+}
+
+/* ── zoom cluster ── */
+.canvas-zoom {
+  position: absolute;
+  top: 70px;
+  left: 18px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgb(4 4 5 / 0.72);
+  backdrop-filter: blur(16px);
+}
+.canvas-zoom button {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  color: var(--dim);
+}
+.canvas-zoom button:hover {
+  background: rgb(255 255 255 / 0.08);
+  color: var(--text);
+}
+.canvas-zoom span {
+  padding: 0 10px 0 6px;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  color: var(--dimmer);
+}
+
+/* ── inspector ── */
+.flow-inspector {
+  position: absolute;
+  top: 52px;
+  right: 0;
+  bottom: 0;
+  z-index: 25;
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--line);
+  background: rgb(13 13 15 / 0.94);
+  backdrop-filter: blur(24px);
+}
+.insp-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.insp-head b {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.insp-head button {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--dim);
+}
+.insp-head button:hover {
+  color: var(--text);
+}
+.insp-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.insp-sec {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.insp-sec p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--dim);
+}
+.insp-sec input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgb(255 255 255 / 0.03);
+  padding: 10px 12px;
+  font-size: 13px;
+}
+.insp-sec input:focus {
+  border-color: var(--line-hi);
+}
+.insp-sec pre {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.6;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgb(255 255 255 / 0.03);
+  padding: 10px 12px;
+  user-select: text;
+}
+.insp-cams {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+.insp-cams button {
+  justify-content: flex-start;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: rgb(255 255 255 / 0.03);
+  padding: 9px 10px;
+  font-size: 12px;
+  color: var(--dim);
+  text-align: left;
+}
+.insp-cams button:hover {
+  background: rgb(255 255 255 / 0.07);
+  color: var(--text);
+}
+.insp-cams button.on {
+  border-color: var(--line-hi);
+  background: rgb(255 255 255 / 0.08);
+  color: var(--text);
+}
+.insp-spend {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.insp-spend b {
+  font-family: var(--mono);
+  font-size: 22px;
+  font-weight: 500;
+}
+.insp-spend span {
+  font-size: 12px;
+  color: var(--dim);
+}
+.insp-sec .gate {
+  color: var(--signal);
+}
+.insp-wires {
+  font-size: 12.5px;
+  color: var(--dim);
+}
+.insp-foot {
+  border-top: 1px solid var(--line);
+  padding: 14px 18px;
+}
+
+/* ── templates (draft mode) ── */
+.flow-templates {
+  position: absolute;
+  top: 52px;
+  right: 0;
+  bottom: 0;
+  z-index: 25;
+  width: 340px;
+  padding: 24px;
+  overflow-y: auto;
+  border-left: 1px solid var(--line);
+  background: rgb(13 13 15 / 0.94);
+  backdrop-filter: blur(24px);
+}
+.template-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.template-title button {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--dim);
+}
+.flow-templates h1 {
+  margin: 14px 0 6px;
+  font-family: var(--font-oswald), "Oswald", sans-serif;
+  font-size: 30px;
+  font-weight: 500;
+  line-height: 1;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+}
+.flow-templates > p {
+  margin: 0 0 18px;
+  color: var(--dim);
+}
+.template-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.template-list button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: rgb(255 255 255 / 0.03);
+  text-align: left;
+}
+.template-list button:hover,
+.template-list button.selected {
+  border-color: rgb(228 0 43 / 0.55);
+}
+.template-list img {
+  width: 64px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: 8px;
+  flex: none;
+}
+.template-list span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+.template-list strong {
+  font-size: 13px;
+}
+.template-list small {
+  font-size: 11.5px;
+  color: var(--dim);
+}
+.template-note {
+  display: block;
+  margin-top: 16px;
+  font-size: 11px;
+  color: var(--dimmer);
+  line-height: 1.6;
+}
+
+/* ── bottom: the prompt bar ── */
+.flow-bottom {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 22px;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 0 240px 0 22px;
+  pointer-events: none;
+}
+.flow-bottom > * {
+  pointer-events: auto;
+}
+/* the open inspector narrows the stage; the bar and the minimap move with it */
+.flows-workspace.has-inspector .flow-bottom {
+  right: 320px;
+  padding-right: 22px;
+}
+.flows-workspace.has-inspector .react-flow__minimap {
+  display: none;
+}
+.flows-workspace.has-inspector .flow-toast {
+  left: calc(50% - 160px);
+}
+.gs-bar {
+  width: 100%;
+  max-width: 960px;
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 8px 8px 8px 10px;
+  border-radius: 20px;
+  border: 1px solid var(--line);
+  background: rgb(4 4 5 / 0.84);
+  box-shadow: 0 30px 90px -30px rgb(0 0 0 / 0.95);
+  backdrop-filter: blur(20px) saturate(1.2);
+}
+.flow-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+  height: 44px;
+}
+.flow-toolbar > button,
+.add-node-wrap > button {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  color: var(--dim);
+  transition:
+    background 180ms,
+    color 180ms;
+}
+.flow-toolbar > button:hover,
+.add-node-wrap > button:hover {
+  background: rgb(255 255 255 / 0.08);
+  color: var(--text);
+}
+.add-node-wrap > button {
+  color: var(--text);
+}
+.tool-active {
+  background: rgb(255 255 255 / 0.1) !important;
+  color: var(--text) !important;
+}
+.tool-divider {
+  width: 1px;
+  height: 22px;
+  margin: 0 6px;
+  background: var(--line);
+}
+.add-node-wrap {
+  position: relative;
+}
+.add-node-menu {
+  position: absolute;
+  bottom: calc(100% + 12px);
+  left: 0;
+  z-index: 30;
+  width: 320px;
+  padding: 8px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: rgb(14 14 17 / 0.97);
+  box-shadow: 0 24px 80px -24px rgb(0 0 0 / 0.85);
+  backdrop-filter: blur(20px);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.add-node-menu > .m {
+  padding: 8px 10px 6px;
+}
+.add-node-menu button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 9px 10px;
+  border-radius: 12px;
+  text-align: left;
+  color: var(--text);
+}
+.add-node-menu button:hover {
+  background: rgb(255 255 255 / 0.06);
+}
+.add-node-menu button > svg:first-child {
+  color: var(--dim);
+  flex: none;
+}
+.add-node-menu button > span {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  font-size: 13px;
+}
+.add-node-menu small {
+  font-size: 11px;
+  color: var(--dim);
+}
+.gs-prompt {
+  flex: 1;
+  min-width: 80px;
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  padding: 0 4px 4px;
+}
+.gs-prompt textarea {
+  width: 100%;
+  resize: none;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 300;
+  line-height: 1.55;
+  padding: 8px 6px;
+  min-height: 38px;
+  max-height: 160px;
+  overflow-y: auto;
+  field-sizing: content;
+}
+.gs-prompt textarea::placeholder {
+  color: var(--dimmer);
+}
+.gs-prompt textarea:disabled {
+  color: var(--dimmer);
+}
+.gs-prompt .mentiondrop {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  z-index: 40;
+  min-width: 280px;
+  max-width: 380px;
+  background: rgb(16 16 20 / 0.97);
+  border: 1px solid var(--line-hi);
+  border-radius: 14px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  box-shadow: 0 18px 60px -20px rgb(0 0 0 / 0.8);
+}
+.gs-prompt .mention {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  color: var(--dim);
+  font-size: 13px;
+  justify-content: flex-start;
+}
+.gs-prompt .mention:hover,
+.gs-prompt .mention.cur {
+  background: rgb(255 255 255 / 0.06);
+  color: var(--text);
+}
+.gs-prompt .mention .mth {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  flex: none;
+  background: #141417 center/cover;
+  border: 1px solid var(--line);
+}
+.gs-prompt .mention .mcat {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--dimmer);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.gs-chips {
+  display: flex;
+  gap: 6px;
+  flex: none;
+  padding-bottom: 8px;
+}
+.gs-go {
+  flex: none;
+  height: 40px;
+  border-radius: 12px;
+  background: var(--signal);
+  color: #fff;
+  padding: 0 16px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.gs-go:hover {
+  filter: brightness(1.1);
+}
+.gs-go:disabled {
+  background: rgb(255 255 255 / 0.08);
+  color: var(--dimmer);
+  filter: none;
+}
+.canvas-caption {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dimmer);
+}
+.canvas-caption i {
+  width: 3px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--dimmer);
+}
+@media (max-width: 1100px) {
+  .flow-bottom {
+    padding-right: 22px;
+  }
+  .flows-workspace .react-flow__minimap {
+    display: none;
+  }
+  .gs-chips {
+    display: none;
+  }
+}
+
+/* ── modals and the toast ── */
+.flow-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  background: rgb(4 4 5 / 0.72);
+  backdrop-filter: blur(6px);
+}
+.flow-modal {
+  position: relative;
+  width: min(440px, calc(100% - 48px));
+  padding: 26px;
+  border-radius: 20px;
+  border: 2px solid rgb(228 0 43 / 0.4);
+  background: rgb(14 14 17 / 0.98);
+  box-shadow: 0 50px 140px -50px rgb(0 0 0 / 0.95);
+}
+.flow-modal h2 {
+  margin: 0 0 8px;
+  font-family: var(--font-oswald), "Oswald", sans-serif;
+  font-size: 22px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.flow-modal p {
+  margin: 0;
+  color: var(--dim);
+  line-height: 1.6;
+}
+.flow-modal > div {
+  display: flex;
+  gap: 10px;
+  margin-top: 20px;
+  align-items: center;
+}
+.flow-modal > div > button,
+.flow-modal > div > a {
+  height: 36px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  padding: 0 16px;
+  font-size: 13px;
+  color: var(--dim);
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+.flow-modal > div > button:hover,
+.flow-modal > div > a:hover {
+  color: var(--text);
+  border-color: rgb(228 0 43 / 0.55);
+}
+.modal-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  color: var(--dim);
+}
+.modal-icon {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background: var(--signal-soft);
+  color: var(--signal);
+  margin-bottom: 14px;
+}
+.light-button {
+  background: var(--signal) !important;
+  border-color: var(--signal) !important;
+  color: #fff !important;
+  font-weight: 600;
+}
+.flow-toast {
+  position: absolute;
+  top: 70px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgb(4 4 5 / 0.84);
+  backdrop-filter: blur(16px);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--text);
+  max-width: min(720px, 80%);
+}
