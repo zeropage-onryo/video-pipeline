@@ -2,6 +2,8 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  // the in-app Browser pane and curl reach the dev server as 127.0.0.1
+  allowedDevOrigins: ["127.0.0.1", "localhost"],
   // A separate build directory lets production validation run alongside dev.
   async rewrites() {
     const upstream = process.env.API_UPSTREAM || "http://localhost:8000";

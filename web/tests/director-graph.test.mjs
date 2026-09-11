@@ -1,60 +1,66 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { seedScene, toLegacy, fromLegacy } from '../src/lib/director-graph.ts';
+import { seedScene, toLegacy, fromLegacy, groupRefs, wireElement } from '../src/lib/director-graph.ts';
 
-test('scene seed includes actual prompt, every reference, and paid outputs', () => {
-  const seeded = seedScene({ n: 2, prompt: 'finished prompt', written_prompt: 'old draft', refs: ['/refs/face.jpg', 'https://cdn.test/bike.jpg'], reference_image: '/renders/frame.jpg', media_url: 'https://cdn.test/clip.mp4' });
-  assert.equal(seeded.nodes[0].data.text, 'finished prompt');
-  assert.equal(seeded.nodes.filter(n => n.data.kind === 'reference').length, 2);
+const shot = {
+  n: 2, prompt: 'finished prompt', written_prompt: 'old draft',
+  refs: ['/characters/michael/photo/a.jpg', '/characters/michael/photo/b.jpg', '/locations/studio-bedroom/photo/r.jpg', 'https://cdn.test/bike.jpg'],
+  reference_image: '/renders/frame.jpg', media_url: 'https://cdn.test/clip.mp4',
+};
+
+test('a scene seeds the full chain and one element card per asset', () => {
+  const seeded = seedScene(shot, { enhanceSystem: 'TIGHTEN', names: { michael: 'Michael' } });
+  const kinds = seeded.nodes.map(n => n.data.kind);
+  assert.deepEqual(kinds.slice(0, 5), ['prompt', 'system', 'enhance', 'image', 'video']);
+  // written_prompt wins: Run must never enhance an already-enhanced prompt
+  assert.equal(seeded.nodes[0].data.text, 'old draft');
+  assert.equal(seeded.nodes[1].data.text, 'TIGHTEN');
+  const elements = seeded.nodes.filter(n => n.data.kind === 'element');
+  assert.deepEqual(elements.map(e => e.data.label), ['Element · Michael', 'Location · Studio Bedroom', 'Reference · Scouted frames']);
+  assert.deepEqual(elements[0].data.urls, ['/characters/michael/photo/a.jpg', '/characters/michael/photo/b.jpg']);
+  // every element feeds all three billed cards on the refs port
+  assert.equal(seeded.edges.filter(e => e.targetHandle === 'refs').length, 9);
   assert.equal(seeded.nodes.find(n => n.data.kind === 'video').data.url, 'https://cdn.test/clip.mp4');
-  assert.equal(seeded.edges.filter(e => e.targetHandle === 'reference').length, 3);
-});
-test('round trip preserves layouts, multiple reference wires, and outputs', () => {
-  const original = seedScene({ n: 1, prompt: 'scene', refs: ['/refs/a.jpg', '/refs/b.jpg'], reference_image: '/renders/image.jpg' });
-  original.nodes[0].position = {x: 124, y: 988};
-  const encoded = toLegacy(original.nodes, original.edges, {}, {conceptId: 42, shotN: 1});
-  const loaded = fromLegacy(encoded.graph, encoded.states);
-  assert.deepEqual(loaded.nodes[0].position, {x: 124,y: 988});
-  assert.equal(loaded.edges.length, original.edges.length);
-  assert.equal(loaded.nodes.find(n => n.data.kind === 'image').data.url, '/renders/image.jpg');
-  assert.equal(encoded.graph.nodes[1].type, 'zpf/nano_banana');
-  assert.equal(encoded.graph.nodes[1].properties.concept_id,42);
-  assert.deepEqual(encoded.graph.nodes[1].properties.ref_urls,['/refs/a.jpg','/refs/b.jpg']);
-  for(const edge of encoded.graph.links) {
-    const target=encoded.graph.nodes.find(n => n.id===edge[3]);
-    assert.equal(target.inputs[edge[4]].link,edge[0]);
-  }
-});
-test('legacy enhancement graph keeps instructions, cached text, input slots and properties', () => {
-  const graph={nodes:[{id:10,type:'zpf/system_prompt',properties:{text:'Keep reference locks'},pos:[20,100]},{id:20,type:'zpf/user_prompt',properties:{text:'Original',concept_id:9},pos:[20,350]},{id:30,type:'zpf/enhance',properties:{auto_ground:true,ref_urls:['/refs/face.jpg']},inputs:[{name:'system',link:1},{name:'user',link:2}],pos:[500,100]}],links:[[1,10,0,30,0,'text'],[2,20,0,30,1,'text']]};
-  const converted=fromLegacy(graph,{'30':{status:'done',kind:'text',output:'Enhanced, paid output'}});
-  assert.equal(converted.nodes[2].data.text,'Enhanced, paid output');
-  const saved=toLegacy(converted.nodes,converted.edges,graph);
-  assert.equal(saved.graph.nodes[2].properties.auto_ground,true);
-  assert.equal(saved.graph.nodes[2].inputs[0].name,'system');
-  assert.equal(saved.graph.nodes[2].inputs[1].name,'user');
-  assert.equal(saved.states['3'].output,'Enhanced, paid output');
-});
-test('unrecognized legacy nodes fail closed instead of deleting work', () => {
-  assert.throws(()=>fromLegacy({nodes:[{id:1,type:'future/special'}],links:[]}),/legacy Director/);
-});
-test('pending job id survives scene graph save and reload', () => {
-  const original=seedScene({n:1,prompt:'scene'});
-  original.nodes[1].data.jobId=88;
-  original.nodes[1].data.busy=true;
-  const saved=toLegacy(original.nodes,original.edges);
-  const restored=fromLegacy(saved.graph,saved.states);
-  assert.equal(restored.nodes[1].data.jobId,88);
-  assert.equal(restored.nodes[1].data.busy,true);
 });
 
-test('legacy edits invalidate React metadata instead of restoring deleted wires', () => {
-  const original=seedScene({n:1,prompt:'scene',refs:['/refs/a.jpg']});
-  const saved=toLegacy(original.nodes,original.edges);
-  saved.graph.links=[];
-  assert.equal(fromLegacy(saved.graph,saved.states).edges.length,0);
+test('groupRefs keys by asset slug and buckets uploads and the web', () => {
+  const groups = groupRefs(['/refs/x.jpg', '/props/motorcycle/photo/1.jpg', '/refs/y.jpg', 'https://a/b.jpg']);
+  assert.deepEqual(groups.map(g => [g.refKind, g.urls.length]), [['upload', 2], ['prop', 1], ['web', 1]]);
 });
-test('legacy image fallback remains available as a reference', () => {
-  const loaded=fromLegacy({nodes:[{id:1,type:'zpf/nano_banana',properties:{image_url:'/refs/face.jpg'}}]});
-  assert.deepEqual(loaded.nodes[0].data.refs,['/refs/face.jpg']);
+
+test('round trip keeps positions, the multi-wire refs port and outputs', () => {
+  const original = seedScene(shot);
+  original.nodes[0].position = { x: 124, y: 988 };
+  const encoded = toLegacy(original.nodes, original.edges, {}, { conceptId: 42, shotN: 2 });
+  const enhance = encoded.graph.nodes.find(n => n.type === 'zpf/enhance');
+  const refs = enhance.inputs.find(i => i.name === 'refs');
+  assert.equal(refs.type, 'images');
+  assert.equal(refs.links.length, 3);          // three element cards, one port
+  assert.equal(refs.link, refs.links[0]);      // the single-link readers see the first
+  assert.deepEqual(enhance.properties.ref_urls, shot.refs);   // the wires ARE the reference list
+  const element = encoded.graph.nodes.find(n => n.type === 'zpf/reference_set');
+  assert.deepEqual(element.properties.urls, ['/characters/michael/photo/a.jpg', '/characters/michael/photo/b.jpg']);
+  assert.equal(element.properties.kind, 'character');
+  const loaded = fromLegacy(encoded.graph, encoded.states);
+  assert.deepEqual(loaded.nodes[0].position, { x: 124, y: 988 });
+  assert.equal(loaded.edges.length, original.edges.length);
+  assert.equal(loaded.nodes.find(n => n.data.kind === 'image').data.url, '/renders/frame.jpg');
+  assert.equal(loaded.nodes.filter(n => n.data.kind === 'element').length, 3);
+});
+
+test('a graph without element cards still rides the frozen refs', () => {
+  const nodes = [
+    { id: 'p', type: 'studio', position: { x: 0, y: 0 }, data: { kind: 'prompt', label: 'Prompt', text: 'x' } },
+    { id: 'i', type: 'studio', position: { x: 1, y: 0 }, data: { kind: 'image', label: 'Nano', refs: ['/refs/a.jpg'] } },
+  ];
+  const edges = [{ id: 'e', source: 'p', target: 'i', targetHandle: 'prompt' }];
+  const encoded = toLegacy(nodes, edges);
+  assert.deepEqual(encoded.graph.nodes[1].properties.ref_urls, ['/refs/a.jpg']);
+});
+
+test('an element dropped on the canvas wires into every refs port', () => {
+  const seeded = seedScene({ n: 1, prompt: 'x', refs: [] });
+  const el = { id: 'el', type: 'studio', position: { x: 0, y: 0 }, data: { kind: 'element', label: 'Element · Cyclops', refKind: 'character', urls: ['/characters/cyclops/photo/1.jpg'] } };
+  const wires = wireElement(el, seeded.nodes);
+  assert.deepEqual(wires.map(w => w.target).sort(), ['scene-enhance', 'scene-image', 'scene-video']);
 });

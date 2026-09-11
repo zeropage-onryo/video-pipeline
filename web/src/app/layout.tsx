@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono, Oswald } from "next/font/google";
+import { Geist, Geist_Mono, Inter, JetBrains_Mono, Oswald } from "next/font/google";
 import "./globals.css";
 import { FilmGrain } from "@/components/film-grain";
 
@@ -18,7 +18,22 @@ const geistMono = Geist_Mono({
 const oswald = Oswald({
   variable: "--font-oswald",
   subsets: ["latin"],
-  weight: ["500", "600", "700"],
+  weight: ["400", "500", "600", "700"],
+});
+
+// The signed-in studio's faces (the ZPF design set): Inter for body
+// copy, JetBrains Mono for the small uppercase labels. Loaded here so
+// the studio shell can use them as CSS variables like Oswald above.
+const inter = Inter({
+  variable: "--font-inter",
+  subsets: ["latin"],
+  weight: ["300", "400", "500", "600"],
+});
+
+const jetbrains = JetBrains_Mono({
+  variable: "--font-jetbrains",
+  subsets: ["latin"],
+  weight: ["400", "500"],
 });
 
 export const metadata: Metadata = {
@@ -34,7 +49,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} ${oswald.variable} h-full antialiased bg-background`}
+      className={`${geistSans.variable} ${geistMono.variable} ${oswald.variable} ${inter.variable} ${jetbrains.variable} h-full antialiased bg-background`}
     >
       <body className="relative min-h-full flex flex-col">
         <FilmGrain />

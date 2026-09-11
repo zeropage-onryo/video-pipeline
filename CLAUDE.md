@@ -714,6 +714,22 @@ is yours, in Resolve, by hand.
   picks, decisions and finished jobs) and the account row; the bar carries Director's
   own controls only while the canvas is up (`html[data-gs="canvas"]`). Not built from
   the same design set: the Elements page (the rail keeps Analytics until it exists).
+- **`web/` is the React front end; `frontend/` is its predecessor (2026-09-11).** Both had
+  only ever lived untracked in the main checkout. `web/` is the v0-bootstrapped Next.js 16
+  project: the landing page at `/`, and under `/studio` the signed-in product — one shell
+  (rail with Studio / Assets / Pipeline / Director / Elements / Queue, **Analytics gone in
+  favour of Elements**, Mike's call), the Studio composer (`/api/scenes/run`), the
+  Director on React Flow (`web/FLOWS.md` — element cards, the `refs` multi-wire port,
+  @-mentions, Run all, Send to Queue) and Elements (`/api/assets/*`). It proxies to
+  FastAPI (`API_UPSTREAM`), so sign-in and every gate stay here; `GET /api/me` is the
+  one route added for it (identity + membership, composed from `auth.current_user` /
+  `accounts.memberships` so the two shells cannot disagree). Assets, Pipeline and Queue
+  still open `/ui?view=…` through the proxy until each has a React page. `frontend/` is
+  the Vite + React composer that preceded it, kept as received; its `/api/brains`,
+  `/api/scene-lengths`, `/api/render-choices`, `/api/creative-guide` and the guide mode
+  exist only as uncommitted work in the main checkout's overnight branch, and the Next
+  composer shows those pills only when the routes answer. The vanilla Gen Space on `/ui`
+  stays as the reference implementation the React one was ported from.
 - **`src/mcp_server.py`** + **`app/mcp_mount.py`** — the MCP surface (2026-08-31), so the
   board can be read and decided on from a phone or an agent instead of only from this
   machine. **An adapter, never a store:** every tool is a thin call into `preprod` or

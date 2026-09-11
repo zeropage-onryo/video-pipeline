@@ -1,66 +1,57 @@
-# React Director
+# The Director (React Flow) — the Gen Space
 
-Run the existing FastAPI server on port 8000, then `npm run dev` here on
-port 3000. In the signed-in product, choose Pipeline → Open in Director.
-Local FastAPI pages hand the scene to `/studio/flows?concept=ID&shot=N`.
-The canvas returns to Pipeline, Queue, or Assets through `/ui?view=…`.
-Queue opens the existing approval screen; navigating there does not render.
+Run the FastAPI studio (`venv/bin/uvicorn app.main:app`), then `npm run dev`
+here. `API_UPSTREAM` (default `http://localhost:8000`) is where the same-origin
+proxy sends `/api`, `/ui`, `/brand`, `/auth` and the photo routes, so the
+`zp_session` cookie rides along and sign-in stays FastAPI's.
 
-## Scene persistence
+Every signed-in page sits inside one shell (`src/components/studio/shell.tsx`):
+the rail (Studio, Assets, Pipeline, Director, Elements, Queue — Analytics is
+gone in favour of Elements, 2026-09-11), the bar, the account row, a Queue
+badge (`GET /api/queue/pending` count). Assets, Pipeline and Queue open the
+Jinja views through the proxy until each has a React page.
 
-The canvas loads the owned concept and its existing per-shot graph. It reads
-and writes the backend's LiteGraph format, with additional React metadata for
-multiple reference wires and pending jobs. Existing prompts, node positions,
-references, and cached outputs survive. Unsupported legacy nodes produce an
-explicit fallback link instead of being dropped.
+## The canvas (`/studio/flows?concept=ID&shot=N`)
 
-Edits autosave to `/api/concepts/{id}/shots/{n}/graph`. Save canvas retries
-explicitly; navigation flushes pending edits. A changed scene seed rejects
-stale graph saves. Save scene prompt explicitly writes the selected prompt or
-enhancement back to the shot; ordinary canvas editing does not replace it.
-The fallback is `/ui?view=director&concept=ID&legacy=1`.
+One shot's chain as cards: the prompt, its instructions, one **element card
+per asset** the scene was written against (`zpf/reference_set` — a
+character's frames, a room's plates, the composer's uploads), the Gemini
+enhance, the Nano keyframe and the Runway clip. Wires are real links the
+runner executes; `src/lib/director-graph.ts` is the adapter and the JSON on
+the wire is still LiteGraph's serialize() shape. The billed cards carry a
+`refs` port that takes SEVERAL wires (`workflow_runner.MULTI_LINK_PORTS`), and
+`ref_urls` is rewritten from the wires on every save so the drawing and the
+run never disagree.
 
-Without a concept parameter the workspace is a browser-local draft, with
-JSON import/export and templates. Templates cannot replace a connected scene.
+- **The prompt bar** underneath edits the shot's prompt card. An `@`-mention
+  (`/api/assets/search`) drops the element on the canvas already wired into
+  every card with a refs port; the same works inside a prompt card.
+- **Generate** saves the canvas to the shot's row and runs the backend's Run
+  all (`POST /api/workflows/{id}/run`), painting each card from the job's
+  `node_states`. A card's own Run (with the confirm) is the per-node route.
+- **Send to Queue** only PICKS the concept (`POST /api/concepts/{id}/pick`);
+  approving in Queue is still the one spend gate.
+- **The inspector** (select a card): what it does, a rename, the camera
+  presets (`/api/presets`, folded into the prompt — the runner has no camera
+  parameter), the spend line and the gate state for the Runway card.
+- Tools: select, pan, cut (click a wire), frame all; the + adds a card.
 
-## Generation and authentication
+Edits autosave to `/api/concepts/{id}/shots/{n}/graph`; a changed scene seed
+rebuilds the canvas (the server compares on read). `Save scene prompt`
+writes the prompt card back onto the shot. A saved canvas wins over a
+rebuild — `DELETE /api/concepts/{id}/graph` is the reset.
 
-The Next.js server proxies API, auth, and reference/media routes to
-`API_UPSTREAM` (default `http://localhost:8000`). Sign-in and account permissions
-remain in FastAPI. `NEXT_PUBLIC_API_URL` optionally selects a direct API origin,
-which needs matching CORS and cookie configuration.
+Without a concept the workspace is a browser-local draft with templates and
+JSON import/export.
 
-Ground/enhance nodes use the existing execution endpoints. Image/video nodes
-use Nano Banana and Runway through the existing authenticated endpoints and
-explicit generation dialog. Concept and shot IDs accompany generation: the
-server verifies ownership and references, enforces existing provider caps, and
-attaches successful media to the shot even if the browser closes. Pending job
-IDs and finished outputs persist with the canvas. Run upstream nodes before
-downstream nodes; a whole-graph runner is not implemented in this workspace.
+## Elements (`/studio/elements`)
 
-For a hosted setup, run the Next.js service alongside FastAPI and set the
-backend's `DIRECTOR_FRONTEND_URL` to the full public `/studio/flows` URL. Nonlocal FastAPI defaults to the legacy
-Director until this setting is configured. The combined Fly configuration below
-sets it for the existing public domain.
+The thing you @ in a prompt: one card per asset row with its plate, @handle,
+frame count and how many concepts it has grounded (derived from the refs on
+the board). New element posts to `/api/assets/{characters|locations|props}`,
+which also teaches the RAG assets shelf.
 
-## Verification
+## Tests
 
-Graph round-trip tests cover prompts, references, layouts, outputs, pending
-jobs, unsupported nodes, legacy image fallback, and legacy edits. Backend
-checks cover graph persistence, stale saves, ownership, and mocked output
-attachment. TypeScript, ESLint, Ruff, and production Next.js build pass.
-No paid rendering was used. Browser automation timed out during integration
-verification; an authenticated live browser walkthrough remains unverified.
-
-The three small template thumbnails were cropped from the supplied recording
-as reference assets for this local implementation.
-
-## Combined Fly deployment
-
-The root Dockerfile builds this app in standalone mode. Supervisor runs Next.js
-on loopback port 3000, FastAPI on 8000, cron, and nginx on public port 8080.
-Nginx sends `/studio/flows`, `/_next/`, and `/flows/` to Next.js; other routes
-remain with FastAPI, preserving the landing page, auth, API, and media routes.
-Forwarded host/protocol headers preserve the public OAuth callback origin.
-The Fly machine has 1 GB RAM. Deploy from the repository root with
-`fly deploy -a zeropage-studio --remote-only`.
+`node --test tests/` covers the adapter (seeding, grouping, the multi-wire
+port, the round trip). `npx tsc --noEmit` and `npx eslint src` are the gates.

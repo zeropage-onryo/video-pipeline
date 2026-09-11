@@ -1,11 +1,26 @@
 "use client";
 
-/* Arbitrary reference hosts and provider outputs are displayed directly, without an image proxy. */
+/* The Director — the Gen Space on React Flow (2026-09-11).
+
+   One shot's chain as cards on an infinite canvas: the prompt and its
+   instructions, one element card per asset the scene was written
+   against, the Gemini enhance, the Nano keyframe and the Runway clip.
+   Wires are real links the runner executes (src/lib/director-graph.ts
+   is the adapter). Underneath, a prompt bar edits the shot's prompt
+   and an @-mention drops an element on the canvas already wired in;
+   Generate runs the whole chain through the backend's Run all; Send
+   to Queue only PICKS — approving in Queue is still the one spend
+   gate. Every billed node stays behind its module's own gate.
+
+   Without a concept the canvas is a browser-local draft with
+   templates and JSON import/export, as before. */
+/* Arbitrary reference hosts and provider outputs are displayed directly. */
 /* eslint-disable @next/next/no-img-element */
 
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   createContext,
@@ -29,93 +44,103 @@ import {
 import {
   ArrowLeft,
   ArrowUpRight,
+  Box,
   Check,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
+  Clapperboard,
+  Clock,
   Copy,
   Download,
   Film,
-  FolderOpen,
   Grid2X2,
   Hand,
-  Home,
   ImagePlus,
   Layers,
+  ListVideo,
+  LoaderCircle,
+  MapPin,
   Maximize,
+  Monitor,
   MoreHorizontal,
   MousePointer2,
+  Play,
   Plus,
-  Search,
-  Settings2,
+  RectangleVertical,
+  Scissors,
   Sparkles,
   Trash2,
   Type,
   Upload,
-  Workflow,
+  UserRound,
+  Video,
   X,
   Zap,
   ZoomIn,
   ZoomOut,
-  Play,
-  LoaderCircle,
 } from "lucide-react";
 import { apiFetch, API_URL } from "@/lib/api";
+import {
+  announceQueueChange,
+  getAssets,
+  getCapabilities,
+  getPresets,
+  pickConcept,
+  type Capabilities,
+  type Preset,
+  type RunwayState,
+} from "@/lib/studio-api";
+import { useMentions } from "@/components/studio/mentions";
+import { useShell } from "@/components/studio/shell";
 import "@xyflow/react/dist/style.css";
 import "./flows.css";
 
 import {
+  compatible,
+  elementLabel,
   fromLegacy,
-  toLegacy,
-  seedScene,
+  isMedia,
   isText,
   ports,
-  type Kind,
+  seedScene,
+  toLegacy,
+  wireElement,
   type CardData,
   type FlowNode,
+  type Kind,
   type LegacyGraph,
   type NodeState,
+  type RefKind,
   type Shot,
 } from "@/lib/director-graph";
 
 type Template = "image" | "video" | "variety";
 type Draft = { version: 1; name: string; nodes: FlowNode[]; edges: Edge[] };
 const KEY = "zeropage.flow-draft.v1";
-const titles = {
+const titles: Record<Kind, string> = {
   prompt: "Prompt",
   image: "Nano Banana",
-  video: "Runway",
+  video: "Runway Gen-4 Turbo",
   reference: "Reference image",
+  element: "Element",
   system: "Instructions",
-  enhance: "Enhance prompt",
+  enhance: "Gemini 2.5 Flash",
   ground: "Ground in references",
+};
+const notes: Record<Kind, string> = {
+  prompt: "What happens in the shot. Written by the generator, editable here or in the bar below — @ brings an element onto the canvas.",
+  system: "How the enhance treats the prompt: tighten, never summarise; keep the locks, the avoid-list and the beat order.",
+  ground: "Reference-library grounding for a spark. Its output feeds the enhance as references.",
+  enhance: "Takes the prompt, the instructions and every reference wired in, and returns one tightened director's prompt.",
+  reference: "One plate this shot starts from.",
+  element: "Reference frames from the asset library. Keeps the face, the wardrobe or the room consistent across shots.",
+  image: "Renders the keyframe the clip starts from — the enhanced prompt as a still, grounded on every reference wired in.",
+  video: "Takes every wire coming in and renders one clip, anchored on the keyframe. The only step that spends money.",
 };
 const starterText =
   "A solitary rider crosses a sunlit field. Wind moves through the tall grass, warm afternoon light, subtle film grain. A quiet, unhurried moment.";
-const templates: {
-  id: Template;
-  title: string;
-  text: string;
-  image: string;
-}[] = [
-  {
-    id: "image",
-    title: "Image generation",
-    text: "Turn a thought into a frame.",
-    image: "image-study",
-  },
-  {
-    id: "video",
-    title: "Video generation",
-    text: "Give your still a little motion.",
-    image: "motion-study",
-  },
-  {
-    id: "variety",
-    title: "Explore variations",
-    text: "One prompt. Three directions.",
-    image: "model-study",
-  },
+const templates: { id: Template; title: string; text: string; image: string }[] = [
+  { id: "image", title: "Image generation", text: "Turn a thought into a frame.", image: "image-study" },
+  { id: "video", title: "Video generation", text: "Give your still a little motion.", image: "motion-study" },
+  { id: "variety", title: "Explore variations", text: "One prompt. Three directions.", image: "model-study" },
 ];
 function makeTemplate(type: Template): { nodes: FlowNode[]; edges: Edge[] } {
   const prompt: FlowNode = {
@@ -131,99 +156,92 @@ function makeTemplate(type: Template): { nodes: FlowNode[]; edges: Edge[] } {
     data: { kind: "image", label: "Nano Banana" },
   };
   const nodes: FlowNode[] = [prompt, image];
-  const edges: Edge[] = [
-    {
-      id: "prompt-image",
-      source: "prompt",
-      target: "image",
-      targetHandle: "prompt",
-    },
-  ];
+  const edges: Edge[] = [{ id: "prompt-image", source: "prompt", target: "image", targetHandle: "prompt" }];
   if (type === "video") {
-    nodes.push({
-      id: "video",
-      type: "studio",
-      position: { x: 980, y: 50 },
-      data: { kind: "video", label: "Runway" },
-    });
+    nodes.push({ id: "video", type: "studio", position: { x: 980, y: 50 }, data: { kind: "video", label: titles.video } });
     edges.push(
-      {
-        id: "image-video",
-        source: "image",
-        target: "video",
-        targetHandle: "reference",
-      },
-      {
-        id: "prompt-video",
-        source: "prompt",
-        target: "video",
-        targetHandle: "prompt",
-      },
+      { id: "image-video", source: "image", target: "video", targetHandle: "reference" },
+      { id: "prompt-video", source: "prompt", target: "video", targetHandle: "prompt" },
     );
   }
   if (type === "variety") {
     image.position.y = -150;
     nodes.push(
-      ...[1, 2].map((n): FlowNode => ({
-        id: `take-${n}`,
-        type: "studio",
-        position: { x: 530, y: -150 + n * 380 },
-        data: { kind: "image", label: `Nano Banana · Take ${n + 1}` },
-      })),
+      ...[1, 2].map(
+        (n): FlowNode => ({
+          id: `take-${n}`,
+          type: "studio",
+          position: { x: 530, y: -150 + n * 380 },
+          data: { kind: "image", label: `Nano Banana · Take ${n + 1}` },
+        }),
+      ),
     );
-    edges.push(
-      ...[1, 2].map((n) => ({
-        id: `prompt-take-${n}`,
-        source: "prompt",
-        target: `take-${n}`,
-        targetHandle: "prompt",
-      })),
-    );
+    edges.push(...[1, 2].map((n) => ({ id: `prompt-take-${n}`, source: "prompt", target: `take-${n}`, targetHandle: "prompt" })));
   }
   return { nodes, edges };
 }
+
+const asSrc = (url: string) => (url.startsWith("/") ? `${API_URL}${url}` : url);
+const ratioLabel = (r?: string) => (r === "720:1280" ? "9:16" : r === "1280:720" ? "16:9" : r || "9:16");
+
 const Actions = createContext<{
   update: (id: string, data: Partial<CardData>) => void;
   remove: (id: string) => void;
   duplicate: (id: string) => void;
   run: (id: string) => void;
-}>({ update: () => {}, remove: () => {}, duplicate: () => {}, run: () => {} });
+  runway: RunwayState | null;
+  caps: Capabilities;
+}>({ update: () => {}, remove: () => {}, duplicate: () => {}, run: () => {}, runway: null, caps: {} });
+
+function KindIcon({ data, size, strokeWidth }: { data: CardData; size: number; strokeWidth: number }) {
+  const props = { size, strokeWidth };
+  if (data.kind === "prompt") return <Type {...props} />;
+  if (data.kind === "system") return <Layers {...props} />;
+  if (data.kind === "video") return <Clapperboard {...props} />;
+  if (data.kind === "reference") return <ImagePlus {...props} />;
+  if (data.kind === "element") {
+    if (data.refKind === "location") return <MapPin {...props} />;
+    if (data.refKind === "prop") return <Box {...props} />;
+    if (data.refKind === "character") return <UserRound {...props} />;
+    return <ImagePlus {...props} />;
+  }
+  return <Sparkles {...props} />;
+}
+
+function gateNote(kind: Kind, caps: Capabilities) {
+  if (kind === "video")
+    return !caps["runway.generate"]
+      ? "Runway · RUNWAYML_API_SECRET not set"
+      : !caps["runway.spend"]
+        ? "Runway · gated — RUNWAY_SPEND_OK=1 to arm"
+        : "";
+  if (kind === "image" && caps["nano.generate"] === false) return "GEMINI_API_KEY not set";
+  return "";
+}
 
 function StudioNode({ id, data, selected }: NodeProps<FlowNode>) {
   const actions = useContext(Actions);
-  const Icon =
-    data.kind === "prompt"
-      ? Type
-      : data.kind === "video"
-        ? Film
-        : data.kind === "reference"
-          ? ImagePlus
-          : Sparkles;
   const [menu, setMenu] = useState(false);
+  const ins = ports(data.kind);
+  const rw = actions.runway;
   return (
-    <article
-      className={`flow-card ${selected ? "is-selected" : ""} kind-${data.kind}`}
-    >
-      {ports(data.kind).map((port, i) => (
+    <article className={`flow-card ${selected ? "is-selected" : ""} kind-${data.kind}${data.busy ? " is-busy" : ""}${data.error ? " is-failed" : ""}${data.url || (isText(data.kind) && data.text && !["prompt", "system"].includes(data.kind)) ? " is-done" : ""}`}>
+      {ins.map((port, i) => (
         <Handle
           key={port}
           type="target"
           position={Position.Left}
           id={port}
-          title={port}
-          className={port === "reference" ? "port-image" : "port-text"}
-          style={{ top: 39 + i * 46 }}
+          title={`${port} · ${port === "reference" ? "image" : port === "refs" ? "images" : "text"}`}
+          className={port === "reference" ? "port-image" : port === "refs" ? "port-images" : "port-text"}
+          style={{ top: 66 + i * 30 }}
         />
       ))}
       <header className="node-header">
-        <Icon size={15} />
+        <KindIcon data={data} size={14} strokeWidth={1.6} />
         <span>{data.label}</span>
-        <button
-          aria-label={`Options for ${data.label}`}
-          className="nodrag node-menu-toggle"
-          onClick={() => setMenu(!menu)}
-        >
-          <MoreHorizontal size={17} />
+        <button aria-label={`Options for ${data.label}`} className="nodrag node-menu-toggle" onClick={() => setMenu(!menu)}>
+          <MoreHorizontal size={16} />
         </button>
       </header>
       {menu && (
@@ -241,213 +259,255 @@ function StudioNode({ id, data, selected }: NodeProps<FlowNode>) {
           </button>
         </div>
       )}
+
       {isText(data.kind) ? (
         <>
           <textarea
             aria-label={data.kind === "prompt" ? "Scene prompt" : data.label}
             className="nodrag nowheel prompt-field"
-            placeholder="Describe what you imagine…"
+            placeholder={
+              data.kind === "prompt"
+                ? "Describe the shot… (@ to reference an element)"
+                : data.kind === "system"
+                  ? "Instructions for how the model should treat the prompt…"
+                  : "Output will appear here"
+            }
             value={data.text || ""}
+            readOnly={["enhance", "ground"].includes(data.kind)}
             onChange={(e) => actions.update(id, { text: e.target.value })}
           />
           <footer className="prompt-footer">
-            <span>@</span>
             {["enhance", "ground"].includes(data.kind) ? (
-              <button
-                className="nodrag"
-                disabled={data.busy}
-                onClick={() => actions.run(id)}
-              >
-                {data.busy ? "Running…" : "Run"} <Zap size={12} />
-              </button>
+              <>
+                <span className="m">{data.text ? `${data.text.length} chars` : "text → text"}</span>
+                <button className="nodrag ghost" disabled={data.busy} onClick={() => actions.run(id)}>
+                  <Play size={12} /> {data.busy ? "Running…" : "Run"}
+                </button>
+              </>
             ) : (
-              <span>
-                {data.kind === "system"
-                  ? "ENHANCE INSTRUCTIONS"
-                  : "YOUR STARTING POINT"}
-              </span>
+              <span className="m">{(data.text || "").length} chars</span>
             )}
           </footer>
           {data.error && (
-            <p role="alert" className="node-error">
-              {data.error}
+            <p role="alert" className="node-error nodrag nowheel">
+              ✕ {data.error}
             </p>
           )}
         </>
+      ) : data.kind === "element" ? (
+        <div className="element-body nodrag">
+          {data.urls?.length ? (
+            <div className={`element-frames c${data.refKind === "location" ? 2 : 3}${data.refKind === "location" ? " wide" : ""}`}>
+              {data.urls.map((u, i) => (
+                <span key={`${u}-${i}`} className="element-frame">
+                  <img src={asSrc(u)} alt="" loading="lazy" />
+                  <button
+                    className="frame-x"
+                    title="Remove this frame"
+                    onClick={() => actions.update(id, { urls: data.urls!.filter((_, j) => j !== i) })}
+                  >
+                    <X size={10} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-media small">
+              <ImagePlus size={22} strokeWidth={1.2} />
+              <span>No frames yet</span>
+            </div>
+          )}
+          <footer className="node-footer">
+            <span className="m">
+              {data.urls?.length || 0} frame{data.urls?.length === 1 ? "" : "s"}
+            </span>
+            <label className="ghost">
+              <Plus size={12} /> Add frame
+              <input
+                type="url"
+                placeholder="paste a photo url"
+                aria-label="Add a frame by url"
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter") return;
+                  const v = (e.target as HTMLInputElement).value.trim();
+                  if (!v) return;
+                  actions.update(id, { urls: [...(data.urls || []), v] });
+                  (e.target as HTMLInputElement).value = "";
+                }}
+              />
+            </label>
+          </footer>
+        </div>
       ) : data.kind === "reference" ? (
         <div className="reference-body nodrag">
           {data.url ? (
-            <img
-              src={
-                data.url.startsWith("/") ? `${API_URL}${data.url}` : data.url
-              }
-              alt="Your reference"
-            />
+            <img src={asSrc(data.url)} alt="Your reference" />
           ) : (
             <div className="empty-media">
-              <ImagePlus size={28} />
+              <ImagePlus size={28} strokeWidth={1.2} />
               <span>Add a reference image</span>
             </div>
           )}
           <label>
-            Public image URL
+            <span className="m">Image url</span>
             <input
               aria-label="Reference image URL"
-              placeholder="https://…"
+              placeholder="https://… or a picked photo"
               value={data.url || ""}
               onChange={(e) => actions.update(id, { url: e.target.value })}
             />
           </label>
-          <small>Connect to a purple image port.</small>
         </div>
       ) : (
         <>
-          <div className="node-preview nodrag">
+          {data.kind === "video" ? (
+            <div className="node-chips nodrag">
+              <span className="chip">
+                <Clock size={11} /> {rw?.duration ?? 5} sec
+              </span>
+              <span className="chip">
+                <RectangleVertical size={11} /> {ratioLabel(rw?.ratio)}
+              </span>
+              <span className="chip">
+                <Monitor size={11} /> {rw?.model ?? "gen4_turbo"}
+              </span>
+              {data.camera ? (
+                <span className="chip">
+                  <Video size={11} /> {data.camera}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
+          <div className={`node-preview nodrag${data.kind === "video" ? " video" : ""}`}>
             {data.url ? (
               data.kind === "video" ? (
-                <video
-                  src={
-                    data.url.startsWith("/")
-                      ? `${API_URL}${data.url}`
-                      : data.url
-                  }
-                  controls
-                />
+                <video src={asSrc(data.url)} controls muted loop playsInline preload="metadata" />
               ) : (
-                <img
-                  src={
-                    data.url.startsWith("/")
-                      ? `${API_URL}${data.url}`
-                      : data.url
-                  }
-                  alt="Generated frame"
-                />
+                <img src={asSrc(data.url)} alt="Generated frame" />
               )
             ) : (
               <div className="empty-media">
-                {data.busy ? (
-                  <LoaderCircle size={28} className="spin" />
-                ) : (
-                  <Icon size={27} strokeWidth={1} />
-                )}
+                {data.busy ? <LoaderCircle size={26} className="spin" /> : <KindIcon data={data} size={26} strokeWidth={1} />}
                 <span>
                   {data.busy
-                    ? "Creating your next frame…"
-                    : data.kind === "video"
-                      ? "Your scene, in motion"
-                      : "A new perspective starts here"}
+                    ? data.kind === "video"
+                      ? "Rendering the clip…"
+                      : "Rendering the keyframe…"
+                    : gateNote(data.kind, actions.caps) ||
+                      (data.kind === "video" ? "The clip lands here" : "Keyframe will appear here")}
                 </span>
               </div>
             )}
-            <span className="preview-tag">
-              {data.kind === "video" ? "VIDEO" : "IMAGE"}
-            </span>
-          </div>
-          <div className="node-meta">
-            <span>
-              <Layers size={12} /> {data.kind === "video" ? "Motion" : "Still"}
-            </span>
-            <span>Provider defaults</span>
-            <span>01</span>
+            {data.busy && data.url ? (
+              <div className="node-overlay">
+                <LoaderCircle size={14} className="spin" /> <span className="m">re-rolling</span>
+              </div>
+            ) : null}
+            <span className="preview-tag">{data.kind === "video" ? "VIDEO" : "IMAGE"}</span>
           </div>
           {data.error && (
             <p role="alert" className="node-error nodrag nowheel">
-              {data.error}
+              ✕ {data.error}
             </p>
           )}
           <footer className="node-footer nodrag">
-            <span>
-              {data.busy
-                ? "Processing"
-                : data.url
-                  ? "Ready"
-                  : "Ready to create"}
+            <span className="m">
+              {data.kind === "video" && rw?.estimate_usd != null
+                ? `est. $${Number(rw.estimate_usd).toFixed(2)}`
+                : data.busy
+                  ? "processing"
+                  : data.url
+                    ? "ready"
+                    : data.kind === "video"
+                      ? "text/image → video"
+                      : "text/image → image"}
             </span>
-            <button disabled={data.busy} onClick={() => actions.run(id)}>
-              <Zap size={12} />
-              {data.busy ? "Running…" : "Generate"}
+            {data.url && data.kind === "video" ? (
+              <a className="ghost" href={asSrc(data.url)} target="_blank" rel="noreferrer">
+                <Download size={12} /> Export
+              </a>
+            ) : null}
+            <button className={data.kind === "video" ? "pri" : "ghost"} disabled={data.busy} onClick={() => actions.run(id)}>
+              <Play size={12} />
+              {data.busy ? "Running…" : data.url ? "Re-roll" : "Run"}
             </button>
           </footer>
         </>
-      )}
-      {!!data.refs?.length && (
-        <div className="node-references nodrag">
-          {data.refs.map((url, i) => (
-            <img
-              key={`${url}-${i}`}
-              src={url.startsWith("/") ? `${API_URL}${url}` : url}
-              alt={`Scene reference ${i + 1}`}
-              title={`Scene reference ${i + 1}`}
-            />
-          ))}
-        </div>
       )}
       <Handle
         type="source"
         position={Position.Right}
         id="output"
-        className={isText(data.kind) ? "port-text" : "port-image"}
-        style={{ top: data.kind === "prompt" ? "50%" : 39 }}
+        className={data.kind === "element" ? "port-images" : isText(data.kind) ? "port-text" : "port-image"}
+        style={{ top: "50%" }}
       />
     </article>
   );
 }
 const nodeTypes = { studio: StudioNode };
 
-function Workspace({
-  conceptId,
-  shotN,
-}: {
-  conceptId?: number;
-  shotN?: number;
-}) {
+type Concept = {
+  id: number;
+  n: string;
+  title: string;
+  shots: Shot[];
+  picked?: boolean;
+  parked?: boolean;
+  media_url?: string;
+  runway?: RunwayState;
+};
+
+function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number }) {
+  const shell = useShell();
   const [initial] = useState(() => makeTemplate("variety"));
-  const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>(
-    initial.nodes,
-  );
+  const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>(initial.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges);
-  const [view, setView] = useState<"home" | "flow">("flow");
   const [name, setName] = useState("Untitled flow");
-  const [sidebar, setSidebar] = useState(false);
   const [template, setTemplate] = useState<Template>("variety");
   const [showTemplates, setShowTemplates] = useState(!conceptId);
   const [addMenu, setAddMenu] = useState(false);
-  const [tool, setTool] = useState<"select" | "hand">("select");
+  const [tool, setTool] = useState<"select" | "hand" | "cut">("select");
   const [toast, setToast] = useState("");
   const [ready, setReady] = useState(false);
   const [confirm, setConfirm] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
-  const [search, setSearch] = useState("");
   const [storageError, setStorageError] = useState(false);
-  const [scene, setScene] = useState<{
-    id: number;
-    title: string;
-    shots: Shot[];
-  } | null>(null);
+  const [scene, setScene] = useState<Concept | null>(null);
   const [activeShot, setActiveShot] = useState<number | undefined>(shotN);
   const [sceneError, setSceneError] = useState("");
   const [saveState, setSaveState] = useState("Loading scene…");
   const [saveRevision, setSaveRevision] = useState(0);
+  const [caps, setCaps] = useState<Capabilities>({});
+  const [presets, setPresets] = useState<Preset[]>([]);
+  const [assets, setAssets] = useState<{ name: string; category: string; photos: string[] }[]>([]);
+  const [runJob, setRunJob] = useState<{ id: number } | null>(null);
+  const [runProgress, setRunProgress] = useState("");
+  const [bar, setBar] = useState("");
   const graphBase = useRef<Partial<LegacyGraph>>({});
   const seedHash = useRef<string | null>(null);
   const saveChain = useRef<Promise<unknown>>(Promise.resolve());
   const lastSaved = useRef("");
   const stopped = useRef(false);
-
   const inputRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLElement>(null);
+  const barRef = useRef<HTMLTextAreaElement>(null);
   const pending = useRef(new Set<string>());
-  const { fitView, zoomIn, zoomOut, screenToFlowPosition, getNodes, getEdges } =
-    useReactFlow<FlowNode>();
+  const { fitView, zoomIn, zoomOut, screenToFlowPosition, getNodes, getEdges } = useReactFlow<FlowNode>();
   const notify = useCallback((text: string) => setToast(text), []);
+
   useEffect(() => {
-    if (view !== "flow") return;
-    const timer = setTimeout(
-      () => fitView({ padding: 0.12, duration: 250 }),
-      120,
-    );
+    getCapabilities().then(setCaps).catch(() => setCaps({}));
+    getPresets()
+      .then((r) => setPresets(r.items || []))
+      .catch(() => setPresets([]));
+    getAssets()
+      .then((r) => setAssets(r.items))
+      .catch(() => setAssets([]));
+  }, []);
+  useEffect(() => {
+    const timer = setTimeout(() => fitView({ padding: 0.12, duration: 250 }), 120);
     return () => clearTimeout(timer);
-  }, [showTemplates, sidebar, view, fitView]);
+  }, [showTemplates, fitView]);
   useEffect(() => {
     if (!confirm) return;
     const previous = document.activeElement;
@@ -461,6 +521,8 @@ function Workspace({
     const timer = setTimeout(() => setToast(""), 4200);
     return () => clearTimeout(timer);
   }, [toast]);
+
+  /* ── the draft (no concept): browser-local ── */
   useEffect(() => {
     if (conceptId) return;
     const timer = setTimeout(() => {
@@ -469,12 +531,7 @@ function Workspace({
         if (saved) {
           const draft = JSON.parse(saved) as Draft;
           if (validDraft(draft)) {
-            setNodes(
-              draft.nodes.map((n) => ({
-                ...n,
-                data: { ...n.data, busy: !!n.data.jobId },
-              })),
-            );
+            setNodes(draft.nodes.map((n) => ({ ...n, data: { ...n.data, busy: !!n.data.jobId } })));
             setEdges(draft.edges);
             setName(draft.name);
             setShowTemplates(false);
@@ -491,10 +548,7 @@ function Workspace({
     if (!ready || conceptId) return;
     const timer = setTimeout(() => {
       try {
-        localStorage.setItem(
-          KEY,
-          JSON.stringify({ version: 1, name, nodes, edges }),
-        );
+        localStorage.setItem(KEY, JSON.stringify({ version: 1, name, nodes, edges }));
         setStorageError(false);
       } catch {
         setStorageError(true);
@@ -502,23 +556,20 @@ function Workspace({
     }, 500);
     return () => clearTimeout(timer);
   }, [nodes, edges, name, ready, conceptId]);
+
+  /* ── the scene (a concept's shot) ── */
   useEffect(() => {
     if (!conceptId) return;
     let cancelled = false;
     (async () => {
       try {
-        const detail = await apiFetch<{
-          id: number;
-          title: string;
-          shots: Shot[];
-        }>(`/concepts/${conceptId}`);
-        const shot = detail.shots.find(
-          (s) => s.n === (shotN ?? detail.shots[0]?.n),
-        );
-        if (!shot)
-          throw new Error(
-            "This scene has no written shot yet. Write its prompt from Pipeline first.",
-          );
+        const [detail, presetsRes, assetsRes] = await Promise.all([
+          apiFetch<Concept>(`/concepts/${conceptId}`),
+          getPresets().catch(() => ({ items: [], enhance_system: "" })),
+          getAssets().catch(() => ({ items: [] })),
+        ]);
+        const shot = detail.shots.find((s) => s.n === (shotN ?? detail.shots[0]?.n));
+        if (!shot) throw new Error("This scene has no written shot yet. Write its prompt from Pipeline first.");
         const saved = await apiFetch<{
           graph: LegacyGraph | null;
           states?: Record<string, NodeState>;
@@ -526,14 +577,18 @@ function Workspace({
           stale?: boolean;
         }>(`/concepts/${conceptId}/shots/${shot.n}/graph`);
         if (cancelled) return;
+        const names: Record<string, string> = {};
+        for (const a of assetsRes.items) {
+          const slug = a.photos[0]?.match(/^\/(characters|locations|props)\/([^/]+)\//)?.[2];
+          if (slug) names[slug] = a.name;
+        }
         const loaded = saved.graph
           ? fromLegacy(saved.graph, saved.states || {})
-          : seedScene(shot);
-        // A render can finish after the previous browser closed. The shot is authoritative.
+          : seedScene(shot, { enhanceSystem: presetsRes.enhance_system, names });
+        // a render can finish after the previous browser closed: the shot is authoritative
         const image = loaded.nodes.find((n) => n.data.kind === "image");
         const video = loaded.nodes.find((n) => n.data.kind === "video");
-        if (image && shot.reference_image)
-          image.data.url = shot.reference_image;
+        if (image && shot.reference_image) image.data.url = shot.reference_image;
         if (video && shot.media_url) video.data.url = shot.media_url;
         graphBase.current = saved.graph || {};
         seedHash.current = saved.seed_hash || null;
@@ -543,33 +598,24 @@ function Workspace({
         setScene(detail);
         setActiveShot(shot.n);
         setReady(true);
-        setSaveState(
-          saved.stale ? "Rebuilt from revised scene" : "Saved to scene",
-        );
+        setSaveState(saved.stale ? "Rebuilt from the revised scene" : saved.graph ? "Saved to scene" : "Fresh canvas");
         lastSaved.current = JSON.stringify(
-          toLegacy(loaded.nodes, loaded.edges, graphBase.current, {
-            conceptId,
-            shotN: shot.n,
-          }),
+          toLegacy(loaded.nodes, loaded.edges, graphBase.current, { conceptId, shotN: shot.n }).graph,
         );
       } catch (error) {
-        if (!cancelled)
-          setSceneError(
-            error instanceof Error ? error.message : "Could not load scene",
-          );
+        if (!cancelled) setSceneError(error instanceof Error ? error.message : "Could not load scene");
       }
     })();
     return () => {
       cancelled = true;
     };
   }, [conceptId, shotN, setNodes, setEdges]);
+
+  // autosave: the graph that ran and the graph you return to are one row
   useEffect(() => {
     if (!conceptId || !activeShot || !ready || sceneError) return;
-    const payload = toLegacy(nodes, edges, graphBase.current, {
-      conceptId,
-      shotN: activeShot,
-    });
-    const fingerprint = JSON.stringify(payload);
+    const payload = toLegacy(nodes, edges, graphBase.current, { conceptId, shotN: activeShot });
+    const fingerprint = JSON.stringify(payload.graph);
     if (fingerprint === lastSaved.current) return;
     const timer = setTimeout(() => {
       setSaveState("Saving…");
@@ -580,39 +626,22 @@ function Workspace({
           try {
             await apiFetch(`/concepts/${conceptId}/shots/${activeShot}/graph`, {
               method: "PUT",
-              body: JSON.stringify({
-                ...payload,
-                name,
-                seed_hash: seedHash.current,
-              }),
+              body: JSON.stringify({ graph: payload.graph, states: payload.states, name }),
             });
             lastSaved.current = fingerprint;
             setSaveState("Saved to scene");
           } catch (error) {
-            setSaveState(
-              `Not saved: ${error instanceof Error ? error.message : "connection lost"}`,
-            );
+            setSaveState(`Not saved: ${error instanceof Error ? error.message : "connection lost"}`);
           }
         });
     }, 650);
     return () => clearTimeout(timer);
-  }, [
-    conceptId,
-    activeShot,
-    nodes,
-    edges,
-    name,
-    ready,
-    sceneError,
-    saveRevision,
-  ]);
+  }, [conceptId, activeShot, nodes, edges, name, ready, sceneError, saveRevision]);
+
   const savePrompt = async () => {
     if (!conceptId || !activeShot) return;
     const promptNodes = getNodes().filter((n) => ["prompt", "enhance"].includes(n.data.kind));
-    const chosen =
-      promptNodes.find((n) => n.selected) ||
-      promptNodes.find((n) => n.data.originalPrompt) ||
-      promptNodes[0];
+    const chosen = promptNodes.find((n) => n.selected) || promptNodes.find((n) => n.data.originalPrompt) || promptNodes[0];
     const prompt = chosen?.data.text?.trim();
     if (!prompt) {
       notify("Select a nonempty prompt node to save to the scene.");
@@ -624,10 +653,6 @@ function Workspace({
         method: "POST",
         body: JSON.stringify({ prompt }),
       });
-      const fresh = await apiFetch<{ seed_hash?: string }>(
-        `/concepts/${conceptId}/shots/${activeShot}/graph`,
-      );
-      seedHash.current = fresh.seed_hash || null;
       lastSaved.current = "";
       setSaveRevision((n) => n + 1);
       notify("Scene prompt updated");
@@ -635,40 +660,28 @@ function Workspace({
       notify(error instanceof Error ? error.message : "Could not save prompt");
     }
   };
-  const leaveScene = async (destination: string) => {
+  const flushAndGo = async (destination: string) => {
     if (conceptId && activeShot && ready && !sceneError) {
       try {
         stopped.current = true;
         await saveChain.current.catch(() => {});
-        const payload = toLegacy(getNodes(), getEdges(), graphBase.current, {
-          conceptId,
-          shotN: activeShot,
-        });
+        const payload = toLegacy(getNodes(), getEdges(), graphBase.current, { conceptId, shotN: activeShot });
         await apiFetch(`/concepts/${conceptId}/shots/${activeShot}/graph`, {
           method: "PUT",
-          body: JSON.stringify({
-            ...payload,
-            name,
-            seed_hash: seedHash.current,
-          }),
+          body: JSON.stringify({ graph: payload.graph, states: payload.states, name }),
         });
       } catch (error) {
         stopped.current = false;
-        notify(
-          `Could not save before leaving: ${error instanceof Error ? error.message : "connection lost"}`,
-        );
+        notify(`Could not save before leaving: ${error instanceof Error ? error.message : "connection lost"}`);
         return;
       }
     }
     window.location.assign(destination);
   };
+
   const update = useCallback(
     (id: string, data: Partial<CardData>) =>
-      setNodes((ns) =>
-        ns.map((n) =>
-          n.id === id ? { ...n, data: { ...n.data, ...data } } : n,
-        ),
-      ),
+      setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, data: { ...n.data, ...data } } : n))),
     [setNodes],
   );
   const remove = useCallback(
@@ -703,37 +716,60 @@ function Workspace({
       {
         id: crypto.randomUUID(),
         type: "studio",
-        position: screenToFlowPosition({
-          x: window.innerWidth / 2 - 120,
-          y: window.innerHeight / 2 - 80,
-        }),
+        position: screenToFlowPosition({ x: window.innerWidth / 2 - 120, y: window.innerHeight / 2 - 120 }),
         data: {
           kind,
           label: titles[kind],
           text: kind === "prompt" ? "" : undefined,
+          urls: kind === "element" ? [] : undefined,
+          refKind: kind === "element" ? "upload" : undefined,
         },
       },
     ]);
     setAddMenu(false);
     setShowTemplates(false);
   };
+
+  /* an @-mention (in the bar or a prompt card) drops the element on the
+     canvas, already wired into every card with a refs port */
+  const addElement = (hit: { name: string; category: string; thumb: string | null }) => {
+    const asset = assets.find((a) => a.name === hit.name && a.category === hit.category);
+    const urls = asset ? asset.photos.slice(0, 6) : hit.thumb ? [hit.thumb] : [];
+    if (!urls.length) {
+      notify(`${hit.name} has no photos on file — add some on Elements`);
+      return;
+    }
+    const refKind = hit.category as RefKind;
+    const label = elementLabel(refKind, hit.name);
+    const current = getNodes();
+    let node = current.find((n) => n.data.kind === "element" && n.data.label === label);
+    if (!node) {
+      const els = current.filter((n) => n.data.kind === "element");
+      const last = els.length ? els.reduce((a, b) => (b.position.y > a.position.y ? b : a)) : null;
+      node = {
+        id: crypto.randomUUID(),
+        type: "studio",
+        position: last ? { x: last.position.x, y: last.position.y + 260 } : { x: 400, y: 0 },
+        data: { kind: "element", label, refKind, urls },
+      };
+      setNodes((ns) => [...ns, node!]);
+    }
+    const fresh = wireElement(node, current).filter(
+      (e) => !getEdges().some((x) => x.source === e.source && x.target === e.target && x.targetHandle === "refs"),
+    );
+    setEdges((es) => [...es, ...fresh]);
+    notify(`${hit.name} on the canvas · wired into ${fresh.length} node${fresh.length === 1 ? "" : "s"}`);
+    setShowTemplates(false);
+  };
+
+  /* wiring rules: matching ports only, no cycles, one wire per single port */
   const connectionValid = (connection: Edge | Connection) => {
     if (connection.source === connection.target) return false;
     const source = getNodes().find((n) => n.id === connection.source);
     const target = getNodes().find((n) => n.id === connection.target);
-    if (
-      !source ||
-      !target ||
-      !ports(target.data.kind).includes(connection.targetHandle || "prompt")
-    )
-      return false;
-    if (connection.targetHandle !== "reference" && !isText(source.data.kind))
-      return false;
-    if (
-      connection.targetHandle === "reference" &&
-      !["image", "reference"].includes(source.data.kind)
-    )
-      return false;
+    const port = connection.targetHandle || "prompt";
+    if (!source || !target || !ports(target.data.kind).includes(port)) return false;
+    if (!compatible(source.data.kind, port)) return false;
     const visit = (id: string, seen = new Set<string>()): boolean => {
       if (id === connection.source) return true;
       if (seen.has(id)) return false;
@@ -753,16 +789,15 @@ function Workspace({
             !(
               e.target === connection.target &&
               e.targetHandle === connection.targetHandle &&
-              connection.targetHandle !== "reference"
+              connection.targetHandle !== "refs"
             ),
         ),
       ),
     );
+
   const pickTemplate = (id: Template) => {
     if (conceptId) {
-      notify(
-        "Scene graphs use their own prompt and references. Open a blank flow for templates.",
-      );
+      notify("Scene graphs use their own prompt and references. Open a blank flow for templates.");
       return;
     }
     const next = makeTemplate(id);
@@ -772,10 +807,7 @@ function Workspace({
     setTimeout(() => fitView({ padding: 0.22, duration: 400 }), 60);
   };
   const exportDraft = () => {
-    const blob = new Blob(
-      [JSON.stringify({ version: 1, name, nodes, edges }, null, 2)],
-      { type: "application/json" },
-    );
+    const blob = new Blob([JSON.stringify({ version: 1, name, nodes, edges }, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -792,79 +824,59 @@ function Workspace({
     }
     try {
       const data: unknown = JSON.parse(await file.text());
-      if (!validDraft(data))
-        throw new Error("Choose a ZeroPage workflow JSON export.");
-      setNodes(
-        data.nodes.map((n) => ({
-          ...n,
-          data: { ...n.data, busy: !!n.data.jobId },
-        })),
-      );
+      if (!validDraft(data)) throw new Error("Choose a ZeroPage workflow JSON export.");
+      setNodes(data.nodes.map((n) => ({ ...n, data: { ...n.data, busy: !!n.data.jobId } })));
       setEdges(data.edges);
       setName(data.name);
       setShowTemplates(false);
       notify("Workflow imported");
       setTimeout(() => fitView({ padding: 0.2 }), 60);
     } catch (error) {
-      notify(
-        error instanceof Error ? error.message : "Could not import workflow",
-      );
+      notify(error instanceof Error ? error.message : "Could not import workflow");
     }
     if (inputRef.current) inputRef.current.value = "";
   };
+
+  /* ── a per-node run (the card's Run) ── */
   const execute = async (id: string) => {
     setConfirm(null);
     const currentNodes = getNodes();
     const node = currentNodes.find((n) => n.id === id);
     if (!node || pending.current.has(id) || node.data.busy) return;
     const inputEdges = getEdges().filter((e) => e.target === id);
-    const inputs = inputEdges
-      .map((e) => currentNodes.find((n) => n.id === e.source))
-      .filter((n): n is FlowNode => !!n);
-    const inputText = (port: string) =>
-      currentNodes.find(
-        (n) =>
-          n.id ===
-          inputEdges.find((e) => (e.targetHandle || "prompt") === port)?.source,
-      )?.data.text || "";
-    const prompt =
-      inputText("prompt").trim() ||
-      (node.data.kind === "ground" ? node.data.text || "" : "");
+    const src = (port: string) =>
+      currentNodes.find((n) => n.id === inputEdges.find((e) => (e.targetHandle || "prompt") === port)?.source);
+    const inputText = (port: string) => src(port)?.data.text || "";
+    const prompt = inputText("prompt").trim() || (node.data.kind === "ground" ? node.data.text || "" : "");
+    // the keyframe port first, then every element wired in, then the frozen refs
     const images = [
       ...new Set([
-        ...inputs
-          .filter((n) => ["image", "reference"].includes(n.data.kind))
-          .map((n) => n.data.url),
+        src("reference")?.data.url,
+        ...inputEdges
+          .filter((e) => e.targetHandle === "refs")
+          .flatMap((e) => {
+            const s = currentNodes.find((n) => n.id === e.source);
+            return s?.data.kind === "element" ? s.data.urls || [] : [s?.data.url];
+          }),
         ...(node.data.refs || []),
       ]),
     ].filter((url): url is string => !!url && /^(https?:\/\/|\/)/.test(url));
     if (!prompt && node.data.kind !== "ground") {
-      update(id, {
-        error: "Connect a prompt or run its upstream enhancement first.",
-      });
-      return;
-    }
-    if (node.data.kind === "video" && !images.length) {
-      update(id, { error: "Connect an image before rendering video." });
+      update(id, { error: "Connect a prompt or run its upstream enhancement first." });
       return;
     }
     pending.current.add(id);
     update(id, { busy: true, error: undefined });
     try {
       if (node.data.kind === "ground") {
-        const result = await apiFetch<{ references: string }>(
-          "/workflows/exec/ground",
-          { method: "POST", body: JSON.stringify({ spark: prompt }) },
-        );
+        const result = await apiFetch<{ references: string }>("/workflows/exec/ground", {
+          method: "POST",
+          body: JSON.stringify({ spark: prompt }),
+        });
         update(id, { text: result.references, busy: false });
         return;
       }
-      const endpoint =
-        node.data.kind === "enhance"
-          ? "enhance"
-          : node.data.kind === "video"
-            ? "generate"
-            : "nano";
+      const endpoint = node.data.kind === "enhance" ? "enhance" : node.data.kind === "video" ? "generate" : "nano";
       const body =
         node.data.kind === "enhance"
           ? {
@@ -872,29 +884,21 @@ function Workspace({
               system: inputText("system"),
               references: inputText("references"),
               images,
-              ground: !!node.data.legacy?.properties?.auto_ground,
+              ground: !inputText("references"),
             }
-          : {
-              prompt,
-              images,
-              ...(conceptId && activeShot
-                ? { concept_id: conceptId, shot_n: activeShot }
-                : {}),
-            };
-      const job = await apiFetch<{ job_id: number }>(
-        `/workflows/exec/${endpoint}`,
-        { method: "POST", body: JSON.stringify(body) },
-      );
+          : { prompt, images, ...(conceptId && activeShot ? { concept_id: conceptId, shot_n: activeShot } : {}) };
+      const job = await apiFetch<{ job_id: number }>(`/workflows/exec/${endpoint}`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
       update(id, { jobId: job.job_id });
     } catch (error) {
-      update(id, {
-        busy: false,
-        error: error instanceof Error ? error.message : "Generation failed",
-      });
+      update(id, { busy: false, error: error instanceof Error ? error.message : "Generation failed" });
     } finally {
       pending.current.delete(id);
     }
   };
+  // per-node jobs: poll until terminal
   useEffect(() => {
     const jobs = nodes.filter((n) => n.data.jobId && n.data.busy);
     if (!jobs.length) return;
@@ -903,26 +907,16 @@ function Workspace({
       await Promise.all(
         jobs.map(async (n) => {
           try {
-            const job = await apiFetch<{
-              status: string;
-              output?: string;
-              error?: string;
-            }>(`/jobs/${n.data.jobId}`);
+            const job = await apiFetch<{ status: string; output?: string; error?: string }>(`/jobs/${n.data.jobId}`);
             if (cancelled) return;
             if (job.status === "done")
               update(n.id, {
                 busy: false,
                 jobId: undefined,
-                ...(isText(n.data.kind)
-                  ? { text: job.output }
-                  : { url: job.output }),
+                ...(isText(n.data.kind) ? { text: job.output } : { url: job.output }),
               });
             else if (["failed", "cancelled"].includes(job.status))
-              update(n.id, {
-                busy: false,
-                jobId: undefined,
-                error: job.error || job.status,
-              });
+              update(n.id, { busy: false, jobId: undefined, error: job.error || job.status });
             else update(n.id, { busy: true });
           } catch (error) {
             if (!cancelled)
@@ -940,6 +934,144 @@ function Workspace({
     };
   }, [nodes, update]);
 
+  /* ── Generate = Run all: save, then the runner walks the graph ── */
+  const runAll = async () => {
+    if (!conceptId || !activeShot) {
+      notify("Open a concept's scene to run the chain — a draft runs card by card.");
+      return;
+    }
+    if (runJob) return;
+    try {
+      await saveChain.current.catch(() => {});
+      const payload = toLegacy(getNodes(), getEdges(), graphBase.current, { conceptId, shotN: activeShot });
+      const saved = await apiFetch<{ id: number }>(`/concepts/${conceptId}/shots/${activeShot}/graph`, {
+        method: "PUT",
+        body: JSON.stringify({ graph: payload.graph, name }),
+      });
+      lastSaved.current = JSON.stringify(payload.graph);
+      // the runner reports node_states by the legacy id toLegacy assigned
+      const byLegacy = new Map<string, string>();
+      payload.ids.forEach((legacyId, nodeId) => byLegacy.set(String(legacyId), nodeId));
+      setNodes((ns) =>
+        ns.map((n) => (isMedia(n.data.kind) || ["enhance", "ground"].includes(n.data.kind)
+          ? { ...n, data: { ...n.data, error: undefined } }
+          : n)),
+      );
+      const job = await apiFetch<{ job_id: number }>(`/workflows/${saved.id}/run`, { method: "POST", body: "{}" });
+      runMap.current = byLegacy;
+      setRunJob({ id: job.job_id });
+      setRunProgress("Running the chain…");
+    } catch (error) {
+      notify(`Run failed: ${error instanceof Error ? error.message : "connection lost"}`);
+    }
+  };
+  const runMap = useRef(new Map<string, string>());
+  useEffect(() => {
+    if (!runJob) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const job = await apiFetch<{
+          status: string;
+          detail?: string;
+          error?: string;
+          progress?: number;
+          node_states?: Record<string, NodeState>;
+        }>(`/jobs/${runJob.id}`);
+        if (cancelled) return;
+        const states = job.node_states || {};
+        setNodes((ns) =>
+          ns.map((n) => {
+            const legacyId = [...runMap.current].find(([, nodeId]) => nodeId === n.id)?.[0];
+            const s = legacyId ? states[legacyId] : undefined;
+            if (!s) return n;
+            const done = s.status === "done";
+            const out = typeof s.output === "string" ? s.output : undefined;
+            return {
+              ...n,
+              data: {
+                ...n.data,
+                busy: s.status === "running",
+                error: s.status === "failed" || s.status === "skipped" ? s.error || s.status : undefined,
+                ...(done && ["enhance", "ground"].includes(n.data.kind) ? { text: out } : {}),
+                ...(done && isMedia(n.data.kind) ? { url: out } : {}),
+              },
+            };
+          }),
+        );
+        setRunProgress(job.detail || job.status);
+        if (["done", "failed", "cancelled"].includes(job.status)) {
+          setRunJob(null);
+          setRunProgress("");
+          notify(job.status === "done" ? job.detail || "Run complete" : job.error || `Run ${job.status}`);
+          lastSaved.current = "";
+          setSaveRevision((n) => n + 1);
+          if (job.status === "done") announceQueueChange();
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setRunJob(null);
+          setRunProgress("");
+          notify(`Lost the run: ${error instanceof Error ? error.message : "connection lost"}`);
+        }
+      }
+    };
+    const timer = setInterval(tick, 2000);
+    void tick();
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runJob?.id]);
+
+  /* ── Send to Queue: the pick. Approving there renders. ── */
+  const inQueue = !!(scene && (scene.picked || scene.parked || scene.media_url));
+  const sendToQueue = async () => {
+    if (!scene) {
+      notify("Open a concept first — the brief on Pipeline builds one");
+      return;
+    }
+    if (inQueue) {
+      void flushAndGo(`${API_URL}/ui?view=queue`);
+      return;
+    }
+    try {
+      await pickConcept(scene.id, true);
+      setScene({ ...scene, picked: true });
+      announceQueueChange();
+      shell.toast(`${scene.n} is in the Queue — approving it there renders the clip`);
+    } catch (error) {
+      notify(`Send to Queue failed: ${error instanceof Error ? error.message : "connection lost"}`);
+    }
+  };
+
+  /* ── the prompt bar edits the scene's prompt card ── */
+  const promptNode = useMemo(
+    () => nodes.find((n) => n.data.kind === "prompt" && n.data.originalPrompt) || nodes.find((n) => n.data.kind === "prompt"),
+    [nodes],
+  );
+  useEffect(() => {
+    if (document.activeElement === barRef.current) return;
+    setBar(promptNode?.data.text || "");
+  }, [promptNode?.data.text]);
+  const setBarText = (v: string) => {
+    setBar(v);
+    if (promptNode) update(promptNode.id, { text: v });
+  };
+  const mentions = useMentions(barRef, bar, setBarText, addElement);
+  const foldPreset = (p: Preset) => {
+    if (!promptNode) return;
+    const text = (promptNode.data.text || "").trim();
+    if (!text.includes(p.how)) setBarText((text ? text + "\n\n" : "") + p.how);
+    const video = getNodes().find((n) => n.data.kind === "video");
+    if (video) update(video.id, { camera: p.label });
+    notify(`${p.label} folded into the prompt`);
+  };
+
+  const selectedNode = nodes.find((n) => n.selected);
+  const rw = scene?.runway ?? null;
+
   return (
     <Actions.Provider
       value={{
@@ -951,467 +1083,323 @@ function Workspace({
           if (node?.data.jobId) update(id, { busy: true, error: undefined });
           else setConfirm(id);
         },
+        runway: rw,
+        caps,
       }}
     >
-      <main
-        className={`flows-workspace ${sidebar ? "rail-expanded" : ""} ${showTemplates ? "templates-open" : ""}`}
-      >
-        <aside className="flows-rail">
-          <button
-            className="zp-symbol"
-            aria-label="Toggle sidebar"
-            onClick={() => setSidebar(!sidebar)}
-          >
-            z<span>p</span>
-            <i />
-          </button>
-          <nav>
-            <button
-              aria-label="Home"
-              className={view === "home" ? "active" : ""}
-              onClick={() => conceptId ? leaveScene(`${API_URL}/ui?view=pipeline`) : setView("home")}
-            >
-              <Home size={18} />
-              <span>Home</span>
+      <main className={`flows-workspace ${showTemplates ? "templates-open" : ""} tool-${tool}${selectedNode ? " has-inspector" : ""}`}>
+        <header className="flow-topbar">
+          <div className="flow-breadcrumb">
+            <button aria-label="Back to Pipeline" title="Back to Pipeline" onClick={() => flushAndGo(`${API_URL}/ui?view=pipeline`)}>
+              <ArrowLeft size={16} />
             </button>
-            <button
-              aria-label="Flows"
-              className={view === "flow" ? "active" : ""}
-              onClick={() => setView("flow")}
-            >
-              <Workflow size={18} />
-              <span>Flows</span>
-            </button>
-            <button onClick={() => leaveScene(`${API_URL}/ui?view=assets`)} title="Asset library">
-              <Layers size={18} />
-              <span>Assets</span>
-            </button>
-          </nav>
-          <div className="rail-bottom">
-            <button onClick={() => leaveScene("/studio")} title="Studio account">
-              <Settings2 size={18} />
-              <span>Studio account</span>
-            </button>
-            <button
-              aria-label="Expand sidebar"
-              onClick={() => setSidebar(!sidebar)}
-            >
-              {sidebar ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
-              <span>Collapse</span>
-            </button>
-            <div className="avatar">Z</div>
-          </div>
-        </aside>
-        {view === "home" ? (
-          <section className="flows-home">
-            <header>
-              <div>
-                <span className="eyebrow">ZERO PAGE / CREATIVE STUDIO</span>
-                <h1>Your next idea starts here.</h1>
-              </div>
-              <button
-                className="light-button"
-                onClick={() => {
-                  setView("flow");
-                  setAddMenu(true);
-                }}
-              >
-                <Plus size={16} /> Open canvas
-              </button>
-            </header>
-            <div className="home-banners">
-              <button
-                className="banner banner-flow"
-                onClick={() => setView("flow")}
-              >
-                <div className="banner-graph">
-                  <i />
-                  <i />
-                  <i />
-                  <svg viewBox="0 0 400 150">
-                    <path d="M100 75 C190 75 170 25 260 25 M100 75 C190 75 170 125 260 125" />
-                  </svg>
-                </div>
-                <span className="eyebrow">IDEAS, CONNECTED</span>
-                <h2>Flows</h2>
-                <p>Build your own creative process.</p>
-                <ArrowUpRight />
-              </button>
-              <button
-                className="banner banner-canvas"
-                onClick={() => {
-                  setView("flow");
-                  setShowTemplates(true);
-                }}
-              >
-                <span className="eyebrow">ROOM TO EXPLORE</span>
-                <h2>
-                  One canvas.
-                  <br />
-                  Every possibility.
-                </h2>
-                <p>From a first thought to the final frame.</p>
-                <ArrowUpRight />
-              </button>
-            </div>
-            <div className="project-bar">
-              <h2>
-                My projects <span>1</span>
-              </h2>
-              <label>
-                <Search size={15} />
-                <input
-                  aria-label="Search projects"
-                  placeholder="Search projects"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                />
-              </label>
-            </div>
-            {name.toLowerCase().includes(search.toLowerCase()) ? (
-              <button className="project-card" onClick={() => setView("flow")}>
-                <div className="project-art">
-                  <Workflow size={42} strokeWidth={1} />
-                  <span>FLOW</span>
-                </div>
-                <strong>{name}</strong>
-                <small>{nodes.length} nodes · Saved on this device</small>
-              </button>
+            {scene ? (
+              <span className="chip">
+                <Clapperboard size={11} /> {scene.n.toLowerCase()} · {scene.title.toLowerCase().slice(0, 26)}
+              </span>
             ) : (
-              <p className="muted">No matching projects.</p>
+              <input aria-label="Workflow name" value={name} maxLength={80} onChange={(e) => setName(e.target.value)} />
             )}
-            <div className="home-dock">
-              <button
-                onClick={() => {
-                  setView("flow");
-                  setShowTemplates(true);
-                }}
-              >
-                <Sparkles size={20} />
-                <span>Create</span>
-                <div className="dock-preview">
-                  <strong>A little inspiration.</strong>
-                  <p>Start with an image, a scene, or a new direction.</p>
-                </div>
-              </button>
-              <button onClick={() => setView("flow")}>
-                <Workflow size={20} />
-                <span>Flows</span>
-                <div className="dock-preview">
-                  <strong>Make the connection.</strong>
-                  <p>Build a creative workflow, one node at a time.</p>
-                </div>
-              </button>
-              <button onClick={() => inputRef.current?.click()}>
-                <FolderOpen size={20} />
-                <span>Open</span>
-              </button>
-            </div>
-          </section>
-        ) : (
-          <>
-            <header className="flow-topbar">
-              <div className="flow-breadcrumb">
-                <button
-                  aria-label="Back to projects"
-                  onClick={() =>
-                    conceptId
-                      ? leaveScene(`${API_URL}/ui?view=pipeline`)
-                      : setView("home")
-                  }
-                >
-                  <ArrowLeft size={16} />
+            {scene && scene.shots.length > 1 && (
+              <select aria-label="Shot" value={activeShot} onChange={(e) => flushAndGo(`/studio/flows?concept=${conceptId}&shot=${e.target.value}`)}>
+                {scene.shots.map((s) => (
+                  <option key={s.n} value={s.n}>
+                    Shot {s.n}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+          <div className="flow-top-actions">
+            <span className="save-indicator">
+              <i />
+              {conceptId ? saveState : storageError ? "Local save unavailable" : "Local draft"}
+            </span>
+            {conceptId && (
+              <>
+                <button onClick={savePrompt} disabled={!ready} className="pill-btn">
+                  Save scene prompt
                 </button>
-                <span>{conceptId ? "Director" : "Flows"}</span>
-                <span className="slash">/</span>
-                <input
-                  readOnly={!!conceptId}
-                  aria-label="Workflow name"
-                  value={name}
-                  maxLength={80}
-                  onChange={(e) => setName(e.target.value)}
-                />
-                <ChevronDown size={13} />
-              </div>
-              <div className="flow-top-actions">
-                {conceptId && (
-                  <>
-                    <button onClick={() => { lastSaved.current = ""; setSaveRevision(n => n + 1); }} disabled={!ready}>Save canvas</button>
-                    <button onClick={savePrompt} disabled={!ready}>
-                      Save scene prompt
-                    </button>
-                    <button
-                      onClick={() => leaveScene(`${API_URL}/ui?view=queue`)}
-                    >
-                      Queue <ArrowUpRight size={14} />
-                    </button>
-                  </>
-                )}
-                {scene && scene.shots.length > 1 && (
-                  <select
-                    aria-label="Shot"
-                    value={activeShot}
-                    onChange={(e) =>
-                      leaveScene(
-                        `/studio/flows?concept=${conceptId}&shot=${e.target.value}`,
-                      )
-                    }
-                  >
-                    {scene.shots.map((s) => (
-                      <option key={s.n} value={s.n}>
-                        Shot {s.n}
-                      </option>
-                    ))}
-                  </select>
-                )}
-
-                <span className="save-indicator">
-                  <i />
-                  {conceptId
-                    ? saveState
-                    : storageError
-                      ? "Local save unavailable"
-                      : "Local draft"}
-                </span>
-                <button
-                  title="Import workflow"
-                  aria-label="Import workflow"
-                  onClick={() => inputRef.current?.click()}
-                >
+                <button onClick={sendToQueue} disabled={!ready} className={`queue-btn${inQueue ? " lit" : ""}`}>
+                  <ListVideo size={14} /> {scene?.media_url ? "Rendered · see Queue" : inQueue ? "In the Queue" : "Send to Queue"}
+                </button>
+              </>
+            )}
+            {!conceptId && (
+              <>
+                <button title="Import workflow" aria-label="Import workflow" onClick={() => inputRef.current?.click()}>
                   <Upload size={16} />
                 </button>
-                <button className="export-button" onClick={exportDraft}>
+                <button className="pill-btn" onClick={exportDraft}>
                   <Download size={14} /> Export
                 </button>
-              </div>
-            </header>
-            <section className="flow-stage" aria-label="Workflow canvas">
-              <ReactFlow
-                nodes={nodes}
-                edges={edges}
-                nodeTypes={nodeTypes}
-                onNodesChange={onNodesChange}
-                onEdgesChange={onEdgesChange}
-                onConnect={onConnect}
-                isValidConnection={connectionValid}
-                fitView
-                fitViewOptions={{ padding: 0.12, maxZoom: 0.85 }}
-                minZoom={0.2}
-                maxZoom={1.7}
-                panOnDrag={tool === "hand" ? true : [1, 2]}
-                selectionOnDrag={tool === "select"}
-                nodesDraggable={tool === "select"}
-                deleteKeyCode={["Backspace", "Delete"]}
-                onMove={(_, viewport) => setZoom(viewport.zoom)}
-                defaultEdgeOptions={{
-                  type: "default",
-                  style: { stroke: "#4a5050", strokeWidth: 1.3 },
-                }}
-              >
-                <Background color="#202323" gap={28} size={0.65} />
-                <MiniMap
-                  pannable
-                  zoomable
-                  nodeColor="#343a38"
-                  maskColor="rgba(5,7,6,.65)"
-                />
-              </ReactFlow>
-            </section>
-            <div className="canvas-zoom">
-              <button
-                aria-label="Zoom out"
-                onClick={() => zoomOut({ duration: 180 })}
-              >
-                <ZoomOut size={17} />
-              </button>
-              <button
-                aria-label="Zoom in"
-                onClick={() => zoomIn({ duration: 180 })}
-              >
-                <ZoomIn size={17} />
-              </button>
-              <button
-                aria-label="Fit canvas"
-                onClick={() => fitView({ padding: 0.22, duration: 350 })}
-              >
-                <Maximize size={16} />
-              </button>
-              <span>{Math.round(zoom * 100)}%</span>
-            </div>
-            {showTemplates && (
-              <aside className="flow-templates">
-                <div className="template-title">
-                  <span className="eyebrow">A PLACE TO BEGIN</span>
-                  <button
-                    aria-label="Close templates"
-                    onClick={() => setShowTemplates(false)}
-                  >
-                    <X size={15} />
-                  </button>
-                </div>
-                <h1>
-                  Build your creative
-                  <br />
-                  workflow.
-                </h1>
-                <p>Start with a template. Make it yours.</p>
-                <div className="template-list">
-                  {templates.map((t) => (
-                    <button
-                      key={t.id}
-                      className={template === t.id ? "selected" : ""}
-                      onClick={() => pickTemplate(t.id)}
-                    >
-                      <img src={`/flows/${t.image}.jpg`} alt="" />
-                      <span>
-                        <strong>{t.title}</strong>
-                        <small>{t.text}</small>
-                      </span>
-                      <ArrowUpRight size={15} />
-                    </button>
-                  ))}
-                </div>
-                <small className="template-note">
-                  Templates replace the current canvas.
-                  <br />
-                  Export first to keep another version.
-                </small>
-              </aside>
+              </>
             )}
-            <div className="flow-bottom">
-              <span className="canvas-caption">
-                {nodes.length} NODES <i />
-                {edges.length} CONNECTIONS
-              </span>
-              <div className="flow-toolbar">
-                <div className="add-node-wrap">
-                  <button
-                    aria-label="Add node"
-                    className={addMenu ? "tool-active" : ""}
-                    onClick={() => setAddMenu(!addMenu)}
-                  >
-                    <Plus size={21} />
-                  </button>
-                  {addMenu && (
-                    <div className="add-node-menu">
-                      <span className="eyebrow">ADD TO YOUR FLOW</span>
-                      {(
-                        ["prompt", "system", "ground", "enhance", "reference", "image", "video"] as Kind[]
-                      ).map((kind) => (
-                        <button key={kind} onClick={() => addNode(kind)}>
-                          {kind === "prompt" ? (
-                            <Type size={17} />
-                          ) : kind === "reference" ? (
-                            <ImagePlus size={17} />
-                          ) : kind === "video" ? (
-                            <Film size={17} />
-                          ) : (
-                            <Sparkles size={17} />
-                          )}
-                          <span>
-                            {titles[kind]}
-                            <small>
-                              {kind === "prompt"
-                                ? "Write your scene"
-                                : kind === "reference"
-                                  ? "Ground your idea"
-                                  : kind === "image"
-                                    ? "Generate a still"
-                                    : "Generate motion"}
-                            </small>
-                          </span>
-                          <Plus size={13} />
-                        </button>
-                      ))}
-                    </div>
-                  )}
+          </div>
+        </header>
+
+        <section className="flow-stage" aria-label="Workflow canvas">
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            nodeTypes={nodeTypes}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onConnect={onConnect}
+            onEdgeClick={(_, edge) => {
+              if (tool === "cut") {
+                setEdges((es) => es.filter((e) => e.id !== edge.id));
+                notify("Wire cut");
+              }
+            }}
+            isValidConnection={connectionValid}
+            fitView
+            fitViewOptions={{ padding: 0.12, maxZoom: 0.85 }}
+            minZoom={0.2}
+            maxZoom={1.7}
+            panOnDrag={tool === "hand" ? true : [1, 2]}
+            selectionOnDrag={tool === "select"}
+            nodesDraggable={tool !== "hand"}
+            deleteKeyCode={["Backspace", "Delete"]}
+            onMove={(_, viewport) => setZoom(viewport.zoom)}
+            defaultEdgeOptions={{ type: "default", style: { stroke: "rgb(255 255 255 / 0.28)", strokeWidth: 1.5 } }}
+          >
+            <Background color="rgb(255 255 255 / 0.14)" gap={26} size={1.1} />
+            <MiniMap pannable zoomable nodeColor="rgb(255 255 255 / 0.3)" maskColor="rgb(4 4 5 / 0.72)" />
+          </ReactFlow>
+        </section>
+
+        <div className="canvas-zoom">
+          <button aria-label="Zoom out" title="Zoom out" onClick={() => zoomOut({ duration: 180 })}>
+            <ZoomOut size={15} />
+          </button>
+          <button aria-label="Zoom in" title="Zoom in" onClick={() => zoomIn({ duration: 180 })}>
+            <ZoomIn size={15} />
+          </button>
+          <button aria-label="Fit canvas" title="Fit to view" onClick={() => fitView({ padding: 0.18, duration: 350 })}>
+            <Maximize size={15} />
+          </button>
+          <span>{Math.round(zoom * 100)}%</span>
+        </div>
+
+        {selectedNode ? (
+          <aside className="flow-inspector">
+            <div className="insp-head">
+              <span className="m">node</span>
+              <b>{selectedNode.data.label}</b>
+              <span className="spacer" />
+              <button aria-label="Close" onClick={() => setNodes((ns) => ns.map((n) => ({ ...n, selected: false })))}>
+                <X size={13} />
+              </button>
+            </div>
+            <div className="insp-body">
+              <div className="insp-sec">
+                <span className="m">what it does</span>
+                <p>{notes[selectedNode.data.kind]}</p>
+              </div>
+              <div className="insp-sec">
+                <span className="m">name</span>
+                <input value={selectedNode.data.label} onChange={(e) => update(selectedNode.id, { label: e.target.value })} />
+              </div>
+              {selectedNode.data.kind === "video" && presets.length ? (
+                <div className="insp-sec">
+                  <span className="m">camera motion · folds a preset into the prompt</span>
+                  <div className="insp-cams">
+                    {presets.map((p) => (
+                      <button key={p.id} className={selectedNode.data.camera === p.label ? "on" : ""} onClick={() => foldPreset(p)}>
+                        {p.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-                <i className="tool-divider" />
-                <button
-                  aria-label="Select tool"
-                  aria-pressed={tool === "select"}
-                  className={tool === "select" ? "tool-active" : ""}
-                  onClick={() => setTool("select")}
-                >
-                  <MousePointer2 size={20} />
-                </button>
-                <button
-                  aria-label="Pan tool"
-                  aria-pressed={tool === "hand"}
-                  className={tool === "hand" ? "tool-active" : ""}
-                  onClick={() => setTool("hand")}
-                >
-                  <Hand size={20} />
-                </button>
-                <i className="tool-divider" />
-                <button
-                  aria-label="Show templates"
-                  aria-pressed={showTemplates}
-                  onClick={() => setShowTemplates(!showTemplates)}
-                >
-                  <Grid2X2 size={19} />
-                </button>
-                <button
-                  aria-label="Duplicate selected nodes"
-                  onClick={() => {
-                    const selected = nodes.filter((n) => n.selected);
-                    if (!selected.length) notify("Select a node to duplicate");
-                    selected.forEach((n) => duplicate(n.id));
-                  }}
-                >
-                  <Copy size={18} />
-                </button>
-                <button
-                  aria-label="Delete selected nodes"
-                  onClick={() => {
-                    const selected = nodes.filter((n) => n.selected);
-                    if (!selected.length) notify("Select a node to delete");
-                    selected.forEach((n) => remove(n.id));
-                  }}
-                >
-                  <Trash2 size={18} />
+              ) : null}
+              {selectedNode.data.kind === "video" ? (
+                <div className="insp-sec">
+                  <span className="m">spend</span>
+                  <div className="insp-spend">
+                    <b>{rw?.estimate_usd != null ? `$${Number(rw.estimate_usd).toFixed(2)}` : "—"}</b>
+                    <span>
+                      per {rw?.duration ?? 5}-second clip · {rw?.model ?? "gen4_turbo"}
+                    </span>
+                  </div>
+                  {gateNote("video", caps) ? <span className="m gate">{gateNote("video", caps)}</span> : null}
+                </div>
+              ) : null}
+              {isText(selectedNode.data.kind) && selectedNode.data.text && !["prompt", "system"].includes(selectedNode.data.kind) ? (
+                <div className="insp-sec">
+                  <span className="m">output</span>
+                  <pre>{selectedNode.data.text}</pre>
+                </div>
+              ) : null}
+              <div className="insp-sec">
+                <span className="m">connections</span>
+                <span className="insp-wires">
+                  {edges.filter((e) => e.target === selectedNode.id).length} in · {edges.filter((e) => e.source === selectedNode.id).length} out
+                </span>
+              </div>
+            </div>
+            {conceptId ? (
+              <div className="insp-foot">
+                <button className={`queue-btn wide${inQueue ? " lit" : ""}`} onClick={sendToQueue}>
+                  <ListVideo size={15} /> {inQueue ? "In the Queue" : "Send to Queue"}
                 </button>
               </div>
-              <span className="canvas-hint">
-                Scroll to zoom · Drag to select
+            ) : null}
+          </aside>
+        ) : null}
+
+        {showTemplates && (
+          <aside className="flow-templates">
+            <div className="template-title">
+              <span className="m">A place to begin</span>
+              <button aria-label="Close templates" onClick={() => setShowTemplates(false)}>
+                <X size={15} />
+              </button>
+            </div>
+            <h1>
+              Build your creative
+              <br />
+              workflow.
+            </h1>
+            <p>Start with a template. Make it yours.</p>
+            <div className="template-list">
+              {templates.map((t) => (
+                <button key={t.id} className={template === t.id ? "selected" : ""} onClick={() => pickTemplate(t.id)}>
+                  <img src={`/flows/${t.image}.jpg`} alt="" />
+                  <span>
+                    <strong>{t.title}</strong>
+                    <small>{t.text}</small>
+                  </span>
+                  <ArrowUpRight size={15} />
+                </button>
+              ))}
+            </div>
+            <small className="template-note">
+              Templates replace the current canvas.
+              <br />
+              Export first to keep another version.
+            </small>
+          </aside>
+        )}
+
+        <div className="flow-bottom">
+          <div className="gs-bar">
+            <div className="flow-toolbar">
+              <div className="add-node-wrap">
+                <button aria-label="Add node" title="Add node" className={addMenu ? "tool-active" : ""} onClick={() => setAddMenu(!addMenu)}>
+                  <Plus size={18} />
+                </button>
+                {addMenu && (
+                  <div className="add-node-menu">
+                    <span className="m">Add to your flow</span>
+                    {(["prompt", "system", "ground", "enhance", "element", "reference", "image", "video"] as Kind[]).map((kind) => (
+                      <button key={kind} onClick={() => addNode(kind)}>
+                        {kind === "prompt" || kind === "system" ? (
+                          <Type size={16} />
+                        ) : kind === "reference" || kind === "element" ? (
+                          <ImagePlus size={16} />
+                        ) : kind === "video" ? (
+                          <Film size={16} />
+                        ) : (
+                          <Sparkles size={16} />
+                        )}
+                        <span>
+                          {titles[kind]}
+                          <small>
+                            {kind === "prompt"
+                              ? "Write your scene"
+                              : kind === "system"
+                                ? "How the enhance treats the prompt"
+                                : kind === "element"
+                                  ? "A character, room or prop's frames"
+                                  : kind === "reference"
+                                    ? "One plate, by url"
+                                    : kind === "image"
+                                      ? "Generate the keyframe"
+                                      : kind === "video"
+                                        ? "Generate the clip"
+                                        : kind === "ground"
+                                          ? "Retrieve from the reference library"
+                                          : "Text to enhanced prompt"}
+                          </small>
+                        </span>
+                        <Plus size={12} />
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <i className="tool-divider" />
+              <button aria-label="Select tool" title="Select" aria-pressed={tool === "select"} className={tool === "select" ? "tool-active" : ""} onClick={() => setTool("select")}>
+                <MousePointer2 size={18} />
+              </button>
+              <button aria-label="Pan tool" title="Pan" aria-pressed={tool === "hand"} className={tool === "hand" ? "tool-active" : ""} onClick={() => setTool("hand")}>
+                <Hand size={18} />
+              </button>
+              <button aria-label="Cut a wire" title="Cut a wire · click a wire" aria-pressed={tool === "cut"} className={tool === "cut" ? "tool-active" : ""} onClick={() => setTool("cut")}>
+                <Scissors size={18} />
+              </button>
+              <button aria-label="Frame all" title="Frame all" onClick={() => fitView({ padding: 0.18, duration: 350 })}>
+                <Grid2X2 size={18} />
+              </button>
+              {!conceptId ? (
+                <button aria-label="Show templates" title="Templates" aria-pressed={showTemplates} onClick={() => setShowTemplates(!showTemplates)}>
+                  <Layers size={18} />
+                </button>
+              ) : null}
+            </div>
+            <div className="gs-prompt">
+              <textarea
+                ref={barRef}
+                rows={1}
+                value={bar}
+                disabled={!promptNode}
+                placeholder={promptNode ? "Describe the shot… (@ to bring an element onto the canvas)" : "Add a Prompt card to start a chain"}
+                onChange={(e) => setBarText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (mentions.onKeyDown(e)) return;
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void runAll();
+                }}
+                onBlur={mentions.onBlur}
+                aria-label="Scene prompt"
+              />
+              {mentions.dropdown}
+            </div>
+            <div className="gs-chips">
+              <span className="chip">
+                <Sparkles size={11} /> {rw?.model ?? "runway"}
+              </span>
+              <span className="chip">
+                <RectangleVertical size={11} /> {ratioLabel(rw?.ratio)}
+              </span>
+              <span className="chip">
+                <Clock size={11} /> {rw?.duration ?? 5} sec
               </span>
             </div>
-          </>
-        )}
-        <input
-          ref={inputRef}
-          type="file"
-          accept="application/json,.json"
-          hidden
-          onChange={(e) => importDraft(e.target.files?.[0])}
-        />
+            <button className="gs-go" disabled={!!runJob || !conceptId} title={conceptId ? "Run the whole chain" : "Open a concept to run the chain"} onClick={() => void runAll()}>
+              {runJob ? <LoaderCircle size={15} className="spin" /> : <Sparkles size={15} />}
+              {runJob ? runProgress || "Running…" : "Generate"}
+            </button>
+          </div>
+          <span className="canvas-caption">
+            {nodes.length} nodes <i /> {edges.length} connections
+          </span>
+        </div>
+
+        <input ref={inputRef} type="file" accept="application/json,.json" hidden onChange={(e) => importDraft(e.target.files?.[0])} />
+
         {conceptId && (!ready || sceneError) && (
           <div className="flow-modal-backdrop">
             <section className="flow-modal" role="status">
-              <h2>
-                {sceneError ? "Could not open scene" : "Opening Director…"}
-              </h2>
-              <p>
-                {sceneError ||
-                  "Loading the saved prompt, references and canvas."}
-              </p>
+              <h2>{sceneError ? "Could not open scene" : "Opening Director…"}</h2>
+              <p>{sceneError || "Loading the saved prompt, references and canvas."}</p>
               {sceneError && (
                 <div>
-                  <a
-                    href={`${API_URL}/signin`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
+                  <a href={`${API_URL}/signin`} target="_blank" rel="noreferrer">
                     Sign in
                   </a>
-                  <button onClick={() => window.location.reload()}>
-                    Retry
-                  </button>
-                  <a
-                    href={`${API_URL}/ui?view=director&concept=${conceptId}&legacy=1`}
-                  >
-                    Legacy Director
-                  </a>
+                  <button onClick={() => window.location.reload()}>Retry</button>
+                  <a href={`${API_URL}/ui?view=director`}>Legacy Director</a>
                 </div>
               )}
             </section>
@@ -1419,7 +1407,7 @@ function Workspace({
         )}
         {toast && (
           <div className="flow-toast" role="status">
-            <Check size={16} />
+            <Check size={14} />
             {toast}
           </div>
         )}
@@ -1437,48 +1425,24 @@ function Workspace({
                   e.stopPropagation();
                   setConfirm(null);
                 }
-                if (e.key !== "Tab") return;
-                const buttons = Array.from(
-                  e.currentTarget.querySelectorAll<HTMLButtonElement>("button"),
-                );
-                const first = buttons[0],
-                  last = buttons[buttons.length - 1];
-                if (e.shiftKey && document.activeElement === first) {
-                  e.preventDefault();
-                  last?.focus();
-                } else if (!e.shiftKey && document.activeElement === last) {
-                  e.preventDefault();
-                  first?.focus();
-                }
               }}
             >
-              <button
-                className="modal-close"
-                aria-label="Close"
-                onClick={() => setConfirm(null)}
-              >
+              <button className="modal-close" aria-label="Close" onClick={() => setConfirm(null)}>
                 <X size={18} />
               </button>
               <div className="modal-icon">
                 <Zap size={23} />
               </div>
-              <h2 id="render-title">Bring this frame to life.</h2>
+              <h2 id="render-title">Run {nodes.find((n) => n.id === confirm)?.data.label}?</h2>
               <p>
-                Generate with {nodes.find((n) => n.id === confirm)?.data.label}.
-                This uses your connected provider and may spend render credits.
-                Your account’s daily limits apply.
+                {nodes.find((n) => n.id === confirm)?.data.kind === "video"
+                  ? "This renders a clip through Runway and spends real credit — the module's own gate (RUNWAY_SPEND_OK) still has the last word."
+                  : "This is a billed model call under the project's daily caps."}
               </p>
-              <small>
-                Sign in through Studio first. Provider settings use your
-                existing backend defaults.
-              </small>
               <div>
                 <button onClick={() => setConfirm(null)}>Keep editing</button>
-                <button
-                  className="light-button"
-                  onClick={() => execute(confirm)}
-                >
-                  <Play size={14} /> Generate
+                <button className="light-button" onClick={() => execute(confirm)}>
+                  <Play size={14} /> Run
                 </button>
               </div>
             </section>
@@ -1510,37 +1474,21 @@ function validDraft(value: unknown): value is Draft {
       !Number.isFinite(node.position?.x) ||
       !Number.isFinite(node.position?.y) ||
       !node.data ||
-      ![
-        "prompt",
-        "reference",
-        "image",
-        "video",
-        "system",
-        "enhance",
-        "ground",
-      ].includes(node.data.kind) ||
+      !["prompt", "reference", "element", "image", "video", "system", "enhance", "ground"].includes(node.data.kind) ||
       typeof node.data.label !== "string"
     )
       return false;
-    if (node.data.text !== undefined && typeof node.data.text !== "string")
-      return false;
+    if (node.data.text !== undefined && typeof node.data.text !== "string") return false;
     if (
       node.data.url !== undefined &&
-      (typeof node.data.url !== "string" ||
-        (node.data.url !== "" && !/^(https?:\/\/|\/)/.test(node.data.url)))
+      (typeof node.data.url !== "string" || (node.data.url !== "" && !/^(https?:\/\/|\/)/.test(node.data.url)))
     )
       return false;
     ids.add(node.id);
   }
-  return d.edges.every(
-    (e) =>
-      e && typeof e.id === "string" && ids.has(e.source) && ids.has(e.target),
-  );
+  return d.edges.every((e) => e && typeof e.id === "string" && ids.has(e.source) && ids.has(e.target));
 }
-export default function FlowWorkspace(props: {
-  conceptId?: number;
-  shotN?: number;
-}) {
+export default function FlowWorkspace(props: { conceptId?: number; shotN?: number }) {
   return (
     <ReactFlowProvider>
       <Workspace {...props} />

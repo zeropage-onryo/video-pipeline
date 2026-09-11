@@ -1,5 +1,11 @@
 # zpf-web-5t
 
+**The signed-in studio lives under `/studio`** (2026-09-11): the shell, the
+Studio composer, the Director canvas (`/studio/flows`, see FLOWS.md) and
+Elements (`/studio/elements`). It talks to the FastAPI backend through the
+same-origin proxy in `next.config.ts` (`API_UPSTREAM`), so run the Python app
+first. The marketing page at `/` is the v0-generated landing.
+
 This is a [Next.js](https://nextjs.org) project bootstrapped with [v0](https://v0.app).
 
 ## Built with v0
