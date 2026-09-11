@@ -12,3 +12,7 @@ data/_to_delete/
 .claude/
 *.pyc
 __pycache__/
+# the React front ends deploy as their own app (web/fly.toml); the
+# API image never needs them
+web/
+frontend/

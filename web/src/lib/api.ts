@@ -47,8 +47,11 @@ export function goToSignIn() {
     // Full navigation on purpose -- this leaves the Next.js app entirely
     // for the API's own origin (a different domain in production), not
     // an internal route, so next/navigation's router isn't the tool here.
+    // `next` asks the API to send the browser back here after sign-in;
+    // the API honours it only for an origin in its FRONTEND_ORIGINS.
+    const next = encodeURIComponent(`${window.location.origin}/studio`);
     // eslint-disable-next-line @next/next/no-location-assign-relative-destination
-    window.location.href = `${API_URL}/signin`;
+    window.location.href = `${API_URL}/signin?next=${next}`;
   }
 }
 
