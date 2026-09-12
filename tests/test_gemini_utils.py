@@ -158,3 +158,101 @@ def test_every_existing_caller_is_unaffected(no_sleeping):
     three positional arguments and must keep working untouched."""
     client = FakeClient([answering("ok")])
     assert gemini_utils.generate_with_retry(client, "m", "x") == "ok"
+
+
+# --- which brain writes (2026-09-09) ----------------------------------------
+# The composer's picker and the nightly graph both resolve through
+# gemini_utils.BRAINS. Two things are worth pinning: that the fast tier's
+# request is byte-for-byte the one this module has always sent, and that
+# the reasoning tier refuses a substitute rather than being answered by
+# flash-lite -- a scene written by the cheapest model in the repo saves,
+# lands on the board, and reads identically to one that was not.
+
+class ConfigClient:
+    """A client that records the `config` it was handed, and objects if it
+    is handed one at all when it should not be.
+
+    Deliberately mirrors FakeClient's narrower signature above: every
+    other fake in this suite implements generate_content(model, contents)
+    and nothing else, which is exactly why generate_with_retry omits the
+    keyword rather than passing None."""
+
+    def __init__(self):
+        self.configs = []
+        self.calls = []
+
+        def generate_content(model, contents, config=None):
+            self.calls.append(model)
+            self.configs.append(config)
+            return answering("wrote it")
+
+        self.models = SimpleNamespace(generate_content=generate_content)
+
+
+def test_the_fast_tier_sends_no_config_at_all():
+    """Not `config=None` -- nothing. The old fakes take two keywords."""
+    client = ConfigClient()
+    gemini_utils.generate_with_retry(client, "m", "x")
+    assert client.configs == [None]          # its own default, never ours
+
+    plain = FakeClient([answering("ok")])    # takes NO config keyword
+    assert gemini_utils.generate_with_retry(plain, "m", "x") == "ok"
+
+
+def test_a_thinking_config_reaches_the_model():
+    client = ConfigClient()
+    spec = gemini_utils.resolve_brain("reasoning")
+    gemini_utils.generate_with_retry(client, spec["model"], "x",
+                                     config=spec["config"])
+    assert client.calls == [gemini_utils.REASONING_MODEL]
+    assert client.configs[0].thinking_config.thinking_level == "HIGH"
+
+
+def test_the_reasoning_tier_refuses_a_substitute(no_sleeping):
+    """The whole point. With the default chain a 503 would have been
+    answered by gemini-3.1-flash-lite and saved as if nothing happened."""
+    busy = RuntimeError("503 UNAVAILABLE")
+    client = FakeClient([busy] * 50)
+    spec = gemini_utils.resolve_brain("reasoning")
+    with pytest.raises(gemini_utils.SubstitutionRefused):
+        gemini_utils.generate_with_retry(client, spec["model"], "x",
+                                         fallbacks=spec["fallbacks"])
+    assert set(client.calls) == {gemini_utils.REASONING_MODEL}
+    for cheaper in gemini_utils.FALLBACK_MODELS:
+        assert cheaper not in client.calls
+
+
+def test_no_opinion_is_not_the_same_as_no_substitute(no_sleeping):
+    """`fallbacks=None` must keep the old ladder: it is what every
+    existing caller passes by not passing anything."""
+    busy = RuntimeError("503 UNAVAILABLE")
+    client = FakeClient([busy] * gemini_utils.FALLTHROUGH_RETRIES + [answering("ok")])
+    assert gemini_utils.generate_with_retry(client, "m", "x", fallbacks=None) == "ok"
+    assert client.calls[-1] == gemini_utils.FALLBACK_MODELS[0]
+
+
+def test_an_unknown_tier_writes_a_cheap_scene_rather_than_failing():
+    """This is reached from a form field and an env var on a 3:30am job.
+    A typo must not lose the night."""
+    for name in ("", None, "resoning", "REASONING"):
+        spec = gemini_utils.resolve_brain(name)
+        assert spec["brain"] in gemini_utils.BRAINS
+    assert gemini_utils.resolve_brain("nonsense")["brain"] == gemini_utils.DEFAULT_BRAIN
+    assert gemini_utils.resolve_brain("REASONING")["brain"] == "reasoning"
+
+
+def test_the_fast_tier_is_the_model_shootgen_actually_uses():
+    """One literal. A second copy of the model name is how the picker and
+    the writer drift into disagreeing."""
+    from src import shootgen
+    assert shootgen.MODEL == gemini_utils.FAST_MODEL
+    assert gemini_utils.resolve_brain("fast")["model"] == shootgen.MODEL
+
+
+def test_every_offered_tier_is_priced():
+    """An UNPRICED reasoning run would leave /costs unable to say what
+    the expensive tier cost, which is the one question it exists for."""
+    from src import spend
+    table = spend.prices()
+    for option in gemini_utils.brain_options():
+        assert gemini_utils.resolve_brain(option["id"])["model"] in table

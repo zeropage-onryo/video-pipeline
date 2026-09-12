@@ -141,9 +141,10 @@ NOVELTY_DAYS = 14
 # the model ever sees it rather than after.
 MAX_PER_LANE = 8
 NET_TIMEOUT = 12
-# The composer accepts 6 references per generation (MAX_ATTACH in
-# app/static/zpf/studio.js), so a bin bigger than that is a bin whose
-# tail can never be used. Banking fewer, better images also keeps the
+# The composer accepts 12 references per generation (MAX_ATTACH in
+# app/static/zpf/studio.js, raised from 6 on 2026-09-10), so the bin
+# only has to stay at or under that. Six leaves the other half for the
+# cast and his own picks, and banking fewer, better images keeps the
 # fetch inside one nightly step.
 MAX_BIN_IMAGES = 6
 

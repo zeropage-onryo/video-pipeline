@@ -227,7 +227,7 @@ h1{
   position:relative;overflow:hidden;padding:0;transition:border-color var(--t),transform var(--t);
 }
 .gph:hover{border-color:var(--line-hi);transform:translateY(-2px)}
-.gph video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.gph video,.gph img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .gph .mname{
   position:absolute;left:0;right:0;bottom:0;padding:18px 10px 8px;
   font-family:var(--mono);font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;
@@ -1160,3 +1160,269 @@ select.rmodel{max-width:260px}
   font-family:var(--body);font-size:12px;letter-spacing:0;text-transform:none;
   text-align:center;line-height:1.45;
 }
+
+/* Conversational development beside the existing scene composer. */
+.guide-toggle{margin-top:14px}
+.creative-guide{margin-top:12px;padding:24px;text-align:left}
+.creative-guide[hidden],.creative-guide [hidden]{display:none}
+.guide-heading{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.guide-heading h2{font-family:var(--display);font-size:28px;margin:0}
+.guide-heading p,#guidestatus{font-size:12px;line-height:1.6;color:var(--dim)}
+.guide-messages{max-height:380px;overflow:auto;overscroll-behavior:contain;margin:20px 0}
+.guide-message{padding:14px 16px;margin:10px 0;border-left:2px solid var(--signal);background:rgb(255 255 255 / .025)}
+.guide-message.user{border-color:var(--line-hi);margin-left:24px}
+.guide-message b{font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--dim)}
+.guide-message p{white-space:pre-wrap;font-size:14px;line-height:1.7;overflow-wrap:anywhere;margin:8px 0 0}
+.guide-choices{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px}
+.guide-choices .chip{white-space:normal;text-align:left;line-height:1.5}
+.creative-guide textarea{display:block;width:100%;box-sizing:border-box;resize:vertical;background:rgb(0 0 0 / .15);border:1px solid var(--line-hi);border-radius:10px;padding:14px;color:var(--text);font:14px/1.6 var(--body);margin:8px 0 12px;min-height:80px}
+.creative-guide textarea:focus{outline:1px solid var(--signal)}
+.guide-actions{display:flex;justify-content:space-between;align-items:center;gap:12px}
+#guidebriefwrap{border-top:1px solid var(--line);padding:18px 0;margin-bottom:18px}
+@media(max-width:600px){.creative-guide{padding:16px}.guide-heading{align-items:flex-start;flex-direction:column}.guide-actions .m{font-size:8px}}
+
+.guide-model-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:18px}
+.model-connections{padding:18px;margin:16px 0;border:1px solid var(--line-hi);border-radius:12px}
+.model-connections p{font-size:12px;color:var(--dim);line-height:1.6}
+.model-connection{padding:12px 0;border-top:1px solid var(--line);margin-top:12px}
+.model-connection b{font-size:14px}
+#modelchallenge{padding:12px 0}
+#modelauthcode{font-family:var(--mono);font-size:16px;letter-spacing:.1em;color:var(--text)}
+#modelauthlink{display:inline-block;text-decoration:none;color:var(--text)}
+
+/* One composer for the creative conversation and its final brief. */
+.integrated-guide{margin-top:0}
+.integrated-guide .guide-model-row{margin-top:12px}
+.integrated-guide .guide-messages:empty{display:none}
+.integrated-guide #prompt{min-height:110px}
+.integrated-guide #guidebriefwrap{margin:18px 0 0;padding-bottom:0}
+.integrated-guide .guide-actions{flex-wrap:wrap;justify-content:flex-end}
+.integrated-guide .cfoot{flex-wrap:wrap}
+
+.guide-project-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:16px}
+.guide-project-row select{max-width:320px}
+
+/* A timed scene's shots on a Queue card (2026-09-10): one row per window,
+   each rendered as its own clip. Compact on purpose -- the card is for
+   comparing scenes, and a scene of five shots must not push the Approve
+   button off the screen. The row wraps rather than overflowing at phone
+   width. */
+.scparts{margin-top:10px;border-top:1px solid var(--line);padding-top:8px}
+.scparts summary{cursor:pointer}
+.scparts ol{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}
+.scpart{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+.scpart.done{opacity:.7}
+.scwin{flex:none;min-width:52px;font-variant-numeric:tabular-nums}
+.scpartshot{width:34px;height:60px;object-fit:cover;border-radius:6px;border:1px solid var(--line);flex:none}
+.scparttext{flex:1 1 180px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.scpartrefs{display:flex;gap:4px;flex:none}
+.scref.sm{width:24px;height:24px;border-radius:6px}
+
+/* ══ LTX-SHAPED COMPOSER + HOVER RAIL (2026-09-10) ══════════════════
+   The composer keeps every id it had: the mode switch and the round
+   send button DELEGATE to #guidesend / #go rather than replacing them,
+   so creative-guide.js and studio.js keep their handlers. Restyling is
+   what changed; the wiring did not. */
+
+/* ── the rail, collapsed to icons and revealed on hover ───────────── */
+:root{ --rail-w:84px; --rail-open:236px; }
+.rail{
+  width:var(--rail-w);
+  transition:width var(--t),background var(--t);
+  overflow:hidden;align-items:stretch;padding:22px 12px 18px;
+}
+/* Overlay, never reflow: .shell keeps its 84px margin whatever the rail
+   is doing, so opening it does not shove the hero and the composer
+   sideways every time the pointer brushes the left edge. */
+.rail:hover,.rail[data-pinned]{width:var(--rail-open);background:rgb(6 6 8 / .88)}
+.rail .mark{margin:0 0 26px 5px;flex:none}
+.railhead{display:flex;align-items:center;gap:10px;margin-bottom:26px}
+.railtitle{
+  font-family:var(--display);text-transform:uppercase;letter-spacing:.09em;font-size:13px;
+  color:var(--dim);white-space:nowrap;
+}
+.railpin{
+  margin-left:auto;width:28px;height:28px;flex:none;display:grid;place-items:center;
+  background:0;border:1px solid var(--line);border-radius:9px;color:var(--dimmer);cursor:pointer;
+  transition:color var(--t),border-color var(--t),opacity var(--t);
+}
+.railpin svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.5}
+.railpin:hover{color:var(--text);border-color:var(--line-hi)}
+.rail[data-pinned] .railpin{color:var(--signal);border-color:var(--signal)}
+/* Everything that only makes sense wide fades with the width, and is
+   pulled out of the tab order while hidden so a keyboard user does not
+   tab into an invisible control. */
+.railtitle,.railpin,.rnav a span,.railfootline{
+  opacity:0;transition:opacity 120ms linear;pointer-events:none;
+}
+.rail:hover .railtitle,.rail:hover .railpin,.rail:hover .rnav a span,.rail:hover .railfootline,
+.rail[data-pinned] .railtitle,.rail[data-pinned] .railpin,
+.rail[data-pinned] .rnav a span,.rail[data-pinned] .railfootline{
+  opacity:1;pointer-events:auto;transition-delay:60ms;
+}
+.rnav{align-items:stretch}
+.rnav a{
+  width:100%;height:44px;display:flex;align-items:center;gap:14px;padding:0 13px;
+  justify-content:flex-start;
+}
+.rnav a span{
+  font-size:13.5px;color:inherit;white-space:nowrap;overflow:hidden;
+}
+.rnav a[aria-current]::before{left:0}
+.rail .rfoot{align-items:stretch;padding-left:8px}
+.railfootline{
+  display:flex;align-items:center;gap:10px;white-space:nowrap;
+  font-family:var(--mono);font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--dimmer);
+}
+@media (prefers-reduced-motion:reduce){
+  .rail{transition:none}
+  .railtitle,.railpin,.rnav a span,.railfootline{transition:none}
+}
+
+/* ── the composer card ────────────────────────────────────────────── */
+#cbox.ltxbox{padding-bottom:6px}
+/* the slot row LTX puts above the text: attachments live here */
+.ltxslots{display:flex;gap:8px;flex-wrap:wrap;padding:18px 20px 0}
+.ltxslot{
+  min-width:76px;height:62px;border-radius:12px;cursor:pointer;flex:none;
+  background:rgb(255 255 255 / .045);border:1px solid transparent;color:var(--dim);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;padding:0 10px;
+  transition:color var(--t),background var(--t),border-color var(--t);
+}
+.ltxslot:hover{color:var(--text);background:rgb(255 255 255 / .08);border-color:var(--line)}
+.ltxslot svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.5}
+.ltxslot b{
+  font-family:var(--mono);font-weight:400;font-size:7.5px;letter-spacing:.1em;text-transform:uppercase;
+  line-height:1.25;text-align:center;max-width:82px;
+}
+#cbox.ltxbox #prompt{font-size:16px;padding:20px 22px 4px;min-height:88px}
+
+/* ── the control row ──────────────────────────────────────────────── */
+.ltxfoot{
+  display:flex;align-items:center;gap:6px;padding:10px 12px 12px 16px;flex-wrap:wrap;
+  border-top:1px solid rgb(255 255 255 / .045);margin-top:10px;
+}
+.ltxfoot .spacer{flex:1;min-width:8px}
+/* every control in the row is one ghost pill: icon, label, optional
+   chevron. A <select> gets the same skin so the ones that already
+   existed (#cbrain, #cseconds, #ccount) do not read as a second system. */
+.pill,.ltxfoot .wfselect{
+  display:inline-flex;align-items:center;gap:7px;height:34px;padding:0 11px;
+  background:transparent;border:1px solid transparent;border-radius:10px;
+  color:var(--dim);font-family:var(--body);font-size:12.5px;line-height:1;cursor:pointer;
+  transition:color var(--t),background var(--t),border-color var(--t);
+  white-space:nowrap;
+}
+.pill svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.5;flex:none}
+.pill:hover,.ltxfoot .wfselect:hover{color:var(--text);background:rgb(255 255 255 / .06)}
+.pill[aria-expanded="true"]{color:var(--text);background:rgb(255 255 255 / .09);border-color:var(--line)}
+.pill:disabled{opacity:.4;cursor:default}
+.pill .chev{width:11px;height:11px;opacity:.7;margin-left:-2px}
+.ltxfoot .wfselect{
+  -webkit-appearance:none;appearance:none;padding-right:26px;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238e8c8a' stroke-width='1.6' stroke-linecap='round'><path d='m6 9 6 6 6-6'/></svg>");
+  background-repeat:no-repeat;background-position:right 8px center;background-size:13px;
+}
+/* the mode switch sits left and is the one pill that reads as chosen */
+.pill.modepill{color:var(--text);background:rgb(255 255 255 / .05);border-color:var(--line)}
+.pill.accent{color:var(--signal)}
+
+/* Runway's send: a circle, not a word. Disabled is quiet rather than
+   absent -- a button that vanishes is a button people ask about. */
+.sendbtn{
+  width:40px;height:40px;flex:none;margin-left:4px;border-radius:var(--rp);border:0;cursor:pointer;
+  display:grid;place-items:center;background:rgb(255 255 255 / .07);color:var(--dim);
+  transition:background var(--t),color var(--t),transform var(--t),box-shadow var(--t);
+}
+.sendbtn svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.9}
+.sendbtn:not(:disabled){background:var(--signal);color:#fff;box-shadow:0 6px 22px -10px rgb(228 0 43 / .9)}
+.sendbtn:not(:disabled):hover{filter:brightness(1.12)}
+.sendbtn:not(:disabled):active{transform:translateY(1px)}
+.sendbtn:disabled{cursor:default}
+.sendbtn.busy svg{animation:sendspin 900ms linear infinite}
+@keyframes sendspin{to{transform:rotate(360deg)}}
+
+/* ── the model popover ────────────────────────────────────────────── */
+.pop{
+  position:absolute;z-index:90;min-width:290px;max-width:340px;padding:6px;
+  background:rgb(18 18 21 / .97);backdrop-filter:blur(24px) saturate(1.2);
+  border:1px solid var(--line);border-radius:16px;
+  box-shadow:0 30px 90px -30px rgb(0 0 0 / .9);
+  animation:vin .18s cubic-bezier(.16,.8,.3,1);
+}
+.pop[hidden]{display:none}
+.popgroup{
+  font-family:var(--mono);font-size:8.5px;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--dimmer);padding:12px 12px 6px;
+}
+.popitem{
+  display:flex;align-items:flex-start;gap:11px;width:100%;text-align:left;cursor:pointer;
+  padding:10px 11px;border:0;border-radius:11px;background:transparent;color:var(--text);
+  transition:background var(--t);
+}
+.popitem:hover{background:rgb(255 255 255 / .06)}
+.popitem[aria-selected="true"]{background:rgb(228 0 43 / .10)}
+.popicon{
+  width:26px;height:26px;flex:none;border-radius:8px;display:grid;place-items:center;
+  background:rgb(255 255 255 / .06);color:var(--dim);
+}
+.popicon svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.6}
+.popbody{min-width:0;flex:1}
+.popname{display:flex;align-items:center;gap:7px;font-size:13px}
+.popnote{font-size:11.5px;color:var(--dim);line-height:1.45;margin-top:2px}
+.popbadge{
+  font-family:var(--mono);font-size:7.5px;letter-spacing:.1em;text-transform:uppercase;
+  padding:3px 6px;border-radius:5px;border:1px solid var(--line-hi);color:var(--dim);
+}
+.popbadge.hot{border-color:rgb(228 0 43 / .5);color:var(--signal)}
+.popcheck{margin-left:auto;color:var(--signal);opacity:0}
+.popitem[aria-selected="true"] .popcheck{opacity:1}
+
+@media (max-width:820px){
+  .ltxfoot{gap:4px;padding-left:12px}
+  .pill span.plabel{display:none}
+  .pill{padding:0 9px}
+}
+
+/* the guide's settings, folded away until asked for */
+.guidesettings{padding:20px 22px 4px;border-bottom:1px solid rgb(255 255 255 / .045);margin-bottom:4px}
+.guidesettings[hidden]{display:none}
+#cbox[data-mode="create"] .guidesettings,
+#cbox[data-mode="create"] #guidegear,
+#cbox[data-mode="create"] .guide-messages,
+#cbox[data-mode="create"] .guide-choices{display:none}
+#cbox.ltxbox .guide-messages:empty,#cbox.ltxbox .guide-choices:empty{display:none}
+#cbox.ltxbox .guide-messages{padding:4px 22px 0;max-height:280px;overflow-y:auto}
+
+/* ── RENDERER KEYS (Queue) ──────────────────────────── */
+/* One card per vendor, folded away until somebody needs it. The panel
+   never displays a key -- the server does not return one -- so what is
+   styled here is whose credential pays and where to type a new one. */
+.keyspanel{max-width:1680px;margin:34px auto 0;padding:0 42px}
+.keyspanel>summary{
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--dim);cursor:pointer;padding:10px 0;list-style:none;
+}
+.keyspanel>summary::-webkit-details-marker{display:none}
+.keyspanel>summary::before{content:"▸ ";color:var(--dimmer)}
+.keyspanel[open]>summary::before{content:"▾ "}
+.keyspanel>summary:hover{color:var(--text)}
+.keyspanel .stateline{padding:8px 0}
+.keysgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;padding:8px 0 6px}
+.keycard{
+  background:var(--glass);border:1px solid var(--line);border-top-color:var(--line-hi);
+  border-radius:var(--r3);padding:18px 20px;display:flex;flex-direction:column;gap:12px;
+}
+.keycard.off{border-color:rgb(228 0 43 / .28)}
+.keyhead{display:flex;align-items:center;gap:12px}
+.keyhead strong{font-family:var(--display);text-transform:uppercase;font-size:14px;letter-spacing:.02em}
+.keysource{font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase}
+.keyfield{display:flex;flex-direction:column;gap:5px}
+.keyfield input{
+  background:rgb(255 255 255 / .03);border:1px solid var(--line);border-radius:var(--r3);
+  color:var(--text);font-family:var(--mono);font-size:12px;padding:10px 12px;
+}
+.keyfield input:focus{outline:0;border-color:var(--line-hi)}
+.keyfoot{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.keyfoot .go{padding:9px 20px;font-size:11px}
+.keyfoot .m{font-family:var(--mono);font-size:9px;letter-spacing:.08em;text-transform:uppercase}

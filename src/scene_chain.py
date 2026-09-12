@@ -2,8 +2,11 @@
 """
 src/scene_chain.py -- the stages a scene goes through, as functions.
 
-    ground -> write_scenes -> attach_refs        [ Create stops here ]
+    ground -> write_scenes -> attach_refs -> plan_timeline   [ Create stops here ]
         -> persist_prompt -> keyframe -> park    [ the nightly graph does these ]
+
+`plan_timeline` (2026-09-10) splits a scene's timed windows into the
+separate shots that get rendered one by one -- see src/timeline.py.
 
 One implementation of each stage, three callers (2026-08-29):
 
@@ -36,7 +39,7 @@ import os
 import sys
 from typing import Callable, Optional
 
-from . import db, imagery, nano_banana, preprod, shootgen
+from . import db, imagery, nano_banana, preprod, shootgen, timeline
 
 # Enhancing and keyframing are per-scene model calls, so a batch of 4 is
 # 4 of each. The cap that actually bites is nano_banana.DAILY_CAP (20/day,
@@ -119,7 +122,8 @@ def scoped_cast_and_locations(idea: str, brand: str, refs, *, db_path=None,
 def write_scenes(idea: str, brand: str, *, count: int = 1, references: str = "",
                  cast=None, refs=None, locations=None, image_refs=None, db_path=None,
                  gemini_client=None, template_tag: str = "",
-                 on_retry=None, account_id: Optional[int] = None) -> dict:
+                 on_retry=None, account_id: Optional[int] = None,
+                 brain=None, seconds=None, ratio=None, video_parts=None) -> dict:
     """N standalone takes on one idea, in ONE call so they are varied
     against each other rather than rolled independently. Raises: with no
     scene there is nothing to work on, and the caller must say so.
@@ -134,13 +138,18 @@ def write_scenes(idea: str, brand: str, *, count: int = 1, references: str = "",
 
     `template_tag` rides into the hashed prompt template, so pick_rate's
     by_prompt breakdown can separate rows produced by different
-    pipelines instead of averaging them into one unreadable number."""
+    pipelines instead of averaging them into one unreadable number.
+
+    `brain` is the named model tier (gemini_utils.BRAINS); None keeps the
+    fast default, which is what every caller that has not adopted it
+    gets. `seconds` is the scene's total length (timeline.scene_seconds)."""
     return shootgen.generate_scene_concepts(
         idea, brand, count=max(1, min(MAX_SCENES, count)),
         gemini_client=gemini_client, references=references, cast=cast,
         db_path=db_path,
         refs=list(refs or []), locations=locations, image_refs=image_refs or None,
-        template_tag=template_tag, account_id=account_id, on_retry=on_retry)
+        template_tag=template_tag, account_id=account_id, on_retry=on_retry,
+        brain=brain, seconds=seconds, ratio=ratio, video_parts=video_parts or None)
 
 
 # How many photos of ONE character are worth a reference slot. A face
@@ -150,10 +159,14 @@ def write_scenes(idea: str, brand: str, *, count: int = 1, references: str = "",
 # (2026-08-29). A prop gains almost nothing from a second angle; an
 # identity gains most of what it has.
 CHARACTER_REF_PHOTOS = 3
-# What one generation carries. Matches the composer's MAX_ATTACH and the
-# scout's MAX_BIN_IMAGES -- a bin bigger than the cap has a tail that
-# can never be used.
-MAX_REFS = 6
+# What one generation carries. Matches the composer's MAX_ATTACH and
+# api.MAX_IMAGE_REFS. Raised 6 -> 12 on 2026-09-10 (Mike: "it's for
+# prompting, then we can narrow down the references") -- the writer and
+# the timeline planner see all of them; Runway still anchors on refs[0]
+# and each timed shot picks its own subset. The scout's MAX_BIN_IMAGES
+# stays at 6: a bin SMALLER than the cap is fine, only a bigger one
+# has a tail that can never be used.
+MAX_REFS = 12
 # Slots HELD for research images when a run has any. Ordering alone was
 # not enough: `extra` went last, and last never arrived. A scene naming
 # Michael, the Ducati, the jacket and one more asset spends four slots on
@@ -312,6 +325,21 @@ def as_image_refs(urls: list, *, resolve_photo=None) -> list:
         if data:
             out.append((data, sniff_mime(data), shootgen.reference_label(url)))
     return out
+
+
+def plan_timeline(concept_id: int, shot_n=None, *, brain=None, db_path=None,
+                  gemini_client=None, resolve_photo: Optional[Callable] = None,
+                  account_id: Optional[int] = None) -> Optional[dict]:
+    """Split the scene's timed windows into the shots that get rendered,
+    one by one, each with its own refs and the scene's memory in front of
+    it (src/timeline.py). The stage both doors call once the prompt and the
+    refs are final: Create after attach_refs, the graph after
+    persist_prompt. None for a one-window scene, which renders whole as it
+    always has. Never raises."""
+    return timeline.ensure(concept_id, shot_n, brain=brain,
+                           gemini_client=gemini_client,
+                           resolve_photo=resolve_photo, db_path=db_path,
+                           account_id=account_id)
 
 
 def persist_prompt(concept_id: int, shot_n, text: str, *, db_path=None, account_id: Optional[int] = None) -> bool:
@@ -538,6 +566,18 @@ def keyframe_scene(concept_id: int, shot_n=None, *, db_path=None,
                 concept_id, {"shots": _replace_shot(shots, shot)},
                 dsn=path, account_id=account_id)
 
+    # A SCENE OF SEVERAL SHOTS draws one still per shot (2026-09-10): each
+    # timed window renders as its own clip, and each clip anchors on its
+    # own first frame. The single-scene path below is untouched for a
+    # scene with one window, which is every scene written before today.
+    tl = timeline.ensure(concept_id, shot.get("n"), gemini_client=gemini_client,
+                         resolve_photo=resolve_photo, db_path=path,
+                         account_id=account_id)
+    if tl:
+        return _keyframe_timeline(concept_id, shot.get("n", 1), tl, db_path=path,
+                                  resolve_photo=resolve_photo,
+                                  account_id=account_id)
+
     references = []
     resolved: list = []
     for url in (shot.get("refs") or []):
@@ -611,6 +651,107 @@ def keyframe_scene(concept_id: int, shot_n=None, *, db_path=None,
                       if len(frames) < len(beats or [""]) else None)}
 
 
+# What the previous shot's still is FOR when it rides into the next one.
+# Without the second sentence the model reads "reference" as "copy this"
+# and every shot of the scene comes back as the same frame.
+CONTINUITY_REF_LABEL = (
+    "THE PREVIOUS SHOT OF THIS SAME SCENE -- for continuity only: the same "
+    "people, faces, wardrobe, props, light and grade. Do NOT copy its "
+    "framing, angle or composition; this is a different shot.")
+
+
+def _still_bytes(result: dict, url: str, resolve_photo=None):
+    """The bytes of a still just drawn: the local file when the render
+    left one, else fetched back by URL. None is fine -- continuity is an
+    enhancement, and a shot drawn without its predecessor is still drawn."""
+    from pathlib import Path as _P
+    path = (result or {}).get("path")
+    try:
+        if path and _P(path).exists():
+            return _P(path).read_bytes()
+    except OSError:
+        pass
+    return imagery.image_bytes_for_gemini(url, resolve_photo=resolve_photo)
+
+
+def _keyframe_timeline(concept_id: int, shot_n, tl: dict, *, db_path=None,
+                       resolve_photo=None, account_id: Optional[int] = None) -> dict:
+    """One still per SHOT of a timed scene, in order -- the frame each
+    part's clip will anchor on.
+
+    Three things hold the shots together, because the stills are drawn on
+    separate calls exactly as the clips will be:
+      * the timeline's continuity block is in front of every shot's prompt
+        (timeline.render_prompt -- code, not the model's memory);
+      * each shot gets ITS refs, named, so the face in shot 3 is the face
+        in the photograph and not the face the model drew in shot 1;
+      * the previous shot's still rides along, labelled as continuity and
+        NOT as something to copy (CONTINUITY_REF_LABEL).
+
+    A part that already has a still (carried over a re-plan) is not drawn
+    again. Stops at the first failure -- usually NANO_DAILY_CAP -- and keeps
+    what did render; picking the scene again draws the rest. Shot 1's still
+    becomes the scene's reference_image (the Queue card's frame), and the
+    whole set rides on the shot as `frames`, the strip the card scrolls."""
+    parts = tl.get("parts") or []
+    total = len(parts)
+    frames: list = []
+    result: dict = {}
+    previous = None
+    for part in parts:
+        n = part.get("n")
+        label = f"({part.get('start')}-{part.get('end')}s) {part.get('text') or part.get('prompt') or ''}".strip()
+        if part.get("reference_image"):
+            frames.append({"beat": label, "url": part["reference_image"], "part": n})
+            previous = imagery.image_bytes_for_gemini(part["reference_image"],
+                                                      resolve_photo=resolve_photo)
+            continue
+        references, resolved = [], []
+        for url in part.get("refs") or []:
+            data = imagery.image_bytes_for_gemini(url, resolve_photo=resolve_photo)
+            if data:
+                references.append((shootgen.reference_label(url), data))
+                resolved.append(url)
+        if previous:
+            references.append((CONTINUITY_REF_LABEL, previous))
+        prompt = shootgen.bind_references(timeline.render_prompt(part, tl), resolved)
+        # No account_id -- keyframe_scene's reason, unchanged.
+        result = nano_banana.generate_from_prompt(
+            prompt, reference_image=references or None, db_path=db_path,
+            concept_id=concept_id,
+            beat=(f"the FIRST frame of shot {n} of {total} -- the instant it "
+                  f"opens on, before its action plays out; the clip starts here"))
+        if not (result.get("ok") and result.get("media_url")):
+            break
+        url = result["media_url"]
+        try:
+            timeline.attach_part(concept_id, shot_n, n, "reference_image", url,
+                                 db_path=db_path, account_id=account_id)
+        except Exception as e:
+            print(f"note: shot {n}'s still not stored on its part: {e}", file=sys.stderr)
+        frames.append({"beat": label, "url": url, "part": n})
+        previous = _still_bytes(result, url, resolve_photo)
+
+    if not frames:
+        return result or {"ok": False, "error": "no frame rendered"}
+
+    preprod.set_shot_reference_image(concept_id, shot_n, frames[0]["url"],
+                                     dsn=db_path, account_id=account_id)
+    try:
+        fresh = preprod.get_concept(concept_id, dsn=db_path, account_id=account_id)
+        current = next(s for s in fresh["shots"] if s.get("n") == shot_n)
+        timeline._save(concept_id, fresh,
+                       _replace_shot(fresh["shots"], dict(current, frames=frames)),
+                       db_path=db_path, account_id=account_id)
+    except Exception:
+        pass       # every part's still is stored on its part; the strip is a bonus
+
+    return {"ok": True, "media_url": frames[0]["url"], "frames": frames,
+            "parts": total, "generation_id": result.get("generation_id"),
+            "path": result.get("path"),
+            "error": (result.get("error") if len(frames) < total else None)}
+
+
 KEYFRAME_ON_PICK_ENV = "ZEROPAGE_KEYFRAME_ON_PICK"
 
 
@@ -636,8 +777,14 @@ def pick_skip_reason(concept: Optional[dict]) -> Optional[str]:
         return "no prompt to render from"
     if shot.get("reference_image"):
         # Unpicking and re-picking must not quietly buy a second image,
-        # and Director's own keyframe is the one a person chose.
-        return "already has a still"
+        # and Director's own keyframe is the one a person chose. A scene
+        # of several shots is only "drawn" when EVERY shot has its still:
+        # a strip that stopped at the daily cap is finished by picking
+        # again, and _keyframe_timeline never redraws a part that has one.
+        parts = ((shot.get("timeline") or {}).get("parts") or []
+                 if timeline.is_current(shot) else [])
+        if not parts or all(p.get("reference_image") for p in parts):
+            return "already has a still"
     return None
 
 
@@ -690,9 +837,10 @@ def run(idea: str, brand: str, *, count: int = 1, refs=None, image_refs=None,
         db_path=None, gemini_client=None, resolve_photo: Optional[Callable] = None,
         attach_refs: Optional[Callable] = None,
         progress: Optional[Callable] = None,
-        account_id: Optional[int] = None) -> dict:
-    """Ground, write and attach -- what pressing Create does, and where
-    it stops. Returns {"scenes": [...], "notes": [...], "ungrounded": [...],
+        account_id: Optional[int] = None, brain=None, seconds=None,
+        ratio=None, video_parts=None) -> dict:
+    """Ground, write, attach and plan the shots -- what pressing Create
+    does, and where it stops. Returns {"scenes": [...], "notes": [...], "ungrounded": [...],
     "prompt_template"}, where `ungrounded` is the concept ids the
     reference gate archived.
 
@@ -727,7 +875,8 @@ def run(idea: str, brand: str, *, count: int = 1, refs=None, image_refs=None,
                            image_refs=image_refs, db_path=path,
                            gemini_client=gemini_client,
                            on_retry=lambda note: say(0.4, note),
-                           account_id=account_id)
+                           account_id=account_id, brain=brain, seconds=seconds,
+                           ratio=ratio, video_parts=video_parts)
     scenes = written.get("scenes") or []
     if not scenes:
         raise RuntimeError("the model returned no usable scene")
@@ -769,6 +918,36 @@ def run(idea: str, brand: str, *, count: int = 1, refs=None, image_refs=None,
             print(f"note: ungrounded concept not archived: {e}", file=sys.stderr)
     if ungrounded:
         _note(notes, f"{len(ungrounded)} archived — no reference photos attached")
+
+    # THE SHOTS (2026-09-10, Mike's call). Each timed window is rendered
+    # on its own, so the scene is split here, on the SAME brain that wrote
+    # it -- the reasoning tier when that is what the composer asked for --
+    # while the scene is fresh and its refs are final. Only the scenes
+    # that survived the gate: an archived one will never render, and
+    # planning it is a call for nothing. In parallel, because a reasoning
+    # call is minutes and four of them in a row is a coffee.
+    live = [s["concept_id"] for s in scenes if s["concept_id"] not in ungrounded]
+    if live:
+        say(0.9, f"planning shots for {len(live)} scene(s)")
+        import contextvars
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _plan(cid):
+            return plan_timeline(cid, brain=brain, db_path=path,
+                                 gemini_client=gemini_client,
+                                 resolve_photo=resolve_photo,
+                                 account_id=account_id)
+        # One copied context PER task: spend.bind() is a ContextVar, a
+        # pool thread starts with an empty one, and the meter would file
+        # every planning call under nobody. (A single Context cannot be
+        # entered by two threads at once, hence a copy each.)
+        with ThreadPoolExecutor(max_workers=min(4, len(live))) as pool:
+            futures = [pool.submit(contextvars.copy_context().run, _plan, cid)
+                       for cid in live]
+            planned = [t for t in (f.result() for f in futures) if t]
+        if planned:
+            shots = sum(len(t["parts"]) for t in planned)
+            _note(notes, f"{shots} shots across {len(planned)} scene(s)")
 
     return {"scenes": scenes, "notes": notes, "ungrounded": ungrounded,
             "prompt_template": written.get("prompt_template")}

@@ -98,3 +98,6 @@ docs/reference-look/**/*.jpg
 docs/sprints/**/*.mp4
 docs/sprints/**/*.png
 docs/sprints/**/*.jpg
+
+# Personal model runtime logins: private credentials, never source or image layers.
+data/model_sessions/

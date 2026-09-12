@@ -79,9 +79,10 @@ export async function renderAssets() {
       <span class="m">${g.items.length} item${g.items.length === 1 ? '' : 's'}</span></div>
     <div class="gphotos">${g.items.map(m => `
       <button class="gph${m.kind === 'video' ? ' video' : ''}" type="button"
-              data-a="${esc(m.asset_id)}"
-              ${m.kind === 'image' ? `style="background-image:url('${esc(m.url)}')"` : ''}>
-        ${m.kind === 'video' ? `<video src="${esc(m.url)}" muted loop playsinline preload="metadata"></video>` : ''}
+              data-a="${esc(m.asset_id)}" aria-label="${esc(m.asset_name)}">
+        ${m.kind === 'video'
+          ? `<video src="${esc(m.url)}" muted loop playsinline preload="none"></video>`
+          : `<img src="${esc(m.url)}" alt="" loading="lazy" decoding="async">`}
         <span class="mname">${esc(m.asset_name)} · ${esc(m.category)}</span>
       </button>`).join('')}
     </div>`).join('');

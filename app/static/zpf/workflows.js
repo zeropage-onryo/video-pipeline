@@ -12,7 +12,7 @@
    a shot node's finished render attaches back onto its shot. Generic
    saved workflows (the seeded "Prompt enhancement" template) still
    open from the same toolbar. Every billed node stays behind its
-   module's own gate (RUNWAY_SPEND_OK, NANO_DAILY_CAP) — this canvas
+   module's own gate (the per-call approval, NANO_DAILY_CAP) — this canvas
    cannot spend around them. */
 import { api, bus, enhanceSystemText, esc, fillPresetSelect, loadPresets, state, stateline, wireMentions } from './shared.js';
 
@@ -567,10 +567,13 @@ function registerNodes() {
         drawBody(this, ctx, wrapLines(this._out, Math.floor(this.size[0] / 7), bodyLines(this)),
           T.textPrimary);
       } else {
-        const gate = state.caps['runway.generate']
-          ? (state.caps['runway.spend'] ? 'Output will appear here'
-                                        : 'Runway · gated — RUNWAY_SPEND_OK=1 to arm')
-          : 'Runway · RUNWAYML_API_SECRET not set';
+        // running this node IS the spend approval since 2026-09-09, so
+        // a key is the only thing that can be missing here
+        // and since 2026-09-11 ANY vendor's key: the node renders on
+        // whatever this account can use (providers.renderer_for)
+        const gate = state.caps['video.generate']
+          ? 'Output will appear here'
+          : 'No video renderer key — add a Runway, Higgsfield or fal key';
         // a skipped node carries the server's own reason — show that
         drawEmptyWell(this, ctx, this._note || gate);
       }
@@ -980,7 +983,7 @@ const NODE_CATALOG = [
     cat: 'Image', glyph: '▣', grad: 'linear-gradient(135deg,#0e7490,#67e8f9)' },
   { type: 'zpf/nano_banana', title: 'Nano Banana', sub: 'Text/Image to Image',
     cat: 'Image', glyph: '✦', grad: 'linear-gradient(135deg,#b45309,#fbbf24)' },
-  { type: 'zpf/generate', title: 'Generate', sub: 'Text/Image to Video · Runway',
+  { type: 'zpf/generate', title: 'Generate', sub: 'Text/Image to Video · any keyed renderer',
     cat: 'Video', glyph: '▶', grad: 'linear-gradient(135deg,#9f1239,#f87171)' },
 ];
 const PALETTE_CATS = ['All', 'Text', 'Image', 'Video'];
@@ -1494,6 +1497,15 @@ export async function openConceptInDirector(id) {
         stateline($('dirstate'), 'error', e.message);
       }
     };
+    return;
+  }
+
+  const reactDirector = document.body.dataset.directorUrl;
+  if (reactDirector && new URLSearchParams(location.search).get('legacy') !== '1') {
+    const destination = new URL(reactDirector, location.origin);
+    destination.searchParams.set('concept', id);
+    destination.searchParams.set('shot', d.shots[0].n);
+    location.assign(destination.href);
     return;
   }
 

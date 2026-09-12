@@ -30,10 +30,15 @@ Layers, runway.py's:
                                       post), the same walls.
 
 THE SPEND GATE, and why it lives here and not in callers:
-- HIGGSFIELD_SPEND_OK=1 must be set or the wrappers raise -- the default
-  answer is "generate it in the Higgsfield app, on the subscription you
-  already pay for". Set it per run, never in .env: an approval that is
-  always on is not an approval.
+- THE APPROVAL IS THE CLICK (2026-09-09, Mike's call). generate_video
+  refuses unless the caller passes approved=True, which the routes a
+  person drives do and nothing else does. HIGGSFIELD_SPEND_OK=1 still satisfies
+  the gate when no caller says otherwise -- that is what keeps the
+  unattended paths (orchestrator, autopilot, the CLI) needing a
+  deliberate arming of their own. See spend_approved().
+  The free path is still the honest default answer to "should this be an
+  API render at all": the Higgsfield app runs on the subscription you
+  already pay for, and the refusal still says so.
 - DAILY_CAP (HIGGSFIELD_DAILY_CAP, default 6) counted from the
   generations table -- the same wall veo.py and runway.py have, enforced
   by the DB so a runaway loop hits it.
@@ -296,9 +301,33 @@ def has_key(account_id: Optional[int] = None) -> bool:
     return _credentials(account_id) is not None
 
 
-def spend_approved() -> bool:
-    """The human approval for burning API credits. Per-run by design:
-    set HIGGSFIELD_SPEND_OK=1 on the command, not in .env."""
+def spend_approved(approved: Optional[bool] = None) -> bool:
+    """Is this ONE call approved to spend?
+
+    THE APPROVAL IS THE CLICK NOW (2026-09-09, Mike's call). It used to
+    be HIGGSFIELD_SPEND_OK=1 in the process environment, set per run on the command
+    and never in .env -- "an approval that's always on isn't an
+    approval". That reasoning was right about what an approval IS and
+    wrong about where this one lives: the person approving a render is
+    standing at the Queue pressing a priced button, and making them
+    restart the server with an environment variable to make that button
+    work meant the variable ended up set for the whole session anyway --
+    an approval that was always on, arrived at the long way round.
+
+    So the approval became an ARGUMENT. `approved=True` is passed by the
+    routes a human drives and by nothing else, which is what the env var
+    was really standing in for. The check still lives inside
+    generate_video, so no caller can spend around it.
+
+    The environment variable still satisfies the gate when no caller
+    says otherwise. That is deliberate and it is what keeps the
+    unattended paths exactly as safe as they were: orchestrator.py and
+    autopilot.py pass no approval, so a nightly run still needs
+    HIGGSFIELD_SPEND_OK=1 set for it on purpose, on top of its own flags. Same for
+    the CLI and the ops scripts.
+    """
+    if approved is not None:
+        return bool(approved)
     return (os.environ.get(SPEND_ENV) or "").strip() == "1"
 
 
@@ -504,17 +533,19 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
                    resolution: str = DEFAULT_RESOLUTION,
                    negative_prompt: str = "",
                    http=None, db_path=None,
+                   approved: Optional[bool] = None,
                    account_id: Optional[int] = None) -> Path:
     """
     The thin wrapper: submit -> poll -> download. Raises on anything --
     including a missing spend approval, which is checked HERE so no
     caller can spend a credit around the gate.
     """
-    if not spend_approved():
+    if not spend_approved(approved):
         raise RuntimeError(
-            f"credit spend not approved: render this in the Higgsfield app "
-            f"instead, or set {SPEND_ENV}=1 on this run to approve "
-            f"~${estimate_cost(1, model=model, duration=duration)} of API credits"
+            f"credit spend not approved: this call was not approved by a person. "
+            f"Render it in the Higgsfield app instead, approve it at the Queue, or "
+            f"set {SPEND_ENV}=1 for an unattended run "
+            f"(~${estimate_cost(1, model=model, duration=duration)} of API credits)"
         )
     # Name-swap first, THEN build the body: what we check has to be what
     # we send.
@@ -535,16 +566,17 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
 
 def generate_image(prompt: str, out_path, *, http=None, db_path=None,
                    aspect_ratio: str = DEFAULT_ASPECT,
+                   approved: Optional[bool] = None,
                    account_id: Optional[int] = None,
                    soul_id: Optional[str] = None) -> Path:
     """A Soul still, same wall. The documented completed payload is
     {"images": [{"url": ...}]} (docs.higgsfield.ai quickstart,
     2026-08-31)."""
-    if not spend_approved():
+    if not spend_approved(approved):
         raise RuntimeError(
-            f"credit spend not approved: generate this in the Higgsfield app "
-            f"instead, or set {SPEND_ENV}=1 on this run to approve "
-            f"~${estimate_image_cost(1)} of API credits"
+            f"credit spend not approved: this call was not approved by a person. "
+            f"Generate it in the Higgsfield app instead, or set {SPEND_ENV}=1 for "
+            f"an unattended run (~${estimate_image_cost(1)} of API credits)"
         )
     prompt = safe_prompt(prompt, db_path)
     body = {"prompt": prompt, "aspect_ratio": aspect_ratio}
@@ -668,7 +700,9 @@ def _shot_row_for_prompt(prompt: str, db_path, note: str, account_id: Optional[i
 
 def generate_candidates(prompt: str, out_dir, n: int = 3, *,
                         shot_id: Optional[int] = None, db_path=None,
-                        model: str = DEFAULT_MODEL, http=None, account_id: Optional[int] = None, **cfg) -> dict:
+                        model: str = DEFAULT_MODEL, http=None,
+                        approved: Optional[bool] = None,
+                        account_id: Optional[int] = None, **cfg) -> dict:
     """
     Never raises. The interface orchestrator.generate_render calls --
     identical in signature and result shape to runway.generate_candidates
@@ -694,7 +728,7 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *,
             return {"ok": False, "candidates": [],
                     "error": "Higgsfield not configured — "
                              "HIGGSFIELD_API_KEY_ID / _SECRET are unset"}
-        if not spend_approved():
+        if not spend_approved(approved):
             return {"ok": False, "candidates": [],
                     "error": f"credit spend not approved: generate in the "
                              f"Higgsfield app, or set {SPEND_ENV}=1 to approve "
@@ -724,7 +758,8 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *,
             out_path = out_dir / f"cand{i}.mp4"
             try:
                 generate_video(prompt, out_path, model=model, http=http,
-                               db_path=db_path, account_id=account_id, **cfg)
+                               db_path=db_path, approved=approved,
+                               account_id=account_id, **cfg)
             except Exception as e:
                 errors.append(f"candidate {i}: {_safe_error(e, account_id)}")
                 continue
@@ -766,9 +801,15 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                       resolution: str = DEFAULT_RESOLUTION,
                       resolve_photo=None,
                       http=None,
+                      approved: Optional[bool] = None,
                       account_id: Optional[int] = None,
+                      part: Optional[int] = None,
 ) -> dict:
     """
+    `part` (2026-09-10) renders ONE shot of a timed scene -- its composed
+    prompt, anchored on its own still, attached to that part (see
+    src/timeline.py). None is the whole scene, exactly as before.
+
     Never raises: {"ok", "media_url", "generation_id", "path", "error"}.
     One render for one concept shot, through every wall this module has
     -- the spend gate lives inside generate_video, so this layer cannot
@@ -802,19 +843,24 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                      if s.get("n") == shot_n), None)
         if shot is None:
             return {"ok": False, "error": f"concept {concept_id} has no shot {shot_n}"}
-        prompt = (shot.get("prompt") or "").strip()
+        from . import timeline
+        target = timeline.render_target(shot, part)
+        if target is None:
+            return {"ok": False, "error": f"shot {shot_n} has no part {part}"}
+        prompt = target["prompt"]
         if not prompt:
             return {"ok": False,
                     "error": f"shot {shot_n} has no AI prompt to render from"}
 
-        image_url = as_image_url(shot.get("reference_image"),
+        image_url = as_image_url(target["reference_image"],
                                  resolve_photo=resolve_photo)
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-        out_path = RENDER_DIR / f"c{concept_id}-s{shot_n}-{stamp}.mp4"
+        out_path = RENDER_DIR / f"c{concept_id}-s{shot_n}{f'-p{part}' if part else ''}-{stamp}.mp4"
         generate_video(prompt, out_path, model=model, image_url=image_url,
                        duration=duration, resolution=resolution,
-                       http=http, db_path=db_path, account_id=account_id)
+                       http=http, db_path=db_path, approved=approved,
+                       account_id=account_id)
 
         shot_row_id = _shot_row_for_prompt(
             prompt, db_path, "auto-created by higgsfield.generate_for_shot",
@@ -826,6 +872,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                     # default -- see runway.generate_for_shot
                     "duration": duration, "resolution": resolution,
                     "concept_id": concept_id, "shot_n": shot_n,
+                    **({"part": part} if part else {}),
                     "prompt_image": bool(image_url),
                     "key_source": account_keys.key_source(
                         account_id, "higgsfield", db_path)},
@@ -834,7 +881,11 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
             **kwargs,
          account_id=account_id)
         media_url = _publish(out_path, "video/mp4")
-        preprod.set_shot_media_url(concept_id, shot_n, media_url, **kwargs, account_id=account_id)
+        if part:
+            timeline.attach_part(concept_id, shot_n, part, "media_url", media_url,
+                                 db_path=db_path, account_id=account_id)
+        else:
+            preprod.set_shot_media_url(concept_id, shot_n, media_url, **kwargs, account_id=account_id)
         return {"ok": True, "media_url": media_url,
                 "generation_id": generation_id, "path": str(out_path),
                 "error": None}
@@ -845,6 +896,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
 def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
                          model: str = DEFAULT_MODEL, resolve_photo=None,
                          http=None,
+                         approved: Optional[bool] = None,
                          account_id: Optional[int] = None,
 ) -> dict:
     """
@@ -878,7 +930,8 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"wf-{stamp}.mp4"
         generate_video(prompt, out_path, model=model, image_url=image_url,
-                       http=http, db_path=db_path, account_id=account_id)
+                       http=http, db_path=db_path, approved=approved,
+                       account_id=account_id)
 
         shot_row_id = _shot_row_for_prompt(
             prompt, db_path, "auto-created by higgsfield.generate_from_prompt",

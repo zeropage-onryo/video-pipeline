@@ -20,9 +20,15 @@ Unlimited/Max plan; API calls always burn API credits, a separate
 balance from the app subscription ("web app credits will never appear
 in your API credits" -- help.runwayml.com, checked 2026-08-12). So the
 cheap path is the app, and the API is a deliberate spend:
-- RUNWAY_SPEND_OK=1 must be set or generate_video raises -- the default
-  answer is "render it in the Runway app for free". Set it per run,
-  never in .env, so every credit spend is an explicit human approval.
+- THE APPROVAL IS THE CLICK (2026-09-09, Mike's call). generate_video
+  refuses unless the caller passes approved=True, which the routes a
+  person drives do and nothing else does. RUNWAY_SPEND_OK=1 still satisfies
+  the gate when no caller says otherwise -- that is what keeps the
+  unattended paths (orchestrator, autopilot, the CLI) needing a
+  deliberate arming of their own. See spend_approved().
+  The free path is still the honest default answer to "should this be an
+  API render at all": Explore Mode in the Runway app costs nothing on
+  the Unlimited plan, and the refusal still says so.
 - DAILY_CAP (RUNWAY_DAILY_CAP, default 6) counted from the generations
   table, same wall veo.py has.
 - estimate_cost() prices a plan before anyone approves it.
@@ -33,6 +39,21 @@ SDK verified against docs.dev.runwayml.com 2026-08-12: package
 and gen4.5 (12 credits/s) at $0.01/credit, ratio "720:1280" for 9:16,
 wait_for_task_output() polls and raises TaskFailedError. Re-verify on
 SDK bump -- Runway versions these.
+
+THE REFERENCE LANE (2026-09-12). Neither gen4 model can be handed a
+reference image: the SDK types their promptImage entries as
+`position: Required[Literal["first"]]` and gives them no reference
+field, so on those two a shot's `refs` reach the clip only as pixels
+Nano baked into the keyframe. seedance2_5 is registered beside them
+because it takes references directly -- "omit position for reference
+images", with the API's own warning that "the two modes cannot be
+mixed", which is why build_prompt_image is the one place that decides
+and reference_mode() decides it by the shot's position in the scene.
+It is dearer by a lot (20/30/68 credits/s at 480p/720p/1080p against
+gen4_turbo's flat 5, 80-credit floor per generation) and roomier by a
+lot (15000 prompt characters against 1000). Nothing switches to it on
+its own: the Queue passes a model a person picked, and RUNWAY_MODEL
+is what changes the default.
 """
 from __future__ import annotations
 
@@ -57,6 +78,13 @@ from .shot import Shot
 MODELS = tuple(render_specs.RUNWAY_MODELS)
 DEFAULT_MODEL = os.environ.get("RUNWAY_MODEL", "gen4_turbo")   # cheapest first spend
 DEFAULT_RATIO = render_specs.RATIO_9_16   # 9:16, the platform vertical
+# The model a render switches to when the point of the shot is its
+# reference photos. NOT applied automatically: the Queue passes an
+# explicit `model=` that a person chose, and overriding that from inside
+# the adapter is the silent-substitution failure this repo keeps writing
+# tests against. Set RUNWAY_MODEL=seedance2_5 to make the reference lane
+# the default for everything instead.
+REFERENCE_MODEL = os.environ.get("RUNWAY_REFERENCE_MODEL", "seedance2_5")
 DEFAULT_DURATION = 5
 DAILY_CAP = int(os.environ.get("RUNWAY_DAILY_CAP", "6"))
 # The installation-wide wall, beside the per-account one. Defaults to the
@@ -71,6 +99,23 @@ SPEND_ENV = "RUNWAY_SPEND_OK"
 CREDIT_USD = 0.01
 CREDITS_PER_SECOND = {"gen4_turbo": 5, "gen4.5": 12}
 
+# Seedance 2.5 prices by OUTPUT RESOLUTION, not by model name
+# (docs.dev.runwayml.com/guides/pricing, checked 2026-09-12): 20 credits/s
+# at 480p, 30 at 720p, 68 at 1080p, with an 80-credit floor on any single
+# generation. A flat entry in CREDITS_PER_SECOND would have priced a
+# 1080p reference render at under half its real cost, which is the number
+# a person reads before approving the spend. The frame names its tier
+# through render_specs.seedance_tier -- NOT through the short side of the
+# ratio, which does not identify it: 992:432 is a 480p frame and 752:560
+# is another, so any arithmetic shortcut here misprices real frames.
+SEEDANCE_CREDITS_BY_TIER = {"480p": 20, "720p": 30, "1080p": 68}
+SEEDANCE_MIN_CREDITS = 80
+# Which registered models bill off that table. Derived from the registry
+# rather than listed twice: a model added to render_specs without a rate
+# here would otherwise price at the gen4 ceiling and read as plausible.
+SEEDANCE_MODELS = frozenset(
+    name for name in render_specs.RUNWAY_MODELS if name.startswith("seedance"))
+
 # promptText caps, straight off the runwayml SDK's own type definitions.
 # Both models this project uses take 1000 characters; the roomier ones
 # (seedance2 at 3500, seedance2_5 at 15000) are named in the error so a
@@ -79,7 +124,7 @@ CREDITS_PER_SECOND = {"gen4_turbo": 5, "gen4.5": 12}
 # list LAST -- silently truncating would drop exactly the constraints
 # the look depends on, so an over-long prompt refuses instead, before
 # any credit is spent (2026-08-29).
-PROMPT_LIMITS = {"gen4_turbo": 1000, "gen4.5": 1000}
+PROMPT_LIMITS = {"gen4_turbo": 1000, "gen4.5": 1000, "seedance2_5": 15000}
 DEFAULT_PROMPT_LIMIT = 1000
 
 
@@ -150,10 +195,33 @@ def safe_prompt(prompt: str, db_path=None) -> str:
     return text
 
 
-def spend_approved() -> bool:
-    """The human approval for burning API credits. Per-run by design:
-    set RUNWAY_SPEND_OK=1 on the command, not in .env -- an approval
-    that's always on isn't an approval."""
+def spend_approved(approved: Optional[bool] = None) -> bool:
+    """Is this ONE call approved to spend?
+
+    THE APPROVAL IS THE CLICK NOW (2026-09-09, Mike's call). It used to
+    be RUNWAY_SPEND_OK=1 in the process environment, set per run on the command
+    and never in .env -- "an approval that's always on isn't an
+    approval". That reasoning was right about what an approval IS and
+    wrong about where this one lives: the person approving a render is
+    standing at the Queue pressing a priced button, and making them
+    restart the server with an environment variable to make that button
+    work meant the variable ended up set for the whole session anyway --
+    an approval that was always on, arrived at the long way round.
+
+    So the approval became an ARGUMENT. `approved=True` is passed by the
+    routes a human drives and by nothing else, which is what the env var
+    was really standing in for. The check still lives inside
+    generate_video, so no caller can spend around it.
+
+    The environment variable still satisfies the gate when no caller
+    says otherwise. That is deliberate and it is what keeps the
+    unattended paths exactly as safe as they were: orchestrator.py and
+    autopilot.py pass no approval, so a nightly run still needs
+    RUNWAY_SPEND_OK=1 set for it on purpose, on top of its own flags. Same for
+    the CLI and the ops scripts.
+    """
+    if approved is not None:
+        return bool(approved)
     return (os.environ.get(SPEND_ENV) or "").strip() == "1"
 
 
@@ -179,10 +247,41 @@ def _safe_error(e: Exception, account_id: Optional[int] = None) -> str:
     return re.sub(r"(Bearer\s+)[A-Za-z0-9_\-.]+", r"\1<redacted>", text)
 
 
+def takes_references(model: str = DEFAULT_MODEL) -> bool:
+    """Whether this model can be handed reference images at all."""
+    return render_specs.takes_references("runway", model)
+
+
+def credits_per_second(model: str = DEFAULT_MODEL, ratio: str = DEFAULT_RATIO) -> int:
+    """The rate one second of this render bills at.
+
+    A flat per-model number for the gen4 pair, a per-resolution one for
+    Seedance. An unknown model costs the MOST this module knows about
+    rather than the least: an estimate a person approves against should
+    err high, because the failure mode of erring low is a spend that was
+    never really agreed to."""
+    flat = CREDITS_PER_SECOND.get(model)
+    if flat is not None:
+        return flat
+    if model in SEEDANCE_MODELS:
+        tier = render_specs.seedance_tier(ratio)
+        return SEEDANCE_CREDITS_BY_TIER.get(
+            tier, max(SEEDANCE_CREDITS_BY_TIER.values()))
+    return max(max(CREDITS_PER_SECOND.values()),
+               max(SEEDANCE_CREDITS_BY_TIER.values()))
+
+
 def estimate_cost(n: int, *, model: str = DEFAULT_MODEL,
-                  duration: int = DEFAULT_DURATION) -> float:
-    per_second = CREDITS_PER_SECOND.get(model, max(CREDITS_PER_SECOND.values()))
-    return round(n * duration * per_second * CREDIT_USD, 2)
+                  duration: int = DEFAULT_DURATION,
+                  ratio: str = DEFAULT_RATIO) -> float:
+    """What `n` clips of this shape cost, in dollars, before anyone
+    approves them. `ratio` is accepted (and defaulted) rather than
+    required so every existing caller keeps working -- it only changes
+    the answer on a model whose rate card is per-resolution."""
+    credits = duration * credits_per_second(model, ratio)
+    if model in SEEDANCE_MODELS:
+        credits = max(credits, SEEDANCE_MIN_CREDITS)
+    return round(n * credits * CREDIT_USD, 2)
 
 
 def generations_today(db_path=None, *, account_id=None, everyone: bool = False) -> int:
@@ -227,7 +326,8 @@ def _download(url: str, out_path: Path) -> None:
 
 def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
                    ratio: str = DEFAULT_RATIO, duration: int = DEFAULT_DURATION,
-                   prompt_image=None, client=None, db_path=None,
+                   prompt_image=None, references=None, client=None, db_path=None,
+                   approved: Optional[bool] = None,
                    account_id: Optional[int] = None) -> Path:
     """
     The thin wrapper: create -> wait -> download. Raises on anything --
@@ -235,18 +335,20 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
     caller can spend a credit around the gate. generate_candidates is
     the layer that catches.
     """
-    if not spend_approved():
+    if not spend_approved(approved):
         raise RuntimeError(
-            f"credit spend not approved: render this in the Runway app instead "
-            f"(Explore Mode, free on the Unlimited plan), or set {SPEND_ENV}=1 "
-            f"on this run to approve API credits"
+            f"credit spend not approved: this call was not approved by a person. "
+            f"Render it in the Runway app instead (Explore Mode, free on the "
+            f"Unlimited plan), approve it at the Queue, or set {SPEND_ENV}=1 for "
+            f"an unattended run."
         )
     # Name-swap first, THEN measure: an alias changes the length, and
     # what we check has to be what we send.
     prompt = safe_prompt(prompt, db_path)
     check_prompt_length(prompt, model)
     client = client or _make_client(account_id)
-    kwargs = {"prompt_image": prompt_image} if prompt_image is not None else {}
+    payload = build_prompt_image(prompt_image, references, model=model)
+    kwargs = {"prompt_image": payload} if payload is not None else {}
     task = client.image_to_video.create(
         model=model,
         prompt_text=prompt,
@@ -277,6 +379,7 @@ def _shot_row_for_prompt(prompt: str, db_path, account_id: Optional[int] = None)
 
 def generate_candidates(prompt: str, out_dir, n: int = 3, *, shot_id: Optional[int] = None,
                         db_path=None, client=None, model: str = DEFAULT_MODEL,
+                        approved: Optional[bool] = None,
                         account_id: Optional[int] = None, **cfg) -> dict:
     """
     Never raises. {"ok", "candidates": [{path, generation_id, model}],
@@ -288,7 +391,7 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *, shot_id: Optional[i
     kwargs = {"dsn": db_path} if db_path is not None else {}
 
     try:
-        if not spend_approved():
+        if not spend_approved(approved):
             return {"ok": False, "candidates": [],
                     "error": f"credit spend not approved: render in the Runway app "
                              f"(Explore Mode, free) or set {SPEND_ENV}=1 to approve "
@@ -316,7 +419,8 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *, shot_id: Optional[i
             out_path = out_dir / f"cand{i}.mp4"
             try:
                 generate_video(prompt, out_path, model=model, client=client,
-                               db_path=db_path, account_id=account_id, **cfg)
+                               db_path=db_path, approved=approved,
+                               account_id=account_id, **cfg)
             except Exception as e:
                 errors.append(f"candidate {i}: {_safe_error(e, account_id)}")
                 continue
@@ -415,14 +519,98 @@ def as_prompt_image(value, *, resolve_photo=None):
     return as_prompt_image(data) if data else None
 
 
+def reference_mode(part) -> bool:
+    """Whether this shot renders in REFERENCE mode rather than anchored on
+    its keyframe. The API makes this either/or -- "use position first/last
+    for keyframe mode, or omit position for reference images; the two
+    modes cannot be mixed" -- so something has to decide, once, per shot.
+
+    The split (2026-09-12, Mike's call) is by position in the scene:
+
+    - A single-shot scene (`part is None`) and the FIRST part of a
+      timeline render in reference mode. Nothing upstream of them has to
+      match, so what the photos show is worth more than a locked frame.
+    - Part 2 and after keep the keyframe. `_keyframe_timeline` draws each
+      part's still from the previous one (CONTINUITY_REF_LABEL) precisely
+      so shot four still looks like shot one; handing those parts loose
+      references instead would throw away the chain that exists to stop
+      the look drifting, which is the failure the timeline was built to
+      fix in the first place."""
+    if part is None:
+        return True
+    try:
+        return int(part) <= 1
+    except (TypeError, ValueError):
+        return False
+
+
+def build_prompt_image(anchor=None, references=None, *, model: str = DEFAULT_MODEL):
+    """The `promptImage` payload for one call, and the single place the
+    API's either/or is enforced.
+
+    No references -> the bare string every gen4 render has always sent,
+    unchanged down to the type, so the keyframe path is byte-for-byte what
+    it was. With references -> the array form with NO `position` on any
+    entry, because one positioned entry would put the request in keyframe
+    mode and the API rejects the mix.
+
+    The anchor is not discarded in reference mode, it is demoted: it rides
+    along as the FIRST reference. It is still the only image composed for
+    this shot specifically, so it is worth more than the photos it was
+    composed from -- it just stops being a guarantee about frame one.
+    Raises on a model that cannot read references at all: that is a
+    programming error at the call site, not a render to attempt and
+    silently under-deliver."""
+    refs = [r for r in (references or []) if r]
+    if not refs:
+        return anchor
+    if not takes_references(model):
+        raise ValueError(
+            f"{model} cannot take reference images -- its promptImage entries are "
+            f"position:'first' only. Render on {REFERENCE_MODEL} (or any model "
+            f"render_specs marks references:True), or pass references=None and "
+            f"let the keyframe carry the look.")
+    uris, seen = [], set()
+    for uri in ([anchor] if anchor else []) + refs:
+        if uri and uri not in seen:
+            seen.add(uri)
+            uris.append(uri)
+    return [{"uri": uri} for uri in uris]
+
+
+def reference_uris(target: dict, part, model: str, *, resolve_photo=None) -> list:
+    """This shot's stored refs as things the API can read -- empty
+    whenever they would not actually be sent, so the caller can record the
+    count and have it mean what it says.
+
+    Empty on a model that cannot carry them and empty in keyframe mode:
+    in both cases the photos still reach the render, just through the
+    keyframe's pixels the way they always have. A ref that will not
+    resolve is dropped here exactly as as_prompt_image drops an anchor."""
+    if not takes_references(model) or not reference_mode(part):
+        return []
+    out = []
+    for url in target.get("refs") or []:
+        uri = as_prompt_image(url, resolve_photo=resolve_photo)
+        if uri:
+            out.append(uri)
+    return out
+
+
 def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                       model: str = DEFAULT_MODEL, client=None,
                       duration: int = DEFAULT_DURATION,
                       ratio: str = DEFAULT_RATIO,
                       resolve_photo=None,
+                      approved: Optional[bool] = None,
                       account_id: Optional[int] = None,
+                      part: Optional[int] = None,
 ) -> dict:
     """
+    `part` (2026-09-10) renders ONE shot of a timed scene -- its composed
+    prompt, anchored on its own still, attached to that part (see
+    src/timeline.py). None is the whole scene, exactly as before.
+
     Never raises: {"ok", "media_url", "generation_id", "error"}. One
     render for one concept shot, through every wall this module already
     has -- the spend gate lives inside generate_video, so this layer
@@ -463,22 +651,32 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                      if s.get("n") == shot_n), None)
         if shot is None:
             return {"ok": False, "error": f"concept {concept_id} has no shot {shot_n}"}
-        prompt = (shot.get("prompt") or "").strip()
+        from . import timeline
+        target = timeline.render_target(shot, part)
+        if target is None:
+            return {"ok": False, "error": f"shot {shot_n} has no part {part}"}
+        prompt = target["prompt"]
         if not prompt:
             return {"ok": False,
                     "error": f"shot {shot_n} has no AI prompt to render from"}
 
         # the keyframe (or picked photo) this shot anchors on, turned
         # into something the API can read -- see as_prompt_image
-        prompt_image = as_prompt_image(shot.get("reference_image"),
+        prompt_image = as_prompt_image(target["reference_image"],
                                        resolve_photo=resolve_photo)
+        # The shot's own reference photos, carried into the render itself
+        # rather than only into the keyframe that was drawn from them.
+        # Empty in keyframe mode and on a gen4 model -- see reference_uris.
+        references = reference_uris(target, part, model,
+                                    resolve_photo=resolve_photo)
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-        out_path = RENDER_DIR / f"c{concept_id}-s{shot_n}-{stamp}.mp4"
+        out_path = RENDER_DIR / f"c{concept_id}-s{shot_n}{f'-p{part}' if part else ''}-{stamp}.mp4"
         generate_video(prompt, out_path, model=model,
                        duration=duration, ratio=ratio,
-                       prompt_image=prompt_image, client=client,
-                       db_path=db_path, account_id=account_id)
+                       prompt_image=prompt_image, references=references,
+                       client=client, db_path=db_path, approved=approved,
+                       account_id=account_id)
 
         shot_row_id = _shot_row_for_prompt(prompt, db_path, account_id)
         # what was ACTUALLY asked for, not the module defaults: the
@@ -488,14 +686,22 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
         generation_params = {"model": model, "ratio": ratio,
                              "duration": duration,
                              "concept_id": concept_id, "shot_n": shot_n,
+                             **({"part": part} if part else {}),
                              "prompt_image": bool(prompt_image),
+                             # How many photos actually rode along, and
+                             # whether the anchor was a locked first frame
+                             # or demoted to a reference. A row reading 0
+                             # on a shot that HAS refs is the honest record
+                             # of a gen4 render, not a silence.
+                             "references": len(references),
+                             "reference_mode": bool(references),
                              "key_source": account_keys.key_source(
                                  account_id, "runway", db_path)}
         generation_id = generative.record_generation(
             shot_row_id, "runway", prompt,
             params=generation_params,
             output_path=str(out_path),
-            cost_usd=estimate_cost(1, model=model, duration=duration),
+            cost_usd=estimate_cost(1, model=model, duration=duration, ratio=ratio),
             **kwargs,
          account_id=account_id)
 
@@ -506,7 +712,11 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
         else:
             media_url = f"/renders/runway/{out_path.name}"
 
-        preprod.set_shot_media_url(concept_id, shot_n, media_url, **kwargs, account_id=account_id)
+        if part:
+            timeline.attach_part(concept_id, shot_n, part, "media_url", media_url,
+                                 db_path=db_path, account_id=account_id)
+        else:
+            preprod.set_shot_media_url(concept_id, shot_n, media_url, **kwargs, account_id=account_id)
         asset = render_assets.record_best_effort(
             account_id=account_id,
             generation_id=generation_id, tool="runway", model=model,
@@ -526,6 +736,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
 
 def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
                          model: str = DEFAULT_MODEL, client=None,
+                         approved: Optional[bool] = None,
                          account_id: Optional[int] = None,
 ) -> dict:
     """
@@ -571,7 +782,7 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
         out_path = RENDER_DIR / f"wf-{stamp}.mp4"
         generate_video(prompt, out_path, model=model,
                        prompt_image=prompt_image, client=client,
-                       db_path=db_path, account_id=account_id)
+                       db_path=db_path, approved=approved, account_id=account_id)
 
         shot_row_id = _shot_row_for_prompt(prompt, db_path, account_id)
         generation_params = {"model": model, "ratio": DEFAULT_RATIO,

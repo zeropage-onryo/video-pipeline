@@ -32,8 +32,12 @@ Layers, higgsfield.py's exactly (which is runway.py's):
                         entries pretending to be four vendors.
 
 THE SPEND GATE, same order and same semantics as higgsfield/runway:
-- FAL_SPEND_OK=1 per run or generate_video raises. Set it on the command,
-  never in .env -- an approval that is always on is not an approval.
+- THE APPROVAL IS THE CLICK (2026-09-09, Mike's call). generate_video
+  refuses unless the caller passes approved=True, which the routes a
+  person drives do and nothing else does. FAL_SPEND_OK=1 still satisfies
+  the gate when no caller says otherwise -- that is what keeps the
+  unattended paths (orchestrator, autopilot, the CLI) needing a
+  deliberate arming of their own. See spend_approved().
   Unlike Runway and Higgsfield there is no free app to fall back to here:
   fal is an API company, so the refusal points at the estimate instead of
   at a cheaper door.
@@ -373,9 +377,33 @@ def has_key(account_id: Optional[int] = None) -> bool:
     return _credential(account_id) is not None
 
 
-def spend_approved() -> bool:
-    """The human approval for spending at fal. Per-run by design: set
-    FAL_SPEND_OK=1 on the command, not in .env."""
+def spend_approved(approved: Optional[bool] = None) -> bool:
+    """Is this ONE call approved to spend?
+
+    THE APPROVAL IS THE CLICK NOW (2026-09-09, Mike's call). It used to
+    be FAL_SPEND_OK=1 in the process environment, set per run on the command
+    and never in .env -- "an approval that's always on isn't an
+    approval". That reasoning was right about what an approval IS and
+    wrong about where this one lives: the person approving a render is
+    standing at the Queue pressing a priced button, and making them
+    restart the server with an environment variable to make that button
+    work meant the variable ended up set for the whole session anyway --
+    an approval that was always on, arrived at the long way round.
+
+    So the approval became an ARGUMENT. `approved=True` is passed by the
+    routes a human drives and by nothing else, which is what the env var
+    was really standing in for. The check still lives inside
+    generate_video, so no caller can spend around it.
+
+    The environment variable still satisfies the gate when no caller
+    says otherwise. That is deliberate and it is what keeps the
+    unattended paths exactly as safe as they were: orchestrator.py and
+    autopilot.py pass no approval, so a nightly run still needs
+    FAL_SPEND_OK=1 set for it on purpose, on top of its own flags. Same for
+    the CLI and the ops scripts.
+    """
+    if approved is not None:
+        return bool(approved)
     return (os.environ.get(SPEND_ENV) or "").strip() == "1"
 
 
@@ -635,17 +663,19 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
                    resolution: Optional[str] = None,
                    negative_prompt: str = "",
                    http=None, db_path=None,
+                   approved: Optional[bool] = None,
                    account_id: Optional[int] = None) -> Path:
     """
     The thin wrapper: submit -> poll -> fetch -> download. Raises on
     anything, including a missing spend approval, which is checked HERE so
     no caller can spend around the gate.
     """
-    if not spend_approved():
+    if not spend_approved(approved):
         raise RuntimeError(
-            f"spend not approved: set {SPEND_ENV}=1 on this run to approve "
-            f"~${estimate_cost(1, model=model, duration=duration, resolution=resolution)} "
-            f"at fal ({model})"
+            f"spend not approved: this call was not approved by a person. "
+            f"Approve it at the Queue, or set {SPEND_ENV}=1 for an unattended run "
+            f"(~${estimate_cost(1, model=model, duration=duration, resolution=resolution)} "
+            f"at fal, {model}). There is no free app to fall back to here."
         )
     # Name-swap first, THEN build the body: what we check has to be what
     # we send.
@@ -668,16 +698,18 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
 def generate_image(prompt: str, out_path, *, model: str = DEFAULT_IMAGE_MODEL,
                    width: int = 1024, height: int = 1024,
                    http=None, db_path=None,
+                   approved: Optional[bool] = None,
                    account_id: Optional[int] = None) -> Path:
     """A FLUX still, same queue and same walls. Separate from the video
     path on purpose -- it shares the transport, not the contract."""
     spec = IMAGE_MODELS.get(model)
     if spec is None:
         raise ValueError(f"image model must be one of {IMAGE_MODEL_NAMES}, got {model!r}")
-    if not spend_approved():
+    if not spend_approved(approved):
         raise RuntimeError(
-            f"spend not approved: set {SPEND_ENV}=1 on this run to approve "
-            f"~${estimate_image_cost(1)} at fal ({model})")
+            f"spend not approved: this call was not approved by a person. "
+            f"Approve it at the Queue, or set {SPEND_ENV}=1 for an unattended run "
+            f"(~${estimate_image_cost(1)} at fal, {model})")
     prompt = safe_prompt(prompt, db_path)
     body = {"prompt": prompt}
     if "width" in spec["params"]:
@@ -737,6 +769,7 @@ def _cap_refusal(n: int, db_path, account_id):
 def generate_candidates(prompt: str, out_dir, n: int = 3, *,
                         shot_id: Optional[int] = None, db_path=None,
                         model: str = DEFAULT_MODEL, http=None,
+                        approved: Optional[bool] = None,
                         account_id: Optional[int] = None, **cfg) -> dict:
     """
     Never raises. The interface orchestrator.generate_render calls --
@@ -768,7 +801,7 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *,
         if not has_key(account_id):
             return {"ok": False, "candidates": [],
                     "error": "fal not configured — FAL_KEY is unset"}
-        if not spend_approved():
+        if not spend_approved(approved):
             return {"ok": False, "candidates": [],
                     "error": f"spend not approved: set {SPEND_ENV}=1 to approve "
                              f"~${estimate_cost(n, model=model, duration=duration)} "
@@ -791,7 +824,8 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *,
             out_path = out_dir / f"cand{i}.mp4"
             try:
                 generate_video(prompt, out_path, model=model, http=http,
-                               db_path=db_path, account_id=account_id, **cfg)
+                               db_path=db_path, approved=approved,
+                               account_id=account_id, **cfg)
             except Exception as e:
                 errors.append(f"candidate {i}: {_safe_error(e, account_id)}")
                 continue
@@ -833,9 +867,15 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                       duration: int = DEFAULT_DURATION,
                       resolution: Optional[str] = None,
                       resolve_photo=None, http=None,
+                      approved: Optional[bool] = None,
                       account_id: Optional[int] = None,
+                      part: Optional[int] = None,
 ) -> dict:
     """
+    `part` (2026-09-10) renders ONE shot of a timed scene -- its composed
+    prompt, anchored on its own still, attached to that part (see
+    src/timeline.py). None is the whole scene, exactly as before.
+
     Never raises: {"ok", "media_url", "generation_id", "path", "error"}.
     One render for one concept shot -- runway.generate_for_shot's contract
     on this vendor, so the Queue's approve can dispatch to either without
@@ -872,7 +912,11 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                      if s.get("n") == shot_n), None)
         if shot is None:
             return {"ok": False, "error": f"concept {concept_id} has no shot {shot_n}"}
-        prompt = (shot.get("prompt") or "").strip()
+        from . import timeline
+        target = timeline.render_target(shot, part)
+        if target is None:
+            return {"ok": False, "error": f"shot {shot_n} has no part {part}"}
+        prompt = target["prompt"]
         if not prompt:
             return {"ok": False,
                     "error": f"shot {shot_n} has no AI prompt to render from"}
@@ -881,14 +925,15 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
         # image_url server-side, so a local keyframe with no R2 behind it
         # is dropped and prompt_image records False -- nothing downstream
         # gets to claim an anchor that never left the building.
-        image_url = as_image_url(shot.get("reference_image"),
+        image_url = as_image_url(target["reference_image"],
                                  resolve_photo=resolve_photo)
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-        out_path = RENDER_DIR / f"c{concept_id}-s{shot_n}-{stamp}.mp4"
+        out_path = RENDER_DIR / f"c{concept_id}-s{shot_n}{f'-p{part}' if part else ''}-{stamp}.mp4"
         generate_video(prompt, out_path, model=model, image_url=image_url,
                        duration=duration, resolution=resolution,
-                       http=http, db_path=db_path, account_id=account_id)
+                       http=http, db_path=db_path, approved=approved,
+                       account_id=account_id)
 
         platform = model_spec(model)["platform"]
         shot_row_id = _shot_row_for_prompt(
@@ -897,6 +942,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                              "duration": duration,
                              "resolution": resolution or model_spec(model)["default_resolution"],
                              "concept_id": concept_id, "shot_n": shot_n,
+                             **({"part": part} if part else {}),
                              "prompt_image": bool(image_url),
                              "key_source": account_keys.key_source(
                                  account_id, "fal", db_path)}
@@ -910,8 +956,12 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
             account_id=account_id)
 
         media_url = _publish(out_path, "video/mp4")
-        preprod.set_shot_media_url(concept_id, shot_n, media_url,
-                                   **kwargs, account_id=account_id)
+        if part:
+            timeline.attach_part(concept_id, shot_n, part, "media_url", media_url,
+                                 db_path=db_path, account_id=account_id)
+        else:
+            preprod.set_shot_media_url(concept_id, shot_n, media_url,
+                                       **kwargs, account_id=account_id)
         asset = render_assets.record_best_effort(
             account_id=account_id,
             generation_id=generation_id, tool=platform, model=model,
@@ -931,7 +981,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
 
 def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
                          model: str = DEFAULT_MODEL, resolve_photo=None,
-                         http=None,
+                         http=None, approved: Optional[bool] = None,
                          account_id: Optional[int] = None) -> dict:
     """
     Never raises: {"ok", "media_url", "generation_id", "path", "error"}.
@@ -957,7 +1007,8 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"wf-{stamp}.mp4"
         generate_video(prompt, out_path, model=model, image_url=image_url,
-                       http=http, db_path=db_path, account_id=account_id)
+                       http=http, db_path=db_path, approved=approved,
+                       account_id=account_id)
 
         shot_row_id = _shot_row_for_prompt(
             prompt, db_path, "auto-created by fal.generate_from_prompt", account_id)
@@ -981,6 +1032,7 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
 
 def generate_image_from_prompt(prompt: str, *, db_path=None, http=None,
                                model: str = DEFAULT_IMAGE_MODEL,
+                               approved: Optional[bool] = None,
                                account_id: Optional[int] = None) -> dict:
     """
     Never raises: {"ok", "media_url", "generation_id", "path", "error"}.
@@ -1009,7 +1061,7 @@ def generate_image_from_prompt(prompt: str, *, db_path=None, http=None,
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"flux-{stamp}.jpg"
         generate_image(prompt, out_path, model=model, http=http,
-                       db_path=db_path, account_id=account_id)
+                       db_path=db_path, approved=approved, account_id=account_id)
 
         shot_row_id = _shot_row_for_prompt(
             prompt, db_path, "auto-created by fal.generate_image_from_prompt",
@@ -1080,8 +1132,8 @@ class _PlatformConnector:
         kw.setdefault("model", self.model)
         return estimate_cost(n, **kw)
 
-    def spend_approved(self):
-        return spend_approved()
+    def spend_approved(self, approved: Optional[bool] = None):
+        return spend_approved(approved)
 
     def has_key(self, account_id: Optional[int] = None):
         return has_key(account_id)

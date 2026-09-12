@@ -193,9 +193,15 @@ def update_media_url(id: int, media_url: str, dsn: Optional[str] = None, *,
 
 def list_all(dsn: Optional[str] = None, *,
              account_id: Optional[int]) -> list[dict[str, Any]]:
-    """This account's generated assets, newest first."""
-    init(dsn)
+    """This account's generated assets, newest first, without schema writes.
+
+    Startup and record() initialize the table. Repeating init() here takes
+    schema locks and backfills ownership on every GET; simultaneous Assets
+    and Media requests can deadlock while upgrading those locks.
+    """
     with db.connect(dsn) as conn:
+        if not db.table_exists(conn, "generated_assets"):
+            return []
         rows = conn.execute(
             "SELECT * FROM generated_assets WHERE account_id IS NOT DISTINCT FROM %s ORDER BY id DESC",
             (account_id,),

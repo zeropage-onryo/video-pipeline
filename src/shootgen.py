@@ -24,7 +24,7 @@ from typing import Optional
 from dotenv import load_dotenv
 from google import genai
 
-from . import accounts, crag, entities, looks, preprod, rag
+from . import accounts, crag, entities, gemini_utils, looks, preprod, rag
 from . import shot as shot_module
 from .db import init_db
 from .gemini_utils import generate_with_retry, strip_fences
@@ -32,7 +32,26 @@ from .gemini_utils import generate_with_retry, strip_fences
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS_DIR = PROJECT_ROOT / "prompts"
 
-MODEL = "gemini-3-flash-preview"
+# The fast tier's id, and ONE literal for it: gemini_utils.BRAINS is the
+# table the composer's picker and the night both resolve through, and a
+# second copy of the model name here is how they drift (2026-09-09).
+MODEL = gemini_utils.FAST_MODEL
+
+
+def brain_call(model: str, brain=None):
+    """(model, config, fallbacks) for one generate_with_retry call.
+
+    A `brain` is the named tier (gemini_utils.BRAINS) and WINS over an
+    explicit `model=`, because it is the more specific request: a caller
+    that names a tier is asking for a posture -- which model, how hard it
+    thinks, and whether a cheaper one may stand in -- and honouring half
+    of that would be worse than honouring none. `brain=None` is the
+    default everywhere, and returns exactly what this module has always
+    sent: the caller's model, no config, the standard fallback chain."""
+    if not brain:
+        return model, None, None
+    spec = gemini_utils.resolve_brain(brain)
+    return spec["model"], spec["config"], spec["fallbacks"]
 
 DEFAULT_IDEA_COUNT = 5
 SHOT_TYPES = ("CHARACTER", "BROLL")
@@ -1215,14 +1234,22 @@ Bad:  "Michael discovers a massive cyclops curiously inspecting his Ducati Panig
 
 
 def build_scene_brief_prompt(brand: str, spark=None, references: str = "",
-                             cast=None) -> str:
+                             cast=None, seconds=None) -> str:
     """The winning skeleton: one cohesive whole-scene prompt (character refs
     -> grounded style -> beats -> diegetic sound -> avoid-list), matched
-    against the gold-standard exemplar."""
+    against the gold-standard exemplar.
+
+    `seconds` is the scene's total length (timeline.scene_seconds -- the
+    composer's select, else ZEROPAGE_SCENE_SECONDS, else 10). Every template
+    placeholder is filled, so the writer is never told to "fit the
+    requested duration" with no duration in front of it -- which is what
+    the first multi-scene draft of this template did (2026-09-10)."""
+    from . import timeline
     template = (PROMPTS_DIR / "scene_brief_prompt.txt").read_text()
     example = gold_standard_example() or "(no gold-standard example on file)"
     return (template
             .replace("{card_line_rules}", CARD_LINE_RULES)
+            .replace("{seconds}", str(timeline.scene_seconds(seconds)))
             .replace("{brand}", load_brand(brand))
             .replace("{look}", looks.look_block(brand))
             .replace("{spark}", f"CREATIVE SPARK FROM THE FILMMAKER: {spark}" if spark else "")
@@ -1256,6 +1283,8 @@ def generate_scene_concept(brand: str, spark=None, steer: str = "",
                            db_path=None, tool: str = DEFAULT_SCENE_TOOL,
                            image_refs=None,
                            account_id: Optional[int] = None,
+                           brain=None,
+                           seconds=None,
 ) -> dict:
     """
     A concept IS one scene, and the scene IS one prompt (2026-08-26).
@@ -1292,8 +1321,10 @@ def generate_scene_concept(brand: str, spark=None, steer: str = "",
     # avoid-list hashed differently, so novelty silently stopped working
     # for every graph-generated row.
     steered = f"{spark or ''}\n{steer}".strip() if steer else spark
+    from . import timeline
+    seconds = timeline.scene_seconds(seconds)
     prompt = build_scene_brief_prompt(brand, spark=steered, references=references,
-                                      cast=cast)
+                                      cast=cast, seconds=seconds)
     if image_refs:
         prompt += IMAGE_REFS_NOTE
     contents = prompt
@@ -1312,16 +1343,21 @@ def generate_scene_concept(brand: str, spark=None, steer: str = "",
                 contents.append(label)
             contents.append(types.Part.from_bytes(data=data, mime_type=mime))
         contents.append(prompt)
+    call_model, call_config, call_fallbacks = brain_call(model, brain)
     parsed = parse_scene_brief_response(
-        generate_with_retry(gemini_client, model, contents, stage="concepts"))
+        generate_with_retry(gemini_client, call_model, contents, stage="concepts",
+                            config=call_config, fallbacks=call_fallbacks))
 
+    # `seconds` is the length the scene was WRITTEN to; the timeline
+    # (src/timeline.py) re-derives it from the windows the writer actually
+    # used, which is the number a render reads.
     shot = {"n": 1, "type": "BROLL", "source": "AI",
             "tool": (tool or DEFAULT_SCENE_TOOL).upper(),
             "desc": parsed["logline"] or parsed["title"],
-            "prompt": parsed["brief"]}
+            "prompt": parsed["brief"], "seconds": seconds}
     concept = {"title": parsed["title"], "hook": parsed["hook"],
                "logline": parsed["logline"], "card_line": parsed["card_line"],
-               "shots": [shot]}
+               "duration": f"{seconds}s", "shots": [shot]}
     location_names = [loc["name"] for loc in preprod.list_locations(**kwargs, account_id=account_id)]
     allowed = ZEROPAGE_AI_TOOLS if brand == "zeropage" else None
     warnings = validate_concept(concept, location_names, allowed_tools=allowed)
@@ -1376,7 +1412,7 @@ def write_card_lines(scene_prompts: dict, gemini_client=None,
 
 
 def build_scenes_prompt(idea: str, brand: str, count: int, locations: list,
-                        references: str = "", cast=None) -> str:
+                        references: str = "", cast=None, seconds=None) -> str:
     """N standalone scene prompts off ONE idea, in the same proven
     skeleton build_scene_brief_prompt uses -- the difference is plural
     and independent: these are competing takes to pick between, not
@@ -1386,11 +1422,13 @@ def build_scenes_prompt(idea: str, brand: str, count: int, locations: list,
     see format_scene_locations. An empty list is the normal case and
     means the scenes may be set anywhere.
     """
+    from . import timeline
     template = (PROMPTS_DIR / "scenes_prompt.txt").read_text()
     example = gold_standard_example() or "(no gold-standard example on file)"
     return (template
             .replace("{card_line_rules}", CARD_LINE_RULES)
             .replace("{count}", str(count))
+            .replace("{seconds}", str(timeline.scene_seconds(seconds)))
             .replace("{idea}", (idea or "").strip() or "(no idea given — surprise me)")
             .replace("{brand}", load_brand(brand))
             .replace("{cast}", cast or NO_CAST_NOTE)
@@ -1436,6 +1474,8 @@ def generate_scene_concepts(idea: str, brand: str, count: int = 4,
                             refs=None, locations=None, image_refs=None,
                             template_tag: str = "", on_retry=None,
                             account_id: Optional[int] = None,
+                            brain=None, ratio=None,
+                            seconds=None, video_parts=None,
 ) -> dict:
     """
     One idea -> N scenes to PICK BETWEEN (2026-08-26).
@@ -1455,6 +1495,11 @@ def generate_scene_concepts(idea: str, brand: str, count: int = 4,
     ride ON the shot so they reach every node of the Director chain
     later. `image_refs` are those same photos as bytes for THIS call's
     vision input.
+
+    `video_parts` (2026-09-10) are reference clips already turned into
+    Gemini parts by the caller (app/api.py video_part -- inline bytes or
+    a Files API handle). They ground the WRITING only: no renderer takes
+    a video as a reference, so they never reach the shot's `refs`.
     """
     kwargs = {"dsn": db_path} if db_path is not None else {}
     # `locations` arriving pre-computed (scene_chain.ground(), via
@@ -1469,12 +1514,14 @@ def generate_scene_concepts(idea: str, brand: str, count: int = 4,
     on_file = preprod.list_locations(**kwargs, account_id=account_id)
     if locations is None:
         locations = picked_locations(refs, on_file)
+    from . import timeline
+    seconds = timeline.scene_seconds(seconds)
     prompt = build_scenes_prompt(idea, brand, count, locations,
-                                 references=references, cast=cast)
-    if image_refs:
+                                 references=references, cast=cast, seconds=seconds)
+    if image_refs or video_parts:
         prompt += IMAGE_REFS_NOTE
     contents = prompt
-    if image_refs:
+    if image_refs or video_parts:
         from google.genai import types
         # A caption before each photo, same binding the keyframe uses.
         # This step WRITES the scene, and the scene text is what
@@ -1482,16 +1529,25 @@ def generate_scene_concepts(idea: str, brand: str, count: int = 4,
         # attached -- so a photo misread here propagates all the way to
         # the render. Refs may be (data, mime) or (data, mime, label).
         contents = []
-        for ref in image_refs:
+        for ref in image_refs or []:
             data, mime = ref[0], ref[1]
             label = ref[2] if len(ref) > 2 else ""
             if label:
                 contents.append(label)
             contents.append(types.Part.from_bytes(data=data, mime_type=mime))
+        for part in video_parts or []:
+            contents.append("Reference video:")
+            contents.append(part)
         contents.append(prompt)
+    call_model, call_config, call_fallbacks = brain_call(model, brain)
+    # Never more than were asked for: the model is told {count}, and a
+    # model that answers with more would otherwise save every extra take
+    # (prompts request, code enforces). This is what makes Studio's "one
+    # Create, one scene" true, not just the count the prompt printed.
     scenes = parse_scenes_response(
-        generate_with_retry(gemini_client, model, contents, on_retry=on_retry,
-                            stage="concepts"))
+        generate_with_retry(gemini_client, call_model, contents, on_retry=on_retry,
+                            stage="concepts", config=call_config,
+                            fallbacks=call_fallbacks))[:max(1, int(count))]
 
     # Validated against every described room, not just the picked ones:
     # a scene that names a real space it was not handed is fine, and a
@@ -1511,14 +1567,16 @@ def generate_scene_concepts(idea: str, brand: str, count: int = 4,
         shot = {"n": 1, "type": "BROLL", "source": "AI",
                 "tool": (tool or DEFAULT_SCENE_TOOL).upper(),
                 "desc": card_line or scene["title"], "prompt": scene["prompt"],
-                "refs": list(refs or [])}
+                "refs": list(refs or []), "seconds": seconds,
+                **({"ratio": ratio} if ratio else {})}
         if scene.get("location"):
             shot["location"] = scene["location"]
         # card_line is the label the board reads, never an input to a
         # render. This path writes no logline: the idea record is the
         # scene-brief writer's job, and an empty one is honest.
         concept = {"title": scene["title"], "hook": "", "logline": "",
-                   "card_line": card_line, "shots": [shot]}
+                   "card_line": card_line, "duration": f"{seconds}s",
+                   "shots": [shot]}
         warnings = validate_concept(concept, location_names, allowed_tools=allowed)
         concept_id = preprod.save_concept(
             concept, brand=brand, spark=idea, prompt_template=hashed,

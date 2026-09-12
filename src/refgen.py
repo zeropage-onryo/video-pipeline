@@ -58,7 +58,11 @@ LIKENESS_PHOTOS = tuple(p.strip() for p in os.environ.get(
     "LIKENESS_PHOTOS",
     "07-headshot-frontal-neutral.jpg,08-frontal-indoor-seated.jpg,IMG_0593.JPG",
 ).split(",") if p.strip())
-LIKENESS_MODEL = os.environ.get("NANO_LIKENESS_MODEL", "gemini-3-pro-image-preview")
+# Pro, because a face is what this path exists to get right. The GA id, not
+# the preview: both were on this account's models.list on 2026-09-12, and the
+# preview is the one that can be retired under a nightly run. Same price tier
+# either way ($0.134 per 1K/2K image).
+LIKENESS_MODEL = os.environ.get("NANO_LIKENESS_MODEL", "gemini-3-pro-image")
 LIKENESS_OPENER = (
     "This is the same man as in the attached reference photos: reproduce his "
     "face exactly -- same features, skin, hair, brows, and his even light "

@@ -11,7 +11,22 @@
 # as "a split, not a move." Those lanes stay on the Mac or get
 # pre-ingested to R2 first; this image only runs the web app + the two
 # scheduled jobs against Postgres (phase 4) / Supabase RAG.
+FROM node:22-bookworm-slim AS model-runtime
+RUN npm install --global @openai/codex@0.153.2
+
+FROM node:22-bookworm-slim AS frontend-build
+WORKDIR /frontend
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN npm run build
+
 FROM python:3.11-slim
+COPY --from=model-runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=model-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s /usr/local/lib/node_modules/@openai/codex/bin/codex.js /usr/local/bin/codex
+RUN codex --version
 
 ENV TZ=America/New_York \
     PYTHONUNBUFFERED=1 \
@@ -20,6 +35,7 @@ ENV TZ=America/New_York \
 RUN apt-get update && apt-get install -y --no-install-recommends \
         cron \
         supervisor \
+        nginx \
         libheif1 \
         curl \
         tzdata \
@@ -34,6 +50,10 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY . .
+COPY --from=frontend-build /frontend/.next/standalone /opt/director
+COPY --from=frontend-build /frontend/.next/static /opt/director/.next/static
+COPY --from=frontend-build /frontend/public /opt/director/public
+COPY ops/fly/nginx.conf /etc/nginx/nginx.conf
 # footage/ and the local asset roots are NOT copied in production --
 # .dockerignore excludes them. If a step here needs them it belongs on
 # the Mac (phase 5's "split, not a move"), not in this image.
@@ -49,7 +69,7 @@ RUN mkdir -p /var/log/zeropage \
 
 COPY ops/fly/supervisord.conf /etc/supervisor/conf.d/zeropage.conf
 
-EXPOSE 8000
+EXPOSE 8080
 
 COPY ops/fly/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

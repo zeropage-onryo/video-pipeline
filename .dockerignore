@@ -13,6 +13,31 @@ data/_to_delete/
 *.pyc
 __pycache__/
 
-# Next.js marketing site -- built/deployed separately via Vercel, not part
-# of this Fly image
-web/
+# Build the React Director from source; exclude local build artifacts.
+web/.git/
+web/.next*/
+web/*.tsbuildinfo
+imports/
+
+# Personal model runtime logins: private credentials, never source or image layers.
+data/model_sessions/
+
+# Local secrets, backup files, and unrelated development workspaces.
+.env
+.env.*
+**/.env
+**/.env.*
+**/*env.bak*
+**/*.bak*
+.agents/
+.codex/
+frontend/
+**/node_modules/
+.pytest_cache/
+.ruff_cache/
+
+# Design references and archived deliverables are not runtime assets.
+docs/reference-look/
+docs/sprints/
+Claude outputs/
+_to_delete/

@@ -100,6 +100,7 @@ from . import (
     crag,
     db,
     entities,
+    gemini_utils,
     preprod,
     promptgen,
     rag,
@@ -109,6 +110,7 @@ from . import (
     settings,
     shootgen,
     spend,
+    timeline,
     uncanny_judge,
     winners,
 )
@@ -191,6 +193,24 @@ def gates_mode() -> str:
     return GATES_HARD if value == GATES_HARD else GATES_ADVISORY
 
 
+def brain_default() -> str:
+    """Which model tier an unattended run writes with (2026-09-09), read
+    per call like gates_mode above.
+
+    Defaults to `fast` ON PURPOSE, and that is the load-bearing half. A
+    walk is NIGHTLY_SPARKS x 2 brands = 10 runs, so making the night
+    reasoning-tier is a real bill (roughly 4x the per-token price, plus
+    thinking tokens billed at the output rate) and therefore a decision
+    somebody makes with ZEROPAGE_BRAIN=reasoning, not something the
+    composer's picker does to it by sharing a constant.
+
+    An unknown value reads as the default rather than raising: this is
+    an env var on a 3:30am job with nobody watching, and a typo must not
+    lose the night."""
+    value = (os.environ.get("ZEROPAGE_BRAIN") or "").strip().lower()
+    return value if value in gemini_utils.BRAINS else gemini_utils.DEFAULT_BRAIN
+
+
 # Two targeted rewrites per failing shot before it holds. Raised from 1
 # to 2 on 2026-09-03: five held concepts (173, 177, 180, 183, 187) all
 # failed the SAME judge dimension -- "too many sequential actions /
@@ -198,8 +218,10 @@ def gates_mode() -> str:
 # them used its one rework attempt without changing the verdict (180's
 # reason came back byte-for-byte identical). One attempt was not the
 # constraint; the REWRITE not addressing the actual failure shape was.
-# See _rework_shot_prompt's STAGE_MARKERS handling below for the fix
-# that makes a second attempt worth having.
+# The fix then was to collapse a staged prompt to one beat. That fix is
+# GONE (2026-09-10): a scene may carry several timed shots now, each
+# rendered as its own clip (src/timeline.py), so "too many sequential
+# actions" stopped being a failure and the rework keeps the windows.
 MAX_PROMPT_REWORKS = 2  # bounded rewrites per failing shot; then hold (hard) or proceed (advisory)
 
 # The two shapes an advisory note takes, as literal prefixes rather than
@@ -224,6 +246,12 @@ class GenState(TypedDict, total=False):
     scout_rationale: str            # why the scout chose it (stored, never injected)
     use_pov: bool
     channel: str
+    seconds: int                    # the scene's total length (timeline.scene_seconds)
+    brain: str                      # which model tier writes the scene
+                                    # (gemini_utils.BRAINS). Set once by run();
+                                    # the judges deliberately stay on the fast
+                                    # tier -- they score, they do not write, and
+                                    # the gates are advisory anyway.
     account_id: Optional[int]       # whose run this is. Set once by run();
                                     # every node reads it off the state rather
                                     # than taking a parameter, because
@@ -647,6 +675,8 @@ def gen_concept(state: GenState) -> GenState:
         cast=state.get("cast"),
         image_refs=image_refs,
         account_id=state.get("account_id"),
+        brain=state.get("brain"),
+        seconds=state.get("seconds"),
     )
     # the generator returns warnings BESIDE the concept, not inside it;
     # fold them in so evaluate's code-enforced check actually sees them.
@@ -946,7 +976,9 @@ yields a usable clip on the FIRST render. Be harsh — a paid credit is spent on
 Rate each 0-2:
 - subject: main subject concrete and unambiguous?
 - camera: framing/lens/angle specified (close-up, 35mm, low angle)?
-- motion: ONE clear action, not several competing ones?
+- motion: each timed window such as (0-3s) is ONE shot with one clear action that
+  fits its length? Several windows, cuts and locations are allowed -- every window
+  is rendered as its own clip -- so judge each window's clarity, not how many there are.
 - lighting: light / mood / time of day specified?
 - coherence: free of contradictions the model can't resolve?
 
@@ -1041,84 +1073,28 @@ def score_prompts(state: GenState) -> GenState:
     return out
 
 
-# The failure this pattern-matches: shootgen's own scene-brief template
-# asks for "4-7 sequential beats" (see [[spark_format]] in project
-# memory -- the spark-vs-prompt contradiction), so a first-draft AI shot
-# prompt often carries literal "Stage 1 @ 00:00 -- ...", "Stage 2 -- ..."
-# staging or timestamps. The judge's `motion` dimension wants ONE clear
-# action, and a generic "resolve the competing actions" instruction
-# evidently isn't enough to make the model actually drop that scaffold
-# -- concept 180's one rework attempt (2026-09-02 night batch) came back
-# with the identical score AND the identical reason string, meaning the
-# rewrite changed nothing that mattered. Detecting the pattern in code
-# and naming it explicitly, rather than trusting the model to infer it
-# from "resolve competing actions", is what makes a second attempt
-# worth having.
-_STAGE_PATTERN = re.compile(
-    r"stage\s*\d|\bstages?\b\s*:|@\s*\d{1,2}:\d{2}|\d{1,2}:\d{2}\s*(?:—|--|-)",
-    re.IGNORECASE,
-)
-
-
 def _rework_shot_prompt(original_prompt: str, verdict: dict) -> str:
-    """Rewrite ONE AI shot prompt to fix exactly what the judge flagged --
-    the named weak dimension(s) and its reason -- rather than regenerating
-    the concept from scratch. Keeps the fix as small and targeted as the
-    diagnosis it's based on.
-
-    Escalates on the second pass (MAX_PROMPT_REWORKS=2): a prompt whose
-    reason names sequential/multi-stage/choreography trouble, or that
-    still carries literal "Stage N" / timestamp scaffolding, gets an
-    explicit COLLAPSE instruction instead of the generic one -- pick the
-    single most visually striking beat and describe only that, start to
-    finish, as one uninterrupted motion. Everything else the story
-    implied stays implied, not depicted; that's what the logline is for."""
+    """Fix the judge's named weakness while preserving scenes and timing."""
     weak = [d for d, v in (verdict.get("dims") or {}).items() if v < 2]
     reason = verdict.get("reason", "")
     weakness = f"{', '.join(weak) or 'unspecified'} -- {reason}".strip(" -")
-
-    staged = bool(_STAGE_PATTERN.search(original_prompt)) or bool(
-        re.search(r"sequential|multi-?stage|multiple.{0,20}actions?|choreograph|"
-                  r"simultaneous|too many|overloaded",
-                  reason, re.IGNORECASE))
-
-    if staged:
-        instruction = (
-            "This AI video prompt was REJECTED for describing too many "
-            "sequential actions / stages for one continuous shot -- the "
-            "judge's exact words: "
-            f"{weakness}\n\n"
-            "Rewrite it by COLLAPSING to a single beat: pick the ONE most "
-            "visually striking action in the prompt below and describe "
-            "ONLY that, start to finish, as one uninterrupted physical "
-            "motion. Delete every numbered stage, timestamp like 'Stage "
-            "1 @ 00:00' or '@ 00:07' and every beat that isn't the one "
-            "you kept -- do not summarize the dropped beats, just remove "
-            "them. Keep the same subject, setting, tool, and grade, and "
-            "keep the same grounded-realism recipe: handheld imperfection, "
-            "practical light, diegetic sound, and the negative clause at "
-            "the end (no glossy CGI, no plastic AI sheen, no dramatic slow "
-            "motion, no smooth commercial camera moves, no over-grading).\n\n"
-            f"ORIGINAL PROMPT:\n{original_prompt}\n\n"
-            "Return ONLY the rewritten prompt text -- no preamble, no "
-            "quotes, no markdown fences, no 'Stage' labels or timestamps."
-        )
-    else:
-        instruction = (
-            "Rewrite the following AI video generation prompt to fix EXACTLY the "
-            "weakness named below. Keep the same subject, setting, tool, and "
-            "grade -- change only how precisely it's specified (add the missing "
-            "camera/lens/framing, resolve the competing actions into one clear "
-            "action, add the missing light/mood, whatever the weakness names). "
-            "Keep the same grounded-realism recipe: handheld imperfection, "
-            "practical light, diegetic sound, and the negative clause at the end "
-            "(no glossy CGI, no plastic AI sheen, no dramatic slow motion, no "
-            "smooth commercial camera moves, no over-grading).\n\n"
-            f"WEAKNESS TO FIX: {weakness}\n\n"
-            f"ORIGINAL PROMPT:\n{original_prompt}\n\n"
-            "Return ONLY the rewritten prompt text -- no preamble, no quotes, no "
-            "markdown fences."
-        )
+    instruction = (
+        "Rewrite the following AI video generation prompt to fix EXACTLY the "
+        "weakness named below. Keep its existing layout, subject, settings, tool, "
+        "grade, reference locks, camera direction, audio and negative constraints. "
+        "Multiple scenes, cuts and sequential actions are allowed. Preserve scene "
+        "order and transitions; never collapse the prompt to one action merely "
+        "because it has multiple scenes. Keep explicit time duration markers for "
+        "each scene or beat, such as (0-3s), (3-7s), (7-10s). If missing, add "
+        "contiguous, non-overlapping windows from 0s to the stated total duration; "
+        "if no total is supplied, choose and state one. Preserve existing timings "
+        "unless the named weakness requires a timing correction. Clarify blocking "
+        "and pacing within each window instead of deleting story events.\n\n"
+        f"WEAKNESS TO FIX: {weakness}\n\n"
+        f"ORIGINAL PROMPT:\n{original_prompt}\n\n"
+        "Return ONLY the rewritten prompt text -- no preamble, no quotes, "
+        "no markdown fences."
+    )
     return generate_with_retry(_client(), GEMINI_MODEL, instruction,
                                stage="shot_prompt").strip()
 
@@ -1287,6 +1263,14 @@ def keyframe(state: GenState) -> GenState:
         except Exception as e:
             done.append({"n": shot_n, "ok": False, "error": f"prompt not stored: {e}"})
             continue
+        # THE SHOTS (2026-09-10), planned on the prompt that will actually
+        # render -- after persist_prompt, not after gen_concept, because the
+        # refine and any rework rewrite it in between -- and on the run's
+        # brain, the tier that wrote the scene. Planned even when the night
+        # draws nothing: the split is text, and it is what the Queue card
+        # and the approve read in the morning.
+        scene_chain.plan_timeline(concept_id, shot_n, brain=state.get("brain"),
+                                  db_path=None, account_id=state.get("account_id"))
         if os.environ.get("ZEROPAGE_KEYFRAME") == "0":
             done.append({"n": shot_n, "ok": False, "error": "keyframes disabled"})
             continue
@@ -1738,8 +1722,12 @@ def run(goal: str, *, brand: Optional[str] = None, spark: Optional[str] = None,
         picked_characters=None, picked_props=None, picked_references=None,
         reference_photos=None, scout_finding_id: Optional[int] = None,
         scout: Optional[bool] = None, research: Optional[bool] = None,
-        account_id: Optional[int] = None) -> dict:
+        account_id: Optional[int] = None, brain: Optional[str] = None,
+        seconds: Optional[int] = None) -> dict:
     """
+    `seconds` is the scene's total length; None reads ZEROPAGE_SCENE_SECONDS
+    (timeline.scene_seconds), which is what the night runs on.
+
     `brand` defaults to `channel` rather than a hardcoded value on
     purpose: `channel` decides where the run gets FILED (which
     hold_queue row, which autonomy/rate-cap row), `brand` decides which
@@ -1811,6 +1799,8 @@ def run(goal: str, *, brand: Optional[str] = None, spark: Optional[str] = None,
         "goal": goal, "brand": brand, "spark": spark or goal, "scout": scout,
         "research": research, "research_note": "",
         "client": client, "use_pov": use_pov, "channel": channel,
+        "brain": brain_default() if brain is None else brain,
+        "seconds": timeline.scene_seconds(seconds),
         "picked_locations": picked_locations or [],
         "picked_characters": picked_characters or [],
         "picked_props": picked_props or [],

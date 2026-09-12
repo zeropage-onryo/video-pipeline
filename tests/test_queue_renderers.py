@@ -222,12 +222,15 @@ def test_approving_still_stamps_the_pick_before_the_spend(tmp_db, monkeypatch):
 # --- what the card is handed -------------------------------------------------
 
 def test_the_queue_lists_every_renderer_and_the_cards_own_default(tmp_db, monkeypatch):
+    # the plan leads only when the account can render it (2026-09-11), so
+    # this is the keyed case; the unkeyed one is its own test below
+    keys(monkeypatch, fal=True)
     a_queued_scene(tmp_db, tool="SEEDANCE")
     data = client.get("/api/queue/pending?brand=zeropage").json()
 
     assert set(data["renderers"]) == set(providers.VIDEO_PROVIDERS)
     for entry in data["renderers"].values():
-        assert {"available", "spend_ok", "spend_env", "models", "frame_axis"} <= set(entry)
+        assert {"available", "models", "frame_axis", "cap", "env_override"} <= set(entry)
 
     card = data["items"][0]
     assert card["tool"] == "SEEDANCE"
@@ -239,3 +242,153 @@ def test_the_queue_lists_every_renderer_and_the_cards_own_default(tmp_db, monkey
     # and the single-vendor shape an older client may still read is
     # deliberately still there
     assert "runway" in data
+
+
+# --- the approval is the click ----------------------------------------------
+# Until 2026-09-09 every adapter refused unless *_SPEND_OK=1 was set in the
+# server's environment, which meant the Approve button did nothing until
+# somebody restarted the server with a variable set -- and once set for one
+# render it stayed set for the whole session, which is exactly the
+# "approval that's always on" the gate existed to prevent, arrived at the
+# long way round. The approval is an argument now, and these are the two
+# halves of what that has to keep true.
+
+def test_approving_renders_with_no_spend_env_set(tmp_db, monkeypatch):
+    """The whole ask: press Approve, it renders. No restart, no variable."""
+    for name in ("RUNWAY_SPEND_OK", "FAL_SPEND_OK", "VEO_SPEND_OK",
+                 "HIGGSFIELD_SPEND_OK"):
+        monkeypatch.delenv(name, raising=False)
+    seen = capture(monkeypatch, fal)
+    scene = a_queued_scene(tmp_db, tool="LTX")
+    res = client.post(f"/api/queue/{scene}/approve", json={"provider": "fal"})
+    assert wait_for_job(res.json()["job_id"])["status"] == "done"
+    # the route says so explicitly rather than relying on the environment
+    assert seen["kwargs"]["approved"] is True
+
+
+def test_the_gate_still_refuses_a_caller_that_nobody_approved(monkeypatch, tmp_path):
+    """The other half, and the reason the check did not simply get
+    deleted: an unattended caller passes no approval and still cannot
+    spend. orchestrator.generate_render and autopilot are that caller."""
+    for name in ("RUNWAY_SPEND_OK", "FAL_SPEND_OK", "VEO_SPEND_OK",
+                 "HIGGSFIELD_SPEND_OK"):
+        monkeypatch.delenv(name, raising=False)
+    for module in (runway, fal, veo):
+        with pytest.raises(RuntimeError, match="not approved"):
+            module.generate_video("a prompt", tmp_path / "x.mp4")
+    # ...and the never-raises edge the graph actually calls says the same.
+    # has_key is stubbed because "not configured" is checked first and
+    # would answer a different question than the one under test.
+    monkeypatch.setattr(fal, "has_key", lambda account_id=None: True)
+    assert "not approved" in (
+        fal.generate_candidates("a prompt", tmp_path, n=1)["error"] or "")
+
+
+def test_an_explicit_approval_satisfies_the_gate_and_a_false_one_does_not(monkeypatch, tmp_path):
+    """spend_approved is the one predicate, and an explicit answer wins
+    over the environment in BOTH directions -- approved=False refuses on
+    a machine where the override happens to be armed, which is what lets
+    an unattended path stay refused on a developer's own laptop."""
+    monkeypatch.setenv("RUNWAY_SPEND_OK", "1")
+    assert runway.spend_approved() is True
+    assert runway.spend_approved(False) is False
+    monkeypatch.delenv("RUNWAY_SPEND_OK", raising=False)
+    assert runway.spend_approved() is False
+    assert runway.spend_approved(True) is True
+
+
+def test_the_daily_cap_is_the_wall_that_is_left(tmp_db, monkeypatch):
+    """With the env gate gone the per-vendor cap is the only automatic
+    thing between a stuck loop and a real bill, so it is asserted here
+    rather than left to the adapter's own tests."""
+    monkeypatch.delenv("FAL_SPEND_OK", raising=False)
+    monkeypatch.setattr(fal, "DAILY_CAP", 0)
+    monkeypatch.setattr(fal, "GLOBAL_DAILY_CAP", 0)
+    monkeypatch.setattr(fal, "has_key", lambda account_id=None: True)
+    scene = a_queued_scene(tmp_db, tool="LTX")
+    res = client.post(f"/api/queue/{scene}/approve", json={"provider": "fal"})
+    job = wait_for_job(res.json()["job_id"])
+    assert job["status"] == "failed"
+    assert "cap" in (job["error"] or "").lower()
+
+
+def test_the_card_no_longer_dims_on_a_missing_env_var(tmp_db, monkeypatch):
+    """What the Queue is handed: a key is the whole gate. `env_override`
+    is still reported because an unattended run needs it, but nothing
+    the card disables reads it."""
+    monkeypatch.delenv("RUNWAY_SPEND_OK", raising=False)
+    monkeypatch.setattr(runway, "has_key", lambda account_id=None: True)
+    a_queued_scene(tmp_db)
+    data = client.get("/api/queue/pending?brand=zeropage").json()
+    assert data["renderers"]["runway"]["spend_ok"] is True
+    assert data["renderers"]["runway"]["env_override"] is False
+    assert data["runway"]["spend_ok"] is True          # the legacy shape too
+
+
+# --- the plan leads only when this account can render it --------------------
+# 2026-09-11, Mike: "the render button doesn't work on queue page ... it
+# said runway key not set". Every scene the chain writes is planned for
+# RUNWAY, and his account holds a Higgsfield key and no Runway key -- so
+# every card opened on a dead button and an empty approve was refused.
+# providers.render_default: the plan if keyed, else the cheapest renderer
+# the account CAN use, else the plan (and the card names the missing key).
+
+def keys(monkeypatch, **keyed):
+    from src import higgsfield
+    for name, module in (("runway", runway), ("fal", fal),
+                         ("higgsfield", higgsfield), ("veo", veo)):
+        monkeypatch.setattr(module, "has_key",
+                            lambda account_id=None, _on=keyed.get(name, False): _on)
+
+
+def test_a_runway_plan_with_no_runway_key_defaults_to_what_is_keyed(tmp_db, monkeypatch):
+    from src import higgsfield
+    keys(monkeypatch, higgsfield=True)
+    a_queued_scene(tmp_db, tool="RUNWAY")
+    card = client.get("/api/queue/pending?brand=zeropage").json()["items"][0]
+    assert card["render_default"]["provider"] == "higgsfield"
+    assert higgsfield.VIDEO_MODELS[card["render_default"]["model"]]["available"]
+
+
+def test_an_empty_approve_spends_where_the_card_pointed(tmp_db, monkeypatch):
+    from src import higgsfield
+    keys(monkeypatch, higgsfield=True)
+    on_hf = {}
+
+    def fake(concept_id, shot_n, **kwargs):
+        on_hf.update(kwargs, args=(concept_id, shot_n))
+        return {"ok": True, "media_url": "https://x/c.mp4",
+                "generation_id": 1, "error": None}
+
+    monkeypatch.setattr(higgsfield, "generate_for_shot", fake)
+    scene = a_queued_scene(tmp_db, tool="RUNWAY")
+    res = client.post(f"/api/queue/{scene}/approve", json={})
+    assert res.status_code == 200, res.text
+    assert wait_for_job(res.json()["job_id"])["status"] == "done"
+    assert on_hf["args"] == (scene, 1)
+    assert res.json()["render"]["provider"] == "higgsfield"
+
+
+def test_the_cheapest_keyed_renderer_wins_the_fallback(monkeypatch):
+    # Veo is keyed on the same Gemini key as everything else and is the
+    # most expensive clip in the repo -- a fallback that took registry
+    # order would open every card on a $3 render
+    keys(monkeypatch, higgsfield=True, veo=True)
+    pick = providers.renderer_for(None, "runway", None)
+    assert pick["provider"] == "higgsfield"
+
+
+def test_a_keyed_plan_still_leads(monkeypatch):
+    keys(monkeypatch, runway=True, higgsfield=True)
+    assert providers.render_default("RUNWAY", None)["provider"] == "runway"
+
+
+def test_nothing_keyed_keeps_the_plan_so_the_card_can_name_the_key(monkeypatch):
+    keys(monkeypatch)
+    assert providers.renderer_for(None, "runway", None) is None
+    assert providers.render_default("RUNWAY", None)["provider"] == "runway"
+
+
+def test_a_door_that_needs_generate_from_prompt_is_never_handed_veo(monkeypatch):
+    keys(monkeypatch, veo=True)
+    assert providers.renderer_for(None, needs="generate_from_prompt") is None

@@ -1,6 +1,6 @@
 /* Boot: capabilities first (everything gates on them), then the field,
    the router, the palette, the brand pill, and the jobs SSE feed. */
-import { api, applyCaps, bus, closeDetail, esc, state, stateline } from './shared.js';
+import { api, applyCaps, bus, closeDetail, esc, loadAssets, state, stateline } from './shared.js';
 import { initField } from './field.js';
 import { initStudio, renderStudio } from './studio.js';
 import { renderAssets } from './assets.js';
@@ -172,23 +172,14 @@ addEventListener('keydown', e => {
   if (e.key === 'Escape') { palClose(); closeWorkflowModal(); closeDetail(); }
 });
 
-/* hero parallax, straight from the prototype */
-if (!matchMedia('(prefers-reduced-motion:reduce)').matches) {
-  const hero = document.querySelector('.hero');
-  let tick = false;
-  addEventListener('scroll', () => {
-    if (tick) return; tick = true;
-    requestAnimationFrame(() => {
-      const y = Math.min(scrollY, innerHeight);
-      hero.style.transform = 'translateY(' + (y * .16) + 'px)';
-      hero.style.opacity = String(Math.max(0, 1 - y / (innerHeight * .85)));
-      tick = false;
-    });
-  }, { passive: true });
-}
+/* Create is an interactive workspace: keep its content opaque and in normal
+   document flow at every scroll position. */
 
 /* boot: capabilities gate everything, so they come first */
 (async () => {
+  // The read-only catalogue can load while capabilities are checked. Controls
+  // still wait for capabilities; renderStudio reports any catalogue failure.
+  loadAssets().catch(() => {});
   try {
     applyCaps(await api('/api/capabilities'));
   } catch (e) {
@@ -197,5 +188,10 @@ if (!matchMedia('(prefers-reduced-motion:reduce)').matches) {
     applyCaps({});
   }
   connectJobs();
-  go('studio');
+  const params = new URLSearchParams(location.search);
+  go(params.get('view') || 'studio');
+  const concept = params.get('concept');
+  if (params.get('view') === 'director' && /^\d+$/.test(concept || '')) {
+    (await import('./workflows.js')).openConceptInDirector(Number(concept));
+  }
 })();

@@ -88,6 +88,7 @@ POSTURE_ENV = R2_ENV + (
     "ZEROPAGE_UNCANNY",          # the on-brand judge, off on his machine
     "ZEROPAGE_GRAPH_SCOUT",      # a run that names no direction reads the bank
     "ZEROPAGE_GRAPH_RESEARCH",   # ... and the research agent runs
+    "ZEROPAGE_SCENE_SECONDS",    # the scene length the writers fill (timeline.py)
     "LANGSMITH_TRACING",         # tracing is a live POST; the guard fails it
 )
 
@@ -143,6 +144,10 @@ OUTPUT_ROOTS = (
     ("src.autopilot", "KILL_SWITCH_PATH", "data/autopilot.off"),
     ("src.refbin", "REFS_DIR", "data/refs"),
     ("src.research_agent", "STAMP_DIR", "data/.research"),
+    # A personal model login is a folder of session files. Registered for
+    # the same reason as the rest: the first test that connects one would
+    # otherwise write a real credential store into data/.
+    ("src.personal_models", "SESSIONS_ROOT", "data/model_sessions"),
     ("src.promote_winners", "QUEUE_PATH", "data/promotion_queue.json"),
     ("src.db", "DB_PATH", "data/pipeline.db"),
     ("app.main", "RENDERS_DIR", "data/renders"),

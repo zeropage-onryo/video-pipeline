@@ -24,6 +24,7 @@ import re
 
 import psycopg
 import pytest
+from starlette.datastructures import State
 
 from src import (
     account_keys,
@@ -561,6 +562,7 @@ def test_the_brand_pill_does_not_empty_the_board(two_accounts, monkeypatch):
     class Request:
         def __init__(self, brand):
             self.cookies = {"brand": brand}
+            self.state = State()
 
     for brand in ("zeropage", "antihero"):
         scoped_to = auth.current_account_id(Request(brand))
@@ -595,6 +597,7 @@ def test_the_brand_pill_does_not_empty_the_dev_console(two_accounts, monkeypatch
     class Request:
         def __init__(self, brand):
             self.cookies = {"brand": brand}
+            self.state = State()
 
     for brand in ("zeropage", "antihero"):
         assert auth.dev_account_id(Request(brand)) == a, f"the {brand} pill switched tenants"
@@ -614,6 +617,9 @@ def test_the_dev_console_still_works_with_no_session(two_accounts, monkeypatch):
 
     class Request:
         cookies: dict = {}
+
+        def __init__(self):
+            self.state = State()
 
     assert auth.dev_account_id(Request()) == a
 
@@ -635,6 +641,9 @@ def test_a_user_with_no_membership_is_refused_not_defaulted(monkeypatch, pg):
 
     class Request:
         cookies: dict = {}
+
+        def __init__(self):
+            self.state = State()
 
     with pytest.raises(HTTPException) as raised:
         auth.current_account_id(Request())
@@ -1397,5 +1406,9 @@ def test_the_availability_check_asks_about_the_callers_own_key(two_tenants, monk
                and jobs.get(job_id, account_id=owner)["status"] in ("queued", "running")):
             time.sleep(0.01)
 
-    assert asked == [owner, owner], (
+    # WHO was asked, not how many times: since 2026-09-11 the Queue also
+    # resolves which renderer this account can use (providers.render_default),
+    # which asks the same question again. The property under test is that
+    # every ask names the caller.
+    assert asked and all(a == owner for a in asked), (
         f"availability was judged on {asked!r}, not on the caller's own key")

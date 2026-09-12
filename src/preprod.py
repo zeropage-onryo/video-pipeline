@@ -513,7 +513,7 @@ def concept_summary(card_line: str = "", logline: str = "", prompt: str = "",
     return line[:1].upper() + line[1:]
 
 
-def _concept_row(row, conn) -> dict[str, Any]:
+def _concept_row(row, conn, *, locations: Optional[list] = None) -> dict[str, Any]:
     data = dict(row)
     data["shots"] = json.loads(data.pop("shots_json") or "[]")
     ai_raw = data.pop("ai_json", None)
@@ -554,7 +554,7 @@ def _concept_row(row, conn) -> dict[str, Any]:
     data["parked"] = bool(first.get("parked_at"))
     data["park_reason"] = first.get("park_reason") or ""
 
-    data["locations"] = [
+    data["locations"] = locations if locations is not None else [
         dict(r)
         for r in conn.execute(
             """
@@ -617,7 +617,22 @@ def list_concepts(limit: int = 100, dsn: Optional[str] = None, *,
             + "ORDER BY id DESC LIMIT %s",
             (account_id, scoped, limit) if scoped else (account_id, limit),
         ).fetchall()
-        return [_concept_row(r, conn) for r in rows]
+        # The board and Queue read hundreds of rows. Hydrate locations in
+        # one round trip, including an explicit empty list for scenes without
+        # rooms, instead of making _concept_row query once per concept.
+        locations_by_concept: dict[int, list] = {r["id"]: [] for r in rows}
+        if rows:
+            for location in conn.execute(
+                "SELECT cl.concept_id, l.id, l.name FROM locations l "
+                "JOIN concept_locations cl ON cl.location_id = l.id "
+                "WHERE cl.concept_id = ANY(%s) "
+                "AND l.account_id IS NOT DISTINCT FROM %s ORDER BY l.name",
+                (list(locations_by_concept), account_id),
+            ):
+                locations_by_concept[location["concept_id"]].append(
+                    {"id": location["id"], "name": location["name"]})
+        return [_concept_row(r, conn, locations=locations_by_concept[r["id"]])
+                for r in rows]
 
 
 def save_concept_ideas(

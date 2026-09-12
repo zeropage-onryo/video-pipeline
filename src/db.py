@@ -56,6 +56,7 @@ from pathlib import Path
 from typing import Any, Iterator, Optional, Sequence
 
 import psycopg
+from psycopg_pool import ConnectionPool
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -233,10 +234,46 @@ def resolve_dsn(dsn: Optional[str] = None) -> str:
     return dsn or os.environ.get("DATABASE_URL") or DEFAULT_DSN
 
 
+_pool: Optional[ConnectionPool] = None
+
+
+def _configure_connection(conn: psycopg.Connection) -> None:
+    # Configure once per physical connection, outside callers' transactions.
+    conn.execute("SET TIME ZONE 'UTC'")
+    conn.commit()
+
+
+@contextmanager
+def connection_pool(dsn: Optional[str] = None, *, max_size: int = 8):
+    """Reuse connections during the server lifespan; CLI calls stay standalone.
+
+    Only the exact configured DSN uses this pool. Explicit migration/test DSNs
+    must never borrow a connection to a different database or schema.
+    """
+    global _pool
+    previous = _pool
+    with ConnectionPool(
+        resolve_dsn(dsn), min_size=1, max_size=max_size, open=True,
+        timeout=10, kwargs={"row_factory": _row_factory, "connect_timeout": 10},
+        configure=_configure_connection, check=ConnectionPool.check_connection,
+    ) as pool:
+        _pool = pool
+        try:
+            yield pool
+        finally:
+            _pool = previous
+
+
 @contextmanager
 def connect(dsn: Optional[str] = None) -> Iterator[psycopg.Connection]:
-    """Commits on success, rolls back on error, always closes."""
-    conn = psycopg.connect(resolve_dsn(dsn), row_factory=_row_factory)
+    """Commit on success, roll back on error, release the connection."""
+    resolved = resolve_dsn(dsn)
+    pool = _pool
+    if pool is not None and pool.conninfo == resolved:
+        with pool.connection() as conn:
+            yield conn
+        return
+    conn = psycopg.connect(resolved, row_factory=_row_factory, connect_timeout=10)
     try:
         # See _AGE_DAYS: the date arithmetic is only right in UTC.
         conn.execute("SET TIME ZONE 'UTC'")
@@ -283,6 +320,7 @@ OWNED_TABLES = (
     # A credential is the one row that must never be readable across the
     # boundary, so it is owned like everything else, not declared shared.
     "account_keys",
+    "creative_projects",
     # the LLM meter (2026-09-04): a metered call is one account's spend
     "llm_calls",
     # the prepaid credit ledger (2026-09-08, docs/CREDIT_LEDGER_DESIGN.md).
@@ -698,6 +736,8 @@ def init_db(dsn: Optional[str] = None) -> None:
     Postgres database DOES predate it (ten hand-made uploads, 2026-09-07),
     and the backfill it carries is the whole point of the migration.
     """
+    from . import creative_projects
+    creative_projects.init(dsn)
     with connect(dsn) as conn:
         conn.execute(SCHEMA)
         # tenancy: a posted video belongs to the account that made it

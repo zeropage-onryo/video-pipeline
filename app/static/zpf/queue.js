@@ -22,9 +22,19 @@
    (app/main.py's /ui), so on any other account #lanelist does not exist
    and everything below no-ops -- and the routes re-ask the gate anyway,
    because a missing section is presentation and not protection. */
+import { renderRendererKeys } from './renderer-keys.js';
 import { api, bus, esc, state, stateline } from './shared.js';
 
 let wired = false;
+
+/* The renderer you picked on a card, kept by concept id across repaints
+   of the pending list (2026-09-11). Repaints happen without you asking --
+   any job finishing re-reads the rows -- and each one used to rebuild the
+   card from its default, so a card moved from Runway to Kling was put
+   back on Runway between the pick and the click. Keyed by id, so it can
+   never follow you onto a different scene; dropped once that card is
+   approved or rejected. */
+const held = new Map();
 
 const $ = id => document.getElementById(id);
 
@@ -40,7 +50,8 @@ export function initQueue() {
 }
 
 export async function renderQueue() {
-  await Promise.all([renderPending(), renderLane(), renderJobs()]);
+  await Promise.all([renderPending(), renderLane(), renderJobs(),
+                     renderRendererKeys()]);
 }
 
 /* ── awaiting approval ── */
@@ -61,15 +72,19 @@ async function renderPending() {
   const renderers = data.renderers || {};
   const order = Object.keys(renderers);
 
-  /* Each vendor's gates, stated honestly rather than shown as a dead
+  /* Each vendor's state, stated honestly rather than shown as a dead
      button. Before 2026-09-08 this line described Runway alone, because
-     Runway was the only thing approving could call. */
+     Runway was the only thing approving could call; before 2026-09-09 it
+     also reported a spend gate, which is gone -- pressing Approve IS the
+     approval now, so a key is the only thing that can be missing. What
+     is still worth printing is the day's count against the cap, which is
+     the only automatic wall left. */
   $('rwstate').textContent = order.length
     ? order.map(name => {
         const r = renderers[name];
         if (!r.available) return `${r.label}: no key`;
-        if (!r.spend_ok) return `${r.label}: spend gate off (${r.spend_env}=1)`;
-        const today = (r.today === null || r.today === undefined) ? '' : ` · ${r.today} today`;
+        const today = (r.today === null || r.today === undefined) ? ''
+          : ` · ${r.today}${r.cap ? '/' + r.cap : ''} today`;
         return `${r.label}: ready${today}`;
       }).join('  ·  ')
     : 'No renderer is configured — approving cannot render';
@@ -82,24 +97,60 @@ async function renderPending() {
      meant to run through LTX. */
   const picks = new Map();
 
+  /* A renderer is usable when it has a key AND the model is reachable on
+     this account. Both halves matter: Runway's models always report
+     available (render_specs has no per-account probe), so reading only
+     the model let a keyless vendor win the default. */
+  const usable = (provider, model) => {
+    const r = renderers[provider];
+    const spec = specOf(provider, model);
+    return !!(r && r.available && spec && spec.available);
+  };
+
   const specOf = (provider, model) =>
     ((renderers[provider] || {}).models || []).find(m => m.id === model) || null;
 
+  /* The fallback when the plan cannot render: the CHEAPEST usable model
+     at its own default length, not the first in registry order -- the
+     registry lists Veo second, and a card quietly defaulting to a $3
+     preview render because Runway had no key is the silent-spend shape
+     the picks comment above is warning about. Unpriced models sort last. */
   function firstUsable() {
+    let best = null;
     for (const name of order) {
-      const model = (renderers[name].models || []).find(m => m.available);
-      if (model) return { provider: name, model: model.id };
+      // a vendor with no key is not usable, however many models it lists
+      if (!renderers[name].available) continue;
+      for (const m of renderers[name].models || []) {
+        if (!m.available) continue;
+        const usd = estimate(m, { frame: m.frame.default }, m.duration.default);
+        const cost = (usd === null || usd === undefined) ? Infinity : usd;
+        if (!best || cost < best.cost) best = { provider: name, model: m.id, cost };
+      }
     }
-    return null;
+    return best && { provider: best.provider, model: best.model };
   }
 
   function pickFor(card) {
     if (picks.has(card.id)) return picks.get(card.id);
+    const kept = held.get(card.id);
+    if (kept && usable(kept.provider, kept.model)) {
+      picks.set(card.id, kept);
+      return kept;
+    }
     // the server resolved the shot's planned tool into (provider, model)
     // with the same function the approve route uses -- see render_default
     const want = card.render_default || {};
-    const base = specOf(want.provider, want.model)
-      ? { provider: want.provider, model: want.model } : firstUsable();
+    // THE PLAN, UNLESS IT CANNOT RENDER (2026-09-11). Every scene the
+    // chain writes is planned for RUNWAY, and on an account with no
+    // Runway key that opened every card on a dead button reading "Runway
+    // key not set" -- and any repaint (a job finishing, coming back to
+    // the Queue) snapped a card you had moved to Kling back onto it. A
+    // plan nobody can render is not a default; the first vendor that
+    // CAN is. The planned renderer still leads whenever it has a key.
+    const base = usable(want.provider, want.model)
+      ? { provider: want.provider, model: want.model }
+      : (firstUsable() || (specOf(want.provider, want.model)
+          ? { provider: want.provider, model: want.model } : null));
     let pick = null;
     if (base) {
       const spec = specOf(base.provider, base.model);
@@ -115,12 +166,31 @@ async function renderPending() {
      catalogue ships so that dragging a duration does not cost a request
      per keystroke. tests/test_providers.py asserts the two agree for
      every model, duration and frame. */
-  function estimate(spec, pick) {
+  function estimate(spec, pick, seconds = pick.duration) {
     const price = spec && spec.price;
     if (!price) return null;
     if (price.kind === 'flat') return price.usd;
     const per = price.usd_by_frame ? price.usd_by_frame[pick.frame] : price.usd;
-    return (per === undefined || per === null) ? null : per * pick.duration;
+    return (per === undefined || per === null) ? null : per * seconds;
+  }
+
+  /* A timed scene's shots each render at their own window's length,
+     fitted UP to what the model can make -- the JS twin of
+     timeline.fit_seconds, for the reason estimate() above exists: the
+     server's check_timeline_choice is the authoritative number and comes
+     back on the approve response; this is the label while you pick. */
+  function fitSeconds(axis, seconds) {
+    const want = Math.max(1, Math.ceil(Number(seconds) || 1));
+    if (axis.kind === 'range') return Math.min(Math.max(want, axis.min), axis.max);
+    const values = (axis.values || []).map(Number).sort((a, b) => a - b);
+    if (!values.length) return want;
+    if (axis.kind === 'fixed') return values[0];
+    return values.find(v => v >= want) ?? values[values.length - 1];
+  }
+
+  function shotsToRender(card) {
+    const tl = card.timeline;
+    return tl ? (tl.parts || []).filter(p => !p.media_url) : null;
   }
 
   function axisControl(role, axis, value, label) {
@@ -161,9 +231,25 @@ async function renderPending() {
     if (!pick) return '<span class="m">no renderer is configured — approving cannot render</span>';
     const r = renderers[pick.provider];
     const spec = specOf(pick.provider, pick.model);
+    // one reason left, and it is the only one a restart could ever have
+    // fixed: no key for this vendor
+    const blocked = r.available ? '' : `${r.label} key not set`;
+    const todo = shotsToRender(card);
+    if (todo) {
+      // no duration control: every shot's length is its window's
+      const lengths = todo.map(p => fitSeconds(spec.duration, p.seconds));
+      const usd = lengths.reduce((sum, sec) => sum + (estimate(spec, pick, sec) || 0), 0);
+      const what = `${todo.length} shot${todo.length === 1 ? '' : 's'}`;
+      return `
+      ${modelSelect(pick)}
+      <span class="m" title="each shot renders at its own window's length, fitted up to what ${esc(spec.id)} can make">${esc(what)} · ${esc(lengths.join(' + '))}s</span>
+      ${axisControl('frame', spec.frame, pick.frame, r.frame_axis)}
+      <button class="go" data-act="approve"${blocked ? ' disabled' : ''}>
+        ${blocked ? 'Approve · render' : `Approve · render ${esc(what)} ~$${usd.toFixed(2)}`}
+      </button>
+      ${blocked ? `<span class="m rblocked">${esc(blocked)}</span>` : ''}`;
+    }
     const usd = estimate(spec, pick);
-    const blocked = !r.available ? `${r.label} key not set`
-      : !r.spend_ok ? `spend gate off — restart with ${r.spend_env}=1` : '';
     return `
       ${modelSelect(pick)}
       ${axisControl('duration', spec.duration, pick.duration, 'duration')}
@@ -172,6 +258,30 @@ async function renderPending() {
         ${blocked ? 'Approve · render' : `Approve · render ~$${(usd === null ? 0 : usd).toFixed(2)}`}
       </button>
       ${blocked ? `<span class="m rblocked">${esc(blocked)}</span>` : ''}`;
+  }
+
+  /* The shots a timed scene renders as, in order: window, its still (the
+     frame that shot's clip anchors on), its own refs, and a tick once its
+     clip is back. An unplanned timeline shows the bare windows -- the
+     approve plans them before the first clip. */
+  function shotStrip(c) {
+    const tl = c.timeline;
+    if (!tl || !(tl.parts || []).length) return '';
+    const rows = tl.parts.map(p => {
+      const refs = (p.refs || []).map(url =>
+        `<span class="scref sm" style="background-image:url('${esc(url)}')"></span>`).join('');
+      return `<li class="scpart${p.media_url ? ' done' : ''}">
+        <span class="m scwin">${esc(p.start)}–${esc(p.end)}s</span>
+        ${p.reference_image ? `<img class="scpartshot" src="${esc(p.reference_image)}" alt="">` : ''}
+        <span class="scparttext" title="${esc(p.prompt || p.text || '')}">${esc(p.text || p.prompt || '')}</span>
+        <span class="scpartrefs">${refs}</span>
+        ${p.media_url ? `<a class="m" href="${esc(p.media_url)}" target="_blank" rel="noopener">clip ✓</a>` : ''}
+      </li>`;
+    }).join('');
+    const head = tl.planned
+      ? `${tl.parts.length} shots · ${esc(tl.seconds)}s · each rendered on its own`
+      : `${tl.parts.length} timed shots · planned when you approve`;
+    return `<details class="scparts" open><summary class="m">${head}</summary><ol>${rows}</ol></details>`;
   }
 
   $('pendcount').textContent = `${data.items.length} waiting`;
@@ -196,6 +306,7 @@ async function renderPending() {
       ${c.reference_image
         ? `<img class="scshot" src="${esc(c.reference_image)}" alt="">` : ''}
       <p class="scprompt">${esc(c.prompt)}</p>
+      ${shotStrip(c)}
       <div class="scfoot">
         <button class="swipe shot" data-act="shot" title="Shot it yourself"
                 aria-label="Mark shot -- you made this outside the render pipeline">📷</button>
@@ -246,6 +357,7 @@ async function renderPending() {
       } else {
         pick.frame = control.value;
       }
+      held.set(id, picks.get(id));
       zone().innerHTML = renderZone(card);
     });
 
@@ -269,7 +381,7 @@ async function renderPending() {
       // cannot render, so the length shown and the length spent are
       // never two different numbers
       button.disabled = !legal;
-      if (legal) pick.duration = seconds;
+      if (legal) { pick.duration = seconds; held.set(id, pick); }
       const usd = estimate(spec, pick);
       button.textContent = legal
         ? `Approve · render ~$${(usd === null ? 0 : usd).toFixed(2)}`
@@ -302,6 +414,7 @@ async function renderPending() {
         // resolves to the shot's planned tool -- see ApproveBody.
         await api(`/api/queue/${id}/${approve ? 'approve' : 'reject'}`,
           { method: 'POST', body: approve ? (picks.get(id) || {}) : {} });
+        held.delete(id);
         renderPending();
       } catch (e) {
         btn.disabled = false;
@@ -353,6 +466,7 @@ async function renderLane() {
         <img class="scshot" src="${esc(c.keyframe_url)}" alt="keyframe" draggable="true">
       </a>` : '<div class="probeblank">no keyframe — this one is text-to-video</div>'}
       <p class="scprompt">${esc(c.prompt)}</p>
+      ${shotStrip(c)}
       <div class="scfoot">
         <button class="tag" data-act="copy">Copy prompt</button>
         <span class="m" data-role="note">${esc(c.lane)}</span>
