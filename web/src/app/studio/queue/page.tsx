@@ -8,12 +8,13 @@
    Jobs list underneath IS the in-process registry, and says so. */
 /* eslint-disable @next/next/no-img-element */
 import { useCallback, useEffect, useState } from "react";
-import { Camera, Clock, Monitor, RectangleVertical, Zap } from "lucide-react";
+import { Camera, Clock, Copy, Monitor, RectangleVertical, Upload, Zap } from "lucide-react";
 import { API_URL } from "@/lib/api";
 import {
   announceQueueChange,
   cancelJob,
   clearJob,
+  fileLaneClip,
   listJobs,
   queueApprove,
   queuePending,
@@ -40,6 +41,8 @@ export default function QueuePage() {
   const { brand, toast } = useShell();
   const [pending, setPending] = useState<Concept[] | null>(null);
   const [runway, setRunway] = useState<RunwayState | null>(null);
+  const [lane, setLane] = useState(false);
+  const [dropping, setDropping] = useState<Record<number, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [jobs, setJobs] = useState<JobRow[]>([]);
   const [jobsError, setJobsError] = useState<string | null>(null);
@@ -63,6 +66,7 @@ export default function QueuePage() {
       .then((r) => {
         setPending(r.items);
         setRunway(r.runway);
+        setLane(!!r.manual_lane);
         setError(null);
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Queue unavailable"));
@@ -137,6 +141,34 @@ export default function QueuePage() {
   };
 
   const running = jobs.filter((j) => ["queued", "running"].includes(j.status)).length;
+
+  /* the subscription lane: drop the finished mp4 on its card */
+  const fileClip = async (c: Concept, file: File | undefined) => {
+    if (!file) return;
+    setDropping((d) => ({ ...d, [c.id]: "filing…" }));
+    try {
+      const res = await fileLaneClip(c.id, file);
+      toast(`${c.n} filed — free on the subscription · ${res.media_url}`);
+      loadPending();
+      announceQueueChange();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Could not file the clip", "err");
+    } finally {
+      setDropping((d) => {
+        const next = { ...d };
+        delete next[c.id];
+        return next;
+      });
+    }
+  };
+  const copyPrompt = async (c: Concept) => {
+    try {
+      await navigator.clipboard.writeText(c.prompt);
+      toast(`${c.n}'s prompt copied — paste it into Runway`);
+    } catch {
+      toast("Clipboard blocked — select the prompt and copy it by hand", "err");
+    }
+  };
 
   return (
     <section className="view" style={{ paddingTop: 0 }}>
@@ -251,6 +283,79 @@ export default function QueuePage() {
           </article>
         ))}
       </div>
+
+      {lane ? (
+        <>
+          <div className="chead">
+            <h3>Subscription lane</h3>
+            <span className="m">{pending ? `${pending.length} to render by hand` : ""}</span>
+            <span className="spacer" />
+            <span className="m">Runway Explore · free on Unlimited · rendered by hand in Chrome</span>
+          </div>
+          {pending && !pending.length ? (
+            <p className="stateline" style={{ padding: "0 42px" }}>
+              Nothing to render by hand — the lane takes whatever is waiting above
+            </p>
+          ) : null}
+          <div className="scenegrid">
+            {(pending || []).map((c) => {
+              const still = c.reference_image
+                ? c.reference_image.startsWith("/")
+                  ? `${API_URL}${c.reference_image}`
+                  : c.reference_image
+                : c.refs?.[0]
+                  ? `${API_URL}${c.refs[0]}`
+                  : null;
+              return (
+                <article key={`lane-${c.id}`} className="scene lane">
+                  <div className="schead">
+                    <h4>{c.title}</h4>
+                    <span className="m">shot 1</span>
+                    <span className="spacer" />
+                    <span className="m">
+                      {choiceFor(c).duration}s · {choiceFor(c).ratio}
+                    </span>
+                  </div>
+                  <div className="scframe drag">
+                    {still ? (
+                      <img src={still} alt="" draggable title="Drag me into Runway's start-image slot" />
+                    ) : (
+                      <span className="scempty">
+                        <span className="m">no keyframe · text-to-video</span>
+                      </span>
+                    )}
+                  </div>
+                  <p className="scpre">{c.prompt}</p>
+                  <label
+                    className={`lanedrop${dropping[c.id] ? " busy" : ""}`}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.currentTarget.classList.add("over");
+                    }}
+                    onDragLeave={(e) => e.currentTarget.classList.remove("over")}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      e.currentTarget.classList.remove("over");
+                      void fileClip(c, e.dataTransfer.files?.[0]);
+                    }}
+                  >
+                    <input type="file" accept="video/mp4" hidden onChange={(e) => void fileClip(c, e.target.files?.[0])} />
+                    <Upload size={14} strokeWidth={1.6} />
+                    {dropping[c.id] ?? "Drop the finished mp4 here, or click to pick it"}
+                  </label>
+                  <div className="scfoot">
+                    <button type="button" className="tag" onClick={() => void copyPrompt(c)}>
+                      <Copy size={12} strokeWidth={1.6} /> Copy prompt
+                    </button>
+                    <span className="spacer" />
+                    <span className="m">runway explore · filed as free</span>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </>
+      ) : null}
 
       <div className="chead">
         <h3>Jobs</h3>

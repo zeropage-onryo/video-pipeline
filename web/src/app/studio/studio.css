@@ -2123,3 +2123,43 @@ textarea.zin {
   font-family: var(--body);
   font-size: 13px;
 }
+
+/* the subscription lane: the keyframe is the thing you drag out, the
+   drop target is the thing you drag into */
+.scene.lane {
+  border-style: dashed;
+  cursor: default;
+}
+.scframe.drag img {
+  cursor: grab;
+}
+.lanedrop {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  height: 58px;
+  border-radius: 12px;
+  border: 1px dashed rgb(228 0 43 / 0.4);
+  background: transparent;
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 8.5px;
+  color: var(--dim);
+  cursor: pointer;
+  transition:
+    border-color var(--t),
+    background var(--t),
+    color var(--t);
+}
+.lanedrop:hover,
+.lanedrop.over {
+  border-color: rgb(228 0 43 / 0.9);
+  background: var(--signal-soft);
+  color: var(--text);
+}
+.lanedrop.busy {
+  opacity: 0.6;
+  pointer-events: none;
+}
