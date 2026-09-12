@@ -11,8 +11,9 @@ actually working.
 
 Never raises on a single video: a missing key or a failed call is
 recorded in the summary and the sweep moves on -- the same contract as
-youtube/instagram.refresh_metrics_for_video. Facebook and TikTok are
-stubbed until their modules land (BACKLOG #4).
+youtube/instagram.refresh_metrics_for_video. TikTok joined the sweep on
+2026-09-07 (src/tiktok.py); Facebook is still stubbed until its module
+lands (BACKLOG #4).
 """
 import argparse
 import os
@@ -23,7 +24,7 @@ from dotenv import load_dotenv
 
 from . import accounts, db
 
-WIRED_PLATFORMS = ("youtube", "instagram")
+WIRED_PLATFORMS = ("youtube", "instagram", "tiktok")
 
 
 def _refresh_platform(platform, videos, db_path=None):
@@ -38,13 +39,25 @@ def _refresh_platform(platform, videos, db_path=None):
         token = instagram.access_token()
         return [instagram.refresh_metrics_for_video(v, token=token, db_path=db_path)
                 for v in videos]
-    # facebook / tiktok: modules not wired yet (BACKLOG #4)
+    if platform == "tiktok":
+        from . import tiktok
+        token = tiktok.access_token()
+        return [tiktok.refresh_metrics_for_video(v, token=token, db_path=db_path)
+                for v in videos]
+    # facebook: module not wired yet (BACKLOG #4)
     return [{"ok": False, "error": f"{platform} refresh not wired yet"} for _ in videos]
 
 
 def refresh_all(platform=None, db_path=None, account_id: Optional[int] = None):
     """Sweep metrics for all posted videos, grouped by platform. Returns
-    {platform: {videos, refreshed, failed, errors}}."""
+    {platform: {videos, refreshed, failed, errors}}.
+
+    Legacy (pre-pipeline) videos are refreshed like any other on
+    purpose: keeping their numbers current is what the Analytics page
+    reads, and a stale row there is a lie about the channel. What they
+    do NOT do is teach -- that line is drawn one step down, in the
+    promote step below (2026-09-07).
+    """
     kwargs = {"dsn": db_path} if db_path is not None else {}
     videos = db.list_videos(limit=10000, **kwargs, account_id=account_id)  # newest first, all platforms
     by_platform = {}
@@ -101,6 +114,13 @@ def main(argv=None):
     # Promote fresh top performers into the proven_results shelf. Needs the
     # RAG store (Postgres); if it's down, the refresh still counted -- the
     # promote just waits for next run rather than taking the sweep down.
+    #
+    # This is the teaching half of the sweep, and it sees pipeline posts
+    # only: promote_winners.candidate_winners asks db for a legacy-free
+    # window on both the median and the candidates (2026-09-07). The
+    # exclusion lives there rather than being re-implemented here, so the
+    # nightly job and a hand-run `promote_winners propose` can never
+    # disagree about what counts as a winner.
     try:
         from . import promote_winners
         result = promote_winners.run_auto()

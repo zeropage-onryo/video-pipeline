@@ -81,3 +81,20 @@ data/thumbs
 data/refs.local-*
 data.symlink-backout-*
 venv
+
+# --- 2026-09-07: local-only trees that must never enter history ---
+web/node_modules/
+web/.next/
+Claude outputs/
+_to_delete/
+data/frames/
+data/.research/
+.DS_Store
+# sprint media (clips, keyframes, sref stills) lives on disk / R2, not in git;
+# the sheets (.md/.txt) beside them are committed.
+docs/reference-look/**/*.mp4
+docs/reference-look/**/*.png
+docs/reference-look/**/*.jpg
+docs/sprints/**/*.mp4
+docs/sprints/**/*.png
+docs/sprints/**/*.jpg

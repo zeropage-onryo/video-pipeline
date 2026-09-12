@@ -34,7 +34,7 @@ gate).
 
 Config (env): SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_JWT_SECRET
 (optional when the project uses asymmetric signing keys),
-SUPABASE_PROVIDERS (comma list, default "google,discord" -- what the
+SUPABASE_PROVIDERS (comma list, default "google,discord,apple" -- what the
 sign-in page offers; enabling them is done in the Supabase dashboard),
 SESSION_SECRET. Google/Discord client ids live in the dashboard now.
 """
@@ -62,7 +62,7 @@ SESSION_MAX_AGE = 60 * 60 * 24 * 30          # 30 days
 MIN_PASSWORD_LEN = 8
 PKCE_SESSION_KEY = "sb_pkce_verifier"
 JWT_AUDIENCE = "authenticated"
-DEFAULT_PROVIDERS = ("google", "discord")
+DEFAULT_PROVIDERS = ("google", "discord", "apple")
 
 
 def _session_secret() -> str:
@@ -236,6 +236,29 @@ def current_account_id(request: Request) -> int:
         from fastapi import HTTPException
         raise HTTPException(status_code=403, detail="no account access")
     return min(int(a["id"]) for a in member_of)
+
+
+def optional_account_id(request: Request) -> Optional[int]:
+    """`current_account_id`, asked as a question instead of enforced as a
+    gate: the tenant, or None when there is not one.
+
+    Exactly one caller, and it should stay that way: GET /api/capabilities,
+    which the shell asks before it knows whether the person has an account
+    at all. `current_account_id` raises 401/403 there, which would blank
+    the UI for the very states -- signed out, signed in with no membership
+    -- that have their own screens.
+
+    NOT a softer door onto anybody's rows. It answers "who is this, if
+    anyone", and the only thing built on it is which sections the shell
+    draws; every route that READS OR WRITES rows keeps
+    `Depends(current_account_id)`, so a None here can never widen
+    anything. In particular the manual lane's capability flag is computed
+    from this, and the lane's own routes re-ask the gate themselves.
+    """
+    try:
+        return current_account_id(request)
+    except Exception:
+        return None
 
 
 def dev_account_id(request: Request) -> int:
@@ -533,6 +556,11 @@ async def google_login(request: Request):
 @router.get("/discord/login")
 async def discord_login(request: Request):
     return _oauth_login(request, "discord")
+
+
+@router.get("/apple/login")
+async def apple_login(request: Request):
+    return _oauth_login(request, "apple")
 
 
 @router.get("/callback", name="auth_callback")

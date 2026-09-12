@@ -41,6 +41,7 @@ from __future__ import annotations
 import os
 import re
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -53,6 +54,12 @@ from .shot import Shot
 MODELS = ("veo-3.1-generate-preview", "veo-3", "veo-3-fast")
 DEFAULT_MODEL = os.environ.get("VEO_MODEL", "veo-3-fast")   # cheapest first spend
 DEFAULT_RESOLUTION = os.environ.get("VEO_RESOLUTION", "720p")
+# The length generate_video asks for when nobody says otherwise.
+# A CONSTANT rather than a literal in the signature because
+# providers.render_options offers it to the Queue card as the one
+# duration verified against the installed SDK -- two copies of that
+# number is how a card comes to offer a length the adapter refuses.
+DEFAULT_DURATION = 8
 DAILY_CAP = int(os.environ.get("VEO_DAILY_CAP", "6"))
 # The installation-wide wall, beside the per-account one. Defaults to the
 # SAME number, so a single-operator database behaves exactly as it did --
@@ -67,14 +74,30 @@ SPEND_ENV = "VEO_SPEND_OK"
 # not an invoice -- verify against Google's pricing before live spend.
 COST_PER_CLIP_USD = 3.20
 
+# Where a clip lands, and the root anything site-relative resolves
+# against. Both are the runway.py shape, because app/main.py mounts
+# data/renders once and serves every vendor's folder out of it.
+RENDERS_ROOT = Path(__file__).resolve().parent.parent / "data" / "renders"
+RENDER_DIR = RENDERS_ROOT / "veo"
 
-def _safe_error(e: Exception) -> str:
-    """The key must never reach a page, a log line, or a DB row."""
+
+def _safe_error(e: Exception, account_id: Optional[int] = None) -> str:
+    """The key must never reach a page, a log line, or a DB row -- and
+    since BYOK that includes the account's OWN stored key, which is
+    never in this process's environment and so was never being redacted
+    (runway._safe_error had the same hole). Best-effort on the account
+    lookup: this runs on the failure path and must not raise there."""
     text = str(e)
     for name in ("GEMINI_API_KEY", "GOOGLE_API_KEY"):
         value = os.environ.get(name)
         if value:
             text = text.replace(value, f"<{name}>")
+    try:
+        creds = account_keys.key_for(account_id, "veo")
+    except Exception:
+        creds = None
+    if creds and creds.get("api_key"):
+        text = text.replace(creds["api_key"], "<GEMINI_API_KEY>")
     return re.sub(r"key=[A-Za-z0-9_\-]+", "key=<redacted>", text)
 
 
@@ -118,7 +141,7 @@ def has_key(account_id: Optional[int] = None) -> bool:
 
 def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
                    aspect_ratio: str = "9:16", resolution: str = DEFAULT_RESOLUTION,
-                   duration: int = 8, image=None, client=None,
+                   duration: int = DEFAULT_DURATION, image=None, client=None,
                    poll_delay: float = 10.0, timeout_s: float = 600.0,
                    account_id: Optional[int] = None) -> Path:
     """
@@ -215,7 +238,7 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *, shot_id: Optional[i
             return {"ok": False, "candidates": [], "error": refusal}
 
         if shot_id is None:
-            shot_id = _shot_row_for_prompt(prompt, db_path)
+            shot_id = _shot_row_for_prompt(prompt, db_path, account_id)
 
         out_dir = Path(out_dir)
         candidates, errors = [], []
@@ -225,11 +248,13 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *, shot_id: Optional[i
                 generate_video(prompt, out_path, model=model, client=client,
                              account_id=account_id, **cfg)
             except Exception as e:
-                errors.append(f"candidate {i}: {_safe_error(e)}")
+                errors.append(f"candidate {i}: {_safe_error(e, account_id)}")
                 continue
             generation_id = generative.record_generation(
                 shot_id, "veo", prompt,
-                params={"model": model, **cfg},
+                params={"model": model,
+                        "key_source": account_keys.key_source(account_id, "veo", db_path),
+                        **cfg},
                 output_path=str(out_path),
                 cost_usd=COST_PER_CLIP_USD,
                 notes=None,
@@ -241,4 +266,176 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *, shot_id: Optional[i
         return {"ok": bool(candidates), "candidates": candidates, "shot_id": shot_id,
                 "error": "; ".join(errors) if errors else None}
     except Exception as e:
-        return {"ok": False, "candidates": [], "error": _safe_error(e)}
+        return {"ok": False, "candidates": [], "error": _safe_error(e, account_id)}
+
+
+
+def _local_render_bytes(value: str):
+    """A site-relative /renders/ URL -> that file's bytes, or None.
+
+    A render is a local file no model provider can fetch by URL, and the
+    path comes out of a stored shot, so anything escaping data/renders/
+    is refused. runway._local_render_bytes' twin; the copy exists for the
+    same reason that one does -- src/ never imports app/."""
+    try:
+        root = RENDERS_ROOT.resolve()
+        target = (root / value[len("/renders/"):]).resolve()
+        if root in target.parents and target.is_file():
+            return target.read_bytes()
+    except OSError:
+        return None
+    return None
+
+
+def as_prompt_image(value, *, resolve_photo=None):
+    """Anything we might have stored as a reference -> a types.Image Veo
+    can anchor on, or None.
+
+    Veo differs from BOTH of the shapes already in this repo, so this is
+    a third one rather than a copy: Runway takes a public URL or a data:
+    URI, Higgsfield and fal take a URL their servers fetch, and the
+    google-genai SDK takes RAW BYTES with a mime type. That last one is
+    the friendliest of the three -- a keyframe on a machine with no R2
+    still anchors here, where the fetching vendors have to drop it.
+
+    The mime comes from the magic number, never a guess: Nano writes PNG
+    and the pipeline's keyframes are Nano's.
+    """
+    if isinstance(value, (bytes, bytearray)):
+        data = bytes(value)
+    elif value and isinstance(value, str):
+        value = value.strip()
+        data = None
+        if value.startswith("data:image/"):
+            import base64
+            try:
+                data = base64.b64decode(value.split(",", 1)[1])
+            except Exception:
+                data = None
+        elif value.startswith("/renders/"):
+            data = _local_render_bytes(value)
+        elif value.startswith(("http://", "https://")):
+            from .imagery import fetch_image_bytes
+            data = fetch_image_bytes(value)
+        elif resolve_photo is not None:
+            try:
+                target = resolve_photo(value)
+            except Exception:
+                target = None
+            if target is not None:
+                try:
+                    data = Path(target).read_bytes()
+                except OSError:
+                    data = None
+    else:
+        return None
+    if not data:
+        # a reference that cannot be resolved is dropped, never fatal --
+        # generate_for_shot records prompt_image=False either way, so
+        # nothing downstream claims an anchor that was never sent
+        return None
+    from .gemini_utils import sniff_mime
+    return types.Image(image_bytes=data, mime_type=sniff_mime(data))
+
+
+def _publish(out_path: Path, content_type: str) -> str:
+    """R2 when configured (Instagram needs a public URL), else the app's
+    own /renders mount."""
+    from . import storage
+    if storage.configured():
+        return storage.upload_file(
+            out_path, key=f"renders/veo/{out_path.name}",
+            content_type=content_type)
+    return f"/renders/veo/{out_path.name}"
+
+
+def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
+                      model: str = DEFAULT_MODEL,
+                      duration: int = DEFAULT_DURATION,
+                      resolution: str = DEFAULT_RESOLUTION,
+                      resolve_photo=None, client=None,
+                      account_id: Optional[int] = None,
+) -> dict:
+    """
+    Never raises: {"ok", "media_url", "generation_id", "path", "error"}.
+    One render for one concept shot -- runway.generate_for_shot's exact
+    contract, so the Queue's approve can dispatch here without knowing
+    which vendor it is talking to. The spend gate lives inside
+    generate_video, the cap is checked before any call, and the attempt
+    is a generations row either way the pick later goes.
+
+    THIS IS THE MOST EXPENSIVE BUTTON IN THE REPO. Veo is $3.20 a clip
+    against Runway's ~$0.25, and VEO_DAILY_CAP defaults to 6 for that
+    reason. Nothing here loosens either wall; the Queue simply stops
+    being able to reach the cheap vendors only.
+    """
+    from . import preprod, render_assets
+    kwargs = {"dsn": db_path} if db_path is not None else {}
+
+    try:
+        generative.init(**kwargs)
+        refusal = generative.cap_error(
+            "veo", 1, account_id=account_id,
+            per_account=DAILY_CAP, ceiling=GLOBAL_DAILY_CAP,
+            dsn=db_path,
+            env_prefix="VEO", phrase="generations used",
+            used=generations_today(db_path=db_path, account_id=account_id),
+            used_everywhere=generations_today(db_path=db_path, everyone=True),
+        )
+        if refusal:
+            return {"ok": False, "error": refusal}
+
+        concept = preprod.get_concept(concept_id, **kwargs, account_id=account_id)
+        if concept is None:
+            return {"ok": False, "error": f"no concept {concept_id}"}
+        shot = next((s for s in concept.get("shots") or []
+                     if s.get("n") == shot_n), None)
+        if shot is None:
+            return {"ok": False, "error": f"concept {concept_id} has no shot {shot_n}"}
+        prompt = (shot.get("prompt") or "").strip()
+        if not prompt:
+            return {"ok": False,
+                    "error": f"shot {shot_n} has no AI prompt to render from"}
+
+        image = as_prompt_image(shot.get("reference_image"),
+                               resolve_photo=resolve_photo)
+
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        out_path = RENDER_DIR / f"c{concept_id}-s{shot_n}-{stamp}.mp4"
+        generate_video(prompt, out_path, model=model, duration=duration,
+                       resolution=resolution, image=image, client=client,
+                       account_id=account_id)
+
+        shot_row_id = _shot_row_for_prompt(prompt, db_path, account_id)
+        generation_params = {"model": model, "duration": duration,
+                             "resolution": resolution,
+                             "concept_id": concept_id, "shot_n": shot_n,
+                             "prompt_image": image is not None,
+                             "key_source": account_keys.key_source(
+                                 account_id, "veo", db_path)}
+        generation_id = generative.record_generation(
+            shot_row_id, "veo", prompt,
+            params=generation_params,
+            output_path=str(out_path),
+            cost_usd=estimate_cost(1),
+            **kwargs,
+            account_id=account_id)
+
+        media_url = _publish(out_path, "video/mp4")
+        preprod.set_shot_media_url(concept_id, shot_n, media_url,
+                                   **kwargs, account_id=account_id)
+        asset = render_assets.record_best_effort(
+            account_id=account_id,
+            generation_id=generation_id, tool="veo", model=model,
+            media_kind="video", prompt=prompt, media_url=media_url,
+            output_path=str(out_path), project=concept.get("brand"),
+            concept_id=concept_id, shot_n=shot_n,
+            metadata=generation_params,
+            dsn=db_path,
+        )
+        return {"ok": True, "media_url": media_url,
+                "generation_id": generation_id, "path": str(out_path),
+                "asset_id": asset["id"], "asset_rag": asset["rag"],
+                "error": None}
+    except Exception as e:
+        return {"ok": False, "error": _safe_error(e, account_id)}

@@ -423,3 +423,74 @@ def test_import_still_adds_videos_when_stats_call_fails(tmp_db, monkeypatch):
     assert result["added"] == 1
     videos = db.list_videos(dsn=tmp_db, account_id=None)
     assert db.get_video_history(videos[0]["id"], dsn=tmp_db, account_id=None) == []
+
+
+# ---------- Shorts: the tag, and what earns it ----------
+
+def test_a_vertical_clip_under_a_minute_is_a_short():
+    assert youtube.is_short(shape=(1080, 1920, 22.0)) is True
+
+
+def test_a_horizontal_or_long_clip_is_not():
+    """The tag is checked rather than assumed: a horizontal cut carrying
+    #Shorts is a lie told to the algorithm."""
+    assert youtube.is_short(shape=(1920, 1080, 22.0)) is False
+    assert youtube.is_short(shape=(1080, 1920, 90.0)) is False
+    assert youtube.is_short(shape=(0, 0, 0.0)) is False      # unreadable file
+
+
+def test_shorts_caption_adds_the_tag_once():
+    assert youtube.shorts_caption("a gearing-up ritual") == "a gearing-up ritual #Shorts"
+    assert youtube.shorts_caption("already #shorts") == "already #shorts"
+
+
+def test_execute_post_action_tags_a_short_and_takes_the_graphs_clip_path(monkeypatch, tmp_path):
+    """The graph hands the action a rendered clip as `video_url` -- a
+    local path on any machine without R2 -- and this used to refuse it
+    with "no video_path" while the file sat right there."""
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x")
+    monkeypatch.setenv("YT_CLIENT_ID", "c")
+    monkeypatch.setenv("YT_CLIENT_SECRET", "s")
+    monkeypatch.setenv("YT_REFRESH_TOKEN", "r")
+    monkeypatch.setattr(youtube, "probe_shape", lambda path: (1080, 1920, 20.0))
+    seen = {}
+
+    def fake_upload(path, title, description="", privacy_status="private", **kw):
+        seen.update({"path": path, "title": title, "description": description})
+        return {"ok": True, "video_id": "v1", "url": "https://youtu.be/v1", "error": None}
+
+    monkeypatch.setattr(youtube, "upload_video", fake_upload)
+    action = {"platform": "youtube", "video_url": str(clip), "caption": "the hook"}
+    youtube.execute_post_action(action)
+
+    assert seen["path"] == str(clip)
+    assert "#Shorts" in seen["description"]
+    assert "#Shorts" in seen["title"]
+    assert action["result"]["video_id"] == "v1"
+
+
+def test_a_public_url_alone_is_still_refused(monkeypatch):
+    """YouTube uploads bytes; an https media_url is genuinely unusable
+    here and must say so rather than uploading nothing."""
+    monkeypatch.setenv("YT_CLIENT_ID", "c")
+    monkeypatch.setenv("YT_CLIENT_SECRET", "s")
+    monkeypatch.setenv("YT_REFRESH_TOKEN", "r")
+    with pytest.raises(RuntimeError, match="no local video file"):
+        youtube.execute_post_action({"video_url": "https://cdn.example/c.mp4"})
+
+
+def test_a_long_horizontal_clip_gets_no_tag(monkeypatch, tmp_path):
+    clip = tmp_path / "wide.mp4"
+    clip.write_bytes(b"x")
+    monkeypatch.setenv("YT_CLIENT_ID", "c")
+    monkeypatch.setenv("YT_CLIENT_SECRET", "s")
+    monkeypatch.setenv("YT_REFRESH_TOKEN", "r")
+    monkeypatch.setattr(youtube, "probe_shape", lambda path: (1920, 1080, 120.0))
+    seen = {}
+    monkeypatch.setattr(youtube, "upload_video",
+                        lambda path, title, description="", privacy_status="private", **kw:
+                        (seen.update({"title": title, "description": description}),
+                         {"ok": True, "video_id": "v", "url": "u", "error": None})[1])
+    youtube.execute_post_action({"video_path": str(clip), "caption": "a long cut"})
+    assert "#Shorts" not in seen["title"] and "#Shorts" not in seen["description"]

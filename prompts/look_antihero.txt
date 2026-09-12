@@ -1,0 +1,57 @@
+ANTIHERO LOOK — distilled from the reference clip Michael handed over
+(docs/reference-look/sref/moto_*.jpg, 2026-09-04). Every idea, image search
+and prompt for this brand matches THIS, whatever world it is set in.
+
+  GRADE     teal-cyan shadows against sodium/tungsten amber. ONE red accent
+            per frame (a neon sign, a tail light, a signal) and never more.
+  AIR       dense fog or haze; headlight and practical halos bloom in it.
+  GROUND    wet. Asphalt, concrete, tile — mirror reflections of every light.
+  LENS      anamorphic feel, 35–50mm wide with a tight 85mm insert cut
+            against it; shallow focus on the insert.
+  FINISH    commercial-grade, glossy, high contrast, rich blacks. NOT raw
+            handheld, NOT matte, NOT "imperfect framing".
+  NOTE      the old house style (enhance_system.txt: raw, matte, imperfect)
+            fights this look and loses; it is not the default any more.
+  SCALE     subject small-to-mid in a wide frame; the world is visible
+            around him.
+  CAST      Michael (face photos on file — name him and they attach) and
+            the white Ducati Panigale 959. He is the person this world is
+            happening TO. The white-and-red leathers are ONE wardrobe, the
+            reference clip's — not his uniform: each world dresses him its
+            own way (hide-wrapped boots and a salt-crusted coat; a sealed
+            hazmat with a cracked visor; a soaked undershirt; a 70s
+            waxed jacket) and changes what covers his face — helmet, mask,
+            respirator, hood, rain, blood, age.
+  LIKENESS  Michael: early thirties, fair skin, an EVEN light stubble across
+            the whole jaw and upper lip -- NOT a grown or shaped mustache, he
+            does not have one -- medium dark-brown hair, side-swept, dark
+            straight brows, hazel-brown eyes. Wardrobe: no default jacket.
+            The white cafe-racer jacket (red quilted shoulders, black
+            sleeves, round chest patch) is ONE option among the CAST line's
+            per-world wardrobes above -- reach for it only when a scene
+            specifically wants it, never automatically. Write this line into
+            every prompt that has him in it; the PHOTOS carry the face, the
+            line stops the hair drifting.
+  NOTE      (2026-09-07) the prior LIKENESS wording was also wrong -- it is
+            why every EIGHT EXITS keyframe grew a mustache he does not
+            have. Verified against a real tight headshot,
+            characters/michael/07-headshot-frontal-neutral.jpg -- the old
+            reference set (IMG_0586/0593/0599) was three wide, full-body
+            shots with no close crop of his face, which is likely WHY the
+            wording drifted wrong twice: with little facial detail in the
+            photos to lock onto, the text line was doing most of the work.
+            refgen.LIKENESS_PHOTOS now leads with that headshot.
+  FRAMING   whenever Michael is the subject his face is at least a third of
+            frame height -- medium or closer, the world BEHIND him. The
+            SCALE line above is for world shots without him; a face at 50px
+            is a stranger for ten seconds of Runway (2026-09-06, his call).
+  IDENTITY  stills with Michael render on Nano Banana Pro with his REAL
+            PHOTOS attached as reference parts (characters/michael --
+            refgen.LIKENESS_PHOTOS, three angles) and a prompt that opens
+            "this is the same man as in the attached reference photos".
+            That is the only method that has reproduced him (2026-09-06,
+            his call after seeing the Soul renders). The trained Higgsfield
+            Soul "Mike Antihero v2" on Soul Cinema / Soul V2 rendered a
+            different actor; an Element hint inside Nano put his mustache
+            on somebody else. Runway's likeness also drifts on an extreme
+            push-in -- hold him at medium/medium-close in motion prompts.

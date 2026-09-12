@@ -41,7 +41,7 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
-from . import accounts, autonomy, db, preprod, refbin, scout
+from . import accounts, autonomy, db, imagesearch, preprod, refbin, scout
 
 ARCHIVE_DESCRIPTION = (
     "Take a concept off the board. Hides it; never deletes. `reason` is WHY "
@@ -358,14 +358,55 @@ def pick_idea(idea_id: int, picked: bool = True,
               dsn: Optional[str] = None,
               account_id: Optional[int] = None,
 ) -> dict[str, Any]:
-    """Mark a concept worth rendering -- the label `pick_rate` reads.
+    """Mark a concept worth rendering -- the label `pick_rate` reads --
+    and draw its still.
 
-    Picking does NOT render. It puts the concept in front of the Queue's
-    spend gate, where approving is what calls Runway, on the machine.
+    THE ONE PLACE THIS SURFACE SPENDS (2026-09-08, Mike's call), and a
+    deliberate amendment to "the read/decide tools never spend", not an
+    oversight. The rule it serves is the budget one: the night writes
+    text and the PICK draws the image, so a pick from a phone that
+    produced no still meant the board and the phone disagreed about what
+    picking means -- and the card Mike opens next has nothing on it.
+
+    It is still not the RENDER gate. A keyframe is cents on the existing
+    Gemini key under NANO_DAILY_CAP; the clip is dollars through Runway,
+    and approving in the Queue, on the machine, is still the only thing
+    that calls it. `scene_chain.pick_skip_reason` is the same guard the
+    board uses -- one predicate, so the two doors cannot drift into
+    billing a scene twice.
     """
     account_id = _account(account_id, dsn)
     preprod.set_picked(int(idea_id), picked=picked, dsn=dsn, account_id=account_id)
-    return _card(preprod.get_concept(int(idea_id), dsn=dsn, account_id=account_id))
+    card = _card(preprod.get_concept(int(idea_id), dsn=dsn, account_id=account_id))
+    if picked:
+        card["keyframe"] = draw_pick_still(idea_id, dsn=dsn, account_id=account_id)
+    return card
+
+
+def draw_pick_still(idea_id: int, dsn: Optional[str] = None,
+                    account_id: Optional[int] = None) -> dict[str, Any]:
+    """Render the picked scene's still, reporting rather than raising.
+
+    The pick has already been recorded by the time this runs, and it is
+    the label that matters; a still that could not be drawn (the daily
+    cap, no key, a 503) leaves a scene that is picked, prompted and not
+    yet drawn -- which is what every scene looked like before this
+    existed. So this never raises: the tool result carries what
+    happened instead, because an agent that sees a tool error retries
+    the identical call, and the retry is what would spend twice.
+    """
+    from . import scene_chain
+    try:
+        result = scene_chain.draw_on_pick(int(idea_id), db_path=dsn,
+                                          account_id=account_id)
+    except Exception as e:                      # pragma: no cover - defensive
+        return {"ok": False, "note": f"still not drawn: {e}"}
+    if result.get("skipped"):
+        return {"ok": False, "note": result["skipped"]}
+    if not result.get("ok"):
+        return {"ok": False, "note": result.get("error") or "keyframe failed"}
+    return {"ok": True, "url": result.get("media_url"),
+            "frames": len(result.get("frames") or [])}
 
 
 def shoot_idea(idea_id: int, shot: bool = True,
@@ -536,11 +577,84 @@ def pipeline_stats(dsn: Optional[str] = None, account_id: Optional[int] = None) 
 
 # --- the research bin ------------------------------------------------------
 
+def _reachable(url: str) -> bool:
+    """Does this page actually exist? A HEAD, five seconds, fail-open on
+    anything that is not a definite 4xx.
+
+    Fail-open because the job here is catching FABRICATION, not policing
+    the web: a timeout or a bot-wall is not evidence the page is fake,
+    and refusing on one would make the bank hostage to a flaky network.
+    A 404 is evidence.
+    """
+    import requests
+    try:
+        resp = requests.head(url, timeout=5, allow_redirects=True)
+        if resp.status_code == 405:              # HEAD not allowed; try GET
+            resp = requests.get(url, timeout=5, stream=True)
+        return not (400 <= resp.status_code < 500)
+    except Exception:
+        return True
+
+
+def _store_local(path_str: str) -> Optional[str]:
+    """A frame off his own disk into the bin, through refbin's own
+    normalisation so it is addressed exactly like every other reference
+    and resolves through the same reader."""
+    try:
+        data = Path(path_str).read_bytes()
+    except OSError:
+        return None
+    jpeg = refbin.to_jpeg(data)
+    return refbin.save(jpeg) if jpeg else None
+
+
+def find_images(
+    query: str,
+    brand: str = "",
+    limit: int = 6,
+    dsn: Optional[str] = None,
+) -> dict[str, Any]:
+    """Look for reference images, and hand back ids -- never URLs.
+
+    THE OMITTED FIELD IS THE FEATURE. On 2026-09-02 an agent with no
+    image search banked eleven references by writing stock URLs from
+    memory; the CDNs served *something* for every guess, so a sunny tree
+    was banked as "bark texture" and six of the source pages 404. It was
+    not lying, it was recalling -- and no prompt fixes recall.
+
+    So the candidate keeps the URL and the caller only ever holds an
+    `id`. There is no address here to invent, and `bank_reference`
+    accepts an id that this function issued or nothing at all.
+    """
+    found = imagesearch.search(query, brand=brand or None,
+                               limit=max(1, min(int(limit), 12)), dsn=dsn)
+    live = imagesearch.sources()
+    return {
+        "query": " ".join((query or "").split()),
+        "sources": live,
+        "count": len(found),
+        # "no lane is configured" and "nothing matched" are different
+        # problems with the same empty list, and the second one wasted
+        # two days when the scout bin was silently unfillable.
+        "note": ("" if found else
+                 ("no image source is configured — Openverse is off "
+                  "(OPENVERSE_LANE=0) and no GOOGLE_CSE_ID / REDDIT_CLIENT_ID / "
+                  "UNSPLASH_ACCESS_KEY / PEXELS_API_KEY is set"
+                  if not imagesearch.any_web(live)
+                  else "nothing matched; try plainer words for the light and "
+                       "the surfaces rather than the story")),
+        "images": [{"id": c["id"], "shows": c.get("title") or "(no description)",
+                    "source": c["source"], "credit": c.get("credit") or ""}
+                   for c in found],
+    }
+
+
 def bank_reference(
     finding_id: int,
-    image_url: str,
-    source_url: str,
+    image_url: str = "",
+    source_url: str = "",
     title: str = "",
+    candidate_id: str = "",
     dsn: Optional[str] = None,
 ) -> dict[str, Any]:
     """Put ONE reference image behind a banked spark.
@@ -566,34 +680,70 @@ def bank_reference(
 
     Capped at MAX_BIN_IMAGES per pass, same as the crawl: a bin bigger
     than one generation carries has a tail that can never be used.
+
+    TWO WAYS IN, AND ONLY ONE OF THEM IS FOR AGENTS.
+
+    `candidate_id` redeems something `find_images` served: the URL and
+    the attribution come out of the row WE wrote, so neither can be
+    invented. That is the path the research agent takes.
+
+    A bare `image_url` is the composer's path -- a photo Michael dragged
+    on, where a person vouched for it. Left open for that reason, but it
+    now has to survive `_reachable(source_url)`: on 2026-09-02 six of
+    eleven agent-banked references cited Unsplash pages that 404, and
+    nothing had ever resolved one. A HEAD request would have caught
+    every one.
     """
-    finding = scout.get_finding(int(finding_id), dsn=dsn)
+    # strict: a database that could not be asked must not come back as
+    # "this spark does not exist" -- the agent's only move on that answer
+    # is to give up on the images, which is what happened on 2026-09-07.
+    try:
+        finding = scout.get_finding(int(finding_id), dsn=dsn, strict=True)
+    except scout.Unreadable as e:
+        raise Refused(str(e)) from e
     if finding is None:
         raise ValueError(f"no finding {finding_id}")
+
+    local_path = ""
+    if candidate_id:
+        candidate = imagesearch.get(candidate_id, dsn=dsn)
+        if candidate is None:
+            # An id nobody issued is what a guess looks like now, and it
+            # has to say so rather than falling through to a fetch.
+            raise ValueError(
+                f"no candidate {candidate_id!r} — ids come from find_images "
+                f"and cannot be composed; search again and pick one")
+        image_url = candidate["image_url"]
+        source_url = candidate["source_url"]
+        title = title or candidate.get("title") or ""
+        if candidate["source"] == "frames":
+            # His own footage never leaves this machine, so there is no
+            # URL to fetch and no host to guard -- the "url" is a path.
+            local_path, image_url = candidate["image_url"], ""
+    elif not (image_url or "").strip():
+        raise ValueError("give either a candidate_id from find_images or an "
+                         "image_url")
+
     if not (source_url or "").strip():
         raise ValueError("source_url is required — an unattributed reference "
                          "is the wrong thing to put in front of a spend")
+    if not candidate_id and not _reachable(source_url):
+        raise ValueError(f"source_url {source_url!r} does not resolve — an "
+                         f"attribution nobody can check is worse than none")
 
-    pass_id = scout.pass_id_for(finding, dsn=dsn)
 
-    stored = refbin.fetch(image_url)
-    if not stored:
-        return {"ok": False, "finding_id": finding["id"], "pass_id": pass_id,
-                "error": "not a readable image, too large, or a refused host",
-                "banked": len(scout.bin_for_pass(pass_id, dsn=dsn))}
-
-    row = scout.bin_add(finding["brand"], pass_id, stored,
-                        source_url=source_url.strip(), title=title.strip(),
-                        lane="agent", dsn=dsn)
-    banked = scout.bin_for_pass(pass_id, dsn=dsn)
-    if row is None:
-        return {"ok": False, "finding_id": finding["id"], "pass_id": pass_id,
-                "url": stored, "banked": len(banked),
-                "error": f"already banked, or the pass is full "
-                         f"({scout.MAX_BIN_IMAGES} images)"}
-    return {"ok": True, "finding_id": finding["id"], "pass_id": pass_id,
-            "url": stored, "source_url": row["source_url"],
-            "banked": len(banked), "cap": scout.MAX_BIN_IMAGES}
+    # The fetch-and-bank tail is scout's, shared with the automatic
+    # backstop (`scout.illustrate`). Everything above this line is what
+    # is specific to an AGENT asking: the id has to have been issued, and
+    # the attribution has to resolve.
+    result = scout.bank_candidate(
+        finding,
+        {"image_url": local_path or image_url,
+         "source_url": source_url, "title": title,
+         "source": "frames" if local_path else "", "lane": "agent"},
+        dsn=dsn)
+    result.setdefault("finding_id", finding["id"])
+    return result
 
 
 def spark_images(finding_id: int, dsn: Optional[str] = None) -> dict[str, Any]:
@@ -708,7 +858,10 @@ def resolve_finding(spark: str, brand: str, finding_id: Optional[int] = None,
     spark = " ".join((spark or "").split())
     finding = None
     if finding_id is not None:
-        finding = scout.get_finding(int(finding_id), dsn=dsn)
+        try:
+            finding = scout.get_finding(int(finding_id), dsn=dsn, strict=True)
+        except scout.Unreadable as e:
+            raise Refused(str(e)) from e
         if finding is None:
             raise ValueError(f"no finding {finding_id}")
         if spark and not scout.claims(finding["id"], spark, dsn=dsn):
@@ -837,8 +990,8 @@ def run_graph(spark: str = "", brand: str = "", goal: str = "",
 
 TOOLS = (
     list_ideas, get_idea, search_ideas, capture_idea, pick_idea,
-    archive_idea, bank_spark, bank_reference, next_spark, list_sparks, spark_images,
-    pipeline_stats,
+    archive_idea, bank_spark, bank_reference, find_images, next_spark,
+    list_sparks, spark_images, pipeline_stats,
 )
 ENGINE_TOOLS = (run_research, run_graph)
 
@@ -946,9 +1099,17 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
 
     @server.tool(annotations=writes)
     def pick(idea_id: int, picked: bool = True) -> dict:
-        """Mark a concept worth rendering. Does NOT render or spend --
-        it puts the concept in front of the Queue's spend gate, which a
-        human approves on the machine."""
+        """Mark a concept worth rendering, and draw its keyframe.
+
+        The still costs cents and is the point of picking: the nightly
+        run writes text, and the image is drawn for the ones a person
+        chose. `keyframe` in the result says whether one was drawn and
+        why not when it was not -- it is never an error, so do NOT
+        retry a pick that came back without a still.
+
+        This is still not the video: the CLIP is dollars, and approving
+        in the Queue on the machine is the only thing that spends
+        them."""
         return _t(pick_idea, idea_id, picked=picked, dsn=dsn)
 
     @server.tool(annotations=writes)
@@ -998,19 +1159,60 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
         return _t(spark_images, finding_id, dsn=dsn)
 
     @server.tool(annotations=writes)
-    def reference(finding_id: int, image_url: str, source_url: str,
+    def reference(finding_id: int, candidate_id: str = "",
+                  image_url: str = "", source_url: str = "",
                   title: str = "") -> dict:
         """Bank one reference image behind a spark, so the run it feeds
         has something to render against and not just words.
 
-        Hand over the image's URL and the page it came from -- this
-        downloads it here, through the same guards and into the same
-        /refs/<sha>.jpg bin a composer upload lands in. Attribution is
-        required. Your own cast and prop photos do NOT go through here:
-        they are already on file and get attached automatically to any
-        scene that names them, ahead of anything banked."""
-        return _t(bank_reference, finding_id, image_url=image_url,
-                  source_url=source_url, title=title, dsn=dsn)
+        Pass a `candidate_id` from `find_images`. That is the whole
+        interface for you: the image and its attribution come from the
+        row the search wrote, so nothing here can be mistyped or
+        remembered wrong. An id that did not come from a search is
+        refused rather than fetched.
+
+        (`image_url` + `source_url` exist for a person dragging a photo
+        onto the composer, where someone has actually looked at it.)
+
+        Your own cast and prop photos do NOT go through here: they are
+        already on file and get attached automatically to any scene that
+        names them, ahead of anything banked."""
+        return _t(bank_reference, finding_id, candidate_id=candidate_id,
+                  image_url=image_url, source_url=source_url, title=title,
+                  dsn=dsn)
+
+    @server.tool(annotations=writes)
+    def imagine_reference(finding_id: int, hook_frame: str) -> dict:
+        """Render ONE reference still for a spark, in the brand's look,
+        from its hook frame -- and bank it behind the spark.
+
+        This is how an invented world gets a reference: no photograph
+        of a flooded mall lit by generators exists, so one is rendered.
+        Pass the `hook_frame` you wrote for the spark (what is on screen
+        in frame one), nothing else -- the look is added here. Midjourney
+        first, then Gemini's image model, then Higgsfield; the result
+        says which one rendered. One call per spark; there is a daily
+        cap and the note tells you when it is reached. Do this BEFORE
+        `images_for`, and then add one or two real photographs for the
+        light and the surfaces."""
+        from . import refgen
+        return _t(refgen.render_for_finding, finding_id, hook_frame, dsn=dsn)
+
+    @server.tool(annotations=read_only)
+    def images_for(query: str, brand: str = "", limit: int = 6) -> dict:
+        """Search for reference images and get back ids to bank.
+
+        Describe the LIGHT and the SURFACES you want, not the story --
+        "cold fluorescent on wet tile, overhead" finds more than "a man
+        regretting something". Then pass an id straight to `reference`.
+
+        You never see or supply a URL: results carry an id, what the
+        image shows, and who it belongs to. Results are images pulled
+        off the internet for THIS spark -- Reddit posts, web image
+        search, the open index -- so name the WORLD and the LOOK
+        together: "flooded mall generator light teal" finds more than
+        either half alone. Two or three searches beat one."""
+        return _t(find_images, query, brand=brand, limit=limit, dsn=dsn)
 
     @server.tool(annotations=read_only)
     def stats() -> dict:

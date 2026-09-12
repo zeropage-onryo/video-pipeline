@@ -35,6 +35,52 @@ fi
 source venv/bin/activate
 mkdir -p data
 
+# ONE WALK PER NIGHT (added 2026-09-08). On the night of 09-07 this script
+# ran twice: two nightly_runs rows, 76 graph runs, ~$3.25 of Gemini instead
+# of ~$1.70. The audit found exactly ONE LaunchAgent installed (22:00, no
+# RunAtLoad, no KeepAlive, a single StartCalendarInterval), nothing in
+# /Library, and no crontab -- while launchd itself reported runs = 2. So the
+# second start comes from launchd (a wake-from-sleep catch-up is the usual
+# cause) and NO plist edit can prevent it. The script defends itself instead.
+#
+# Two guards, because they fail differently:
+#   * the lock directory is atomic and catches a CONCURRENT second start.
+#     mkdir is the portable test-and-set -- macOS ships no flock binary.
+#   * the night marker catches a SEQUENTIAL second start, after the first
+#     finished and released the lock (which is what actually happened: walk
+#     two began three seconds after walk one wrote its row). A "night" runs
+#     midday to midday, so a 22:00 walk and a 03:30 catch-up are one night.
+# Both exit 0: a refused duplicate is the correct outcome, not a failure for
+# a scheduler to report. FORCE_NIGHTLY=1 runs anyway, for a deliberate
+# manual walk.
+#
+# The marker is written BEFORE the walk, so a crash mid-walk consumes the
+# night. That is the safe direction: skipping a night costs nothing, and
+# double-spending is the bug being fixed.
+LOCK="data/.nightly.lock"
+MARK="data/.nightly-night"
+NIGHT="$(date -v-12H +%F 2>/dev/null || date -d '-12 hours' +%F)"
+if [ "${FORCE_NIGHTLY:-0}" != "1" ]; then
+  # A kill -9 leaves the lock behind and would block every future night.
+  if [ -d "$LOCK" ] && [ -z "$(find "$LOCK" -maxdepth 0 -mmin -480 2>/dev/null)" ]; then
+    rmdir "$LOCK" 2>/dev/null \
+      && echo "$(date -u +%FT%TZ) morning: cleared a stale lock" >> data/morning_prompts.log
+  fi
+  if ! mkdir "$LOCK" 2>/dev/null; then
+    echo "$(date -u +%FT%TZ) morning: another run holds $LOCK -- skipping (FORCE_NIGHTLY=1 to override)" \
+      >> data/morning_prompts.log
+    exit 0
+  fi
+  trap 'rmdir "$LOCK" 2>/dev/null' EXIT
+  if [ -f "$MARK" ] && [ "$(cat "$MARK")" = "$NIGHT" ]; then
+    echo "$(date -u +%FT%TZ) morning: night $NIGHT already walked -- skipping (FORCE_NIGHTLY=1 to override)" \
+      >> data/morning_prompts.log
+    exit 0
+  fi
+  echo "$NIGHT" > "$MARK"
+fi
+
+
 # 1) Pull the latest post analytics (YouTube + Instagram) and promote the
 #    fresh top performers into the proven_results RAG shelf, so tonight's
 #    concepts ground on what's actually working. Never fatal: a missing key
@@ -79,6 +125,33 @@ SCOUT_BANK_PER_BRAND="${SCOUT_BANK_PER_BRAND:-8}"
 python3 -m ops.bank ingest data/idea_agent >> data/morning_prompts.log 2>&1 || \
   echo "$(date -u +%FT%TZ) morning: idea-agent plans failed to ingest (falling back to the crawl)" \
     >> data/morning_prompts.log
+
+# Generated references (src/refgen.py, 2026-09-06): every banked spark gets
+# one still rendered from its hook frame in the brand's look, Midjourney
+# first. Midjourney keeps its own per-run approval gate; this export lets
+# the NIGHT spend AceData credits (~$0.27/still, capped by REFGEN_DAILY_CAP,
+# default 8, and by MIDJOURNEY_DAILY_CAP/MIDJOURNEY_GLOBAL_DAILY_CAP,
+# default 10). Turned on 2026-09-08 (Mike's call) -- still a no-op until
+# ACEDATA_API_KEY exists in .env (sign up at platform.acedata.cloud); until
+# then this falls straight through to Gemini's image model (NANO) exactly
+# as before, and says so in the note.
+export MIDJOURNEY_SPEND_OK=1
+
+# 2b) The research agent (src/research_agent.py) -- Claude/Gemini with the
+#    board's own MCP tools, banking sparks WITH reference images picked from
+#    images_for's closed set. Turned on 2026-09-05. It runs HERE, before the
+#    crawl, and not only via --research on the runs below, because
+#    research_agent.bank_is_full() skips when the bank already holds
+#    RESEARCH_BANK_TARGET unused sparks -- and step 3 fills exactly that many.
+#    With --research alone the node was a no-op every night it was ever
+#    passed. Order is therefore: agent, then crawl tops up what is left, then
+#    sparks.txt. Never fatal; once a day per brand (data/.research stamp).
+for BRAND in antihero zeropage; do
+  python3 -m src.research_agent --brand "$BRAND" \
+    >> data/morning_prompts.log 2>&1 || \
+    echo "$(date -u +%FT%TZ) morning: research agent failed for $BRAND (the crawl still runs)" \
+      >> data/morning_prompts.log
+done
 
 # 3) The research scout. One pass per brand banks scored sparks crawled off
 #    the web / YouTube / feeds (src/scout.py). Never fatal and never
@@ -127,23 +200,21 @@ done
 # that is already full, so runs two through eight cost a database read. With
 # no ANTHROPIC_API_KEY the node reports that and the night is exactly the
 # night it was before.
-SPARKS=()
-while IFS= read -r line || [ -n "$line" ]; do
-  case "$line" in ''|\#*) continue ;; esac
-  SPARKS+=("$line")
-done < prompts/sparks.txt
-
-for PAIR in "antihero antihero" "zeropage zeropage"; do
-  read -r CHANNEL BRAND <<< "$PAIR"
-  i=0
-  for spark in "${SPARKS[@]}"; do
-    if [ "$i" -lt "$SCOUT_PER_BRAND" ]; then
-      python3 -m src.trigger --channel "$CHANNEL" --brand "$BRAND" --scout \
-        --spark "$spark" >> data/morning_prompts.log 2>&1
-    else
-      python3 -m src.trigger --channel "$CHANNEL" --brand "$BRAND" --spark "$spark" \
-        >> data/morning_prompts.log 2>&1
-    fi
-    i=$((i + 1))
-  done
-done
+# THE WALK ITSELF IS PYTHON NOW (src/nightly.py, 2026-09-07). Everything
+# above this line is unchanged; the bash loop that used to live here is
+# not, because bash had no opinion about failure. One DNS miss to the
+# Supabase pooler used to run the other fifteen sparks into the same dead
+# socket; a depleted Gemini card was retried six times per call in all
+# sixteen; a spent image cap produced sixteen identical "no keyframe"
+# holds. The runner asks those questions ONCE (preflight), stops on a
+# systemic failure while continuing past a content one (the breaker),
+# stops at NIGHTLY_BUDGET_USD, drops keyframes rather than the night when
+# the image cap is already gone, and writes a nightly_runs row so a night
+# that never started can be told from a night that produced nothing.
+#
+# Same knobs: SCOUT_PER_BRAND is read from this environment (exported
+# below so the runner sees the value this script resolved), the sparks
+# still come from prompts/sparks.txt, and the pairing is still
+# antihero/antihero + zeropage/zeropage.
+export SCOUT_PER_BRAND
+python3 -m src.nightly walk >> data/morning_prompts.log 2>&1

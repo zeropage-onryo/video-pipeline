@@ -10,9 +10,14 @@ was the suite getting slower.
 So: no test may reach the network. Anything that wants to talk to
 Gemini or YouTube has to patch the function it actually calls, and
 gets a loud, immediate failure naming the offender if it doesn't.
+
+`output_roots_in_tmp` below is the same idea for the OTHER thing a test
+can do to a real machine: write to it. See its docstring.
 """
+import importlib
 import os
 import socket
+from pathlib import Path
 
 import pytest
 
@@ -23,12 +28,75 @@ import pytest
 # which reload app.main under DEV_TOOLS=0.
 os.environ["DEV_TOOLS"] = "1"
 
+# The reference rule (2026-09-08): in production a spark with no pictures
+# behind it does not get written from at all -- `orchestrator.planner`
+# holds the run. Pinned OFF here, deliberately, and for one reason: every
+# graph test in this suite was written to exercise something else (the
+# retry edge, the prompt gate, the keyframe, tenancy) and hands the graph
+# a bare spark, so leaving it on would turn eighty-odd unrelated tests
+# into assertions about reference images. The rule has its own tests,
+# which turn it ON explicitly -- tests/test_reference_rule.py -- the same
+# arrangement ZEROPAGE_GATES uses, where the default is what the suite
+# runs under and the other mode is pinned per test.
+os.environ["ZEROPAGE_REQUIRE_REFS"] = "0"
+
 
 from app.main import app as _APP_AT_IMPORT  # noqa: E402  (see account_scope)
+
+# Modules that are ABOUT the reference rule turn it back on for
+# themselves. Keeping the list here rather than a fixture in each file is
+# deliberate: the rule grew from two directions on the same day and the
+# thing that would actually go wrong is a third enforcement point landing
+# with its tests written under the suite default, passing, and testing
+# nothing. A module named for the rule is opted in by being named.
+REFS_RULE_MODULES = {"test_reference_gate", "test_reference_rule"}
+
+
+@pytest.fixture(autouse=True)
+def _refs_rule(request, monkeypatch):
+    """ZEROPAGE_REQUIRE_REFS on for the rule's own tests, off elsewhere.
+
+    A test whose NAME says it is about an ungrounded scene opts in too --
+    those live in files that are mostly about something else (the queue,
+    the board), and splitting them out would separate them from the
+    fixtures they share."""
+    module = request.module.__name__.rsplit(".", 1)[-1]
+    if module in REFS_RULE_MODULES or "ungrounded" in request.node.name:
+        monkeypatch.setenv("ZEROPAGE_REQUIRE_REFS", "1")
 
 
 class NetworkUseInTest(RuntimeError):
     pass
+
+
+# THE SUITE RUNS AS CI RUNS IT (2026-09-08). Everything below is a
+# DEPLOYMENT POSTURE that lives in .env on Mike's machine and nowhere in
+# CI, so a suite that inherits it is two different suites -- eleven
+# orchestrator tests fail on his Mac and pass on GitHub, and the one that
+# actually mattered (a reference photo's canonical URL) silently swapped
+# what a dozen assertions were checking without either run saying which
+# it got. A test that is ABOUT one of these sets it itself; monkeypatch
+# unwinds these deletes in order, so a setenv inside a test still wins.
+#
+# A fixture and not a module-level pop, because app.main calls
+# load_dotenv() at import and would put every one of them straight back.
+R2_ENV = ("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY",
+          "R2_BUCKET", "R2_PUBLIC_BASE_URL")
+
+POSTURE_ENV = R2_ENV + (
+    "ZEROPAGE_KEYFRAME",         # the night's stills, off since 2026-09-08
+    "ZEROPAGE_UNCANNY",          # the on-brand judge, off on his machine
+    "ZEROPAGE_GRAPH_SCOUT",      # a run that names no direction reads the bank
+    "ZEROPAGE_GRAPH_RESEARCH",   # ... and the research agent runs
+    "LANGSMITH_TRACING",         # tracing is a live POST; the guard fails it
+)
+
+
+@pytest.fixture(autouse=True)
+def r2_off(monkeypatch):
+    """Shipped defaults, not this machine's .env."""
+    for name in POSTURE_ENV:
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -43,6 +111,76 @@ def no_network(monkeypatch, request):
     monkeypatch.setattr(socket.socket, "connect", blocked)
     monkeypatch.setattr(socket.socket, "connect_ex", blocked)
     monkeypatch.setattr(socket, "create_connection", blocked)
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# Every module-level path that names somewhere this project WRITES on the
+# real machine: (module, attribute, where it lives under the project root).
+# The last field is what makes the redirect faithful -- RENDER_DIR has to
+# stay *inside* RENDERS_ROOT or `_local_render_bytes`'s containment check
+# refuses the very file the test just wrote.
+#
+# A test that drives a render patches the HTTP layer, not the output path,
+# and the fake downloader writes 2048 zero bytes because that is what
+# passes the size QC. Nothing about that is wrong -- but with RENDER_DIR
+# still pointing at data/renders/higgsfield/, every one of those stubs
+# landed in the owner's real render directory, named wf-<stamp>.mp4 like
+# any real clip and indistinguishable from one in a listing or in the
+# Queue. Twenty had accumulated there before anyone noticed.
+OUTPUT_ROOTS = (
+    ("src.higgsfield", "RENDERS_ROOT", "data/renders"),
+    ("src.higgsfield", "RENDER_DIR", "data/renders/higgsfield"),
+    ("src.fal", "RENDERS_ROOT", "data/renders"),
+    ("src.fal", "RENDER_DIR", "data/renders/fal"),
+    ("src.runway", "RENDERS_ROOT", "data/renders"),
+    ("src.runway", "RENDER_DIR", "data/renders/runway"),
+    ("src.veo", "RENDERS_ROOT", "data/renders"),
+    ("src.veo", "RENDER_DIR", "data/renders/veo"),
+    ("src.nano_banana", "RENDER_DIR", "data/renders/nano"),
+    ("src.orchestrator", "GENERATED_ROOT", "footage/generated"),
+    ("src.autopilot", "GENERATED_DIR", "footage/generated"),
+    ("src.autopilot", "KILL_SWITCH_PATH", "data/autopilot.off"),
+    ("src.refbin", "REFS_DIR", "data/refs"),
+    ("src.research_agent", "STAMP_DIR", "data/.research"),
+    ("src.promote_winners", "QUEUE_PATH", "data/promotion_queue.json"),
+    ("src.db", "DB_PATH", "data/pipeline.db"),
+    ("app.main", "RENDERS_DIR", "data/renders"),
+    ("app.main", "UPLOAD_REFS_DIR", "data/refs"),
+    ("app.main", "THUMB_DIR", "data/thumbs"),
+    ("app.api", "UPLOAD_REFS_DIR", "data/refs"),
+    ("ops.render_queue", "RENDERS_ROOT", "data/renders"),
+    ("ops.render_queue", "RENDER_DIR", "data/renders/higgsfield"),
+    ("ops.render_queue", "RUNWAY_RENDER_DIR", "data/renders/runway"),
+    ("ops.bank", "PLANS_DIR", "data/idea_agent"),
+)
+
+
+@pytest.fixture(autouse=True)
+def output_roots_in_tmp(tmp_path, monkeypatch):
+    """No test writes into the real data/ or footage/ tree.
+
+    Autouse on purpose, and the reason is the whole point: the tests that
+    littered data/renders/higgsfield/ with 2048-byte stubs were not tests
+    that got the redirect wrong, they were tests that never thought about
+    output paths at all. An opt-in fixture is exactly the thing they would
+    not have opted into. So the default is tmp_path and a module has to be
+    *registered* (OUTPUT_ROOTS above) rather than remembered.
+
+    A test that already points one of these at its own tmp dir keeps
+    working: it patches the same attribute afterwards, so its value wins,
+    and monkeypatch unwinds both in order.
+
+    tests/test_output_roots.py is the other half -- it fails if a new
+    output root appears that nobody added here.
+    """
+    root = tmp_path / "project"
+    for name in ("data", "footage"):
+        (root / name).mkdir(parents=True, exist_ok=True)
+    for module_name, attr, relative in OUTPUT_ROOTS:
+        module = importlib.import_module(module_name)
+        monkeypatch.setattr(module, attr, root / relative, raising=True)
+    return root
 
 
 @pytest.fixture(autouse=True)

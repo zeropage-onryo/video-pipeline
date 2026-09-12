@@ -125,9 +125,18 @@ def board_taste(db_path=None, account_id=None) -> dict:
 
 
 def gather_signals(db_path=None, account_id=None) -> dict:
-    """Everything the judge scores against -- pure, no network."""
+    """Everything the judge scores against -- pure, no network.
+
+    Legacy posts are excluded (2026-09-07): this is the evidence a
+    concept is scored against before it is shot, and the hand-made
+    back catalogue -- short films, cocktail recipes, a haircut -- is a
+    record of a different practice, not of what this pipeline makes.
+    Both halves that touch posted numbers ask for it: the winners
+    listing and the performance signals. ZEROPAGE_LEARN_FROM_LEGACY=1
+    puts them back for a measurement.
+    """
     path = db_path
-    wins = winners.list_all(dsn=path)
+    wins = winners.list_all(dsn=path, include_legacy=False)
     return {
         "liked": _merge(_board_verdicts("liked", HISTORY_LIMIT, path, account_id),
                         _graded_concepts("approved", HISTORY_LIMIT, path, account_id)),

@@ -15,9 +15,16 @@ import json
 
 import pytest
 
-from src import framebank, imagesearch, mcp_server, preprod, refbin, scout
+from src import imagesearch, mcp_server, preprod, refbin, scout
 
 JPEG = b"\xff\xd8\xff" + b"pretend jpeg"
+
+# Captured at import, before the autouse `no_web` fixture stubs the lane
+# out. A test that wants the REAL pinterest ranking has to put this back:
+# patching `_pinterest_pins` alone leaves `pinterest` itself stubbed to
+# return [], so the test reads as "the board ranked nothing" and nothing
+# in it is actually exercised.
+REAL_PINTEREST = imagesearch.pinterest
 
 
 def real_jpeg() -> bytes:
@@ -32,16 +39,28 @@ def real_jpeg() -> bytes:
     return buf.getvalue()
 
 
+@pytest.fixture(autouse=True)
+def no_web(monkeypatch):
+    """The web lanes (2026-09-05) are real HTTP; tests never make them.
+    Each test that wants a lane patches it back in."""
+    for lane in ("openverse", "google_images", "unsplash", "pexels"):
+        monkeypatch.setattr(imagesearch, lane, lambda q, limit=6: [])
+    for lane in ("reddit", "pinterest"):
+        monkeypatch.setattr(imagesearch, lane, lambda q, brand=None, limit=6: [])
+    monkeypatch.delenv("PINTEREST_ACCESS_TOKEN", raising=False)
+    monkeypatch.setenv("OPENVERSE_LANE", "0")
+    for k in ("GOOGLE_CSE_ID", "REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET"):
+        monkeypatch.delenv(k, raising=False)
+
+
 @pytest.fixture
 def tmp_db(pg, tmp_path, monkeypatch):
     path = pg
     preprod.init(path)
     scout.init(path)
     imagesearch.init(path)
-    framebank.init(path)
     monkeypatch.setenv("DATABASE_URL", path)
     monkeypatch.setattr(refbin, "REFS_DIR", tmp_path / "refs")
-    monkeypatch.setattr(framebank, "FRAMES_DIR", tmp_path / "frames")
     return path
 
 
@@ -181,7 +200,90 @@ def test_an_unconfigured_lane_says_so(tmp_db, monkeypatch):
 
     assert out["count"] == 0
     assert "no image source is configured" in out["note"]
-    assert out["sources"] == {"frames": True, "unsplash": False, "pexels": False}
+    assert out["sources"] == {"openverse": False, "google": False,
+                              "reddit": False, "pinterest": False,
+                              "unsplash": False, "pexels": False}
+
+
+def test_openverse_is_the_keyless_floor(tmp_db, monkeypatch):
+    """With no key at all the agent still gets real photographs off the
+    internet -- Mike's 2026-09-05 call: references are images pulled off
+    the web for the spark, not his footage."""
+    monkeypatch.setenv("OPENVERSE_LANE", "1")
+    monkeypatch.setattr(imagesearch, "openverse", lambda q, limit=6: [
+        {"source": "openverse", "image_url": "https://live.example/x_b.jpg",
+         "source_url": "https://www.flickr.com/photos/someone/1", "title": "wet street",
+         "credit": "someone on flickr"}])
+    out = mcp_server.find_images("wet street night", brand="zeropage", dsn=tmp_db)
+    assert out["count"] == 1 and out["sources"]["openverse"] is True
+    assert out["images"][0]["source"] == "openverse" and "image_url" not in out["images"][0]
+
+
+def test_web_lanes_interleave_reddit_google_openverse(monkeypatch):
+    monkeypatch.setattr(imagesearch, "reddit", lambda q, brand=None, limit=6: [
+        {
+          "source": "reddit",
+          "image_url": "https://i.example/r1.jpg",
+          "source_url": "https://www.reddit.com/r/x/1",
+          "title": "",
+          "credit": ""
+         }])
+    monkeypatch.setattr(imagesearch, "google_images", lambda q, limit=6: [
+        {
+          "source": "google",
+          "image_url": "https://i.example/g1.jpg",
+          "source_url": "https://p.example/g1",
+          "title": "",
+          "credit": ""
+         },
+        {
+          "source": "google",
+          "image_url": "https://i.example/g2.jpg",
+          "source_url": "https://p.example/g2",
+          "title": "",
+          "credit": ""
+         }])
+    monkeypatch.setattr(imagesearch, "openverse", lambda q, limit=6: [
+        {
+          "source": "openverse",
+          "image_url": "https://i.example/o1.jpg",
+          "source_url": "https://p.example/o1",
+          "title": "",
+          "credit": ""
+         }])
+    monkeypatch.setattr(imagesearch, "remember", lambda c, query="", dsn=None: c)
+    got = [c["source"] for c in imagesearch.search("q", brand="antihero", limit=6)]
+    assert got == ["reddit", "google", "openverse", "google"]
+
+
+def test_his_own_pinterest_board_comes_first(monkeypatch):
+    """Pinterest has no public search; the lane is the board he curates,
+    ranked by pin text against the query, ahead of every other lane."""
+    monkeypatch.setenv("PINTEREST_ACCESS_TOKEN", "t")
+    monkeypatch.setenv("PINTEREST_BOARD_ZEROPAGE", "zeropage refs")
+    monkeypatch.setattr(imagesearch, "pinterest", REAL_PINTEREST)
+    monkeypatch.setattr(imagesearch, "_pinterest_pins", lambda brand: [
+        {"id": "1", "title": "flooded mall generator light", "description": "",
+         "media": {"images": {"1200x": {"url": "https://i.pinimg.com/1200x/a.jpg"}}}},
+        {"id": "2", "title": "a cat", "media": {"images": {"1200x": {"url": "https://i.pinimg.com/1200x/b.jpg"}}}},
+        {"id": "3", "title": "mall at night, flooded", "link": "https://example.com/post",
+         "media": {"images": {"originals": {"url": "https://i.pinimg.com/originals/c.jpg"}}}},
+    ])
+    monkeypatch.setattr(imagesearch, "openverse", lambda q, limit=6: [
+        {
+          "source": "openverse",
+          "image_url": "https://i.example/o1.jpg",
+          "source_url": "https://p.example/o1",
+          "title": "",
+          "credit": ""
+         }])
+    monkeypatch.setattr(imagesearch, "remember", lambda c, query="", dsn=None: c)
+    got = imagesearch.search("flooded mall", brand="zeropage", limit=6)
+    assert [c["source"] for c in got] == ["pinterest", "pinterest", "openverse"]
+    assert got[0]["image_url"] == "https://i.pinimg.com/1200x/a.jpg"
+    assert got[0]["source_url"] == "https://www.pinterest.com/pin/1/"
+    assert got[1]["source_url"] == "https://example.com/post"
+    assert "pinned by you" in got[0]["credit"]
 
 
 def test_a_configured_lane_that_matched_nothing_says_something_else(tmp_db,
@@ -192,76 +294,3 @@ def test_a_configured_lane_that_matched_nothing_says_something_else(tmp_db,
 
     out = mcp_server.find_images("nothing at all", brand="zeropage", dsn=tmp_db)
     assert out["count"] == 0 and "nothing matched" in out["note"]
-
-
-# ---------- his own footage, and which brand may have it ----------
-
-def a_frame(tmp_db, tmp_path, caption, tags, clip="A037_C001.mov", t=30.0):
-    d = tmp_path / "frames"
-    d.mkdir(parents=True, exist_ok=True)
-    f = d / f"{framebank.frame_id(clip, t)}.jpg"
-    f.write_bytes(real_jpeg())
-    framebank.record({"id": framebank.frame_id(clip, t), "clip": clip,
-                      "t_sec": t, "path": str(f), "caption": caption,
-                      "tags": tags}, brand="antihero", dsn=tmp_db)
-    return f
-
-
-def test_zero_page_never_reaches_his_garage_footage(tmp_db, tmp_path,
-                                                    monkeypatch):
-    """All 37 clips are motorcycle build. Zero Page is faceless and its
-    cast never attaches either, so stock is its whole grounding budget —
-    serving it a garage frame would be worse than serving it nothing."""
-    a_frame(tmp_db, tmp_path, "gloved hands on a bike engine", ["garage", "hands"])
-    monkeypatch.delenv("UNSPLASH_ACCESS_KEY", raising=False)
-    monkeypatch.delenv("PEXELS_API_KEY", raising=False)
-
-    assert imagesearch.search("hands", brand="zeropage", dsn=tmp_db) == []
-    assert imagesearch.search("hands", brand="antihero", dsn=tmp_db)
-
-
-def test_a_frame_is_read_off_disk_not_fetched(tmp_db, tmp_path, monkeypatch,
-                                              a_spark):
-    """His own footage never leaves the machine: there is no URL to
-    fetch and no host to guard."""
-    a_frame(tmp_db, tmp_path, "gloved hands on a tiled floor", ["tile", "hands"])
-    monkeypatch.setattr(refbin, "fetch",
-                        lambda url: pytest.fail("fetched a local frame"))
-    monkeypatch.setattr(mcp_server, "_reachable", lambda url: True)
-
-    found = mcp_server.find_images("hands on tile", brand="antihero", dsn=tmp_db)
-    assert found["images"][0]["source"] == "frames"
-    out = mcp_server.bank_reference(a_spark,
-                                    candidate_id=found["images"][0]["id"],
-                                    dsn=tmp_db)
-
-    assert out["ok"] and out["url"].startswith("/refs/")
-    assert scout.bin_for_finding(a_spark, dsn=tmp_db)[0]["source_url"].startswith(
-        "footage/")
-
-
-def test_an_unusable_frame_stays_in_the_bank_and_out_of_the_results(tmp_db,
-                                                                    tmp_path):
-    """Kept so the next build does not re-cut it; hidden so it never
-    eats a reference slot."""
-    a_frame(tmp_db, tmp_path, "a hand over the lens, pure blur",
-            ["unusable", "blur"], clip="A037_C002.mov")
-    a_frame(tmp_db, tmp_path, "a hand on a blurred engine", ["hands", "blur"],
-            clip="A037_C003.mov")
-
-    hits = framebank.search("blur hand", brand="antihero", dsn=tmp_db)
-    assert len(hits) == 1 and "unusable" not in hits[0]["tags"]
-
-
-def test_rebuilding_updates_a_frame_rather_than_duplicating_it(tmp_db, tmp_path):
-    a_frame(tmp_db, tmp_path, "first guess", ["tile"])
-    a_frame(tmp_db, tmp_path, "a better caption", ["tile", "overhead"])
-
-    hits = framebank.search("tile", brand="antihero", dsn=tmp_db)
-    assert len(hits) == 1 and hits[0]["caption"] == "a better caption"
-
-
-def test_sampling_skips_the_hand_still_on_the_camera(tmp_db):
-    assert framebank.sample_times(225) == [30, 60, 90, 120, 150, 180, 210]
-    assert framebank.sample_times(1.08) == [0.5]     # a one-second take
-    assert framebank.sample_times(0) == []

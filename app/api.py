@@ -18,6 +18,7 @@ import json
 import os
 import re
 import statistics
+import sys
 import time
 from pathlib import Path
 from typing import Optional
@@ -35,16 +36,20 @@ from src import (
     db,
     entities,
     evalstore,
+    generative,
     higgsfield,
     imagery,
     inspiration,
     instagram,
+    manual_lane,
     preprod,
     presets,
+    providers,
     rag,
     rag_eval,
     refbin,
     render_assets,
+    render_specs,
     runway,
     scout,
     settings,
@@ -106,7 +111,18 @@ def _rag_reachable() -> bool:
         return False
 
 
-def compute_capabilities() -> dict:
+def compute_capabilities(account_id: Optional[int] = None) -> dict:
+    """What the shell may render. Derived live, never a static dict.
+
+    `account_id` is the TENANT, resolved server-side, and it exists for
+    exactly one key: `manual_lane`. Everything else here is a property of
+    the INSTALLATION -- a key is set or it is not -- and is the same
+    answer for every caller, which is why this route is allowed to take
+    no account at all (tests/test_tenancy.py's exempt list). The lane is
+    a property of the ACCOUNT, so it needs one, and `None` -- nobody
+    signed in, or a user with no membership -- reads as no lane, which is
+    also what manual_lane's fail-closed rule says.
+    """
     from src import promptgen
 
     gemini = bool(_gemini_key())
@@ -144,12 +160,31 @@ def compute_capabilities() -> dict:
         # e.g. the rail's "legacy" link -- on a public deployment there is
         # no /studio to link to
         "dev_tools": os.environ.get("DEV_TOOLS") == "1",
+        # The operator-only subscription lane (src/manual_lane.py), so
+        # the Queue view can leave its section out entirely for everyone
+        # else instead of rendering a panel that 404s.
+        #
+        # PRESENTATION ONLY, and this is the line worth not crossing: a
+        # capability is what the shell may DRAW, never what the server
+        # may DO. Every lane route re-asks manual_lane against the
+        # account it resolved itself, so a caller who fakes this flag --
+        # it is a JSON field in a response they can edit in a console --
+        # gains a section full of cards that refuse. There is also no
+        # write twin: the flag is granted with
+        # `python -m src.accounts operator <slug> --on` and nowhere else,
+        # because an account that can grant itself the lane is not gated.
+        "manual_lane": manual_lane.manual_lane_allowed(account_id),
     }
 
 
 @router.get("/capabilities")
-def capabilities():
-    return compute_capabilities()
+def capabilities(account_id: Optional[int] = Depends(auth.optional_account_id)):
+    """What the shell may draw. `optional_account_id` and not
+    `current_account_id`, because this is the one route the shell asks
+    BEFORE it knows whether the person has an account at all -- a 403
+    here blanks the whole UI -- and because None is a perfectly good
+    answer to "does this account have the lane": no."""
+    return compute_capabilities(account_id)
 
 
 def _account_card(a: dict) -> dict:
@@ -200,9 +235,36 @@ def _photo_names(base_dir: Path, folder: str) -> list:
                   if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS)
 
 
+def _asset_photo_urls(kind: str, base_dir: Path, slug: str) -> list:
+    """One asset's photos, as the URL they ride on everywhere.
+
+    Through asset_shelf.photo_url rather than an f-string (2026-09-08,
+    Mike: "the reference photos aren't appearing"). These strings are
+    not only what the gallery draws -- _auto_refs stores them on the
+    shot, and a site-relative /characters/... path is true only on the
+    machine holding the folder. characters/, props/ and locations/ are
+    gitignored AND dockerignored, so the deployed site 404s every one:
+    four refs on the row, four empty tiles on the card, and a renderer
+    reaching for a face it cannot fetch. photo_url returns the public
+    R2 URL when R2 is configured, which src/asset_shelf.catalogue has
+    handed the nightly graph since the same day -- two catalogues
+    disagreeing about one photo's URL is the shape of bug this repo
+    keeps finding.
+
+    ?thumb=1 rides only on the local route: it is a query this app's own
+    handler understands and R2 does not.
+    """
+    from src import asset_shelf as _shelf
+
+    urls = []
+    for fn in _photo_names(base_dir, slug):
+        url = _shelf.photo_url(kind, slug, fn)
+        urls.append(url if url.startswith("http") else f"{url}?thumb=1")
+    return urls
+
+
 def _location_photos(space: str) -> list:
-    return [f"/locations/{space}/photo/{fn}?thumb=1"
-            for fn in _photo_names(LOCATIONS_DIR, space)]
+    return _asset_photo_urls("location", LOCATIONS_DIR, space)
 
 
 def _description_text(desc) -> str:
@@ -239,8 +301,7 @@ def _assets_all(account_id: Optional[int] = None) -> list:
         })
     for c in entities.list_characters(account_id=account_id):
         slug = _slug(c["name"])
-        photos = [f"/characters/{slug}/photo/{fn}?thumb=1"
-                  for fn in _photo_names(CHARACTERS_DIR, slug)]
+        photos = _asset_photo_urls("character", CHARACTERS_DIR, slug)
         items.append({
             "id": f"character-{c['id']}", "category": "character",
             "name": c["name"], "photos": photos,
@@ -251,8 +312,7 @@ def _assets_all(account_id: Optional[int] = None) -> list:
         })
     for p in entities.list_props(account_id=account_id):
         slug = _slug(p["name"])
-        photos = [f"/props/{slug}/photo/{fn}?thumb=1"
-                  for fn in _photo_names(PROPS_DIR, slug)]
+        photos = _asset_photo_urls("prop", PROPS_DIR, slug)
         items.append({
             "id": f"prop-{p['id']}", "category": "prop",
             "name": p["name"], "photos": photos,
@@ -342,9 +402,19 @@ def media_list(q: Optional[str] = None, category: Optional[str] = None,
             else:
                 target = _resolve_asset_photo(url)
                 if target is None:
-                    continue
-                mtime = datetime.fromtimestamp(target.stat().st_mtime,
-                                                tz=timezone.utc)
+                    # Not on THIS disk. Once a photo's canonical URL is
+                    # its R2 one (2026-09-08) that is the normal case on
+                    # any machine but the one that saved it -- dropping
+                    # it here would empty the reference picker on the
+                    # deployed site while /api/assets listed the same
+                    # photo happily. It is only the sort date that is
+                    # unknown, so it sorts oldest rather than vanishing.
+                    if not str(url).startswith("http"):
+                        continue
+                    mtime = datetime.fromtimestamp(0, tz=timezone.utc)
+                else:
+                    mtime = datetime.fromtimestamp(target.stat().st_mtime,
+                                                    tz=timezone.utc)
             items.append({
                 "url": url, "asset_id": asset["id"],
                 "asset_name": asset["name"], "category": asset["category"],
@@ -436,6 +506,31 @@ def describe_entity_photos(kind: str, name: str, photos: list) -> dict:
         return {"ok": False, "description": None, "error": str(e)}
 
 
+def _mirror_photos_to_r2(plural: str, slug: str, saved) -> None:
+    """Push newly saved asset photos to R2, best-effort.
+
+    The counterpart of asset_shelf.photo_url returning an R2 URL: a
+    photo added after the 2026-09-08 backfill would otherwise be handed
+    out under a URL whose object was never uploaded -- a broken tile
+    that looks exactly like the bug this whole change fixes, only newer.
+    Never raises; an unconfigured or unreachable R2 leaves the file on
+    local disk, where the /characters/... route still serves it.
+    """
+    try:
+        from src import storage
+        if not storage.configured():
+            return
+    except Exception:                                   # noqa: BLE001
+        return
+    for target in saved:
+        try:
+            storage.upload_file(target, key=f"{plural}/{slug}/{target.name}",
+                                content_type="image/jpeg")
+        except Exception as e:                          # noqa: BLE001
+            print(f"note: R2 mirror failed for {plural}/{slug}/{target.name}: "
+                  f"{type(e).__name__}: {e}", file=sys.stderr)
+
+
 async def _save_uploaded_photos(base_dir: Path, slug: str, photos) -> tuple:
     """(first filename, count) -- mirrors the old dev-console handler."""
     images = [p for p in photos
@@ -444,8 +539,13 @@ async def _save_uploaded_photos(base_dir: Path, slug: str, photos) -> tuple:
         return "", 0
     directory = base_dir / slug
     directory.mkdir(parents=True, exist_ok=True)
+    saved = []
     for upload in images:
-        (directory / Path(upload.filename).name).write_bytes(await upload.read())
+        target = directory / Path(upload.filename).name
+        target.write_bytes(await upload.read())
+        saved.append(target)
+    _mirror_photos_to_r2(
+        "characters" if base_dir == CHARACTERS_DIR else "props", slug, saved)
     return Path(images[0].filename).name, len(images)
 
 
@@ -471,6 +571,7 @@ async def asset_create_location(request: Request, account_id: int = Depends(auth
         target = space_dir / Path(upload.filename).name
         target.write_bytes(await upload.read())
         saved.append(target)
+    _mirror_photos_to_r2("locations", slug, saved)
 
     described = False
     note = None
@@ -645,7 +746,7 @@ def retrieve(body: RetrieveBody, account_id: int = Depends(auth.current_account_
 
 # --- pipeline (adapted to pre-production) -----------------------------------
 
-def _concept_card(c: dict) -> dict:
+def _concept_card(c: dict, subscription_ids: Optional[set] = None) -> dict:
     status = "shot" if c.get("shot_done") else (
         "planned" if c.get("has_shot_list") else "idea")
     location_names = [loc["name"] for loc in c.get("locations") or []]
@@ -693,10 +794,24 @@ def _concept_card(c: dict) -> dict:
         "refs": c.get("refs") or [],
         "prompt": ((c.get("shots") or [{}])[0].get("prompt") or "")
                   if c.get("is_scene") else "",
+        # WHICH TOOL THIS SHOT WAS PLANNED FOR. shootgen chose it and
+        # nothing downstream ever showed it, so the Queue's renderer
+        # picker had no way to default to the plan and defaulted to
+        # Runway for everything -- including a scene written for Kling.
+        "tool": ((c.get("shots") or [{}])[0].get("tool") or "")
+                if c.get("is_scene") else "",
         "media_url": ((c.get("shots") or [{}])[0].get("media_url") or "")
                      if c.get("is_scene") else "",
         "reference_image": ((c.get("shots") or [{}])[0].get("reference_image") or "")
                            if c.get("is_scene") else "",
+        # WHO PAID FOR THIS CLIP. A hand-rendered clip off the operator's
+        # subscription and an API-rendered one billed to somebody's credit
+        # are the same mp4 in the same folder; only `params.source` on the
+        # generations row tells them apart, and until this field nobody
+        # ever saw it. The board renders it as one word beside RENDERED.
+        # Absent set = not asked (a single-card read), which is why the
+        # default is False rather than unknown.
+        "subscription": bool(subscription_ids and c["id"] in subscription_ids),
     }
 
 
@@ -713,7 +828,10 @@ def pipeline_concepts(brand: Optional[str] = None, status: Optional[str] = None,
     # takes the newest 100 of THIS ACCOUNT, and both brands live in one
     # account, so filtering afterwards meant one brand could eat the
     # whole limit and quietly shorten the other's board.
-    cards = [_concept_card(c) for c in preprod.list_concepts(account_id=account_id, brand=brand)]
+    # one query for the whole board rather than one per card
+    subscription_ids = generative.subscription_rendered(account_id=account_id)
+    cards = [_concept_card(c, subscription_ids)
+             for c in preprod.list_concepts(account_id=account_id, brand=brand)]
     if status in ("idea", "planned", "shot"):
         cards = [c for c in cards if c["status"] == status]
     if not archived:
@@ -731,6 +849,32 @@ def pipeline_concepts(brand: Optional[str] = None, status: Optional[str] = None,
 # exactly the row generate_scene_concept writes, so the scene board,
 # Director, render and autopilot keep working unmodified. What is new is
 # that you get SEVERAL and the pick is recorded (preprod.pick_rate).
+
+def _photo_bytes(url: str) -> Optional[bytes]:
+    """A reference URL -> its bytes, from disk first and the network
+    second, or None.
+
+    The disk half is the old behaviour and stays first: a photo on THIS
+    machine costs nothing to read and cannot fail. The network half is
+    what a canonical R2 URL needs (2026-09-08) -- on the deployed site
+    no asset photo is on disk at all, and without this the composer
+    would attach a picked face to the shot and hand the generator
+    nothing, which is precisely the silent it-looked-attached failure
+    the reference layer exists to prevent. Never raises: fetch_image_bytes
+    is SSRF-guarded, image/* only, byte-capped, and returns None on
+    anything it does not like.
+    """
+    target = _resolve_asset_photo(url)
+    if target is not None:
+        try:
+            return target.read_bytes()
+        except OSError:
+            return None
+    if str(url or "").startswith(("http://", "https://")):
+        from src import imagery
+        return imagery.fetch_image_bytes(url)
+    return None
+
 
 async def _collect_refs(form, want_video: bool = False, drop_urls=None):
     """Every reference one composer submission carries, in both the
@@ -784,10 +928,12 @@ async def _collect_refs(form, want_video: bool = False, drop_urls=None):
         if picked in drop_urls:
             continue
         ref_urls.append(picked)
-        target = _resolve_asset_photo(picked)
-        if target is None or len(image_refs) >= MAX_IMAGE_REFS:
+        if len(image_refs) >= MAX_IMAGE_REFS:
             continue
-        jpeg = _to_jpeg(target.read_bytes())
+        raw = _photo_bytes(picked)
+        if raw is None:
+            continue
+        jpeg = _to_jpeg(raw)
         if jpeg:
             image_refs.append((jpeg, "image/jpeg",
                                shootgen.reference_label(picked)))
@@ -795,11 +941,19 @@ async def _collect_refs(form, want_video: bool = False, drop_urls=None):
 
 
 def _auto_refs(text: str, already: list,
-               account_id: Optional[int] = None) -> list:
+               account_id: Optional[int] = None, *, idea: Optional[str] = None) -> list:
     """The photos of the assets this scene actually names.
 
-    `format_cast` tells the generator that Michael and the Ducati have
-    "(reference photos on file)", and the scene it writes says so in as
+    `idea` (2026-09-05): when given, the assets in scope are the ones
+    the IDEA names or `already` explicitly picks -- asset_shelf.in_scope,
+    the same rule that decided what the writer was offered -- and the
+    finished scene's own text is not scanned. Scanning it back had been
+    attaching Michael's photos to scenes whose idea never named him,
+    because the writer volunteers his name on his own channel. Without
+    `idea` the legacy scene-text scan still runs.
+
+    `format_cast` tells the generator that the cast and props on file
+    have "(reference photos on file)", and the scene it writes says so in as
     many words -- but nothing was ever attaching those files, so the
     renderer got the sentence and not the face (2026-08-28). This
     closes that loop: read the finished scene back, find the assets it
@@ -820,7 +974,11 @@ def _auto_refs(text: str, already: list,
     except Exception:
         return []
     picked = list(already)
-    named = shootgen.named_assets(text, assets)
+    if idea is not None:
+        from src import asset_shelf
+        named = asset_shelf.in_scope(idea, already, assets)
+    else:
+        named = shootgen.named_assets(text, assets)
     for asset in named:
         if len(picked) >= MAX_IMAGE_REFS:
             return picked
@@ -842,7 +1000,7 @@ def _auto_refs(text: str, already: list,
 
 # How many photos of one character are worth spending reference slots
 # on. A face is the case the one-photo rule below was not written for:
-# the Garage Guest keyframe grounded a three-quarter head turn on a
+# a guest-character keyframe grounded a three-quarter head turn on a
 # single frontal portrait and aged him about ten years, while the
 # three-quarter frame it needed sat unused in the same folder
 # (2026-08-29). A prop gains almost nothing from a second angle; an
@@ -872,7 +1030,8 @@ def _asset_photos(photos: list, limit: int) -> list:
 
 
 def _attach_scene_refs(concept_id: int, manual: list,
-                       account_id: Optional[int] = None) -> list:
+                       account_id: Optional[int] = None, *,
+                       idea: Optional[str] = None) -> list:
     """Store a scene's references on its shot, manual picks first.
 
     On the shot rather than on the concept because that is what the
@@ -886,7 +1045,8 @@ def _attach_scene_refs(concept_id: int, manual: list,
     shots = [dict(sh) for sh in concept["shots"]]
     text = " ".join(str(shots[0].get(k) or "")
                     for k in ("desc", "prompt", "location"))
-    refs = _auto_refs(text, manual, account_id)[:MAX_IMAGE_REFS]
+    refs = _auto_refs(text, manual, account_id, idea=idea)[:MAX_IMAGE_REFS]
+    refs = [asset_shelf.canonical_url(r) for r in refs]
     if not refs:
         return []
     shots[0]["refs"] = refs
@@ -1079,6 +1239,67 @@ def scout_run(body: ScoutRunBody, account_id: int = Depends(auth.current_account
     return {"job_id": job["id"], "brand": brand}
 
 
+def _keyframe_on_pick(concept: dict, account_id: int):
+    """Render the picked scene's still(s), in the background. Returns a
+    job id, or None when there is nothing to do.
+
+    WHY HERE AND NOT IN THE NIGHT (2026-09-08, Mike's call). The nightly
+    graph's keyframe step is off (`ZEROPAGE_KEYFRAME=0`, a deliberate
+    cost cut on 09-07): a 40-spark walk that draws every scene spends the
+    whole Nano cap on concepts nobody has looked at, and 75 of 75 stills
+    from one night is not a review queue, it is wallpaper. The pick is
+    the first moment a human has said this scene is worth something, so
+    it is the cheapest possible place to spend cents on an image -- and
+    the image arrives before the Queue, which is where the dollars are.
+
+    Never fatal, and never in the request. The pick itself has already
+    been recorded by the time this runs; a keyframe that fails (no key,
+    NANO_DAILY_CAP, a 503 from the image model) leaves a failed job in
+    the rail and a scene that is picked, prompted and simply not drawn
+    yet -- exactly what every scene looked like before this existed.
+    Set ZEROPAGE_KEYFRAME_ON_PICK=0 to turn it off without touching the
+    route.
+
+    Deliberately skipped for a scene that already HAS a still: unpicking
+    and re-picking a card must not quietly re-bill it, and the Director
+    canvas's own keyframe is the one a person chose.
+    """
+    from src import scene_chain
+
+    api_key = _gemini_key()
+    if not api_key:
+        return None
+    # The guard is scene_chain's, asked here so a skip costs no job at
+    # all, and asked again inside draw_on_pick so the MCP door cannot
+    # drift away from this one.
+    if scene_chain.pick_skip_reason(concept):
+        return None
+    concept_id = concept.get("id")
+    title = (concept.get("title") or f"concept {concept_id}")[:60]
+
+    def work(job):
+        from google import genai
+
+        from src import scene_chain
+
+        jobs.progress(job, 0.2, "rendering keyframe")
+        result = scene_chain.draw_on_pick(
+            concept_id, db_path=None, account_id=account_id,
+            resolve_photo=_resolve_asset_photo,
+            gemini_client=genai.Client(api_key=api_key))
+        if result.get("skipped"):
+            return {"detail": result["skipped"]}
+        if not result.get("ok"):
+            raise RuntimeError(result.get("error") or "keyframe failed")
+        frames = result.get("frames") or []
+        detail = f"{1 + len(frames)} still(s)" if frames else "1 still"
+        return {"detail": detail, "ref_id": concept_id}
+
+    job = jobs.start("keyframe", f"keyframe · {title}", work,
+                     account_id=account_id)
+    return job["id"]
+
+
 class PickBody(BaseModel):
     picked: bool = True
 
@@ -1103,12 +1324,16 @@ def concept_pick(concept_id: int, body: PickBody, account_id: int = Depends(auth
         return _error(404, "not_found", str(e))
     concept = preprod.get_concept(concept_id, account_id=account_id)
     ruled = False
+    job_id = None
     if concept is not None:
         if body.picked:
             ruled = _board_verdict(concept, "worked", BOARD_PICK_NOTE)
+            # The still is rendered for the ones you pick, and only those.
+            job_id = _keyframe_on_pick(concept, account_id)
         else:
             _withdraw_board_verdict(concept)
     return {"ok": True, "picked": body.picked, "ruled": ruled,
+            "job_id": job_id,
             "pick": preprod.pick_rate(account_id=account_id)}
 
 
@@ -1248,9 +1473,66 @@ def _runway_state() -> dict:
                         "label": m.replace("gen4_turbo", "Gen-4 Turbo").replace("gen4.5", "Gen-4.5"),
                         "usd_per_second": round(runway.CREDITS_PER_SECOND[m] * runway.CREDIT_USD, 3)}
                        for m in runway.MODELS],
-            "ratios": list(runway.RATIOS),
-            "durations": list(runway.DURATIONS),
+            # projected off src/render_specs.py, the one table the lane
+            # import and providers.check_render_choice refuse against
+            "ratios": list(render_specs.RUNWAY_RATIOS),
+            "durations": list(render_specs.RUNWAY_DURATIONS),
             "today": today}
+
+
+def _renderers_state(account_id: Optional[int] = None) -> dict:
+    """Every renderer the Queue may spend on, with its gates and its legal
+    options -- the four-vendor form of _runway_state.
+
+    Until 2026-09-08 this surface reported exactly one vendor, because
+    approving could only call one: `queue_approve` named runway in the
+    route body and the card's disabled state was read off `data.runway`.
+    A concept shootgen planned for KLING rendered on Kling at 3:30am
+    through orchestrator.generate_render's connectors dict and on Runway
+    if a human approved the same row by hand -- two doors disagreeing
+    about what a shot's `tool` means.
+
+    `runway` is still returned alongside, unchanged. It is a public shape
+    an older client may still be reading, and there is nothing to gain
+    from breaking it on the same day the new one arrives."""
+    return providers.render_options(account_id)
+
+
+def _waiting(account_id: Optional[int], brand: Optional[str]) -> list[tuple[dict, dict]]:
+    """The queue predicate -- parked by the chain or picked on the board,
+    not archived, a scene, no clip yet -- as (concept, card) pairs.
+
+    ONE definition of "waiting" for every surface that reads it: the
+    Queue page and the manual-lane list must not be able to disagree
+    about which shots are outstanding, or a human renders something the
+    Queue never asked for. (ops/render_queue.py keeps its own copy on
+    purpose and says so; it has to run without importing app/.)
+
+    AND IT MUST CARRY REFERENCE PHOTOS (2026-09-08, Mike's call). The
+    writers already archive an ungrounded concept, so in the normal case
+    nothing reaches here to refuse -- this is the check that makes that
+    true rather than merely likely. Three ways a row gets here without
+    photos anyway: it was written before the gate existed, somebody
+    un-archived it, or a later edit cleared the shot's refs. In every one
+    of them the next click spends real money on a scene rendering from
+    its own text.
+
+    Deliberately NOT a prompt check as well. A prompt is on `shots_json`
+    only because score_prompts put it there, and a second bar here would
+    be a different opinion from the one that already ran."""
+    # scoped in SQL, see above
+    out = []
+    for concept in preprod.list_concepts(account_id=account_id, brand=brand):
+        card = _concept_card(concept)
+        if ((card["picked"] or card["parked"]) and not card["archived"]
+                and card["is_scene"] and not card["media_url"]
+                # nothing reaches a spend ungrounded -- see above
+                and not preprod.reference_gate(concept)
+                # marked shot by hand (the camera button) -- a card you
+                # already made yourself isn't waiting on you to spend
+                and not card["shot_done"]):
+            out.append((concept, card))
+    return out
 
 
 @router.get("/queue/pending")
@@ -1264,27 +1546,325 @@ def queue_pending(brand: Optional[str] = None, account_id: int = Depends(auth.cu
     Studio chain parks it (concept written, prompt enhanced, keyframe
     rendered -- the next step is the one that costs money), or you pick
     a text-only concept off the board yourself."""
-    # scoped in SQL, see above
-    cards = [_concept_card(c)
-             for c in preprod.list_concepts(account_id=account_id, brand=brand)]
-    pending = [c for c in cards
-               if (c["picked"] or c["parked"]) and not c["archived"]
-               and c["is_scene"] and not c["media_url"]
-               # marked shot by hand (the camera button) -- a card you
-               # already made yourself isn't waiting on you to spend
-               and not c["shot_done"]]
-    return {"items": pending, "runway": _runway_state(),
-            # the subscription lane shows only for an account an operator
-            # opened it for -- see accounts.is_manual_lane_operator
-            "manual_lane": accounts.is_manual_lane_operator(account_id)}
+    items = []
+    for _, card in _waiting(account_id, brand):
+        # THE CARD'S OWN DEFAULT RENDERER, resolved here rather than in
+        # the browser. The mapping from a shot's planned tool to a
+        # (provider, model) pair lives in providers.platform_default and
+        # is the same one the approve route resolves with, so what the
+        # card offers first and what an empty approve body would spend on
+        # cannot come apart -- which they would the moment the browser
+        # held its own copy of fal.PLATFORM_MODELS.
+        planned = providers.platform_default(card.get("tool"))
+        items.append({**card, "render_default": {
+            "provider": planned[0] if planned else providers.DEFAULT_PROVIDER,
+            "model": (planned[1] if planned
+                      else providers.default_model(providers.DEFAULT_PROVIDER)),
+        }})
+    return {"items": items,
+            "runway": _runway_state(),
+            "renderers": _renderers_state(account_id)}
+
+
+def _lane_models() -> list:
+    """The lane's legal models, each with what it may claim, for the
+    drop card's controls. `render_specs` is the one table; this is a
+    projection of it, never a second copy."""
+    return [{"id": name,
+             "durations": list(spec.get("durations") or ()),
+             "ratios": list(spec.get("ratios") or ())}
+            for name, spec in sorted((render_specs.RUNWAY_MODELS or {}).items())]
+
+
+def _lane_default_model() -> str:
+    """What the card offers first: the adapter's own default when the
+    lane can actually render it, else the first legal model. RUNWAY_MODEL
+    is an env var, so it can name something render_specs does not know --
+    and offering that as the default would mean every drop refused."""
+    known = render_specs.RUNWAY_MODELS or {}
+    if runway.DEFAULT_MODEL in known:
+        return runway.DEFAULT_MODEL
+    return sorted(known)[0] if known else runway.DEFAULT_MODEL
+
+
+@router.get("/queue/manual")
+def queue_manual(brand: Optional[str] = None,
+                 account_id: int = Depends(auth.current_account_id)):
+    """The same waiting shots, addressed to a pair of hands in Chrome.
+
+    THE OPERATOR'S LANE, AND ONLY THE OPERATOR'S. Runway's free Explore
+    Mode is a web-app toggle with no API parameter, so the only way to
+    spend the Unlimited plan is a human driving the app -- and that plan
+    is the operator's personal consumer subscription, so rendering a
+    paying tenant's shot on it would be reselling it. That is an
+    account-termination risk which, on a shared install, takes every
+    tenant's renders down at once.
+
+    So the gate is `manual_lane.manual_lane_allowed(account_id)`, called
+    on the TENANT resolved server-side by `auth.current_account_id` --
+    never a query parameter, a header or a body field, because all three
+    are things a caller writes. Since 2026-09-08 that reads ONE column on
+    the account's own row (`accounts.manual_lane_operator`, set by hand
+    with `python -m src.accounts operator <slug> --on`) rather than an
+    env var this process could have been started with, and membership of
+    an operator's account grants nothing. A database nobody has been
+    turned on in allows nobody.
+
+    The refusal is a 404 carrying `manual_lane.REFUSAL` and nothing
+    else, the same for every caller: it must read like a route that does
+    not exist, and must never let someone learn from the difference
+    between two refusals whether the lane exists for somebody else.
+
+    Read-only, and its POST twin is `queue_manual_import` (2026-09-08),
+    which takes the finished mp4 dropped onto a card. That used to be the
+    CLI's alone -- "the file is on the human's machine, so the terminal
+    is where it gets filed" -- which was true and was still a terminal
+    standing between the owner and a lane he drives from a browser. A
+    multipart upload carries the file perfectly well; what mattered was
+    that the new door be the same door, so it re-asks this same gate and
+    calls the same `import_clip` rather than growing a second way to
+    write a lane row.
+    """
+    if not manual_lane.manual_lane_allowed(account_id):
+        return _error(404, "not_found", manual_lane.REFUSAL)
+    items = []
+    for concept, card in _waiting(account_id, brand):
+        shot = (concept.get("shots") or [{}])[0]
+        try:
+            duration = int(shot.get("duration"))
+        except (TypeError, ValueError):
+            duration = manual_lane.LANE_DURATION
+        items.append({
+            "concept_id": card["id"],
+            "title": card["title"],
+            "brand": card["brand"],
+            "shot_n": shot.get("n", 1),
+            "prompt": card["prompt"],
+            # the frame that gets dragged into the start-image slot
+            "keyframe_url": card["reference_image"],
+            "duration": duration,
+            "ratio": shot.get("ratio") or manual_lane.LANE_RATIO,
+            "lane": manual_lane.LANES["runway"],
+        })
+    return {"items": items, "lane": manual_lane.LANES["runway"],
+            # The models this lane may claim, and the lengths and frames
+            # each of them legally renders, straight off src/render_specs.py
+            # -- the same table `import_clip` refuses against. Served
+            # rather than written into the JS so the drop card's controls
+            # cannot offer a value the import would then refuse, and so a
+            # model leaving the table leaves the UI in the same commit.
+            "models": _lane_models(),
+            "default_model": _lane_default_model(),
+            "import_with": "ops/render_queue.py --provider runway import"}
+
+
+# --- the manual lane's drop target ------------------------------------------
+# The other half of /queue/manual: the card shows what to paste and what
+# to drag in, and this takes back the mp4 that comes out the far end. It
+# exists so the owner never has to leave /ui for this lane -- until
+# 2026-09-08 filing a clip meant a terminal and a full `ops/render_queue.py
+# import` command line, which is a lot of ceremony for a file that is
+# already sitting in ~/Downloads.
+
+# What a Runway Explore clip actually weighs: a 10s 9:16 gen4 render is
+# tens of megabytes. The cap is generous against that and still bounded,
+# because an unbounded multipart body is a way to fill the disk this
+# app's own renders live on. Enforced while STREAMING (see below), not
+# after the read, or the cap would be enforced by first accepting the
+# thing it exists to refuse.
+MANUAL_CLIP_MAX_BYTES = 256 * 1024 * 1024
+
+# Enough bytes to see the ISO base-media file-type box. Byte 4..8 of an
+# mp4 is the literal `ftyp`; the four after it are the major brand.
+_MAGIC_BYTES = 12
+
+# QuickTime uses the SAME ftyp box with this brand, and a .mov is not an
+# mp4 however much the filename insists. Named rather than allow-listing
+# mp4 brands, because that list is long, vendor-specific and still
+# growing (isom, iso2, mp41, mp42, avc1, dash, mmp4...) -- an allowlist
+# that refuses a real Runway render is worse than a denylist that lets a
+# rare sibling format through to ffprobe.
+_NOT_MP4_BRANDS = (b"qt  ",)
+
+
+def _looks_like_mp4(head: bytes) -> bool:
+    """Whether these first bytes are an mp4, asked of the FILE and never
+    of its name.
+
+    The extension is the uploader's opinion; `.mp4` on a zip is one
+    rename away and the browser's own content-type is no better -- both
+    are client-supplied strings. The ftyp box is the file itself saying
+    what it is. This is a cheap sanity check, not a parser: what it
+    stops is a wrong file being copied into data/renders/ and attached to
+    a shot as a render that happened.
+    """
+    if len(head) < _MAGIC_BYTES or head[4:8] != b"ftyp":
+        return False
+    return head[8:12] not in _NOT_MP4_BRANDS
+
+
+async def _spool_clip(upload, dest: Path) -> Optional[JSONResponse]:
+    """The upload onto disk, in chunks, refusing before it is all here.
+
+    Returns an error response, or None when `dest` now holds the clip.
+    Chunked because the two things worth refusing -- the wrong format and
+    an oversized body -- are both knowable early: the magic number from
+    the first chunk, the cap the moment it is crossed. Reading the whole
+    body first and checking afterwards would mean holding a quarter of a
+    gigabyte of somebody's mistake in memory to decide it was a mistake.
+    """
+    size = 0
+    head = b""
+    with dest.open("wb") as out:
+        while True:
+            chunk = await upload.read(1024 * 1024)
+            if not chunk:
+                break
+            if not head:
+                head = chunk[:_MAGIC_BYTES]
+                if not _looks_like_mp4(head):
+                    return _error(
+                        400, "not_an_mp4",
+                        "that is not an mp4 -- the file's own header says so, "
+                        "whatever it is called. Drop the clip Runway gave you.")
+            size += len(chunk)
+            if size > MANUAL_CLIP_MAX_BYTES:
+                return _error(
+                    413, "clip_too_large",
+                    f"clip is over {MANUAL_CLIP_MAX_BYTES // (1024 * 1024)}MB -- "
+                    f"that is not a 10-second render")
+            out.write(chunk)
+    if not size:
+        return _error(400, "empty_upload", "no file arrived")
+    return None
+
+
+@router.post("/queue/manual/{concept_id}/clip")
+async def queue_manual_import(concept_id: int, request: Request,
+                              account_id: int = Depends(auth.current_account_id)):
+    """Drag the finished mp4 onto its card and it is filed. The lane's
+    one writing surface on /ui.
+
+    THE SAME GATE, NOT A SECOND ONE. `manual_lane.require` on the account
+    `auth.current_account_id` resolved server-side, refusing with the
+    byte-identical `manual_lane.REFUSAL` in a 404 exactly as
+    `queue_manual` does -- a new door onto an operator-only lane must not
+    be a weaker one, and two refusals that differ are a way to learn
+    whether the lane exists here at all. The `manual_lane` capability
+    flag is presentation and is deliberately not consulted here: it is a
+    field in a response the caller can edit.
+
+    THE VERIFICATION IS NOT REIMPLEMENTED HERE. `ops/render_queue.py`'s
+    `import_clip` is the SINGLE IMPLEMENTATION of filing a lane clip --
+    the model/ratio/duration claims checked against `src/render_specs.py`
+    and REFUSED rather than clamped, the ffprobe measurement written
+    beside the claim as `duration_measured_s`/`duration_source`, `_place`
+    putting the file where the /renders mount can serve it, and the
+    `generations` row with `cost_usd` NULL and the `manual-unlimited`
+    marker that makes `ledger.is_billable` refuse a hold. This route
+    calls it. It does not repeat it, and it must never grow a copy: a
+    second implementation of "is this claim legal" is how the CLI and the
+    UI come to disagree about what was rendered, which is the exact
+    failure the checks were added to catch. Its refusals are SystemExit
+    (the script's idiom) and arrive here as a 400 carrying the message
+    render_specs wrote.
+
+    WHAT THIS ROUTE OWNS, because it is about the upload and not about
+    the lane: the file is an mp4 by MAGIC NUMBER rather than by name, it
+    is under MANUAL_CLIP_MAX_BYTES, and it is written under a name this
+    server chose (`concept<id>-shot<n>.mp4`) rather than the uploader's
+    -- `_place` names the served file after the one it is handed, and a
+    filename is caller-supplied text.
+
+    A SECOND DROP ON THE SAME SHOT IS REFUSED, not silently applied.
+    Dropping is a gesture, and gestures repeat: a browser can fire twice,
+    a hand can drop again when the card did not visibly change, and the
+    two are indistinguishable from a deliberate replacement. Applying it
+    would leave the shot pointing at the newer file with an older
+    `generations` row still claiming to be this shot's render -- two
+    attempts recorded for one, which is exactly what the tool scoreboard
+    counts -- and the first mp4 orphaned in data/renders/ where nothing
+    names it. Refusing costs one clear sentence and is undoable (clear
+    the shot's media_url and drop again); replacing is not. The CLI keeps
+    its overwrite behaviour on purpose: a full command line naming
+    --concept and --shot is a stated intention, and a drop is not.
+    """
+    if not manual_lane.manual_lane_allowed(account_id):
+        return _error(404, "not_found", manual_lane.REFUSAL)
+
+    form = await request.form()
+    upload = form.get("file")
+    if upload is None or not hasattr(upload, "read"):
+        return _error(400, "no_file", "attach the mp4 Runway rendered")
+
+    concept = preprod.get_concept(concept_id, account_id=account_id)
+    if concept is None:
+        return _error(404, "not_found", f"no concept {concept_id}")
+    try:
+        shot_n = int(form.get("shot_n") or (concept.get("shots") or [{}])[0].get("n", 1))
+    except (TypeError, ValueError):
+        shot_n = 1
+    shot = next((s for s in concept.get("shots") or [] if s.get("n") == shot_n), None)
+    if shot is None:
+        return _error(404, "not_found", f"concept {concept_id} has no shot {shot_n}")
+    if shot.get("media_url"):
+        return _error(
+            409, "already_filed",
+            "this shot already has a clip -- it left the queue when the "
+            "first one landed. Clear its media_url if you meant to replace it.")
+
+    model = (form.get("model") or "").strip() or runway.DEFAULT_MODEL
+    ratio = (form.get("ratio") or "").strip() or None
+    duration_raw = (form.get("duration") or "").strip()
+    try:
+        duration = int(duration_raw) if duration_raw else None
+    except (TypeError, ValueError):
+        return _error(400, "bad_duration", f"duration {duration_raw!r} is not seconds")
+    anchored = str(form.get("anchored") or "").lower() in ("1", "true", "on", "yes")
+
+    import tempfile
+
+    from ops import render_queue
+
+    with tempfile.TemporaryDirectory() as tmp:
+        landing = Path(tmp) / f"concept{concept_id}-shot{shot_n}.mp4"
+        refused = await _spool_clip(upload, landing)
+        if refused is not None:
+            return refused
+        try:
+            filed = render_queue.import_clip(
+                concept_id, shot_n, str(landing), model, None, None, anchored,
+                account_id=account_id, provider="runway",
+                duration=duration, ratio=ratio)
+        except SystemExit as refusal:
+            # render_specs said no (a model, a ratio or a length this
+            # lane cannot have produced), or the concept moved under us.
+            # Nothing was copied and no row was written -- that is
+            # import_clip's own contract.
+            return _error(400, "refused", str(refusal))
+    return {"ok": True, **filed}
 
 
 class ApproveBody(BaseModel):
-    """The Queue's selectors. Defaults are the connector's, so a bare
-    POST renders exactly what it always did."""
+    """WHICH RENDERER this approve spends on, and how.
+
+    Every field is optional, and an empty body is the pre-2026-09-08
+    call: it resolves to the tool the shot was actually PLANNED for
+    (`providers.platform_default`), falling back to Runway. So an older
+    client keeps working, and what it gets is the plan rather than a
+    hardcoded vendor -- which is what the route did before, and was
+    wrong about for every concept shootgen wrote for Kling or Seedance.
+
+    `frame` is one field for two vocabularies on purpose: Runway takes a
+    frame SIZE ("720:1280"), the other three take a resolution tier
+    ("720p"). providers.FRAME_AXIS says which one a given renderer is
+    talking about, and the card labels its control from that -- one axis
+    with two names beats two fields where only ever one is legal.
+    """
+    provider: Optional[str] = None
     model: Optional[str] = None
-    ratio: Optional[str] = None
     duration: Optional[int] = None
+    frame: Optional[str] = None
 
 
 @router.post("/queue/{concept_id}/approve")
@@ -1292,24 +1872,49 @@ def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
                   account_id: int = Depends(auth.current_account_id)):
     """Approve = render, and approving IS the pick.
 
-    The concept's stored prompt goes through the Runway API (anchored on
-    its keyframe when it has one) and the clip comes back attached to
-    the shot. picked_at is stamped here rather than requiring a separate
-    click, because with the chain parking scenes straight into the Queue
-    the spend gate is where the real choice is made -- and pick_rate
-    ("how many generated scenes were worth rendering") is better
-    answered there than by a board click nothing was ever risked on.
+    The concept's stored prompt goes through the renderer picked on the
+    card (anchored on its keyframe when it has one) and the clip comes
+    back attached to the shot. picked_at is stamped here rather than
+    requiring a separate click, because with the chain parking scenes
+    straight into the Queue the spend gate is where the real choice is
+    made -- and pick_rate ("how many generated scenes were worth
+    rendering") is better answered there than by a board click nothing
+    was ever risked on.
 
     It deliberately does NOT archive the siblings any more. That tidy-up
     inferred "you have answered this batch" from which rows were picked,
     which was safe while picking was a separate bulk step done first:
     pick two, approve one, both survived. Now that approval is the pick,
     approving take 1 would archive takes 2-4 out from under you -- and
-    nondeterministically, since it ran after Runway returned ~90s later.
-    Rejecting archives explicitly, and that is the honest signal.
+    nondeterministically, since it ran after the render returned ~90s
+    later.  Rejecting archives explicitly, and that is the honest signal.
+
+    ANY REGISTERED RENDERER, not just Runway (2026-09-08, Mike's call).
+    The old body named `runway` in three places -- the key check, the
+    render call and the button's price -- so the one surface that spends
+    money could reach exactly one of four working adapters, and a scene
+    planned for Kling was rendered on Runway without ever saying so. It
+    dispatches through providers.VIDEO_PROVIDERS now, which is the same
+    registry orchestrator.generate_render's connectors dict is built
+    from, so the nightly graph and this button can no longer disagree
+    about which vendor a tool name means.
+
+    WHAT DID NOT CHANGE, and each of these is load-bearing:
+      * the gates run in the same order and refuse the same things --
+        no prompt, not queued, no reference photos;
+      * the reference gate is asked HERE and not only in the listing,
+        because this route is reachable by id and a concept can lose its
+        refs between the two requests;
+      * the pick is recorded BEFORE the spend, so a render that fails
+        halfway still leaves the row saying you chose this one;
+      * the per-run spend approval (`*_SPEND_OK`) is still checked
+        inside the adapter's own generate_video and NOT here. That looks
+        like something to hoist up for a nicer error, and it is not: the
+        gate has to sit where the money is spent so no caller can spend
+        around it, and a route-level copy would be a second opinion that
+        can drift from the one that actually holds.
     """
-    if not runway.has_key():
-        return _error(503, "runway_unavailable", "RUNWAYML_API_SECRET is not set")
+    body = body or ApproveBody()
     concept = preprod.get_concept(concept_id, account_id=account_id)
     if concept is None:
         return _error(404, "not_found", "no such concept")
@@ -1318,91 +1923,78 @@ def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
     if not (concept.get("picked") or concept.get("parked")):
         return _error(400, "not_queued",
                       "this concept isn't in the queue — pick it on the board first")
+    # Asked again HERE, not just in _waiting. The queue list and the
+    # approve button are two requests, and a concept can lose its refs
+    # between them; more to the point, this route is reachable by id
+    # without ever reading the list. The gate has to sit where the money
+    # is spent, which is this function.
+    ungrounded = preprod.reference_gate(concept)
+    if ungrounded:
+        return _error(400, "no_reference",
+                      f"this concept has no reference photos attached "
+                      f"({ungrounded}) — rendering it would generate from "
+                      f"text alone. Attach references and try again.")
 
-    # the selectors, refused rather than clamped: a frame the endpoint
-    # does not take must not become a clip the wrong shape
-    body = body or ApproveBody()
-    model = body.model or runway.DEFAULT_MODEL
-    ratio = body.ratio or runway.DEFAULT_RATIO
-    duration = body.duration or runway.DEFAULT_DURATION
-    if model not in runway.MODELS:
-        return _error(400, "bad_model", f"unknown Runway model {model!r}")
-    if ratio not in runway.RATIOS:
-        return _error(400, "bad_ratio",
-                      f"frame {ratio!r} is not one Runway renders — one of {', '.join(runway.RATIOS)}")
-    if duration not in runway.DURATIONS:
-        return _error(400, "bad_duration",
-                      f"a clip is {' or '.join(str(d) for d in runway.DURATIONS)} seconds")
+    shot = concept["shots"][0]
+    shot_n = shot.get("n", 1)
 
-    shot_n = concept["shots"][0].get("n", 1)
+    # The plan is the default, the body overrides it. A shot carries the
+    # tool shootgen chose; platform_default turns that into (provider,
+    # model) through the SAME binding orchestrator.generate_render holds,
+    # so "KLING" means one model in both places or in neither.
+    planned = providers.platform_default(shot.get("tool"))
+    provider = body.provider or (planned[0] if planned else providers.DEFAULT_PROVIDER)
+    model = body.model
+    if model is None and planned and provider == planned[0]:
+        model = planned[1]
+    try:
+        choice = providers.check_render_choice(
+            provider, model, body.duration, body.frame)
+    except ValueError as e:
+        # REFUSED, never clamped: a length or a frame outside the model's
+        # own set is evidence the card and the model have come apart, and
+        # quietly rounding it spends real money on something nobody
+        # picked. (The adapters clamp internally -- that is their contract
+        # with the nightly graph, which has no human to refuse to.)
+        return _error(400, "bad_render_choice", str(e))
+
+    module = providers.VIDEO_PROVIDERS[choice["provider"]]
+    label = providers.RENDER_LABELS.get(choice["provider"], choice["provider"])
+    # the CALLER's key, not the operator's: a BYOK account with its own
+    # stored secret is available even on a server whose environment
+    # variable is unset, and generate_for_shot resolves it per account
+    # anyway (2026-09-08)
+    if not module.has_key(account_id):
+        return _error(503, "renderer_unavailable",
+                      f"no {label} key is available for this account — add one, "
+                      f"or approve on a renderer that has a key")
+
+    # runway takes a frame SIZE and calls it `ratio`; the others take a
+    # resolution tier. One axis, two parameter names -- see ApproveBody.
+    frame_kw = "ratio" if choice["provider"] == "runway" else "resolution"
+    render_kwargs = {"model": choice["model"],
+                     "duration": choice["duration"],
+                     frame_kw: choice["frame"]}
+
     # the pick is recorded BEFORE the spend, not after it: a render that
     # fails halfway still leaves the row saying you chose this one
     if not concept.get("picked"):
         preprod.set_picked(concept_id, True, account_id=account_id)
 
     def work(job):
-        jobs.progress(job, 0.2, f"rendering via Runway · {model} · {ratio} · {duration}s")
-        result = runway.generate_for_shot(
+        jobs.progress(job, 0.2, f"rendering via {label} ({choice['model']})")
+        result = module.generate_for_shot(
             concept_id, shot_n, db_path=None,
             resolve_photo=_resolve_asset_photo, account_id=account_id,
-            model=model, ratio=ratio, duration=duration)
+            **render_kwargs)
         if not result.get("ok"):
             raise RuntimeError(result.get("error") or "render failed")
         return {"ref_id": concept_id, "detail": "clip attached"}
 
-    job = jobs.start("render", f"approved · {concept['title']}", work, account_id=account_id)
-    return {"job_id": job["id"], "model": model, "ratio": ratio, "duration": duration,
-            "estimate_usd": runway.estimate_cost(1, model=model, duration=duration)}
-
-
-MANUAL_CLIP_MAX_BYTES = 256 * 1024 * 1024
-
-
-@router.post("/queue/{concept_id}/clip")
-async def queue_file_clip(concept_id: int, request: Request,
-                          account_id: int = Depends(auth.current_account_id)):
-    """The subscription lane's drop target (2026-09-12): the mp4 you
-    rendered by hand in Runway Explore, filed onto the shot as its clip.
-    Nothing here spends -- the row it writes is FREE (cost NULL), which
-    is the point of the lane.
-
-    Gated on accounts.manual_lane_operator, and there is deliberately no
-    browser route that grants it: an account able to open the lane for
-    itself would defeat the gate. The upload is read in chunks under a
-    hard cap, checked by magic number, and named by the server."""
-    if not accounts.is_manual_lane_operator(account_id):
-        return _error(403, "lane_closed",
-                      "the subscription lane is not open for this account -- "
-                      "an operator opens it with `python -m src.accounts operator <slug> --on`")
-    form = await request.form()
-    upload = form.get("clip")
-    if upload is None or not getattr(upload, "filename", ""):
-        return _error(400, "no_clip", "attach the finished mp4 as `clip`")
-    chunks, total = [], 0
-    while True:
-        chunk = await upload.read(1024 * 1024)
-        if not chunk:
-            break
-        total += len(chunk)
-        if total > MANUAL_CLIP_MAX_BYTES:
-            return _error(413, "too_large", "a lane clip is at most 256MB")
-        chunks.append(chunk)
-    data = b"".join(chunks)
-    if not runway.is_mp4(data[:12]):
-        return _error(415, "not_mp4",
-                      "that is not an MP4 -- export from Runway as mp4 (a .mov is refused)")
-    concept = preprod.get_concept(concept_id, account_id=account_id)
-    if concept is None:
-        return _error(404, "not_found", "no such concept")
-    shot_n = (concept["shots"] or [{}])[0].get("n", 1)
-    result = runway.file_manual_clip(concept_id, shot_n, data, db_path=None,
-                                     account_id=account_id)
-    if not result["ok"]:
-        if result.get("conflict"):
-            return _error(409, "has_clip", result["error"])
-        return _error(400, "clip_refused", result["error"] or "could not file the clip")
-    return {"ok": True, "media_url": result["media_url"],
-            "generation_id": result["generation_id"], "cost_usd": None}
+    job = jobs.start("render",
+                     f"approved · {concept['title']} · {label} {choice['model']}",
+                     work, account_id=account_id)
+    return {"job_id": job["id"], "render": choice}
 
 
 @router.post("/queue/{concept_id}/reject")
@@ -1470,7 +2062,8 @@ def concept_refs(concept_id: int, body: ConceptRefsBody, account_id: int = Depen
     if concept is None or not concept["shots"]:
         return _error(404, "not_found", "no such scene")
     shots = [dict(s) for s in concept["shots"]]
-    shots[0]["refs"] = [r for r in body.refs if r][:MAX_IMAGE_REFS]
+    shots[0]["refs"] = [asset_shelf.canonical_url(r)
+                        for r in body.refs if r][:MAX_IMAGE_REFS]
     # a plan dict, not a bare list: update_concept_shots re-validates the
     # whole plan, and carrying the existing warnings/duration through
     # keeps attaching a reference from rewriting anything else
@@ -1604,7 +2197,8 @@ def shot_generate(concept_id: int, shot_n: int, account_id: int = Depends(auth.c
     Billed, capped, and spend-gated -- generate_video refuses without
     RUNWAY_SPEND_OK=1 on the server's run, so nothing here can spend
     around the module's own gate."""
-    if not runway.has_key():
+    # the caller's key, not the operator's -- see queue_approve
+    if not runway.has_key(account_id):
         return _error(503, "runway_unavailable", "RUNWAYML_API_SECRET is not set")
     concept = preprod.get_concept(concept_id, account_id=account_id)
     if concept is None:
@@ -1827,7 +2421,8 @@ async def pipeline_run(request: Request, account_id: int = Depends(auth.current_
         # much as a Create-written one
         try:
             if result.get("concept_id"):
-                attached = _attach_scene_refs(result["concept_id"], refs, account_id)
+                attached = _attach_scene_refs(result["concept_id"], refs, account_id,
+                                              idea=prompt)
                 if attached:
                     detail += f" · {len(attached)} reference(s)"
         except Exception:

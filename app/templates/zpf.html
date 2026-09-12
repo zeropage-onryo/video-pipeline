@@ -84,7 +84,7 @@
     <div class="stack rise d2">
       <div class="glass mentionwrap" id="cbox">
         <div class="attachbar" id="attachbar"></div>
-        <textarea id="prompt" placeholder="A rider suits up in a dark garage and something is already wrong… (@ to reference an asset)"></textarea>
+        <textarea id="prompt" placeholder="Someone checks the lock one last time and something is already wrong… (@ to reference an asset)"></textarea>
         <div class="mentiondrop" id="promptmentions" hidden></div>
         <div class="cfoot">
           <button class="plus" id="up" data-label="Add media" aria-label="Add media" aria-expanded="false">
@@ -359,6 +359,21 @@
     </div>
     <div class="stateline" id="pendstate" hidden></div>
     <div class="scenegrid" id="pendlist"></div>
+
+{% if manual_lane %}
+    <!-- The subscription lane. Server-rendered behind the operator flag
+         (app/main.py's /ui), so a non-operator's page does not contain
+         this section at all -- and every route it talks to re-asks the
+         same gate, because a template condition is presentation. -->
+    <div class="chead">
+      <h3>Subscription lane</h3>
+      <span class="m" id="lanecount">—</span>
+      <span class="spacer"></span>
+      <span class="m">Runway Explore · free on Unlimited · rendered by hand in Chrome</span>
+    </div>
+    <div class="stateline" id="lanestate" hidden></div>
+    <div class="scenegrid" id="lanelist"></div>
+{% endif %}
 
     <div class="chead">
       <h3>Jobs</h3>

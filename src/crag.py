@@ -19,10 +19,16 @@ chasing a reference library that genuinely doesn't have the answer.
 One rewrite is enough to catch a badly-phrased query; past that, the
 honest outcome is "the library doesn't have this," not "keep trying."
 """
+import re
 from typing import Optional
 
-from . import evalstore, rag
+from . import db, evalstore, rag
 from .gemini_utils import generate_with_retry, strip_fences
+
+# What promote_winners.source_key writes: "proven_results/video-42.txt".
+# Matched rather than imported so this module keeps depending on nothing
+# that depends on it.
+_PROVEN_SOURCE = re.compile(r"^proven_results/video-(\d+)\.txt$")
 
 # The shipped default. The effective threshold is resolved per call via
 # src/settings.py (Dev Studio Settings tab -> GRADE_THRESHOLD env ->
@@ -69,6 +75,51 @@ def grade_retrieval(references: list, threshold: Optional[float] = None) -> dict
 def rewrite_query(original_query: str, best_score: float, client, model: str) -> str:
     prompt = REWRITE_PROMPT.format(score=best_score, query=original_query)
     return strip_fences(generate_with_retry(client, model, prompt, stage="crag")).strip()
+
+
+def drop_legacy_references(references: list, dsn=None) -> list:
+    """Drop proven_results docs promoted from pre-pipeline uploads.
+
+    This is the read side of the same rule promote_winners applies when
+    it writes: only posts the pipeline produced may teach the loop
+    (2026-09-07). The write side stops NEW legacy winners reaching the
+    shelf; this stops the ones promoted before the rule existed from
+    grounding tonight's concept, without a migration that deletes
+    documents somebody may still want to read on /library.
+
+    Applied before grading on purpose -- the grade has to describe the
+    references actually handed to generation, or a strong score from a
+    chunk that gets thrown away would suppress the rewrite that would
+    have found a usable one.
+
+    Fails OPEN: if the pipeline database can't be reached, the
+    references pass through untouched. Retrieval degrading a run and
+    never stopping one is the contract every caller depends on, and an
+    unreachable database is not a reason to generate ungrounded.
+    """
+    if not db.excludes_legacy(False):   # ZEROPAGE_LEARN_FROM_LEGACY=1
+        return references
+    by_source = {}
+    for ref in references:
+        m = _PROVEN_SOURCE.match((ref.get("source") or "").strip())
+        if m:
+            by_source[(ref.get("source") or "").strip()] = int(m.group(1))
+    if not by_source:
+        return references
+    try:
+        with db.connect(dsn) as conn:
+            rows = conn.execute(
+                "SELECT id FROM videos WHERE legacy AND id = ANY(%s)",
+                (sorted(set(by_source.values())),),
+            ).fetchall()
+        legacy_ids = {row["id"] for row in rows}
+    except Exception:
+        return references
+    dropped = {src for src, vid in by_source.items() if vid in legacy_ids}
+    if not dropped:
+        return references
+    return [r for r in references
+            if (r.get("source") or "").strip() not in dropped]
 
 
 def retrieve_with_crag(
@@ -133,6 +184,7 @@ def retrieve_with_crag(
         event["error"] = result.get("error")
         return finish({**result, "grade": None, "rewritten_query": None})
 
+    result = {**result, "references": drop_legacy_references(result["references"])}
     grade = grade_retrieval(result["references"], threshold=threshold)
     event["initial_score"] = grade["best_score"]
     event["final_score"] = grade["best_score"]
@@ -152,6 +204,9 @@ def retrieve_with_crag(
     event["requery_triggered"] = True
     retried = rag.retrieve_references(rewritten, k=k, db_url=db_url, domain=domain, project=project,
                                       prefer_project=prefer_project)
+    if retried["ok"]:
+        retried = {**retried,
+                   "references": drop_legacy_references(retried["references"])}
     if not retried["ok"] or not retried["references"]:
         # the rewrite came back empty or the connection broke -- keep
         # whatever the original weak attempt found rather than nothing.

@@ -1,6 +1,6 @@
 ---
 name: idea-agent
-description: "Runs the Zero Page / Antihero idea loop over the MCP board: read what is already waiting, get or research a direction, generate concepts through the LangGraph, and report what landed. Use when Mike says 'run the idea agent,' 'find me ideas,' 'what should we shoot,' 'generate some concepts,' 'do a research pass,' 'what's tonight's spark,' 'fill the board,' or asks what is sitting unreviewed. Also use when he wants the board read from his phone — what's open, what to pick, what to kill. Needs the zeropage MCP server connected (ops/connect-claude.md). For turning existing footage into platform angles, that is content-angles; for checking a finished draft, post-audit."
+description: "Runs the Zero Page / Antihero idea loop over the MCP board: read what is already waiting, get or research a direction, generate concepts through the LangGraph, and report what landed. Use when Mike says 'run the idea agent,' 'find me ideas,' 'what should we shoot,' 'generate some concepts,' 'do a research pass,' 'run the scout,' 'what's tonight's spark,' 'fill the board,' or asks what is sitting unreviewed. Also use when he wants the board read from his phone — what's open, what to pick, what to kill. Needs the zeropage MCP server connected (ops/connect-claude.md). For turning existing footage into platform angles, that is content-angles; for checking a finished draft, post-audit."
 metadata:
   version: 1.0.0
 ---
@@ -58,6 +58,40 @@ still matches it before trusting it.
 **Web search** — weakest lane by far. Queries about "short form trends"
 return SEO listicle farms with no signal. Only use it for a specific,
 checkable fact, never for "what's trending."
+
+**The scout, in the studio** — the one lane that is an agent rather than
+a browse, and the one this skill can now fire itself. `research(brand,
+count=4)` runs exactly the pass the magnifier in Create runs (`POST
+/api/scout/run` → `src/scout.py`): it crawls five lanes — `web`,
+`shorts`, `feeds`, `instagram`, `creators` — folds all of it through ONE
+digest call into scored sparks, banks them, and downloads the frames
+behind them into `data/refs` as ordinary `/refs/<sha>.jpg`. Same bank,
+two surfaces: a pass fired from here is sitting in his Create composer,
+images pre-attached, the next time he opens Studio.
+
+```
+research(brand, count=4, lanes=["shorts","creators"])   → returns a job id
+job(job_id)                                             → poll until "done"
+sparks(brand) · images(finding_id)                      → what it banked
+```
+
+- Registered only when `ZEROPAGE_MCP_ENGINE=1` on that machine. If the
+  tool is not there, say so — never narrate a crawl that did not run.
+- `count` clamps to 1–8. `lanes` is optional and defaults to all five;
+  pinterest is deliberately not among them here.
+- A pass takes tens of seconds to a couple of minutes. Poll, don't guess.
+- **Report `errors` even when `ok` is true.** A dead lane looks exactly
+  like a healthy crawl from the outside — that is how the nightly job
+  hid for eleven nights.
+- The gates, in order: `avoid_guidance`, the 14-day novelty list, then
+  `SCORE_FLOOR` 0.55. Below-floor sparks are banked but never
+  auto-served, so a thin night degrades rather than spending on a weak
+  idea.
+- It costs a grounded search plus a digest call. Fire it when he asks
+  for fresh research, or when `tonight(brand)` comes back `spark: null`
+  — never to answer "give me ideas."
+- What it hands back is crawl output: moments wearing trend headlines,
+  scoring themselves high regardless. Raw signal, not concepts.
 
 Then convert what you found into ideas. Report the MECHANIC you are
 riding and the number behind it, so he can judge the borrow rather than

@@ -2,9 +2,36 @@
 src/orchestrator.py — the autonomous content graph over pre-production:
 
     research -> scout -> planner -> ground_entities -> ground_rag
-        -> gen_concept -> evaluate -> structure_prompt -> generate_render
-                ^_____________|            -> qc_clip -> caption -> publish
-                (corrective re-run)                 \\-> hold  (park, don't post)
+        -> gen_concept -> evaluate -> structure_prompt -> score_prompts
+                ^_____________|                              |
+                (corrective re-run)         keyframe -> generate_render
+                                    -> qc_clip -> select_clip -> caption -> publish
+                                             \\-> hold  (park, don't post)
+
+THE GATES ARE INVERTED (2026-09-07, Mike's call). Measured over the
+graded holds, the prompt gate agreed with his own would-post verdict
+~38% of the time -- coin-flip territory -- and no dimension of its
+rubric separated what he would post from what he would not. So the
+graph no longer tries to predict from the PROMPT whether the clip will
+be good: it lets the run reach the keyframe (and the render, when
+that is on) and selects AFTERWARDS. `ZEROPAGE_GATES` is the one
+switch (`gates_mode()`):
+
+- `advisory` (the default): the LLM judges still score and still
+  store -- `critique`, `prompt_scores`, the hold payload, the parked
+  reason on the scene -- but they never route to `hold`. A failing
+  prompt still gets its bounded rework (cheap, and it improves the
+  prompt) and then proceeds to `keyframe` carrying the verdict in its
+  reason text ("advisory: prompt gate 4/10 -- ..."), so the morning
+  review sees what the judge thought beside the still.
+- `hard`: today's behaviour, byte for byte, for the way back.
+
+What stays hard in BOTH modes: the code-enforced `warnings` retry loop
+(structural, not taste), the uncanny/on-brand judge (recorded here,
+read at the posting decision -- unchanged), the likeness rule, clip
+QC, `_post_gate`, and every credit/spend gate (ZEROPAGE_RENDER, the
+*_SPEND_OK approvals, the daily caps). A camera-only concept with no
+prompts still holds: there is nothing to render.
 
 `scout` is the research agent's socket (src/scout.py): asked for, it
 replaces the caller's rotated spark with one discovered by crawling;
@@ -47,6 +74,8 @@ Env:    GEMINI_API_KEY            (required, already used by your stages)
         JUDGE=1                   (optional) turn the LLM-judge on
         GEMINI_MODEL=...          (optional) judge model; match your other stages
         ZEROPAGE_KILL=1           (optional) kill switch without a DB write
+        ZEROPAGE_GATES=advisory|hard  (optional) advisory is the default; hard is
+                                  the pre-2026-09-07 hold-on-judge behaviour
         LANGSMITH_TRACING=true    (optional) auto-trace the graph to LangSmith
         LANGSMITH_API_KEY=...     (optional) with the line above
 """
@@ -90,7 +119,53 @@ from .gemini_utils import generate_with_retry
 
 MAX_ATTEMPTS = 3
 JUDGE_MIN = 0.6
+# Where a night's candidate clips land, one subdirectory per concept. A
+# module-level constant rather than a path built inside generate_render,
+# because a path built inside the function cannot be redirected -- and an
+# output root a test cannot redirect is an output root a test eventually
+# writes to for real.
+GENERATED_ROOT = db.PROJECT_ROOT / "footage" / "generated"
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", shootgen.MODEL)  # match the other stages
+
+
+# --- the two input-side nodes, and who decides they run -------------------
+# `research` fills the spark bank; `scout` drains it. Both used to be off
+# unless a caller said otherwise, which meant the only path that ever ran
+# them was the nightly walk. These two env flags make "on" the default for
+# a caller with no opinion (the cron path, `src.trigger` with no flags)
+# WITHOUT touching the doors where a person already typed the direction --
+# Studio, Director, the MCP `generate` tool. The scout node REPLACES the
+# direction; defaulting it on for a typed idea would answer a different
+# question than the one asked.
+GRAPH_SCOUT_ENV = "ZEROPAGE_GRAPH_SCOUT"
+GRAPH_RESEARCH_ENV = "ZEROPAGE_GRAPH_RESEARCH"
+
+
+def _env_on(name: str) -> bool:
+    return (os.environ.get(name) or "").strip() == "1"
+
+
+def resolve_nodes(scout=None, research=None, *, spark=None,
+                  scout_finding_id=None) -> tuple[bool, bool]:
+    """Which of the two input-side nodes a run gets.
+
+    Tri-state on purpose. `True`/`False` from the caller always wins --
+    `--scout` still forces it on, and a caller that passes False still
+    gets a run with no crawl in it. `None` means "no opinion", and then
+    the env flags above decide, unless the caller NAMED its direction
+    (an explicit `spark=`, or a `scout_finding_id` it already resolved),
+    in which case both stay off.
+
+    `research` implies `scout`: filling a bank nothing will read is spend
+    with no output, and the node itself is gated on both, so the state
+    says up front what will actually happen.
+    """
+    named = bool(spark) or bool(scout_finding_id)
+    if research is None:
+        research = _env_on(GRAPH_RESEARCH_ENV) and not named
+    if scout is None:
+        scout = bool(research) or (_env_on(GRAPH_SCOUT_ENV) and not named)
+    return bool(scout), bool(research) and bool(scout)
 
 
 def prompt_gate_min() -> int:
@@ -98,6 +173,24 @@ def prompt_gate_min() -> int:
     (settings table) wins, then PROMPT_GATE_MIN in the env, then 7 --
     so raising the bar no longer needs a restart."""
     return settings.prompt_gate_min()
+
+
+GATES_ADVISORY = "advisory"
+GATES_HARD = "hard"
+
+
+def gates_mode() -> str:
+    """The one switch over the LLM gates, read per call so a test (or a
+    night) can flip it without a restart: `advisory` (the default since
+    2026-09-07) scores and stores but never routes to `hold`; `hard` is
+    the previous hold-on-judge behaviour, preserved exactly so the way
+    back is one env var. Anything that is not literally `hard` is
+    advisory -- a typo must not silently re-arm a gate that agreed with
+    Mike 38% of the time."""
+    value = (os.environ.get("ZEROPAGE_GATES") or "").strip().lower()
+    return GATES_HARD if value == GATES_HARD else GATES_ADVISORY
+
+
 # Two targeted rewrites per failing shot before it holds. Raised from 1
 # to 2 on 2026-09-03: five held concepts (173, 177, 180, 183, 187) all
 # failed the SAME judge dimension -- "too many sequential actions /
@@ -107,7 +200,15 @@ def prompt_gate_min() -> int:
 # constraint; the REWRITE not addressing the actual failure shape was.
 # See _rework_shot_prompt's STAGE_MARKERS handling below for the fix
 # that makes a second attempt worth having.
-MAX_PROMPT_REWORKS = 2  # one targeted rewrite per failing shot before it holds
+MAX_PROMPT_REWORKS = 2  # bounded rewrites per failing shot; then hold (hard) or proceed (advisory)
+
+# The two shapes an advisory note takes, as literal prefixes rather than
+# a structured record: these strings are read by a human on a Queue card
+# beside a still, and a prefix is also how the newest verdict replaces
+# the previous one (a rework re-scores, and the card must show what the
+# judge said LAST, not both).
+_EVAL_ADVISORY = "advisory: concept judge"
+_GATE_ADVISORY = "advisory: prompt gate"
 
 
 class GenState(TypedDict, total=False):
@@ -156,9 +257,12 @@ class GenState(TypedDict, total=False):
     prompt_scores: list             # [{prompt, score, pass, reason, dims}]
     prompt_rework_attempts: int     # bounded per-shot rewrite passes, not concept retries
     refs: list                      # the photo urls attached to the scene's shot
+    ungrounded: str                 # set when the reference gate took the concept off the board
     keyframes: list                 # [{"n", "ok", "url", "error"}] -- the stills
     parked_reason: str              # what the Queue card says it is waiting on
+    advisory: list                  # the verdicts that would have held in hard mode
     clips: list                     # [{"tool", "prompt", "url", "ok"}]
+    clip_candidates: list           # every clip qc_clip saw, before select_clip chose
     caption: str
     posted: list                    # [{"platform", "id", "url"}] once real posting exists
     autonomy: str                   # the channel's setting at run time
@@ -331,6 +435,26 @@ def planner(state: GenState) -> GenState:
     # is stamped with is minted on this line, and a finding marked used
     # before a run exists to point at is how the same spark gets served
     # twice after a crash between the two.
+    if scout_mod.refs_required() and not state.get("reference_photos"):
+        # MIKE'S RULE, 2026-09-08: a concept with no reference images is a
+        # no-go. Measured the night before, 20 of 29 banked sparks had no
+        # picture behind them and every one of them still produced a scene
+        # written from words alone -- so nothing downstream ever noticed
+        # that the crawl was reaching the WORDS and not the pictures.
+        #
+        # The finding is deliberately NOT claimed on this path. An
+        # unclaimed spark can still have images put behind it by the next
+        # research pass and become servable; claiming it here would refuse
+        # it AND throw the research away, which is the worst of both.
+        # `scout.next_spark` already skips these, so reaching this line
+        # means the direction came from somewhere else -- the sparks.txt
+        # rotation, a typed spark, an agent's `generate`.
+        return {
+            "channel": channel,
+            "autonomy": (row or {}).get("autonomy", "shadow"),
+            "run_id": run_id,
+            "error": NO_REFS_REASON,
+        }
     if state.get("scout_finding_id"):
         scout_mod.mark_used(state["scout_finding_id"], run_id=run_id)
     return {
@@ -338,6 +462,19 @@ def planner(state: GenState) -> GenState:
         "autonomy": (row or {}).get("autonomy", "shadow"),
         "run_id": run_id,
     }
+
+
+NO_REFS_REASON = ("no reference images behind this spark — a scene is not "
+                  "written from words alone (ZEROPAGE_REQUIRE_REFS=0 to allow it)")
+
+
+def route_after_planner(state: GenState) -> str:
+    """The one gate in front of the whole generation, and it is code, not
+    taste: either there are pictures behind this direction or there are
+    not. Every other gate in this graph went advisory on 2026-09-07 --
+    this one is deliberately hard, because it is not predicting anything.
+    """
+    return "hold" if state.get("error") else "plan"
 
 
 def ground_entities(state: GenState) -> GenState:
@@ -519,9 +656,22 @@ def gen_concept(state: GenState) -> GenState:
     # assets it NAMED first (identity holds the anchor slot Runway reads),
     # the handed-in research images after. Never fatal -- an ungrounded
     # scene is still a scene, and attach_refs says so by returning [].
+    # Scoped on the SPARK the scene was written from plus any explicit
+    # pick -- the same set ground_entities offered the writer -- never on
+    # the finished scene's own words (2026-09-05): reading the scene
+    # back had been attaching Michael's face to crawled ideas that only
+    # ever said "he".
+    scope_text = state.get("spark") or ""
+    for getter, ids in ((entities.get_character, state.get("picked_characters")),
+                        (entities.get_prop, state.get("picked_props"))):
+        for i in ids or []:
+            row = getter(i, account_id=state.get("account_id"))
+            if row and row.get("name"):
+                scope_text += f" {row['name']}"
     refs = []
     try:
         refs = scene_chain.attach_refs(result["concept_id"], handed,
+                                       idea=scope_text,
                                        db_path=None,
                                        account_id=state.get("account_id"))
         if refs:
@@ -529,24 +679,108 @@ def gen_concept(state: GenState) -> GenState:
     except Exception as e:
         print(f"note: references not attached: {e}", file=sys.stderr)
 
+    # THE REFERENCE GATE (2026-09-08, Mike's call). A scene with no
+    # photographs behind it is not a candidate: it renders on its own
+    # text, which is the thing this pipeline was built to stop doing.
+    # So it comes off the board here, one step after the only step that
+    # could have grounded it.
+    #
+    # Archive, never delete -- the row keeps its prompt and still
+    # teaches the grade queue. And the reason is preprod.NO_REFERENCE, a
+    # MACHINE reason kept out of pick_rate and the taste tally: nobody
+    # judged this concept, so counting it as one Michael passed over
+    # would read a grounding failure as a verdict on the writing.
+    #
+    # No retry edge. Regenerating cannot conjure photographs -- what the
+    # writer is offered is fixed by the spark and the attached picks
+    # (asset_shelf.in_scope), so a second pass produces another
+    # ungrounded scene at full price.
+    # Asked through preprod.refs_required(), the ONE switch (2026-09-08):
+    # this gate and `planner`'s and the Queue's are the same rule at three
+    # depths, and a switch that turned off only some of them would leave a
+    # night holding at the far end for a reason the near end was told to
+    # ignore.
+    #
+    # Why BOTH this and planner's, which look redundant: planner refuses a
+    # DIRECTION that arrived with no photographs, before a generation is
+    # paid for. This catches the scene that was written from a direction
+    # that HAD photographs and still ended up attaching none -- nothing
+    # the writer named resolved to a file. Neither can see the other's
+    # case, and the cheap one runs first on purpose.
+    ungrounded = ""
+    if not refs and preprod.refs_required():
+        ungrounded = preprod.NO_REFERENCE
+        try:
+            preprod.archive_ungrounded(result["concept_id"],
+                                       account_id=state.get("account_id"))
+        except Exception as e:
+            # The routing above does NOT depend on this write. A row
+            # that could not be archived is a row still on the board,
+            # which is visible and fixable; a run that kept going
+            # because the archive failed would be neither.
+            print(f"note: ungrounded concept not archived: {e}", file=sys.stderr)
+
     return {"concept": concept, "concept_id": result["concept_id"],
-            "refs": refs, "attempts": state.get("attempts", 0) + 1}
+            "refs": refs, "ungrounded": ungrounded,
+            "attempts": state.get("attempts", 0) + 1}
 
 
 def evaluate(state: GenState) -> GenState:
+    """Scores the concept exactly as it always did -- the verdict is
+    unchanged in both modes, because the number is what the grade queue
+    and the agreement statistic read. What changes is who acts on it
+    (route_after_eval), not what it says.
+
+    In advisory mode a judge-only failure also leaves a NOTE behind, so
+    the run that carries on can still say what the judge thought when it
+    parks. Written into `advisory`, never into the reason directly: the
+    run has not finished yet and does not know where it will end."""
     concept = state.get("concept", {}) or {}
     issues = list(concept.get("warnings", []) or [])   # code-enforced
     score = 1.0
     if os.environ.get("JUDGE") == "1":
         score, judge_issues = _judge(concept)
         issues += judge_issues
-    ok = (not concept.get("warnings")) and (score >= JUDGE_MIN)
-    return {"critique": {"ok": ok, "issues": issues, "score": score}}
+    structural = bool(concept.get("warnings"))
+    ok = (not structural) and (score >= JUDGE_MIN)
+    out: GenState = {"critique": {"ok": ok, "issues": issues, "score": score}}
+    if not ok and not structural and gates_mode() == GATES_ADVISORY:
+        kept = [a for a in (state.get("advisory") or [])
+                if not a.startswith(_EVAL_ADVISORY)]
+        detail = "; ".join(str(i) for i in issues) or "no reason given"
+        out["advisory"] = kept + [f"{_EVAL_ADVISORY} {score:.2f} < {JUDGE_MIN} — {detail}"]
+    return out
 
 
 def route_after_eval(state: GenState) -> str:
-    if state.get("critique", {}).get("ok"):
+    """The concept gate, split by what enforced it.
+
+    `concept["warnings"]` is CODE -- shootgen asked, validate_concept
+    checked, and a shot naming a room that does not exist or a tool that
+    is not in the registry is broken output, not a matter of taste. That
+    still retries, and still holds when the retries run out, in BOTH
+    modes.
+
+    A low LLM-judge score is the other thing, and since 2026-09-07 it no
+    longer routes: in advisory mode it is recorded in `critique` (and in
+    `advisory`, which rides to the parked reason) and the run proceeds.
+    Retrying on it bought nothing measurable -- the same rubric that
+    agreed with Mike 38% of the time was deciding whether to spend
+    another generation."""
+    # The reference gate is HARD in both modes, and it is asked first.
+    # It belongs beside `warnings` on the list of things code enforces:
+    # whether a scene was handed photographs is a fact, not an opinion,
+    # so ZEROPAGE_GATES has no say in it. gen_concept has already taken
+    # the row off the board; this is the run declining to spend a
+    # keyframe and a credit on it.
+    if state.get("ungrounded"):
+        return "hold"
+    critique = state.get("critique", {}) or {}
+    if critique.get("ok"):
         return "pass"
+    structural = bool((state.get("concept", {}) or {}).get("warnings"))
+    if not structural and gates_mode() == GATES_ADVISORY:
+        return "pass"               # recorded, not enforced
     if state.get("attempts", 0) < MAX_ATTEMPTS:
         return "retry"
     return "hold"                   # out of retries -> park it, don't post it
@@ -744,6 +978,30 @@ def _judge_prompt(prompt: str) -> dict:
                 "reason": f"judge unreadable ({e}) — failed closed"}
 
 
+def _gate_advisory(state: GenState, scored: list) -> list[str]:
+    """The failing verdicts, in the words the Queue card shows, with any
+    previous prompt-gate note replaced (a rework re-scores the same shot,
+    and two contradictory lines on one card is worse than none).
+
+    THE SCORES THEMSELVES ARE UNTOUCHED. `pass` still means what the
+    judge said, `log_prompt_scores` still writes `passed = 0` for a shot
+    that failed, and `autonomy.prompt_gate_agreement` therefore keeps
+    measuring the JUDGE against Mike's grade rather than quietly
+    measuring whether the pipeline let a run through -- which, in
+    advisory mode, it always does. Losing that would delete the only
+    evidence that the inversion was the right call.
+
+    A `structural` failure is never listed here: layer 1 still HOLDS in
+    advisory mode, so its reason is the hold's reason, not an advisory
+    note on a run that carried on."""
+    kept = [a for a in (state.get("advisory") or [])
+            if not a.startswith(_GATE_ADVISORY)]
+    return kept + [f"{_GATE_ADVISORY} {x.get('score')}/10 — "
+                   f"{x.get('reason') or 'no reason given'}"
+                   for x in scored
+                   if not x.get("pass") and not x.get("structural")]
+
+
 def score_prompts(state: GenState) -> GenState:
     """The credit gate. Every extracted prompt gets the deterministic
     floor, then the judge; every score is logged before any credit could
@@ -758,9 +1016,16 @@ def score_prompts(state: GenState) -> GenState:
                if p.get("reference_image") else {})
         ok, why = _structural_check(text)
         if not ok:
+            # `structural: True` is what keeps layer 1 HARD in both modes
+            # (2026-09-07). It has to be an explicit flag, not "score 0
+            # with empty dims", because the fail-closed judge produces
+            # exactly that shape too -- and those are opposite things: a
+            # verdict nobody could read is the judge failing, an unfilled
+            # {token} is the prompt being broken.
             scored.append({"prompt": text, "tool": p.get("tool"),
                            "still": p.get("still"), "score": 0,
-                           "pass": False, "reason": why, "dims": {}, **ref})
+                           "pass": False, "reason": why, "dims": {},
+                           "structural": True, **ref})
             continue
         verdict = _judge_prompt(text)
         scored.append({"prompt": text, "tool": p.get("tool"),
@@ -770,7 +1035,10 @@ def score_prompts(state: GenState) -> GenState:
                        "reason": verdict["reason"], "dims": verdict["dims"],
                        **ref})
     autonomy.log_prompt_scores(state.get("run_id"), scored)
-    return {"prompt_scores": scored}
+    out: GenState = {"prompt_scores": scored}
+    if gates_mode() == GATES_ADVISORY:
+        out["advisory"] = _gate_advisory(state, scored)
+    return out
 
 
 # The failure this pattern-matches: shootgen's own scene-brief template
@@ -896,7 +1164,8 @@ def revise_prompts(state: GenState) -> GenState:
 
         ok, why = _structural_check(new_text)
         if not ok:
-            new_entry = {**entry, "prompt": new_text, "pass": False, "reason": why}
+            new_entry = {**entry, "prompt": new_text, "pass": False,
+                         "reason": why, "structural": True}
         else:
             verdict = _judge_prompt(new_text)
             new_entry = {"prompt": new_text, "tool": entry.get("tool"),
@@ -914,12 +1183,15 @@ def revise_prompts(state: GenState) -> GenState:
 
     concept["shots"] = shots
     autonomy.log_prompt_scores(state.get("run_id"), revised)
-    return {
+    out: GenState = {
         "prompt_scores": revised,
         "prompts": prompts,
         "concept": concept,
         "prompt_rework_attempts": state.get("prompt_rework_attempts", 0) + 1,
     }
+    if gates_mode() == GATES_ADVISORY:
+        out["advisory"] = _gate_advisory(state, revised)
+    return out
 
 
 def route_after_score(state: GenState) -> str:
@@ -930,7 +1202,32 @@ def route_after_score(state: GenState) -> str:
     specific thing before the whole concept -- including whatever shots
     already passed -- is thrown away over one fixable line. (Camera-only
     concepts have no scores and hold too; render has nothing for them
-    either.)"""
+    either.)
+
+    Since 2026-09-07 the LAST step of that changed. The bounded rework
+    pass stays in both modes -- two cheap text calls that demonstrably
+    improve the prompt, worth having whether or not anything is gated on
+    the result. But in advisory mode a shot that still fails afterwards
+    proceeds to `keyframe` instead of holding: the judge was predicting
+    from the PROMPT whether the clip would be worth posting, and it was
+    right 38% of the time, so the still is the cheaper and better place
+    to decide. The verdict rides along in `advisory` and lands in the
+    parked reason, so /holds shows it beside the image.
+
+    LAYER 1 IS NOT PART OF THE INVERSION. `_structural_check` is code:
+    empty, under fifteen words, a leftover `{token}` or TODO. A prompt
+    with an unfilled placeholder in it renders garbage whatever any judge
+    thinks of the writing, so a `structural` failure still holds in
+    advisory mode -- the same line route_after_eval draws between
+    validate_concept's `warnings` and the LLM's opinion. Structure is not
+    taste. Only layer 2, the rubric that agreed 38% of the time, stops
+    routing. (It still gets its rework first: the rewrite re-runs the
+    structural check, and a rewritten prompt that fills the token is the
+    cheapest possible fix.)
+
+    A camera-only concept still holds in BOTH modes, and that is not an
+    oversight: with no prompt there is nothing to keyframe and nothing
+    to render. That hold is code, not taste."""
     scores = state.get("prompt_scores", [])
     if not scores:
         return "hold"
@@ -938,7 +1235,10 @@ def route_after_score(state: GenState) -> str:
         return "generate_render"
     if state.get("prompt_rework_attempts", 0) < MAX_PROMPT_REWORKS:
         return "rework"
-    return "hold"
+    broken = any(x.get("structural") for x in scores if not x.get("pass"))
+    if broken or gates_mode() == GATES_HARD:
+        return "hold"
+    return "generate_render"
 
 
 def keyframe(state: GenState) -> GenState:
@@ -1002,6 +1302,14 @@ def keyframe(state: GenState) -> GenState:
               if rendered else
               "no keyframe: " + (failed[0].get("error") or "unknown")
               if failed else "no shot to keyframe")
+    # What the judges thought, carried onto the card rather than thrown
+    # away. In advisory mode a run reaches here having FAILED something,
+    # and the morning review has to be able to see that verdict next to
+    # the still it is judging -- otherwise the inversion doesn't move the
+    # decision to the image, it just deletes the opinion.
+    notes = [str(a) for a in (state.get("advisory") or []) if a]
+    if notes:
+        reason = " | ".join([reason, *notes])
     try:
         scene_chain.park_scene(concept_id, reason, db_path=None,
                                account_id=state.get("account_id"))
@@ -1026,6 +1334,13 @@ def generate_render(state: GenState) -> GenState:
     HIGGSFIELD" and parked, though shootgen names HIGGSFIELD first in
     ZEROPAGE_AI_TOOLS and shot.py already compiled its prompt.
 
+    tool==KLING / LTX / WAN / SEEDANCE route through fal.py (wired
+    2026-09-08), one adapter over fal.ai's queue API bound to one model
+    each. Those four platforms have had prompt renderers in shot.PLATFORMS
+    since the registry existed and no execution adapter at all, so every
+    shot planned for one of them came back "no adapter wired" -- half the
+    tool vocabulary was writable and unrenderable.
+
     tool==VEO keeps the legacy veo.py path for when Veo
     returns to the registry; anything else is honestly "no adapter
     wired" -- unless the aggregator registry (providers.py, 2026-09-04)
@@ -1040,27 +1355,53 @@ def generate_render(state: GenState) -> GenState:
     if os.environ.get("ZEROPAGE_RENDER") != "1":
         return {"clips": [{**p, "url": None, "ok": False} for p in prompts]}
 
-    from . import higgsfield, providers, runway, veo
-    connectors = {"VEO": veo, "RUNWAY": runway, "HIGGSFIELD": higgsfield}
-    out_root = (db.PROJECT_ROOT / "footage" / "generated"
-                / f"concept-{state.get('concept_id', 'x')}")
+    from . import fal, higgsfield, providers, runway, veo
+    connectors = {
+        "VEO": veo, "RUNWAY": runway, "HIGGSFIELD": higgsfield,
+        # The four that had prompt renderers in shot.PLATFORMS and no way
+        # to execute them since the registry was written. Each is this one
+        # fal adapter bound to one model (fal.PLATFORM_MODELS), so a shot
+        # shootgen planned for KLING renders on Kling rather than parking
+        # -- and the row it writes is logged under "kling", the tool that
+        # actually made the clip.
+        "KLING": fal.connector("kling"),
+        "LTX": fal.connector("ltx"),
+        "WAN": fal.connector("wan"),
+        "SEEDANCE": fal.connector("seedance"),
+    }
+    out_root = GENERATED_ROOT / f"concept-{state.get('concept_id', 'x')}"
     account_id = state.get("account_id")
     clips = []
     for index, p in enumerate(prompts, start=1):
         tool_name = (p.get("tool") or "").upper()
         connector = connectors.get(tool_name)
         tried = {tool_name.lower()} if tool_name else set()
+        # A connector may BE a provider under another name: the four fal
+        # platforms are all provider "fal". Excluding the tool name alone
+        # would let the failover "retry" on the same vendor that just
+        # failed, through a different door.
+        if connector is not None:
+            tried.add(getattr(connector, "PROVIDER", tool_name.lower()))
         result = None
         if connector is not None:
+            # account_id, or the clip is billed to nobody: the row lands
+            # with account_id=NULL, its cap counts against the unowned
+            # pool instead of this account's, and the provider key is
+            # resolved from the environment even when the account has
+            # its own stored one (BYOK). choose_provider() below was
+            # already being told whose run this is -- the render itself
+            # was not.
             result = connector.generate_candidates(
-                p["prompt"], out_root / f"shot{index}", n=1, db_path=None)
+                p["prompt"], out_root / f"shot{index}", n=1, db_path=None,
+                account_id=account_id)
         if result and result["ok"] and result["candidates"]:
             clips.append({**p, "url": result["candidates"][0]["path"], "ok": True})
             continue
         fallback = providers.choose_provider(account_id, exclude=tuple(tried))
         if fallback is not None:
             fb_result = providers.VIDEO_PROVIDERS[fallback].generate_candidates(
-                p["prompt"], out_root / f"shot{index}", n=1, db_path=None)
+                p["prompt"], out_root / f"shot{index}", n=1, db_path=None,
+                account_id=account_id)
             if fb_result["ok"] and fb_result["candidates"]:
                 clips.append({**p, "url": fb_result["candidates"][0]["path"],
                               "ok": True, "tool": fallback.upper(),
@@ -1104,7 +1445,99 @@ def _clip_passes_qc(url) -> bool:
 
 def route_after_qc(state: GenState) -> str:
     clips = state.get("clips", [])
-    return "caption" if clips and any(c.get("ok") for c in clips) else "hold"
+    return "select_clip" if clips and any(c.get("ok") for c in clips) else "hold"
+
+
+# The seam for a video-level judge, and the whole point of the inversion
+# (2026-09-07). The prompt gate was asking a text model to predict, from
+# the prompt, whether the render would be worth posting -- 38% agreement
+# with Mike's own verdict, and no rubric dimension separating it. The
+# thing that CAN answer that question is a model looking at the finished
+# clip, which does not exist here yet and costs real money when it does.
+#
+# So: `select_clip` picks with code today, and this hook is where that
+# model plugs in. Set `orchestrator.JUDGE = fn` and it is called with the
+# candidate list (each a clip dict as generate_render/qc_clip left it,
+# `ok` already decided) and must return ONE of those dicts, or None to
+# fall back to the heuristic. It is wrapped: a judge that raises, or
+# answers with something that isn't one of the candidates, loses its say
+# and the code choice stands -- the same never-raises contract every
+# other model seam in this pipeline keeps. Deliberately a module global
+# rather than an env var: what would flip it is a real implementation
+# landing, not a night's configuration.
+JUDGE = None
+
+
+def _clip_duration(url) -> float:
+    """Seconds, 0.0 for anything unreadable. Never raises -- an
+    unreadable clip is one candidate scored 0, not a failed run.
+
+    Inlined here on 2026-09-09. It used to call framebank.duration,
+    which was the same ffprobe invocation living in the frame-bank
+    module; that module went with the operator-footage lane, and this
+    is now the only place the pipeline asks how long a clip is."""
+    if not url:
+        return 0.0
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "csv=p=0", str(Path(url))],
+            capture_output=True, text=True, timeout=60)
+        return float((out.stdout or "0").strip() or 0)
+    except Exception:
+        return 0.0
+
+
+def _clip_size(url) -> int:
+    try:
+        return Path(url).stat().st_size if url else 0
+    except OSError:
+        return 0
+
+
+def _clip_rank(clip: dict) -> tuple:
+    """The code-only heuristic, in the order the reasons are actually
+    trustworthy: QC first (a file that isn't a video can never be the
+    pick), then the LONGEST clip, then the largest file.
+
+    Duration over size deliberately. Both are proxies -- neither knows
+    whether the clip is any good -- but a render that came back short is
+    usually a generation that gave up early, while a big file is often
+    just a noisier one. Bytes only break the tie."""
+    return (1 if clip.get("ok") else 0,
+            _clip_duration(clip.get("url")),
+            _clip_size(clip.get("url")))
+
+
+def select_clip(state: GenState) -> GenState:
+    """Choose between candidate renders AFTER the render, which is where
+    the inversion actually lands: selecting from finished clips is the
+    thing the prompt gate was a bad proxy for.
+
+    A no-op on one clip, which is every run today -- generate_render asks
+    each connector for n=1 -- so this node costs nothing until several
+    candidates exist. Every candidate is kept in `clip_candidates` (and
+    in the hold payload) whether it won or not: the losers are the
+    negative signal a video judge would eventually be trained or graded
+    against, and this pipeline's standing rule is that the thing you
+    passed over is the only evidence you passed over it."""
+    clips = [dict(c) for c in state.get("clips", []) or []]
+    if len(clips) <= 1:
+        return {"clip_candidates": clips}
+
+    best = max(clips, key=_clip_rank)
+    if JUDGE is not None:
+        try:
+            picked = JUDGE(clips)
+        except Exception as e:                       # never fatal, same as every seam
+            print(f"note: clip judge failed, keeping the code pick: {e}", file=sys.stderr)
+            picked = None
+        if any(picked is c for c in clips):
+            best = picked
+        elif picked is not None:
+            print("note: clip judge returned something that is not one of the "
+                  "candidates — keeping the code pick", file=sys.stderr)
+    return {"clips": [best], "clip_candidates": clips}
 
 
 def caption(state: GenState) -> GenState:
@@ -1141,6 +1574,12 @@ def _park(state: GenState, reason: str) -> GenState:
                  "prompts": state.get("prompts", []),
                  "prompt_scores": state.get("prompt_scores", []),
                  "critique": state.get("critique"),
+                 # every verdict that would have held this run in hard
+                 # mode, kept whole for the grade queue: the payload is
+                 # the replayable record of a run, and a gate that stops
+                 # routing must not also stop being visible
+                 "advisory": list(state.get("advisory") or []),
+                 "clip_candidates": state.get("clip_candidates", []),
                  "error": state.get("error")},
         account_id=state.get("account_id"),
     )
@@ -1174,6 +1613,23 @@ def hold(state: GenState) -> GenState:
     failed_scores = [x for x in state.get("prompt_scores", []) if not x.get("pass")]
     if state.get("error"):
         reason = state["error"]
+    elif state.get("ungrounded"):
+        # Ahead of every judge branch: this run stopped before any of
+        # them ran, and "prompt gate" on a scene that was never scored
+        # would send the morning review looking at the wrong thing.
+        reason = ("reference gate: no photos attached — archived off the board. "
+                  "Bank references for this spark and run it again.")
+    elif state.get("parked_reason"):
+        # THE RUN GOT AS FAR AS IT CAN. The scene is in the Queue with
+        # (usually) a still, waiting on a human, and `parked_reason`
+        # already carries every advisory verdict keyframe appended to it.
+        # Checked before the judge branches, not after (moved up
+        # 2026-09-07): in hard mode nothing failing ever reached the
+        # keyframe, so this is the same answer it always gave, but in
+        # advisory mode a failed judge and a rendered still are now the
+        # same run -- and "eval stop" would describe the opinion instead
+        # of what the night actually produced.
+        reason = state["parked_reason"]
     elif not (state.get("critique", {}) or {}).get("ok") and \
             (state.get("critique", {}) or {}).get("issues"):
         reason = "eval stop: " + "; ".join(
@@ -1185,12 +1641,6 @@ def hold(state: GenState) -> GenState:
             f"{x['reason']} ({x['score']}/10)" for x in failed_scores)
     elif not state.get("prompts"):
         reason = "no AI shots to render (camera-only concept)"
-    elif state.get("parked_reason"):
-        # the run got as far as it can without spending: the scene is in
-        # the Queue with (usually) a still, waiting on a human. Saying
-        # "no usable clips" here was true and useless -- it described
-        # the stub rather than what the night produced.
-        reason = state["parked_reason"]
     elif not state.get("clips"):
         reason = "held before render"
     else:
@@ -1212,7 +1662,8 @@ def _build():
         ("structure_prompt", structure_prompt), ("score_prompts", score_prompts),
         ("revise_prompts", revise_prompts),
         ("keyframe", keyframe), ("generate_render", generate_render),
-        ("qc_clip", qc_clip), ("caption", caption), ("publish", publish),
+        ("qc_clip", qc_clip), ("select_clip", select_clip),
+        ("caption", caption), ("publish", publish),
         ("hold", hold),
     ]:
         g.add_node(name, fn)
@@ -1229,7 +1680,10 @@ def _build():
     # so a room is named material the scene MAY use, exactly like cast
     # -- and an empty table means "nothing filed under places yet", not
     # a reason to refuse to think.
-    g.add_edge("planner", "ground_entities")
+    g.add_conditional_edges("planner", route_after_planner, {
+        "plan": "ground_entities",
+        "hold": "hold",
+    })
     g.add_edge("ground_entities", "ground_rag")
     g.add_edge("ground_rag", "gen_concept")
     g.add_edge("gen_concept", "evaluate")
@@ -1254,15 +1708,21 @@ def _build():
     })
     g.add_conditional_edges("revise_prompts", route_after_score, {
         "generate_render": "keyframe",
-        "rework": "revise_prompts",  # unreachable while MAX_PROMPT_REWORKS == 1;
-                                      # kept so raising that constant later just works
+        "rework": "revise_prompts",  # the second bounded pass (MAX_PROMPT_REWORKS == 2),
+                                      # and whatever raising that constant later allows
         "hold": "hold",
     })
     g.add_edge("keyframe", "generate_render")
     g.add_edge("generate_render", "qc_clip")
+    # select_clip sits between QC and caption, not inside either: QC
+    # answers "is this a video at all" (code, per clip) and selection
+    # answers "which of these is the one" (a judgment, across clips).
+    # Collapsing them would put the future video judge behind a function
+    # whose contract is that it never guesses.
     g.add_conditional_edges("qc_clip", route_after_qc, {
-        "caption": "caption", "hold": "hold",
+        "select_clip": "select_clip", "hold": "hold",
     })
+    g.add_edge("select_clip", "caption")
     g.add_edge("caption", "publish")
     g.add_edge("publish", END)
     g.add_edge("hold", END)
@@ -1277,7 +1737,7 @@ def run(goal: str, *, brand: Optional[str] = None, spark: Optional[str] = None,
         channel: str = "zeropage", picked_locations=None,
         picked_characters=None, picked_props=None, picked_references=None,
         reference_photos=None, scout_finding_id: Optional[int] = None,
-        scout: bool = False, research: bool = False,
+        scout: Optional[bool] = None, research: Optional[bool] = None,
         account_id: Optional[int] = None) -> dict:
     """
     `brand` defaults to `channel` rather than a hardcoded value on
@@ -1296,19 +1756,19 @@ def run(goal: str, *, brand: Optional[str] = None, spark: Optional[str] = None,
     what's wanted -- this only changes what happens when brand is
     omitted.
 
-    `research=True` lets a Claude agent fill the bank before it is read.
-    It requires `scout=True` as well -- filling a bank nothing will read
-    is spend with no output -- and is off by default for the same reason
-    scout is: an explicit spark already knows what it wants, and a node
-    that quietly spent Anthropic credit on every Director re-fire would
-    be a surprise on a bill.
+    `research=True` lets a Claude agent fill the bank before it is read;
+    `scout=True` then asks that bank for the direction instead of using
+    the one passed in. Both are TRI-STATE (see resolve_nodes): an
+    explicit True or False wins, and `None` -- the default -- hands the
+    decision to ZEROPAGE_GRAPH_RESEARCH / ZEROPAGE_GRAPH_SCOUT, which
+    are what turn the pair on for the unattended path without turning
+    them on for a caller that typed its own direction. Passing `spark=`
+    or `scout_finding_id` IS naming a direction, so Studio, Director and
+    the MCP `generate` tool keep theirs no matter what the env says.
 
-    `scout=True` asks the research agent for the direction instead of
-    using the one passed in. Off by default and never inferred: an
-    explicit spark stays authoritative, and a caller that wants a
-    crawled idea has to say so. The spark passed alongside it is still
-    required -- it is what the run falls back to when the scout's bank
-    is empty or every finding sits below scout.SCORE_FLOOR.
+    A scouted run still wants its `goal` spark: that is what it falls
+    back to when the bank is empty or every finding sits below
+    scout.SCORE_FLOOR.
 
     `scout_finding_id` is the OTHER way a banked finding seeds a run: the
     caller already chose it (the MCP `generate` tool, resolving a spark
@@ -1324,6 +1784,8 @@ def run(goal: str, *, brand: Optional[str] = None, spark: Optional[str] = None,
         print(f"note: channel={channel!r} but brand={brand!r} -- filing under "
               f"one channel, generating with the other engine, on purpose",
               file=sys.stderr)
+    scout, research = resolve_nodes(scout, research, spark=spark,
+                                    scout_finding_id=scout_finding_id)
     autonomy.init()
     winners.init()
     scout_mod.init()

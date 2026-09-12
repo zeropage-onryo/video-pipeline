@@ -62,17 +62,23 @@ def derive_signals(
     counts plus the evidence context (median, sample size), so a reason
     string can always say *why* -- "3 of the window's winners" -- rather
     than just asserting goodness.
+
+    Legacy posts are out (2026-09-07). These traits become caption
+    guidance and the Patterns block of every proven_results doc, so a
+    cocktail recipe's hook type would be taught back to a generator that
+    will never shoot one. Only the posts the pipeline produced may
+    teach the loop; ZEROPAGE_LEARN_FROM_LEGACY=1 is the way back.
     """
     kwargs = {"dsn": db_path} if db_path is not None else {}
     bench = db.benchmark(
         at_days=at_days, posted_within_days=posted_within_days,
-        metric=metric, **kwargs,
-    
+        metric=metric, include_legacy=False, **kwargs,
+
         account_id=account_id,)
     rows = db.get_top_performers(
         at_days=at_days, posted_within_days=posted_within_days,
-        metric=metric, limit=1000, **kwargs,
-    
+        metric=metric, limit=1000, include_legacy=False, **kwargs,
+
         account_id=account_id,)
 
     signals: dict[str, Any] = {

@@ -27,6 +27,39 @@ def tmp_db(pg, monkeypatch):
     return path
 
 
+def grounded_lanes(monkeypatch, tmp_path):
+    """gather_web, plus one signal from a TRUSTED image lane and a fetch
+    that really banks a frame.
+
+    Since 2026-09-08 a pass with no reference image behind it writes no
+    findings at all and returns ok=False before the digest call -- a spark
+    has to relate to a real photograph, not be invented from crawl text.
+    The score tests below are not about that rule, so they satisfy it:
+    stash_images only trusts `instagram` and `pinterest`, and the bytes
+    have to resolve through refbin, so the fetch writes a real JPEG.
+    """
+    import io
+
+    from PIL import Image
+
+    from src import refbin
+
+    refs = tmp_path / "refs"
+    monkeypatch.setattr(refbin, "REFS_DIR", refs)
+    monkeypatch.setattr(scout, "gather_web", lambda *a, **k: [
+        {"lane": "web", "detail": "night rituals everywhere"},
+        {"lane": "instagram", "detail": "a post that performed",
+         "image": "https://cdn.ig/p.jpg", "url": "https://instagram.com/p/abc"},
+    ])
+
+    def fetch(url):
+        buf = io.BytesIO()
+        Image.new("RGB", (9, 16), (20, 60, 70)).save(buf, format="JPEG")
+        return refbin.save(buf.getvalue())
+
+    return fetch
+
+
 class FakeResponse:
     def __init__(self, text):
         self.text = text
@@ -49,13 +82,31 @@ class FakeClient:
 
 
 DIGEST_JSON = json.dumps({"candidates": [
-    {"spark": "the last check before leaving", "rationale": "night rituals are landing",
+    {"image": 1, "spark": "the last check before leaving", "rationale": "night rituals are landing",
      "evidence": "three of the top feed posts this week were pre-ride rituals",
      "sources": ["https://example.com/a"], "score": 0.82},
-    {"spark": "a routine performed wrong", "rationale": "mistake-as-hook format",
+    {"image": 1, "spark": "a routine performed wrong", "rationale": "mistake-as-hook format",
      "evidence": "highest-view short in the sample opens on an error",
      "sources": ["https://youtube.com/watch?v=x"], "score": 0.71},
 ]})
+
+# One fake found photo, standing in for what stash_images would have pulled
+# off the instagram lane (2026-09-08: digest now requires a real grounding
+# image, so every scout.scout(...) test needs one of these alongside its
+# web signal, and a fetch= stub so stash_images never touches the network).
+FAKE_IMAGE_SIGNAL = {"lane": "instagram", "detail": "a night ride", "url": "https://ig/p/1",
+                     "image": "https://img/1.jpg", "metric": "1,000 likes"}
+
+
+def fake_fetch(url):
+    # A real file under data/refs/ -- scout() now reads these bytes back
+    # (refbin.resolve + read_bytes) to attach as an image Part, so a
+    # fabricated path string that resolves to nothing would silently
+    # produce zero images and every scout.scout(...) test below would
+    # hit the new "no reference images this pass" early return.
+    from src import refbin
+    return refbin.save(f"fake reference bytes for {url}".encode())
+
 
 
 # ---------- novelty keys ----------
@@ -179,6 +230,8 @@ def test_digest_prompt_carries_the_avoid_list_and_the_recent_sparks(tmp_db):
     assert "an old idea" in prompt
     assert "something found" in prompt
     assert "{signals}" not in prompt and "{brand}" not in prompt
+    # the per-brand look (2026-09-05) is injected, not left as a placeholder
+    assert "{look}" not in prompt and "LOOK" in prompt
 
 
 def test_format_signals_omits_lanes_that_only_reported_an_error():
@@ -194,11 +247,11 @@ def test_format_signals_omits_lanes_that_only_reported_an_error():
 
 def test_scout_banks_scored_candidates(tmp_db, monkeypatch):
     monkeypatch.setattr(scout, "gather_web", lambda *a, **k: [
-        {"lane": "web", "detail": "night rituals everywhere"}])
+        {"lane": "web", "detail": "night rituals everywhere"}, FAKE_IMAGE_SIGNAL])
     client = FakeClient(DIGEST_JSON)
 
     result = scout.scout("zeropage", 2, client=client, model="fake",
-                         lanes=("web",), dsn=tmp_db)
+                         lanes=("web",), dsn=tmp_db, fetch=fake_fetch)
 
     assert result["ok"]
     assert [f["spark"] for f in result["findings"]] == [
@@ -210,10 +263,10 @@ def test_scout_drops_a_candidate_that_repeats_a_recent_spark(tmp_db, monkeypatch
     scout.record("zeropage", {"spark": "The Last Check Before Leaving!", "score": 0.9},
                  dsn=tmp_db)
     monkeypatch.setattr(scout, "gather_web", lambda *a, **k: [
-        {"lane": "web", "detail": "x"}])
+        {"lane": "web", "detail": "x"}, FAKE_IMAGE_SIGNAL])
 
     result = scout.scout("zeropage", 2, client=FakeClient(DIGEST_JSON), model="fake",
-                         lanes=("web",), dsn=tmp_db)
+                         lanes=("web",), dsn=tmp_db, fetch=fake_fetch)
 
     sparks = [f["spark"] for f in result["findings"]]
     assert sparks == ["a routine performed wrong"]
@@ -233,7 +286,7 @@ def test_scout_with_every_lane_dead_reports_not_ok_and_banks_nothing(tmp_db, mon
 
 def test_scout_survives_a_digest_that_raises(tmp_db, monkeypatch):
     monkeypatch.setattr(scout, "gather_web", lambda *a, **k: [
-        {"lane": "web", "detail": "x"}])
+        {"lane": "web", "detail": "x"}, FAKE_IMAGE_SIGNAL])
 
     class Exploding(FakeClient):
         def __init__(self):
@@ -244,7 +297,7 @@ def test_scout_survives_a_digest_that_raises(tmp_db, monkeypatch):
             raise RuntimeError("gemini fell over")
 
     result = scout.scout("zeropage", 2, client=Exploding(), model="fake",
-                         lanes=("web",), dsn=tmp_db)
+                         lanes=("web",), dsn=tmp_db, fetch=fake_fetch)
     assert result["ok"] is False
     assert any("digest failed" in e for e in result["errors"])
 
@@ -256,9 +309,9 @@ def test_scout_rejects_an_unknown_brand(tmp_db):
 
 def test_scout_keeps_the_brands_apart(tmp_db, monkeypatch):
     monkeypatch.setattr(scout, "gather_web", lambda *a, **k: [
-        {"lane": "web", "detail": "x"}])
+        {"lane": "web", "detail": "x"}, FAKE_IMAGE_SIGNAL])
     scout.scout("zeropage", 2, client=FakeClient(DIGEST_JSON), model="fake",
-                lanes=("web",), dsn=tmp_db)
+                lanes=("web",), dsn=tmp_db, fetch=fake_fetch)
 
     assert scout.list_findings(brand="antihero", dsn=tmp_db) == []
     assert len(scout.list_findings(brand="zeropage", dsn=tmp_db)) == 2
@@ -396,28 +449,39 @@ def test_stash_images_stops_at_the_composer_limit(tmp_db):
 def test_bin_for_finding_returns_the_pass_it_was_read_out_of(tmp_db, monkeypatch):
     monkeypatch.setattr(scout, "gather_web", lambda *a, **k: [
         {"lane": "instagram", "detail": "x", "image": "https://img/1.jpg"}])
-    monkeypatch.setattr(scout.refbin, "fetch", lambda url: "/refs/one.jpg")
+    # a real file, not a fabricated path -- scout() now reads these bytes
+    # back (refbin.resolve + read_bytes) to ground the digest call itself
+    monkeypatch.setattr(scout.refbin, "fetch",
+                        lambda url: scout.refbin.save(b"fake reference bytes"))
 
     result = scout.scout("zeropage", 2, client=FakeClient(DIGEST_JSON), model="fake",
                          lanes=("web",), dsn=tmp_db)
 
     # both candidates came out of ONE crawl, so both see the same bin
+    [only_row] = result["bin"]
     for finding in result["findings"]:
         assert [b["url"] for b in scout.bin_for_finding(finding["id"], dsn=tmp_db)] \
-            == ["/refs/one.jpg"]
+            == [only_row["url"]]
 
 
-def test_a_pass_that_banks_nothing_does_not_fetch_images(tmp_db, monkeypatch):
-    """Files nothing can reference are just litter in data/refs."""
+def test_a_pass_with_no_grounding_image_never_calls_digest(tmp_db, monkeypatch):
+    """2026-09-08: images now come BEFORE digest, not after -- a spark must
+    relate to a real reference image, so there is nothing to spend a
+    digest (Gemini) call on until one has actually been found. This
+    replaces the old ordering's guarantee (nothing was fetched after a
+    dead digest) with the new one (digest is never reached without a real
+    image first) -- inverted on purpose, not a relaxed version of the
+    old rule."""
     monkeypatch.setattr(scout, "gather_web", lambda *a, **k: [
-        {"lane": "web", "detail": "x", "image": "https://img/1.jpg"}])
-    calls = []
-    monkeypatch.setattr(scout.refbin, "fetch",
-                        lambda url: calls.append(url) or "/refs/one.jpg")
+        {"lane": "web", "detail": "x"}])  # no instagram signal, no image
 
-    scout.scout("zeropage", 2, client=FakeClient("not json at all"), model="fake",
-                lanes=("web",), dsn=tmp_db)
-    assert calls == []
+    client = FakeClient("not json at all")
+    result = scout.scout("zeropage", 2, client=client, model="fake",
+                         lanes=("web",), dsn=tmp_db)
+
+    assert result["ok"] is False
+    assert client.models.calls == []
+    assert any("no reference images" in e for e in result["errors"])
 
 
 def test_bin_for_a_pass_that_does_not_exist_is_empty(tmp_db):
@@ -590,15 +654,14 @@ def test_find_by_spark_matches_on_the_claim_key_and_prefers_the_unused(tmp_db):
 
 # ---------- the story judge, wired into the pass (src/story_judge.py) ----------
 
-def test_scout_defaults_to_the_self_score_when_judge_is_off(tmp_db, monkeypatch):
+def test_scout_defaults_to_the_self_score_when_judge_is_off(tmp_db, monkeypatch, tmp_path):
     """judge=False is the default -- every existing call site (the dev
     console, the nightly walk without --judge) must see unchanged
     behaviour, at zero extra network or model cost."""
-    monkeypatch.setattr(scout, "gather_web", lambda *a, **k: [
-        {"lane": "web", "detail": "night rituals everywhere"}])
+    fetch = grounded_lanes(monkeypatch, tmp_path)
 
     result = scout.scout("zeropage", 2, client=FakeClient(DIGEST_JSON), model="fake",
-                         lanes=("web",), dsn=tmp_db)
+                         lanes=("web",), dsn=tmp_db, fetch=fetch)
 
     assert result["ok"]
     scores = {f["spark"]: f["score"] for f in result["findings"]}
@@ -607,16 +670,15 @@ def test_scout_defaults_to_the_self_score_when_judge_is_off(tmp_db, monkeypatch)
     assert all("story-judge" not in f["rationale"] for f in result["findings"])
 
 
-def test_scout_with_judge_blends_the_independent_score(tmp_db, monkeypatch):
+def test_scout_with_judge_blends_the_independent_score(tmp_db, monkeypatch, tmp_path):
     from src import story_judge
 
-    monkeypatch.setattr(scout, "gather_web", lambda *a, **k: [
-        {"lane": "web", "detail": "night rituals everywhere"}])
     monkeypatch.setattr(story_judge, "judge_spark", lambda *a, **k: {
         "ok": True, "score": 0.9, "verdict": "the spine is all there", "missing": []})
+    fetch = grounded_lanes(monkeypatch, tmp_path)
 
     result = scout.scout("zeropage", 2, client=FakeClient(DIGEST_JSON), model="fake",
-                         lanes=("web",), judge=True, dsn=tmp_db)
+                         lanes=("web",), judge=True, dsn=tmp_db, fetch=fetch)
 
     assert result["ok"]
     finding = next(f for f in result["findings"] if f["spark"] == "the last check before leaving")
@@ -625,17 +687,47 @@ def test_scout_with_judge_blends_the_independent_score(tmp_db, monkeypatch):
     assert "story-judge 0.90" in finding["rationale"]
 
 
-def test_scout_with_judge_falls_back_to_self_score_when_the_judge_cant_run(tmp_db, monkeypatch):
+def test_scout_with_judge_falls_back_to_self_score_when_the_judge_cant_run(tmp_db, monkeypatch, tmp_path):
     """A dead RAG connection or a bad key must not fail a night -- same
     contract as every other lane. rag.connect/make_client are not
     reachable under no_network, so this proves the pass still bank"""
-    monkeypatch.setattr(scout, "gather_web", lambda *a, **k: [
-        {"lane": "web", "detail": "night rituals everywhere"}])
+    fetch = grounded_lanes(monkeypatch, tmp_path)
 
     result = scout.scout("zeropage", 2, client=FakeClient(DIGEST_JSON), model="fake",
-                         lanes=("web",), judge=True, dsn=tmp_db)
+                         lanes=("web",), judge=True, dsn=tmp_db, fetch=fetch)
 
     assert result["ok"]
     assert [f["spark"] for f in result["findings"]] == [
         "the last check before leaving", "a routine performed wrong"]
     assert any("story judge" in e for e in result["errors"])
+
+
+def test_variety_is_enforced_in_code_not_just_asked():
+    """Mike, 2026-09-06: different wardrobe, faces and worlds throughout.
+    The second spark to reuse a world (this slate or the recent bank), a
+    wardrobe or a face is dropped and named; a candidate without the
+    fields passes."""
+    cands = [
+        {"spark": "a", "world": "rain-neon future, adverts know your name",
+         "wardrobe": "white and red leathers", "face": "Michael, visor down"},
+        {"spark": "b", "world": "a rain-soaked neon future",
+         "wardrobe": "sealed hazmat", "face": "Michael, respirator"},
+        {"spark": "c", "world": "the floodline, generator light",
+         "wardrobe": "white leathers", "face": "Michael, hood"},
+        {"spark": "d", "world": "salt desert", "wardrobe": "hide-wrapped coat",
+         "face": "an old woman, grey braid"},
+        {"spark": "f", "world": "orbital dock", "wardrobe": "grey issued coat",
+         "face": "an old woman with a grey braid"},
+        {"spark": "e"},
+    ]
+    kept, dropped = scout.enforce_variety(cands, [scout._variety_key("the floodline")])
+    assert [c["spark"] for c in kept] == ["a", "d", "e"]
+    assert [(c["spark"], why) for c, why in dropped] == [("b", "world"), ("c", "world"), ("f", "face")]
+
+
+def test_the_digest_keeps_world_wardrobe_and_face_raw_and_folded():
+    text = ('{"candidates": [{"spark": "s", "world": "salt desert", "wardrobe": "hide coat",'
+            ' "face": "an old woman", "hook_frame": "h", "score": 0.7}]}')
+    c = scout.parse_digest_response(text)[0]
+    assert (c["world"], c["wardrobe"], c["face"]) == ("salt desert", "hide coat", "an old woman")
+    assert "wardrobe: hide coat" in c["rationale"] and "face: an old woman" in c["rationale"]

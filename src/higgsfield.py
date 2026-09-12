@@ -89,7 +89,42 @@ DAILY_CAP = int(os.environ.get("HIGGSFIELD_DAILY_CAP", "6"))
 # whose card is paying, instead of the total quietly doubling.
 GLOBAL_DAILY_CAP = int(os.environ.get("HIGGSFIELD_GLOBAL_DAILY_CAP", str(DAILY_CAP)))
 POLL_SECONDS = 3
+# The shipped default and the fallback `timeout_seconds()` reads when the
+# environment says nothing. Bound at import like every other constant
+# here -- what must NOT be bound at import is the value the poll loop
+# actually uses; see timeout_seconds().
 TIMEOUT_SECONDS = int(os.environ.get("HIGGSFIELD_TIMEOUT_S", "600"))
+
+
+def timeout_seconds() -> int:
+    """How long a poll loop may wait, resolved PER CALL.
+
+    `_submit_and_wait` used to carry `timeout_s: int = TIMEOUT_SECONDS`,
+    and a default argument binds at import: once this module was
+    imported, `HIGGSFIELD_TIMEOUT_S` could never be changed again.
+    Setting it in the environment afterwards did nothing, and a test
+    that patched the constant patched a name the function no longer
+    read -- so the failure mode was a poll loop hanging for the OLD
+    timeout while the operator believed they had shortened it, with
+    nothing anywhere saying otherwise. `src/fal.py::_submit_and_wait`
+    was written against that trap (it reads its constant inside the
+    function); this is the same fix with the environment read live as
+    well, so `settings.py`'s rule -- env beats the shipped default,
+    resolved when it is needed rather than when the process started --
+    holds for the one number that decides how long money can sit in
+    flight.
+
+    A junk value falls back to the constant rather than raising: this is
+    a deadline, and refusing to render because someone typed
+    `HIGGSFIELD_TIMEOUT_S=soon` would be a worse answer than using 600.
+    """
+    raw = os.environ.get("HIGGSFIELD_TIMEOUT_S")
+    if raw is None:
+        return int(TIMEOUT_SECONDS)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return int(TIMEOUT_SECONDS)
 
 # Not published on the docs (checked 2026-08-31) -- estimates for the
 # confirm dialog, not a promise. Override once a real invoice is known.
@@ -279,10 +314,21 @@ def estimate_image_cost(n: int) -> float:
     return round(n * COST_PER_IMAGE_USD, 2)
 
 
-def _safe_error(e: Exception) -> str:
-    """Neither credential may reach a page, a log line, or a DB row."""
+def _safe_error(e: Exception, account_id: Optional[int] = None) -> str:
+    """Neither credential may reach a page, a log line, or a DB row.
+
+    It takes the account because _credentials() does: called with no
+    account this resolved the OPERATOR's env credentials and redacted
+    those, so a BYOK customer's own stored key -- the one the failing
+    request was actually signed with -- passed straight through into an
+    error string that reaches a Queue card and a generations row. Best
+    effort on the lookup: redaction runs on the failure path and must
+    never be the thing that raises there."""
     text = str(e)
-    creds = _credentials()
+    try:
+        creds = _credentials(account_id)
+    except Exception:
+        creds = None
     if creds:
         for secret in creds:
             if secret:
@@ -412,10 +458,20 @@ def _download(url: str, out_path: Path) -> None:
 
 
 def _submit_and_wait(path: str, body: dict, *, http=None,
-                     timeout_s: int = TIMEOUT_SECONDS,
+                     timeout_s: Optional[int] = None,
                      account_id: Optional[int] = None) -> tuple[dict, set]:
     """Submit -> poll to a terminal state -> (final payload, control
-    URLs to skip). Raises on failure or timeout."""
+    URLs to skip). Raises on failure or timeout.
+
+    The deadline is resolved HERE, through `timeout_seconds()`, and not
+    as a default argument: a default binds at import, so the value would
+    be whatever `HIGGSFIELD_TIMEOUT_S` said the first time anything
+    imported this module and nothing could change it afterwards. This is
+    the only wall between a stuck job and a night held open; it has to
+    be the one actually in force. fal.py's `_submit_and_wait` carries
+    the same shape and the same comment.
+    """
+    timeout_s = timeout_seconds() if timeout_s is None else int(timeout_s)
     http = http or (lambda u, p=None: _request(u, p, account_id=account_id))
     submitted = http(HOST + path, body)
     status_url = submitted.get("status_url")
@@ -479,7 +535,8 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
 
 def generate_image(prompt: str, out_path, *, http=None, db_path=None,
                    aspect_ratio: str = DEFAULT_ASPECT,
-                   account_id: Optional[int] = None) -> Path:
+                   account_id: Optional[int] = None,
+                   soul_id: Optional[str] = None) -> Path:
     """A Soul still, same wall. The documented completed payload is
     {"images": [{"url": ...}]} (docs.higgsfield.ai quickstart,
     2026-08-31)."""
@@ -490,9 +547,25 @@ def generate_image(prompt: str, out_path, *, http=None, db_path=None,
             f"~${estimate_image_cost(1)} of API credits"
         )
     prompt = safe_prompt(prompt, db_path)
-    state, skip = _submit_and_wait(
-        SOUL_PATH, {"prompt": prompt, "aspect_ratio": aspect_ratio}, http=http,
-        account_id=account_id)
+    body = {"prompt": prompt, "aspect_ratio": aspect_ratio}
+    if soul_id is None:
+        soul_id = os.environ.get("HIGGSFIELD_SOUL_ID", "").strip()
+    if soul_id:
+        # NOT THE LIKENESS PATH ANY MORE (2026-09-06, Mike's call after
+        # seeing the renders): the trained Soul "Mike Antihero v2" on Soul
+        # Cinema / Soul V2 produced a different actor -- thick mustache,
+        # pompadour. His face comes from nano_banana with his real photos
+        # attached (refgen.identity_references); HIGGSFIELD_SOUL_ID is
+        # left unset in .env so this branch is opt-in for someone else's
+        # Soul, never his default. Field names are the JS SDK's for
+        # /v1/text2image/soul (custom_reference_id,
+        # custom_reference_strength); verify against SOUL_PATH on the first
+        # live call -- an unknown field is a 400, not a silent drop.
+        body["custom_reference_id"] = soul_id
+        body["custom_reference_strength"] = float(
+            os.environ.get("HIGGSFIELD_SOUL_STRENGTH", "1.0"))
+    state, skip = _submit_and_wait(SOUL_PATH, body, http=http,
+                                   account_id=account_id)
     url = _output_url(state, skip)
     if not url:
         raise RuntimeError(
@@ -653,11 +726,14 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *,
                 generate_video(prompt, out_path, model=model, http=http,
                                db_path=db_path, account_id=account_id, **cfg)
             except Exception as e:
-                errors.append(f"candidate {i}: {_safe_error(e)}")
+                errors.append(f"candidate {i}: {_safe_error(e, account_id)}")
                 continue
             generation_id = generative.record_generation(
                 shot_id, "higgsfield", prompt,
-                params={"model": model, **cfg},
+                params={"model": model,
+                        "key_source": account_keys.key_source(
+                            account_id, "higgsfield", db_path),
+                        **cfg},
                 output_path=str(out_path),
                 cost_usd=estimate_cost(1, model=model, duration=duration),
                 notes=None,
@@ -670,7 +746,7 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *,
                 "shot_id": shot_id,
                 "error": "; ".join(errors) if errors else None}
     except Exception as e:
-        return {"ok": False, "candidates": [], "error": _safe_error(e)}
+        return {"ok": False, "candidates": [], "error": _safe_error(e, account_id)}
 
 
 def _publish(out_path: Path, content_type: str) -> str:
@@ -685,7 +761,10 @@ def _publish(out_path: Path, content_type: str) -> str:
 
 
 def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
-                      model: str = DEFAULT_MODEL, resolve_photo=None,
+                      model: str = DEFAULT_MODEL,
+                      duration: int = DEFAULT_DURATION,
+                      resolution: str = DEFAULT_RESOLUTION,
+                      resolve_photo=None,
                       http=None,
                       account_id: Optional[int] = None,
 ) -> dict:
@@ -734,6 +813,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"c{concept_id}-s{shot_n}-{stamp}.mp4"
         generate_video(prompt, out_path, model=model, image_url=image_url,
+                       duration=duration, resolution=resolution,
                        http=http, db_path=db_path, account_id=account_id)
 
         shot_row_id = _shot_row_for_prompt(
@@ -742,11 +822,15 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
         generation_id = generative.record_generation(
             shot_row_id, "higgsfield", prompt,
             params={"model": model, "aspect_ratio": DEFAULT_ASPECT,
-                    "duration": DEFAULT_DURATION,
+                    # the length actually asked for, not the module
+                    # default -- see runway.generate_for_shot
+                    "duration": duration, "resolution": resolution,
                     "concept_id": concept_id, "shot_n": shot_n,
-                    "prompt_image": bool(image_url)},
+                    "prompt_image": bool(image_url),
+                    "key_source": account_keys.key_source(
+                        account_id, "higgsfield", db_path)},
             output_path=str(out_path),
-            cost_usd=estimate_cost(1, model=model),
+            cost_usd=estimate_cost(1, model=model, duration=duration),
             **kwargs,
          account_id=account_id)
         media_url = _publish(out_path, "video/mp4")
@@ -755,7 +839,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                 "generation_id": generation_id, "path": str(out_path),
                 "error": None}
     except Exception as e:
-        return {"ok": False, "error": _safe_error(e)}
+        return {"ok": False, "error": _safe_error(e, account_id)}
 
 
 def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
@@ -803,7 +887,9 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
             shot_row_id, "higgsfield", prompt,
             params={"model": model, "aspect_ratio": DEFAULT_ASPECT,
                     "duration": DEFAULT_DURATION, "source": "workflow",
-                    "prompt_image": bool(image_url)},
+                    "prompt_image": bool(image_url),
+                    "key_source": account_keys.key_source(
+                        account_id, "higgsfield", db_path)},
             output_path=str(out_path),
             cost_usd=estimate_cost(1, model=model),
             **kwargs,
@@ -812,7 +898,7 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
                 "generation_id": generation_id, "path": str(out_path),
                 "error": None}
     except Exception as e:
-        return {"ok": False, "error": _safe_error(e)}
+        return {"ok": False, "error": _safe_error(e, account_id)}
 
 
 def generate_image_from_prompt(prompt: str, *, db_path=None, http=None, account_id: Optional[int] = None) -> dict:
@@ -851,7 +937,9 @@ def generate_image_from_prompt(prompt: str, *, db_path=None, http=None, account_
             account_id)
         generation_id = generative.record_generation(
             shot_row_id, "higgsfield", prompt,
-            params={"model": "soul-standard", "source": "workflow"},
+            params={"model": "soul-standard", "source": "workflow",
+                    "key_source": account_keys.key_source(
+                        account_id, "higgsfield", db_path)},
             output_path=str(out_path),
             cost_usd=estimate_image_cost(1),
             **kwargs,
@@ -860,4 +948,4 @@ def generate_image_from_prompt(prompt: str, *, db_path=None, http=None, account_
                 "generation_id": generation_id, "path": str(out_path),
                 "error": None}
     except Exception as e:
-        return {"ok": False, "error": _safe_error(e)}
+        return {"ok": False, "error": _safe_error(e, account_id)}

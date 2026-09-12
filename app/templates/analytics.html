@@ -52,14 +52,14 @@
           <td><input type="number" class="metric-input" data-row="{{ loop.index0 }}" data-col="1" name="likes_{{ r.video_id }}" placeholder="{{ r.likes if r.likes is not none else '' }}"></td>
           <td><input type="number" class="metric-input" data-row="{{ loop.index0 }}" data-col="2" name="comments_{{ r.video_id }}" placeholder="{{ r.comments if r.comments is not none else '' }}"></td>
           <td><input type="number" class="metric-input" data-row="{{ loop.index0 }}" data-col="3" name="saves_{{ r.video_id }}" placeholder="{{ r.saves if r.saves is not none else '' }}"></td>
-          <td>{% if r.platform in ("youtube", "instagram") %}<button type="submit" form="refresh-{{ r.video_id }}">Refresh</button>{% endif %}</td>
+          <td>{% if r.platform in ("youtube", "instagram", "tiktok") %}<button type="submit" form="refresh-{{ r.video_id }}">Refresh</button>{% endif %}</td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
     <p><button type="submit" class="primary">Save this week's numbers</button></p>
   </form>
-  {% for r in rows %}{% if r.platform in ("youtube", "instagram") %}<form id="refresh-{{ r.video_id }}" method="post" action="/metrics/refresh/{{ r.video_id }}"></form>{% endif %}{% endfor %}
+  {% for r in rows %}{% if r.platform in ("youtube", "instagram", "tiktok") %}<form id="refresh-{{ r.video_id }}" method="post" action="/metrics/refresh/{{ r.video_id }}"></form>{% endif %}{% endfor %}
   {% else %}
   <p class="dim">No videos yet. <a href="/videos/new" style="color:var(--steel)">Add your first one.</a></p>
   {% endif %}

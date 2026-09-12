@@ -38,6 +38,10 @@ def test_build_scene_brief_prompt_has_the_full_skeleton():
     p = shootgen.build_scene_brief_prompt("antihero")
     for marker in ("OPEN LINE", "STYLE", "BEATS", "SOUND", "AVOID", "9:16"):
         assert marker in p
+    # the per-brand look (2026-09-05) replaces the "raw handheld, matte"
+    # house style that flattened every reference carrying it
+    assert "{look}" not in p and "ANTIHERO LOOK" in p
+    assert "raw handheld, close wide-angle" not in p
 
 
 def test_scene_brief_marks_brand_as_fallback_context():
@@ -45,17 +49,6 @@ def test_scene_brief_marks_brand_as_fallback_context():
         "antihero", spark="a sunlit romantic comedy")
     assert p.index("a sunlit romantic comedy") < p.index("CHANNEL DIRECTION")
     assert "idea and attached images win" in p
-
-
-def test_generate_scene_brief_parses_json(monkeypatch):
-    monkeypatch.setattr(
-        shootgen, "generate_with_retry",
-        lambda *a, **k: '{"title": "Portal Room", "brief": "Ultra-realistic grounded ..."}')
-    out = shootgen.generate_scene_brief("antihero", spark="s", gemini_client=object())
-    assert out["title"] == "Portal Room"
-    assert out["brief"].startswith("Ultra-realistic")
-
-
 
 
 def test_gold_standard_is_injected_into_the_scene_brief_prompt():

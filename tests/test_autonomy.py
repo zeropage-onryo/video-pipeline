@@ -5,7 +5,7 @@ reads. Pure SQLite against a throwaway DB.
 """
 import pytest
 
-from src import autonomy
+from src import autonomy, db
 
 
 @pytest.fixture
@@ -193,3 +193,29 @@ def test_prompt_scores_for_run_keeps_the_order_the_gate_scored_in(tmp_db):
     assert rows[0]["dims"] == {"subject": 1}
     assert autonomy.prompt_scores_for_run(None, dsn=tmp_db) == []
     assert autonomy.prompt_scores_for_run("nope", dsn=tmp_db) == []
+
+
+# ---------- post targets: validated, because a typo posts nowhere ----------
+
+def test_tiktok_is_a_legal_target(tmp_db):
+    autonomy.set_targets("zeropage", "instagram,youtube,tiktok", dsn=tmp_db)
+    assert autonomy.channel_targets("zeropage", dsn=tmp_db) == [
+        "instagram", "youtube", "tiktok"]
+
+
+def test_an_unroutable_target_is_refused_at_the_edit(tmp_db):
+    """autopilot._post_dispatch routes on exactly these names; a typo
+    accepted here is a NotImplementedError at 3am."""
+    with pytest.raises(ValueError, match="instgram"):
+        autonomy.set_targets("zeropage", "instgram", dsn=tmp_db)
+
+
+def test_channel_targets_never_raises_and_drops_what_it_cannot_route(tmp_db):
+    """It is read from autopilot.build_plan, a read-only preview that
+    must survive a database with no channels table and a hand-edited
+    row."""
+    with db.connect(tmp_db) as conn:
+        conn.execute("UPDATE channels SET targets = %s WHERE name = %s",
+                     ("instagram,myspace", "zeropage"))
+    assert autonomy.channel_targets("zeropage", dsn=tmp_db) == ["instagram"]
+    assert autonomy.channel_targets("nobody", dsn=tmp_db) == []

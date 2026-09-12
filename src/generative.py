@@ -35,7 +35,14 @@ from .shot import TOOLS, Shot
 # nano_banana.py) that log attempts here but never render a Shot --
 # they must not join shot.PLATFORMS or they'd be offered as AI-shot
 # video tools in concepts.
-IMAGE_TOOLS = ("midjourney", "nano")
+#
+# "fal" is here for fal.py's FLUX stills ONLY. fal's video renders log
+# under the PLATFORM they rendered for (kling / ltx / wan / seedance,
+# already in TOOLS), because the scoreboard's question is which model
+# makes keepable clips and "fal" would average four models that cost
+# $0.30 and $1.51 into one meaningless row. The split is also what keeps
+# fal's video daily cap from moving when someone renders a still.
+IMAGE_TOOLS = ("midjourney", "nano", "fal")
 LOG_TOOLS = TOOLS + IMAGE_TOOLS
 
 SCHEMA = """
@@ -342,6 +349,63 @@ def attempts_to_keeper(
     params = (account_id, tool) if tool else (account_id,)
     with connect(dsn) as conn:
         return [dict(r) for r in conn.execute(sql, params)]
+
+
+def subscription_rendered(dsn: Optional[str] = None, *,
+                          account_id: Optional[int] = None) -> set[int]:
+    """Concept ids whose clip came off a SUBSCRIPTION rather than a
+    metered API call -- the manual lanes' rows (`ops/render_queue.py`).
+
+    Provenance a human can see. A hand-rendered clip and an API-rendered
+    one are the same mp4 in the same folder with the same `media_url`
+    shape; the only thing that separates them is `params.source`, which
+    until now lived nowhere anyone looks. That matters because the two
+    were paid for by different things -- one by a subscription with terms
+    of its own, one by credit somebody was billed for -- and a person
+    about to use a clip somewhere those terms bite has no other way to
+    tell.
+
+    Read off `params_json` rather than a new column on purpose: the fact
+    is already on the row, for every row ever written including the ones
+    imported before this function existed, and a column would have to be
+    backfilled from exactly this query anyway. `::jsonb` is safe because
+    every value in that column is `json.dumps` output; a NULL params or a
+    row with no concept_id simply does not match.
+    """
+    from . import manual_lane
+    rows = _subscription_rows(dsn, account_id, list(manual_lane.SUBSCRIPTION_SOURCES))
+    out = set()
+    for row in rows:
+        try:
+            out.add(int(row["concept_id"]))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _subscription_rows(dsn, account_id, sources) -> list:
+    """The query behind `subscription_rendered`, and the one place it is
+    allowed to give up.
+
+    NEVER RAISES, deliberately, unlike everything else that reads this
+    table: this is a LABEL on a card, and a database that has never
+    rendered anything has no `generations` table at all. The board 500ing
+    because nothing has ever been billed on it is the wrong failure --
+    the same degrade `_runway_state` makes for the daily count. An
+    unlabelled card is honest; a dead board is not.
+    """
+    try:
+        with connect(dsn) as conn:
+            return list(conn.execute(
+                "SELECT DISTINCT (params_json::jsonb->>'concept_id') AS concept_id "
+                "FROM generations "
+                "WHERE account_id IS NOT DISTINCT FROM %s AND params_json IS NOT NULL "
+                "AND params_json::jsonb->>'source' = ANY(%s) "
+                "AND params_json::jsonb->>'concept_id' IS NOT NULL",
+                (account_id, sources),
+            ).fetchall())
+    except Exception:
+        return []
 
 
 def tool_scoreboard(dsn: Optional[str] = None, *,

@@ -99,9 +99,70 @@
   {% if message %}<div class="toast">{{ message }}</div>{% endif %}
 
   {% if active_tab == "stats" %}
-  {# ── the five pipeline numbers, computed server-side ── #}
   {% if metrics.killed %}<div class="warnings" style="margin-bottom:14px">Kill switch is ON — every channel holds regardless of autonomy.</div>{% endif %}
+
+  {# ── DISTRIBUTION leads the page (2026-09-07) ──
+     Everything below measures how well the machine reasons. This block
+     measures whether anything left the building: posts per week per
+     brand per platform, what they cost, and what last night did. A
+     pipeline with perfect agreement numbers and a zero here is a
+     pipeline that is not working, and only this block says so. #}
   <div class="panel">
+    <div class="panel-head"><span class="id">DISTRIBUTION</span>
+      <span class="m">LAST {{ distribution.weeks|length }} WEEKS · PIPELINE POSTS ONLY · LEGACY UPLOADS EXCLUDED</span></div>
+    <div class="panel-body">
+      {% if distribution.available %}
+      <div class="tiles">
+        <div class="tile"><div class="k">Posts · since {{ distribution.since }}</div>
+          <div class="v">{{ distribution.posts }}</div></div>
+        <div class="tile"><div class="k">Spend in window <span class="dim">(estimate)</span></div>
+          <div class="v">${{ "%.2f"|format(distribution.spend_usd) }}</div></div>
+        <div class="tile"><div class="k">Cost per post</div>
+          <div class="v">{{ "$%.2f"|format(distribution.cost_per_post) if distribution.cost_per_post is not none else "—" }}</div></div>
+      </div>
+
+      {% if distribution.rows %}
+      <div style="overflow-x:auto">
+        <table class="tbl">
+          <thead><tr><th>brand</th><th>platform</th>
+            {% for w in distribution.weeks %}<th>{{ w.label }}</th>{% endfor %}
+            <th>total</th></tr></thead>
+          <tbody>
+          {% for r in distribution.rows %}
+            <tr><td>{{ r.brand }}</td><td class="mono">{{ r.platform }}</td>
+              {% for n in r.counts %}<td>{{ n }}</td>{% endfor %}
+              <td><strong>{{ r.total }}</strong></td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <p class="dim">No pipeline posts in the last {{ distribution.weeks|length }} weeks.
+        Hand-made uploads that predate the loop are deliberately not counted here —
+        this number is about what the machine published, not about the channel.</p>
+      {% endif %}
+
+      {# The table is added by the nightly job and may not exist yet; the
+         line is simply absent until it does, never an error. #}
+      {% if distribution.nightly %}
+      <p class="dim mono" style="margin-top:12px">
+        Last night · {{ distribution.nightly.started_at }}
+        {%- if distribution.nightly.finished_at %} → {{ distribution.nightly.finished_at }}{% endif %} ·
+        {{ distribution.nightly.attempted }} attempted ·
+        {{ distribution.nightly.succeeded }} succeeded ·
+        {{ distribution.nightly.failed }} failed ·
+        ${{ "%.2f"|format(distribution.nightly.spent_usd or 0) }}
+        {%- if distribution.nightly.stopped_reason %} · stopped: {{ distribution.nightly.stopped_reason }}{% endif %}
+      </p>
+      {% endif %}
+      {% else %}
+      <p class="dim">Distribution is unavailable — the videos table could not be read.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  {# ── the five pipeline numbers, computed server-side ── #}
+  <div class="panel" style="margin-top:26px">
     <div class="panel-head"><span class="id">PIPELINE</span><span class="m">THE TWO LABELS + THE THREE AGREEMENT NUMBERS</span></div>
     <div class="panel-body">
       <div class="tiles">

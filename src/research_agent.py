@@ -228,6 +228,7 @@ def build_brief(brand: str, count: int, dsn=None, tools=None,
     return brief.format(
         brand=brand,
         brand_note=scout.BRAND_NOTES.get(brand, ""),
+        look=scout.look_block(brand),
         count=count,
         max_images=scout.MAX_BIN_IMAGES,
         rules=rules,
@@ -397,10 +398,24 @@ async def _drive(client, brand: str, count: int, dsn, banked_before: int, *,
     # closing message. An agent's own summary of its work is the least
     # reliable record of it, and this number is what the night depends on.
     banked = len(scout.list_findings(brand=brand, dsn=dsn)) - banked_before
+
+    # THE BACKSTOP (2026-09-08). Illustrating a spark was the agent's job
+    # too, and it did it for a third of them: 9 of 29 on the night of
+    # 09-07. "Attach an image to each" is exactly the instruction a model
+    # honours for the first few of eight, and the shortfall was invisible
+    # because the pass reported the sparks it banked, not the ones it
+    # could illustrate. Since a bare spark is now never served
+    # (`scout.refs_required`), this is the difference between a night
+    # that generates and one that holds ten times -- so it is code that
+    # runs over whatever the agent left bare, and cannot skip one.
+    fill = scout.illustrate_bare(brand, dsn=dsn,
+                                 log=lambda line: print(line, file=sys.stderr))
+
     images = sum(len(scout.bin_for_finding(r["id"], dsn=dsn))
                  for r in scout.list_findings(brand=brand, unused_only=True,
                                               limit=100, dsn=dsn))
-    return {"ok": banked > 0, "banked": banked, "images": images}
+    return {"ok": banked > 0, "banked": banked, "images": images,
+            "illustrated": fill["illustrated"], "bare": fill["bare"]}
 
 
 def _meter_turns(result, model: str) -> int:
@@ -467,6 +482,41 @@ def run(brand: str, *, count: int = BANK_TARGET, dsn=None,
     except Exception as e:
         return {"ok": False, "banked": 0, "images": 0,
                 "note": f"{type(e).__name__}: {e}"}
-    result["note"] = (f"banked {result['banked']} spark(s)"
-                      if result["ok"] else "the agent banked nothing")
+    # The note says what is SERVABLE, not just what was banked. A spark
+    # with no picture behind it is never served (scout.refs_required), so
+    # "banked 8 sparks" on a pass that illustrated two is a number that
+    # reads like success and predicts a night of holds.
+    if result["ok"]:
+        note = f"banked {result['banked']} spark(s)"
+        if result.get("illustrated"):
+            note += f", illustrated {result['illustrated']}"
+        if result.get("bare"):
+            note += (f", {result['bare']} still bare and therefore "
+                     f"unservable")
+        result["note"] = note
+    else:
+        result["note"] = "the agent banked nothing"
     return result
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    """`python -m src.research_agent --brand antihero` -- one pass by hand
+    or from run_morning_prompts.sh. Exit 0 whatever happened: a skipped
+    pass ("already researched today", "bank already full", "no key") is a
+    normal night, and the script treats a non-zero as a crash."""
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--brand", required=True, choices=("antihero", "zeropage"))
+    parser.add_argument("--count", type=int, default=BANK_TARGET)
+    parser.add_argument("--force", action="store_true",
+                        help="ignore the once-a-day stamp")
+    args = parser.parse_args(argv)
+    result = run(args.brand, count=args.count, force=args.force)
+    print(f"research: {args.brand} — {result['note']} "
+          f"(banked={result['banked']} images={result['images']} "
+          f"bare={result.get('bare', 0)})")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

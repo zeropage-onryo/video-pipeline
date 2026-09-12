@@ -50,9 +50,12 @@ function card(c) {
     ? `<img class="scshot" src="${esc(c.reference_image)}" alt="">` : '';
   const clip = c.media_url
     ? `<a class="tag" href="${esc(c.media_url)}" target="_blank" rel="noreferrer">clip ↗</a>` : '';
-  // what this card is waiting on, said plainly
+  // what this card is waiting on, said plainly. A rendered clip also says
+  // WHO PAID: a subscription clip was made by hand on the operator's own
+  // consumer plan (ops/render_queue.py), not billed per call, and that is
+  // otherwise invisible -- same mp4, same folder, same URL shape.
   const status = c.archived ? (c.graded ? 'ARCHIVED · GRADED' : 'ARCHIVED · AWAITING GRADE')
-    : c.media_url ? 'RENDERED'
+    : c.media_url ? (c.subscription ? 'RENDERED · SUBSCRIPTION' : 'RENDERED')
     : c.picked ? 'PICKED · AWAITING APPROVAL IN QUEUE'
     : c.parked ? 'KEYFRAMED · AWAITING APPROVAL IN QUEUE'
     : '';

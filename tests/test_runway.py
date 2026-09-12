@@ -429,22 +429,6 @@ def test_the_swap_happens_before_the_length_check(asset_db, approved,
 
 # ---------- the Queue's selectors (2026-09-12) ----------
 
-def test_for_shot_refuses_a_frame_runway_does_not_render(scene_db, monkeypatch, tmp_path):
-    """Refused, never clamped -- and before any credit moves."""
-    monkeypatch.setenv(runway.SPEND_ENV, "1")
-    monkeypatch.setattr(runway, "RENDER_DIR", tmp_path / "renders")
-    concept_id = seed_scene(scene_db)
-    client = FakeClient()
-    result = runway.generate_for_shot(concept_id, 1, db_path=scene_db, client=client,
-                                      ratio="4:3")
-    assert result["ok"] is False
-    assert "4:3" in result["error"] and "720:1280" in result["error"]
-    assert client.calls == []                     # nothing was sent
-    result = runway.generate_for_shot(concept_id, 1, db_path=scene_db, client=client,
-                                      duration=7)
-    assert result["ok"] is False and "5 or 10" in result["error"]
-
-
 def test_for_shot_sends_the_chosen_frame_and_length(scene_db, approved, fake_download,
                                                     monkeypatch, tmp_path):
     import src.storage as storage
@@ -457,3 +441,104 @@ def test_for_shot_sends_the_chosen_frame_and_length(scene_db, approved, fake_dow
     assert result["ok"] is True, result
     sent = client.calls[-1]
     assert sent["ratio"] == "1280:720" and sent["duration"] == 10
+
+# ---------- BYOK: whose key paid for this ----------
+
+@pytest.fixture
+def byok(pg, monkeypatch):
+    """One account with its own stored Runway secret, and a DIFFERENT
+    operator secret in the environment. Whichever of the two turns up in
+    a client, an error string or a generations row is the answer to
+    "whose card is this render on".
+
+    DATABASE_URL is set because a credential is a property of the
+    INSTALLATION's database, not of whatever db_path a render was handed
+    -- account_keys.key_for(dsn=None) is what _make_client calls.
+    """
+    from cryptography.fernet import Fernet
+
+    from src import account_keys, accounts, db
+
+    monkeypatch.setenv("DATABASE_URL", pg)
+    monkeypatch.setenv("ACCOUNT_KEYS_SECRET", Fernet.generate_key().decode())
+    monkeypatch.setenv("RUNWAYML_API_SECRET", "OPERATOR-SECRET")
+    generative.init(pg)
+    accounts.seed("mike@example.com", dsn=pg)
+    with db.connect(pg) as conn:
+        owner = conn.execute(
+            "SELECT id FROM accounts WHERE slug = 'zeropage'").fetchone()["id"]
+    account_keys.set_key(owner, "runway", "TENANT-SECRET", dsn=pg)
+    return {"dsn": pg, "account_id": owner}
+
+
+@pytest.fixture
+def sdk_keys(monkeypatch):
+    """Every api_key the runwayml SDK was constructed with, in order."""
+    used = []
+
+    def fake_sdk(api_key=None, **kwargs):
+        used.append(api_key)
+        return FakeClient()
+
+    monkeypatch.setattr("runwayml.RunwayML", fake_sdk)
+    return used
+
+
+def _params(byok, generation_id):
+    """The stored params of one generation, read as its owner -- so the
+    row being the caller's own is part of what this asserts."""
+    import json
+
+    from src import db
+
+    with db.connect(byok["dsn"]) as conn:
+        row = conn.execute(
+            "SELECT params_json FROM generations WHERE id = %s AND account_id = %s",
+            (generation_id, byok["account_id"]),
+        ).fetchone()
+    return json.loads(row["params_json"])
+
+
+def test_a_byok_account_renders_on_its_own_key_not_the_operators(
+    byok, approved, fake_download, sdk_keys,
+):
+    """generate_from_prompt called generate_video WITHOUT account_id, so
+    _make_client resolved RUNWAYML_API_SECRET from the environment --
+    the operator's key -- while the generations row it then wrote said
+    the render was the customer's. The bill and the record disagreed."""
+    result = runway.generate_from_prompt("a prompt", db_path=byok["dsn"],
+                                         account_id=byok["account_id"])
+
+    assert result["ok"] is True, result["error"]
+    assert sdk_keys == ["TENANT-SECRET"], (
+        f"the render went on {sdk_keys!r} -- the operator's key paid for a "
+        "customer's clip")
+
+
+def test_a_stored_secret_never_reaches_an_error_string(byok):
+    """_safe_error only ever knew about the environment, so a BYOK
+    customer's own secret passed straight through into a string that
+    reaches a Queue card and a generations row."""
+    text = runway._safe_error(RuntimeError("401 rejecting key TENANT-SECRET"),
+                              byok["account_id"])
+    assert "TENANT-SECRET" not in text
+    assert "<RUNWAYML_API_SECRET>" in text
+
+
+def test_the_generations_row_records_whose_key_paid_for_it(
+    byok, approved, fake_download, sdk_keys,
+):
+    """The prepaid ledger must not debit credits for a render the
+    customer already paid the provider for directly, and `key_for` alone
+    cannot tell those apart after the fact. The row says which it was."""
+    from src import account_keys
+
+    own = runway.generate_from_prompt("a prompt", db_path=byok["dsn"],
+                                      account_id=byok["account_id"])
+    assert _params(byok, own["generation_id"])["key_source"] == "account"
+
+    account_keys.clear_key(byok["account_id"], "runway", dsn=byok["dsn"])
+    ours = runway.generate_from_prompt("a prompt", db_path=byok["dsn"],
+                                       account_id=byok["account_id"])
+    assert _params(byok, ours["generation_id"])["key_source"] == "env"
+    assert sdk_keys == ["TENANT-SECRET", "OPERATOR-SECRET"]

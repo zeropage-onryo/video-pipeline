@@ -550,3 +550,113 @@ def test_engine_flag_is_the_same_switch_as_the_env_var(tmp_db, monkeypatch):
                         lambda **kw: FakeServer())
     mcp_server.main(["--db", str(tmp_db), "--engine"])
     assert mcp_server.engine_enabled()
+
+
+# ---------- picking from a phone draws the still ----------
+# 2026-09-08, Mike's call, and a deliberate amendment to "the read/decide
+# tools never spend". The budget rule is that the night writes text and
+# the PICK draws the image; a pick from a phone that produced no still
+# meant the board and the phone disagreed about what picking means, and
+# the card he opened next had nothing on it. The CLIP is still dollars
+# behind the Queue's approve, on the machine.
+
+def _scene(path, title="Cold Open", prompt="P", **shot):
+    base = {"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
+            "desc": title, "prompt": prompt}
+    base.update(shot)
+    return preprod.save_concept(
+        {"title": title, "hook": "", "logline": "", "shots": [base]},
+        brand="zeropage", prompt_template="T", dsn=path, account_id=None)
+
+
+@pytest.fixture
+def stills(monkeypatch):
+    from src import scene_chain
+    calls = []
+    monkeypatch.delenv("ZEROPAGE_KEYFRAME_ON_PICK", raising=False)
+    monkeypatch.setattr(scene_chain, "keyframe_scene",
+                        lambda cid, n=None, **kw: calls.append((cid, n)) or
+                        {"ok": True, "media_url": "https://example.test/k.jpg",
+                         "frames": ["b"]})
+    return calls
+
+
+def test_picking_from_a_phone_draws_the_still(tmp_db, stills):
+    cid = _scene(tmp_db)
+    card = mcp_server.pick_idea(cid, dsn=tmp_db)
+    assert card["status"] == "picked"
+    assert card["keyframe"]["ok"] is True
+    assert card["keyframe"]["url"] == "https://example.test/k.jpg"
+    assert card["keyframe"]["frames"] == 1
+    assert stills == [(cid, 1)]
+
+
+def test_unpicking_draws_nothing(tmp_db, stills):
+    cid = _scene(tmp_db)
+    card = mcp_server.pick_idea(cid, picked=False, dsn=tmp_db)
+    assert "keyframe" not in card
+    assert stills == []
+
+
+def test_a_scene_that_already_has_a_still_is_not_re_billed(tmp_db, stills):
+    """An agent re-picking a card must not buy a second image."""
+    cid = _scene(tmp_db, reference_image="https://example.test/old.jpg")
+    card = mcp_server.pick_idea(cid, dsn=tmp_db)
+    assert card["keyframe"] == {"ok": False, "note": "already has a still"}
+    assert stills == []
+
+
+def test_a_still_that_cannot_be_drawn_is_a_note_and_never_an_error(tmp_db,
+                                                                   monkeypatch):
+    """An agent that sees a tool error retries the identical call, and the
+    retry is what would spend twice. So the failure rides back on the
+    card and the pick -- the label, which is the part that matters --
+    stands."""
+    from src import scene_chain
+    monkeypatch.setattr(scene_chain, "keyframe_scene",
+                        lambda *a, **k: {"ok": False,
+                                         "error": "daily ceiling: 60/60 images"})
+    cid = _scene(tmp_db)
+    card = mcp_server.pick_idea(cid, dsn=tmp_db)
+    assert card["status"] == "picked"
+    assert card["keyframe"]["ok"] is False
+    assert "60/60" in card["keyframe"]["note"]
+
+
+def test_a_keyframe_that_raises_still_leaves_the_concept_picked(tmp_db,
+                                                                monkeypatch):
+    from src import scene_chain
+
+    def boom(*a, **k):
+        raise RuntimeError("the image model fell over")
+
+    monkeypatch.setattr(scene_chain, "keyframe_scene", boom)
+    cid = _scene(tmp_db)
+    card = mcp_server.pick_idea(cid, dsn=tmp_db)
+    assert card["status"] == "picked"
+    assert card["keyframe"]["ok"] is False
+
+
+def test_the_drawing_can_be_turned_off(tmp_db, stills, monkeypatch):
+    monkeypatch.setenv("ZEROPAGE_KEYFRAME_ON_PICK", "0")
+    cid = _scene(tmp_db)
+    assert mcp_server.pick_idea(cid, dsn=tmp_db)["keyframe"]["note"] == \
+        "drawing on pick is off"
+    assert stills == []
+
+
+def test_the_clip_is_still_not_reachable_from_here(tmp_db, stills):
+    """The amendment is the KEYFRAME -- cents on the Gemini key under
+    NANO_DAILY_CAP. Picking must still not be able to call Runway."""
+    cid = _scene(tmp_db)
+    mcp_server.pick_idea(cid, dsn=tmp_db)
+    source = Path(mcp_server.__file__).read_text()
+    imported = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.ImportFrom):
+            imported.update(alias.name for alias in node.names)
+            if node.module:
+                imported.add(node.module.split(".")[0])
+        elif isinstance(node, ast.Import):
+            imported.update(alias.name.split(".")[0] for alias in node.names)
+    assert not (FORBIDDEN & imported)

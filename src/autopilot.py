@@ -29,10 +29,15 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from . import instagram, preprod, youtube
+from . import autonomy, instagram, preprod, tiktok, youtube
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 KILL_SWITCH_PATH = PROJECT_ROOT / "data" / "autopilot.off"
+# Where generated candidates land. A module-level constant rather than a
+# path built inside _generate, because a path built inside the function
+# cannot be redirected -- and an output root a test cannot redirect is an
+# output root a test eventually writes to for real.
+GENERATED_DIR = PROJECT_ROOT / "footage" / "generated"
 
 ENABLE_ENV = "ZEROPAGE_AUTOPILOT"
 
@@ -100,11 +105,8 @@ def execute_generate_action(action: dict):
     because every call costs real money. Nothing is auto-kept: the
     clips land as candidates and the keeper is still a human pick.
     """
-    from pathlib import Path
-
     from . import veo
-    out_dir = (Path(__file__).resolve().parent.parent / "footage" / "generated"
-               / f"autopilot-{action.get('concept_id', 'x')}")
+    out_dir = GENERATED_DIR / f"autopilot-{action.get('concept_id', 'x')}"
     return veo.generate_candidates(
         action.get("prompt", ""), out_dir,
         n=int(action.get("candidates", 1)),
@@ -124,8 +126,9 @@ def post_approved() -> bool:
 
 def _post_dispatch(action: dict):
     """Route a post action to its platform's executor. Defaults to
-    Instagram (the original behavior); 'youtube' uploads a local file.
-    Both are only ever reached in live mode, behind the same gate --
+    Instagram (the original behavior); 'youtube' uploads a local file;
+    'tiktok' hands TikTok a public URL to pull. All three are only ever
+    reached in live mode, behind the same gate --
     and behind the per-run posting approval, checked here so nothing
     that reaches an executor directly can publish around it."""
     if not post_approved():
@@ -137,6 +140,8 @@ def _post_dispatch(action: dict):
         return youtube.execute_post_action(action)
     if platform == "instagram":
         return instagram.execute_post_action(action)
+    if platform == "tiktok":
+        return tiktok.execute_post_action(action)
     raise NotImplementedError(f"no post adapter for platform {platform!r}")
 
 
@@ -202,14 +207,42 @@ def build_plan(db_path=None, account_id: Optional[int] = None) -> dict[str, Any]
             None,
         )
         if rendered:
-            actions.append({
-                "kind": "post",
-                "platform": "instagram",
-                "concept_id": concept["id"],
-                "title": concept.get("title"),
-                "video_url": rendered["media_url"].strip(),
-                "caption": concept.get("hook") or concept.get("title") or "",
-            })
+            # ONE ACTION PER TARGET (2026-09-07). The plan used to name
+            # Instagram and nothing else, so a channel whose `targets`
+            # said "instagram,youtube" published to half of them and the
+            # column was decoration. The fan-out reads that column --
+            # the same one /api/holds/{id}/post has always fanned out on
+            # -- so the two publishing paths agree about where a channel
+            # posts instead of each having its own idea.
+            #
+            # Every gate is untouched and every one of them is UPSTREAM
+            # of here: the kill switch, the enable env, the per-run
+            # approval and the rate cap all sit in execute(), so fanning
+            # out multiplies what a plan DESCRIBES, never what it is
+            # allowed to do. The brand and uncanny checks above still
+            # decide whether any of this is reached at all.
+            #
+            # Falling back to Instagram when there is no channel row
+            # keeps the pre-fan-out behaviour for a database that has no
+            # channels table (every preprod-only fixture, and the plan
+            # is a read-only preview that must still work there).
+            media_url = rendered["media_url"].strip()
+            is_local = not media_url.startswith("http")
+            targets = autonomy.channel_targets(concept.get("brand") or "",
+                                               dsn=db_path) or ["instagram"]
+            for platform in targets:
+                actions.append({
+                    "kind": "post",
+                    "platform": platform,
+                    "concept_id": concept["id"],
+                    "title": concept.get("title"),
+                    "video_url": media_url,
+                    # YouTube uploads bytes, not a URL: hand it the path
+                    # when the render never reached public storage, and
+                    # let its executor say so when neither exists.
+                    "video_path": media_url if is_local else "",
+                    "caption": concept.get("hook") or concept.get("title") or "",
+                })
     return {"actions": actions}
 
 

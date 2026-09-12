@@ -126,8 +126,41 @@ export type Concept = {
   media_url: string;
   reference_image: string;
   created_at?: string;
+  /** the card's own default renderer, resolved server-side from the shot's planned tool */
+  render_default?: { provider: string; model: string };
 };
 export type RunwayModel = { id: string; label: string; usd_per_second: number };
+/* the overnight branch's renderer catalogue (providers.render_options):
+   every registered renderer with its gates, its models and each model's
+   legal duration and frame axis; a price shape the card may multiply */
+export type Axis = {
+  kind: "choices" | "range" | "fixed";
+  values?: (string | number)[];
+  min?: number;
+  max?: number;
+  default?: string | number | null;
+  note?: string;
+};
+export type ModelSpec = {
+  id: string;
+  label: string;
+  available?: boolean;
+  duration: Axis;
+  frame: Axis;
+  verified?: string | null;
+  price?: { kind: "per_second" | "flat" | "unknown"; usd?: number; usd_by_frame?: Record<string, number> };
+};
+export type RendererSpec = {
+  label: string;
+  available: boolean;
+  spend_ok: boolean;
+  spend_env?: string | null;
+  cap?: number | null;
+  today?: number | null;
+  frame_axis: "ratio" | "resolution";
+  models: ModelSpec[];
+  default_model: string | null;
+};
 export type RunwayState = {
   available: boolean;
   spend_ok: boolean;
@@ -140,7 +173,9 @@ export type RunwayState = {
   durations?: number[];
   today?: number | null;
 };
-export type RenderChoice = { model: string; ratio: string; duration: number };
+/** what approve takes: providers.check_render_choice refuses, never clamps */
+export type RenderChoice = { provider?: string; model?: string; duration?: number; frame?: string };
+export type RenderResolved = { provider: string; model: string; duration: number; frame: string; estimate_usd: number };
 export type PickRate = { generated: number; picked: number; rate: number | null };
 /** GET /api/pipeline/concepts — the board. Ask for the archived rows
  *  too and filter client-side, so the count line can say where every
@@ -166,7 +201,7 @@ export const updateShotPrompt = (id: number, n: number, prompt: string) =>
   });
 /* the spend gate: approving is what calls Runway */
 export const queueApprove = (id: number, choice?: RenderChoice) =>
-  apiFetch<{ job_id?: number; estimate_usd?: number }>(`/queue/${id}/approve`, {
+  apiFetch<{ job_id?: number; render?: RenderResolved }>(`/queue/${id}/approve`, {
     method: "POST",
     body: JSON.stringify(choice ?? {}),
   });
@@ -175,13 +210,43 @@ export const queueReject = (id: number) =>
 /** made by hand, outside the render lane — drops it off the pending list */
 export const queueShot = (id: number) =>
   apiFetch<{ ok: boolean }>(`/queue/${id}/shot`, { method: "POST", body: JSON.stringify({ shot: true }) });
-/** The subscription lane's drop target: the mp4 rendered by hand in
- *  Runway Explore, filed onto the shot as a FREE row. Gated server-side
- *  on the operator column; a second drop is refused (409). */
-export const fileLaneClip = (id: number, file: File) => {
+/* ── the subscription lane (operator-gated server-side; the `manual_lane`
+   capability only says whether to draw the section) ── */
+export type LaneModel = { id: string; durations: number[]; ratios: string[] };
+export type LaneItem = {
+  concept_id: number;
+  title: string;
+  brand: string;
+  shot_n: number;
+  prompt: string;
+  keyframe_url: string | null;
+  duration: number;
+  ratio: string;
+  lane?: string;
+};
+/** GET /api/queue/manual — the same waiting shots, addressed to a pair of
+ *  hands in Chrome; a 404 for an account the lane is not open for. */
+export const queueManual = (brand?: string) =>
+  apiFetch<{ items: LaneItem[]; models: LaneModel[]; default_model: string }>(
+    `/queue/manual${brand ? `?brand=${encodeURIComponent(brand)}` : ""}`,
+  );
+/** POST /api/queue/manual/{id}/clip — the finished mp4, filed by
+ *  ops/render_queue.import_clip as a FREE row; the claimed model, frame
+ *  and length are refused by render_specs if the lane cannot have
+ *  produced them; a second drop is refused (409). */
+export const fileLaneClip = (
+  id: number,
+  file: File,
+  claim: { shot_n?: number; model?: string; ratio?: string; duration?: number; anchored?: boolean } = {},
+) => {
   const form = new FormData();
-  form.append("clip", file, file.name);
-  return apiForm<{ ok: boolean; media_url: string; cost_usd: null }>(`/queue/${id}/clip`, form);
+  form.append("file", file, file.name);
+  if (claim.shot_n != null) form.append("shot_n", String(claim.shot_n));
+  if (claim.model) form.append("model", claim.model);
+  if (claim.ratio) form.append("ratio", claim.ratio);
+  if (claim.duration != null) form.append("duration", String(claim.duration));
+  if (claim.anchored != null) form.append("anchored", claim.anchored ? "1" : "0");
+  return apiForm<{ ok: boolean; media_url?: string; [k: string]: unknown }>(`/queue/manual/${id}/clip`, form);
 };
 
 /* the in-process job registry (clears on restart, and says so) */
@@ -189,7 +254,7 @@ export const listJobs = () => apiFetch<{ items: (Job & { cancellable?: boolean }
 export const cancelJob = (id: number) => apiFetch<Job>(`/jobs/${id}/cancel`, { method: "POST", body: "{}" });
 export const clearJob = (id: number) => apiFetch<{ deleted: number }>(`/jobs/${id}`, { method: "DELETE" });
 export const queuePending = (brand?: string) =>
-  apiFetch<{ items: Concept[]; runway: RunwayState; manual_lane?: boolean }>(
+  apiFetch<{ items: Concept[]; runway: RunwayState; renderers?: Record<string, RendererSpec> }>(
     `/queue/pending${brand ? `?brand=${encodeURIComponent(brand)}` : ""}`,
   );
 /** The pick. Puts a concept in front of the Queue's approval gate;

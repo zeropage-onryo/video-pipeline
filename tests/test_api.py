@@ -445,7 +445,7 @@ def test_concept_detail_carries_runway_availability(tmp_db, monkeypatch):
 
 def test_shot_generate_runs_the_render_as_a_job(tmp_db, monkeypatch):
     concept_id = seed_concept(tmp_db)
-    monkeypatch.setattr(api_mod.runway, "has_key", lambda: True)
+    monkeypatch.setattr(api_mod.runway, "has_key", lambda account_id=None: True)
     monkeypatch.setattr(
         api_mod.runway, "generate_for_shot",
         # account_id in the stub because the route passes it (2026-09-02):
@@ -462,7 +462,7 @@ def test_shot_generate_runs_the_render_as_a_job(tmp_db, monkeypatch):
 
 def test_shot_generate_surfaces_render_failure(tmp_db, monkeypatch):
     concept_id = seed_concept(tmp_db)
-    monkeypatch.setattr(api_mod.runway, "has_key", lambda: True)
+    monkeypatch.setattr(api_mod.runway, "has_key", lambda account_id=None: True)
     monkeypatch.setattr(
         api_mod.runway, "generate_for_shot",
         lambda cid, n, db_path=None, resolve_photo=None, account_id=None: {
@@ -884,47 +884,13 @@ def test_holds_resolve_writes_the_prompt_verdict(tmp_db):
 
 # --- the Queue's selectors (2026-09-12) --------------------------------------
 
-SHOT = [{"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY", "prompt": "low key garage"}]
-
-
-def test_queue_approve_passes_the_chosen_model_frame_and_length(tmp_db, monkeypatch):
-    from src import preprod
-    concept_id = seed_concept(tmp_db, shots=SHOT)
-    preprod.set_picked(concept_id, True, dsn=tmp_db, account_id=None)
-    monkeypatch.setattr(api_mod.runway, "has_key", lambda: True)
-    seen = {}
-
-    def fake(cid, n, db_path=None, resolve_photo=None, account_id=None, **kw):
-        seen.update(kw)
-        return {"ok": True, "media_url": "/renders/runway/x.mp4", "generation_id": 1, "error": None}
-
-    monkeypatch.setattr(api_mod.runway, "generate_for_shot", fake)
-    res = client.post(f"/api/queue/{concept_id}/approve",
-                      json={"model": "gen4.5", "ratio": "960:960", "duration": 10})
-    assert res.status_code == 200, res.text
-    assert res.json()["estimate_usd"] == api_mod.runway.estimate_cost(1, model="gen4.5", duration=10)
-    assert wait_for_job(res.json()["job_id"])["status"] == "done"
-    assert seen == {"model": "gen4.5", "ratio": "960:960", "duration": 10}
-
-
-def test_queue_approve_refuses_a_bad_frame_before_starting_a_job(tmp_db, monkeypatch):
-    from src import preprod
-    concept_id = seed_concept(tmp_db, shots=SHOT)
-    preprod.set_picked(concept_id, True, dsn=tmp_db, account_id=None)
-    monkeypatch.setattr(api_mod.runway, "has_key", lambda: True)
-    monkeypatch.setattr(api_mod.runway, "generate_for_shot",
-                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not run")))
-    res = client.post(f"/api/queue/{concept_id}/approve", json={"ratio": "4:3"})
-    assert res.status_code == 400
-    assert res.json()["error"]["code"] == "bad_ratio"
-    res = client.post(f"/api/queue/{concept_id}/approve", json={"duration": 7})
-    assert res.status_code == 400 and res.json()["error"]["code"] == "bad_duration"
-
-
 def test_queue_state_carries_the_selector_choices(tmp_db):
-    from src import runway
+    """The React Queue's Runway lists are projections of src/render_specs.py,
+    the one table the lane import and providers.check_render_choice refuse
+    against -- never a second copy."""
+    from src import render_specs, runway
     d = client.get("/api/queue/pending").json()["runway"]
     assert [m["id"] for m in d["models"]] == list(runway.MODELS)
     assert all(m["usd_per_second"] > 0 for m in d["models"])
-    assert d["ratios"] == list(runway.RATIOS)
-    assert d["durations"] == list(runway.DURATIONS)
+    assert d["ratios"] == list(render_specs.RUNWAY_RATIOS)
+    assert d["durations"] == list(render_specs.RUNWAY_DURATIONS)

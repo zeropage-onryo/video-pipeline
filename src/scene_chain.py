@@ -32,6 +32,7 @@ file) are INJECTED as callables, because src/ never imports app/.
 """
 from __future__ import annotations
 
+import os
 import sys
 from typing import Callable, Optional
 
@@ -180,7 +181,8 @@ def _ordered(photos: list, limit: int) -> list:
     return (native + [u for u in urls if u not in native])[:max(0, limit)]
 
 
-def attach_refs(concept_id: int, extra: list | None = None, *, db_path=None, account_id: Optional[int] = None) -> list:
+def attach_refs(concept_id: int, extra: list | None = None, *, idea: str | None = None,
+                db_path=None, account_id: Optional[int] = None) -> list:
     """Store the photos this scene should render against, on its shot.
 
     Closes the loop `format_cast` opens. The cast block tells the
@@ -210,6 +212,18 @@ def attach_refs(concept_id: int, extra: list | None = None, *, db_path=None, acc
 
     Grounding shapes, it never gates: no match, no assets, or a broken
     catalogue all just mean the scene renders on its text.
+
+    WHICH assets qualify as "named" depends on `idea` (2026-09-05, Mike:
+    "the crawl is still using my asset reference"). With `idea` given --
+    the spark or typed idea the scene was WRITTEN from -- the scope is
+    asset_shelf.in_scope(idea, extra, catalogue): exactly the set the
+    writer was offered, i.e. assets the idea names or a caller
+    explicitly attached. The finished scene's own text is NOT scanned:
+    the writer had been putting "Michael" and "his motorcycle" into a
+    scene whose spark said only "he" and "his bike", and reading the
+    scene back then attached three photos of his face and one of the
+    Ducati to a crawled idea that never asked for either. With `idea`
+    None (legacy callers, tests) the scene text is scanned as before.
     """
     path = db_path
     concept = preprod.get_concept(concept_id, dsn=path, account_id=account_id)
@@ -223,8 +237,11 @@ def attach_refs(concept_id: int, extra: list | None = None, *, db_path=None, acc
     picked: list = []
     try:
         from . import asset_shelf
-        named = shootgen.named_assets(
-            text, asset_shelf.catalogue(db_path=path, account_id=account_id))
+        catalogue = asset_shelf.catalogue(db_path=path, account_id=account_id)
+        if idea is not None:
+            named = asset_shelf.in_scope(idea, extra, catalogue)
+        else:
+            named = shootgen.named_assets(text, catalogue)
     except Exception as e:
         # Say so. This except swallowed an account-scoping mistake for
         # two nights: the catalogue came back empty, every scene "named
@@ -261,6 +278,15 @@ def attach_refs(concept_id: int, extra: list | None = None, *, db_path=None, acc
         clean = (url or "").split("?")[0]
         if clean and clean not in picked:
             picked.append(clean)
+
+    # Canonical (public R2 when configured), never machine-local: what
+    # is written here is read on his phone, on the deployed site and by
+    # a renderer's own fetch -- see asset_shelf.canonical_url. Before
+    # the comparison below, or an already-attached shot would rewrite
+    # itself on every pass, differing from its stored refs by nothing
+    # but the hostname.
+    from . import asset_shelf as _shelf
+    picked = [_shelf.canonical_url(u) for u in picked]
 
     if not picked or picked == list(shot.get("refs") or []):
         return list(shot.get("refs") or [])
@@ -585,6 +611,69 @@ def keyframe_scene(concept_id: int, shot_n=None, *, db_path=None,
                       if len(frames) < len(beats or [""]) else None)}
 
 
+KEYFRAME_ON_PICK_ENV = "ZEROPAGE_KEYFRAME_ON_PICK"
+
+
+def pick_skip_reason(concept: Optional[dict]) -> Optional[str]:
+    """Why this concept should NOT be drawn when it is picked, or None.
+
+    Pure, so both doors can ask before spending anything: the board
+    (`app/api.py`) asks to decide whether to start a job at all, and the
+    MCP `pick` asks inside one. One predicate rather than two copies --
+    the drift between them would be a phone pick that bills twice.
+    """
+    if (os.environ.get(KEYFRAME_ON_PICK_ENV) or "1") == "0":
+        return "drawing on pick is off"
+    if not concept:
+        return "no concept"
+    shots = concept.get("shots") or []
+    # One-shot scenes only. A legacy multi-shot concept is not a scene,
+    # and six stills off one tap is not what the pick means.
+    if len(shots) != 1:
+        return "not a one-shot scene"
+    shot = shots[0]
+    if not (shot.get("prompt") or "").strip():
+        return "no prompt to render from"
+    if shot.get("reference_image"):
+        # Unpicking and re-picking must not quietly buy a second image,
+        # and Director's own keyframe is the one a person chose.
+        return "already has a still"
+    return None
+
+
+def draw_on_pick(concept_id: int, *, db_path=None, account_id: Optional[int] = None,
+                 resolve_photo=None, gemini_client=None) -> dict:
+    """Render the still for a scene somebody just picked.
+
+    THE BUDGET RULE (2026-09-08, Mike's call). The nightly graph writes
+    text and stops (`ZEROPAGE_KEYFRAME=0`): a 40-spark walk that draws
+    every scene spends the whole Nano cap on concepts nobody has looked
+    at, and 75 stills is not a review queue. The pick is the first
+    moment a human has said a scene is worth something, so that is where
+    the cents go -- one step before the Queue, which is where the
+    dollars do.
+
+    Never raises. A skip and a failure are different answers and both
+    are reported: `skipped` means nothing was attempted and nothing was
+    billed.
+    """
+    concept = preprod.get_concept(int(concept_id), dsn=db_path,
+                                  account_id=account_id)
+    skip = pick_skip_reason(concept)
+    if skip:
+        return {"ok": False, "skipped": skip}
+    shot_n = (concept["shots"][0] or {}).get("n", 1)
+    try:
+        result = keyframe_scene(int(concept_id), shot_n, db_path=db_path,
+                                resolve_photo=resolve_photo,
+                                gemini_client=gemini_client,
+                                account_id=account_id)
+    except Exception as e:                      # pragma: no cover - defensive
+        return {"ok": False, "skipped": None, "error": str(e)}
+    result.setdefault("skipped", None)
+    return result
+
+
 def park_scene(concept_id: int, reason: str = "", *, db_path=None, account_id: Optional[int] = None) -> None:
     """The end of the automatic half: this scene is waiting on a human
     to spend. An explicit marker, never inferred from having a keyframe
@@ -603,7 +692,9 @@ def run(idea: str, brand: str, *, count: int = 1, refs=None, image_refs=None,
         progress: Optional[Callable] = None,
         account_id: Optional[int] = None) -> dict:
     """Ground, write and attach -- what pressing Create does, and where
-    it stops. Returns {"scenes": [...], "notes": [...], "prompt_template"}.
+    it stops. Returns {"scenes": [...], "notes": [...], "ungrounded": [...],
+    "prompt_template"}, where `ungrounded` is the concept ids the
+    reference gate archived.
 
     `progress(fraction, detail)` is optional and is how the jobs SSE feed
     narrates the run. `account_id` is whose concepts these are: it was
@@ -648,12 +739,36 @@ def run(idea: str, brand: str, *, count: int = 1, refs=None, image_refs=None,
             continue
         try:
             if attach_refs(scene["concept_id"], list(refs or []),
-                           account_id=account_id):
+                           idea=idea, account_id=account_id):
                 grounded_count += 1
         except Exception:
             pass          # a missing photo never fails a written scene
     if grounded_count:
         _note(notes, f"{grounded_count} grounded in references")
 
-    return {"scenes": scenes, "notes": notes,
+    # THE REFERENCE GATE (2026-09-08, Mike's call). Same rule the nightly
+    # graph applies, applied at the other door: a scene nothing could be
+    # attached to comes straight off the board.
+    #
+    # It runs even when `attach_refs` was not injected (tests, callers
+    # that ground some other way) -- the question is what the ROW ends up
+    # carrying, never which code path put it there. Reading the row back
+    # is also what makes this agree with the Queue: both ask
+    # preprod.reference_gate about stored state, so they cannot drift.
+    #
+    # Failing to archive is reported and never raises. A scene was still
+    # written, and losing it over bookkeeping would be the expensive half
+    # of the failure.
+    ungrounded = []
+    for scene in scenes:
+        try:
+            if preprod.archive_ungrounded(scene["concept_id"], dsn=path,
+                                          account_id=account_id):
+                ungrounded.append(scene["concept_id"])
+        except Exception as e:
+            print(f"note: ungrounded concept not archived: {e}", file=sys.stderr)
+    if ungrounded:
+        _note(notes, f"{len(ungrounded)} archived — no reference photos attached")
+
+    return {"scenes": scenes, "notes": notes, "ungrounded": ungrounded,
             "prompt_template": written.get("prompt_template")}

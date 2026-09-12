@@ -182,3 +182,38 @@ def test_build_caption_falls_back_without_a_model(monkeypatch, tmp_db):
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     caption = scheduling.build_caption("fallback caption", db_path=tmp_db)
     assert caption == "fallback caption"
+
+
+# ---------- platforms: three now, and validated ----------
+
+def test_a_tiktok_row_can_be_queued(tmp_db):
+    post_id = scheduling.add_post("https://cdn.example/v.mp4", "c",
+                                  "2026-09-08T09:00:00", platform="tiktok",
+                                  db_path=tmp_db)
+    row = [r for r in scheduling.list_queue(db_path=tmp_db) if r["id"] == post_id][0]
+    assert row["platform"] == "tiktok"
+
+
+def test_an_unroutable_platform_is_refused_at_add(tmp_db):
+    """A row nothing can execute is not an intention; refusing it here
+    is refusing it while a person is still watching."""
+    with pytest.raises(ValueError, match="platform must be one of"):
+        scheduling.add_post("https://cdn.example/v.mp4", "c",
+                            "2026-09-08T09:00:00", platform="myspace",
+                            db_path=tmp_db)
+
+
+def test_metas_quota_does_not_gate_a_tiktok_row(tmp_db, open_gate, monkeypatch):
+    """Asking Meta about a TikTok row answers 0 whenever no IG token is
+    configured, which would defer it forever with the wrong reason."""
+    posted = []
+    monkeypatch.setattr(autopilot, "EXECUTORS", dict(
+        autopilot.EXECUTORS, post=lambda a: posted.append(a)))
+    monkeypatch.setattr(scheduling, "_quota_remaining", lambda: 0)
+    scheduling.add_post("https://cdn.example/v.mp4", "c", "2026-08-01T00:00:00",
+                        platform="tiktok", db_path=tmp_db)
+
+    result = scheduling.run_due(now="2026-08-04T00:00:00", approve=True,
+                                live=True, db_path=tmp_db)
+    assert result["published"] == 1
+    assert [a["platform"] for a in posted] == ["tiktok"]

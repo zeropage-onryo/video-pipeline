@@ -127,9 +127,56 @@ def test_an_explicit_spark_survives_a_non_scouting_run(tmp_db):
     assert orchestrator.scout({"brand": "zeropage", "spark": "the last check"}) == {}
 
 
-def test_run_defaults_to_not_scouting():
+def test_run_defers_the_decision_instead_of_hardcoding_it():
+    """The default is None -- "no opinion" -- not False. False would make
+    the env flags unreachable from every caller that never mentions them,
+    which is every caller."""
     import inspect
-    assert inspect.signature(orchestrator.run).parameters["scout"].default is False
+    params = inspect.signature(orchestrator.run).parameters
+    assert params["scout"].default is None
+    assert params["research"].default is None
+
+
+def test_nothing_scouts_with_the_env_unset(monkeypatch):
+    monkeypatch.delenv(orchestrator.GRAPH_SCOUT_ENV, raising=False)
+    monkeypatch.delenv(orchestrator.GRAPH_RESEARCH_ENV, raising=False)
+    assert orchestrator.resolve_nodes() == (False, False)
+
+
+def test_the_env_turns_both_on_for_a_caller_that_names_nothing(monkeypatch):
+    monkeypatch.setenv(orchestrator.GRAPH_SCOUT_ENV, "1")
+    monkeypatch.setenv(orchestrator.GRAPH_RESEARCH_ENV, "1")
+    assert orchestrator.resolve_nodes() == (True, True)
+
+
+def test_a_typed_direction_outranks_the_env(monkeypatch):
+    """The whole point of the flags: on for the unattended path, never
+    for a door where somebody already said what they wanted. Studio,
+    Director and the MCP generate tool all pass one of these."""
+    monkeypatch.setenv(orchestrator.GRAPH_SCOUT_ENV, "1")
+    monkeypatch.setenv(orchestrator.GRAPH_RESEARCH_ENV, "1")
+    assert orchestrator.resolve_nodes(spark="a monster in the garage") == (False, False)
+    assert orchestrator.resolve_nodes(scout_finding_id=7) == (False, False)
+
+
+def test_an_explicit_flag_still_wins_either_way(monkeypatch):
+    monkeypatch.setenv(orchestrator.GRAPH_SCOUT_ENV, "1")
+    monkeypatch.setenv(orchestrator.GRAPH_RESEARCH_ENV, "1")
+    assert orchestrator.resolve_nodes(scout=False) == (False, False)
+    monkeypatch.delenv(orchestrator.GRAPH_SCOUT_ENV)
+    monkeypatch.delenv(orchestrator.GRAPH_RESEARCH_ENV)
+    assert orchestrator.resolve_nodes(scout=True) == (True, False)
+    # research implies scout, even against a named spark, because asking
+    # for the agent is asking for the direction it banks
+    assert orchestrator.resolve_nodes(research=True, spark="mine") == (True, True)
+
+
+def test_research_never_runs_without_the_node_that_reads_it(monkeypatch):
+    """Filling a bank nothing will drain is spend with no output."""
+    monkeypatch.delenv(orchestrator.GRAPH_SCOUT_ENV, raising=False)
+    monkeypatch.setenv(orchestrator.GRAPH_RESEARCH_ENV, "1")
+    scout_on, research_on = orchestrator.resolve_nodes(scout=False)
+    assert (scout_on, research_on) == (False, False)
 
 
 def test_the_trigger_only_scouts_behind_its_flag(tmp_db, monkeypatch):
@@ -144,9 +191,12 @@ def test_the_trigger_only_scouts_behind_its_flag(tmp_db, monkeypatch):
     monkeypatch.setattr(orchestrator, "run", fake_run)
 
     trigger.main([])
-    assert seen["scout"] is False
+    # no flag is no opinion now -- the graph resolves it against the env
+    assert seen["scout"] is None
     trigger.main(["--scout"])
     assert seen["scout"] is True
+    trigger.main(["--no-scout"])
+    assert seen["scout"] is False
 
 
 # ---------- the claim gate: his idea never spends the bank ----------

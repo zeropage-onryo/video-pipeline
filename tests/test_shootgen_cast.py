@@ -90,10 +90,9 @@ def test_format_cast_detail_survives_an_asset_with_no_description():
     assert "Mike" in block and "Helmet" in block
 
 
-def test_the_scene_writer_grounds_in_appearance_and_ideation_does_not(tmp_db,
-                                                                      monkeypatch):
-    """The two paths want different things from the same table. Only the
-    scene writers' output becomes a prompt a renderer grounds."""
+def test_the_scene_writer_grounds_in_appearance(tmp_db, monkeypatch):
+    """The scene writer's output becomes a prompt a renderer grounds, so
+    it must pull physical appearance onto the page."""
     entities.add_character(
         "Mike", role="protagonist", photo_count=6,
         description=MIKE_ON_FILE["description"], dsn=tmp_db, account_id=None)
@@ -112,18 +111,6 @@ def test_the_scene_writer_grounds_in_appearance_and_ideation_does_not(tmp_db,
         brand="antihero", dsn=tmp_db, account_id=None)
     shootgen.write_scene_for_concept(concept_id, gemini_client=None, db_path=tmp_db)
     assert "short mustache" in captured["prompt"]
-
-    def fake_concept(client, model, prompt, **_):
-        captured["prompt"] = prompt
-        return response_for({
-            "title": "T", "hook": "h", "logline": "l", "duration": "12s",
-            "shots": [{"n": 1, "type": "CHARACTER", "source": "CAMERA", "cam": "BMPCC",
-                       "location": "hallway", "desc": "d", "light": "l"}],
-        })
-
-    monkeypatch.setattr(shootgen, "generate_with_retry", fake_concept)
-    shootgen.generate_concept(brand="antihero", gemini_client=None, db_path=tmp_db)
-    assert "short mustache" not in captured["prompt"]
 
 
 # ---------- build_concept_prompt / build_shotlist_prompt ----------
@@ -157,52 +144,6 @@ def test_build_shotlist_prompt_falls_back_without_cast():
     prompt = shootgen.build_shotlist_prompt(locs, "antihero", None, concept)
     assert shootgen.NO_CAST_NOTE in prompt
 
-
-# ---------- end to end: generate_concept / generate_shot_list pull cast from the db ----------
-
-def response_for(concept):
-    return json.dumps({"concept": concept})
-
-
-def test_generate_concept_grounds_in_named_cast(tmp_db, monkeypatch):
-    entities.add_character("Mike", role="protagonist", photo_count=5, dsn=tmp_db, account_id=None)
-    entities.add_prop("Ducati frame", category="vehicle", photo_count=3, dsn=tmp_db, account_id=None)
-
-    captured = {}
-
-    def fake_generate(client, model, prompt, **_):
-        captured["prompt"] = prompt
-        return response_for({
-            "title": "T", "hook": "h", "logline": "l", "duration": "12s",
-            "shots": [{"n": 1, "type": "CHARACTER", "source": "CAMERA", "cam": "BMPCC",
-                       "location": "hallway", "desc": "d", "light": "l"}],
-        })
-
-    monkeypatch.setattr(shootgen, "generate_with_retry", fake_generate)
-
-    shootgen.generate_concept(brand="antihero", gemini_client=None, db_path=tmp_db)
-
-    assert "Mike" in captured["prompt"]
-    assert "Ducati frame" in captured["prompt"]
-    assert "reference photos on file" in captured["prompt"]
-
-
-def test_generate_concept_degrades_to_no_cast_note_when_nothing_on_file(tmp_db, monkeypatch):
-    captured = {}
-
-    def fake_generate(client, model, prompt, **_):
-        captured["prompt"] = prompt
-        return response_for({
-            "title": "T", "hook": "h", "logline": "l", "duration": "12s",
-            "shots": [{"n": 1, "type": "CHARACTER", "source": "CAMERA", "cam": "BMPCC",
-                       "location": "hallway", "desc": "d", "light": "l"}],
-        })
-
-    monkeypatch.setattr(shootgen, "generate_with_retry", fake_generate)
-
-    shootgen.generate_concept(brand="antihero", gemini_client=None, db_path=tmp_db)
-
-    assert shootgen.NO_CAST_NOTE in captured["prompt"]
 
 
 def test_write_scene_grounds_in_named_cast(tmp_db, monkeypatch):

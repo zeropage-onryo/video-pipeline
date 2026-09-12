@@ -1,382 +1,229 @@
-# Runbook — building this in Claude Code
+# Runbook
 
-Work through in order. Each session is a fresh Claude Code window. Do not
-continue a session past its gate.
+Operational notes, newest first. Each section is dated and is about a
+thing that has actually gone wrong.
 
-Roughly four working days. Day 1 is the one that matters most.
+## 2026-09-08 — the manual render lanes (`ops/render_queue.py`)
 
----
-
-## Setup — 10 minutes, no Claude Code
-
-```bash
-cd video-pipeline
-git checkout -b build/spine
-mkdir -p tests data
-```
-
-Copy in the supplied files:
-
-```
-BUILD_SPEC.md          -> repo root
-REMOVAL_SPEC.md        -> repo root
-src/db.py              -> src/
-src/shot.py            -> src/
-src/generative.py      -> src/
-src/editgen.py         -> src/   (replaces yours)
-tests/test_db.py       -> tests/
-tests/test_generative.py -> tests/
-```
-
-Add to `.gitignore`:
-
-```
-.env
-data/*.db
-venv/
-manifest.json
-pitches.json
-concepts.json
-__pycache__/
-*.pyc
-```
-
-Commit this as `chore: add spine modules and specs`. Nothing runs yet —
-that is expected.
-
----
-
-## The habit that makes this work
-
-After **every** session below, open a fresh Claude Code window and run:
-
-```
-Review the diff on this branch against BUILD_SPEC.md. Flag only things that
-affect correctness or contradict the spec. Do not invent work.
-```
-
-Fix what it finds before moving on. A reviewer in a fresh context is not
-biased toward code it just wrote. The "do not invent work" clause matters —
-a reviewer told to find problems will always find some.
-
----
-
-# Day 1 — the spine
-
-## Session 0 — removals
-
-```
-Read REMOVAL_SPEC.md. Work through all seven sections in order, committing
-each numbered section separately.
-
-Before you start: read section "Warning before you start" carefully. The
-word "beats" means two different things in this repo and only one is being
-removed.
-
-src/editgen.py has already been replaced with a cleaned version. Verify it,
-then delete src/beat_sync.py.
-
-Section 2 removes build_timeline.py, apply_grade.py AND resolve_edit.py.
-resolve_edit is imported only by the other two, so it is dead once they go.
-Confirm that with grep before deleting rather than taking my word for it.
-
-Section 2 also asks for a --print flag on editgen.py. Do that one TDD:
-failing test for the formatter first.
-```
-
-**Gate**
+Two lanes spend a subscription instead of API credits, and neither can
+run unattended — an MCP server and a browser both need a session, so
+**this is deliberately not on the 03:30 walk and cannot be.**
 
 ```bash
-grep -rn "beat_sync\|apply_grade\|build_timeline\|resolve_edit\|librosa" \
-     src/ *.md requirements.txt
+python3 ops/render_queue.py --account zeropage list    # higgsfield (MCP)
+python3 ops/render_queue.py --provider runway --account zeropage list
+python3 ops/render_queue.py --provider runway --account zeropage import \
+    --concept 131 --shot 1 --file ~/Downloads/clip.mp4 \
+    --model gen4_turbo --duration 10 --anchored
 ```
 
-Returns nothing. `git log --oneline` shows about seven commits.
+`list` prints the prompt, the keyframe URL to drag into the start-image
+slot, and the duration/ratio to set. `import` copies the mp4 into
+`data/renders/runway/` (where `src/runway.py` already writes, so
+`/renders` serves it unchanged) and writes the `generations` row with
+`cost_usd` NULL — FREE with a count on `/costs`, never `$0`, never
+backfilled — and `params.source = "manual-unlimited"`, which is what
+makes `ledger.is_billable` refuse to take a hold.
 
-Also confirm nothing needs Resolve any more:
+**Both lanes are operator-only, and that is a security property.** Each
+spends one of Mike's personal consumer plans; rendering a paying tenant's
+shot on either is reselling a consumer subscription, and the penalty is
+the account, which is every tenant's renders at once. `src/manual_lane.py`
+holds the allowlist, checked server-side against the account id at every
+surface (the CLI, `GET /api/queue/manual`). It **fails closed**: unset
+means nobody, including the bootstrap account and including the unowned
+pool a fresh database hands a CLI.
+
+**The gate is a column on `accounts`, not an environment variable
+(changed 2026-09-08).** `accounts.manual_lane_operator`, moved with an
+idempotent `ALTER TABLE` in `src/db.py` and **no backfill** — every
+account, including the bootstrap one, comes out of the migration OFF.
+`ZEROPAGE_OPERATOR_ACCOUNTS` / `_EMAILS` are **removed, not deprecated**:
+anything that can set an env var on the process could name itself
+operator, and a gate with two doors is one door.
+
+**RUN THIS ONCE, or both lanes — including the Higgsfield one you use
+now — refuse everything:**
 
 ```bash
-grep -rn "DaVinciResolveScript" src/
+venv/bin/python -m src.accounts operator zeropage --on
 ```
 
-Write the three Decisions Log entries yourself. Edit my drafts — the reasons
-should be yours, and "it never sounded right" is more convincing than my
-guess at your reasoning.
+It prints what changed (`OFF -> ON`, or `already ON`) and lists any other
+account that is on. `--off` revokes. Do it for `antihero` too if you
+render from that brand's account. The refusal names the command, so if
+`list` starts refusing this is what it is telling you to run.
 
-## Session 1 — foundation and the import fix
+**The Higgsfield lane needs this too, and that is a deliberate break.**
+It used to run with no configuration at all. It is the same exposure — a
+consumer app subscription spent on any account's shot — and gating one
+lane while leaving the other open is worse than gating neither, because
+it reads as though the question had been asked and answered.
 
-This one has a trap. State it up front:
+The **API-billed adapters are untouched** by any of this: `src/runway.py`,
+`src/higgsfield.py`, `src/veo.py` and `src/fal.py` spend a credential a
+tenant can own, metered per call, under their own `*_SPEND_OK` gates and
+daily caps. This allowlist is about the subscription lanes only.
 
-```
-Read BUILD_SPEC.md session 1.
+**Provenance is visible on the board.** A subscription clip and an
+API-billed clip are the same mp4 in the same folder with the same URL
+shape, so the scene board's status now reads `RENDERED · SUBSCRIPTION`
+when the row carries a lane marker (`generative.subscription_rendered`,
+derived from `params_json` — so rows imported before the field existed
+are covered with no backfill). It matters when a clip is about to be used
+somewhere a consumer plan's terms bite.
 
-Important: src/ is currently not a package. Existing modules use flat
-imports (from gemini_utils import ...) that only work because scripts are
-run as `python src/pitch.py`. The new src/generative.py uses relative
-imports (from .db import ...) and cannot be imported that way.
+### The lane on `/ui` (added 2026-09-08)
 
-Fix this properly:
-- add pyproject.toml, make src a real package, install editable
-- convert ALL existing src/ modules to relative imports
-- update the run commands in CLAUDE.md and README.md to `python -m src.pitch`
-- remove the sys.path hack from both test files
+The Queue view carries a **Subscription lane** section for an operator
+account, and the terminal is no longer part of the loop:
 
-Do NOT solve this with sys.path.insert anywhere. If you find yourself
-adding one, stop and tell me.
+- each waiting shot shows its **gate-passed prompt with a Copy button**
+  (that is what gets pasted into Runway), the **keyframe** (drag it
+  straight into the start-image slot, or click to save it first), and the
+  **duration and ratio to set** — the duration is printed on every card
+  because the web app resets that chip to 5s on every reload;
+- the finished mp4 goes back by **dropping it on the card** (clicking the
+  drop area opens a file picker instead) — `POST /api/queue/manual/{id}/clip`.
 
-Also: add pytest to requirements.txt, drop librosa if session 0 missed it,
-and try removing the numpy<2 pin per REMOVAL_SPEC section 3.
+The section is **server-rendered behind the operator flag**, so a
+non-operator's page does not contain it at all, and `/api/capabilities`
+reports `manual_lane` for the same reason. Both are presentation: the
+upload route re-asks `manual_lane.require` against the account
+`auth.current_account_id` resolved server-side, and refuses with the same
+404 and the same `REFUSAL` bytes as `GET /api/queue/manual`. Faking the
+capability gets you a section full of cards that refuse.
 
-Plan mode first.
-```
+**The route does not verify anything itself.** It calls
+`ops/render_queue.py`'s `import_clip`, which stays the single
+implementation of filing a lane clip — the model/ratio/duration claims
+checked against `src/render_specs.py` and refused rather than clamped,
+the ffprobe measurement, `_place` into `data/renders/runway/`, and the
+`generations` row with `cost_usd` NULL and the `manual-unlimited` marker.
+What the route owns is the upload: **mp4 by magic number** (the `ftyp`
+box, not the filename, and a QuickTime brand is refused), a **256MB cap
+enforced while the body streams**, and a server-chosen filename
+(`concept<id>-shot<n>.mp4`).
 
-**Gate**
+**A second drop on the same shot is refused, not applied** (409,
+"this shot already has a clip"). Dropping is a gesture and gestures
+repeat; replacing would leave a second `generations` row for one render —
+which is what the tool scoreboard counts — and the first mp4 orphaned in
+`data/renders/`. Clear the shot's `media_url` and drop again if a replace
+is really what you meant. The CLI keeps its overwrite behaviour: a
+command line naming `--concept` and `--shot` is a stated intention.
+
+**The operator flag is still CLI-only.** There is no UI to grant it and
+there must not be — an account that can turn on its own lane is not
+gated. `/api/capabilities` may say you do not have it; only
+`python -m src.accounts operator <slug> --on` changes that.
+
+### Driving the Runway app (measured 2026-09-06)
+
+Four things cost real time or a wasted round that day:
+
+- **Two generations in flight, and extra clicks are dropped silently.**
+  Unlimited queues 2 at a time; a third Generate does nothing but raise a
+  "wait or switch to Credits Mode" toast. Queue two, then wait.
+- **Duration resets to 5s on every page reload.** Set it and *zoom in to
+  read the chip* before every Generate — one whole round went out at 5s
+  because the control looked set and was not. This is why `list` prints
+  the target duration on every row.
+- **The gallery is stale until reload, and slow to fill.** Give it ~15s,
+  reload, then "View latest". A clip that is not there yet looks exactly
+  like a failed generation.
+- **Uploading a 9:16 image flips the ratio chip.** Check it after the
+  upload, not before.
+
+### The four shared-box problems, and what was done about them
+
+All four were recorded here as known-and-unfixed on 2026-09-08 and fixed
+the same day. Kept as a record of what the failure actually was:
+
+- **The environment was the whole gate.** Anyone who could set env vars
+  on the process — a deploy config, a `.env` on a shared box, a wrapper
+  script — could name themselves operator, with no record of who was on
+  the list when a clip was rendered. Now a column, above, and the env
+  vars are gone rather than left as a fallback.
+- **Membership was transitive.** An operator EMAIL resolved to every
+  account that person was a member of, so adding Mike to a pilot user's
+  account to debug something silently gave that account the lane. Gone by
+  construction: the flag is on the account row, so membership no longer
+  says anything about it. A test acts as an operator who is *also* a
+  member of a second, non-operator account and expects the refusal.
+- **`import` believed what it was told.** `--model`, `--ratio` and
+  `--duration` were unverified strings landing in a `generations` row the
+  tool scoreboard reads, so a 1am typo became a measurement of a model
+  that never ran. The runway lane's claims are now checked against
+  `src/render_specs.py`'s per-model legal values and **refused, not
+  clamped** — a value outside the set means the row and the clip have
+  come apart, and rounding hides exactly that. `import` also asks
+  **ffprobe** how long the file really is and writes
+  `duration_measured_s` beside the claimed `duration`; with no ffprobe on
+  PATH the row says so in `duration_source` rather than implying a
+  measurement nobody took. The Higgsfield lane's model names are the
+  MCP's own and published nowhere this repo can read, so they are
+  recorded with `model_verified: false` instead of being checked against
+  a list this repo invented.
+- **`manual_lane.LANE_RATIO` duplicated `runway.DEFAULT_RATIO`**, with a
+  drift test standing in for a shared source. Both now read
+  `src/render_specs.py` — a module that imports nothing at all, so the
+  script that must run under a bare `python3` can have it too. The drift
+  test is deleted: a shared constant cannot drift.
+
+## 2026-09-07 — the nightly walk (`src/nightly.py`)
+
+Step 4 of `run_morning_prompts.sh` is `python3 -m src.nightly walk` now.
+Steps 1–3 (metrics, the idea-agent bank, the research agent, the crawl)
+are unchanged, as are the smoke flag, the `cd` guard and the root check.
+
+**What it does that bash did not.** Four failures from one week of real
+logs, each of which cost a whole night:
+
+| symptom in the log | what it was | what happens now |
+| --- | --- | --- |
+| `trigger: run crashed: [Errno 8] nodename nor servname provided` | one DNS miss to the Supabase pooler | preflight catches it before run 1; if it appears mid-walk the breaker stops there |
+| `429 RESOURCE_EXHAUSTED … prepayment credits are depleted` ×6 per call ×16 runs | an empty prepayment balance retried as if it were a rate limit | `gemini_utils.is_depleted` — no retries, no fallback models, and the breaker ends the walk |
+| `held='no keyframe: daily ceiling: 20/20 …'` ×16 | the image cap was spent before the walk began | preflight sets `ZEROPAGE_KEYFRAME=0` once and says so; concepts still get written |
+| LangSmith connection-error spam | tracing on with nowhere to send | the runner forces tracing off unless `NIGHTLY_TRACING=1` |
+
+**Systemic vs content** is `nightly.classify_error(e)`, shared with
+`src/trigger.py` so a hold row and the breaker cannot disagree. Systemic
+(stop the walk): DNS/connection failure, a depleted-billing 429, an auth
+refusal, a `psycopg.OperationalError`. Content (next spark): a Postgres
+deadlock, a judge parse error, anything unrecognised — erring that way
+costs one run, erring the other way costs the night.
+
+**Budget**: `NIGHTLY_BUDGET_USD`, default $5.00, checked before each run
+against `costs.spent_since(<the walk's own start>)` — LLM calls plus
+renders. A timestamp, not "today", because a 22:00 walk and a 03:30 walk
+are not the same calendar day.
+
+### Morning check
 
 ```bash
-python -m pytest tests/ -q          # 47 passed
-python -m src.db                    # creates data/pipeline.db
-python -m src.pitch --help          # still runs
-grep -rn "sys.path" src/ tests/     # nothing
+python3 -m src.nightly status          # the last 7 nights' receipts
+python3 -m src.nightly preflight       # the three checks, nothing spent
 ```
 
-If `pitches.json` exists, import it so the current run is not lost:
-
-```
-Run db.import_pitches_file on the existing pitches.json and confirm the
-count with db.summary().
-```
-
-## Session 2 — capture the label
-
-The highest-value session in this document. Two function calls.
-
-```
-Read BUILD_SPEC.md session 2. Implement it.
-
-pitch.py: after writing pitches.json, call db.save_pitch_run with the
-pitches, MODEL, len(manifest), and the raw text of brief.txt, settings.txt
-and pitch_prompt.txt. Print the run id.
-
-editgen.py: after a successful run, call db.mark_selected_by_number with
-the pitch numbers already on the command line. Add --run-id defaulting to
-the most recent run.
-
-Critical: neither script may fail because the database is unavailable.
-Wrap both calls so a database error prints a warning and the pipeline
-continues. Generating pitches must never depend on bookkeeping.
-
-Write a test for the failure path: a broken database path must not stop
-pitch.py from writing pitches.json.
-```
-
-**Gate**
-
-```bash
-python -m src.pitch
-python -m src.editgen 2 5 9
-python -c "from src import db; print(db.selection_rate())"
-```
-
-Shows 3 chosen of 10.
-
-**From this point every normal run of your pipeline accumulates labelled
-data.** That is the thing that compounds. Everything below is worth less
-than getting this working.
-
----
-
-# Day 2 — generative clips
-
-## Session 3 — footage gaps become shots
-
-```
-Read the "Addendum — generative clips" section of BUILD_SPEC.md, then
-session G1. Implement G1 only.
-
-TDD, in this order:
-1. Write failing tests in tests/test_editgen.py: an edit_list with one
-   entry marked "source": "generate" plus a shot description validates;
-   two generative entries is rejected; a generative entry with no
-   description is rejected. Confirm they fail. Do not write implementation.
-2. Then update validate_edit to exempt generative slots from the unknown-
-   clip check while still enforcing in/out points and total runtime.
-3. Then update prompts/edit_prompt.txt so the model may mark at most one
-   entry this way when the footage cannot support a shot.
-
-Do not touch anything about clip "beats" in edit_prompt.txt — those are the
-vision-description timestamps, not musical beats, and they are load-bearing.
-```
-
-**Gate** — a real `editgen.py` run produces a `concepts.json` with one
-generative slot, and validation accepts it.
-
-## Session 4 — the prompt writer
-
-```
-Read BUILD_SPEC.md session G2. Implement it as src/promptgen.py.
-
-Architecture, non-negotiable:
-- The LLM's ONLY job is turning a loose edit description into a valid Shot
-  dataclass via structured output. Nothing else.
-- src/shot.py's renderers are pure functions. Do not put a model call
-  anywhere near them. Do not modify shot.py.
-- Then call render_all() to compile.
-
-This split means a bad prompt is either a bad Shot (visible in the JSON) or
-a bad compile (catchable in a test). Do not collapse it.
-
-Read tests/test_generative.py first — several tests encode decisions that
-are not obvious from the code.
-
-Plan mode first.
-```
-
-**Gate** — one generative slot in, three tool prompts out, and a free-text
-camera value like "swooshes dramatically" raises rather than passing through.
-
-## Session 5 — logging attempts
-
-```
-Read BUILD_SPEC.md session G3. Build a small CLI: src/genlog.py.
-
-Commands: record a generation against a shot, mark one kept, mark one
-rejected with a reason. It runs after you have generated in the tool's own
-UI — do not call any generation APIs.
-
-Keep reject reasons a short controlled list plus "other": morphing,
-wrong lighting, camera ignored, subject wrong, artefacts, other.
-Grouped reasons are only useful if the vocabulary is tight.
-```
-
-**Gate** — after logging a few real attempts, `gen.tool_scoreboard()` and
-`gen.attempts_to_keeper()` return sensible numbers.
-
-**Before you trust the prompts:** open each tool's current prompt guide and
-correct `RUNWAY_CAMERA`, `VEO_CAMERA`, `KLING_CAMERA` in `shot.py`. Put the
-date you checked in a comment above each map. Mine are starting points from
-general patterns, not from current documentation.
-
----
-
-# Day 3 — the app
-
-## Session 6 — skeleton
-
-```
-Read BUILD_SPEC.md session 3. FastAPI, Jinja2, vanilla JS. No build step,
-no framework, no component library.
-
-This session: the dashboard route only, reading real data through src/db.py.
-No styling beyond the palette variables. Prove the data reaches the page.
-```
-
-**Gate** — `uvicorn app.main:app --reload` shows your real rows.
-
-## Sessions 7–10 — screens, one per session
-
-Do not ask for four screens in one prompt. You will get four mediocre ones.
-
-**Session 7**
-
-```
-Read BUILD_SPEC.md session 4 and the design direction. Build /metrics/new
-only — the add-numbers screen.
-
-Follow the keyboard behaviour exactly: tab across, enter down, previous
-value greyed behind each input, one save writes every changed row as a new
-snapshot. Report what changed.
-```
-
-**Session 8** — `/videos/new`, with datalist-backed free text for topic and
-hook type.
-
-**Session 9** — `/videos/{id}` and the sparkline:
-
-```
-Add the growth-curve sparkline. Inline SVG from db.get_video_history.
-120x28, thin stroke, no fill, no axes, no gridlines. Show it to me before
-styling anything around it.
-```
-
-**Session 10** — `/pitches` and `/shots`, plus the tool scoreboard on the
-dashboard.
-
-Check every screen at 1280px and 1920px.
-
----
-
-# Day 4 — automation and finish
-
-## Session 11 — YouTube
-
-Get the key first, five minutes: Google Cloud Console, new project, enable
-YouTube Data API v3, create an API key.
-
-```
-Read BUILD_SPEC.md session 5.
-
-TDD: write failing tests for the video-id parser first. Handle
-youtube.com/watch?v=, youtu.be/, and /shorts/ urls, plus urls with extra
-query params. Confirm they fail. Do not write the fetcher yet.
-```
-
-The parser is the part that actually breaks. Test it properly.
-
-## Session 12 — CI
-
-```
-Add .github/workflows/ci.yml running ruff and pytest on every push and PR.
-Add a badge to README.md that links to the actual workflow runs.
-```
-
-Click the badge afterwards. A badge that does not link to real runs is worse
-than none.
-
-## Session 13 — README as case study
-
-Do this one yourself with Claude Code assisting, not the other way round.
-It is the thing people read first.
-
-Problem, architecture diagram, key decisions with rationale, what you
-measured, demo. Your Decisions Log is already most of the raw material —
-it is genuinely stronger than most portfolio repos have.
-
-Lead with the loop: ideas grounded in your own performance data, one
-generated clip where the footage runs out, measured selection rates.
-
----
-
-## Rules for every session
-
-- One session per section. Long sessions degrade — context fills with dead
-  ends and it starts contradicting earlier decisions.
-- Plan mode for anything spanning more than one file. Skip it when you could
-  describe the diff in one sentence.
-- Read every diff before committing. Every one.
-- Conventional commits, one concern each.
-- If Claude proposes something not in the spec, say no and ask it to raise
-  it instead.
-
-## If a session goes sideways
-
-```bash
-git reset --hard HEAD    # discard uncommitted work
-git checkout .           # or just the working tree
-```
-
-You are on a branch. Throwing away a bad session costs nothing. Untangling
-one costs an afternoon.
-
-
-## The subscription lane (Runway Explore, rendered by hand)
-
-Open it for ONE account, from a shell on this machine -- never from the browser:
-
-```bash
-venv/bin/python -m src.accounts operator zeropage --on     # or --off
-```
-
-Then, on the Queue: copy the prompt, drag the keyframe into Runway's start-image
-slot in Chrome (Explore mode, free on Unlimited), export the mp4, drop it on the
-card. The clip files as the shot's media with `cost_usd` NULL. A second drop on
-the same shot is refused; clear the clip first if it really is a replacement.
+`nightly_runs` is the receipt table (`src/db.py`). Read it:
+
+- **no row for last night** → the schedule never fired. That is launchd or
+  Fly, not the code. On the Mac this is usually TCC refusing a
+  LaunchAgent access to `~/Documents` (`EPERM`, not `ENOENT`, in
+  `data/morning_prompts.err`) — see CLAUDE.md's launchd section; the
+  durable fix is moving the project out of a protected folder.
+- **`finished_at` NULL** → the walk started and died mid-flight. The row
+  is written *before* the first run for exactly this.
+- **`stopped_reason` set** → the breaker or the budget. There is one
+  `hold_queue` row saying the same thing, on `/holds` with the night's
+  other outcomes.
+- **`attempted` 16, `failed` 0** → a healthy night, whatever the holds say.
+  Holding is what shadow mode does.
+
+### Running it on Fly
+
+`ops/fly/nightly.md` + `ops/fly/run-nightly.sh`. Recipe only — not
+deployed. It also lists what cannot run in that image (the frame bank,
+local photo roots) and says to unload the launchd plists once Fly owns
+the schedule, so the walk does not run twice against one set of caps.

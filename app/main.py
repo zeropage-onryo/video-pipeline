@@ -16,6 +16,7 @@ import os
 import random
 import re
 from contextlib import asynccontextmanager
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
@@ -24,6 +25,7 @@ from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import (
     FileResponse,
+    HTMLResponse,
     PlainTextResponse,
     RedirectResponse,
     Response,
@@ -32,6 +34,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from google import genai
+from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from src import accounts as accounts_mod
@@ -45,7 +48,9 @@ from src import (
     generative,
     inspiration,
     instagram,
+    ledger,
     locations,
+    manual_lane,
     preprod,
     rag,
     render_assets,
@@ -172,6 +177,7 @@ async def lifespan(app: FastAPI):
     workflows.seed_default()  # "Prompt enhancement" starter canvas
     render_assets.init()  # generated_assets, owned (merged 2026-09-02)
     spend.init()          # llm_calls, the LLM meter (2026-09-04)
+    ledger.init()         # credit_lots / credit_entries, the prepaid ledger
     generative.init()    # generations log the render caps count
     accounts_mod.init()  # users / identities / accounts / members
     settings_mod.init()  # the Dev Studio tunables (gate/threshold/k)
@@ -195,7 +201,45 @@ class NoCacheStaticFiles(StaticFiles):
         return response
 
 
+def r2_fallback(key: str):
+    """A redirect to the same file in R2, or None.
+
+    Registered behind every route that serves a reference photo off
+    local disk. characters/, props/, locations/ and data/refs/ are
+    gitignored and dockerignored, and data/ on Fly is a fresh volume --
+    so on the deployed site NONE of these files exist and every
+    reference tile came back 404 (2026-09-08, Mike: "the reference
+    photos aren't appearing"). New rows now store the canonical R2 URL
+    outright; this covers the rest -- every row written before today,
+    every /ui gallery, and any hand-typed path -- with a 302 rather than
+    a second copy of the serving logic.
+    """
+    from src import storage
+
+    url = storage.url_for_key(key)
+    return RedirectResponse(url, status_code=302) if url else None
+
+
 app = FastAPI(lifespan=lifespan)
+
+# CORS: only needed once the frontend is on a different origin than this
+# API (e.g. a Vercel-hosted refine app calling the Fly-hosted API). Same-
+# origin deployments (frontend served from this app) don't need this at
+# all, but it's harmless to leave on. Origins come from FRONTEND_ORIGINS
+# in .env, comma-separated, no trailing slashes -- empty by default so
+# nothing cross-site is allowed until you set it.
+_frontend_origins = [
+    o.strip() for o in os.environ.get("FRONTEND_ORIGINS", "").split(",") if o.strip()
+]
+if _frontend_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_frontend_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
 # Starlette session middleware: used ONLY for the OAuth state/nonce dance
 # (Authlib stores its CSRF state here). The login session itself is the
 # separate signed zp_session cookie in app/auth.py.
@@ -230,7 +274,22 @@ app.mount("/renders", NoCacheStaticFiles(directory=str(RENDERS_DIR)), name="rend
 # call and nothing after it.
 UPLOAD_REFS_DIR = PROJECT_ROOT / "data" / "refs"
 UPLOAD_REFS_DIR.mkdir(parents=True, exist_ok=True)
-app.mount("/refs", NoCacheStaticFiles(directory=str(UPLOAD_REFS_DIR)), name="refs")
+class RefsStaticFiles(NoCacheStaticFiles):
+    """The bin, with R2 behind it. A composer upload or a scouted image
+    saved on one machine is not on the next one's disk; the bytes were
+    mirrored up at save time (refbin.mirror_to_r2), so a miss here is a
+    redirect rather than a broken tile."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        if response.status_code == 404 and "/" not in path and path not in (".", ".."):
+            redirect = r2_fallback(f"refs/{path}")
+            if redirect is not None:
+                return redirect
+        return response
+
+
+app.mount("/refs", RefsStaticFiles(directory=str(UPLOAD_REFS_DIR)), name="refs")
 # Every /api route now requires a session -- the /ui shell is gated, so
 # its backing endpoints are too (401 JSON, which shared.js surfaces as a
 # stateline). The legacy /studio pages stay open as the dev console.
@@ -289,6 +348,14 @@ def ui(request: Request):
     shell, client-side views, every control backed by /api and gated by
     /api/capabilities. Requires a session; the active brand comes from
     real membership (current_account), not the raw cookie.
+
+    One block of the page is decided HERE rather than by a data-cap
+    attribute: the Queue's manual-lane section. `data-cap` hides markup
+    that was still served, and this lane is operator-only for a reason
+    that is not cosmetic (src/manual_lane.py) -- so a non-operator's page
+    does not contain the section at all. The flag is read from the
+    account's own row, server-side, and the lane's routes re-ask the same
+    gate anyway; nothing here is what protects it.
     """
     user = auth.current_user(request)
     if user is None:
@@ -298,8 +365,13 @@ def ui(request: Request):
         # signed in, zero memberships: the no-access state, never a
         # silent grant into the real accounts
         return RedirectResponse("/ui/accounts", status_code=303)
+    # the TENANT, not the brand -- the lane is a property of the account
+    # that owns the rows, the same id every /api route acts as
     return templates.TemplateResponse(
-        request, "zpf.html", {"brand": account["slug"], "user": user})
+        request, "zpf.html",
+        {"brand": account["slug"], "user": user,
+         "manual_lane": manual_lane.manual_lane_allowed(
+             auth.optional_account_id(request))})
 
 
 def benchmark_class(score, median) -> str:
@@ -374,6 +446,15 @@ def healthz():
     return {"ok": True}
 
 
+@app.get("/privacy", response_class=HTMLResponse)
+def privacy_policy(request: Request):
+    """Public legal page -- also doubles as the privacy-policy URL every
+    OAuth app registration (Instagram, Pinterest, ...) needs on file."""
+    return templates.TemplateResponse(
+        request, "privacy.html", {"site_url": seo.site_url()},
+    )
+
+
 @app.get("/robots.txt", response_class=PlainTextResponse)
 def robots_txt():
     """Public page open to everyone including the AI crawlers; the app
@@ -442,6 +523,113 @@ GOOD_SCORE = 7.0
 
 GRADE_EMPTY = ("Nothing waiting on you right now — every concept has your "
                "verdict, and the golden set is empty.")
+
+
+# --- distribution: the number the Stats tab now leads with ------------------
+# (2026-09-07) Every other figure on this page measures how well the
+# machine THINKS. This one measures whether anything came out of it:
+# posts per week per brand per platform, what each one cost, and what
+# last night actually did. It leads because a pipeline that reasons
+# beautifully and publishes nothing is a pipeline with a zero here, and
+# no agreement percentage below would say so.
+DISTRIBUTION_WEEKS = 4
+
+
+def _week_starts(weeks: int = DISTRIBUTION_WEEKS) -> list:
+    """The Monday of each of the last `weeks` weeks, oldest first. Weeks
+    are Mondays rather than rolling 7-day windows so two page loads a day
+    apart show the same buckets -- a chart whose columns move under you
+    cannot be compared with yesterday's."""
+    today = date.today()
+    monday = today - timedelta(days=today.weekday())
+    return [monday - timedelta(weeks=n) for n in range(weeks - 1, -1, -1)]
+
+
+def _distribution(account_id: Optional[int], weeks: int = DISTRIBUTION_WEEKS) -> dict:
+    """Posts per week per brand per platform, cost per post, and last
+    night -- read-only, and every part of it degrades rather than 500s.
+
+    Only PIPELINE posts count. `videos.legacy` marks the hand-made
+    uploads that predate the loop (db.add_legacy_column), and counting
+    them here would credit the machine with Mike's own back catalogue --
+    so the query carries db.excludes_legacy's predicate, the same one
+    the teaching readers use, rather than a second hand-rolled filter
+    that could disagree with it.
+
+    `nightly_runs` is queried through to_regclass because another agent
+    is landing that table in parallel: absent, the line is simply not
+    shown, and the page is correct either way.
+    """
+    starts = _week_starts(weeks)
+    since = starts[0].isoformat()
+    dist = {
+        "weeks": [{"start": s.isoformat(), "label": s.strftime("%b %-d")} for s in starts],
+        "rows": [], "posts": 0, "since": since,
+        "spend_usd": 0.0, "cost_per_post": None, "nightly": None,
+        "available": True,
+    }
+
+    counts: dict = {}
+    try:
+        with db.connect() as conn:
+            rows = conn.execute(
+                "SELECT COALESCE(v.brand, '—') AS brand, v.platform, "
+                "substr(v.posted_at, 1, 10) AS day FROM videos v "
+                "WHERE v.account_id IS NOT DISTINCT FROM %s "
+                "AND substr(v.posted_at, 1, 10) >= %s"
+                + (" AND NOT v.legacy" if db.excludes_legacy(False) else ""),
+                (account_id, since),
+            ).fetchall()
+            for r in rows:
+                key = (r["brand"], r["platform"])
+                bucket = counts.setdefault(key, [0] * weeks)
+                for i, start in enumerate(starts):
+                    end = start + timedelta(days=7)
+                    if start.isoformat() <= r["day"] < end.isoformat():
+                        bucket[i] += 1
+                        break
+            if db.table_exists(conn, "nightly_runs"):
+                night = conn.execute(
+                    "SELECT * FROM nightly_runs ORDER BY started_at DESC LIMIT 1"
+                ).fetchone()
+                dist["nightly"] = dict(night) if night else None
+    except Exception:
+        dist["available"] = False
+        return dist
+
+    dist["rows"] = [
+        {"brand": brand, "platform": platform, "counts": bucket,
+         "total": sum(bucket)}
+        for (brand, platform), bucket in sorted(counts.items())
+    ]
+    dist["posts"] = sum(r["total"] for r in dist["rows"])
+
+    # What those posts cost: the LLM meter plus metered renders over the
+    # same window. Both are estimates written at call time (src/costs.py's
+    # honesty rules), and a render with no price was paid for by a
+    # subscription -- it is missing from this sum rather than counted as
+    # $0, which is the same call /costs makes.
+    spent = 0.0
+    try:
+        spent += sum(float(s["cost_usd"] or 0)
+                     for s in spend.by_stage(account_id=account_id, since=since))
+    except Exception:
+        pass
+    try:
+        with db.connect() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(cost_usd), 0) FROM generations "
+                "WHERE created_at >= %s AND account_id IS NOT DISTINCT FROM %s",
+                (since, account_id),
+            ).fetchone()
+            spent += float(row[0] or 0)
+    except Exception:
+        pass
+    dist["spend_usd"] = round(spent, 2)
+    # Zero posts shows "—", never a division: "$18.40 per post" with no
+    # posts is either a crash or a lie, and both are worse than a dash.
+    dist["cost_per_post"] = round(spent / dist["posts"], 2) if dist["posts"] else None
+    return dist
 
 
 def _pipeline_metrics(account_id: int) -> dict:
@@ -712,6 +900,7 @@ def studio(request: Request, tab: Optional[str] = None, message: Optional[str] =
                "message": message}
     if active_tab == "stats":
         context["metrics"] = _pipeline_metrics(account_id)
+        context["distribution"] = _distribution(account_id)
     elif active_tab == "grade":
         context["grade"] = _grade_context(mode, concept_id, golden_id, fresh, account_id)
     elif active_tab == "graded":
@@ -1635,6 +1824,11 @@ def metrics_refresh(video_id: int, account_id: int = Depends(auth.dev_account_id
         result = instagram.refresh_metrics_for_video(
             video, token=instagram.access_token(), db_path=None,
         )
+    elif video["platform"] == "tiktok":
+        from src import tiktok
+        result = tiktok.refresh_metrics_for_video(
+            video, token=tiktok.access_token(), db_path=None,
+        )
     else:
         api_key = os.environ.get("YOUTUBE_API_KEY")
         result = youtube.refresh_metrics_for_video(video, api_key=api_key,
@@ -1739,7 +1933,13 @@ def location_photo(space: str, filename: str, thumb: Optional[int] = None):
     root = LOCATIONS_DIR.resolve()
     if root not in target.parents:
         raise HTTPException(status_code=404, detail="not found")
-    if not target.is_file() or target.suffix.lower() not in locations.IMAGE_EXTENSIONS:
+    if target.suffix.lower() not in locations.IMAGE_EXTENSIONS:
+        raise HTTPException(status_code=404, detail="not found")
+    if not target.is_file():
+        # the wall above has already passed: space/filename cannot climb
+        redirect = r2_fallback(f"locations/{space}/{filename}")
+        if redirect is not None:
+            return redirect
         raise HTTPException(status_code=404, detail="not found")
     return FileResponse(thumbnail_for(target) if thumb else target)
 
@@ -1759,7 +1959,13 @@ def _entity_photo_response(base_dir, slug, filename, thumb):
     root = base_dir.resolve()
     if root not in target.parents:
         raise HTTPException(status_code=404, detail="not found")
-    if not target.is_file() or target.suffix.lower() not in locations.IMAGE_EXTENSIONS:
+    if target.suffix.lower() not in locations.IMAGE_EXTENSIONS:
+        raise HTTPException(status_code=404, detail="not found")
+    if not target.is_file():
+        plural = "characters" if base_dir == CHARACTERS_DIR else "props"
+        redirect = r2_fallback(f"{plural}/{slug}/{filename}")
+        if redirect is not None:
+            return redirect
         raise HTTPException(status_code=404, detail="not found")
     return FileResponse(thumbnail_for(target) if thumb else target)
 

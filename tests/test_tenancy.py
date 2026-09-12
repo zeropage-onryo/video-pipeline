@@ -82,8 +82,9 @@ def test_every_owned_table_grows_an_account_id(pg):
     workflows.init(pg)
     render_assets.init(pg)
     account_keys.init(pg)
-    from src import spend
+    from src import ledger, spend
     spend.init(pg)
+    ledger.init(pg)
     with db.connect(pg) as conn:
         for table in db.OWNED_TABLES:
             assert "account_id" in db.columns(conn, table), f"{table} has no owner"
@@ -374,6 +375,14 @@ UNSCOPED_ALLOWED = {
     "FROM concept_locations",
     "INTO concept_locations",
     "DELETE FROM concept_locations",
+    # ops/backfill_renders_r2.py's scan (2026-09-08). An operator-run
+    # one-off that repoints local render paths at R2 from the machine
+    # holding the files: it has no session and no account, and a row it
+    # skipped is a permanently blank tile on the deployed site. It reads
+    # across accounts and selects `account_id` so the UPDATE it feeds
+    # (render_assets.update_media_url) is scoped -- the write is where
+    # the damage would be, and that one is checked by this scan.
+    "SELECT id, media_url, output_path, account_id FROM generated_assets",
     # the global ceiling in generative.used_today(everyone=True). The one
     # query in the codebase that is SUPPOSED to count every account: it is
     # what stops ten pilot users, each inside their own cap, from putting
@@ -395,9 +404,27 @@ UNSCOPED_ALLOWED = {
     # seed asking whether the starter canvas exists at all
     "SELECT id FROM workflows WHERE name = %s",
     "SELECT id FROM workflows LIMIT 1",
+    # db.add_legacy_column's backfill (2026-09-07): a migration, like
+    # autonomy.init's channel rename below. It marks every pre-pipeline
+    # row on the database once, at the moment the column appears, and an
+    # owner predicate would leave half the table unmarked and teaching.
+    "UPDATE videos SET legacy = TRUE WHERE concept_id IS NULL",
+    # the two legacy filters, and both are deliberately installation-wide:
+    # they read `videos` only to build a set of rows to LEAVE OUT of a
+    # SHARED learning surface (winning_prompts, the proven_results shelf),
+    # nothing from them reaches a caller, and erring wide excludes a row
+    # that might have taught rather than teaching from one that must not.
+    "SELECT id, url FROM videos WHERE legacy",
+    "SELECT id FROM videos WHERE legacy AND id = ANY(%s)",
     # spend.spent_today_everyone: the installation-wide LLM spend, the
     # number the ceilings are a ceiling ON -- generative.used_today's twin
     "SELECT COUNT(*), COALESCE(SUM(cost_usd), 0) FROM llm_calls WHERE created_at >= %s",
+    # ledger.outstanding_everyone: total credits held against renders in
+    # flight, across every account -- the operator's own liability, the
+    # number on their books rather than a number about anybody's rows.
+    # generative.used_today(everyone=True) and spend.spent_today_everyone
+    # are its two siblings. Scoping it would make it a different figure.
+    "FROM credit_entries h WHERE h.kind = 'hold' AND NOT EXISTS (",
 }
 
 # Built from the list, not written out beside it: adding a table to
@@ -788,7 +815,6 @@ def _init_everything(path):
     schema under test is the whole schema."""
     from src import (
         evalstore,
-        framebank,
         imagesearch,
         inspiration,
         instagram,
@@ -812,11 +838,11 @@ def _init_everything(path):
     scout.init(path)
     instagram.init(path)
     imagesearch.init(path)
-    framebank.init(path)
     render_assets.init(path)
     account_keys.init(path)
-    from src import spend
+    from src import ledger, spend
     spend.init(path)
+    ledger.init(path)
 
 
 AUTH_SCHEMA = {"users", "accounts", "account_members"}
@@ -1205,7 +1231,7 @@ def test_the_render_path_carries_the_owner(two_tenants, monkeypatch):
         return {"ok": True, "media_url": "file:///clip.mp4", "generation_id": 1}
 
     monkeypatch.setattr(runway, "generate_for_shot", fake_generate_for_shot)
-    monkeypatch.setattr(runway, "has_key", lambda: True)
+    monkeypatch.setattr(runway, "has_key", lambda account_id=None: True)
 
     owner = t["a"]
     concept_id = preprod.save_concept(
@@ -1263,3 +1289,113 @@ def test_no_job_closure_shadows_the_route_owner():
     assert not offenders, (
         "a job function takes account_id as a parameter; jobs.start passes "
         "only the job, so it is always None:\n  " + "\n  ".join(offenders))
+
+
+# --------------------------------------------------------------------------
+# BYOK: which key, and whose
+#
+# key_for() answers "what credential do I render with" and cannot answer
+# "whose is it" -- the account's own stored key and the operator's env
+# fallback come back looking identical. The prepaid credit ledger has to
+# tell them apart: a render the customer's own key paid for at the
+# provider must not also be debited here.
+# --------------------------------------------------------------------------
+
+@pytest.fixture
+def byok_account(two_accounts, monkeypatch):
+    """Account A stores its own Runway secret; account B has none and
+    falls through to the operator's environment key."""
+    from cryptography.fernet import Fernet
+
+    path, a, b = two_accounts
+    monkeypatch.setenv("ACCOUNT_KEYS_SECRET", Fernet.generate_key().decode())
+    monkeypatch.setenv("RUNWAYML_API_SECRET", "OPERATOR-SECRET")
+    account_keys.set_key(a, "runway", "TENANT-SECRET", dsn=path)
+    return path, a, b
+
+
+def test_key_source_says_whose_credential_a_render_would_use(byok_account):
+    path, a, b = byok_account
+    assert account_keys.key_source(a, "runway", path) == account_keys.SOURCE_ACCOUNT
+    assert account_keys.key_source(b, "runway", path) == account_keys.SOURCE_ENV
+    assert account_keys.key_source(None, "runway", path) == account_keys.SOURCE_ENV
+
+
+def test_key_source_is_none_when_nothing_would_resolve(byok_account, monkeypatch):
+    """No stored key and no environment fallback is not "the operator
+    pays" -- it is "this render cannot happen", and the ledger must not
+    read it as either of the other two."""
+    path, a, b = byok_account
+    monkeypatch.delenv("RUNWAYML_API_SECRET")
+    assert account_keys.key_source(b, "runway", path) is None
+    assert account_keys.key_source(a, "runway", path) == account_keys.SOURCE_ACCOUNT
+
+
+def test_key_for_still_answers_exactly_what_it_always_did(byok_account):
+    """The source is a second question, not a change to the first one:
+    key_for has many callers and every one of them wants the key."""
+    path, a, b = byok_account
+    assert account_keys.key_for(a, "runway", path) == {"api_secret": "TENANT-SECRET"}
+    assert account_keys.key_for(b, "runway", path) == {"api_secret": "OPERATOR-SECRET"}
+    assert account_keys.key_and_source(a, "runway", path) == (
+        {"api_secret": "TENANT-SECRET"}, account_keys.SOURCE_ACCOUNT)
+
+
+def test_labelling_a_render_never_costs_it_its_row(byok_account, monkeypatch):
+    """key_source runs AFTER the money is spent, on the way to writing
+    the row that records the spend. An unreadable ciphertext (a rotated
+    ACCOUNT_KEYS_SECRET, say) must cost the row its label, never the
+    row: an unlabelled render is a ledger question, a lost one is a
+    render nobody can account for."""
+    from cryptography.fernet import Fernet
+
+    path, a, b = byok_account
+    monkeypatch.setenv("ACCOUNT_KEYS_SECRET", Fernet.generate_key().decode())
+    with pytest.raises(Exception):
+        account_keys.key_for(a, "runway", path)
+    assert account_keys.key_source(a, "runway", path) is None
+
+
+def test_the_availability_check_asks_about_the_callers_own_key(two_tenants, monkeypatch):
+    """Both render routes asked `runway.has_key()` with no account, so
+    availability was judged on the OPERATOR's environment key: a BYOK
+    account with its own stored secret was told 503 on a server whose
+    RUNWAYML_API_SECRET is unset, and an account with no key at all was
+    waved through onto someone else's. The render underneath resolves
+    the key per account (generate_for_shot), so the gate in front of it
+    has to ask the same question."""
+    import time
+
+    from app import jobs
+    from src import preprod, runway
+
+    t = two_tenants
+    asked = []
+
+    monkeypatch.setattr(runway, "has_key",
+                        lambda account_id=None: asked.append(account_id) or True)
+    monkeypatch.setattr(runway, "generate_for_shot",
+                        lambda concept_id, shot_n, **kwargs: {
+                            "ok": True, "media_url": "file:///clip.mp4",
+                            "generation_id": 1})
+
+    owner = t["a"]
+    concept_id = preprod.save_concept(
+        {"title": "a take", "logline": "x",
+         "shots": [{"n": 1, "ai_prompt": "a prompt"}]},
+        "zeropage", dsn=t["path"], account_id=owner)
+    preprod.set_picked(concept_id, True, dsn=t["path"], account_id=owner)
+
+    client = t["as"](owner)
+    for url in (f"/api/queue/{concept_id}/approve",
+                f"/api/concepts/{concept_id}/shots/1/generate"):
+        res = client.post(url)
+        assert res.status_code == 200, (url, res.text)
+        job_id = res.json()["job_id"]
+        deadline = time.time() + 5
+        while (time.time() < deadline
+               and jobs.get(job_id, account_id=owner)["status"] in ("queued", "running")):
+            time.sleep(0.01)
+
+    assert asked == [owner, owner], (
+        f"availability was judged on {asked!r}, not on the caller's own key")

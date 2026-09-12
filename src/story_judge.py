@@ -191,7 +191,8 @@ def virality_signal(candidate: dict, signals: list) -> dict:
     fuzzy -- the digest paraphrases, it doesn't cite precisely. This tries
     an exact URL match first (candidate['sources'] against a signal's
     url), then falls back to token overlap between the candidate's own
-    text and a signal's detail, the same style of match src/framebank.py
+    text and a signal's detail, the same style of match the retired
+    frame bank
     already uses for frame search rather than an embedding lookup that
     would be overkill for a handful of short strings.
 

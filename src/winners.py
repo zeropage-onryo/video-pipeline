@@ -76,15 +76,45 @@ def get(entry_id, dsn=None):
         return dict(row) if row else None
 
 
-def list_all(dsn=None) -> list:
+def _legacy_video_refs(conn) -> set:
+    """Every string a legacy video can be named by in `video_ref`.
+
+    `video_ref` is free text -- app/main.py writes `concept-<id>`, a
+    person pastes a url or a bare video id -- so there is no join to
+    make. Matching the identifiers a legacy row CAN carry is the honest
+    approximation: a pipeline post is named by its concept, and a
+    concept is exactly what a legacy row does not have.
+    """
+    refs = set()
+    if not db.table_exists(conn, "videos"):
+        return refs
+    for row in conn.execute("SELECT id, url FROM videos WHERE legacy"):
+        refs.add(str(row["id"]))
+        refs.add(f"video-{row['id']}")
+        if row["url"]:
+            refs.add(row["url"].strip())
+    return refs
+
+
+def list_all(dsn=None, include_legacy: bool = True) -> list:
     # ensure the table exists before querying, same as avoid_guidance:
     # this is read on every Grade/Graded render to work out which
     # concepts carry a verdict, and a database that has not seen a
     # verdict yet should read as "none", not raise (2026-09-02).
+    #
+    # include_legacy=False is what the taste judge asks for (2026-09-07):
+    # the Grade tab lists everything you ever noted, but a note written
+    # against a hand-made pre-pipeline upload is not evidence about what
+    # the pipeline should make next. The default stays True so the
+    # listing pages are unchanged; db.learn_from_legacy() overrides.
     init(dsn)
     with db.connect(dsn) as conn:
-        return [dict(r) for r in conn.execute(
+        rows = [dict(r) for r in conn.execute(
             "SELECT * FROM winning_prompts ORDER BY created_at DESC")]
+        if not db.excludes_legacy(include_legacy):
+            return rows
+        legacy_refs = _legacy_video_refs(conn)
+    return [r for r in rows if (r.get("video_ref") or "").strip() not in legacy_refs]
 
 
 def _render_doc(w: dict, pair: dict | None = None) -> str:

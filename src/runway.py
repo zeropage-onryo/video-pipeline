@@ -44,19 +44,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from . import account_keys, generative, render_assets
+from . import account_keys, generative, render_assets, render_specs
 from .shot import Shot
 
-MODELS = ("gen4_turbo", "gen4.5")
+# The model list, the frame and the legal durations all come from
+# src/render_specs.py, which imports nothing at all -- so ops/render_queue.py
+# can check what a by-hand render CLAIMS against the same numbers this
+# adapter renders by, without importing this module (google-genai comes in
+# here through render_assets, and that script must run on a bare python3).
+# Before 2026-09-08 the manual lane held a second copy of the ratio and a
+# test asserted the two had not drifted; a shared constant cannot drift.
+MODELS = tuple(render_specs.RUNWAY_MODELS)
 DEFAULT_MODEL = os.environ.get("RUNWAY_MODEL", "gen4_turbo")   # cheapest first spend
-DEFAULT_RATIO = "720:1280"   # 9:16, the platform vertical
+DEFAULT_RATIO = render_specs.RATIO_9_16   # 9:16, the platform vertical
 DEFAULT_DURATION = 5
-# The frames and lengths the image-to-video endpoint takes for both
-# models this project uses (runwayml SDK type definitions, 2026-09-12).
-# A frame outside this list is REFUSED, never clamped: a silently
-# corrected frame is a clip that comes back the wrong shape.
-RATIOS = ("720:1280", "1280:720", "832:1104", "1104:832", "960:960", "1584:672")
-DURATIONS = (5, 10)
 DAILY_CAP = int(os.environ.get("RUNWAY_DAILY_CAP", "6"))
 # The installation-wide wall, beside the per-account one. Defaults to the
 # SAME number, so a single-operator database behaves exactly as it did --
@@ -156,12 +157,25 @@ def spend_approved() -> bool:
     return (os.environ.get(SPEND_ENV) or "").strip() == "1"
 
 
-def _safe_error(e: Exception) -> str:
-    """The key must never reach a page, a log line, or a DB row."""
+def _safe_error(e: Exception, account_id: Optional[int] = None) -> str:
+    """The key must never reach a page, a log line, or a DB row -- and
+    since BYOK the key that would leak is often NOT the one in the
+    environment. So redact whatever this account actually rendered on
+    (its own stored secret when it has one, the env fallback otherwise)
+    as well as the env value, then any Bearer token the text still
+    carries. Resolving the account key is best-effort: redaction runs on
+    the failure path and must never be the thing that raises there."""
     text = str(e)
-    secret = os.environ.get("RUNWAYML_API_SECRET")
-    if secret:
-        text = text.replace(secret, "<RUNWAYML_API_SECRET>")
+    secrets = [os.environ.get("RUNWAYML_API_SECRET")]
+    try:
+        creds = account_keys.key_for(account_id, "runway")
+    except Exception:
+        creds = None
+    if creds:
+        secrets.append(creds.get("api_secret"))
+    for secret in secrets:
+        if secret:
+            text = text.replace(secret, "<RUNWAYML_API_SECRET>")
     return re.sub(r"(Bearer\s+)[A-Za-z0-9_\-.]+", r"\1<redacted>", text)
 
 
@@ -304,11 +318,13 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *, shot_id: Optional[i
                 generate_video(prompt, out_path, model=model, client=client,
                                db_path=db_path, account_id=account_id, **cfg)
             except Exception as e:
-                errors.append(f"candidate {i}: {_safe_error(e)}")
+                errors.append(f"candidate {i}: {_safe_error(e, account_id)}")
                 continue
             generation_id = generative.record_generation(
                 shot_id, "runway", prompt,
-                params={"model": model, **cfg},
+                params={"model": model,
+                        "key_source": account_keys.key_source(account_id, "runway", db_path),
+                        **cfg},
                 output_path=str(out_path),
                 cost_usd=estimate_cost(1, model=model, duration=duration),
                 notes=None,
@@ -320,7 +336,7 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *, shot_id: Optional[i
         return {"ok": bool(candidates), "candidates": candidates, "shot_id": shot_id,
                 "error": "; ".join(errors) if errors else None}
     except Exception as e:
-        return {"ok": False, "candidates": [], "error": _safe_error(e)}
+        return {"ok": False, "candidates": [], "error": _safe_error(e, account_id)}
 
 
 # --- the scene board's one-click render (added 2026-08-21) -----------------
@@ -401,10 +417,10 @@ def as_prompt_image(value, *, resolve_photo=None):
 
 def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                       model: str = DEFAULT_MODEL, client=None,
+                      duration: int = DEFAULT_DURATION,
+                      ratio: str = DEFAULT_RATIO,
                       resolve_photo=None,
                       account_id: Optional[int] = None,
-                      ratio: str = DEFAULT_RATIO,
-                      duration: int = DEFAULT_DURATION,
 ) -> dict:
     """
     Never raises: {"ok", "media_url", "generation_id", "error"}. One
@@ -427,16 +443,6 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
     """
     from . import preprod, storage
     kwargs = {"dsn": db_path} if db_path is not None else {}
-
-    # the Queue's selectors (2026-09-12) land here; a value the endpoint
-    # does not take is refused before any credit moves, not corrected
-    if model not in MODELS:
-        return {"ok": False, "error": f"unknown Runway model {model!r} — one of {', '.join(MODELS)}"}
-    if ratio not in RATIOS:
-        return {"ok": False, "error": f"frame {ratio!r} is not one Runway renders — one of {', '.join(RATIOS)}"}
-    if int(duration) not in DURATIONS:
-        return {"ok": False, "error": f"a clip is {' or '.join(str(d) for d in DURATIONS)} seconds, not {duration}"}
-    duration = int(duration)
 
     try:
         refusal = generative.cap_error(
@@ -469,16 +475,22 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"c{concept_id}-s{shot_n}-{stamp}.mp4"
-        generate_video(prompt, out_path, model=model, ratio=ratio,
-                       duration=duration,
+        generate_video(prompt, out_path, model=model,
+                       duration=duration, ratio=ratio,
                        prompt_image=prompt_image, client=client,
-                       db_path=db_path)
+                       db_path=db_path, account_id=account_id)
 
         shot_row_id = _shot_row_for_prompt(prompt, db_path, account_id)
+        # what was ACTUALLY asked for, not the module defaults: the
+        # Queue lets a person pick a length and a frame per approve, and
+        # a row that records the default instead would make the tool
+        # scoreboard a measurement of a render nobody ran
         generation_params = {"model": model, "ratio": ratio,
                              "duration": duration,
                              "concept_id": concept_id, "shot_n": shot_n,
-                             "prompt_image": bool(prompt_image)}
+                             "prompt_image": bool(prompt_image),
+                             "key_source": account_keys.key_source(
+                                 account_id, "runway", db_path)}
         generation_id = generative.record_generation(
             shot_row_id, "runway", prompt,
             params=generation_params,
@@ -509,7 +521,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                 "asset_id": asset["id"], "asset_rag": asset["rag"],
                 "error": None}
     except Exception as e:
-        return {"ok": False, "error": _safe_error(e)}
+        return {"ok": False, "error": _safe_error(e, account_id)}
 
 
 def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
@@ -559,13 +571,15 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
         out_path = RENDER_DIR / f"wf-{stamp}.mp4"
         generate_video(prompt, out_path, model=model,
                        prompt_image=prompt_image, client=client,
-                       db_path=db_path)
+                       db_path=db_path, account_id=account_id)
 
         shot_row_id = _shot_row_for_prompt(prompt, db_path, account_id)
         generation_params = {"model": model, "ratio": DEFAULT_RATIO,
                              "duration": DEFAULT_DURATION,
                              "source": "workflow",
-                             "prompt_image": bool(prompt_image)}
+                             "prompt_image": bool(prompt_image),
+                             "key_source": account_keys.key_source(
+                                 account_id, "runway", db_path)}
         generation_id = generative.record_generation(
             shot_row_id, "runway", prompt,
             params=generation_params,
@@ -594,95 +608,4 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
                 "asset_id": asset["id"], "asset_rag": asset["rag"],
                 "error": None}
     except Exception as e:
-        return {"ok": False, "error": _safe_error(e)}
-
-
-# --- the subscription lane: a clip rendered by hand, filed (2026-09-12) ----
-# Runway's API has one billing path -- developer-portal credits. The
-# Unlimited plan's free-but-queued Explore mode is a web-app toggle with
-# no API parameter, so nothing above can reach it; the only way to spend
-# the subscription is a person driving Chrome. This is the receiving end:
-# the finished mp4 lands where the adapter writes (same /renders mount,
-# same media_url shape), the generations row carries cost_usd NULL --
-# which this repo reports as FREE with a count, never $0 -- and the
-# params say where it came from.
-
-MANUAL_SOURCE = "manual-unlimited"
-MP4_BRANDS = {b"isom", b"iso2", b"iso4", b"iso5", b"iso6", b"mp41", b"mp42",
-              b"avc1", b"dash", b"M4V ", b"MSNV"}
-
-
-def is_mp4(head: bytes) -> bool:
-    """An MP4 by MAGIC NUMBER, not extension: an ftyp box whose brand is
-    one of the ISO base-media brands. The QuickTime brand is refused --
-    a .mov carries the same ftyp box, and it is not what the site
-    serves as video/mp4."""
-    if len(head) < 12 or head[4:8] != b"ftyp":
-        return False
-    return head[8:12] in MP4_BRANDS
-
-
-def file_manual_clip(concept_id: int, shot_n, data: bytes, *, db_path=None,
-                     account_id: Optional[int] = None,
-                     ratio: str = DEFAULT_RATIO,
-                     duration: int = DEFAULT_DURATION) -> dict:
-    """Never raises: {"ok", "media_url", "generation_id", "error",
-    "conflict"}. `conflict` is True when the shot already carries a
-    clip -- a drop is a gesture and gestures repeat, and a second one
-    applied would leave two generations rows for one render and the
-    first mp4 orphaned. Refused, never replaced; clear the clip first."""
-    from . import preprod, storage
-    kwargs = {"dsn": db_path} if db_path is not None else {}
-    try:
-        if not is_mp4(data[:12]):
-            return {"ok": False, "conflict": False,
-                    "error": "not an MP4 (the file must start with an ISO ftyp box; a .mov is refused)"}
-        concept = preprod.get_concept(concept_id, **kwargs, account_id=account_id)
-        if concept is None:
-            return {"ok": False, "conflict": False, "error": f"no concept {concept_id}"}
-        shot = next((s for s in concept.get("shots") or []
-                     if s.get("n") == shot_n), None)
-        if shot is None:
-            return {"ok": False, "conflict": False,
-                    "error": f"concept {concept_id} has no shot {shot_n}"}
-        if shot.get("media_url"):
-            return {"ok": False, "conflict": True,
-                    "error": "this shot already carries a clip -- a second drop is "
-                             "refused, not applied"}
-        prompt = (shot.get("prompt") or "").strip()
-
-        RENDER_DIR.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-        out_path = RENDER_DIR / f"c{concept_id}-s{shot_n}-manual-{stamp}.mp4"
-        out_path.write_bytes(data)
-
-        shot_row_id = _shot_row_for_prompt(prompt or f"concept {concept_id} shot {shot_n}",
-                                           db_path, account_id)
-        params = {"source": MANUAL_SOURCE, "model": "runway-explore",
-                  "ratio": ratio, "duration": duration,
-                  "concept_id": concept_id, "shot_n": shot_n,
-                  "bytes": len(data)}
-        generation_id = generative.record_generation(
-            shot_row_id, "runway", prompt, params=params,
-            output_path=str(out_path), cost_usd=None,
-            notes="filed from the subscription lane",
-            **kwargs, account_id=account_id)
-
-        if storage.configured():
-            media_url = storage.upload_file(
-                out_path, key=f"renders/runway/{out_path.name}",
-                content_type="video/mp4")
-        else:
-            media_url = f"/renders/runway/{out_path.name}"
-        preprod.set_shot_media_url(concept_id, shot_n, media_url, **kwargs,
-                                   account_id=account_id)
-        render_assets.record_best_effort(
-            account_id=account_id, generation_id=generation_id,
-            tool="runway", model="runway-explore", media_kind="video",
-            prompt=prompt, media_url=media_url, output_path=str(out_path),
-            project=concept.get("brand"), concept_id=concept_id, shot_n=shot_n,
-            metadata=params, dsn=db_path)
-        return {"ok": True, "conflict": False, "media_url": media_url,
-                "generation_id": generation_id, "path": str(out_path), "error": None}
-    except Exception as e:
-        return {"ok": False, "conflict": False, "error": _safe_error(e)}
+        return {"ok": False, "error": _safe_error(e, account_id)}
