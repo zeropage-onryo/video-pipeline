@@ -21,11 +21,19 @@ import {
   queueShot,
   type Concept,
   type Job,
+  type RenderChoice,
   type RunwayState,
 } from "@/lib/studio-api";
 import { useShell } from "@/components/studio/shell";
 
-const ratioLabel = (r?: string) => (r === "720:1280" ? "9:16" : r === "1280:720" ? "16:9" : r || "9:16");
+const RATIO_NAMES: Record<string, string> = {
+  "720:1280": "9:16 · vertical",
+  "1280:720": "16:9 · wide",
+  "832:1104": "3:4 · portrait",
+  "1104:832": "4:3 · landscape",
+  "960:960": "1:1 · square",
+  "1584:672": "21:9 · cinema",
+};
 type JobRow = Job & { cancellable?: boolean };
 
 export default function QueuePage() {
@@ -36,6 +44,19 @@ export default function QueuePage() {
   const [jobs, setJobs] = useState<JobRow[]>([]);
   const [jobsError, setJobsError] = useState<string | null>(null);
   const [busy, setBusy] = useState<Record<number, string>>({});
+  // the selectors, per card: the connector's defaults until touched
+  const [choices, setChoices] = useState<Record<number, Partial<RenderChoice>>>({});
+  const choiceFor = (c: Concept): RenderChoice => ({
+    model: choices[c.id]?.model ?? runway?.model ?? "gen4_turbo",
+    ratio: choices[c.id]?.ratio ?? runway?.ratio ?? "720:1280",
+    duration: choices[c.id]?.duration ?? runway?.duration ?? 5,
+  });
+  // priced from the state's per-second rates, the same numbers the
+  // server prices the approve with
+  const priceOf = (choice: RenderChoice) => {
+    const m = runway?.models?.find((x) => x.id === choice.model);
+    return m ? m.usd_per_second * choice.duration : (runway?.estimate_usd ?? 0);
+  };
 
   const loadPending = useCallback(() => {
     queuePending(brand || undefined)
@@ -87,8 +108,13 @@ export default function QueuePage() {
     setBusy((b) => ({ ...b, [c.id]: what }));
     try {
       if (what === "approve") {
-        const res = await queueApprove(c.id);
-        toast(res.job_id ? `Rendering ${c.n} — watch Jobs below` : `${c.n} approved`);
+        const choice = choiceFor(c);
+        const res = await queueApprove(c.id, choice);
+        toast(
+          res.job_id
+            ? `Rendering ${c.n} — ${choice.model} · ${choice.ratio} · ${choice.duration}s · ~$${(res.estimate_usd ?? priceOf(choice)).toFixed(2)}`
+            : `${c.n} approved`,
+        );
       } else if (what === "reject") {
         await queueReject(c.id);
         toast(`${c.n} rejected — archived, still counted`);
@@ -157,16 +183,49 @@ export default function QueuePage() {
               </div>
             ) : null}
             <p className="scpre">{c.prompt}</p>
-            <div className="scchips">
-              <span className="chip">
-                <Clock size={11} /> {runway?.duration ?? 5} sec
-              </span>
-              <span className="chip">
-                <RectangleVertical size={11} /> {ratioLabel(runway?.ratio)}
-              </span>
-              <span className="chip">
-                <Monitor size={11} /> {runway?.model ?? "gen4_turbo"}
-              </span>
+            <div className="scchoice">
+              <label className="scsel" title="Renderer and model">
+                <Monitor size={11} />
+                <select
+                  aria-label="Renderer and model"
+                  value={choiceFor(c).model}
+                  onChange={(e) => setChoices((w) => ({ ...w, [c.id]: { ...w[c.id], model: e.target.value } }))}
+                >
+                  {(runway?.models ?? [{ id: "gen4_turbo", label: "Gen-4 Turbo", usd_per_second: 0.05 }]).map((m) => (
+                    <option key={m.id} value={m.id}>
+                      Runway · {m.label} · ${m.usd_per_second.toFixed(2)}/s
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="scsel" title="Frame">
+                <RectangleVertical size={11} />
+                <select
+                  aria-label="Frame"
+                  value={choiceFor(c).ratio}
+                  onChange={(e) => setChoices((w) => ({ ...w, [c.id]: { ...w[c.id], ratio: e.target.value } }))}
+                >
+                  {(runway?.ratios ?? ["720:1280"]).map((r) => (
+                    <option key={r} value={r}>
+                      {r} · {RATIO_NAMES[r] ?? ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="scsel" title="Length">
+                <Clock size={11} />
+                <select
+                  aria-label="Length"
+                  value={choiceFor(c).duration}
+                  onChange={(e) => setChoices((w) => ({ ...w, [c.id]: { ...w[c.id], duration: Number(e.target.value) } }))}
+                >
+                  {(runway?.durations ?? [5]).map((d) => (
+                    <option key={d} value={d}>
+                      {d} sec
+                    </option>
+                  ))}
+                </select>
+              </label>
             </div>
             <div className="scfoot">
               <button
@@ -186,7 +245,7 @@ export default function QueuePage() {
               <span className="spacer" />
               <button type="button" className="go" disabled={!canRender || !!busy[c.id]} onClick={() => decide(c, "approve")}>
                 <Zap strokeWidth={2} />
-                {busy[c.id] === "approve" ? "Rendering…" : canRender ? `Approve · render ~$${(runway?.estimate_usd || 0).toFixed(2)}` : "Approve · render"}
+                {busy[c.id] === "approve" ? "Rendering…" : canRender ? `Approve · render ~$${priceOf(choiceFor(c)).toFixed(2)}` : "Approve · render"}
               </button>
             </div>
           </article>

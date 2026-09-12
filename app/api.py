@@ -1241,6 +1241,15 @@ def _runway_state() -> dict:
             # spend, not just what it costs
             "ratio": runway.DEFAULT_RATIO,
             "duration": runway.DEFAULT_DURATION,
+            # the Queue's selectors (2026-09-12): every model with what a
+            # second of it costs, and the frames and lengths the endpoint
+            # takes -- so the approve button can price the actual choice
+            "models": [{"id": m,
+                        "label": m.replace("gen4_turbo", "Gen-4 Turbo").replace("gen4.5", "Gen-4.5"),
+                        "usd_per_second": round(runway.CREDITS_PER_SECOND[m] * runway.CREDIT_USD, 3)}
+                       for m in runway.MODELS],
+            "ratios": list(runway.RATIOS),
+            "durations": list(runway.DURATIONS),
             "today": today}
 
 
@@ -1267,8 +1276,17 @@ def queue_pending(brand: Optional[str] = None, account_id: int = Depends(auth.cu
     return {"items": pending, "runway": _runway_state()}
 
 
+class ApproveBody(BaseModel):
+    """The Queue's selectors. Defaults are the connector's, so a bare
+    POST renders exactly what it always did."""
+    model: Optional[str] = None
+    ratio: Optional[str] = None
+    duration: Optional[int] = None
+
+
 @router.post("/queue/{concept_id}/approve")
-def queue_approve(concept_id: int, account_id: int = Depends(auth.current_account_id)):
+def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
+                  account_id: int = Depends(auth.current_account_id)):
     """Approve = render, and approving IS the pick.
 
     The concept's stored prompt goes through the Runway API (anchored on
@@ -1298,6 +1316,21 @@ def queue_approve(concept_id: int, account_id: int = Depends(auth.current_accoun
         return _error(400, "not_queued",
                       "this concept isn't in the queue — pick it on the board first")
 
+    # the selectors, refused rather than clamped: a frame the endpoint
+    # does not take must not become a clip the wrong shape
+    body = body or ApproveBody()
+    model = body.model or runway.DEFAULT_MODEL
+    ratio = body.ratio or runway.DEFAULT_RATIO
+    duration = body.duration or runway.DEFAULT_DURATION
+    if model not in runway.MODELS:
+        return _error(400, "bad_model", f"unknown Runway model {model!r}")
+    if ratio not in runway.RATIOS:
+        return _error(400, "bad_ratio",
+                      f"frame {ratio!r} is not one Runway renders — one of {', '.join(runway.RATIOS)}")
+    if duration not in runway.DURATIONS:
+        return _error(400, "bad_duration",
+                      f"a clip is {' or '.join(str(d) for d in runway.DURATIONS)} seconds")
+
     shot_n = concept["shots"][0].get("n", 1)
     # the pick is recorded BEFORE the spend, not after it: a render that
     # fails halfway still leaves the row saying you chose this one
@@ -1305,16 +1338,18 @@ def queue_approve(concept_id: int, account_id: int = Depends(auth.current_accoun
         preprod.set_picked(concept_id, True, account_id=account_id)
 
     def work(job):
-        jobs.progress(job, 0.2, "rendering via Runway")
+        jobs.progress(job, 0.2, f"rendering via Runway · {model} · {ratio} · {duration}s")
         result = runway.generate_for_shot(
             concept_id, shot_n, db_path=None,
-            resolve_photo=_resolve_asset_photo, account_id=account_id)
+            resolve_photo=_resolve_asset_photo, account_id=account_id,
+            model=model, ratio=ratio, duration=duration)
         if not result.get("ok"):
             raise RuntimeError(result.get("error") or "render failed")
         return {"ref_id": concept_id, "detail": "clip attached"}
 
     job = jobs.start("render", f"approved · {concept['title']}", work, account_id=account_id)
-    return {"job_id": job["id"]}
+    return {"job_id": job["id"], "model": model, "ratio": ratio, "duration": duration,
+            "estimate_usd": runway.estimate_cost(1, model=model, duration=duration)}
 
 
 @router.post("/queue/{concept_id}/reject")

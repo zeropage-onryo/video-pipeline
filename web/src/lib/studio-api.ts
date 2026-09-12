@@ -127,6 +127,7 @@ export type Concept = {
   reference_image: string;
   created_at?: string;
 };
+export type RunwayModel = { id: string; label: string; usd_per_second: number };
 export type RunwayState = {
   available: boolean;
   spend_ok: boolean;
@@ -134,8 +135,12 @@ export type RunwayState = {
   estimate_usd: number;
   ratio?: string;
   duration?: number;
+  models?: RunwayModel[];
+  ratios?: string[];
+  durations?: number[];
   today?: number | null;
 };
+export type RenderChoice = { model: string; ratio: string; duration: number };
 export type PickRate = { generated: number; picked: number; rate: number | null };
 /** GET /api/pipeline/concepts — the board. Ask for the archived rows
  *  too and filter client-side, so the count line can say where every
@@ -160,8 +165,11 @@ export const updateShotPrompt = (id: number, n: number, prompt: string) =>
     body: JSON.stringify({ prompt }),
   });
 /* the spend gate: approving is what calls Runway */
-export const queueApprove = (id: number) =>
-  apiFetch<{ job_id?: number; ok?: boolean }>(`/queue/${id}/approve`, { method: "POST", body: "{}" });
+export const queueApprove = (id: number, choice?: RenderChoice) =>
+  apiFetch<{ job_id?: number; estimate_usd?: number }>(`/queue/${id}/approve`, {
+    method: "POST",
+    body: JSON.stringify(choice ?? {}),
+  });
 export const queueReject = (id: number) =>
   apiFetch<{ ok: boolean }>(`/queue/${id}/reject`, { method: "POST", body: "{}" });
 /** made by hand, outside the render lane — drops it off the pending list */
