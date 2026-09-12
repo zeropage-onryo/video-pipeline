@@ -85,6 +85,27 @@ export const createAsset = (
   form: FormData,
 ) => apiForm<AssetCreated>(`/assets/${kind}`, form);
 
+/* ── the media wall ── */
+export type MediaItem = {
+  url: string;
+  asset_id: string;
+  asset_name: string;
+  category: AssetCategory | "generated";
+  kind: "image" | "video";
+  date: string;
+};
+export type MediaCounts = Record<string, number> & { all: number };
+/** GET /api/media?kind=all — one row per saved photo or clip, carrying
+ *  its owning asset; `counts` are set totals, never page length. */
+export const getMedia = (q?: string, category?: string) => {
+  const params = new URLSearchParams({ kind: "all" });
+  if (q) params.set("q", q);
+  if (category && category !== "all") params.set("category", category);
+  return apiFetch<{ items: MediaItem[]; counts: MediaCounts }>(`/media?${params}`);
+};
+export const deleteAsset = (kind: "characters" | "props", id: number) =>
+  apiFetch<{ ok: boolean }>(`/assets/${kind}/${id}`, { method: "DELETE" });
+
 /* ── the board and the queue ── */
 export type Concept = {
   id: number;
@@ -115,10 +136,41 @@ export type RunwayState = {
   duration?: number;
   today?: number | null;
 };
-export const boardConcepts = (brand?: string) =>
-  apiFetch<{ items: Concept[] }>(
-    `/pipeline/concepts${brand ? `?brand=${encodeURIComponent(brand)}` : ""}`,
-  );
+export type PickRate = { generated: number; picked: number; rate: number | null };
+/** GET /api/pipeline/concepts — the board. Ask for the archived rows
+ *  too and filter client-side, so the count line can say where every
+ *  card went (the 2026-09-02 lesson). */
+export const boardConcepts = (brand?: string, archived = false) => {
+  const params = new URLSearchParams();
+  if (brand) params.set("brand", brand);
+  if (archived) params.set("archived", "true");
+  const qs = params.toString();
+  return apiFetch<{ items: Concept[]; pick?: PickRate }>(`/pipeline/concepts${qs ? `?${qs}` : ""}`);
+};
+/** Leaving the board is archiving, never deleting: an unpicked row is
+ *  the only negative signal pick_rate has. */
+export const archiveConcept = (id: number, archived = true) =>
+  apiFetch<{ ok: boolean }>(`/concepts/${id}/archive`, {
+    method: "POST",
+    body: JSON.stringify({ archived }),
+  });
+export const updateShotPrompt = (id: number, n: number, prompt: string) =>
+  apiFetch<{ ok: boolean; warnings?: string[] }>(`/concepts/${id}/shots/${n}/prompt`, {
+    method: "POST",
+    body: JSON.stringify({ prompt }),
+  });
+/* the spend gate: approving is what calls Runway */
+export const queueApprove = (id: number) =>
+  apiFetch<{ job_id?: number; ok?: boolean }>(`/queue/${id}/approve`, { method: "POST", body: "{}" });
+export const queueReject = (id: number) =>
+  apiFetch<{ ok: boolean }>(`/queue/${id}/reject`, { method: "POST", body: "{}" });
+/** made by hand, outside the render lane — drops it off the pending list */
+export const queueShot = (id: number) =>
+  apiFetch<{ ok: boolean }>(`/queue/${id}/shot`, { method: "POST", body: JSON.stringify({ shot: true }) });
+/* the in-process job registry (clears on restart, and says so) */
+export const listJobs = () => apiFetch<{ items: (Job & { cancellable?: boolean })[] }>("/jobs");
+export const cancelJob = (id: number) => apiFetch<Job>(`/jobs/${id}/cancel`, { method: "POST", body: "{}" });
+export const clearJob = (id: number) => apiFetch<{ deleted: number }>(`/jobs/${id}`, { method: "DELETE" });
 export const queuePending = (brand?: string) =>
   apiFetch<{ items: Concept[]; runway: RunwayState }>(
     `/queue/pending${brand ? `?brand=${encodeURIComponent(brand)}` : ""}`,

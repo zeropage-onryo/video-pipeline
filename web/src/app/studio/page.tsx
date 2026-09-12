@@ -13,7 +13,8 @@
    404s. The model / length / frame pills likewise appear only when
    their routes answer. */
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   AtSign,
   Brain,
@@ -97,8 +98,20 @@ function PillMenu({
   );
 }
 
+/* useSearchParams needs a Suspense boundary above it for the static
+   shell Next prerenders; the composer itself is the client page */
 export default function StudioPage() {
+  return (
+    <Suspense fallback={null}>
+      <Composer />
+    </Suspense>
+  );
+}
+
+function Composer() {
   const { brand, toast } = useShell();
+  const params = useSearchParams();
+  const attachId = params.get("attach");
   const [idea, setIdea] = useState("");
   const [count, setCount] = useState(4);
   const [caps, setCaps] = useState<Capabilities>({});
@@ -125,7 +138,12 @@ export default function StudioPage() {
   useEffect(() => {
     getCapabilities().then(setCaps).catch(() => setCaps({}));
     getAssets()
-      .then((r) => setAssets(r.items))
+      .then((r) => {
+        setAssets(r.items);
+        // "Use in a shot" on Assets lands here with the asset attached
+        const hit = attachId ? r.items.find((a) => a.id === attachId) : null;
+        if (hit) setPicked(hit.photos.slice(0, 3));
+      })
       .catch(() => setAssets([]));
     apiFetch<{ brains: { id: string; label: string; note: string }[]; default: string }>("/brains")
       .then((r) => {
@@ -145,6 +163,7 @@ export default function StudioPage() {
         setRatio(r.default);
       })
       .catch(() => setRatios([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Guide only when the server says the route is there; otherwise the

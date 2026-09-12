@@ -7,9 +7,8 @@
    The rail is the design's: Studio, Assets, Pipeline, Director,
    Elements, Queue. Analytics is gone in favour of Elements (Mike's
    call, 2026-09-11): the thing you @ in a prompt is a page, the charts
-   were not. Assets, Pipeline and Queue still open the Jinja views
-   through the same-origin proxy (/ui?view=…) until each has a React
-   page of its own — a link to a working screen beats a placeholder. */
+   were not. Every rail entry is a React page now (Assets, Pipeline
+   and Queue landed 2026-09-12). */
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import {
@@ -48,16 +47,19 @@ export type ViewId = "studio" | "assets" | "pipeline" | "director" | "elements" 
 
 const NAV: { id: ViewId; label: string; href: string; icon: typeof House; external?: boolean }[] = [
   { id: "studio", label: "Studio", href: "/studio", icon: House },
-  { id: "assets", label: "Assets", href: "/ui?view=assets", icon: Layers, external: true },
-  { id: "pipeline", label: "Pipeline", href: "/ui?view=pipeline", icon: Workflow, external: true },
+  { id: "assets", label: "Assets", href: "/studio/assets", icon: Layers },
+  { id: "pipeline", label: "Pipeline", href: "/studio/pipeline", icon: Workflow },
   { id: "director", label: "Director", href: "/studio/flows", icon: Clapperboard },
   { id: "elements", label: "Elements", href: "/studio/elements", icon: AtSign },
-  { id: "queue", label: "Queue", href: "/ui?view=queue", icon: ListVideo, external: true },
+  { id: "queue", label: "Queue", href: "/studio/queue", icon: ListVideo },
 ];
 
 const VIEW_BY_PATH: [string, ViewId][] = [
   ["/studio/flows", "director"],
   ["/studio/elements", "elements"],
+  ["/studio/assets", "assets"],
+  ["/studio/pipeline", "pipeline"],
+  ["/studio/queue", "queue"],
   ["/studio", "studio"],
 ];
 

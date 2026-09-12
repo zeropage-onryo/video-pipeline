@@ -723,8 +723,11 @@ is yours, in Resolve, by hand.
   @-mentions, Run all, Send to Queue) and Elements (`/api/assets/*`). It proxies to
   FastAPI (`API_UPSTREAM`), so sign-in and every gate stay here; `GET /api/me` is the
   one route added for it (identity + membership, composed from `auth.current_user` /
-  `accounts.memberships` so the two shells cannot disagree). Assets, Pipeline and Queue
-  still open `/ui?view=…` through the proxy until each has a React page. `frontend/` is
+  `accounts.memberships` so the two shells cannot disagree). Assets (the date-grouped
+  media wall off `/api/media`, with the detail rail and "Use in a shot" → `/studio?attach=`),
+  Pipeline (the board: pick / archive / restore, the prompt editable in place) and Queue
+  (the spend gate off `/api/queue/pending` + the job registry) are React pages too
+  (2026-09-12), so nothing in the rail opens the Jinja `/ui` any more. `frontend/` is
   the Vite + React composer that preceded it, kept as received; its `/api/brains`,
   `/api/scene-lengths`, `/api/render-choices`, `/api/creative-guide` and the guide mode
   exist only as uncommitted work in the main checkout's overnight branch, and the Next

@@ -8,8 +8,10 @@ proxy sends `/api`, `/ui`, `/brand`, `/auth` and the photo routes, so the
 Every signed-in page sits inside one shell (`src/components/studio/shell.tsx`):
 the rail (Studio, Assets, Pipeline, Director, Elements, Queue — Analytics is
 gone in favour of Elements, 2026-09-11), the bar, the account row, a Queue
-badge (`GET /api/queue/pending` count). Assets, Pipeline and Queue open the
-Jinja views through the proxy until each has a React page.
+badge (`GET /api/queue/pending` count). Every entry is a React page:
+`/studio` (composer), `/studio/assets` (the media wall + detail rail),
+`/studio/pipeline` (the board), `/studio/flows` (this canvas),
+`/studio/elements`, `/studio/queue` (the spend gate + jobs).
 
 ## The canvas (`/studio/flows?concept=ID&shot=N`)
 
