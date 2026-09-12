@@ -366,3 +366,17 @@ git checkout .           # or just the working tree
 
 You are on a branch. Throwing away a bad session costs nothing. Untangling
 one costs an afternoon.
+
+
+## The subscription lane (Runway Explore, rendered by hand)
+
+Open it for ONE account, from a shell on this machine -- never from the browser:
+
+```bash
+venv/bin/python -m src.accounts operator zeropage --on     # or --off
+```
+
+Then, on the Queue: copy the prompt, drag the keyframe into Runway's start-image
+slot in Chrome (Explore mode, free on Unlimited), export the mp4, drop it on the
+card. The clip files as the shot's media with `cost_usd` NULL. A second drop on
+the same shot is refused; clear the clip first if it really is a replacement.

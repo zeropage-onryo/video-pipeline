@@ -714,6 +714,31 @@ is yours, in Resolve, by hand.
   picks, decisions and finished jobs) and the account row; the bar carries Director's
   own controls only while the canvas is up (`html[data-gs="canvas"]`). Not built from
   the same design set: the Elements page (the rail keeps Analytics until it exists).
+- **The subscription lane (2026-09-12).** Runway's API has one billing path -- credits.
+  The Unlimited plan's free-but-queued Explore mode is a web-app toggle with no API
+  parameter, so the only way to spend the subscription is a person driving Chrome. The
+  Queue's **Subscription lane** section is the receiving end: the pending scene's
+  gate-passed prompt with a Copy control, the keyframe to drag into Runway's start-image
+  slot, the frame and length, and a drop target that files the finished mp4
+  (`POST /api/queue/{id}/clip`, multipart `clip`) -- `runway.file_manual_clip` writes it
+  where the adapter writes (same `/renders` mount, R2 when configured), attaches it as the
+  shot's `media_url`, and records a generations row with **`cost_usd` NULL** (FREE with a
+  count, never $0) and params `source: manual-unlimited`. MP4 by MAGIC NUMBER not extension
+  (the QuickTime brand is refused), a 256MB cap enforced while the body streams, a
+  server-chosen filename, and **a second drop is refused (409), never applied** -- a drop is
+  a gesture and gestures repeat. **The gate is a column, not an environment variable:**
+  `accounts.manual_lane_operator`, set only by `python -m src.accounts operator <slug>
+  --on`; the lane spends a personal consumer subscription, and serving a paying tenant's
+  render on it would be reselling that plan. There is deliberately NO browser route that
+  grants it (a test asserts so), the section is absent from the page for anyone else, and
+  `GET /api/queue/pending` says `manual_lane` per account. The overnight branch holds a
+  fuller version of the same lane (`ops/render_queue.py`, render_specs, the ledger); this
+  one was built on main so the React Queue could ship, with the same two decisions, so the
+  reconcile is a rename rather than a rethink. **Approve takes the Queue's selectors** the
+  same day: `{model, ratio, duration}` validated against `runway.MODELS / RATIOS /
+  DURATIONS` and refused (400) rather than clamped, at the route and again inside
+  `generate_for_shot`; `_runway_state` carries the choices with per-second prices so the
+  React Queue prices the actual choice with the server's numbers.
 - **`web/` is the React front end; `frontend/` is its predecessor (2026-09-11).** Both had
   only ever lived untracked in the main checkout. `web/` is the v0-bootstrapped Next.js 16
   project: the landing page at `/`, and under `/studio` the signed-in product — one shell

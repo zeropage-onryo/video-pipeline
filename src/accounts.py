@@ -86,6 +86,50 @@ def init(dsn: Optional[str] = None) -> None:
     """Create the auth tables. Run after db.init_db()."""
     with connect(dsn) as conn:
         conn.execute(SCHEMA)
+        # The subscription lane's gate (2026-09-12): a boolean column, set
+        # deliberately by `python -m src.accounts operator <slug> --on`,
+        # never an environment variable -- a gate anyone who can set an
+        # env var on the process can open is not a gate. No backfill: a
+        # migration that named somebody an operator would be the
+        # migration making the decision the column exists to make.
+        conn.execute("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS "
+                     "manual_lane_operator BOOLEAN NOT NULL DEFAULT FALSE")
+
+
+# --------------------------------------------------------------------------
+# the subscription lane's gate
+# --------------------------------------------------------------------------
+# The lane spends a personal consumer subscription (Runway Unlimited's
+# free Explore mode, driven by hand in a browser). Serving a paying
+# tenant's render on it would be reselling that plan -- an
+# account-termination risk that takes every tenant down at once. So the
+# lane is closed to every account until an operator opens it for THAT
+# account, on purpose, from a shell on this machine.
+
+def is_manual_lane_operator(account_id: Optional[int], dsn: Optional[str] = None) -> bool:
+    """Never raises: an unreadable answer is a closed lane."""
+    if account_id is None:
+        return False
+    try:
+        with connect(dsn) as conn:
+            row = conn.execute(
+                "SELECT manual_lane_operator FROM accounts WHERE id = %s",
+                (int(account_id),)).fetchone()
+        return bool(row and row["manual_lane_operator"])
+    except Exception:
+        return False
+
+
+def set_manual_lane_operator(slug: str, on: bool, dsn: Optional[str] = None) -> int:
+    """Open (or close) the lane for one account by slug. Raises
+    ValueError on an unknown slug rather than creating anything."""
+    with connect(dsn) as conn:
+        row = conn.execute(
+            "UPDATE accounts SET manual_lane_operator = %s WHERE slug = %s RETURNING id",
+            (bool(on), slug)).fetchone()
+    if row is None:
+        raise ValueError(f"no account with slug {slug!r}")
+    return int(row["id"])
 
 
 # --------------------------------------------------------------------------
@@ -439,7 +483,26 @@ def main(argv=None) -> None:
 
     sub.add_parser("members", help="who can enter what")
 
+    p_op = sub.add_parser(
+        "operator",
+        help="open or close the subscription lane (Runway Explore, rendered by "
+             "hand) for one account -- the only door onto it")
+    p_op.add_argument("slug")
+    group = p_op.add_mutually_exclusive_group(required=True)
+    group.add_argument("--on", action="store_true")
+    group.add_argument("--off", action="store_true")
+
     args = parser.parse_args(argv)
+
+    if args.command == "operator":
+        try:
+            account_id = set_manual_lane_operator(args.slug, on=bool(args.on))
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            sys.exit(1)
+        print(f"  subscription lane {'OPEN' if args.on else 'closed'} for "
+              f"{args.slug!r} (account {account_id})")
+        return
 
     if args.command == "members":
         with connect() as conn:

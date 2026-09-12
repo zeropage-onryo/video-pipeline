@@ -175,12 +175,21 @@ export const queueReject = (id: number) =>
 /** made by hand, outside the render lane — drops it off the pending list */
 export const queueShot = (id: number) =>
   apiFetch<{ ok: boolean }>(`/queue/${id}/shot`, { method: "POST", body: JSON.stringify({ shot: true }) });
+/** The subscription lane's drop target: the mp4 rendered by hand in
+ *  Runway Explore, filed onto the shot as a FREE row. Gated server-side
+ *  on the operator column; a second drop is refused (409). */
+export const fileLaneClip = (id: number, file: File) => {
+  const form = new FormData();
+  form.append("clip", file, file.name);
+  return apiForm<{ ok: boolean; media_url: string; cost_usd: null }>(`/queue/${id}/clip`, form);
+};
+
 /* the in-process job registry (clears on restart, and says so) */
 export const listJobs = () => apiFetch<{ items: (Job & { cancellable?: boolean })[] }>("/jobs");
 export const cancelJob = (id: number) => apiFetch<Job>(`/jobs/${id}/cancel`, { method: "POST", body: "{}" });
 export const clearJob = (id: number) => apiFetch<{ deleted: number }>(`/jobs/${id}`, { method: "DELETE" });
 export const queuePending = (brand?: string) =>
-  apiFetch<{ items: Concept[]; runway: RunwayState }>(
+  apiFetch<{ items: Concept[]; runway: RunwayState; manual_lane?: boolean }>(
     `/queue/pending${brand ? `?brand=${encodeURIComponent(brand)}` : ""}`,
   );
 /** The pick. Puts a concept in front of the Queue's approval gate;

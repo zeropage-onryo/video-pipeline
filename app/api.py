@@ -1273,7 +1273,10 @@ def queue_pending(brand: Optional[str] = None, account_id: int = Depends(auth.cu
                # marked shot by hand (the camera button) -- a card you
                # already made yourself isn't waiting on you to spend
                and not c["shot_done"]]
-    return {"items": pending, "runway": _runway_state()}
+    return {"items": pending, "runway": _runway_state(),
+            # the subscription lane shows only for an account an operator
+            # opened it for -- see accounts.is_manual_lane_operator
+            "manual_lane": accounts.is_manual_lane_operator(account_id)}
 
 
 class ApproveBody(BaseModel):
@@ -1350,6 +1353,56 @@ def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
     job = jobs.start("render", f"approved · {concept['title']}", work, account_id=account_id)
     return {"job_id": job["id"], "model": model, "ratio": ratio, "duration": duration,
             "estimate_usd": runway.estimate_cost(1, model=model, duration=duration)}
+
+
+MANUAL_CLIP_MAX_BYTES = 256 * 1024 * 1024
+
+
+@router.post("/queue/{concept_id}/clip")
+async def queue_file_clip(concept_id: int, request: Request,
+                          account_id: int = Depends(auth.current_account_id)):
+    """The subscription lane's drop target (2026-09-12): the mp4 you
+    rendered by hand in Runway Explore, filed onto the shot as its clip.
+    Nothing here spends -- the row it writes is FREE (cost NULL), which
+    is the point of the lane.
+
+    Gated on accounts.manual_lane_operator, and there is deliberately no
+    browser route that grants it: an account able to open the lane for
+    itself would defeat the gate. The upload is read in chunks under a
+    hard cap, checked by magic number, and named by the server."""
+    if not accounts.is_manual_lane_operator(account_id):
+        return _error(403, "lane_closed",
+                      "the subscription lane is not open for this account -- "
+                      "an operator opens it with `python -m src.accounts operator <slug> --on`")
+    form = await request.form()
+    upload = form.get("clip")
+    if upload is None or not getattr(upload, "filename", ""):
+        return _error(400, "no_clip", "attach the finished mp4 as `clip`")
+    chunks, total = [], 0
+    while True:
+        chunk = await upload.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MANUAL_CLIP_MAX_BYTES:
+            return _error(413, "too_large", "a lane clip is at most 256MB")
+        chunks.append(chunk)
+    data = b"".join(chunks)
+    if not runway.is_mp4(data[:12]):
+        return _error(415, "not_mp4",
+                      "that is not an MP4 -- export from Runway as mp4 (a .mov is refused)")
+    concept = preprod.get_concept(concept_id, account_id=account_id)
+    if concept is None:
+        return _error(404, "not_found", "no such concept")
+    shot_n = (concept["shots"] or [{}])[0].get("n", 1)
+    result = runway.file_manual_clip(concept_id, shot_n, data, db_path=None,
+                                     account_id=account_id)
+    if not result["ok"]:
+        if result.get("conflict"):
+            return _error(409, "has_clip", result["error"])
+        return _error(400, "clip_refused", result["error"] or "could not file the clip")
+    return {"ok": True, "media_url": result["media_url"],
+            "generation_id": result["generation_id"], "cost_usd": None}
 
 
 @router.post("/queue/{concept_id}/reject")
