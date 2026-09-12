@@ -51,6 +51,12 @@ MODELS = ("gen4_turbo", "gen4.5")
 DEFAULT_MODEL = os.environ.get("RUNWAY_MODEL", "gen4_turbo")   # cheapest first spend
 DEFAULT_RATIO = "720:1280"   # 9:16, the platform vertical
 DEFAULT_DURATION = 5
+# The frames and lengths the image-to-video endpoint takes for both
+# models this project uses (runwayml SDK type definitions, 2026-09-12).
+# A frame outside this list is REFUSED, never clamped: a silently
+# corrected frame is a clip that comes back the wrong shape.
+RATIOS = ("720:1280", "1280:720", "832:1104", "1104:832", "960:960", "1584:672")
+DURATIONS = (5, 10)
 DAILY_CAP = int(os.environ.get("RUNWAY_DAILY_CAP", "6"))
 # The installation-wide wall, beside the per-account one. Defaults to the
 # SAME number, so a single-operator database behaves exactly as it did --
@@ -397,6 +403,8 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                       model: str = DEFAULT_MODEL, client=None,
                       resolve_photo=None,
                       account_id: Optional[int] = None,
+                      ratio: str = DEFAULT_RATIO,
+                      duration: int = DEFAULT_DURATION,
 ) -> dict:
     """
     Never raises: {"ok", "media_url", "generation_id", "error"}. One
@@ -419,6 +427,16 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
     """
     from . import preprod, storage
     kwargs = {"dsn": db_path} if db_path is not None else {}
+
+    # the Queue's selectors (2026-09-12) land here; a value the endpoint
+    # does not take is refused before any credit moves, not corrected
+    if model not in MODELS:
+        return {"ok": False, "error": f"unknown Runway model {model!r} — one of {', '.join(MODELS)}"}
+    if ratio not in RATIOS:
+        return {"ok": False, "error": f"frame {ratio!r} is not one Runway renders — one of {', '.join(RATIOS)}"}
+    if int(duration) not in DURATIONS:
+        return {"ok": False, "error": f"a clip is {' or '.join(str(d) for d in DURATIONS)} seconds, not {duration}"}
+    duration = int(duration)
 
     try:
         refusal = generative.cap_error(
@@ -451,20 +469,21 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"c{concept_id}-s{shot_n}-{stamp}.mp4"
-        generate_video(prompt, out_path, model=model,
+        generate_video(prompt, out_path, model=model, ratio=ratio,
+                       duration=duration,
                        prompt_image=prompt_image, client=client,
                        db_path=db_path)
 
         shot_row_id = _shot_row_for_prompt(prompt, db_path, account_id)
-        generation_params = {"model": model, "ratio": DEFAULT_RATIO,
-                             "duration": DEFAULT_DURATION,
+        generation_params = {"model": model, "ratio": ratio,
+                             "duration": duration,
                              "concept_id": concept_id, "shot_n": shot_n,
                              "prompt_image": bool(prompt_image)}
         generation_id = generative.record_generation(
             shot_row_id, "runway", prompt,
             params=generation_params,
             output_path=str(out_path),
-            cost_usd=estimate_cost(1, model=model),
+            cost_usd=estimate_cost(1, model=model, duration=duration),
             **kwargs,
          account_id=account_id)
 

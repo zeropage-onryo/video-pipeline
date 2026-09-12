@@ -2074,3 +2074,52 @@ textarea.zin {
   flex: 1;
   justify-content: center;
 }
+
+/* the Queue's selectors: model, frame, length — each a pill with a select inside */
+.scchoice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.scsel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 8px 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: rgb(255 255 255 / 0.04);
+  color: var(--dim);
+  cursor: pointer;
+}
+.scsel:hover {
+  border-color: var(--line-hi);
+  color: var(--text);
+}
+.scsel svg {
+  width: 11px;
+  height: 11px;
+  flex: none;
+}
+.scsel select {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  outline: none;
+  max-width: 200px;
+}
+.scsel select option {
+  background: #141417;
+  color: var(--text);
+  text-transform: none;
+  letter-spacing: normal;
+  font-family: var(--body);
+  font-size: 13px;
+}

@@ -880,3 +880,51 @@ def test_holds_resolve_writes_the_prompt_verdict(tmp_db):
     gate = autonomy.prompt_gate_agreement(dsn=tmp_db)
     assert gate["graded"] == 1
     assert gate["passed_but_rejected"] == 1
+
+
+# --- the Queue's selectors (2026-09-12) --------------------------------------
+
+SHOT = [{"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY", "prompt": "low key garage"}]
+
+
+def test_queue_approve_passes_the_chosen_model_frame_and_length(tmp_db, monkeypatch):
+    from src import preprod
+    concept_id = seed_concept(tmp_db, shots=SHOT)
+    preprod.set_picked(concept_id, True, dsn=tmp_db, account_id=None)
+    monkeypatch.setattr(api_mod.runway, "has_key", lambda: True)
+    seen = {}
+
+    def fake(cid, n, db_path=None, resolve_photo=None, account_id=None, **kw):
+        seen.update(kw)
+        return {"ok": True, "media_url": "/renders/runway/x.mp4", "generation_id": 1, "error": None}
+
+    monkeypatch.setattr(api_mod.runway, "generate_for_shot", fake)
+    res = client.post(f"/api/queue/{concept_id}/approve",
+                      json={"model": "gen4.5", "ratio": "960:960", "duration": 10})
+    assert res.status_code == 200, res.text
+    assert res.json()["estimate_usd"] == api_mod.runway.estimate_cost(1, model="gen4.5", duration=10)
+    assert wait_for_job(res.json()["job_id"])["status"] == "done"
+    assert seen == {"model": "gen4.5", "ratio": "960:960", "duration": 10}
+
+
+def test_queue_approve_refuses_a_bad_frame_before_starting_a_job(tmp_db, monkeypatch):
+    from src import preprod
+    concept_id = seed_concept(tmp_db, shots=SHOT)
+    preprod.set_picked(concept_id, True, dsn=tmp_db, account_id=None)
+    monkeypatch.setattr(api_mod.runway, "has_key", lambda: True)
+    monkeypatch.setattr(api_mod.runway, "generate_for_shot",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not run")))
+    res = client.post(f"/api/queue/{concept_id}/approve", json={"ratio": "4:3"})
+    assert res.status_code == 400
+    assert res.json()["error"]["code"] == "bad_ratio"
+    res = client.post(f"/api/queue/{concept_id}/approve", json={"duration": 7})
+    assert res.status_code == 400 and res.json()["error"]["code"] == "bad_duration"
+
+
+def test_queue_state_carries_the_selector_choices(tmp_db):
+    from src import runway
+    d = client.get("/api/queue/pending").json()["runway"]
+    assert [m["id"] for m in d["models"]] == list(runway.MODELS)
+    assert all(m["usd_per_second"] > 0 for m in d["models"])
+    assert d["ratios"] == list(runway.RATIOS)
+    assert d["durations"] == list(runway.DURATIONS)

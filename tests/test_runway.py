@@ -425,3 +425,35 @@ def test_the_swap_happens_before_the_length_check(asset_db, approved,
     runway.generate_video(prompt, "/tmp/ok.mp4", db_path=asset_db)
     assert "Cyclops" not in seen["prompt_text"]
     assert len(seen["prompt_text"]) <= 1000
+
+
+# ---------- the Queue's selectors (2026-09-12) ----------
+
+def test_for_shot_refuses_a_frame_runway_does_not_render(scene_db, monkeypatch, tmp_path):
+    """Refused, never clamped -- and before any credit moves."""
+    monkeypatch.setenv(runway.SPEND_ENV, "1")
+    monkeypatch.setattr(runway, "RENDER_DIR", tmp_path / "renders")
+    concept_id = seed_scene(scene_db)
+    client = FakeClient()
+    result = runway.generate_for_shot(concept_id, 1, db_path=scene_db, client=client,
+                                      ratio="4:3")
+    assert result["ok"] is False
+    assert "4:3" in result["error"] and "720:1280" in result["error"]
+    assert client.calls == []                     # nothing was sent
+    result = runway.generate_for_shot(concept_id, 1, db_path=scene_db, client=client,
+                                      duration=7)
+    assert result["ok"] is False and "5 or 10" in result["error"]
+
+
+def test_for_shot_sends_the_chosen_frame_and_length(scene_db, approved, fake_download,
+                                                    monkeypatch, tmp_path):
+    import src.storage as storage
+    monkeypatch.setattr(runway, "RENDER_DIR", tmp_path / "renders")
+    monkeypatch.setattr(storage, "configured", lambda: False)
+    concept_id = seed_scene(scene_db)
+    client = FakeClient()
+    result = runway.generate_for_shot(concept_id, 1, db_path=scene_db, client=client,
+                                      ratio="1280:720", duration=10)
+    assert result["ok"] is True, result
+    sent = client.calls[-1]
+    assert sent["ratio"] == "1280:720" and sent["duration"] == 10
