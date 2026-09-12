@@ -9,6 +9,9 @@ primary_region = 'iad'
 [build]
 [env]
   PORT = '8000'
+  # the React Director is the other Fly app (web/fly.toml); /ui hands a
+  # planned concept over to it unless ?legacy=1 asks for the vanilla canvas
+  DIRECTOR_FRONTEND_URL = 'https://zeropage-web.fly.dev/studio/flows'
 
 [[mounts]]
   source = 'zeropage_data'
@@ -31,4 +34,4 @@ primary_region = 'iad'
 [[vm]]
   cpu_kind = 'shared'
   cpus = 1
-  memory_mb = 512
+  memory_mb = 1024

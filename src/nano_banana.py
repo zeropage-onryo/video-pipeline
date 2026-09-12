@@ -11,11 +11,29 @@ a Runway render burns real credits. The wall here is NANO_DAILY_CAP
 (default 20/day), counted from the generations table so it can't drift
 from the log.
 
-Model verified against the Gemini API docs 2026-08-25:
-"gemini-2.5-flash-image" is Nano Banana; set NANO_BANANA_MODEL to
-"gemini-3-pro-image-preview" for Nano Banana Pro (better text/layout,
-several times the per-image price). Output arrives as inline_data
-bytes on the response parts -- there is no file URL to download.
+Model verified against this account's own models.list on 2026-09-12:
+"gemini-2.5-flash-image" is Nano Banana and "gemini-3-pro-image" is
+Nano Banana Pro, now GA -- prefer the GA id over the still-present
+"gemini-3-pro-image-preview", which can be retired under a nightly run.
+Prices from ai.google.dev/gemini-api/docs/pricing the same day: $0.039
+an image on Flash against $0.134 on Pro, so the switch is 3.4x, and at
+NANO_DAILY_CAP=60 that is $8.04 a day worst case against $2.34.
+
+WHY PRO IS WORTH IT HERE, and it is not "better pictures": the keyframe
+is the ONLY channel a reference photo has into a gen4 render, and on a
+timeline it stays the only channel for part 2 onward, which keep the
+keyframe by design (runway.reference_mode). Whatever the frame loses,
+the clip never had. Pro composites several references and holds a face
+better, which is exactly the job.
+
+AND 2K IS FREE ON PRO: 1K and 2K are both 1120 output tokens at one
+price tier, while the API default is 1K. Identity lives in pixels on
+the face, so NANO_IMAGE_SIZE=2K buys resolution at no cost -- see
+IMAGE_SIZE below, which stays opt-in because 2K is NOT offered on every
+model this endpoint serves.
+
+Output arrives as inline_data bytes on the response parts -- there is
+no file URL to download.
 """
 import base64
 import os

@@ -624,10 +624,14 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
         .then(async () => {
           if (stopped.current) return;
           try {
-            await apiFetch(`/concepts/${conceptId}/shots/${activeShot}/graph`, {
+            // seed_hash is what this canvas was drawn against; the server
+            // refuses (409) a save for a scene revised underneath it rather
+            // than overwriting a canvas nobody here has seen
+            const saved = await apiFetch<{ seed_hash?: string }>(`/concepts/${conceptId}/shots/${activeShot}/graph`, {
               method: "PUT",
-              body: JSON.stringify({ graph: payload.graph, states: payload.states, name }),
+              body: JSON.stringify({ graph: payload.graph, states: payload.states, name, seed_hash: seedHash.current ?? undefined }),
             });
+            if (saved.seed_hash) seedHash.current = saved.seed_hash;
             lastSaved.current = fingerprint;
             setSaveState("Saved to scene");
           } catch (error) {

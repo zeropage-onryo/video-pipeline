@@ -1,8 +1,10 @@
+import os
 import re
 import sys
 import time
 
 from google import genai
+from google.genai import types
 
 from . import spend
 
@@ -51,6 +53,98 @@ def sniff_mime(data) -> str:
 
 
 FALLBACK_MODELS = ["gemini-3.1-flash-lite", "gemini-pro-latest"]
+
+
+class SubstitutionRefused(RuntimeError):
+    """The asked-for model stayed down and this call would not take a
+    cheaper one instead.
+
+    Only raised for a caller that passed an EMPTY `fallbacks` list, which
+    is a deliberate statement rather than a default: see BRAINS below.
+    Everything else keeps the old behaviour of falling through, because
+    for an ordinary call a slightly worse answer beats no answer."""
+
+
+# --- WHICH BRAIN WRITES (2026-09-09, Mike's call) -------------------------
+# A named tier, not a free-text model id, for the reason providers.py
+# gives about render models: a menu the UI can render, checked
+# server-side, resolving in ONE place to the model + the thinking
+# config + what may stand in for it. Three copies of "which model does
+# the composer use" is how the composer, the night and the tests end up
+# quietly disagreeing.
+#
+# Model ids verified live against this account's own models.list on
+# 2026-09-09; prices from ai.google.dev/gemini-api/docs/pricing the same
+# day (3.1 Pro $2/$12 per 1M at <=200k prompt, Flash $0.50/$3), and
+# mirrored into spend.DEFAULT_PRICES so /costs prices a reasoning run
+# instead of leaving it UNPRICED. Re-check both before trusting them.
+#
+# NOTE both models think: gemini-3-flash-preview reports thinking:true
+# too. What the reasoning tier buys is the bigger model AND an explicit
+# HIGH level, not the existence of thought.
+FAST_MODEL = "gemini-3-flash-preview"
+REASONING_MODEL = os.environ.get("ZEROPAGE_REASONING_MODEL",
+                                 "gemini-3.1-pro-preview")
+DEFAULT_BRAIN = "fast"
+
+# `substitute` is the whole disagreement between the two rows. The
+# fallback chain exists so a 503 does not lose a night -- but the first
+# model in it is gemini-3.1-flash-lite, the LEAST capable model in the
+# repo, and a scene asked for on the reasoning tier and quietly answered
+# by flash-lite still saves, still lands on the board, and reads
+# identically to one that was not. That is the failure mode this project
+# keeps writing tests around. So the reasoning tier refuses (Mike's call,
+# 2026-09-09): fail loudly, a person is standing at the composer.
+BRAINS = {
+    "fast": {
+        "label": "Fast",
+        "note": "gemini 3 flash — the default, and what the night runs on",
+        "model": lambda: FAST_MODEL,
+        "level": None,
+        "substitute": True,
+    },
+    "reasoning": {
+        "label": "Reasoning",
+        "note": "gemini 3.1 pro, thinking HIGH — slower, ~4x the tokens, no fallback",
+        "model": lambda: REASONING_MODEL,
+        "level": "HIGH",
+        "substitute": False,
+    },
+}
+
+
+def resolve_brain(name=None) -> dict:
+    """A tier name -> the three things a call needs: `model`, `config`
+    (None on the fast tier, so its request is byte-for-byte the one this
+    module has always sent) and `fallbacks`.
+
+    Unknown or empty falls back to DEFAULT_BRAIN rather than raising:
+    every caller of this reaches it from a form field or an env var, and
+    a typo should write a cheap scene, not fail a run. The SERVER
+    clamping to this table is the gate -- the select is not (the
+    SCENE_COUNT_MAX rule).
+
+    Resolved per call, never at import, so ZEROPAGE_REASONING_MODEL can
+    be changed without a restart (the src/settings.py convention)."""
+    key = (name or DEFAULT_BRAIN).strip().lower()
+    spec = BRAINS.get(key) or BRAINS[DEFAULT_BRAIN]
+    if key not in BRAINS:
+        key = DEFAULT_BRAIN
+    config = None
+    if spec["level"]:
+        config = types.GenerateContentConfig(
+            thinking_config=types.ThinkingConfig(thinking_level=spec["level"]))
+    return {"brain": key, "model": spec["model"](), "config": config,
+            "fallbacks": None if spec["substitute"] else []}
+
+
+def brain_options() -> list:
+    """The menu, for the composer's select. A PROJECTION of BRAINS, never
+    a second list -- a hardcoded <option> in a template is a copy that
+    goes stale the first time a tier is added."""
+    return [{"id": key, "label": spec["label"], "note": spec["note"],
+             "default": key == DEFAULT_BRAIN}
+            for key, spec in BRAINS.items()]
 
 
 # The 429 that is not a rate limit. Google returns RESOURCE_EXHAUSTED for
@@ -120,7 +214,8 @@ def retry_delay(error, attempt: int) -> float:
 
 def generate_with_retry(client: genai.Client, model: str, contents,
                         *, on_retry=None, stage: str = "unknown",
-                        account_id=None, run_id=None) -> str:
+                        account_id=None, run_id=None,
+                        config=None, fallbacks=None) -> str:
     """Retries transient errors on `model`; if it stays unavailable for the
     whole retry budget, falls through to FALLBACK_MODELS in order rather
     than failing the run outright.
@@ -137,8 +232,24 @@ def generate_with_retry(client: genai.Client, model: str, contents,
     existing caller is unaffected -- but a job that does pass one stops
     being a spinner that means both "thinking" and "asleep for the next
     twenty seconds". The notes went only to stderr before, which is
-    nowhere if the person is looking at a progress bar (2026-08-29)."""
-    models_to_try = [model] + [m for m in FALLBACK_MODELS if m != model]
+    nowhere if the person is looking at a progress bar (2026-08-29).
+
+    `config` is a types.GenerateContentConfig -- the seam a thinking
+    level needs (2026-09-09). Passed to generate_content ONLY when it is
+    not None, deliberately: every fake client in this suite implements
+    generate_content(model=, contents=) and nothing else, so sending a
+    keyword nobody asked for would break all of them to express "no
+    config", which is what omitting it already says.
+
+    `fallbacks` overrides FALLBACK_MODELS for this call. An EMPTY list
+    means take no substitute: the model asked for answers, or the call
+    raises SubstitutionRefused. That is the reasoning tier's posture,
+    and the reason `fallbacks=[]` and `fallbacks=None` are different
+    things -- None is "no opinion", which still means the default
+    chain."""
+    chain = FALLBACK_MODELS if fallbacks is None else list(fallbacks)
+    models_to_try = [model] + [m for m in chain if m != model]
+    no_substitute = fallbacks is not None and not chain
 
     def note(text: str) -> None:
         print(f"  {text}", file=sys.stderr)
@@ -154,7 +265,11 @@ def generate_with_retry(client: genai.Client, model: str, contents,
         for attempt in range(budget):
             started = time.monotonic()
             try:
-                response = client.models.generate_content(model=current_model, contents=contents)
+                response = (
+                    client.models.generate_content(model=current_model, contents=contents)
+                    if config is None else
+                    client.models.generate_content(model=current_model,
+                                                   contents=contents, config=config))
                 if current_model != model:
                     print(f"  (used fallback model {current_model})", file=sys.stderr)
                 spend.record_call(stage=stage, model_asked=model, model_used=current_model,
@@ -172,6 +287,12 @@ def generate_with_retry(client: genai.Client, model: str, contents,
                         spend.record_call(stage=stage, model_asked=model,
                                           model_used=current_model, ok=False,
                                           account_id=account_id, run_id=run_id)
+                        if no_substitute:
+                            raise SubstitutionRefused(
+                                f"{model} is unavailable and this call takes no "
+                                f"substitute -- a reasoning run answered by a "
+                                f"cheaper model reads identically on the board, "
+                                f"which is the whole reason to refuse it") from e
                         raise
                     note(f"{current_model} still unavailable, trying a fallback model...")
                     break

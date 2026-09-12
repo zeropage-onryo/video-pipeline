@@ -28,6 +28,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from src import (
+    account_keys,
     accounts,
     asset_shelf,
     autonomy,
@@ -53,15 +54,25 @@ from src import (
     runway,
     scout,
     settings,
+    timeline,
     winners,
     workflows,
     youtube,
 )
 from src.locations import IMAGE_EXTENSIONS
 
-from . import auth, jobs, workflow_runner
+from . import auth, jobs, model_connections, workflow_runner
+from . import creative_projects as creative_projects_routes
 
 router = APIRouter(prefix="/api")
+
+# Both live in their own module and mount UNDER /api, which is what makes
+# their client paths /api/creative-projects and /api/model-connections.
+# They are included here rather than in main.py so they inherit this
+# router's auth dependency along with every other /api route -- and so a
+# reader looking for "what is under /api" finds all of it in one place.
+router.include_router(creative_projects_routes.router)
+router.include_router(model_connections.router)
 
 APP_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = APP_DIR.parent
@@ -139,6 +150,10 @@ def compute_capabilities(account_id: Optional[int] = None) -> dict:
         # the scout crawls with the google_search tool on the same key
         # every other stage uses, so the key is the whole gate
         "scout": gemini,
+        # the guide's default provider is Gemini on the same key; the
+        # personal providers are reported per-account by
+        # /api/model-connections, which is a different question
+        "creative_guide": gemini,
         "pipeline.deny": True,                  # correction always lands; RAG chunk is best-effort
         "holds": True,
         "evals.golden": True,
@@ -147,11 +162,22 @@ def compute_capabilities(account_id: Optional[int] = None) -> dict:
         "analytics.youtube": bool(os.environ.get("YOUTUBE_API_KEY")),
         "analytics.instagram": bool(instagram.access_token()),
         "runway.generate": runway.has_key(),
-        "runway.spend": runway.spend_approved(),
+        # the Director's Generate node renders on whatever this account
+        # holds a key for (providers.renderer_for), not on Runway alone
+        "video.generate": providers.renderer_for(
+            account_id, needs="generate_from_prompt") is not None,
+        # `*.spend` is TRUE for anything a person drives (2026-09-09):
+        # the click is the approval, so a key is the whole gate on a
+        # human surface. It stays a live read for the unattended paths,
+        # which still need *_SPEND_OK set for them on purpose -- see
+        # runway.spend_approved. The UI reads these to decide whether to
+        # dim a button, and dimming a button a person is allowed to
+        # press was the whole complaint.
+        "runway.spend": runway.has_key(),
         # Higgsfield is the other half of ZEROPAGE_AI_TOOLS, and it
-        # bills its own API credits on its own per-run approval
+        # bills its own API credits on the same terms
         "higgsfield.generate": higgsfield.has_key(),
-        "higgsfield.spend": higgsfield.spend_approved(),
+        "higgsfield.spend": higgsfield.has_key(),
         "nano.generate": gemini,               # Nano Banana rides the Gemini key
         "workflows": True,
         "jobs": True,
@@ -193,6 +219,74 @@ def _account_card(a: dict) -> dict:
     return {"id": a["id"], "slug": a["slug"],
             "label": a.get("display_name") or a["slug"],
             "accent": a.get("accent_color"), "role": a.get("role")}
+@router.get("/scene-lengths")
+def scene_lengths(account_id: int = Depends(auth.current_account_id)):
+    """The scene lengths the composer offers, and which is the default --
+    timeline.SCENE_SECONDS_CHOICES and scene_seconds() projected, so the
+    select cannot drift from what the route will clamp to. The default
+    follows ZEROPAGE_SCENE_SECONDS, which is also what the night writes."""
+    default = timeline.scene_seconds()
+    choices = sorted(set(timeline.SCENE_SECONDS_CHOICES) | {default})
+    return {"choices": choices, "default": default,
+            "min": timeline.MIN_SCENE_SECONDS, "max": timeline.MAX_SCENE_SECONDS}
+
+
+@router.get("/brains")
+def brains(account_id: int = Depends(auth.current_account_id)):
+    """The model tiers the composer may offer, as a PROJECTION of
+    gemini_utils.BRAINS rather than a second list (providers.render_options'
+    rule). A hardcoded <option> in the template is a copy that goes stale
+    the first time a tier is added or a model id moves.
+
+    Not a capability: a capability answers "may the shell draw this", and
+    the answer for the tiers is the same as for Create itself
+    (`pipeline.run` -- the Gemini key). This is the menu behind a control
+    that is already gated.
+
+    Takes the account even though the menu is installation-wide, unlike
+    /capabilities beside it. That route is exempt because the shell asks
+    it BEFORE it knows whether the person has an account at all; this one
+    is asked from inside Studio, which is already behind sign-in, so
+    there is nothing to gain from being the one /api route a signed-in
+    stranger can reach (tests/test_tenancy.py enforces exactly that).
+
+    Local import: src.gemini_utils pulls in google.genai, and this module
+    stays cheap to import (the shootgen convention above).
+    """
+    from src import gemini_utils
+    return {"brains": gemini_utils.brain_options(),
+            "default": gemini_utils.DEFAULT_BRAIN}
+
+
+@router.get("/render-choices")
+def render_choices(account_id: int = Depends(auth.current_account_id)):
+    """The frames a scene can be written for, PROJECTED from
+    src/render_specs.py rather than listed again here.
+
+    There is deliberately no "resolution" beside it: a ratio in this
+    project is a frame SIZE ("720:1280"), so width and height are the
+    same choice, and offering a second control for a dimension the
+    renderers do not take would be a pill that changes nothing.
+
+    The label is derived, not stored -- one place decides that 720:1280
+    is 9:16, so a size added to RUNWAY_RATIOS shows up here correctly
+    without anyone remembering to name it.
+    """
+    from math import gcd
+
+    def label(size: str) -> str:
+        try:
+            w, h = (int(n) for n in size.split(":"))
+        except ValueError:
+            return size
+        step = gcd(w, h) or 1
+        return f"{w // step}:{h // step}"
+
+    return {
+        "ratios": [{"id": r, "label": label(r), "size": r}
+                   for r in render_specs.RUNWAY_RATIOS],
+        "default": render_specs.RATIO_9_16,
+    }
 
 
 @router.get("/me")
@@ -215,6 +309,126 @@ def me(request: Request, account_id: int = Depends(auth.current_account_id)):
         "account": _account_card(active) if active else None,
         "accounts": [_account_card(a) for a in member_of],
     }
+
+
+# --- the creative guide -----------------------------------------------------
+# Conversational brief development. It writes NOTHING: no concept, no
+# render, no spend beyond the one model call -- the Create button is
+# still the only thing that writes scenes, which is why this route can
+# be as chatty as it likes.
+#
+# Restored 2026-09-10 after being overwritten. src/creative_guide.py,
+# app/creative_projects.py, app/model_connections.py and the client all
+# survived; this route and the two include_routers above did not, and
+# are rebuilt from the contract the client still states. Diff it against
+# your editor's local history before trusting it to be what was there.
+
+@router.post("/creative-guide")
+async def creative_guide_reply(request: Request,
+                               account_id: int = Depends(auth.current_account_id)):
+    """One turn of the conversation, as a job.
+
+    A job rather than a plain response because the reasoning tier takes
+    tens of seconds and an open request that long is indistinguishable
+    from a hang -- the client polls /api/jobs/{id} and shows `detail`.
+
+    The header check is model_connections' own: a studio session is
+    SameSite=None, so a cross-site form post must not be able to spend a
+    personal model connection. It runs for every provider, not just the
+    personal ones, because the cheapest place to refuse is before any
+    work happens.
+    """
+    from src import creative_guide, scene_chain
+
+    model_connections.mutation_header(request)
+    form = await request.form()
+    raw = form.get("conversation") or ""
+    try:
+        conversation = creative_guide.Conversation.model_validate_json(raw)
+    except Exception:
+        return _error(400, "bad_conversation", "that conversation could not be read")
+    # A turn is a REPLY to something the person said, so the history has
+    # to end with them. An assistant-last history would ask the model to
+    # talk to itself, and it is worth refusing before anything is billed
+    # rather than after.
+    if conversation.messages[-1].role != "user":
+        return _error(400, "bad_conversation",
+                      "the conversation has to end with your own message")
+
+    # The brand is the ACCOUNT's, never the submitted field: the guide
+    # grounds on a brand's own library and inspiration accounts, and a
+    # form value would let one brand's context be pulled while signed in
+    # to another. The form's `brand` is ignored on purpose.
+    account = auth.current_account(request) or {}
+    brand = account.get("slug") if account.get("slug") in preprod.BRANDS else "antihero"
+
+    provider = (form.get("guide_provider") or "gemini").strip().lower()
+    model = (form.get("guide_model") or "").strip() or None
+    personal = provider != "gemini"
+
+    scope = None
+    if personal:
+        scope = model_connections.connection_scope(request, account_id)
+        if not _personal_connected(provider, scope):
+            # 409, and the client reads it as "offer the studio
+            # assistant" -- checked BEFORE the job so a disconnected
+            # provider never silently falls back onto Gemini credit.
+            return _error(409, "model_not_connected",
+                          f"Connect your {provider} account first.")
+    elif not _gemini_key():
+        return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
+
+    image_refs, ref_urls, _ = await _collect_refs(form)
+    idea = (form.get("idea") or form.get("prompt") or "").strip()
+
+    def work(job):
+        # Grounded through scene_chain.ground -- the same scoped set a
+        # Create would be handed (named in the idea, or explicitly
+        # picked), so what the guide proposes is shaped by the material
+        # a scene could actually be written from. It writes nothing.
+        grounding = scene_chain.ground(idea, brand=brand, account_id=account_id,
+                                       refs=ref_urls)
+        note = lambda text: jobs.progress(job, 0.5, text)   # noqa: E731
+        if personal:
+            reply = creative_guide.respond_personal(
+                conversation, provider=provider, scope=scope, model=model,
+                brand=brand, grounding=grounding, image_refs=image_refs)
+        else:
+            from google import genai
+            reply = creative_guide.respond(
+                conversation, client=genai.Client(api_key=_gemini_key()),
+                brand=brand, grounding=grounding, image_refs=image_refs,
+                account_id=account_id, on_retry=note)
+        # `billing` says WHOSE plan paid: a personal connection spends
+        # the person's own ChatGPT/Claude subscription and never touches
+        # this install's Gemini credit, and /costs must not count it.
+        return {"reply": reply, "reference_urls": ref_urls,
+                "billing": "personal_plan" if personal else "studio_credits",
+                "detail": "ready"}
+
+    job = jobs.start("guide", "creative guide", work, account_id=account_id)
+    return {"job_id": job["id"]}
+
+
+def _personal_connected(provider: str, scope) -> bool:
+    """Is this person's own model account connected?
+
+    Deliberately the narrow question, not model_connections.provider_status:
+    that one also reports whether the CLI is installed and what models
+    exist, which is what the settings panel needs and more than a guide
+    turn should depend on. Never raises -- an unreachable connection
+    reads as not connected, which is the safe answer.
+    """
+    from src import personal_models
+
+    try:
+        if provider == "chatgpt":
+            return bool(personal_models.codex_session(scope).status().get("connected"))
+        if provider == "claude":
+            return bool(personal_models.claude_status(scope).get("connected"))
+    except Exception:
+        return False
+    return False
 
 
 # --- assets -----------------------------------------------------------------
@@ -804,6 +1018,13 @@ def _concept_card(c: dict, subscription_ids: Optional[set] = None) -> dict:
                      if c.get("is_scene") else "",
         "reference_image": ((c.get("shots") or [{}])[0].get("reference_image") or "")
                            if c.get("is_scene") else "",
+        # THE SHOTS a timed scene is rendered as (2026-09-10) -- each with
+        # its window, its own refs, its still and its clip -- or None for a
+        # scene that renders whole. Only a CURRENT timeline: one planned
+        # from a prompt that has since been edited describes shots nobody
+        # will render, and the approve re-plans it first.
+        "timeline": _timeline_card((c.get("shots") or [{}])[0])
+                    if c.get("is_scene") else None,
         # WHO PAID FOR THIS CLIP. A hand-rendered clip off the operator's
         # subscription and an API-rendered one billed to somebody's credit
         # are the same mp4 in the same folder; only `params.source` on the
@@ -813,6 +1034,29 @@ def _concept_card(c: dict, subscription_ids: Optional[set] = None) -> dict:
         # default is False rather than unknown.
         "subscription": bool(subscription_ids and c["id"] in subscription_ids),
     }
+
+
+def _timeline_card(shot: dict) -> Optional[dict]:
+    """The card's view of a scene's shots: the timeline when it is current,
+    else the bare windows the prompt carries (so the Queue can still show
+    how many clips an approve will make, and price them), else None."""
+    if timeline.is_current(shot):
+        tl = shot["timeline"]
+        return {"planned": True, "seconds": tl.get("seconds"),
+                "planner": tl.get("planner"), "continuity": tl.get("continuity") or "",
+                "parts": [{k: p.get(k) for k in ("n", "start", "end", "seconds", "text",
+                                                  "prompt", "refs", "reference_image",
+                                                  "media_url")}
+                          for p in tl.get("parts") or []]}
+    windows = timeline.parse_windows(shot.get("prompt") or "")
+    if not windows:
+        return None
+    return {"planned": False, "seconds": sum(w["seconds"] for w in windows),
+            "planner": None, "continuity": "",
+            "parts": [{"n": i, "start": w["start"], "end": w["end"],
+                       "seconds": w["seconds"], "text": w["text"], "prompt": "",
+                       "refs": [], "reference_image": None, "media_url": None}
+                      for i, w in enumerate(windows, start=1)]}
 
 
 @router.get("/pipeline/concepts")
@@ -1056,8 +1300,12 @@ def _attach_scene_refs(concept_id: int, manual: list,
     return refs
 
 
-SCENE_COUNT_MAX = 4        # the composer offers 1-4
-SCENE_COUNT_DEFAULT = 4
+# ONE Create writes ONE scene (2026-09-10, Mike's call). The composer used
+# to offer 1-4 takes off one idea; the picker is gone and this is the gate
+# that makes it true -- an old client or a hand-made request posting
+# count=4 still gets one scene, never four billed takes.
+SCENE_COUNT_MAX = 1
+SCENE_COUNT_DEFAULT = 1
 
 
 @router.post("/scenes/run")
@@ -1096,6 +1344,29 @@ async def scenes_run(request: Request, account_id: int = Depends(auth.current_ac
         count = SCENE_COUNT_DEFAULT
     count = max(1, min(SCENE_COUNT_MAX, count))
 
+    # Which brain writes (2026-09-09). Clamped HERE against the real
+    # table, for the reason the count above is: the select is not the
+    # gate, and an unknown tier should write a cheap scene rather than
+    # fail a run. resolve_brain does the same clamp a second time at the
+    # bottom -- deliberately, since the graph reaches it without passing
+    # through this route at all.
+    from src import gemini_utils
+    brain_raw = (form.get("brain") or "").strip().lower()
+    brain = brain_raw if brain_raw in gemini_utils.BRAINS else gemini_utils.DEFAULT_BRAIN
+
+    # The frame the scene is written for, stored on its shot so the Queue
+    # card defaults to it instead of asking again. REFUSED rather than
+    # clamped when it is not a size the renderers take -- the same rule
+    # providers.check_render_choice follows, and for the same reason: a
+    # silently corrected frame is a clip that comes back the wrong shape.
+    ratio = (form.get("ratio") or "").strip()
+    if ratio and ratio not in render_specs.RUNWAY_RATIOS:
+        return _error(400, "bad_ratio",
+                      f"{ratio} is not a frame the renderers take")
+    # The scene's total length (2026-09-10). Clamped by scene_seconds,
+    # never refused -- the select is not the gate, same as the count.
+    seconds = timeline.scene_seconds(form.get("seconds"))
+
     # A researched spark and an idea Mike typed himself are two separate
     # paths, and this route is the only place they touch. The composer
     # sends the id of whatever research was on screen; the SERVER decides
@@ -1121,7 +1392,11 @@ async def scenes_run(request: Request, account_id: int = Depends(auth.current_ac
         drop_urls = {b["url"] for b in
                      scout.bin_for_finding(scout_finding_id)}
 
-    image_refs, refs, _ = await _collect_refs(form, drop_urls=drop_urls)
+    # Videos too (2026-09-10): they ground the WRITING only -- Gemini
+    # watches them -- and never land on the shot, since no renderer takes
+    # a video as a reference. MAX_VIDEO_REFS caps them, same as Generate.
+    image_refs, refs, video_refs = await _collect_refs(
+        form, want_video=True, drop_urls=drop_urls)
     # The other half of the claim (2026-09-03): when this IS the spark,
     # the photos attached here go into ITS bin too, so a later run on
     # the same direction -- from the nightly graph or from a phone's
@@ -1138,6 +1413,13 @@ async def scenes_run(request: Request, account_id: int = Depends(auth.current_ac
 
         from src import scene_chain
 
+        client = genai.Client(api_key=api_key)
+        video_parts = [p for p in (video_part(client, data, mime)
+                                   for data, mime in video_refs) if p is not None]
+        if video_refs:
+            jobs.progress(job, 0.05,
+                          f"{len(video_parts)}/{len(video_refs)} reference video(s) ready")
+
         # ground -> write -> attach, and STOP: pressing Create writes
         # concepts and lands on the board. The enhance, the keyframe and
         # the clip are the Director canvas's job when a person is doing
@@ -1146,22 +1428,26 @@ async def scenes_run(request: Request, account_id: int = Depends(auth.current_ac
         result = scene_chain.run(
             idea, brand, count=count, refs=refs, image_refs=image_refs or None,
             db_path=None, account_id=account_id,
-            gemini_client=genai.Client(api_key=api_key),
+            gemini_client=client, video_parts=video_parts,
             resolve_photo=_resolve_asset_photo,
             attach_refs=_attach_scene_refs,
+            brain=brain, ratio=ratio or None, seconds=seconds,
             progress=lambda fraction, detail: jobs.progress(job, fraction, detail))
         saved = result["scenes"]
         if scout_claimed and saved:
             scout.mark_used(scout_finding_id,
                             run_id=f"concept:{saved[0]['concept_id']}")
         detail = f"{len(saved)} concept(s)"
+        if brain != gemini_utils.DEFAULT_BRAIN:
+            detail += f" · {brain}"
         for note in result["notes"]:
             detail += f" · {note}"
         return {"detail": detail,
                 "ref_id": saved[0]["concept_id"] if saved else None}
 
     job = jobs.start("scenes", f"concepts · {idea[:60]}", work, account_id=account_id)
-    return {"job_id": job["id"], "image_refs": len(image_refs)}
+    return {"job_id": job["id"], "image_refs": len(image_refs),
+            "video_refs": len(video_refs), "brain": brain, "seconds": seconds}
 
 
 # --- the research scout -----------------------------------------------------
@@ -1459,7 +1745,12 @@ def _runway_state() -> dict:
     except Exception:
         today = None
     return {"available": runway.has_key(),
-            "spend_ok": runway.spend_approved(),
+            # TRUE since 2026-09-09: there is no separate spend approval
+            # for a person any more, so an older client reading this
+            # shape must not dim a button it is allowed to press. The
+            # env override still exists for unattended runs and is
+            # reported as `env_override` on the per-renderer payload.
+            "spend_ok": runway.has_key(),
             "model": runway.DEFAULT_MODEL,
             "estimate_usd": runway.estimate_cost(1),
             # the Gen Space's model chips say what a clip IS before the
@@ -1469,9 +1760,14 @@ def _runway_state() -> dict:
             # the Queue's selectors (2026-09-12): every model with what a
             # second of it costs, and the frames and lengths the endpoint
             # takes -- so the approve button can price the actual choice
+            # priced through runway.credits_per_second, never the flat
+            # table: seedance bills by the frame's resolution tier, so its
+            # per-second figure is quoted at the default frame
             "models": [{"id": m,
-                        "label": m.replace("gen4_turbo", "Gen-4 Turbo").replace("gen4.5", "Gen-4.5"),
-                        "usd_per_second": round(runway.CREDITS_PER_SECOND[m] * runway.CREDIT_USD, 3)}
+                        "label": (m.replace("gen4_turbo", "Gen-4 Turbo").replace("gen4.5", "Gen-4.5")
+                                  .replace("seedance2_5", "Seedance 2.5")),
+                        "usd_per_second": round(
+                            runway.credits_per_second(m, runway.DEFAULT_RATIO) * runway.CREDIT_USD, 3)}
                        for m in runway.MODELS],
             # projected off src/render_specs.py, the one table the lane
             # import and providers.check_render_choice refuse against
@@ -1555,12 +1851,14 @@ def queue_pending(brand: Optional[str] = None, account_id: int = Depends(auth.cu
         # card offers first and what an empty approve body would spend on
         # cannot come apart -- which they would the moment the browser
         # held its own copy of fal.PLATFORM_MODELS.
-        planned = providers.platform_default(card.get("tool"))
-        items.append({**card, "render_default": {
-            "provider": planned[0] if planned else providers.DEFAULT_PROVIDER,
-            "model": (planned[1] if planned
-                      else providers.default_model(providers.DEFAULT_PROVIDER)),
-        }})
+        #
+        # AND ONE THIS ACCOUNT CAN RENDER (2026-09-11). The plan leads when
+        # the account holds its key; when it does not, the card opens on
+        # the cheapest renderer the account can use instead of on a dead
+        # button -- providers.render_default, the same call an empty
+        # approve body makes below.
+        items.append({**card, "render_default": providers.render_default(
+            card.get("tool"), account_id)})
     return {"items": items,
             "runway": _runway_state(),
             "renderers": _renderers_state(account_id)}
@@ -1656,6 +1954,132 @@ def queue_manual(brand: Optional[str] = None,
             "models": _lane_models(),
             "default_model": _lane_default_model(),
             "import_with": "ops/render_queue.py --provider runway import"}
+
+
+# --- renderer keys (BYOK) ----------------------------------------------------
+#
+# 2026-09-12, Mike: "is there a long term solution for this so other users can
+# start using this product". src/account_keys.py has held per-account encrypted
+# credentials since 2026-09-03, and until today the only way to enter one was
+# `python -m src.account_keys set` on the server -- so a pilot user could not
+# bring their own key at all, and every render they approved billed the
+# operator's. This is that table's front door and nothing more: it stores and
+# clears, it never reads a key back out.
+#
+# THREE RULES, each load-bearing:
+#   * a stored key is NEVER returned, not even masked. The row says whose
+#     credential would be used (account / env / nothing) and when it was
+#     stored, which is everything a person needs to decide what to do next,
+#     and none of what an attacker who got a session would want.
+#   * mutations require the x-zpf-renderer-key header, model_connections'
+#     rule: the session cookie is SameSite=None on the hosted deployment
+#     (FRONTEND_ORIGINS), so a form on another origin could otherwise POST a
+#     key onto somebody's account. A custom header forces a CORS preflight.
+#   * the vendors offered are exactly providers.VIDEO_PROVIDERS, plus nothing.
+#     Gemini and Midjourney are deliberately absent: the cheap Gemini steps
+#     are the operator's to pay for (backlog #10's "split by cost"), and
+#     Midjourney has no API to hold a key for.
+
+RENDERER_KEY_HEADER = "x-zpf-renderer-key"
+
+# What to call each field on the form. account_keys.PROVIDER_FIELDS is the
+# contract; this is only its spelling for a human.
+_KEY_FIELD_LABELS = {
+    "api_secret": "API secret",
+    "api_key": "API key",
+    "api_key_id": "Key id",
+    "api_key_secret": "Key secret",
+}
+
+
+def _renderer_key_row(provider: str, account_id: Optional[int],
+                      stored: Optional[dict] = None) -> dict:
+    """One vendor's state: whose key would pay, when this account stored
+    one, and what the environment fallback is called. Never the key.
+
+    `stored` is the whole listing when the caller already has it -- four
+    rows on one page load is one query, not four."""
+    if stored is None:
+        stored = {row["provider"]: row["updated_at"]
+                  for row in account_keys.list_providers(account_id)} if account_id else {}
+    try:
+        source = account_keys.key_source(account_id, provider)
+    except ValueError:
+        source = None
+    return {
+        "provider": provider,
+        "label": providers.RENDER_LABELS.get(provider, provider),
+        "fields": [{"name": name,
+                    "label": _KEY_FIELD_LABELS.get(name, name.replace("_", " "))}
+                   for name in account_keys.PROVIDER_FIELDS.get(provider, ())],
+        # "account" = this account's own stored key, "env" = the operator's
+        # environment key, None = nothing resolves and approving refuses
+        "source": source,
+        "stored_at": stored.get(provider),
+        "env_names": [list(names) for names in
+                      account_keys.PROVIDER_ENV_FALLBACK.get(provider, ())],
+    }
+
+
+def _renderer_keys(account_id: Optional[int]) -> dict:
+    stored = {row["provider"]: row["updated_at"]
+              for row in account_keys.list_providers(account_id)} if account_id else {}
+    return {"items": [_renderer_key_row(name, account_id, stored)
+                      for name in providers.VIDEO_PROVIDERS]}
+
+
+class RendererKeyBody(BaseModel):
+    """The key's parts, in PROVIDER_FIELDS order. A list and not named
+    fields because higgsfield takes two and the others one, and the order
+    is already the contract every adapter resolves through."""
+    values: list[str]
+
+
+@router.get("/renderer-keys")
+def renderer_keys(account_id: int = Depends(auth.current_account_id)):
+    """Which renderers this account can spend on, and on whose credential."""
+    return _renderer_keys(account_id)
+
+
+@router.put("/renderer-keys/{provider}")
+def renderer_key_set(provider: str, body: RendererKeyBody, request: Request,
+                     account_id: int = Depends(auth.current_account_id)):
+    """Store this account's own key for one renderer. Encrypted at rest
+    (Fernet, ACCOUNT_KEYS_SECRET); overwrites whatever was there."""
+    if request.headers.get(RENDERER_KEY_HEADER) != "1":
+        return _error(403, "forbidden", "use the studio's renderer key controls")
+    if provider not in providers.VIDEO_PROVIDERS:
+        return _error(404, "not_found", f"no renderer {provider!r}")
+    fields = account_keys.PROVIDER_FIELDS.get(provider, ())
+    values = [(v or "").strip() for v in body.values]
+    if len(values) != len(fields) or not all(values):
+        return _error(400, "bad_key",
+                      f"{providers.RENDER_LABELS.get(provider, provider)} takes "
+                      f"{len(fields)} value(s): "
+                      f"{', '.join(_KEY_FIELD_LABELS.get(f, f) for f in fields)}")
+    try:
+        account_keys.set_key(account_id, provider, *values)
+    except RuntimeError as e:
+        # ACCOUNT_KEYS_SECRET unset: there is nothing to encrypt with, and
+        # storing the key in the clear instead is exactly what that secret
+        # exists to prevent. Say so rather than failing as a 500.
+        return _error(503, "encryption_unavailable", str(e))
+    return _renderer_key_row(provider, account_id)
+
+
+@router.delete("/renderer-keys/{provider}")
+def renderer_key_clear(provider: str, request: Request,
+                       account_id: int = Depends(auth.current_account_id)):
+    """Forget this account's key. The environment fallback (the operator's
+    own key, where there is one) takes over again -- which the returned
+    row says, so nobody has to guess whether removing it turned rendering
+    off."""
+    if request.headers.get(RENDERER_KEY_HEADER) != "1":
+        return _error(403, "forbidden", "use the studio's renderer key controls")
+    if provider not in providers.VIDEO_PROVIDERS:
+        return _error(404, "not_found", f"no renderer {provider!r}")
+    account_keys.clear_key(account_id, provider)
+    return _renderer_key_row(provider, account_id)
 
 
 # --- the manual lane's drop target ------------------------------------------
@@ -1907,12 +2331,23 @@ def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
         refs between the two requests;
       * the pick is recorded BEFORE the spend, so a render that fails
         halfway still leaves the row saying you chose this one;
-      * the per-run spend approval (`*_SPEND_OK`) is still checked
-        inside the adapter's own generate_video and NOT here. That looks
-        like something to hoist up for a nicer error, and it is not: the
-        gate has to sit where the money is spent so no caller can spend
-        around it, and a route-level copy would be a second opinion that
-        can drift from the one that actually holds.
+      * the spend approval is still checked inside the adapter's own
+        generate_video and NOT here. That looks like something to hoist
+        up for a nicer error, and it is not: the gate has to sit where
+        the money is spent so no caller can spend around it, and a
+        route-level copy would be a second opinion that can drift from
+        the one that actually holds.
+
+    WHAT SATISFIES THAT APPROVAL CHANGED (2026-09-09, Mike's call). It
+    used to be `*_SPEND_OK=1` in the server's environment, which meant
+    this button did nothing until somebody restarted the server with a
+    variable set -- and once set for one render it stayed set for the
+    session, which is the "approval that's always on" the gate was
+    written to prevent, reached the long way round. The click IS the
+    approval now: this route passes `approved=True` and the unattended
+    callers (orchestrator.py, autopilot.py) pass nothing, so they still
+    need their own env flag on purpose. The daily caps are untouched and
+    are now the only automatic wall -- see generative.cap_error.
     """
     body = body or ApproveBody()
     concept = preprod.get_concept(concept_id, account_id=account_id)
@@ -1937,19 +2372,37 @@ def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
 
     shot = concept["shots"][0]
     shot_n = shot.get("n", 1)
+    # A SCENE OF SEVERAL TIMED SHOTS renders as that many clips, one after
+    # another (2026-09-10, src/timeline.py). What decides it is the prompt
+    # carrying windows, not whether the timeline happens to be planned yet
+    # -- a stale or missing one is planned inside the job, before the first
+    # clip, so the card can never render the old split of an edited scene.
+    windows = [p["seconds"] for p in (_timeline_card(shot) or {}).get("parts") or []]
 
     # The plan is the default, the body overrides it. A shot carries the
     # tool shootgen chose; platform_default turns that into (provider,
     # model) through the SAME binding orchestrator.generate_render holds,
     # so "KLING" means one model in both places or in neither.
+    # An empty body resolves exactly as the card's default did
+    # (providers.render_default: the plan if this account can render it,
+    # else the cheapest renderer it can), so the two cannot come apart.
     planned = providers.platform_default(shot.get("tool"))
-    provider = body.provider or (planned[0] if planned else providers.DEFAULT_PROVIDER)
-    model = body.model
-    if model is None and planned and provider == planned[0]:
-        model = planned[1]
+    if body.provider:
+        provider = body.provider
+        model = body.model
+        if model is None and planned and provider == planned[0]:
+            model = planned[1]
+    else:
+        default = providers.render_default(shot.get("tool"), account_id)
+        provider = default["provider"]
+        model = body.model or default["model"]
     try:
-        choice = providers.check_render_choice(
-            provider, model, body.duration, body.frame)
+        # A timed scene's LENGTHS are its windows', fitted to the model --
+        # the card's duration does not apply, so it is not checked either.
+        choice = (providers.check_timeline_choice(provider, model, body.frame, windows)
+                  if windows else
+                  providers.check_render_choice(
+                      provider, model, body.duration, body.frame))
     except ValueError as e:
         # REFUSED, never clamped: a length or a frame outside the model's
         # own set is evidence the card and the model have come apart, and
@@ -1982,10 +2435,17 @@ def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
         preprod.set_picked(concept_id, True, account_id=account_id)
 
     def work(job):
+        if windows:
+            return _render_timeline(job, concept_id, shot_n, module, label, choice,
+                                    frame_kw, account_id)
         jobs.progress(job, 0.2, f"rendering via {label} ({choice['model']})")
         result = module.generate_for_shot(
             concept_id, shot_n, db_path=None,
-            resolve_photo=_resolve_asset_photo, account_id=account_id,
+            resolve_photo=_resolve_asset_photo,
+            # A PERSON PRESSED THE PRICED BUTTON. That is the approval
+            # the adapter's gate is asking for -- see spend_approved.
+            approved=True,
+            account_id=account_id,
             **render_kwargs)
         if not result.get("ok"):
             raise RuntimeError(result.get("error") or "render failed")
@@ -1995,6 +2455,51 @@ def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
                      f"approved · {concept['title']} · {label} {choice['model']}",
                      work, account_id=account_id)
     return {"job_id": job["id"], "render": choice}
+
+
+def _render_timeline(job, concept_id: int, shot_n, module, label: str, choice: dict,
+                     frame_kw: str, account_id: int) -> dict:
+    """Render a timed scene ONE SHOT AT A TIME, in order (2026-09-10).
+
+    Each part is its own call through the SAME adapter entry point a whole
+    scene goes through (`generate_for_shot(..., part=n)`), so every wall is
+    unchanged per clip: the spend approval inside generate_video, the daily
+    cap before each call, a generations row per attempt. Its length is its
+    window fitted to the model (timeline.fit_seconds), its anchor its own
+    still, its prompt the scene's continuity followed by that shot.
+
+    Parts that already have a clip are skipped, and the loop stops at the
+    first failure -- usually the daily cap -- keeping what rendered. The
+    scene stays in the Queue until every part has its clip, so approving
+    again renders the rest rather than paying for shot 1 twice."""
+    jobs.progress(job, 0.05, "planning the shots")
+    tl = timeline.ensure(concept_id, shot_n, resolve_photo=_resolve_asset_photo,
+                         account_id=account_id)
+    if not tl:
+        raise RuntimeError("this scene's shots could not be planned -- open it in "
+                           "Director or approve again")
+    axis = providers.model_options(choice["provider"], choice["model"])["duration"]
+    parts = tl.get("parts") or []
+    todo = [p for p in parts if not p.get("media_url")]
+    done = len(parts) - len(todo)
+    for i, part in enumerate(todo):
+        seconds = timeline.fit_seconds(axis, part.get("seconds"))
+        jobs.progress(job, 0.1 + 0.85 * i / max(1, len(todo)),
+                      f"shot {part['n']} of {len(parts)} · {seconds}s via {label} "
+                      f"({choice['model']})")
+        result = module.generate_for_shot(
+            concept_id, shot_n, db_path=None, part=part["n"],
+            resolve_photo=_resolve_asset_photo,
+            approved=True,          # the priced button -- see queue_approve
+            account_id=account_id,
+            model=choice["model"], duration=seconds, **{frame_kw: choice["frame"]})
+        if not result.get("ok"):
+            raise RuntimeError(
+                f"shot {part['n']} of {len(parts)} failed: "
+                f"{result.get('error') or 'render failed'} -- {done} of {len(parts)} "
+                f"rendered; approve again to render the rest")
+        done += 1
+    return {"ref_id": concept_id, "detail": f"{done} of {len(parts)} shots rendered"}
 
 
 @router.post("/queue/{concept_id}/reject")
@@ -2194,9 +2699,11 @@ def shot_generate(concept_id: int, shot_n: int, account_id: int = Depends(auth.c
     """One click, one render: the shot's stored prompt through the
     Runway API (anchored on its reference_image when set), the clip
     downloaded, logged as a generations row, and attached to the shot.
-    Billed, capped, and spend-gated -- generate_video refuses without
-    RUNWAY_SPEND_OK=1 on the server's run, so nothing here can spend
-    around the module's own gate."""
+
+    Billed and capped. The click is the spend approval (2026-09-09) --
+    this route passes approved=True into generate_for_shot, and the gate
+    itself still lives inside generate_video so nothing here spends
+    around it. RUNWAY_DAILY_CAP is what stops a stuck loop."""
     # the caller's key, not the operator's -- see queue_approve
     if not runway.has_key(account_id):
         return _error(503, "runway_unavailable", "RUNWAYML_API_SECRET is not set")
@@ -2208,7 +2715,8 @@ def shot_generate(concept_id: int, shot_n: int, account_id: int = Depends(auth.c
         jobs.progress(job, 0.2, "rendering via Runway")
         result = runway.generate_for_shot(
             concept_id, shot_n, db_path=None,
-            resolve_photo=_resolve_asset_photo, account_id=account_id)
+            resolve_photo=_resolve_asset_photo, approved=True,
+            account_id=account_id)
         if not result.get("ok"):
             raise RuntimeError(result.get("error") or "render failed")
         return {"ref_id": concept_id,
@@ -2218,7 +2726,10 @@ def shot_generate(concept_id: int, shot_n: int, account_id: int = Depends(auth.c
     return {"job_id": job["id"]}
 
 
-MAX_IMAGE_REFS = 6   # cap what one Create sends to Gemini, same as /studio
+# Cap what one Create sends to Gemini, same as the composer's MAX_ATTACH
+# and scene_chain.MAX_REFS. 6 -> 12 on 2026-09-10: the extras ground the
+# writing and the per-shot planner; Mike narrows them afterwards.
+MAX_IMAGE_REFS = 12
 
 _PHOTO_ROOTS = {
     "locations": LOCATIONS_DIR,
@@ -2339,7 +2850,7 @@ def scene_grounding(brand: str, spark, client=None) -> str:
     reference_block contract: generators stay hermetic).
 
     The brand's own inspiration accounts ride in front of the retrieved
-    references, brand-scoped so ANTIHERO's moto/noir riffs never leak
+    references, brand-scoped so ANTIHERO's own riffs never leak
     into Zero Page's faceless ideation. This used to live on the dev
     console's /concepts/generate; that route went with the page, and
     without it here the accounts would quietly stop steering anything.
@@ -2629,6 +3140,8 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
                 result = runway.generate_from_prompt(
                     enhanced,
                     reference_image=image_refs[0][0] if image_refs else None,
+                    # a person asked for a video from this composer
+                    approved=True,
                     db_path=None)
                 if result.get("ok"):
                     preprod.set_shot_media_url(
@@ -2660,6 +3173,9 @@ class ShotGraphBody(BaseModel):
     graph: dict
     states: Optional[dict] = None
     name: Optional[str] = None
+    # what the canvas was drawn against (from the GET); a save carrying a
+    # hash the shot no longer matches is refused rather than applied
+    seed_hash: Optional[str] = None
 
 
 @router.put("/concepts/{concept_id}/shots/{shot_n}/graph")
@@ -2675,14 +3191,24 @@ def shot_graph_save(concept_id: int, shot_n: int, body: ShotGraphBody,
     concept = preprod.get_concept(concept_id, account_id=account_id)
     if concept is None:
         return _error(404, "not_found", "no such concept")
+    current = _shot_seed_hash(concept, shot_n)
+    if current is None:
+        return _error(404, "not_found", "no such shot")
     if not body.graph.get("nodes"):
         return _error(400, "empty_graph", "nothing to save")
+    # The React canvas hands back the seed_hash it loaded against. A shot
+    # revised underneath it (Direct, Polish, a replan) means the drawing
+    # is of words the shot no longer says -- refuse, and the client
+    # re-reads a fresh seed instead of overwriting a canvas it never saw.
+    if body.seed_hash and body.seed_hash != current:
+        return _error(409, "stale_canvas",
+                      "the scene changed since this canvas was drawn -- reload it")
     workflow_id = workflows.save_shot_graph(
         concept_id, shot_n, body.graph, states=body.states,
         name=body.name or concept.get("title"), brand=concept.get("brand"),
-        seed_hash=_shot_seed_hash(concept, shot_n),
+        seed_hash=current,
         account_id=account_id)
-    return {"ok": True, "id": workflow_id}
+    return {"ok": True, "id": workflow_id, "seed_hash": current}
 
 
 def _shot_seed_hash(concept: dict, shot_n: int) -> Optional[str]:
@@ -2720,15 +3246,22 @@ def shot_graph_get(concept_id: int, shot_n: int, account_id: int = Depends(auth.
     concept = preprod.get_concept(concept_id, account_id=account_id)
     if concept is None:
         return _error(404, "not_found", "no such concept")
+    current = _shot_seed_hash(concept, shot_n)
+    if current is None:
+        return _error(404, "not_found", "no such shot")
     saved = workflows.get_shot_graph(concept_id, shot_n,
                                      account_id=account_id)
+    # `seed_hash` is always the CURRENT one -- what a save must carry --
+    # so a fresh canvas and a stale one both learn what they are drawn against
     if saved is None:
-        return {"graph": None, "states": None, "updated_at": None, "stale": False}
-    current = _shot_seed_hash(concept, shot_n)
-    if saved.get("seed_hash") and current and saved["seed_hash"] != current:
+        return {"graph": None, "states": None, "updated_at": None,
+                "stale": False, "seed_hash": current}
+    if saved.get("seed_hash") and saved["seed_hash"] != current:
         return {"graph": None, "states": None,
-                "updated_at": saved["updated_at"], "stale": True}
+                "updated_at": saved["updated_at"], "stale": True,
+                "seed_hash": current}
     saved["stale"] = False
+    saved["seed_hash"] = current
     return saved
 
 
@@ -3247,9 +3780,10 @@ def video_refresh(video_id: int, account_id: int = Depends(auth.current_account_
 # stored whole; execution (Run all) walks it server-side in topological
 # order through app/workflow_runner.py, one node at a time -- billed
 # calls are sequential on purpose. The Generate node goes through
-# runway.generate_from_prompt, whose spend gate (RUNWAY_SPEND_OK inside
-# generate_video) means this surface cannot become a second, ungated
-# route to spend.
+# runway.generate_from_prompt. Its spend gate still lives inside
+# generate_video so this surface cannot become a second route that
+# spends around it -- what satisfies the gate here is the person running
+# the canvas (approved=True), not an environment variable.
 
 class WorkflowBody(BaseModel):
     name: Optional[str] = None
@@ -3348,6 +3882,17 @@ class WfGenerateBody(BaseModel):
     # as a sentence and never as pixels (2026-08-28). `image` stays for
     # any caller that sends one.
     images: Optional[list[str]] = None
+    # Optional: which renderer to spend on. Unset -- the canvas today --
+    # means whatever this account can render (providers.renderer_for).
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    # Optional: the shot this node belongs to. Named, the render checks
+    # the concept is this account's BEFORE any job starts, falls back to
+    # the shot's own refs when the node posts none, and attaches its
+    # output to the shot when it finishes -- a render that completes
+    # after the browser closed still lands where the Director expects it.
+    concept_id: Optional[int] = None
+    shot_n: Optional[int] = None
 
     def reference_urls(self) -> list[str]:
         urls, seen = [], set()
@@ -3358,30 +3903,75 @@ class WfGenerateBody(BaseModel):
         return urls
 
 
+_NO_SUCH_SHOT = object()
+
+
+def _exec_shot(body: "WfGenerateBody", account_id: Optional[int]):
+    """The shot a per-node render belongs to: None when the node is
+    free-standing (no concept named), the shot dict when it is this
+    account's, and _NO_SUCH_SHOT when the concept is not -- someone
+    else's concept is a 404, the same as a missing one, checked before a
+    single billed call. A named concept whose shot number is wrong
+    still runs free-standing rather than failing a render over a
+    stale n; there is just nothing to attach to."""
+    if body.concept_id is None:
+        return None
+    concept = preprod.get_concept(body.concept_id, account_id=account_id)
+    if concept is None:
+        return _NO_SUCH_SHOT
+    return next((s for s in (concept.get("shots") or [])
+                 if s.get("n") == body.shot_n), None)
+
+
+def _shot_refs(shot) -> list:
+    """The references stored on the shot -- read at run time, the rule
+    workflow_runner.shot_reference_urls states -- as the fallback when
+    the node posted none."""
+    if not shot:
+        return []
+    return [str(u) for u in (shot.get("refs") or []) if u]
+
+
 @router.post("/workflows/exec/generate")
 def workflow_exec_generate(body: WfGenerateBody, account_id: int = Depends(auth.current_account_id)):
-    """The Generate node's own Run: one Runway render from a free-
-    standing prompt + optional reference. Billed, capped, and
-    spend-gated -- generate_video refuses without RUNWAY_SPEND_OK=1 on
-    the server's run, exactly as the scene board's render button."""
-    if not runway.has_key():
-        return _error(503, "runway_unavailable", "RUNWAYML_API_SECRET is not set")
+    """The Generate node's own Run: one clip from a free-standing prompt
+    + optional reference, on WHATEVER RENDERER THIS ACCOUNT CAN USE
+    (2026-09-11) -- providers.renderer_for, the same resolver the Queue
+    uses, so an account with a Higgsfield key and no Runway key renders
+    instead of being told about a key it never meant to hold. Billed and
+    capped; the click is the spend approval (2026-09-09) -- the gate
+    still lives inside each adapter's generate_video."""
+    shot = _exec_shot(body, account_id)
+    if shot is _NO_SUCH_SHOT:
+        return _error(404, "not_found", "no such concept")
+    pick = providers.renderer_for(account_id, body.provider, body.model,
+                                  needs="generate_from_prompt")
+    if pick is None:
+        return _error(503, "renderer_unavailable",
+                      "no video renderer key is available for this account — "
+                      "add a Runway, Higgsfield or fal key")
+    label = providers.RENDER_LABELS.get(pick["provider"], pick["provider"])
 
     def work(job):
-        jobs.progress(job, 0.2, "rendering via Runway")
-        # Runway anchors on exactly ONE frame, so of the references the
-        # node carries only the first is usable -- same rule as the
+        jobs.progress(job, 0.2, f"rendering via {label} ({pick['model']})")
+        # Every adapter anchors on exactly ONE frame, so of the references
+        # the node carries only the first is usable -- same rule as the
         # graph runner's Generate branch.
-        urls = body.reference_urls()
-        reference = workflow_runner.image_for_runway(
-            urls[0] if urls else None, resolve_photo=_resolve_asset_photo)
-        result = runway.generate_from_prompt(
-            body.prompt, reference_image=reference, db_path=None)
+        urls = body.reference_urls() or _shot_refs(shot)
+        result = workflow_runner.render_generate_node(
+            pick, body.prompt, urls[0] if urls else None,
+            resolve_photo=_resolve_asset_photo, db_path=None,
+            account_id=account_id)
         if not result.get("ok"):
             raise RuntimeError(result.get("error") or "render failed")
-        return {"detail": "clip rendered", "output": result["media_url"]}
+        if shot is not None:
+            preprod.set_shot_media_url(body.concept_id, body.shot_n,
+                                       result["media_url"], account_id=account_id)
+        return {"detail": f"clip rendered via {label} ({pick['model']})",
+                "output": result["media_url"]}
 
-    job = jobs.start("render", f"runway · {body.prompt[:50]}", work, account_id=account_id)
+    job = jobs.start("render", f"{label.lower()} · {body.prompt[:50]}", work,
+                     account_id=account_id)
     return {"job_id": job["id"]}
 
 
@@ -3394,6 +3984,9 @@ def workflow_exec_nano(body: WfGenerateBody, account_id: int = Depends(auth.curr
     cents where a Runway render burns credits."""
     from src import nano_banana
 
+    shot = _exec_shot(body, account_id)
+    if shot is _NO_SUCH_SHOT:
+        return _error(404, "not_found", "no such concept")
     if not nano_banana.has_key():
         return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
 
@@ -3405,13 +3998,16 @@ def workflow_exec_nano(body: WfGenerateBody, account_id: int = Depends(auth.curr
             data for data in (
                 imagery.image_bytes_for_gemini(
                     url, resolve_photo=_resolve_asset_photo)
-                for url in body.reference_urls())
+                for url in (body.reference_urls() or _shot_refs(shot)))
             if data
         ]
         result = nano_banana.generate_from_prompt(
             body.prompt, reference_image=reference, db_path=None)
         if not result.get("ok"):
             raise RuntimeError(result.get("error") or "render failed")
+        if shot is not None:
+            preprod.set_shot_reference_image(body.concept_id, body.shot_n,
+                                             result["media_url"], account_id=account_id)
         return {"detail": "image rendered", "output": result["media_url"]}
 
     job = jobs.start("render", f"nano · {body.prompt[:50]}", work, account_id=account_id)
@@ -3469,7 +4065,8 @@ def workflows_run(workflow_id: int, account_id: int = Depends(auth.current_accou
         result = workflow_runner.execute_graph(
             graph, gemini_client=gemini_client,
             resolve_photo=_resolve_asset_photo, db_path=None,
-            emit=emit, check_cancelled=lambda: jobs.check_cancelled(job))
+            emit=emit, check_cancelled=lambda: jobs.check_cancelled(job),
+            account_id=account_id)
         jobs.update(job["id"], node_states=result["nodes"])
         failed = [s for s in result["nodes"].values() if s["status"] == "failed"]
         if failed:

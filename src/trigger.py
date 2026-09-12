@@ -57,7 +57,7 @@ def pick_spark(sparks: list, day: int) -> str:
 
 
 def run_once(spark: str, *, channel: str = "zeropage", brand=None,
-             scout=None, research=None) -> dict:
+             scout=None, research=None, brain=None) -> dict:
     """One graph run, as a result dict instead of an exit code.
 
     The shape the nightly runner needs and the CLI wraps: `ok`, the
@@ -79,7 +79,7 @@ def run_once(spark: str, *, channel: str = "zeropage", brand=None,
         if scout is None and research:
             scout = True
         result = orchestrator.run(spark, brand=brand, channel=channel,
-                                  scout=scout, research=research)
+                                  scout=scout, research=research, brain=brain)
     except Exception as e:
         kind = nightly.classify_error(e)
         # the dead-man log gets the crash too -- a silent night looks
@@ -136,12 +136,19 @@ def main(argv=None) -> int:
                              "default: ZEROPAGE_GRAPH_RESEARCH)")
     parser.add_argument("--no-research", dest="research", action="store_false",
                         help="skip the agent for this run")
+    # None, not "fast": an unnamed tier is what lets ZEROPAGE_BRAIN
+    # decide (orchestrator.brain_default), the same tri-state shape
+    # --scout/--research use. A walk is ten runs, so naming `reasoning`
+    # here is a bill somebody chose.
+    parser.add_argument("--brain", default=None,
+                        help="model tier for the writer: fast (default) or reasoning")
     args = parser.parse_args(argv)
 
     spark = args.spark or pick_spark(load_sparks(), date.today().timetuple().tm_yday)
 
     outcome = run_once(spark, channel=args.channel, brand=args.brand,
-                       scout=args.scout, research=args.research)
+                       scout=args.scout, research=args.research,
+                       brain=args.brain)
     if not outcome["ok"]:
         print(f"trigger: run crashed ({outcome['kind']}): {outcome['error']}",
               file=sys.stderr)

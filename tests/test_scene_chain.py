@@ -114,8 +114,10 @@ def test_create_writes_concepts_and_stops(tmp_db, seams):
     assert job["status"] == "done", job.get("error")
 
     concepts = preprod.list_concepts(dsn=tmp_db, account_id=None)
-    assert len(concepts) == 2
-    assert seams["write"] == 1          # ONE call for both takes, not two
+    # One Create, one scene (2026-09-10): the seam's model answers with
+    # two takes and the form still posts count=2, and ONE is saved.
+    assert len(concepts) == 1
+    assert seams["write"] == 1
     assert seams["enhance"] == []       # nothing enhanced
     assert seams["nano"] == []          # nothing rendered, nothing spent
 

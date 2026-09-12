@@ -10,7 +10,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@300;400;500;600&family=Inter:wght@300;400;500&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/zpf/zpf.css">
 </head>
-<body data-brand="{{ brand }}">
+<body data-brand="{{ brand }}" data-director-url="{{ director_url|default('') }}">
 
 <canvas id="gl"></canvas><div class="fb"></div>
 
@@ -82,29 +82,116 @@
     <h1 class="rise d1">What do you<br>want to create?</h1>
 
     <div class="stack rise d2">
-      <div class="glass mentionwrap" id="cbox">
-        <div class="attachbar" id="attachbar"></div>
-        <textarea id="prompt" placeholder="Someone checks the lock one last time and something is already wrong… (@ to reference an asset)"></textarea>
+      <div class="glass mentionwrap creative-guide integrated-guide ltxbox" id="cbox" data-mode="guide">
+        <div class="guidesettings" id="guidesettings" hidden>
+        <div class="guide-heading"><div><h2>Your creative partner</h2>
+          <p>Work through your idea here, then create scenes from the brief.</p></div>
+          <button type="button" class="chip" id="guidereset">New conversation</button></div>
+        <div class="guide-project-row">
+          <label for="guideproject" class="m">Saved projects</label>
+          <select id="guideproject" class="wfselect"><option value="">New project</option></select>
+          <button type="button" class="chip" id="guidesave">Save project</button>
+          <span id="guidesavestatus" role="status" class="m"></span>
+        </div>
+        <div class="guide-model-row">
+          <label for="guideprovider" class="m">Creative partner</label>
+          <select id="guideprovider" class="wfselect" aria-label="Creative guide provider">
+            <option value="gemini">Studio assistant · no extra sign-in</option>
+            <option value="chatgpt">Personal ChatGPT · optional</option>
+            <option value="claude">Personal Claude · optional</option>
+          </select>
+          <select id="guidemodel" class="wfselect" aria-label="Personal model" hidden></select>
+          <button type="button" class="chip" id="modelconnecttoggle" aria-expanded="false"
+                  aria-controls="modelconnections">Use a personal model (optional)</button>
+        </div>
+        <p id="guidebilling" class="m"></p>
+        <section id="modelconnections" class="model-connections" aria-label="Personal model connections" hidden>
+          <p>Sign into your own model account separately. Your studio login stays the same.</p>
+          <div class="model-connection"><b>ChatGPT</b>
+            <p id="chatgptstatus">Not connected</p>
+            <button type="button" class="chip" id="chatgptsignin">Sign in with ChatGPT</button>
+            <button type="button" class="chip" id="chatgptdisconnect" hidden>Disconnect ChatGPT</button>
+          </div>
+          <div class="model-connection"><b>Claude</b>
+            <p id="claudestatus">Not connected</p>
+            <button type="button" class="chip" id="claudesignin">Sign in through Claude Code</button>
+            <button type="button" class="chip" id="claudedisconnect" hidden>Disconnect Claude</button>
+          </div>
+          <div id="modelchallenge" hidden>
+            <p>Enter this code on OpenAI's sign-in page: <strong id="modelauthcode"></strong></p>
+            <a id="modelauthlink" class="chip" target="_blank" rel="noopener noreferrer">Open ChatGPT sign-in</a>
+          </div>
+          <p id="modelconnectnote" role="status"></p>
+          <button type="button" class="chip" id="modelrefresh">Refresh status</button>
+        </section>
+        </div><!-- /.guidesettings -->
+        <div id="guidemessages" class="guide-messages" role="log" aria-label="Creative conversation" aria-live="polite"></div>
+        <div id="guidechoices" class="guide-choices"></div>
+
+        <div class="ltxslots">
+          <button type="button" class="ltxslot" id="slotref" title="Attach a reference photo">
+            <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="8.5" cy="9.5" r="1.6"/><path d="m4 17 5-5 4 4 3-2 4 4"/></svg>
+            <b>Add image<br>reference</b>
+          </button>
+          <button type="button" class="ltxslot" id="slotasset" title="Reference an asset by name">
+            <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 5 2.2A9 9 0 1 0 16.5 20"/></svg>
+            <b>Consistent<br>element</b>
+          </button>
+          <div class="attachbar" id="attachbar"></div>
+        </div>
+        <textarea id="prompt" maxlength="10000" aria-label="Your idea or reply" placeholder="Describe your video or ask for a direction. We’ll work through the story, look and pacing… (@ to reference an asset)"></textarea>
         <div class="mentiondrop" id="promptmentions" hidden></div>
-        <div class="cfoot">
-          <button class="plus" id="up" data-label="Add media" aria-label="Add media" aria-expanded="false">
+        <div class="cfoot ltxfoot">
+          <button type="button" class="pill modepill" id="modepill" aria-expanded="false"
+                  aria-haspopup="true" title="What the send button does">
+            <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z"/></svg>
+            <span class="plabel" id="modelabel">Guide</span>
+            <svg class="chev" viewBox="0 0 24 24" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+          <button type="button" class="pill" id="up" aria-label="Add media" aria-expanded="false" title="Add media">
             <svg viewBox="0 0 24 24" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
           </button>
-          <button class="plus" id="scoutbtn" data-cap="scout" data-label="Research an idea"
+          <button type="button" class="pill" id="guidegear" aria-expanded="false"
+                  aria-controls="guidesettings" title="Conversation settings and saved projects">
+            <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7.1 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0-1.1-2.7H1a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 2.6 7.1a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H7a1.6 1.6 0 0 0 1-1.5V1a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 2.7 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V7a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z" transform="translate(1.5 1.5) scale(0.86)"/></svg>
+          </button>
+          <button type="button" class="pill" id="scoutbtn" data-cap="scout"
                   aria-label="Research an idea" title="Crawl for a spark and its references">
             <svg viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
           </button>
-          <span class="m cfnote">references ride into every node — prompt, keyframe and clip</span>
           <span class="spacer"></span>
-          <select class="wfselect" id="ccount" aria-label="How many concepts">
-            <option value="1">1 concept</option>
-            <option value="2">2 concepts</option>
-            <option value="3">3 concepts</option>
-            <option value="4" selected>4 concepts</option>
-          </select>
-          <button class="go" id="go" data-cap="pipeline.run" disabled>Create</button>
+          <button type="button" class="pill" id="brainpill" aria-expanded="false" aria-haspopup="listbox"
+                  title="Which model writes the scene">
+            <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4a4 4 0 0 0-4 4 3 3 0 0 0-1 5.8V17a3 3 0 0 0 5 2.2A3 3 0 0 0 17 17v-3.2A3 3 0 0 0 16 8a4 4 0 0 0-4-4z"/></svg>
+            <span class="plabel" id="brainlabel">Fast</span>
+            <svg class="chev" viewBox="0 0 24 24" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+          <div class="ltxrender" id="ltxrender"></div>
+          <button type="button" class="sendbtn" id="send" aria-label="Send">
+            <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13M12 5l7 7-7 7"/></svg>
+          </button>
+          <button type="button" class="go" id="guidesend" hidden>Send</button>
         </div>
-        <input type="file" id="upfiles" accept="image/*" multiple hidden>
+        <input type="file" id="upfiles" accept="image/*,video/*" multiple hidden>
+        <p id="guidestatus" role="status"></p>
+        <button type="button" class="chip" id="guidestudio" hidden>Use studio assistant</button>
+        <div id="guidebriefwrap" hidden>
+          <label for="guidebrief" class="m">Your scene brief · editable</label>
+          <textarea id="guidebrief" rows="7"></textarea>
+          <div class="guide-actions">          <select class="wfselect" id="cbrain" aria-label="Which model writes"
+                  title="Which model writes the scene">
+            <!-- filled from /api/brains: gemini_utils.BRAINS is the one
+                 table, and a hardcoded option here is the copy that goes
+                 stale the first time a tier or a model id moves. -->
+          </select>
+          <select class="wfselect" id="cseconds" aria-label="How long the scene is"
+                  title="Total length -- the writer fills it with timed shots, each rendered as its own clip">
+            <!-- filled from /api/scene-lengths (timeline.SCENE_SECONDS_CHOICES) -->
+          </select>
+          <!-- No "how many concepts" picker (2026-09-10, Mike's call): one
+               Create writes ONE scene. See api.SCENE_COUNT_MAX. -->
+          <button class="go" id="go" data-cap="pipeline.run" disabled>Create scene</button></div>
+        </div>
       </div>
 
       <div class="glass upmenu" id="upmenu" hidden>
@@ -347,9 +434,19 @@
   <div class="view" id="v-queue">
     <div class="vhead">
       <h2>Queue</h2>
-      <span class="m">approving a concept here is what spends — it renders the clip through Runway</span>
+      <span class="m">approving a concept here is what spends — it renders the clip on the renderer you picked</span>
       <span class="spacer"></span><span class="m" id="qcount">—</span>
     </div>
+
+    <!-- Bring your own renderer key (2026-09-12). On the Queue because
+         this is where a missing key is discovered; the panel is closed by
+         default because most days there is nothing to do here. The server
+         never returns a stored key -- see app/api.py's renderer-keys. -->
+    <details class="keyspanel" id="keyspanel">
+      <summary id="keyssummary">Renderer keys</summary>
+      <div class="stateline" id="keysstate" hidden></div>
+      <div class="keysgrid" id="keyslist"></div>
+    </details>
 
     <div class="chead">
       <h3>Awaiting approval</h3>

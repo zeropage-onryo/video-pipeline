@@ -201,3 +201,25 @@ def test_an_empty_graph_is_refused_rather_than_stored(tmp_db):
 def test_saving_against_a_concept_that_does_not_exist_is_a_404(tmp_db):
     assert client.put("/api/concepts/9999/shots/1/graph",
                       json={"graph": GRAPH}).status_code == 404
+
+
+def test_react_canvas_refuses_stale_save_and_returns_fresh_seed(tmp_db):
+    cid = a_concept(tmp_db)
+    path = f"/api/concepts/{cid}/shots/1/graph"
+    initial = client.get(path).json()
+    assert initial["seed_hash"]
+    assert client.put(path, json={"graph": GRAPH, "seed_hash": initial["seed_hash"]}).status_code == 200
+    concept = preprod.get_concept(cid, dsn=tmp_db, account_id=None)
+    concept["shots"][0]["prompt"] = "Revised elsewhere"
+    preprod.update_concept_shots(cid, {"shots": concept["shots"]}, dsn=tmp_db, account_id=None)
+    assert client.put(path, json={"graph": GRAPH, "seed_hash": initial["seed_hash"]}).status_code == 409
+    fresh = client.get(path).json()
+    assert fresh["stale"] is True
+    assert fresh["seed_hash"] != initial["seed_hash"]
+
+
+def test_graph_routes_reject_nonexistent_shot(tmp_db):
+    cid = a_concept(tmp_db)
+    path = f"/api/concepts/{cid}/shots/99/graph"
+    assert client.get(path).status_code == 404
+    assert client.put(path, json={"graph": GRAPH}).status_code == 404

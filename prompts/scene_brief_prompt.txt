@@ -19,13 +19,13 @@ must never override, narrow or redirect the idea or images. If anything
 conflicts, the idea and attached images win.
 
 WHAT THE SPARK IS, AND WHAT YOU DO WITH IT: it is the filmmaker's IDEA, told
-in full -- who is there, what they want, what is in the way, what changes. It
-is NOT the prompt and it is not a shot. Your job is to choose the ONE stretch
-of it that a single AI-generated clip can actually hold, and write that. The
-rest of the idea does not go in the prompt; it goes in "logline", where a human
-reads it. Do not try to stage the whole idea -- a prompt carrying five separate
-actions is rejected before it renders, and losing the idea's shape is not the
-cost of keeping its best ten seconds.
+in full -- who is there, what they want, what is in the way, what changes.
+Write one paste-ready prompt that may contain one or multiple shots, cuts and
+locations as the idea requires, fitted to the scene's total length below. Do
+not throw story events away to keep it to one continuous action -- the scene
+is rendered one timed window at a time (see BEATS), so the whole idea can fit.
+
+TOTAL LENGTH OF THIS SCENE: {seconds} seconds.
 
 CAST & PROPS ON FILE (reference the uploaded photos as the EXACT face / EXACT
 clothing where they apply; name them, don't redescribe their appearance):
@@ -58,18 +58,17 @@ Write the "brief" as a single cohesive prompt with these five parts, in order:
 
    THE LOOK:
 {look}
-3. BEATS: ONE continuous action, escalating, in prose. Open on an uncomfortable
-   or arresting image (the frame-1 hook), turn/reveal, and END ABRUPTLY.
-   Reactions are serious and physically believable — that restraint is what
-   makes it funny or tense, never cartoon.
-   A BEAT IS NOT A NEW ACTION. Escalation inside one action is what a video
-   model can hold: attention shifting, a light changing, the hands slowing, the
-   camera drifting and re-centring, the same movement repeating harder. A CHAIN
-   of separate physical events is not — "he picks it up, crosses the room,
-   opens the drawer, turns, drops it" is five actions and gets rejected as a
-   multi-stage sequence before a credit is spent. Pick the single action the
-   idea turns on and stay inside it. No hand-to-hand object exchanges, no
-   crossing between rooms, no physics stunts.
+3. BEATS: the scene as timed shots, each opening with its window, e.g.
+   (0-3s), (3-7s), (7-10s) for a 10-second scene. Start at 0s; windows are
+   contiguous, never overlap, and end at exactly {seconds}s. EACH WINDOW IS
+   RENDERED AS ITS OWN SEPARATE CLIP, one after another, by a model that sees
+   only that window -- so every window is ONE shot: one camera setup, one
+   clear action that fits its length, 2-10 seconds long. Cuts and location
+   changes happen BETWEEN windows, never inside one; say them ("hard cut to",
+   "reverse on"). One window for the whole scene is right when the idea is one
+   continuous moment or the brief asks for one take. Open on an uncomfortable
+   or arresting image, turn/reveal, and END ABRUPTLY. Reactions are serious
+   and physically believable, never cartoon.
 4. SOUND: begin "No background music." then the diegetic sound only — exactly
    what you would hear in that scene.
 5. AVOID: no plastic AI sheen, no CGI-looking skin or fabric, no cartoon
@@ -92,9 +91,7 @@ other: the card line is the label on a card in a grid, the logline is the idea
 record below. Write both. Do not shorten the logline to fit the card, and do
 not pad the card line toward the logline.
 
-"logline" is where the IDEA survives. The prompt holds one action because that
-is all a video model can render; the logline holds what the scene is actually
-about — the want, the obstacle, the turn, and why anyone would feel it. Write
-it so that reading the logline and watching the clip together makes sense of
-each other. A one-line logline under a rich spark means the idea was thrown
-away rather than compressed.
+"logline" is where the IDEA survives: the want, the obstacle, the turn, and
+why anyone would feel it. The prompt may depict multiple scenes to carry
+that idea. Write the logline so reading it and watching the clip make sense
+of each other. Do not throw away the idea merely to shorten the prompt.

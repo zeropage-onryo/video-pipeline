@@ -234,6 +234,36 @@ def test_the_written_scene_comes_out_carrying_its_references(tmp_db, monkeypatch
     assert all("thumb" not in r for r in card["refs"])
 
 
+def test_create_watches_a_reference_video_but_never_renders_on_it(tmp_db, monkeypatch):
+    """2026-09-10: the composer takes videos. They go to the WRITER as
+    vision input and never onto the shot's refs -- no renderer takes a
+    video as a reference, and refs[0] is what Runway anchors on."""
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr("google.genai.Client", lambda api_key=None: object())
+    monkeypatch.setattr("src.shootgen.reference_block",
+                        lambda spark=None, client=None, db_path=None: "")
+    monkeypatch.setattr(api, "_assets_all", lambda account_id=None: [])
+    monkeypatch.setattr(api, "video_part", lambda c, data, mime: ("VIDEO", data, mime))
+    sent = {}
+
+    def fake_model(c, m, contents, **_):
+        sent["contents"] = contents
+        return json.dumps({"scenes": [{"title": "t", "prompt": "an empty road"}]})
+    monkeypatch.setattr("src.shootgen.generate_with_retry", fake_model)
+
+    res = client.post("/api/scenes/run", data={"idea": "an empty road", "brand": "zeropage"},
+                      files=[("files", ("clip.mp4", b"0000", "video/mp4")),
+                             ("files", ("b.mov", b"1111", "video/quicktime")),
+                             ("files", ("c.mp4", b"2222", "video/mp4"))])
+    assert res.json()["video_refs"] == api.MAX_VIDEO_REFS == 2
+    job = wait_for_job(res.json()["job_id"])
+    assert job["status"] == "done", job.get("error")
+    assert ("VIDEO", b"0000", "video/mp4") in sent["contents"]
+    assert ("VIDEO", b"2222", "video/mp4") not in sent["contents"]
+    card = client.get("/api/pipeline/concepts?brand=zeropage").json()["items"][0]
+    assert not card.get("refs")
+
+
 def test_a_manual_pick_outranks_an_inferred_one(tmp_db, monkeypatch):
     """An explicit pick is first, because first is what Runway anchors
     on. Inferred references fill in behind it."""

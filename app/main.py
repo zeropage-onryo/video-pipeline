@@ -23,6 +23,7 @@ from urllib.parse import quote
 
 from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
@@ -30,11 +31,9 @@ from fastapi.responses import (
     RedirectResponse,
     Response,
 )
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from google import genai
-from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from src import accounts as accounts_mod
@@ -166,26 +165,27 @@ MCP_APP, MCP_SESSIONS = mcp_mount.build(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    db.init_db()
-    preprod.init()
-    entities.init()
-    autonomy.init()
-    winners.init()
-    inspiration.init()   # seeds the researched accounts if empty
-    evalstore.init()     # golden set seeded from eval_cases.json
-    workflows.init()     # saved node graphs for /ui Workflows
-    workflows.seed_default()  # "Prompt enhancement" starter canvas
-    render_assets.init()  # generated_assets, owned (merged 2026-09-02)
-    spend.init()          # llm_calls, the LLM meter (2026-09-04)
-    ledger.init()         # credit_lots / credit_entries, the prepaid ledger
-    generative.init()    # generations log the render caps count
-    accounts_mod.init()  # users / identities / accounts / members
-    settings_mod.init()  # the Dev Studio tunables (gate/threshold/k)
-    seed_gold_standard()                # records the canonical example as a winner
-    # The MCP transport is not self-starting: its session manager has
-    # to be entered by whoever hosts it. A no-op when MCP is off.
-    async with mcp_mount.session_lifespan(MCP_SESSIONS):
-        yield
+    with db.connection_pool():
+        db.init_db()
+        preprod.init()
+        entities.init()
+        autonomy.init()
+        winners.init()
+        inspiration.init()   # seeds the researched accounts if empty
+        evalstore.init()     # golden set seeded from eval_cases.json
+        workflows.init()     # saved node graphs for /ui Workflows
+        workflows.seed_default()  # "Prompt enhancement" starter canvas
+        render_assets.init()  # generated_assets, owned (merged 2026-09-02)
+        spend.init()          # llm_calls, the LLM meter (2026-09-04)
+        ledger.init()         # credit_lots / credit_entries, the prepaid ledger
+        generative.init()    # generations log the render caps count
+        accounts_mod.init()  # users / identities / accounts / members
+        settings_mod.init()  # the Dev Studio tunables (gate/threshold/k)
+        seed_gold_standard()                # records the canonical example as a winner
+        # The MCP transport is not self-starting: its session manager has
+        # to be entered by whoever hosts it. A no-op when MCP is off.
+        async with mcp_mount.session_lifespan(MCP_SESSIONS):
+            yield
 
 
 class NoCacheStaticFiles(StaticFiles):
@@ -370,6 +370,9 @@ def ui(request: Request):
     return templates.TemplateResponse(
         request, "zpf.html",
         {"brand": account["slug"], "user": user,
+         "director_url": os.environ.get("DIRECTOR_FRONTEND_URL", "").rstrip("/") or (
+             f"http://{request.url.hostname}:3000/studio/flows"
+             if request.url.hostname in ("localhost", "127.0.0.1") else ""),
          "manual_lane": manual_lane.manual_lane_allowed(
              auth.optional_account_id(request))})
 

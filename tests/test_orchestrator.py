@@ -95,9 +95,9 @@ def stage_fakes(monkeypatch, results):
 
     def fake_generate(brand, spark=None, steer="", gemini_client=None, model=None,
                       db_path=None, references="", cast=None, tool=None,
-                      image_refs=None, account_id=None):
+                      image_refs=None, account_id=None, brain=None, seconds=None):
         calls.append({"brand": brand, "spark": spark, "steer": steer,
-                      "references": references,
+                      "references": references, "brain": brain, "seconds": seconds,
                       "cast": cast, "image_refs": list(image_refs or [])})
         concept, warnings = queue.pop(0)
         concept_id = _save_scene(None, concept, brand)
@@ -174,6 +174,17 @@ def test_run_explicit_brand_can_still_disagree_with_channel_on_purpose(tmp_db, m
     orchestrator.run("gearing up ritual", channel="zeropage", brand="antihero")
     assert calls[0]["brand"] == "antihero"
     assert "note:" in capsys.readouterr().err  # the mismatch is logged, not silent
+
+
+def test_the_scene_length_reaches_the_writer_from_the_graph(tmp_db, monkeypatch):
+    """2026-09-10: a scene is written to a total length its timed shots
+    fill. An explicit `seconds` wins; with none the night reads
+    ZEROPAGE_SCENE_SECONDS, like every other posture it runs on."""
+    calls = stage_fakes(monkeypatch, [(make_concept(), []), (make_concept(), [])])
+    orchestrator.run("gearing up ritual", seconds=15)
+    monkeypatch.setenv("ZEROPAGE_SCENE_SECONDS", "20")
+    orchestrator.run("gearing up ritual")
+    assert [c["seconds"] for c in calls] == [15, 20]
 
 
 # ---------- the left third: the original loop, preserved ----------
@@ -720,9 +731,10 @@ def test_a_failed_shot_gets_two_rework_passes_before_holding(tmp_db, monkeypatch
     rework attempt was landing on the SAME verdict for the "too many
     sequential actions" failure shape (concept 180 in the live database,
     byte-for-byte identical reason before and after its one rework), so one
-    attempt was never enough to prove the mechanism works; see
-    _rework_shot_prompt's staged-prompt handling for the other half of
-    that fix."""
+    attempt was never enough to prove the mechanism works. (The other half
+    of that fix, collapsing a staged prompt to one beat, is gone since
+    2026-09-10: timed shots are rendered one by one now -- src/timeline.py
+    -- and the rework keeps them.)"""
     monkeypatch.setenv("ZEROPAGE_GATES", "hard")
     scores = iter([
         {"score": 10, "reason": "", "dims": {}},                             # shot 1, first pass
@@ -1503,6 +1515,43 @@ def test_a_rotation_night_is_untouched_by_any_of_this(tmp_db, monkeypatch):
 
     assert out["spark"] == "the last check before leaving"
     assert calls[0]["image_refs"] == []
+
+
+# --- which brain the NIGHT writes with (2026-09-09) --------------------------
+# The composer's picker and the walk share one table (gemini_utils.BRAINS)
+# and deliberately not one default. A walk is NIGHTLY_SPARKS x 2 brands =
+# 10 runs, so the expensive tier has to be something somebody turns on.
+
+def test_the_night_writes_on_the_fast_tier_unless_told_otherwise(tmp_db, monkeypatch):
+    from src import gemini_utils
+
+    monkeypatch.delenv("ZEROPAGE_BRAIN", raising=False)
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])])
+    orchestrator.run("a spark", brand="zeropage", channel="zeropage")
+    assert calls[0]["brain"] == gemini_utils.DEFAULT_BRAIN == "fast"
+
+
+def test_a_walk_can_be_put_on_the_reasoning_tier_on_purpose(tmp_db, monkeypatch):
+    """Two doors, and both are deliberate acts: the env var for the cron
+    box, an explicit argument for a caller that named one."""
+    monkeypatch.setenv("ZEROPAGE_BRAIN", "reasoning")
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])])
+    orchestrator.run("a spark", brand="zeropage", channel="zeropage")
+    assert calls[0]["brain"] == "reasoning"
+
+    monkeypatch.delenv("ZEROPAGE_BRAIN", raising=False)
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])])
+    orchestrator.run("a spark", brand="zeropage", channel="zeropage",
+                     brain="reasoning")
+    assert calls[0]["brain"] == "reasoning"
+
+
+def test_a_typo_in_the_env_var_does_not_lose_the_night(tmp_db, monkeypatch):
+    """Nobody is watching at 3:30am, and brain_default is read there."""
+    monkeypatch.setenv("ZEROPAGE_BRAIN", "resoning")
+    calls = stage_fakes(monkeypatch, [(make_concept(), [])])
+    orchestrator.run("a spark", brand="zeropage", channel="zeropage")
+    assert calls[0]["brain"] == "fast"
 
 
 def test_avoid_guidance_steers_without_becoming_the_spark(tmp_db, monkeypatch):

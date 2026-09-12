@@ -16,3 +16,27 @@ __pycache__/
 # API image never needs them
 web/
 frontend/
+imports/
+
+# Personal model runtime logins: private credentials, never source or image layers.
+data/model_sessions/
+
+# Local secrets, backup files, and unrelated development workspaces.
+.env
+.env.*
+**/.env
+**/.env.*
+**/*env.bak*
+**/*.bak*
+.agents/
+.codex/
+frontend/
+**/node_modules/
+.pytest_cache/
+.ruff_cache/
+
+# Design references and archived deliverables are not runtime assets.
+docs/reference-look/
+docs/sprints/
+Claude outputs/
+_to_delete/

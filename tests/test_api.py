@@ -450,7 +450,9 @@ def test_shot_generate_runs_the_render_as_a_job(tmp_db, monkeypatch):
         api_mod.runway, "generate_for_shot",
         # account_id in the stub because the route passes it (2026-09-02):
         # without it the render found none of the caller's own concepts.
-        lambda cid, n, db_path=None, resolve_photo=None, account_id=None: {
+        # **kw because it also passes approved=True now (2026-09-09) --
+        # the click is the spend approval; see test_queue_renderers.
+        lambda cid, n, db_path=None, resolve_photo=None, account_id=None, **kw: {
             "ok": True, "media_url": "/renders/runway/x.mp4",
             "generation_id": 1, "error": None})
     job_id = client.post(
@@ -465,7 +467,7 @@ def test_shot_generate_surfaces_render_failure(tmp_db, monkeypatch):
     monkeypatch.setattr(api_mod.runway, "has_key", lambda account_id=None: True)
     monkeypatch.setattr(
         api_mod.runway, "generate_for_shot",
-        lambda cid, n, db_path=None, resolve_photo=None, account_id=None: {
+        lambda cid, n, db_path=None, resolve_photo=None, account_id=None, **kw: {
             "ok": False, "error": "daily cap: 6/6"})
     job_id = client.post(
         f"/api/concepts/{concept_id}/shots/1/generate").json()["job_id"]

@@ -420,8 +420,11 @@ function nodeTitle(node) {
 
 function gateNote(type) {
   if (type === 'zpf/generate') {
-    return !state.caps['runway.generate'] ? 'Runway · RUNWAYML_API_SECRET not set'
-      : !state.caps['runway.spend'] ? 'Runway · gated — RUNWAY_SPEND_OK=1 to arm' : '';
+    // running this node IS the spend approval (2026-09-09), and it
+    // renders on whatever this account has a key for (providers.renderer_for,
+    // 2026-09-11) -- so a missing key is the only thing that can gate it
+    return state.caps['video.generate'] ? ''
+      : 'No video renderer key — add a Runway, Higgsfield or fal key';
   }
   if (type === 'zpf/nano_banana' && !state.caps['nano.generate']) return 'GEMINI_API_KEY not set';
   if (type === 'zpf/enhance' && !state.caps['enhance']) return 'GEMINI_API_KEY not set';
@@ -1284,7 +1287,7 @@ const NODE_CATALOG = [
   { type: 'zpf/reference_set', title: 'Element', sub: 'A character, room or prop’s frames from Assets', cat: 'Image', glyph: '@', grad: 'linear-gradient(135deg,#9f1239,#E4002B)' },
   { type: 'zpf/reference_image', title: 'Reference Image', sub: 'One saved photo, as a plate', cat: 'Image', glyph: '▣', grad: 'linear-gradient(135deg,#0e7490,#67e8f9)' },
   { type: 'zpf/nano_banana', title: 'Nano Banana', sub: 'Text/Image to Image · the keyframe', cat: 'Image', glyph: '✦', grad: 'linear-gradient(135deg,#b45309,#fbbf24)' },
-  { type: 'zpf/generate', title: 'Runway Gen-4 Turbo', sub: 'Text/Image to Video', cat: 'Video', glyph: '▶', grad: 'linear-gradient(135deg,#9f1239,#f87171)' },
+  { type: 'zpf/generate', title: 'Generate', sub: 'Text/Image to Video · any keyed renderer', cat: 'Video', glyph: '▶', grad: 'linear-gradient(135deg,#9f1239,#f87171)' },
 ];
 const PALETTE_CATS = ['All', 'Text', 'Image', 'Video'];
 let paletteCat = 'All';
@@ -1834,6 +1837,18 @@ export async function openConceptInDirector(id) {
   } catch (e) {
     await ensureDirectorView();
     stateline($('dirstate'), 'error', `Could not open concept: ${e.message}`);
+    return;
+  }
+  // The React Director (web/, its own Fly app) is where a planned
+  // concept opens when the shell knows its address -- DIRECTOR_FRONTEND_URL
+  // on the body -- unless ?legacy=1 asks for this canvas explicitly.
+  const reactDirector = document.body.dataset.directorUrl;
+  if ((d.shots || []).length && reactDirector
+      && new URLSearchParams(location.search).get('legacy') !== '1') {
+    const destination = new URL(reactDirector, location.origin);
+    destination.searchParams.set('concept', id);
+    destination.searchParams.set('shot', d.shots[0].n);
+    location.assign(destination.href);
     return;
   }
   if (!(d.shots || []).length) {

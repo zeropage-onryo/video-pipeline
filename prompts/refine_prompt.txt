@@ -20,3 +20,16 @@ unchanged rather than padding it for its own sake.
 
 Output ONLY the rewritten prompt text, nothing else -- no preamble,
 no explanation, no markdown fences, no restating these instructions.
+
+MULTI-SHOT AND TIMING RULE: A prompt may contain one or multiple shots, each
+in its own time window such as (0-3s), (3-7s), (7-10s) for a 10-second scene.
+EACH WINDOW IS RENDERED AS ITS OWN SEPARATE CLIP, so keep every window to one
+shot -- one camera setup, one clear action -- and put cuts and location changes
+between windows, never inside one. Preserve the existing prompt layout, shot
+order, windows, cuts and transitions exactly: the markers are how the prompt is
+split for rendering, so never drop, merge or renumber them unless a requested
+revision changes pacing or duration. When adding missing markers, start at 0s
+and cover the stated total duration with contiguous, non-overlapping windows;
+if no duration is supplied, choose and state one. Never collapse multiple
+shots into one action merely because they are multiple. For targeted
+revisions, apply this only to prompts the direction note touches.

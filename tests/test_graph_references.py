@@ -126,10 +126,11 @@ def test_research_images_never_take_the_anchor_slot(tmp_db, photo_bank):
 def test_refs_are_capped_at_what_one_generation_carries(tmp_db, photo_bank):
     photo_bank("character", "michael", *[f"{i}.jpg" for i in range(8)])
     entities.add_character("Michael", dsn=tmp_db, account_id=None)
-    extra = [refbin.save(JPEG + bytes([i])) for i in range(6)]
+    extra = [refbin.save(JPEG + bytes([i])) for i in range(scene_chain.MAX_REFS)]
     scene_id = a_scene(tmp_db, "Michael waits.")
     refs = scene_chain.attach_refs(scene_id, extra, db_path=tmp_db)
-    assert len(refs) == scene_chain.MAX_REFS == 6
+    # 12 since 2026-09-10 -- one number shared with the composer and the API
+    assert len(refs) == scene_chain.MAX_REFS == 12
 
 
 def test_a_scene_naming_nothing_still_renders_on_its_text(tmp_db, photo_bank):
@@ -301,11 +302,15 @@ def test_a_spark_banked_with_no_images_is_a_normal_night(tmp_db, photo_bank):
 
 # --- and they survive a cast that would otherwise fill every slot ------------
 
-def test_research_survives_a_scene_that_names_the_whole_cast(tmp_db, photo_bank):
+def test_research_survives_a_scene_that_names_the_whole_cast(tmp_db, photo_bank, monkeypatch):
     """The bug ordering alone could not fix. Four named assets plus more
     angles of the face spend all six slots before `extra` is read, so
     "research images go last" silently meant "research images go
-    nowhere" -- which looks exactly like an empty bin."""
+    nowhere" -- which looks exactly like an empty bin.
+
+    Pinned at the six-slot cap it was found at: the reservation logic is
+    the subject, and 12 slots would never fill with this cast."""
+    monkeypatch.setattr(scene_chain, "MAX_REFS", 6)
     photo_bank("character", "michael", "a.jpg", "b.jpg", "c.jpg")
     photo_bank("prop", "ducati", "bike.jpg")
     photo_bank("prop", "jacket", "coat.jpg")
@@ -343,9 +348,11 @@ def test_a_run_with_no_research_still_spends_every_slot_on_the_cast(tmp_db, phot
     assert len([r for r in refs if "michael" in r]) == scene_chain.CHARACTER_REF_PHOTOS
 
 
-def test_the_cast_still_wins_when_they_actually_compete(tmp_db, photo_bank):
+def test_the_cast_still_wins_when_they_actually_compete(tmp_db, photo_bank, monkeypatch):
     """Six named assets is six named assets. The reservation comes out of
-    extra face angles, which are a refinement -- never out of identity."""
+    extra face angles, which are a refinement -- never out of identity.
+    Pinned at a six-slot cap so the cast actually fills it."""
+    monkeypatch.setattr(scene_chain, "MAX_REFS", 6)
     for slug in ("michael", "cyclops"):
         photo_bank("character", slug, "a.jpg")
     for slug in ("ducati", "jacket", "helmet", "gloves"):

@@ -55,9 +55,11 @@ from . import db
 # spellings of "judge" within a month. `unknown` is the default so every
 # existing caller keeps working; the labelling pass names them.
 STAGES = (
+    "creative_guide",   # conversational development before Create
     "concepts",        # scene / concept generation (shootgen, rework's slate)
     "logline",         # the board's card line
     "shot_prompt",     # promptgen: structure a Shot, refine a tool prompt
+    "timeline",        # timeline.plan: a scene's timed windows -> its shots
     "prompt_gate",     # the orchestrator's credit-gate judge
     "taste_judge",
     "uncanny_judge",
@@ -120,6 +122,13 @@ DEFAULT_PRICES: dict[str, dict[str, float]] = {
     "gemini-3-flash-preview":   {"input": 0.50, "output": 3.00, "cached": 0.05},
     "gemini-3.1-flash-lite":    {"input": 0.25, "output": 1.50, "cached": 0.025},
     "gemini-pro-latest":        {"input": 2.00, "output": 12.00, "cached": 0.20},   # estimate
+    # The reasoning tier (gemini_utils.BRAINS). Read off
+    # ai.google.dev/gemini-api/docs/pricing 2026-09-09: $2/$12 per 1M at
+    # a <=200k prompt, $4/$18 above it -- this repo's prompts are far
+    # under that, so the cheap half is the honest estimate and the page
+    # already says every figure here is one. Thinking tokens bill at the
+    # OUTPUT rate and are already summed in below.
+    "gemini-3.1-pro-preview":   {"input": 2.00, "output": 12.00, "cached": 0.20},
     "gemini-2.5-flash":         {"input": 0.30, "output": 2.50, "cached": 0.03},
     "gemini-2.5-flash-lite":    {"input": 0.10, "output": 0.40, "cached": 0.01},
     "gemini-2.5-flash-image":   {"input": 0.30, "output": 2.50, "cached": 0.03, "image": 0.039},

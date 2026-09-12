@@ -15,6 +15,7 @@ python-multipart
 Pillow
 pillow-heif   # .heic decoding -- iPhone photos are half the asset bank, and without this a HEIC reference is accepted, listed, and then silently dropped at render
 psycopg[binary]
+psycopg_pool>=3.2,<4   # reuse remote connections for the web server's lifespan
 pgvector
 pypdf   # /library/ingest's PDF file upload -- text extraction before chunking
 langgraph

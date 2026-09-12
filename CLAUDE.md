@@ -241,6 +241,58 @@ both would have meant one tile that could only ever read 100%. `pick_rate` and
 change, `shots_json` was always flexible), which is what carries them into the enhance,
 the keyframe and the clip when it opens in Director.
 
+**A scene is written as TIMED SHOTS and rendered ONE SHOT AT A TIME (2026-09-10, Mike's
+call).** The one-continuous-action rule is gone: a scene prompt's BEATS are now timed
+windows — `(0-3s)` one shot, `(3-7s)` a different one, cuts and location changes between
+them — filling a total length (`timeline.scene_seconds`: the composer's `cseconds` select via
+`GET /api/scene-lengths`, else `ZEROPAGE_SCENE_SECONDS`, else 10; clamped 4–30, never
+refused). Both writer templates get `{seconds}`, and tell the writer each window is rendered
+as its own clip, so each window must be ONE shot (one camera setup, one clear action, 2–10s).
+**`src/timeline.py` is the step between the scene and the renderer.** It runs on the SAME
+brain that wrote the scene (the composer's Reasoning tier, or `ZEROPAGE_BRAIN` at night) and
+turns the windows into `shot["timeline"]` = `{seconds, planner, source, brain, continuity,
+parts: [{n, start, end, seconds, text, prompt, refs, reference_image, media_url}]}` — one
+row, one shot, one scene still (`is_scene` is untouched); the parts live one level down.
+The rules code enforces, not the model:
+
+- **The windows are the scene's**, parsed off the prompt (`parse_windows`; a single window,
+  or none, means no timeline — the scene renders whole, as every scene before 2026-09-10
+  does). An answer that does not give one shot per window is refused and the deterministic
+  split (`fallback`: the window's sentence, the rest of the scene as continuity, every ref)
+  is used instead, labelled `planner: "split"`.
+- **A part's refs are picked by NUMBER from the scene's own refs** (the model is shown each
+  photo under its number), dropped if out of range, and re-sorted into the scene's order — a
+  part can only narrow the scene's grounding, so `reference_gate` on the scene still covers
+  every part, and identity stays first.
+- **Continuity is prepended in code** (`render_prompt`): `CONTINUITY …` then `SHOT n OF N
+  (a-bs, Ns): …`. A model asked to repeat the scene's memory in every shot drifts by shot 4.
+- **Staleness is checked on read** (`source` = hash of prompt + refs; `is_current`), the
+  `seed_hash` pattern: a Director edit or a new ref makes it stale and `timeline.ensure`
+  re-plans, carrying over any still/clip whose window, sentence and refs did not change.
+
+Where it runs: `scene_chain.plan_timeline` after `attach_refs` in Create (in parallel, one
+copied context per thread so `spend.bind` still attributes the calls), and in the graph's
+`keyframe` node after `persist_prompt` (the refined prompt is the one that renders), whether
+or not the night draws. **Keyframes:** `keyframe_scene` draws ONE STILL PER SHOT
+(`_keyframe_timeline`) — the part's composed prompt, its own refs, the previous shot's still
+labelled `CONTINUITY_REF_LABEL` (continuity, not composition), and a beat note saying it is
+the shot's FIRST frame, because that is what its clip anchors on. Shot 1's still is the
+scene's `reference_image`; a strip cut short by `NANO_DAILY_CAP` is finished by picking
+again (`pick_skip_reason` only says "already has a still" once every part has one).
+**Rendering:** `queue_approve` renders a timed scene through `_render_timeline` — every
+part, in order, through the SAME `generate_for_shot(..., part=n)` each adapter already has
+(all four grew `part`; `timeline.render_target` reads the part's prompt/still, and
+`timeline.attach_part` stores the clip), so the spend approval, the daily cap and the
+generations row are per clip exactly as before. Each part's length is its window fitted UP
+to the model (`timeline.fit_seconds`: a 3s window is a 5s Runway clip, trimmed in the edit),
+priced by `providers.check_timeline_choice`; the card's duration control is hidden for such a
+scene. Parts with a clip are skipped and the loop stops at the first failure, so approving
+again resumes rather than re-buying shot 1. When the LAST part lands, the scene's own
+`media_url` is set to shot 1's clip — the marker every existing reader means by "rendered" —
+**not** a stitched cut: the edit is still Mike's, in Resolve (the L1 hold), and the parts are
+listed in order on the card for exactly that. The Queue card shows the shots (`_timeline_card`;
+bare windows when not yet planned). `spend.STAGES` gained `timeline`.
+
 **The references now actually get attached (2026-08-28).** The loop was open at its most
 embarrassing point: `format_cast` tells the generator that Michael and the Ducati have
 "(reference photos on file)", the scene it writes says exactly that, the photos sit in
@@ -355,9 +407,12 @@ the same card. The three surfaces are now split by *what you are doing*, not by 
 row is called:
 
 - **Studio** is where an idea is typed, and the only place. The hero composer carries the
-  idea, its references (uploads or picks out of the asset bank) and a **1–4** count, and
-  posts multipart to `/api/scenes/run` (`SCENE_COUNT_MAX = 4` enforces the cap
-  server-side — the select is not the gate). The Pipeline composer, the legacy "Generate
+  idea, its references (uploads or picks out of the asset bank) and the scene length, and
+  posts multipart to `/api/scenes/run`. **One Create writes ONE scene** (2026-09-10, Mike's
+  call): the old 1–4 takes picker is gone, `SCENE_COUNT_MAX = 1` enforces it server-side
+  whatever `count` a client posts, and `generate_scene_concepts` never saves more takes
+  than it asked for. The multi-take generator itself stays (the graph and CLI can still
+  ask for N); only Studio stopped offering it. The Pipeline composer, the legacy "Generate
   scene" bar and the Generate tab are gone; `app/static/zpf/generate.js` was deleted.
   **Create writes concepts and stops on the board** (2026-08-29, Mike's call): pressing it
   is for reading concepts, not for a minute of billed work nobody asked for. Enhancing and
@@ -384,8 +439,22 @@ row is called:
   than clamping it (the adapters clamp internally — that is their contract with the graph,
   which has no human to refuse to). Every gate that was there is unchanged and in the same
   order: no prompt, not queued, no reference photos, the pick recorded before the spend,
-  and the per-run `*_SPEND_OK` approval still checked inside the adapter's own
-  `generate_video` so no caller can spend around it. `GET /api/queue/pending` is derived from the rows
+  and the spend approval still checked inside the adapter's own `generate_video` so no
+  caller can spend around it. **WHAT SATISFIES THAT APPROVAL CHANGED (2026-09-09, Mike's
+  call): the click is the approval.** It used to be `*_SPEND_OK=1` in the server's
+  environment, which meant this button did nothing until somebody restarted the server
+  with a variable set — and once set for one render it stayed set for the session, which
+  is exactly the "approval that's always on" the gate was written to prevent, reached the
+  long way round. `spend_approved(approved=None)` now takes the caller's own answer and
+  falls back to the environment only when nobody gave one; the routes a person drives
+  (Queue approve, the board's per-shot render, `/api/generate/run`'s video branch,
+  `/api/workflows/exec/generate`, and the Director canvas's Generate node) pass
+  `approved=True`, and `orchestrator.py` / `autopilot.py` pass nothing — so an unattended
+  run still needs `*_SPEND_OK` armed for it on purpose, on top of `ZEROPAGE_RENDER=1` and
+  the L4 gate. `providers.usable()` (and so `choose_provider`) deliberately still reads
+  the environment, because its only caller is the nightly graph's failover. **The daily
+  caps are untouched and are now the only automatic wall** — `RUNWAY_DAILY_CAP` and
+  friends, default 6/vendor/day, enforced from the generations table. `GET /api/queue/pending` is derived from the rows
   (**parked or picked**, not archived, no `media_url`) rather than from the jobs registry,
   which is an in-process dict a restart clears — an approval queue that quietly emptied
   itself on restart would be a queue that lies. The live job registry stays underneath it,
@@ -409,7 +478,8 @@ out from under you, and racily, since it ran after Runway returned ~90s later.
 **The night does the rest (2026-08-29, Mike's call.)** Enhancing, keyframing and
 rendering happen in the **Director canvas** when Michael is steering a scene, and in the
 **nightly graph** when nobody is. `src/scene_chain.py` holds one implementation of each
-stage — `ground`, `write_scenes`, `persist_prompt`, `keyframe_scene`, `park_scene` — so
+stage — `ground`, `write_scenes`, `plan_timeline`, `persist_prompt`, `keyframe_scene`,
+`park_scene` — so
 those three callers share code instead of growing three copies of "render a keyframe"
 that drift apart. The two app-layer capabilities `src/` cannot reach (which asset photos a
 scene named; how to resolve a site-relative photo to a file) are **injected as callables**,
@@ -442,7 +512,8 @@ background job) and from the MCP `pick`, guarded by one shared `scene_chain.pick
 so the two doors cannot drift into billing a scene twice. It is skipped for a scene that
 already has a `reference_image` (re-picking must not re-bill, and Director's own keyframe is
 the one a person chose) and `ZEROPAGE_KEYFRAME_ON_PICK=0` turns it off. `NANO_DAILY_CAP` is
-60: a pick draws one still per BEAT, not one per scene.
+60: a pick draws one still per SHOT of a timed scene (one per beat of a one-window scene),
+not one per scene.
 **A walk is 5 sparks × 2 brands = 10 runs** (`NIGHTLY_SPARKS`, cut from every line of
 sparks.txt — 20 — on the same day, "we'll increase it once I see it gets better").
 The historical note: while the night did draw, only a scene whose prompt cleared the judge
@@ -556,6 +627,8 @@ a spark (typed, or scouted)  +  reference IMAGES  +  RAG library  +  brand brief
                         shootgen.generate_scene_concept(s)   <-- Studio Create, or the
                                                   |               nightly graph's gen_concept
                           shoot_concepts row: ONE scene, ONE prompt, refs on the shot
+                                                  |
+             timeline.plan: timed windows -> shots, each with its own refs + the scene's memory
                                                   |
                         no refs? -> archived immediately (preprod.NO_REFERENCE, never boards)
                                                   |
@@ -869,10 +942,12 @@ is yours, in Resolve, by hand.
   tool prompt / Director rendering, render free in the tool's own app, and paste the
   finished clip's URL back (`set_shot_media_url`) — the default path — or one click
   through `src/runway.py`'s `generate_for_shot` (added 2026-08-21 on the existing
-  connector), which only fires when `RUNWAYML_API_SECRET` is set AND the per-run spend
-  gate `RUNWAY_SPEND_OK=1` is on: API calls always burn API credits even on the
-  Unlimited plan, so the module's own gate inside `generate_video` is the wall, the
-  button shows the priced estimate, and refusal points at the free app path. Every
+  connector), which fires when `RUNWAYML_API_SECRET` is set — pressing it IS the spend
+  approval since 2026-09-09, so the route passes `approved=True` and no environment
+  variable stands between the button and the render. API calls always burn API credits
+  even on the Unlimited plan, so the module's own gate inside `generate_video` is still
+  the wall (an unapproved caller is still refused there), the button shows the priced
+  estimate, and refusal points at the free app path. Every
   attempt is a generations row under `RUNWAY_DAILY_CAP`; the shot's `reference_image`
   (public URL) anchors as `prompt_image`; the clip downloads immediately (Runway URLs
   are ephemeral) to `data/renders/`, uploaded to R2 when configured, else served via
@@ -947,6 +1022,33 @@ is yours, in Resolve, by hand.
   exist only as uncommitted work in the main checkout's overnight branch, and the Next
   composer shows those pills only when the routes answer. The vanilla Gen Space on `/ui`
   stays as the reference implementation the React one was ported from.
+- **The overnight session's working tree landed on main (2026-09-12, second
+  reconcile).** Everything that had sat uncommitted in the main checkout on
+  `claude/overnight-20260907` -- the creative guide (`src/creative_guide.py`,
+  `POST /api/creative-guide`, a job), creative projects, the shot timeline
+  (`src/timeline.py`, `GET /api/scene-lengths`), `GET /api/brains` and
+  `GET /api/render-choices` (the composer's pills, PROJECTED off
+  `gemini_utils.BRAINS` and `render_specs`), personal model runtimes
+  (`src/personal_models.py` + `app/model_connections.py`: a person's own
+  ChatGPT/Claude CLI login, sessions under `data/model_sessions/` on the
+  volume, never in the image -- hence the `model-runtime` stage in the
+  Dockerfile that ships the Codex CLI), per-account renderer keys, the
+  Pinterest token scripts and the vanilla studio's panels for all of it --
+  was committed as found (99c9ce9) and merged. Left out on purpose: the
+  media under `docs/reference-look/sprint4` and `wide_worlds_keyframes/`,
+  `imports/`, `data/*.bak*`, and Codex's own `.agents/` + `AGENTS.md`.
+  **Two decisions in the merge.** The deploy shape stays TWO Fly apps: that
+  tree bundled the Next app into the API image behind nginx on 8080 with only
+  `/studio/flows` proxied, while main already serves the whole `/studio` from
+  `zeropage-web`; the API image keeps the Codex stage and drops the Next
+  build, nginx and the director/proxy supervisord programs. And the vanilla
+  `/ui` hands a PLANNED concept to the React Director: `DIRECTOR_FRONTEND_URL`
+  (fly.toml points it at `zeropage-web.fly.dev/studio/flows`; locally it
+  defaults to `:3000`) reaches the body as `data-director-url`, and
+  `genspace.openConceptInDirector` redirects there unless `?legacy=1` asks for
+  the vanilla canvas -- ported from the `workflows.js` edit, since that file
+  no longer exists. The Generate node's gate note reads `video.generate`
+  (any keyed renderer), not Runway's key alone.
 - **`src/mcp_server.py`** + **`app/mcp_mount.py`** — the MCP surface (2026-08-31), so the
   board can be read and decided on from a phone or an agent instead of only from this
   machine. **An adapter, never a store:** every tool is a thin call into `preprod` or
@@ -1391,6 +1493,12 @@ clip, posting it, and recording metrics. L4 exists as `src.autopilot` — gated,
 off, executors unwired.
 
 **Known gaps, in rough priority:**
+- **Timed scenes (2026-09-10) are rendered shot by shot only at the Queue.** The graph's
+  `generate_render` (a dry stub unless `ZEROPAGE_RENDER=1`) still renders a scene's whole
+  prompt as one clip, and the Director canvas still edits the whole scene prompt rather than
+  one shot of it. Both read `shot["timeline"]` for free when they are taught to. The Queue
+  card's `fitSeconds` is a JS twin of `timeline.fit_seconds` (the price label); the server's
+  `check_timeline_choice` on the approve response is the authoritative figure.
 - `src/fal.py`'s image-to-video field name is `image_url` for every model in the table;
   that is documented for Seedance 2.0 and inferred from the playground's "Start Image
   Url" label for Wan 3.0 and LTX-2.3. Verify on the first live i2v render for those two.

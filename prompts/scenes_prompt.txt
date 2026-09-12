@@ -2,10 +2,11 @@ You write {count} SEPARATE, paste-ready SCENE PROMPTS for an AI video model that
 generates a whole scene from a single description (Veo / Sora / Kling / Runway /
 OpenArt Director). Return ONLY JSON, no markdown fences, no preamble.
 
-Each one is a STANDALONE scene — a single continuous moment that stands on its
-own and gets rendered on its own. This is NOT a shot list, and the scenes are
-NOT parts of one longer video: the filmmaker will pick the ones worth rendering
-and discard the rest, so make each one a different swing at the idea rather than
+Each one is a STANDALONE scene that may contain one or multiple shots, cuts and
+locations, and is {seconds} seconds long. These separate prompts are
+alternative takes, NOT parts of one longer video: the filmmaker will pick the
+ones worth rendering and discard the rest, so make each one a different swing
+at the idea rather than
 {count} angles on the same swing. Vary the situation, the location, the tone and
 the hook against each other.
 
@@ -53,10 +54,18 @@ Write each "prompt" as a single cohesive directive with these five parts, in ord
    real locations, grounded and rough — NOT glossy, epic or stylized. Fold in
    the run's references and stated mood here. Use the channel's fallback grade
    only where those inputs leave the look unspecified.
-3. BEATS: 4-7 sequential beats in prose. Open on an uncomfortable or arresting
-   image (the frame-1 hook), turn/reveal, escalate with grounded physical
-   comedy or tension, and END ABRUPTLY. Reactions are serious and physically
-   believable — that restraint is what makes it funny or tense, never cartoon.
+3. BEATS: the scene as timed shots, each opening with its window, e.g.
+   (0-3s), (3-7s), (7-10s) for a 10-second scene. Start at 0s; windows are
+   contiguous, never overlap, and end at exactly {seconds}s. EACH WINDOW IS
+   RENDERED AS ITS OWN SEPARATE CLIP, one after another, by a model that sees
+   only that window -- so every window is ONE shot: one camera setup, one
+   clear action that fits its length, 2-10 seconds long. Cuts and location
+   changes happen BETWEEN windows, never inside one; say them ("hard cut to",
+   "reverse on"). One window for the whole scene is right when the idea is one
+   continuous moment. Open on an uncomfortable or arresting image (the frame-1
+   hook), turn/reveal, escalate with grounded physical comedy or tension, and
+   END ABRUPTLY. Reactions are serious and physically believable — that
+   restraint is what makes it funny or tense, never cartoon.
 4. SOUND: begin "No background music." then the diegetic sound only — exactly
    what you would hear in that scene.
 5. AVOID: no polished/fantasy gloss, no dramatic slow motion, no glossy CGI, no

@@ -70,10 +70,19 @@ export function applyCaps(caps) {
   });
 }
 
+let assetsRequest = null;
 export async function loadAssets(force = false) {
+  // A refresh after an upload must read again, even if an older catalogue
+  // request was already running when the upload completed.
+  if (force && assetsRequest) await assetsRequest.catch(() => {});
   if (state.assets && !force) return state.assets;
-  state.assets = await api('/api/assets');
-  return state.assets;
+  if (!assetsRequest) {
+    assetsRequest = api('/api/assets').then(data => {
+      state.assets = data;
+      return data;
+    }).finally(() => { assetsRequest = null; });
+  }
+  return assetsRequest;
 }
 
 /* Presets: prompts/presets.json via /api/presets, cached once. The

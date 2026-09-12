@@ -100,8 +100,16 @@ def conforms(module: ModuleType) -> list[str]:
 def usable(account_id: Optional[int] = None, *,
            tools: Optional[list[str]] = None) -> list[str]:
     """Tool names with a resolvable key (this account's own, per BYOK, or
-    the environment fallback) AND spend approved for this run. Does NOT
-    check the daily cap -- that's a per-attempt decision each provider's
+    the environment fallback) AND spend approved for this run.
+
+    Deliberately still the ENVIRONMENT approval, not the per-call one
+    (2026-09-09). Its only caller is choose_provider(), whose only
+    caller is orchestrator.generate_render's failover -- an unattended
+    path, where "approved" has to mean somebody armed this night on
+    purpose. The Queue's picker does not come through here; it asks
+    render_options() and gates on a key.
+
+    Does NOT check the daily cap -- that's a per-attempt decision each provider's
     own generate_candidates already makes, because it also has to log the
     attempt either way the check comes out."""
     names = tools if tools is not None else list(VIDEO_PROVIDERS)
@@ -227,14 +235,32 @@ def _runway_models() -> list[dict]:
     from . import render_specs
     out = []
     for name, spec in sorted((render_specs.RUNWAY_MODELS or {}).items()):
+        legal_durations = [int(d) for d in spec.get("durations") or ()]
+        if legal_durations:
+            # a SET of two, not a span -- see check_duration in render_specs
+            duration = _choices(legal_durations, runway.DEFAULT_DURATION)
+        else:
+            # Seedance's SDK type declares a bare `duration: int` and Runway
+            # publishes no list of legal lengths, so there is nothing to
+            # offer as THE options. Offering none would leave the card with
+            # an empty control and a null default; offering an invented span
+            # would claim a verification nobody did. So the card gets the two
+            # lengths this pipeline actually renders, and the note says that
+            # is what they are.
+            duration = _choices(
+                [runway.DEFAULT_DURATION, render_specs.LANE_DURATION],
+                runway.DEFAULT_DURATION,
+                note="Runway publishes no duration list for this model; "
+                     "these are the two lengths this pipeline renders.")
         out.append({
             "id": name,
             "label": name,
             "available": True,
-            # a SET of two, not a span -- see check_duration in render_specs
-            "duration": _choices([int(d) for d in spec.get("durations") or ()],
-                                 runway.DEFAULT_DURATION),
+            "duration": duration,
             "frame": _choices(list(spec.get("ratios") or ()), runway.DEFAULT_RATIO),
+            # Whether a render on this model can carry the shot's reference
+            # photos, or whether they only reach it baked into the keyframe.
+            "references": render_specs.takes_references("runway", name),
             "verified": spec.get("verified"),
         })
     return out
@@ -308,8 +334,11 @@ _MODEL_PROJECTIONS = {
 # Higgsfield scales an estimate by duration; only fal's is close to an
 # invoice, because only fal publishes a per-second rate per model.
 _ESTIMATORS = {
+    # `frame` IS the ratio on this lane, and Seedance bills per resolution
+    # tier -- so a 1080p reference render prices at 68 credits/s here
+    # instead of silently quoting the 720p rate on the approve button.
     "runway": lambda model, duration, frame: runway.estimate_cost(
-        1, model=model, duration=duration),
+        1, model=model, duration=duration, ratio=frame),
     "fal": lambda model, duration, frame: fal.estimate_cost(
         1, model=model, duration=duration, resolution=frame),
     "higgsfield": lambda model, duration, frame: higgsfield.estimate_cost(
@@ -374,9 +403,20 @@ def _price_for(provider: str, spec: dict) -> dict:
         # one flat preview price, duration-independent
         return {"kind": "flat", "usd": veo.estimate_cost(1)}
     if provider == "runway":
-        per_second = runway.CREDITS_PER_SECOND.get(
-            model, max(runway.CREDITS_PER_SECOND.values())) * runway.CREDIT_USD
-        return {"kind": "per_second", "usd": per_second}
+        # Seedance bills per resolution tier, so ONE per-second number
+        # cannot label it: a card multiplying the 720p rate would under-
+        # quote a 1080p render by more than half. usd_by_frame is fal's
+        # shape, reached for here for fal's reason -- and `usd` stays
+        # beside it so the gen4 pair, whose rate really is one number,
+        # keeps labelling exactly as before.
+        frames = spec["frame"]["values"] or [runway.DEFAULT_RATIO]
+        by_frame = {frame: runway.credits_per_second(model, frame) * runway.CREDIT_USD
+                    for frame in frames}
+        default = runway.credits_per_second(
+            model, spec["frame"]["default"]) * runway.CREDIT_USD
+        if len(set(by_frame.values())) > 1:
+            return {"kind": "per_second", "usd": default, "usd_by_frame": by_frame}
+        return {"kind": "per_second", "usd": default}
     if provider == "higgsfield":
         # an ESTIMATE scaled off a per-clip base at the default length --
         # higgsfield.estimate_cost's own arithmetic, not a second guess
@@ -474,6 +514,26 @@ def check_render_choice(provider: Optional[str] = None, model: Optional[str] = N
             "estimate_usd": _ESTIMATORS[provider](model, seconds, framed)}
 
 
+def check_timeline_choice(provider: Optional[str] = None, model: Optional[str] = None,
+                          frame=None, windows=()) -> dict:
+    """check_render_choice for a scene of several timed shots
+    (src/timeline.py, 2026-09-10): the same provider / model / frame
+    checks, refused the same way, but the LENGTH is not the card's to pick
+    -- each shot's window decides its own, fitted up to the nearest length
+    the model can make (timeline.fit_seconds: a 3s window is a 5s Runway
+    render, trimmed in the edit). Returns the per-shot lengths and the sum
+    of their estimates, so the card can show what the whole scene costs
+    before anything is billed."""
+    from . import timeline
+    choice = check_render_choice(provider, model, None, frame)
+    axis = model_options(choice["provider"], choice["model"])["duration"]
+    durations = [timeline.fit_seconds(axis, w) for w in windows or ()]
+    estimate = sum(_ESTIMATORS[choice["provider"]](choice["model"], d, choice["frame"])
+                   for d in durations)
+    return {**choice, "duration": None, "durations": durations,
+            "estimate_usd": round(estimate, 4)}
+
+
 def provider_state(provider: str, account_id: Optional[int] = None,
                    db_path=None) -> dict:
     """Whether approving on this renderer could even happen, and what it
@@ -499,7 +559,19 @@ def provider_state(provider: str, account_id: Optional[int] = None,
     return {
         "label": RENDER_LABELS.get(provider, provider),
         "available": available,
-        "spend_ok": bool(module.spend_approved()),
+        # A KEY IS THE WHOLE GATE ON THIS SURFACE (2026-09-09, Mike's
+        # call). `spend_ok` used to be `module.spend_approved()` -- the
+        # *_SPEND_OK environment variable -- and the card dimmed Approve
+        # whenever it was unset, so the button that IS the approval
+        # could not be pressed until somebody restarted the server with
+        # a variable that then stayed set all session. The approval is
+        # the click; the route passes it explicitly.
+        "spend_ok": available,
+        # The env override, reported because it is still what an
+        # unattended run (orchestrator, autopilot, the CLI) needs and
+        # the one place a person can see whether it is armed. It is NOT
+        # a gate on anything a person clicks.
+        "env_override": bool(module.spend_approved()),
         "spend_env": getattr(module, "SPEND_ENV", None),
         "cap": getattr(module, "DAILY_CAP", None),
         "today": today,
@@ -524,3 +596,102 @@ def render_options(account_id: Optional[int] = None, db_path=None) -> dict:
             "default_model": default_model(name) if models else None,
         }
     return out
+
+
+# --------------------------------------------------------------------------
+# which renderer THIS account can actually use -- one answer for every door
+# --------------------------------------------------------------------------
+# 2026-09-11, Mike: "the render button doesn't work ... it said Runway key
+# not set", then "make it whatever I can use". Every door that spends on a
+# clip -- the Queue card's default, an empty approve body, the Director
+# Generate node's own Run and its Run all -- used to start from a fixed
+# vendor (the shot's planned tool, or Runway), so an account holding a
+# Higgsfield key and no Runway key opened every one of them on a dead
+# button. The plan still leads when the account can render it; when it
+# cannot, the door falls to the cheapest thing the account CAN render
+# instead of refusing. One function so the doors cannot disagree -- the
+# same reason platform_default is one function.
+
+def _keyed(provider: str, account_id: Optional[int]) -> bool:
+    """Has this account a key for this vendor (its own BYOK secret or the
+    installation's environment one)? Never raises: a vendor whose key
+    lookup breaks is a vendor this account cannot use right now."""
+    try:
+        return bool(VIDEO_PROVIDERS[provider].has_key(account_id))
+    except Exception:
+        return False
+
+
+def _default_cost(provider: str, spec: dict) -> float:
+    """What one clip of this model costs at its own default length and
+    frame -- the ranking key for the fallback. Unpriced sorts last."""
+    try:
+        usd = _ESTIMATORS[provider](spec["id"], spec["duration"]["default"],
+                                    spec["frame"]["default"])
+        return float(usd) if usd is not None else float("inf")
+    except Exception:
+        return float("inf")
+
+
+def renderer_for(account_id: Optional[int] = None,
+                 provider: Optional[str] = None,
+                 model: Optional[str] = None, *,
+                 needs: str = "generate_for_shot") -> Optional[dict]:
+    """{"provider", "model"} this account can render on, or None.
+
+    `provider`/`model` are the preference -- the shot's plan, or what a
+    caller asked for. It wins whenever the account holds that vendor's key
+    and the model is reachable. Otherwise: the CHEAPEST reachable model
+    (at its default length) on any vendor the account holds a key for.
+
+    `needs` is the adapter entry point the door will call. Veo has no
+    generate_from_prompt, so the Director's Generate node must never be
+    handed it; the Queue calls generate_for_shot, which all four have.
+
+    None means the account holds no key for any vendor that can do the
+    job -- the one case where a door should refuse, and say so."""
+    name = (provider or "").strip().lower()
+    if name in VIDEO_PROVIDERS and hasattr(VIDEO_PROVIDERS[name], needs) \
+            and _keyed(name, account_id):
+        try:
+            spec = model_options(name, model or default_model(name))
+        except ValueError:
+            spec = None
+        if spec and spec["available"]:
+            return {"provider": name, "model": spec["id"]}
+
+    best = None
+    for candidate in VIDEO_PROVIDERS:
+        if not hasattr(VIDEO_PROVIDERS[candidate], needs):
+            continue
+        if not _keyed(candidate, account_id):
+            continue
+        try:
+            specs = models_for(candidate)
+        except Exception:
+            continue
+        for spec in specs:
+            if not spec.get("available"):
+                continue
+            cost = _default_cost(candidate, spec)
+            if best is None or cost < best[0]:
+                best = (cost, candidate, spec["id"])
+    return {"provider": best[1], "model": best[2]} if best else None
+
+
+def render_default(tool: Optional[str],
+                   account_id: Optional[int] = None) -> dict:
+    """The Queue's default for a shot planned for `tool`: the plan when
+    this account can render it, else the cheapest renderer it can, else
+    the plan anyway (nothing is keyed, and the card then says which key
+    is missing rather than naming a vendor nobody chose).
+
+    Both the listing (`render_default` on each card) and an approve with
+    an empty body resolve through here, so what the card offers first and
+    what an empty approve spends on cannot come apart."""
+    planned = platform_default(tool)
+    want = planned or (DEFAULT_PROVIDER, default_model(DEFAULT_PROVIDER))
+    usable_pick = renderer_for(account_id, want[0], want[1])
+    if usable_pick:
+        return usable_pick
+    return {"provider": want[0], "model": want[1]}

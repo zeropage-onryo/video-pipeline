@@ -105,8 +105,7 @@ CREATE TABLE IF NOT EXISTS account_keys (
 
 
 def _ensure(conn) -> None:
-    """The table, on an open connection -- every function below calls it
-    first, so the first key stored on a fresh database creates it."""
+    """Initialize schema on writes. Reads must not run DDL on page loads."""
     conn.execute(SCHEMA)
     _db.own_table(conn, "account_keys")   # the FK to accounts(id)
 
@@ -153,7 +152,8 @@ def clear_key(account_id: int, provider: str, dsn: Optional[str] = None) -> bool
 
 def list_providers(account_id: int, dsn: Optional[str] = None) -> list[dict]:
     with _db.connect(dsn) as conn:
-        _ensure(conn)
+        if not _db.table_exists(conn, "account_keys"):
+            return []
         rows = conn.execute(
             "SELECT provider, updated_at FROM account_keys "
             "WHERE account_id = %s ORDER BY provider",
@@ -192,12 +192,14 @@ def key_and_source(account_id: Optional[int], provider: str,
 
     if account_id is not None:
         with _db.connect(dsn) as conn:
-            _ensure(conn)
+            # A fresh database has no stored keys. Checking that is one
+            # read, rather than replaying table/FK/index setup for every
+            # renderer shown on the Queue.
             row = conn.execute(
                 "SELECT ciphertext FROM account_keys "
                 "WHERE account_id = %s AND provider = %s",
                 (account_id, provider),
-            ).fetchone()
+            ).fetchone() if _db.table_exists(conn, "account_keys") else None
         if row:
             payload = json.loads(_fernet().decrypt(row[0].encode()).decode())
             if all(payload.get(f) for f in fields):

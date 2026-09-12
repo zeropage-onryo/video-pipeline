@@ -147,7 +147,11 @@ def test_the_run_route_refuses_an_empty_idea_and_a_missing_key(tmp_db, monkeypat
     assert client.post("/api/scenes/run", data={"idea": "x"}).status_code == 503
 
 
-def test_the_run_route_saves_and_reports(tmp_db, monkeypatch):
+def test_the_run_route_saves_and_reports_one_scene(tmp_db, monkeypatch):
+    """One Create, one scene (2026-09-10, Mike's call). A client still
+    posting count=3 -- and a model answering with three takes anyway --
+    gets ONE saved scene: the route clamps the ask and the generator
+    never saves more than it asked for."""
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     monkeypatch.setattr("google.genai.Client", lambda api_key=None: object())
     monkeypatch.setattr("src.shootgen.reference_block",
@@ -167,17 +171,17 @@ def test_the_run_route_saves_and_reports(tmp_db, monkeypatch):
         data={"idea": "night ride", "count": 3, "brand": "zeropage"},
     ).json()["job_id"])
     assert job["status"] == "done", job.get("error")
-    assert "3 concept(s)" in job["detail"]
+    assert "1 concept(s)" in job["detail"]
 
     body = client.get("/api/pipeline/concepts?brand=zeropage").json()
     scenes = [c for c in body["items"] if c["is_scene"]]
-    assert len(scenes) == 3
+    assert len(scenes) == 1
     assert all(c["prompt"] for c in scenes)          # the card carries the prompt
 
 
-def test_the_composer_caps_the_count_at_four(tmp_db, monkeypatch):
-    """The Studio composer offers 1-4. A hand-rolled request asking for
-    forty does not get to bill forty."""
+def test_the_route_caps_the_count_at_one(tmp_db, monkeypatch):
+    """The Studio composer no longer offers a count (2026-09-10). A
+    hand-rolled request asking for forty is asked of the model as one."""
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     monkeypatch.setattr("google.genai.Client", lambda api_key=None: object())
     monkeypatch.setattr("src.shootgen.reference_block",
@@ -195,7 +199,78 @@ def test_the_composer_caps_the_count_at_four(tmp_db, monkeypatch):
     ).json()["job_id"])
     assert job["status"] == "done", job.get("error")
     assert "40" not in asked["prompt"].split("night ride")[0]
+    assert "You write 1 SEPARATE" in asked["prompt"]
 
+
+# --- which brain writes (2026-09-09) ----------------------------------------
+# The composer picks a model tier per run. Two things are worth pinning:
+# that the tier reaches the model actually asked for, and that the SELECT
+# is not the gate -- the clamp is here, for the same reason count's is.
+
+def _records_the_call(monkeypatch, asked):
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr("google.genai.Client", lambda api_key=None: object())
+    monkeypatch.setattr("src.shootgen.reference_block",
+                        lambda spark=None, client=None, db_path=None: "")
+
+    def fake_model(client_, model, contents, **kwargs):
+        asked["model"] = model
+        asked["config"] = kwargs.get("config")
+        asked["fallbacks"] = kwargs.get("fallbacks")
+        return json.dumps({"scenes": [{"title": "S", "prompt": "P"}]})
+
+    monkeypatch.setattr("src.shootgen.generate_with_retry", fake_model)
+
+
+def _create(**data):
+    return wait_for_job(client.post("/api/scenes/run", data=data).json()["job_id"])
+
+
+def test_create_writes_on_the_fast_tier_by_default(tmp_db, monkeypatch):
+    from src import gemini_utils
+    asked = {}
+    _records_the_call(monkeypatch, asked)
+    job = _create(idea="night ride", count="1", brand="zeropage")
+    assert job["status"] == "done", job.get("error")
+    assert asked["model"] == gemini_utils.FAST_MODEL
+    # the fast tier's request is byte-for-byte the one this path has
+    # always sent: no config, the standard fallback chain
+    assert asked["config"] is None and asked["fallbacks"] is None
+    assert "fast" not in job["detail"]          # the default is not narrated
+
+
+def test_asking_for_the_reasoning_tier_reaches_the_writer(tmp_db, monkeypatch):
+    from src import gemini_utils
+    asked = {}
+    _records_the_call(monkeypatch, asked)
+    job = _create(idea="night ride", count="1", brand="zeropage", brain="reasoning")
+    assert job["status"] == "done", job.get("error")
+    assert asked["model"] == gemini_utils.REASONING_MODEL
+    assert asked["config"].thinking_config.thinking_level == "HIGH"
+    # and it takes no substitute -- an empty list, not None
+    assert asked["fallbacks"] == []
+    assert "reasoning" in job["detail"]         # the card says which brain wrote it
+
+
+def test_an_invented_tier_writes_a_cheap_scene(tmp_db, monkeypatch):
+    """A hand-rolled request naming a tier that does not exist must not
+    fail a run, and must not reach the model as-is."""
+    from src import gemini_utils
+    asked = {}
+    _records_the_call(monkeypatch, asked)
+    job = _create(idea="night ride", count="1", brand="zeropage",
+                  brain="gpt-9-ultra")
+    assert job["status"] == "done", job.get("error")
+    assert asked["model"] == gemini_utils.FAST_MODEL
+
+
+def test_the_menu_is_a_projection_of_the_one_table(tmp_db):
+    from src import gemini_utils
+    body = client.get("/api/brains").json()
+    assert [b["id"] for b in body["brains"]] == list(gemini_utils.BRAINS)
+    assert body["default"] == gemini_utils.DEFAULT_BRAIN
+    assert sum(1 for b in body["brains"] if b["default"]) == 1
+    assert all(b["label"] and b["note"] for b in body["brains"])
 
 # --- the pick ---------------------------------------------------------------
 
@@ -621,8 +696,15 @@ def test_approving_one_take_leaves_its_siblings_in_the_queue(tmp_db, monkeypatch
     assert sorted(c["id"] for c in pending) == takes[1:]   # newest-first listing
 
 
-def test_approving_without_a_runway_key_says_so(tmp_db, monkeypatch):
-    monkeypatch.setattr("src.runway.has_key", lambda account_id=None: False)
+def test_approving_with_no_renderer_key_at_all_says_so(tmp_db, monkeypatch):
+    """EVERY vendor, not just Runway (2026-09-11): approving falls back to
+    whatever the account can render, so one keyed vendor is a render and
+    not a refusal. The suite inherits the operator's own .env on his
+    machine, where Higgsfield IS keyed -- asserting "unconfigured" means
+    saying so for all four, or this passes in CI and fails on his Mac."""
+    from src import fal, higgsfield, runway, veo
+    for vendor in (runway, fal, higgsfield, veo):
+        monkeypatch.setattr(vendor, "has_key", lambda account_id=None: False)
     scene_id = a_scene(tmp_db)
     client.post(f"/api/concepts/{scene_id}/pick", json={"picked": True})
     assert client.post(f"/api/queue/{scene_id}/approve").status_code == 503

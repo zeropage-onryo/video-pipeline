@@ -152,6 +152,9 @@ def current_user(request: Request) -> Optional[dict[str, Any]]:
     """The signed-in user (the mirror row), or None. Signature + age
     checked; a stale or tampered cookie is simply an anonymous request,
     never a 500."""
+    if hasattr(request.state, "auth_user"):
+        return request.state.auth_user
+    request.state.auth_user = None
     token = request.cookies.get(SESSION_COOKIE)
     if not token:
         return None
@@ -160,7 +163,18 @@ def current_user(request: Request) -> Optional[dict[str, Any]]:
     except BadSignature:
         return None
     uid = data.get("uid")
-    return accounts.get_user(str(uid)) if uid else None
+    request.state.auth_user = accounts.get_user(str(uid)) if uid else None
+    return request.state.auth_user
+
+
+def _memberships(request: Request, user: dict) -> list[dict]:
+    """Reuse within one request only; the next request rechecks access."""
+    if not hasattr(request.state, "auth_memberships"):
+        request.state.auth_memberships = {}
+    cached = request.state.auth_memberships
+    if user["id"] not in cached:
+        cached[user["id"]] = accounts.memberships(user["id"])
+    return cached[user["id"]]
 
 
 def current_account(request: Request,
@@ -175,7 +189,7 @@ def current_account(request: Request,
         user = current_user(request)
     if user is None:
         return None
-    member_of = accounts.memberships(user["id"])
+    member_of = _memberships(request, user)
     if not member_of:
         return None
     preferred = request.cookies.get("brand")
@@ -231,7 +245,7 @@ def current_account_id(request: Request) -> int:
     if user is None:
         from fastapi import HTTPException
         raise HTTPException(status_code=401, detail="sign in first")
-    member_of = accounts.memberships(user["id"])
+    member_of = _memberships(request, user)
     if not member_of:
         from fastapi import HTTPException
         raise HTTPException(status_code=403, detail="no account access")

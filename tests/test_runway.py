@@ -8,6 +8,7 @@ throwaway DB. The spend gate (RUNWAY_SPEND_OK) is the extra surface
 veo.py doesn't have: approval is opt-in per test, refusal is the
 default -- same as production.
 """
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -167,8 +168,126 @@ def test_estimate_cost_prices_by_model_and_duration():
     # gen4_turbo: 5 credits/s * $0.01 -- a 5s clip is $0.25
     assert runway.estimate_cost(1, model="gen4_turbo", duration=5) == 0.25
     assert runway.estimate_cost(2, model="gen4.5", duration=10) == 2.40
-    # an unknown model prices at the most expensive known rate, never free
-    assert runway.estimate_cost(1, model="mystery", duration=5) == 0.60
+    # an unknown model prices at the most expensive known rate, never free.
+    # That ceiling moved from gen4.5 to Seedance 1080p when the reference
+    # lane was registered (2026-09-12) -- the point of the rule is that an
+    # unrecognised model errs HIGH on the button a person approves with,
+    # so the number tracks the dearest rate this module knows, not a
+    # constant that happened to be the dearest once.
+    assert runway.estimate_cost(1, model="mystery", duration=5) == 3.40
+
+
+def test_seedance_prices_by_resolution_not_by_model_name():
+    """docs.dev.runwayml.com/guides/pricing, 2026-09-12: seedance2_5 bills
+    20/30/68 credits per second at 480p/720p/1080p. A flat per-model rate
+    would quote a 1080p render at under half its real price on the button
+    a person approves it with."""
+    assert runway.estimate_cost(1, model="seedance2_5", duration=5,
+                                ratio="720:1280") == 1.50
+    assert runway.estimate_cost(1, model="seedance2_5", duration=5,
+                                ratio="1080:1920") == 3.40
+    # the short side is what names the tier, whichever way the frame is up
+    assert (runway.estimate_cost(1, model="seedance2_5", duration=5, ratio="1280:720")
+            == runway.estimate_cost(1, model="seedance2_5", duration=5, ratio="720:1280"))
+    # and an 80-credit floor on any single generation, so a 2s clip is not
+    # priced at 2 * the rate
+    assert runway.estimate_cost(1, model="seedance2_5", duration=2,
+                                ratio="720:1280") == 0.80
+    # an unknown model still prices at the most expensive rate known --
+    # which is now Seedance's, not gen4.5's
+    assert runway.estimate_cost(1, model="mystery", duration=5) == 3.40
+
+
+# ---------- the reference lane ----------
+
+def test_gen4_models_cannot_carry_references_at_all():
+    """Not a gap in this module: the SDK types both gen4 models'
+    promptImage entries as position:'first' with no reference field, so
+    attaching references to one is a call that cannot be made. It raises
+    at the boundary rather than dropping them and rendering anyway."""
+    assert runway.takes_references("seedance2_5") is True
+    assert runway.takes_references("gen4_turbo") is False
+    assert runway.takes_references("gen4.5") is False
+    with pytest.raises(ValueError, match="cannot take reference images"):
+        runway.build_prompt_image("https://cdn/k.png", ["https://cdn/1.jpg"],
+                                  model="gen4_turbo")
+
+
+def test_no_references_sends_the_string_form_untouched():
+    """The keyframe path has to stay byte-for-byte what it was, down to
+    the type: every gen4 render in this repo sends a bare string."""
+    assert runway.build_prompt_image("https://cdn/k.png", None,
+                                     model="gen4_turbo") == "https://cdn/k.png"
+    assert runway.build_prompt_image("https://cdn/k.png", [],
+                                     model="seedance2_5") == "https://cdn/k.png"
+    assert runway.build_prompt_image(None, None, model="gen4_turbo") is None
+
+
+def test_reference_mode_omits_position_and_demotes_the_anchor():
+    """"Use position first/last for keyframe mode, or omit position for
+    reference images. The two modes cannot be mixed." So not one entry
+    may carry a position -- and the anchor is not thrown away, it leads
+    the list: it is still the only image composed for THIS shot."""
+    payload = runway.build_prompt_image(
+        "https://cdn/k.png", ["https://cdn/1.jpg", "https://cdn/2.jpg"],
+        model="seedance2_5")
+    assert payload == [{"uri": "https://cdn/k.png"},
+                       {"uri": "https://cdn/1.jpg"},
+                       {"uri": "https://cdn/2.jpg"}]
+    assert not any("position" in entry for entry in payload)
+
+
+def test_an_anchor_that_is_also_a_ref_is_sent_once():
+    payload = runway.build_prompt_image(
+        "https://cdn/1.jpg", ["https://cdn/1.jpg", "https://cdn/2.jpg"],
+        model="seedance2_5")
+    assert [e["uri"] for e in payload] == ["https://cdn/1.jpg", "https://cdn/2.jpg"]
+
+
+def test_reference_mode_is_decided_by_position_in_the_scene():
+    """A single-shot scene and the first part of a timeline render on
+    their references; part 2 and after keep the keyframe, because
+    _keyframe_timeline draws each part's still from the previous one and
+    that chain is the only thing holding the look still across shots."""
+    assert runway.reference_mode(None) is True
+    assert runway.reference_mode(1) is True
+    assert runway.reference_mode(2) is False
+    assert runway.reference_mode(9) is False
+
+
+def test_reference_uris_are_empty_wherever_they_would_not_be_sent():
+    """The count goes into the generations row, so it has to mean what it
+    says: zero on a gen4 render and zero in keyframe mode, both of which
+    are cases where the photos reach the clip through the keyframe's
+    pixels instead."""
+    target = {"refs": ["https://cdn/1.jpg", "https://cdn/2.jpg"],
+              "reference_image": "https://cdn/k.png"}
+    assert len(runway.reference_uris(target, 1, "seedance2_5")) == 2
+    assert runway.reference_uris(target, 2, "seedance2_5") == []
+    assert runway.reference_uris(target, 1, "gen4_turbo") == []
+    assert runway.reference_uris({"refs": []}, None, "seedance2_5") == []
+
+
+def test_a_ref_that_will_not_resolve_is_dropped_not_fatal():
+    """as_prompt_image's rule, unchanged: an unresolvable reference is
+    left out and the row records the smaller count, rather than the
+    render failing or a broken URI being sent."""
+    target = {"refs": ["https://cdn/1.jpg", "/refs/nowhere.jpg"]}
+    assert runway.reference_uris(target, None, "seedance2_5") == ["https://cdn/1.jpg"]
+
+
+def test_seedance_takes_the_platform_vertical_and_a_far_bigger_prompt():
+    """720:1280 is in BOTH ratio lists, which is what lets a render move
+    to the reference lane without changing the frame anything downstream
+    was cut for. And the 1000-character refusal that drops a director's
+    Avoid list does not apply here."""
+    from src import render_specs
+    assert render_specs.RATIO_9_16 in render_specs.SEEDANCE_2_5_RATIOS
+    assert render_specs.RATIO_9_16 in render_specs.RUNWAY_RATIOS
+    assert runway.prompt_limit("seedance2_5") == 15000
+    runway.check_prompt_length("x" * 1400, "seedance2_5")      # no raise
+    with pytest.raises(ValueError):
+        runway.check_prompt_length("x" * 1400, "gen4_turbo")
 
 
 # ---------- generate_for_shot: the scene board's one-click render ----------
@@ -188,6 +307,74 @@ def seed_scene(path, reference=""):
         shot["reference_image"] = reference
     return preprod.save_concept(
         {"title": "Vault", "shots": [shot]}, brand="antihero", dsn=path, account_id=None)
+
+
+def seed_scene_with_refs(path, refs, reference=""):
+    from src import preprod
+    shot = {"n": 1, "type": "BROLL", "source": "AI", "location": "garage",
+            "tool": "RUNWAY", "prompt": "low key garage, single bulb",
+            "refs": list(refs)}
+    if reference:
+        shot["reference_image"] = reference
+    return preprod.save_concept(
+        {"title": "Vault", "shots": [shot]}, brand="antihero", dsn=path, account_id=None)
+
+
+def test_for_shot_carries_the_refs_into_the_render_on_the_reference_lane(
+        scene_db, approved, fake_download, monkeypatch, tmp_path):
+    """The whole point of the lane: on a single-shot scene the stored
+    reference photos reach the video model itself, not only the keyframe
+    that was drawn from them. No entry carries a position, the keyframe
+    leads the list, and the row says how many rode along."""
+    import src.storage as storage
+    from src import generative as gen
+    monkeypatch.setattr(runway, "RENDER_DIR", tmp_path / "renders")
+    monkeypatch.setattr(storage, "configured", lambda: False)
+    concept_id = seed_scene_with_refs(
+        scene_db, ["https://cdn.example/a.jpg", "https://cdn.example/b.jpg"],
+        reference="https://cdn.example/key.png")
+    client = FakeClient()
+
+    result = runway.generate_for_shot(concept_id, 1, db_path=scene_db, client=client,
+                                      model="seedance2_5", duration=5)
+    assert result["ok"], result["error"]
+    sent = client.calls[0]
+    assert sent["prompt_image"] == [{"uri": "https://cdn.example/key.png"},
+                                    {"uri": "https://cdn.example/a.jpg"},
+                                    {"uri": "https://cdn.example/b.jpg"}]
+    with gen.connect(scene_db) as conn:
+        row = conn.execute(
+            "SELECT params_json FROM generations ORDER BY id DESC LIMIT 1").fetchone()
+    params = json.loads(row["params_json"])
+    assert params["references"] == 2
+    assert params["reference_mode"] is True
+
+
+def test_for_shot_on_a_gen4_model_renders_anchored_and_says_references_zero(
+        scene_db, approved, fake_download, monkeypatch, tmp_path):
+    """The same scene on gen4_turbo must still render -- refusing would
+    stop a queue over an enhancement -- but the row has to record that the
+    photos did NOT ride along, so a clip that ignored them is explainable
+    from the log instead of from the output."""
+    import src.storage as storage
+    from src import generative as gen
+    monkeypatch.setattr(runway, "RENDER_DIR", tmp_path / "renders")
+    monkeypatch.setattr(storage, "configured", lambda: False)
+    concept_id = seed_scene_with_refs(
+        scene_db, ["https://cdn.example/a.jpg"],
+        reference="https://cdn.example/key.png")
+    client = FakeClient()
+
+    result = runway.generate_for_shot(concept_id, 1, db_path=scene_db, client=client,
+                                      model="gen4_turbo", duration=5)
+    assert result["ok"], result["error"]
+    assert client.calls[0]["prompt_image"] == "https://cdn.example/key.png"
+    with gen.connect(scene_db) as conn:
+        row = conn.execute(
+            "SELECT params_json FROM generations ORDER BY id DESC LIMIT 1").fetchone()
+    params = json.loads(row["params_json"])
+    assert params["references"] == 0
+    assert params["reference_mode"] is False
 
 
 def test_for_shot_respects_the_spend_gate(scene_db, monkeypatch, tmp_path):
@@ -213,7 +400,12 @@ def test_for_shot_renders_logs_and_attaches(scene_db, approved, fake_download,
 
     result = runway.generate_for_shot(concept_id, 1, db_path=scene_db, client=client)
     assert result["ok"], result["error"]
-    assert client.calls[0]["prompt_text"] == "low key garage, single bulb"
+    # the motion directive leads (timeline.for_render -- every renderer here
+    # is image-to-video, so the prompt's job is the change, not the scene),
+    # and the shot's own prompt follows it unaltered
+    from src import timeline as tl_mod
+    assert client.calls[0]["prompt_text"] == (
+        tl_mod.MOTION_DIRECTIVE + "\n\nlow key garage, single bulb")
     assert "prompt_image" not in client.calls[0]     # no reference -> text-to-video
     # served from /renders, logged, and attached to the shot
     assert result["media_url"].startswith("/renders/runway/")
@@ -542,3 +734,44 @@ def test_the_generations_row_records_whose_key_paid_for_it(
                                        account_id=byok["account_id"])
     assert _params(byok, ours["generation_id"])["key_source"] == "env"
     assert sdk_keys == ["TENANT-SECRET", "OPERATOR-SECRET"]
+
+
+def test_for_shot_renders_one_part_of_a_timed_scene(scene_db, approved, fake_download,
+                                                    monkeypatch, tmp_path):
+    """2026-09-10: `part=n` renders ONE shot of a timed scene through the
+    same walls -- the scene's continuity then that shot's prompt, anchored
+    on THAT shot's still, attached to that part and not to the scene."""
+    import src.storage as storage
+    from src import preprod, timeline
+    monkeypatch.setattr(runway, "RENDER_DIR", tmp_path / "renders")
+    monkeypatch.setattr(storage, "configured", lambda: False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    shot = {"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
+            "refs": ["/refs/a.jpg"],
+            "prompt": ("Grounded noir. (0-3s) Close on the key turning. "
+                       "(3-8s) Hard cut to the alley, he looks up.")}
+    concept_id = preprod.save_concept({"title": "Key", "shots": [shot]},
+                                      brand="antihero", dsn=scene_db, account_id=None)
+    timeline.ensure(concept_id, db_path=scene_db)            # the plain split
+    timeline.attach_part(concept_id, 1, 2, "reference_image",
+                         "https://cdn.example/still2.png", db_path=scene_db)
+    client = FakeClient()
+
+    result = runway.generate_for_shot(concept_id, 1, db_path=scene_db, client=client,
+                                      part=2, duration=5)
+    assert result["ok"], result["error"]
+    sent = client.calls[0]
+    # the motion directive leads (timeline.for_render), then the scene's
+    # memory, then this shot -- both still there, just no longer first
+    from src import timeline as tl_mod
+    assert sent["prompt_text"].startswith(tl_mod.MOTION_DIRECTIVE)
+    assert "CONTINUITY" in sent["prompt_text"]
+    assert "SHOT 2 OF 2 (3-8s, 5s): Hard cut to the alley" in sent["prompt_text"]
+    assert sent["prompt_image"] == "https://cdn.example/still2.png"
+    assert "-p2-" in result["path"]
+    stored = preprod.get_concept(concept_id, dsn=scene_db, account_id=None)["shots"][0]
+    assert stored["timeline"]["parts"][1]["media_url"] == result["media_url"]
+    assert not stored.get("media_url")        # shot 1 has no clip yet
+    assert runway.generate_for_shot(concept_id, 1, db_path=scene_db, client=client,
+                                    part=7)["ok"] is False

@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-from src import imagery, runway
+from src import imagery
 
 # The reference->bytes layer and the enhance call moved to
 # src/imagery.py (2026-08-29) so the Studio's scene chain could reach
@@ -165,6 +165,35 @@ def image_for_runway(value, resolve_photo=None):
     return imagery.upright(target.read_bytes()) if target is not None else None
 
 
+def render_generate_node(pick: dict, prompt: str, reference: Optional[str], *,
+                         resolve_photo=None, db_path=None,
+                         account_id: Optional[int] = None) -> dict:
+    """One Generate-node render on the renderer providers.renderer_for
+    picked -- the node's own Run and Run all both come through here, so
+    one graph cannot render two different ways depending on which button
+    was pressed (2026-09-11: the node used to be Runway-only).
+
+    Runway takes an inline data URI, so a local reference becomes bytes
+    here (image_for_runway). Higgsfield and fal take a URL their servers
+    FETCH and resolve local references themselves (as_image_url, which
+    uploads to R2 or drops the anchor honestly), so they are handed the
+    reference and the resolver as-is. Never raises -- the adapters'
+    generate_from_prompt contract."""
+    from src import providers
+
+    module = providers.VIDEO_PROVIDERS[pick["provider"]]
+    kwargs = {"approved": True,     # a person pressed Run -- see spend_approved
+              "db_path": db_path, "account_id": account_id,
+              "model": pick["model"]}
+    if pick["provider"] == "runway":
+        kwargs["reference_image"] = image_for_runway(reference,
+                                                     resolve_photo=resolve_photo)
+    else:
+        kwargs["reference_image"] = reference
+        kwargs["resolve_photo"] = resolve_photo
+    return module.generate_from_prompt(prompt, **kwargs)
+
+
 def shot_reference_urls(properties, db_path=None, account_id: Optional[int] = None) -> list:
     """The references stored on the shot this node belongs to, read at
     RUN time rather than trusted from the drawing.
@@ -226,7 +255,8 @@ def node_reference_urls(node, properties, links, outputs, port="image",
 
 def execute_graph(graph: dict, *, gemini_client=None, resolve_photo=None,
                   db_path=None, emit: Optional[Callable] = None,
-                  check_cancelled: Optional[Callable] = None) -> dict:
+                  check_cancelled: Optional[Callable] = None,
+                  account_id: Optional[int] = None) -> dict:
     """
     Run every node in topological order. Returns {"ok", "order",
     "nodes": {id: {"status", "kind", "output", "error"}}} -- status is
@@ -355,13 +385,25 @@ def execute_graph(graph: dict, *, gemini_client=None, resolve_photo=None,
                 # graph -- an unadapted tool honestly stays dry. Skipping
                 # (not failing) keeps a chain whose keyframe rendered
                 # from reporting itself as a failure on every run.
-                # Deliberately NOT extended to the spend gate: a
-                # configured Runway with no per-run approval must still
-                # refuse loudly, through the module's own wall.
-                if not runway.has_key():
+                # Deliberately NOT extended to the spend gate, which
+                # is a different wall and still the module's own. Since
+                # 2026-09-09 a person running this canvas IS the
+                # approval, so the call below passes approved=True --
+                # what stays refused is an unattended caller, and what
+                # stays enforced is each vendor's daily cap.
+                #
+                # WHICH vendor is this account's to answer (2026-09-11):
+                # whatever it holds a key for, cheapest first -- the same
+                # providers.renderer_for the node's own Run asks. Skipped
+                # only when it holds none at all.
+                from src import providers
+                pick = providers.renderer_for(account_id,
+                                              needs="generate_from_prompt")
+                if pick is None:
                     states[node_id] = {
                         "status": "skipped", "kind": None, "output": None,
-                        "error": "Runway not configured — RUNWAYML_API_SECRET is unset"}
+                        "error": "no video renderer key on this account — "
+                                 "add a Runway, Higgsfield or fal key"}
                     mark_downstream_skipped(node_id, f"upstream skipped: {title}")
                     push((index + 1) / total, f"{title} skipped")
                     continue
@@ -374,10 +416,10 @@ def execute_graph(graph: dict, *, gemini_client=None, resolve_photo=None,
                 # got here, which is how they reach the clip at all.
                 urls = node_reference_urls(node, properties, links, outputs,
                                            db_path=db_path)
-                reference = image_for_runway(
-                    urls[0] if urls else None, resolve_photo=resolve_photo)
-                result = runway.generate_from_prompt(
-                    prompt, reference_image=reference, db_path=db_path)
+                result = render_generate_node(
+                    pick, prompt, urls[0] if urls else None,
+                    resolve_photo=resolve_photo, db_path=db_path,
+                    account_id=account_id)
                 if not result["ok"]:
                     raise RuntimeError(result["error"] or "render failed")
                 kind, value = "media", result["media_url"]
