@@ -33,7 +33,7 @@ import {
   PanelLeft,
   Workflow,
 } from "lucide-react";
-import { API_URL, signOut } from "@/lib/api";
+import { API_URL, ApiError, goToSignIn, signOut } from "@/lib/api";
 import {
   getMe,
   queuePending,
@@ -102,6 +102,7 @@ export function StudioShell({ children }: { children: ReactNode }) {
   const view = VIEW_BY_PATH.find(([p]) => pathname.startsWith(p))?.[1] ?? "studio";
   const stage = view === "director";
   const [me, setMe] = useState<Me | null>(null);
+  const [signedOut, setSignedOut] = useState(false);
   const pinned = useSyncExternalStore(subscribePin, readPin, () => false);
   const [menu, setMenu] = useState(false);
   const [pending, setPending] = useState(0);
@@ -112,7 +113,11 @@ export function StudioShell({ children }: { children: ReactNode }) {
   useEffect(() => {
     getMe()
       .then(setMe)
-      .catch(() => setMe(null));
+      .catch((err) => {
+        setMe(null);
+        // a 401 is a visitor, not an outage: the account row becomes Sign in
+        if (err instanceof ApiError && err.status === 401) setSignedOut(true);
+      });
   }, []);
 
   const refreshBadge = useCallback(() => {
@@ -206,17 +211,21 @@ export function StudioShell({ children }: { children: ReactNode }) {
             <button
               type="button"
               className="racct"
-              onClick={() => setMenu((v) => !v)}
+              onClick={() => (signedOut ? goToSignIn() : setMenu((v) => !v))}
               aria-expanded={menu}
-              title={`${who} · switch account`}
+              title={signedOut ? "Sign in" : `${who} · switch account`}
             >
               <span className="ravatar">
                 {me?.user.avatar_url ? <img src={me.user.avatar_url} alt="" /> : initials || "ZP"}
               </span>
               <span className="rl rwho">
-                <span className="rname">{who}</span>
+                <span className="rname">{signedOut ? "Sign in" : who}</span>
                 <span className="rrole">
-                  {me?.account ? `${me.account.label} · ${me.account.role || "member"}` : "no account"}
+                  {signedOut
+                    ? "Google, Discord or email"
+                    : me?.account
+                      ? `${me.account.label} · ${me.account.role || "member"}`
+                      : "no account"}
                 </span>
               </span>
               <ChevronsUpDown className="rl rchev" strokeWidth={1.6} />
@@ -252,10 +261,10 @@ export function StudioShell({ children }: { children: ReactNode }) {
             <button
               type="button"
               className="tag"
-              title="Switch account"
-              onClick={() => setMenu((v) => !v)}
+              title={signedOut ? "Sign in" : "Switch account"}
+              onClick={() => (signedOut ? goToSignIn() : setMenu((v) => !v))}
             >
-              {me?.account?.label ?? "—"} · switch
+              {signedOut ? "Sign in" : `${me?.account?.label ?? "—"} · switch`}
             </button>
           </div>
           {stage ? <div className="stage">{children}</div> : children}
