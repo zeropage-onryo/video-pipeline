@@ -80,24 +80,34 @@ export default function QueuePage() {
   const [lanePicks, setLanePicks] = useState<Record<number, { model?: string; ratio?: string; duration?: number; anchored?: boolean }>>({});
   const [dropping, setDropping] = useState<Record<number, string>>({});
 
-  const loadPending = useCallback(() => {
+  // `stale` lets an effect drop a response that arrives after the brand
+  // changed: the shell resolves the brand a beat after mount, and the
+  // unscoped first request used to land AFTER the scoped one, leaving the
+  // list showing every brand under a header naming one (2026-09-14).
+  const loadPending = useCallback((stale: () => boolean = () => false) => {
     queuePending(brand || undefined)
       .then((r) => {
+        if (stale()) return;
         setPending(r.items);
         setRunway(r.runway);
         setRenderers(r.renderers || {});
         setError(null);
       })
-      .catch((e) => setError(e instanceof Error ? e.message : "Queue unavailable"));
+      .catch((e) => {
+        if (!stale()) setError(e instanceof Error ? e.message : "Queue unavailable");
+      });
   }, [brand]);
-  const loadLane = useCallback(() => {
+  const loadLane = useCallback((stale: () => boolean = () => false) => {
     queueManual(brand || undefined)
       .then((r) => {
+        if (stale()) return;
         setLane(r.items);
         setLaneModels(r.models || []);
         setLaneDefault(r.default_model || "");
       })
-      .catch(() => setLane([]));
+      .catch(() => {
+        if (!stale()) setLane([]);
+      });
   }, [brand]);
   const loadJobs = useCallback(() => {
     listJobs()
@@ -108,15 +118,11 @@ export default function QueuePage() {
       .catch((e) => setJobsError(e instanceof Error ? e.message : "Jobs unavailable"));
   }, []);
   useEffect(() => {
-    loadPending();
     loadJobs();
     getCapabilities()
       .then((c) => setLaneOn(c.manual_lane === true))
       .catch(() => setLaneOn(false));
-  }, [loadPending, loadJobs]);
-  useEffect(() => {
-    if (laneOn) loadLane();
-  }, [laneOn, loadLane]);
+  }, [loadJobs]);
   // the registry moves while anything runs: poll it, and re-read the
   // rows when a render finishes (a finished clip leaves the pending list)
   const active = jobs.some((j) => ["queued", "running"].includes(j.status));
@@ -125,12 +131,20 @@ export default function QueuePage() {
     const timer = setInterval(loadJobs, 2500);
     return () => clearInterval(timer);
   }, [active, loadJobs]);
+  // the rows: on mount, whenever the brand resolves or changes, whenever
+  // the lane opens, and whenever the registry goes quiet (a finished clip
+  // leaves the pending list). A response from before any of those
+  // changed is dropped, never applied.
   useEffect(() => {
     if (active) return;
-    loadPending();
-    if (laneOn) loadLane();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active]);
+    let stale = false;
+    const isStale = () => stale;
+    loadPending(isStale);
+    if (laneOn) loadLane(isStale);
+    return () => {
+      stale = true;
+    };
+  }, [active, laneOn, loadPending, loadLane]);
 
   /* ── the selectors: the plan is the default, the pick overrides it ── */
   const pickFor = (c: Concept): Pick => {
