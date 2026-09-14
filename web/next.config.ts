@@ -1,7 +1,11 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  output: "standalone",
+  // standalone is what the Fly image runs (node server.js on a copied
+  // .next/standalone); on Vercel the platform packages the app itself and
+  // its build hook looks for tracing files standalone does not write
+  // (next-server.js.nft.json -- ENOENT on the first Vercel build, 2026-09-14)
+  output: process.env.VERCEL ? undefined : "standalone",
   // the in-app Browser pane and curl reach the dev server as 127.0.0.1
   allowedDevOrigins: ["127.0.0.1", "localhost"],
   // A separate build directory lets production validation run alongside dev.
