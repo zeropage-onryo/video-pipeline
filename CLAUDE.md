@@ -994,7 +994,10 @@ is yours, in Resolve, by hand.
   live database carried over), the lane is `GET /api/queue/manual` +
   `POST /api/queue/manual/{id}/clip` (field `file`; one `ops/render_queue.import_clip`
   behind both the CLI and the browser; `render_specs` refuses a claim it cannot have
-  produced; a second drop is 409), and approve takes `{provider, model, duration, frame}`
+  produced; a second drop is 409; **the lane lists PICKED scenes only** -- 2026-09-14,
+  Mike's call: a scene the night parked is the Queue's to approve, which picks it, and it
+  joins the lane the moment it is picked, since the lane is a person's hands per clip and
+  takes only what a person chose), and approve takes `{provider, model, duration, frame}`
   through `providers.check_render_choice` across every registered renderer. The React
   Queue (`web/src/app/studio/queue/page.tsx`) reads `renderers` off `/api/queue/pending`
   for its selectors, `manual_lane` off `/api/capabilities` for the lane's visibility, and

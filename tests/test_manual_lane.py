@@ -362,6 +362,28 @@ def test_the_route_serves_the_operator(tmp_db, monkeypatch, api):
     assert body["items"][0]["ratio"] == manual_lane.LANE_RATIO
 
 
+def test_the_lane_takes_picked_scenes_not_merely_parked_ones(tmp_db, monkeypatch, api):
+    """The night parks a keyframed scene in the Queue, where approving it
+    is what picks it. The lane is a person's hands per clip, so it lists
+    only what a person chose -- and a parked scene joins it the moment
+    it is picked (2026-09-14, Mike's call)."""
+    from src import scene_chain
+    account_id = an_operator(tmp_db, monkeypatch)
+    parked = a_scene(tmp_db, account_id, title="Night Parked")
+    scene_chain.park_scene(parked, "keyframed", db_path=tmp_db, account_id=account_id)
+    picked = a_scene(tmp_db, account_id, title="Hand Picked")
+    preprod.set_picked(picked, True, dsn=tmp_db, account_id=account_id)
+    client = api(account_id)
+    queued = [c["id"] for c in client.get("/api/queue/pending").json()["items"]]
+    assert set(queued) == {parked, picked}                 # both await the spend gate
+    lane = [i["concept_id"] for i in client.get("/api/queue/manual").json()["items"]]
+    assert lane == [picked]                                # only the chosen one is hand work
+    assert [w["concept_id"] for w in rq.pending(account_id=account_id, provider="runway")] == [picked]
+    preprod.set_picked(parked, True, dsn=tmp_db, account_id=account_id)
+    lane = [i["concept_id"] for i in client.get("/api/queue/manual").json()["items"]]
+    assert set(lane) == {parked, picked}
+
+
 def test_the_route_refuses_a_non_operator(tmp_db, monkeypatch, api):
     an_operator(tmp_db, monkeypatch)
     other = accounts.upsert_account("pilot", "Pilot", dsn=tmp_db)

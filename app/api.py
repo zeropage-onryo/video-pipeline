@@ -1927,6 +1927,14 @@ def queue_manual(brand: Optional[str] = None,
         return _error(404, "not_found", manual_lane.REFUSAL)
     items = []
     for concept, card in _waiting(account_id, brand):
+        # PICKED scenes only (2026-09-14, Mike's call). The Queue above
+        # lists what the night parked too, and approving one of those is
+        # what picks it -- a one-click spend. The lane is minutes of a
+        # person's hands in Chrome per clip, so it takes only what a
+        # person already chose on the board (or sent from the Director);
+        # a parked scene reaches it the moment it is picked.
+        if not card["picked"]:
+            continue
         shot = (concept.get("shots") or [{}])[0]
         try:
             duration = int(shot.get("duration"))

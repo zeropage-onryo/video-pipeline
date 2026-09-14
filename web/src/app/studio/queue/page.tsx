@@ -434,7 +434,7 @@ export default function QueuePage() {
           </div>
           {lane && !lane.length ? (
             <p className="stateline" style={{ padding: "0 42px" }}>
-              Nothing to render by hand — the lane takes whatever is waiting above
+              Nothing to render by hand — the lane takes the scenes you picked on Pipeline or sent from the Director
             </p>
           ) : null}
           <div className="scenegrid">

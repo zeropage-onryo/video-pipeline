@@ -235,7 +235,7 @@ def _measure_duration(path: Path) -> tuple[float | None, str]:
 def pending(brand=None, account_id: int | None = None,
             provider: str = "higgsfield") -> list[dict]:
     """What is waiting on a spend, by exactly the rule app/api.py's
-    /queue/pending uses: picked or parked, not archived, a scene, no clip
+    /queue/manual uses: picked (not merely parked), not archived, a scene, no clip
     yet, and reference photos attached. Duplicated deliberately in ONE
     place only -- if that rule changes, this is the line to change with
     it. The reference half is not duplicated at all: both surfaces call
@@ -260,7 +260,10 @@ def pending(brand=None, account_id: int | None = None,
     for concept in preprod.list_concepts(account_id=account_id):
         if brand and concept.get("brand") != brand:
             continue
-        if not (concept.get("picked") or concept.get("parked")):
+        # picked only -- a parked scene nobody chose is the Queue's to
+        # approve (which picks it), not a person's to render by hand
+        # (2026-09-14, matching queue_manual in app/api.py)
+        if not concept.get("picked"):
             continue
         if concept.get("archived") or not concept.get("is_scene"):
             continue
