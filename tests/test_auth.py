@@ -458,3 +458,114 @@ def test_callback_relays_supabases_error(clean_slate, gotrue):
                           follow_redirects=False)
     assert "Email%20not%20verified" in response.headers["location"]
     assert auth_mod.SESSION_COOKIE not in response.cookies
+
+
+# ---------- the handoff: a session for an external front end, on ITS origin ----------
+# 2026-09-14. The React studio is another site (fly.dev is a public suffix),
+# so this API's cookie was a third-party cookie to every fetch it made and
+# Safari/Chrome would not send it: /signin said "already signed in" while
+# every /api call got 401. The studio now proxies the API through its own
+# origin, and a sign-in that came from a trusted front end ends in a
+# redirect to {front end}/auth/handoff with a short-lived token; the proxy
+# forwards that here and the cookie in the answer lands on the front end.
+
+WEB = "https://web.example"
+
+
+@pytest.fixture
+def trusted_web(monkeypatch):
+    monkeypatch.setenv("FRONTEND_ORIGINS", WEB)
+
+
+def handoff_url(response):
+    from urllib.parse import parse_qs, urlsplit
+    location = response.headers["location"]
+    parts = urlsplit(location)
+    assert f"{parts.scheme}://{parts.netloc}{parts.path}" == f"{WEB}/auth/handoff", location
+    query = parse_qs(parts.query)
+    return query["t"][0], query["next"][0]
+
+
+def test_a_sign_in_that_came_from_the_studio_ends_in_a_handoff(clean_slate, gotrue, trusted_web):
+    signup()
+    client.cookies.clear()
+    client.get(f"/signin?next={WEB}/studio?tab=queue")          # the studio's Sign in link
+    response = login("new@example.com", "hunter2hunter2")
+    assert response.status_code == 303
+    token, next_ = handoff_url(response)
+    assert next_ == "/studio?tab=queue"                           # the path on THAT origin
+    assert auth_mod.SESSION_COOKIE in response.cookies            # this origin keeps one too
+    # the token is not a session: presenting it as the cookie is anonymous
+    client.cookies.clear()
+    client.cookies.set(auth_mod.SESSION_COOKIE, token)
+    assert client.get("/ui", follow_redirects=False).status_code == 303
+    # ...and the handoff, forwarded by the studio's proxy, issues the real one
+    client.cookies.clear()
+    response = client.get(f"/auth/handoff?t={token}&next=/studio?tab=queue",
+                          follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/studio?tab=queue"
+    issued = auth_mod._serializer().loads(response.cookies[auth_mod.SESSION_COOKIE])
+    assert issued["uid"] == accounts.get_user_by_email("new@example.com", dsn=clean_slate)["id"]
+
+
+def test_already_signed_in_here_still_hands_the_session_to_the_studio(clean_slate, gotrue, trusted_web):
+    """The live symptom: signed in on this origin, signed out on the
+    studio's. /signin with the studio's next must not just bounce back."""
+    signup()                                                      # signed in on this origin
+    response = client.get(f"/signin?next={WEB}/studio", follow_redirects=False)
+    assert response.status_code == 303
+    _, next_ = handoff_url(response)
+    assert next_ == "/studio"
+
+
+def test_the_oauth_door_hands_off_too(clean_slate, gotrue, trusted_web):
+    gotrue.register("g@example.com", uid="sb-g")
+    gotrue.codes["code-9"] = "g@example.com"
+    client.get(f"/signin?next={WEB}/studio")
+    client.get("/auth/google/login", follow_redirects=False)
+    response = client.get("/auth/callback?code=code-9", follow_redirects=False)
+    token, _ = handoff_url(response)
+    assert auth_mod._handoff_serializer().loads(token)["uid"] == "sb-g"
+
+
+def test_a_stale_or_forged_handoff_is_a_sign_in_error_not_a_session(clean_slate, gotrue, trusted_web, monkeypatch):
+    forged = auth_mod._serializer().dumps({"uid": "sb-anyone"})  # the session salt, not the handoff's
+    response = client.get(f"/auth/handoff?t={forged}&next=/studio", follow_redirects=False)
+    assert "handoff%20expired" in response.headers["location"]
+    assert auth_mod.SESSION_COOKIE not in response.cookies
+    real = auth_mod._handoff_serializer().dumps({"uid": "sb-anyone"})
+    monkeypatch.setattr(auth_mod, "HANDOFF_MAX_AGE", -1)          # every token is now too old
+    response = client.get(f"/auth/handoff?t={real}", follow_redirects=False)
+    assert "handoff%20expired" in response.headers["location"]
+    assert auth_mod.SESSION_COOKIE not in response.cookies
+
+
+@pytest.mark.parametrize("next_,landing", [
+    ("/studio/queue", "/studio/queue"),
+    ("https://evil.example/x", "/"),
+    ("//evil.example/x", "/"),
+    ("", "/"),
+])
+def test_the_handoff_lands_on_a_path_of_its_own_origin_only(clean_slate, gotrue, next_, landing):
+    token = auth_mod._handoff_serializer().dumps({"uid": "sb-x"})
+    response = client.get(f"/auth/handoff?t={token}&next={next_}", follow_redirects=False)
+    assert response.headers["location"] == landing
+
+
+def test_an_untrusted_next_gets_no_handoff(clean_slate, gotrue):
+    signup()
+    client.cookies.clear()
+    client.get("/signin?next=https://evil.example/studio")
+    response = login("new@example.com", "hunter2hunter2")
+    assert response.headers["location"] == "/ui/accounts"
+
+
+def test_sign_out_as_a_navigation_clears_this_origin_and_carries_next(clean_slate, gotrue, trusted_web):
+    signup()
+    response = client.get(f"/auth/logout?next={WEB}/studio", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/signin?next=https%3A%2F%2Fweb.example%2Fstudio"
+    assert 'zp_session=""' in response.headers["set-cookie"] or "Max-Age=0" in response.headers["set-cookie"]
+    client.cookies.clear()
+    assert client.get("/ui", follow_redirects=False).status_code == 303   # signed out here

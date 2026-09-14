@@ -124,6 +124,62 @@ def _post_login_redirect(request: Request) -> Optional[str]:
     return target if _origin_trusted(origin) else None
 
 
+# --------------------------------------------------------------------------
+# the handoff: a session for an external front end, on ITS origin
+# --------------------------------------------------------------------------
+#
+# 2026-09-14, found on the live account. The React studio (zeropage-web)
+# and this API (zeropage-studio) are different sites -- fly.dev is on the
+# public-suffix list -- so the cookie set here was a THIRD-PARTY cookie
+# to every fetch the studio made, and Safari (always) and Chrome (now by
+# default) refuse to send one. The symptom: /signin, a top-level
+# navigation to this origin, saw the cookie and answered "already signed
+# in"; every /api call from the studio's origin arrived without it and
+# got 401. A person could sign in as often as they liked and stay signed
+# out.
+#
+# So the studio talks to this API through its own origin (the Next
+# rewrites proxy /api, /auth, /signin ... to API_UPSTREAM) and the cookie
+# has to be set on THAT origin. OAuth still runs here -- the PKCE
+# verifier lives in this origin's session and Supabase's redirect list
+# names this callback -- so after a sign-in that came from a trusted
+# front end, the browser is sent to {front end}/auth/handoff with a
+# short-lived signed token, the proxy forwards that GET here, and the
+# Set-Cookie in the answer lands on the front end's origin as a
+# first-party cookie. Two minutes, signed with the session secret under
+# its own salt so it can never be presented as a session itself.
+
+HANDOFF_MAX_AGE = 120
+
+
+def _handoff_serializer() -> URLSafeTimedSerializer:
+    return URLSafeTimedSerializer(_session_secret(), salt="zp-handoff")
+
+
+def handoff_redirect(destination: str, user_id: str) -> RedirectResponse:
+    """303 to the front end's /auth/handoff carrying a token for `user_id`
+    and the path on that origin to land on. `destination` has already
+    passed _post_login_redirect, so its origin is trusted."""
+    from urllib.parse import urlencode, urlsplit
+    parts = urlsplit(destination)
+    origin = f"{parts.scheme}://{parts.netloc}"
+    path = parts.path or "/"
+    if parts.query:
+        path = f"{path}?{parts.query}"
+    token = _handoff_serializer().dumps({"uid": str(user_id)})
+    return RedirectResponse(
+        f"{origin}/auth/handoff?{urlencode({'t': token, 'next': path})}",
+        status_code=303)
+
+
+def _local_path(next_: Optional[str]) -> str:
+    """A path on the origin the handoff landed on, never another origin:
+    an absolute URL or a protocol-relative one is replaced by '/'."""
+    if not next_ or not next_.startswith("/") or next_.startswith("//"):
+        return "/"
+    return next_
+
+
 def issue_session(response, user_id: str, request: Request) -> None:
     token = _serializer().dumps({"uid": str(user_id)})
     # Cross-site by design: a separate frontend on another origin reads this
@@ -470,10 +526,15 @@ def _finish(request: Request, session: dict) -> RedirectResponse:
     if error:
         return _signin_error(error)
     # An external frontend (FRONTEND_ORIGINS) that sent the person here
-    # gets them back on its own origin, cookie set; otherwise the built-in
-    # /ui shell as before.
-    destination = _post_login_redirect(request) or "/ui/accounts"
-    response = RedirectResponse(destination, status_code=303)
+    # gets them back on its own origin THROUGH THE HANDOFF, so the cookie
+    # is set there too (see handoff_redirect); otherwise the built-in /ui
+    # shell as before. This origin's cookie is set either way -- /ui is
+    # still here.
+    destination = _post_login_redirect(request)
+    if destination:
+        response = handoff_redirect(destination, user_id)
+    else:
+        response = RedirectResponse("/ui/accounts", status_code=303)
     issue_session(response, user_id, request)
     return response
 
@@ -532,6 +593,35 @@ async def login(request: Request, email: str = Form(...),
 async def logout():
     response = RedirectResponse("/signin", status_code=303)
     clear_session(response)
+    return response
+
+
+@router.get("/logout")
+async def logout_get(next: Optional[str] = None):
+    """Sign-out as a top-level navigation, for a front end on another
+    origin: its own cookie it clears through the proxy (the POST above),
+    then it sends the browser HERE so this origin's cookie goes too --
+    otherwise /signin would answer "already signed in" and hand the old
+    session straight back. `next` rides on to /signin, which validates it."""
+    from urllib.parse import urlencode
+    target = "/signin" + (f"?{urlencode({'next': next})}" if next else "")
+    response = RedirectResponse(target, status_code=303)
+    clear_session(response)
+    return response
+
+
+@router.get("/handoff")
+async def handoff(request: Request, t: str = "", next: Optional[str] = None):
+    """The receiving end of handoff_redirect, reached THROUGH the front
+    end's proxy so the cookie issued here belongs to that origin. A bad
+    or stale token is a sign-in error, never a session."""
+    from itsdangerous import BadData
+    try:
+        data = _handoff_serializer().loads(t, max_age=HANDOFF_MAX_AGE)
+    except BadData:
+        return _signin_error("sign-in handoff expired -- try again")
+    response = RedirectResponse(_local_path(next), status_code=303)
+    issue_session(response, data["uid"], request)
     return response
 
 

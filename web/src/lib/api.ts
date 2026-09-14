@@ -4,6 +4,14 @@
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
 const API_BASE = `${API_URL}/api`;
+// Where sign-in and sign-out NAVIGATE to: the API's own origin. Fetches
+// stay same-origin through the proxy (API_URL empty) because the API's
+// cookie is a third-party cookie to this site and Safari/Chrome will not
+// send it; but OAuth has to run on the API's origin (its PKCE session,
+// Supabase's redirect list), and it hands the session back to this origin
+// through /auth/handoff, which the proxy forwards. Unset (local dev, one
+// origin) this is simply API_URL.
+export const AUTH_ORIGIN = process.env.NEXT_PUBLIC_AUTH_ORIGIN ?? API_URL;
 
 export class ApiError extends Error {
   status: number;
@@ -51,18 +59,24 @@ export function goToSignIn() {
     // the API honours it only for an origin in its FRONTEND_ORIGINS.
     const next = encodeURIComponent(`${window.location.origin}/studio`);
     // eslint-disable-next-line @next/next/no-location-assign-relative-destination
-    window.location.href = `${API_URL}/signin?next=${next}`;
+    window.location.href = `${AUTH_ORIGIN}/signin?next=${next}`;
   }
 }
 
 export async function signOut() {
   // /logout lives at the API's root, not under /api -- apiFetch() is
   // scoped to API_BASE (.../api), so this calls it directly.
+  // this origin's cookie first (through the proxy), then the API's own,
+  // as a navigation -- a cross-site fetch could not carry that one
   await fetch(`${API_URL}/auth/logout`, {
     method: "POST",
     credentials: "include",
   }).catch(() => {});
-  goToSignIn();
+  if (typeof window !== "undefined") {
+    const next = encodeURIComponent(`${window.location.origin}/studio`);
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+    window.location.href = `${AUTH_ORIGIN}/auth/logout?next=${next}`;
+  }
 }
 
 // A cheap authenticated call to prove a session exists. /api/capabilities

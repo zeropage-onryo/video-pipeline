@@ -185,6 +185,20 @@ work — see .env.example), `SESSION_SECRET` (ephemeral dev secret with a stderr
 when unset). Tests stand in for GoTrue behind the one seam `auth.gotrue` and sign
 real HS256 tokens with a test secret. Not built yet, deliberately: an invite UI,
 sign-out-everywhere; password reset and email verification are Supabase's now.
+**The React studio gets its session through a handoff, never cross-site (2026-09-14,
+found on the live account).** `zeropage-web.fly.dev` and `zeropage-studio.fly.dev` are
+different sites (fly.dev is a public suffix), so the API's cookie was a third-party cookie
+to every fetch the studio made and Safari (always) and Chrome (now by default) refused to
+send it: `/signin`, a top-level navigation, saw the cookie and answered "already signed
+in" while every `/api` call got 401. Now the studio's fetches go through ITS OWN origin
+(`NEXT_PUBLIC_API_URL` empty; the Next rewrites proxy `/api`, `/auth`, `/signin`, `/brand`
+and the photo routes to `API_UPSTREAM`), sign-in and sign-out NAVIGATE to the API origin
+(`NEXT_PUBLIC_AUTH_ORIGIN`, where OAuth's PKCE session and Supabase's callback live), and
+a sign-in that came from a trusted `next` (FRONTEND_ORIGINS) ends in a 303 to
+`{front end}/auth/handoff?t=<2-minute token, session secret under its own salt>&next=/studio`
+-- the proxy forwards that GET to `auth.handoff`, whose Set-Cookie lands on the front end's
+origin first-party. `/signin` does the same when already signed in here; `GET /auth/logout`
+clears this origin's cookie after the studio has cleared its own through the proxy.
 
 ## Architecture
 

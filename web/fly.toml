@@ -1,5 +1,8 @@
 # The Next.js studio, as its own Fly app beside zeropage-studio (the API).
-# Deploy from web/:  fly deploy --build-arg NEXT_PUBLIC_API_URL=https://zeropage-studio.fly.dev
+# Deploy from web/:  fly deploy --build-arg NEXT_PUBLIC_AUTH_ORIGIN=https://zeropage-studio.fly.dev
+#   (NEXT_PUBLIC_API_URL stays empty: fetches go through this origin's proxy so
+#    the session cookie is first-party; sign-in navigates to the API origin and
+#    comes back via /auth/handoff -- see web/Dockerfile and app/auth.py)
 # Then on the API:   fly secrets set -a zeropage-studio FRONTEND_ORIGINS=https://zeropage-web.fly.dev
 app = "zeropage-web"
 primary_region = "iad"
@@ -8,9 +11,8 @@ primary_region = "iad"
 
 [env]
   PORT = "3000"
-  # the same-origin proxy is unused when NEXT_PUBLIC_API_URL is baked in;
-  # kept pointing at the API's public origin so a rewrite that does fire
-  # still lands somewhere real
+  # every /api, /auth, /signin, /brand and photo request the browser makes
+  # to this origin is proxied here (next.config.ts rewrites)
   API_UPSTREAM = "https://zeropage-studio.fly.dev"
 
 [http_service]

@@ -316,9 +316,14 @@ def signin(request: Request, error: Optional[str] = None,
     it is never an open redirect."""
     if next:
         request.session["post_login_redirect"] = next
-    if auth.current_user(request):
-        return RedirectResponse(
-            auth._post_login_redirect(request) or "/ui", status_code=303)
+    user = auth.current_user(request)
+    if user:
+        # already signed in HERE; a trusted front end still needs the
+        # session on its own origin (auth.handoff_redirect says why)
+        destination = auth._post_login_redirect(request)
+        if destination:
+            return auth.handoff_redirect(destination, user["id"])
+        return RedirectResponse("/ui", status_code=303)
     return templates.TemplateResponse(
         request, "signin.html",
         {"error": error, "mode": mode if mode in ("signin", "signup") else "signin",
