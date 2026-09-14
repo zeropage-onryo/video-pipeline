@@ -68,11 +68,14 @@ venv/bin/python -m src.scout run  [--brand ...] [--count 4] [--lanes web,shorts,
 venv/bin/python -m src.scout list [--brand ...] [--unused]
 venv/bin/python -m src.scout next --brand zeropage       # the servable spark, or exit 1
 
-# THE NIGHTLY TRIGGER — one shadow run, spark rotated from prompts/sparks.txt.
-# ops/com.zeropage.shadowrun.plist schedules it at 03:30 (see its header to
-# install); grading happens on /holds each morning. --scout takes the
-# direction from the scout's bank instead, falling back to the rotation
-# when the bank is empty or under scout.SCORE_FLOOR.
+# THE SHADOW RUN — one run, spark rotated from prompts/sparks.txt. MANUAL
+# ONLY: nothing schedules this. The 03:30 launchd job was removed
+# 2026-09-14 because it took neither the nightly lock nor the budget, so it
+# ran an eleventh time beside the 22:00 walk. The scheduled path is
+# `src.nightly walk`; this is the hand-run door into the same graph.
+# Grading happens on /holds each morning. --scout takes the direction from
+# the scout's bank instead, falling back to the rotation when the bank is
+# empty or under scout.SCORE_FLOOR.
 venv/bin/python -m src.trigger [--spark ...] [--channel zeropage] [--scout]
 
 # GENERATIVE CLIPS — the Shot dataclass and its per-tool prompt renderers
