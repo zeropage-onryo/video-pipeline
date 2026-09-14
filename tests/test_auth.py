@@ -569,3 +569,79 @@ def test_sign_out_as_a_navigation_clears_this_origin_and_carries_next(clean_slat
     assert 'zp_session=""' in response.headers["set-cookie"] or "Max-Age=0" in response.headers["set-cookie"]
     client.cookies.clear()
     assert client.get("/ui", follow_redirects=False).status_code == 303   # signed out here
+
+
+# ---------- STUDIO_URL: the React studio is THE studio ----------
+# 2026-09-14. Mike signed in on this origin's own page (no `next`), landed
+# on /ui, and found the Analytics rail he had asked to retire -- the Jinja
+# shell is the reference implementation now, not the product. With
+# STUDIO_URL set, every road that used to end on /ui ends in the React
+# studio with the session handed over; /ui?legacy=1 keeps the old shell.
+
+STUDIO = "https://studio.example"
+
+
+@pytest.fixture
+def studio(monkeypatch):
+    monkeypatch.setenv("STUDIO_URL", STUDIO)
+
+
+def studio_handoff_of(response, path):
+    from urllib.parse import parse_qs, urlsplit
+    parts = urlsplit(response.headers["location"])
+    assert f"{parts.scheme}://{parts.netloc}{parts.path}" == f"{STUDIO}/auth/handoff"
+    query = parse_qs(parts.query)
+    assert query["next"][0] == path
+    return query["t"][0]
+
+
+def test_a_member_signing_in_with_no_return_address_lands_in_the_studio(clean_slate, gotrue, studio):
+    seed_mike(clean_slate, gotrue)
+    response = login("mike@example.com", "mikes-password-1")
+    token = studio_handoff_of(response, "/studio")
+    assert auth_mod._handoff_serializer().loads(token)["uid"] == "uid-mike-supabase"
+
+
+def test_a_fresh_signup_still_sees_the_no_access_page_not_a_studio_it_cannot_use(clean_slate, gotrue, studio):
+    response = signup()
+    assert response.headers["location"] == "/ui/accounts"
+
+
+def test_ui_hands_a_signed_in_member_to_the_studio_with_the_view_translated(clean_slate, gotrue, studio):
+    seed_mike(clean_slate, gotrue)
+    login("mike@example.com", "mikes-password-1")
+    studio_handoff_of(client.get("/ui", follow_redirects=False), "/studio")
+    studio_handoff_of(client.get("/ui?view=queue", follow_redirects=False), "/studio/queue")
+    studio_handoff_of(client.get("/ui?view=director&concept=42", follow_redirects=False),
+                      "/studio/flows?concept=42&shot=1")
+    studio_handoff_of(client.get("/ui?view=analytics", follow_redirects=False), "/studio")
+
+
+def test_ui_legacy_keeps_the_reference_shell(clean_slate, gotrue, studio):
+    seed_mike(clean_slate, gotrue)
+    login("mike@example.com", "mikes-password-1")
+    response = client.get("/ui?legacy=1", follow_redirects=False)
+    assert response.status_code == 200
+    assert 'data-view="director"' in response.text
+
+
+def test_ui_signed_out_goes_to_signin_with_the_studio_as_next(clean_slate, gotrue, studio):
+    response = client.get("/ui?view=pipeline", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/signin?next=https%3A%2F%2Fstudio.example%2Fstudio%2Fpipeline"
+
+
+def test_signin_when_already_signed_in_here_goes_to_the_studio(clean_slate, gotrue, studio):
+    seed_mike(clean_slate, gotrue)
+    login("mike@example.com", "mikes-password-1")
+    studio_handoff_of(client.get("/signin", follow_redirects=False), "/studio")
+
+
+def test_the_landing_page_door_is_the_studio(clean_slate, studio):
+    assert f'href="{STUDIO}/studio"' in client.get("/").text
+
+
+def test_without_a_studio_url_nothing_changes(clean_slate, gotrue):
+    seed_mike(clean_slate, gotrue)
+    assert login("mike@example.com", "mikes-password-1").headers["location"] == "/ui/accounts"
+    assert client.get("/ui", follow_redirects=False).status_code == 200

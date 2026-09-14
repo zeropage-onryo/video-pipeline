@@ -996,7 +996,15 @@ is yours, in Resolve, by hand.
   hover-expands with labels, a Queue badge (`GET /api/queue/pending` count, refreshed on
   picks, decisions and finished jobs) and the account row; the bar carries Director's
   own controls only while the canvas is up (`html[data-gs="canvas"]`). Not built from
-  the same design set: the Elements page (the rail keeps Analytics until it exists).
+  the same design set: the Elements page -- it exists in the React studio (`web/`), and
+  the Jinja rail still shows Analytics because this shell is the reference implementation
+  now, not the product. **With `STUDIO_URL` set (2026-09-14) the React studio is THE
+  studio:** `/ui` (with its `?view=` translated, `auth.STUDIO_VIEWS`), the landing page's
+  door, and a sign-in with no return address all hand the session to it
+  (`auth.studio_handoff`, the same `/auth/handoff` the studio's own Sign in uses); a
+  signed-in person with no account still sees `/ui/accounts`, the gate's page, on this
+  origin. `/ui?legacy=1` keeps this shell reachable. Mike signed in on this origin's own
+  page, landed here, and found the Analytics rail he had asked to retire -- that is why.
 - **The overnight branch reconciled into main (2026-09-12).** `claude/overnight-20260907`
   (13 commits: the corpus/gates/nightly/distribution/research builds, the credit ledger,
   fal.ai as one adapter for the four unwired platforms, the Runway Unlimited lane, public

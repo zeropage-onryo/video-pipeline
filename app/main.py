@@ -19,7 +19,7 @@ from contextlib import asynccontextmanager
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -323,7 +323,8 @@ def signin(request: Request, error: Optional[str] = None,
         destination = auth._post_login_redirect(request)
         if destination:
             return auth.handoff_redirect(destination, user["id"])
-        return RedirectResponse("/ui", status_code=303)
+        return (auth.studio_handoff(user["id"])
+                or RedirectResponse("/ui", status_code=303))
     return templates.TemplateResponse(
         request, "signin.html",
         {"error": error, "mode": mode if mode in ("signin", "signup") else "signin",
@@ -362,9 +363,24 @@ def ui(request: Request):
     account's own row, server-side, and the lane's routes re-ask the same
     gate anyway; nothing here is what protects it.
     """
+    # The React studio is the studio when this deployment has one
+    # (STUDIO_URL): a /ui address -- an old bookmark, the landing page,
+    # a sign-in with no return address -- lands there, session in hand,
+    # with its ?view= translated. ?legacy=1 keeps this shell reachable as
+    # the reference implementation the React one was ported from.
+    studio = auth.studio_url()
+    legacy = request.query_params.get("legacy") == "1"
     user = auth.current_user(request)
     if user is None:
+        if studio and not legacy:
+            target = f"{studio}{auth.studio_path_for_ui(request)}"
+            return RedirectResponse(f"/signin?{urlencode({'next': target})}",
+                                    status_code=303)
         return RedirectResponse("/signin", status_code=303)
+    if studio and not legacy:
+        handoff = auth.studio_handoff(user["id"], auth.studio_path_for_ui(request))
+        if handoff is not None:
+            return handoff
     account = auth.current_account(request, user)
     if account is None:
         # signed in, zero memberships: the no-access state, never a
@@ -437,14 +453,17 @@ def landing(request: Request):
     a canonical tag ends up pointing at localhost in production. The
     workspace lives at /studio.
     """
-    # The CTA points at whichever workspace exists on this deployment:
-    # /studio on the dev machine, /ui (behind sign-in) everywhere else --
-    # a public front door must not link into a 404.
+    # The CTA points at whichever workspace exists on this deployment: the
+    # React studio when there is one (STUDIO_URL), /studio on the dev
+    # machine, /ui (behind sign-in) everywhere else -- a public front door
+    # must not link into a 404.
+    studio = auth.studio_url()
     return templates.TemplateResponse(
         request,
         "landing.html",
         {"site_url": seo.site_url(), "schema_json": seo.homepage_schema_json(),
-         "studio_href": "/studio" if DEV_TOOLS else "/ui"},
+         "studio_href": (f"{studio}/studio" if studio
+                         else "/studio" if DEV_TOOLS else "/ui")},
     )
 
 

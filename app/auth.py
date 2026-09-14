@@ -79,13 +79,29 @@ def _serializer() -> URLSafeTimedSerializer:
     return URLSafeTimedSerializer(_session_secret(), salt="zp-session")
 
 
+def studio_url() -> Optional[str]:
+    """The React studio's public origin (STUDIO_URL), when this deployment
+    has one -- then it is THE studio: /ui, the landing page's door and a
+    sign-in with no return address all lead there, and the Jinja shell
+    stays reachable only as /ui?legacy=1, the reference implementation.
+    Unset (local dev, a deployment with no front end) means /ui is the
+    studio, exactly as before (2026-09-14: Mike signed in on this origin's
+    own page, landed on /ui, and found the rail he had asked to retire)."""
+    return os.environ.get("STUDIO_URL", "").strip().rstrip("/") or None
+
+
 def frontend_origins() -> list[str]:
     """The external frontend origins allowed to use this API cross-site --
     both the CORS allow-list and the set of trusted post-login redirect
-    targets. Comma-separated FRONTEND_ORIGINS; empty (the default) means no
-    cross-origin frontend, i.e. the API is consumed only by its own /ui."""
+    targets. Comma-separated FRONTEND_ORIGINS, plus STUDIO_URL's origin
+    when set; empty (the default) means no cross-origin frontend, i.e.
+    the API is consumed only by its own /ui."""
     raw = os.environ.get("FRONTEND_ORIGINS", "")
-    return [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
+    origins = [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
+    studio = studio_url()
+    if studio and studio not in origins:
+        origins.append(studio)
+    return origins
 
 
 def frontend_origin_regex() -> Optional[str]:
@@ -170,6 +186,36 @@ def handoff_redirect(destination: str, user_id: str) -> RedirectResponse:
     return RedirectResponse(
         f"{origin}/auth/handoff?{urlencode({'t': token, 'next': path})}",
         status_code=303)
+
+
+def studio_handoff(user_id: str, path: str = "/studio") -> Optional[RedirectResponse]:
+    """The React studio, session in hand -- or None when this deployment
+    has no STUDIO_URL, or the person has no account yet (the gate: a
+    fresh sign-in sees the explicit no-access page on THIS origin, never
+    a studio it cannot use)."""
+    studio = studio_url()
+    if not studio or not accounts.memberships(user_id):
+        return None
+    return handoff_redirect(f"{studio}{path}", user_id)
+
+
+# how the Jinja shell's `?view=` addresses map onto the React studio's pages
+STUDIO_VIEWS = {"studio": "/studio", "assets": "/studio/assets",
+                "pipeline": "/studio/pipeline", "director": "/studio/flows",
+                "elements": "/studio/elements", "queue": "/studio/queue"}
+
+
+def studio_path_for_ui(request: Request) -> str:
+    """The React page a /ui?view=... link meant: the Director keeps its
+    concept and shot, the rest are one-to-one, anything else is home."""
+    from urllib.parse import urlencode
+    view = request.query_params.get("view") or "studio"
+    path = STUDIO_VIEWS.get(view, "/studio")
+    if view == "director" and request.query_params.get("concept"):
+        query = {"concept": request.query_params["concept"],
+                 "shot": request.query_params.get("shot") or "1"}
+        path = f"{path}?{urlencode(query)}"
+    return path
 
 
 def _local_path(next_: Optional[str]) -> str:
@@ -534,7 +580,10 @@ def _finish(request: Request, session: dict) -> RedirectResponse:
     if destination:
         response = handoff_redirect(destination, user_id)
     else:
-        response = RedirectResponse("/ui/accounts", status_code=303)
+        # no return address: the React studio when this deployment has
+        # one and the person has an account, else the no-access page
+        response = (studio_handoff(user_id)
+                    or RedirectResponse("/ui/accounts", status_code=303))
     issue_session(response, user_id, request)
     return response
 
