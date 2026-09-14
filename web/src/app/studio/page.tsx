@@ -32,6 +32,7 @@ import {
   announceQueueChange,
   getAssets,
   getCapabilities,
+  runCreativeGuide,
   runScenes,
   waitForJob,
   type Asset,
@@ -223,13 +224,12 @@ function Composer() {
         if (brand) form.append("brand", brand);
         form.append("guide_provider", "gemini");
         form.append("idea", asked);
-        const res = await fetch(`${API_URL}/api/creative-guide`, {
-          method: "POST",
-          credentials: "include",
-          body: form,
-        });
-        if (!res.ok) throw new Error(`The guide answered ${res.status}`);
-        const started = (await res.json()) as { job_id: number };
+        // runCreativeGuide, never a bare fetch: the route is behind
+        // mutation_header and a call without GUARDED_HEADERS is refused
+        // 403 -- which lands in `note` and reads as the guide saying
+        // nothing at all, since the thread and the box are already
+        // cleared by then.
+        const started = await runCreativeGuide(form);
         const job = await waitForJob(started.job_id, (j) =>
           setNote(j.detail || "Considering your direction…"),
         );
