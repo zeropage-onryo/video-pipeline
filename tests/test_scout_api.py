@@ -138,14 +138,14 @@ def test_the_brand_scopes_the_bank(tmp_db):
 # ---------- POST /api/scout/run ----------
 
 def test_run_without_a_key_is_a_503_not_a_dead_job(tmp_db, monkeypatch):
-    monkeypatch.setattr(api_mod, "_gemini_key", lambda: None)
+    monkeypatch.setattr(api_mod, "_gemini_key", lambda *a, **k: None)
     res = client.post("/api/scout/run", json={"brand": "zeropage"})
     assert res.status_code == 503
     assert res.json()["error"]["code"] == "generation_unavailable"
 
 
 def test_run_banks_what_the_pass_found(tmp_db, monkeypatch):
-    monkeypatch.setattr(api_mod, "_gemini_key", lambda: "test-key")
+    monkeypatch.setattr(api_mod, "_gemini_key", lambda *a, **k: "test-key")
     monkeypatch.setattr(api_mod.scout, "scout", lambda brand, count, dsn=None: {
         "ok": True, "signals": 5, "pass_id": "p",
         "findings": [{"spark": "a crawled idea", "score": 0.8}],
@@ -160,7 +160,7 @@ def test_run_banks_what_the_pass_found(tmp_db, monkeypatch):
 
 def test_a_crawl_that_finds_nothing_fails_the_job_loudly(tmp_db, monkeypatch):
     """A silent empty crawl looks exactly like a healthy one."""
-    monkeypatch.setattr(api_mod, "_gemini_key", lambda: "test-key")
+    monkeypatch.setattr(api_mod, "_gemini_key", lambda *a, **k: "test-key")
     monkeypatch.setattr(api_mod.scout, "scout", lambda brand, count, dsn=None: {
         "ok": False, "signals": 0, "pass_id": "p", "findings": [], "bin": [],
         "errors": ["every lane came back empty"]})
@@ -177,7 +177,7 @@ def test_a_crawl_that_finds_nothing_fails_the_job_loudly(tmp_db, monkeypatch):
 def test_create_claims_the_spark_it_actually_generated_from(tmp_db, monkeypatch):
     finding_id = scout.record("zeropage", {"spark": "a researched idea", "score": 0.9},
                               pass_id="p", dsn=tmp_db)
-    monkeypatch.setattr(api_mod, "_gemini_key", lambda: "test-key")
+    monkeypatch.setattr(api_mod, "_gemini_key", lambda *a, **k: "test-key")
 
     from src import scene_chain
     monkeypatch.setattr(scene_chain, "run", lambda *a, **k: {
@@ -196,7 +196,7 @@ def test_create_claims_the_spark_it_actually_generated_from(tmp_db, monkeypatch)
 def test_create_without_a_finding_id_claims_nothing(tmp_db, monkeypatch):
     scout.record("zeropage", {"spark": "a researched idea", "score": 0.9},
                  pass_id="p", dsn=tmp_db)
-    monkeypatch.setattr(api_mod, "_gemini_key", lambda: "test-key")
+    monkeypatch.setattr(api_mod, "_gemini_key", lambda *a, **k: "test-key")
 
     from src import scene_chain
     monkeypatch.setattr(scene_chain, "run", lambda *a, **k: {
@@ -213,7 +213,7 @@ def test_create_without_a_finding_id_claims_nothing(tmp_db, monkeypatch):
 def test_a_generation_that_writes_nothing_leaves_the_spark_unclaimed(tmp_db, monkeypatch):
     finding_id = scout.record("zeropage", {"spark": "a researched idea", "score": 0.9},
                               pass_id="p", dsn=tmp_db)
-    monkeypatch.setattr(api_mod, "_gemini_key", lambda: "test-key")
+    monkeypatch.setattr(api_mod, "_gemini_key", lambda *a, **k: "test-key")
 
     from src import scene_chain
     def no_scene(*a, **k):
@@ -237,7 +237,7 @@ def _jpeg():
 
 
 def _create(monkeypatch, tmp_path, data, files=None):
-    monkeypatch.setattr(api_mod, "_gemini_key", lambda: "test-key")
+    monkeypatch.setattr(api_mod, "_gemini_key", lambda *a, **k: "test-key")
     monkeypatch.setattr(refbin, "REFS_DIR", tmp_path / "refs")
     from src import scene_chain
     monkeypatch.setattr(scene_chain, "run", lambda *a, **k: {
@@ -299,7 +299,7 @@ def test_a_typed_idea_never_consults_the_scout(tmp_db, monkeypatch):
     the scout may touch the idea he typed."""
     scout.record("zeropage", {"spark": "a crawled idea", "score": 0.99},
                  pass_id="p", dsn=tmp_db)
-    monkeypatch.setattr(api_mod, "_gemini_key", lambda: "test-key")
+    monkeypatch.setattr(api_mod, "_gemini_key", lambda *a, **k: "test-key")
 
     consulted = []
     monkeypatch.setattr(api_mod.scout, "next_spark",
@@ -331,7 +331,7 @@ def test_a_stale_finding_id_cannot_burn_a_spark_he_did_not_use(tmp_db, monkeypat
     one place research is kept. The server compares before claiming."""
     finding_id = scout.record("zeropage", {"spark": "the last check before leaving",
                                            "score": 0.9}, pass_id="p", dsn=tmp_db)
-    monkeypatch.setattr(api_mod, "_gemini_key", lambda: "test-key")
+    monkeypatch.setattr(api_mod, "_gemini_key", lambda *a, **k: "test-key")
 
     from src import scene_chain
     monkeypatch.setattr(scene_chain, "run", lambda *a, **k: {
@@ -350,7 +350,7 @@ def test_a_stale_finding_id_cannot_burn_a_spark_he_did_not_use(tmp_db, monkeypat
 def test_the_spark_is_still_claimed_when_he_only_fixed_the_capitals(tmp_db, monkeypatch):
     finding_id = scout.record("zeropage", {"spark": "the last check before leaving",
                                            "score": 0.9}, pass_id="p", dsn=tmp_db)
-    monkeypatch.setattr(api_mod, "_gemini_key", lambda: "test-key")
+    monkeypatch.setattr(api_mod, "_gemini_key", lambda *a, **k: "test-key")
 
     from src import scene_chain
     monkeypatch.setattr(scene_chain, "run", lambda *a, **k: {
@@ -374,7 +374,7 @@ def test_his_own_idea_does_not_inherit_the_research_images(tmp_db, monkeypatch):
     scout.stash_images("zeropage", "p",
                        [{"lane": "instagram", "detail": "a clip", "image": "https://i/1.jpg"}],
                        dsn=tmp_db, fetch=lambda u: "/refs/research.jpg")
-    monkeypatch.setattr(api_mod, "_gemini_key", lambda: "test-key")
+    monkeypatch.setattr(api_mod, "_gemini_key", lambda *a, **k: "test-key")
 
     seen = {}
     from src import scene_chain
@@ -400,7 +400,7 @@ def test_his_own_photos_survive_when_the_research_is_dropped(tmp_db, monkeypatch
     scout.stash_images("zeropage", "p",
                        [{"lane": "instagram", "detail": "a clip", "image": "https://i/1.jpg"}],
                        dsn=tmp_db, fetch=lambda u: "/refs/research.jpg")
-    monkeypatch.setattr(api_mod, "_gemini_key", lambda: "test-key")
+    monkeypatch.setattr(api_mod, "_gemini_key", lambda *a, **k: "test-key")
     monkeypatch.setattr(api_mod, "_resolve_asset_photo", lambda url: None)
 
     seen = {}
@@ -428,7 +428,7 @@ def test_the_research_images_ride_along_when_the_spark_is_used(tmp_db, monkeypat
     scout.stash_images("zeropage", "p",
                        [{"lane": "instagram", "detail": "a clip", "image": "https://i/1.jpg"}],
                        dsn=tmp_db, fetch=lambda u: "/refs/research.jpg")
-    monkeypatch.setattr(api_mod, "_gemini_key", lambda: "test-key")
+    monkeypatch.setattr(api_mod, "_gemini_key", lambda *a, **k: "test-key")
     monkeypatch.setattr(api_mod, "_resolve_asset_photo", lambda url: None)
 
     seen = {}

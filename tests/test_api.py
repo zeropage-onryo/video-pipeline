@@ -187,7 +187,7 @@ def test_pipeline_run_generates_through_a_job(tmp_db, monkeypatch):
     monkeypatch.setattr(
         shootgen, "generate_scene_concept",
         lambda **k: {"concept_id": 7, "concept": {"title": "Generated"}, "warnings": []})
-    monkeypatch.setattr(api_mod, "_gemini_key", lambda: "k")
+    monkeypatch.setattr(api_mod, "_gemini_key", lambda *a, **k: "k")
 
     job_id = client.post("/api/pipeline/run",
                          data={"prompt": "night ride"}).json()["job_id"]
@@ -198,7 +198,7 @@ def test_pipeline_run_generates_through_a_job(tmp_db, monkeypatch):
 
 
 def test_pipeline_run_refuses_without_key(tmp_db, monkeypatch):
-    monkeypatch.setattr(api_mod, "_gemini_key", lambda: None)
+    monkeypatch.setattr(api_mod, "_gemini_key", lambda *a, **k: None)
     response = client.post("/api/pipeline/run", data={"prompt": "x"})
     assert response.status_code == 503
 
@@ -271,7 +271,7 @@ def test_pipeline_run_carries_picked_media_as_image_refs(tmp_db, photo_root,
         return {"concept_id": 1, "concept": {"title": "T"}, "warnings": []}
 
     monkeypatch.setattr(shootgen, "generate_scene_concept", fake_generate)
-    monkeypatch.setattr(api_mod, "_gemini_key", lambda: "k")
+    monkeypatch.setattr(api_mod, "_gemini_key", lambda *a, **k: "k")
 
     response = client.post("/api/pipeline/run", data={
         "prompt": "night ride",
@@ -318,7 +318,7 @@ def test_approve_writes_the_scene_via_job(tmp_db, monkeypatch):
         return {"concept_id": concept_id, "shots": [{"n": 1}], "warnings": []}
 
     monkeypatch.setattr(shootgen, "write_scene_for_concept", fake)
-    monkeypatch.setattr(api_mod, "_gemini_key", lambda: "k")
+    monkeypatch.setattr(api_mod, "_gemini_key", lambda *a, **k: "k")
     monkeypatch.setattr("google.genai.Client", lambda **k: object())
     concept_id = seed_concept(tmp_db, "An Idea")      # no shots yet
 
@@ -394,7 +394,7 @@ def test_shot_media_attach_roundtrip(tmp_db):
 
 def test_direct_endpoint_revises_through_a_job(tmp_db, monkeypatch):
     concept_id = seed_concept(tmp_db)
-    monkeypatch.setattr(api_mod, "_gemini_key", lambda: "k")
+    monkeypatch.setattr(api_mod, "_gemini_key", lambda *a, **k: "k")
     import src.director as director
     monkeypatch.setattr(
         director, "direct_scene",
@@ -412,7 +412,7 @@ def test_direct_endpoint_revises_through_a_job(tmp_db, monkeypatch):
 
 def test_refine_endpoint_surfaces_failure(tmp_db, monkeypatch):
     concept_id = seed_concept(tmp_db)
-    monkeypatch.setattr(api_mod, "_gemini_key", lambda: "k")
+    monkeypatch.setattr(api_mod, "_gemini_key", lambda *a, **k: "k")
     import src.director as director
     monkeypatch.setattr(
         director, "refine_shot_prompt",
@@ -520,7 +520,7 @@ def test_eval_run_computes_and_stores_metrics(tmp_db, monkeypatch):
         def close(self):
             pass
 
-    monkeypatch.setattr(api_mod, "_gemini_key", lambda: "k")
+    monkeypatch.setattr(api_mod, "_gemini_key", lambda *a, **k: "k")
     monkeypatch.setattr(api_mod, "_rag_reachable", lambda: True)
     monkeypatch.setattr(api_mod.rag, "connect", lambda db_url=None: FakeConn())
     monkeypatch.setattr(api_mod.rag, "make_client", lambda: object())

@@ -43,7 +43,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from . import generative, render_assets, spend
+from . import account_keys, gemini_utils, generative, render_assets, spend
 from .gemini_utils import sniff_mime
 from .shot import Shot
 
@@ -148,13 +148,21 @@ def as_still_frame(prompt: str, *, has_reference=False, beat: str = "") -> str:
         beat=BEAT_NOTE.format(beat=beat) if beat else "")
 
 
-def has_key() -> bool:
-    return bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
+def has_key(account_id: Optional[int] = None) -> bool:
+    """Whether a keyframe can be drawn for this account at all -- its own
+    stored Gemini key, or the operator's from the environment.
+
+    Takes account_id (2026-09-14) for the reason gemini_utils.api_key_for
+    exists: this is the busiest paid path in the pipeline and it billed
+    the operator for everybody. None keeps the old answer exactly."""
+    return bool(gemini_utils.api_key_for(account_id))
 
 
-def _client():
-    from google import genai
-    return genai.Client()
+def _client(account_id: Optional[int] = None):
+    """The client this account draws on. genai.Client() with no argument
+    read GEMINI_API_KEY out of the ambient environment, which is the one
+    thing a second account must not do."""
+    return gemini_utils.client_for(account_id)
 
 
 def generations_today(db_path=None, *, account_id=None, everyone: bool = False) -> int:
@@ -277,7 +285,8 @@ def generate_image(prompt: str, out_path: Path, *, model: str = MODEL,
                    reference_bytes=None,
                    reference_mime: Optional[str] = None, client=None,
                    aspect_ratio: str = ASPECT_RATIO,
-                   image_size: str = IMAGE_SIZE) -> Path:
+                   image_size: str = IMAGE_SIZE,
+                   account_id: Optional[int] = None) -> Path:
     """The thin raising wrapper: one generate_content call (retried on a
     transient overload), first image part written to out_path. Raises
     when the model returns no image -- here the image IS the deliverable
@@ -297,7 +306,7 @@ def generate_image(prompt: str, out_path: Path, *, model: str = MODEL,
     better outcome than an INVALID_ARGUMENT on a paid call."""
     from google.genai import types
 
-    client = client or _client()
+    client = client or _client(account_id)
     references = as_reference_list(reference_bytes)
     parts: list = []
     for label, data in references:
@@ -363,8 +372,10 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
         prompt = (prompt or "").strip()
         if not prompt:
             return {"ok": False, "error": "an empty prompt renders nothing"}
-        if not has_key():
-            return {"ok": False, "error": "GEMINI_API_KEY not set"}
+        if not has_key(account_id):
+            return {"ok": False,
+                    "error": "no Gemini key -- add one in Renderer keys, or "
+                             "set GEMINI_API_KEY for the installation"}
 
         generative.init(**kwargs)
         refusal = generative.cap_error(
@@ -392,7 +403,8 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
                                       beat=beat),
                        out_path, model=model,
                        reference_bytes=references, client=client,
-                       aspect_ratio=aspect_ratio, image_size=image_size)
+                       aspect_ratio=aspect_ratio, image_size=image_size,
+                       account_id=account_id)
 
         # the row logs the prompt the person wrote, not the constant
         # wrapper around it -- the flag says which framing was applied
@@ -400,7 +412,14 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
         generation_params = {"model": model, "source": "workflow",
                              "framing": "still", "references": len(references),
                              **({"beat": beat} if beat else {}),
-                             **({"concept_id": concept_id} if concept_id else {})}
+                             **({"concept_id": concept_id} if concept_id else {}),
+                             # whose key paid for this image -- the label
+                             # every renderer's row already carries, and the
+                             # one that tells a billable draw from one the
+                             # customer paid for themselves. Never raises.
+                             "key_source": account_keys.key_source(
+                                 account_id, gemini_utils.GEMINI_PROVIDER,
+                                 db_path)}
         generation_id = generative.record_generation(
             shot_row_id, "nano", prompt,
             params=generation_params,

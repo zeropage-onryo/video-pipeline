@@ -992,7 +992,10 @@ async def grade_fresh(request: Request, account_id: int = Depends(auth.dev_accou
     form = dict(await request.form())
     brand = form.get("brand") or active_brand(request)
     spark = (form.get("spark") or "").strip() or None
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    from src import gemini_utils
+    # the dev console is still a tenant (auth.dev_account_id), so its
+    # paid calls resolve like any other account's -- see _gemini_key
+    api_key = gemini_utils.api_key_for(account_id)
     if not api_key:
         return RedirectResponse(
             f"/studio?tab=grade&message={quote('GEMINI_API_KEY not set')}",

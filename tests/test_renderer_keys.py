@@ -140,3 +140,110 @@ def test_the_key_a_person_enters_is_what_the_queue_then_offers(keys_db, monkeypa
     client.put("/api/renderer-keys/higgsfield", headers=HEADER,
                json={"values": ["mine-id", "mine-secret"]})
     assert providers.render_default("RUNWAY", OWNER)["provider"] == "higgsfield"
+
+
+# --- Gemini is a BYOK provider too (2026-09-14) ----------------------------
+#
+# Every renderer resolved its credential per account through
+# account_keys.key_for; Gemini did not, and read GEMINI_API_KEY -- the
+# OPERATOR's key -- straight from the environment. That is invisible with one
+# operator and it is the bill the moment there are users, because Gemini is
+# not an occasional renderer here: it writes every scene, plans every
+# timeline, draws every keyframe, and runs the scout and the judge. It fires
+# on every Create, where Runway fires only when someone approves a spend.
+#
+# These test BOTH directions, which is the lesson from the pilot dry run: a
+# stranger must not spend the operator's key, AND the operator must still
+# reach their own. An inward drop fails closed and looks like nothing.
+
+@pytest.fixture
+def gemini_byok(pg, monkeypatch):
+    """One account with its own stored Gemini key, a DIFFERENT operator key
+    in the environment. Whichever turns up is the answer to whose bill it is."""
+    monkeypatch.setenv("DATABASE_URL", pg)
+    monkeypatch.setenv("ACCOUNT_KEYS_SECRET", Fernet.generate_key().decode())
+    monkeypatch.setenv("GEMINI_API_KEY", "OPERATOR-GEMINI")
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    accounts.seed("mike@example.com", dsn=pg)
+    with db.connect(pg) as conn:
+        owner = conn.execute(
+            "SELECT id FROM accounts WHERE slug = 'zeropage'").fetchone()["id"]
+    account_keys.set_key(owner, "gemini", "TENANT-GEMINI", dsn=pg)
+    return {"dsn": pg, "account_id": owner}
+
+
+def test_an_account_with_a_gemini_key_does_not_spend_the_operators(gemini_byok):
+    from src import gemini_utils
+    assert gemini_utils.api_key_for(gemini_byok["account_id"]) == "TENANT-GEMINI"
+
+
+def test_an_account_without_one_still_falls_back_to_the_installation(gemini_byok):
+    """The inward direction. A tenant with no stored key must keep working on
+    the operator's -- this is how it behaved before BYOK and how every
+    single-operator install still behaves."""
+    from src import accounts as accounts_mod
+    from src import gemini_utils
+    other = accounts_mod.upsert_account("nokey", "No Key", dsn=gemini_byok["dsn"])
+    other_id = other["id"] if isinstance(other, dict) else other
+    assert gemini_utils.api_key_for(other_id) == "OPERATOR-GEMINI"
+    # and account_id=None -- the nightly walk, the scout, the CLI -- is unchanged
+    assert gemini_utils.api_key_for(None) == "OPERATOR-GEMINI"
+
+
+def test_the_keyframe_path_asks_for_the_accounts_key_not_the_environment(
+        gemini_byok, monkeypatch):
+    """nano_banana._client() used to be a bare genai.Client(), which reads
+    GEMINI_API_KEY out of the ambient environment -- the one thing a second
+    account must not do."""
+    from src import nano_banana
+    seen = []
+    monkeypatch.setattr("google.genai.Client",
+                        lambda api_key=None, **kw: seen.append(api_key) or object())
+    nano_banana._client(gemini_byok["account_id"])
+    nano_banana._client(None)
+    assert seen == ["TENANT-GEMINI", "OPERATOR-GEMINI"]
+
+
+def test_has_key_answers_per_account(gemini_byok, monkeypatch):
+    from src import nano_banana
+    assert nano_banana.has_key(gemini_byok["account_id"]) is True
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    # the tenant keeps its own key when the installation has none at all
+    assert nano_banana.has_key(gemini_byok["account_id"]) is True
+    assert nano_banana.has_key(None) is False
+
+
+def test_a_client_with_no_key_anywhere_refuses_instead_of_failing_later(
+        gemini_byok, monkeypatch):
+    from src import gemini_utils
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="no Gemini key"):
+        gemini_utils.client_for(None)
+
+
+def test_the_web_surface_resolves_per_account(gemini_byok):
+    """app/api._gemini_key is the chokepoint 18 routes read; if it is not
+    account-aware then none of them are."""
+    from app import api
+    assert api._gemini_key(gemini_byok["account_id"]) == "TENANT-GEMINI"
+    assert api._gemini_key(None) == "OPERATOR-GEMINI"
+
+
+def test_no_route_reads_the_gemini_env_var_behind_the_chokepoint():
+    """The static guard. A new route that reaches for os.environ directly
+    puts the operator's key back on a tenant's call, and nothing else here
+    would notice."""
+    import pathlib
+    import re
+    root = pathlib.Path(__file__).resolve().parent.parent
+    offenders = []
+    for name in ("app/api.py", "app/main.py"):
+        for i, line in enumerate((root / name).read_text().split("\n"), 1):
+            if re.search(r'environ\.get\(\s*"(GEMINI_API_KEY|GOOGLE_API_KEY)"', line):
+                offenders.append(f"{name}:{i}")
+    # app/main.py's library_backfill_assets takes no account at all -- it is an
+    # operator-only maintenance route, and is the ONE allowed reader.
+    assert len(offenders) <= 1, (
+        "these read the operator's Gemini key directly instead of going "
+        "through _gemini_key(account_id)/gemini_utils.api_key_for: "
+        + ", ".join(offenders))

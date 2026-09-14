@@ -103,8 +103,21 @@ def _error(status: int, code: str, message: str) -> JSONResponse:
 
 # --- capabilities -----------------------------------------------------------
 
-def _gemini_key() -> Optional[str]:
-    return os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+def _gemini_key(account_id: Optional[int] = None) -> Optional[str]:
+    """This account's Gemini key, falling back to the installation's.
+
+    Was a bare read of GEMINI_API_KEY, which is the OPERATOR's key --
+    so every scene write, timeline plan, keyframe, enhance and judge a
+    SECOND account ran was billed to Mike. The renderers never had this
+    problem because they all go through account_keys.key_for; Gemini was
+    the one provider that didn't, despite account_keys having had a
+    "gemini" entry since BYOK landed (2026-09-14).
+
+    Passing account_id is what makes a route tenant-aware, and leaving it
+    off is still correct for the paths that are genuinely the
+    installation's -- the nightly walk, the scout, the CLI."""
+    from src import gemini_utils
+    return gemini_utils.api_key_for(account_id)
 
 
 def _rag_reachable() -> bool:
@@ -136,7 +149,7 @@ def compute_capabilities(account_id: Optional[int] = None) -> dict:
     """
     from src import promptgen
 
-    gemini = bool(_gemini_key())
+    gemini = bool(_gemini_key(account_id))
     store = _rag_reachable()
     return {
         # per-shot polish needs the in-flight promptgen.refine_prompt to
@@ -375,7 +388,7 @@ async def creative_guide_reply(request: Request,
             # provider never silently falls back onto Gemini credit.
             return _error(409, "model_not_connected",
                           f"Connect your {provider} account first.")
-    elif not _gemini_key():
+    elif not _gemini_key(account_id):
         return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
 
     image_refs, ref_urls, _ = await _collect_refs(form)
@@ -396,7 +409,7 @@ async def creative_guide_reply(request: Request,
         else:
             from google import genai
             reply = creative_guide.respond(
-                conversation, client=genai.Client(api_key=_gemini_key()),
+                conversation, client=genai.Client(api_key=_gemini_key(account_id)),
                 brand=brand, grounding=grounding, image_refs=image_refs,
                 account_id=account_id, on_retry=note)
         # `billing` says WHOSE plan paid: a personal connection spends
@@ -697,7 +710,8 @@ ingest_asset_chunk = asset_shelf.ingest_one
 _drop_asset_chunk = asset_shelf.drop_one
 
 
-def describe_entity_photos(kind: str, name: str, photos: list) -> dict:
+def describe_entity_photos(kind: str, name: str, photos: list,
+                           account_id: Optional[int] = None) -> dict:
     """The vision step for a character or prop, mirroring what a
     location has always got on upload. This is what makes the asset
     *searchable*: the RAG library is text-only, so an undescribed
@@ -705,10 +719,10 @@ def describe_entity_photos(kind: str, name: str, photos: list) -> dict:
 
     Never raises -- a failed vision call must not lose the photos or
     the entity row, exactly the locations contract."""
-    api_key = _gemini_key()
+    api_key = _gemini_key(account_id)
     if not (api_key and photos):
         return {"ok": False, "description": None,
-                "error": "no photos" if api_key else "GEMINI_API_KEY not set"}
+                "error": "no photos" if api_key else "no Gemini key"}
     try:
         from google import genai
 
@@ -790,7 +804,7 @@ async def asset_create_location(request: Request, account_id: int = Depends(auth
     described = False
     note = None
     description = None
-    api_key = _gemini_key()
+    api_key = _gemini_key(account_id)
     if not api_key:
         note = "GEMINI_API_KEY is not set, so the photos were not described"
     else:
@@ -836,7 +850,7 @@ async def _create_entity(kind: str, request: Request, account_id: int):
     # constant -- they're the same in production, but the photos that
     # were just written are the ones to describe.
     saved_photos = [base_dir / slug / n for n in _photo_names(base_dir, slug)]
-    vision = describe_entity_photos(kind, name, saved_photos)
+    vision = describe_entity_photos(kind, name, saved_photos, account_id)
     description = dict(vision["description"] or {})
     if notes:
         description["notes"] = notes
@@ -880,14 +894,14 @@ def assets_backfill(body: BackfillBody, account_id: int = Depends(auth.current_a
     vision step on undescribed cast/props: one billed call each, opt-in,
     and already-described assets are skipped rather than re-described.
     Runs as a job because a real library takes a while."""
-    if body.describe and not _gemini_key():
+    if body.describe and not _gemini_key(account_id):
         return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
 
     def work(job):
         client = None
         if body.describe:
             from google import genai
-            client = genai.Client(api_key=_gemini_key())
+            client = genai.Client(api_key=_gemini_key(account_id))
         jobs.progress(job, 0.1, "walking assets")
         result = asset_shelf.backfill(db_path=None, describe=body.describe,
                                       gemini_client=client, account_id=account_id)
@@ -1331,7 +1345,7 @@ async def scenes_run(request: Request, account_id: int = Depends(auth.current_ac
     idea = (form.get("idea") or form.get("prompt") or "").strip()
     if not idea:
         return _error(400, "empty_idea", "type an idea first")
-    api_key = _gemini_key()
+    api_key = _gemini_key(account_id)
     if not api_key:
         return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
     brand_raw = form.get("brand")
@@ -1506,7 +1520,7 @@ def scout_run(body: ScoutRunBody, account_id: int = Depends(auth.current_account
     """Fire one research pass as a job, so the crawl narrates on the
     same SSE feed as everything else -- it takes tens of seconds and a
     silent button is indistinguishable from a broken one."""
-    if not _gemini_key():
+    if not _gemini_key(account_id):
         return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
     brand = body.brand if body.brand in preprod.BRANDS else "antihero"
     count = max(1, min(6, int(body.count or 4)))
@@ -1552,7 +1566,7 @@ def _keyframe_on_pick(concept: dict, account_id: int):
     """
     from src import scene_chain
 
-    api_key = _gemini_key()
+    api_key = _gemini_key(account_id)
     if not api_key:
         return None
     # The guard is scene_chain's, asked here so a skip costs no job at
@@ -2646,7 +2660,7 @@ def concept_direct(concept_id: int, body: DirectBody, account_id: int = Depends(
     """Director mode: one note revises the stored scene in place --
     validated, attachments carried over, refused when the revision
     comes back broken. One billed call per note."""
-    api_key = _gemini_key()
+    api_key = _gemini_key(account_id)
     if not api_key:
         return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
     note = body.note.strip()
@@ -2679,7 +2693,7 @@ def concept_direct(concept_id: int, body: DirectBody, account_id: int = Depends(
 def shot_refine(concept_id: int, shot_n: int, account_id: int = Depends(auth.current_account_id)):
     """Technique-aware polish for one shot's AI prompt, grounded in the
     ai_prompting shelf. Falls back to unchanged on anything broken."""
-    api_key = _gemini_key()
+    api_key = _gemini_key(account_id)
     if not api_key:
         return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
     concept = preprod.get_concept(concept_id, account_id=account_id)
@@ -2889,7 +2903,7 @@ async def pipeline_run(request: Request, account_id: int = Depends(auth.current_
     prompt = (form.get("prompt") or "").strip()
     if not prompt:
         return _error(400, "empty_prompt", "a prompt is required")
-    api_key = _gemini_key()
+    api_key = _gemini_key(account_id)
     if not api_key:
         return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
     brand_raw = form.get("brand")
@@ -3055,7 +3069,7 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
     prompt = (form.get("prompt") or "").strip()
     if not prompt:
         return _error(400, "empty_prompt", "a prompt is required")
-    api_key = _gemini_key()
+    api_key = _gemini_key(account_id)
     if not api_key:
         return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
     brand_raw = form.get("brand")
@@ -3350,7 +3364,7 @@ def concept_approve(concept_id: int, account_id: int = Depends(auth.current_acco
     if concept.get("shots"):
         return _error(409, "already_written",
                       "this concept already has its scene prompt")
-    api_key = _gemini_key()
+    api_key = _gemini_key(account_id)
     if not api_key:
         return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
 
@@ -3617,7 +3631,7 @@ def evals_run(body: EvalRunBody, account_id: int = Depends(auth.current_account_
     golden = evalstore.list_golden()
     if not golden:
         return _error(400, "empty_golden", "the golden set is empty")
-    api_key = _gemini_key()
+    api_key = _gemini_key(account_id)
     if not (api_key and _rag_reachable()):
         return _error(503, "evals_unavailable",
                       "needs the RAG store and GEMINI_API_KEY")
@@ -3853,7 +3867,7 @@ def workflow_exec_enhance(body: EnhanceBody, account_id: int = Depends(auth.curr
     call through generate_with_retry, images riding as vision input and
     the Ground node's references folded in as grounding. A job, so the
     canvas lights the node from the same SSE feed everything uses."""
-    api_key = _gemini_key()
+    api_key = _gemini_key(account_id)
     if not api_key:
         return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
 
@@ -4058,7 +4072,7 @@ def workflows_run(workflow_id: int, account_id: int = Depends(auth.current_accou
     graph = workflow.get("graph") or {}
     if not graph.get("nodes"):
         return _error(400, "empty_graph", "the workflow has no nodes to run")
-    api_key = _gemini_key()
+    api_key = _gemini_key(account_id)
 
     def work(job):
         gemini_client = None

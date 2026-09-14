@@ -62,7 +62,7 @@ def test_bad_history_does_not_start_a_call(client, monkeypatch, messages):
 
 
 def test_missing_key_is_visible(client, monkeypatch):
-    monkeypatch.setattr(api, "_gemini_key", lambda: None)
+    monkeypatch.setattr(api, "_gemini_key", lambda *a, **k: None)
     response = client.post('/api/creative-guide', data={"conversation": json.dumps({
         "messages": [{"role": "user", "content": "Help"}]})})
     assert response.status_code == 503
