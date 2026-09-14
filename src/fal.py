@@ -101,7 +101,12 @@ DAILY_CAP = int(os.environ.get("FAL_DAILY_CAP", "6"))
 # SAME number so a single-operator database behaves exactly as it did --
 # runway.py/higgsfield.py's comment, and the same reasoning: admitting a
 # second account should force a decision about whose card is paying.
-GLOBAL_DAILY_CAP = int(os.environ.get("FAL_GLOBAL_DAILY_CAP", str(DAILY_CAP)))
+# 0 = no installation-wide ceiling (2026-09-14, Mike's call): a user who
+# brought their own key was still consuming the operator's shared budget and
+# could lock everyone else out of money nobody spent. The per-account cap
+# (FAL_DAILY_CAP) is the wall that remains. Set FAL_GLOBAL_DAILY_CAP to a
+# positive number to put the ceiling back -- see generative.cap_error.
+GLOBAL_DAILY_CAP = int(os.environ.get("FAL_GLOBAL_DAILY_CAP", "0"))
 POLL_SECONDS = 3
 TIMEOUT_SECONDS = int(os.environ.get("FAL_TIMEOUT_S", "900"))
 
@@ -479,7 +484,8 @@ def safe_prompt(prompt: str, db_path=None) -> str:
     return text
 
 
-def generations_today(db_path=None, *, account_id=None, everyone: bool = False) -> int:
+def generations_today(db_path=None, *, account_id=None, everyone: bool = False,
+                      operator_billed_only: bool = False) -> int:
     """This account's fal-rendered generations since UTC midnight -- what
     DAILY_CAP counts against. `everyone=True` gives the installation-wide
     count GLOBAL_DAILY_CAP counts against.
@@ -490,7 +496,8 @@ def generations_today(db_path=None, *, account_id=None, everyone: bool = False) 
     "fal" would count zero forever while the money went out the door.
     """
     return sum(
-        generative.used_today(tool, db_path, account_id=account_id, everyone=everyone)
+        generative.used_today(tool, db_path, account_id=account_id, everyone=everyone,
+                              operator_billed_only=operator_billed_only)
         for tool in VIDEO_LOG_TOOLS
     )
 
@@ -762,7 +769,8 @@ def _cap_refusal(n: int, db_path, account_id):
         dsn=db_path,
         env_prefix="FAL", phrase="generations used",
         used=generations_today(db_path=db_path, account_id=account_id),
-        used_everywhere=generations_today(db_path=db_path, everyone=True),
+        used_everywhere=generations_today(db_path=db_path, everyone=True,
+                                             operator_billed_only=True),
     )
 
 

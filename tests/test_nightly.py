@@ -253,10 +253,35 @@ def test_headroom_is_the_smaller_of_the_two_walls(nightly_db, monkeypatch):
     monkeypatch.setattr(nano_banana, "DAILY_CAP", 20)
     monkeypatch.setattr(nano_banana, "GLOBAL_DAILY_CAP", 20)
     monkeypatch.setattr(nano_banana, "generations_today",
-                        lambda db_path=None, account_id=None, everyone=False:
+                        lambda db_path=None, everyone=False, **kw:
                         20 if everyone else 3)
     report = nightly.check_image_cap(nightly_db)
     assert report["headroom"] == 0 and report["ok"] is False
+
+
+def test_no_ceiling_does_not_read_as_zero_headroom(nightly_db, monkeypatch):
+    """2026-09-14. GLOBAL_DAILY_CAP defaults to 0 = OFF. Subtracting it
+    blindly made headroom negative, clamped to 0, and reported ok=False --
+    which would have stopped the walk every single night on an install that
+    had merely turned the installation-wide wall off. The per-account cap
+    is the only wall left, and it still counts."""
+    from src import nano_banana
+    monkeypatch.setattr(nano_banana, "DAILY_CAP", 20)
+    monkeypatch.setattr(nano_banana, "GLOBAL_DAILY_CAP", 0)
+    monkeypatch.setattr(nano_banana, "generations_today",
+                        lambda db_path=None, everyone=False, **kw:
+                        999 if everyone else 3)
+    report = nightly.check_image_cap(nightly_db)
+    assert report["ok"] is True
+    assert report["headroom"] == 17          # 20 - 3, the ceiling ignored
+    assert "no ceiling" in report["detail"]
+
+    # and the per-account cap still stops the night on its own
+    monkeypatch.setattr(nano_banana, "generations_today",
+                        lambda db_path=None, everyone=False, **kw:
+                        999 if everyone else 20)
+    spent = nightly.check_image_cap(nightly_db)
+    assert spent["headroom"] == 0 and spent["ok"] is False
 
 
 # --------------------------------------------------------------------------

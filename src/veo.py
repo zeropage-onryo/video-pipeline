@@ -68,7 +68,12 @@ DAILY_CAP = int(os.environ.get("VEO_DAILY_CAP", "6"))
 # SAME number, so a single-operator database behaves exactly as it did --
 # admitting a second account is what forces a deliberate decision about
 # whose card is paying, instead of the total quietly doubling.
-GLOBAL_DAILY_CAP = int(os.environ.get("VEO_GLOBAL_DAILY_CAP", str(DAILY_CAP)))
+# 0 = no installation-wide ceiling (2026-09-14, Mike's call): a user who
+# brought their own key was still consuming the operator's shared budget and
+# could lock everyone else out of money nobody spent. The per-account cap
+# (VEO_DAILY_CAP) is the wall that remains. Set VEO_GLOBAL_DAILY_CAP to a
+# positive number to put the ceiling back -- see generative.cap_error.
+GLOBAL_DAILY_CAP = int(os.environ.get("VEO_GLOBAL_DAILY_CAP", "0"))
 
 SPEND_ENV = "VEO_SPEND_OK"
 
@@ -138,13 +143,15 @@ def estimate_cost(n: int) -> float:
     return round(n * COST_PER_CLIP_USD, 2)
 
 
-def generations_today(db_path=None, *, account_id=None, everyone: bool = False) -> int:
+def generations_today(db_path=None, *, account_id=None, everyone: bool = False,
+                      operator_billed_only: bool = False) -> int:
     """This account's veo generations since UTC midnight -- what
     DAILY_CAP counts against. `everyone=True` gives the installation-wide
     count that GLOBAL_DAILY_CAP counts against."""
     return generative.used_today(
         "veo", db_path,
         account_id=account_id, everyone=everyone,
+        operator_billed_only=operator_billed_only,
     )
 
 
@@ -261,7 +268,8 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *, shot_id: Optional[i
             dsn=db_path,
             env_prefix="VEO", phrase="generations used",
             used=generations_today(db_path=db_path, account_id=account_id),
-            used_everywhere=generations_today(db_path=db_path, everyone=True),
+            used_everywhere=generations_today(db_path=db_path, everyone=True,
+                                             operator_billed_only=True),
         )
         if refusal:
             return {"ok": False, "candidates": [], "error": refusal}
@@ -415,7 +423,8 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
             dsn=db_path,
             env_prefix="VEO", phrase="generations used",
             used=generations_today(db_path=db_path, account_id=account_id),
-            used_everywhere=generations_today(db_path=db_path, everyone=True),
+            used_everywhere=generations_today(db_path=db_path, everyone=True,
+                                             operator_billed_only=True),
         )
         if refusal:
             return {"ok": False, "error": refusal}

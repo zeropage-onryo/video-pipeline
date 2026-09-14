@@ -203,15 +203,24 @@ def check_image_cap(dsn: Optional[str] = None, *, account_id: Optional[int] = No
         everyone = nano_banana.generations_today(db_path=dsn, everyone=True)
     except Exception as e:
         return {"ok": True, "headroom": None, "detail": f"cap unreadable ({_first_line(e)})"}
-    headroom = min(nano_banana.DAILY_CAP - used, nano_banana.GLOBAL_DAILY_CAP - everyone)
+    # A ceiling of 0 means OFF, not a ceiling of zero (2026-09-14, the same
+    # reading generative.cap_error takes). Subtracting it blindly made
+    # headroom negative, clamped to 0, and reported ok=False -- which would
+    # have stopped the nightly walk every night on an installation that had
+    # simply turned the installation-wide wall off.
+    headroom = nano_banana.DAILY_CAP - used
+    if nano_banana.GLOBAL_DAILY_CAP > 0:
+        headroom = min(headroom, nano_banana.GLOBAL_DAILY_CAP - everyone)
     headroom = max(headroom, 0)
     return {
         "ok": headroom > 0,
         "headroom": headroom,
         "used": used,
         "everyone": everyone,
-        "detail": (f"{used}/{nano_banana.DAILY_CAP} today, "
-                   f"{everyone}/{nano_banana.GLOBAL_DAILY_CAP} installation-wide"),
+        "detail": (f"{used}/{nano_banana.DAILY_CAP} today"
+                   + (f", {everyone}/{nano_banana.GLOBAL_DAILY_CAP} installation-wide"
+                      if nano_banana.GLOBAL_DAILY_CAP > 0
+                      else f", {everyone} installation-wide (no ceiling)")),
     }
 
 
