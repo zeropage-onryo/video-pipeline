@@ -189,6 +189,71 @@ def test_the_scene_length_reaches_the_writer_from_the_graph(tmp_db, monkeypatch)
 
 # ---------- the left third: the original loop, preserved ----------
 
+def test_the_keyframe_pairs_each_prompt_with_its_own_shot(monkeypatch):
+    """Joined on `n`, never on list position.
+
+    `shots` is re-derived here from state["concept"], which
+    revise_prompts rewrites in place, while `prompts` comes off
+    state["prompts"] -- two lists built by two filters that agree today.
+    A zip() agrees right up until one of them drops a shot the other
+    keeps, and then it renders shot A's prompt onto shot B: silently, at
+    full cost, with every card in the Queue looking correct.
+    """
+    monkeypatch.setenv("ZEROPAGE_KEYFRAME", "0")   # no billed image call
+    persisted = []
+    monkeypatch.setattr(orchestrator.scene_chain, "persist_prompt",
+                        lambda cid, n, text, **kw: persisted.append((n, text)))
+    monkeypatch.setattr(orchestrator.scene_chain, "plan_timeline",
+                        lambda *a, **kw: None)
+
+    orchestrator.keyframe({
+        "concept_id": 7,
+        "concept": {"shots": [{"n": 1, "prompt": "one"}, {"n": 2, "prompt": "two"}]},
+        # deliberately NOT in shot order -- the order a filter or a rework
+        # is free to produce, and the one a zip() gets wrong
+        "prompts": [{"n": 2, "prompt": "TWO"}, {"n": 1, "prompt": "ONE"}],
+    })
+
+    assert persisted == [(1, "ONE"), (2, "TWO")]
+
+
+def test_the_keyframe_says_so_when_a_shot_has_no_prompt_of_its_own(monkeypatch):
+    """Better a named failure on that shot than a neighbour's prompt."""
+    monkeypatch.setenv("ZEROPAGE_KEYFRAME", "0")
+    persisted = []
+    monkeypatch.setattr(orchestrator.scene_chain, "persist_prompt",
+                        lambda cid, n, text, **kw: persisted.append((n, text)))
+    monkeypatch.setattr(orchestrator.scene_chain, "plan_timeline",
+                        lambda *a, **kw: None)
+
+    out = orchestrator.keyframe({
+        "concept_id": 7,
+        "concept": {"shots": [{"n": 1, "prompt": "one"}, {"n": 2, "prompt": "two"}]},
+        "prompts": [{"n": 1, "prompt": "ONE"}],   # shot 2 was filtered out upstream
+    })
+
+    assert persisted == [(1, "ONE")], "shot 2 gets nothing rather than shot 1's prompt"
+    assert any(k["n"] == 2 and not k["ok"] for k in out["keyframes"])
+
+
+def test_the_keyframe_still_pairs_when_no_prompt_carries_a_number(monkeypatch):
+    """A state written before structure_prompt stamped `n` still runs."""
+    monkeypatch.setenv("ZEROPAGE_KEYFRAME", "0")
+    persisted = []
+    monkeypatch.setattr(orchestrator.scene_chain, "persist_prompt",
+                        lambda cid, n, text, **kw: persisted.append((n, text)))
+    monkeypatch.setattr(orchestrator.scene_chain, "plan_timeline",
+                        lambda *a, **kw: None)
+
+    orchestrator.keyframe({
+        "concept_id": 7,
+        "concept": {"shots": [{"n": 1, "prompt": "one"}, {"n": 2, "prompt": "two"}]},
+        "prompts": [{"prompt": "ONE"}, {"prompt": "TWO"}],
+    })
+
+    assert persisted == [(1, "ONE"), (2, "TWO")]
+
+
 def test_clean_run_keyframes_the_scene_and_parks_it_for_approval(tmp_db, monkeypatch):
     """What a night actually produces (2026-08-29). It used to end
     "no usable clips (render is a dry-run stub)" -- true, and useless:
@@ -203,7 +268,7 @@ def test_clean_run_keyframes_the_scene_and_parks_it_for_approval(tmp_db, monkeyp
     assert result["critique"]["ok"] is True
     # the AI shot's prompt was extracted...
     assert result["prompts"] == [
-        {"tool": "KLING", "prompt": GOOD_PROMPT, "still": ""}]
+        {"n": 1, "tool": "KLING", "prompt": GOOD_PROMPT, "still": ""}]
     # ...one still was rendered from it, and the run parks rather than posting
     assert len(calls.keyframes) == 1
     assert calls.keyframes[0]["prompt"] == GOOD_PROMPT
@@ -245,7 +310,7 @@ def test_structure_prompt_refines_against_technique_references(tmp_db, monkeypat
     result = orchestrator.run("gearing up ritual")
 
     assert result["prompts"] == [
-        {"tool": "KLING", "prompt": "REFINED: " + GOOD_PROMPT + ", mid-motion start", "still": ""}]
+        {"n": 1, "tool": "KLING", "prompt": "REFINED: " + GOOD_PROMPT + ", mid-motion start", "still": ""}]
 
 
 def test_structure_prompt_keeps_the_original_when_the_shelf_is_empty(tmp_db, monkeypatch):
@@ -256,7 +321,7 @@ def test_structure_prompt_keeps_the_original_when_the_shelf_is_empty(tmp_db, mon
     result = orchestrator.run("gearing up ritual")
 
     assert result["prompts"] == [
-        {"tool": "KLING", "prompt": GOOD_PROMPT, "still": ""}]
+        {"n": 1, "tool": "KLING", "prompt": GOOD_PROMPT, "still": ""}]
 
 
 def test_warnings_trigger_a_retry_with_feedback_in_the_spark(tmp_db, monkeypatch):

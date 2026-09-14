@@ -935,7 +935,14 @@ def structure_prompt(state: GenState) -> GenState:
         refined = promptgen.refine_prompt(s["prompt"], tool, _client(),
                                           model=GEMINI_MODEL, references=references)
         reference_image = (s.get("reference_image") or "").strip()
-        entry = {"tool": s.get("tool"), "prompt": refined,
+        # `n` is the join key the keyframe node uses to pair this prompt
+        # back to its shot. It has to be stamped here, at the only place
+        # that still has the shot in hand -- revise_prompts rewrites
+        # entries in place (`prompts[i] = {**prompts[i], ...}`) so it
+        # carries through, and without it the pairing falls back to list
+        # position, which is a bug waiting for the two filters to disagree.
+        entry = {"n": s.get("n", 1),
+                 "tool": s.get("tool"), "prompt": refined,
                  "still": "" if reference_image else _midjourney_still(refined)}
         # carried only when attached, same as on the shot dict itself
         if reference_image:
@@ -1006,7 +1013,16 @@ def _judge_prompt(prompt: str) -> dict:
         return {"score": sum(vals.values()), "dims": vals,
                 "reason": str(data.get("reason", ""))[:200]}
     except Exception as e:
-        return {"score": 0, "dims": {},
+        # `unreadable` separates "the judge never spoke" from "the judge
+        # said this is a 0". Both fail closed -- a credit still must not be
+        # spent on a prompt nobody vouched for, and that does not change.
+        # What changes is the RECORD: a Gemini 503 used to be written to
+        # prompt_scores as passed=0, indistinguishable from a real negative
+        # verdict, so every API wobble quietly moved
+        # autonomy.prompt_gate_agreement -- the one number that says whether
+        # the gate can be trusted -- using rows where the gate had no
+        # opinion at all. An outage is not evidence about the judge.
+        return {"score": 0, "dims": {}, "unreadable": True,
                 "reason": f"judge unreadable ({e}) — failed closed"}
 
 
@@ -1065,6 +1081,7 @@ def score_prompts(state: GenState) -> GenState:
                        "score": verdict["score"],
                        "pass": verdict["score"] >= prompt_gate_min(),
                        "reason": verdict["reason"], "dims": verdict["dims"],
+                       **({"unreadable": True} if verdict.get("unreadable") else {}),
                        **ref})
     autonomy.log_prompt_scores(state.get("run_id"), scored)
     out: GenState = {"prompt_scores": scored}
@@ -1251,10 +1268,35 @@ def keyframe(state: GenState) -> GenState:
 
     shots = [s for s in (state.get("concept", {}) or {}).get("shots", [])
              if s.get("prompt")]
+    # JOINED ON THE SHOT NUMBER, not on position. This list is re-derived
+    # from state["concept"], which revise_prompts rewrites in place, while
+    # `prompts` comes off state["prompts"] -- two lists built by two
+    # filters (structure_prompt and revise_prompts) that happen to agree
+    # today. A zip() would keep agreeing right up until one of them drops
+    # a shot the other keeps, and then it would render shot A's prompt
+    # onto shot B, silently and at full cost, with every card in the Queue
+    # looking correct. `n` is what persist_prompt and plan_timeline are
+    # keyed on anyway, so it is the only join that means anything.
+    by_n = {}
+    for refined in state.get("prompts", []):
+        n = refined.get("n")
+        if n is not None:
+            by_n[n] = refined
     prompts = state.get("prompts", [])
+    positional = len(by_n) != len(prompts)   # no usable `n` -- fall back
     done = []
-    for shot, refined in zip(shots, prompts):
+    for index, shot in enumerate(shots):
         shot_n = shot.get("n", 1)
+        if positional:
+            if index >= len(prompts):
+                continue
+            refined = prompts[index]
+        else:
+            refined = by_n.get(shot_n)
+            if refined is None:
+                done.append({"n": shot_n, "ok": False,
+                             "error": "no refined prompt for this shot"})
+                continue
         try:
             scene_chain.persist_prompt(concept_id, shot_n,
                                        refined.get("prompt", ""),
