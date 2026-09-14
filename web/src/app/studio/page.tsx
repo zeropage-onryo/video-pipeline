@@ -121,7 +121,14 @@ function Composer() {
   const [picked, setPicked] = useState<string[]>([]); // asset photo urls
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [busy, setBusy] = useState(false);
+  // Two kinds of note, and they used to render identically: progress
+  // ("Writing…") and failure. A failure in the hint's own slot, small
+  // caps and ellipsised, is how a 403 on every Guide turn read as the
+  // composer saying nothing at all (2026-09-14). `say(text, true)`
+  // marks the failing kind -- it turns the line signal-red and also
+  // raises the shell's error toast, which is the loud surface.
   const [note, setNote] = useState<string | null>(null);
+  const [noteBad, setNoteBad] = useState(false);
   const [wantMode, setMode] = useState<"guide" | "create">("guide");
   const [thread, setThread] = useState<GuideMessage[]>([]);
   const [choices, setChoices] = useState<string[]>([]);
@@ -187,10 +194,16 @@ function Composer() {
 
   const canSend = !busy && (mode === "create" ? !!(idea.trim() || brief.trim()) : !!idea.trim());
 
+  const say = (text: string | null, bad = false) => {
+    setNote(text);
+    setNoteBad(bad);
+    if (bad && text) toast(text, "err");
+  };
+
   async function send() {
     if (!canSend) return;
     setBusy(true);
-    setNote(null);
+    say(null);
     try {
       if (mode === "create") {
         const form = new FormData();
@@ -203,15 +216,15 @@ function Composer() {
         picked.forEach((u) => form.append("refs", u));
         attachments.forEach((a) => form.append("files", a.file, a.name));
         const started = await runScenes(form);
-        setNote("Writing — the takes appear on Pipeline as they land…");
-        const job = await waitForJob(started.job_id, (j) => setNote(j.detail || "Writing…"));
+        say("Writing — the takes appear on Pipeline as they land…");
+        const job = await waitForJob(started.job_id, (j) => say(j.detail || "Writing…"));
         if (job.status === "done") {
-          setNote(`Done — ${job.detail || "on the board"}`);
+          say(`Done — ${job.detail || "on the board"}`);
           toast(`${count} take${count === 1 ? "" : "s"} written · open Pipeline to pick`);
           setIdea("");
           announceQueueChange();
         } else {
-          setNote(job.error || "That run did not finish.");
+          say(job.error || "That run did not finish.", true);
         }
       } else {
         const next: GuideMessage[] = [...thread, { role: "user", content: idea.trim() }];
@@ -231,17 +244,17 @@ function Composer() {
         // cleared by then.
         const started = await runCreativeGuide(form);
         const job = await waitForJob(started.job_id, (j) =>
-          setNote(j.detail || "Considering your direction…"),
+          say(j.detail || "Considering your direction…"),
         );
         const reply = (job as unknown as { reply?: { message: string; choices?: string[]; brief?: string } }).reply;
         if (job.status !== "done" || !reply) throw new Error(job.error || "The guide stopped.");
         setThread([...next, { role: "assistant", content: reply.message }]);
         setChoices(reply.choices ?? []);
         if (reply.brief) setBrief(reply.brief);
-        setNote(reply.brief ? "Brief ready — switch to Create, or keep refining." : "Choose a direction or reply.");
+        say(reply.brief ? "Brief ready — switch to Create, or keep refining." : "Choose a direction or reply.");
       }
     } catch (e) {
-      setNote(e instanceof Error ? e.message : "That did not go through.");
+      say(e instanceof Error ? e.message : "That did not go through.", true);
     } finally {
       setBusy(false);
     }
@@ -403,7 +416,13 @@ function Composer() {
               <button type="button" className="pill" title="Add media" onClick={() => fileInput.current?.click()}>
                 <Plus strokeWidth={1.6} />
               </button>
-              <span className="m cnote">{note ?? "references ride into every node — prompt, keyframe and clip"}</span>
+              <span
+                className={`m cnote${noteBad ? " bad" : ""}`}
+                role={noteBad ? "alert" : undefined}
+                title={noteBad && note ? note : undefined}
+              >
+                {note ?? "references ride into every node — prompt, keyframe and clip"}
+              </span>
               {brains.length ? (
                 <PillMenu
                   heading="Which model writes"
