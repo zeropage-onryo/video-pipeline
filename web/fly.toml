@@ -12,7 +12,9 @@ primary_region = "iad"
 [env]
   PORT = "3000"
   # every /api, /auth, /signin, /brand and photo request the browser makes
-  # to this origin is proxied here (next.config.ts rewrites)
+  # to this origin is proxied here (next.config.ts rewrites). The rewrites
+  # are fixed at BUILD time, so the Dockerfile's API_UPSTREAM build arg is
+  # the one that counts; this runtime copy only keeps the two in one place.
   API_UPSTREAM = "https://zeropage-studio.fly.dev"
 
 [http_service]

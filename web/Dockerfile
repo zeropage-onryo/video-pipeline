@@ -18,8 +18,15 @@ FROM node:22-alpine AS build
 WORKDIR /app
 ARG NEXT_PUBLIC_API_URL=
 ARG NEXT_PUBLIC_AUTH_ORIGIN
+# next.config.ts computes its rewrites at BUILD time, so the proxy's
+# destination has to be known here -- the runtime [env] in fly.toml is
+# too late, and an unset value silently proxies to localhost:8000 inside
+# the container (every /api and /signin answered 500 on the first deploy
+# of the handoff, 2026-09-14).
+ARG API_UPSTREAM=https://zeropage-studio.fly.dev
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL \
     NEXT_PUBLIC_AUTH_ORIGIN=$NEXT_PUBLIC_AUTH_ORIGIN \
+    API_UPSTREAM=$API_UPSTREAM \
     NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
