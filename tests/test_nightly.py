@@ -213,6 +213,41 @@ def test_a_spent_image_cap_turns_keyframes_off_and_still_walks(nightly_db, monke
     assert summary["log"].count("image cap already spent") == 1, "said once, not 16 times"
 
 
+def test_the_walk_puts_back_every_environment_variable_it_changed(nightly_db, monkeypatch):
+    """The walk borrows the process environment; it does not keep it.
+
+    Both overrides used to be one-way writes. On the Mac that was
+    invisible -- the walk is a subprocess and its environment dies with
+    it. On the always-on Fly machine cron and uvicorn share one process
+    environment, so a single night that hit the image cap left
+    ZEROPAGE_KEYFRAME="0" behind and every Director keyframe after it was
+    silently disabled until someone restarted the machine.
+    """
+    import os
+    monkeypatch.setenv("ZEROPAGE_KEYFRAME", "1")
+    monkeypatch.setenv("LANGSMITH_TRACING", "true")
+    monkeypatch.delenv(nightly.TRACING_ENV, raising=False)
+    monkeypatch.delenv("LANGCHAIN_TRACING_V2", raising=False)
+    monkeypatch.setattr(nightly, "check_gemini",
+                        lambda client=None: {"ok": True, "detail": "stub"})
+    monkeypatch.setattr(nightly, "check_image_cap",
+                        lambda dsn=None, account_id=None: {
+                            "ok": False, "headroom": 0, "used": 20, "everyone": 20,
+                            "detail": "20/20 today"})
+    inside = {}
+    monkeypatch.setattr(nightly, "run_one",
+                        lambda channel, brand, spark, research=True: inside.setdefault(
+                            "keyframe", os.environ.get("ZEROPAGE_KEYFRAME")) and None or {
+                                "ok": True, "spark": spark, "held": None})
+
+    _walk(nightly_db)
+
+    assert inside["keyframe"] == "0", "the runs still see it turned off"
+    assert os.environ["ZEROPAGE_KEYFRAME"] == "1", "and it is put back after"
+    assert os.environ["LANGSMITH_TRACING"] == "true", "tracing restored too"
+    assert "LANGCHAIN_TRACING_V2" not in os.environ, "one that was unset stays unset"
+
+
 def test_headroom_is_the_smaller_of_the_two_walls(nightly_db, monkeypatch):
     from src import nano_banana
     monkeypatch.setattr(nano_banana, "DAILY_CAP", 20)

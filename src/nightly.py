@@ -42,6 +42,7 @@ sixteen times why none of them has a picture.
 from __future__ import annotations
 
 import argparse
+import functools
 import os
 import socket
 import sys
@@ -344,6 +345,40 @@ def run_one(channel: str, brand: str, spark: str, *, research=True) -> dict:
                             research=research)
 
 
+def _restores_env(*names: str):
+    """Put back what the walk changed.
+
+    `walk` turns two things off for its own duration -- LangSmith tracing
+    (quiet_langsmith) and keyframes when the image cap is already spent --
+    by writing os.environ directly, and never put either back. As a
+    one-shot subprocess on the Mac that was invisible: the process exits
+    and takes the environment with it. Under the always-on Fly container
+    it is not, because cron and uvicorn share a machine and a process
+    environment, so one night that hit the image cap left ZEROPAGE_KEYFRAME
+    pinned to "0" for the WEB app until the machine restarted -- every
+    Director keyframe after it silently disabled, with the reason sitting
+    in a log nobody reads.
+
+    Snapshot before, restore after, delete the ones that were not there.
+    """
+    def decorate(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            before = {n: os.environ.get(n) for n in names}
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                for name, was in before.items():
+                    if was is None:
+                        os.environ.pop(name, None)
+                    else:
+                        os.environ[name] = was
+        return wrapper
+    return decorate
+
+
+@_restores_env("ZEROPAGE_KEYFRAME", "LANGSMITH_TRACING",
+               "LANGCHAIN_TRACING_V2", "LANGCHAIN_TRACING")
 def walk(*, sparks: Optional[list] = None, pairs=PAIRS,
          per_pair: Optional[int] = None,
          scout_per_brand: Optional[int] = None,
