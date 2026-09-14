@@ -1041,7 +1041,12 @@ is yours, in Resolve, by hand.
   media wall off `/api/media`, with the detail rail and "Use in a shot" → `/studio?attach=`),
   Pipeline (the board: pick / archive / restore, the prompt editable in place) and Queue
   (the spend gate off `/api/queue/pending` + the job registry) are React pages too
-  (2026-09-12), so nothing in the rail opens the Jinja `/ui` any more. `frontend/` is
+  (2026-09-12), so nothing in the rail opens the Jinja `/ui` any more. **It deploys on
+  Vercel (2026-09-14, Mike's call):** project `zpf-web`, git-connected, root directory
+  `web`, `API_UPSTREAM` + `NEXT_PUBLIC_AUTH_ORIGIN` set to the API origin and no
+  `NEXT_PUBLIC_API_URL`, live at `zpf-web.vercel.app`, which the API's `STUDIO_URL`
+  names; `web/README.md` has the recipe. The Fly app `zeropage-web` is scaled to zero,
+  not destroyed. The API stays on Fly. `frontend/` is
   the Vite + React composer that preceded it, kept as received; its `/api/brains`,
   `/api/scene-lengths`, `/api/render-choices`, `/api/creative-guide` and the guide mode
   exist only as uncommitted work in the main checkout's overnight branch, and the Next
