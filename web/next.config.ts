@@ -8,6 +8,12 @@ const nextConfig: NextConfig = {
   output: process.env.VERCEL ? undefined : "standalone",
   // the in-app Browser pane and curl reach the dev server as 127.0.0.1
   allowedDevOrigins: ["127.0.0.1", "localhost"],
+  // The landing page's frames are the studio's own keyframes on R2
+  // (src/content/landing-media.ts); next/image resizes and re-encodes
+  // them, so a 2MB PNG reaches the page as a ~60KB WebP.
+  images: {
+    remotePatterns: [{ protocol: "https", hostname: "*.r2.dev" }],
+  },
   // A separate build directory lets production validation run alongside dev.
   async rewrites() {
     const upstream = process.env.API_UPSTREAM || "http://localhost:8000";

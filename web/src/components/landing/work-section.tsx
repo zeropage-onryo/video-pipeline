@@ -1,7 +1,10 @@
+import { MediaTile } from "@/components/landing/media-tile";
+import { LANDING_MEDIA } from "@/content/landing-media";
+
 // LTX-style first section: a full-bleed 3-up media grid directly under the
 // hero. The frames lead; each tile carries only a plain bottom-left label.
-// Placeholder frames -- deliberately NOT fabricated footage; each tile reads
-// as a labelled slate awaiting a real still/clip from the footage bank.
+// The frames are the studio's own newest keyframes (landing-media.ts) --
+// real output off the board, never stock.
 
 const TILES = [
   { label: "Filmmakers", slate: "01 / FILM", copy: "Develop scenes, explore visual worlds, and direct the moments that make the story yours." },
@@ -17,22 +20,18 @@ export function WorkSection() {
         <h2 className="display mt-5 text-5xl sm:text-7xl">Big vision.<br />Meet your studio.</h2>
       </div>
       <div className="grid grid-cols-1 gap-px overflow-hidden border border-border bg-border md:grid-cols-3">
-        {TILES.map((tile) => (
+        {TILES.map((tile, i) => (
           <div
             key={tile.slate}
-            className="group relative flex min-h-[320px] flex-col justify-between overflow-hidden p-7 md:min-h-[420px]"
+            className="group relative flex min-h-[360px] flex-col justify-between overflow-hidden bg-black p-7 md:min-h-[460px]"
           >
-            {/* The plate: scales up slowly on hover, the way a still would. */}
-            <div
-              aria-hidden
-              className="pointer-events-none absolute inset-0 bg-gradient-to-br from-neutral-700 via-neutral-900 to-black transition-transform duration-700 ease-out group-hover:scale-[1.04]"
-            />
+            <MediaTile media={LANDING_MEDIA[i]} sizes="(min-width: 768px) 33vw, 100vw" priority={i === 0} />
             {/* Bottom scrim so the label stays legible over any frame. */}
             <div
               aria-hidden
-              className="pointer-events-none absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/80 to-transparent"
+              className="pointer-events-none absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-black/90 via-black/50 to-transparent"
             />
-            <span className="film-slate relative text-muted-foreground">{tile.slate}</span>
+            <span className="film-slate relative text-foreground/80">{tile.slate}</span>
             <div className="relative">
               <h3 className="display text-4xl">{tile.label}</h3>
               <p className="mt-4 text-sm leading-relaxed text-muted-foreground">{tile.copy}</p>
