@@ -51,11 +51,26 @@ export type AssetHit = { name: string; category: AssetCategory; thumb: string | 
 export const searchAssets = (q: string) =>
   apiFetch<{ items: AssetHit[] }>(`/assets/search?q=${encodeURIComponent(q)}`);
 
+/* Routes behind app/model_connections.mutation_header refuse any request
+   that does not carry this header (403, before any work). It exists so a
+   SameSite=None studio session cannot be spent by a cross-site form post:
+   a custom header forces a CORS preflight. Send it from ONE place -- the
+   Jinja client sends it per call site and the React composer was ported
+   without it, which 403'd every Guide turn silently (2026-09-14). */
+export const GUARDED_HEADERS: Record<string, string> = {
+  "X-ZPF-Model-Connection": "1",
+};
+
 /* multipart: apiFetch pins a JSON content-type, so uploads go direct */
-async function apiForm<T>(path: string, form: FormData): Promise<T> {
+async function apiForm<T>(
+  path: string,
+  form: FormData,
+  headers?: Record<string, string>,
+): Promise<T> {
   const res = await fetch(`${API_URL}/api${path}`, {
     method: "POST",
     credentials: "include",
+    ...(headers ? { headers } : {}),
     body: form,
   });
   if (!res.ok) {
@@ -282,6 +297,10 @@ export type Job = {
  *  (asset photo urls) and files (uploads), exactly what the Jinja
  *  composer posts. */
 export const runScenes = (form: FormData) => apiForm<{ job_id: number }>("/scenes/run", form);
+/* One Guide turn. A job, not a plain response: the reasoning tier takes
+   tens of seconds. Guarded -- see GUARDED_HEADERS. */
+export const runCreativeGuide = (form: FormData) =>
+  apiForm<{ job_id: number }>("/creative-guide", form, GUARDED_HEADERS);
 export const getJob = (id: number) => apiFetch<Job>(`/jobs/${id}`);
 export async function waitForJob(id: number, onTick?: (job: Job) => void, everyMs = 1500) {
   for (;;) {
