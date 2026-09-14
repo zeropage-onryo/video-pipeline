@@ -183,7 +183,7 @@ def test_generate_from_prompt_honours_the_daily_cap(tmp_db, tmp_path, monkeypatc
     monkeypatch.setenv(runway.SPEND_ENV, "1")
     monkeypatch.setattr(runway, "RENDER_DIR", tmp_path / "renders")
     monkeypatch.setattr(runway, "generations_today",
-                        lambda db_path=None, account_id=None, everyone=False:
+                        lambda db_path=None, **kw:
                         runway.DAILY_CAP)
     result = runway.generate_from_prompt("x", db_path=tmp_db, client=FakeClient())
     assert result["ok"] is False

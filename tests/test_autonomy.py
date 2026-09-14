@@ -147,6 +147,39 @@ def test_prompt_gate_agreement_separates_the_two_error_costs(tmp_db):
     assert result["held_but_posted"] == 1
 
 
+def test_a_judge_that_never_answered_is_not_counted_against_the_gate(tmp_db):
+    """A Gemini 503 is not evidence about the judge's taste.
+
+    The fail-closed path returns score 0 with empty dims, which is the
+    same shape as a real negative verdict, and it used to be written to
+    prompt_scores as passed = 0 -- so every API wobble moved the one
+    number that says whether the gate can be trusted, using rows where
+    the gate had no opinion at all. Genuine passed = 0 rows still count,
+    deliberately: see orchestrator._gate_advisory on why the scores
+    themselves are never massaged.
+    """
+    # a real verdict you agreed with
+    autonomy.log_prompt_scores("r1", [
+        {"prompt": "a", "score": 9, "pass": True, "reason": "", "dims": {}}], dsn=tmp_db)
+    autonomy.set_prompt_verdicts("r1", "post", dsn=tmp_db)
+    # a real verdict you disagreed with -- still counts
+    autonomy.log_prompt_scores("r2", [
+        {"prompt": "b", "score": 2, "pass": False, "reason": "thin", "dims": {}}], dsn=tmp_db)
+    autonomy.set_prompt_verdicts("r2", "post", dsn=tmp_db)
+    # the judge fell over; you graded the hold anyway
+    autonomy.log_prompt_scores("r3", [
+        {"prompt": "c", "score": 0, "pass": False, "unreadable": True,
+         "reason": "judge unreadable (503) — failed closed", "dims": {}}], dsn=tmp_db)
+    autonomy.set_prompt_verdicts("r3", "post", dsn=tmp_db)
+
+    result = autonomy.prompt_gate_agreement(dsn=tmp_db)
+    assert result["graded"] == 2, "the outage row is not a graded verdict"
+    assert result["agreement"] == 0.5, "one agreement, one real disagreement"
+    assert result["held_but_posted"] == 1, "and only the real one is a miss"
+    # the descriptive rate leaves it out too -- it is not a gate decision
+    assert autonomy.first_try_pass_rate(dsn=tmp_db)["total"] == 2
+
+
 def test_prompt_verdict_rejects_unknown_values(tmp_db):
     with pytest.raises(ValueError):
         autonomy.set_prompt_verdicts("r1", "maybe", dsn=tmp_db)

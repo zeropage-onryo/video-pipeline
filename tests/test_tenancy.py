@@ -351,6 +351,116 @@ def test_the_global_ceiling_catches_what_per_account_caps_cannot(two_accounts):
     assert refusal is not None and "daily ceiling" in refusal
 
 
+def _log_render_on_own_key(path, account_id, tool="runway", n=1):
+    """A render the ACCOUNT paid for -- the key_source label every adapter
+    stamps once account_keys resolved a stored key rather than the env."""
+    from src import account_keys
+    from src.shot import Shot
+    shot_id = generative.add_shot(
+        Shot(subject="a bike", action="idles"), dsn=path, account_id=account_id)
+    for _ in range(n):
+        generative.record_generation(
+            shot_id, tool, "a prompt", dsn=path, account_id=account_id,
+            params={"key_source": account_keys.SOURCE_ACCOUNT})
+
+
+def test_a_byok_render_does_not_eat_the_operators_ceiling(two_accounts):
+    """2026-09-14. The ceiling is the operator's credit card, so it must
+    count what the operator PAID for. A user who brought their own key
+    costs him nothing, and before this could still lock out everyone else
+    by filling a budget that was never spent."""
+    path, a, b = two_accounts
+    _log_render_on_own_key(path, b, n=6)          # b pays for all six
+    assert generative.used_today("runway", path, everyone=True) == 6
+    assert generative.used_today("runway", path, everyone=True,
+                                 operator_billed_only=True) == 0
+    # so a, on the operator's key, still has the whole ceiling to spend
+    assert generative.cap_error("runway", 1, account_id=a, per_account=10,
+                                ceiling=6, dsn=path, env_prefix="RUNWAY") is None
+
+
+def test_the_ceiling_still_catches_renders_on_the_operators_key(two_accounts):
+    """The other direction, and the reason the ceiling still exists: two
+    accounts falling back to the installation's key are two accounts
+    spending Mike's money, each inside its own cap the whole time."""
+    path, a, b = two_accounts
+    _log_render(path, a, n=3)                     # no key_source -> operator's
+    _log_render(path, b, n=3)
+    assert generative.used_today("runway", path, everyone=True,
+                                 operator_billed_only=True) == 6
+    refusal = generative.cap_error("runway", 1, account_id=a, per_account=10,
+                                   ceiling=6, dsn=path, env_prefix="RUNWAY")
+    assert refusal is not None and "daily ceiling" in refusal
+
+
+def test_an_unreadable_row_counts_toward_the_ceiling(two_accounts):
+    """Fail toward refusing a render, never toward spending. key_source has
+    only existed since BYOK, midjourney never writes it, and a params_json
+    we cannot parse is not proof somebody else paid."""
+    path, a, _ = two_accounts
+    from src.shot import Shot
+    shot_id = generative.add_shot(
+        Shot(subject="a bike", action="idles"), dsn=path, account_id=a)
+    generative.record_generation(shot_id, "runway", "p", dsn=path, account_id=a)
+    with generative.connect(path) as conn:
+        conn.execute("UPDATE generations SET params_json = 'not json at all'")
+    assert generative.used_today("runway", path, everyone=True,
+                                 operator_billed_only=True) == 1
+    assert generative._billed_to_operator(None) is True
+    assert generative._billed_to_operator("") is True
+
+
+def test_the_per_account_cap_is_untouched_by_whose_key_paid(two_accounts):
+    """Only the CEILING learned about key_source. The per-account wall is
+    fairness, not billing -- a user on their own key still cannot run away
+    with the installation."""
+    path, a, _ = two_accounts
+    _log_render_on_own_key(path, a, n=3)
+    assert generative.used_today("runway", path, account_id=a) == 3
+    refusal = generative.cap_error("runway", 1, account_id=a, per_account=3,
+                                   ceiling=99, dsn=path, env_prefix="RUNWAY")
+    assert refusal is not None and "daily cap" in refusal
+
+
+def test_no_ceiling_is_the_default_and_means_no_ceiling(two_accounts):
+    """2026-09-14, Mike's call: every *_GLOBAL_DAILY_CAP defaults to 0, and
+    0 means the wall is OFF -- not a wall at zero that refuses everything,
+    which is the reading that would brick every render on the install."""
+    from src import fal, higgsfield, midjourney, nano_banana, runway, veo
+    for mod in (runway, veo, fal, higgsfield, midjourney, nano_banana):
+        assert mod.GLOBAL_DAILY_CAP == 0, mod.__name__
+
+    path, a, b = two_accounts
+    _log_render(path, a, n=50)
+    _log_render(path, b, n=50)
+    # a hundred renders on the operator's own key, and no ceiling refuses
+    assert generative.cap_error("runway", 1, account_id=a, per_account=999,
+                                ceiling=0, dsn=path, env_prefix="RUNWAY") is None
+    assert generative.cap_error("runway", 1, account_id=a, per_account=999,
+                                ceiling=None, dsn=path, env_prefix="RUNWAY") is None
+
+
+def test_the_per_account_wall_is_what_remains(two_accounts):
+    """Turning the ceiling off did not turn the caps off. This is the one
+    that still stops a single runaway account."""
+    path, a, _ = two_accounts
+    _log_render(path, a, n=6)
+    refusal = generative.cap_error("runway", 1, account_id=a, per_account=6,
+                                   ceiling=0, dsn=path, env_prefix="RUNWAY")
+    assert refusal is not None and "daily cap" in refusal
+
+
+def test_a_ceiling_that_is_set_still_works(two_accounts):
+    """The mechanism is off, not gone: one env var puts it back, so the
+    check itself has to keep working for anyone who sets it."""
+    path, a, b = two_accounts
+    _log_render(path, a, n=3)
+    _log_render(path, b, n=3)
+    refusal = generative.cap_error("runway", 1, account_id=a, per_account=10,
+                                   ceiling=6, dsn=path, env_prefix="RUNWAY")
+    assert refusal is not None and "daily ceiling" in refusal
+
+
 def test_a_generation_cannot_be_logged_against_someone_elses_shot(two_accounts):
     from src.shot import Shot
     path, a, b = two_accounts
@@ -389,6 +499,13 @@ UNSCOPED_ALLOWED = {
     # what stops ten pilot users, each inside their own cap, from putting
     # sixty renders on one card.
     "SELECT COUNT(*) FROM generations WHERE tool = %s AND created_at >= %s",
+    # the same ceiling, narrowed to what the OPERATOR paid for
+    # (operator_billed_only, 2026-09-14). Deliberately account-blind for
+    # the same reason as the line above -- it is counting a card, not a
+    # tenant -- and it reads params_json rather than COUNT(*) because the
+    # key_source filter is applied in Python, where a malformed legacy row
+    # cannot take the whole cap check down with it.
+    "SELECT params_json FROM generations WHERE tool = %s AND created_at >= %s",
     # assembled in pieces: the owner predicate lives in a different
     # literal from the one that names the table, so the scan cannot see
     # them together. Both are checked by tests of their own --
@@ -1113,29 +1230,35 @@ def test_veo_has_the_same_spend_gate_as_every_other_paid_tool(tmp_path, monkeypa
     assert "VEO_SPEND_OK" in result["error"] and "$19.2" in result["error"]
 
 
-def test_the_global_caps_are_set_deliberately_in_the_example_env():
-    """Every global defaults to its per-account cap, which is right for
-    one operator and wrong for two: the first person to render each
-    day ends the day for everyone. .env.example carries the decision
-    -- (per-account cap x people) -- so a deployment copies a ceiling
-    that was chosen, not the one-operator default."""
+def test_the_global_ceiling_is_off_by_default_and_says_how_to_restore_it():
+    """REPLACES the 2026-09-02 rule that every global had to be SET above
+    its per-account cap. That rule existed because every render billed the
+    operator's keys; BYOK ended that for every provider, Gemini last
+    (2026-09-14), and a shared ceiling was locking users out of a budget
+    nobody had spent.
+
+    What this holds in place now: the shipped default is 0 (off), nothing
+    in .env.example silently turns it back on, and the arithmetic for
+    restoring it is still written down -- because the exposure it covered
+    is real for any account with no key of its own."""
     root = pathlib.Path(__file__).resolve().parent.parent
     text = (root / ".env.example").read_text()
-    values = dict(re.findall(r"^([A-Z_]+_GLOBAL_DAILY_CAP)=(\d+)", text, re.M))
-    # the SHIPPED per-account default, read off the module source: the
-    # module attribute is whatever the local .env set today, and a raised
-    # NANO_DAILY_CAP there is not a reason for this test to move
-    per_account = {}
-    for prefix, module in (("RUNWAY", "runway"), ("VEO", "veo"), ("HIGGSFIELD", "higgsfield"),
-                           ("MIDJOURNEY", "midjourney"), ("NANO", "nano_banana")):
+
+    live = dict(re.findall(r"^([A-Z_]+_GLOBAL_DAILY_CAP)=(\d+)", text, re.M))
+    assert not live, (
+        "these turn the installation-wide ceiling back on for every "
+        f"deployment that copies the example: {sorted(live)}")
+
+    for module in ("runway", "veo", "higgsfield", "midjourney", "nano_banana", "fal"):
         source = (root / "src" / f"{module}.py").read_text()
-        per_account[prefix] = int(re.search(
-            rf'environ\.get\("{prefix}_DAILY_CAP", "(\d+)"\)', source).group(1))
-    for prefix, cap in per_account.items():
-        key = f"{prefix}_GLOBAL_DAILY_CAP"
-        assert key in values, f"{key} is not set in .env.example"
-        assert int(values[key]) > cap, f"{key} is not above the per-account cap of {cap}"
-    assert "people" in text and "x 3" in text     # the arithmetic is written down
+        shipped = re.search(
+            r'environ\.get\("[A-Z_]+_GLOBAL_DAILY_CAP", "(\d+)"\)', source)
+        assert shipped and shipped.group(1) == "0", (
+            f"src/{module}.py ships a ceiling instead of 0 (off)")
+
+    # the way back is documented, with the arithmetic that sized it
+    assert "people" in text and "x 3" in text
+    assert "# RUNWAY_GLOBAL_DAILY_CAP=" in text
 
 
 # --------------------------------------------------------------------------

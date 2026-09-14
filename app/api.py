@@ -25,7 +25,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from src import (
     account_keys,
@@ -3192,6 +3192,13 @@ class ShotPromptBody(BaseModel):
 
 
 class ShotGraphBody(BaseModel):
+    # An unknown field is a 422 naming it, not a silent drop. Both of this
+    # file's canvas models were loose, and that is how `images` was dropped
+    # without a word in 2026-08-28 (see WfGenerateBody) and how a save
+    # carrying seed_hash was accepted-and-ignored for weeks afterwards: the
+    # route answered 200 and the caller had no way to learn otherwise.
+    model_config = ConfigDict(extra="forbid")
+
     graph: dict
     states: Optional[dict] = None
     name: Optional[str] = None
@@ -3894,6 +3901,8 @@ def workflow_exec_enhance(body: EnhanceBody, account_id: int = Depends(auth.curr
 
 
 class WfGenerateBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     prompt: str
     image: Optional[str] = None
     # The canvas posts the node's WHOLE reference list as `images`

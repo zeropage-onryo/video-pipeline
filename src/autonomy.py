@@ -85,7 +85,8 @@ CREATE TABLE IF NOT EXISTS prompt_scores (
     passed        INTEGER,
     reason        TEXT,
     dims          TEXT,           -- json {subject, camera, motion, lighting, coherence}
-    human_verdict TEXT            -- 'post' | 'reject' | NULL, filled when the hold is graded
+    human_verdict TEXT,           -- 'post' | 'reject' | NULL, filled when the hold is graded
+    unreadable    INTEGER NOT NULL DEFAULT 0  -- 1 = the judge errored, so this row is NOT a verdict
 );
 CREATE INDEX IF NOT EXISTS idx_prompt_scores_run ON prompt_scores (run_id);
 """
@@ -125,6 +126,14 @@ def init(dsn=None) -> None:
         # database that is account 1, the one that owns every concept the
         # holds point at. Proved against a copy before it landed here.
         db.own_table(conn, "hold_queue")
+        # prompt_scores.unreadable (2026-09-14): a live database predates
+        # it, and the default is what makes the backfill a no-op -- every
+        # existing row WAS a real verdict as far as anyone can now tell,
+        # so 0 is both the honest value and the one that leaves
+        # prompt_gate_agreement reading exactly as it did before.
+        if "unreadable" not in db.columns(conn, "prompt_scores"):
+            conn.execute("ALTER TABLE prompt_scores ADD COLUMN "
+                         "unreadable INTEGER NOT NULL DEFAULT 0")
 
 
 # --- channels -------------------------------------------------------------
@@ -409,10 +418,12 @@ def log_prompt_scores(run_id, scored: list, dsn=None) -> None:
         for x in scored:
             conn.execute(
                 "INSERT INTO prompt_scores (created_at, run_id, prompt, score, "
-                "passed, reason, dims) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                "passed, reason, dims, unreadable) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
                 (_now(), run_id, x.get("prompt"), x.get("score"),
                  int(bool(x.get("pass"))), x.get("reason"),
-                 json.dumps(x.get("dims", {}))),
+                 json.dumps(x.get("dims", {})),
+                 int(bool(x.get("unreadable")))),
             )
 
 
@@ -446,6 +457,12 @@ def prompt_gate_agreement(dsn=None) -> dict:
             " SUM(CASE WHEN passed = 1 AND human_verdict = 'reject' THEN 1 ELSE 0 END),"
             " SUM(CASE WHEN passed = 0 AND human_verdict = 'post' THEN 1 ELSE 0 END)"
             " FROM prompt_scores WHERE human_verdict IS NOT NULL"
+            # A row the judge never rendered a verdict on measures the
+            # Gemini API's uptime, not the gate's judgement. Genuine
+            # passed = 0 rows stay in, deliberately -- see
+            # orchestrator._gate_advisory on why the scores themselves
+            # are never massaged.
+            " AND unreadable = 0"
         ).fetchone()
     graded, agreed, expensive, cheap = (row[0], row[1] or 0, row[2] or 0, row[3] or 0)
     return {
@@ -461,7 +478,8 @@ def first_try_pass_rate(dsn=None) -> dict:
     Not the trust number -- that's prompt_gate_agreement."""
     with db.connect(dsn) as conn:
         row = conn.execute(
-            "SELECT COUNT(*), SUM(passed) FROM prompt_scores"
+            "SELECT COUNT(*), SUM(passed) FROM prompt_scores "
+            "WHERE unreadable = 0"
         ).fetchone()
     total, passed = row[0], row[1] or 0
     return {"total": total, "passed": passed,
