@@ -20,15 +20,23 @@ export function WorkSection() {
         {TILES.map((tile) => (
           <div
             key={tile.slate}
-            className="group relative flex min-h-[420px] flex-col justify-between overflow-hidden bg-gradient-to-br from-neutral-700 via-neutral-900 to-black p-7"
+            className="group relative flex min-h-[320px] flex-col justify-between overflow-hidden p-7 md:min-h-[420px]"
           >
+            {/* The plate: scales up slowly on hover, the way a still would. */}
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-0 bg-gradient-to-br from-neutral-700 via-neutral-900 to-black transition-transform duration-700 ease-out group-hover:scale-[1.04]"
+            />
             {/* Bottom scrim so the label stays legible over any frame. */}
             <div
               aria-hidden
               className="pointer-events-none absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/80 to-transparent"
             />
             <span className="film-slate relative text-muted-foreground">{tile.slate}</span>
-            <div className="relative"><h3 className="display text-4xl">{tile.label}</h3><p className="mt-4 text-sm leading-relaxed text-muted-foreground">{tile.copy}</p></div>
+            <div className="relative">
+              <h3 className="display text-4xl">{tile.label}</h3>
+              <p className="mt-4 text-sm leading-relaxed text-muted-foreground">{tile.copy}</p>
+            </div>
           </div>
         ))}
       </div>

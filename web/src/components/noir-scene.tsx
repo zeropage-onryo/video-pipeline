@@ -145,7 +145,9 @@ export function NoirScene({ className }: { className?: string }) {
     <div className={className} aria-hidden>
       <Canvas
         dpr={[1, 1.5]}
-        camera={{ position: [0, 0, 6], fov: 45 }}
+        // Raised off the axis so the rings read as an aperture (ellipses)
+        // rather than edge-on lines; R3F aims the camera at the origin.
+        camera={{ position: [0, 3.4, 9.2], fov: 40 }}
         gl={{ antialias: true, alpha: true }}
       >
         <Scene />

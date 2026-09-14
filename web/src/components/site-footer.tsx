@@ -22,10 +22,10 @@ export function SiteFooter() {
             <div className="flex flex-col gap-3">
               <span className="film-slate text-muted-foreground/70">Studio</span>
               <Link href="/#pipeline" className="text-sm text-muted-foreground hover:text-foreground">
-                Pipeline
+                The studio
               </Link>
               <Link href="/#work" className="text-sm text-muted-foreground hover:text-foreground">
-                Work
+                Who it&apos;s for
               </Link>
             </div>
             <div className="flex flex-col gap-3">
