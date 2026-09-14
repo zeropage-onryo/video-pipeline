@@ -1815,3 +1815,97 @@ def test_the_failover_render_carries_the_owner_too(monkeypatch, tmp_path):
     assert seen.get("account_id") == 42, (
         "the failover connector was called with account_id="
         f"{seen.get('account_id')!r} -- the retry is billed to nobody")
+
+
+# --------------------------------------------------------------------------
+# the checkpointer: a killed run can be picked back up (2026-09-14)
+# --------------------------------------------------------------------------
+
+def _reset_checkpoint_cache():
+    orchestrator._CHECKPOINTED = None
+
+
+def test_no_database_means_no_checkpointer_not_a_dead_run(monkeypatch, capsys):
+    """Fails soft, on purpose.
+
+    A run that cannot be resumed is worse than one that can; a run that
+    refuses to START because the checkpoint tables are missing is worse
+    than both. The CLI, the MCP server and this suite all import the
+    orchestrator without a reachable Postgres.
+    """
+    _reset_checkpoint_cache()
+    # the suite pins this OFF (see conftest); a test about it turns it on
+    monkeypatch.setenv(orchestrator.CHECKPOINT_ENV, "1")
+    monkeypatch.setattr(orchestrator.db, "resolve_dsn",
+                        lambda dsn=None: "postgresql://nobody@127.0.0.1:1/nope")
+
+    assert orchestrator.checkpointed_graph() is None
+    assert "without a checkpointer" in capsys.readouterr().err
+    _reset_checkpoint_cache()
+
+
+def test_the_checkpointer_can_be_switched_off(monkeypatch):
+    _reset_checkpoint_cache()
+    monkeypatch.setenv(orchestrator.CHECKPOINT_ENV, "0")
+    assert orchestrator.checkpointing_on() is False
+    assert orchestrator.checkpointed_graph() is None, "and never opens a connection"
+    _reset_checkpoint_cache()
+
+
+def test_the_default_is_on(monkeypatch):
+    # unset, not "0" -- the suite's pin is a posture, not the product default
+    monkeypatch.delenv(orchestrator.CHECKPOINT_ENV, raising=False)
+    assert orchestrator.checkpointing_on() is True
+
+
+def test_resume_refuses_clearly_when_nothing_was_saved(monkeypatch):
+    """The failure has to name why, or a lost night looks like a bug."""
+    _reset_checkpoint_cache()
+    monkeypatch.setattr(orchestrator, "checkpointed_graph", lambda: None)
+    with pytest.raises(RuntimeError, match="no checkpointer"):
+        orchestrator.resume("deadbeef")
+
+
+def test_resume_reads_the_account_off_the_checkpoint(monkeypatch):
+    """Spend is attributed to whoever the run belonged to, never to
+    whoever typed the resume."""
+    class FakeState:
+        values = {"account_id": 42}
+        next = ("gen_concept",)
+
+    seen = {}
+
+    class FakeGraph:
+        def get_state(self, config):
+            seen["thread"] = config["configurable"]["thread_id"]
+            return FakeState()
+
+        def invoke(self, payload, config):
+            seen["payload"] = payload
+            seen["bound"] = dict(orchestrator.spend._context.get() or {})
+            return {"resumed": True}
+
+    monkeypatch.setattr(orchestrator, "checkpointed_graph", lambda: FakeGraph())
+
+    assert orchestrator.resume("run-7") == {"resumed": True}
+    assert seen["thread"] == "run-7"
+    assert seen["payload"] is None, "None is LangGraph's resume signal"
+    assert seen["bound"]["account_id"] == 42
+    assert seen["bound"]["run_id"] == "run-7"
+
+
+def test_resume_says_so_when_the_run_already_finished(monkeypatch):
+    class Finished:
+        values = {"account_id": 1}
+        next = ()
+
+    class FakeGraph:
+        def get_state(self, config):
+            return Finished()
+
+        def invoke(self, payload, config):
+            raise AssertionError("must not re-run a finished graph")
+
+    monkeypatch.setattr(orchestrator, "checkpointed_graph", lambda: FakeGraph())
+    with pytest.raises(RuntimeError, match="already finished"):
+        orchestrator.resume("run-done")

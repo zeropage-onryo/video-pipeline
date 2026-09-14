@@ -1676,7 +1676,7 @@ def hold(state: GenState) -> GenState:
 
 # --- graph ----------------------------------------------------------------
 
-def _build():
+def _build(checkpointer=None):
     g = StateGraph(GenState)
     for name, fn in [
         ("research", research),
@@ -1752,10 +1752,64 @@ def _build():
     g.add_edge("caption", "publish")
     g.add_edge("publish", END)
     g.add_edge("hold", END)
-    return g.compile()
+    return g.compile(checkpointer=checkpointer)
 
 
+# The plain graph: no checkpointer, no database touched at import. This is
+# what langgraph.json exposes to LangGraph Studio, and the fallback for
+# every caller that cannot reach Postgres.
 GRAPH = _build()
+
+CHECKPOINT_ENV = "ZEROPAGE_CHECKPOINT"
+_CHECKPOINTED = None   # None = not tried yet, False = tried and cannot
+
+
+def checkpointing_on() -> bool:
+    """On unless switched off. The cost is a few writes per node; the
+    thing it buys is that a night killed at run seven of ten does not
+    start again from zero."""
+    raw = (os.environ.get(CHECKPOINT_ENV) or "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def checkpointed_graph():
+    """The graph with a PostgresSaver behind it, or None.
+
+    Built lazily and cached, never at import: `GRAPH = _build()` runs on
+    every `import src.orchestrator` -- the MCP server, the CLI, the web
+    app, the test suite -- and none of those should open a database
+    connection just by being imported.
+
+    FAILS SOFT, deliberately. No database, no checkpoint tables, no
+    permission: say so once on stderr and hand back None so `run` uses
+    the plain graph. A run that cannot be resumed is worse than one that
+    can; a run that refuses to start is worse than both.
+    """
+    global _CHECKPOINTED
+    if _CHECKPOINTED is not None:
+        return _CHECKPOINTED or None
+    if not checkpointing_on():
+        _CHECKPOINTED = False
+        return None
+    try:
+        import psycopg
+        from langgraph.checkpoint.postgres import PostgresSaver
+
+        # The saver's own connection, autocommit as it requires, and NOT
+        # from db.connection_pool: that pool is the web server's, sized
+        # for request handlers, and a checkpointer holding one of its
+        # connections for the length of a graph run would starve it.
+        conn = psycopg.connect(db.resolve_dsn(None), autocommit=True,
+                               connect_timeout=10)
+        saver = PostgresSaver(conn)
+        saver.setup()
+        _CHECKPOINTED = _build(checkpointer=saver)
+    except Exception as e:
+        print(f"note: running without a checkpointer ({e}) -- an interrupted "
+              f"run will not be resumable", file=sys.stderr)
+        _CHECKPOINTED = False
+        return None
+    return _CHECKPOINTED
 
 
 def run(goal: str, *, brand: Optional[str] = None, spark: Optional[str] = None,
@@ -1834,8 +1888,14 @@ def run(goal: str, *, brand: Optional[str] = None, spark: Optional[str] = None,
     # after, so nothing leaks into whatever this thread does next.
     run_id = uuid.uuid4().hex
     token = spend.bind(account_id=account_id, run_id=run_id)
+    # The run's own id IS the checkpoint thread. One thread per run, so a
+    # resume names the run it is resuming and nothing else, and the
+    # checkpoint rows line up with the nightly_runs / hold_queue rows that
+    # already carry it. Harmless on the plain graph, which ignores it.
+    graph = checkpointed_graph() or GRAPH
+    config = {"configurable": {"thread_id": run_id}}
     try:
-        return GRAPH.invoke({
+        return graph.invoke({
             "run_id": run_id,
             "account_id": account_id,
         "goal": goal, "brand": brand, "spark": spark or goal, "scout": scout,
@@ -1850,6 +1910,40 @@ def run(goal: str, *, brand: Optional[str] = None, spark: Optional[str] = None,
         "reference_photos": reference_photos or [],
         "attempts": 0,
         **({"scout_finding_id": int(scout_finding_id)} if scout_finding_id else {}),
-        })
+        }, config)
+    finally:
+        spend.unbind(token)
+
+
+def resume(run_id: str) -> dict:
+    """Carry on a run that was interrupted, from its last finished node.
+
+    What this is for: `nightly.walk` does ten runs in a row and the whole
+    walk dies together -- a machine that sleeps, a deploy, a kill. Before
+    checkpointing, run seven's paid keyframe and the concept row it had
+    already written were simply orphaned: a row on the board with no hold
+    explaining it, and nothing that could pick the run back up.
+
+    `invoke(None, ...)` is LangGraph's resume: no new input, start from
+    the last checkpoint on this thread. The account is read back OUT of
+    that checkpoint rather than passed in, because the spend has to be
+    attributed to whoever the run belonged to -- not to whoever is doing
+    the resuming.
+    """
+    graph = checkpointed_graph()
+    if graph is None:
+        raise RuntimeError(
+            f"cannot resume {run_id}: no checkpointer (see {CHECKPOINT_ENV} "
+            f"and DATABASE_URL). Nothing was saved to resume from.")
+    config = {"configurable": {"thread_id": run_id}}
+    saved = graph.get_state(config)
+    if not saved or not saved.values:
+        raise RuntimeError(f"no checkpoint for run {run_id}")
+    if not saved.next:
+        raise RuntimeError(f"run {run_id} already finished -- nothing to resume")
+    account_id = saved.values.get("account_id")
+    token = spend.bind(account_id=account_id, run_id=run_id)
+    try:
+        return graph.invoke(None, config)
     finally:
         spend.unbind(token)
