@@ -37,3 +37,46 @@ To learn more, take a look at the following resources:
 - [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
 - [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
 - [v0 Documentation](https://v0.app/docs) - learn about v0 and how to use it.
+
+## Deploying
+
+The API (`zeropage-studio` on Fly, the FastAPI app one directory up) stays
+where it is whichever of these serves this front end. The browser never
+talks to the API directly: every `/api`, `/auth`, `/signin`, `/brand` and
+photo request goes to THIS app's origin and is proxied by the rewrites in
+`next.config.ts` -- a cross-site cookie is a third-party cookie Safari and
+Chrome refuse to send. Sign-in navigates to the API's origin and the
+session comes back through `/auth/handoff` (see `app/auth.py`).
+
+Three settings, the same on either host, all fixed at BUILD time:
+
+| setting | value | why |
+|---|---|---|
+| `API_UPSTREAM` | `https://zeropage-studio.fly.dev` | the proxy's target; the rewrites are computed by `next build` |
+| `NEXT_PUBLIC_AUTH_ORIGIN` | `https://zeropage-studio.fly.dev` | where Sign in / Sign out navigate |
+| `NEXT_PUBLIC_API_URL` | *unset* | leaving it unset keeps fetches same-origin |
+
+### Vercel (git-connected; the recommended host)
+
+1. vercel.com -> Add New -> Project -> import the `video-pipeline` repo.
+2. **Root Directory: `web`** (Edit next to the detected root). Framework
+   auto-detects as Next.js; leave build settings alone.
+3. Environment Variables: the two from the table, for Production and
+   Preview. Do not add `NEXT_PUBLIC_API_URL`.
+4. Deploy. Every later push to `main` deploys itself; branches get
+   preview URLs.
+5. On the API, once the hostname is known (e.g. `zpf-web.vercel.app`):
+   it must be in `FRONTEND_ORIGINS` (preview hosts match
+   `FRONTEND_ORIGIN_REGEX`), and `STUDIO_URL` should point at it so `/ui`,
+   the landing page and a sign-in with no return address land there:
+   `fly secrets set -a zeropage-studio STUDIO_URL=https://<host>`.
+
+### Fly (`zeropage-web`)
+
+```bash
+cd web && fly deploy --remote-only --yes --build-arg NEXT_PUBLIC_AUTH_ORIGIN=https://zeropage-studio.fly.dev
+```
+
+`web/Dockerfile` bakes `API_UPSTREAM` in with a default of the API's
+public origin; `web/fly.toml` describes the app. The machine stops when
+idle, which is the one reason to prefer Vercel.
