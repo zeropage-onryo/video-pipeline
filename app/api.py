@@ -480,6 +480,13 @@ def _asset_photo_urls(kind: str, base_dir: Path, slug: str) -> list:
 
     ?thumb=1 rides only on the local route: it is a query this app's own
     handler understands and R2 does not.
+
+    When the folder is missing (the deployed API: gitignored AND
+    dockerignored, so Fly has none of them -- 2026-09-15, every asset
+    answering photos: [] to the studio) the listing comes from the
+    bucket instead, through asset_shelf.r2_photo_urls: cached per
+    prefix per process, [] when R2 is off. Disk stays first so Mike's
+    Mac reads its own photos.
     """
     from src import asset_shelf as _shelf
 
@@ -487,7 +494,7 @@ def _asset_photo_urls(kind: str, base_dir: Path, slug: str) -> list:
     for fn in _photo_names(base_dir, slug):
         url = _shelf.photo_url(kind, slug, fn)
         urls.append(url if url.startswith("http") else f"{url}?thumb=1")
-    return urls
+    return urls or _shelf.r2_photo_urls(kind, slug)
 
 
 def _location_photos(space: str) -> list:

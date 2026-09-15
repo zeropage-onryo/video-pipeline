@@ -155,6 +155,49 @@ def photos_for(kind: str, slug: str) -> list:
                   if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS)
 
 
+def r2_photo_urls(kind: str, slug: str) -> list[str]:
+    """The asset's photos as listed in the BUCKET, as public R2 URLs --
+    the catalogue's answer on a machine that has no photo folder.
+
+    2026-09-15: GET /api/assets on the deployed API answered photos: []
+    for every character, location and prop, so the studio's composer
+    and Elements page could attach none of them. photos_for() reads the
+    folder, and characters/ props/ locations/ are gitignored AND
+    dockerignored -- the bytes were in R2 (ops/backfill_reference_
+    photos_r2.py put them there) and nothing looked. This lists the
+    bucket under the asset's prefix, filters to what photos_for() would
+    have accepted off disk (IMAGE_EXTENSIONS, files directly under the
+    slug), sorts by filename so the two listings agree on order, and
+    returns exactly the URL photo_url() would build for each -- one
+    canonical_url-shaped string per photo. [] when R2 is off: the
+    unconfigured local setup keeps reading its own disk and nothing
+    else."""
+    from . import storage
+    from .locations import IMAGE_EXTENSIONS
+
+    if not storage.configured():
+        return []
+    plural = next(k for k, v in URL_ROOTS.items() if v == kind)
+    head = f"{plural}/{slug}/"
+    names = set()
+    for key in storage.keys_under(f"{plural}/"):
+        if not key.startswith(head):
+            continue
+        name = key[len(head):]
+        if not name or "/" in name or Path(name).suffix.lower() not in IMAGE_EXTENSIONS:
+            continue
+        names.add(name)
+    return [url for url in (storage.url_for_key(f"{head}{n}") for n in sorted(names)) if url]
+
+
+def photo_urls(kind: str, slug: str) -> list[str]:
+    """The asset's photo URLs: the local folder first (this machine's
+    own photos, off its own disk), the bucket listing when the folder
+    is absent or empty."""
+    local = [photo_url(kind, slug, f.name) for f in photos_for(kind, slug)]
+    return local or r2_photo_urls(kind, slug)
+
+
 # The site-relative URL every reference in this pipeline travels as.
 # `/characters/<slug>/photo/<file>`, `/props/...`, `/locations/...` for
 # the asset bank, `/refs/<sha>.jpg` for anything the composer uploaded
@@ -344,8 +387,7 @@ def catalogue(db_path=None, account_id: Optional[int] = None) -> list[dict]:
     items: list[dict] = []
 
     def photos(kind: str, name: str) -> list:
-        slug = slugify(name)
-        return [photo_url(kind, slug, f.name) for f in photos_for(kind, slug)]
+        return photo_urls(kind, slugify(name))
 
     for loc in preprod.list_locations(dsn=path, account_id=account_id):
         items.append({"category": "location", "name": loc["name"],
