@@ -24,6 +24,7 @@ import {
   Brain,
   Clapperboard,
   Clock,
+  Ellipsis,
   Image as ImageIcon,
   ImageOff,
   MessageSquare,
@@ -48,25 +49,25 @@ import {
 } from "@/lib/studio-api";
 import { useMentions } from "@/components/studio/mentions";
 import { useShell } from "@/components/studio/shell";
+import { AddElement } from "@/components/studio/add-element";
+import { ElementSheet } from "@/components/studio/element-sheet";
+import { ELEMENT_KINDS, displayPhoto, drawable, elementKind, isElement, kindLabel, type ElementKind } from "@/lib/elements";
 
 type Attachment = { id: string; name: string; file: File; url: string };
 type Option = { id: string; label: string; note?: string };
 type GuideMessage = { role: "user" | "assistant"; content: string };
 type Written = { conceptId: number | null; detail: string };
-/* the rail's filters: real elements first; the studio's own generated
-   stills are a shelf of their own rather than 69 identical plates
-   drowning the seven things a person can @ */
-type Filter = "elements" | Asset["category"];
+/* the shelf under the box is ELEMENTS only -- the characters, props,
+   products and places a person created to @ in a prompt (Mike's call,
+   2026-09-15). Blank until one exists; the Assets wall's generated
+   stills never appear here. */
+type Filter = "all" | ElementKind;
 
 const FILTERS: [Filter, string][] = [
-  ["elements", "Elements"],
-  ["location", "Rooms"],
-  ["character", "Characters"],
-  ["prop", "Props"],
-  ["generated", "Generated"],
+  ["all", "All elements"],
+  ...ELEMENT_KINDS.map(({ id, label }) => [id, label] as [Filter, string]),
 ];
 
-const IS_ELEMENT = (a: Asset) => a.category !== "generated";
 const FRAMES_PER_ASSET = 3;
 
 function PillMenu({
@@ -133,14 +134,6 @@ export default function StudioPage() {
 const imageFiles = (list: FileList | File[] | null | undefined) =>
   Array.from(list ?? []).filter((f) => f.type.startsWith("image/"));
 
-const shortDate = (iso?: string | null) => {
-  if (!iso) return "";
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime())
-    ? ""
-    : d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
-};
-
 function Composer() {
   const { brand, toast } = useShell();
   const params = useSearchParams();
@@ -148,8 +141,10 @@ function Composer() {
   const [idea, setIdea] = useState("");
   const [caps, setCaps] = useState<Capabilities>({});
   const [assets, setAssets] = useState<Asset[]>([]);
-  const [filter, setFilter] = useState<Filter>("elements");
+  const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [open, setOpen] = useState<Asset | null>(null);
   const [picked, setPicked] = useState<string[]>([]); // asset photo urls
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [busy, setBusy] = useState(false);
@@ -171,6 +166,11 @@ function Composer() {
   const fileInput = useRef<HTMLInputElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const dragDepth = useRef(0);
+
+  const loadAssets = () =>
+    getAssets()
+      .then((r) => setAssets(r.items))
+      .catch(() => setAssets([]));
 
   useEffect(() => {
     getCapabilities().then(setCaps).catch(() => setCaps({}));
@@ -339,26 +339,24 @@ function Composer() {
     attach(e.dataTransfer.files);
   };
 
-  const elements = useMemo(() => assets.filter(IS_ELEMENT), [assets]);
-  const counts = useMemo(
-    () => ({
-      elements: elements.length,
-      location: assets.filter((a) => a.category === "location").length,
-      character: assets.filter((a) => a.category === "character").length,
-      prop: assets.filter((a) => a.category === "prop").length,
-      generated: assets.length - elements.length,
-    }),
-    [assets, elements],
-  );
+  const elements = useMemo(() => assets.filter(isElement), [assets]);
+  const counts = useMemo(() => {
+    const c: Record<Filter, number> = { all: elements.length, character: 0, prop: 0, product: 0, place: 0 };
+    for (const a of elements) {
+      const k = elementKind(a);
+      if (k) c[k] += 1;
+    }
+    return c;
+  }, [elements]);
   const shown = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    const pool = filter === "elements" ? elements : assets.filter((a) => a.category === filter);
+    const pool = filter === "all" ? elements : elements.filter((a) => elementKind(a) === filter);
     const hit = needle
       ? pool.filter((a) => `${a.name} ${a.text || ""}`.toLowerCase().includes(needle))
       : pool;
     // things with frames first: an empty plate cannot be attached
     return [...hit].sort((a, b) => Number(!!b.photos.length) - Number(!!a.photos.length));
-  }, [assets, elements, filter, query]);
+  }, [elements, filter, query]);
 
   const togglePlate = (a: Asset) => {
     const urls = a.photos.slice(0, FRAMES_PER_ASSET);
@@ -477,7 +475,13 @@ function Composer() {
                 </span>
               ))}
               {picked.map((u) => (
-                <span key={u} className="cattach" title={u} style={{ backgroundImage: `url(${API_URL}${u})` }}>
+                <span
+                  key={u}
+                  className={`cattach${drawable(u) ? "" : " raw"}`}
+                  title={u}
+                  data-ext={drawable(u) ? undefined : u.split(".").pop()?.split("?")[0]?.toUpperCase()}
+                  style={drawable(u) ? { backgroundImage: `url(${API_URL}${u})` } : undefined}
+                >
                   <button
                     type="button"
                     aria-label="Remove reference"
@@ -670,6 +674,10 @@ function Composer() {
             />
           </label>
           <span className="spacer" />
+          <button type="button" className="cat" onClick={() => setAdding(true)}>
+            <Plus strokeWidth={2} size={12} style={{ marginRight: 6, verticalAlign: -2 }} />
+            New element
+          </button>
           <Link href="/studio/elements" className="cat">
             Elements ↗
           </Link>
@@ -679,49 +687,92 @@ function Composer() {
             {shown.map((a) => {
               const frames = a.photos.length;
               const on = a.photos.slice(0, FRAMES_PER_ASSET).some((u) => picked.includes(u));
-              const generated = a.category === "generated";
+              const kind = kindLabel(elementKind(a) ?? "prop");
               return (
-                <button
-                  type="button"
-                  key={a.id}
-                  className={`plate${frames ? "" : " empty"}`}
-                  aria-pressed={on}
-                  title={
-                    !frames
-                      ? "No frames yet — add photos on Elements"
-                      : on
-                        ? "Attached — click to detach"
-                        : "Attach as a reference"
-                  }
-                  style={a.poster ? { backgroundImage: `url(${API_URL}${a.poster})` } : undefined}
-                  onClick={() => togglePlate(a)}
-                >
-                  {on ? <span className="pick">✓</span> : null}
-                  {!frames ? <ImageOff className="pempty" strokeWidth={1.2} aria-hidden /> : null}
-                  <span className="pn">
-                    <b>{generated ? "Keyframe" : a.name}</b>
-                    <span>
-                      {generated
-                        ? `${shortDate(a.created_at)} · ${String(a.meta?.provider ?? "generated")}`
-                        : frames
-                          ? `${a.category} · ${frames} frame${frames === 1 ? "" : "s"}`
-                          : `${a.category} · no frames yet`}
+                <div key={a.id} className={`plate${frames ? "" : " empty"}`} data-on={on ? "1" : undefined}>
+                  <button
+                    type="button"
+                    className="pattach"
+                    aria-pressed={on}
+                    title={
+                      !frames
+                        ? "No frames yet — add photos on Elements"
+                        : on
+                          ? "Attached — click to detach"
+                          : "Attach as a reference"
+                    }
+                    style={displayPhoto(a) ? { backgroundImage: `url(${API_URL}${displayPhoto(a)})` } : undefined}
+                    onClick={() => togglePlate(a)}
+                  >
+                    {on ? <span className="pick">✓</span> : null}
+                    {!frames ? <ImageOff className="pempty" strokeWidth={1.2} aria-hidden /> : null}
+                    <span className="pn">
+                      <b>{a.name}</b>
+                      <span>{frames ? `${kind} · ${frames} frame${frames === 1 ? "" : "s"}` : `${kind} · no frames yet`}</span>
                     </span>
-                  </span>
-                </button>
+                  </button>
+                  <button
+                    type="button"
+                    className="pmore"
+                    title={`${a.name} · options`}
+                    aria-label={`${a.name} options`}
+                    onClick={() => setOpen(a)}
+                  >
+                    <Ellipsis strokeWidth={2} />
+                  </button>
+                </div>
               );
             })}
           </div>
+        ) : elements.length ? (
+          <div className="stateline">{query ? `Nothing matches “${query}”` : "Nothing of this kind yet"}</div>
         ) : (
-          <div className="stateline">
-            {assets.length
-              ? query
-                ? `Nothing matches “${query}”`
-                : "Nothing on this shelf yet"
-              : "No assets yet — add a character, room or prop on Elements"}
+          <div className="cblank">
+            <AtSign strokeWidth={1.4} />
+            <div>
+              <b>No elements yet</b>
+              <p>
+                Create a character, prop, product or place and its frames become something you can @ in a
+                prompt. They hold every shot to the same face, object or room.
+              </p>
+            </div>
+            <button type="button" className="go" style={{ padding: "11px 22px" }} onClick={() => setAdding(true)}>
+              <Plus strokeWidth={2} /> New element
+            </button>
           </div>
         )}
       </div>
+
+      {open ? (
+        <ElementSheet
+          asset={open}
+          onClose={() => setOpen(null)}
+          onAttach={(a) => {
+            setOpen(null);
+            const urls = a.photos.slice(0, FRAMES_PER_ASSET);
+            setPicked((was) => [...new Set([...was, ...urls])]);
+            toast(`${a.name} attached · ${urls.length} frame${urls.length === 1 ? "" : "s"}`);
+          }}
+          onDeleted={(a) => {
+            setOpen(null);
+            setPicked((was) => was.filter((u) => !a.photos.includes(u)));
+            toast(`${a.name} deleted`);
+            void loadAssets();
+          }}
+        />
+      ) : null}
+
+      {adding ? (
+        <AddElement
+          title="New element"
+          onClose={() => setAdding(false)}
+          onSaved={(name, photos) => {
+            setAdding(false);
+            toast(`${name} saved · ${photos} photo${photos === 1 ? "" : "s"} · teaching the assets shelf`);
+            void loadAssets();
+          }}
+        />
+      ) : null}
     </section>
   );
 }

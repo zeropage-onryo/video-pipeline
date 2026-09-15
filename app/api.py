@@ -926,6 +926,21 @@ def asset_delete_character(character_id: int, account_id: int = Depends(auth.cur
     return {"deleted": character_id}
 
 
+@router.delete("/assets/locations/{location_id}")
+def asset_delete_location(location_id: int, account_id: int = Depends(auth.current_account_id)):
+    """The third delete (2026-09-15, Mike: "I want to be able to delete
+    assets or elements"): places had create and list but no delete, so
+    the element sheet could remove a character or a prop and not a room.
+    Same shape as the two below -- the row and its RAG chunk go, the
+    photo bytes stay."""
+    row = preprod.get_location(location_id, account_id=account_id)
+    if row is None:
+        return _error(404, "not_found", "no such location")
+    preprod.delete_location(location_id, account_id=account_id)
+    _drop_asset_chunk("location", _slug(row["name"]))
+    return {"deleted": location_id}
+
+
 @router.delete("/assets/props/{prop_id}")
 def asset_delete_prop(prop_id: int, account_id: int = Depends(auth.current_account_id)):
     row = entities.get_prop(prop_id, account_id=account_id)

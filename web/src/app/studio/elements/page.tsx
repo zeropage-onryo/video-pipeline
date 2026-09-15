@@ -15,10 +15,11 @@ import { useEffect, useMemo, useState } from "react";
 import { ImageOff, Info, Plus } from "lucide-react";
 import { API_URL } from "@/lib/api";
 import { boardConcepts, getAssets, type Asset, type Concept } from "@/lib/studio-api";
+import { displayPhoto, elementKind, isElement, kindLabel } from "@/lib/elements";
 import { useShell } from "@/components/studio/shell";
 import { AddElement } from "@/components/studio/add-element";
-
-const handleOf = (name: string) => "@" + name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+import { ElementSheet } from "@/components/studio/element-sheet";
+import { handleOf } from "@/lib/elements";
 const slugOf = (url: string) => url.match(/^\/(characters|locations|props)\/([^/]+)\//)?.[2] ?? null;
 
 export default function ElementsPage() {
@@ -29,6 +30,7 @@ export default function ElementsPage() {
   const [howto, setHowto] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [open, setOpen] = useState<Asset | null>(null);
 
   const load = () => {
     getAssets()
@@ -55,8 +57,10 @@ export default function ElementsPage() {
   }, [concepts]);
   const slugFor = (a: Asset) => (a.photos[0] ? slugOf(a.photos[0]) : null) ?? handleOf(a.name).slice(1);
 
-  const all = assets ?? [];
-  const collage = all.filter((a) => a.poster).slice(0, 4);
+  // elements only: the Assets wall's generated stills are not something a
+  // person created to @ (Mike's call, 2026-09-15)
+  const all = (assets ?? []).filter(isElement);
+  const collage = all.filter((a) => displayPhoto(a)).slice(0, 4);
 
   return (
     <section className="view" style={{ paddingTop: 0, display: "flex", flexDirection: "column", minHeight: "calc(100vh - 80px)" }}>
@@ -91,7 +95,7 @@ export default function ElementsPage() {
             </div>
             <div className="elcollage" aria-hidden>
               {collage.map((a) => (
-                <span key={a.id} style={{ backgroundImage: `url(${API_URL}${a.poster})` }} />
+                <span key={a.id} style={{ backgroundImage: `url(${API_URL}${displayPhoto(a)})` }} />
               ))}
             </div>
           </div>
@@ -125,12 +129,25 @@ export default function ElementsPage() {
           {all.map((a) => {
             const used = usage.get(slugFor(a)) || 0;
             return (
-              <article key={a.id} className="elcard">
+              <article
+                key={a.id}
+                className="elcard"
+                role="button"
+                tabIndex={0}
+                title="Open"
+                onClick={() => setOpen(a)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setOpen(a);
+                  }
+                }}
+              >
                 <div
-                  className={`elplate${a.poster ? "" : " blank"}`}
-                  style={a.poster ? { backgroundImage: `url(${API_URL}${a.poster})` } : undefined}
+                  className={`elplate${displayPhoto(a) ? "" : " blank"}`}
+                  style={displayPhoto(a) ? { backgroundImage: `url(${API_URL}${displayPhoto(a)})` } : undefined}
                 >
-                  {!a.poster ? (
+                  {!displayPhoto(a) ? (
                     <span className="m">
                       <ImageOff strokeWidth={1.6} size={13} /> no photos yet
                     </span>
@@ -139,7 +156,7 @@ export default function ElementsPage() {
                 <div className="elbody">
                   <div className="elname">
                     <b>{a.name}</b>
-                    <span className="elcat">{a.category}</span>
+                    <span className="elcat">{kindLabel(elementKind(a) ?? "prop")}</span>
                   </div>
                   <p className="elhandle">{handleOf(a.name)}</p>
                 </div>
@@ -162,6 +179,19 @@ export default function ElementsPage() {
           })}
         </div>
       )}
+
+      {open ? (
+        <ElementSheet
+          asset={open}
+          usedIn={usage.get(slugFor(open)) || 0}
+          onClose={() => setOpen(null)}
+          onDeleted={(a) => {
+            setOpen(null);
+            toast(`${a.name} deleted`);
+            load();
+          }}
+        />
+      ) : null}
 
       {adding ? (
         <AddElement

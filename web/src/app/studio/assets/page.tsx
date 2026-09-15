@@ -10,7 +10,7 @@
 /* eslint-disable @next/next/no-img-element */
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Download, Film, Image as ImageIcon, MapPin, Plus, Search, Sparkles, UserRound, Box, X } from "lucide-react";
+import { Download, Ellipsis, Film, Image as ImageIcon, MapPin, Plus, Search, Sparkles, UserRound, Box, X } from "lucide-react";
 import { API_URL } from "@/lib/api";
 import {
   boardConcepts,
@@ -23,6 +23,8 @@ import {
 } from "@/lib/studio-api";
 import { useShell } from "@/components/studio/shell";
 import { AddElement } from "@/components/studio/add-element";
+import { ElementSheet } from "@/components/studio/element-sheet";
+import { isElement } from "@/lib/elements";
 
 const CATS: [string, string][] = [
   ["all", "All"],
@@ -66,6 +68,7 @@ export default function AssetsPage() {
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<{ asset: Asset; item: MediaItem } | null>(null);
   const [adding, setAdding] = useState(false);
+  const [sheet, setSheet] = useState<Asset | null>(null);
   const track = useRef<HTMLDivElement>(null);
 
   const load = (q = query, c = cat) => {
@@ -284,11 +287,33 @@ export default function AssetsPage() {
             <Link href={`/studio?attach=${encodeURIComponent(open.asset.id)}`} className="btn pri">
               Use in a shot
             </Link>
+            {isElement(open.asset) ? (
+              <button type="button" className="btn" title="Element options" aria-label="Element options" onClick={() => setSheet(open.asset)}>
+                <Ellipsis strokeWidth={1.6} />
+              </button>
+            ) : null}
             <a className="btn" href={`${API_URL}${open.item.url.split("?")[0]}`} target="_blank" rel="noreferrer" title="Open the file" aria-label="Open the file">
               <Download strokeWidth={1.6} />
             </a>
           </div>
         </aside>
+      ) : null}
+
+      {sheet ? (
+        <ElementSheet
+          asset={sheet}
+          usedIn={usedIn(sheet)}
+          onClose={() => setSheet(null)}
+          onDeleted={(a) => {
+            setSheet(null);
+            setOpen(null);
+            toast(`${a.name} deleted`);
+            getAssets()
+              .then((r) => setAssets(r.items))
+              .catch(() => {});
+            load();
+          }}
+        />
       ) : null}
 
       {adding ? (
