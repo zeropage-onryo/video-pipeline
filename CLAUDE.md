@@ -368,6 +368,18 @@ mind when adding a fourth writer:
 his Mac reads its own photos off disk rather than over the network; `_photo_bytes` in
 `app/api.py` is the fetch fallback for the machine that does not.
 
+**And the LISTING falls back to the bucket too (2026-09-15).** The deployed API answered
+`photos: []` / `poster: null` for every asset, so the React composer and Elements page could
+attach none of them: `_assets_all` and `asset_shelf.catalogue` both built the list by scanning
+the folder, and Fly has no folder. `asset_shelf.r2_photo_urls(kind, slug)` lists the bucket
+under the asset's prefix and returns the same canonical URL `photo_url` would build (disk
+still first, on both listings, so the Mac reads its own photos). `storage.keys_under(prefix)`
+is the cached edge behind it: ONE `list_objects_v2` per top-level prefix (`characters/`,
+`locations/`, `props/`) per process, kept for `R2_LISTING_TTL` (600s), an upload from this
+process folded straight into the cache, a failed list remembered as empty for one TTL rather
+than retried per asset, `[]` outright when R2 is unconfigured. `tests/test_assets_r2_fallback.py`
+stands a fake listing in at `storage.list_keys`.
+
 **`.heic` decodes now** (`pillow-heif`, registered in `_to_jpeg`, degrading if absent), and
 `_best_photo` prefers a natively-decodable sibling regardless. `IMAGE_EXTENSIONS` has always
 listed `.heic` and the gallery has always shown it, but Pillow could not read one — so a HEIC
