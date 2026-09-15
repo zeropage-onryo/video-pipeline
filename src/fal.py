@@ -731,7 +731,8 @@ def generate_image(prompt: str, out_path, *, model: str = DEFAULT_IMAGE_MODEL,
     return out_path
 
 
-def as_image_url(value, *, resolve_photo=None) -> Optional[str]:
+def as_image_url(value, *, resolve_photo=None,
+                 account_id: Optional[int] = None) -> Optional[str]:
     """Anything stored as a reference -> a URL fal's servers can actually
     FETCH, or None.
 
@@ -745,7 +746,8 @@ def as_image_url(value, *, resolve_photo=None) -> Optional[str]:
     third vendor -- or with a fourth copy of the code.
     """
     from . import higgsfield
-    return higgsfield.as_image_url(value, resolve_photo=resolve_photo)
+    return higgsfield.as_image_url(value, resolve_photo=resolve_photo,
+                                   account_id=account_id)
 
 
 # --------------------------------------------------------------------------
@@ -859,13 +861,15 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *,
         return {"ok": False, "candidates": [], "error": _safe_error(e, account_id)}
 
 
-def _publish(out_path: Path, content_type: str) -> str:
+def _publish(out_path: Path, content_type: str,
+             account_id: Optional[int] = None) -> str:
     """R2 when configured (Instagram needs a public URL), else the app's
-    own /renders mount."""
-    from . import storage
+    own /renders mount. The key carries the tenant -- see src/media.py."""
+    from . import media, storage
     if storage.configured():
         return storage.upload_file(
-            out_path, key=f"renders/fal/{out_path.name}",
+            out_path,
+            key=media.object_key(f"renders/fal/{out_path.name}", account_id),
             content_type=content_type)
     return f"/renders/fal/{out_path.name}"
 
@@ -933,7 +937,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
         # image_url server-side, so a local keyframe with no R2 behind it
         # is dropped and prompt_image records False -- nothing downstream
         # gets to claim an anchor that never left the building.
-        image_url = as_image_url(target["reference_image"],
+        image_url = as_image_url(target["reference_image"], account_id=account_id,
                                  resolve_photo=resolve_photo)
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
@@ -963,7 +967,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
             **kwargs,
             account_id=account_id)
 
-        media_url = _publish(out_path, "video/mp4")
+        media_url = _publish(out_path, "video/mp4", account_id)
         if part:
             timeline.attach_part(concept_id, shot_n, part, "media_url", media_url,
                                  db_path=db_path, account_id=account_id)
@@ -1010,7 +1014,8 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
         if refusal:
             return {"ok": False, "error": refusal}
 
-        image_url = as_image_url(reference_image, resolve_photo=resolve_photo)
+        image_url = as_image_url(reference_image, resolve_photo=resolve_photo,
+                                 account_id=account_id)
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"wf-{stamp}.mp4"
@@ -1031,7 +1036,7 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
             cost_usd=estimate_cost(1, model=model),
             **kwargs,
             account_id=account_id)
-        return {"ok": True, "media_url": _publish(out_path, "video/mp4"),
+        return {"ok": True, "media_url": _publish(out_path, "video/mp4", account_id),
                 "generation_id": generation_id, "path": str(out_path),
                 "error": None}
     except Exception as e:
@@ -1083,7 +1088,7 @@ def generate_image_from_prompt(prompt: str, *, db_path=None, http=None,
             cost_usd=estimate_image_cost(1),
             **kwargs,
             account_id=account_id)
-        return {"ok": True, "media_url": _publish(out_path, "image/jpeg"),
+        return {"ok": True, "media_url": _publish(out_path, "image/jpeg", account_id),
                 "generation_id": generation_id, "path": str(out_path),
                 "error": None}
     except Exception as e:

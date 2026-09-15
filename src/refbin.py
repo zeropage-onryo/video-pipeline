@@ -26,7 +26,6 @@ that was using it.
 from __future__ import annotations
 
 import hashlib
-import sys
 from pathlib import Path
 from typing import Optional
 
@@ -71,7 +70,7 @@ def to_jpeg(data: bytes) -> Optional[bytes]:
         return None             # not a readable image -- skip, never fail the run
 
 
-def save(jpeg: bytes) -> Optional[str]:
+def save(jpeg: bytes, account_id: Optional[int] = None) -> Optional[str]:
     """Persist one reference, return the URL it rides on.
 
     Content-addressed, so attaching the same photo to six scenes -- or
@@ -83,37 +82,31 @@ def save(jpeg: bytes) -> Optional[str]:
         target = REFS_DIR / name
         if not target.exists():
             target.write_bytes(jpeg)
-        mirror_to_r2(target)
+        mirror_to_r2(target, account_id)
         return f"/refs/{name}"
     except Exception:
         return None
 
 
-def mirror_to_r2(target: Path) -> Optional[str]:
-    """Push one bin image up to R2 under `refs/<name>`, best-effort.
+def mirror_to_r2(target: Path, account_id: Optional[int] = None) -> Optional[str]:
+    """Push one bin image up, best-effort. Delegates to `media.mirror`.
 
     data/refs/ is gitignored, dockerignored, AND on the deploy it is a
     fresh Fly volume, so a photo the composer took or the scout crawled
     on his Mac reaches no other machine (2026-09-08, Mike: "the
     reference photos aren't appearing"). The bytes go up here, at the
-    one place they are written, so `asset_shelf.canonical_url` can turn
-    `/refs/<sha>.jpg` into a URL that is true everywhere without ever
-    guessing whether the object is there.
+    one place they are written.
 
-    Never raises and never blocks a save: an unconfigured or unreachable
-    R2 leaves the local file exactly as it was, which is what every
-    local-only setup has always had.
+    The KEY this lands under is no longer built here. It was, and
+    app/api.py built the asset-photo one its own way, and two writers of
+    one scheme is the bug this repo has now paid for twice -- so
+    `src/media.py` owns the scheme (tenant prefix, derivative) and this
+    stays what it always was: the place that knows a bin image has just
+    been written and that a failure here must never cost the save.
     """
-    try:
-        from . import storage
-        if not storage.configured():
-            return None
-        return storage.upload_file(target, key=f"refs/{target.name}",
-                                   content_type="image/jpeg")
-    except Exception as e:                        # noqa: BLE001
-        print(f"note: refs mirror to R2 failed for {target.name}: "
-              f"{type(e).__name__}: {e}", file=sys.stderr)
-        return None
+    from . import media
+    return media.mirror(target, f"refs/{target.name}", account_id,
+                        content_type="image/jpeg")
 
 
 def resolve(url_path: str) -> Optional[Path]:

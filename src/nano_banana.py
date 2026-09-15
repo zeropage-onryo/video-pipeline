@@ -372,7 +372,7 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
     answers in prose instead of rendering. The thin generate_image
     wrapper stays literal for callers who mean exactly what they typed.
     """
-    from . import storage
+    from . import media, storage
     kwargs = {"dsn": db_path} if db_path is not None else {}
 
     try:
@@ -438,7 +438,8 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
 
         if storage.configured():
             media_url = storage.upload_file(
-                out_path, key=f"renders/nano/{out_path.name}",
+                out_path,
+                key=media.object_key(f"renders/nano/{out_path.name}", account_id),
                 content_type="image/png")
         else:
             media_url = f"/renders/nano/{out_path.name}"

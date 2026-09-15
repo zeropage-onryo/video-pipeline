@@ -219,6 +219,53 @@ def r2_key(url: str) -> Optional[str]:
     return f"{ref['plural']}/{ref['slug']}/{ref['filename']}"
 
 
+def logical_ref(url: str) -> str:
+    """The site-relative NAME of a reference: `/refs/<sha>.jpg`,
+    `/characters/<slug>/photo/<file>`. Unchanged for anything this
+    pipeline does not own.
+
+    This is the durable half of a reference. Every reference bug this
+    repo has paid for came from storing a URL instead of a name -- a
+    local route true only on the machine holding the folder
+    (2026-09-08), and, the moment media is signed, a URL true only for
+    the next hour. A name is true everywhere and forever; the URL is
+    minted from it on read by `fetch_url`.
+    """
+    ref = parse_ref(url)
+    if not ref:
+        return url
+    if ref["kind"] == "refs":
+        return f"/refs/{ref['filename']}"
+    return f"/{ref['plural']}/{ref['slug']}/photo/{ref['filename']}"
+
+
+def storable_ref(url: str) -> str:
+    """What goes ON a row.
+
+    On the `legacy` rung this is the 2026-09-08 answer unchanged -- the
+    public R2 URL, because a site-relative path 404s on the deployed
+    site and a renderer there anchors on nothing while the card claims
+    it anchored on a face. From `tenant` up it is the logical name
+    instead, because the URL is no longer a constant: it carries the
+    account and, under `signed`, an expiry.
+
+    Both shapes are read by `parse_ref` and minted by `fetch_url`, so a
+    row written under either rung keeps working under the other. That is
+    the whole reason the ladder is safe to climb and to climb back down.
+    """
+    from . import media
+    if media.tenant_keys():
+        return logical_ref(url)
+    return canonical_url(url)
+
+
+def fetch_url(url: str, account_id: Optional[int] = None) -> str:
+    """What a browser, a renderer, or a server-side fetch should ask
+    for. The read-time mint -- see src/media.url_for."""
+    from . import media
+    return media.url_for(url, account_id)
+
+
 def canonical_url(url: str) -> str:
     """The form of a reference URL that is true on EVERY machine.
 
@@ -233,7 +280,12 @@ def canonical_url(url: str) -> str:
 
     The bytes must already BE in R2; this is a string map, not an upload.
     Callers that write a NEW file (refbin.save, the upload handlers) push
-    it up first."""
+    it up first.
+
+    Still THE writer for the `legacy` rung, and still what
+    ops/canonicalize_shot_refs.py applies. New callers want
+    `storable_ref`, which picks this or `logical_ref` by the rung.
+    """
     key = r2_key(url)
     if not key:
         return url
@@ -255,9 +307,17 @@ def photo_url(kind: str, slug: str, filename: str) -> str:
     it. Falls back to the local `/characters/.../photo/...` route (still
     served by app/main.py) when R2 isn't set, so nothing breaks for a
     local dev setup that never turns R2 on.
+
+    From the `tenant` rung up it returns the LOCAL route again -- not a
+    regression, the opposite: the key now carries an account and the URL
+    may carry an expiry, so neither can be baked into a string that gets
+    stored and read back months later. `fetch_url` mints the real one at
+    the moment of reading. See src/media.py.
     """
     plural = next(k for k, v in URL_ROOTS.items() if v == kind)
-    from . import storage
+    from . import media, storage
+    if media.tenant_keys():
+        return f"/{plural}/{slug}/photo/{filename}"
     r2_url = storage.url_for_key(f"{plural}/{slug}/{filename}")
     if r2_url:
         return r2_url

@@ -299,7 +299,7 @@ def attach_refs(concept_id: int, extra: list | None = None, *, idea: str | None 
     # itself on every pass, differing from its stored refs by nothing
     # but the hostname.
     from . import asset_shelf as _shelf
-    picked = [_shelf.canonical_url(u) for u in picked]
+    picked = [_shelf.storable_ref(u) for u in picked]
 
     if not picked or picked == list(shot.get("refs") or []):
         return list(shot.get("refs") or [])

@@ -911,6 +911,27 @@ def _grade_context(mode: Optional[str], concept_id: Optional[int],
     return context
 
 
+def _tab_counts(account_id: int) -> dict:
+    """Live counts for the tab column (2026-09-14).
+
+    The queue depth is the whole point of this console and it used to
+    take a click to find: the tabs were pills with labels and nothing
+    else, so "184 concepts are waiting on you" was invisible from five
+    of the six tabs. Every count is best-effort and swallowed -- a badge
+    that 500s the console is strictly worse than a badge that is absent,
+    and this runs on every Dev Studio render.
+    """
+    counts: dict[str, int] = {}
+    for key, fn in (("grade", lambda: len(_ungraded_rows(account_id))),
+                    ("graded", lambda: len(_graded_rows(account_id))),
+                    ("dataset", lambda: len(evalstore.list_golden()))):
+        try:
+            counts[key] = fn()
+        except Exception:
+            pass
+    return counts
+
+
 @dev.get("/studio")
 def studio(request: Request, tab: Optional[str] = None, message: Optional[str] = None,
            q: Optional[str] = None, domain: Optional[str] = None,
@@ -925,6 +946,7 @@ def studio(request: Request, tab: Optional[str] = None, message: Optional[str] =
     active_tab = tab if tab in DEV_TABS else "stats"
     context = {"active_tab": active_tab, "active_nav": "home",
                "message": message}
+    context["tab_counts"] = _tab_counts(account_id)
     if active_tab == "stats":
         context["metrics"] = _pipeline_metrics(account_id)
         context["distribution"] = _distribution(account_id)
@@ -1654,13 +1676,14 @@ async def post_image_queue(request: Request,
 
             from PIL import Image
 
-            from src import storage
+            from src import media, storage
             data = await upload.read()
             jpeg = Image.open(io.BytesIO(data)).convert("RGB")
             tmp = Path("/tmp") / f"mj-{uuid.uuid4().hex}.jpg"
             jpeg.save(tmp, "JPEG", quality=92)
             image_url = storage.upload_file(
-                tmp, key=f"images/{tmp.name}", content_type="image/jpeg")
+                tmp, key=media.object_key(f"images/{tmp.name}", account_id),
+                content_type="image/jpeg")
         except Exception as e:
             return back(f"Upload failed: {e}")
 
@@ -2058,13 +2081,14 @@ async def concept_shot_reference(concept_id: int, shot_n: int, request: Request,
 
                 from PIL import Image
 
-                from src import storage
+                from src import media, storage
                 data = await upload.read()
                 jpeg = Image.open(io.BytesIO(data)).convert("RGB")
                 tmp = Path("/tmp") / f"ref-{uuid.uuid4().hex}.jpg"
                 jpeg.save(tmp, "JPEG", quality=92)
                 image_url = storage.upload_file(
-                    tmp, key=f"references/{tmp.name}", content_type="image/jpeg")
+                    tmp, key=media.object_key(f"references/{tmp.name}", account_id),
+                    content_type="image/jpeg")
             except Exception as e:
                 return back(f"Reference upload failed: {e}")
         if not image_url:

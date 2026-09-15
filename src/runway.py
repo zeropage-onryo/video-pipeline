@@ -637,7 +637,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
     the field autopilot.build_plan requires before it will ever emit a
     post action.
     """
-    from . import preprod, storage
+    from . import media, preprod, storage
     kwargs = {"dsn": db_path} if db_path is not None else {}
 
     try:
@@ -716,7 +716,8 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
 
         if storage.configured():
             media_url = storage.upload_file(
-                out_path, key=f"renders/runway/{out_path.name}",
+                out_path,
+                key=media.object_key(f"renders/runway/{out_path.name}", account_id),
                 content_type="video/mp4")
         else:
             media_url = f"/renders/runway/{out_path.name}"
@@ -763,7 +764,7 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
     mime read off the magic number. Anything else is dropped -- a
     reference is an enhancement, never a gate.
     """
-    from . import storage
+    from . import media, storage
     kwargs = {"dsn": db_path} if db_path is not None else {}
 
     try:
@@ -811,7 +812,8 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
 
         if storage.configured():
             media_url = storage.upload_file(
-                out_path, key=f"renders/runway/{out_path.name}",
+                out_path,
+                key=media.object_key(f"renders/runway/{out_path.name}", account_id),
                 content_type="video/mp4")
         else:
             media_url = f"/renders/runway/{out_path.name}"

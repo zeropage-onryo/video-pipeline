@@ -371,6 +371,67 @@ mind when adding a fourth writer:
 his Mac reads its own photos off disk rather than over the network; `_photo_bytes` in
 `app/api.py` is the fetch fallback for the machine that does not.
 
+**MEDIA IS MULTI-TENANT NOW, AND THE STORED STRING IS A NAME AGAIN (2026-09-14).** The flat
+scheme above is correct for one person and breaks on the second: `characters/michael/IMG_1.jpg`
+is the same key for every account, so the second studio to upload a character called `michael`
+overwrote the first one's face, and nothing in a key says who owns it, so per-account
+accounting, quota and deletion are all impossible. **`src/media.py` is the one owner** of the
+key scheme and of the read-time mint; `storage.py` stays the boto3 layer and
+`asset_shelf.parse_ref` stays THE parser.
+
+- **`ZEROPAGE_MEDIA` is one switch and a LADDER**, each rung a superset of the one below and
+  every rung reversible by setting it back: `legacy` (default — flat keys, public URLs, today's
+  behaviour byte for byte) → `tenant` (`m/<account>/<tail>`) → `signed` (the same keys,
+  presigned URLs, private bucket). An unrecognised value reads as `legacy`: a typo must leave
+  the system where it was, never make media private.
+- **THE BIN IS SHARED, and that is a decision (2026-09-15, Mike's call).** `/refs/<sha>.jpg` is
+  deliberately the same shape whether a composer uploaded it or the scout crawled it — "they
+  come out the far end identical", above — and `scout_bin` has no account column at all, being a
+  shared table by design. So at read time nothing can tell an owned bin image from a shared one,
+  and a scheme that needed to would have to guess. `refs/` routes to `m/shared/refs/...` for
+  everybody; characters, props, locations, renders and soul-training are fenced per account.
+  What that costs, stated plainly: a bin image is protected by an unguessable content-hash key
+  (and a signature under `signed`), not by a tenant fence. The privacy weight sits on the faces
+  and the renders, and those are fenced. `media.scope_for` is the one place that decides.
+- **Two top-level prefixes, `m/` for masters and `t/` for the 480px derivative, and that is not
+  cosmetic.** A lifecycle rule matches on a prefix, so masters age into Infrequent Access while
+  the thumbnails every card actually reads stay in Standard. Nest the thumbs under `m/` and
+  that rule cannot be written without demoting them.
+- **What goes ON a row is `asset_shelf.storable_ref`, not a URL.** Every reference bug this repo
+  has paid for came from storing a URL — a local route true only on the machine holding the
+  folder (2026-09-08), and now a signed URL true only for the next hour. From `tenant` up the
+  row carries the logical name and `media.url_for` mints the fetchable string on READ. Rows
+  written on either rung keep working on the other, which is what makes the ladder safe in both
+  directions and why the migration does not rewrite the database at all.
+- **One mirror.** `refbin.mirror_to_r2` and `api._mirror_photos_to_r2` were two implementations
+  of one scheme with two key builders between them; both delegate to `media.mirror` now, which
+  is also what writes the derivative. A new writer gets the tenant prefix and the thumbnail
+  without having to remember either.
+- **`refs` and `photo_thumbs` are deliberately NOT one list.** `refs[0]` is the single frame
+  Runway anchors a clip on; a list that quietly carried 480px versions would anchor the clip on
+  one. A card with no derivative falls back to `?thumb=1` — a slow tile, never a missing one.
+- **The migration COPIES and never moves** (`ops/migrate_media_keys.py`, report first, `--write`
+  to act, re-runnable). Old keys stay public and serving, so the flip is reversible. A flat key
+  does not say who owns it, so ownership is recovered from the database; anything unattributable
+  is reported and LEFT ALONE, and a slug held by two accounts is reported as ambiguous rather
+  than guessed — under the flat scheme one overwrote the other and nobody can now say which
+  bytes survived.
+- **`signed` trades the edge cache for access control**, knowingly: a presigned URL must address
+  the S3 API endpoint, because an R2 custom domain serves the public bucket path and will not
+  accept a SigV4 query signature. Signatures are memoised per hour so the BROWSER cache still
+  works on a card it has already drawn. The way to get both is a Worker on the custom domain
+  validating a token against an R2 binding — deliberately not built until a bill says to.
+- **Migrated 2026-09-15**: 303 objects copied (139 to account 1, 164 to the shared bin), 185
+  derivatives built, all 364 legacy keys left in place, `ZEROPAGE_MEDIA=tenant` locally. 61
+  objects were left where they are because NOTHING in the database references them — three prop
+  folders whose rows are gone, and superseded nano keyframes. Verified by fetching: a 2,258,681
+  byte location photo now draws as a 33,533 byte tile.
+- **`ops/media_lifecycle.py --write` needs an ADMIN token.** Lifecycle is a bucket-level
+  operation and the token in `.env` is scoped to Object Read & Write (correctly, for everything
+  else). It refuses with an explanation rather than a traceback and changes nothing.
+- Full operational sequence, including the custom domain and the tiering pass
+  (`ops/media_lifecycle.py`): **ops/r2-setup.md**.
+
 **`.heic` decodes now** (`pillow-heif`, registered in `_to_jpeg`, degrading if absent), and
 `_best_photo` prefers a natively-decodable sibling regardless. `IMAGE_EXTENSIONS` has always
 listed `.heic` and the gallery has always shown it, but Pillow could not read one — so a HEIC

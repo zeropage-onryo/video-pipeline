@@ -632,7 +632,8 @@ def _local_render_bytes(value: str):
     return None
 
 
-def as_image_url(value, *, resolve_photo=None) -> Optional[str]:
+def as_image_url(value, *, resolve_photo=None,
+                 account_id: Optional[int] = None) -> Optional[str]:
     """Anything we might have stored as a reference -> a URL Higgsfield
     can actually FETCH, or None.
 
@@ -679,6 +680,7 @@ def as_image_url(value, *, resolve_photo=None) -> Optional[str]:
 
     import hashlib
 
+    from . import media
     from .gemini_utils import sniff_mime
     mime = sniff_mime(data)
     ext = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}.get(mime, "png")
@@ -687,7 +689,8 @@ def as_image_url(value, *, resolve_photo=None) -> Optional[str]:
     tmp.parent.mkdir(parents=True, exist_ok=True)
     tmp.write_bytes(data)
     try:
-        return storage.upload_file(tmp, key=key, content_type=mime)
+        return storage.upload_file(tmp, key=media.object_key(key, account_id),
+                                   content_type=mime)
     except Exception:
         return None            # a reference is an enhancement, never a gate
 
@@ -792,13 +795,15 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *,
         return {"ok": False, "candidates": [], "error": _safe_error(e, account_id)}
 
 
-def _publish(out_path: Path, content_type: str) -> str:
+def _publish(out_path: Path, content_type: str,
+             account_id: Optional[int] = None) -> str:
     """R2 when configured (Instagram needs a public URL), else the app's
-    own /renders mount."""
-    from . import storage
+    own /renders mount. The key carries the tenant -- see src/media.py."""
+    from . import media, storage
     if storage.configured():
         return storage.upload_file(
-            out_path, key=f"renders/higgsfield/{out_path.name}",
+            out_path,
+            key=media.object_key(f"renders/higgsfield/{out_path.name}", account_id),
             content_type=content_type)
     return f"/renders/higgsfield/{out_path.name}"
 
@@ -861,7 +866,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
             return {"ok": False,
                     "error": f"shot {shot_n} has no AI prompt to render from"}
 
-        image_url = as_image_url(target["reference_image"],
+        image_url = as_image_url(target["reference_image"], account_id=account_id,
                                  resolve_photo=resolve_photo)
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
@@ -889,7 +894,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
             cost_usd=estimate_cost(1, model=model, duration=duration),
             **kwargs,
          account_id=account_id)
-        media_url = _publish(out_path, "video/mp4")
+        media_url = _publish(out_path, "video/mp4", account_id)
         if part:
             timeline.attach_part(concept_id, shot_n, part, "media_url", media_url,
                                  db_path=db_path, account_id=account_id)
@@ -935,7 +940,8 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
         if refusal:
             return {"ok": False, "error": refusal}
 
-        image_url = as_image_url(reference_image, resolve_photo=resolve_photo)
+        image_url = as_image_url(reference_image, resolve_photo=resolve_photo,
+                                 account_id=account_id)
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"wf-{stamp}.mp4"
@@ -957,7 +963,7 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
             cost_usd=estimate_cost(1, model=model),
             **kwargs,
          account_id=account_id)
-        return {"ok": True, "media_url": _publish(out_path, "video/mp4"),
+        return {"ok": True, "media_url": _publish(out_path, "video/mp4", account_id),
                 "generation_id": generation_id, "path": str(out_path),
                 "error": None}
     except Exception as e:
@@ -1008,7 +1014,7 @@ def generate_image_from_prompt(prompt: str, *, db_path=None, http=None, account_
             cost_usd=estimate_image_cost(1),
             **kwargs,
          account_id=account_id)
-        return {"ok": True, "media_url": _publish(out_path, "image/jpeg"),
+        return {"ok": True, "media_url": _publish(out_path, "image/jpeg", account_id),
                 "generation_id": generation_id, "path": str(out_path),
                 "error": None}
     except Exception as e:

@@ -18,7 +18,6 @@ import json
 import os
 import re
 import statistics
-import sys
 import time
 from pathlib import Path
 from typing import Optional
@@ -462,32 +461,55 @@ def _photo_names(base_dir: Path, folder: str) -> list:
                   if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS)
 
 
-def _asset_photo_urls(kind: str, base_dir: Path, slug: str) -> list:
+def _asset_photo_urls(kind: str, base_dir: Path, slug: str,
+                      account_id: Optional[int] = None) -> list:
     """One asset's photos, as the URL they ride on everywhere.
 
-    Through asset_shelf.photo_url rather than an f-string (2026-09-08,
-    Mike: "the reference photos aren't appearing"). These strings are
-    not only what the gallery draws -- _auto_refs stores them on the
-    shot, and a site-relative /characters/... path is true only on the
-    machine holding the folder. characters/, props/ and locations/ are
+    Through asset_shelf rather than an f-string (2026-09-08, Mike: "the
+    reference photos aren't appearing"). These strings are not only what
+    the gallery draws -- _auto_refs stores them on the shot, and a
+    site-relative /characters/... path is true only on the machine
+    holding the folder. characters/, props/ and locations/ are
     gitignored AND dockerignored, so the deployed site 404s every one:
     four refs on the row, four empty tiles on the card, and a renderer
-    reaching for a face it cannot fetch. photo_url returns the public
-    R2 URL when R2 is configured, which src/asset_shelf.catalogue has
-    handed the nightly graph since the same day -- two catalogues
-    disagreeing about one photo's URL is the shape of bug this repo
-    keeps finding.
+    reaching for a face it cannot fetch.
 
-    ?thumb=1 rides only on the local route: it is a query this app's own
-    handler understands and R2 does not.
+    What is RETURNED is the storable name; `_asset_photo_thumbs` below
+    is what the gallery draws. Keeping them apart is the whole point --
+    `refs[0]` is the single frame Runway anchors a clip on, and a list
+    that quietly carried 480px versions would anchor the clip on one.
     """
     from src import asset_shelf as _shelf
 
-    urls = []
-    for fn in _photo_names(base_dir, slug):
-        url = _shelf.photo_url(kind, slug, fn)
-        urls.append(url if url.startswith("http") else f"{url}?thumb=1")
-    return urls
+    return [_shelf.photo_url(kind, slug, fn) for fn in _photo_names(base_dir, slug)]
+
+
+def _asset_photo_thumbs(urls: list, account_id: Optional[int] = None) -> list:
+    """The drawable URL for each of those photos, small where a small
+    one exists.
+
+    BACKLOG #0: a Queue card drew four full-size tiles, which off an
+    iPhone is a 4.6MB JPEG each -- 18MB to render one card, on a phone,
+    to show four thumbnails. The derivative is made at mirror time
+    (src/media.mirror) and lives under its own `t/` prefix.
+
+    Falls back to `?thumb=1`, the local handler that has always done
+    this off disk, whenever there is no derivative to point at -- R2
+    off, a photo added before the migration, a foreign URL. A fallback
+    and not a failure: the tile is slow, never missing.
+    """
+    from src import media
+
+    out = []
+    for url in urls:
+        small = media.thumb_url_for(url, account_id)
+        if small:
+            out.append(small)
+        elif url.startswith("http"):
+            out.append(url)          # no local handler to ask for a thumb
+        else:
+            out.append(f"{url}?thumb=1")
+    return out
 
 
 def _location_photos(space: str) -> list:
@@ -517,10 +539,11 @@ def _assets_all(account_id: Optional[int] = None) -> list:
     items = []
     for loc in preprod.list_locations(account_id=account_id):
         photos = _location_photos(loc["name"])
+        thumbs = _asset_photo_thumbs(photos, account_id)
         items.append({
             "id": f"location-{loc['id']}", "category": "location",
-            "name": loc["name"], "photos": photos,
-            "poster": photos[0] if photos else None,
+            "name": loc["name"], "photos": photos, "photo_thumbs": thumbs,
+            "poster": thumbs[0] if thumbs else None,
             "text": _description_text(loc.get("description")
                                       or loc.get("description_json") or ""),
             "meta": {"photo_count": loc.get("photo_count")},
@@ -529,10 +552,11 @@ def _assets_all(account_id: Optional[int] = None) -> list:
     for c in entities.list_characters(account_id=account_id):
         slug = _slug(c["name"])
         photos = _asset_photo_urls("character", CHARACTERS_DIR, slug)
+        thumbs = _asset_photo_thumbs(photos, account_id)
         items.append({
             "id": f"character-{c['id']}", "category": "character",
-            "name": c["name"], "photos": photos,
-            "poster": photos[0] if photos else None,
+            "name": c["name"], "photos": photos, "photo_thumbs": thumbs,
+            "poster": thumbs[0] if thumbs else None,
             "text": c.get("notes") or c.get("role") or "",
             "meta": {"role": c.get("role")},
             "created_at": c.get("created_at"),
@@ -540,10 +564,11 @@ def _assets_all(account_id: Optional[int] = None) -> list:
     for p in entities.list_props(account_id=account_id):
         slug = _slug(p["name"])
         photos = _asset_photo_urls("prop", PROPS_DIR, slug)
+        thumbs = _asset_photo_thumbs(photos, account_id)
         items.append({
             "id": f"prop-{p['id']}", "category": "prop",
-            "name": p["name"], "photos": photos,
-            "poster": photos[0] if photos else None,
+            "name": p["name"], "photos": photos, "photo_thumbs": thumbs,
+            "poster": thumbs[0] if thumbs else None,
             "text": p.get("notes") or p.get("category") or "",
             "meta": {"kind": p.get("category")},
             "created_at": p.get("created_at"),
@@ -734,32 +759,29 @@ def describe_entity_photos(kind: str, name: str, photos: list,
         return {"ok": False, "description": None, "error": str(e)}
 
 
-def _mirror_photos_to_r2(plural: str, slug: str, saved) -> None:
-    """Push newly saved asset photos to R2, best-effort.
+def _mirror_photos_to_r2(plural: str, slug: str, saved,
+                         account_id: Optional[int] = None) -> None:
+    """Push newly saved asset photos up, best-effort.
 
     The counterpart of asset_shelf.photo_url returning an R2 URL: a
     photo added after the 2026-09-08 backfill would otherwise be handed
     out under a URL whose object was never uploaded -- a broken tile
     that looks exactly like the bug this whole change fixes, only newer.
-    Never raises; an unconfigured or unreachable R2 leaves the file on
-    local disk, where the /characters/... route still serves it.
+
+    Delegates to `src/media.mirror`, which owns the key scheme and makes
+    the 480px derivative. This function used to build the key itself,
+    alongside refbin doing the same thing differently; the account
+    prefix is exactly the kind of change that would have landed in one
+    of them and not the other.
     """
-    try:
-        from src import storage
-        if not storage.configured():
-            return
-    except Exception:                                   # noqa: BLE001
-        return
+    from src import media
     for target in saved:
-        try:
-            storage.upload_file(target, key=f"{plural}/{slug}/{target.name}",
-                                content_type="image/jpeg")
-        except Exception as e:                          # noqa: BLE001
-            print(f"note: R2 mirror failed for {plural}/{slug}/{target.name}: "
-                  f"{type(e).__name__}: {e}", file=sys.stderr)
+        media.mirror(target, f"{plural}/{slug}/{target.name}", account_id,
+                     content_type="image/jpeg")
 
 
-async def _save_uploaded_photos(base_dir: Path, slug: str, photos) -> tuple:
+async def _save_uploaded_photos(base_dir: Path, slug: str, photos,
+                                account_id: Optional[int] = None) -> tuple:
     """(first filename, count) -- mirrors the old dev-console handler."""
     images = [p for p in photos
               if getattr(p, "filename", "") and (p.content_type or "").startswith("image/")]
@@ -773,7 +795,8 @@ async def _save_uploaded_photos(base_dir: Path, slug: str, photos) -> tuple:
         target.write_bytes(await upload.read())
         saved.append(target)
     _mirror_photos_to_r2(
-        "characters" if base_dir == CHARACTERS_DIR else "props", slug, saved)
+        "characters" if base_dir == CHARACTERS_DIR else "props", slug, saved,
+        account_id)
     return Path(images[0].filename).name, len(images)
 
 
@@ -799,7 +822,7 @@ async def asset_create_location(request: Request, account_id: int = Depends(auth
         target = space_dir / Path(upload.filename).name
         target.write_bytes(await upload.read())
         saved.append(target)
-    _mirror_photos_to_r2("locations", slug, saved)
+    _mirror_photos_to_r2("locations", slug, saved, account_id)
 
     described = False
     note = None
@@ -844,7 +867,8 @@ async def _create_entity(kind: str, request: Request, account_id: int):
         return _error(400, "invalid_name", "a name is required")
     field = (form.get(label) or "").strip()
     notes = (form.get("notes") or "").strip()
-    ref, count = await _save_uploaded_photos(base_dir, slug, form.getlist("photos"))
+    ref, count = await _save_uploaded_photos(base_dir, slug, form.getlist("photos"),
+                                             account_id)
 
     # resolved against THIS route's base_dir, not asset_shelf's module
     # constant -- they're the same in production, but the photos that
@@ -1304,7 +1328,7 @@ def _attach_scene_refs(concept_id: int, manual: list,
     text = " ".join(str(shots[0].get(k) or "")
                     for k in ("desc", "prompt", "location"))
     refs = _auto_refs(text, manual, account_id, idea=idea)[:MAX_IMAGE_REFS]
-    refs = [asset_shelf.canonical_url(r) for r in refs]
+    refs = [asset_shelf.storable_ref(r) for r in refs]
     if not refs:
         return []
     shots[0]["refs"] = refs
@@ -2589,7 +2613,7 @@ def concept_refs(concept_id: int, body: ConceptRefsBody, account_id: int = Depen
     if concept is None or not concept["shots"]:
         return _error(404, "not_found", "no such scene")
     shots = [dict(s) for s in concept["shots"]]
-    shots[0]["refs"] = [asset_shelf.canonical_url(r)
+    shots[0]["refs"] = [asset_shelf.storable_ref(r)
                         for r in body.refs if r][:MAX_IMAGE_REFS]
     # a plan dict, not a bare list: update_concept_shots re-validates the
     # whole plan, and carrying the existing warnings/duration through

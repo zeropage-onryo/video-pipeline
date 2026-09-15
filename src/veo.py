@@ -375,13 +375,15 @@ def as_prompt_image(value, *, resolve_photo=None):
     return types.Image(image_bytes=data, mime_type=sniff_mime(data))
 
 
-def _publish(out_path: Path, content_type: str) -> str:
+def _publish(out_path: Path, content_type: str,
+             account_id: Optional[int] = None) -> str:
     """R2 when configured (Instagram needs a public URL), else the app's
-    own /renders mount."""
-    from . import storage
+    own /renders mount. The key carries the tenant -- see src/media.py."""
+    from . import media, storage
     if storage.configured():
         return storage.upload_file(
-            out_path, key=f"renders/veo/{out_path.name}",
+            out_path,
+            key=media.object_key(f"renders/veo/{out_path.name}", account_id),
             content_type=content_type)
     return f"/renders/veo/{out_path.name}"
 
@@ -470,7 +472,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
             **kwargs,
             account_id=account_id)
 
-        media_url = _publish(out_path, "video/mp4")
+        media_url = _publish(out_path, "video/mp4", account_id)
         if part:
             timeline.attach_part(concept_id, shot_n, part, "media_url", media_url,
                                  db_path=db_path, account_id=account_id)
