@@ -36,7 +36,9 @@ export const getCapabilities = () => apiFetch<Capabilities>("/capabilities");
 export type AssetCategory = "character" | "location" | "prop";
 export type Asset = {
   id: string;
-  category: AssetCategory;
+  /** the studio's own rendered stills come back as "generated" beside the
+   *  three element kinds (app/api.py _assets_all) */
+  category: AssetCategory | "generated";
   name: string;
   photos: string[];
   poster: string | null;
