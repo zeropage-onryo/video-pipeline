@@ -5,6 +5,7 @@ import { ApertureMark } from "@/components/aperture-mark";
 const NAV = [
   ["/#pipeline", "The studio"],
   ["/#work", "Who it's for"],
+  ["/#faq", "FAQ"],
 ] as const;
 
 export function SiteHeader() {

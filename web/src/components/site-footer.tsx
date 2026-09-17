@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ApertureMark } from "@/components/aperture-mark";
+import { SITE } from "@/lib/site";
 
 export function SiteFooter() {
   return (
@@ -18,7 +19,7 @@ export function SiteFooter() {
             </p>
           </div>
 
-          <div className="flex gap-16">
+          <div className="flex flex-wrap gap-x-16 gap-y-8">
             <div className="flex flex-col gap-3">
               <span className="film-slate text-muted-foreground/70">Studio</span>
               <Link href="/#pipeline" className="text-sm text-muted-foreground hover:text-foreground">
@@ -26,6 +27,9 @@ export function SiteFooter() {
               </Link>
               <Link href="/#work" className="text-sm text-muted-foreground hover:text-foreground">
                 Who it&apos;s for
+              </Link>
+              <Link href="/#faq" className="text-sm text-muted-foreground hover:text-foreground">
+                FAQ
               </Link>
             </div>
             <div className="flex flex-col gap-3">
@@ -36,6 +40,18 @@ export function SiteFooter() {
               <Link href="/studio" className="text-sm text-muted-foreground hover:text-foreground">
                 Get started
               </Link>
+            </div>
+            <div className="flex flex-col gap-3">
+              <span className="film-slate text-muted-foreground/70">Legal</span>
+              <Link href="/terms" className="text-sm text-muted-foreground hover:text-foreground">
+                Terms
+              </Link>
+              <Link href="/privacy" className="text-sm text-muted-foreground hover:text-foreground">
+                Privacy
+              </Link>
+              <a href={`mailto:${SITE.contactEmail}`} className="text-sm text-muted-foreground hover:text-foreground">
+                Contact
+              </a>
             </div>
           </div>
         </div>

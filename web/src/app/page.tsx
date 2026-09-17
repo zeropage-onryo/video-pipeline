@@ -5,6 +5,7 @@ import { PipelineSection, StartingPointsSection } from "@/components/landing/pip
 import { WorkSection } from "@/components/landing/work-section";
 import { FramesSection } from "@/components/landing/frames-section";
 import { CtaSection } from "@/components/landing/cta-section";
+import { FaqSection } from "@/components/landing/faq-section";
 
 export default function Home() {
   return (
@@ -16,6 +17,7 @@ export default function Home() {
         <FramesSection />
         <PipelineSection />
         <StartingPointsSection />
+        <FaqSection />
         <CtaSection />
       </main>
       <SiteFooter />
