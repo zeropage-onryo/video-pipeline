@@ -41,30 +41,33 @@ const jetbrains = JetBrains_Mono({
 // domain, or a preview host).
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://zpf-web.vercel.app";
 
+const TITLE = "Zero Page — The AI content studio that creates for you.";
+
 const DESCRIPTION =
-  "An AI creative studio for filmmakers, brands, and creators. Start with a script, an idea, a concept, an image, or a video — and move from idea to creation.";
+  "An AI content studio for filmmakers, brands, and creators. Start with a script, an idea, a concept, an image, or a video — and Zero Page creates for you.";
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: {
-    default: "ZeroPage — AI Creative Studio",
-    template: "%s · ZeroPage",
+    default: TITLE,
+    template: "%s — Zero Page",
   },
   description: DESCRIPTION,
-  // The share card (app/opengraph-image.tsx renders the image itself).
   openGraph: {
     type: "website",
-    siteName: "ZeroPage",
-    title: "ZeroPage — AI Creative Studio",
+    siteName: "Zero Page",
+    title: TITLE,
     description: DESCRIPTION,
     url: "/",
     locale: "en_US",
+    images: [{ url: "/og.jpg", width: 1200, height: 630 }],
   },
   twitter: {
     card: "summary_large_image",
-    title: "ZeroPage — AI Creative Studio",
+    title: TITLE,
     description: DESCRIPTION,
   },
+  robots: { index: true, follow: true },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
