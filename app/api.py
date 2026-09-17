@@ -45,6 +45,7 @@ from src import (
     manual_lane,
     preprod,
     presets,
+    pricing,
     providers,
     rag,
     rag_eval,
@@ -1845,6 +1846,30 @@ def _waiting(account_id: Optional[int], brand: Optional[str]) -> list[tuple[dict
     return out
 
 
+def _card_quote(concept: dict, account_id: Optional[int], **pick) -> dict:
+    """What approving this card would render and cost, for the pick given
+    (none = the card's own default) -- pricing.display, or {"error"} when
+    that intent has no price. Never raises: a card that cannot be priced
+    still has to be listed, with the reason where the number would be."""
+    try:
+        return pricing.display(account_id=account_id, shot=concept["shots"][0],
+                               shot_id=concept["id"], **pick)
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _generate_node_quote(concept: dict, account_id: Optional[int]) -> dict:
+    """The Director Generate node's price: ONE clip, at the adapter's own
+    default length and frame, on the renderer workflow_exec_generate and
+    Run all resolve (providers.renderer_for, needs=generate_from_prompt).
+    {"error"} when no renderer is keyed or the intent has no price."""
+    pick = providers.renderer_for(account_id, needs="generate_from_prompt")
+    if pick is None:
+        return {"error": "no video renderer key is available for this account"}
+    return _card_quote(concept, account_id, provider=pick["provider"],
+                       model=pick["model"], whole=True)
+
+
 @router.get("/queue/pending")
 def queue_pending(brand: Optional[str] = None, account_id: int = Depends(auth.current_account_id)):
     """What is waiting on you to spend: parked by the chain or picked on
@@ -1857,7 +1882,7 @@ def queue_pending(brand: Optional[str] = None, account_id: int = Depends(auth.cu
     rendered -- the next step is the one that costs money), or you pick
     a text-only concept off the board yourself."""
     items = []
-    for _, card in _waiting(account_id, brand):
+    for concept, card in _waiting(account_id, brand):
         # THE CARD'S OWN DEFAULT RENDERER, resolved here rather than in
         # the browser. The mapping from a shot's planned tool to a
         # (provider, model) pair lives in providers.platform_default and
@@ -1871,8 +1896,9 @@ def queue_pending(brand: Optional[str] = None, account_id: int = Depends(auth.cu
         # the cheapest renderer the account can use instead of on a dead
         # button -- providers.render_default, the same call an empty
         # approve body makes below.
-        items.append({**card, "render_default": providers.render_default(
-            card.get("tool"), account_id)})
+        items.append({**card,
+                      "render_default": providers.render_default(card.get("tool"), account_id),
+                      "quote": _card_quote(concept, account_id)})
     return {"items": items,
             "runway": _runway_state(),
             "renderers": _renderers_state(account_id)}
@@ -2313,6 +2339,29 @@ class ApproveBody(BaseModel):
     frame: Optional[str] = None
 
 
+@router.get("/queue/{concept_id}/quote")
+def queue_quote(concept_id: int, provider: Optional[str] = None,
+                model: Optional[str] = None, duration: Optional[int] = None,
+                frame: Optional[str] = None,
+                account_id: int = Depends(auth.current_account_id)):
+    """What approving this card WITH THIS PICK would render and cost --
+    pricing.display for the same four fields the approve body takes, so
+    the button's number and the approve's number are one computation
+    (2026-09-17). The listing already carries this for the card's default
+    pick; the card asks here when the person moves a control, instead of
+    doing the arithmetic -- and the window-fitting -- a second time in
+    JavaScript. Spends nothing and writes nothing."""
+    concept = preprod.get_concept(concept_id, account_id=account_id)
+    if concept is None or not concept.get("shots"):
+        return _error(404, "not_found", "no such concept")
+    try:
+        return pricing.display(account_id=account_id, shot=concept["shots"][0],
+                               shot_id=concept_id, provider=provider, model=model,
+                               seconds=duration, frame=frame)
+    except ValueError as e:
+        return _error(400, "bad_render_choice", str(e))
+
+
 @router.post("/queue/{concept_id}/approve")
 def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
                   account_id: int = Depends(auth.current_account_id)):
@@ -2399,32 +2448,24 @@ def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
     # carrying windows, not whether the timeline happens to be planned yet
     # -- a stale or missing one is planned inside the job, before the first
     # clip, so the card can never render the old split of an edited scene.
-    windows = [p["seconds"] for p in (_timeline_card(shot) or {}).get("parts") or []]
+    # pricing.windows_to_render is that rule; `timed` below is its answer.
 
-    # The plan is the default, the body overrides it. A shot carries the
-    # tool shootgen chose; platform_default turns that into (provider,
-    # model) through the SAME binding orchestrator.generate_render holds,
-    # so "KLING" means one model in both places or in neither.
-    # An empty body resolves exactly as the card's default did
-    # (providers.render_default: the plan if this account can render it,
-    # else the cheapest renderer it can), so the two cannot come apart.
-    planned = providers.platform_default(shot.get("tool"))
-    if body.provider:
-        provider = body.provider
-        model = body.model
-        if model is None and planned and provider == planned[0]:
-            model = planned[1]
-    else:
-        default = providers.render_default(shot.get("tool"), account_id)
-        provider = default["provider"]
-        model = body.model or default["model"]
+    # The plan is the default, the body overrides it -- and BOTH are
+    # resolved, checked and priced in one place (src/pricing.py,
+    # 2026-09-17). A named provider is honoured exactly; an empty body
+    # resolves as the card's default did (providers.render_default: the
+    # plan if this account can render it, else the cheapest renderer it
+    # can); a shot's planned tool means one model here and in
+    # orchestrator.generate_render (providers.platform_default). The card
+    # printed pricing.display() for this same intent, so the number on the
+    # button and the number in this response are one computation.
+    #
+    # A timed scene's LENGTHS are its windows', fitted to the model -- the
+    # card's duration does not apply, so it is not checked either.
     try:
-        # A timed scene's LENGTHS are its windows', fitted to the model --
-        # the card's duration does not apply, so it is not checked either.
-        choice = (providers.check_timeline_choice(provider, model, body.frame, windows)
-                  if windows else
-                  providers.check_render_choice(
-                      provider, model, body.duration, body.frame))
+        priced = pricing.display(account_id=account_id, shot=shot, shot_id=concept_id,
+                                 provider=body.provider, model=body.model,
+                                 seconds=body.duration, frame=body.frame)
     except ValueError as e:
         # REFUSED, never clamped: a length or a frame outside the model's
         # own set is evidence the card and the model have come apart, and
@@ -2432,6 +2473,12 @@ def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
         # picked. (The adapters clamp internally -- that is their contract
         # with the nightly graph, which has no human to refuse to.)
         return _error(400, "bad_render_choice", str(e))
+    timed = priced["timed"]
+    choice = {"provider": priced["provider"], "model": priced["model"],
+              "duration": None if timed else priced["durations"][0],
+              "frame": priced["frame"], "estimate_usd": priced["estimate_usd"]}
+    if timed:
+        choice["durations"] = priced["durations"]
 
     module = providers.VIDEO_PROVIDERS[choice["provider"]]
     label = providers.RENDER_LABELS.get(choice["provider"], choice["provider"])
@@ -2457,7 +2504,7 @@ def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
         preprod.set_picked(concept_id, True, account_id=account_id)
 
     def work(job):
-        if windows:
+        if timed:
             return _render_timeline(job, concept_id, shot_n, module, label, choice,
                                     frame_kw, account_id)
         jobs.progress(job, 0.2, f"rendering via {label} ({choice['model']})")
@@ -2476,7 +2523,9 @@ def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
     job = jobs.start("render",
                      f"approved · {concept['title']} · {label} {choice['model']}",
                      work, account_id=account_id)
-    return {"job_id": job["id"], "render": choice}
+    # `render` keeps the shape clients already read; `quote` beside it is
+    # the same intent as pricing.display printed it on the card
+    return {"job_id": job["id"], "render": choice, "quote": priced}
 
 
 def _render_timeline(job, concept_id: int, shot_n, module, label: str, choice: dict,
@@ -2627,7 +2676,12 @@ def concept_detail(concept_id: int, account_id: int = Depends(auth.current_accou
             "shots": shots,
             # the render button's copy is server-sourced: availability,
             # the spend gate's state, and what one clip would cost
-            "runway": _runway_state()}
+            "runway": _runway_state(),
+            # ... and what the Generate node would ACTUALLY spend on. The
+            # chip read `runway.estimate_usd` -- Runway's default clip --
+            # on every account, including one whose only key is Higgsfield
+            # and whose Run therefore renders, and bills, somewhere else.
+            "generate": _generate_node_quote(concept, account_id)}
 
 
 class ShotMediaBody(BaseModel):

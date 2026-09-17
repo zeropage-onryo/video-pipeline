@@ -567,26 +567,6 @@ def check_render_choice(provider: Optional[str] = None, model: Optional[str] = N
             "estimate_usd": ESTIMATORS[provider](model, seconds, framed)}
 
 
-def check_timeline_choice(provider: Optional[str] = None, model: Optional[str] = None,
-                          frame=None, windows=()) -> dict:
-    """check_render_choice for a scene of several timed shots
-    (src/timeline.py, 2026-09-10): the same provider / model / frame
-    checks, refused the same way, but the LENGTH is not the card's to pick
-    -- each shot's window decides its own, fitted up to the nearest length
-    the model can make (timeline.fit_seconds: a 3s window is a 5s Runway
-    render, trimmed in the edit). Returns the per-shot lengths and the sum
-    of their estimates, so the card can show what the whole scene costs
-    before anything is billed."""
-    from . import timeline
-    choice = check_render_choice(provider, model, None, frame)
-    axis = model_options(choice["provider"], choice["model"])["duration"]
-    durations = [timeline.fit_seconds(axis, w) for w in windows or ()]
-    estimate = sum(ESTIMATORS[choice["provider"]](choice["model"], d, choice["frame"])
-                   for d in durations)
-    return {**choice, "duration": None, "durations": durations,
-            "estimate_usd": round(estimate, 4)}
-
-
 def provider_state(provider: str, account_id: Optional[int] = None,
                    db_path=None) -> dict:
     """Whether approving on this renderer could even happen, and what it

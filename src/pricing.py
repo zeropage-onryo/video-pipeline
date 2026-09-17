@@ -259,13 +259,18 @@ def estimate(*, account_id: Optional[int], shot: dict, part: Optional[int] = Non
 
 def estimate_scene(*, account_id: Optional[int], shot: dict,
                    provider: Optional[str] = None, model: Optional[str] = None,
-                   seconds=None, frame=None, tier: Optional[str] = None) -> list[Estimate]:
+                   seconds=None, frame=None, tier: Optional[str] = None,
+                   whole: bool = False) -> list[Estimate]:
     """What approving this scene would render, in order: one estimate per
     timed shot STILL WITHOUT A CLIP (windows_to_render -- approving again
     resumes, so it prices only what is left), or the single
     whole-scene render when the scene has no timeline. `seconds` applies
-    to a whole-scene render only; a part's length is its window's."""
-    todo = windows_to_render(shot)
+    to a whole-scene render only; a part's length is its window's.
+
+    `whole` is the Director's Generate node: it renders the prompt it is
+    handed as ONE clip whatever windows that prompt carries, so it is
+    priced as one."""
+    todo = None if whole else windows_to_render(shot)
     if todo is not None:
         return [estimate(account_id=account_id, shot=shot, part=w["n"],
                          provider=provider, model=model, frame=frame, tier=tier)
@@ -316,7 +321,8 @@ def quote(*, account_id: Optional[int], shot: dict, shot_id: int,
 
 def display(*, account_id: Optional[int], shot: dict, shot_id: int,
             provider: Optional[str] = None, model: Optional[str] = None,
-            seconds=None, frame=None, tier: Optional[str] = None) -> dict:
+            seconds=None, frame=None, tier: Optional[str] = None,
+            whole: bool = False) -> dict:
     """The priced plan for one approve, as JSON a card can print without
     doing arithmetic: every render it would make, its length, the
     provider's estimate, and the credits it would cost (None on BYOK).
@@ -325,7 +331,8 @@ def display(*, account_id: Optional[int], shot: dict, shot_id: int,
     has always shown -- so that while MARKUP is 1.0 no number on any
     screen moves. Raises ValueError / PricingRefused."""
     parts = estimate_scene(account_id=account_id, shot=shot, provider=provider,
-                           model=model, seconds=seconds, frame=frame, tier=tier)
+                           model=model, seconds=seconds, frame=frame, tier=tier,
+                           whole=whole)
     if not parts:
         raise PricingRefused("nothing_to_render", "every shot of this scene has a clip")
     head = parts[0]

@@ -86,6 +86,7 @@ import {
   pickConcept,
   type Capabilities,
   type Preset,
+  type RenderQuote,
   type RunwayState,
 } from "@/lib/studio-api";
 import { useMentions } from "@/components/studio/mentions";
@@ -455,6 +456,7 @@ type Concept = {
   parked?: boolean;
   media_url?: string;
   runway?: RunwayState;
+  generate?: RenderQuote;
 };
 
 function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number }) {
@@ -1074,7 +1076,15 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
   };
 
   const selectedNode = nodes.find((n) => n.selected);
-  const rw = scene?.runway ?? null;
+  // What the Generate node would render ON and cost: the server's own
+  // price (`generate`, pricing.display) laid over the Runway state the
+  // chips read. Without it every Run was priced at Runway's default clip,
+  // even on an account whose only key -- and bill -- is another vendor's.
+  const gen = scene?.generate && !scene.generate.error ? scene.generate : null;
+  const rw =
+    scene?.runway && gen
+      ? { ...scene.runway, model: gen.model, duration: gen.durations[0], estimate_usd: gen.estimate_usd }
+      : (scene?.runway ?? null);
 
   return (
     <Actions.Provider

@@ -128,6 +128,8 @@ export type Concept = {
   created_at?: string;
   /** the card's own default renderer, resolved server-side from the shot's planned tool */
   render_default?: { provider: string; model: string };
+  /** pricing.display for the card's default pick (GET /api/queue/pending) */
+  quote?: RenderQuote;
 };
 export type RunwayModel = { id: string; label: string; usd_per_second: number };
 /* the overnight branch's renderer catalogue (providers.render_options):
@@ -173,6 +175,24 @@ export type RunwayState = {
   durations?: number[];
   today?: number | null;
 };
+/** src/pricing.py `display()` — the priced plan for one approve, or for
+ *  the Director's Generate node: every render it would make, at what
+ *  length, and the provider's estimate. `credits` is null on BYOK (the
+ *  account's own provider bills it). `{error}` when the intent has no
+ *  price. The server is the only place a price is computed. */
+export type RenderQuote = {
+  error?: string;
+  provider: string;
+  model: string;
+  frame: string;
+  timed: boolean;
+  durations: number[];
+  estimate_usd: number;
+  byok: boolean;
+  credits: number | null;
+  content_hash: string;
+  renders: { part: number | null; seconds: number; estimate_usd: number; credits: number | null }[];
+};
 /** what approve takes: providers.check_render_choice refuses, never clamps */
 export type RenderChoice = { provider?: string; model?: string; duration?: number; frame?: string };
 export type RenderResolved = { provider: string; model: string; duration: number; frame: string; estimate_usd: number };
@@ -205,6 +225,14 @@ export const queueApprove = (id: number, choice?: RenderChoice) =>
     method: "POST",
     body: JSON.stringify(choice ?? {}),
   });
+/** what approving WITH THIS PICK would render and cost — the server's
+ *  own price; spends nothing. The Queue asks when a pick differs from the
+ *  one the listing already priced. */
+export const queueQuote = (id: number, choice: RenderChoice) => {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(choice)) if (v !== undefined && v !== null) q.set(k, String(v));
+  return apiFetch<RenderQuote>(`/queue/${id}/quote?${q}`);
+};
 export const queueReject = (id: number) =>
   apiFetch<{ ok: boolean }>(`/queue/${id}/reject`, { method: "POST", body: "{}" });
 /** made by hand, outside the render lane — drops it off the pending list */

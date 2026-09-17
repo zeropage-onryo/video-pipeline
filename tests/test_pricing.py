@@ -10,8 +10,8 @@ from cryptography.fernet import Fernet
 
 from src import account_keys, accounts, db, ledger, pricing, providers, timeline
 
-RENDER_KEYS = ("RUNWAYML_API_SECRET", "FAL_KEY", "HF_API_KEY", "HF_API_SECRET",
-               "HIGGSFIELD_API_KEY_ID", "HIGGSFIELD_API_KEY_SECRET",
+RENDER_KEYS = ("RUNWAYML_API_SECRET", "FAL_KEY", "FAL_API_KEY", "HIGGSFIELD_API_KEY_ID",
+               "HF_API_KEY_ID", "HIGGSFIELD_API_KEY_SECRET", "HF_API_KEY_SECRET",
                "GEMINI_API_KEY", "GOOGLE_API_KEY")
 
 
