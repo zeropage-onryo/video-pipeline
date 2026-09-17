@@ -179,6 +179,31 @@ def test_pipeline_concepts_derive_status(tmp_db):
     assert data["deny_reasons"] == list(api_mod.DENY_REASONS)
 
 
+def test_the_card_carries_the_gates_verdict_or_says_it_was_never_scored(tmp_db):
+    """`gate` on the board and the Queue is the prompt gate's own verdict
+    (autonomy.gates_for_concepts), and None -- not a pass -- for a Studio
+    Create that no graph run ever scored."""
+    shot = [{"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
+             "prompt": "x", "refs": ["/refs/a.jpg"]}]
+    scored = seed_concept(tmp_db, "Scored", shots=shot)
+    created = seed_concept(tmp_db, "Created", shots=shot)
+    api_mod.autonomy.to_hold("antihero", "advisory: prompt gate 4/10 — no camera direction",
+                             concept_id=scored, payload={"run_id": "r1"},
+                             dsn=tmp_db, account_id=None)
+    api_mod.autonomy.log_prompt_scores(
+        "r1", [{"prompt": "x", "score": 4, "pass": False, "reason": "no camera direction"}],
+        dsn=tmp_db)
+    by_id = {c["id"]: c for c in client.get("/api/pipeline/concepts").json()["items"]}
+    assert by_id[scored]["gate"] == {
+        "score": 4, "passed": False, "reason": "no camera direction", "reworks": 0,
+        "status": "held", "outcome": "advisory: prompt gate 4/10 — no camera direction"}
+    assert by_id[created]["gate"] is None
+    # the Queue reads the same card
+    preprod.set_picked(scored, True, dsn=tmp_db, account_id=None)
+    [waiting] = client.get("/api/queue/pending").json()["items"]
+    assert waiting["id"] == scored and waiting["gate"]["score"] == 4
+
+
 def test_pipeline_run_generates_through_a_job(tmp_db, monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     import src.shootgen as shootgen

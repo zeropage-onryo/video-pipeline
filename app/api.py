@@ -974,7 +974,8 @@ def retrieve(body: RetrieveBody, account_id: int = Depends(auth.current_account_
 
 # --- pipeline (adapted to pre-production) -----------------------------------
 
-def _concept_card(c: dict, subscription_ids: Optional[set] = None) -> dict:
+def _concept_card(c: dict, subscription_ids: Optional[set] = None,
+                  gates: Optional[dict] = None) -> dict:
     status = "shot" if c.get("shot_done") else (
         "planned" if c.get("has_shot_list") else "idea")
     location_names = [loc["name"] for loc in c.get("locations") or []]
@@ -1047,6 +1048,17 @@ def _concept_card(c: dict, subscription_ids: Optional[set] = None) -> dict:
         # Absent set = not asked (a single-card read), which is why the
         # default is False rather than unknown.
         "subscription": bool(subscription_ids and c["id"] in subscription_ids),
+        # THE PROMPT GATE'S OWN VERDICT (2026-09-17): {score, passed, reason,
+        # reworks, status, outcome}, or None when no graph run ever ended on
+        # this concept -- a Studio Create stops on the board unscored, and
+        # the card has to say "never scored" rather than invent a pass. The
+        # cards drew a readiness dot from warnings and park_reason because
+        # this was only ever reachable through the MCP `idea` tool; it is
+        # the same reading (autonomy.gates_for_concepts), batched for a
+        # board. `passed` is what the gate SAID, not whether the run went
+        # on: in advisory mode a failed prompt still parks. Absent dict =
+        # not asked (a single-card read), the `subscription` rule.
+        "gate": (gates or {}).get(c["id"]),
     }
 
 
@@ -1088,8 +1100,11 @@ def pipeline_concepts(brand: Optional[str] = None, status: Optional[str] = None,
     # whole limit and quietly shorten the other's board.
     # one query for the whole board rather than one per card
     subscription_ids = generative.subscription_rendered(account_id=account_id)
-    cards = [_concept_card(c, subscription_ids)
-             for c in preprod.list_concepts(account_id=account_id, brand=brand)]
+    concepts = preprod.list_concepts(account_id=account_id, brand=brand)
+    # ...and two for every card's gate verdict, not two per card
+    gates = autonomy.gates_for_concepts([c["id"] for c in concepts],
+                                        account_id=account_id)
+    cards = [_concept_card(c, subscription_ids, gates) for c in concepts]
     if status in ("idea", "planned", "shot"):
         cards = [c for c in cards if c["status"] == status]
     if not archived:
@@ -1832,8 +1847,11 @@ def _waiting(account_id: Optional[int], brand: Optional[str]) -> list[tuple[dict
     be a different opinion from the one that already ran."""
     # scoped in SQL, see above
     out = []
-    for concept in preprod.list_concepts(account_id=account_id, brand=brand):
-        card = _concept_card(concept)
+    concepts = preprod.list_concepts(account_id=account_id, brand=brand)
+    gates = autonomy.gates_for_concepts([c["id"] for c in concepts],
+                                        account_id=account_id)
+    for concept in concepts:
+        card = _concept_card(concept, gates=gates)
         if ((card["picked"] or card["parked"]) and not card["archived"]
                 and card["is_scene"] and not card["media_url"]
                 # nothing reaches a spend ungrounded -- see above

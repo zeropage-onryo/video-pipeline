@@ -36,26 +36,50 @@ export function shotsLabel(c: Concept): string {
   return `${parts.length} SHOT${parts.length === 1 ? "" : "S"} · ${total}S`;
 }
 
-export type Gate = { level: "pass" | "warn" | "fail"; short: "READY" | "CHECK" | "BLOCKED"; long: string };
+export type Gate = { level: "pass" | "warn" | "fail"; short: "READY" | "CHECK" | "BLOCKED"; long: string; score?: number };
 
 /** READY / CHECK / BLOCKED.
 
-    NOT the prompt gate's verdict: prompt_scores (score, passed, reason) is
-    not on this payload -- only the MCP `idea` tool joins it -- so the dot is
-    derived from what the card does carry. BLOCKED is the reference gate's
-    own fact (no refs, preprod.reference_gate). CHECK is anything a person
-    should read first: validate_concept's warnings, or the advisory verdict
-    the night wrote into park_reason ("advisory: prompt gate 4/10 — ...").
-    READY is the absence of both, and says only that. */
+    BLOCKED is the reference gate's own fact (no refs,
+    preprod.reference_gate) and outranks everything: nothing renders without
+    photographs, whatever a judge thought of the writing.
+
+    Then THE PROMPT GATE'S VERDICT, when the concept has one. `c.gate` is
+    autonomy.gates_for_concepts on the card payload since 2026-09-17, the
+    same reading the MCP `idea` tool makes. A pass with no warnings is READY;
+    a fail is CHECK, never BLOCKED -- the gates are advisory (2026-09-07),
+    the run parked anyway, and a judge that agreed with the grade 38% of the
+    time gets to raise a flag, not close a door.
+
+    `c.gate` null means NO GRAPH RUN EVER SCORED THIS (a Studio Create stops
+    on the board unscored). That is said as such, and the dot falls back to
+    validate_concept's warnings. It must not read as a pass.
+    (app/static/zpf/cards.js is the twin.) */
 export function gateOf(c: Concept): Gate {
   if (!(c.refs || []).length) return { level: "fail", short: "BLOCKED", long: "Blocked · no reference images" };
   const warnings = c.warnings || [];
-  const advisory = /^advisory/i.test(c.park_reason || "");
-  if (warnings.length || advisory) {
-    const why = advisory ? c.park_reason : `${warnings.length} warning${warnings.length === 1 ? "" : "s"} on file`;
-    return { level: "warn", short: "CHECK", long: `Check · ${why}` };
+  const flagged = warnings.length ? ` · ${warnings.length} warning${warnings.length === 1 ? "" : "s"} on file` : "";
+  const g = c.gate;
+  if (g && g.score !== null && g.score !== undefined) {
+    const reworked = g.reworks ? ` · after ${g.reworks} rework${g.reworks === 1 ? "" : "s"}` : "";
+    if (g.passed && !warnings.length) {
+      return { level: "pass", short: "READY", score: g.score, long: `Prompt gate ${g.score}/10 · passed${reworked}` };
+    }
+    return {
+      level: "warn",
+      short: "CHECK",
+      score: g.score,
+      long: g.passed
+        ? `Prompt gate ${g.score}/10 · passed${reworked}${flagged}`
+        : `Prompt gate ${g.score}/10 · ${g.reason || "did not pass"}${reworked}${flagged}`,
+    };
   }
-  return { level: "pass", short: "READY", long: "Ready · references attached, no warnings on file" };
+  // a run that ended before the gate scored anything says why it ended
+  const unscored = g
+    ? `Not scored · ${g.outcome || "the run ended before the prompt gate"}`
+    : "Never scored · written by Create, which stops on the board";
+  if (warnings.length) return { level: "warn", short: "CHECK", long: `${unscored}${flagged}` };
+  return { level: "pass", short: "READY", long: `${unscored} · references attached` };
 }
 
 export const GATE_DOT: Record<Gate["level"], string> = { pass: "bg-gate-pass", warn: "bg-gate-warn", fail: "bg-noir-red" };

@@ -186,6 +186,7 @@ export default function PipelinePage() {
                 <span className={`${TAG} ${TAG_DARK} right-3 top-3 max-w-[40%]`} title={gate.long}>
                   <i className={`size-2 flex-none rounded-full ${GATE_DOT[gate.level]}`} />
                   {gate.short}
+                  {gate.score === undefined ? null : ` · ${gate.score}/10`}
                 </span>
                 <span className={`${TAG} ${TAG_DARK} bottom-3 left-3 max-w-[45%]`}>{shotsLabel(c)}</span>
                 {status ? (

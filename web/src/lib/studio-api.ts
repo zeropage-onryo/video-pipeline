@@ -136,6 +136,17 @@ export type Concept = {
   shot_done?: boolean;
   subscription?: boolean;
   tool?: string;
+  /** the prompt gate's own verdict (autonomy.gates_for_concepts), or null
+   *  when no graph run ever ended on this concept -- never scored, NOT a
+   *  pass. `passed` is what the gate said, not whether the run went on. */
+  gate?: {
+    score: number | null;
+    passed: boolean | null;
+    reason: string;
+    reworks: number;
+    status: string;
+    outcome: string;
+  } | null;
   /** the timed shots a scene renders as, or null for one that renders whole */
   timeline?: Timeline | null;
 };

@@ -77,7 +77,7 @@ function card(c) {
             aria-label="Open details for ${title}">
       ${heroMarkup(c)}
       <span class="nc-tag tl">${esc(brandName(c.brand))}</span>
-      <span class="nc-tag tr" title="${esc(gate.long)}"><i class="nc-dot ${gate.level}"></i>${gate.short}</span>
+      <span class="nc-tag tr" title="${esc(gate.long)}"><i class="nc-dot ${gate.level}"></i>${gate.short}${gate.score === undefined ? '' : ` · ${gate.score}/10`}</span>
       <span class="nc-tag bl">${esc(shotsLabel(c))}</span>
       ${status ? `<span class="nc-tag br${c.picked && !c.archived && !c.media_url ? ' red' : ' bone'}">${esc(status)}</span>` : ''}
     </button>
