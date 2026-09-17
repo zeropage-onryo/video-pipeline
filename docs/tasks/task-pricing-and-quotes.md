@@ -411,6 +411,6 @@ Found while wiring the display (step 2's purpose):
 
 Not done, deliberately:
 
-- **`nightly_runs.spent_usd`.** The meter (`costs.spent_since`) just sums `generations.cost_usd`; the under-report is in what the *adapters write* — `runway.py:433` omits `ratio`, `fal.py:840` omits `resolution`, and the `generate_from_prompt` rows (`runway.py:798`, `fal.py:1023`, `higgsfield.py:947`) omit `duration`. Fixing it means editing all four adapters' write sites, which is steps 4–6's territory. Those five lines are the fix.
+- **`nightly_runs.spent_usd`.** The meter (`costs.spent_since`) just sums `generations.cost_usd`; so any under-report is in what the *adapters write*. Not diagnosed, only read; the candidates are: `runway.py:433` omits `ratio`, `fal.py:840` omits `resolution`, and the `generate_from_prompt` rows (`runway.py:798`, `fal.py:1023`, `higgsfield.py:947`) omit `duration`. Fixing it means editing the adapters' write sites, which is steps 4–6's territory, and it should start by comparing real rows to `pricing.estimate` rather than from this list.
 - `ledger.credits_for_usd` still has its one caller, `hold_for_render` (step 6). `test_at_cost_it_charges_what_the_ledger_always_did` pins the two together at 1.0x for every model.
 - `QUOTE_SIGNING_SECRET` is not in `POSTURE_ENV` yet because nothing reads it yet; it goes in with the first line of step 4.
