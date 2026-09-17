@@ -359,4 +359,11 @@
 <script>window.ZP_API_BASE = "/studio";</script>
 <script src="/static/evals_dev.js" defer></script>
 {% endif %}
+{% if active_tab == "grade" %}
+{# the same reference preview the Pipeline board and the Queue open #}
+<script type="module">
+  import { wirePreview } from "/static/zpf/preview.js";
+  wirePreview();
+</script>
+{% endif %}
 {% endblock %}

@@ -9,6 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@300;400;500;600&family=Inter:wght@300;400;500&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/zpf/zpf.css">
+<link rel="stylesheet" href="/static/zpf/cards.css">
 </head>
 <body data-brand="{{ brand }}" data-director-url="{{ director_url|default('') }}">
 
@@ -262,7 +263,6 @@
   <div class="view" id="v-pipeline">
     <div class="vhead">
       <h2>Pipeline</h2>
-      <span class="m">pick the ones worth the spend — approving them in Queue is what renders</span>
       <span class="spacer"></span><span class="m" id="pbrand"></span>
     </div>
 
@@ -434,7 +434,6 @@
   <div class="view" id="v-queue">
     <div class="vhead">
       <h2>Queue</h2>
-      <span class="m">approving a concept here is what spends — it renders the clip on the renderer you picked</span>
       <span class="spacer"></span><span class="m" id="qcount">—</span>
     </div>
 

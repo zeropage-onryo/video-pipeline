@@ -1,0 +1,237 @@
+/* The image-first concept card (Pipeline) and render card (Queue), and
+   the board's detail drawer (2026-09-17).
+
+   SCOPED ON PURPOSE. zpf.css is /ui's glass skin and skin.css is shared by
+   ~8 .sk pages; these cards wear the noir identity from style.css inside
+   that shell, so every selector below starts at .nc / .nq / .ncd (or the
+   drawer's #ncdrawer) and nothing here can restyle another surface -- the
+   .sk.dev rule in devstudio.css, applied to a card. The subscription
+   lane's cards keep zpf.css's .scene and are untouched.
+
+   /ui does not load style.css, so the three faces are asked for here. */
+@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Mono:wght@400;500&family=Inter+Tight:wght@400;500;600&display=swap');
+
+.nc,#ncdrawer{
+  --nc-bg:#0B0B0B;--nc-panel:#151514;--nc-line:#2E2D2A;--nc-line2:#262522;
+  --nc-bone:#CDC9C0;--nc-text2:#B3AFA6;--nc-mute:#8C887F;--nc-red:#E23B2E;--nc-red2:#FF6A5C;
+  --nc-title:'Bebas Neue',Impact,sans-serif;
+  --nc-mono:'IBM Plex Mono',ui-monospace,monospace;
+  --nc-body:'Inter Tight','Helvetica Neue',Helvetica,sans-serif;
+}
+.nc *,#ncdrawer *{box-sizing:border-box}
+.nc [hidden],#ncdrawer [hidden]{display:none!important}
+/* :where keeps these resets at element specificity, so a class below
+   (.nq-chip's mono, .nq-approve's Bebas) still wins over `font:inherit` */
+:where(.nc,#ncdrawer) button{font:inherit;color:inherit;cursor:pointer;margin:0}
+.nc button:disabled,#ncdrawer button:disabled{cursor:not-allowed}
+.nc button:focus-visible,#ncdrawer button:focus-visible,.nc input:focus-visible{
+  outline:2px solid var(--nc-red);outline-offset:2px;border-radius:8px}
+
+/* ── the card ── */
+.nc{
+  position:relative;display:flex;flex-direction:column;min-width:0;
+  background:var(--nc-panel);border:1px solid var(--nc-line2);border-radius:10px;
+  color:var(--nc-bone);font-family:var(--nc-body);font-size:14px;line-height:1.4;
+}
+/* picked: a 1px border plus a 3px ring OUTSIDE the box, so nothing moves */
+.nc.picked{border-color:var(--nc-red);box-shadow:0 0 0 3px var(--nc-red)}
+.nc.off{opacity:.5}
+.nc.off:hover,.nc.off:focus-within{opacity:1}
+.nc.acted{opacity:.35}
+.nc.locked{border-color:#5A2320}
+
+.nc-hero{
+  position:relative;display:block;width:100%;aspect-ratio:16/9;padding:0;border:0;
+  border-radius:9px 9px 0 0;overflow:hidden;background:#1F1E1C;
+}
+.nc-hero:disabled{cursor:default}
+.nc-heroimg{width:100%;height:100%;object-fit:cover;display:block}
+.nc-hero:not(:disabled):hover .nc-heroimg{filter:brightness(1.08)}
+.nc-slate{
+  position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
+  background:#1C1716;font-family:var(--nc-mono);font-size:11px;letter-spacing:.16em;color:var(--nc-red2);
+}
+.nc-slate small{font-size:11px;letter-spacing:0;color:rgb(205 201 192 / .55)}
+.nc-hero .zpv-dead{position:absolute;inset:0;font-size:11px;letter-spacing:.16em}
+.nc-tag{
+  position:absolute;display:flex;align-items:center;gap:6px;max-width:calc(100% - 24px);
+  padding:4px 8px;border-radius:4px;background:rgb(11 11 11 / .78);
+  font-family:var(--nc-mono);font-size:11px;line-height:1.3;letter-spacing:.08em;color:var(--nc-bone);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.nc-tag.tl{top:12px;left:12px;max-width:55%}
+.nc-tag.tr{top:12px;right:12px;max-width:40%}
+.nc-tag.bl{bottom:12px;left:12px;max-width:45%}
+.nc-tag.br{bottom:12px;right:12px;max-width:50%}
+.nc-tag.bl2{bottom:40px;left:12px;color:var(--nc-text2)}
+.nc-tag.red{background:var(--nc-red);color:var(--nc-bg)}
+.nc-tag.bone{background:var(--nc-bone);color:var(--nc-bg)}
+.nc-dot{width:8px;height:8px;border-radius:50%;flex:none;display:inline-block}
+.nc-dot.pass{background:#5FA878}
+.nc-dot.warn{background:#D9A441}
+.nc-dot.fail{background:var(--nc-red)}
+
+.nc-body{display:flex;flex-direction:column;gap:12px;padding:14px 16px 16px;min-width:0}
+/* wraps only when the card is phone-narrow: the buttons drop under the
+   title instead of crushing it to two letters */
+.nc-row{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;min-width:0}
+.nc-text{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1 1 150px}
+.nc-title{
+  margin:0;font-family:var(--nc-title);font-weight:400;font-size:26px;line-height:1;letter-spacing:.03em;
+  color:var(--nc-bone);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+/* the card line: ONE line, clamped; the full text is its title attribute */
+.nc-line{margin:0;font-size:14.5px;color:var(--nc-text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nc-acts{display:flex;gap:6px;flex:none}
+.nc-icon{
+  width:44px;height:44px;flex:none;padding:0;display:flex;align-items:center;justify-content:center;
+  border-radius:8px;border:1px solid var(--nc-line);background:transparent;color:var(--nc-mute);
+}
+.nc-icon:hover:not(:disabled){color:var(--nc-bone);border-color:var(--nc-bone)}
+.nc-icon.pick{color:var(--nc-bone)}
+.nc-icon.pick.on{background:var(--nc-red);border-color:var(--nc-red);color:var(--nc-bg)}
+.nc-icon:disabled{opacity:.4}
+
+.nc-refs{display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-height:52px;min-width:0}
+.nc-ref{
+  position:relative;width:52px;height:52px;flex:none;padding:0;overflow:hidden;
+  border-radius:6px;border:1px solid var(--nc-line);background:#1F1E1C;
+}
+.nc-ref:hover{border-color:var(--nc-bone)}
+.nc-ref img{width:100%;height:100%;object-fit:cover;display:block}
+.nc-ref.more{border-style:dashed;border-color:#3A3935;background:transparent;font-family:var(--nc-mono);font-size:12px;color:var(--nc-bone)}
+.nc-ref.lg{width:82px;height:82px}
+.nc-ref.sm{width:36px;height:44px;border-radius:4px}
+.nc-num{
+  position:absolute;left:4px;bottom:3px;font-family:var(--nc-mono);font-size:9px;line-height:1;
+  color:var(--nc-bone);text-shadow:0 0 3px #000,0 0 3px #000;pointer-events:none;
+}
+.nc-ref.sm .nc-num{display:none}
+.nc-norefs{font-family:var(--nc-mono);font-size:12px;letter-spacing:.06em;color:var(--nc-red2)}
+
+/* ── the Queue's card ── */
+.nq-shots{display:flex;gap:4px;padding:8px 8px 0;min-width:0}
+.nq-shot{
+  position:relative;flex:1 1 0;min-width:0;height:44px;padding:0;overflow:hidden;
+  border-radius:4px;border:0;background:#1F1E1C;display:block;
+}
+.nq-shot img{width:100%;height:100%;object-fit:cover;display:block}
+.nq-shot.done{opacity:.6}
+.nq-win{
+  position:absolute;left:6px;bottom:4px;font-family:var(--nc-mono);font-size:10px;line-height:1;
+  color:var(--nc-bone);text-shadow:0 0 3px #000,0 0 3px #000;white-space:nowrap;
+}
+.nq-refs{display:flex;gap:4px;flex:none}
+.nq-why{
+  margin:-4px 0 0;font-family:var(--nc-mono);font-size:11px;letter-spacing:.04em;color:var(--nc-mute);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.nq-zone{display:flex;flex-direction:column;gap:12px;min-width:0}
+.nq-chipwrap{position:relative}
+.nq-chip{
+  width:100%;height:44px;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 12px;
+  border-radius:8px;border:1px solid var(--nc-line);background:#0F0F0E;
+  font-family:var(--nc-mono);font-size:12px;letter-spacing:.06em;color:var(--nc-bone);
+}
+.nq-chip span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nq-chip svg{flex:none}
+.nq-chip:hover:not(:disabled){border-color:var(--nc-bone)}
+.nq-chip:disabled{color:var(--nc-mute)}
+.nq-chip[aria-expanded="true"] svg{transform:rotate(180deg)}
+.nq-pop{
+  position:absolute;left:0;right:0;top:52px;z-index:40;display:flex;flex-direction:column;gap:10px;
+  padding:16px;border-radius:10px;border:1px solid #3A3935;background:#1C1B19;
+  box-shadow:0 18px 40px rgb(0 0 0 / .55);
+}
+.nq-popk{font-family:var(--nc-mono);font-size:11px;letter-spacing:.14em;color:var(--nc-mute);margin-bottom:8px}
+.nq-pills{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.nq-two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:4px}
+.nq-pill{
+  min-height:44px;padding:0 12px;border-radius:6px;border:1px solid #3A3935;background:transparent;
+  font-family:var(--nc-mono);font-size:12px;color:var(--nc-bone);
+}
+.nq-pill:hover:not(:disabled){border-color:var(--nc-bone)}
+.nq-pill[aria-pressed="true"]{background:var(--nc-bone);border-color:var(--nc-bone);color:var(--nc-bg)}
+.nq-pill:disabled{border-color:var(--nc-line2);color:#5E5B55}
+.nq-pill[aria-pressed="true"]:disabled{background:#3A3935;border-color:#3A3935;color:var(--nc-bone)}
+.nq-note{font-family:var(--nc-mono);font-size:11px;color:var(--nc-mute)}
+.nq-span{display:flex;align-items:center;gap:8px;font-family:var(--nc-mono);font-size:11px;color:var(--nc-mute)}
+.nq-num{
+  width:72px;height:44px;text-align:center;border-radius:6px;border:1px solid #3A3935;background:#0F0F0E;
+  font-family:var(--nc-mono);font-size:13px;color:var(--nc-bone);
+}
+.nq-actions{display:flex;gap:8px;min-width:0}
+.nq-approve{
+  flex:1 1 0;min-width:0;height:52px;padding:0 10px;border-radius:8px;border:0;
+  background:var(--nc-red);color:var(--nc-bg);
+  font-family:var(--nc-title);font-size:22px;letter-spacing:.05em;line-height:1;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.nq-approve:hover:not(:disabled){background:var(--nc-red2)}
+.nq-approve:disabled{background:var(--nc-line2);color:var(--nc-mute)}
+.nq-side{
+  width:52px;height:52px;flex:none;padding:0;display:flex;align-items:center;justify-content:center;
+  border-radius:8px;border:1px solid var(--nc-line);background:transparent;color:var(--nc-mute);
+}
+.nq-side[data-act="reject"]{color:var(--nc-bone)}
+.nq-side:hover:not(:disabled){color:var(--nc-bone);border-color:var(--nc-bone)}
+.nq-side.on{color:var(--nc-bone);border-color:var(--nc-bone)}
+.nq-side:disabled{opacity:.5}
+
+/* ── the board's detail drawer ── */
+#ncdrawer{position:fixed;inset:0;z-index:900;font-family:var(--nc-body);color:var(--nc-bone)}
+.ncd-back{position:absolute;inset:0;width:100%;height:100%;border:0;padding:0;background:rgb(0 0 0 / .6);cursor:default}
+.ncd{
+  position:absolute;top:0;right:0;bottom:0;width:520px;max-width:100%;
+  display:flex;flex-direction:column;gap:22px;padding:28px 32px;overflow-y:auto;
+  background:#121211;border-left:1px solid var(--nc-line);font-size:14px;line-height:1.5;
+}
+.ncd>*{flex:none}
+.ncd section{display:flex;flex-direction:column;gap:6px;min-width:0}
+.ncd-top{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.ncd-k{font-family:var(--nc-mono);font-size:11px;letter-spacing:.14em;color:var(--nc-mute)}
+.ncd-top .ncd-k{font-size:12px;letter-spacing:.12em}
+.ncd-title{margin:0 0 6px;font-family:var(--nc-title);font-weight:400;font-size:48px;line-height:.95;letter-spacing:.02em;overflow-wrap:anywhere}
+.ncd-line{margin:0;font-size:16px;color:var(--nc-text2)}
+.ncd-hero{
+  position:relative;width:100%;aspect-ratio:16/9;padding:0;overflow:hidden;
+  border-radius:8px;border:1px solid var(--nc-line);background:#1F1E1C;
+}
+.ncd-hero:hover:not(:disabled){border-color:var(--nc-bone)}
+.ncd-hero .zpv-dead{position:absolute;inset:0;font-size:11px;letter-spacing:.16em}
+.ncd-p{margin:0;font-size:15px;line-height:1.5;color:var(--nc-bone);overflow-wrap:anywhere}
+.ncd-p.sm{font-size:14px;line-height:1.45}
+.ncd-two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.ncd-shots{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.ncd-shots li{display:flex;gap:10px;font-size:13.5px;line-height:1.4;overflow-wrap:anywhere}
+.ncd-t{font-family:var(--nc-mono);font-size:12px;color:var(--nc-mute);min-width:52px;flex:none}
+.ncd-refs{display:flex;flex-wrap:wrap;gap:8px}
+.ncd-gate{border-top:1px solid var(--nc-line);padding-top:16px;gap:10px!important}
+.ncd-gaterow{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.ncd-gatetext{display:flex;align-items:flex-start;gap:8px;min-width:0;font-family:var(--nc-mono);font-size:12px;overflow-wrap:anywhere}
+.ncd-gatetext .nc-dot{margin-top:5px}
+.ncd-toggle{
+  height:44px;flex:none;padding:0 14px;border-radius:8px;border:1px solid var(--nc-line);background:transparent;
+  font-family:var(--nc-mono);font-size:12px;letter-spacing:.08em;color:var(--nc-bone);
+}
+.ncd-toggle:hover{border-color:var(--nc-bone)}
+.ncd-warn{margin:0;padding-left:18px;font-size:13px;color:#D9A441}
+.ncd-prompt{
+  margin:0;padding:12px;border-radius:6px;background:var(--nc-bg);border:1px solid var(--nc-line);
+  font-family:var(--nc-mono);font-size:12px;line-height:1.5;color:var(--nc-text2);
+  white-space:pre-wrap;overflow-wrap:anywhere;max-height:none;
+}
+.ncd-links{display:flex;flex-wrap:wrap;gap:6px 16px;font-family:var(--nc-mono);font-size:11px;letter-spacing:.06em;color:var(--nc-mute)}
+.ncd-links span{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ncd-links a{color:var(--nc-red)}
+.ncd-links a:hover{color:var(--nc-red2)}
+@media (max-width:560px){
+  .ncd{padding:20px 16px}
+  .ncd-two{grid-template-columns:1fr}
+  .ncd-title{font-size:38px}
+}
+
+/* three across at desktop width, as drawn: the picture needs the room, and
+   the title row carries three 44px buttons. Only these two lists -- the
+   subscription lane keeps zpf.css's grid. */
+#scenelist.scenegrid,#pendlist.scenegrid{grid-template-columns:repeat(auto-fill,minmax(min(400px,100%),1fr));gap:24px}

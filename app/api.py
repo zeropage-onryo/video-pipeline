@@ -974,7 +974,46 @@ def retrieve(body: RetrieveBody, account_id: int = Depends(auth.current_account_
 
 # --- pipeline (adapted to pre-production) -----------------------------------
 
-def _concept_card(c: dict, subscription_ids: Optional[set] = None) -> dict:
+def _bin_filenames(concepts: list) -> list:
+    """Every bin image named by these concepts' refs, for ONE
+    scout.sources_for_refs call per board rather than one per card."""
+    names = []
+    for c in concepts:
+        for url in c.get("refs") or []:
+            ref = asset_shelf.parse_ref(url)
+            if ref and ref["kind"] == "refs":
+                names.append(ref["filename"])
+    return names
+
+
+def _ref_sources(refs: list, sources: Optional[dict]) -> list:
+    """`refs`, one entry each and in the same order, saying what each
+    picture IS and where it came from: {url, kind, slug, filename,
+    source_url, title, lane}.
+
+    `kind` is asset_shelf.parse_ref's -- the ONE parser, so a local route
+    and its R2 twin read the same: character / prop / location (the asset
+    bank; `slug` names the asset, and that IS its attribution), `refs` (the
+    reference bin) or "" for anything else. `source_url` is the page a
+    scouted frame was taken from, off scout_bin; empty for a composer
+    upload, which has no page. `refs` itself is unchanged -- it is what
+    the renderers read, and its order is load-bearing (urls[0] anchors)."""
+    out = []
+    for url in refs or []:
+        ref = asset_shelf.parse_ref(url) or {}
+        found = (sources or {}).get(ref.get("filename")) if ref.get("kind") == "refs" else None
+        out.append({"url": url, "kind": ref.get("kind") or "",
+                    "slug": ref.get("slug") or "",
+                    "filename": ref.get("filename") or "",
+                    "source_url": (found or {}).get("source_url") or "",
+                    "title": (found or {}).get("title") or "",
+                    "lane": (found or {}).get("lane") or ""})
+    return out
+
+
+def _concept_card(c: dict, subscription_ids: Optional[set] = None,
+                  gates: Optional[dict] = None,
+                  sources: Optional[dict] = None) -> dict:
     status = "shot" if c.get("shot_done") else (
         "planned" if c.get("has_shot_list") else "idea")
     location_names = [loc["name"] for loc in c.get("locations") or []]
@@ -1047,6 +1086,23 @@ def _concept_card(c: dict, subscription_ids: Optional[set] = None) -> dict:
         # Absent set = not asked (a single-card read), which is why the
         # default is False rather than unknown.
         "subscription": bool(subscription_ids and c["id"] in subscription_ids),
+        # THE PROMPT GATE'S OWN VERDICT (2026-09-17): {score, passed, reason,
+        # reworks, status, outcome}, or None when no graph run ever ended on
+        # this concept -- a Studio Create stops on the board unscored, and
+        # the card has to say "never scored" rather than invent a pass. The
+        # cards drew a readiness dot from warnings and park_reason because
+        # this was only ever reachable through the MCP `idea` tool; it is
+        # the same reading (autonomy.gates_for_concepts), batched for a
+        # board. `passed` is what the gate SAID, not whether the run went
+        # on: in advisory mode a failed prompt still parks. Absent dict =
+        # not asked (a single-card read), the `subscription` rule.
+        "gate": (gates or {}).get(c["id"]),
+        # WHERE EACH REFERENCE CAME FROM (2026-09-17), parallel to `refs`.
+        # "A reference must be traceable to where it came from" was kept at
+        # banking time and lost on the shot, which stores bare URLs -- so
+        # the one surface where someone is about to spend a render on a
+        # frame showed it unattributed. See _ref_sources.
+        "ref_sources": _ref_sources(c.get("refs") or [], sources),
     }
 
 
@@ -1088,8 +1144,13 @@ def pipeline_concepts(brand: Optional[str] = None, status: Optional[str] = None,
     # whole limit and quietly shorten the other's board.
     # one query for the whole board rather than one per card
     subscription_ids = generative.subscription_rendered(account_id=account_id)
-    cards = [_concept_card(c, subscription_ids)
-             for c in preprod.list_concepts(account_id=account_id, brand=brand)]
+    concepts = preprod.list_concepts(account_id=account_id, brand=brand)
+    # ...and two for every card's gate verdict, not two per card
+    gates = autonomy.gates_for_concepts([c["id"] for c in concepts],
+                                        account_id=account_id)
+    # ...and one for every scouted frame's attribution
+    sources = scout.sources_for_refs(_bin_filenames(concepts))
+    cards = [_concept_card(c, subscription_ids, gates, sources) for c in concepts]
     if status in ("idea", "planned", "shot"):
         cards = [c for c in cards if c["status"] == status]
     if not archived:
@@ -1832,8 +1893,12 @@ def _waiting(account_id: Optional[int], brand: Optional[str]) -> list[tuple[dict
     be a different opinion from the one that already ran."""
     # scoped in SQL, see above
     out = []
-    for concept in preprod.list_concepts(account_id=account_id, brand=brand):
-        card = _concept_card(concept)
+    concepts = preprod.list_concepts(account_id=account_id, brand=brand)
+    gates = autonomy.gates_for_concepts([c["id"] for c in concepts],
+                                        account_id=account_id)
+    sources = scout.sources_for_refs(_bin_filenames(concepts))
+    for concept in concepts:
+        card = _concept_card(concept, gates=gates, sources=sources)
         if ((card["picked"] or card["parked"]) and not card["archived"]
                 and card["is_scene"] and not card["media_url"]
                 # nothing reaches a spend ungrounded -- see above

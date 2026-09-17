@@ -128,7 +128,42 @@ export type Concept = {
   created_at?: string;
   /** the card's own default renderer, resolved server-side from the shot's planned tool */
   render_default?: { provider: string; model: string };
+  /* the rest of app/api.py's _concept_card, read by the image-first cards */
+  hook?: string | null;
+  card_line?: string;
+  warnings?: string[];
+  graded?: boolean;
+  shot_done?: boolean;
+  subscription?: boolean;
+  tool?: string;
+  /** where each reference came from, parallel to `refs` (app/api.py _ref_sources) */
+  ref_sources?: import("./refs").RefSource[];
+  /** the prompt gate's own verdict (autonomy.gates_for_concepts), or null
+   *  when no graph run ever ended on this concept -- never scored, NOT a
+   *  pass. `passed` is what the gate said, not whether the run went on. */
+  gate?: {
+    score: number | null;
+    passed: boolean | null;
+    reason: string;
+    reworks: number;
+    status: string;
+    outcome: string;
+  } | null;
+  /** the timed shots a scene renders as, or null for one that renders whole */
+  timeline?: Timeline | null;
 };
+export type TimelinePart = {
+  n: number;
+  start: number;
+  end: number;
+  seconds: number;
+  text?: string | null;
+  prompt?: string | null;
+  refs?: string[] | null;
+  reference_image?: string | null;
+  media_url?: string | null;
+};
+export type Timeline = { planned: boolean; seconds?: number | null; parts: TimelinePart[] };
 export type RunwayModel = { id: string; label: string; usd_per_second: number };
 /* the overnight branch's renderer catalogue (providers.render_options):
    every registered renderer with its gates, its models and each model's
