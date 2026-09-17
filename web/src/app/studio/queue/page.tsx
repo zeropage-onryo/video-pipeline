@@ -46,7 +46,7 @@ import {
   type RunwayState,
 } from "@/lib/studio-api";
 import { cardFonts } from "@/components/studio/card-fonts";
-import { CARD, Hero, RefImg, RefThumbs, TAG, TAG_DARK, TitleBlock, brandName, partsOf, shotsLabel, stillsOf, windowLabel } from "@/components/studio/concept-card";
+import { CARD, Hero, RefImg, RefThumbs, TAG, TAG_DARK, TitleBlock, brandName, partsOf, refItems, shotsLabel, stillsOf, windowLabel } from "@/components/studio/concept-card";
 import { PreviewOverlay, type PreviewState } from "@/components/studio/preview-overlay";
 import { useShell } from "@/components/studio/shell";
 import {
@@ -366,7 +366,7 @@ export default function QueuePage() {
                   setPreview(
                     stills.length
                       ? { title: c.title, kind: "KEYFRAME", index: 0, trigger, items: stills.map((url) => ({ url })) }
-                      : { title: c.title, kind: "REFERENCE", index: 0, trigger, items: c.refs.map((url) => ({ url })) },
+                      : { title: c.title, kind: "REFERENCE", index: 0, trigger, items: refItems(c) },
                   )
                 }
               >
@@ -419,7 +419,7 @@ export default function QueuePage() {
                       concept={c}
                       max={3}
                       size="sm"
-                      onOpen={(index, trigger) => setPreview({ title: c.title, kind: "REFERENCE", index, trigger, items: c.refs.map((url) => ({ url })) })}
+                      onOpen={(index, trigger) => setPreview({ title: c.title, kind: "REFERENCE", index, trigger, items: refItems(c) })}
                     />
                   </div>
                 </div>

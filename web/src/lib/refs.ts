@@ -106,3 +106,32 @@ export function sourceLabel(url: string): string {
     return "";
   }
 }
+
+export type RefSource = { url: string; kind: string; slug: string; filename: string; source_url: string; title: string; lane: string };
+
+/** The caption for a row of the card's `ref_sources` (2026-09-17): the page
+ *  a scouted frame was taken from, as a LINK -- these are other people's
+ *  frames held as mood reference, and the attribution has to be one click
+ *  from the picture. An upload has no page and says so; a bin image the bin
+ *  has no row for says THAT rather than implying a source. Only http(s) is
+ *  ever linked. (app/static/zpf/preview.js `sourcedItem` is the twin.) */
+export function sourced(row: RefSource): { url: string; name: string; source: string; href?: string } {
+  const base = { url: row.url, name: fileName(row.url), source: sourceLabel(row.url) };
+  const href = /^https?:\/\//i.test(row.source_url || "") ? row.source_url : "";
+  if (href) {
+    let host = href;
+    try {
+      host = new URL(href).hostname.replace(/^www\./, "");
+    } catch {
+      /* keep the url */
+    }
+    return { ...base, href, source: `${(row.lane || "scouted").toUpperCase()} · ${host}${row.title ? " · " + row.title : ""}` };
+  }
+  if (row.kind === "refs") {
+    return {
+      ...base,
+      source: row.lane === "composer" ? "YOUR UPLOAD · NO SOURCE PAGE" : row.lane ? `${row.lane.toUpperCase()} · NO SOURCE ON FILE` : "REFERENCE BIN · NO SOURCE ON FILE",
+    };
+  }
+  return base;
+}

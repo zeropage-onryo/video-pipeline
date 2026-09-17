@@ -22,7 +22,7 @@ import { cardFonts } from "@/components/studio/card-fonts";
 import { RefImg } from "@/components/studio/concept-card";
 import { fileName, sourceLabel } from "@/lib/refs";
 
-export type PreviewItem = { url: string; name?: string; source?: string };
+export type PreviewItem = { url: string; name?: string; source?: string; href?: string };
 export type PreviewState = {
   title: string;
   kind: "REFERENCE" | "KEYFRAME";
@@ -99,7 +99,19 @@ export function PreviewOverlay({ state, onClose }: { state: PreviewState; onClos
 
           <div className="flex w-full max-w-[1280px] flex-none justify-between gap-4 text-bone2">
             <span className="min-w-0 truncate">{it.name || fileName(it.url)}</span>
-            <span className="max-w-[60%] flex-none truncate text-bone3">{it.source ?? sourceLabel(it.url)}</span>
+            {/* the source is a link when the payload had a page for it */}
+            {it.href ? (
+              <a
+                href={it.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="max-w-[60%] flex-none truncate text-bone underline underline-offset-[3px] hover:text-noir-red2"
+              >
+                {it.source} ↗
+              </a>
+            ) : (
+              <span className="max-w-[60%] flex-none truncate text-bone3">{it.source ?? sourceLabel(it.url)}</span>
+            )}
           </div>
 
           {many ? (

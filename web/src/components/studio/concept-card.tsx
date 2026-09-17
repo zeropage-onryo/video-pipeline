@@ -20,7 +20,7 @@
 /* eslint-disable @next/next/no-img-element */
 import { useMemo, useState, type ReactNode } from "react";
 import { API_URL } from "@/lib/api";
-import { fileName, sourcesFor } from "@/lib/refs";
+import { fileName, sourced, sourcesFor } from "@/lib/refs";
 import type { Concept, TimelinePart } from "@/lib/studio-api";
 
 export const brandName = (b?: string | null) => String(b || "").replace(/zeropage/i, "ZERO PAGE").toUpperCase();
@@ -99,6 +99,14 @@ export function stillsOf(c: Concept): string[] {
   if (c.reference_image) urls.push(c.reference_image);
   for (const p of partsOf(c)) if (p.reference_image && !urls.includes(p.reference_image)) urls.push(p.reference_image);
   return urls;
+}
+
+/** The preview's items for a concept's references. `ref_sources` is
+ *  parallel to `refs`; an older payload without it still previews,
+ *  captioned by what the URL proves. */
+export function refItems(c: Concept) {
+  const refs = c.refs || [];
+  return c.ref_sources && c.ref_sources.length === refs.length ? c.ref_sources.map(sourced) : refs.map((url) => ({ url }));
 }
 
 /* ── pictures ── */

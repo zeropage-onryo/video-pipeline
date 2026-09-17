@@ -7,7 +7,7 @@
    already sends. Nothing below decides anything: the reference gate, the
    spend gate and the pick are the server's. */
 import { esc } from './shared.js';
-import { imgTag, openPreview, refItem } from './preview.js';
+import { imgTag, openPreview, refItem, sourcedItem } from './preview.js';
 
 export const ICON = {
   check: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5L20 7"/></svg>',
@@ -118,7 +118,11 @@ export function refThumbs(c, { max = 4, cls = 'nc-ref' } = {}) {
 
 export function previewRefs(c, index, trigger) {
   openPreview({ title: c.title, kind: 'REFERENCE', index, trigger,
-                items: (c.refs || []).map(url => ({ url })) });
+                // ref_sources is parallel to refs; an older payload without it
+                // still previews, captioned by what the URL proves
+                items: (c.ref_sources && c.ref_sources.length === (c.refs || []).length)
+                  ? c.ref_sources.map(sourcedItem)
+                  : (c.refs || []).map(url => ({ url })) });
 }
 
 /* the stills: the scene's keyframe, then each timed shot's own. Shot 1's

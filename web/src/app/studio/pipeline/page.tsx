@@ -42,6 +42,7 @@ import {
   gateOf,
   heroOf,
   partsOf,
+  refItems,
   shotsLabel,
   stillsOf,
   windowLabel,
@@ -123,7 +124,7 @@ export default function PipelinePage() {
   };
 
   const previewRefs = (c: Concept, index: number, trigger: HTMLElement) =>
-    setPreview({ title: c.title, kind: "REFERENCE", index, trigger, items: (c.refs || []).map((url) => ({ url })) });
+    setPreview({ title: c.title, kind: "REFERENCE", index, trigger, items: refItems(c) });
   const previewStills = (c: Concept, trigger: HTMLElement) => {
     const stills = stillsOf(c);
     if (!stills.length) return (c.refs || []).length ? previewRefs(c, 0, trigger) : undefined;

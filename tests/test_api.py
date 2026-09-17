@@ -204,6 +204,32 @@ def test_the_card_carries_the_gates_verdict_or_says_it_was_never_scored(tmp_db):
     assert waiting["id"] == scored and waiting["gate"]["score"] == 4
 
 
+def test_the_card_says_where_each_reference_came_from(tmp_db):
+    """`ref_sources` is parallel to `refs` (which is untouched -- its order
+    anchors the render): a scouted frame carries the page it was taken
+    from, in either stored URL shape; an asset photo is attributed by its
+    shelf and slug; an upload has no page and says so by being empty."""
+    api_mod.scout.init(tmp_db)
+    api_mod.scout.bin_add("antihero", "p1", "/refs/aaa.jpg",
+                          source_url="https://ex.test/post/1", title="stairwell",
+                          lane="feeds", dsn=tmp_db)
+    api_mod.scout.bin_add("antihero", "p1", "/refs/ccc.jpg", source_url="",
+                          lane="composer", dsn=tmp_db)
+    refs = ["/characters/michael/photo/a.jpg", "https://pub-x.r2.dev/refs/aaa.jpg",
+            "/refs/ccc.jpg", "https://cdn.test/other.png"]
+    cid = seed_concept(tmp_db, "Sourced", shots=[
+        {"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY", "prompt": "x", "refs": refs}])
+    card = {c["id"]: c for c in client.get("/api/pipeline/concepts").json()["items"]}[cid]
+    assert card["refs"] == refs
+    assert [r["url"] for r in card["ref_sources"]] == refs
+    asset, scouted, upload, other = card["ref_sources"]
+    assert (asset["kind"], asset["slug"], asset["source_url"]) == ("character", "michael", "")
+    assert scouted == {"url": refs[1], "kind": "refs", "slug": "", "filename": "aaa.jpg",
+                       "source_url": "https://ex.test/post/1", "title": "stairwell", "lane": "feeds"}
+    assert (upload["kind"], upload["lane"], upload["source_url"]) == ("refs", "composer", "")
+    assert (other["kind"], other["source_url"]) == ("", "")
+
+
 def test_pipeline_run_generates_through_a_job(tmp_db, monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     import src.shootgen as shootgen

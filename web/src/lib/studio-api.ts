@@ -136,6 +136,8 @@ export type Concept = {
   shot_done?: boolean;
   subscription?: boolean;
   tool?: string;
+  /** where each reference came from, parallel to `refs` (app/api.py _ref_sources) */
+  ref_sources?: import("./refs").RefSource[];
   /** the prompt gate's own verdict (autonomy.gates_for_concepts), or null
    *  when no graph run ever ended on this concept -- never scored, NOT a
    *  pass. `passed` is what the gate said, not whether the run went on. */

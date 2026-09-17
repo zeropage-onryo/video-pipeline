@@ -45,6 +45,9 @@
 }
 .zpv-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .zpv-source{color:#8C887F;flex:none;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.zpv-source a{color:#CDC9C0;text-decoration:underline;text-underline-offset:3px}
+.zpv-source a:hover{color:#FF6A5C}
+.zpv-source a:focus-visible{outline:2px solid #E23B2E;outline-offset:2px}
 .zpv-strip{flex:none;display:flex;gap:8px;max-width:100%;overflow-x:auto;padding:4px}
 .zpv-thumb{
   width:64px;height:44px;flex:none;padding:0;overflow:hidden;

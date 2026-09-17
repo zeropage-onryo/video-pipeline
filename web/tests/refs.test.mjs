@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseRef, sourcesFor, fileName, sourceLabel } from '../src/lib/refs.ts';
+import { parseRef, sourcesFor, fileName, sourceLabel, sourced } from '../src/lib/refs.ts';
 
 test('both stored shapes of an asset photo read the same (asset_shelf.parse_ref twin)', () => {
   const local = parseRef('/characters/michael/photo/a.jpg?thumb=1');
@@ -27,4 +27,16 @@ test('the caption says the file and the shelf, never an invented source', () => 
   assert.equal(sourceLabel('/props/bike/photo/b.jpg'), 'ASSET BANK · PROP · bike');
   assert.equal(sourceLabel('/refs/abc.jpg'), 'REFERENCE BIN');
   assert.equal(sourceLabel('https://cdn.test/renders/k.png'), 'DRAWN BY THE PIPELINE');
+});
+
+test('a scouted frame links its page; an upload and an unknown bin image say they have none', () => {
+  const row = (over) => ({ url: '/refs/a.jpg', kind: 'refs', slug: '', filename: 'a.jpg', source_url: '', title: '', lane: '', ...over });
+  assert.deepEqual(sourced(row({ source_url: 'https://www.ex.test/post/1', title: 'stairwell', lane: 'feeds' })),
+    { url: '/refs/a.jpg', name: 'a.jpg', href: 'https://www.ex.test/post/1', source: 'FEEDS · ex.test · stairwell' });
+  assert.equal(sourced(row({ lane: 'composer' })).source, 'YOUR UPLOAD · NO SOURCE PAGE');
+  assert.equal(sourced(row({})).source, 'REFERENCE BIN · NO SOURCE ON FILE');
+  // never a javascript: or relative "source" turned into a link
+  assert.equal(sourced(row({ source_url: 'javascript:alert(1)', lane: 'agent' })).href, undefined);
+  const asset = sourced({ url: '/props/bike/photo/b.jpg', kind: 'prop', slug: 'bike', filename: 'b.jpg', source_url: '', title: '', lane: '' });
+  assert.equal(asset.source, 'ASSET BANK · PROP · bike');
 });

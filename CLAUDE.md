@@ -1150,6 +1150,14 @@ is yours, in Resolve, by hand.
   False; the cards show a failed gate as CHECK, never BLOCKED — BLOCKED is the reference
   gate's alone. `gateOf` in `app/static/zpf/cards.js` and
   `web/src/components/studio/concept-card.tsx` are twins.
+  **And where each reference came from (same day).** `ref_sources` is parallel to `refs`
+  (`refs` itself is untouched — its order anchors the render): `{url, kind, slug, filename,
+  source_url, title, lane}`, `kind` from `asset_shelf.parse_ref`, the rest from
+  `scout.sources_for_refs` — one query per board, joined on the bin's content-hash basename
+  (the same in `/refs/<sha>.jpg` and the R2 URL), the row WITH a `source_url` winning when
+  the same bytes were banked twice. "A reference must be traceable to where it came from"
+  was kept at banking time and lost on the shot; the preview overlay now links the page.
+  Only http(s) is ever linked, and an upload says it has no page rather than implying one.
   **Two layers, and the split is the testable part.** The tool functions are plain Python
   against a database path (so the whole surface is testable with no `mcp` package
   installed); `build_server` wraps them lazily. `app/jobs.py` is injected as callables

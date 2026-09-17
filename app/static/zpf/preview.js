@@ -79,6 +79,28 @@ export function sourceLabel(url) {
 
 export const refItem = url => ({ url, name: fileName(url), source: sourceLabel(url) });
 
+/* An item from the card's `ref_sources` row (2026-09-17): the page a
+   scouted frame was taken from, as a LINK -- these are other people's
+   frames held as mood reference, and the attribution has to be one click
+   from the picture. An upload has no page and says so; a bin image the
+   bin has no row for says THAT, rather than implying a source. Only
+   http(s) is ever linked. */
+export function sourcedItem(row) {
+  const item = refItem(row.url);
+  const href = /^https?:\/\//i.test(row.source_url || '') ? row.source_url : '';
+  if (href) {
+    let host = href;
+    try { host = new URL(href).hostname.replace(/^www\./, ''); } catch { /* keep the url */ }
+    return { ...item, href,
+             source: `${(row.lane || 'scouted').toUpperCase()} · ${host}${row.title ? ' · ' + row.title : ''}` };
+  }
+  if (row.kind === 'refs') {
+    return { ...item, source: row.lane === 'composer' ? 'YOUR UPLOAD · NO SOURCE PAGE'
+      : row.lane ? `${row.lane.toUpperCase()} · NO SOURCE ON FILE` : 'REFERENCE BIN · NO SOURCE ON FILE' };
+  }
+  return item;
+}
+
 /* Walk an <img> down its sources; `broken` fires once every one failed.
    Works for markup already in the page: <img data-srcs="a|b">. */
 export function loadChain(img, sources, broken) {
@@ -200,7 +222,19 @@ export function openPreview({ title = '', items = [], index = 0, kind = 'REFEREN
     q('.zpv-title').textContent =
       `${String(title).toUpperCase()} · ${kind} ${at + 1} / ${items.length}`;
     q('.zpv-name').textContent = it.name;
-    q('.zpv-source').textContent = it.source || '';
+    // the source is a link when the payload had a page for it
+    const src = q('.zpv-source');
+    src.textContent = '';
+    if (it.href) {
+      const a = document.createElement('a');
+      a.href = it.href;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.textContent = `${it.source} ↗`;
+      src.appendChild(a);
+    } else {
+      src.textContent = it.source || '';
+    }
     const img = q('.zpv-img');
     const broken = q('.zpv-broken');
     img.hidden = false;
@@ -232,7 +266,7 @@ export function openPreview({ title = '', items = [], index = 0, kind = 'REFEREN
     if (ev.key === 'ArrowRight' && many) { ev.preventDefault(); show(at + 1); return; }
     if (ev.key === 'Tab') {
       // focus stays inside while the page behind it is covered
-      const stops = [...el.querySelectorAll('button:not([hidden])')];
+      const stops = [...el.querySelectorAll('button:not([hidden]), a[href]')];
       const first = stops[0], last = stops[stops.length - 1];
       if (!el.contains(document.activeElement)) { ev.preventDefault(); first.focus(); }
       else if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last.focus(); }
