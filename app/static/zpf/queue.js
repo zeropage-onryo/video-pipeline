@@ -174,18 +174,37 @@ async function renderPending() {
     return (per === undefined || per === null) ? null : per * seconds;
   }
 
-  /* A timed scene's shots each render at their own window's length,
-     fitted UP to what the model can make -- the JS twin of
-     timeline.fit_seconds, for the reason estimate() above exists: the
-     server's check_timeline_choice is the authoritative number and comes
-     back on the approve response; this is the label while you pick. */
-  function fitSeconds(axis, seconds) {
-    const want = Math.max(1, Math.ceil(Number(seconds) || 1));
-    if (axis.kind === 'range') return Math.min(Math.max(want, axis.min), axis.max);
-    const values = (axis.values || []).map(Number).sort((a, b) => a - b);
-    if (!values.length) return want;
-    if (axis.kind === 'fixed') return values[0];
-    return values.find(v => v >= want) ?? values[values.length - 1];
+  /* A TIMED SCENE'S PRICE IS THE SERVER'S (src/pricing.py, 2026-09-17).
+     Each shot renders at its own window's length fitted UP to what the
+     model can make, and that fitting used to be done twice -- here, as a
+     JS twin of timeline.fit_seconds, and again on approve. Two
+     implementations of a price is how a person is shown one number and
+     charged another, so the twin is gone: the listing carries
+     pricing.display for the card's default pick (`card.quote`), and a
+     pick that differs asks GET /api/queue/{id}/quote once and repaints.
+     Until that answers the button names the shots without a number,
+     which is honest; it never shows arithmetic of its own. */
+  const quotes = new Map();
+  const quoteKey = (card, pick) => `${card.id}|${pick.provider}|${pick.model}|${pick.frame}`;
+  const matches = (q, pick) => !!q && !q.error && q.timed
+    && q.provider === pick.provider && q.model === pick.model && q.frame === pick.frame;
+
+  function timedQuote(card, pick) {
+    if (matches(card.quote, pick)) return card.quote;
+    const key = quoteKey(card, pick);
+    if (quotes.has(key)) return quotes.get(key);
+    quotes.set(key, null);                       // in flight: ask once
+    const query = new URLSearchParams({ provider: pick.provider, model: pick.model, frame: pick.frame });
+    api(`/api/queue/${card.id}/quote?${query}`)
+      .then(q => quotes.set(key, q), e => quotes.set(key, { error: e.message }))
+      .then(() => {
+        const now = picks.get(card.id);
+        const zone = list.querySelector(`.scene[data-id="${card.id}"] .rzone`);
+        // only if the person is still on this pick -- a slow answer must
+        // not repaint the zone back onto a model they have moved off
+        if (zone && now && quoteKey(card, now) === key) zone.innerHTML = renderZone(card);
+      });
+    return null;
   }
 
   function shotsToRender(card) {
@@ -237,17 +256,20 @@ async function renderPending() {
     const todo = shotsToRender(card);
     if (todo) {
       // no duration control: every shot's length is its window's
-      const lengths = todo.map(p => fitSeconds(spec.duration, p.seconds));
-      const usd = lengths.reduce((sum, sec) => sum + (estimate(spec, pick, sec) || 0), 0);
+      const q = timedQuote(card, pick);
       const what = `${todo.length} shot${todo.length === 1 ? '' : 's'}`;
+      const refused = q && q.error ? q.error : '';
+      const lengths = q && !q.error ? `${q.durations.join(' + ')}s` : (refused ? '' : 'pricing…');
+      const price = q && !q.error ? ` ~$${Number(q.estimate_usd).toFixed(2)}` : '';
+      const off = blocked || refused;
       return `
       ${modelSelect(pick)}
-      <span class="m" title="each shot renders at its own window's length, fitted up to what ${esc(spec.id)} can make">${esc(what)} · ${esc(lengths.join(' + '))}s</span>
+      <span class="m" title="each shot renders at its own window's length, fitted up to what ${esc(spec.id)} can make">${esc(what)}${lengths ? ' · ' + esc(lengths) : ''}</span>
       ${axisControl('frame', spec.frame, pick.frame, r.frame_axis)}
-      <button class="go" data-act="approve"${blocked ? ' disabled' : ''}>
-        ${blocked ? 'Approve · render' : `Approve · render ${esc(what)} ~$${usd.toFixed(2)}`}
+      <button class="go" data-act="approve"${off ? ' disabled' : ''}>
+        ${blocked ? 'Approve · render' : `Approve · render ${esc(what)}${price}`}
       </button>
-      ${blocked ? `<span class="m rblocked">${esc(blocked)}</span>` : ''}`;
+      ${off ? `<span class="m rblocked">${esc(blocked || refused)}</span>` : ''}`;
     }
     const usd = estimate(spec, pick);
     return `

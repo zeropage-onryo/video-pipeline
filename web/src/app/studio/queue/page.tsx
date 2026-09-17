@@ -32,6 +32,7 @@ import {
   getCapabilities,
   listJobs,
   queueApprove,
+  queueQuote,
   queueManual,
   queuePending,
   queueReject,
@@ -42,6 +43,7 @@ import {
   type LaneItem,
   type LaneModel,
   type RenderChoice,
+  type RenderQuote,
   type RendererSpec,
   type RunwayState,
 } from "@/lib/studio-api";
@@ -72,6 +74,8 @@ export default function QueuePage() {
   const [jobsError, setJobsError] = useState<string | null>(null);
   const [busy, setBusy] = useState<Record<number, string>>({});
   const [picks, setPicks] = useState<Record<number, Partial<Pick>>>({});
+  // server prices for picks the listing did not already price (timed scenes)
+  const [quotes, setQuotes] = useState<Record<string, RenderQuote | { error: string }>>({});
   // the lane: drawn only when the capability says so; the routes re-ask the gate
   const [laneOn, setLaneOn] = useState(false);
   const [lane, setLane] = useState<LaneItem[] | null>(null);
@@ -182,6 +186,31 @@ export default function QueuePage() {
     }
     return null;
   };
+  /* A TIMED SCENE'S PRICE IS THE SERVER'S (src/pricing.py). It renders as
+     several clips, each at its window's length fitted up to the model --
+     priceOf() above knows none of that and used to label such a card with
+     the price of ONE clip at the card's duration. The listing prices the
+     default pick (`c.quote`); any other pick asks /quote once. */
+  const quoteKey = (c: Concept, pick: Pick) => `${c.id}|${pick.provider}|${pick.model}|${pick.frame}`;
+  const timedQuote = (c: Concept, pick: Pick): RenderQuote | { error: string } | null => {
+    const q = c.quote;
+    if (!q?.timed) return null;
+    if (!q.error && q.provider === pick.provider && q.model === pick.model && q.frame === pick.frame) return q;
+    return quotes[quoteKey(c, pick)] ?? null;
+  };
+  useEffect(() => {
+    for (const c of pending || []) {
+      if (!c.quote?.timed) continue;
+      const pick = pickFor(c);
+      const key = quoteKey(c, pick);
+      if (timedQuote(c, pick) || key in quotes) continue;
+      queueQuote(c.id, { provider: pick.provider, model: pick.model, frame: pick.frame ?? undefined })
+        .then((q) => setQuotes((w) => ({ ...w, [key]: q })))
+        .catch((e) => setQuotes((w) => ({ ...w, [key]: { error: e instanceof Error ? e.message : "no price" } })));
+    }
+    // pickFor/timedQuote read only what is listed here
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pending, picks, renderers, quotes]);
   const gateFor = (provider: string) => {
     const s = renderers[provider];
     if (!s) return { ok: false, note: "—" };
@@ -312,7 +341,9 @@ export default function QueuePage() {
           const spec = renderers[pick.provider];
           const ms = modelSpec(pick);
           const gate = gateFor(pick.provider);
-          const price = priceOf(pick);
+          const timed = c.quote?.timed ? timedQuote(c, pick) : null;
+          const timedOk = timed && !("error" in timed && timed.error) ? (timed as RenderQuote) : null;
+          const price = c.quote?.timed ? (timedOk ? timedOk.estimate_usd : null) : priceOf(pick);
           const frameLabel = spec?.frame_axis === "ratio" ? "Frame" : "Resolution";
           return (
             <article key={c.id} className="scene on">
@@ -363,7 +394,16 @@ export default function QueuePage() {
                     ))}
                   </select>
                 </label>
-                {ms?.duration ? (
+                {c.quote?.timed ? (
+                  <span className="m" title="each shot renders at its own window's length, fitted up to what the model can make">
+                    <Clock size={11} />{" "}
+                    {timedOk
+                      ? `${timedOk.durations.length} shot${timedOk.durations.length === 1 ? "" : "s"} · ${timedOk.durations.join(" + ")}s`
+                      : timed && "error" in timed && timed.error
+                        ? timed.error
+                        : "pricing…"}
+                  </span>
+                ) : ms?.duration ? (
                   <label className="scsel" title={ms.duration.note || "Length"}>
                     <Clock size={11} />
                     {ms.duration.kind === "range" ? (

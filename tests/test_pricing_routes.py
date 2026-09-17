@@ -168,6 +168,14 @@ def test_no_keyed_renderer_is_said_not_priced(tmp_db, monkeypatch):
     assert "error" in client.get(f"/api/concepts/{scene}").json()["generate"]
 
 
+# step 3: two implementations of a price is how a person is shown one
+# number and charged another
+def test_the_queue_js_does_no_window_fitting_of_its_own():
+    js = pathlib.Path("app/static/zpf/queue.js").read_text()
+    assert "function fitSeconds" not in js and "fitSeconds(" not in js
+    assert "/quote?" in js and "card.quote" in js
+
+
 def test_the_content_hash_on_a_card_moves_with_its_prompt(tmp_db):
     scene = a_queued_scene(tmp_db)
     before = card_for(scene)["quote"]["content_hash"]
