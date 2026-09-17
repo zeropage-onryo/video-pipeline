@@ -1,0 +1,78 @@
+/* The reference preview overlay (preview.js loads this itself).
+   Every rule is under .zpv / .zpv-*, because this sheet lands on pages
+   with three different skins -- /ui's glass, the Dev Studio's .sk -- and
+   must restyle none of them. The fonts are style.css's; /ui does not
+   load that sheet, so they are asked for again here (one request, the
+   browser dedupes it). */
+@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Mono:wght@400;500&family=Inter+Tight:wght@400;500;600&display=swap');
+
+.zpv{
+  position:fixed;inset:0;z-index:1000;box-sizing:border-box;
+  display:flex;flex-direction:column;align-items:center;gap:16px;
+  padding:24px clamp(16px,4vw,56px);
+  background:rgb(6 6 6 / .96);color:#CDC9C0;
+  font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:12px;
+}
+.zpv *{box-sizing:border-box}
+.zpv [hidden]{display:none!important}
+:where(.zpv) button{font:inherit;color:inherit;cursor:pointer;margin:0}
+.zpv button:focus-visible{outline:2px solid #E23B2E;outline-offset:2px;border-radius:8px}
+.zpv-head{width:100%;display:flex;align-items:center;justify-content:space-between;gap:16px;flex:none}
+.zpv-title{letter-spacing:.12em;color:#8C887F;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.zpv-btn{
+  width:44px;height:44px;flex:none;display:flex;align-items:center;justify-content:center;
+  border-radius:8px;border:1px solid #2E2D2A;background:transparent;padding:0;
+}
+.zpv-btn:hover,.zpv-nav:hover{border-color:#CDC9C0}
+.zpv-stage{flex:1 1 0;min-height:0;width:100%;display:flex;align-items:center;justify-content:center;gap:24px}
+.zpv-nav{
+  width:56px;height:56px;flex:none;display:flex;align-items:center;justify-content:center;
+  border-radius:50%;border:1px solid #2E2D2A;background:#151514;padding:0;
+}
+.zpv-frame{
+  flex:1 1 0;min-width:0;height:100%;max-width:1280px;
+  display:flex;align-items:center;justify-content:center;border-radius:6px;
+}
+.zpv-img{max-width:100%;max-height:100%;width:100%;height:100%;object-fit:contain;border-radius:6px;display:block}
+.zpv-broken{
+  width:100%;height:100%;display:flex;align-items:center;justify-content:center;text-align:center;
+  padding:24px;border:1px dashed #5A2320;border-radius:6px;background:#1C1716;
+  letter-spacing:.14em;color:#FF6A5C;overflow-wrap:anywhere;
+}
+.zpv-cap{
+  width:100%;max-width:1280px;flex:none;display:flex;justify-content:space-between;gap:16px;
+  color:#B3AFA6;
+}
+.zpv-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.zpv-source{color:#8C887F;flex:none;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.zpv-strip{flex:none;display:flex;gap:8px;max-width:100%;overflow-x:auto;padding:4px}
+.zpv-thumb{
+  width:64px;height:44px;flex:none;padding:0;overflow:hidden;
+  border-radius:4px;border:2px solid transparent;background:#1F1E1C;
+}
+.zpv-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.zpv-thumb[aria-current="true"]{border-color:#E23B2E}
+@media (max-width:640px){
+  .zpv-stage{gap:8px}
+  .zpv-nav{width:44px;height:44px}
+}
+
+/* a picture that would not load, where it stood (hydrateImages) */
+.zpv-dead{
+  width:100%;height:100%;display:flex;align-items:center;justify-content:center;text-align:center;
+  background:#1C1716;color:#FF6A5C;
+  font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:9px;letter-spacing:.08em;line-height:1.3;
+  padding:2px;overflow:hidden;
+}
+
+/* the grade tab's thumbnails: server-rendered, so they are styled here */
+.zpv-row{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
+.zpv-row button{
+  width:82px;height:82px;padding:0;overflow:hidden;cursor:pointer;
+  border-radius:6px;border:1px solid #2E2D2A;background:#1F1E1C;
+}
+.zpv-row button.wide{width:auto;height:auto;max-width:100%}
+.zpv-row button.wide img{max-height:200px;width:auto;max-width:100%;height:auto;object-fit:contain}
+.zpv-row button:hover{border-color:#CDC9C0}
+.zpv-row button:focus-visible{outline:2px solid #E23B2E;outline-offset:2px}
+.zpv-row img{width:100%;height:100%;object-fit:cover;display:block}
