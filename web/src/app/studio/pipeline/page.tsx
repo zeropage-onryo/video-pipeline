@@ -136,7 +136,6 @@ export default function PipelinePage() {
     <section className="view" style={{ paddingTop: 0 }}>
       <div className="vhead" style={{ marginTop: 8 }}>
         <h2>Pipeline</h2>
-        <span className="m">pick the ones worth the spend — approving them in Queue is what renders</span>
         <span className="spacer" />
         <span className="m">{countLine}</span>
       </div>

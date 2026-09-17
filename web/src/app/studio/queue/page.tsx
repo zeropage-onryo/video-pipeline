@@ -311,7 +311,6 @@ export default function QueuePage() {
     <section className="view" style={{ paddingTop: 0 }}>
       <div className="vhead" style={{ marginTop: 8 }}>
         <h2>Queue</h2>
-        <span className="m">approving a concept here is what spends — it renders the clip on the renderer you pick</span>
         <span className="spacer" />
         <span className="m">{pending ? `${pending.length} waiting` : "—"}</span>
       </div>
