@@ -33,12 +33,24 @@ ledger underneath it is finished and tested.
    so and names the four call sites. **Until that wiring lands, credit is sold and
    never consumed.** Phase 1 below is not optional and does not come second.
 
-3. **The LLM half is deliberately NOT charged to credits.** From the design doc:
-   concepts, judges, the scout and RAG "are metered in `llm_calls` and are cheap; they
-   are the subscription's cost of goods, not a metered line item. Revisit only if a
-   customer's ideation spend ever rivals their render spend." Do not add a credit
-   debit to `spend.record_call`. The separate protection for the operator's Gemini key
-   is a **daily cap**, not a credit price — Phase 4.
+3. **The LLM half IS charged to credits — reversed 2026-09-17, Mike's call.**
+   `docs/CREDIT_LEDGER_DESIGN.md` says the opposite ("the subscription's cost of goods,
+   not a metered line item") and it named its own trigger for revisiting: "if a
+   customer's ideation spend ever rivals their render spend." The live numbers are that
+   trigger — 232 concepts written against 4 picked, 0 carrying a `media_url`. The
+   ideation-only user is not hypothetical, it is the ONLY user so far, and under the
+   original design that user costs the operator money, pays nothing, and is eventually
+   refused by a cap rather than charged. One balance is also the only story that
+   explains itself to a customer: credits buy work.
+
+   **But not by the same mechanism — see Phase 1b.** The hold/settle machinery exists
+   for an event that is rare, slow and irreversible. A Gemini call is none of those, and
+   putting the per-account advisory lock in front of every one of them serializes the
+   hot path. Renders hold; LLM settles after the fact.
+
+   This supersedes the "Also out: charging for the LLM half" paragraph in
+   CREDIT_LEDGER_DESIGN.md. Update that doc in the same commit as the code -- a design
+   doc that still argues the other way is how a later session reverts this by accident.
 
 ---
 
@@ -62,6 +74,37 @@ Rules that are already decided and must not drift:
 **Done when:** approving a render with an empty balance refuses before the HTTP
 submit, the ledger shows hold → settle on success and hold → release on failure, and
 `ledger.reconcile()` is clean after a burst of concurrent approvals.
+
+---
+
+## Phase 1b — the LLM half, settled not held
+
+Same balance, different mechanism, for the reason in fact 3.
+
+- **No hold, no lock per call.** `spend.record_call` already computes `cost_usd` for
+  every Gemini call and already never raises. The debit rides that path.
+- **One entry per job or per `run_id`, not per call.** A Create fires several calls
+  (ground, write, plan the timeline) and a graph run about seven. Sum them at the
+  boundary `spend.bind()` already defines and write ONE `credit_entries` row, kind
+  `settle`, ref carrying the run/job id. Six locks per Create is the thing this avoids.
+- **The gate is at the START of the job, not at the call.** A Create or a graph run
+  checks `ledger.available(account_id)` before it begins and refuses in `cap_error`'s
+  shape. A run already underway finishes and overdraws; the NEXT one is blocked. That
+  is the policy the design doc already chose for renders (open question 1) applied
+  here, and it is what keeps a half-written scene from dying mid-sentence over
+  fractions of a cent.
+- **An unpriced call must never debit zero.** `record_call` writes NULL when token
+  counts are missing -- deliberately, "UNPRICED, never $0.00". Decide and write down
+  which: charge a documented default estimate, or charge nothing AND mark the entry so
+  the gap is visible in `costs.summary`. Silence is the one unacceptable answer: "we
+  could not measure it" must not become "it was free".
+- **`credits_for_usd` rounds UP per entry.** Batching per run rather than per call also
+  stops that rounding from being applied seven times to seven fractions of a cent,
+  which would quietly overcharge by more than the calls cost.
+
+**Done when:** a Create on an empty balance refuses before the first billed call, a
+completed graph run leaves exactly one settle entry whose credits match
+`spend.by_run` for that `run_id`, and an unpriced call is visible rather than free.
 
 ---
 
@@ -155,16 +198,23 @@ account row**, applied in **one** predicate.
 
 ---
 
-## Phase 4 — the Gemini key's own wall (independent of credits)
+## Phase 4 — the Gemini key's own wall (the free tier's, now that credits meter)
 
 `gemini_utils.api_key_for(account_id)` falls back to the operator's key, so a second
 account's ideation currently bills Mike with nothing in front of it. The renderers
 have `generative.cap_error`; Gemini is the one provider with no wall.
 
+With Phase 1b in place the ledger is the wall for anyone holding credit, so this cap
+shrinks to what it should always have been: the **free tier's** limit, and a backstop
+on paths that hold no credit at all (the nightly walk, the scout, the CLI -- the
+installation's own runs, which pass no account_id).
+
 Add a per-account **daily dollar budget** on billed Gemini calls: read
 `spend.spent_today(account_id=…)` (exists), refuse in `cap_error`'s shape when over,
-skip the check entirely when `key_source == "account"` (they are paying) or when the
-account is `credit_exempt`. This is a cap, not a credit debit — see fact 3 above.
+skip it when `key_source == "account"` (they are paying) or the account is
+`credit_exempt`. A credit balance covers it; a zero balance on a free account meets
+this instead of an empty ledger, so a new signup gets a usable trial rather than a
+refusal on their first Create.
 
 Ship this one first if Stripe slips: it is small, and it is the only thing between a
 stranger and the operator's Gemini balance.
@@ -182,8 +232,16 @@ From `docs/CREDIT_LEDGER_DESIGN.md`, still open:
 3. **Escheatment** — a 2-month expiry interacts with state gift-card law. The design
    doc says an accountant's half hour before selling a credit, not after.
 
-Plus, new: the plan shape (subscription tiers, pack sizes, the free allowance a new
-signup gets), and whether a free tier exists at all.
+Plus, new:
+
+4. **The plan shape** — subscription tiers, pack sizes, the free allowance a new signup
+   gets, and whether a free tier exists at all.
+5. **What a thought costs.** With the LLM half now metered (fact 3), ideation needs a
+   published price. The input is measured: roughly 6.8 calls and $0.043 per graph run,
+   and `costs.summary`/`spend.by_stage` give the per-stage split. At the 1 credit = 1
+   cent peg a graph run is ~5 credits at cost. Decide the markup, and decide whether a
+   Create and a nightly walk are priced the same way — the walk is 10 runs and the
+   customer is asleep for it.
 
 ## Sequencing note
 
