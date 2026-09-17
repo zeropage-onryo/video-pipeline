@@ -22,7 +22,8 @@
    `manual_lane` capability only decides whether the section is drawn). */
 /* eslint-disable @next/next/no-img-element */
 import { useCallback, useEffect, useState } from "react";
-import { Camera, Clock, Copy, Monitor, RectangleVertical, Upload, Zap } from "lucide-react";
+import { Popover } from "@base-ui/react/popover";
+import { Camera, ChevronDown, Clock, Copy, Monitor, RectangleVertical, Upload, X } from "lucide-react";
 import { API_URL } from "@/lib/api";
 import {
   announceQueueChange,
@@ -36,7 +37,6 @@ import {
   queuePending,
   queueReject,
   queueShot,
-  type Axis,
   type Concept,
   type Job,
   type LaneItem,
@@ -45,7 +45,23 @@ import {
   type RendererSpec,
   type RunwayState,
 } from "@/lib/studio-api";
+import { cardFonts } from "@/components/studio/card-fonts";
+import { CARD, Hero, RefImg, RefThumbs, TAG, TAG_DARK, TitleBlock, brandName, partsOf, shotsLabel, stillsOf, windowLabel } from "@/components/studio/concept-card";
+import { PreviewOverlay, type PreviewState } from "@/components/studio/preview-overlay";
 import { useShell } from "@/components/studio/shell";
+import {
+  approveText,
+  chipText,
+  held,
+  legalDuration,
+  pickFor as pickForCard,
+  planFor,
+  specOf,
+  withModel,
+  type AxisLike,
+  type Pick,
+  type Renderers,
+} from "@/lib/render-choice";
 
 const RATIO_NAMES: Record<string, string> = {
   "720:1280": "9:16 · vertical",
@@ -56,11 +72,22 @@ const RATIO_NAMES: Record<string, string> = {
   "1584:672": "21:9 · cinema",
 };
 type JobRow = Job & { cancellable?: boolean };
-type Pick = { provider: string; model: string; duration: number | null; frame: string | null };
+/* What you just did to a card, shown on it as a bone tag: RENDERING for as
+   long as the approve's job is live, ARCHIVED / SHOT BY HAND for the beat
+   before the card leaves the list. Display only -- the rows decide what is
+   pending; this stops an approved card looking untouched, and its priced
+   button looking pressable twice, while the render runs. Module-level for
+   the same reason render-choice's `held` is: it outlives the page. */
+type Acted = { status: "RENDERING" | "ARCHIVED" | "SHOT BY HAND"; job?: number; at: number };
+const acted = new Map<number, Acted>();
 
-/* the default of an axis, whatever its shape */
-const axisDefault = (axis?: Axis): string | number | null =>
-  !axis ? null : axis.kind === "range" ? (axis.default ?? axis.min ?? null) : (axis.default ?? axis.values?.[0] ?? null);
+const PILL =
+  "min-h-11 rounded-[6px] border px-3 font-plex! text-xs! focus-visible:rounded-[6px]! disabled:cursor-not-allowed";
+const pill = (on: boolean, off = false) =>
+  `${PILL} ${off ? (on ? "border-noir-line3 bg-noir-line3 text-bone!" : "border-noir-line2 text-[#5e5b55]!") : on ? "border-bone bg-bone text-noir-bg!" : "border-noir-line3 text-bone! hover:border-bone"}`;
+const SIDE_BTN =
+  "flex size-[52px] flex-none items-center justify-center rounded-[8px] border border-noir-line bg-transparent p-0 hover:enabled:border-bone hover:enabled:text-bone! disabled:opacity-50 focus-visible:rounded-[8px]!";
+const POPK = "mb-2 font-plex text-[11px] tracking-[0.14em] text-bone3";
 
 export default function QueuePage() {
   const { brand, toast } = useShell();
@@ -71,7 +98,9 @@ export default function QueuePage() {
   const [jobs, setJobs] = useState<JobRow[]>([]);
   const [jobsError, setJobsError] = useState<string | null>(null);
   const [busy, setBusy] = useState<Record<number, string>>({});
-  const [picks, setPicks] = useState<Record<number, Partial<Pick>>>({});
+  const [, repaint] = useState(0); // held/acted live outside state (they outlive the page)
+  const [popId, setPopId] = useState<number | null>(null);
+  const [preview, setPreview] = useState<PreviewState | null>(null);
   // the lane: drawn only when the capability says so; the routes re-ask the gate
   const [laneOn, setLaneOn] = useState(false);
   const [lane, setLane] = useState<LaneItem[] | null>(null);
@@ -146,78 +175,79 @@ export default function QueuePage() {
     };
   }, [active, laneOn, loadPending, loadLane]);
 
-  /* ── the selectors: the plan is the default, the pick overrides it ── */
-  const pickFor = (c: Concept): Pick => {
-    const p = picks[c.id] || {};
-    const provider = p.provider ?? c.render_default?.provider ?? "runway";
-    const spec = renderers[provider];
-    const model = p.model ?? (provider === c.render_default?.provider ? c.render_default?.model : undefined) ?? spec?.default_model ?? spec?.models?.[0]?.id ?? "";
-    const ms = spec?.models?.find((m) => m.id === model);
-    return {
-      provider,
-      model,
-      duration: p.duration !== undefined ? p.duration : (axisDefault(ms?.duration) as number | null),
-      frame: p.frame !== undefined ? p.frame : (axisDefault(ms?.frame) as string | null),
-    };
-  };
-  const setPick = (c: Concept, patch: Partial<Pick>) =>
-    setPicks((w) => {
-      const next = { ...(w[c.id] || {}), ...patch };
-      // a new provider or model resets the axes to that model's defaults
-      if (patch.provider !== undefined || patch.model !== undefined) {
-        delete next.duration;
-        delete next.frame;
-      }
-      return { ...w, [c.id]: next };
-    });
-  const modelSpec = (pick: Pick) => renderers[pick.provider]?.models?.find((m) => m.id === pick.model);
-  const priceOf = (pick: Pick) => {
-    const price = modelSpec(pick)?.price;
-    const seconds = pick.duration ?? 0;
-    if (!price) return null;
-    if (price.kind === "flat") return price.usd ?? null;
-    if (price.kind === "per_second") {
-      const rate = price.usd ?? (pick.frame ? price.usd_by_frame?.[pick.frame] : undefined);
-      return rate != null ? rate * seconds : null;
-    }
-    return null;
-  };
-  const gateFor = (provider: string) => {
-    const s = renderers[provider];
-    if (!s) return { ok: false, note: "—" };
-    if (!s.available) return { ok: false, note: `${s.label} key not set — approving cannot render` };
-    if (!s.spend_ok) return { ok: false, note: `${s.label} spend gate off — ${s.spend_env ? `set ${s.spend_env}=1` : "arm it"}` };
-    return { ok: true, note: `${s.label}${s.today != null ? ` · ${s.today} today` : ""}${s.cap != null ? ` · cap ${s.cap}` : ""}` };
+  // a RENDERING tag outlives its job by nothing: it is READ against the
+  // registry, so a job that ended (or that a restart forgot) drops it
+  const didFor = (c: Concept): Acted | undefined => {
+    const did = acted.get(c.id);
+    if (!did || did.status !== "RENDERING") return did;
+    return jobs.some((j) => j.id === did.job && ["queued", "running"].includes(j.status)) ? did : undefined;
   };
 
+  /* ── the pick: lib/render-choice.ts (the plan leads when it can render,
+     else the cheapest usable model; a held pick survives repaints AND
+     leaving the page) ── */
+  const catalogue = renderers as unknown as Renderers;
+  const pickOf = (c: Concept): Pick | null => pickForCard(catalogue, c.id, c.render_default);
+  const hold = (c: Concept, pick: Pick | null) => {
+    if (!pick) return;
+    held.set(c.id, pick);
+    repaint((n) => n + 1);
+  };
+  // a card the reference gate would refuse. _waiting() already keeps such a
+  // row out of this list, so today this is never true of a real card; it is
+  // drawn for the day one arrives, and it is DISPLAY -- the server refuses
+  // the approve whatever the button looks like.
+  const lockedFor = (c: Concept) => !(c.refs || []).length;
+  const gateLine = (p: string) => {
+    const r = renderers[p];
+    if (!r.available) return `${r.label}: no key`;
+    return `${r.label}: ready${r.today != null ? ` · ${r.today}${r.cap ? `/${r.cap}` : ""} today` : ""}`;
+  };
   const decide = async (c: Concept, what: "approve" | "reject" | "shot") => {
     setBusy((b) => ({ ...b, [c.id]: what }));
+    setPopId(null);
     try {
       if (what === "approve") {
-        const pick = pickFor(c);
-        const res = await queueApprove(c.id, {
-          provider: pick.provider,
-          model: pick.model,
-          duration: pick.duration ?? undefined,
-          frame: pick.frame ?? undefined,
-        } as RenderChoice);
+        const pick = pickOf(c);
+        // the pick rides on the approve; an empty body resolves to the plan
+        const res = await queueApprove(
+          c.id,
+          (pick ? { provider: pick.provider, model: pick.model, duration: pick.duration ?? undefined, frame: pick.frame ?? undefined } : {}) as RenderChoice,
+        );
         const r = res.render;
         toast(
           r
-            ? `Rendering ${c.n} — ${r.provider} · ${r.model} · ${r.duration}s · ${r.frame} · ~$${Number(r.estimate_usd).toFixed(2)}`
+            ? `Rendering ${c.n} — ${r.provider} · ${r.model} · ${r.frame} · ~$${Number(r.estimate_usd).toFixed(2)}`
             : `${c.n} approved`,
         );
+        acted.set(c.id, { status: "RENDERING", job: res.job_id, at: Date.now() });
       } else if (what === "reject") {
         await queueReject(c.id);
         toast(`${c.n} rejected — archived, still counted`);
+        acted.set(c.id, { status: "ARCHIVED", at: Date.now() });
       } else {
         await queueShot(c.id);
         toast(`${c.n} marked shot by hand`);
+        acted.set(c.id, { status: "SHOT BY HAND", at: Date.now() });
       }
-      loadPending();
-      loadJobs();
+      held.delete(c.id);
+      // the registry BEFORE the card is released: the RENDERING tag is read
+      // against it, and a priced button that came back live for the beat in
+      // between is a button that can be pressed twice
+      await listJobs()
+        .then((r) => setJobs(r.items.sort((a, b) => b.id - a.id)))
+        .catch(() => loadJobs());
       if (laneOn) loadLane();
       announceQueueChange();
+      if (what === "approve") loadPending();
+      else {
+        // said on the card for a beat, then the rows are re-read and it is
+        // gone -- a card that simply vanished read as a misclick
+        setTimeout(() => {
+          acted.delete(c.id);
+          loadPending();
+        }, 900);
+      }
     } catch (e) {
       toast(e instanceof Error ? e.message : "That did not go through", "err");
     } finally {
@@ -288,11 +318,13 @@ export default function QueuePage() {
 
       <div className="chead">
         <h3>Awaiting approval</h3>
-        <span className="m">{pending ? `${pending.length} waiting` : ""}</span>
+        <span className="m">
+          {pending ? `${pending.length} waiting${pending.some(lockedFor) ? ` · ${pending.filter(lockedFor).length} blocked` : ""}` : ""}
+        </span>
         <span className="spacer" />
         <span className="m">
           {providerIds.length
-            ? providerIds.map((p) => `${renderers[p].label}: ${gateFor(p).ok ? "armed" : "off"}`).join(" · ")
+            ? providerIds.map(gateLine).join(" · ")
             : runway
               ? runway.available
                 ? `${runway.model} · ~$${(runway.estimate_usd || 0).toFixed(2)} a clip`
@@ -306,137 +338,260 @@ export default function QueuePage() {
           Nothing waiting — a Studio run lands here once its keyframe is rendered, or pick a concept on Pipeline
         </p>
       ) : null}
-      <div className="scenegrid">
+      <div className="mx-auto mb-4 grid max-w-[1680px] grid-cols-[repeat(auto-fill,minmax(min(400px,100%),1fr))] items-start gap-6 px-[42px]">
         {(pending || []).map((c) => {
-          const pick = pickFor(c);
-          const spec = renderers[pick.provider];
-          const ms = modelSpec(pick);
-          const gate = gateFor(pick.provider);
-          const price = priceOf(pick);
-          const frameLabel = spec?.frame_axis === "ratio" ? "Frame" : "Resolution";
+          const pick = pickOf(c);
+          const locked = lockedFor(c);
+          const did = didFor(c);
+          const r = pick ? renderers[pick.provider] : undefined;
+          const spec = pick ? specOf(catalogue, pick.provider, pick.model) : null;
+          const plan = pick && spec ? planFor(spec, pick, c.timeline ? partsOf(c) : null) : null;
+          // one reason left, and the only one a restart could ever have fixed
+          const noKey = r && !r.available ? `${r.label} key not set` : "";
+          const badLength = !!(pick && spec && plan && !plan.timed && !legalDuration(spec.duration as AxisLike, Number(pick.duration)));
+          const why = c.park_reason || (c.reference_image ? "anchors on the keyframe" : "text-to-video · no keyframe yet");
+          const stills = stillsOf(c);
+          const parts = partsOf(c);
           return (
-            <article key={c.id} className="scene on">
-              <div className="screfs">
-                {(c.refs || []).slice(0, 4).map((u) => (
-                  <span key={u} className="scref" style={{ backgroundImage: `url("${u.startsWith("/") ? API_URL + u : u}")` }} />
-                ))}
-                {!(c.refs || []).length ? <span className="m">no references</span> : null}
-                <span className="spacer" />
-                <span className="m">{c.spark || ""}</span>
-              </div>
-              <div className="schead">
-                <h4>{c.title}</h4>
-                <span className="m">{c.n}</span>
-                <span className="spacer" />
-                <span className="m">{c.parked ? "ready · awaiting approval" : "picked"}</span>
-              </div>
-              {c.summary ? <p className="scsum">{c.summary}</p> : null}
-              {c.reference_image ? (
-                <div className="scframe">
-                  <img src={c.reference_image.startsWith("/") ? `${API_URL}${c.reference_image}` : c.reference_image} alt="" />
+            <article
+              key={c.id}
+              data-id={c.id}
+              className={`${CARD} ${locked ? "border-[#5a2320]" : "border-noir-line2"} ${did && did.status !== "RENDERING" ? "opacity-35" : ""}`}
+            >
+              <Hero
+                concept={c}
+                disabled={!stills.length && !(c.refs || []).length}
+                label={`Preview ${c.reference_image ? "keyframe" : "reference"} for ${c.title}`}
+                onOpen={(trigger) =>
+                  setPreview(
+                    stills.length
+                      ? { title: c.title, kind: "KEYFRAME", index: 0, trigger, items: stills.map((url) => ({ url })) }
+                      : { title: c.title, kind: "REFERENCE", index: 0, trigger, items: c.refs.map((url) => ({ url })) },
+                  )
+                }
+              >
+                <span className={`${TAG} ${TAG_DARK} left-3 top-3 max-w-[55%]`}>{brandName(c.brand)}</span>
+                {locked ? <span className={`${TAG} right-3 top-3 bg-noir-red tracking-[0.1em] text-noir-bg`}>NO REFS</span> : null}
+                {did ? <span className={`${TAG} bottom-3 right-3 bg-bone tracking-[0.1em] text-noir-bg`}>{did.status}</span> : null}
+              </Hero>
+
+              {/* the shots, as frames whose WIDTH is their share of the scene */}
+              {parts.length ? (
+                <div className="flex min-w-0 gap-1 px-2 pt-2" role="group" aria-label={shotsLabel(c)}>
+                  {parts.map((p) => {
+                    const frame = `relative block h-11 min-w-0 basis-0 overflow-hidden rounded-[4px] bg-noir-slate p-0 ${p.media_url ? "opacity-60" : ""}`;
+                    const label = (
+                      <span className="absolute bottom-1 left-1.5 whitespace-nowrap font-plex text-[10px] leading-none text-bone [text-shadow:0_0_3px_#000,0_0_3px_#000]">
+                        {windowLabel(p)}
+                        {p.media_url ? " ✓" : ""}
+                      </span>
+                    );
+                    const grow = { flexGrow: Number(p.seconds) > 0 ? Number(p.seconds) : 1 };
+                    return p.reference_image ? (
+                      <button
+                        type="button"
+                        key={p.n}
+                        style={grow}
+                        className={`${frame} focus-visible:rounded-[4px]!`}
+                        title={p.text || p.prompt || ""}
+                        aria-label={`Preview shot ${p.n} still, ${windowLabel(p)}`}
+                        onClick={(e) =>
+                          setPreview({ title: c.title, kind: "KEYFRAME", trigger: e.currentTarget, index: Math.max(0, stills.indexOf(p.reference_image!)), items: stills.map((url) => ({ url })) })
+                        }
+                      >
+                        <RefImg url={p.reference_image} className="block size-full object-cover" deadLabel="" />
+                        {label}
+                      </button>
+                    ) : (
+                      <div key={p.n} style={grow} className={frame} title={p.text || p.prompt || ""}>
+                        {label}
+                      </div>
+                    );
+                  })}
                 </div>
               ) : null}
-              <p className="scpre">{c.prompt}</p>
 
-              <div className="scchoice">
-                <label className="scsel" title="Renderer">
-                  <Zap size={11} />
-                  <select aria-label="Renderer" value={pick.provider} onChange={(e) => setPick(c, { provider: e.target.value })}>
-                    {providerIds.map((p) => (
-                      <option key={p} value={p}>
-                        {renderers[p].label}
-                        {renderers[p].available ? "" : " · no key"}
-                      </option>
-                    ))}
-                    {!providerIds.length ? <option value="runway">Runway</option> : null}
-                  </select>
-                </label>
-                <label className="scsel" title="Model">
-                  <Monitor size={11} />
-                  <select aria-label="Model" value={pick.model} onChange={(e) => setPick(c, { model: e.target.value })}>
-                    {(spec?.models || []).map((m) => (
-                      <option key={m.id} value={m.id} disabled={m.available === false}>
-                        {m.label}
-                        {m.price?.kind === "per_second" && m.price.usd != null ? ` · $${m.price.usd.toFixed(2)}/s` : ""}
-                        {m.available === false ? " · unreachable" : ""}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                {ms?.duration ? (
-                  <label className="scsel" title={ms.duration.note || "Length"}>
-                    <Clock size={11} />
-                    {ms.duration.kind === "range" ? (
-                      <input
-                        type="number"
-                        aria-label="Length in seconds"
-                        min={ms.duration.min}
-                        max={ms.duration.max}
-                        value={pick.duration ?? ""}
-                        onChange={(e) => setPick(c, { duration: Number(e.target.value) })}
-                      />
-                    ) : (
-                      <select
-                        aria-label="Length"
-                        value={String(pick.duration ?? "")}
-                        disabled={ms.duration.kind === "fixed"}
-                        onChange={(e) => setPick(c, { duration: Number(e.target.value) })}
+              <div className="flex min-w-0 flex-col gap-3 px-4 pb-4 pt-3.5">
+                <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+                  <TitleBlock concept={c} />
+                  <div className="flex flex-none gap-1">
+                    <RefThumbs
+                      concept={c}
+                      max={3}
+                      size="sm"
+                      onOpen={(index, trigger) => setPreview({ title: c.title, kind: "REFERENCE", index, trigger, items: c.refs.map((url) => ({ url })) })}
+                    />
+                  </div>
+                </div>
+                <p className="-mt-1 mb-0 truncate font-plex text-[11px] tracking-[0.04em] text-bone3" title={why}>
+                  {c.n} · {c.parked ? "PARKED" : "PICKED"} · {why}
+                </p>
+
+                {/* the renderer: ONE chip, and a popover over the same catalogue */}
+                <Popover.Root open={popId === c.id && !did && !locked && !!pick} onOpenChange={(o) => setPopId(o ? c.id : null)}>
+                  <Popover.Trigger
+                    disabled={locked || !pick || !!did}
+                    aria-label={locked || !pick ? "Renderer locked" : `Change renderer — ${spec && plan ? chipText(spec, pick, plan) : ""}`}
+                    className="flex h-11 w-full items-center justify-between gap-2 rounded-[8px] border border-noir-line bg-noir-well px-3 font-plex! text-xs! leading-none! tracking-[0.06em] text-bone! hover:enabled:border-bone focus-visible:rounded-[8px]! disabled:cursor-not-allowed disabled:text-bone3! data-[popup-open]:[&>svg]:rotate-180"
+                  >
+                    <span className="min-w-0 truncate">
+                      {locked ? "RENDERER LOCKED" : !pick || !spec || !plan ? "NO RENDERER CONFIGURED" : chipText(spec, pick, plan)}
+                    </span>
+                    <ChevronDown size={16} strokeWidth={2} aria-hidden className="flex-none" />
+                  </Popover.Trigger>
+                  <Popover.Portal>
+                    <Popover.Positioner side="bottom" align="start" sideOffset={8} className="z-[800]">
+                      <Popover.Popup
+                        aria-label={`Renderer for ${c.title}`}
+                        className={`${cardFonts} flex w-[var(--anchor-width)] flex-col gap-2.5 rounded-[10px] border border-noir-line3 bg-noir-raise p-4 text-bone shadow-[0_18px_40px_rgb(0_0_0/0.55)] outline-none`}
                       >
-                        {(ms.duration.values || []).map((d) => (
-                          <option key={String(d)} value={String(d)}>
-                            {d} sec
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                  </label>
-                ) : null}
-                {ms?.frame ? (
-                  <label className="scsel" title={ms.frame.note || frameLabel}>
-                    <RectangleVertical size={11} />
-                    <select
-                      aria-label={frameLabel}
-                      value={String(pick.frame ?? "")}
-                      disabled={ms.frame.kind === "fixed"}
-                      onChange={(e) => setPick(c, { frame: e.target.value })}
-                    >
-                      {(ms.frame.values || []).map((f) => (
-                        <option key={String(f)} value={String(f)}>
-                          {String(f)}
-                          {RATIO_NAMES[String(f)] ? ` · ${RATIO_NAMES[String(f)]}` : ""}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : null}
-              </div>
-              {ms?.frame?.kind === "fixed" && ms.frame.note ? <span className="m">{ms.frame.note}</span> : null}
+                        {pick && spec && plan && r ? (
+                          <>
+                            <div>
+                              <div className={POPK}>MODEL</div>
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                {providerIds.map((name) => {
+                                  const v = renderers[name];
+                                  // a vendor with no key is one dead pill, not a row of them
+                                  if (!v.available)
+                                    return (
+                                      <button type="button" key={name} disabled className={pill(false, true)}>
+                                        {v.label} · no key
+                                      </button>
+                                    );
+                                  return (v.models || []).map((m) => (
+                                    <button
+                                      type="button"
+                                      key={`${name}|${m.id}`}
+                                      title={v.label}
+                                      disabled={m.available === false}
+                                      aria-pressed={pick.provider === name && pick.model === m.id}
+                                      className={pill(pick.provider === name && pick.model === m.id, m.available === false)}
+                                      onClick={() => hold(c, withModel(catalogue, name, m.id))}
+                                    >
+                                      {m.label}
+                                      {m.available === false ? " · not on this account" : ""}
+                                    </button>
+                                  ));
+                                })}
+                              </div>
+                            </div>
+                            <div className="mt-1 grid grid-cols-2 gap-3">
+                              <div>
+                                <div className={POPK}>LENGTH{plan.timed ? " · PER SHOT" : ""}</div>
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  {plan.timed ? (
+                                    // no length control: every shot's length is its window's
+                                    <span className="font-plex text-[11px] text-bone3" title={`each shot renders at its own window's length, fitted up to what ${spec.id} can make`}>
+                                      {plan.lengths.join(" + ")}s · set by the windows
+                                    </span>
+                                  ) : spec.duration.kind === "range" ? (
+                                    // a real span, so 7s on a model that renders 1-20s is a real request
+                                    <span className="flex items-center gap-2 font-plex text-[11px] text-bone3">
+                                      <input
+                                        type="number"
+                                        min={spec.duration.min}
+                                        max={spec.duration.max}
+                                        step={1}
+                                        value={pick.duration ?? ""}
+                                        aria-label={`Length in seconds, ${spec.duration.min} to ${spec.duration.max}`}
+                                        onChange={(e) => hold(c, { ...pick, duration: e.target.value === "" ? null : Number(e.target.value) })}
+                                        className="h-11 w-[72px] rounded-[6px] border border-noir-line3 bg-noir-well text-center font-plex! text-[13px]! text-bone! outline-none focus:border-bone"
+                                      />
+                                      sec · {spec.duration.min}–{spec.duration.max}
+                                    </span>
+                                  ) : (
+                                    (spec.duration.values || []).map((d) => (
+                                      <button
+                                        type="button"
+                                        key={String(d)}
+                                        disabled={spec.duration.kind === "fixed"}
+                                        title={spec.duration.kind === "fixed" ? spec.duration.note || "the only length this model offers" : undefined}
+                                        aria-pressed={Number(d) === pick.duration}
+                                        className={pill(Number(d) === pick.duration, spec.duration.kind === "fixed")}
+                                        onClick={() => hold(c, { ...pick, duration: Number(d) })}
+                                      >
+                                        {d}s
+                                      </button>
+                                    ))
+                                  )}
+                                </div>
+                              </div>
+                              <div>
+                                <div className={POPK}>FRAME · {String(r.frame_axis || "resolution").toUpperCase()}</div>
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  {(spec.frame.values || []).map((f) => (
+                                    <button
+                                      type="button"
+                                      key={String(f)}
+                                      disabled={spec.frame.kind === "fixed"}
+                                      title={spec.frame.kind === "fixed" ? spec.frame.note || "the only frame this model offers" : RATIO_NAMES[String(f)]}
+                                      aria-pressed={String(f) === pick.frame}
+                                      className={pill(String(f) === pick.frame, spec.frame.kind === "fixed")}
+                                      onClick={() => hold(c, { ...pick, frame: String(f) })}
+                                    >
+                                      {String(f)}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                            <div className="font-plex text-[11px] text-bone3">Greyed out = no API key on this account</div>
+                          </>
+                        ) : null}
+                      </Popover.Popup>
+                    </Popover.Positioner>
+                  </Popover.Portal>
+                </Popover.Root>
 
-              <div className="scfoot">
-                <button
-                  type="button"
-                  className="swipe shot"
-                  title="Mark shot — you made this outside the render pipeline"
-                  aria-label="Mark shot — you made this outside the render pipeline"
-                  disabled={!!busy[c.id]}
-                  onClick={() => decide(c, "shot")}
-                >
-                  <Camera size={15} strokeWidth={1.6} />
-                </button>
-                <button type="button" className="tag" disabled={!!busy[c.id]} onClick={() => decide(c, "reject")}>
-                  {busy[c.id] === "reject" ? "…" : "Reject"}
-                </button>
-                <span className="m">{gate.ok ? (c.reference_image ? "anchors on the keyframe above" : c.park_reason || "text-to-video · no reference attached") : gate.note}</span>
-                <span className="spacer" />
-                <button type="button" className="go" disabled={!gate.ok || !!busy[c.id]} onClick={() => decide(c, "approve")}>
-                  <Zap strokeWidth={2} />
-                  {busy[c.id] === "approve" ? "Rendering…" : `Approve · render${price != null ? ` ~$${price.toFixed(2)}` : ""}`}
-                </button>
+                <div className="flex min-w-0 gap-2">
+                  <button
+                    type="button"
+                    disabled={locked || !pick || !!noKey || badLength || !!did || !!busy[c.id]}
+                    onClick={() => decide(c, "approve")}
+                    className="h-[52px] min-w-0 flex-1 truncate rounded-[8px] bg-noir-red px-2.5 font-bebas! text-[22px]! leading-none! tracking-[0.05em] text-noir-bg! hover:enabled:bg-noir-red2 focus-visible:rounded-[8px]! disabled:cursor-not-allowed disabled:bg-noir-line2 disabled:text-bone3!"
+                  >
+                    {busy[c.id] === "approve" || did?.status === "RENDERING"
+                      ? "Rendering…"
+                      : did
+                        ? did.status
+                        : locked
+                          ? "Add references to approve"
+                          : !pick || !spec || !plan
+                            ? "No renderer is configured"
+                            : noKey
+                              ? noKey
+                              : badLength
+                                ? `${spec.id} renders ${spec.duration.min}-${spec.duration.max}s`
+                                : approveText(plan)}
+                  </button>
+                  <button
+                    type="button"
+                    className={`${SIDE_BTN} text-bone!`}
+                    title="Reject — archive it"
+                    aria-label={`Reject ${c.title}`}
+                    disabled={!!did || !!busy[c.id]}
+                    onClick={() => decide(c, "reject")}
+                  >
+                    <X size={18} strokeWidth={2} aria-hidden />
+                  </button>
+                  <button
+                    type="button"
+                    className={`${SIDE_BTN} ${did?.status === "SHOT BY HAND" ? "border-bone! text-bone!" : "text-bone3!"}`}
+                    title="Shot it yourself"
+                    aria-label={`Mark ${c.title} as shot by hand — made outside the render pipeline`}
+                    disabled={!!did || !!busy[c.id]}
+                    onClick={() => decide(c, "shot")}
+                  >
+                    <Camera size={20} strokeWidth={2} aria-hidden />
+                  </button>
+                </div>
               </div>
             </article>
           );
         })}
       </div>
+      {preview ? <PreviewOverlay key={`${preview.title}-${preview.kind}-${preview.index}`} state={preview} onClose={() => setPreview(null)} /> : null}
 
       {laneOn ? (
         <>

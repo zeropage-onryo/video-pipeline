@@ -3,53 +3,87 @@
 /* Pipeline — the board you decide on, and nothing else (2026-09-12, the
    "ZPF Pipeline" design). A concept IS one scene IS one prompt, so this
    is one grid of cards and one question: which of these is worth the
-   spend. The references it was written against ABOVE, the concept, then
-   the prompt BELOW, folded away until a card is opened.
+   spend. Each card leads with its PICTURE, then the title and one line,
+   then the references it was written against; the logline, the hook, the
+   timed shots and the prompt are in the card's drawer (2026-09-17, the
+   image-first restyle -- ported from app/static/zpf/scenes.js).
 
    Picking is the label (pick_rate) and puts the concept in front of the
    Queue; approving THERE renders. Leaving the board is archiving, never
    deleting — an unpicked row is the only negative signal this system
    collects. Only one-shot concepts are the unit; a legacy multi-shot row
    is left to the Dev Studio. */
-/* eslint-disable @next/next/no-img-element */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Check, Clock, Image as ImageIcon, ListVideo, Monitor, RectangleVertical, Undo2, Workflow, X } from "lucide-react";
-import { API_URL } from "@/lib/api";
+import { Dialog } from "@base-ui/react/dialog";
+import { Archive, Check, Undo2, Workflow, X } from "lucide-react";
 import {
   announceQueueChange,
   archiveConcept,
   boardConcepts,
   pickConcept,
-  queuePending,
   updateShotPrompt,
   type Concept,
   type PickRate,
-  type RunwayState,
 } from "@/lib/studio-api";
+import { cardFonts } from "@/components/studio/card-fonts";
+import {
+  CARD,
+  GATE_DOT,
+  Hero,
+  ICON_BTN,
+  NoReferenceSlate,
+  RefImg,
+  RefThumbs,
+  TAG,
+  TAG_DARK,
+  TitleBlock,
+  brandName,
+  gateOf,
+  heroOf,
+  partsOf,
+  shotsLabel,
+  stillsOf,
+  windowLabel,
+} from "@/components/studio/concept-card";
+import { PreviewOverlay, type PreviewState } from "@/components/studio/preview-overlay";
 import { useShell } from "@/components/studio/shell";
 
 type Filter = "open" | "picked" | "archived";
-const ratioLabel = (r?: string) => (r === "720:1280" ? "9:16" : r === "1280:720" ? "16:9" : r || "9:16");
+
+/* Which concepts have their prompt open in the drawer. Out here, not in
+   state: the board re-reads on every pick, and a prompt that snapped shut
+   each time -- or when you left the page and came back -- would be worse
+   than no toggle. (The vanilla board's `openPrompts`, same reason.) */
+const openPrompts = new Set<number>();
 
 function statusOf(c: Concept) {
-  if (c.archived) return "archived";
-  if (c.media_url) return "rendered";
-  if (c.picked) return "picked · awaiting approval in queue";
-  if (c.parked) return "keyframed · awaiting approval in queue";
-  return "open";
+  // A rendered clip also says WHO PAID: a subscription clip was made by
+  // hand on the operator's own plan, not billed per call.
+  if (c.archived) return c.graded ? "ARCHIVED · GRADED" : "ARCHIVED · AWAITING GRADE";
+  if (c.media_url) return c.subscription ? "RENDERED · SUBSCRIPTION" : "RENDERED";
+  if (c.picked) return "PICKED";
+  if (c.parked) return "KEYFRAMED · IN QUEUE";
+  return "";
 }
+
+const K = "font-plex text-[11px] tracking-[0.14em] text-bone3";
 
 export default function PipelinePage() {
   const { brand, toast } = useShell();
   const [filter, setFilter] = useState<Filter>("open");
   const [all, setAll] = useState<Concept[] | null>(null);
   const [rate, setRate] = useState<PickRate | null>(null);
-  const [runway, setRunway] = useState<RunwayState | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [openId, setOpenId] = useState<number | null>(null);
-  const [drafts, setDrafts] = useState<Record<number, string>>({});
   const [busy, setBusy] = useState<Record<number, boolean>>({});
+  const [drafts, setDrafts] = useState<Record<number, string>>({});
+  const [drawer, setDrawer] = useState<{ id: number; trigger: HTMLElement | null } | null>(null);
+  const [preview, setPreview] = useState<PreviewState | null>(null);
+  const [, bump] = useState(0); // openPrompts lives outside state; this repaints its toggle
+  const drawerClose = useRef<HTMLButtonElement>(null);
+  // where focus goes back to. A ref, not the `drawer` state: by the time
+  // Base UI asks (finalFocus), closing has already set that state to null.
+  const drawerFrom = useRef<{ id: number; trigger: HTMLElement | null } | null>(null);
 
   const load = () => {
     boardConcepts(brand || undefined, true)
@@ -65,17 +99,14 @@ export default function PipelinePage() {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brand]);
-  useEffect(() => {
-    queuePending()
-      .then((r) => setRunway(r.runway))
-      .catch(() => setRunway(null));
-  }, []);
 
   const open = useMemo(() => (all || []).filter((c) => !c.archived), [all]);
   const gone = useMemo(() => (all || []).filter((c) => c.archived), [all]);
   const cards = filter === "archived" ? gone : filter === "picked" ? open.filter((c) => c.picked) : open;
   const scope = `${brand || "—"} · ${open.length} open · ${gone.length} archived`;
   const countLine = rate?.generated ? `${scope} · ${rate.picked}/${rate.generated} picked all time, all brands` : scope;
+  // the drawer reads the FRESH row, so a pick made while it is open reads back
+  const shown = drawer ? (all || []).find((c) => c.id === drawer.id) || null : null;
 
   const act = async (c: Concept, fn: () => Promise<unknown>, done?: string) => {
     setBusy((b) => ({ ...b, [c.id]: true }));
@@ -90,6 +121,15 @@ export default function PipelinePage() {
       setBusy((b) => ({ ...b, [c.id]: false }));
     }
   };
+
+  const previewRefs = (c: Concept, index: number, trigger: HTMLElement) =>
+    setPreview({ title: c.title, kind: "REFERENCE", index, trigger, items: (c.refs || []).map((url) => ({ url })) });
+  const previewStills = (c: Concept, trigger: HTMLElement) => {
+    const stills = stillsOf(c);
+    if (!stills.length) return (c.refs || []).length ? previewRefs(c, 0, trigger) : undefined;
+    setPreview({ title: c.title, kind: "KEYFRAME", index: 0, trigger, items: stills.map((url) => ({ url })) });
+  };
+  const overlay = preview ? <PreviewOverlay key={`${preview.title}-${preview.kind}-${preview.index}`} state={preview} onClose={() => setPreview(null)} /> : null;
 
   return (
     <section className="view" style={{ paddingTop: 0 }}>
@@ -122,154 +162,328 @@ export default function PipelinePage() {
         </p>
       ) : null}
 
-      <div className="scenegrid">
+      {/* Image-first (2026-09-17): the picture is the card. Title and the ONE
+          card line under it (c.summary is preprod.concept_summary); the
+          logline, hook and prompt are the drawer's and are never printed or
+          trimmed here. */}
+      <div className="mx-auto mb-4 grid max-w-[1680px] grid-cols-[repeat(auto-fill,minmax(min(400px,100%),1fr))] items-start gap-6 px-[42px]">
         {cards.map((c) => {
-          const isOpen = openId === c.id;
-          const draft = drafts[c.id] ?? c.prompt;
-          const dirty = draft.trim() !== (c.prompt || "").trim();
+          const gate = gateOf(c);
+          const status = statusOf(c);
+          const live = c.picked && !c.archived && !c.media_url;
           return (
             <article
               key={c.id}
-              className={`scene${c.picked || c.parked ? " on" : ""}${c.archived ? " off" : ""}${isOpen ? " open" : ""}`}
-              onClick={() => setOpenId(isOpen ? null : c.id)}
+              data-id={c.id}
+              /* picked: a 1px border plus a 3px ring OUTSIDE the box, so nothing moves */
+              className={`${CARD} ${c.picked && !c.archived ? "border-noir-red shadow-[0_0_0_3px_#E23B2E]" : "border-noir-line2"} ${c.archived ? "opacity-50 focus-within:opacity-100 hover:opacity-100" : ""}`}
             >
-              <div className="screfs">
-                {(c.refs || []).slice(0, 4).map((u) => (
-                  <span key={u} className="scref" style={{ backgroundImage: `url("${API_URL}${u}")` }} />
-                ))}
-                {!(c.refs || []).length ? <span className="m">no references</span> : null}
-                <span className="spacer" />
-                <span className="m">{c.spark || ""}</span>
-              </div>
-              <div className="schead">
-                <h4>{c.title}</h4>
-                <span className="m">{c.n}</span>
-                <span className="spacer" />
-                {c.media_url ? (
-                  <a className="tag" href={c.media_url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
-                    clip ↗
-                  </a>
+              <Hero concept={c} label={`Open details for ${c.title}`} onOpen={(trigger) => {
+                  drawerFrom.current = { id: c.id, trigger };
+                  setDrawer({ id: c.id, trigger });
+                }}>
+                <span className={`${TAG} ${TAG_DARK} left-3 top-3 max-w-[55%]`}>{brandName(c.brand)}</span>
+                <span className={`${TAG} ${TAG_DARK} right-3 top-3 max-w-[40%]`} title={gate.long}>
+                  <i className={`size-2 flex-none rounded-full ${GATE_DOT[gate.level]}`} />
+                  {gate.short}
+                </span>
+                <span className={`${TAG} ${TAG_DARK} bottom-3 left-3 max-w-[45%]`}>{shotsLabel(c)}</span>
+                {status ? (
+                  <span className={`${TAG} bottom-3 right-3 max-w-[50%] text-noir-bg ${live ? "bg-noir-red" : "bg-bone"}`}>{status}</span>
                 ) : null}
-                <span className="m">{statusOf(c)}</span>
-              </div>
-              {c.summary ? <p className="scsum">{c.summary}</p> : null}
-
-              {isOpen ? (
-                <div className="scbody" onClick={(e) => e.stopPropagation()}>
-                  <div className="scframe">
-                    {c.reference_image ? (
-                      <img src={c.reference_image.startsWith("/") ? `${API_URL}${c.reference_image}` : c.reference_image} alt="" />
+              </Hero>
+              <div className="flex min-w-0 flex-col gap-3 px-4 pb-4 pt-3.5">
+                {/* wraps only when the card is phone-narrow */}
+                <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+                  <TitleBlock concept={c} />
+                  <div className="flex flex-none gap-1.5">
+                    {c.archived ? (
+                      <button
+                        type="button"
+                        className={ICON_BTN}
+                        title="Put back on the board"
+                        aria-label={`Put ${c.title} back on the board`}
+                        disabled={busy[c.id]}
+                        onClick={() => act(c, () => archiveConcept(c.id, false), "Back on the board")}
+                      >
+                        <Undo2 size={18} strokeWidth={2} aria-hidden />
+                      </button>
                     ) : (
-                      <span className="scempty">
-                        <ImageIcon size={18} strokeWidth={1.4} />
-                        <span className="m">no keyframe yet · the Director renders one</span>
-                      </span>
-                    )}
-                  </div>
-                  <div className="scchips">
-                    <span className="chip">
-                      <Clock size={11} /> {runway?.duration ?? 5} sec
-                    </span>
-                    <span className="chip">
-                      <RectangleVertical size={11} /> {ratioLabel(runway?.ratio)}
-                    </span>
-                    <span className="chip">
-                      <Monitor size={11} /> {runway?.model ?? "gen4_turbo"}
-                    </span>
-                    <span className="spacer" />
-                    <span className="m">{runway?.estimate_usd != null ? `~$${runway.estimate_usd.toFixed(2)} a clip` : ""}</span>
-                  </div>
-                  <div className="scprompt">
-                    <div className="scphead">
-                      <span className="m">prompt · shot 1</span>
-                      <span className="spacer" />
-                      <span className="m">{draft.length} chars</span>
-                    </div>
-                    <textarea
-                      rows={7}
-                      value={draft}
-                      onChange={(e) => setDrafts((d) => ({ ...d, [c.id]: e.target.value }))}
-                      placeholder="What happens in this shot…"
-                      aria-label={`Prompt for ${c.title}`}
-                    />
-                    <div className="scpfoot">
-                      {dirty ? (
+                      <>
                         <button
                           type="button"
-                          className="btn pri"
-                          disabled={busy[c.id]}
-                          onClick={() =>
-                            act(c, () => updateShotPrompt(c.id, 1, draft.trim()), "Prompt saved to the concept").then(() =>
-                              setDrafts((d) => {
-                                const next = { ...d };
-                                delete next[c.id];
-                                return next;
-                              }),
-                            )
-                          }
-                        >
-                          Save prompt
-                        </button>
-                      ) : null}
-                      {!c.archived ? (
-                        <button
-                          type="button"
-                          className={`btn${c.picked ? "" : " pri"}`}
+                          className={`${ICON_BTN} ${c.picked ? "border-noir-red! bg-noir-red! text-noir-bg!" : "text-bone!"}`}
+                          title={c.picked ? "Picked — click to unpick" : "Pick this"}
+                          aria-label={`${c.picked ? "Unpick" : "Pick"} ${c.title}`}
+                          aria-pressed={c.picked}
                           disabled={busy[c.id] || !!c.media_url}
                           onClick={() =>
                             act(c, () => pickConcept(c.id, !c.picked), c.picked ? "Unpicked" : `${c.n} is in the Queue — approving it there renders`)
                           }
                         >
-                          <ListVideo strokeWidth={1.8} /> {c.media_url ? "Rendered" : c.picked ? "In the Queue" : "Send to Queue"}
+                          <Check size={18} strokeWidth={2} aria-hidden />
                         </button>
-                      ) : null}
-                      <Link href={`/studio/flows?concept=${c.id}&shot=1`} className="btn">
-                        <Workflow strokeWidth={1.6} /> Open in Director
-                      </Link>
-                    </div>
+                        {/* archives, never deletes: an unpicked row is the only negative signal */}
+                        <button
+                          type="button"
+                          className={ICON_BTN}
+                          title="Not this one — archive"
+                          aria-label={`Archive ${c.title} — take it off the board`}
+                          disabled={busy[c.id]}
+                          onClick={() => act(c, () => archiveConcept(c.id, true), "Archived — it still counts")}
+                        >
+                          <Archive size={18} strokeWidth={2} aria-hidden />
+                        </button>
+                      </>
+                    )}
+                    <Link
+                      href={`/studio/flows?concept=${c.id}&shot=1`}
+                      className={`${ICON_BTN} hover:border-bone hover:text-bone!`}
+                      title="Open in Director"
+                      aria-label={`Open ${c.title} in Director`}
+                    >
+                      <Workflow size={18} strokeWidth={2} aria-hidden />
+                    </Link>
                   </div>
                 </div>
-              ) : null}
-
-              <div className="scfoot" onClick={(e) => e.stopPropagation()}>
-                {c.archived ? (
-                  <button type="button" className="tag" disabled={busy[c.id]} onClick={() => act(c, () => archiveConcept(c.id, false), "Back on the board")}>
-                    <Undo2 size={12} strokeWidth={1.6} /> Put back on the board
-                  </button>
-                ) : (
-                  <>
-                    <button
-                      type="button"
-                      className="swipe no"
-                      title="Not this one — take it off the board"
-                      aria-label="Not this one — take it off the board"
-                      disabled={busy[c.id]}
-                      onClick={() => act(c, () => archiveConcept(c.id, true), "Archived — it still counts")}
-                    >
-                      <X size={16} strokeWidth={2} />
-                    </button>
-                    <button
-                      type="button"
-                      className={`swipe yes${c.picked ? " on" : ""}`}
-                      title={c.picked ? "Picked — click to unpick" : "Pick this"}
-                      aria-label={c.picked ? "Unpick this concept" : "Pick this concept"}
-                      aria-pressed={c.picked}
-                      disabled={busy[c.id]}
-                      onClick={() => act(c, () => pickConcept(c.id, !c.picked))}
-                    >
-                      <Check size={16} strokeWidth={2.2} />
-                    </button>
-                  </>
-                )}
-                <span className="spacer" />
-                <Link href={`/studio/flows?concept=${c.id}&shot=1`} className="go" style={{ padding: "10px 22px" }}>
-                  Open in Director
-                </Link>
+                <div className="flex min-h-[52px] min-w-0 flex-wrap items-center gap-2">
+                  {(c.refs || []).length ? (
+                    <RefThumbs concept={c} onOpen={(i, trigger) => previewRefs(c, i, trigger)} />
+                  ) : (
+                    <span className="font-plex text-xs tracking-[0.06em] text-noir-red2">NO REFERENCES — ADD BEFORE QUEUE</span>
+                  )}
+                </div>
               </div>
             </article>
           );
         })}
       </div>
+
+      {/* ── the drawer: everything the card will not print ── */}
+      <Dialog.Root
+        open={!!shown}
+        onOpenChange={(o) => {
+          if (!o) setDrawer(null);
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Backdrop className="fixed inset-0 z-[900] bg-black/60" />
+          <Dialog.Popup
+            initialFocus={drawerClose}
+            finalFocus={() => {
+              // the board may have re-read under the drawer: find the card again
+              const from = drawerFrom.current;
+              if (from?.trigger?.isConnected) return from.trigger;
+              return document.querySelector<HTMLElement>(`article[data-id="${from?.id}"] button`) ?? true;
+            }}
+            className={`${cardFonts} fixed inset-y-0 right-0 z-[901] flex w-[520px] max-w-full flex-col gap-[22px] overflow-y-auto border-l border-noir-line bg-[#121211] px-8 py-7 font-tight text-sm leading-normal text-bone outline-none max-sm:px-4 max-sm:py-5 [&>*]:flex-none`}
+          >
+            {shown ? (
+              <DrawerBody
+                c={shown}
+                closeRef={drawerClose}
+                promptOpen={openPrompts.has(shown.id)}
+                onTogglePrompt={() => {
+                  if (openPrompts.has(shown.id)) openPrompts.delete(shown.id);
+                  else openPrompts.add(shown.id);
+                  bump((n) => n + 1);
+                }}
+                draft={drafts[shown.id] ?? shown.prompt ?? ""}
+                onDraft={(text) => setDrafts((d) => ({ ...d, [shown.id]: text }))}
+                saving={!!busy[shown.id]}
+                onSave={(text) =>
+                  act(shown, () => updateShotPrompt(shown.id, 1, text), "Prompt saved to the concept").then(() =>
+                    setDrafts((d) => {
+                      const next = { ...d };
+                      delete next[shown.id];
+                      return next;
+                    }),
+                  )
+                }
+                onRefs={(i, trigger) => previewRefs(shown, i, trigger)}
+                onHero={(trigger) => previewStills(shown, trigger)}
+              />
+            ) : null}
+            {/* inside the drawer's tree, so Base UI nests it: Esc closes the
+                preview first and the drawer stays */}
+            {shown ? overlay : null}
+          </Dialog.Popup>
+        </Dialog.Portal>
+      </Dialog.Root>
+      {shown ? null : overlay}
     </section>
+  );
+}
+
+function DrawerBody({
+  c,
+  closeRef,
+  promptOpen,
+  onTogglePrompt,
+  draft,
+  onDraft,
+  saving,
+  onSave,
+  onRefs,
+  onHero,
+}: {
+  c: Concept;
+  closeRef: React.RefObject<HTMLButtonElement | null>;
+  promptOpen: boolean;
+  onTogglePrompt: () => void;
+  draft: string;
+  onDraft: (text: string) => void;
+  saving: boolean;
+  onSave: (text: string) => void;
+  onRefs: (index: number, trigger: HTMLElement) => void;
+  onHero: (trigger: HTMLElement) => void;
+}) {
+  const gate = gateOf(c);
+  const hero = heroOf(c);
+  const parts = partsOf(c);
+  const refs = c.refs || [];
+  const dirty = draft.trim() !== (c.prompt || "").trim();
+  return (
+    <>
+      <div className="flex items-center justify-between gap-3">
+        <span className="font-plex text-xs tracking-[0.12em] text-bone3">
+          {brandName(c.brand)} · CONCEPT #{c.id}
+        </span>
+        <Dialog.Close ref={closeRef} aria-label="Close details" className={ICON_BTN}>
+          <X size={18} strokeWidth={2} aria-hidden />
+        </Dialog.Close>
+      </div>
+      <div>
+        <Dialog.Title className="m-0 mb-1.5 font-bebas text-5xl font-normal leading-[0.95] tracking-[0.02em] [overflow-wrap:anywhere] max-sm:text-[38px]">
+          {c.title || "Untitled"}
+        </Dialog.Title>
+        {c.summary ? <p className="m-0 text-base text-bone2">{c.summary}</p> : null}
+      </div>
+
+      <button
+        type="button"
+        disabled={hero.kind === "none"}
+        aria-label={hero.kind === "keyframe" ? "Preview keyframe" : hero.kind === "ref" ? "Preview reference 1" : "No image to preview"}
+        onClick={(e) => onHero(e.currentTarget)}
+        className="relative aspect-video w-full overflow-hidden rounded-[8px] border border-noir-line bg-noir-slate p-0 hover:enabled:border-bone focus-visible:rounded-[8px]! disabled:cursor-default"
+      >
+        {hero.kind === "none" ? (
+          <NoReferenceSlate />
+        ) : (
+          <>
+            <RefImg url={hero.url} eager className="block size-full object-cover" deadClassName="absolute inset-0 text-[11px] tracking-[0.16em]" />
+            <span className={`${TAG} ${TAG_DARK} bottom-2.5 right-2.5`}>{hero.kind === "keyframe" ? "KEYFRAME" : "REF 1"} · CLICK TO ENLARGE</span>
+          </>
+        )}
+      </button>
+
+      <section className="flex min-w-0 flex-col gap-1.5">
+        <div className={K}>LOGLINE</div>
+        <p className="m-0 text-[15px] leading-normal [overflow-wrap:anywhere]">{c.logline || "—"}</p>
+      </section>
+
+      <div className="grid grid-cols-2 gap-4 max-sm:grid-cols-1">
+        <section className="flex min-w-0 flex-col gap-1.5">
+          <div className={K}>HOOK · FRAME 1</div>
+          <p className="m-0 text-sm leading-[1.45] [overflow-wrap:anywhere]">{c.hook || "—"}</p>
+        </section>
+        <section className="flex min-w-0 flex-col gap-1.5">
+          <div className={K}>SHOTS · {shotsLabel(c)}</div>
+          <ol className="m-0 flex list-none flex-col gap-1.5 p-0">
+            {parts.length ? (
+              parts.map((p) => (
+                <li key={p.n} className="flex gap-2.5 text-[13.5px] leading-[1.4] [overflow-wrap:anywhere]">
+                  <span className="min-w-[52px] flex-none font-plex text-xs text-bone3">{windowLabel(p)}</span>
+                  <span>{p.text || p.prompt || ""}</span>
+                </li>
+              ))
+            ) : (
+              <li className="flex gap-2.5 text-[13.5px]">
+                <span className="min-w-[52px] flex-none font-plex text-xs text-bone3">—</span>
+                <span>One shot · rendered whole</span>
+              </li>
+            )}
+          </ol>
+        </section>
+      </div>
+
+      <section className="flex min-w-0 flex-col gap-2">
+        <div className={K}>REFERENCES · {refs.length}</div>
+        <div className="flex flex-wrap gap-2">
+          {refs.length ? (
+            <RefThumbs concept={c} max={99} size="lg" onOpen={onRefs} />
+          ) : (
+            <span className="font-plex text-xs tracking-[0.06em] text-noir-red2">NO REFERENCES — ADD BEFORE QUEUE</span>
+          )}
+        </div>
+      </section>
+
+      <section className="flex min-w-0 flex-col gap-2.5 border-t border-noir-line pt-4">
+        <div className="flex items-center justify-between gap-3">
+          <span className="flex min-w-0 items-start gap-2 font-plex text-xs [overflow-wrap:anywhere]">
+            <i className={`mt-[5px] size-2 flex-none rounded-full ${GATE_DOT[gate.level]}`} />
+            <span>{gate.long}</span>
+          </span>
+          <button
+            type="button"
+            aria-expanded={promptOpen}
+            aria-controls="ncdprompt"
+            onClick={onTogglePrompt}
+            className="h-11 flex-none rounded-[8px] border border-noir-line bg-transparent px-3.5 font-plex! text-xs! tracking-[0.08em] text-bone! hover:border-bone focus-visible:rounded-[8px]!"
+          >
+            {promptOpen ? "HIDE PROMPT" : "SHOW PROMPT"}
+          </button>
+        </div>
+        {(c.warnings || []).length ? (
+          <ul className="m-0 list-disc pl-[18px] text-[13px] text-gate-warn">
+            {c.warnings!.map((w) => (
+              <li key={w}>{w}</li>
+            ))}
+          </ul>
+        ) : null}
+        {promptOpen ? (
+          <div id="ncdprompt" className="flex flex-col gap-2">
+            {/* the full prompt, in mono -- and editable in place, as the
+                board's prompt always was here: Save appears once it differs */}
+            <textarea
+              value={draft}
+              onChange={(e) => onDraft(e.target.value)}
+              rows={Math.min(22, Math.max(6, Math.ceil(draft.length / 58)))}
+              aria-label={`Prompt for ${c.title}`}
+              placeholder="No prompt on this concept yet."
+              className="m-0 w-full resize-y rounded-[6px] border border-noir-line bg-noir-bg p-3 font-plex! text-xs! leading-normal! text-bone2! outline-none focus:border-bone3"
+            />
+            <div className="flex items-center justify-between gap-3 font-plex text-[11px] text-bone3">
+              <span>{draft.length} chars</span>
+              {dirty ? (
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() => onSave(draft.trim())}
+                  className="h-11 rounded-[8px] bg-noir-red px-4 font-plex! text-xs! tracking-[0.08em] text-noir-bg! hover:enabled:bg-noir-red2 disabled:opacity-50 focus-visible:rounded-[8px]!"
+                >
+                  SAVE PROMPT
+                </button>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+        <div className="flex flex-wrap gap-x-4 gap-y-1.5 font-plex text-[11px] tracking-[0.06em] text-bone3">
+          {c.media_url ? (
+            <a href={c.media_url} target="_blank" rel="noreferrer" className="text-noir-red! hover:text-noir-red2!">
+              RENDERED CLIP ↗
+            </a>
+          ) : null}
+          <Link href={`/studio/flows?concept=${c.id}&shot=1`} className="text-bone2! hover:text-bone!">
+            OPEN IN DIRECTOR →
+          </Link>
+          {c.spark ? (
+            <span className="max-w-full truncate" title={c.spark}>
+              SPARK · {c.spark}
+            </span>
+          ) : null}
+        </div>
+      </section>
+    </>
   );
 }
