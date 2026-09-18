@@ -597,25 +597,46 @@ def test_approving_something_not_in_the_queue_is_refused(tmp_db, monkeypatch):
     assert res.json()["error"]["code"] == "not_queued"
 
 
-def test_an_ungrounded_scene_never_reaches_the_queue(tmp_db):
-    """The reference gate at the spend door (2026-09-08, Mike's call).
+def test_an_ungrounded_scene_is_listed_blocked_and_never_spendable(tmp_db):
+    """The reference gate at the spend door (2026-09-08, Mike's call), and
+    what the Queue PAGE may show of it (2026-09-17, also his).
 
-    This is the case that prompted it: a scene the nightly graph parked
-    with a keyframe, whose card read "KEYFRAMED · AWAITING APPROVAL IN
-    QUEUE" beside "NO REFERENCES". The still was drawn by Nano from the
-    prompt, so approving would have anchored a paid Runway clip on the
-    pipeline's own guess. Grounded siblings are unaffected.
+    The case that prompted the gate: a scene the nightly graph parked with
+    a keyframe, whose card read "KEYFRAMED · AWAITING APPROVAL IN QUEUE"
+    beside "NO REFERENCES". The still was drawn by Nano from the prompt, so
+    approving would have anchored a paid clip on the pipeline's own guess.
+
+    It used to be dropped from the list outright, which made a picked scene
+    with no photos look like a lost pick. Now it is LISTED -- marked
+    `blocked` with the gate's reason, after every spendable card, and left
+    out of `spendable` (the rail's badge). Still not approvable: see the
+    next test. Grounded siblings are unaffected.
     """
-    grounded = a_scene(tmp_db, "has photos")
     blind = a_scene(tmp_db, "no photos", refs=[])
+    grounded = a_scene(tmp_db, "has photos")
     for scene_id in (grounded, blind):
         preprod.set_shot_reference_image(scene_id, 1, "https://cdn/key.png",
                                          dsn=tmp_db, account_id=None)
         preprod.set_shot_parked(scene_id, 1, "keyframe rendered",
                                 dsn=tmp_db, account_id=None)
 
-    items = client.get("/api/queue/pending?brand=zeropage").json()["items"]
-    assert [c["id"] for c in items] == [grounded]
+    body = client.get("/api/queue/pending?brand=zeropage").json()
+    # spendable first, whatever order the rows were written in
+    assert [c["id"] for c in body["items"]] == [grounded, blind]
+    assert [bool(c["blocked"]) for c in body["items"]] == [False, True]
+    assert "reference" in body["items"][1]["blocked"]
+    assert body["spendable"] == 1
+
+
+def test_with_the_reference_rule_off_nothing_is_blocked(tmp_db, monkeypatch):
+    """`blocked` is reference_gate's answer, not a second rule: the one
+    switch (ZEROPAGE_REQUIRE_REFS=0) turns it off here too."""
+    monkeypatch.setenv(preprod.REQUIRE_REFS_ENV, "0")
+    blind = a_scene(tmp_db, "no photos", refs=[])
+    preprod.set_shot_parked(blind, 1, "keyframe rendered", dsn=tmp_db, account_id=None)
+    body = client.get("/api/queue/pending?brand=zeropage").json()
+    assert [(c["id"], c["blocked"]) for c in body["items"]] == [(blind, "")]
+    assert body["spendable"] == 1
 
 
 def test_approving_an_ungrounded_scene_is_refused_before_it_spends(tmp_db, monkeypatch):

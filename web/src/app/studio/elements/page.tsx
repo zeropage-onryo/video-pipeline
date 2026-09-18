@@ -16,7 +16,9 @@
    gets a REFERENCE SHEET (2026-09-18, part of adding one): drawn on
    save as a job from the real photos, it becomes the card's plate and
    rides LAST in the element's photos; "Draw sheet" on a card is the
-   same route for elements saved before, or a redraw. */
+   same route for elements saved before, or a redraw. A click on a card
+   opens the element sheet (frames, @handle, notes, where it grounds,
+   its own delete) -- the hover buttons on the plate are the shortcuts. */
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { ImageOff, Info, LayoutGrid, Plus, Trash2 } from "lucide-react";
@@ -32,10 +34,11 @@ import {
   type Concept,
   type ElementKind,
 } from "@/lib/studio-api";
+import { displayPhoto, elementKind, handleOf, kindLabel } from "@/lib/elements";
 import { useShell } from "@/components/studio/shell";
 import { AddElement } from "@/components/studio/add-element";
+import { ElementSheet } from "@/components/studio/element-sheet";
 
-const handleOf = (name: string) => "@" + name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 const slugOf = (url: string) => url.match(/^\/(characters|locations|props)\/([^/]+)\//)?.[2] ?? null;
 const ROUTE_KIND = { character: "characters", prop: "props", location: "locations" } as const;
 type RouteKind = ElementKind;
@@ -54,6 +57,7 @@ export default function ElementsPage() {
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [confirming, setConfirming] = useState<string | null>(null);
+  const [open, setOpen] = useState<Asset | null>(null);
   const [canDraw, setCanDraw] = useState(false);
   // element id -> the job drawing its sheet; the card shows it until the job lands
   const [drawing, setDrawing] = useState<Record<string, number>>({});
@@ -132,7 +136,7 @@ export default function ElementsPage() {
   const slugFor = (a: Asset) => (a.photos[0] ? slugOf(a.photos[0]) : null) ?? handleOf(a.name).slice(1);
 
   const all = assets ?? [];
-  const collage = all.filter((a) => a.poster).slice(0, 4);
+  const collage = all.filter((a) => displayPhoto(a)).slice(0, 4);
 
   return (
     <section className="view" style={{ paddingTop: 0, display: "flex", flexDirection: "column", minHeight: "calc(100vh - 80px)" }}>
@@ -167,7 +171,7 @@ export default function ElementsPage() {
             </div>
             <div className="elcollage" aria-hidden>
               {collage.map((a) => (
-                <span key={a.id} style={{ backgroundImage: `url(${API_URL}${a.poster})` }} />
+                <span key={a.id} style={{ backgroundImage: `url(${API_URL}${displayPhoto(a)})` }} />
               ))}
             </div>
           </div>
@@ -202,10 +206,21 @@ export default function ElementsPage() {
           {all.map((a) => {
             const used = usage.get(slugFor(a)) || 0;
             const asking = confirming === a.id;
+            const plate = displayPhoto(a);
             return (
               <motion.article
                 key={a.id}
                 className="elcard group relative"
+                role="button"
+                tabIndex={0}
+                title="Open"
+                onClick={() => setOpen(a)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setOpen(a);
+                  }
+                }}
                 layout
                 initial={{ opacity: 0, scale: 0.97 }}
                 animate={{ opacity: 1, scale: 1 }}
@@ -213,10 +228,10 @@ export default function ElementsPage() {
                 transition={{ duration: 0.18, ease: "easeOut" }}
               >
                 <div
-                  className={`elplate${a.poster ? "" : " blank"}${a.sheet ? " sheet" : ""}`}
-                  style={a.poster ? { backgroundImage: `url(${API_URL}${a.poster})` } : undefined}
+                  className={`elplate${plate ? "" : " blank"}${a.sheet ? " sheet" : ""}`}
+                  style={plate ? { backgroundImage: `url(${API_URL}${plate})` } : undefined}
                 >
-                  {!a.poster ? (
+                  {!plate ? (
                     <span className="m">
                       <ImageOff strokeWidth={1.6} size={13} /> no photos yet
                     </span>
@@ -231,7 +246,10 @@ export default function ElementsPage() {
                     </motion.span>
                   ) : null}
                   {asking ? (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/75 p-3 text-center">
+                    <div
+                      className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/75 p-3 text-center"
+                      onClick={(e) => e.stopPropagation()}
+                    >
                       <span className="m" style={{ fontSize: 9 }}>
                         delete {a.name}? {used ? `it grounds ${used} shot${used === 1 ? "" : "s"}` : "photos stay on disk"}
                       </span>
@@ -245,7 +263,10 @@ export default function ElementsPage() {
                       </div>
                     </div>
                   ) : (
-                    <div className="absolute top-2 right-2 flex gap-1.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                    <div
+                      className="absolute top-2 right-2 flex gap-1.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100"
+                      onClick={(e) => e.stopPropagation()}
+                    >
                       {canDraw && a.photos.length && !drawing[a.id] ? (
                         <button
                           type="button"
@@ -272,7 +293,7 @@ export default function ElementsPage() {
                 <div className="elbody">
                   <div className="elname">
                     <b>{a.name}</b>
-                    <span className="elcat">{a.category}</span>
+                    <span className="elcat">{kindLabel(elementKind(a) ?? "prop")}</span>
                   </div>
                   <p className="elhandle">{handleOf(a.name)}</p>
                 </div>
@@ -296,6 +317,19 @@ export default function ElementsPage() {
           </AnimatePresence>
         </div>
       )}
+
+      {open ? (
+        <ElementSheet
+          asset={open}
+          usedIn={usage.get(slugFor(open)) || 0}
+          onClose={() => setOpen(null)}
+          onDeleted={(a) => {
+            setOpen(null);
+            setAssets((was) => (was ?? []).filter((x) => x.id !== a.id));
+            toast(`${a.name} deleted · photos stay on disk`);
+          }}
+        />
+      ) : null}
 
       {adding ? (
         <AddElement

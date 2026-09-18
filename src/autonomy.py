@@ -347,6 +347,69 @@ def prompt_scores_for_run(run_id: Optional[str], dsn=None) -> list[dict]:
     return out
 
 
+def gates_for_concepts(concept_ids, dsn=None, *,
+                       account_id: Optional[int]) -> dict:
+    """The prompt gate's verdict for MANY concepts at once: {concept_id:
+    {score, passed, reason, reworks, status, outcome}}, for a board that
+    prints a card per concept (2026-09-17).
+
+    The same reading `mcp_server._gate` makes one concept at a time --
+    the latest hold row this account owns, its payload's run_id, the
+    LAST score that run logged (a rework's revised verdict, not the first
+    draft's) -- in TWO queries however long the board is, where calling
+    hold_for_concept + prompt_scores_for_run per card would be two
+    hundred. A concept with no hold row is absent from the result: no
+    graph run ever ended on it (a Studio Create, a capture), which the
+    card must be able to tell apart from "scored badly". A run that held
+    before it reached the gate is present with score None.
+
+    `passed` is what the gate SAID, never what the run then did: under
+    ZEROPAGE_GATES=advisory a failed prompt still proceeds, and this
+    still reads False -- the log_prompt_scores rule.
+
+    Never raises and never guesses: a database with no graph history, or
+    an unreadable payload, reads as nothing to show."""
+    ids = sorted({int(i) for i in concept_ids or [] if i is not None})
+    if not ids:
+        return {}
+    try:
+        with db.connect(dsn) as conn:
+            holds = conn.execute(
+                "SELECT DISTINCT ON (concept_id) concept_id, status, reason, payload "
+                "FROM hold_queue WHERE concept_id = ANY(%s) "
+                "AND account_id IS NOT DISTINCT FROM %s "
+                "ORDER BY concept_id, id DESC",
+                (ids, account_id)).fetchall()
+            runs = {}
+            for row in holds:
+                payload = _parse_payload(dict(row)).get("payload")
+                run_id = payload.get("run_id") if isinstance(payload, dict) else None
+                runs[row["concept_id"]] = (dict(row), run_id)
+            wanted = sorted({r for _, r in runs.values() if r})
+            scores: dict = {}
+            if wanted:
+                for r in conn.execute(
+                        "SELECT run_id, score, passed, reason FROM prompt_scores "
+                        "WHERE run_id = ANY(%s) ORDER BY id", (wanted,)).fetchall():
+                    scores.setdefault(r["run_id"], []).append(dict(r))
+    except psycopg.Error:
+        return {}
+    out = {}
+    for concept_id, (hold, run_id) in runs.items():
+        logged = scores.get(run_id) or []
+        latest = logged[-1] if logged else None
+        out[concept_id] = {
+            "score": latest["score"] if latest else None,
+            "passed": bool(latest["passed"]) if latest else None,
+            "reason": (latest.get("reason") or "") if latest else "",
+            # how many times the gate sent it back before this verdict
+            "reworks": max(0, len(logged) - 1),
+            "status": hold.get("status") or "held",
+            "outcome": hold.get("reason") or "",
+        }
+    return out
+
+
 def resolve_hold(hold_id: int, status: str, dsn=None, *,
                  account_id: Optional[int]) -> bool:
     """Your morning verdict on a shadow run: approved (would have

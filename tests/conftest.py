@@ -108,6 +108,7 @@ POSTURE_ENV = R2_ENV + (
     "ZEROPAGE_GRAPH_RESEARCH",   # ... and the research agent runs
     "ZEROPAGE_SCENE_SECONDS",    # the scene length the writers fill (timeline.py)
     "LANGSMITH_TRACING",         # tracing is a live POST; the guard fails it
+    "QUOTE_SIGNING_SECRET",      # quotes sign only where a test says so
 )
 
 

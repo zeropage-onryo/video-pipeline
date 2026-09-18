@@ -418,6 +418,20 @@ function nodeTitle(node) {
   return node.type === 'zpf/reference_set' && !node._renamed ? refSetTitle(node) : node.title;
 }
 
+/* What the Generate node would render ON and what that costs: the
+   server's own price (pricing.display, served as `generate` on the
+   concept) laid over the Runway state the chips were built around.
+   Without it the chip priced every Run at Runway's default clip, even on
+   an account whose only key -- and therefore whose bill -- is another
+   vendor's. */
+function generateState() {
+  const c = directorConcept || {};
+  const g = c.generate && !c.generate.error ? c.generate : null;
+  return g
+    ? { ...(c.runway || {}), model: g.model, duration: g.durations[0], estimate_usd: g.estimate_usd }
+    : (c.runway || {});
+}
+
 function gateNote(type) {
   if (type === 'zpf/generate') {
     // running this node IS the spend approval (2026-09-09), and it
@@ -475,7 +489,7 @@ function bodyHTML(node) {
           ${node._state === 'running' ? overlayHTML('rendering · keyframe') : ''}</div>${errline}
         <div class="gsfoot"><span class="m">${node._out ? 'keyframe' : 'text/image → image'}</span><span class="spacer"></span><button class="gsbtn ghost" data-act="run">${icon('play')}Run</button></div>`;
     case 'zpf/generate': {
-      const rw = (directorConcept && directorConcept.runway) || {};
+      const rw = generateState();
       const ratio = rw.ratio === '720:1280' ? '9:16' : rw.ratio === '1280:720' ? '16:9' : (rw.ratio || '9:16');
       const cam = p.camera ? `<span class="gschip">${icon('video')}${esc(p.camera)}</span>` : '';
       return `<div class="gschips">
@@ -575,7 +589,7 @@ function outputHTML(node) {
   const still = inputVal(node, 'image') || node.properties.image_url || '';
   const status = running ? 'rendering' : clip ? 'done' : node._state === 'failed' ? 'failed'
     : node._state === 'skipped' ? 'skipped' : 'queued';
-  const rw = (directorConcept && directorConcept.runway) || {};
+  const rw = generateState();
   const ratio = rw.ratio === '720:1280' ? '9:16' : (rw.ratio || '9:16');
   return `<div class="gshead">${icon('clap')}<b>Output${directorConcept ? ' · ' + esc(directorConcept.n.toLowerCase()) : ''}</b><span class="spacer"></span>
       <span class="gsstatus${status === 'done' || running ? ' lit' : ''}${status === 'failed' ? ' bad' : ''}">${status}</span></div>
@@ -799,7 +813,7 @@ function paintInspector() {
   $('gsispendsec').hidden = !isGen;
   if (isGen) {
     paintCamera(node);
-    const rw = (directorConcept && directorConcept.runway) || {};
+    const rw = generateState();
     $('gsispend').textContent = rw.estimate_usd != null ? '$' + Number(rw.estimate_usd).toFixed(2) : '—';
     $('gsispendnote').textContent = `per ${rw.duration || 5}-second clip · ${rw.model || 'gen4_turbo'}`;
     $('gsigate').textContent = gateNote(node.type) || (rw.today != null ? `${rw.today} rendered today` : '');
@@ -1037,8 +1051,16 @@ async function runNode(node) {
       nodeJobs.set(res.job_id, node.id);
     } else if (node.type === 'zpf/generate') {
       setNodeState(node, 'running');
+      // the signed quote the chip showed rides along when this node is a
+      // concept's shot (pricing.sign); the route refuses the run if the
+      // scene or the renderer moved since
+      const gen = (directorConcept && directorConcept.generate) || {};
+      const token = gen.renders && gen.renders[0] && gen.renders[0].token;
+      const p = node.properties || {};
+      const shotRef = token && p.concept_id && p.shot_n && Number(p.concept_id) === Number(directorConcept.id)
+        ? { concept_id: Number(p.concept_id), shot_n: Number(p.shot_n), token } : {};
       const res = await api('/api/workflows/exec/generate', {
-        method: 'POST', body: { prompt: inputVal(node, 'prompt') || '', images: referenceUrls(node) } });
+        method: 'POST', body: { prompt: inputVal(node, 'prompt') || '', images: referenceUrls(node), ...shotRef } });
       nodeJobs.set(res.job_id, node.id);
     } else if (node.type === 'zpf/nano_banana') {
       setNodeState(node, 'running');

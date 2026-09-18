@@ -22,10 +22,10 @@ export function SiteFooter() {
             <div className="flex flex-col gap-3">
               <span className="film-slate text-muted-foreground/70">Studio</span>
               <Link href="/#pipeline" className="text-sm text-muted-foreground hover:text-foreground">
-                Pipeline
+                The studio
               </Link>
               <Link href="/#work" className="text-sm text-muted-foreground hover:text-foreground">
-                Work
+                Who it&apos;s for
               </Link>
             </div>
             <div className="flex flex-col gap-3">
@@ -44,7 +44,14 @@ export function SiteFooter() {
           <span className="film-slate text-muted-foreground/60">
             © {new Date().getFullYear()} Zero Page Films
           </span>
-          <span className="film-slate text-muted-foreground/60">From idea to creation</span>
+          <nav aria-label="Legal" className="flex gap-6">
+            <Link href="/terms" className="film-slate text-muted-foreground/60 hover:text-foreground">
+              Terms
+            </Link>
+            <Link href="/privacy" className="film-slate text-muted-foreground/60 hover:text-foreground">
+              Privacy
+            </Link>
+          </nav>
         </div>
       </div>
     </footer>

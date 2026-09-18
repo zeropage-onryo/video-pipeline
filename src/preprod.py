@@ -334,16 +334,16 @@ def get_location(location_id: int, dsn: Optional[str] = None, *,
 
 
 def delete_location(location_id: int, dsn: Optional[str] = None, *,
-                    account_id: int) -> bool:
-    """Remove a described space (2026-09-18, the Elements page's delete).
-    concept_locations cascades; the photos on disk are left where they
-    are, the same as a character or prop delete leaves theirs."""
+                    account_id: int) -> None:
+    """Drop a place. concept_locations cascades, so a concept that named
+    the room keeps its row and simply stops pointing at a described
+    space (validate_concept will flag the name on its next pass). The
+    photos in locations/<slug>/ and the bucket are not touched."""
     with connect(dsn) as conn:
-        cur = conn.execute(
+        conn.execute(
             "DELETE FROM locations WHERE id = %s AND account_id IS NOT DISTINCT FROM %s",
             (location_id, account_id),
         )
-        return bool(cur.rowcount)
 
 
 def get_location_by_name(name: str, dsn: Optional[str] = None, *,

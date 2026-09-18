@@ -22,7 +22,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from src import gemini_utils, imagery, nano_banana, preprod, providers, runway, scene_chain, shootgen, timeline
+from src import gemini_utils, imagery, nano_banana, preprod, runway, scene_chain, shootgen, timeline
 
 client = TestClient(app)
 
@@ -148,11 +148,15 @@ def test_a_window_is_fitted_up_to_a_length_the_model_can_make():
     assert timeline.fit_seconds({"kind": "fixed", "values": [8]}, 3) == 8
 
 
-def test_the_timeline_price_is_the_sum_of_each_shots_own_render():
-    choice = providers.check_timeline_choice("runway", runway.DEFAULT_MODEL, None, [3, 4, 3])
-    assert choice["durations"] == [5, 5, 5]
+def test_the_timeline_price_is_the_sum_of_each_shots_own_render(monkeypatch):
+    from src import pricing
+    monkeypatch.setenv("RUNWAYML_API_SECRET", "test-key")
+    shot = {"n": 1, "prompt": "BEATS (0-3s) one. (3-7s) two. (7-10s) three.", "refs": ["/refs/a.jpg"]}
+    shown = pricing.display(account_id=None, shot=shot, shot_id=1,
+                            provider="runway", model=runway.DEFAULT_MODEL)
+    assert shown["durations"] == [5, 5, 5]
     one = runway.estimate_cost(1, model=runway.DEFAULT_MODEL, duration=5)
-    assert choice["estimate_usd"] == pytest.approx(3 * one)
+    assert shown["estimate_usd"] == pytest.approx(3 * one)
 
 
 # --- planning ----------------------------------------------------------------

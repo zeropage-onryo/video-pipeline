@@ -36,13 +36,38 @@ const jetbrains = JetBrains_Mono({
   weight: ["400", "500"],
 });
 
+// The public origin, for absolute OG/canonical URLs. Vercel's own
+// deployment is the default; NEXT_PUBLIC_SITE_URL overrides it (a custom
+// domain, or a preview host).
+const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://zpf-web.vercel.app";
+
+const TITLE = "Zero Page — The AI content studio that creates for you.";
+
+const DESCRIPTION =
+  "An AI content studio for filmmakers, brands, and creators. Start with a script, an idea, a concept, an image, or a video — and Zero Page creates for you.";
+
 export const metadata: Metadata = {
+  metadataBase: new URL(SITE_URL),
   title: {
-    default: "ZeroPage — AI Creative Studio",
-    template: "%s · ZeroPage",
+    default: TITLE,
+    template: "%s — Zero Page",
   },
-  description:
-    "An AI creative studio for filmmakers, brands, and creators. Start with a script, an idea, a concept, an image, or a video — and move from idea to creation.",
+  description: DESCRIPTION,
+  openGraph: {
+    type: "website",
+    siteName: "Zero Page",
+    title: TITLE,
+    description: DESCRIPTION,
+    url: "/",
+    locale: "en_US",
+    images: [{ url: "/og.jpg", width: 1200, height: 630 }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: TITLE,
+    description: DESCRIPTION,
+  },
+  robots: { index: true, follow: true },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

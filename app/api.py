@@ -18,6 +18,7 @@ import json
 import os
 import re
 import statistics
+import sys
 import time
 from pathlib import Path
 from typing import Optional
@@ -46,6 +47,7 @@ from src import (
     manual_lane,
     preprod,
     presets,
+    pricing,
     providers,
     rag,
     rag_eval,
@@ -180,6 +182,9 @@ def compute_capabilities(account_id: Optional[int] = None) -> dict:
         # holds a key for (providers.renderer_for), not on Runway alone
         "video.generate": providers.renderer_for(
             account_id, needs="generate_from_prompt") is not None,
+        # whether a price comes with a signed quote a client can echo on
+        # approve (pricing.sign; QUOTE_SIGNING_SECRET set)
+        "quote.sign": pricing.configured(),
         # `*.spend` is TRUE for anything a person drives (2026-09-09):
         # the click is the approval, so a key is the whole gate on a
         # human surface. It stays a live read for the unattended paths,
@@ -409,10 +414,16 @@ async def creative_guide_reply(request: Request,
                 brand=brand, grounding=grounding, image_refs=image_refs)
         else:
             from google import genai
+            # The board's tools, in-process (src/guide_tools.py,
+            # 2026-09-18): READ tools run inside the turn, a WRITE
+            # tool comes back as `reply.proposal` for the confirm
+            # card, and nothing here spends. Absent `mcp`, the plain
+            # conversation it always was.
+            tools, run_tool = _guide_tools(account_id)
             reply = creative_guide.respond(
                 conversation, client=genai.Client(api_key=_gemini_key(account_id)),
                 brand=brand, grounding=grounding, image_refs=image_refs,
-                account_id=account_id, on_retry=note)
+                account_id=account_id, on_retry=note, tools=tools, run_tool=run_tool)
         # `billing` says WHOSE plan paid: a personal connection spends
         # the person's own ChatGPT/Claude subscription and never touches
         # this install's Gemini credit, and /costs must not count it.
@@ -422,6 +433,57 @@ async def creative_guide_reply(request: Request,
 
     job = jobs.start("guide", "creative guide", work, account_id=account_id)
     return {"job_id": job["id"]}
+
+
+def _guide_tools(account_id: int):
+    """(specs, run_tool) for a Guide turn, or (None, None) when the
+    `mcp` package is absent or the server cannot be opened. Never
+    raises: a board that cannot be read costs the answer its tools,
+    not the person their turn."""
+    from src import guide_tools
+
+    if not guide_tools.available():
+        return None, None
+    try:
+        return guide_tools.session(account_id=account_id)
+    except Exception as exc:
+        print(f"  guide tools unavailable: {exc}", file=sys.stderr)
+        return None, None
+
+
+@router.post("/creative-guide/act")
+async def creative_guide_act(request: Request,
+                             account_id: int = Depends(auth.current_account_id)):
+    """The confirm card's click: run ONE write tool the Guide proposed.
+
+    The model never reaches this -- a proposal comes back off a turn
+    unrun, and the person's click is the only thing that posts here.
+    Same header guard as the turn (a cross-site form post must not be
+    able to bank a spark either); the tool set is `guide_tools.WRITE_TOOLS`
+    and nothing else, checked again here rather than trusted from the
+    body; and the URL rule is enforced by `guide_tools.check_args` on
+    the way in. Runs inline: banking a row is milliseconds.
+    """
+    from src import guide_tools
+
+    model_connections.mutation_header(request)
+    try:
+        body = await request.json()
+    except Exception:
+        return _error(400, "bad_request", "expected JSON {tool, args}")
+    tool = str((body or {}).get("tool") or "")
+    args = (body or {}).get("args") or {}
+    if not guide_tools.is_write(tool):
+        return _error(400, "bad_tool", f"`{tool}` is not an action the Guide can take")
+    if not isinstance(args, dict):
+        return _error(400, "bad_request", "args must be an object")
+    if not guide_tools.available():
+        return _error(503, "tools_unavailable", "the board's tools are not installed here")
+    try:
+        result = guide_tools.run(tool, args, account_id=account_id)
+    except guide_tools.Refused as exc:
+        return _error(400, "refused", str(exc))
+    return {"ok": True, "tool": tool, "result": result}
 
 
 def _personal_connected(provider: str, scope) -> bool:
@@ -1073,6 +1135,21 @@ def asset_delete_character(character_id: int, account_id: int = Depends(auth.cur
     return {"deleted": character_id}
 
 
+@router.delete("/assets/locations/{location_id}")
+def asset_delete_location(location_id: int, account_id: int = Depends(auth.current_account_id)):
+    """The third delete (2026-09-15, Mike: "I want to be able to delete
+    assets or elements"): places had create and list but no delete, so
+    the element sheet could remove a character or a prop and not a room.
+    Same shape as the two below -- the row and its RAG chunk go, the
+    photo bytes stay."""
+    row = preprod.get_location(location_id, account_id=account_id)
+    if row is None:
+        return _error(404, "not_found", "no such location")
+    preprod.delete_location(location_id, account_id=account_id)
+    _drop_asset_chunk("location", _slug(row["name"]))
+    return {"deleted": location_id}
+
+
 @router.delete("/assets/props/{prop_id}")
 def asset_delete_prop(prop_id: int, account_id: int = Depends(auth.current_account_id)):
     row = entities.get_prop(prop_id, account_id=account_id)
@@ -1081,18 +1158,6 @@ def asset_delete_prop(prop_id: int, account_id: int = Depends(auth.current_accou
     entities.delete_prop(prop_id, account_id=account_id)
     _drop_asset_chunk("prop", _slug(row["name"]))
     return {"deleted": prop_id}
-
-
-@router.delete("/assets/locations/{location_id}")
-def asset_delete_location(location_id: int, account_id: int = Depends(auth.current_account_id)):
-    """The Elements page's delete for a place (2026-09-18). The photos
-    stay on disk, the same as the character and prop deletes above."""
-    row = preprod.get_location(location_id, account_id=account_id)
-    if row is None:
-        return _error(404, "not_found", "no such location")
-    preprod.delete_location(location_id, account_id=account_id)
-    _drop_asset_chunk("location", _slug(row["name"]))
-    return {"deleted": location_id}
 
 
 SHEET_KINDS = ("characters", "props", "locations")
@@ -1257,7 +1322,46 @@ def retrieve(body: RetrieveBody, account_id: int = Depends(auth.current_account_
 
 # --- pipeline (adapted to pre-production) -----------------------------------
 
-def _concept_card(c: dict, subscription_ids: Optional[set] = None) -> dict:
+def _bin_filenames(concepts: list) -> list:
+    """Every bin image named by these concepts' refs, for ONE
+    scout.sources_for_refs call per board rather than one per card."""
+    names = []
+    for c in concepts:
+        for url in c.get("refs") or []:
+            ref = asset_shelf.parse_ref(url)
+            if ref and ref["kind"] == "refs":
+                names.append(ref["filename"])
+    return names
+
+
+def _ref_sources(refs: list, sources: Optional[dict]) -> list:
+    """`refs`, one entry each and in the same order, saying what each
+    picture IS and where it came from: {url, kind, slug, filename,
+    source_url, title, lane}.
+
+    `kind` is asset_shelf.parse_ref's -- the ONE parser, so a local route
+    and its R2 twin read the same: character / prop / location (the asset
+    bank; `slug` names the asset, and that IS its attribution), `refs` (the
+    reference bin) or "" for anything else. `source_url` is the page a
+    scouted frame was taken from, off scout_bin; empty for a composer
+    upload, which has no page. `refs` itself is unchanged -- it is what
+    the renderers read, and its order is load-bearing (urls[0] anchors)."""
+    out = []
+    for url in refs or []:
+        ref = asset_shelf.parse_ref(url) or {}
+        found = (sources or {}).get(ref.get("filename")) if ref.get("kind") == "refs" else None
+        out.append({"url": url, "kind": ref.get("kind") or "",
+                    "slug": ref.get("slug") or "",
+                    "filename": ref.get("filename") or "",
+                    "source_url": (found or {}).get("source_url") or "",
+                    "title": (found or {}).get("title") or "",
+                    "lane": (found or {}).get("lane") or ""})
+    return out
+
+
+def _concept_card(c: dict, subscription_ids: Optional[set] = None,
+                  gates: Optional[dict] = None,
+                  sources: Optional[dict] = None) -> dict:
     status = "shot" if c.get("shot_done") else (
         "planned" if c.get("has_shot_list") else "idea")
     location_names = [loc["name"] for loc in c.get("locations") or []]
@@ -1330,6 +1434,23 @@ def _concept_card(c: dict, subscription_ids: Optional[set] = None) -> dict:
         # Absent set = not asked (a single-card read), which is why the
         # default is False rather than unknown.
         "subscription": bool(subscription_ids and c["id"] in subscription_ids),
+        # THE PROMPT GATE'S OWN VERDICT (2026-09-17): {score, passed, reason,
+        # reworks, status, outcome}, or None when no graph run ever ended on
+        # this concept -- a Studio Create stops on the board unscored, and
+        # the card has to say "never scored" rather than invent a pass. The
+        # cards drew a readiness dot from warnings and park_reason because
+        # this was only ever reachable through the MCP `idea` tool; it is
+        # the same reading (autonomy.gates_for_concepts), batched for a
+        # board. `passed` is what the gate SAID, not whether the run went
+        # on: in advisory mode a failed prompt still parks. Absent dict =
+        # not asked (a single-card read), the `subscription` rule.
+        "gate": (gates or {}).get(c["id"]),
+        # WHERE EACH REFERENCE CAME FROM (2026-09-17), parallel to `refs`.
+        # "A reference must be traceable to where it came from" was kept at
+        # banking time and lost on the shot, which stores bare URLs -- so
+        # the one surface where someone is about to spend a render on a
+        # frame showed it unattributed. See _ref_sources.
+        "ref_sources": _ref_sources(c.get("refs") or [], sources),
     }
 
 
@@ -1371,8 +1492,13 @@ def pipeline_concepts(brand: Optional[str] = None, status: Optional[str] = None,
     # whole limit and quietly shorten the other's board.
     # one query for the whole board rather than one per card
     subscription_ids = generative.subscription_rendered(account_id=account_id)
-    cards = [_concept_card(c, subscription_ids)
-             for c in preprod.list_concepts(account_id=account_id, brand=brand)]
+    concepts = preprod.list_concepts(account_id=account_id, brand=brand)
+    # ...and two for every card's gate verdict, not two per card
+    gates = autonomy.gates_for_concepts([c["id"] for c in concepts],
+                                        account_id=account_id)
+    # ...and one for every scouted frame's attribution
+    sources = scout.sources_for_refs(_bin_filenames(concepts))
+    cards = [_concept_card(c, subscription_ids, gates, sources) for c in concepts]
     if status in ("idea", "planned", "shot"):
         cards = [c for c in cards if c["status"] == status]
     if not archived:
@@ -2141,7 +2267,8 @@ def _renderers_state(account_id: Optional[int] = None) -> dict:
     return providers.render_options(account_id)
 
 
-def _waiting(account_id: Optional[int], brand: Optional[str]) -> list[tuple[dict, dict]]:
+def _waiting(account_id: Optional[int], brand: Optional[str],
+             include_blocked: bool = False) -> list[tuple[dict, dict]]:
     """The queue predicate -- parked by the chain or picked on the board,
     not archived, a scene, no clip yet -- as (concept, card) pairs.
 
@@ -2162,20 +2289,66 @@ def _waiting(account_id: Optional[int], brand: Optional[str]) -> list[tuple[dict
 
     Deliberately NOT a prompt check as well. A prompt is on `shots_json`
     only because score_prompts put it there, and a second bar here would
-    be a different opinion from the one that already ran."""
+    be a different opinion from the one that already ran.
+
+    `include_blocked` (2026-09-17, Mike's call) is for the Queue PAGE
+    alone. Those three ways in are real, and a picked scene that simply
+    was not on the Queue read as a lost pick -- nothing anywhere said why.
+    So the page may ask for the ungrounded rows too; each comes back with
+    `card["blocked"]` = the gate's own reason, and is drawn locked, with
+    its approve dead and "add references" on it. WHAT DID NOT CHANGE: the
+    default is still spendable-only, so the manual lane (a person's hands
+    on a render) never sees one; `queue_approve` still asks
+    `reference_gate` itself and refuses; ops/render_queue.py is untouched.
+    Listing a scene is not a way to spend on it."""
     # scoped in SQL, see above
     out = []
-    for concept in preprod.list_concepts(account_id=account_id, brand=brand):
-        card = _concept_card(concept)
-        if ((card["picked"] or card["parked"]) and not card["archived"]
+    concepts = preprod.list_concepts(account_id=account_id, brand=brand)
+    gates = autonomy.gates_for_concepts([c["id"] for c in concepts],
+                                        account_id=account_id)
+    sources = scout.sources_for_refs(_bin_filenames(concepts))
+    for concept in concepts:
+        card = _concept_card(concept, gates=gates, sources=sources)
+        if not ((card["picked"] or card["parked"]) and not card["archived"]
                 and card["is_scene"] and not card["media_url"]
-                # nothing reaches a spend ungrounded -- see above
-                and not preprod.reference_gate(concept)
                 # marked shot by hand (the camera button) -- a card you
                 # already made yourself isn't waiting on you to spend
                 and not card["shot_done"]):
-            out.append((concept, card))
+            continue
+        # nothing reaches a spend ungrounded -- see above
+        blocked = preprod.reference_gate(concept)
+        if blocked and not include_blocked:
+            continue
+        card["blocked"] = blocked or ""
+        out.append((concept, card))
+    # spendable first: a locked card must never be the first thing under
+    # the pointer on the page whose primary button spends money
+    out.sort(key=lambda pair: bool(pair[1]["blocked"]))
     return out
+
+
+def _card_quote(concept: dict, account_id: Optional[int], **pick) -> dict:
+    """What approving this card would render and cost, for the pick given
+    (none = the card's own default) -- pricing.display, or {"error"} when
+    that intent has no price. Never raises: a card that cannot be priced
+    still has to be listed, with the reason where the number would be."""
+    try:
+        return pricing.display(account_id=account_id, shot=concept["shots"][0],
+                               shot_id=concept["id"], **pick)
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _generate_node_quote(concept: dict, account_id: Optional[int]) -> dict:
+    """The Director Generate node's price: ONE clip, at the adapter's own
+    default length and frame, on the renderer workflow_exec_generate and
+    Run all resolve (providers.renderer_for, needs=generate_from_prompt).
+    {"error"} when no renderer is keyed or the intent has no price."""
+    pick = providers.renderer_for(account_id, needs="generate_from_prompt")
+    if pick is None:
+        return {"error": "no video renderer key is available for this account"}
+    return _card_quote(concept, account_id, provider=pick["provider"],
+                       model=pick["model"], whole=True)
 
 
 @router.get("/queue/pending")
@@ -2190,7 +2363,7 @@ def queue_pending(brand: Optional[str] = None, account_id: int = Depends(auth.cu
     rendered -- the next step is the one that costs money), or you pick
     a text-only concept off the board yourself."""
     items = []
-    for _, card in _waiting(account_id, brand):
+    for concept, card in _waiting(account_id, brand, include_blocked=True):
         # THE CARD'S OWN DEFAULT RENDERER, resolved here rather than in
         # the browser. The mapping from a shot's planned tool to a
         # (provider, model) pair lives in providers.platform_default and
@@ -2204,9 +2377,14 @@ def queue_pending(brand: Optional[str] = None, account_id: int = Depends(auth.cu
         # the cheapest renderer the account can use instead of on a dead
         # button -- providers.render_default, the same call an empty
         # approve body makes below.
-        items.append({**card, "render_default": providers.render_default(
-            card.get("tool"), account_id)})
+        items.append({**card,
+                      "render_default": providers.render_default(card.get("tool"), account_id),
+                      "quote": _card_quote(concept, account_id)})
     return {"items": items,
+            # how many of `items` can actually be approved. The rail's badge
+            # reads THIS, not len(items): it has always meant "waiting on you
+            # to spend", and a locked card is waiting on references instead.
+            "spendable": sum(1 for c in items if not c["blocked"]),
             "runway": _runway_state(),
             "renderers": _renderers_state(account_id)}
 
@@ -2644,6 +2822,89 @@ class ApproveBody(BaseModel):
     model: Optional[str] = None
     duration: Optional[int] = None
     frame: Optional[str] = None
+    # The signed quotes the card showed (pricing.display's `renders[].token`,
+    # one per shot to render), echoed back so the price approved is
+    # provably the price rendered. OPTIONAL for now (step 4 of
+    # docs/tasks/task-pricing-and-quotes.md): a body without them falls
+    # to the click-is-the-approval gate exactly as before; a body WITH
+    # them is refused unless every one verifies against this scene as it
+    # is now and the pick as it was priced.
+    tokens: Optional[list[str]] = None
+
+
+def _verify_tokens(tokens: list, priced: dict, shot: dict, shot_id: int,
+                   account_id: Optional[int]) -> list:
+    """Every render `priced` would make, matched to a token that verifies
+    for it -- and says the same provider, model, length, frame and
+    credits the card is about to spend on. Returns the Quotes in render
+    order. Raises pricing.QuoteRefused (reason on it) or
+    SigningUnconfigured; never returns a partial answer."""
+    spare = [t for t in tokens if isinstance(t, str) and t.strip()]
+    quotes = []
+    for render in priced["renders"]:
+        bound = None
+        for token in list(spare):
+            try:
+                bound = pricing.verify(token, account_id=account_id, shot=shot,
+                                       shot_id=shot_id, part=render["part"])
+            except pricing.QuoteRefused as e:
+                # another shot's token is not a refusal yet -- it may be
+                # the next render's; anything else about it is
+                if e.reason != "wrong_render":
+                    raise
+                continue
+            spare.remove(token)
+            break
+        if bound is None:
+            raise pricing.QuoteRefused(
+                "missing_quote", f"no quote for shot {render['part']}" if render["part"]
+                else "no quote for this render")
+        same = (bound.provider == priced["provider"] and bound.model == priced["model"]
+                and bound.frame == priced["frame"] and bound.seconds == render["seconds"]
+                and bound.credits == render["credits"])
+        if not same:
+            raise pricing.QuoteRefused(
+                "wrong_render", "the renderer, length or frame changed since this "
+                                "price -- re-quote")
+        quotes.append(bound)
+    return quotes
+
+
+def _quote_refusal(e: Exception, account_id: Optional[int]):
+    """The response for a token that did not verify: 503 with the
+    generation command when nothing can be verified here, else 400 with
+    the refusal's own reason as the code. wrong_account is logged at
+    warning -- it cannot happen through the UI, so it is a replay."""
+    if isinstance(e, pricing.SigningUnconfigured):
+        return _error(503, "signing_unconfigured", str(e))
+    if e.reason == "wrong_account":
+        print(f"[quote] wrong_account: a quote issued to another tenant was "
+              f"presented by account {account_id!r}", file=sys.stderr)
+        return _error(400, "wrong_account", "this quote isn't valid -- get a fresh price")
+    return _error(400, e.reason, str(e))
+
+
+@router.get("/queue/{concept_id}/quote")
+def queue_quote(concept_id: int, provider: Optional[str] = None,
+                model: Optional[str] = None, duration: Optional[int] = None,
+                frame: Optional[str] = None,
+                account_id: int = Depends(auth.current_account_id)):
+    """What approving this card WITH THIS PICK would render and cost --
+    pricing.display for the same four fields the approve body takes, so
+    the button's number and the approve's number are one computation
+    (2026-09-17). The listing already carries this for the card's default
+    pick; the card asks here when the person moves a control, instead of
+    doing the arithmetic -- and the window-fitting -- a second time in
+    JavaScript. Spends nothing and writes nothing."""
+    concept = preprod.get_concept(concept_id, account_id=account_id)
+    if concept is None or not concept.get("shots"):
+        return _error(404, "not_found", "no such concept")
+    try:
+        return pricing.display(account_id=account_id, shot=concept["shots"][0],
+                               shot_id=concept_id, provider=provider, model=model,
+                               seconds=duration, frame=frame)
+    except ValueError as e:
+        return _error(400, "bad_render_choice", str(e))
 
 
 @router.post("/queue/{concept_id}/approve")
@@ -2732,32 +2993,24 @@ def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
     # carrying windows, not whether the timeline happens to be planned yet
     # -- a stale or missing one is planned inside the job, before the first
     # clip, so the card can never render the old split of an edited scene.
-    windows = [p["seconds"] for p in (_timeline_card(shot) or {}).get("parts") or []]
+    # pricing.windows_to_render is that rule; `timed` below is its answer.
 
-    # The plan is the default, the body overrides it. A shot carries the
-    # tool shootgen chose; platform_default turns that into (provider,
-    # model) through the SAME binding orchestrator.generate_render holds,
-    # so "KLING" means one model in both places or in neither.
-    # An empty body resolves exactly as the card's default did
-    # (providers.render_default: the plan if this account can render it,
-    # else the cheapest renderer it can), so the two cannot come apart.
-    planned = providers.platform_default(shot.get("tool"))
-    if body.provider:
-        provider = body.provider
-        model = body.model
-        if model is None and planned and provider == planned[0]:
-            model = planned[1]
-    else:
-        default = providers.render_default(shot.get("tool"), account_id)
-        provider = default["provider"]
-        model = body.model or default["model"]
+    # The plan is the default, the body overrides it -- and BOTH are
+    # resolved, checked and priced in one place (src/pricing.py,
+    # 2026-09-17). A named provider is honoured exactly; an empty body
+    # resolves as the card's default did (providers.render_default: the
+    # plan if this account can render it, else the cheapest renderer it
+    # can); a shot's planned tool means one model here and in
+    # orchestrator.generate_render (providers.platform_default). The card
+    # printed pricing.display() for this same intent, so the number on the
+    # button and the number in this response are one computation.
+    #
+    # A timed scene's LENGTHS are its windows', fitted to the model -- the
+    # card's duration does not apply, so it is not checked either.
     try:
-        # A timed scene's LENGTHS are its windows', fitted to the model --
-        # the card's duration does not apply, so it is not checked either.
-        choice = (providers.check_timeline_choice(provider, model, body.frame, windows)
-                  if windows else
-                  providers.check_render_choice(
-                      provider, model, body.duration, body.frame))
+        priced = pricing.display(account_id=account_id, shot=shot, shot_id=concept_id,
+                                 provider=body.provider, model=body.model,
+                                 seconds=body.duration, frame=body.frame)
     except ValueError as e:
         # REFUSED, never clamped: a length or a frame outside the model's
         # own set is evidence the card and the model have come apart, and
@@ -2765,6 +3018,17 @@ def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
         # picked. (The adapters clamp internally -- that is their contract
         # with the nightly graph, which has no human to refuse to.)
         return _error(400, "bad_render_choice", str(e))
+    if body.tokens:
+        try:
+            _verify_tokens(body.tokens, priced, shot, concept_id, account_id)
+        except (pricing.QuoteRefused, pricing.SigningUnconfigured) as e:
+            return _quote_refusal(e, account_id)
+    timed = priced["timed"]
+    choice = {"provider": priced["provider"], "model": priced["model"],
+              "duration": None if timed else priced["durations"][0],
+              "frame": priced["frame"], "estimate_usd": priced["estimate_usd"]}
+    if timed:
+        choice["durations"] = priced["durations"]
 
     module = providers.VIDEO_PROVIDERS[choice["provider"]]
     label = providers.RENDER_LABELS.get(choice["provider"], choice["provider"])
@@ -2790,7 +3054,7 @@ def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
         preprod.set_picked(concept_id, True, account_id=account_id)
 
     def work(job):
-        if windows:
+        if timed:
             return _render_timeline(job, concept_id, shot_n, module, label, choice,
                                     frame_kw, account_id)
         jobs.progress(job, 0.2, f"rendering via {label} ({choice['model']})")
@@ -2809,7 +3073,9 @@ def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
     job = jobs.start("render",
                      f"approved · {concept['title']} · {label} {choice['model']}",
                      work, account_id=account_id)
-    return {"job_id": job["id"], "render": choice}
+    # `render` keeps the shape clients already read; `quote` beside it is
+    # the same intent as pricing.display printed it on the card
+    return {"job_id": job["id"], "render": choice, "quote": priced}
 
 
 def _render_timeline(job, concept_id: int, shot_n, module, label: str, choice: dict,
@@ -2960,7 +3226,12 @@ def concept_detail(concept_id: int, account_id: int = Depends(auth.current_accou
             "shots": shots,
             # the render button's copy is server-sourced: availability,
             # the spend gate's state, and what one clip would cost
-            "runway": _runway_state()}
+            "runway": _runway_state(),
+            # ... and what the Generate node would ACTUALLY spend on. The
+            # chip read `runway.estimate_usd` -- Runway's default clip --
+            # on every account, including one whose only key is Higgsfield
+            # and whose Run therefore renders, and bills, somewhere else.
+            "generate": _generate_node_quote(concept, account_id)}
 
 
 class ShotMediaBody(BaseModel):
@@ -4382,6 +4653,9 @@ class WfGenerateBody(BaseModel):
     # after the browser closed still lands where the Director expects it.
     concept_id: Optional[int] = None
     shot_n: Optional[int] = None
+    # the signed quote the chip showed (`generate.renders[0].token` on the
+    # concept) -- optional, see ApproveBody.tokens
+    token: Optional[str] = None
 
     def reference_urls(self) -> list[str]:
         urls, seen = [], set()
@@ -4440,6 +4714,18 @@ def workflow_exec_generate(body: WfGenerateBody, account_id: int = Depends(auth.
                       "no video renderer key is available for this account — "
                       "add a Runway, Higgsfield or fal key")
     label = providers.RENDER_LABELS.get(pick["provider"], pick["provider"])
+    if body.token:
+        if shot is None:
+            return _error(400, "wrong_render",
+                          "a quote names a concept's shot; this node has none")
+        try:
+            priced = pricing.display(account_id=account_id, shot=shot, shot_id=body.concept_id,
+                                     provider=pick["provider"], model=pick["model"], whole=True)
+            _verify_tokens([body.token], priced, shot, body.concept_id, account_id)
+        except (pricing.QuoteRefused, pricing.SigningUnconfigured) as e:
+            return _quote_refusal(e, account_id)
+        except ValueError as e:
+            return _error(400, "bad_render_choice", str(e))
 
     def work(job):
         jobs.progress(job, 0.2, f"rendering via {label} ({pick['model']})")
