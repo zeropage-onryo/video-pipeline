@@ -2899,3 +2899,30 @@ select.zin {
     width: 100%;
   }
 }
+
+
+/* the Queue's lane and job list on a phone: same 16px gutters as the heads */
+@media (max-width: 720px) {
+  .scenegrid,
+  .qlist {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  /* a 360px minimum overflows a 358px column */
+  .scenegrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  /* the row is a five-column grid: dot, text and the action stay on one
+     line, the bar takes a line of its own, the duplicate status goes */
+  .qrow {
+    grid-template-columns: 8px minmax(0, 1fr) auto;
+  }
+  .qrow .qbar {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    width: 100%;
+  }
+  .qrow > .m {
+    display: none;
+  }
+}

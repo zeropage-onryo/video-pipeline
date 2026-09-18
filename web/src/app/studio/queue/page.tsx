@@ -93,7 +93,7 @@ const SIDE_BTN =
 const POPK = "mb-2 font-plex text-[11px] tracking-[0.14em] text-bone3";
 
 export default function QueuePage() {
-  const { brand, toast } = useShell();
+  const { me, brand, toast } = useShell();
   const [pending, setPending] = useState<Concept[] | null>(null);
   const [runway, setRunway] = useState<RunwayState | null>(null);
   const [renderers, setRenderers] = useState<Record<string, RendererSpec>>({});
@@ -167,16 +167,29 @@ export default function QueuePage() {
   // the lane opens, and whenever the registry goes quiet (a finished clip
   // leaves the pending list). A response from before any of those
   // changed is dropped, never applied.
+  //
+  // ONE pending request per reason, not three per page load (2026-09-18).
+  // The route prices every card, so it is the slow one -- 21s from a Mac
+  // against the remote database -- and the page used to ask it on mount
+  // (no brand yet), again when the brand resolved, and a third time when
+  // the lane capability arrived, which has nothing to do with it. It now
+  // waits for the shell to say who this is, and the lane reads on its own.
   useEffect(() => {
-    if (active) return;
+    if (active || !me) return;
     let stale = false;
-    const isStale = () => stale;
-    loadPending(isStale);
-    if (laneOn) loadLane(isStale);
+    loadPending(() => stale);
     return () => {
       stale = true;
     };
-  }, [active, laneOn, loadPending, loadLane]);
+  }, [active, me, loadPending]);
+  useEffect(() => {
+    if (active || !me || !laneOn) return;
+    let stale = false;
+    loadLane(() => stale);
+    return () => {
+      stale = true;
+    };
+  }, [active, me, laneOn, loadLane]);
 
   // a RENDERING tag outlives its job by nothing: it is READ against the
   // registry, so a job that ended (or that a restart forgot) drops it
@@ -354,31 +367,87 @@ export default function QueuePage() {
   };
 
   const running = jobs.filter((j) => ["queued", "running"].includes(j.status)).length;
+  const finished = jobs.filter((j) => !["queued", "running"].includes(j.status));
   const providerIds = Object.keys(renderers);
+
+  /* What approving everything on the page would make and cost: the SAME
+     plan each card prints on its button, summed. Display only -- every
+     approve is still its own click and its own signed quote. A card still
+     pricing, refused or unpriced is counted out loud rather than as $0. */
+  const spendable = (pending || []).filter((c) => !lockedFor(c) && !didFor(c));
+  const tally = spendable.reduce(
+    (t, c) => {
+      const pick = pickOf(c);
+      const spec = pick ? specOf(catalogue, pick.provider, pick.model) : null;
+      if (!pick || !spec || !renderers[pick.provider]?.available) return { ...t, open: t.open + 1 };
+      const plan = planFor(spec, pick, c.timeline ? partsOf(c) : null, quoteOf(c, pick));
+      return plan.usd === null
+        ? { ...t, shots: t.shots + plan.n, open: t.open + 1 }
+        : { ...t, shots: t.shots + plan.n, usd: t.usd + plan.usd };
+    },
+    { usd: 0, shots: 0, open: 0 },
+  );
+  const blockedCount = (pending || []).filter(lockedFor).length;
+  const clearFinished = async () => {
+    // one at a time: the registry has no bulk route, and a row that is
+    // already gone (a restart cleared it) must not stop the rest
+    await Promise.all(finished.map((j) => clearJob(j.id).catch(() => {})));
+    loadJobs();
+  };
 
   return (
     <section className="view" style={{ paddingTop: 0 }}>
       <div className="vhead" style={{ marginTop: 8 }}>
         <h2>Queue</h2>
         <span className="spacer" />
-        <span className="m">{pending ? `${pending.filter((c) => !lockedFor(c)).length} waiting` : "—"}</span>
+        <span className="m">
+          {pending
+            ? spendable.length
+              ? `${tally.shots} shot${tally.shots === 1 ? "" : "s"} across ${spendable.length} scene${spendable.length === 1 ? "" : "s"} · ~$${tally.usd.toFixed(2)} to approve all${tally.open ? ` · ${tally.open} not priced` : ""}`
+              : "nothing to spend on"
+            : "—"}
+        </span>
       </div>
 
       <div className="chead">
         <h3>Awaiting approval</h3>
         <span className="m">
-          {pending ? `${pending.filter((c) => !lockedFor(c)).length} waiting${pending.some(lockedFor) ? ` · ${pending.filter(lockedFor).length} blocked` : ""}` : ""}
+          {pending ? `${spendable.length} waiting${blockedCount ? ` · ${blockedCount} blocked` : ""}` : ""}
         </span>
         <span className="spacer" />
-        <span className="m">
-          {providerIds.length
-            ? providerIds.map(gateLine).join(" · ")
-            : runway
+        {/* one chip per renderer: can it render, and how much of today's cap
+            is left. The old single line of mono text said all of this and
+            nobody could find their vendor in it. */}
+        {providerIds.length ? (
+          <div className="flex min-w-0 flex-wrap justify-end gap-1.5" role="list" aria-label="Renderers">
+            {providerIds.map((p) => {
+              const v = renderers[p];
+              const full = v.available && v.cap != null && v.today != null && v.today >= v.cap;
+              return (
+                <span
+                  key={p}
+                  role="listitem"
+                  title={gateLine(p) + (full ? " · daily cap reached" : "")}
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-plex text-[10px] leading-none tracking-[0.08em] ${v.available ? "border-noir-line3 text-bone2" : "border-noir-line2 text-[#5e5b55]"}`}
+                >
+                  <i className={`size-1.5 flex-none rounded-full ${!v.available ? "bg-[#4a4843]" : full ? "bg-gate-warn" : "bg-gate-pass"}`} />
+                  {v.label.toUpperCase()}
+                  <span className="text-bone3">
+                    {!v.available ? "NO KEY" : v.today != null ? `${v.today}${v.cap ? `/${v.cap}` : ""}` : "READY"}
+                  </span>
+                </span>
+              );
+            })}
+          </div>
+        ) : (
+          <span className="m">
+            {runway
               ? runway.available
                 ? `${runway.model} · ~$${(runway.estimate_usd || 0).toFixed(2)} a clip`
                 : "Runway key not set — approving cannot render"
               : "—"}
-        </span>
+          </span>
+        )}
       </div>
       {error ? <div className="stateline err" style={{ padding: "0 42px 14px" }}>{error}</div> : null}
       {pending && !pending.length ? (
@@ -386,7 +455,21 @@ export default function QueuePage() {
           Nothing waiting — a Studio run lands here once its keyframe is rendered, or pick a concept on Pipeline
         </p>
       ) : null}
-      <div className="mx-auto mb-4 grid max-w-[1680px] grid-cols-[repeat(auto-fill,minmax(min(400px,100%),1fr))] items-start gap-6 px-[42px]">
+      <div className="mx-auto mb-4 grid max-w-[1680px] grid-cols-[repeat(auto-fill,minmax(min(400px,100%),1fr))] items-start gap-6 px-[42px] max-sm:px-4">
+        {/* before the first answer: the cards' own shape, not an empty gate */}
+        {!pending && !error
+          ? Array.from({ length: 3 }, (_, i) => (
+              <div key={i} aria-hidden className={`${CARD} border-noir-line2 motion-safe:animate-pulse`}>
+                <div className="aspect-video w-full rounded-t-[9px] bg-noir-slate" />
+                <div className="flex flex-col gap-3 px-4 pb-4 pt-3.5">
+                  <div className="h-[26px] w-2/3 rounded-[4px] bg-noir-slate" />
+                  <div className="h-4 w-5/6 rounded-[4px] bg-noir-raise" />
+                  <div className="h-11 rounded-[8px] bg-noir-raise" />
+                  <div className="h-[52px] rounded-[8px] bg-noir-slate" />
+                </div>
+              </div>
+            ))
+          : null}
         {(pending || []).map((c) => {
           const pick = pickOf(c);
           const locked = lockedFor(c);
@@ -399,9 +482,16 @@ export default function QueuePage() {
           const noKey = r && !r.available ? `${r.label} key not set` : "";
           const badLength = !!(pick && spec && plan && !plan.timed && !legalDuration(spec.duration as AxisLike, Number(pick.duration)));
           // a blocked card says WHY, in the gate's own words, not how it would anchor
+          // park_reason is what the NIGHT said ("no keyframe: daily ceiling
+          // …"); a pick draws the still afterwards, and the card then showed
+          // its keyframe over a line saying it had none (2026-09-18). The
+          // still on the row outranks the night's note about lacking one.
+          const drawnSince = !!c.reference_image && /^no keyframe/i.test(c.park_reason || "");
           const why = locked
             ? `blocked · ${c.blocked || "no reference photos attached"}`
-            : c.park_reason || (c.reference_image ? "anchors on the keyframe" : "text-to-video · no keyframe yet");
+            : drawnSince
+              ? "anchors on the keyframe · drawn after it parked"
+              : c.park_reason || (c.reference_image ? "anchors on the keyframe" : "text-to-video · no keyframe yet");
           const stills = stillsOf(c);
           const parts = partsOf(c);
           return (
@@ -476,7 +566,8 @@ export default function QueuePage() {
                   </div>
                 </div>
                 <p className="-mt-1 mb-0 truncate font-plex text-[11px] tracking-[0.04em] text-bone3" title={why}>
-                  {c.n} · {c.parked ? "PARKED" : "PICKED"} · {why}
+                  {/* a pick is the person's act and outranks the night's park */}
+                  {c.n} · {c.picked ? "PICKED" : "PARKED"} · {why}
                 </p>
                 {locked ? (
                   // the way out of a locked card: the same door the board's
@@ -779,6 +870,11 @@ export default function QueuePage() {
         <span className="m">
           {running} running · {jobs.length} total
         </span>
+        {finished.length > 1 ? (
+          <button type="button" className="tag" onClick={() => void clearFinished()}>
+            Clear {finished.length} finished
+          </button>
+        ) : null}
       </div>
       {jobsError ? <div className="stateline err" style={{ padding: "0 42px 14px" }}>{jobsError}</div> : null}
       <div className="qlist">

@@ -35,6 +35,7 @@ import {
 import { API_URL, ApiError, goToSignIn, signOut } from "@/lib/api";
 import {
   getMe,
+  queueCount,
   queuePending,
   switchAccount,
   QUEUE_EVENT,
@@ -123,11 +124,17 @@ export function StudioShell({ children }: { children: ReactNode }) {
   }, []);
 
   const refreshBadge = useCallback(() => {
-    queuePending()
-      // what can be APPROVED: a blocked card is waiting on references, not
-      // on you to spend (an older API has no `spendable`; count the rows)
-      .then((res) => setPending(res.spendable ?? res.items.length))
-      .catch(() => setPending(0));
+    // the count route, not the listing: the listing prices every card and
+    // the badge is on every page. An API from before the route existed
+    // answers 404 (or 405), so the listing stays as the fallback.
+    queueCount()
+      .then((res) => setPending(res.spendable))
+      .catch((err) => {
+        if (!(err instanceof ApiError) || ![404, 405].includes(err.status)) return setPending(0);
+        queuePending()
+          .then((res) => setPending(res.spendable ?? res.items.length))
+          .catch(() => setPending(0));
+      });
   }, []);
   useEffect(() => {
     refreshBadge();
