@@ -51,7 +51,8 @@ from typing import Optional
 from google import genai
 from google.genai import types
 
-from . import account_keys, generative
+from . import account_keys, generative, ledger
+from . import charge as charging
 from .shot import Shot
 
 MODELS = ("veo-3.1-generate-preview", "veo-3", "veo-3-fast")
@@ -177,10 +178,16 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
                    duration: int = DEFAULT_DURATION, image=None, client=None,
                    poll_delay: float = 10.0, timeout_s: float = 600.0,
                    approved: Optional[bool] = None,
-                   account_id: Optional[int] = None) -> Path:
+                   account_id: Optional[int] = None,
+                   db_path=None,
+                   charge: Optional[charging.Charge] = None) -> Path:
     """
     The thin wrapper: submit -> poll until done or timeout -> download.
     Raises on anything; generate_candidates is the layer that catches.
+    The credit hold is taken here too, after the spend gate and before
+    the submit (src/charge.py, 2026-09-18): `charge` is the caller's when
+    it will record the generation; otherwise this call holds and settles
+    its own at the estimate. `db_path` is the ledger's DSN for that case.
     Latency runs ~11s to ~6min, so polling is the contract, not an edge
     case.
 
@@ -199,34 +206,49 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
         )
     client = client or _make_client(account_id)
     kwargs = {"image": image} if image is not None else {}
-    operation = client.models.generate_videos(
-        model=model,
-        prompt=prompt,
-        config=types.GenerateVideosConfig(
-            aspect_ratio=aspect_ratio,
-            resolution=resolution,
-            duration_seconds=int(duration),
-        ),
-        **kwargs,
-    )
-
-    deadline = time.monotonic() + timeout_s
-    while not operation.done:
-        if time.monotonic() > deadline:
-            raise TimeoutError(f"Veo job did not finish within {timeout_s:.0f}s")
-        time.sleep(poll_delay)
-        operation = client.operations.get(operation)
-
-    videos = getattr(operation.response, "generated_videos", None) or []
-    if not videos:
-        raise RuntimeError("Veo job finished with no video in the response")
-
     out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    video = videos[0]
-    # download NOW -- Google keeps the file ~2 days, the repo keeps it forever
-    client.files.download(file=video.video)
-    video.video.save(str(out_path))
+    own = charge is None
+    if own:
+        charge = charging.Charge(
+            account_id, provider="veo", ref=out_path.name,
+            estimate_usd=estimate_cost(1),
+            key_source=account_keys.key_source(account_id, "veo", db_path),
+            dsn=db_path)
+    charge.take()          # InsufficientCredit raises HERE: nothing submitted
+    charge.submitted()     # the last line before the provider call
+    try:
+        operation = client.models.generate_videos(
+            model=model,
+            prompt=prompt,
+            config=types.GenerateVideosConfig(
+                aspect_ratio=aspect_ratio,
+                resolution=resolution,
+                duration_seconds=int(duration),
+            ),
+            **kwargs,
+        )
+
+        deadline = time.monotonic() + timeout_s
+        while not operation.done:
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"Veo job did not finish within {timeout_s:.0f}s")
+            time.sleep(poll_delay)
+            operation = client.operations.get(operation)
+
+        videos = getattr(operation.response, "generated_videos", None) or []
+        if not videos:
+            raise RuntimeError("Veo job finished with no video in the response")
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        video = videos[0]
+        # download NOW -- Google keeps the file ~2 days, the repo keeps it forever
+        client.files.download(file=video.video)
+        video.video.save(str(out_path))
+    except Exception as e:
+        charge.release(f"veo: {type(e).__name__}")
+        raise
+    if own:
+        charge.settle()
     return out_path
 
 
@@ -452,9 +474,13 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"c{concept_id}-s{shot_n}{f'-p{part}' if part else ''}-{stamp}.mp4"
+        key_source = account_keys.key_source(account_id, "veo", db_path)
+        charge = charging.Charge(
+            account_id, provider="veo", ref=out_path.name,
+            estimate_usd=estimate_cost(1), key_source=key_source, dsn=db_path)
         generate_video(prompt, out_path, model=model, duration=duration,
                        resolution=resolution, image=image, client=client,
-                       approved=approved, account_id=account_id)
+                       approved=approved, account_id=account_id, charge=charge)
 
         shot_row_id = _shot_row_for_prompt(prompt, db_path, account_id)
         generation_params = {"model": model, "duration": duration,
@@ -462,8 +488,8 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                              "concept_id": concept_id, "shot_n": shot_n,
                              **({"part": part} if part else {}),
                              "prompt_image": image is not None,
-                             "key_source": account_keys.key_source(
-                                 account_id, "veo", db_path)}
+                             "key_source": key_source,
+                             **charge.params()}
         generation_id = generative.record_generation(
             shot_row_id, "veo", prompt,
             params=generation_params,
@@ -471,6 +497,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
             cost_usd=estimate_cost(1),
             **kwargs,
             account_id=account_id)
+        charge.settle(generation_id=generation_id)
 
         media_url = _publish(out_path, "video/mp4", account_id)
         if part:
@@ -492,5 +519,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                 "generation_id": generation_id, "path": str(out_path),
                 "asset_id": asset["id"], "asset_rag": asset["rag"],
                 "error": None}
+    except ledger.InsufficientCredit as e:
+        return {"ok": False, "error": charging.refusal(e)}
     except Exception as e:
         return {"ok": False, "error": _safe_error(e, account_id)}

@@ -362,7 +362,12 @@ ESTIMATORS = {
 # decision made here. WHICH TIER AN ACCOUNT IS ON IS NOT RECORDED ANYWHERE
 # YET -- pricing takes it as an argument and enforces nothing when it is
 # not given, so this table changes no behaviour until a plan exists.
-TIERS = ("standard", "premium")      # ascending: a tier may use itself and below
+# THREE TIERS SINCE 2026-09-18 (the plans in pricing.PLANS): standard is
+# what a Starter plan renders, creator adds the Kling and Seedance family,
+# premium adds Veo. An account with no plan has no tier and is not
+# refused here -- with no credit it cannot hold, and a BYOK render is the
+# provider's business (pricing.tier_for).
+TIERS = ("standard", "creator", "premium")      # ascending: a tier may use itself and below
 
 
 @dataclass(frozen=True)
@@ -374,16 +379,16 @@ class Band:
 BANDS: dict[tuple[str, str], Band] = {
     ("runway", "gen4_turbo"): Band("standard"),
     ("runway", "gen4.5"): Band("standard"),
-    ("runway", "seedance2_5"): Band("standard"),
+    ("runway", "seedance2_5"): Band("creator"),
     ("fal", "ltx2.3"): Band("standard"),
     ("fal", "wan3"): Band("standard"),
-    ("fal", "kling3-turbo-pro"): Band("standard"),
-    ("fal", "seedance2-fast"): Band("standard"),
-    ("fal", "seedance2"): Band("standard"),
-    ("higgsfield", "seedance-pro"): Band("standard"),
-    ("higgsfield", "seedance-lite"): Band("standard"),
-    ("higgsfield", "kling2.5"): Band("standard"),
-    ("higgsfield", "kling2.1"): Band("standard"),
+    ("fal", "kling3-turbo-pro"): Band("creator"),
+    ("fal", "seedance2-fast"): Band("creator"),
+    ("fal", "seedance2"): Band("creator"),
+    ("higgsfield", "seedance-pro"): Band("creator"),
+    ("higgsfield", "seedance-lite"): Band("creator"),
+    ("higgsfield", "kling2.5"): Band("creator"),
+    ("higgsfield", "kling2.1"): Band("creator"),
     ("higgsfield", "veo3.1-fast"): Band("premium", max_seconds=8),
     ("higgsfield", "veo3.1"): Band("premium", max_seconds=8),
     ("veo", "veo-3.1-generate-preview"): Band("premium", max_seconds=8),

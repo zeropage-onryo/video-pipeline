@@ -75,7 +75,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from . import account_keys, generative
+from . import account_keys, generative, ledger
+from . import charge as charging
 from .shot import Shot
 
 HOST = os.environ.get("HIGGSFIELD_HOST", "https://api.higgsfield.ai").rstrip("/")
@@ -558,11 +559,15 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
                    negative_prompt: str = "",
                    http=None, db_path=None,
                    approved: Optional[bool] = None,
-                   account_id: Optional[int] = None) -> Path:
+                   account_id: Optional[int] = None,
+                   charge: Optional[charging.Charge] = None) -> Path:
     """
     The thin wrapper: submit -> poll -> download. Raises on anything --
     including a missing spend approval, which is checked HERE so no
-    caller can spend a credit around the gate.
+    caller can spend a credit around the gate, and an empty credit
+    balance, held here between the gate and the submit (src/charge.py).
+    `charge` is the caller's when it will record the generation;
+    otherwise this call holds and settles its own at the estimate.
     """
     if not spend_approved(approved):
         raise RuntimeError(
@@ -577,14 +582,29 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
     path, body = build_body(prompt, model=model, image_url=image_url,
                             duration=duration, aspect_ratio=aspect_ratio,
                             resolution=resolution, negative_prompt=negative_prompt)
-    state, skip = _submit_and_wait(path, body, http=http, account_id=account_id)
-    url = _output_url(state, skip)
-    if not url:
-        raise RuntimeError(
-            f"Higgsfield job finished but no output URL was found in the "
-            f"payload (keys: {sorted(state)})")
     out_path = Path(out_path)
-    _download(url, out_path)
+    own = charge is None
+    if own:
+        charge = charging.Charge(
+            account_id, provider="higgsfield", ref=out_path.name,
+            estimate_usd=estimate_cost(1, model=model, duration=duration),
+            key_source=account_keys.key_source(account_id, "higgsfield", db_path),
+            dsn=db_path)
+    charge.take()          # InsufficientCredit raises HERE: nothing submitted
+    charge.submitted()     # the last line before the provider call
+    try:
+        state, skip = _submit_and_wait(path, body, http=http, account_id=account_id)
+        url = _output_url(state, skip)
+        if not url:
+            raise RuntimeError(
+                f"Higgsfield job finished but no output URL was found in the "
+                f"payload (keys: {sorted(state)})")
+        _download(url, out_path)
+    except Exception as e:
+        charge.release(f"higgsfield: {type(e).__name__}")
+        raise
+    if own:
+        charge.settle()
     return out_path
 
 
@@ -888,10 +908,15 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"c{concept_id}-s{shot_n}{f'-p{part}' if part else ''}-{stamp}.mp4"
+        key_source = account_keys.key_source(account_id, "higgsfield", db_path)
+        charge = charging.Charge(
+            account_id, provider="higgsfield", ref=out_path.name,
+            estimate_usd=estimate_cost(1, model=model, duration=duration),
+            key_source=key_source, dsn=db_path)
         generate_video(prompt, out_path, model=model, image_url=image_url,
                        duration=duration, resolution=resolution,
                        http=http, db_path=db_path, approved=approved,
-                       account_id=account_id)
+                       account_id=account_id, charge=charge)
 
         shot_row_id = _shot_row_for_prompt(
             prompt, db_path, "auto-created by higgsfield.generate_for_shot",
@@ -905,12 +930,13 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                     "concept_id": concept_id, "shot_n": shot_n,
                     **({"part": part} if part else {}),
                     "prompt_image": bool(image_url),
-                    "key_source": account_keys.key_source(
-                        account_id, "higgsfield", db_path)},
+                    "key_source": key_source,
+                    **charge.params()},
             output_path=str(out_path),
             cost_usd=estimate_cost(1, model=model, duration=duration),
             **kwargs,
          account_id=account_id)
+        charge.settle(generation_id=generation_id)
         media_url = _publish(out_path, "video/mp4", account_id)
         if part:
             timeline.attach_part(concept_id, shot_n, part, "media_url", media_url,
@@ -920,6 +946,8 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
         return {"ok": True, "media_url": media_url,
                 "generation_id": generation_id, "path": str(out_path),
                 "error": None}
+    except ledger.InsufficientCredit as e:
+        return {"ok": False, "error": charging.refusal(e)}
     except Exception as e:
         return {"ok": False, "error": _safe_error(e, account_id)}
 
@@ -962,9 +990,14 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"wf-{stamp}.mp4"
+        key_source = account_keys.key_source(account_id, "higgsfield", db_path)
+        charge = charging.Charge(
+            account_id, provider="higgsfield", ref=out_path.name,
+            estimate_usd=estimate_cost(1, model=model),
+            key_source=key_source, source="workflow", dsn=db_path)
         generate_video(prompt, out_path, model=model, image_url=image_url,
                        http=http, db_path=db_path, approved=approved,
-                       account_id=account_id)
+                       account_id=account_id, charge=charge)
 
         shot_row_id = _shot_row_for_prompt(
             prompt, db_path, "auto-created by higgsfield.generate_from_prompt",
@@ -974,15 +1007,18 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
             params={"model": model, "aspect_ratio": DEFAULT_ASPECT,
                     "duration": DEFAULT_DURATION, "source": "workflow",
                     "prompt_image": bool(image_url),
-                    "key_source": account_keys.key_source(
-                        account_id, "higgsfield", db_path)},
+                    "key_source": key_source,
+                    **charge.params()},
             output_path=str(out_path),
             cost_usd=estimate_cost(1, model=model),
             **kwargs,
          account_id=account_id)
+        charge.settle(generation_id=generation_id)
         return {"ok": True, "media_url": _publish(out_path, "video/mp4", account_id),
                 "generation_id": generation_id, "path": str(out_path),
                 "error": None}
+    except ledger.InsufficientCredit as e:
+        return {"ok": False, "error": charging.refusal(e)}
     except Exception as e:
         return {"ok": False, "error": _safe_error(e, account_id)}
 
@@ -1034,5 +1070,7 @@ def generate_image_from_prompt(prompt: str, *, db_path=None, http=None, account_
         return {"ok": True, "media_url": _publish(out_path, "image/jpeg", account_id),
                 "generation_id": generation_id, "path": str(out_path),
                 "error": None}
+    except ledger.InsufficientCredit as e:
+        return {"ok": False, "error": charging.refusal(e)}
     except Exception as e:
         return {"ok": False, "error": _safe_error(e, account_id)}

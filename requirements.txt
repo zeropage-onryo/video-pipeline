@@ -5,6 +5,7 @@ google-genai
 python-dotenv
 requests
 boto3   # R2 speaks the S3 API; storage.py's client, no Cloudflare-specific SDK needed
+stripe>=15,<16   # app/billing.py + src/billing.py -- checkout, portal, the signed webhook (2026-09-18)
 runwayml   # runway.py's client -- API credit spend, gated behind RUNWAY_SPEND_OK=1
 pytest
 ruff

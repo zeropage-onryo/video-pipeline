@@ -5017,3 +5017,13 @@ def job_clear(job_id: int, account_id: int = Depends(auth.current_account_id)):
     if not removed:
         return _error(409, "not_finished", "only finished jobs can be cleared")
     return {"deleted": job_id}
+
+
+# --- billing (2026-09-18) --------------------------------------------------
+# The customer-facing Stripe routes live in app/billing.py and are included
+# HERE so they sit under /api, behind the session gate, and inside the
+# route audit in tests/test_tenancy.py. The webhook is deliberately not.
+from . import billing as _billing  # noqa: E402  (bottom of the file on purpose)
+
+for _path, _endpoint, _methods in _billing.API_ROUTES:
+    router.add_api_route(_path, _endpoint, methods=_methods, tags=["billing"])

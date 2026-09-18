@@ -419,6 +419,27 @@ Not done, deliberately:
 - `ledger.credits_for_usd` still has its one caller, `hold_for_render` (step 6). `test_at_cost_it_charges_what_the_ledger_always_did` pins the two together at 1.0x for every model.
 - `QUOTE_SIGNING_SECRET` is not in `POSTURE_ENV` yet because nothing reads it yet; it goes in with the first line of step 4.
 
+## As built — steps 5 and 6 (2026-09-18)
+
+Landed together with Stripe (docs/BILLING.md), and not quite as the spec drew them:
+
+- **`MARKUP` is `"2.4"`** and `PRICING_VERSION` is `2026-09-18-video-v2` (the v1 tokens
+  are `retired_pricing`). The token is still OPTIONAL on approve: the hold is what now
+  makes an unsigned path safe -- it converts through the same `ledger.charge_credits`
+  the quote does, so an unsigned approve is charged the marked-up price, not the
+  at-cost one. Requiring the token is a front-end change for another day.
+- **The hold is inside `generate_video`, not threaded as a `Quote`.** `src/charge.py`'s
+  `Charge` carries it from the caller that writes the generations row into the
+  adapter that submits, so `spend_approved` kept its shape and the adapters' signatures
+  grew one `charge` kwarg. `hold_for_render` did not take a Quote; it takes the
+  adapter's own estimate and converts it with the quote's function.
+- **The settle is capped at what was held** (`ledger.settle(credits=..., cap=...)`), the
+  "ledger sandwich" rule. `ledger.hold`/`settle` themselves stay at-cost primitives
+  (their tests are the ledger's), and the charge conversion happens at the seam.
+- **Tiers:** `providers.TIERS` is `standard / creator / premium`; the Kling and Seedance
+  family moved to `creator`. `pricing.tier_for(account_id)` reads `accounts.plan`
+  (written by the webhook) and `estimate()` applies it when no tier is passed. No plan
+  = no tier = no band refusal: the ledger is that account's wall.
 ## Live attempt, 2026-09-18 — after the merge
 
 Steps 1–4 merged to `main` as PR #21 (`7ddb947`); the branch named at the top of "As built" is
@@ -489,6 +510,8 @@ exemption** (how an account is marked exempt is step 6's to design; a column in
   `generate_run`, the Director node, Run all, and `MARKUP`.
 
 ## Step 6 design — the operator's exemption (2026-09-18, designed, not built)
+
+> Design record, kept as written. It was built the same day, to this shape (`accounts.credit_exempt`, read once inside `ledger.hold_for_render`, `python -m src.accounts credits <slug> --on`) — see "As built — steps 5 and 6" above and `docs/BILLING.md`.
 
 Mike's rule: **zero credits refuses, even with a key on file; his own account is the
 exemption.** This section is the column and the one predicate that reads it. It does not
@@ -603,4 +626,3 @@ here seeds real accounts and sets its own `dependency_overrides`.
 - Exempt + own stored key → reason `byok`, not `exempt`.
 - Exempt approve with no token on a signing server → still `missing_quote`.
 - Exempt account over `RUNWAY_DAILY_CAP` → still capped.
-
