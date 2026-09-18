@@ -2834,11 +2834,13 @@ class ApproveBody(BaseModel):
     frame: Optional[str] = None
     # The signed quotes the card showed (pricing.display's `renders[].token`,
     # one per shot to render), echoed back so the price approved is
-    # provably the price rendered. OPTIONAL for now (step 4 of
-    # docs/tasks/task-pricing-and-quotes.md): a body without them falls
-    # to the click-is-the-approval gate exactly as before; a body WITH
-    # them is refused unless every one verifies against this scene as it
-    # is now and the pick as it was priced.
+    # provably the price rendered. REQUIRED whenever the card was handed
+    # them (step 5 of docs/tasks/task-pricing-and-quotes.md): a render
+    # that is billable here, on a server that can sign, is a 400
+    # `missing_quote` without one. A BYOK render, and any render on a
+    # server with no QUOTE_SIGNING_SECRET, was never given a token and
+    # approves without one -- a dev box with no secret is not locked out.
+    # Tokens that ARE sent are verified either way.
     tokens: Optional[list[str]] = None
 
 
@@ -2878,6 +2880,18 @@ def _verify_tokens(tokens: list, priced: dict, shot: dict, shot_id: int,
                                 "price -- re-quote")
         quotes.append(bound)
     return quotes
+
+
+def _quote_required(account_id: Optional[int], provider: str) -> bool:
+    """Whether a render on `provider` must arrive with a signed quote:
+    it is billable to this account (not BYOK) AND this server can sign.
+    The same predicate as pricing.display()'s `signed`, for the routes
+    that have no display() in hand."""
+    return pricing.configured() and pricing.billable(account_id, provider)
+
+
+_QUEUE_ONLY = ("this render is billed in credits, and the Queue is where a "
+               "price is quoted and approved -- pick the scene and approve it there")
 
 
 def _quote_refusal(e: Exception, account_id: Optional[int]):
@@ -3028,9 +3042,12 @@ def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
         # picked. (The adapters clamp internally -- that is their contract
         # with the nightly graph, which has no human to refuse to.)
         return _error(400, "bad_render_choice", str(e))
-    if body.tokens:
+    # priced["signed"] is "billable AND a secret to sign with" -- exactly
+    # the renders display() minted a token for, so the requirement and the
+    # offer are one predicate and cannot disagree
+    if priced["signed"] or body.tokens:
         try:
-            _verify_tokens(body.tokens, priced, shot, concept_id, account_id)
+            _verify_tokens(body.tokens or [], priced, shot, concept_id, account_id)
         except (pricing.QuoteRefused, pricing.SigningUnconfigured) as e:
             return _quote_refusal(e, account_id)
     timed = priced["timed"]
@@ -3400,6 +3417,12 @@ def shot_generate(concept_id: int, shot_n: int, account_id: int = Depends(auth.c
     concept = preprod.get_concept(concept_id, account_id=account_id)
     if concept is None:
         return _error(404, "not_found", "no such concept")
+    # No surface prints a price for this button and no front end calls it
+    # any more, so it mints and takes no quote: a billable render is sent
+    # to the Queue (step 5). BYOK, and a server that cannot sign, render
+    # here exactly as before.
+    if _quote_required(account_id, "runway"):
+        return _error(400, "missing_quote", _QUEUE_ONLY)
 
     def work(job):
         jobs.progress(job, 0.2, "rendering via Runway")
@@ -3448,6 +3471,39 @@ def _save_upload_ref(jpeg: bytes) -> Optional[str]:
     Best-effort: a full disk costs the reference, never the scene that
     was being written."""
     return refbin.save(jpeg)
+
+
+@router.post("/refs/upload")
+async def refs_upload(request: Request, account_id: int = Depends(auth.current_account_id)):
+    """Upload reference photos from disk, return the URLs they ride on.
+
+    The Director canvas's reference cards only took a pasted URL
+    (2026-09-18, Mike: "I'd have to paste a url"). This is the same
+    bin the composer's uploads land in -- normalised to JPEG,
+    content-addressed, mirrored to R2 -- so a frame added here resolves
+    exactly like one attached at Create, on this machine and on the
+    deploy. Field `photos` (the element create routes' name -- `files`
+    is the concept writers' collector, and the drift guard keeps that
+    one read to one place), up to MAX_IMAGE_REFS; anything that is not
+    a readable image is skipped and counted, never a 500. This writes
+    no concept: the card's frames reach a shot through the graph."""
+    form = await request.form()
+    urls: list = []
+    skipped = 0
+    for upload in form.getlist("photos"):
+        if not getattr(upload, "filename", ""):
+            continue
+        if len(urls) >= MAX_IMAGE_REFS:
+            skipped += 1
+            continue
+        jpeg = _to_jpeg(await upload.read())
+        saved = refbin.save(jpeg, account_id) if jpeg else None
+        if saved:
+            if saved not in urls:
+                urls.append(saved)
+        else:
+            skipped += 1
+    return {"urls": urls, "skipped": skipped}
 
 
 def _resolve_asset_photo(url_path: str) -> Optional[Path]:
@@ -3752,6 +3808,12 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
     attach_to = int(concept_id_raw) if concept_id_raw.isdigit() else None
     if attach_to is not None and preprod.get_concept(attach_to, account_id=account_id) is None:
         return _error(404, "not_found", "no such concept to attach to")
+    # the video branch spends on Runway with no price shown anywhere and
+    # no front end posting it -- a billable one goes to the Queue (step 5),
+    # refused BEFORE the job so no Gemini call is made for a clip that
+    # will not render
+    if output == "video" and runway.has_key() and _quote_required(account_id, "runway"):
+        return _error(400, "missing_quote", _QUEUE_ONLY)
 
     image_refs, ref_urls, video_refs = await _collect_refs(form, want_video=True)
 
@@ -4724,14 +4786,22 @@ def workflow_exec_generate(body: WfGenerateBody, account_id: int = Depends(auth.
                       "no video renderer key is available for this account — "
                       "add a Runway, Higgsfield or fal key")
     label = providers.RENDER_LABELS.get(pick["provider"], pick["provider"])
-    if body.token:
-        if shot is None:
+    required = _quote_required(account_id, pick["provider"])
+    if body.token or required:
+        if shot is None and body.token:
             return _error(400, "wrong_render",
                           "a quote names a concept's shot; this node has none")
+        if shot is None:
+            # a free-standing node has no shot for a quote to name, so there
+            # is nothing a billable render here could be priced against
+            return _error(400, "missing_quote",
+                          "this render is billed in credits and needs a quoted price -- "
+                          "open a concept's shot, or approve it in the Queue")
         try:
             priced = pricing.display(account_id=account_id, shot=shot, shot_id=body.concept_id,
                                      provider=pick["provider"], model=pick["model"], whole=True)
-            _verify_tokens([body.token], priced, shot, body.concept_id, account_id)
+            _verify_tokens([body.token] if body.token else [], priced, shot,
+                           body.concept_id, account_id)
         except (pricing.QuoteRefused, pricing.SigningUnconfigured) as e:
             return _quote_refusal(e, account_id)
         except ValueError as e:
