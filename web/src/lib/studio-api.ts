@@ -389,6 +389,15 @@ export const fileLaneClip = (
   return apiForm<{ ok: boolean; media_url?: string; [k: string]: unknown }>(`/queue/manual/${id}/clip`, form);
 };
 
+/** POST /api/refs/upload — reference photos from disk into the shared
+ *  bin (JPEG-normalised, content-addressed, mirrored to R2); returns the
+ *  URLs to put on a reference card. */
+export const uploadRefs = (files: File[]) => {
+  const form = new FormData();
+  for (const f of files) form.append("photos", f, f.name);
+  return apiForm<{ urls: string[]; skipped: number }>("/refs/upload", form);
+};
+
 /* the in-process job registry (clears on restart, and says so) */
 export const listJobs = () => apiFetch<{ items: (Job & { cancellable?: boolean })[] }>("/jobs");
 export const cancelJob = (id: number) => apiFetch<Job>(`/jobs/${id}/cancel`, { method: "POST", body: "{}" });

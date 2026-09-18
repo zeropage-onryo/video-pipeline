@@ -25,6 +25,7 @@ import {
   useState,
   createContext,
   useContext,
+  type ReactNode,
 } from "react";
 import {
   ReactFlow,
@@ -78,6 +79,7 @@ import {
   ZoomOut,
 } from "lucide-react";
 import { apiFetch, API_URL } from "@/lib/api";
+import { uploadRefs } from "@/lib/studio-api";
 import {
   announceQueueChange,
   getAssets,
@@ -188,12 +190,13 @@ const ratioLabel = (r?: string) => (r === "720:1280" ? "9:16" : r === "1280:720"
 
 const Actions = createContext<{
   update: (id: string, data: Partial<CardData>) => void;
+  addFrames: (id: string, urls: string[]) => void;
   remove: (id: string) => void;
   duplicate: (id: string) => void;
   run: (id: string) => void;
   runway: RunwayState | null;
   caps: Capabilities;
-}>({ update: () => {}, remove: () => {}, duplicate: () => {}, run: () => {}, runway: null, caps: {} });
+}>({ update: () => {}, addFrames: () => {}, remove: () => {}, duplicate: () => {}, run: () => {}, runway: null, caps: {} });
 
 function KindIcon({ data, size, strokeWidth }: { data: CardData; size: number; strokeWidth: number }) {
   const props = { size, strokeWidth };
@@ -219,6 +222,91 @@ function gateNote(kind: Kind, caps: Capabilities) {
         : "";
   if (kind === "image" && caps["nano.generate"] === false) return "GEMINI_API_KEY not set";
   return "";
+}
+
+/* Frames from disk (2026-09-18, Mike: a pasted URL was the only way in).
+ * Upload button + drop-anywhere on the card; both go through
+ * /api/refs/upload, the composer's bin, so an uploaded frame resolves
+ * exactly like one attached at Create. */
+const imageFiles = (list: FileList | null | undefined) =>
+  Array.from(list || []).filter((f) => f.type.startsWith("image/") || /\.(heic|heif)$/i.test(f.name));
+
+function useFrameUpload(id: string) {
+  const actions = useContext(Actions);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");
+  const send = async (files: File[]) => {
+    if (!files.length) return;
+    setBusy(true);
+    setNote("");
+    try {
+      const res = await uploadRefs(files);
+      if (res.urls.length) actions.addFrames(id, res.urls);
+      if (res.skipped) setNote(`${res.skipped} skipped (not a readable image)`);
+    } catch (err) {
+      setNote(err instanceof Error ? err.message : "upload failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return { busy, note, send };
+}
+
+const FrameCtx = createContext<ReturnType<typeof useFrameUpload> | null>(null);
+
+function FrameDrop({ id, children }: { id: string; children: ReactNode }) {
+  const up = useFrameUpload(id);
+  const [over, setOver] = useState(false);
+  return (
+    <FrameCtx.Provider value={up}>
+      <div
+        className={`element-body nodrag${over ? " is-drop" : ""}`}
+        onDragOver={(e) => {
+          if (!e.dataTransfer.types.includes("Files")) return;
+          e.preventDefault();
+          e.stopPropagation();
+          setOver(true);
+        }}
+        onDragLeave={() => setOver(false)}
+        onDrop={(e) => {
+          if (!e.dataTransfer.files.length) return;
+          e.preventDefault();
+          e.stopPropagation();
+          setOver(false);
+          up.send(imageFiles(e.dataTransfer.files));
+        }}
+      >
+        {children}
+        {up.note ? (
+          <p role="alert" className="node-error nodrag nowheel">
+            {up.note}
+          </p>
+        ) : null}
+      </div>
+    </FrameCtx.Provider>
+  );
+}
+
+function FrameUpload() {
+  const up = useContext(FrameCtx);
+  const input = useRef<HTMLInputElement>(null);
+  if (!up) return null;
+  return (
+    <button className="ghost frame-upload" disabled={up.busy} onClick={() => input.current?.click()} title="Upload photos from your computer (or drop them on the card)">
+      {up.busy ? <LoaderCircle size={12} className="spin" /> : <Upload size={12} />} {up.busy ? "Uploading…" : "Upload"}
+      <input
+        ref={input}
+        type="file"
+        accept="image/*,.heic,.heif"
+        multiple
+        hidden
+        onChange={(e) => {
+          up.send(imageFiles(e.target.files));
+          e.target.value = "";
+        }}
+      />
+    </button>
+  );
 }
 
 function StudioNode({ id, data, selected }: NodeProps<FlowNode>) {
@@ -297,7 +385,7 @@ function StudioNode({ id, data, selected }: NodeProps<FlowNode>) {
           )}
         </>
       ) : data.kind === "element" ? (
-        <div className="element-body nodrag">
+        <FrameDrop id={id}>
           {data.urls?.length ? (
             <div className={`element-frames c${data.refKind === "location" ? 2 : 3}${data.refKind === "location" ? " wide" : ""}`}>
               {data.urls.map((u, i) => (
@@ -323,23 +411,9 @@ function StudioNode({ id, data, selected }: NodeProps<FlowNode>) {
             <span className="m">
               {data.urls?.length || 0} frame{data.urls?.length === 1 ? "" : "s"}
             </span>
-            <label className="ghost">
-              <Plus size={12} /> Add frame
-              <input
-                type="url"
-                placeholder="paste a photo url"
-                aria-label="Add a frame by url"
-                onKeyDown={(e) => {
-                  if (e.key !== "Enter") return;
-                  const v = (e.target as HTMLInputElement).value.trim();
-                  if (!v) return;
-                  actions.update(id, { urls: [...(data.urls || []), v] });
-                  (e.target as HTMLInputElement).value = "";
-                }}
-              />
-            </label>
+            <FrameUpload />
           </footer>
-        </div>
+        </FrameDrop>
       ) : data.kind === "reference" ? (
         <div className="reference-body nodrag">
           {data.url ? (
@@ -720,6 +794,19 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
   const update = useCallback(
     (id: string, data: Partial<CardData>) =>
       setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, data: { ...n.data, ...data } } : n))),
+    [setNodes],
+  );
+  // appended against the LIVE node, not the render's copy: an upload
+  // resolves seconds later and may race a remove or a second upload
+  const addFrames = useCallback(
+    (id: string, urls: string[]) =>
+      setNodes((ns) =>
+        ns.map((n) => {
+          if (n.id !== id) return n;
+          const have = n.data.urls || [];
+          return { ...n, data: { ...n.data, urls: [...have, ...urls.filter((u) => !have.includes(u))] } };
+        }),
+      ),
     [setNodes],
   );
   const remove = useCallback(
@@ -1134,6 +1221,7 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
     <Actions.Provider
       value={{
         update,
+        addFrames,
         remove,
         duplicate,
         run: (id) => {

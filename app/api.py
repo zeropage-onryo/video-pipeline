@@ -3440,6 +3440,39 @@ def _save_upload_ref(jpeg: bytes) -> Optional[str]:
     return refbin.save(jpeg)
 
 
+@router.post("/refs/upload")
+async def refs_upload(request: Request, account_id: int = Depends(auth.current_account_id)):
+    """Upload reference photos from disk, return the URLs they ride on.
+
+    The Director canvas's reference cards only took a pasted URL
+    (2026-09-18, Mike: "I'd have to paste a url"). This is the same
+    bin the composer's uploads land in -- normalised to JPEG,
+    content-addressed, mirrored to R2 -- so a frame added here resolves
+    exactly like one attached at Create, on this machine and on the
+    deploy. Field `photos` (the element create routes' name -- `files`
+    is the concept writers' collector, and the drift guard keeps that
+    one read to one place), up to MAX_IMAGE_REFS; anything that is not
+    a readable image is skipped and counted, never a 500. This writes
+    no concept: the card's frames reach a shot through the graph."""
+    form = await request.form()
+    urls: list = []
+    skipped = 0
+    for upload in form.getlist("photos"):
+        if not getattr(upload, "filename", ""):
+            continue
+        if len(urls) >= MAX_IMAGE_REFS:
+            skipped += 1
+            continue
+        jpeg = _to_jpeg(await upload.read())
+        saved = refbin.save(jpeg, account_id) if jpeg else None
+        if saved:
+            if saved not in urls:
+                urls.append(saved)
+        else:
+            skipped += 1
+    return {"urls": urls, "skipped": skipped}
+
+
 def _resolve_asset_photo(url_path: str) -> Optional[Path]:
     """A reference URL -> the file on disk, or None.
 
