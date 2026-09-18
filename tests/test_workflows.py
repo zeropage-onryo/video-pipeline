@@ -1227,6 +1227,36 @@ def test_an_unconfigured_runway_node_is_skipped_not_failed(tmp_db, monkeypatch):
     assert result["nodes"]["1"]["status"] == "done"       # the rest still ran
 
 
+# guards: the pricing.configured() skip in execute_graph's Generate branch
+def test_run_all_does_not_render_a_billable_clip_without_a_quote(tmp_db, monkeypatch):
+    """Run all carries no signed quote (the prompt it renders is the
+    enhance node's, written after any price was shown), so on a server
+    that signs, a billable Generate node is skipped -- not failed, and
+    not rendered around the Queue's price."""
+    from src import pricing
+    entered = []
+    monkeypatch.setattr(runway, "has_key", lambda account_id=None: True)
+    monkeypatch.setattr(runway, "generate_from_prompt",
+                        lambda prompt, **kw: entered.append(prompt) or
+                        {"ok": True, "media_url": "/x.mp4", "generation_id": 1,
+                         "path": "p", "error": None})
+    graph = {
+        "nodes": [node(1, "zpf/user_prompt", properties={"text": "night ride"}),
+                  node(2, "zpf/generate", inputs=[slot("prompt", "text", 1),
+                                                  slot("image", "image", None)])],
+        "links": [[1, 1, 0, 2, 0, "text"]],
+    }
+    monkeypatch.setenv(pricing.SIGNING_ENV, "dGVzdC1zZWNyZXQtdGhpcnR5LXR3by1ieXRlcy1sb25nLW9r")
+    result = workflow_runner.execute_graph(graph, gemini_client=object(), db_path=tmp_db)
+    assert result["nodes"]["2"]["status"] == "skipped" and not entered
+    assert "Queue" in result["nodes"]["2"]["error"]
+    assert result["nodes"]["1"]["status"] == "done"
+    # BYOK renders here as it always did
+    monkeypatch.setattr(pricing, "billable", lambda account_id, provider: False)
+    result = workflow_runner.execute_graph(graph, gemini_client=object(), db_path=tmp_db)
+    assert result["nodes"]["2"]["status"] == "done" and entered
+
+
 def test_api_exec_nano_needs_the_key(tmp_db, monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)

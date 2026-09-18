@@ -269,8 +269,11 @@ export default function QueuePage() {
         // so the tokens always describe THIS pick. An empty body still
         // resolves to the plan.
         let choice: RenderChoice = pick ? choiceOf(pick) : {};
-        if (pick) {
-          const cached = quoteOf(c, pick);
+        {
+          // no pick (no catalogue yet) is the empty body, which the server
+          // resolves to the plan -- and a billable render needs its quote
+          // for THAT too since step 5, so it is asked for the same way
+          const cached = pick ? quoteOf(c, pick) : null;
           const q = cached && !("error" in cached && cached.error) ? (cached as RenderQuote) : await queueQuote(c.id, choice);
           const tokens = (q.renders || []).map((r) => r.token).filter((t): t is string => !!t);
           if (tokens.length) choice = { ...choice, tokens };
