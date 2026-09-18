@@ -11,8 +11,9 @@ import { Wordmark } from "@/components/wordmark";
 // scroll listener never re-renders the tree.
 const LINKS = [
   { href: "/#how", label: "How it works" },
-  { href: "/#frames", label: "Frames" },
-  { href: "/#work", label: "Who it's for" },
+  { href: "/models", label: "Models" },
+  { href: "/pricing", label: "Pricing" },
+  { href: "/faq", label: "FAQ" },
 ];
 
 export function SiteHeader() {

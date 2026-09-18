@@ -91,6 +91,10 @@ POSTURE_ENV = R2_ENV + (
     "ZEROPAGE_SCENE_SECONDS",    # the scene length the writers fill (timeline.py)
     "LANGSMITH_TRACING",         # tracing is a live POST; the guard fails it
     "QUOTE_SIGNING_SECRET",      # quotes sign only where a test says so
+    "STRIPE_SECRET_KEY",         # billing is configured only where a test says so
+    "STRIPE_WEBHOOK_SECRET",
+    "STRIPE_PRICE_STARTER", "STRIPE_PRICE_CREATOR", "STRIPE_PRICE_STUDIO", "STRIPE_PRICE_TOPUP",
+    "BILLING_RETURN_URL",
 )
 
 

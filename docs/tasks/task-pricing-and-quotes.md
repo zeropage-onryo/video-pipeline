@@ -418,3 +418,25 @@ Not done, deliberately:
 - **`nightly_runs.spent_usd`.** The meter (`costs.spent_since`) just sums `generations.cost_usd`; so any under-report is in what the *adapters write*. Not diagnosed, only read; the candidates are: `runway.py:433` omits `ratio`, `fal.py:840` omits `resolution`, and the `generate_from_prompt` rows (`runway.py:798`, `fal.py:1023`, `higgsfield.py:947`) omit `duration`. Fixing it means editing the adapters' write sites, which is steps 4–6's territory, and it should start by comparing real rows to `pricing.estimate` rather than from this list.
 - `ledger.credits_for_usd` still has its one caller, `hold_for_render` (step 6). `test_at_cost_it_charges_what_the_ledger_always_did` pins the two together at 1.0x for every model.
 - `QUOTE_SIGNING_SECRET` is not in `POSTURE_ENV` yet because nothing reads it yet; it goes in with the first line of step 4.
+
+## As built — steps 5 and 6 (2026-09-18)
+
+Landed together with Stripe (docs/BILLING.md), and not quite as the spec drew them:
+
+- **`MARKUP` is `"2.4"`** and `PRICING_VERSION` is `2026-09-18-video-v2` (the v1 tokens
+  are `retired_pricing`). The token is still OPTIONAL on approve: the hold is what now
+  makes an unsigned path safe -- it converts through the same `ledger.charge_credits`
+  the quote does, so an unsigned approve is charged the marked-up price, not the
+  at-cost one. Requiring the token is a front-end change for another day.
+- **The hold is inside `generate_video`, not threaded as a `Quote`.** `src/charge.py`'s
+  `Charge` carries it from the caller that writes the generations row into the
+  adapter that submits, so `spend_approved` kept its shape and the adapters' signatures
+  grew one `charge` kwarg. `hold_for_render` did not take a Quote; it takes the
+  adapter's own estimate and converts it with the quote's function.
+- **The settle is capped at what was held** (`ledger.settle(credits=..., cap=...)`), the
+  "ledger sandwich" rule. `ledger.hold`/`settle` themselves stay at-cost primitives
+  (their tests are the ledger's), and the charge conversion happens at the seam.
+- **Tiers:** `providers.TIERS` is `standard / creator / premium`; the Kling and Seedance
+  family moved to `creator`. `pricing.tier_for(account_id)` reads `accounts.plan`
+  (written by the webhook) and `estimate()` applies it when no tier is passed. No plan
+  = no tier = no band refusal: the ledger is that account's wall.

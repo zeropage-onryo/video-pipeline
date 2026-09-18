@@ -6,14 +6,16 @@ const COLUMNS: { title: string; links: [string, string][] }[] = [
     title: "Studio",
     links: [
       ["How it works", "/#how"],
+      ["Models", "/models"],
       ["Frames", "/#frames"],
       ["Who it's for", "/#work"],
-      ["Start where you are", "/#starting-points"],
     ],
   },
   {
-    title: "Access",
+    title: "Plans",
     links: [
+      ["Pricing", "/pricing"],
+      ["FAQ", "/faq"],
       ["Sign in", "/studio"],
       ["Start creating", "/studio"],
     ],

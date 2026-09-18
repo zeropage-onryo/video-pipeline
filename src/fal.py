@@ -90,7 +90,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from . import account_keys, generative
+from . import account_keys, generative, ledger
+from . import charge as charging
 from .shot import Shot
 
 HOST = os.environ.get("FAL_HOST", "https://queue.fal.run").rstrip("/")
@@ -664,11 +665,15 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
                    negative_prompt: str = "",
                    http=None, db_path=None,
                    approved: Optional[bool] = None,
-                   account_id: Optional[int] = None) -> Path:
+                   account_id: Optional[int] = None,
+                   charge: Optional[charging.Charge] = None) -> Path:
     """
     The thin wrapper: submit -> poll -> fetch -> download. Raises on
     anything, including a missing spend approval, which is checked HERE so
-    no caller can spend around the gate.
+    no caller can spend around the gate -- and an empty credit balance,
+    held here between the gate and the submit (src/charge.py). `charge`
+    is the caller's when it will record the generation; otherwise this
+    call holds and settles its own at the estimate.
     """
     if not spend_approved(approved):
         raise RuntimeError(
@@ -684,14 +689,30 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
                                 duration=duration, aspect_ratio=aspect_ratio,
                                 resolution=resolution,
                                 negative_prompt=negative_prompt)
-    result, skip = _submit_and_wait(model_id, body, http=http, account_id=account_id)
-    url = _output_url(result, skip)
-    if not url:
-        raise RuntimeError(
-            f"fal job completed but no output URL was found in the result "
-            f"(keys: {sorted(result) if isinstance(result, dict) else type(result)})")
     out_path = Path(out_path)
-    _download(url, out_path)
+    own = charge is None
+    if own:
+        charge = charging.Charge(
+            account_id, provider="fal", ref=out_path.name,
+            estimate_usd=estimate_cost(1, model=model, duration=duration,
+                                       resolution=resolution),
+            key_source=account_keys.key_source(account_id, "fal", db_path),
+            dsn=db_path)
+    charge.take()          # InsufficientCredit raises HERE: nothing submitted
+    charge.submitted()     # the last line before the provider call
+    try:
+        result, skip = _submit_and_wait(model_id, body, http=http, account_id=account_id)
+        url = _output_url(result, skip)
+        if not url:
+            raise RuntimeError(
+                f"fal job completed but no output URL was found in the result "
+                f"(keys: {sorted(result) if isinstance(result, dict) else type(result)})")
+        _download(url, out_path)
+    except Exception as e:
+        charge.release(f"fal: {type(e).__name__}")
+        raise
+    if own:
+        charge.settle()
     return out_path
 
 
@@ -930,10 +951,16 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"c{concept_id}-s{shot_n}{f'-p{part}' if part else ''}-{stamp}.mp4"
+        key_source = account_keys.key_source(account_id, "fal", db_path)
+        charge = charging.Charge(
+            account_id, provider="fal", ref=out_path.name,
+            estimate_usd=estimate_cost(1, model=model, duration=duration,
+                                       resolution=resolution),
+            key_source=key_source, dsn=db_path)
         generate_video(prompt, out_path, model=model, image_url=image_url,
                        duration=duration, resolution=resolution,
                        http=http, db_path=db_path, approved=approved,
-                       account_id=account_id)
+                       account_id=account_id, charge=charge)
 
         platform = model_spec(model)["platform"]
         shot_row_id = _shot_row_for_prompt(
@@ -944,8 +971,8 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                              "concept_id": concept_id, "shot_n": shot_n,
                              **({"part": part} if part else {}),
                              "prompt_image": bool(image_url),
-                             "key_source": account_keys.key_source(
-                                 account_id, "fal", db_path)}
+                             "key_source": key_source,
+                             **charge.params()}
         generation_id = generative.record_generation(
             shot_row_id, platform, prompt,
             params=generation_params,
@@ -954,6 +981,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                                    resolution=resolution),
             **kwargs,
             account_id=account_id)
+        charge.settle(generation_id=generation_id)
 
         media_url = _publish(out_path, "video/mp4")
         if part:
@@ -975,6 +1003,8 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                 "generation_id": generation_id, "path": str(out_path),
                 "asset_id": asset["id"], "asset_rag": asset["rag"],
                 "error": None}
+    except ledger.InsufficientCredit as e:
+        return {"ok": False, "error": charging.refusal(e)}
     except Exception as e:
         return {"ok": False, "error": _safe_error(e, account_id)}
 
@@ -1006,9 +1036,14 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"wf-{stamp}.mp4"
+        key_source = account_keys.key_source(account_id, "fal", db_path)
+        charge = charging.Charge(
+            account_id, provider="fal", ref=out_path.name,
+            estimate_usd=estimate_cost(1, model=model),
+            key_source=key_source, source="workflow", dsn=db_path)
         generate_video(prompt, out_path, model=model, image_url=image_url,
                        http=http, db_path=db_path, approved=approved,
-                       account_id=account_id)
+                       account_id=account_id, charge=charge)
 
         shot_row_id = _shot_row_for_prompt(
             prompt, db_path, "auto-created by fal.generate_from_prompt", account_id)
@@ -1017,15 +1052,18 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
             params={"provider": "fal", "model": model,
                     "duration": DEFAULT_DURATION, "source": "workflow",
                     "prompt_image": bool(image_url),
-                    "key_source": account_keys.key_source(
-                        account_id, "fal", db_path)},
+                    "key_source": key_source,
+                    **charge.params()},
             output_path=str(out_path),
             cost_usd=estimate_cost(1, model=model),
             **kwargs,
             account_id=account_id)
+        charge.settle(generation_id=generation_id)
         return {"ok": True, "media_url": _publish(out_path, "video/mp4"),
                 "generation_id": generation_id, "path": str(out_path),
                 "error": None}
+    except ledger.InsufficientCredit as e:
+        return {"ok": False, "error": charging.refusal(e)}
     except Exception as e:
         return {"ok": False, "error": _safe_error(e, account_id)}
 

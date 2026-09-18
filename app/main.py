@@ -65,6 +65,7 @@ from src import (
 )
 
 from . import api, auth, jobs, mcp_mount, seo
+from . import billing as billing_routes
 from .sparkline import render_sparkline
 
 load_dotenv()
@@ -300,6 +301,9 @@ if MCP_APP is not None:
     app.mount(mcp_mount.MOUNT_PATH, MCP_APP, name="mcp")
 app.include_router(api.router, dependencies=[Depends(auth.require_user_api)])
 app.include_router(auth.router)
+# Stripe's webhook: outside /api, because Stripe cannot sign in -- its
+# authentication is the signature over the raw body (app/billing.py)
+app.include_router(billing_routes.webhook)
 
 
 @app.get("/signin")

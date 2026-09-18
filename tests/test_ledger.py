@@ -493,7 +493,9 @@ def test_a_render_on_the_installations_key_does_take_a_hold(led):
     hold_id = ledger.hold_for_render(account, ref="render-1", provider="runway",
                                      estimate_usd=2.00, key_source="env", dsn=dsn)
     assert isinstance(hold_id, int)
-    assert ledger.available(account, dsn) == 300
+    # the CHARGE, not the cost (2026-09-18): $2.00 at MARKUP 2.4 is 480
+    assert ledger.charge_credits(2.00) == 480
+    assert ledger.available(account, dsn) == 500 - 480
 
 
 def test_an_unknown_key_source_is_billable(led):
@@ -549,7 +551,8 @@ def test_reap_settles_a_hold_whose_render_landed(led):
 
     result = ledger.reap(datetime.now(timezone.utc) + timedelta(minutes=1), dsn=dsn)
     assert result == {"settled": [hold_id], "released": [], "orphaned": []}
-    assert ledger.available(account, dsn) == 750       # settled at the ACTUAL cost
+    # settled at the ACTUAL cost, converted at the CHARGE (2.50 * 2.4 = 600)
+    assert ledger.available(account, dsn) == 1000 - ledger.charge_credits(2.50) == 400
     settles = [e for e in ledger.entries(account, dsn, ref="render-1")
                if e["kind"] == "settle"]
     assert all(e["generation_id"] == gen_id for e in settles)

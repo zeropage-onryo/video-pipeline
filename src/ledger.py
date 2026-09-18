@@ -210,6 +210,25 @@ def credits_for_usd(usd) -> int:
     return int(math.ceil(cents))
 
 
+def charge_credits(usd) -> int:
+    """USD of PROVIDER cost -> integer credits of CHARGE: marked up by
+    `pricing.MARKUP`, rounded UP, never under `pricing.CREDIT_FLOOR`.
+
+    THE ONE NUMBER A HOLD AND A QUOTE SHARE (2026-09-18, the day
+    `MARKUP` left 1.0). `credits_for_usd` above is the at-cost peg the
+    ledger was designed around and is kept for what it says; but a
+    hold that debited at cost beside a quote that showed the marked-up
+    price would charge one number and display another, so every hold
+    and every settle converts HERE, and here delegates to
+    `pricing.credits_for(pricing.usd_micros(usd))` -- the same two
+    functions, in the same order, that mint the token the Queue card
+    shows. Imported lazily: pricing imports providers imports the
+    adapters import this module.
+    """
+    from . import pricing
+    return pricing.credits_for(pricing.usd_micros(usd))
+
+
 def ref_params(ref: str) -> dict:
     """The fragment an adapter merges into its `generations` params so a
     hold can be matched back to the render it paid for.
@@ -930,10 +949,19 @@ def mark_submitted(hold_id: int, dsn: Optional[str] = None) -> str:
 # settle / release
 # --------------------------------------------------------------------------
 
-def settle(hold_id: int, actual_usd, *, generation_id: Optional[int] = None,
+def settle(hold_id: int, actual_usd=None, *, generation_id: Optional[int] = None,
+           credits: Optional[int] = None, cap: Optional[int] = None,
            dsn: Optional[str] = None) -> int:
     """Close a hold at what the render ACTUALLY cost. Returns net credits
-    debited (which is `credits_for_usd(actual_usd)`).
+    debited: `credits` when the caller converted (src/charge.py passes
+    `charge_credits(actual)`, the marked-up price), else the at-cost
+    `credits_for_usd(actual_usd)`; never above `cap` when one is given.
+
+    `cap` is the quoted price (2026-09-18, docs/tasks/task-pricing-and-
+    quotes.md, "the ledger sandwich"): a provider that bills more than
+    the estimator predicted is the estimator's error, not the customer's,
+    so the debit never exceeds what was quoted -- the overage is logged
+    and eaten. Without a cap the third case below still applies.
 
     Three cases, and only the third is interesting:
 
@@ -969,7 +997,11 @@ def settle(hold_id: int, actual_usd, *, generation_id: Optional[int] = None,
     only, so a debt parked there survives the lot's expiry instead of
     evaporating with it.
     """
-    debit = credits_for_usd(actual_usd)
+    debit = int(credits) if credits is not None else credits_for_usd(actual_usd)
+    if cap is not None and debit > int(cap):
+        _log(f"settle: hold {hold_id} cost {debit} credits against a quote of "
+             f"{int(cap)} -- charging the quote, eating {debit - int(cap)}")
+        debit = int(cap)
     with db.connect(dsn) as conn:
         # The hold's own rows are append-only and immutable, so reading
         # them before the lock is safe; everything that could CHANGE
@@ -1256,7 +1288,8 @@ def reap(older_than=DEFAULT_REAP_AGE, *, account_id: Optional[int] = None,
         if usable:
             actual = gen.get("cost_usd")
             actual_usd = float(actual) if actual is not None else int(h["held"]) / 100
-            settle(hold_id, actual_usd, generation_id=int(gen["id"]), dsn=dsn)
+            settle(hold_id, credits=charge_credits(actual_usd),
+                   generation_id=int(gen["id"]), dsn=dsn)
             settled.append(hold_id)
             continue
         if gen is None:
@@ -1339,15 +1372,44 @@ def hold_for_render(account_id: Optional[int], *, ref: str, provider: str,
     """
     if not is_billable(key_source, source=source):
         return None
-    return hold(account_id, credits_for_usd(estimate_usd), ref=ref,
-                provider=provider, estimate_usd=estimate_usd, dsn=dsn)
+    if account_id is None:
+        # THE UNOWNED POOL IS NOBODY'S BILL. A render with no tenant is
+        # the installation's own -- the CLI, the nightly walk, a script
+        # -- and there is no customer to debit; the daily caps and the
+        # *_SPEND_OK arming are its walls. Every route a person drives
+        # resolves a real account_id before it gets here.
+        return None
+    if credit_exempt(account_id, dsn=dsn):
+        # THE OPERATOR'S EXEMPTION (docs/tasks/task-stripe-billing.md,
+        # phase 3) -- a property of the account row, applied here and
+        # nowhere else, so no call site can grow an `if account_id ==`.
+        # No hold and no entry: the generations row the adapter writes
+        # next is still the record of the render and its cost, exactly
+        # as a manual-lane import is recorded FREE rather than not at
+        # all. The daily caps are a different gate and still apply.
+        return None
+    # the CHARGE, not the cost: hold() is handed the converted number and
+    # no estimate to re-check, because its own guard is the at-cost peg
+    return hold(account_id, charge_credits(estimate_usd), ref=ref,
+                provider=provider, dsn=dsn)
+
+
+def credit_exempt(account_id: Optional[int], dsn: Optional[str] = None) -> bool:
+    """Does this account's own row say it spends without being charged?
+    `None` (the unowned pool) is never exempt -- nobody owns those rows,
+    and "nobody" is not the operator. Reads through accounts.credit_exempt
+    so the column has one reader on the money path."""
+    if account_id is None:
+        return False
+    from . import accounts
+    return accounts.is_credit_exempt(account_id, dsn=dsn)
 
 
 __all__ = [
     "EXPIRY_MONTHS", "LAPSE_POLICY", "LOT_KINDS", "ENTRY_KINDS",
     "GENERATION_REF_KEY", "BYOK_KEY_SOURCE", "SUBSCRIPTION_SOURCES",
     "LedgerError", "InsufficientCredit",
-    "credits_for_usd", "is_billable", "ref_params",
+    "credits_for_usd", "charge_credits", "is_billable", "ref_params", "credit_exempt",
     "init", "grant", "available", "lots", "entries", "outstanding",
     "outstanding_everyone", "reconcile",
     "hold", "mark_submitted", "settle", "release", "expire_due",
