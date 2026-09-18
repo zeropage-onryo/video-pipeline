@@ -896,6 +896,86 @@ button.tag:hover {
   text-transform: uppercase;
   color: var(--signal);
 }
+/* one turn: an optional "looked at" line, the bubble, an optional
+   confirm card (a write the guide proposed; nothing runs until Confirm) */
+.cturn {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.clooked {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dimmer);
+  padding-left: 4px;
+}
+.ccard {
+  margin-right: 32px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--signal);
+  background: rgb(255 255 255 / 0.03);
+  font-size: 12.5px;
+  color: var(--dim);
+}
+.ccard b {
+  display: block;
+  color: var(--text);
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.ccard dl {
+  margin: 0 0 10px;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+}
+.ccard dl > div {
+  display: contents;
+}
+.ccard dt {
+  color: var(--dimmer);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding-top: 2px;
+}
+.ccard dd {
+  margin: 0;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+.ccard-actions {
+  display: flex;
+  gap: 8px;
+}
+.ccard-actions button {
+  font-size: 12px;
+  padding: 7px 14px;
+  border-radius: var(--rp);
+  border: 1px solid var(--line-hi);
+  background: rgb(255 255 255 / 0.04);
+  color: var(--text);
+}
+.ccard-actions button.yes {
+  border-color: var(--signal);
+  background: var(--signal);
+  color: #fff;
+}
+.ccard-actions button:disabled {
+  opacity: 0.5;
+}
+.ccard.done,
+.ccard.skipped {
+  border-color: var(--line);
+}
+.ccard-state {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dimmer);
+}
 .cchoices {
   display: flex;
   flex-wrap: wrap;

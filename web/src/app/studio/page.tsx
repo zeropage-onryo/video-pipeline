@@ -38,6 +38,9 @@ import {
   type Asset,
   type AssetHit,
   type Capabilities,
+  runGuideAction,
+  type GuideProposal,
+  type GuideReply,
 } from "@/lib/studio-api";
 import { useMentions } from "@/components/studio/mentions";
 import { useShell } from "@/components/studio/shell";
@@ -47,7 +50,16 @@ type Option = { id: string; label: string; note?: string };
 /* `failed` marks a turn the guide never answered. It is drawn on the
    bubble itself and dropped from the next turn's conversation, so a
    retry neither repeats it on screen nor sends it twice. */
-type GuideMessage = { role: "user" | "assistant"; content: string; failed?: boolean };
+type GuideMessage = {
+  role: "user" | "assistant";
+  content: string;
+  failed?: boolean;
+  /** which board tools the guide looked at before this answer */
+  looked?: string[];
+  /** a write the guide proposed; drawn as a confirm card until decided */
+  proposal?: GuideProposal | null;
+  decided?: "done" | "skipped";
+};
 
 const COUNTS = [1, 2, 3, 4];
 
@@ -254,12 +266,26 @@ function Composer() {
         const job = await waitForJob(started.job_id, (j) =>
           say(j.detail || "Considering your direction…"),
         );
-        const reply = (job as unknown as { reply?: { message: string; choices?: string[]; brief?: string } }).reply;
+        const reply = (job as unknown as { reply?: GuideReply }).reply;
         if (job.status !== "done" || !reply) throw new Error(job.error || "The guide stopped.");
-        setThread([...next, { role: "assistant", content: reply.message }]);
+        setThread([
+          ...next,
+          {
+            role: "assistant",
+            content: reply.message,
+            looked: (reply.tool_runs ?? []).filter((r) => r.ok).map((r) => r.tool),
+            proposal: reply.proposal ?? null,
+          },
+        ]);
         setChoices(reply.choices ?? []);
         if (reply.brief) setBrief(reply.brief);
-        say(reply.brief ? "Brief ready — switch to Create, or keep refining." : "Choose a direction or reply.");
+        say(
+          reply.proposal
+            ? "Confirm on the card, or skip it."
+            : reply.brief
+              ? "Brief ready — switch to Create, or keep refining."
+              : "Choose a direction or reply.",
+        );
       }
     } catch (e) {
       // The thread and the box were cleared before the request went out,
@@ -270,6 +296,32 @@ function Composer() {
         setThread([...asking.slice(0, -1), { ...last, failed: true }]);
         setIdea((now) => now || last.content);
       }
+      say(e instanceof Error ? e.message : "That did not go through.", true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /* The confirm card. Nothing has run until this: the guide's turn
+     ended on the proposal, and the click is what posts it. The result
+     goes into the thread as the guide's own words, so the next turn's
+     conversation says what was banked. */
+  async function decide(i: number, yes: boolean) {
+    const entry = thread[i];
+    if (!entry?.proposal || entry.decided || busy) return;
+    if (!yes) {
+      setThread((t) => t.map((m, j) => (j === i ? { ...m, decided: "skipped" } : m)));
+      return;
+    }
+    setBusy(true);
+    try {
+      const done = await runGuideAction(entry.proposal);
+      setThread((t) => [
+        ...t.map((m, j) => (j === i ? { ...m, decided: "done" as const } : m)),
+        { role: "assistant", content: `Done — ${done.result}` },
+      ]);
+      say("Banked.");
+    } catch (e) {
       say(e instanceof Error ? e.message : "That did not go through.", true);
     } finally {
       setBusy(false);
@@ -315,13 +367,40 @@ function Composer() {
             {thread.length && mode === "guide" ? (
               <div className="cthread">
                 {thread.map((m, i) => (
-                  <p
-                    key={i}
-                    className={`cmsg${m.role === "user" ? " me" : ""}${m.failed ? " failed" : ""}`}
-                  >
-                    {m.content}
-                    {m.failed ? <span className="cmsg-failed">Not sent — try again</span> : null}
-                  </p>
+                  <div key={i} className="cturn">
+                    {m.looked?.length ? (
+                      <span className="clooked">looked at {m.looked.join(", ")}</span>
+                    ) : null}
+                    <p className={`cmsg${m.role === "user" ? " me" : ""}${m.failed ? " failed" : ""}`}>
+                      {m.content}
+                      {m.failed ? <span className="cmsg-failed">Not sent — try again</span> : null}
+                    </p>
+                    {m.proposal ? (
+                      <div className={`ccard${m.decided ? ` ${m.decided}` : ""}`}>
+                        <b>{m.proposal.label}</b>
+                        <dl>
+                          {Object.entries(m.proposal.args).map(([k, v]) => (
+                            <div key={k}>
+                              <dt>{k}</dt>
+                              <dd>{String(v)}</dd>
+                            </div>
+                          ))}
+                        </dl>
+                        {m.decided ? (
+                          <span className="ccard-state">{m.decided === "done" ? "Done" : "Skipped"}</span>
+                        ) : (
+                          <div className="ccard-actions">
+                            <button type="button" className="yes" disabled={busy} onClick={() => decide(i, true)}>
+                              Confirm
+                            </button>
+                            <button type="button" disabled={busy} onClick={() => decide(i, false)}>
+                              Skip
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
                 ))}
                 {choices.length ? (
                   <div className="cchoices">
