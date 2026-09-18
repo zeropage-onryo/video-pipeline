@@ -259,6 +259,129 @@ def test_generated_renders_join_assets_and_video_stays_out_of_image_pickers(
     assert {item["kind"] for item in gallery["items"]} == {"image", "video"}
 
 
+def _bank_two(tmp_db, monkeypatch):
+    monkeypatch.setattr(render_assets, "_ingest",
+                        lambda *a, **k: {"ok": True, "chunks": 1, "error": None})
+    entities.add_character(name="Michael", role="rider", dsn=tmp_db, account_id=None)
+    image = render_assets.record(
+        generation_id=201, tool="nano", model="gemini-3-pro-image-preview",
+        media_kind="image", prompt="low angle bike portrait",
+        media_url="/renders/nano/a.png", dsn=tmp_db, account_id=None)
+    video = render_assets.record(
+        generation_id=202, tool="runway", model="gen4.5",
+        media_kind="video", prompt="camera pushes toward the motorcycle",
+        media_url="/renders/runway/b.mp4", dsn=tmp_db, account_id=None)
+    return image["id"], video["id"]
+
+
+def test_assets_scope_splits_elements_from_generated(tmp_db, monkeypatch):
+    """2026-09-18: Elements are the characters/props/places, Assets are
+    the renders. The default stays `all` so nothing that read the bank
+    before reads differently; the two scopes are each one half."""
+    _bank_two(tmp_db, monkeypatch)
+    everything = client.get("/api/assets").json()
+    assert everything["counts"] == {"all": 3, "location": 0, "character": 1,
+                                    "prop": 0, "generated": 2}
+    elements = client.get("/api/assets?scope=elements").json()
+    assert [i["category"] for i in elements["items"]] == ["character"]
+    generated = client.get("/api/assets?scope=generated").json()
+    assert {i["category"] for i in generated["items"]} == {"generated"}
+    assert all("generated_id" in i and "starred" in i for i in generated["items"])
+    # an unknown scope reads as `all`, never as an empty wall
+    assert client.get("/api/assets?scope=bogus").json()["counts"]["all"] == 3
+
+
+def test_mention_search_never_offers_a_render(tmp_db, monkeypatch):
+    _bank_two(tmp_db, monkeypatch)
+    hits = client.get("/api/assets/search?q=").json()["items"]
+    assert [h["category"] for h in hits] == ["character"]
+
+
+def test_generated_media_carries_organize_fields_and_folders(tmp_db, monkeypatch):
+    image_id, video_id = _bank_two(tmp_db, monkeypatch)
+    moved = client.patch(f"/api/assets/generated/{image_id}",
+                         json={"folder": "bike portraits", "starred": True})
+    assert moved.status_code == 200
+    assert moved.json() == {"id": image_id, "folder": "bike portraits", "starred": True}
+
+    wall = client.get("/api/media?kind=all&scope=generated").json()
+    assert wall["counts"]["all"] == 2
+    assert wall["wall"] == {"image": 1, "video": 1, "starred": 1}
+    assert wall["folders"] == {"bike portraits": 1}
+    assert set(wall["providers"]) == {"Nano Banana Pro", "Runway"}
+    by_id = {i["generated_id"]: i for i in wall["items"]}
+    assert by_id[image_id]["folder"] == "bike portraits"
+    assert by_id[image_id]["starred"] is True
+    assert by_id[video_id]["folder"] is None
+
+    in_folder = client.get("/api/media?kind=all&scope=generated&folder=bike+portraits").json()
+    assert [i["generated_id"] for i in in_folder["items"]] == [image_id]
+    starred = client.get("/api/media?kind=all&scope=generated&starred=true").json()
+    assert [i["generated_id"] for i in starred["items"]] == [image_id]
+    runway = client.get("/api/media?kind=all&scope=generated&provider=Runway").json()
+    assert [i["generated_id"] for i in runway["items"]] == [video_id]
+
+    # a field left out is left alone; an empty folder clears it
+    cleared = client.patch(f"/api/assets/generated/{image_id}", json={"folder": ""}).json()
+    assert cleared == {"id": image_id, "folder": None, "starred": True}
+    assert client.patch(f"/api/assets/generated/{image_id}", json={}).status_code == 400
+    assert client.patch("/api/assets/generated/9999", json={"starred": True}).status_code == 404
+
+
+def test_deleting_a_render_is_soft(tmp_db, monkeypatch):
+    """The wall and the shelf forget it; the row and the file stay, so a
+    concept whose shot carries that clip keeps rendering it."""
+    image_id, video_id = _bank_two(tmp_db, monkeypatch)
+    dropped = []
+    monkeypatch.setattr(render_assets, "drop_chunk", lambda i: dropped.append(i))
+    gone = client.delete(f"/api/assets/generated/{video_id}")
+    assert gone.status_code == 200 and gone.json() == {"deleted": video_id}
+    assert dropped == [video_id]
+
+    wall = client.get("/api/media?kind=all&scope=generated").json()
+    assert [i["generated_id"] for i in wall["items"]] == [image_id]
+    assert client.get("/api/assets?scope=generated").json()["counts"]["generated"] == 1
+    # still there underneath, marked
+    row = render_assets.get(video_id, dsn=tmp_db, account_id=None)
+    assert row is not None and row["deleted_at"]
+    assert client.delete(f"/api/assets/generated/{video_id}").status_code == 404
+    assert client.delete("/api/assets/generated/9999").status_code == 404
+
+
+def test_deleting_a_location_drops_its_row_and_chunk(tmp_db, monkeypatch):
+    loc_id = preprod.add_location("garage", {"space": "low key garage"},
+                                  dsn=tmp_db, account_id=None)
+    dropped = []
+    monkeypatch.setattr(api_mod, "_drop_asset_chunk",
+                        lambda kind, slug: dropped.append((kind, slug)))
+    assert client.delete(f"/api/assets/locations/{loc_id}").json() == {"deleted": loc_id}
+    assert dropped == [("location", "garage")]
+    assert client.get("/api/assets?scope=elements").json()["counts"]["location"] == 0
+    assert client.delete(f"/api/assets/locations/{loc_id}").status_code == 404
+
+
+def test_make_element_takes_a_render_by_url(tmp_db, monkeypatch, tmp_path):
+    """"Make element" on the Assets wall: a render's URL instead of an
+    upload. The bytes come through _photo_bytes, so a URL that resolves
+    to nothing is skipped rather than failing the save."""
+    monkeypatch.setattr(api_mod, "CHARACTERS_DIR", tmp_path / "characters")
+    monkeypatch.setattr(api_mod, "_photo_bytes",
+                        lambda url: b"\x89PNG-bytes" if url.endswith("a.png") else None)
+    monkeypatch.setattr(api_mod, "describe_entity_photos",
+                        lambda *a, **k: {"ok": False, "description": {}, "error": "no key"})
+    monkeypatch.setattr(api_mod, "ingest_asset_chunk",
+                        lambda *a, **k: {"ok": True, "chunks": 1, "error": None})
+    res = client.post("/api/assets/characters",
+                      data={"name": "Rider", "role": "the rider",
+                            "photo_urls": ["/renders/nano/a.png", "/renders/nano/missing.png"]})
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["ok"] and body["photos"] == 1
+    saved = list((tmp_path / "characters" / "rider").iterdir())
+    assert len(saved) == 1 and saved[0].name.startswith("gen-")
+    assert saved[0].read_bytes() == b"\x89PNG-bytes"
+
+
 def test_pipeline_run_carries_picked_media_as_image_refs(tmp_db, photo_root,
                                                          monkeypatch):
     preprod.add_location("garage", {"space": "the garage"}, dsn=tmp_db, account_id=None)
@@ -398,7 +521,7 @@ def test_direct_endpoint_revises_through_a_job(tmp_db, monkeypatch):
     import src.director as director
     monkeypatch.setattr(
         director, "direct_scene",
-        lambda cid, note, gemini_client=None, db_path=None:
+        lambda cid, note, gemini_client=None, db_path=None, account_id=None:
             {"ok": True, "summary": "revised shot(s) 1", "warnings": [], "error": None})
     job_id = client.post(f"/api/concepts/{concept_id}/direct",
                          json={"note": "shot 1 slower"}).json()["job_id"]
@@ -416,7 +539,7 @@ def test_refine_endpoint_surfaces_failure(tmp_db, monkeypatch):
     import src.director as director
     monkeypatch.setattr(
         director, "refine_shot_prompt",
-        lambda cid, n, gemini_client=None, db_path=None:
+        lambda cid, n, gemini_client=None, db_path=None, account_id=None:
             {"ok": False, "error": "no technique references reachable"})
     job_id = client.post(
         f"/api/concepts/{concept_id}/shots/1/refine").json()["job_id"]
@@ -761,6 +884,99 @@ def test_create_prop_saves_and_teaches_the_assets_shelf(
     [record] = rag_recorder
     assert record["source"] == "assets/prop-ducati-panigale"
     assert "vehicle" in record["text"] and "scuffed" in record["text"]
+
+
+def test_the_sheet_lists_last_and_is_the_poster(tmp_db, tmp_path, monkeypatch):
+    """`refs[0]` anchors the clip, so the drawn sheet rides behind the
+    real photos -- and the card shows the sheet."""
+    root = tmp_path / "characters"
+    (root / "michael").mkdir(parents=True)
+    for name in ("sheet.jpg", "IMG_2.jpg", "IMG_1.jpg"):
+        (root / "michael" / name).write_bytes(b"x")
+    monkeypatch.setattr(api_mod, "CHARACTERS_DIR", root)
+    entities.add_character(name="Michael", role="rider", dsn=tmp_db, account_id=None)
+    [asset] = client.get("/api/assets?scope=elements").json()["items"]
+    files = [u.split("?")[0].rsplit("/", 1)[-1] for u in asset["photos"]]
+    assert files == ["IMG_1.jpg", "IMG_2.jpg", "sheet.jpg"]
+    assert asset["sheet"].endswith("sheet.jpg")
+    assert "sheet.jpg" in asset["poster"]
+
+
+def test_creating_an_element_draws_its_sheet_as_a_job(
+        tmp_db, tmp_path, monkeypatch, rag_recorder, fake_vision):
+    monkeypatch.setattr(api_mod, "PROPS_DIR", tmp_path / "props")
+    monkeypatch.setattr(api_mod, "_gemini_key", lambda a=None: "k")
+    drawn = []
+
+    def fake_draw(kind, name, photos, out_dir, **kw):
+        drawn.append((kind, name, [p.name for p in photos], kw))
+        target = out_dir / "sheet.jpg"
+        target.write_bytes(b"sheet")
+        return {"ok": True, "path": target, "generation_id": 1, "error": None}
+
+    monkeypatch.setattr(api_mod.element_sheet, "draw", fake_draw)
+    monkeypatch.setattr(api_mod, "_mirror_photos_to_r2", lambda *a, **k: None)
+    res = client.post("/api/assets/props",
+                      data={"name": "Ducati 959", "category": "vehicle", "notes": "red"},
+                      files=[("photos", ("a.jpg", b"jpg-bytes", "image/jpeg"))])
+    body = res.json()
+    assert body["ok"] and body["sheet_job"]
+    job = wait_for_job(body["sheet_job"])
+    assert job["status"] == "done", job
+    assert job["output"].endswith("/sheet.jpg")
+    assert drawn == [("prop", "Ducati 959", ["a.jpg"],
+                      {"detail": "vehicle", "notes": "red", "account_id": None})]
+    files = [u.split("?")[0].rsplit("/", 1)[-1]
+             for u in client.get("/api/assets/prop/1").json()["photos"]]
+    assert files == ["a.jpg", "sheet.jpg"]
+
+
+def test_the_sheet_is_opt_out_and_needs_photos_and_a_key(
+        tmp_db, tmp_path, monkeypatch, rag_recorder, fake_vision):
+    monkeypatch.setattr(api_mod, "PROPS_DIR", tmp_path / "props")
+    monkeypatch.setattr(api_mod, "_gemini_key", lambda a=None: "k")
+    started = []
+    monkeypatch.setattr(api_mod, "_start_sheet_job",
+                        lambda *a, **k: started.append(a) or {"id": 99})
+    # off by the modal's switch
+    res = client.post("/api/assets/props", data={"name": "A", "sheet": "0"},
+                      files=[("photos", ("a.jpg", b"x", "image/jpeg"))])
+    assert res.json()["sheet_job"] is None
+    # on, but nothing to draw from
+    res = client.post("/api/assets/props", data={"name": "B"})
+    assert res.json()["sheet_job"] is None
+    # on, with photos
+    res = client.post("/api/assets/props", data={"name": "C"},
+                      files=[("photos", ("a.jpg", b"x", "image/jpeg"))])
+    assert res.json()["sheet_job"] == 99 and len(started) == 1
+    # no key: saved, no job
+    monkeypatch.setattr(api_mod, "_gemini_key", lambda a=None: None)
+    res = client.post("/api/assets/props", data={"name": "D"},
+                      files=[("photos", ("a.jpg", b"x", "image/jpeg"))])
+    assert res.json()["ok"] and res.json()["sheet_job"] is None
+
+
+def test_redrawing_an_existing_element(tmp_db, tmp_path, monkeypatch):
+    root = tmp_path / "characters"
+    monkeypatch.setattr(api_mod, "CHARACTERS_DIR", root)
+    monkeypatch.setattr(api_mod, "_gemini_key", lambda a=None: "k")
+    cid = entities.add_character(name="Michael", role="rider", notes="leathers",
+                                 dsn=tmp_db, account_id=None)
+    assert client.post(f"/api/assets/characters/{cid}/sheet").status_code == 400  # no photos
+    (root / "michael").mkdir(parents=True)
+    (root / "michael" / "sheet.jpg").write_bytes(b"old")   # a sheet alone is not a photo
+    assert client.post(f"/api/assets/characters/{cid}/sheet").status_code == 400
+    (root / "michael" / "a.jpg").write_bytes(b"x")
+    started = []
+    monkeypatch.setattr(api_mod, "_start_sheet_job",
+                        lambda plural, slug, name, **k: started.append((plural, slug, name, k)) or {"id": 5})
+    assert client.post(f"/api/assets/characters/{cid}/sheet").json() == {"job_id": 5}
+    assert started == [("characters", "michael", "Michael",
+                        {"detail": "rider", "notes": "leathers", "account_id": None})]
+    assert client.post("/api/assets/characters/999/sheet").status_code == 404
+    assert client.post("/api/assets/renders/1/sheet").status_code == 404
+    monkeypatch.setattr(api_mod, "_gemini_key", lambda a=None: None)
+    assert client.post(f"/api/assets/characters/{cid}/sheet").status_code == 503
 
 
 def test_assets_backfill_runs_as_a_job(tmp_db, monkeypatch):

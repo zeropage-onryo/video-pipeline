@@ -1203,6 +1203,7 @@ button.tag:hover {
   border-color: rgb(228 0 43 / 0.7);
 }
 .elplate {
+  position: relative; /* the card's delete button and its confirm overlay (2026-09-18) */
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1211,6 +1212,10 @@ button.tag:hover {
 }
 .elplate.blank {
   border-bottom: 1px dashed rgb(228 0 43 / 0.3);
+}
+/* a drawn reference sheet is wide (four or five panels): show it whole (2026-09-18) */
+.elplate.sheet {
+  background-size: contain;
 }
 .elplate .m {
   display: inline-flex;
@@ -1946,6 +1951,10 @@ textarea.zin {
   border-color: rgb(228 0 43 / 0.6);
   transform: translateY(-2px);
 }
+/* the tile whose render is open in the detail rail (2026-09-18) */
+.wtile.on {
+  border-color: var(--signal);
+}
 .wtile video {
   position: absolute;
   inset: 0;
@@ -2047,7 +2056,9 @@ textarea.zin {
 }
 .admeta {
   display: grid;
-  grid-template-columns: 80px 1fr;
+  /* minmax(0, …): a bare 1fr is min-sized by its content, and the folder
+     input's intrinsic width pushed the whole column past the rail (2026-09-18) */
+  grid-template-columns: 80px minmax(0, 1fr);
   gap: 10px 14px;
   margin: 0;
   font-size: 13px;
@@ -2086,6 +2097,13 @@ textarea.zin {
 .adfoot .btn.pri {
   flex: 1;
   justify-content: center;
+  white-space: nowrap;
+}
+/* the wall's provider filter: a native select on the input skin (2026-09-18) */
+select.zin {
+  color-scheme: dark;
+  background: #0b0b0d;
+  color: var(--text);
 }
 
 /* the Queue's selectors: model, frame, length — each a pill with a select inside */

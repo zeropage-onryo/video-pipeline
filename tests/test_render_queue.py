@@ -171,6 +171,25 @@ def test_importing_takes_the_scene_out_of_the_queue(tmp_db, tmp_path, operator):
     assert rq.pending(account_id=operator) == []
 
 
+def test_an_imported_clip_joins_the_assets_wall(tmp_db, tmp_path, operator, monkeypatch):
+    """2026-09-18: a hand-rendered clip used to live on the concept and
+    nowhere else, so it never showed on the Assets wall. The import now
+    records a generated_assets row too, best-effort and lazily imported."""
+    from src import render_assets
+    monkeypatch.setattr(render_assets, "_ingest",
+                        lambda *a, **k: {"ok": True, "chunks": 1, "error": None})
+    cid = a_scene(tmp_db, operator)
+    preprod.set_picked(cid, True, dsn=tmp_db, account_id=operator)
+    result = rq.import_clip(cid, 1, str(a_clip(tmp_path)), "seedance1_5", 4.8, None, True,
+                            account_id=operator)
+    assert result["asset_id"]
+    rows = render_assets.list_all(tmp_db, account_id=operator)
+    assert [r["media_url"] for r in rows] == [result["media_url"]]
+    assert rows[0]["media_kind"] == "video"
+    assert rows[0]["concept_id"] == cid and rows[0]["shot_n"] == 1
+    assert rows[0]["generation_id"] == result["generation_id"]
+
+
 def test_a_truncated_download_is_refused(tmp_db, tmp_path, operator):
     """A 200-byte 'mp4' is a failed download, and logging it as a render
     would put a broken clip on the board with a row saying it worked."""

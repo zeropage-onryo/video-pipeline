@@ -42,6 +42,7 @@ from src import (
     autonomy,
     autopilot,
     db,
+    edit_teach,
     entities,
     evalstore,
     generative,
@@ -850,6 +851,10 @@ def _graded_rows(account_id: int) -> list[dict]:
         entries = c.get("_entries") or []
         rows.append({**_concept_line(c),
                      "archived": bool(c.get("archived")),
+                     # a draft -> fix pair filed by a hand edit or a Direct
+                     # note (src/edit_teach.py), so the tab says which door
+                     "edited": any(edit_teach.is_edit_note(w.get("note"))
+                                   for w in entries),
                      "verdict": _verdict_label(entries),
                      "entries": len(entries),
                      "pending": c.get("_pending") or 0,
@@ -2261,10 +2266,14 @@ def concepts_grade_all(account_id: int = Depends(auth.dev_account_id)):
             "Nothing waiting — grade some concepts on the Grade tab first.")
 
     taught, failed = 0, 0
+    # label every lesson with the tenant that taught it (rag.py's
+    # `project`), so their own rank first for them -- the deferred path
+    # dropped the label the Grade tab's immediate path always carried
+    project = accounts_mod.slug_of(account_id)
     for c in waiting:
         result = {"ok": True}
         for ref in _concept_refs(c):
-            one = winners.ingest_pending(ref)
+            one = winners.ingest_pending(ref, project=project)
             if not one.get("ok"):
                 result = one
         if result.get("ok"):

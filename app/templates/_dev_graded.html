@@ -70,6 +70,7 @@
       </span>
       <span class="utags">
         <span class="tag {{ 'red' if g.verdict == 'DENIED' else 'bone' }}">{{ g.verdict }}</span>
+        {% if g.edited %}<span class="tag faint" title="A hand edit or a Direct note filed the model's draft beside your fix — a pair, both shelves">✎ EDITED</span>{% endif %}
         {% if g.archived %}<span class="tag faint" title="Denied by the X on the board — one tap, no reason box">✗ BOARD</span>
         {% elif g.picked %}<span class="tag faint" title="Approved by the ✓ on the board — its prompt is bound for the winning shelf">✓ BOARD</span>{% endif %}
       </span>

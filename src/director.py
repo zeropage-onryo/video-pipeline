@@ -22,7 +22,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from . import preprod
+from . import edit_teach, preprod
 from .gemini_utils import generate_with_retry, strip_fences
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
@@ -195,6 +195,7 @@ def refine_shot_prompt(concept_id: int, shot_n, gemini_client=None,
                     "summary": "already technique-clean — kept as is", "error": None}
 
         shot["prompt"] = refined
+        edit_teach.forget_draft(shot)   # model-written: the next hand edit re-snapshots
         locations = preprod.list_locations(**kwargs, account_id=account_id)
         warnings = shootgen.validate_concept(
             {**concept, "shots": shots},

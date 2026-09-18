@@ -1,0 +1,168 @@
+/* app/static/devstudio.css — the Dev Studio's own layer.
+   Scoped under `.sk.dev`, which ONLY dev_studio.html sets, so every other
+   page on the .sk skin (analytics, costs, accounts, references/pick …) is
+   untouched by anything here.
+
+   The move (2026-09-14): skin.css kept the red and the mono and dropped
+   everything that made this a film studio — Bebas Neue, the grain, the
+   bone ink. All three already ship in style.css, which base.html loads,
+   so reclaiming them costs no new font request. Everything below is
+   either that reclamation or the structural fixes: tabs as a column with
+   live counts, one thing leading the page, Grade as two panes.
+
+   The page-local rules that used to sit in dev_studio.html's <style>
+   block live here now, verbatim apart from the .dev scoping. */
+
+.sk.dev{
+  --disp:"Bebas Neue",Impact,sans-serif;
+  --raised:#1A1A1F; --sunk:#08080A; --red-sunk:#3A1A16; --warn:#E0A458;
+  --bone:#CDC9C0;
+  font-family:"Inter Tight","Helvetica Neue",Helvetica,Arial,system-ui,sans-serif;
+}
+
+/* ── shell: the six tabs become a column beside the content ───────── */
+.sk.dev .page{ padding-top:26px; }
+.sk.dev .devshell{ display:grid; grid-template-columns:188px minmax(0,1fr); gap:30px; align-items:start; }
+
+.sk.dev .devnav{ position:sticky; top:26px; display:flex; flex-direction:column; gap:22px; }
+.sk.dev .devmark .zp{ font-family:var(--disp); font-size:25px; letter-spacing:.06em; color:var(--bone); line-height:.9; }
+.sk.dev .devmark .ds{ font-family:var(--mono); font-size:9.5px; letter-spacing:.22em; text-transform:uppercase; color:var(--red); margin-top:5px; }
+.sk.dev .devtabs{ display:flex; flex-direction:column; gap:0; margin:0; }
+.sk.dev .devtab{
+  display:flex; align-items:center; justify-content:space-between; gap:8px;
+  padding:9px 12px; border:0; border-left:2px solid transparent; border-radius:0;
+  font-family:inherit; font-size:13px; letter-spacing:0; color:var(--dim); text-decoration:none;
+}
+.sk.dev .devtab:hover{ color:var(--ink); background:#0D0D10; border-color:transparent; }
+.sk.dev .devtab[aria-current="page"]{ background:#0E0E11; border-left-color:var(--red); color:var(--ink); }
+.sk.dev .devtab .ct{
+  font-family:var(--mono); font-size:10px; color:var(--faint);
+  background:#151519; border:1px solid var(--line); border-radius:5px; padding:1px 6px;
+}
+.sk.dev .devtab[aria-current="page"] .ct{ color:var(--red); border-color:var(--red-sunk); }
+.sk.dev .devfoot{ display:flex; flex-direction:column; gap:9px; padding-left:12px; }
+.sk.dev .devfoot .kill{ display:flex; align-items:center; gap:7px; font-family:var(--mono); font-size:10px; letter-spacing:.06em; color:var(--faint); }
+.sk.dev .devfoot .dot{ width:6px; height:6px; border-radius:50%; background:var(--good); flex:none; }
+.sk.dev .devfoot .dot.on{ background:var(--red); }
+.sk.dev .devfoot a{ font-size:12px; color:var(--steel); text-decoration:none; }
+.sk.dev .devfoot a:hover{ color:var(--ink); }
+
+/* ── header: the display face earns its keep here ─────────────────── */
+.sk.dev .vhead h1{ font-family:var(--disp); font-size:38px; font-weight:400; letter-spacing:.03em; line-height:.9; color:var(--bone); text-wrap:balance; }
+.sk.dev .vhead .rule{ letter-spacing:.16em; }
+.sk.dev .vhead .vsub{ max-width:60ch; }
+
+/* ── the band that leads: what is actually waiting on him ─────────── */
+.sk.dev .attn{
+  display:flex; align-items:center; gap:22px; flex-wrap:wrap;
+  background:linear-gradient(100deg,#17100F 0%,var(--panel) 62%);
+  border:1px solid var(--red-sunk); border-left:3px solid var(--red);
+  border-radius:4px; padding:18px 22px; margin-bottom:26px;
+}
+.sk.dev .attn .n{ font-family:var(--disp); font-size:56px; line-height:.82; color:var(--red); letter-spacing:.02em; }
+.sk.dev .attn .t{ flex:1; min-width:210px; }
+.sk.dev .attn .t strong{ display:block; font-size:15px; font-weight:600; color:var(--ink); }
+.sk.dev .attn .t span{ color:var(--dim); font-size:12.5px; }
+.sk.dev .attn.quiet{ background:var(--panel); border-color:var(--line); border-left-color:var(--good); }
+.sk.dev .attn.quiet .n{ color:var(--good); }
+
+/* ── section rules + numbers ──────────────────────────────────────── */
+.sk.dev h2{ font-family:var(--disp); font-size:21px; font-weight:400; letter-spacing:.05em; color:var(--bone); }
+.sk.dev .panel{ border-radius:4px; }
+.sk.dev .tile{ border-radius:4px; }
+/* the stat row is the point of the Stats tab, so the figures take the
+   display face and tabular figures instead of the body font at 26px */
+.sk.dev .tile .v{
+  font-family:var(--disp); font-size:34px; font-weight:400; line-height:1;
+  letter-spacing:.02em; font-variant-numeric:tabular-nums; margin-top:8px;
+}
+.sk.dev .tile .v.q{ color:var(--faint); }
+.sk.dev .tiles{ gap:1px; background:var(--line); border:1px solid var(--line); border-radius:4px; overflow:hidden; }
+.sk.dev .tiles .tile{ border:0; border-radius:0; }
+.sk.dev .btnw, .sk.dev button.primary, .sk.dev .primary{ border-radius:4px; }
+.sk.dev button, .sk.dev .btn{ border-radius:4px; }
+.sk.dev .tag{ border-radius:3px; }
+.sk.dev .promptbox{ border-radius:3px; }
+
+/* honest empty states — a zero should say what it means */
+.sk.dev .empty{ padding:24px 4px; text-align:center; }
+.sk.dev .empty .big{ font-family:var(--disp); font-size:34px; color:var(--faint); letter-spacing:.03em; }
+.sk.dev .empty p{ color:var(--dim); font-size:12.5px; margin:6px auto 0; max-width:54ch; }
+
+/* ── GRADE: queue left, card right ────────────────────────────────── */
+.sk.dev .gradewrap{ display:grid; grid-template-columns:268px minmax(0,1fr); gap:16px; align-items:start; }
+.sk.dev .gradewrap > .gradequeue{ margin:0; position:sticky; top:26px; }
+.sk.dev .gradewrap > .gradecard{ margin:0; min-width:0; }
+.sk.dev .gradequeue .uqwrap{ max-height:calc(100vh - 210px); }
+/* stacked inside a narrow column, the queue row's four tracks collapse */
+.sk.dev .gradequeue .uq{ grid-template-columns:1fr; gap:3px; padding:10px 14px; }
+.sk.dev .gradequeue .uq .ug, .sk.dev .gradequeue .uq .utags{ justify-self:start; text-align:left; }
+.sk.dev .gradequeue .uq .ut{ white-space:normal; }
+.sk.dev .drawrow{ gap:8px; }
+
+@media(max-width:1100px){
+  .sk.dev .gradewrap{ grid-template-columns:1fr; }
+  .sk.dev .gradewrap > .gradequeue{ position:static; }
+  .sk.dev .gradequeue .uq{ grid-template-columns:84px 1fr 168px 74px; gap:12px; }
+}
+@media(max-width:860px){
+  .sk.dev .devshell{ grid-template-columns:1fr; gap:18px; }
+  .sk.dev .devnav{ position:static; }
+  .sk.dev .devtabs{ flex-direction:row; flex-wrap:wrap; }
+  .sk.dev .devtab{ border-left:0; border-bottom:2px solid transparent; }
+  .sk.dev .devtab[aria-current="page"]{ border-left:0; border-bottom-color:var(--red); }
+  .sk.dev .devfoot{ display:none; }
+  .sk.dev .vhead h1{ font-size:31px; }
+  .sk.dev .gradequeue .uq{ grid-template-columns:1fr; gap:3px; }
+}
+
+/* ══ carried over from dev_studio.html's page-local <style> ═════════ */
+.sk.dev .ebars{ display:flex; align-items:flex-end; gap:10px; height:140px; padding-top:22px; }
+.sk.dev .ebar{ flex:1; min-width:18px; max-width:64px; border:0; border-radius:3px 3px 0 0;
+           background:var(--raised); position:relative; cursor:pointer; padding:0; }
+.sk.dev .ebar:hover{ background:#303038; }
+.sk.dev .ebar.sel{ background:var(--red); }
+.sk.dev .ebar::after{ content:attr(data-v); position:absolute; top:-19px; left:50%;
+                  transform:translateX(-50%); font-family:var(--mono); font-size:10px; color:var(--dim); }
+.sk.dev .prow{ display:grid; grid-template-columns:26px 1fr auto auto; gap:12px; align-items:center;
+           padding:8px 10px; border-bottom:1px solid var(--line); font-size:13px; }
+.sk.dev .prow:last-child{ border-bottom:none; }
+.sk.dev .prow .rank{ font-family:var(--mono); font-size:11px; color:var(--faint); }
+.sk.dev .prow .rn{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.sk.dev .prow .rs{ font-family:var(--mono); font-size:12px; color:var(--dim); }
+.sk.dev .prow.gold{ background:#101a14; box-shadow:inset 2px 0 0 var(--good); }
+.sk.dev .mk{ width:28px; height:28px; border-radius:6px; border:1px solid var(--line2);
+         background:transparent; color:var(--faint); cursor:pointer; font-size:13px; padding:0; }
+.sk.dev .mk[aria-pressed="true"]{ background:#12241a; border-color:var(--good); color:var(--good); }
+.sk.dev .gq{ display:grid; grid-template-columns:1fr 170px 78px 58px 34px; gap:12px; align-items:center;
+         padding:10px; border-bottom:1px solid var(--line); font-size:13px; cursor:pointer; }
+.sk.dev .gq:hover{ background:var(--panel2); }
+.sk.dev .gq .v{ font-family:var(--mono); font-size:11.5px; color:var(--dim);
+            white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.sk.dev .gq .v.ok{ color:var(--good); } .sk.dev .gq .v.miss{ color:var(--red); }
+.sk.dev .gq .del{ border:0; background:transparent; color:var(--faint); cursor:pointer; font-size:12px; }
+.sk.dev .gq .del:hover{ color:var(--red); }
+.sk.dev .gdetail{ display:none; padding:2px 10px 12px; }
+.sk.dev .gdetail[data-open]{ display:block; }
+.sk.dev .blank{ padding:16px 4px; font-family:var(--mono); font-size:11px; color:var(--faint); }
+.sk.dev .delta{ font-family:var(--mono); font-size:11px; margin-left:8px; }
+.sk.dev #probefoot{ display:flex; align-items:center; gap:12px; margin-top:12px; }
+.sk.dev #probefoot[hidden]{ display:none; }
+.sk.dev .drawrow{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:18px; }
+.sk.dev summary.panel-head::-webkit-details-marker{ display:none; }
+.sk.dev .uqwrap{ max-height:340px; overflow-y:auto; }
+.sk.dev .uq{ display:grid; grid-template-columns:84px 1fr 168px 74px; gap:12px; align-items:center;
+         padding:8px 10px; border-bottom:1px solid var(--line); font-size:13px;
+         color:inherit; text-decoration:none; }
+.sk.dev .uq:last-child{ border-bottom:none; }
+.sk.dev .uq:hover{ background:var(--panel2); }
+.sk.dev .uq.here{ background:#0E0E11; box-shadow:inset 2px 0 0 var(--red); }
+.sk.dev .uq .uid{ font-family:var(--mono); font-size:11px; color:var(--faint); }
+.sk.dev .uq .ut{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.sk.dev .uq .us{ display:block; font-size:12px; color:var(--dim); }
+.sk.dev .uq .ug{ font-family:var(--mono); font-size:11px; color:var(--faint); text-align:right; white-space:nowrap; }
+.sk.dev .uq .utags{ display:flex; gap:6px; align-items:center; white-space:nowrap; }
+.sk.dev .uq.scored{ grid-template-columns:84px 1fr 168px 108px 64px; }
+.sk.dev .uq .sc{ font-family:var(--mono); font-size:15px; color:var(--dim); text-align:right; }
+.sk.dev .uq.strong .sc{ color:var(--good); }
+.sk.dev .uq .sc small{ display:block; font-size:10px; color:var(--faint); }

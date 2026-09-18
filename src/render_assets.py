@@ -45,9 +45,26 @@ CREATE INDEX IF NOT EXISTS idx_generated_assets_created
 """
 
 
+# The organize/delete columns (2026-09-18, Mike's call: Assets are the
+# generated content, and you can organize them, delete them, view them).
+# Additive ALTERs, the picked_at/archived_at pattern: `folder` is a free
+# label the wall groups by, `starred_at` is the heart, `deleted_at` is a
+# SOFT delete -- the render leaves the wall and the RAG shelf, but the
+# file stays on disk/R2 and a concept whose shot already carries that
+# clip keeps rendering it. A paid output is never thrown away.
+ORGANIZE_COLUMNS = (
+    ("folder", "TEXT"),
+    ("starred_at", "TEXT"),
+    ("deleted_at", "TEXT"),
+)
+
+
 def init(dsn: Optional[str] = None) -> None:
     with db.connect(dsn) as conn:
         conn.execute(SCHEMA)
+        for column, kind in ORGANIZE_COLUMNS:
+            conn.execute(
+                f"ALTER TABLE generated_assets ADD COLUMN IF NOT EXISTS {column} {kind}")
         db.own_table(conn, "generated_assets")
 
 
@@ -192,8 +209,10 @@ def update_media_url(id: int, media_url: str, dsn: Optional[str] = None, *,
 
 
 def list_all(dsn: Optional[str] = None, *,
-             account_id: Optional[int]) -> list[dict[str, Any]]:
+             account_id: Optional[int],
+             include_deleted: bool = False) -> list[dict[str, Any]]:
     """This account's generated assets, newest first, without schema writes.
+    Soft-deleted rows are left out unless asked for.
 
     Startup and record() initialize the table. Repeating init() here takes
     schema locks and backfills ownership on every GET; simultaneous Assets
@@ -202,13 +221,19 @@ def list_all(dsn: Optional[str] = None, *,
     with db.connect(dsn) as conn:
         if not db.table_exists(conn, "generated_assets"):
             return []
+        deleted = "" if include_deleted else " AND deleted_at IS NULL"
         rows = conn.execute(
-            "SELECT * FROM generated_assets WHERE account_id IS NOT DISTINCT FROM %s ORDER BY id DESC",
+            "SELECT * FROM generated_assets WHERE account_id IS NOT DISTINCT FROM %s"
+            + deleted + " ORDER BY id DESC",
             (account_id,),
         ).fetchall()
     items = []
     for row in rows:
         item = dict(row)
+        # rows read before init() ran on this database have no column
+        for column, _ in ORGANIZE_COLUMNS:
+            item.setdefault(column, None)
+        item["starred"] = bool(item.get("starred_at"))
         try:
             item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
         except (TypeError, ValueError):
@@ -217,3 +242,73 @@ def list_all(dsn: Optional[str] = None, *,
         item["provider"] = _label(item["tool"], item["model"])
         items.append(item)
     return items
+
+
+def get(id: int, dsn: Optional[str] = None, *,
+        account_id: Optional[int]) -> Optional[dict[str, Any]]:
+    """One of this account's rows (deleted or not), or None."""
+    for item in list_all(dsn, account_id=account_id, include_deleted=True):
+        if item["id"] == id:
+            return item
+    return None
+
+
+def organize(id: int, dsn: Optional[str] = None, *, account_id: Optional[int],
+             folder: Optional[str] = ..., starred: Optional[bool] = None) -> bool:
+    """Move a render into a folder and/or star it. `folder` left at the
+    sentinel means "don't touch"; an empty string clears it. Returns
+    whether a row of this account's was updated."""
+    sets, args = [], []
+    if folder is not ...:
+        sets.append("folder = %s")
+        args.append((folder or "").strip() or None)
+    if starred is not None:
+        sets.append("starred_at = %s")
+        args.append(db._now() if starred else None)
+    if not sets:
+        return False
+    args += [id, account_id]
+    with db.connect(dsn) as conn:
+        cur = conn.execute(
+            f"UPDATE generated_assets SET {', '.join(sets)} "
+            "WHERE id = %s AND account_id IS NOT DISTINCT FROM %s",
+            tuple(args))
+        return bool(cur.rowcount)
+
+
+def soft_delete(id: int, dsn: Optional[str] = None, *,
+                account_id: Optional[int]) -> bool:
+    """Take a render off the wall. The row and the file stay -- see
+    ORGANIZE_COLUMNS. Returns whether a row of this account's was marked."""
+    with db.connect(dsn) as conn:
+        cur = conn.execute(
+            "UPDATE generated_assets SET deleted_at = %s "
+            "WHERE id = %s AND account_id IS NOT DISTINCT FROM %s AND deleted_at IS NULL",
+            (db._now(), id, account_id))
+        return bool(cur.rowcount)
+
+
+def drop_chunk(id: int) -> None:
+    """Forget the render's prompt on the assets shelf -- best-effort,
+    the ingest's own contract."""
+    try:
+        conn = rag.connect()
+        try:
+            rag.delete_source(conn, f"assets/generated-{id}")
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def folders(dsn: Optional[str] = None, *,
+            account_id: Optional[int]) -> dict[str, int]:
+    """Folder name -> how many live renders sit in it."""
+    counts: dict[str, int] = {}
+    for item in list_all(dsn, account_id=account_id):
+        if item.get("folder"):
+            counts[item["folder"]] = counts.get(item["folder"], 0) + 1
+    return dict(sorted(counts.items()))

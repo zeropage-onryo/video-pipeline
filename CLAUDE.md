@@ -539,6 +539,32 @@ row is called:
   and says so. Two ways in: the chain parks a scene once its keyframe is rendered, or you
   pick a text-only concept off the board.
 
+**A hand edit of a prompt teaches — for ONE account, by a column (2026-09-18, Mike's
+call: "only for my account specifically, not for other users").** Every prompt edit — the
+Director prompt bar, the Pipeline card's in-place edit (both `POST /api/concepts/{id}/shots/{n}/prompt`),
+a Direct note — used to write `shots_json` and nothing else, while the board's pick
+snapshotted the prompt at click time: edit-then-pick filed the human's text as "worked" with
+no record of the draft, pick-then-edit filed the draft and lost the edit. Now, when
+`accounts.prompt_edits_teach` is TRUE for the tenant (`python -m src.accounts edits-teach
+<slug> --on`; `src/edit_teach.py` is the gate, manual_lane's shape — fails closed, never
+membership, FALSE for every account until turned on by hand), an edit files a PENDING pair on
+the board's own `concept-{id}-shot-{n}` ref through `winners.record_pair`: the model's draft
+on the avoid side, the edit on the winning side, note `edited by hand` (or `directed: <note>`
+for a Direct note, where the pair is prompt-before → revision). Nothing reaches a shelf until
+the Teach tab's grade-all ingests it, same as a board tap; the tab marks these `✎ EDITED`.
+`shot["model_prompt"]` remembers the model's last draft across hand edits (so a re-edit still
+pairs draft → latest, one pending pair per shot, latest wins; editing back to the draft
+withdraws it) and every model writer drops it (`persist_prompt`, Polish, Direct). Replacement
+extends `api._board_verdict`'s asymmetry: a pending board tap is replaced by the pair, a board
+tap AFTER an edit leaves the pair alone, a Grade-tab verdict and anything ingested are never
+touched. Accounts that are off get no new key on their rows and no winners row — byte for
+byte the old behaviour. What the server cannot tell: Director's Save prompt may save the
+ENHANCE node's text, which Gemini wrote; it files as the person's fix. Found on the way:
+`/direct` and `/refine` never passed `account_id` into `director.*`, so on an owned row
+(every live concept) the job died with "no concept N" — fixed. Deferred ingest
+(`winners.ingest_pending`) now carries the tenant `project` label the immediate path always
+had. Live: on for accounts 1 and 2 (both Mike's brands), column added 2026-09-18.
+
 **Leaving the board is archiving, never deleting** (`archived_at`, additive ALTER, same
 shape as `picked_at`). An unpicked row is the only negative signal this system collects:
 `pick_rate` is generated-vs-picked, so deleting what you passed over would make the rate
@@ -1138,6 +1164,44 @@ is yours, in Resolve, by hand.
   the vanilla canvas -- ported from the `workflows.js` edit, since that file
   no longer exists. The Generate node's gate note reads `video.generate`
   (any keyed renderer), not Runway's key alone.
+- **Assets and Elements are two things, not four chips on one wall (2026-09-18, Mike's
+  call).** `_assets_all()` had always returned locations + characters + props + `generated`
+  in one list, so the React Assets wall showed element photos beside renders, the Elements
+  page listed a render as an element (`@runway-image`), and the `@`-mention search offered
+  it. Now: **Assets** (`/studio/assets`) is GENERATED content only — `/api/media?scope=generated`,
+  one row per render carrying `provider`, `model`, `concept_id`, `prompt`, `folder`, `starred` —
+  and you can view, organize and delete it. **Elements** (`/studio/elements`) is the
+  characters / props / places a scene is held to — `/api/assets?scope=elements` — and a card
+  can be deleted (locations gained `DELETE /api/assets/locations/{id}` to match). `scope`
+  defaults to `all` so every existing caller reads as before; `/assets/search` is pinned to
+  `elements` because a mention is an element by definition. Organize = `folder` + `starred_at`
+  on `generated_assets` (additive ALTERs in `render_assets.init`, `PATCH
+  /api/assets/generated/{id}`); the wall's chips are Images / Clips / Starred / one per folder,
+  plus a provider select, all derived from the response's set totals (`wall`, `folders`,
+  `providers`). **Delete is SOFT** (`deleted_at`, `DELETE /api/assets/generated/{id}`): the
+  render leaves the wall and its RAG chunk is dropped, but the row and the file stay, so a
+  concept whose shot carries that clip keeps rendering it — a paid output is never thrown
+  away. **"Make element"** on a still opens the add-element modal with the render attached
+  by URL (`photo_urls` on the create routes, fetched through `_photo_bytes`), the Higgsfield
+  "Create Element" move and the only honest way a render becomes a reference here. And the
+  manual lane's `import_clip` now records a `generated_assets` row (lazily imported,
+  best-effort) — until today a hand-rendered Runway/Higgsfield clip lived on the concept and
+  nowhere else, so it never reached the wall. `web/` gained the `motion` package for the
+  rail slide and tile enter/exit.
+  **An element gets a REFERENCE SHEET, as part of adding one (same day, Mike's call).**
+  Creating an element used to save the photos, describe them (vision, text) and stop; the
+  frames a shot was held to were exactly the uploads. Now the create routes take `sheet`
+  (on unless the modal says off) and, once the row is saved, start a job that draws ONE
+  sheet from the real photos on Nano Banana Pro — `src/element_sheet.py`, prompts in
+  `prompts/element_sheet_{character,prop,location}.txt` (five panels + info block for a
+  person, a turnaround for a prop, plates for a place), through `nano_banana.generate_from_prompt`
+  with two new flags: `literal=True` (a sheet is not a video prompt, so no `as_still_frame`)
+  and `bank=False` (it lives with its element, not on the Assets wall; caps, the
+  generations row, the meter and R2 still apply). It lands as `<slug>/sheet.jpg` and
+  `_photo_names` sorts it LAST — a sheet is a derivative of the face, never evidence of it,
+  and `refs[0]` stays a real photo. `POST /api/assets/{kind}/{id}/sheet` redraws, and is how
+  elements saved before today get one (the card's button). Never a gate: no key, no photos
+  or a failed draw leaves the element exactly as saved, with the reason on the job.
 - **`src/mcp_server.py`** + **`app/mcp_mount.py`** — the MCP surface (2026-08-31), so the
   board can be read and decided on from a phone or an agent instead of only from this
   machine. **An adapter, never a store:** every tool is a thin call into `preprod` or
@@ -1552,36 +1616,59 @@ is yours, in Resolve, by hand.
 
 Everything below is current as of the last commit on `main`. Update it when it stops being true.
 
-**Working and verified against real data** (counts read off the live Postgres 2026-09-09):
-the ideation loop runs end to end on real Gemini calls. **232 concepts** written, **107**
-carrying reference images on the shot, **68** with a keyframe drawn, **178 archived** with a
-reason, **4 picked**, **9 marked shot**, **274 recorded graph runs**, 100 generation attempts,
-1610 metered LLM calls, 10 posted videos, 3 described rooms. Reference-grounded ideation is
-verified live both ways: `src.shootgen --spark "gearing up ritual"` printed "Grounding in 5
-retrieved reference(s)" against the real library, and the same command with the store pointed at
-a dead URL printed the ungrounded note and still produced ideas (exit 0). **1956 tests pass, 8
-xfail**, ruff clean, CI green on every push.
+**Working and verified against real data** (counts read off the live Postgres 2026-09-18):
+the ideation loop runs end to end on real Gemini calls. **255 concepts** written, **122**
+carrying reference images on the shot, **73** with a keyframe drawn, **205 archived** with a
+reason, **11 picked**, **20 marked shot**, **359 recorded graph runs**, 113 generation attempts,
+2403 metered LLM calls, **23 videos with 24 metrics snapshots**, 0 described rooms (rooms became
+optional material on 2026-08-31 and nothing has re-run `src.locations` since). Reference-grounded
+ideation is verified live both ways: `src.shootgen --spark "gearing up ritual"` printed "Grounding
+in 5 retrieved reference(s)" against the real library, and the same command with the store pointed
+at a dead URL printed the ungrounded note and still produced ideas (exit 0). 1956 tests pass, 8
+xfail, ruff clean, CI green on every push — last run 2026-09-09, not re-run for this update.
 
-**The number that matters and is not moving: 0 concepts carry a `media_url`.** Nothing has been
-rendered onto a concept row. 4 picks against 232 written is the real shape of this project —
-generation is cheap and abundant, selection is the bottleneck, and the spend gate has barely
-been used. Read every rate below in that light.
+**THE LOOP CLOSED ON 2026-09-18.** Concept #375 "Neon City Ascent" went spark -> scene ->
+references -> keyframe -> pick -> render -> post -> measured, and it is the first one that ever
+did. What that means concretely: **1 concept carries a `media_url`** (it was 0 for the whole life
+of the project), the clip is a 10.042s 720x1280 h264 with a stereo AAC track rendered on Runway
+gen4_turbo through Explore Mode — the subscription lane, `cost_usd` NULL, no ledger hold — filed
+on the Fly volume, in `data/renders/runway/`, and mirrored to R2 so the deployed card resolves.
+**`videos` row 11 is the first row in this project's history carrying a `concept_id`**, and it
+carries a real metrics snapshot: reach 19, likes 4, comments 1, average watch 4.59s against a
+10.042s clip (46%). The other 12 Instagram reels on the account were backfilled the same day with
+their own snapshots, so `posted_outcomes` has 13 rows to join instead of none.
+
+**The number that matters now: 11 picks against 255 written, and 1 of 255 rendered.** Generation
+is cheap and abundant, selection is still the bottleneck, and the spend gate has been used once.
+Read every rate below in that light. The backfilled reels carry `duration_s` NULL because the IG
+Graph API returns no `media_url` for REELS on this token, so their `watch_time_seconds` cannot be
+turned into a completion rate — only clips this pipeline renders get a measured duration
+(ffprobe at import). Cross-video watch comparison is not valid until that is solved.
 
 Post-production (ingest/pitch/editgen, `/pitches`, the assistant's `cut` intent) was removed in
 Aug 2026 — the DB keeps historical pitch-run rows, but nothing generates new ones.
 
-**Structurally complete, statistically empty:** the L2→L3 loop is built and verified live —
-`promote_winners propose` honestly reports nothing clears the bar (no videos measured at equal
-age yet), and `src.rework` generates an evidence-free slate with the note. `pick_rate`,
-`shoot_rate` and `post_seo`'s signals are structurally correct and currently close to
-meaningless — they need weeks of real posting before a prompt change can be measured or a slate
-genuinely reworked from evidence. (`db.selection_rate` is a different, surviving thing: it
-measures kept-vs-attempted on generative CLIPS, not concepts.) **The most valuable next step is
-still not code** — it is taking one written concept all the way through Approve to a rendered
-clip, posting it, and recording metrics. L4 exists as `src.autopilot` — gated, dry-run, default
-off, executors unwired.
+**Structurally complete, statistically thin:** the L2->L3 loop is built, verified live, and now
+has exactly one measured concept in it. `promote_winners propose` still honestly reports nothing
+clears the bar — it compares at equal age and there is one linked video — and `src.rework` still
+generates an evidence-free slate with the note. `pick_rate`, `shoot_rate` and `post_seo`'s
+signals are structurally correct and now non-empty rather than meaningless; they need weeks of
+real posting before a prompt change can be measured. (`db.selection_rate` is a different,
+surviving thing: it measures kept-vs-attempted on generative CLIPS, not concepts — the first
+`kept=1` row in the table was written 2026-09-18.) **The most valuable next step is repetition,
+not code** — the path exists now, so the question is whether it can be walked weekly. L4 exists
+as `src.autopilot` — gated, dry-run, default off, executors unwired.
 
 **Known gaps, in rough priority:**
+- **`generations` has four columns no writer sets** (found 2026-09-18). `ai_model`,
+  `aspect_ratio`, `camera_motion` and `is_favorite` exist on the live table with hardcoded
+  defaults (`'Nano Banana Pro'`, `'16:9'`, the STRING `'None'`, false), are absent from
+  `generative.SCHEMA`, and are not parameters on `record_generation` — the only writer. So all
+  113 rows carried the same fake provenance and ratio until row 113 was corrected by hand, a
+  fresh `init()` builds a differently-shaped table than production, and `tests/test_tenancy.py`
+  cannot classify them as owned or shared. Fix: add them to `SCHEMA`, drop the literal defaults
+  in favour of NULL, take them as kwargs on `record_generation`, pass them from the adapters
+  that already know the answers.
 - **Timed scenes (2026-09-10) are rendered shot by shot only at the Queue.** The graph's
   `generate_render` (a dry stub unless `ZEROPAGE_RENDER=1`) still renders a scene's whole
   prompt as one clip, and the Director canvas still edits the whole scene prompt rather than

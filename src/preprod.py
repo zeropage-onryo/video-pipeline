@@ -333,6 +333,19 @@ def get_location(location_id: int, dsn: Optional[str] = None, *,
     return _location_row(row) if row else None
 
 
+def delete_location(location_id: int, dsn: Optional[str] = None, *,
+                    account_id: int) -> bool:
+    """Remove a described space (2026-09-18, the Elements page's delete).
+    concept_locations cascades; the photos on disk are left where they
+    are, the same as a character or prop delete leaves theirs."""
+    with connect(dsn) as conn:
+        cur = conn.execute(
+            "DELETE FROM locations WHERE id = %s AND account_id IS NOT DISTINCT FROM %s",
+            (location_id, account_id),
+        )
+        return bool(cur.rowcount)
+
+
 def get_location_by_name(name: str, dsn: Optional[str] = None, *,
                          account_id: int) -> Optional[dict[str, Any]]:
     with connect(dsn) as conn:

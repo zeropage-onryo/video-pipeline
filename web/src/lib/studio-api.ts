@@ -40,12 +40,22 @@ export type Asset = {
   name: string;
   photos: string[];
   poster: string | null;
+  /** the drawn reference sheet, when one exists — always LAST in `photos` (2026-09-18) */
+  sheet?: string | null;
   text: string;
   meta: Record<string, unknown>;
   created_at?: string | null;
 };
-export const getAssets = (q?: string) =>
-  apiFetch<{ items: Asset[] }>(`/assets${q ? `?q=${encodeURIComponent(q)}` : ""}`);
+/* Which half of the bank (2026-09-18): `elements` is the characters /
+   locations / props a shot is held to, `generated` is the renders, `all`
+   is both -- the server's default, kept for the one caller that needs a
+   generated id to resolve (the composer's ?attach= handoff). */
+export type AssetScope = "all" | "elements" | "generated";
+export const getAssets = (q?: string, scope: AssetScope = "elements") => {
+  const params = new URLSearchParams({ scope });
+  if (q) params.set("q", q);
+  return apiFetch<{ items: Asset[] }>(`/assets?${params}`);
+};
 
 export type AssetHit = { name: string; category: AssetCategory; thumb: string | null };
 export const searchAssets = (q: string) =>
@@ -92,7 +102,14 @@ export type AssetCreated = {
   photos: number;
   described?: boolean;
   note?: string | null;
+  /** the job drawing the element's reference sheet, when one was asked for (2026-09-18) */
+  sheet_job?: number | null;
 };
+export type ElementKind = "characters" | "locations" | "props";
+/** POST /api/assets/{kind}/{id}/sheet — draw (or redraw) an element's
+ *  reference sheet from its real photos; cents on Nano Banana Pro. */
+export const drawSheet = (kind: ElementKind, id: number) =>
+  apiFetch<{ job_id: number }>(`/assets/${kind}/${id}/sheet`, { method: "POST", body: "{}" });
 /** POST /api/assets/{characters|locations|props} — the always-on create
  *  path; every save also teaches the RAG assets shelf. */
 export const createAsset = (
@@ -108,18 +125,56 @@ export type MediaItem = {
   category: AssetCategory | "generated";
   kind: "image" | "video";
   date: string;
+  /* generated rows only (2026-09-18) */
+  generated_id?: number;
+  provider?: string | null;
+  model?: string | null;
+  concept_id?: number | null;
+  shot_n?: number | null;
+  prompt?: string;
+  folder?: string | null;
+  starred?: boolean;
 };
 export type MediaCounts = Record<string, number> & { all: number };
-/** GET /api/media?kind=all — one row per saved photo or clip, carrying
- *  its owning asset; `counts` are set totals, never page length. */
-export const getMedia = (q?: string, category?: string) => {
-  const params = new URLSearchParams({ kind: "all" });
-  if (q) params.set("q", q);
-  if (category && category !== "all") params.set("category", category);
-  return apiFetch<{ items: MediaItem[]; counts: MediaCounts }>(`/media?${params}`);
+export type MediaWall = {
+  items: MediaItem[];
+  counts: MediaCounts;
+  wall: { image: number; video: number; starred: number };
+  folders: Record<string, number>;
+  providers: Record<string, number>;
 };
-export const deleteAsset = (kind: "characters" | "props", id: number) =>
-  apiFetch<{ ok: boolean }>(`/assets/${kind}/${id}`, { method: "DELETE" });
+export type MediaFilter = {
+  q?: string;
+  kind?: "image" | "video";
+  folder?: string;
+  starred?: boolean;
+  provider?: string;
+};
+/** GET /api/media?kind=all&scope=generated — one row per render, newest
+ *  first; `counts`/`wall`/`folders`/`providers` are set totals, never
+ *  page length. The Assets wall is generated content only (2026-09-18). */
+export const getMedia = (f: MediaFilter = {}) => {
+  const params = new URLSearchParams({ kind: f.kind ?? "all", scope: "generated" });
+  if (f.q) params.set("q", f.q);
+  if (f.folder) params.set("folder", f.folder);
+  if (f.starred) params.set("starred", "true");
+  if (f.provider) params.set("provider", f.provider);
+  return apiFetch<MediaWall>(`/media?${params}`);
+};
+/** DELETE /api/assets/{characters|props|locations}/{id} — an element. */
+export const deleteAsset = (kind: "characters" | "props" | "locations", id: number) =>
+  apiFetch<{ deleted: number }>(`/assets/${kind}/${id}`, { method: "DELETE" });
+/** DELETE /api/assets/generated/{id} — a SOFT delete: off the wall and
+ *  the RAG shelf, the file and the row stay. */
+export const deleteGenerated = (id: number) =>
+  apiFetch<{ deleted: number }>(`/assets/generated/${id}`, { method: "DELETE" });
+/** PATCH /api/assets/generated/{id} — folder and/or star. A field left
+ *  out is left alone; folder "" clears it. */
+export const organizeGenerated = (id: number, body: { folder?: string; starred?: boolean }) =>
+  apiFetch<{ id: number; folder: string | null; starred: boolean }>(`/assets/generated/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
 
 /* ── the board and the queue ── */
 export type Concept = {

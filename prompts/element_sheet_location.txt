@@ -1,0 +1,6 @@
+Make a location reference sheet for the space in the attached photos: {name}.
+Four panels side by side on one wide image, each labelled in small capitals along its top edge: WIDE, LEFT ANGLE, RIGHT ANGLE, DETAIL. The space must match the attached photos exactly — same room, architecture, furniture, surfaces, fixtures and light sources; add nothing that is not there. WIDE is an establishing view from the entrance; the DETAIL panel is a close crop of the most characteristic texture or fixture.
+Notes: {wardrobe}
+Under the WIDE panel, a plain info block on ruled lines reading exactly:
+PLACE: {name_upper}
+Visual style: photoreal architectural photography in the space's own light, no HDR glow, no AI gloss, thin dark panel borders. No extra text, no logos, no watermark.

@@ -69,6 +69,7 @@ import json
 import os
 import re
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -199,9 +200,13 @@ VIDEO_MODELS: dict[str, dict] = {
         "durations": (5, 10),
         "verified": "2026-08-31",
     },
-    # route confirmed live 2026-08-31
+    # route confirmed live 2026-08-31; BLOCKED 2026-09-18 -- every
+    # kling2.1 path now answers 423 {"detail":"model_blocked"} on this
+    # account (kling2.5 still answers 400 on an empty body). Found when a
+    # Queue approve on "Neon City Ascent" failed with bare "HTTP Error
+    # 423: Locked". Re-probe before flipping it back.
     "kling2.1": {
-        "available": True,
+        "available": False,
         "t2v": "/kling-video/v2.1/master/text-to-video",
         "i2v": "/kling-video/v2.1/master/image-to-video",
         "params": ("duration", "cfg_scale", "negative_prompt"),
@@ -435,8 +440,20 @@ def _request(url: str, payload: Optional[dict] = None, *,
                  "User-Agent": USER_AGENT},
         method="POST" if payload is not None else "GET",
     )
-    with urllib.request.urlopen(req, timeout=60) as response:
-        return json.loads(response.read().decode())
+    try:
+        with urllib.request.urlopen(req, timeout=60) as response:
+            return json.loads(response.read().decode())
+    except urllib.error.HTTPError as e:
+        # urllib's message is only "HTTP Error 423: Locked"; the reason
+        # (model_blocked, model_not_found, a credit error) is in the body.
+        # Attach it so the Queue card says WHY, not just the status line.
+        try:
+            detail = e.read().decode(errors="replace")[:300].strip()
+        except Exception:
+            detail = ""
+        if detail:
+            raise RuntimeError(f"HTTP Error {e.code}: {e.reason} -- {detail}") from e
+        raise
 
 
 # The documented image shape is {"images": [{"url": ...}]}. The video

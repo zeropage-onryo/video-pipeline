@@ -223,3 +223,85 @@ def test_graph_routes_reject_nonexistent_shot(tmp_db):
     path = f"/api/concepts/{cid}/shots/99/graph"
     assert client.get(path).status_code == 404
     assert client.put(path, json={"graph": GRAPH}).status_code == 404
+
+
+# --- the canvas's reference wiring, saved back onto the scene (2026-09-18) --
+
+def _with_refs(path, refs):
+    cid = a_concept(path)
+    concept = preprod.get_concept(cid, dsn=path, account_id=None)
+    shots = [dict(s) for s in concept["shots"]]
+    shots[0]["refs"] = refs
+    preprod.update_concept_shots(cid, {"shots": shots}, dsn=path, account_id=None)
+    return cid
+
+
+def test_rewired_references_land_on_the_scene(tmp_db):
+    """The point: what the canvas has wired in is what Pipeline shows,
+    what the reference gate checks and what Queue renders against."""
+    cid = _with_refs(tmp_db, ["/characters/michael/photo/a.jpg"])
+    seed = client.get(f"/api/concepts/{cid}/shots/1/graph").json()["seed_hash"]
+    new = ["/characters/michael/photo/a.jpg", "/props/jacket/photo/j.jpg"]
+    res = client.put(f"/api/concepts/{cid}/shots/1/refs",
+                     json={"refs": new, "seed_hash": seed}).json()
+    assert res["changed"] is True
+    shot = preprod.get_concept(cid, dsn=tmp_db, account_id=None)["shots"][0]
+    assert shot["refs"] == new
+    assert shot["prompt"] == "the scene as written"      # nothing else moved
+    # the canvas that saved them is handed the hash its next save must carry
+    assert res["seed_hash"] != seed
+    assert client.put(f"/api/concepts/{cid}/shots/1/graph",
+                      json={"graph": GRAPH, "seed_hash": res["seed_hash"]}).status_code == 200
+    assert client.get(f"/api/concepts/{cid}/shots/1/graph").json()["stale"] is False
+
+
+def test_the_same_list_is_not_a_write(tmp_db):
+    cid = _with_refs(tmp_db, ["/characters/michael/photo/a.jpg"])
+    res = client.put(f"/api/concepts/{cid}/shots/1/refs",
+                     json={"refs": ["/characters/michael/photo/a.jpg"]}).json()
+    assert res["changed"] is False
+
+
+def test_an_empty_canvas_never_strips_the_scene(tmp_db):
+    """reference_gate keeps a scene with no refs out of the Queue, so
+    cutting every card must not quietly make the scene unapprovable."""
+    cid = _with_refs(tmp_db, ["/characters/michael/photo/a.jpg"])
+    res = client.put(f"/api/concepts/{cid}/shots/1/refs", json={"refs": ["", " "]})
+    assert res.status_code == 400
+    assert res.json()["error"]["code"] == "no_references"
+    shot = preprod.get_concept(cid, dsn=tmp_db, account_id=None)["shots"][0]
+    assert shot["refs"] == ["/characters/michael/photo/a.jpg"]
+
+
+def test_a_canvas_drawn_against_old_refs_cannot_overwrite_newer_ones(tmp_db):
+    cid = _with_refs(tmp_db, ["/characters/michael/photo/a.jpg"])
+    old_seed = client.get(f"/api/concepts/{cid}/shots/1/graph").json()["seed_hash"]
+    client.put(f"/api/concepts/{cid}/shots/1/refs",
+               json={"refs": ["/characters/michael/photo/b.jpg"]})
+    res = client.put(f"/api/concepts/{cid}/shots/1/refs",
+                     json={"refs": ["/props/x/photo/1.jpg"], "seed_hash": old_seed})
+    assert res.status_code == 409
+    shot = preprod.get_concept(cid, dsn=tmp_db, account_id=None)["shots"][0]
+    assert shot["refs"] == ["/characters/michael/photo/b.jpg"]
+
+
+def test_refs_are_deduped_capped_and_validated(tmp_db):
+    cid = _with_refs(tmp_db, ["/characters/michael/photo/a.jpg"])
+    many = [f"/refs/{i:02d}.jpg" for i in range(20)]
+    res = client.put(f"/api/concepts/{cid}/shots/1/refs",
+                     json={"refs": [many[0], *many]}).json()
+    assert len(res["refs"]) == 12 and len(set(res["refs"])) == 12
+    assert client.put(f"/api/concepts/{cid}/shots/1/refs",
+                      json={"refs": ["javascript:alert(1)"]}).status_code == 400
+    assert client.put(f"/api/concepts/{cid}/shots/9/refs",
+                      json={"refs": ["/refs/a.jpg"]}).status_code == 404
+
+
+def test_a_prompt_saved_from_the_canvas_hands_back_its_hash(tmp_db):
+    """Save-prompt used to leave the canvas holding the OLD hash, so its
+    very next autosave was refused as stale -- by its own edit."""
+    cid = a_concept(tmp_db)
+    res = client.post(f"/api/concepts/{cid}/shots/1/prompt",
+                      json={"prompt": "a revised scene"}).json()
+    assert client.put(f"/api/concepts/{cid}/shots/1/graph",
+                      json={"graph": GRAPH, "seed_hash": res["seed_hash"]}).status_code == 200

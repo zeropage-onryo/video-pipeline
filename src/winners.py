@@ -220,15 +220,17 @@ def discard_pending(video_ref: str, dsn=None) -> int:
         return cur.rowcount
 
 
-def ingest_pending(video_ref: str, dsn=None) -> dict:
+def ingest_pending(video_ref: str, dsn=None,
+                   project: Optional[str] = None) -> dict:
     """Embed everything still waiting for this subject. Best-effort, the
     standing contract: a failure leaves the rows saved and re-ingestable,
-    and the caller can tell because `ok` is False."""
+    and the caller can tell because `ok` is False. `project` is the
+    teaching tenant's slug, as on ingest_to_rag."""
     rows = pending(video_ref, dsn=dsn)
     errors = []
     done = 0
     for r in rows:
-        result = ingest_to_rag(r["id"], dsn=dsn)
+        result = ingest_to_rag(r["id"], dsn=dsn, project=project)
         if result.get("ok"):
             done += 1
         else:

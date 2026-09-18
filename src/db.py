@@ -579,6 +579,13 @@ def add_legacy_column(conn: psycopg.Connection) -> bool:
 # half believes the wrong thing about the whole.
 MANUAL_LANE_COLUMN = "manual_lane_operator"
 
+# Whether a hand edit of a scene prompt teaches the RAG shelves
+# (src/edit_teach.py, 2026-09-18). Same shape as the lane gate and for the
+# same reason: it is ONE person's taste being written onto shelves every
+# tenant retrieves from, so it is a column on the account row, FALSE for
+# everybody until the operator turns their own account on by hand.
+EDIT_TEACH_COLUMN = "prompt_edits_teach"
+
 
 def add_manual_lane_operator_column(conn: psycopg.Connection) -> bool:
     """Additive ALTER TABLE on `accounts`. True if added now.
@@ -603,6 +610,25 @@ def add_manual_lane_operator_column(conn: psycopg.Connection) -> bool:
         return False
     conn.execute(
         f"ALTER TABLE accounts ADD COLUMN {MANUAL_LANE_COLUMN} "
+        "BOOLEAN NOT NULL DEFAULT FALSE"
+    )
+    return True
+
+
+def add_prompt_edits_teach_column(conn: psycopg.Connection) -> bool:
+    """Additive ALTER TABLE on `accounts`. True if added now.
+
+    add_manual_lane_operator_column's twin (2026-09-18): no backfill, every
+    account comes out FALSE, and the one way on is
+    `python -m src.accounts edits-teach <slug> --on`. Missing table is
+    "not yet" -- accounts.init() asks again once there is one.
+    """
+    if not table_exists(conn, "accounts"):
+        return False
+    if EDIT_TEACH_COLUMN in columns(conn, "accounts"):
+        return False
+    conn.execute(
+        f"ALTER TABLE accounts ADD COLUMN {EDIT_TEACH_COLUMN} "
         "BOOLEAN NOT NULL DEFAULT FALSE"
     )
     return True
@@ -749,6 +775,8 @@ def init_db(dsn: Optional[str] = None) -> None:
         # who may spend the operator's subscription (src/manual_lane.py,
         # 2026-09-08) -- a no-op until accounts.init() has made the table
         add_manual_lane_operator_column(conn)
+        # whose hand edits teach the shelves (src/edit_teach.py, 2026-09-18)
+        add_prompt_edits_teach_column(conn)
 
 
 # --------------------------------------------------------------------------
