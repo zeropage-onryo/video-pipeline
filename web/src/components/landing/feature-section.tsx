@@ -13,7 +13,21 @@ type Feature = {
   body: string;
   cta: string;
   stills: [number, number];
-  screenshot?: { src: string; alt: string };
+  screenshot?: { src: string; alt: string; width: number; height: number };
+};
+
+// The product, as Mike screenshotted it on 2026-09-18 (web/public/site/):
+// the Studio composer, the Assets wall, the Director canvas, the Queue.
+// Shown at their own aspect, never cropped -- a screenshot is evidence.
+const SHOTS = {
+  composer: { src: "/site/studio-composer.webp", width: 1194, height: 623,
+              alt: "The Studio composer: \"What do you want to create?\" with reference and element pickers" },
+  assets: { src: "/site/studio-assets.webp", width: 1661, height: 844,
+            alt: "The Assets wall: keyframes the studio drew, grouped by day" },
+  director: { src: "/site/studio-director.webp", width: 1270, height: 629,
+              alt: "The Director canvas: prompt, references, enhance, keyframe and renderer wired as nodes" },
+  queue: { src: "/site/studio-queue.webp", width: 581, height: 631,
+           alt: "The Queue: a scene awaiting approval with its renderer, shots and frame picked" },
 };
 
 const FEATURES: Feature[] = [
@@ -22,24 +36,28 @@ const FEATURES: Feature[] = [
     body: "Turn a spark, a brief, or a passage from your script into several scene concepts worth exploring. The studio writes the scene; you decide which one is worth the frame.",
     cta: "Start with a spark",
     stills: [0, 1],
+    screenshot: SHOTS.composer,
   },
   {
     title: "Build the visual world",
     body: "Attach characters, objects, locations, and visual references so every scene begins from your material. A scene with no references never reaches the board.",
     cta: "Bring your references",
     stills: [2, 3],
+    screenshot: SHOTS.assets,
   },
   {
     title: "Direct every frame",
     body: "Shape the prompt, connect the references, and draw the keyframe in a canvas built for creative decisions. The still you approve is the frame the clip anchors on.",
     cta: "Open the Director",
     stills: [4, 5],
+    screenshot: SHOTS.director,
   },
   {
     title: "Put it in motion",
     body: "Choose a model, a frame, and a duration, then render the clip you decided was worth making. The Queue is the only place money is spent, and you are the one who presses it.",
     cta: "See the Queue",
     stills: [1, 4],
+    screenshot: SHOTS.queue,
   },
 ];
 
@@ -87,15 +105,22 @@ function FeatureMedia({ feature, priority }: { feature: Feature; priority: boole
         aria-hidden
         className="pointer-events-none absolute -inset-10 rounded-[40px] bg-[radial-gradient(60%_60%_at_50%_50%,rgba(255,255,255,0.05),transparent_70%)]"
       />
-      <div className="relative overflow-hidden rounded-[14px] border border-border bg-card p-3">
+      <div
+        className={`relative overflow-hidden rounded-[14px] border border-border bg-card p-3 ${
+          feature.screenshot && feature.screenshot.height > feature.screenshot.width
+            ? "mx-auto max-w-[400px]"
+            : ""
+        }`}
+      >
         {feature.screenshot ? (
-          <div className="relative aspect-[4/3] overflow-hidden rounded-lg">
+          <div className="overflow-hidden rounded-lg bg-[#0f0e0c]">
             <Image
               src={feature.screenshot.src}
               alt={feature.screenshot.alt}
-              fill
+              width={feature.screenshot.width}
+              height={feature.screenshot.height}
               sizes="(min-width: 768px) 560px, 100vw"
-              className="object-cover"
+              className="h-auto w-full"
               priority={priority}
             />
           </div>

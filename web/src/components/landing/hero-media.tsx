@@ -2,9 +2,10 @@ import Image from "next/image";
 import { HERO_MEDIA, HERO_STEPS } from "@/content/hero-media";
 import { LANDING_MEDIA } from "@/content/landing-media";
 
-// The frame under the headline: a 16:9 plate in a 24px-radius border, the
-// recording of the studio when there is one, three real keyframes off the
-// board when there is not (see content/hero-media.ts). Under it, the four
+// The frame under the headline: a 16:9 plate in a 24px-radius border -- the
+// recording of the studio when there is one, its poster (a real screenshot)
+// when there is not, three real keyframes off the board with neither
+// (see content/hero-media.ts). Under it, the four
 // beats of the recording as a strip whose underlines fill in turn.
 export function HeroMedia() {
   const stills = LANDING_MEDIA.slice(0, 3);
@@ -23,6 +24,15 @@ export function HeroMedia() {
               playsInline
               preload="metadata"
               aria-label={HERO_MEDIA.alt}
+            />
+          ) : HERO_MEDIA.poster ? (
+            <Image
+              src={HERO_MEDIA.poster}
+              alt={HERO_MEDIA.alt}
+              fill
+              sizes="(min-width: 1190px) 1142px, 100vw"
+              priority
+              className="object-cover object-top"
             />
           ) : (
             <div className="grid h-full grid-cols-3 gap-[3px]" aria-label="Recent frames off the board">
