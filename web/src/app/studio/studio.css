@@ -711,6 +711,19 @@ button.tag:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* A failure, in the slot the composer's hint normally occupies. The
+   hint is one quiet line on purpose; an error is not, so it takes the
+   signal colour and is allowed to wrap to two lines rather than being
+   ellipsised down to a fragment nobody reads. The shell's error toast
+   carries the same text -- this is what remains after it fades. */
+.cnote.bad {
+  color: var(--signal);
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-clamp: 2;
+}
 .pill {
   display: inline-flex;
   align-items: center;
@@ -868,6 +881,20 @@ button.tag:hover {
   border-color: var(--line-hi);
   background: rgb(255 255 255 / 0.04);
   color: var(--text);
+}
+/* a turn the guide never answered: said on the bubble, not only in
+   the note line under the pills */
+.cmsg.failed {
+  border-color: var(--signal);
+  color: var(--dim);
+}
+.cmsg-failed {
+  display: block;
+  margin-top: 6px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--signal);
 }
 .cchoices {
   display: flex;

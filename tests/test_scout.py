@@ -731,3 +731,27 @@ def test_the_digest_keeps_world_wardrobe_and_face_raw_and_folded():
     c = scout.parse_digest_response(text)[0]
     assert (c["world"], c["wardrobe"], c["face"]) == ("salt desert", "hide coat", "an old woman")
     assert "wardrobe: hide coat" in c["rationale"] and "face: an old woman" in c["rationale"]
+
+
+# ---------- attribution, read back for a card ----------
+
+def test_sources_for_refs_joins_on_the_content_hash_and_prefers_a_real_source(tmp_db):
+    """The shot stores a bare URL (local route or R2); the bin names the
+    file by its hash, so the basename is the join. When the same bytes were
+    banked twice, the row that HAS a source wins -- a composer upload's
+    empty provenance must not hide the page a scouted frame came from."""
+    scout.bin_add("zeropage", "p1", "/refs/aaa.jpg", source_url="https://ex.test/post/1",
+                  title="stairwell", lane="feeds", dsn=tmp_db)
+    scout.bin_add("zeropage", "p2", "/refs/aaa.jpg", source_url="", lane="composer", dsn=tmp_db)
+    scout.bin_add("zeropage", "p2", "https://pub-x.r2.dev/refs/bbb.jpg", source_url="",
+                  lane="composer", dsn=tmp_db)
+    found = scout.sources_for_refs(["aaa.jpg", "bbb.jpg", "nope.jpg", None], dsn=tmp_db)
+    assert found["aaa.jpg"] == {"source_url": "https://ex.test/post/1",
+                                "title": "stairwell", "lane": "feeds"}
+    assert found["bbb.jpg"] == {"source_url": "", "title": "", "lane": "composer"}
+    assert "nope.jpg" not in found
+    assert scout.sources_for_refs([], dsn=tmp_db) == {}
+
+
+def test_sources_for_refs_answers_nothing_without_a_bin(pg):
+    assert scout.sources_for_refs(["aaa.jpg"], dsn=pg) == {}

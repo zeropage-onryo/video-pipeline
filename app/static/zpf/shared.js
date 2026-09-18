@@ -240,7 +240,9 @@ export async function refreshQueueBadge() {
   if (!badge) return;
   try {
     const res = await api('/api/queue/pending?brand=' + encodeURIComponent(state.brand));
-    const n = (res.items || []).length;
+    // what can be APPROVED: a blocked card is waiting on references, not
+    // on you to spend (older payloads have no `spendable`; count the rows)
+    const n = res.spendable ?? (res.items || []).length;
     badge.textContent = n > 9 ? '9+' : String(n);
     badge.hidden = n === 0;
   } catch {

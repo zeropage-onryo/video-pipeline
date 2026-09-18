@@ -124,7 +124,9 @@ export function StudioShell({ children }: { children: ReactNode }) {
 
   const refreshBadge = useCallback(() => {
     queuePending()
-      .then((res) => setPending(res.items.length))
+      // what can be APPROVED: a blocked card is waiting on references, not
+      // on you to spend (an older API has no `spendable`; count the rows)
+      .then((res) => setPending(res.spendable ?? res.items.length))
       .catch(() => setPending(0));
   }, []);
   useEffect(() => {

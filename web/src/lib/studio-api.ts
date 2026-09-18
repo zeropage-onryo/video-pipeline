@@ -51,11 +51,26 @@ export type AssetHit = { name: string; category: AssetCategory; thumb: string | 
 export const searchAssets = (q: string) =>
   apiFetch<{ items: AssetHit[] }>(`/assets/search?q=${encodeURIComponent(q)}`);
 
+/* Routes behind app/model_connections.mutation_header refuse any request
+   that does not carry this header (403, before any work). It exists so a
+   SameSite=None studio session cannot be spent by a cross-site form post:
+   a custom header forces a CORS preflight. Send it from ONE place -- the
+   Jinja client sends it per call site and the React composer was ported
+   without it, which 403'd every Guide turn silently (2026-09-14). */
+export const GUARDED_HEADERS: Record<string, string> = {
+  "X-ZPF-Model-Connection": "1",
+};
+
 /* multipart: apiFetch pins a JSON content-type, so uploads go direct */
-async function apiForm<T>(path: string, form: FormData): Promise<T> {
+async function apiForm<T>(
+  path: string,
+  form: FormData,
+  headers?: Record<string, string>,
+): Promise<T> {
   const res = await fetch(`${API_URL}/api${path}`, {
     method: "POST",
     credentials: "include",
+    ...(headers ? { headers } : {}),
     body: form,
   });
   if (!res.ok) {
@@ -130,7 +145,45 @@ export type Concept = {
   render_default?: { provider: string; model: string };
   /** pricing.display for the card's default pick (GET /api/queue/pending) */
   quote?: RenderQuote;
+  /* the rest of app/api.py's _concept_card, read by the image-first cards */
+  hook?: string | null;
+  card_line?: string;
+  warnings?: string[];
+  graded?: boolean;
+  shot_done?: boolean;
+  subscription?: boolean;
+  tool?: string;
+  /** Queue only: why the reference gate refuses this card ("" when it can
+   *  be approved). Listed so a pick does not look lost; never approvable. */
+  blocked?: string;
+  /** where each reference came from, parallel to `refs` (app/api.py _ref_sources) */
+  ref_sources?: import("./refs").RefSource[];
+  /** the prompt gate's own verdict (autonomy.gates_for_concepts), or null
+   *  when no graph run ever ended on this concept -- never scored, NOT a
+   *  pass. `passed` is what the gate said, not whether the run went on. */
+  gate?: {
+    score: number | null;
+    passed: boolean | null;
+    reason: string;
+    reworks: number;
+    status: string;
+    outcome: string;
+  } | null;
+  /** the timed shots a scene renders as, or null for one that renders whole */
+  timeline?: Timeline | null;
 };
+export type TimelinePart = {
+  n: number;
+  start: number;
+  end: number;
+  seconds: number;
+  text?: string | null;
+  prompt?: string | null;
+  refs?: string[] | null;
+  reference_image?: string | null;
+  media_url?: string | null;
+};
+export type Timeline = { planned: boolean; seconds?: number | null; parts: TimelinePart[] };
 export type RunwayModel = { id: string; label: string; usd_per_second: number };
 /* the overnight branch's renderer catalogue (providers.render_options):
    every registered renderer with its gates, its models and each model's
@@ -284,7 +337,7 @@ export const listJobs = () => apiFetch<{ items: (Job & { cancellable?: boolean }
 export const cancelJob = (id: number) => apiFetch<Job>(`/jobs/${id}/cancel`, { method: "POST", body: "{}" });
 export const clearJob = (id: number) => apiFetch<{ deleted: number }>(`/jobs/${id}`, { method: "DELETE" });
 export const queuePending = (brand?: string) =>
-  apiFetch<{ items: Concept[]; runway: RunwayState; renderers?: Record<string, RendererSpec> }>(
+  apiFetch<{ items: Concept[]; spendable?: number; runway: RunwayState; renderers?: Record<string, RendererSpec> }>(
     `/queue/pending${brand ? `?brand=${encodeURIComponent(brand)}` : ""}`,
   );
 /** The pick. Puts a concept in front of the Queue's approval gate;
@@ -312,6 +365,10 @@ export type Job = {
  *  (asset photo urls) and files (uploads), exactly what the Jinja
  *  composer posts. */
 export const runScenes = (form: FormData) => apiForm<{ job_id: number }>("/scenes/run", form);
+/* One Guide turn. A job, not a plain response: the reasoning tier takes
+   tens of seconds. Guarded -- see GUARDED_HEADERS. */
+export const runCreativeGuide = (form: FormData) =>
+  apiForm<{ job_id: number }>("/creative-guide", form, GUARDED_HEADERS);
 export const getJob = (id: number) => apiFetch<Job>(`/jobs/${id}`);
 export async function waitForJob(id: number, onTick?: (job: Job) => void, everyMs = 1500) {
   for (;;) {

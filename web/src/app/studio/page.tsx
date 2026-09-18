@@ -32,6 +32,7 @@ import {
   announceQueueChange,
   getAssets,
   getCapabilities,
+  runCreativeGuide,
   runScenes,
   waitForJob,
   type Asset,
@@ -43,7 +44,10 @@ import { useShell } from "@/components/studio/shell";
 
 type Attachment = { id: string; name: string; file: File; url: string };
 type Option = { id: string; label: string; note?: string };
-type GuideMessage = { role: "user" | "assistant"; content: string };
+/* `failed` marks a turn the guide never answered. It is drawn on the
+   bubble itself and dropped from the next turn's conversation, so a
+   retry neither repeats it on screen nor sends it twice. */
+type GuideMessage = { role: "user" | "assistant"; content: string; failed?: boolean };
 
 const COUNTS = [1, 2, 3, 4];
 
@@ -120,7 +124,14 @@ function Composer() {
   const [picked, setPicked] = useState<string[]>([]); // asset photo urls
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [busy, setBusy] = useState(false);
+  // Two kinds of note, and they used to render identically: progress
+  // ("Writing…") and failure. A failure in the hint's own slot, small
+  // caps and ellipsised, is how a 403 on every Guide turn read as the
+  // composer saying nothing at all (2026-09-14). `say(text, true)`
+  // marks the failing kind -- it turns the line signal-red and also
+  // raises the shell's error toast, which is the loud surface.
   const [note, setNote] = useState<string | null>(null);
+  const [noteBad, setNoteBad] = useState(false);
   const [wantMode, setMode] = useState<"guide" | "create">("guide");
   const [thread, setThread] = useState<GuideMessage[]>([]);
   const [choices, setChoices] = useState<string[]>([]);
@@ -186,10 +197,17 @@ function Composer() {
 
   const canSend = !busy && (mode === "create" ? !!(idea.trim() || brief.trim()) : !!idea.trim());
 
+  const say = (text: string | null, bad = false) => {
+    setNote(text);
+    setNoteBad(bad);
+    if (bad && text) toast(text, "err");
+  };
+
   async function send() {
     if (!canSend) return;
     setBusy(true);
-    setNote(null);
+    say(null);
+    let asking: GuideMessage[] | null = null;
     try {
       if (mode === "create") {
         const form = new FormData();
@@ -202,19 +220,23 @@ function Composer() {
         picked.forEach((u) => form.append("refs", u));
         attachments.forEach((a) => form.append("files", a.file, a.name));
         const started = await runScenes(form);
-        setNote("Writing — the takes appear on Pipeline as they land…");
-        const job = await waitForJob(started.job_id, (j) => setNote(j.detail || "Writing…"));
+        say("Writing — the takes appear on Pipeline as they land…");
+        const job = await waitForJob(started.job_id, (j) => say(j.detail || "Writing…"));
         if (job.status === "done") {
-          setNote(`Done — ${job.detail || "on the board"}`);
+          say(`Done — ${job.detail || "on the board"}`);
           toast(`${count} take${count === 1 ? "" : "s"} written · open Pipeline to pick`);
           setIdea("");
           announceQueueChange();
         } else {
-          setNote(job.error || "That run did not finish.");
+          say(job.error || "That run did not finish.", true);
         }
       } else {
-        const next: GuideMessage[] = [...thread, { role: "user", content: idea.trim() }];
+        const next: GuideMessage[] = [
+          ...thread.filter((m) => !m.failed),
+          { role: "user", content: idea.trim() },
+        ];
         const asked = idea.trim();
+        asking = next;
         setThread(next);
         setIdea("");
         setChoices([]);
@@ -223,25 +245,32 @@ function Composer() {
         if (brand) form.append("brand", brand);
         form.append("guide_provider", "gemini");
         form.append("idea", asked);
-        const res = await fetch(`${API_URL}/api/creative-guide`, {
-          method: "POST",
-          credentials: "include",
-          body: form,
-        });
-        if (!res.ok) throw new Error(`The guide answered ${res.status}`);
-        const started = (await res.json()) as { job_id: number };
+        // runCreativeGuide, never a bare fetch: the route is behind
+        // mutation_header and a call without GUARDED_HEADERS is refused
+        // 403 -- which lands in `note` and reads as the guide saying
+        // nothing at all, since the thread and the box are already
+        // cleared by then.
+        const started = await runCreativeGuide(form);
         const job = await waitForJob(started.job_id, (j) =>
-          setNote(j.detail || "Considering your direction…"),
+          say(j.detail || "Considering your direction…"),
         );
         const reply = (job as unknown as { reply?: { message: string; choices?: string[]; brief?: string } }).reply;
         if (job.status !== "done" || !reply) throw new Error(job.error || "The guide stopped.");
         setThread([...next, { role: "assistant", content: reply.message }]);
         setChoices(reply.choices ?? []);
         if (reply.brief) setBrief(reply.brief);
-        setNote(reply.brief ? "Brief ready — switch to Create, or keep refining." : "Choose a direction or reply.");
+        say(reply.brief ? "Brief ready — switch to Create, or keep refining." : "Choose a direction or reply.");
       }
     } catch (e) {
-      setNote(e instanceof Error ? e.message : "That did not go through.");
+      // The thread and the box were cleared before the request went out,
+      // so a failed turn must say so ON its own bubble, and hand the
+      // words back for a retry.
+      if (asking) {
+        const last = asking[asking.length - 1];
+        setThread([...asking.slice(0, -1), { ...last, failed: true }]);
+        setIdea((now) => now || last.content);
+      }
+      say(e instanceof Error ? e.message : "That did not go through.", true);
     } finally {
       setBusy(false);
     }
@@ -286,8 +315,12 @@ function Composer() {
             {thread.length && mode === "guide" ? (
               <div className="cthread">
                 {thread.map((m, i) => (
-                  <p key={i} className={`cmsg${m.role === "user" ? " me" : ""}`}>
+                  <p
+                    key={i}
+                    className={`cmsg${m.role === "user" ? " me" : ""}${m.failed ? " failed" : ""}`}
+                  >
                     {m.content}
+                    {m.failed ? <span className="cmsg-failed">Not sent — try again</span> : null}
                   </p>
                 ))}
                 {choices.length ? (
@@ -403,7 +436,13 @@ function Composer() {
               <button type="button" className="pill" title="Add media" onClick={() => fileInput.current?.click()}>
                 <Plus strokeWidth={1.6} />
               </button>
-              <span className="m cnote">{note ?? "references ride into every node — prompt, keyframe and clip"}</span>
+              <span
+                className={`m cnote${noteBad ? " bad" : ""}`}
+                role={noteBad ? "alert" : undefined}
+                title={noteBad && note ? note : undefined}
+              >
+                {note ?? "references ride into every node — prompt, keyframe and clip"}
+              </span>
               {brains.length ? (
                 <PillMenu
                   heading="Which model writes"
