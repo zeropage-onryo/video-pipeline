@@ -476,7 +476,9 @@ def healthz():
 @app.get("/privacy", response_class=HTMLResponse)
 def privacy_policy(request: Request):
     """Public legal page -- also doubles as the privacy-policy URL every
-    OAuth app registration (Instagram, Pinterest, ...) needs on file."""
+    OAuth app registration (Instagram, Pinterest, ...) needs on file. The
+    studio site renders the same policy (web/src/app/privacy/page.tsx);
+    a change to one is a change to both."""
     return templates.TemplateResponse(
         request, "privacy.html", {"site_url": seo.site_url()},
     )
