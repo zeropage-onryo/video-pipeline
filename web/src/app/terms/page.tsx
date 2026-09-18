@@ -3,7 +3,8 @@ import Link from "next/link";
 import { LEGAL_CONTACT, LegalPage, type LegalSection } from "@/components/legal-page";
 
 // Plain-language terms for an invite-based product. A first draft written
-// 2026-09-17 alongside /privacy; not yet reviewed by a lawyer.
+// 2026-09-17 alongside /privacy; not yet reviewed by a lawyer. Governing
+// law names the United States and no state (2026-09-18, Mike's call).
 
 export const metadata: Metadata = {
   title: "Terms of Service",
@@ -129,6 +130,16 @@ const SECTIONS: LegalSection[] = [
         You can stop using the Studio at any time and ask for your account and its data to be
         deleted. If these terms change materially, the effective date above will be updated;
         continued use after a change means you accept the revised terms.
+      </p>
+    ),
+  },
+  {
+    title: "Governing law",
+    body: (
+      <p>
+        These terms are governed by the laws of the United States, and any dispute about them or
+        about the Studio will be brought in the courts of the United States. If any part of these
+        terms is found unenforceable, the rest still applies.
       </p>
     ),
   },
