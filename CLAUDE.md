@@ -115,6 +115,13 @@ venv/bin/python -m src.mcp_server --engine   # stdio; Claude Desktop launches th
 # env vars are gone), checked server-side against the account id on every
 # surface, fails closed (nobody, until somebody is turned on). Turn it on:
 venv/bin/python -m src.accounts operator <slug> --on   # --off to revoke
+# THE ACCOUNT FLAGS WRITE TO WHATEVER `DATABASE_URL` IS EXPORTED -- and
+# `src.accounts` never loads `.env`. With nothing exported, `operator`,
+# `edits-teach` and `credits` fall back to db.DEFAULT_DSN (the LOCAL throwaway
+# Postgres), create the auth tables there, and answer "no account '<slug>'"
+# with no list of known slugs -- that empty list is the tell (found 2026-09-18,
+# turning `credits` on for antihero). To move a flag on the LIVE database:
+set -a && source .env && set +a && venv/bin/python -m src.accounts credits <slug> --on
 # The API-billed adapters are untouched by it. See docs/RUNBOOK.md 2026-09-08.
 python3 ops/render_queue.py --account <slug> [--provider runway] list
 python3 ops/render_queue.py --provider runway --account <slug> import \
@@ -1694,7 +1701,9 @@ three plans live in `src/pricing.PLANS`, every adapter holds credit before its s
 Yearly plans are a SCHEDULE (`credit_schedules`, released monthly by
 `python -m src.billing release` and lazily on the money path), never a twelve-month lot.
 **Your own account must be exempted once** -- `python -m src.accounts credits zeropage
---on` -- or the Queue refuses you for having no credit. Unset `STRIPE_*` = the plan
+--on`, with `DATABASE_URL` exported first (the CLI does not read `.env`; see Commands) -- or
+the Queue refuses you for having no credit. Both `zeropage` and `antihero` are ON live as of
+2026-09-18. Unset `STRIPE_*` = the plan
 buttons say so and nothing else changes.
 
 **The number that matters and is not moving: 0 concepts carry a `media_url`.** Nothing has been
