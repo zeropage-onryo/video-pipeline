@@ -232,8 +232,9 @@ def test_render_queue_imports_without_third_party_packages():
     # shutil and subprocess joined the list on 2026-09-08: `import` asks
     # ffprobe how long the clip really is. Both are stdlib, which is the
     # only thing this test is about -- one boto3 here and the whole
-    # subscription path stops working on a bare python3.
-    allowed = {"argparse", "json", "shutil", "sqlite3", "subprocess", "sys",
+    # subscription path stops working on a bare python3. `struct` joined
+    # on 2026-09-18: the mvhd header reader that stands in for ffprobe.
+    allowed = {"argparse", "json", "shutil", "sqlite3", "struct", "subprocess", "sys",
                "pathlib", "src", "ops", "__future__"}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -457,6 +458,50 @@ def test_a_missing_ffprobe_says_so_rather_than_asserting_a_measurement(tmp_db,
     assert params["duration_measured_s"] is None
     assert "ffprobe" in params["duration_source"]
     assert params["duration_source"].startswith("unmeasured")
+
+
+def _mvhd_clip(tmp_path, seconds, version=0, name="clip.mp4"):
+    """An mp4 with a real `mvhd` box near the front and nothing else a
+    decoder would want -- enough for the header reader, not for ffprobe."""
+    import struct
+    timescale = 1000
+    duration = int(seconds * timescale)
+    if version == 1:
+        body = bytes([1, 0, 0, 0]) + struct.pack(">QQIQ", 0, 0, timescale, duration)
+    else:
+        body = bytes([0, 0, 0, 0]) + struct.pack(">IIII", 0, 0, timescale, duration)
+    mvhd = struct.pack(">I", 8 + len(body)) + b"mvhd" + body
+    moov = struct.pack(">I", 8 + len(mvhd)) + b"moov" + mvhd
+    ftyp = struct.pack(">I", 16) + b"ftypisom" + b"\x00\x00\x02\x00"
+    p = tmp_path / name
+    p.write_bytes(ftyp + moov + b"\x00" * 4096)
+    return p
+
+
+def test_without_ffprobe_the_mp4_header_is_read_and_labelled_as_such(tmp_db, tmp_path,
+                                                                    operator, monkeypatch):
+    """The imports happen on the operator's Mac, which has no ffprobe; an
+    mp4 states its own length in mvhd, so that is recorded rather than a
+    not-knowing -- under a label that says it is the muxer's word."""
+    monkeypatch.setattr(rq.shutil, "which", lambda name: None)
+    cid = a_runway_scene(tmp_db, operator)
+    preprod.set_picked(cid, True, dsn=tmp_db, account_id=operator)
+    rq.import_clip(cid, 1, str(_mvhd_clip(tmp_path, 10.042)), "gen4_turbo", None, None, True,
+                   account_id=operator, provider="runway", duration=10)
+    params = _last_params(tmp_db)
+    assert params["duration_measured_s"] == 10.04
+    assert params["duration_source"].startswith("mp4 mvhd header")
+    assert "ffprobe" in params["duration_source"]
+
+
+def test_mvhd_reader_handles_both_box_versions_and_never_raises(tmp_path):
+    assert rq._mp4_header_duration(_mvhd_clip(tmp_path, 5.5)) == pytest.approx(5.5)
+    assert rq._mp4_header_duration(_mvhd_clip(tmp_path, 7.25, version=1, name="v1.mp4")) == pytest.approx(7.25)
+    assert rq._mp4_header_duration(a_clip(tmp_path, name="zeros.mp4")) is None   # no box at all
+    assert rq._mp4_header_duration(tmp_path / "missing.mp4") is None             # unreadable
+    # a zero timescale is a broken header, not a zero-length clip
+    broken = _mvhd_clip(tmp_path, 0, name="zero.mp4")
+    assert rq._mp4_header_duration(broken) is None
 
 
 def test_an_unreadable_file_is_a_missing_measurement_not_a_zero(tmp_db, tmp_path,

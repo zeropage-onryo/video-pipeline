@@ -201,6 +201,34 @@ def _verify_claims(provider: str, model: str, ratio, duration) -> bool:
         raise SystemExit(str(wrong)) from None
 
 
+def _mp4_header_duration(path: Path) -> float | None:
+    """Seconds off the mp4 `mvhd` box, or None. Never raises.
+
+    Pure stdlib on purpose: the whole point is to work on a machine that
+    has no ffmpeg installed. Reads the first 512KB, which is where mvhd
+    sits in every file a render lane produces (moov at the front for a
+    web-playable clip; a file with moov at the end just returns None and
+    the caller records the not-knowing exactly as before).
+    """
+    import struct
+    try:
+        head = path.open("rb").read(512 * 1024)
+        i = head.find(b"mvhd")
+        if i < 0:
+            return None
+        version = head[i + 4]
+        if version == 1:
+            timescale, duration = struct.unpack(">IQ", head[i + 24:i + 36])
+        else:
+            timescale, duration = struct.unpack(">II", head[i + 16:i + 24])
+        if not timescale or not duration:
+            return None
+        seconds = duration / timescale
+        return seconds if 0 < seconds < 24 * 3600 else None
+    except Exception:
+        return None
+
+
 def _measure_duration(path: Path) -> tuple[float | None, str]:
     """How long the clip on disk actually is, and how we know.
 
@@ -217,6 +245,17 @@ def _measure_duration(path: Path) -> tuple[float | None, str]:
     """
     ffprobe = shutil.which("ffprobe")
     if not ffprobe:
+        # ffprobe is genuinely optional (this script runs wherever the
+        # human downloaded the mp4), but "unmeasured" was the answer on
+        # the operator's own Mac, which is where the imports actually
+        # happen -- so the claim went unchecked in the one place it most
+        # needed checking. The container has ffprobe; his Mac does not.
+        # An mp4 states its own duration in the mvhd box, so read that
+        # rather than record a not-knowing. Still labelled distinctly:
+        # the header is what the muxer wrote, not what the frames total.
+        seconds = _mp4_header_duration(path)
+        if seconds:
+            return round(seconds, 2), "mp4 mvhd header (ffprobe not on PATH)"
         return None, "unmeasured -- ffprobe is not on PATH"
     try:
         out = subprocess.run(
@@ -456,7 +495,24 @@ def import_clip(concept_id: int, shot_n, file: str, model: str,
         cost_usd=None,
         notes=notes, account_id=account_id)
 
-    media_url = "/renders/" + str(path.relative_to(RENDERS_ROOT.resolve())).replace("\\", "/")
+    tail = str(path.relative_to(RENDERS_ROOT.resolve())).replace("\\", "/")
+    media_url = "/renders/" + tail
+    # A `/renders/...` route is true only on the machine holding the file,
+    # which is the 2026-09-08 reference-URL lesson arriving at the clip:
+    # #375 was imported on Fly, so the card 404'd everywhere else and the
+    # only copy lived on a volume a redeploy recreates. Same spelling as
+    # src/runway.py's API path -- one way to put a render where it can be
+    # fetched. Best-effort: an unconfigured R2 leaves the local route,
+    # which is what every local-only setup has always had.
+    try:
+        from src import media, storage
+        if storage.configured():
+            media_url = storage.upload_file(
+                path,
+                key=media.object_key(f"renders/{tail}", account_id),
+                content_type="video/mp4")
+    except Exception:
+        pass
     preprod.set_shot_media_url(concept_id, shot_n, media_url, account_id=account_id)
     # The Assets wall reads generated_assets, and until 2026-09-18 a
     # hand-rendered clip never got a row there -- it was on the concept
