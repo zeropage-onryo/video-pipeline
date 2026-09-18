@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { seedScene, toLegacy, fromLegacy, groupRefs, wireElement } from '../src/lib/director-graph.ts';
+import { seedScene, toLegacy, fromLegacy, groupRefs, wireElement, sceneRefs } from '../src/lib/director-graph.ts';
 
 const shot = {
   n: 2, prompt: 'finished prompt', written_prompt: 'old draft',
@@ -63,4 +63,42 @@ test('an element dropped on the canvas wires into every refs port', () => {
   const el = { id: 'el', type: 'studio', position: { x: 0, y: 0 }, data: { kind: 'element', label: 'Element · Cyclops', refKind: 'character', urls: ['/characters/cyclops/photo/1.jpg'] } };
   const wires = wireElement(el, seeded.nodes);
   assert.deepEqual(wires.map(w => w.target).sort(), ['scene-enhance', 'scene-image', 'scene-video']);
+});
+
+/* ── the canvas's wiring saved back onto the scene (2026-09-18) ── */
+test('an untouched seeded canvas reads back exactly the scene refs, in order', () => {
+  const seeded = seedScene(shot);
+  assert.deepEqual(sceneRefs(seeded.nodes, seeded.edges, shot.refs), shot.refs);
+});
+
+test('cutting an element card drops its photos from the scene', () => {
+  const seeded = seedScene(shot);
+  const room = seeded.nodes.find(n => n.data.refKind === 'location');
+  const edges = seeded.edges.filter(e => e.source !== room.id);
+  assert.deepEqual(sceneRefs(seeded.nodes, edges, shot.refs),
+    ['/characters/michael/photo/a.jpg', '/characters/michael/photo/b.jpg', 'https://cdn.test/bike.jpg']);
+});
+
+test('a new element goes in after the kept refs but never behind a room', () => {
+  const seeded = seedScene(shot);
+  const jacket = { id: 'el-jacket', type: 'studio', position: { x: 0, y: 0 },
+    data: { kind: 'element', label: 'Prop · Jacket', refKind: 'prop', urls: ['/props/jacket/photo/j.jpg'] } };
+  const nodes = [...seeded.nodes, jacket];
+  const edges = [...seeded.edges, ...wireElement(jacket, nodes)];
+  const refs = sceneRefs(nodes, edges, shot.refs);
+  assert.equal(refs[0], '/characters/michael/photo/a.jpg');   // the anchor is untouched
+  assert.ok(refs.indexOf('/props/jacket/photo/j.jpg') < refs.indexOf('/locations/studio-bedroom/photo/r.jpg'));   // a new ref never lands behind a room
+  assert.deepEqual(refs.slice(0, 3), ['/characters/michael/photo/a.jpg', '/characters/michael/photo/b.jpg', '/props/jacket/photo/j.jpg']);
+});
+
+test('a drawn keyframe wired into refs is not a reference', () => {
+  // reference_gate refuses to count a frame this pipeline drew as grounding
+  const seeded = seedScene({ ...shot, refs: ['/characters/michael/photo/a.jpg'] });
+  const edges = [...seeded.edges, { id: 'kf', source: 'scene-image', target: 'scene-video', targetHandle: 'refs' }];
+  assert.deepEqual(sceneRefs(seeded.nodes, edges, ['/characters/michael/photo/a.jpg']), ['/characters/michael/photo/a.jpg']);
+});
+
+test('an unwired element card grounds nothing', () => {
+  const seeded = seedScene(shot);
+  assert.deepEqual(sceneRefs(seeded.nodes, [], shot.refs), []);
 });

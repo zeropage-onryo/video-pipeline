@@ -39,7 +39,7 @@ import os
 import sys
 from typing import Callable, Optional
 
-from . import db, imagery, nano_banana, preprod, shootgen, timeline
+from . import db, edit_teach, imagery, nano_banana, preprod, shootgen, timeline
 
 # Enhancing and keyframing are per-scene model calls, so a batch of 4 is
 # 4 of each. The cap that actually bites is nano_banana.DAILY_CAP (20/day,
@@ -299,7 +299,7 @@ def attach_refs(concept_id: int, extra: list | None = None, *, idea: str | None 
     # itself on every pass, differing from its stored refs by nothing
     # but the hostname.
     from . import asset_shelf as _shelf
-    picked = [_shelf.canonical_url(u) for u in picked]
+    picked = [_shelf.storable_ref(u) for u in picked]
 
     if not picked or picked == list(shot.get("refs") or []):
         return list(shot.get("refs") or [])
@@ -372,6 +372,7 @@ def persist_prompt(concept_id: int, shot_n, text: str, *, db_path=None, account_
         return False
     shot.setdefault("written_prompt", shot.get("prompt") or "")
     shot["prompt"] = text
+    edit_teach.forget_draft(shot)   # a model wrote this; the next hand edit re-snapshots
     warnings = shootgen.validate_concept(
         {**concept, "shots": shots},
         [loc["name"] for loc in preprod.list_locations(dsn=path, account_id=account_id)],

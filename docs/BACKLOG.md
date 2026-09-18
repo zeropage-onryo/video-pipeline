@@ -18,6 +18,13 @@ list: `refs[0]` is what Runway anchors the clip on, and anchoring a clip
 on a thumbnail is the kind of quiet downgrade this reference layer keeps
 being bitten by.
 
+**DONE 2026-09-14.** `src/media.mirror` writes the 480px derivative under its own
+`t/<account>/<tail>` prefix on every mirror; `_assets_all` serves them as `photo_thumbs` and
+uses one as the `poster`; `?thumb=1` remains the fallback when there is no derivative to point
+at. The two lists stayed separate exactly as this entry required. Remaining: `queue.js` and
+`scenes.js` still draw `refs` directly — the server now offers the small list, the cards have
+not been switched to it yet.
+
 ## 1. UI readability pass  (parked — hold until Mike says go)
 Make the app simpler and easier to read. Same density problem on both pages:
 dense monospace prompt blocks, warnings, shot lists, and multiple button
@@ -1022,3 +1029,28 @@ new Company website URL; (3) if the Production-Limited-token error persists
 after approval, file the Pinterest support ticket. Then run
 `ops/pinterest_token_paste.sh` (or the full `pinterest_token.sh` flow) for
 real and set `PINTEREST_BOARD_ANTIHERO` / `PINTEREST_BOARD_ZEROPAGE`.
+
+## 18. A render that fails at the provider submit leaves no `generations` row  (found 2026-09-18, not fixed)
+
+Reported from the live attempt, not yet reproduced in a test. Approving #361 on Higgsfield
+`kling2.1` returned 200, the job failed at the submit with `HTTP Error 423: Locked`, and the
+newest `generations` rows on the live database afterwards were still #113 (the manual Runway
+lane) and #112 (nano). CLAUDE.md says every attempt is a row; the only record of this failure
+was the in-process jobs registry, which a restart clears.
+
+Why it matters beyond bookkeeping: pricing step 6 takes a ledger hold BEFORE the submit, so this
+exact path must leave a row and release the hold. Start by reading `src/higgsfield.py`'s
+never-raises edge and finding where the row is written relative to the submit, then check the
+other three adapters for the same ordering.
+
+## 19. The React Queue cannot show the other brand's scenes, and its account switch is dead  (found 2026-09-18, not fixed)
+
+Contradicts #7 (the brand switcher, shipped and verified 2026-08-27) on the React side only.
+`GET /api/queue/pending` with no `brand` param returned all 18 waiting scenes while `/api/me`
+said the active account was `zeropage`; `web/src/app/studio/queue/page.tsx` draws only the active
+brand's, so 15 of 18 were invisible. Clicking ANTIHERO in the account menu did nothing — no
+`/brand` request went out and `/api/me` still answered `zeropage`. The vanilla shell
+(`/ui?legacy=1&view=queue`) sends `?brand=antihero` and works, which is how #361 was approved.
+Two bugs, probably one fix: make the menu actually POST `/brand/{name}` (through the proxy, so
+the cookie lands first-party), then have the Queue refetch.
+

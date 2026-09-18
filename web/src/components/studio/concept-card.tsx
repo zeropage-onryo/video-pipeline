@@ -133,6 +133,13 @@ export function RefImg({
   const sources = useMemo(() => sourcesFor(url, { thumb, base: API_URL }), [url, thumb]);
   const [failed, setFailed] = useState<{ url: string; n: number }>({ url, n: 0 });
   const n = failed.url === url ? failed.n : 0;
+  /* Arrived yet? A board tile can wait seconds on a multi-megabyte original
+     (2026-09-18: a 3024px photo decoding into a 52px tile), and an empty
+     dark box for that long reads as a broken card. Until the bytes land the
+     <img> box itself pulses -- an <img> paints its background with nothing
+     loaded. Keyed by source, like `failed`, so a retry pulses again. */
+  const [arrived, setArrived] = useState<string | null>(null);
+  const here = sources[n] ?? "";
   if (n >= sources.length) {
     return (
       <span
@@ -146,11 +153,16 @@ export function RefImg({
   }
   return (
     <img
-      src={sources[n]}
+      src={here}
       alt={alt}
       loading={eager ? "eager" : "lazy"}
       decoding="async"
-      className={className}
+      className={`${className} ${arrived === here ? "" : "bg-noir-raise motion-safe:animate-pulse"}`}
+      /* a cached image can finish before React attaches onLoad */
+      ref={(el) => {
+        if (el?.complete && el.naturalWidth > 0 && arrived !== here) setArrived(here);
+      }}
+      onLoad={() => setArrived(here)}
       onError={() => setFailed({ url, n: n + 1 })}
     />
   );
@@ -169,8 +181,30 @@ export function NoReferenceSlate() {
   );
 }
 
+/* The references as the card's picture, when nothing has been drawn yet.
+   The asset sort puts the character first (it is what Runway anchors on),
+   so with ref 1 alone as the hero a board of Michael scenes is a wall of
+   one headshot and no card can be told from its neighbour (2026-09-18:
+   17 of 21). Ref 1 keeps the large cell -- it IS the anchor -- and up to
+   three more stack beside it, which is what tells the scenes apart. */
+function RefMosaic({ refs }: { refs: string[] }) {
+  const rest = refs.slice(1, 4);
+  const cell = "block size-full min-h-0 min-w-0 object-cover";
+  return (
+    <span className="absolute inset-0 grid grid-cols-[3fr_2fr] gap-px bg-noir-bg group-enabled:group-hover:brightness-110">
+      <RefImg url={refs[0]} thumb className={cell} deadLabel="REF 1 UNAVAILABLE" deadClassName="size-full text-[11px] tracking-[0.16em]" />
+      <span className="grid min-h-0 min-w-0 gap-px" style={{ gridTemplateRows: `repeat(${rest.length}, minmax(0, 1fr))` }}>
+        {rest.map((u, i) => (
+          <RefImg key={`${u}-${i}`} url={u} thumb className={cell} deadLabel="N/A" />
+        ))}
+      </span>
+    </span>
+  );
+}
+
 /** The 16:9 top of a card: a real button, the picture, and whatever tags
- *  the page lays over it. */
+ *  the page lays over it. A rendered scene plays its clip while the pointer
+ *  is on it (muted, never preloaded: the still stays the poster). */
 export function Hero({
   concept,
   label,
@@ -185,16 +219,32 @@ export function Hero({
   children?: ReactNode;
 }) {
   const hero = heroOf(concept);
+  const refs = concept.refs || [];
+  const mosaic = hero.kind === "ref" && refs.length > 1;
+  const clip = concept.media_url ? (concept.media_url.startsWith("/") ? API_URL + concept.media_url : concept.media_url) : "";
   return (
     <button
       type="button"
       aria-label={label}
       disabled={disabled}
       onClick={(e) => onOpen(e.currentTarget)}
+      onPointerEnter={(e) => {
+        if (e.pointerType === "touch") return;
+        e.currentTarget.querySelector("video")?.play().catch(() => {});
+      }}
+      onPointerLeave={(e) => {
+        const v = e.currentTarget.querySelector("video");
+        if (v) {
+          v.pause();
+          v.currentTime = 0;
+        }
+      }}
       className="group relative block aspect-video w-full overflow-hidden rounded-t-[9px] bg-noir-slate p-0 focus-visible:rounded-t-[9px]! disabled:cursor-default"
     >
       {hero.kind === "none" ? (
         <NoReferenceSlate />
+      ) : mosaic ? (
+        <RefMosaic refs={refs} />
       ) : (
         <RefImg
           url={hero.url}
@@ -204,7 +254,31 @@ export function Hero({
           deadClassName="absolute inset-0 text-[11px] tracking-[0.16em]"
         />
       )}
-      {hero.kind === "ref" ? <span className={`${TAG} ${TAG_DARK} bottom-10 left-3 text-bone2!`}>REF 1 · NO KEYFRAME YET</span> : null}
+      {clip ? (
+        <video
+          src={clip}
+          muted
+          loop
+          playsInline
+          preload="none"
+          aria-hidden
+          /* shown only WHILE PLAYING, never merely on hover: a clip this
+             machine cannot fetch (it lives on another host's volume) would
+             otherwise black out the still it was meant to animate */
+          onPlaying={(e) => {
+            e.currentTarget.dataset.on = "1";
+          }}
+          onPause={(e) => {
+            delete e.currentTarget.dataset.on;
+          }}
+          className="pointer-events-none absolute inset-0 size-full object-cover opacity-0 transition-opacity duration-300 data-[on]:opacity-100"
+        />
+      ) : null}
+      {hero.kind === "ref" ? (
+        <span className={`${TAG} ${TAG_DARK} bottom-10 left-3 text-bone2!`}>
+          {mosaic ? `REFS 1–${Math.min(4, refs.length)}` : "REF 1"} · NO KEYFRAME YET
+        </span>
+      ) : null}
       {children}
     </button>
   );

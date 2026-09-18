@@ -615,7 +615,11 @@
   border: 1px solid var(--line-hi);
   background: rgb(4 4 5 / 0.8);
   color: var(--dim);
-  opacity: 0;
+  /* always visible (2026-09-18): hover-only read as "can't remove" */
+  opacity: 0.75;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
   transition: opacity 180ms;
 }
 .element-frame:hover .frame-x {
@@ -1283,4 +1287,22 @@
   text-transform: uppercase;
   color: var(--text);
   max-width: min(720px, 80%);
+}
+
+/* frames from disk: upload button + drop target (2026-09-18) */
+.element-body.is-drop {
+  outline: 1px dashed var(--signal);
+  outline-offset: -4px;
+  border-radius: 10px;
+}
+.element-body .frame-upload {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text);
+  cursor: pointer;
+}
+.element-body .frame-upload:disabled {
+  opacity: 0.6;
+  cursor: progress;
 }

@@ -69,7 +69,12 @@ DAILY_CAP = int(os.environ.get("VEO_DAILY_CAP", "6"))
 # SAME number, so a single-operator database behaves exactly as it did --
 # admitting a second account is what forces a deliberate decision about
 # whose card is paying, instead of the total quietly doubling.
-GLOBAL_DAILY_CAP = int(os.environ.get("VEO_GLOBAL_DAILY_CAP", str(DAILY_CAP)))
+# 0 = no installation-wide ceiling (2026-09-14, Mike's call): a user who
+# brought their own key was still consuming the operator's shared budget and
+# could lock everyone else out of money nobody spent. The per-account cap
+# (VEO_DAILY_CAP) is the wall that remains. Set VEO_GLOBAL_DAILY_CAP to a
+# positive number to put the ceiling back -- see generative.cap_error.
+GLOBAL_DAILY_CAP = int(os.environ.get("VEO_GLOBAL_DAILY_CAP", "0"))
 
 SPEND_ENV = "VEO_SPEND_OK"
 
@@ -139,13 +144,15 @@ def estimate_cost(n: int) -> float:
     return round(n * COST_PER_CLIP_USD, 2)
 
 
-def generations_today(db_path=None, *, account_id=None, everyone: bool = False) -> int:
+def generations_today(db_path=None, *, account_id=None, everyone: bool = False,
+                      operator_billed_only: bool = False) -> int:
     """This account's veo generations since UTC midnight -- what
     DAILY_CAP counts against. `everyone=True` gives the installation-wide
     count that GLOBAL_DAILY_CAP counts against."""
     return generative.used_today(
         "veo", db_path,
         account_id=account_id, everyone=everyone,
+        operator_billed_only=operator_billed_only,
     )
 
 
@@ -283,7 +290,8 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *, shot_id: Optional[i
             dsn=db_path,
             env_prefix="VEO", phrase="generations used",
             used=generations_today(db_path=db_path, account_id=account_id),
-            used_everywhere=generations_today(db_path=db_path, everyone=True),
+            used_everywhere=generations_today(db_path=db_path, everyone=True,
+                                             operator_billed_only=True),
         )
         if refusal:
             return {"ok": False, "candidates": [], "error": refusal}
@@ -389,13 +397,15 @@ def as_prompt_image(value, *, resolve_photo=None):
     return types.Image(image_bytes=data, mime_type=sniff_mime(data))
 
 
-def _publish(out_path: Path, content_type: str) -> str:
+def _publish(out_path: Path, content_type: str,
+             account_id: Optional[int] = None) -> str:
     """R2 when configured (Instagram needs a public URL), else the app's
-    own /renders mount."""
-    from . import storage
+    own /renders mount. The key carries the tenant -- see src/media.py."""
+    from . import media, storage
     if storage.configured():
         return storage.upload_file(
-            out_path, key=f"renders/veo/{out_path.name}",
+            out_path,
+            key=media.object_key(f"renders/veo/{out_path.name}", account_id),
             content_type=content_type)
     return f"/renders/veo/{out_path.name}"
 
@@ -437,7 +447,8 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
             dsn=db_path,
             env_prefix="VEO", phrase="generations used",
             used=generations_today(db_path=db_path, account_id=account_id),
-            used_everywhere=generations_today(db_path=db_path, everyone=True),
+            used_everywhere=generations_today(db_path=db_path, everyone=True,
+                                             operator_billed_only=True),
         )
         if refusal:
             return {"ok": False, "error": refusal}
@@ -488,7 +499,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
             account_id=account_id)
         charge.settle(generation_id=generation_id)
 
-        media_url = _publish(out_path, "video/mp4")
+        media_url = _publish(out_path, "video/mp4", account_id)
         if part:
             timeline.attach_part(concept_id, shot_n, part, "media_url", media_url,
                                  db_path=db_path, account_id=account_id)

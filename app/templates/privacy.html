@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Privacy Policy — Zero Page AI Studio</title>
-<meta name="description" content="How Zero Page AI Studio collects, uses, and protects data across the product and its third-party integrations.">
+<title>Privacy Policy — Zero Page</title>
+<meta name="description" content="What Zero Page collects, why, and how it is handled — across the studio itself and the third-party services it connects to.">
 <link rel="canonical" href="{{ site_url }}/privacy">
 <meta name="robots" content="index,follow">
 <style>
@@ -79,26 +79,27 @@ footer{padding-top:24px;border-top:1px solid var(--line);font-family:'IBM Plex M
 <main>
   <div class="eyebrow">Legal</div>
   <h1>Privacy Policy</h1>
-  <p class="dek">What Zero Page AI Studio collects, why, and how it's handled — across the product itself and the third-party services it connects to.</p>
-  <div class="meta">Effective 08 Sep 2026 &nbsp;·&nbsp; Zero Page AI Studio, operated by Michael Massaad</div>
+  <p class="dek">What Zero Page collects, why, and how it is handled — across the studio itself and the third-party services it connects to.</p>
+  <div class="meta">Effective 17 Sep 2026 &nbsp;·&nbsp; Zero Page, operated by Michael Massaad</div>
 
   <section>
     <div class="shead"><span class="snum">01</span><h2>What this is</h2></div>
-    <p>Zero Page AI Studio ("Zero Page", "the Studio") is a video pre-production tool: it turns real footage and reference photography into concepts, shot lists, and AI video prompts, and generates AI media from them. It's operated as a small, invite-based product by Michael Massaad, not a public consumer app with open sign-up.</p>
+    <p>Zero Page ("the Studio") is an AI content studio: it turns ideas, scripts and reference photography into concepts, scene prompts and AI-generated images and video. It is operated as a small, invite-based product by Michael Massaad, not a public consumer app with open sign-up.</p>
   </section>
 
   <section>
     <div class="shead"><span class="snum">02</span><h2>Accounts</h2></div>
-    <p>Signing in uses Supabase Auth, either by email and password or by OAuth through Google, Discord, or Apple. Zero Page never sees or stores a Google/Discord/Apple password — those providers authenticate you and return a verified email address, which Supabase and Zero Page use to identify your account. A session is kept in a single signed, HTTP-only cookie on your device; signing out clears it.</p>
+    <p>Signing in uses Supabase Auth, either by email and password or by OAuth through a provider such as Google or Discord. Zero Page never sees or stores your password with those providers — they authenticate you and return a verified email address, which Supabase and Zero Page use to identify your account. A session is kept in a single signed, HTTP-only cookie on your device; signing out clears it. Zero Page sets no advertising or tracking cookies.</p>
   </section>
 
   <section>
     <div class="shead"><span class="snum">03</span><h2>What's collected</h2></div>
     <ul>
       <li><span class="label">Account</span> — email address and account identifier.</li>
-      <li><span class="label">Production material</span> — footage, photos, and reference images you upload, plus the concepts, shot lists, prompts, and AI-generated images/video produced from them.</li>
-      <li><span class="label">Reference sources</span> — where you connect a service like Instagram or Pinterest, the Studio reads boards, pins, or posts from an account you authorize, to gather visual reference for your own projects.</li>
-      <li><span class="label">Usage</span> — basic operational data (timestamps, error logs) used to keep the pipeline running and to grade output quality.</li>
+      <li><span class="label">Production material</span> — photos, reference images and other media you upload, plus the concepts, prompts and AI-generated images and video produced from them.</li>
+      <li><span class="label">Reference sources</span> — where you connect a service like Instagram or Pinterest, the Studio reads boards, pins or posts from an account you authorize, to gather visual reference for your own projects.</li>
+      <li><span class="label">Your own provider keys</span> — if you add an API key for a rendering service, it is stored against your account and used only to run your own generations.</li>
+      <li><span class="label">Usage</span> — basic operational data (timestamps, error logs, model-call counts) used to keep the pipeline running, meter cost and grade output quality.</li>
     </ul>
   </section>
 
@@ -107,26 +108,28 @@ footer{padding-top:24px;border-top:1px solid var(--line);font-family:'IBM Plex M
     <p>The Studio relies on a small set of providers to function, each under its own privacy policy:</p>
     <ul>
       <li><span class="label">Supabase</span> — authentication and database storage.</li>
-      <li><span class="label">Google (Gemini API)</span> — AI generation and reasoning over your material.</li>
+      <li><span class="label">Google (Gemini API)</span> — AI writing, reasoning and image generation over your material.</li>
+      <li><span class="label">Video rendering providers</span> (Runway, fal.ai, Higgsfield, Google Veo) — when you approve a render, the scene's prompt and its reference images are sent to the provider you chose.</li>
+      <li><span class="label">Cloudflare R2</span> — storage for reference images and rendered media.</li>
       <li><span class="label">Meta (Instagram Graph API) / Pinterest API</span> — read-only reference gathering from accounts you explicitly authorize.</li>
-      <li><span class="label">Fly.io</span> — application hosting.</li>
+      <li><span class="label">Vercel and Fly.io</span> — application hosting.</li>
     </ul>
-    <p class="dim">None of these providers receive more than what's needed to perform their function, and none are permitted to use Studio data for their own advertising.</p>
+    <p class="dim">None of these providers receive more than what is needed to perform their function, and Zero Page does not authorize any of them to use Studio data for advertising.</p>
   </section>
 
   <section>
     <div class="shead"><span class="snum">05</span><h2>What doesn't happen</h2></div>
-    <div class="card">Zero Page does not sell data, run ads, or share your footage, images, or account details with data brokers or marketers. Reference-gathering integrations are read-only — the Studio never posts, edits, or deletes anything on a connected account.</div>
+    <div class="card">Zero Page does not sell data, run ads, or share your media, images or account details with data brokers or marketers. Reference-gathering integrations are read-only — the Studio never posts, edits or deletes anything on a connected account without an explicit action from you.</div>
   </section>
 
   <section>
-    <div class="shead"><span class="snum">06</span><h2>Retention & control</h2></div>
-    <p>Production material and account data are kept for as long as your account is active. You can ask for your account and its data to be deleted, or revoke any connected third-party account (e.g. under that service's own connected-apps settings), at any time — see contact below.</p>
+    <div class="shead"><span class="snum">06</span><h2>Retention &amp; control</h2></div>
+    <p>Production material and account data are kept for as long as your account is active. You can ask for your account and its data to be deleted, or revoke any connected third-party account (under that service's own connected-apps settings), at any time — see contact below.</p>
   </section>
 
   <section>
     <div class="shead"><span class="snum">07</span><h2>Children</h2></div>
-    <p>Zero Page is a professional production tool and isn't directed at or knowingly used by children under 13.</p>
+    <p>Zero Page is a professional production tool and is not directed at or knowingly used by children under 13.</p>
   </section>
 
   <section>
@@ -140,7 +143,7 @@ footer{padding-top:24px;border-top:1px solid var(--line);font-family:'IBM Plex M
   </section>
 
   <footer>
-    <span>Zero Page AI Studio</span>
+    <span>Zero Page</span>
     <span>{{ site_url }}</span>
   </footer>
 </main>

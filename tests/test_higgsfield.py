@@ -423,7 +423,7 @@ def test_an_unreachable_model_refuses_before_the_round_trip():
 
 
 def test_only_kling_is_currently_reachable():
-    assert set(higgsfield.AVAILABLE_MODELS) == {"kling2.5", "kling2.1"}
+    assert set(higgsfield.AVAILABLE_MODELS) == {"kling2.5"}
 
 
 def test_a_byok_accounts_own_credentials_never_reach_an_error_string(

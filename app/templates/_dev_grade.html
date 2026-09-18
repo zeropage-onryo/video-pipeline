@@ -58,13 +58,15 @@
   </form>
 </div>
 
+<div class="{{ 'gradewrap' if grade.ungraded else '' }}">
+
 {# The queue itself. Open by default -- seeing what is waiting is the
    point -- and scrollable rather than tall, so the drawn card below
    stays on screen. A row is a link into the same ?mode=shot view the
    random draw redirects to, so nothing about grading changes; only the
    order does. #}
 {% if grade.ungraded %}
-<details class="panel" open style="margin-bottom:18px">
+<details class="panel gradequeue" open>
   <summary class="panel-head" style="cursor:pointer; list-style:none">
     <span class="id">UNGRADED · WAITING ON YOU</span>
     <span class="m">{{ grade.ungraded_count }} CONCEPTS · CLICK ONE TO GRADE IT</span>
@@ -87,6 +89,8 @@
   </div>
 </details>
 {% endif %}
+
+<div class="gradecard">
 
 {% if grade.mode == "shot" and grade.concept %}
 {% set c = grade.concept %}
@@ -273,3 +277,5 @@ HOOK: {{ f.hook }}{% endif %}{% if f.logline %}
   </div>
 </div>
 {% endif %}
+</div>
+</div>

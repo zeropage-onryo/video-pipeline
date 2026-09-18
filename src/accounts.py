@@ -46,6 +46,7 @@ from .db import (
     OWNED_TABLES,
     add_billing_columns,
     add_manual_lane_operator_column,
+    add_prompt_edits_teach_column,
     backfill_owner,
     columns,
     connect,
@@ -88,7 +89,10 @@ CREATE TABLE IF NOT EXISTS accounts (
     -- keys; NULL is no subscription, never a default).
     credit_exempt      BOOLEAN NOT NULL DEFAULT FALSE,
     stripe_customer_id TEXT,
-    plan               TEXT
+    plan               TEXT,
+    -- may a hand edit of this account's scene prompts teach the RAG
+    -- shelves (src/edit_teach.py)? Same posture: FALSE until turned on.
+    prompt_edits_teach BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE TABLE IF NOT EXISTS account_members (
@@ -114,6 +118,7 @@ def init(dsn: Optional[str] = None) -> None:
         # here as well as there -- both are no-ops once it has landed.
         add_manual_lane_operator_column(conn)
         add_billing_columns(conn)
+        add_prompt_edits_teach_column(conn)
 
 
 # --------------------------------------------------------------------------
@@ -284,24 +289,32 @@ def set_manual_lane_operator(slug: str, on: bool,
     Raises ValueError for an unknown slug -- naming an account that does
     not exist must not read as success.
     """
+    return _set_account_flag("manual_lane_operator", slug, on, dsn=dsn)
+
+
+def _set_account_flag(column: str, slug: str, on: bool,
+                      dsn: Optional[str] = None) -> dict[str, Any]:
+    """Flip ONE boolean gate column on ONE account row, by slug. The
+    shared body of set_manual_lane_operator and set_prompt_edits_teach;
+    `column` is a literal from this module, never caller input."""
     init(dsn)
     slug = (slug or "").strip().lower()
     if not slug:
         raise ValueError("which account? -- pass the slug, e.g. zeropage")
     with connect(dsn) as conn:
         row = conn.execute(
-            "SELECT id, manual_lane_operator FROM accounts WHERE slug = %s",
+            f"SELECT id, {column} FROM accounts WHERE slug = %s",
             (slug,)).fetchone()
         if row is None:
             known = [r["slug"] for r in conn.execute(
                 "SELECT slug FROM accounts ORDER BY slug")]
             raise ValueError(
                 f"no account {slug!r}" + (f" -- try one of {known}" if known else ""))
-        was = bool(row["manual_lane_operator"])
+        was = bool(row[column])
         now = bool(on)
         if was != now:
             conn.execute(
-                "UPDATE accounts SET manual_lane_operator = %s WHERE id = %s",
+                f"UPDATE accounts SET {column} = %s WHERE id = %s",
                 (now, int(row["id"])))
         return {"slug": slug, "account_id": int(row["id"]),
                 "was": was, "now": now, "changed": was != now}
@@ -435,6 +448,28 @@ def account_for_stripe_customer(customer_id: str, dsn: Optional[str] = None) -> 
         row = conn.execute("SELECT id FROM accounts WHERE stripe_customer_id = %s",
                            (customer_id,)).fetchone()
     return int(row["id"]) if row else None
+
+
+def set_prompt_edits_teach(slug: str, on: bool,
+                           dsn: Optional[str] = None) -> dict[str, Any]:
+    """Turn hand-edit teaching on or off for ONE account
+    (src/edit_teach.py, 2026-09-18). Same contract as
+    set_manual_lane_operator: idempotent, reports before and after,
+    ValueError on an unknown slug, and no route or env var beside it --
+    `python -m src.accounts edits-teach <slug> --on`."""
+    return _set_account_flag("prompt_edits_teach", slug, on, dsn=dsn)
+
+
+def prompt_edits_teachers(dsn: Optional[str] = None) -> list[dict[str, Any]]:
+    """Every account whose hand edits teach, for the CLI to print. The
+    gate itself asks about one id (edit_teach.allowed)."""
+    with connect(dsn) as conn:
+        if not table_exists(conn, "accounts"):
+            return []
+        rows = conn.execute(
+            "SELECT id, slug FROM accounts WHERE prompt_edits_teach "
+            "ORDER BY slug").fetchall()
+        return [{"account_id": int(r["id"]), "slug": r["slug"]} for r in rows]
 
 
 def manual_lane_operators(dsn: Optional[str] = None) -> list[dict[str, Any]]:
@@ -669,6 +704,19 @@ def main(argv=None) -> None:
                       help="it may not (the state every account starts in)")
     p_op.set_defaults(on=None)
 
+    p_et = sub.add_parser(
+        "edits-teach",
+        help="turn on/off whether a hand edit of a scene prompt (Director, "
+             "Pipeline card, Direct note) teaches the RAG shelves for one account")
+    p_et.add_argument("slug", help="the account slug, e.g. zeropage")
+    door = p_et.add_mutually_exclusive_group(required=True)
+    door.add_argument("--on", dest="on", action="store_true",
+                      help="this account's prompt edits are recorded as "
+                           "draft -> fix pairs on the Teach tab")
+    door.add_argument("--off", dest="on", action="store_false",
+                      help="they are not (the state every account starts in)")
+    p_et.set_defaults(on=None)
+
     p_cr = sub.add_parser(
         "credits",
         help="exempt one account from being charged credits for renders -- the "
@@ -701,6 +749,26 @@ def main(argv=None) -> None:
                   if o["account_id"] != result["account_id"]]
         if others:
             print("also exempt: " + ", ".join(
+                f"{o['slug']} (account {o['account_id']})" for o in others))
+        return
+
+    if args.command == "edits-teach":
+        try:
+            result = set_prompt_edits_teach(args.slug, args.on)
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            sys.exit(1)
+        state = "ON" if result["now"] else "OFF"
+        where = f"{result['slug']!r} (account {result['account_id']})"
+        if result["changed"]:
+            print(f"prompt edits teach {'OFF -> ON' if result['now'] else 'ON -> OFF'} "
+                  f"for {where}")
+        else:
+            print(f"prompt edits teach already {state} for {where} -- nothing changed")
+        others = [o for o in prompt_edits_teachers()
+                  if o["account_id"] != result["account_id"]]
+        if others:
+            print("also on: " + ", ".join(
                 f"{o['slug']} (account {o['account_id']})" for o in others))
         return
 

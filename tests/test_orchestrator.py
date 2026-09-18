@@ -189,6 +189,71 @@ def test_the_scene_length_reaches_the_writer_from_the_graph(tmp_db, monkeypatch)
 
 # ---------- the left third: the original loop, preserved ----------
 
+def test_the_keyframe_pairs_each_prompt_with_its_own_shot(monkeypatch):
+    """Joined on `n`, never on list position.
+
+    `shots` is re-derived here from state["concept"], which
+    revise_prompts rewrites in place, while `prompts` comes off
+    state["prompts"] -- two lists built by two filters that agree today.
+    A zip() agrees right up until one of them drops a shot the other
+    keeps, and then it renders shot A's prompt onto shot B: silently, at
+    full cost, with every card in the Queue looking correct.
+    """
+    monkeypatch.setenv("ZEROPAGE_KEYFRAME", "0")   # no billed image call
+    persisted = []
+    monkeypatch.setattr(orchestrator.scene_chain, "persist_prompt",
+                        lambda cid, n, text, **kw: persisted.append((n, text)))
+    monkeypatch.setattr(orchestrator.scene_chain, "plan_timeline",
+                        lambda *a, **kw: None)
+
+    orchestrator.keyframe({
+        "concept_id": 7,
+        "concept": {"shots": [{"n": 1, "prompt": "one"}, {"n": 2, "prompt": "two"}]},
+        # deliberately NOT in shot order -- the order a filter or a rework
+        # is free to produce, and the one a zip() gets wrong
+        "prompts": [{"n": 2, "prompt": "TWO"}, {"n": 1, "prompt": "ONE"}],
+    })
+
+    assert persisted == [(1, "ONE"), (2, "TWO")]
+
+
+def test_the_keyframe_says_so_when_a_shot_has_no_prompt_of_its_own(monkeypatch):
+    """Better a named failure on that shot than a neighbour's prompt."""
+    monkeypatch.setenv("ZEROPAGE_KEYFRAME", "0")
+    persisted = []
+    monkeypatch.setattr(orchestrator.scene_chain, "persist_prompt",
+                        lambda cid, n, text, **kw: persisted.append((n, text)))
+    monkeypatch.setattr(orchestrator.scene_chain, "plan_timeline",
+                        lambda *a, **kw: None)
+
+    out = orchestrator.keyframe({
+        "concept_id": 7,
+        "concept": {"shots": [{"n": 1, "prompt": "one"}, {"n": 2, "prompt": "two"}]},
+        "prompts": [{"n": 1, "prompt": "ONE"}],   # shot 2 was filtered out upstream
+    })
+
+    assert persisted == [(1, "ONE")], "shot 2 gets nothing rather than shot 1's prompt"
+    assert any(k["n"] == 2 and not k["ok"] for k in out["keyframes"])
+
+
+def test_the_keyframe_still_pairs_when_no_prompt_carries_a_number(monkeypatch):
+    """A state written before structure_prompt stamped `n` still runs."""
+    monkeypatch.setenv("ZEROPAGE_KEYFRAME", "0")
+    persisted = []
+    monkeypatch.setattr(orchestrator.scene_chain, "persist_prompt",
+                        lambda cid, n, text, **kw: persisted.append((n, text)))
+    monkeypatch.setattr(orchestrator.scene_chain, "plan_timeline",
+                        lambda *a, **kw: None)
+
+    orchestrator.keyframe({
+        "concept_id": 7,
+        "concept": {"shots": [{"n": 1, "prompt": "one"}, {"n": 2, "prompt": "two"}]},
+        "prompts": [{"prompt": "ONE"}, {"prompt": "TWO"}],
+    })
+
+    assert persisted == [(1, "ONE"), (2, "TWO")]
+
+
 def test_clean_run_keyframes_the_scene_and_parks_it_for_approval(tmp_db, monkeypatch):
     """What a night actually produces (2026-08-29). It used to end
     "no usable clips (render is a dry-run stub)" -- true, and useless:
@@ -203,7 +268,7 @@ def test_clean_run_keyframes_the_scene_and_parks_it_for_approval(tmp_db, monkeyp
     assert result["critique"]["ok"] is True
     # the AI shot's prompt was extracted...
     assert result["prompts"] == [
-        {"tool": "KLING", "prompt": GOOD_PROMPT, "still": ""}]
+        {"n": 1, "tool": "KLING", "prompt": GOOD_PROMPT, "still": ""}]
     # ...one still was rendered from it, and the run parks rather than posting
     assert len(calls.keyframes) == 1
     assert calls.keyframes[0]["prompt"] == GOOD_PROMPT
@@ -245,7 +310,7 @@ def test_structure_prompt_refines_against_technique_references(tmp_db, monkeypat
     result = orchestrator.run("gearing up ritual")
 
     assert result["prompts"] == [
-        {"tool": "KLING", "prompt": "REFINED: " + GOOD_PROMPT + ", mid-motion start", "still": ""}]
+        {"n": 1, "tool": "KLING", "prompt": "REFINED: " + GOOD_PROMPT + ", mid-motion start", "still": ""}]
 
 
 def test_structure_prompt_keeps_the_original_when_the_shelf_is_empty(tmp_db, monkeypatch):
@@ -256,7 +321,7 @@ def test_structure_prompt_keeps_the_original_when_the_shelf_is_empty(tmp_db, mon
     result = orchestrator.run("gearing up ritual")
 
     assert result["prompts"] == [
-        {"tool": "KLING", "prompt": GOOD_PROMPT, "still": ""}]
+        {"n": 1, "tool": "KLING", "prompt": GOOD_PROMPT, "still": ""}]
 
 
 def test_warnings_trigger_a_retry_with_feedback_in_the_spark(tmp_db, monkeypatch):
@@ -1750,3 +1815,97 @@ def test_the_failover_render_carries_the_owner_too(monkeypatch, tmp_path):
     assert seen.get("account_id") == 42, (
         "the failover connector was called with account_id="
         f"{seen.get('account_id')!r} -- the retry is billed to nobody")
+
+
+# --------------------------------------------------------------------------
+# the checkpointer: a killed run can be picked back up (2026-09-14)
+# --------------------------------------------------------------------------
+
+def _reset_checkpoint_cache():
+    orchestrator._CHECKPOINTED = None
+
+
+def test_no_database_means_no_checkpointer_not_a_dead_run(monkeypatch, capsys):
+    """Fails soft, on purpose.
+
+    A run that cannot be resumed is worse than one that can; a run that
+    refuses to START because the checkpoint tables are missing is worse
+    than both. The CLI, the MCP server and this suite all import the
+    orchestrator without a reachable Postgres.
+    """
+    _reset_checkpoint_cache()
+    # the suite pins this OFF (see conftest); a test about it turns it on
+    monkeypatch.setenv(orchestrator.CHECKPOINT_ENV, "1")
+    monkeypatch.setattr(orchestrator.db, "resolve_dsn",
+                        lambda dsn=None: "postgresql://nobody@127.0.0.1:1/nope")
+
+    assert orchestrator.checkpointed_graph() is None
+    assert "without a checkpointer" in capsys.readouterr().err
+    _reset_checkpoint_cache()
+
+
+def test_the_checkpointer_can_be_switched_off(monkeypatch):
+    _reset_checkpoint_cache()
+    monkeypatch.setenv(orchestrator.CHECKPOINT_ENV, "0")
+    assert orchestrator.checkpointing_on() is False
+    assert orchestrator.checkpointed_graph() is None, "and never opens a connection"
+    _reset_checkpoint_cache()
+
+
+def test_the_default_is_on(monkeypatch):
+    # unset, not "0" -- the suite's pin is a posture, not the product default
+    monkeypatch.delenv(orchestrator.CHECKPOINT_ENV, raising=False)
+    assert orchestrator.checkpointing_on() is True
+
+
+def test_resume_refuses_clearly_when_nothing_was_saved(monkeypatch):
+    """The failure has to name why, or a lost night looks like a bug."""
+    _reset_checkpoint_cache()
+    monkeypatch.setattr(orchestrator, "checkpointed_graph", lambda: None)
+    with pytest.raises(RuntimeError, match="no checkpointer"):
+        orchestrator.resume("deadbeef")
+
+
+def test_resume_reads_the_account_off_the_checkpoint(monkeypatch):
+    """Spend is attributed to whoever the run belonged to, never to
+    whoever typed the resume."""
+    class FakeState:
+        values = {"account_id": 42}
+        next = ("gen_concept",)
+
+    seen = {}
+
+    class FakeGraph:
+        def get_state(self, config):
+            seen["thread"] = config["configurable"]["thread_id"]
+            return FakeState()
+
+        def invoke(self, payload, config):
+            seen["payload"] = payload
+            seen["bound"] = dict(orchestrator.spend._context.get() or {})
+            return {"resumed": True}
+
+    monkeypatch.setattr(orchestrator, "checkpointed_graph", lambda: FakeGraph())
+
+    assert orchestrator.resume("run-7") == {"resumed": True}
+    assert seen["thread"] == "run-7"
+    assert seen["payload"] is None, "None is LangGraph's resume signal"
+    assert seen["bound"]["account_id"] == 42
+    assert seen["bound"]["run_id"] == "run-7"
+
+
+def test_resume_says_so_when_the_run_already_finished(monkeypatch):
+    class Finished:
+        values = {"account_id": 1}
+        next = ()
+
+    class FakeGraph:
+        def get_state(self, config):
+            return Finished()
+
+        def invoke(self, payload, config):
+            raise AssertionError("must not re-run a finished graph")
+
+    monkeypatch.setattr(orchestrator, "checkpointed_graph", lambda: FakeGraph())
+    with pytest.raises(RuntimeError, match="already finished"):
+        orchestrator.resume("run-done")

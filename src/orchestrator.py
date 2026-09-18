@@ -935,7 +935,14 @@ def structure_prompt(state: GenState) -> GenState:
         refined = promptgen.refine_prompt(s["prompt"], tool, _client(),
                                           model=GEMINI_MODEL, references=references)
         reference_image = (s.get("reference_image") or "").strip()
-        entry = {"tool": s.get("tool"), "prompt": refined,
+        # `n` is the join key the keyframe node uses to pair this prompt
+        # back to its shot. It has to be stamped here, at the only place
+        # that still has the shot in hand -- revise_prompts rewrites
+        # entries in place (`prompts[i] = {**prompts[i], ...}`) so it
+        # carries through, and without it the pairing falls back to list
+        # position, which is a bug waiting for the two filters to disagree.
+        entry = {"n": s.get("n", 1),
+                 "tool": s.get("tool"), "prompt": refined,
                  "still": "" if reference_image else _midjourney_still(refined)}
         # carried only when attached, same as on the shot dict itself
         if reference_image:
@@ -1006,7 +1013,16 @@ def _judge_prompt(prompt: str) -> dict:
         return {"score": sum(vals.values()), "dims": vals,
                 "reason": str(data.get("reason", ""))[:200]}
     except Exception as e:
-        return {"score": 0, "dims": {},
+        # `unreadable` separates "the judge never spoke" from "the judge
+        # said this is a 0". Both fail closed -- a credit still must not be
+        # spent on a prompt nobody vouched for, and that does not change.
+        # What changes is the RECORD: a Gemini 503 used to be written to
+        # prompt_scores as passed=0, indistinguishable from a real negative
+        # verdict, so every API wobble quietly moved
+        # autonomy.prompt_gate_agreement -- the one number that says whether
+        # the gate can be trusted -- using rows where the gate had no
+        # opinion at all. An outage is not evidence about the judge.
+        return {"score": 0, "dims": {}, "unreadable": True,
                 "reason": f"judge unreadable ({e}) — failed closed"}
 
 
@@ -1065,6 +1081,7 @@ def score_prompts(state: GenState) -> GenState:
                        "score": verdict["score"],
                        "pass": verdict["score"] >= prompt_gate_min(),
                        "reason": verdict["reason"], "dims": verdict["dims"],
+                       **({"unreadable": True} if verdict.get("unreadable") else {}),
                        **ref})
     autonomy.log_prompt_scores(state.get("run_id"), scored)
     out: GenState = {"prompt_scores": scored}
@@ -1251,10 +1268,35 @@ def keyframe(state: GenState) -> GenState:
 
     shots = [s for s in (state.get("concept", {}) or {}).get("shots", [])
              if s.get("prompt")]
+    # JOINED ON THE SHOT NUMBER, not on position. This list is re-derived
+    # from state["concept"], which revise_prompts rewrites in place, while
+    # `prompts` comes off state["prompts"] -- two lists built by two
+    # filters (structure_prompt and revise_prompts) that happen to agree
+    # today. A zip() would keep agreeing right up until one of them drops
+    # a shot the other keeps, and then it would render shot A's prompt
+    # onto shot B, silently and at full cost, with every card in the Queue
+    # looking correct. `n` is what persist_prompt and plan_timeline are
+    # keyed on anyway, so it is the only join that means anything.
+    by_n = {}
+    for refined in state.get("prompts", []):
+        n = refined.get("n")
+        if n is not None:
+            by_n[n] = refined
     prompts = state.get("prompts", [])
+    positional = len(by_n) != len(prompts)   # no usable `n` -- fall back
     done = []
-    for shot, refined in zip(shots, prompts):
+    for index, shot in enumerate(shots):
         shot_n = shot.get("n", 1)
+        if positional:
+            if index >= len(prompts):
+                continue
+            refined = prompts[index]
+        else:
+            refined = by_n.get(shot_n)
+            if refined is None:
+                done.append({"n": shot_n, "ok": False,
+                             "error": "no refined prompt for this shot"})
+                continue
         try:
             scene_chain.persist_prompt(concept_id, shot_n,
                                        refined.get("prompt", ""),
@@ -1634,7 +1676,7 @@ def hold(state: GenState) -> GenState:
 
 # --- graph ----------------------------------------------------------------
 
-def _build():
+def _build(checkpointer=None):
     g = StateGraph(GenState)
     for name, fn in [
         ("research", research),
@@ -1710,10 +1752,64 @@ def _build():
     g.add_edge("caption", "publish")
     g.add_edge("publish", END)
     g.add_edge("hold", END)
-    return g.compile()
+    return g.compile(checkpointer=checkpointer)
 
 
+# The plain graph: no checkpointer, no database touched at import. This is
+# what langgraph.json exposes to LangGraph Studio, and the fallback for
+# every caller that cannot reach Postgres.
 GRAPH = _build()
+
+CHECKPOINT_ENV = "ZEROPAGE_CHECKPOINT"
+_CHECKPOINTED = None   # None = not tried yet, False = tried and cannot
+
+
+def checkpointing_on() -> bool:
+    """On unless switched off. The cost is a few writes per node; the
+    thing it buys is that a night killed at run seven of ten does not
+    start again from zero."""
+    raw = (os.environ.get(CHECKPOINT_ENV) or "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def checkpointed_graph():
+    """The graph with a PostgresSaver behind it, or None.
+
+    Built lazily and cached, never at import: `GRAPH = _build()` runs on
+    every `import src.orchestrator` -- the MCP server, the CLI, the web
+    app, the test suite -- and none of those should open a database
+    connection just by being imported.
+
+    FAILS SOFT, deliberately. No database, no checkpoint tables, no
+    permission: say so once on stderr and hand back None so `run` uses
+    the plain graph. A run that cannot be resumed is worse than one that
+    can; a run that refuses to start is worse than both.
+    """
+    global _CHECKPOINTED
+    if _CHECKPOINTED is not None:
+        return _CHECKPOINTED or None
+    if not checkpointing_on():
+        _CHECKPOINTED = False
+        return None
+    try:
+        import psycopg
+        from langgraph.checkpoint.postgres import PostgresSaver
+
+        # The saver's own connection, autocommit as it requires, and NOT
+        # from db.connection_pool: that pool is the web server's, sized
+        # for request handlers, and a checkpointer holding one of its
+        # connections for the length of a graph run would starve it.
+        conn = psycopg.connect(db.resolve_dsn(None), autocommit=True,
+                               connect_timeout=10)
+        saver = PostgresSaver(conn)
+        saver.setup()
+        _CHECKPOINTED = _build(checkpointer=saver)
+    except Exception as e:
+        print(f"note: running without a checkpointer ({e}) -- an interrupted "
+              f"run will not be resumable", file=sys.stderr)
+        _CHECKPOINTED = False
+        return None
+    return _CHECKPOINTED
 
 
 def run(goal: str, *, brand: Optional[str] = None, spark: Optional[str] = None,
@@ -1792,8 +1888,14 @@ def run(goal: str, *, brand: Optional[str] = None, spark: Optional[str] = None,
     # after, so nothing leaks into whatever this thread does next.
     run_id = uuid.uuid4().hex
     token = spend.bind(account_id=account_id, run_id=run_id)
+    # The run's own id IS the checkpoint thread. One thread per run, so a
+    # resume names the run it is resuming and nothing else, and the
+    # checkpoint rows line up with the nightly_runs / hold_queue rows that
+    # already carry it. Harmless on the plain graph, which ignores it.
+    graph = checkpointed_graph() or GRAPH
+    config = {"configurable": {"thread_id": run_id}}
     try:
-        return GRAPH.invoke({
+        return graph.invoke({
             "run_id": run_id,
             "account_id": account_id,
         "goal": goal, "brand": brand, "spark": spark or goal, "scout": scout,
@@ -1808,6 +1910,40 @@ def run(goal: str, *, brand: Optional[str] = None, spark: Optional[str] = None,
         "reference_photos": reference_photos or [],
         "attempts": 0,
         **({"scout_finding_id": int(scout_finding_id)} if scout_finding_id else {}),
-        })
+        }, config)
+    finally:
+        spend.unbind(token)
+
+
+def resume(run_id: str) -> dict:
+    """Carry on a run that was interrupted, from its last finished node.
+
+    What this is for: `nightly.walk` does ten runs in a row and the whole
+    walk dies together -- a machine that sleeps, a deploy, a kill. Before
+    checkpointing, run seven's paid keyframe and the concept row it had
+    already written were simply orphaned: a row on the board with no hold
+    explaining it, and nothing that could pick the run back up.
+
+    `invoke(None, ...)` is LangGraph's resume: no new input, start from
+    the last checkpoint on this thread. The account is read back OUT of
+    that checkpoint rather than passed in, because the spend has to be
+    attributed to whoever the run belonged to -- not to whoever is doing
+    the resuming.
+    """
+    graph = checkpointed_graph()
+    if graph is None:
+        raise RuntimeError(
+            f"cannot resume {run_id}: no checkpointer (see {CHECKPOINT_ENV} "
+            f"and DATABASE_URL). Nothing was saved to resume from.")
+    config = {"configurable": {"thread_id": run_id}}
+    saved = graph.get_state(config)
+    if not saved or not saved.values:
+        raise RuntimeError(f"no checkpoint for run {run_id}")
+    if not saved.next:
+        raise RuntimeError(f"run {run_id} already finished -- nothing to resume")
+    account_id = saved.values.get("account_id")
+    token = spend.bind(account_id=account_id, run_id=run_id)
+    try:
+        return graph.invoke(None, config)
     finally:
         spend.unbind(token)

@@ -61,32 +61,30 @@ def test_the_floor_binds_on_a_sub_cent_render():
 # guards: the ceiling division in credits_for (floor division reads 25 / 25)
 def test_rounding_is_up_at_every_boundary(monkeypatch):
     monkeypatch.setattr(pricing, "CREDIT_FLOOR", 0)
-    monkeypatch.setattr(pricing, "MARKUP", "1.0")
+    monkeypatch.setattr(pricing, "MARKUP", "1.0")     # the boundaries, in plain cents
     assert pricing.credits_for(250_000) == 25
     assert pricing.credits_for(250_001) == 26
     assert pricing.credits_for(259_999) == 26
     assert pricing.credits_for(1) == 1
 
-
-# guards: MARKUP being read at all, and being read EXACTLY. As a float,
-# 100000 * 1.1 == 110000.00000000001 and the ceiling is 12.
-def test_markup_is_honoured_and_is_not_a_float(monkeypatch):
-    monkeypatch.setattr(pricing, "MARKUP", "1.0")
-    at_cost = pricing.credits_for(350_000)
-    monkeypatch.setattr(pricing, "MARKUP", "2.4")
-    marked_up = pricing.credits_for(350_000)
-    assert (at_cost, marked_up) == (35, 84)
-    monkeypatch.setattr(pricing, "MARKUP", "1.1")
-    assert pricing.credits_for(100_000) == 11
-    monkeypatch.setattr(pricing, "MARKUP", 1.1)      # somebody will type it this way
-    assert pricing.credits_for(100_000) == 11
-
-
-def test_float_noise_from_an_estimator_does_not_buy_a_credit():
-    assert pricing.usd_micros(0.1 + 0.2) == 300_000
     assert pricing.usd_micros(0.29) == 290_000
 
 
+# guards: MARKUP = "2.4" itself -- $1.00 of provider cost is 240 credits
+def test_the_shipped_markup_is_two_point_four():
+    assert pricing.MARKUP == "2.4"
+    assert pricing.credits_for(1_000_000) == 240
+    assert pricing.credits_for(250_000) == 60        # gen4_turbo, 5s
+    assert pricing.credits_for(400_000) == 96        # kling2.1, 5s
+    assert pricing.credits_for(10_000) == pricing.CREDIT_FLOOR   # 2.4 credits -> the floor
+
+
+def test_at_cost_it_charges_what_the_ledger_always_did(runway_only, monkeypatch):
+    """AT 1.0x a quote moves no number: above the floor its credits are
+    ledger.credits_for_usd of the provider's own estimate, for every
+    model in the catalogue at its default length and frame. Pins the two
+    together so hold_for_render (step 6) has one arithmetic, not two."""
+    monkeypatch.setattr(pricing, "MARKUP", "1.0")
 def test_the_quote_and_the_hold_share_one_conversion(runway_only):
     """MARKUP is 2.4 since 2026-09-18, and the number the card shows must
     be the number the ledger holds: for every model in the catalogue at
@@ -110,6 +108,24 @@ def test_the_quote_and_the_hold_share_one_conversion(runway_only):
             assert quoted >= max(at_cost, pricing.CREDIT_FLOOR)
             if at_cost * 2.4 > pricing.CREDIT_FLOOR:
                 assert quoted == pytest.approx(at_cost * 2.4, abs=1)
+            seen += 1
+    assert seen >= 4
+
+
+# guards: every catalogue price through Fraction at the shipped markup --
+# exact, so the ceiling never fires on float dust
+def test_the_shipped_markup_is_exact_on_every_catalogue_price(runway_only):
+    from fractions import Fraction
+    from math import ceil
+    seen = 0
+    for provider in providers.VIDEO_PROVIDERS:
+        for spec in providers.models_for(provider):
+            if not spec["available"]:
+                continue
+            priced = pricing.estimate(account_id=None, shot=scene(), provider=provider,
+                                      model=spec["id"])
+            exact = ceil(Fraction(priced.provider_usd_micros, 10_000) * Fraction(pricing.MARKUP))
+            assert pricing.credits_for(priced.provider_usd_micros) == max(exact, pricing.CREDIT_FLOOR)
             seen += 1
     assert seen >= 4
 

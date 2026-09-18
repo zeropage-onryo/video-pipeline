@@ -69,6 +69,7 @@ import json
 import os
 import re
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -93,7 +94,12 @@ DAILY_CAP = int(os.environ.get("HIGGSFIELD_DAILY_CAP", "6"))
 # SAME number, so a single-operator database behaves exactly as it did --
 # admitting a second account is what forces a deliberate decision about
 # whose card is paying, instead of the total quietly doubling.
-GLOBAL_DAILY_CAP = int(os.environ.get("HIGGSFIELD_GLOBAL_DAILY_CAP", str(DAILY_CAP)))
+# 0 = no installation-wide ceiling (2026-09-14, Mike's call): a user who
+# brought their own key was still consuming the operator's shared budget and
+# could lock everyone else out of money nobody spent. The per-account cap
+# (HIGGSFIELD_DAILY_CAP) is the wall that remains. Set HIGGSFIELD_GLOBAL_DAILY_CAP to a
+# positive number to put the ceiling back -- see generative.cap_error.
+GLOBAL_DAILY_CAP = int(os.environ.get("HIGGSFIELD_GLOBAL_DAILY_CAP", "0"))
 POLL_SECONDS = 3
 # The shipped default and the fallback `timeout_seconds()` reads when the
 # environment says nothing. Bound at import like every other constant
@@ -195,9 +201,13 @@ VIDEO_MODELS: dict[str, dict] = {
         "durations": (5, 10),
         "verified": "2026-08-31",
     },
-    # route confirmed live 2026-08-31
+    # route confirmed live 2026-08-31; BLOCKED 2026-09-18 -- every
+    # kling2.1 path now answers 423 {"detail":"model_blocked"} on this
+    # account (kling2.5 still answers 400 on an empty body). Found when a
+    # Queue approve on "Neon City Ascent" failed with bare "HTTP Error
+    # 423: Locked". Re-probe before flipping it back.
     "kling2.1": {
-        "available": True,
+        "available": False,
         "t2v": "/kling-video/v2.1/master/text-to-video",
         "i2v": "/kling-video/v2.1/master/image-to-video",
         "params": ("duration", "cfg_scale", "negative_prompt"),
@@ -384,13 +394,15 @@ def safe_prompt(prompt: str, db_path=None) -> str:
     return text
 
 
-def generations_today(db_path=None, *, account_id=None, everyone: bool = False) -> int:
+def generations_today(db_path=None, *, account_id=None, everyone: bool = False,
+                      operator_billed_only: bool = False) -> int:
     """This account's higgsfield generations since UTC midnight -- what
     DAILY_CAP counts against. `everyone=True` gives the installation-wide
     count that GLOBAL_DAILY_CAP counts against."""
     return generative.used_today(
         "higgsfield", db_path,
         account_id=account_id, everyone=everyone,
+        operator_billed_only=operator_billed_only,
     )
 
 
@@ -429,8 +441,20 @@ def _request(url: str, payload: Optional[dict] = None, *,
                  "User-Agent": USER_AGENT},
         method="POST" if payload is not None else "GET",
     )
-    with urllib.request.urlopen(req, timeout=60) as response:
-        return json.loads(response.read().decode())
+    try:
+        with urllib.request.urlopen(req, timeout=60) as response:
+            return json.loads(response.read().decode())
+    except urllib.error.HTTPError as e:
+        # urllib's message is only "HTTP Error 423: Locked"; the reason
+        # (model_blocked, model_not_found, a credit error) is in the body.
+        # Attach it so the Queue card says WHY, not just the status line.
+        try:
+            detail = e.read().decode(errors="replace")[:300].strip()
+        except Exception:
+            detail = ""
+        if detail:
+            raise RuntimeError(f"HTTP Error {e.code}: {e.reason} -- {detail}") from e
+        raise
 
 
 # The documented image shape is {"images": [{"url": ...}]}. The video
@@ -645,7 +669,8 @@ def _local_render_bytes(value: str):
     return None
 
 
-def as_image_url(value, *, resolve_photo=None) -> Optional[str]:
+def as_image_url(value, *, resolve_photo=None,
+                 account_id: Optional[int] = None) -> Optional[str]:
     """Anything we might have stored as a reference -> a URL Higgsfield
     can actually FETCH, or None.
 
@@ -692,6 +717,7 @@ def as_image_url(value, *, resolve_photo=None) -> Optional[str]:
 
     import hashlib
 
+    from . import media
     from .gemini_utils import sniff_mime
     mime = sniff_mime(data)
     ext = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}.get(mime, "png")
@@ -700,7 +726,8 @@ def as_image_url(value, *, resolve_photo=None) -> Optional[str]:
     tmp.parent.mkdir(parents=True, exist_ok=True)
     tmp.write_bytes(data)
     try:
-        return storage.upload_file(tmp, key=key, content_type=mime)
+        return storage.upload_file(tmp, key=media.object_key(key, account_id),
+                                   content_type=mime)
     except Exception:
         return None            # a reference is an enhancement, never a gate
 
@@ -762,7 +789,8 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *,
             dsn=db_path,
             env_prefix="HIGGSFIELD", phrase="generations used",
             used=generations_today(db_path=db_path, account_id=account_id),
-            used_everywhere=generations_today(db_path=db_path, everyone=True),
+            used_everywhere=generations_today(db_path=db_path, everyone=True,
+                                             operator_billed_only=True),
         )
         if refusal:
             return {"ok": False, "candidates": [], "error": refusal}
@@ -804,13 +832,15 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *,
         return {"ok": False, "candidates": [], "error": _safe_error(e, account_id)}
 
 
-def _publish(out_path: Path, content_type: str) -> str:
+def _publish(out_path: Path, content_type: str,
+             account_id: Optional[int] = None) -> str:
     """R2 when configured (Instagram needs a public URL), else the app's
-    own /renders mount."""
-    from . import storage
+    own /renders mount. The key carries the tenant -- see src/media.py."""
+    from . import media, storage
     if storage.configured():
         return storage.upload_file(
-            out_path, key=f"renders/higgsfield/{out_path.name}",
+            out_path,
+            key=media.object_key(f"renders/higgsfield/{out_path.name}", account_id),
             content_type=content_type)
     return f"/renders/higgsfield/{out_path.name}"
 
@@ -851,7 +881,8 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
             dsn=db_path,
             env_prefix="HIGGSFIELD", phrase="generations used",
             used=generations_today(db_path=db_path, account_id=account_id),
-            used_everywhere=generations_today(db_path=db_path, everyone=True),
+            used_everywhere=generations_today(db_path=db_path, everyone=True,
+                                             operator_billed_only=True),
         )
         if refusal:
             return {"ok": False, "error": refusal}
@@ -872,7 +903,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
             return {"ok": False,
                     "error": f"shot {shot_n} has no AI prompt to render from"}
 
-        image_url = as_image_url(target["reference_image"],
+        image_url = as_image_url(target["reference_image"], account_id=account_id,
                                  resolve_photo=resolve_photo)
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
@@ -906,7 +937,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
             **kwargs,
          account_id=account_id)
         charge.settle(generation_id=generation_id)
-        media_url = _publish(out_path, "video/mp4")
+        media_url = _publish(out_path, "video/mp4", account_id)
         if part:
             timeline.attach_part(concept_id, shot_n, part, "media_url", media_url,
                                  db_path=db_path, account_id=account_id)
@@ -948,12 +979,14 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
             dsn=db_path,
             env_prefix="HIGGSFIELD", phrase="generations used",
             used=generations_today(db_path=db_path, account_id=account_id),
-            used_everywhere=generations_today(db_path=db_path, everyone=True),
+            used_everywhere=generations_today(db_path=db_path, everyone=True,
+                                             operator_billed_only=True),
         )
         if refusal:
             return {"ok": False, "error": refusal}
 
-        image_url = as_image_url(reference_image, resolve_photo=resolve_photo)
+        image_url = as_image_url(reference_image, resolve_photo=resolve_photo,
+                                 account_id=account_id)
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"wf-{stamp}.mp4"
@@ -981,7 +1014,7 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
             **kwargs,
          account_id=account_id)
         charge.settle(generation_id=generation_id)
-        return {"ok": True, "media_url": _publish(out_path, "video/mp4"),
+        return {"ok": True, "media_url": _publish(out_path, "video/mp4", account_id),
                 "generation_id": generation_id, "path": str(out_path),
                 "error": None}
     except ledger.InsufficientCredit as e:
@@ -1011,7 +1044,8 @@ def generate_image_from_prompt(prompt: str, *, db_path=None, http=None, account_
             dsn=db_path,
             env_prefix="HIGGSFIELD", phrase="generations used",
             used=generations_today(db_path=db_path, account_id=account_id),
-            used_everywhere=generations_today(db_path=db_path, everyone=True),
+            used_everywhere=generations_today(db_path=db_path, everyone=True,
+                                             operator_billed_only=True),
         )
         if refusal:
             return {"ok": False, "error": refusal}
@@ -1033,7 +1067,7 @@ def generate_image_from_prompt(prompt: str, *, db_path=None, http=None, account_
             cost_usd=estimate_image_cost(1),
             **kwargs,
          account_id=account_id)
-        return {"ok": True, "media_url": _publish(out_path, "image/jpeg"),
+        return {"ok": True, "media_url": _publish(out_path, "image/jpeg", account_id),
                 "generation_id": generation_id, "path": str(out_path),
                 "error": None}
     except ledger.InsufficientCredit as e:

@@ -37,7 +37,7 @@ export function SiteFooter() {
           <div className="max-w-xs">
             <Wordmark />
             <p className="mt-4 text-sm leading-relaxed text-[#afafaf]">
-              An AI creative studio for filmmakers, brands, and creators. From idea to creation.
+              The AI content studio that creates for you — for filmmakers, brands, and creators.
             </p>
           </div>
           {COLUMNS.map((column) => (

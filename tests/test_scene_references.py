@@ -665,3 +665,23 @@ def test_every_concept_writing_route_uses_the_one_collector():
     # implementation instead of a second copy growing down there.
     assert source.count("_attach_scene_refs") == 4    # 1 def + 2 calls + 1 injection
     assert "attach_refs=_attach_scene_refs" in source
+
+
+def test_director_frames_upload_from_disk_into_the_bin(tmp_path, monkeypatch):
+    """The Director's reference card only took a pasted URL (2026-09-18).
+    /api/refs/upload files photos into the composer's bin and returns
+    URLs that resolve back through the one resolver; junk is counted,
+    never a 500."""
+    monkeypatch.setattr(refbin, "REFS_DIR", tmp_path / "refs")
+    monkeypatch.setattr(refbin, "mirror_to_r2", lambda *a, **k: None)
+    res = client.post("/api/refs/upload", files=[
+        ("photos", ("a.jpg", _jpeg(), "image/jpeg")),
+        ("photos", ("again.jpg", _jpeg(), "image/jpeg")),
+        ("photos", ("notes.txt", b"not an image", "text/plain")),
+    ])
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert len(body["urls"]) == 1          # the same photo twice is one frame
+    assert body["skipped"] == 1
+    assert body["urls"][0].startswith("/refs/")
+    assert api._resolve_asset_photo(body["urls"][0]).exists()

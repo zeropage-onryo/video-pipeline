@@ -26,7 +26,7 @@ export function HeroSection() {
         <p
           className={`mt-8 max-w-[52ch] text-[clamp(1rem,1.6vw,1.125rem)] leading-normal tracking-[-0.005em] text-[#afafaf] md:mt-11 ${REVEAL} motion-safe:duration-700 motion-safe:delay-100`}
         >
-          An AI creative studio for filmmakers, brands, and creators. Bring the spark, shape the
+          An AI content studio for filmmakers, brands, and creators. Bring the spark, shape the
           story, and make something only you could imagine.
         </p>
         <div

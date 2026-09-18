@@ -52,6 +52,12 @@ plan's tier reaches the band check. The public site is GENERATED from
 `public_catalog()` -- `python -m src.pricing export` writes
 web/src/content/pricing.json, and tests/test_plans.py fails when the
 committed file and this module disagree.
+MARKUP is 2.4 (2026-09-18, Mike's call -- the spec's number): $1.00 of
+provider cost is 240 credits. It landed in ONE commit with making the
+signed token required on approve, because a raised markup beside an
+unsigned path silently undercharges. ledger.credits_for_usd is the 1.0x
+figure and no longer what a quote charges; hold_for_render (step 6)
+holds quote.credits, never a re-derivation.
 """
 
 from __future__ import annotations

@@ -25,6 +25,7 @@ import {
   useState,
   createContext,
   useContext,
+  type ReactNode,
 } from "react";
 import {
   ReactFlow,
@@ -78,6 +79,7 @@ import {
   ZoomOut,
 } from "lucide-react";
 import { apiFetch, API_URL } from "@/lib/api";
+import { uploadRefs } from "@/lib/studio-api";
 import {
   announceQueueChange,
   getAssets,
@@ -101,6 +103,7 @@ import {
   isMedia,
   isText,
   ports,
+  sceneRefs,
   seedScene,
   toLegacy,
   wireElement,
@@ -187,12 +190,13 @@ const ratioLabel = (r?: string) => (r === "720:1280" ? "9:16" : r === "1280:720"
 
 const Actions = createContext<{
   update: (id: string, data: Partial<CardData>) => void;
+  addFrames: (id: string, urls: string[]) => void;
   remove: (id: string) => void;
   duplicate: (id: string) => void;
   run: (id: string) => void;
   runway: RunwayState | null;
   caps: Capabilities;
-}>({ update: () => {}, remove: () => {}, duplicate: () => {}, run: () => {}, runway: null, caps: {} });
+}>({ update: () => {}, addFrames: () => {}, remove: () => {}, duplicate: () => {}, run: () => {}, runway: null, caps: {} });
 
 function KindIcon({ data, size, strokeWidth }: { data: CardData; size: number; strokeWidth: number }) {
   const props = { size, strokeWidth };
@@ -218,6 +222,91 @@ function gateNote(kind: Kind, caps: Capabilities) {
         : "";
   if (kind === "image" && caps["nano.generate"] === false) return "GEMINI_API_KEY not set";
   return "";
+}
+
+/* Frames from disk (2026-09-18, Mike: a pasted URL was the only way in).
+ * Upload button + drop-anywhere on the card; both go through
+ * /api/refs/upload, the composer's bin, so an uploaded frame resolves
+ * exactly like one attached at Create. */
+const imageFiles = (list: FileList | null | undefined) =>
+  Array.from(list || []).filter((f) => f.type.startsWith("image/") || /\.(heic|heif)$/i.test(f.name));
+
+function useFrameUpload(id: string) {
+  const actions = useContext(Actions);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");
+  const send = async (files: File[]) => {
+    if (!files.length) return;
+    setBusy(true);
+    setNote("");
+    try {
+      const res = await uploadRefs(files);
+      if (res.urls.length) actions.addFrames(id, res.urls);
+      if (res.skipped) setNote(`${res.skipped} skipped (not a readable image)`);
+    } catch (err) {
+      setNote(err instanceof Error ? err.message : "upload failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return { busy, note, send };
+}
+
+const FrameCtx = createContext<ReturnType<typeof useFrameUpload> | null>(null);
+
+function FrameDrop({ id, children }: { id: string; children: ReactNode }) {
+  const up = useFrameUpload(id);
+  const [over, setOver] = useState(false);
+  return (
+    <FrameCtx.Provider value={up}>
+      <div
+        className={`element-body nodrag${over ? " is-drop" : ""}`}
+        onDragOver={(e) => {
+          if (!e.dataTransfer.types.includes("Files")) return;
+          e.preventDefault();
+          e.stopPropagation();
+          setOver(true);
+        }}
+        onDragLeave={() => setOver(false)}
+        onDrop={(e) => {
+          if (!e.dataTransfer.files.length) return;
+          e.preventDefault();
+          e.stopPropagation();
+          setOver(false);
+          up.send(imageFiles(e.dataTransfer.files));
+        }}
+      >
+        {children}
+        {up.note ? (
+          <p role="alert" className="node-error nodrag nowheel">
+            {up.note}
+          </p>
+        ) : null}
+      </div>
+    </FrameCtx.Provider>
+  );
+}
+
+function FrameUpload() {
+  const up = useContext(FrameCtx);
+  const input = useRef<HTMLInputElement>(null);
+  if (!up) return null;
+  return (
+    <button className="ghost frame-upload" disabled={up.busy} onClick={() => input.current?.click()} title="Upload photos from your computer (or drop them on the card)">
+      {up.busy ? <LoaderCircle size={12} className="spin" /> : <Upload size={12} />} {up.busy ? "Uploading…" : "Upload"}
+      <input
+        ref={input}
+        type="file"
+        accept="image/*,.heic,.heif"
+        multiple
+        hidden
+        onChange={(e) => {
+          up.send(imageFiles(e.target.files));
+          e.target.value = "";
+        }}
+      />
+    </button>
+  );
 }
 
 function StudioNode({ id, data, selected }: NodeProps<FlowNode>) {
@@ -296,7 +385,7 @@ function StudioNode({ id, data, selected }: NodeProps<FlowNode>) {
           )}
         </>
       ) : data.kind === "element" ? (
-        <div className="element-body nodrag">
+        <FrameDrop id={id}>
           {data.urls?.length ? (
             <div className={`element-frames c${data.refKind === "location" ? 2 : 3}${data.refKind === "location" ? " wide" : ""}`}>
               {data.urls.map((u, i) => (
@@ -322,23 +411,9 @@ function StudioNode({ id, data, selected }: NodeProps<FlowNode>) {
             <span className="m">
               {data.urls?.length || 0} frame{data.urls?.length === 1 ? "" : "s"}
             </span>
-            <label className="ghost">
-              <Plus size={12} /> Add frame
-              <input
-                type="url"
-                placeholder="paste a photo url"
-                aria-label="Add a frame by url"
-                onKeyDown={(e) => {
-                  if (e.key !== "Enter") return;
-                  const v = (e.target as HTMLInputElement).value.trim();
-                  if (!v) return;
-                  actions.update(id, { urls: [...(data.urls || []), v] });
-                  (e.target as HTMLInputElement).value = "";
-                }}
-              />
-            </label>
+            <FrameUpload />
           </footer>
-        </div>
+        </FrameDrop>
       ) : data.kind === "reference" ? (
         <div className="reference-body nodrag">
           {data.url ? (
@@ -487,6 +562,9 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
   const [bar, setBar] = useState("");
   const graphBase = useRef<Partial<LegacyGraph>>({});
   const seedHash = useRef<string | null>(null);
+  // the reference list the scene holds right now, in the canvas's own
+  // spelling of each url -- what the wiring is compared against
+  const savedRefs = useRef<string[]>([]);
   const saveChain = useRef<Promise<unknown>>(Promise.resolve());
   const lastSaved = useRef("");
   const stopped = useRef(false);
@@ -594,6 +672,7 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
         if (video && shot.media_url) video.data.url = shot.media_url;
         graphBase.current = saved.graph || {};
         seedHash.current = saved.seed_hash || null;
+        savedRefs.current = shot.refs || [];
         setNodes(loaded.nodes);
         setEdges(loaded.edges);
         setName(detail.title);
@@ -613,6 +692,26 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
     };
   }, [conceptId, shotN, setNodes, setEdges]);
 
+  /* The canvas's reference wiring IS the scene's reference list
+     (2026-09-18): rewiring a face here changes what Pipeline shows,
+     what the reference gate checks and what Queue renders against --
+     not just this drawing. Runs inside the save chain, BEFORE the graph
+     save, because a new ref list is a new seed hash and the graph must
+     be saved against the hash it now matches. */
+  const pushRefs = async (ns: FlowNode[], es: Edge[]): Promise<string | null> => {
+    if (!conceptId || !activeShot) return null;
+    const next = sceneRefs(ns, es, savedRefs.current);
+    if (JSON.stringify(next) === JSON.stringify(savedRefs.current)) return null;
+    if (!next.length) return "keeps its last references — a scene with none can't reach the Queue";
+    const res = await apiFetch<{ changed: boolean; seed_hash?: string }>(
+      `/concepts/${conceptId}/shots/${activeShot}/refs`,
+      { method: "PUT", body: JSON.stringify({ refs: next, seed_hash: seedHash.current ?? undefined }) },
+    );
+    if (res.seed_hash) seedHash.current = res.seed_hash;
+    savedRefs.current = next;
+    return res.changed ? `references updated (${next.length})` : null;
+  };
+
   // autosave: the graph that ran and the graph you return to are one row
   useEffect(() => {
     if (!conceptId || !activeShot || !ready || sceneError) return;
@@ -626,6 +725,7 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
         .then(async () => {
           if (stopped.current) return;
           try {
+            const refNote = await pushRefs(nodes, edges);
             // seed_hash is what this canvas was drawn against; the server
             // refuses (409) a save for a scene revised underneath it rather
             // than overwriting a canvas nobody here has seen
@@ -635,13 +735,15 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
             });
             if (saved.seed_hash) seedHash.current = saved.seed_hash;
             lastSaved.current = fingerprint;
-            setSaveState("Saved to scene");
+            setSaveState(refNote ? `Saved to scene · ${refNote}` : "Saved to scene");
           } catch (error) {
             setSaveState(`Not saved: ${error instanceof Error ? error.message : "connection lost"}`);
           }
         });
     }, 650);
     return () => clearTimeout(timer);
+    // pushRefs reads refs and the deps listed here; it is not state of its own
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conceptId, activeShot, nodes, edges, name, ready, sceneError, saveRevision]);
 
   const savePrompt = async () => {
@@ -655,10 +757,13 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
     }
     try {
       await saveChain.current.catch(() => {});
-      await apiFetch(`/concepts/${conceptId}/shots/${activeShot}/prompt`, {
+      const res = await apiFetch<{ seed_hash?: string }>(`/concepts/${conceptId}/shots/${activeShot}/prompt`, {
         method: "POST",
         body: JSON.stringify({ prompt }),
       });
+      // this canvas made the edit, so it is still a true drawing of the
+      // shot: adopt the new hash or the next autosave is refused as stale
+      if (res?.seed_hash) seedHash.current = res.seed_hash;
       lastSaved.current = "";
       setSaveRevision((n) => n + 1);
       notify("Scene prompt updated");
@@ -671,6 +776,7 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
       try {
         stopped.current = true;
         await saveChain.current.catch(() => {});
+        await pushRefs(getNodes(), getEdges());
         const payload = toLegacy(getNodes(), getEdges(), graphBase.current, { conceptId, shotN: activeShot });
         await apiFetch(`/concepts/${conceptId}/shots/${activeShot}/graph`, {
           method: "PUT",
@@ -688,6 +794,19 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
   const update = useCallback(
     (id: string, data: Partial<CardData>) =>
       setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, data: { ...n.data, ...data } } : n))),
+    [setNodes],
+  );
+  // appended against the LIVE node, not the render's copy: an upload
+  // resolves seconds later and may race a remove or a second upload
+  const addFrames = useCallback(
+    (id: string, urls: string[]) =>
+      setNodes((ns) =>
+        ns.map((n) => {
+          if (n.id !== id) return n;
+          const have = n.data.urls || [];
+          return { ...n, data: { ...n.data, urls: [...have, ...urls.filter((u) => !have.includes(u))] } };
+        }),
+      ),
     [setNodes],
   );
   const remove = useCallback(
@@ -830,7 +949,7 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
     }
     try {
       const data: unknown = JSON.parse(await file.text());
-      if (!validDraft(data)) throw new Error("Choose a ZeroPage workflow JSON export.");
+      if (!validDraft(data)) throw new Error("Choose a Zero Page workflow JSON export.");
       setNodes(data.nodes.map((n) => ({ ...n, data: { ...n.data, busy: !!n.data.jobId } })));
       setEdges(data.edges);
       setName(data.name);
@@ -958,6 +1077,7 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
     if (runJob) return;
     try {
       await saveChain.current.catch(() => {});
+      await pushRefs(getNodes(), getEdges());
       const payload = toLegacy(getNodes(), getEdges(), graphBase.current, { conceptId, shotN: activeShot });
       const saved = await apiFetch<{ id: number }>(`/concepts/${conceptId}/shots/${activeShot}/graph`, {
         method: "PUT",
@@ -1052,6 +1172,8 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
       return;
     }
     try {
+      await saveChain.current.catch(() => {});
+      await pushRefs(getNodes(), getEdges());
       await pickConcept(scene.id, true);
       setScene({ ...scene, picked: true });
       announceQueueChange();
@@ -1099,6 +1221,7 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
     <Actions.Provider
       value={{
         update,
+        addFrames,
         remove,
         duplicate,
         run: (id) => {

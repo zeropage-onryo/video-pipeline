@@ -588,6 +588,13 @@ CREDIT_EXEMPT_COLUMN = "credit_exempt"
 STRIPE_CUSTOMER_COLUMN = "stripe_customer_id"
 PLAN_COLUMN = "plan"
 
+# Whether a hand edit of a scene prompt teaches the RAG shelves
+# (src/edit_teach.py, 2026-09-18). Same shape as the lane gate and for the
+# same reason: it is ONE person's taste being written onto shelves every
+# tenant retrieves from, so it is a column on the account row, FALSE for
+# everybody until the operator turns their own account on by hand.
+EDIT_TEACH_COLUMN = "prompt_edits_teach"
+
 
 def add_manual_lane_operator_column(conn: psycopg.Connection) -> bool:
     """Additive ALTER TABLE on `accounts`. True if added now.
@@ -646,6 +653,23 @@ def add_billing_columns(conn: psycopg.Connection) -> list[str]:
         conn.execute(f"ALTER TABLE accounts ADD COLUMN {PLAN_COLUMN} TEXT")
         added.append(PLAN_COLUMN)
     return added
+def add_prompt_edits_teach_column(conn: psycopg.Connection) -> bool:
+    """Additive ALTER TABLE on `accounts`. True if added now.
+
+    add_manual_lane_operator_column's twin (2026-09-18): no backfill, every
+    account comes out FALSE, and the one way on is
+    `python -m src.accounts edits-teach <slug> --on`. Missing table is
+    "not yet" -- accounts.init() asks again once there is one.
+    """
+    if not table_exists(conn, "accounts"):
+        return False
+    if EDIT_TEACH_COLUMN in columns(conn, "accounts"):
+        return False
+    conn.execute(
+        f"ALTER TABLE accounts ADD COLUMN {EDIT_TEACH_COLUMN} "
+        "BOOLEAN NOT NULL DEFAULT FALSE"
+    )
+    return True
 
 
 # --------------------------------------------------------------------------
@@ -792,6 +816,8 @@ def init_db(dsn: Optional[str] = None) -> None:
         # billing (docs/tasks/task-stripe-billing.md, 2026-09-18) -- same
         # no-op-until-accounts-exists shape
         add_billing_columns(conn)
+        # whose hand edits teach the shelves (src/edit_teach.py, 2026-09-18)
+        add_prompt_edits_teach_column(conn)
 
 
 # --------------------------------------------------------------------------
