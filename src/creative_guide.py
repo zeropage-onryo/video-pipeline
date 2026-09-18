@@ -70,8 +70,19 @@ def _contents(conversation, grounding, image_refs):
     return contents
 
 
+# Which brain answers a Guide turn when the composer names none. FAST,
+# not reasoning (2026-09-18, Mike's call): the Guide used to hardcode the
+# reasoning tier, so "which of these three directions?" was billed at
+# 3.1 Pro rates -- ~1.5c a turn, a third of a whole nightly graph run per
+# chat message -- while the pill on the composer only ever reached
+# Create. The tier is the person's to pick per turn, the same
+# gemini_utils.BRAINS menu Create offers, clamped server-side; flip it to
+# Reasoning for the turn that writes the brief.
+DEFAULT_BRAIN = "fast"
+
+
 def respond(conversation, *, client, brand, grounding, image_refs=(),
-            account_id=None, on_retry=None, tools=None, run_tool=None):
+            account_id=None, on_retry=None, tools=None, run_tool=None, brain=None):
     """One Guide turn.
 
     With `tools` (the specs `guide_tools.session` returns) and
@@ -81,9 +92,17 @@ def respond(conversation, *, client, brand, grounding, image_refs=(),
     tool call ends the turn instead: nothing runs, and the reply
     carries it as `proposal` for the thread's confirm card. Without
     tools this is the plain conversation it was, byte for byte.
+
+    `brain` is a gemini_utils.BRAINS key; anything else resolves to
+    DEFAULT_BRAIN (resolve_brain's own clamp, so a typo answers cheaply
+    rather than not at all).
     """
-    brain = gemini_utils.resolve_brain("reasoning")
-    config = brain["config"].model_copy(deep=True)
+    brain = gemini_utils.resolve_brain(brain or DEFAULT_BRAIN)
+    # The fast tier's config is None on purpose (its request is the one
+    # this module has always sent); the Guide needs an object to hang
+    # the system instruction and the response schema on.
+    config = (brain["config"].model_copy(deep=True) if brain["config"] is not None
+              else types.GenerateContentConfig())
     config.system_instruction = instructions(brand, with_tools=bool(tools))
     contents = _contents(conversation, grounding, image_refs)
     if not tools:

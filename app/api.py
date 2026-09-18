@@ -384,6 +384,14 @@ async def creative_guide_reply(request: Request,
     provider = (form.get("guide_provider") or "gemini").strip().lower()
     model = (form.get("guide_model") or "").strip() or None
     personal = provider != "gemini"
+    # Which brain answers (2026-09-18): the composer's Fast / Reasoning
+    # pill, the same one Create sends, clamped against BRAINS here the
+    # way scenes_run clamps it. Absent or unknown -> the Guide's own
+    # default (fast). Only the Gemini path reads it; a personal
+    # connection is the person's own model and has no tier.
+    from src import gemini_utils
+    brain_raw = (form.get("brain") or "").strip().lower()
+    brain = brain_raw if brain_raw in gemini_utils.BRAINS else creative_guide.DEFAULT_BRAIN
 
     scope = None
     if personal:
@@ -423,12 +431,14 @@ async def creative_guide_reply(request: Request,
             reply = creative_guide.respond(
                 conversation, client=genai.Client(api_key=_gemini_key(account_id)),
                 brand=brand, grounding=grounding, image_refs=image_refs,
-                account_id=account_id, on_retry=note, tools=tools, run_tool=run_tool)
+                account_id=account_id, on_retry=note, tools=tools, run_tool=run_tool,
+                brain=brain)
         # `billing` says WHOSE plan paid: a personal connection spends
         # the person's own ChatGPT/Claude subscription and never touches
         # this install's Gemini credit, and /costs must not count it.
         return {"reply": reply, "reference_urls": ref_urls,
                 "billing": "personal_plan" if personal else "studio_credits",
+                "brain": None if personal else brain,
                 "detail": "ready"}
 
     job = jobs.start("guide", "creative guide", work, account_id=account_id)

@@ -35,7 +35,8 @@ def test_reasoning_receives_history_and_actual_images(monkeypatch):
     ])
     reply = creative_guide.respond(conversation, client=object(), brand="zeropage",
                                    grounding={"references": "mirror study"},
-                                   image_refs=[(b"photo", "image/jpeg", "Mirror")], account_id=42)
+                                   image_refs=[(b"photo", "image/jpeg", "Mirror")], account_id=42,
+                                   brain="reasoning")
     assert reply["brief"].startswith("A silent")
     assert seen["model"] == gemini_utils.resolve_brain("reasoning")["model"]
     assert seen["fallbacks"] == []
@@ -44,6 +45,29 @@ def test_reasoning_receives_history_and_actual_images(monkeypatch):
     assert [c.role for c in seen["contents"]] == ["user", "user", "model", "user"]
     assert seen["contents"][-1].parts[-1].inline_data.data == b"photo"
     assert "Nobody. Its mirror moves." in seen["contents"][-1].parts[0].text
+
+
+@pytest.mark.parametrize("asked", [None, "", "nonsense"])
+def test_guide_answers_on_the_fast_tier_unless_told_otherwise(monkeypatch, asked):
+    """A chat turn is not a brief: the default and any unknown tier
+    resolve to Fast (2026-09-18), with the fallback chain the fast tier
+    allows and the system instruction still attached."""
+    seen = {}
+
+    def generate(client, model, contents, **kwargs):
+        seen.update(model=model, **kwargs)
+        return json.dumps({"message": "Which way?", "choices": ["Dark", "Light"], "brief": ""})
+
+    monkeypatch.setattr(gemini_utils, "generate_with_retry", generate)
+    creative_guide.respond(creative_guide.Conversation(messages=[
+        {"role": "user", "content": "An empty elevator."}]),
+        client=object(), brand="zeropage", grounding={}, brain=asked)
+    fast = gemini_utils.resolve_brain("fast")
+    assert seen["model"] == fast["model"]
+    assert seen["fallbacks"] is None
+    assert seen["config"].thinking_config is None
+    assert seen["config"].system_instruction
+    assert seen["config"].response_json_schema
 
 
 def test_invalid_model_reply_is_not_usable_brief(monkeypatch):
@@ -98,5 +122,36 @@ def test_guide_job_is_owned_and_does_not_create_scenes(client, monkeypatch):
     assert seen['account_id'] == 42
     assert seen['brand'] == 'zeropage'  # server membership, not submitted brand
     assert seen['image_refs'][0][0] == b'image'
+    assert seen['brain'] == creative_guide.DEFAULT_BRAIN   # none sent -> fast
+    assert job['brain'] == creative_guide.DEFAULT_BRAIN
     app.dependency_overrides[auth.current_account_id] = lambda: 43
     assert client.get(f'/api/jobs/{job_id}').status_code == 404
+
+
+@pytest.mark.parametrize("sent, expect", [("reasoning", "reasoning"), ("REASONING", "reasoning"),
+                                          ("ultra", "fast"), ("", "fast")])
+def test_guide_route_clamps_the_brain_pill(client, monkeypatch, sent, expect):
+    """The pill's value reaches respond() only as a BRAINS key -- an
+    unknown tier answers cheaply rather than failing the turn."""
+    seen = {}
+
+    async def refs(form):
+        return [], [], []
+
+    monkeypatch.setattr(api, "_collect_refs", refs)
+    monkeypatch.setattr(scene_chain, "ground", lambda *a, **k: {})
+    monkeypatch.setattr(creative_guide, "respond",
+                        lambda conversation, **kw: seen.update(kw) or {"message": "ok", "choices": [], "brief": ""})
+    app.dependency_overrides[auth.current_account_id] = lambda: 42
+    response = client.post('/api/creative-guide', data={"brain": sent, "conversation": json.dumps({
+        "messages": [{"role": "user", "content": "A mirror"}]})})
+    assert response.status_code == 200
+    job_id = response.json()["job_id"]
+    for _ in range(100):
+        job = client.get(f'/api/jobs/{job_id}').json()
+        if job['status'] in ('done', 'failed'):
+            break
+        time.sleep(.01)
+    assert job['status'] == 'done', job
+    assert seen['brain'] == expect
+    assert job['brain'] == expect
