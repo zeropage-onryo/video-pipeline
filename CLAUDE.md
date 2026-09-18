@@ -1439,6 +1439,15 @@ is yours, in Resolve, by hand.
   + `queue_approve` and `ops/render_queue.py`'s `pending` all ask it again at the spend.
   `ops/archive_ungrounded.py` is the repair pass for rows written before it (87 archived on the
   day, of 152 live).
+  **The Queue PAGE lists them, blocked (2026-09-17, Mike's call).** A row still gets here
+  ungrounded three ways — written before the gate, un-archived, or its refs cleared later — and
+  dropping it from the list made a picked scene look like a lost pick. `_waiting(...,
+  include_blocked=True)` is `queue_pending`'s alone: such a card carries `blocked` (the gate's
+  own reason), sorts after every spendable card, and is left out of `spendable`, which is what
+  the rail's badge counts. Nothing about SPENDING moved: `_waiting`'s default is still
+  spendable-only, so the manual lane never sees one, `queue_approve` still asks
+  `reference_gate` itself and answers `no_reference`, and `ops/render_queue.py` is untouched.
+  Listing a scene is not a way to spend on it.
   What made this worth breaking the convention for: the board was showing cards reading
   "KEYFRAMED · AWAITING APPROVAL IN QUEUE" beside "NO REFERENCES". That keyframe is a still
   Nano drew **from the prompt**, so approving one spends a Runway credit anchoring the clip on

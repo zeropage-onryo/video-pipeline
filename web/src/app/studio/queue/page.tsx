@@ -193,11 +193,13 @@ export default function QueuePage() {
     held.set(c.id, pick);
     repaint((n) => n + 1);
   };
-  // a card the reference gate would refuse. _waiting() already keeps such a
-  // row out of this list, so today this is never true of a real card; it is
-  // drawn for the day one arrives, and it is DISPLAY -- the server refuses
-  // the approve whatever the button looks like.
-  const lockedFor = (c: Concept) => !(c.refs || []).length;
+  // A card the reference gate refuses. The server lists these on this page
+  // since 2026-09-17 (`blocked` = preprod.reference_gate's reason), after
+  // every spendable card, so a picked scene with no photos does not read as
+  // a lost pick. DISPLAY ONLY: the approve route asks the gate itself and
+  // refuses whatever this button looks like. The refs check is the fallback
+  // for a payload from before the field existed.
+  const lockedFor = (c: Concept) => !!c.blocked || !(c.refs || []).length;
   const gateLine = (p: string) => {
     const r = renderers[p];
     if (!r.available) return `${r.label}: no key`;
@@ -312,13 +314,13 @@ export default function QueuePage() {
       <div className="vhead" style={{ marginTop: 8 }}>
         <h2>Queue</h2>
         <span className="spacer" />
-        <span className="m">{pending ? `${pending.length} waiting` : "—"}</span>
+        <span className="m">{pending ? `${pending.filter((c) => !lockedFor(c)).length} waiting` : "—"}</span>
       </div>
 
       <div className="chead">
         <h3>Awaiting approval</h3>
         <span className="m">
-          {pending ? `${pending.length} waiting${pending.some(lockedFor) ? ` · ${pending.filter(lockedFor).length} blocked` : ""}` : ""}
+          {pending ? `${pending.filter((c) => !lockedFor(c)).length} waiting${pending.some(lockedFor) ? ` · ${pending.filter(lockedFor).length} blocked` : ""}` : ""}
         </span>
         <span className="spacer" />
         <span className="m">
@@ -348,7 +350,10 @@ export default function QueuePage() {
           // one reason left, and the only one a restart could ever have fixed
           const noKey = r && !r.available ? `${r.label} key not set` : "";
           const badLength = !!(pick && spec && plan && !plan.timed && !legalDuration(spec.duration as AxisLike, Number(pick.duration)));
-          const why = c.park_reason || (c.reference_image ? "anchors on the keyframe" : "text-to-video · no keyframe yet");
+          // a blocked card says WHY, in the gate's own words, not how it would anchor
+          const why = locked
+            ? `blocked · ${c.blocked || "no reference photos attached"}`
+            : c.park_reason || (c.reference_image ? "anchors on the keyframe" : "text-to-video · no keyframe yet");
           const stills = stillsOf(c);
           const parts = partsOf(c);
           return (

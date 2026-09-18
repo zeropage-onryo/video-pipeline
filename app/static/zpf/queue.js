@@ -270,11 +270,13 @@ async function renderPending() {
      is that three selects became pills behind one 44px button that reads
      the whole choice back ("KLING 2.1 · 5S · 720P"). */
 
-  // a card the reference gate would refuse. _waiting() already keeps such
-  // a row out of this list, so today this is never true of a real card;
-  // it is drawn for the day one arrives, and it is DISPLAY -- the server
-  // refuses the approve whatever the button looks like.
-  const lockedFor = card => !(card.refs || []).length;
+  // A card the reference gate refuses. The server lists these on this
+  // page since 2026-09-17 (`blocked` = preprod.reference_gate's reason),
+  // after every spendable card, so a picked scene with no photos does not
+  // read as a lost pick. DISPLAY ONLY: the approve route asks the gate
+  // itself and refuses whatever this button looks like. The refs check is
+  // the fallback for a payload from before the field existed.
+  const lockedFor = card => !!card.blocked || !(card.refs || []).length;
 
   function pills(role, axis, value, unit) {
     if (axis.kind === 'range') {
@@ -414,7 +416,7 @@ async function renderPending() {
   if (openPop !== null && !cards.has(openPop)) setPop(null);
 
   const lockedCount = data.items.filter(lockedFor).length;
-  $('pendcount').textContent = `${data.items.length} waiting`
+  $('pendcount').textContent = `${data.items.length - lockedCount} waiting`
     + (lockedCount ? ` · ${lockedCount} blocked` : '');
 
   list.innerHTML = data.items.length ? data.items.map(c => {
@@ -422,7 +424,9 @@ async function renderPending() {
     const did = acted.get(c.id);
     const title = esc(c.title || 'Untitled');
     const hero = heroOf(c);
-    const why = c.park_reason
+    // a blocked card says WHY, in the gate's own words, not how it would anchor
+    const why = locked ? `blocked · ${c.blocked || 'no reference photos attached'}`
+      : c.park_reason
       || (c.reference_image ? 'anchors on the keyframe' : 'text-to-video · no keyframe yet');
     return `
     <article class="nc nq${locked ? ' locked' : ''}${did && did.status !== 'RENDERING' ? ' acted' : ''}" data-id="${c.id}">

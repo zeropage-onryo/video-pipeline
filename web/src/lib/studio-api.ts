@@ -151,6 +151,9 @@ export type Concept = {
   shot_done?: boolean;
   subscription?: boolean;
   tool?: string;
+  /** Queue only: why the reference gate refuses this card ("" when it can
+   *  be approved). Listed so a pick does not look lost; never approvable. */
+  blocked?: string;
   /** where each reference came from, parallel to `refs` (app/api.py _ref_sources) */
   ref_sources?: import("./refs").RefSource[];
   /** the prompt gate's own verdict (autonomy.gates_for_concepts), or null
@@ -304,7 +307,7 @@ export const listJobs = () => apiFetch<{ items: (Job & { cancellable?: boolean }
 export const cancelJob = (id: number) => apiFetch<Job>(`/jobs/${id}/cancel`, { method: "POST", body: "{}" });
 export const clearJob = (id: number) => apiFetch<{ deleted: number }>(`/jobs/${id}`, { method: "DELETE" });
 export const queuePending = (brand?: string) =>
-  apiFetch<{ items: Concept[]; runway: RunwayState; renderers?: Record<string, RendererSpec> }>(
+  apiFetch<{ items: Concept[]; spendable?: number; runway: RunwayState; renderers?: Record<string, RendererSpec> }>(
     `/queue/pending${brand ? `?brand=${encodeURIComponent(brand)}` : ""}`,
   );
 /** The pick. Puts a concept in front of the Queue's approval gate;
