@@ -47,8 +47,12 @@ def test_one_flipped_byte_in_any_part_is_bad_signature(signing):
     head, body, mac = token.split(".")
 
     def flip(text):
-        ch = "B" if text[-1] != "B" else "C"
-        return text[:-1] + ch
+        # the FIRST character, never the last: the last base64 character of
+        # a 32-byte mac carries two unused bits, so A -> B there can decode
+        # to the same bytes and the token (correctly) still verifies -- the
+        # test then failed or passed by what second it was minted in
+        ch = "B" if text[0] != "B" else "C"
+        return ch + text[1:]
 
     for broken in (f"{flip(head)}.{body}.{mac}", f"{head}.{flip(body)}.{mac}",
                    f"{head}.{body}.{flip(mac)}", "zpf_notaquote", "", token + ".x"):

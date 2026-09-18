@@ -407,6 +407,23 @@ def execute_graph(graph: dict, *, gemini_client=None, resolve_photo=None,
                     mark_downstream_skipped(node_id, f"upstream skipped: {title}")
                     push((index + 1) / total, f"{title} skipped")
                     continue
+                # A BILLABLE render needs a signed quote (pricing step 5,
+                # 2026-09-18), and Run all has none to carry: the prompt
+                # this node renders is the enhance node's output, which
+                # did not exist when any price was shown. So it is
+                # skipped -- the enhance and the keyframe upstream still
+                # ran -- and the clip is approved at its price in the
+                # Queue. BYOK, and a server that cannot sign, render here
+                # exactly as before.
+                from src import pricing
+                if pricing.configured() and pricing.billable(account_id, pick["provider"]):
+                    states[node_id] = {
+                        "status": "skipped", "kind": None, "output": None,
+                        "error": "billed in credits — Send to Queue and approve "
+                                 "the clip at its quoted price"}
+                    mark_downstream_skipped(node_id, f"upstream skipped: {title}")
+                    push((index + 1) / total, f"{title} skipped")
+                    continue
                 prompt = _input_value(node, "prompt", links, outputs) or ""
                 # Runway anchors a clip on exactly ONE frame (its API
                 # takes a single prompt_image), so of the references this

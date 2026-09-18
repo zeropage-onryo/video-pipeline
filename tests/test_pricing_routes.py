@@ -295,15 +295,71 @@ def test_a_token_with_no_secret_is_503_with_the_command(signing, monkeypatch):
     assert "called" not in entered
 
 
-def test_an_approve_without_tokens_still_works_for_now(signing, monkeypatch):
-    """Step 4 accepts a missing token (the front ends catch up); step 5
-    makes it required, in one commit with the markup."""
+# guards: `priced["signed"] or` in queue_approve (step 5)
+def test_a_billable_approve_without_a_quote_does_not_render(signing, monkeypatch):
+    entered = never_submits(monkeypatch, runway)
+    scene = a_queued_scene(signing)
+    for body in (None, {}, {"tokens": []}, {"tokens": [""]}):
+        res = client.post(f"/api/queue/{scene}/approve", json=body)
+        assert res.status_code == 400, res.text
+        assert res.json()["error"]["code"] == "missing_quote"
+    assert "called" not in entered
+
+
+# guards: the requirement reading display()'s `signed`, not configured() alone
+def test_a_byok_render_still_approves_without_a_quote(signing, monkeypatch):
+    monkeypatch.setattr(pricing, "billable", lambda account_id, provider: False)
     seen = {}
     monkeypatch.setattr(runway, "generate_for_shot",
                         lambda *a, **kw: seen.update(kw) or {"ok": True, "media_url": "https://x/c.mp4"})
     scene = a_queued_scene(signing)
+    quote = card_for(scene)["quote"]
+    assert quote["byok"] is True and quote["signed"] is False
+    assert quote["renders"][0]["token"] is None
     res = client.post(f"/api/queue/{scene}/approve")
     assert res.status_code == 200 and wait_for_job(res.json()["job_id"])["status"] == "done"
+    assert seen["approved"] is True
+
+
+def test_a_server_with_no_secret_is_not_locked_out(tmp_db, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(runway, "generate_for_shot",
+                        lambda *a, **kw: seen.update(kw) or {"ok": True, "media_url": "https://x/c.mp4"})
+    scene = a_queued_scene(tmp_db)
+    res = client.post(f"/api/queue/{scene}/approve")
+    assert res.status_code == 200 and wait_for_job(res.json()["job_id"])["status"] == "done"
+
+
+# guards: the _quote_required line in shot_generate
+def test_the_boards_render_button_sends_a_billable_render_to_the_queue(signing, monkeypatch):
+    entered = never_submits(monkeypatch, runway)
+    scene = a_queued_scene(signing)
+    res = client.post(f"/api/concepts/{scene}/shots/1/generate")
+    assert res.status_code == 400 and res.json()["error"]["code"] == "missing_quote"
+    assert "Queue" in res.json()["error"]["message"]
+    assert "called" not in entered
+    # BYOK renders there as it always did
+    monkeypatch.setattr(pricing, "billable", lambda account_id, provider: False)
+    monkeypatch.setattr(runway, "generate_for_shot",
+                        lambda *a, **kw: {"ok": True, "media_url": "https://x/c.mp4"})
+    assert client.post(f"/api/concepts/{scene}/shots/1/generate").status_code == 200
+
+
+# guards: the _quote_required line in generate_run -- before the job, so no
+# Gemini call is made for a clip that will not render
+def test_the_composers_video_branch_sends_a_billable_render_to_the_queue(signing, monkeypatch):
+    from app import jobs
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    started = []
+    monkeypatch.setattr(jobs, "start", lambda *a, **kw: started.append(a) or {"id": 1})
+    res = client.post("/api/generate/run", data={"prompt": "a man laces his boots",
+                                                 "output": "video"})
+    assert res.status_code == 400 and res.json()["error"]["code"] == "missing_quote"
+    assert not started
+    # an image is cents on the operator's Gemini key and is not quoted
+    res = client.post("/api/generate/run", data={"prompt": "a man laces his boots",
+                                                 "output": "image"})
+    assert res.status_code == 200 and started
 
 
 # guards: the token branch in workflow_exec_generate
@@ -329,6 +385,13 @@ def test_the_director_run_carries_its_quote(signing, monkeypatch):
     preprod.update_concept_shots(scene, {"shots": shots}, account_id=None)
     res = client.post("/api/workflows/exec/generate", json=body)
     assert res.status_code == 400 and res.json()["error"]["code"] == "stale_content"
+    assert not entered
+    # step 5: the same run with NO token is refused before the adapter
+    res = client.post("/api/workflows/exec/generate",
+                      json={k: v for k, v in body.items() if k != "token"})
+    assert res.status_code == 400 and res.json()["error"]["code"] == "missing_quote"
+    res = client.post("/api/workflows/exec/generate", json={"prompt": "a free-standing node"})
+    assert res.status_code == 400 and res.json()["error"]["code"] == "missing_quote"
     assert not entered
     # a free-standing node cannot carry one
     res = client.post("/api/workflows/exec/generate", json={"prompt": "p", "token": token})
