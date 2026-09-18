@@ -323,6 +323,11 @@ function Composer() {
         if (brand) form.append("brand", brand);
         form.append("guide_provider", "gemini");
         form.append("idea", asked);
+        // The same Fast / Reasoning pill Create sends. Without it the
+        // Guide answered every turn on the reasoning tier -- ~1.5c a
+        // message for "which direction?" -- and the pill did nothing
+        // in this mode. Server clamps it; absent means Fast.
+        if (brain) form.append("brain", brain);
         // The same photos a Create would carry: the guide grounds on them
         // (scene_chain.ground) and the model is shown them, so it can
         // answer about a face instead of asking where the photos are.
@@ -728,7 +733,7 @@ function Composer() {
               <span className="spacer" />
               {brains.length ? (
                 <PillMenu
-                  heading="Which model writes"
+                  heading={mode === "guide" ? "Which model answers" : "Which model writes"}
                   value={brain}
                   onChange={setBrain}
                   options={brains}
