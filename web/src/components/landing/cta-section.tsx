@@ -21,7 +21,7 @@ export function CtaSection() {
           <span className="text-primary">on your mind.</span>
         </h2>
         <p className="max-w-lg text-balance text-sm font-light leading-relaxed text-muted-foreground">
-          Start with whatever you have. ZeroPage helps you develop the direction, build the scene,
+          Start with whatever you have. Zero Page helps you develop the direction, build the scene,
           and turn the idea into an image or video.
         </p>
         <Button className="h-12 px-8" render={<Link href="/studio" />}>
