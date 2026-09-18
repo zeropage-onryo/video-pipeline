@@ -406,6 +406,11 @@ export const queuePending = (brand?: string) =>
   apiFetch<{ items: Concept[]; spendable?: number; runway: RunwayState; renderers?: Record<string, RendererSpec> }>(
     `/queue/pending${brand ? `?brand=${encodeURIComponent(brand)}` : ""}`,
   );
+/** GET /api/queue/count -- the rail badge's number and nothing else. The
+ *  listing prices every card (signed quotes, a default and the renderer
+ *  state per request), which is seconds of work the badge never needed
+ *  and used to repeat on every studio page. */
+export const queueCount = () => apiFetch<{ spendable: number; blocked: number }>("/queue/count");
 /** The pick. Puts a concept in front of the Queue's approval gate;
  *  approving THERE is what renders. */
 export const pickConcept = (id: number, picked = true) =>

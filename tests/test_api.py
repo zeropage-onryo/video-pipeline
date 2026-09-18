@@ -204,6 +204,33 @@ def test_the_card_carries_the_gates_verdict_or_says_it_was_never_scored(tmp_db):
     assert waiting["id"] == scored and waiting["gate"]["score"] == 4
 
 
+def test_the_queue_count_agrees_with_the_listing_and_prices_nothing(tmp_db, monkeypatch):
+    """The badge's route counts the SAME rows /queue/pending lists, split the
+    same way, and never reaches the pricing the listing does per card."""
+    ready = preprod.save_concept(
+        {"title": "Ready", "hook": "h", "logline": "l",
+         "shots": [{"n": 1, "prompt": "a long enough scene prompt " * 3,
+                    "refs": ["/refs/a.jpg"]}]},
+        brand="antihero", dsn=tmp_db, account_id=None)
+    bare = preprod.save_concept(
+        {"title": "Bare", "hook": "h", "logline": "l",
+         "shots": [{"n": 1, "prompt": "a long enough scene prompt " * 3}]},
+        brand="antihero", dsn=tmp_db, account_id=None)
+    for cid in (ready, bare):
+        preprod.set_picked(cid, True, dsn=tmp_db, account_id=None)
+
+    listing = client.get("/api/queue/pending").json()
+    priced = []
+    monkeypatch.setattr(api_mod, "_card_quote", lambda *a, **k: priced.append(1))
+    monkeypatch.setattr(api_mod, "_renderers_state", lambda *a, **k: priced.append(1))
+    counted = client.get("/api/queue/count").json()
+
+    assert counted["spendable"] == listing["spendable"]
+    assert counted["blocked"] == sum(1 for c in listing["items"] if c["blocked"])
+    assert counted["spendable"] + counted["blocked"] == len(listing["items"]) == 2
+    assert priced == []
+
+
 def test_the_card_says_where_each_reference_came_from(tmp_db):
     """`ref_sources` is parallel to `refs` (which is untouched -- its order
     anchors the render): a scouted frame carries the page it was taken

@@ -2389,6 +2389,33 @@ def queue_pending(brand: Optional[str] = None, account_id: int = Depends(auth.cu
             "renderers": _renderers_state(account_id)}
 
 
+@router.get("/queue/count")
+def queue_count(brand: Optional[str] = None,
+                account_id: int = Depends(auth.current_account_id)):
+    """How many cards are waiting -- and NOTHING else (2026-09-18).
+
+    The rail's badge is on every studio page and re-asks on every pick,
+    decision and finished job. It used to call /queue/pending for one
+    number, and that route prices every card: signed quotes, a render
+    default and the renderer state per request. Timed against the live
+    database for four cards: the rows 2.4s, the quotes 21.7s, the defaults
+    12.9s, the renderer state 7.4s -- and the badge fired it unbranded on
+    top of the page's own call, so the Queue page waited behind its own
+    badge. This walks the same `_waiting` rows the listing does and counts
+    them, so the two cannot disagree about what "waiting" means.
+
+    `spendable` is the badge's number (the listing's own field, same
+    meaning: a card the reference gate blocks is waiting on photographs,
+    not on a spend); `blocked` is the rest."""
+    spendable = blocked = 0
+    for _concept, card in _waiting(account_id, brand, include_blocked=True):
+        if card.get("blocked"):
+            blocked += 1
+        else:
+            spendable += 1
+    return {"spendable": spendable, "blocked": blocked}
+
+
 def _lane_models() -> list:
     """The lane's legal models, each with what it may claim, for the
     drop card's controls. `render_specs` is the one table; this is a
