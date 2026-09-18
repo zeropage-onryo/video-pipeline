@@ -882,6 +882,20 @@ button.tag:hover {
   background: rgb(255 255 255 / 0.04);
   color: var(--text);
 }
+/* a turn the guide never answered: said on the bubble, not only in
+   the note line under the pills */
+.cmsg.failed {
+  border-color: var(--signal);
+  color: var(--dim);
+}
+.cmsg-failed {
+  display: block;
+  margin-top: 6px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--signal);
+}
 .cchoices {
   display: flex;
   flex-wrap: wrap;
