@@ -418,3 +418,38 @@ Not done, deliberately:
 - **`nightly_runs.spent_usd`.** The meter (`costs.spent_since`) just sums `generations.cost_usd`; so any under-report is in what the *adapters write*. Not diagnosed, only read; the candidates are: `runway.py:433` omits `ratio`, `fal.py:840` omits `resolution`, and the `generate_from_prompt` rows (`runway.py:798`, `fal.py:1023`, `higgsfield.py:947`) omit `duration`. Fixing it means editing the adapters' write sites, which is steps 4–6's territory, and it should start by comparing real rows to `pricing.estimate` rather than from this list.
 - `ledger.credits_for_usd` still has its one caller, `hold_for_render` (step 6). `test_at_cost_it_charges_what_the_ledger_always_did` pins the two together at 1.0x for every model.
 - `QUOTE_SIGNING_SECRET` is not in `POSTURE_ENV` yet because nothing reads it yet; it goes in with the first line of step 4.
+
+## Live attempt, 2026-09-18 — after the merge
+
+Steps 1–4 merged to `main` as PR #21 (`7ddb947`); the branch named at the top of "As built" is
+deleted. `QUOTE_SIGNING_SECRET` is set on Fly (`zeropage-studio`) and `pricing.configured()`
+reads `True` there. Rotating it invalidates every outstanding quote; cards re-quote on next load.
+
+**Verified in production:** cards carry `signed: true`, one token per render,
+`pricing_version 2026-09-17-video-v1`. **Not verified:** that the approve body carried the token
+— the request body was not captured.
+
+**The one real API-billed render step 6 needs did not happen.** Runway and fal are
+`available: false` on the deployed API (most likely `RUNWAYML_API_SECRET` / `FAL_KEY` live only
+in the Mac's `.env`, not in Fly's secrets — not checked); only `higgsfield` and `veo` are
+available, so a shot whose tool is `RUNWAY` shows a Kling default on the live card — that is
+`render_default`'s documented preference-with-fallback, not a bug. Mike approved #361 "The
+Crimson Descent" on Higgsfield `kling2.1`, 5 s, $0.40: `POST /api/queue/361/approve` answered
+200 with signing on, and the job failed at the provider submit with **`HTTP Error 423: Locked`**
+— the Higgsfield account (billing / API access), not the request. Nothing rendered, nothing
+charged, Higgsfield's daily count still 0, #361 still waiting.
+
+Prices read off the live `/quote` for #361: Runway `gen4_turbo` 5 s $0.25 / 10 s $0.50, `gen4.5`
+5 s $0.60 / 10 s $1.20; Higgsfield `kling2.1` and `kling2.5` 5 s $0.40. Unreachable models were
+refused with the reason (`bad_render_choice`).
+
+To unblock: the Runway key into Fly's secrets (then #361 on `gen4_turbo` 5 s, $0.25), or the
+Higgsfield lock cleared (then Kling, $0.40). Confirm the exact spend with Mike before the click.
+Expected on success: a `generations` row under a vendor tool, `cost_usd` filled, `key_source`
+set, `media_url` on #361 — then read what the nightly `spent_usd` says about it.
+
+Two findings from the attempt are filed as BACKLOG #18 (a failed submit leaves no `generations`
+row — step 6's hold-before-submit must leave one and release) and #19 (the React Queue's brand
+scoping and dead account switch). The handoff for steps 5–6 is
+`docs/tasks/task-pricing-and-quotes-handoff-2.md`.
+
