@@ -2850,3 +2850,21 @@ textarea.zin {
   font-size: 12px;
   font-family: var(--body);
 }
+
+/* the page heads on a phone: the 42px gutters leave a 306px column at
+   390, and the board's search + three pills do not fit one line */
+@media (max-width: 720px) {
+  .vhead,
+  .chead {
+    padding: 0 16px;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .chead .csearch {
+    order: 3;
+    flex: 1 1 100%;
+  }
+  .chead .csearch input {
+    width: 100%;
+  }
+}
