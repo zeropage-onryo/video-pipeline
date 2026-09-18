@@ -333,6 +333,19 @@ def get_location(location_id: int, dsn: Optional[str] = None, *,
     return _location_row(row) if row else None
 
 
+def delete_location(location_id: int, dsn: Optional[str] = None, *,
+                    account_id: int) -> None:
+    """Drop a place. concept_locations cascades, so a concept that named
+    the room keeps its row and simply stops pointing at a described
+    space (validate_concept will flag the name on its next pass). The
+    photos in locations/<slug>/ and the bucket are not touched."""
+    with connect(dsn) as conn:
+        conn.execute(
+            "DELETE FROM locations WHERE id = %s AND account_id IS NOT DISTINCT FROM %s",
+            (location_id, account_id),
+        )
+
+
 def get_location_by_name(name: str, dsn: Optional[str] = None, *,
                          account_id: int) -> Optional[dict[str, Any]]:
     with connect(dsn) as conn:

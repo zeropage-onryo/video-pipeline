@@ -908,6 +908,19 @@ def test_delete_character_drops_the_shelf_chunk(tmp_db, monkeypatch):
     assert client.delete(f"/api/assets/characters/{cid}").status_code == 404
 
 
+def test_delete_location_drops_the_row_and_the_shelf_chunk(tmp_db, monkeypatch):
+    dropped = []
+    monkeypatch.setattr(api_mod.rag, "connect", lambda db_url=None: _RagConn())
+    monkeypatch.setattr(api_mod.rag, "delete_source",
+                        lambda conn, source: dropped.append(source) or 1)
+    lid = preprod.add_location("Old Garage", {"space": "a garage"}, dsn=tmp_db, account_id=None)
+    res = client.delete(f"/api/assets/locations/{lid}")
+    assert res.json()["deleted"] == lid
+    assert preprod.get_location(lid, dsn=tmp_db, account_id=None) is None
+    assert dropped == ["assets/location-old-garage"]
+    assert client.delete(f"/api/assets/locations/{lid}").status_code == 404
+
+
 def test_create_asset_survives_a_down_store(tmp_db, tmp_path, monkeypatch):
     """The degrade contract: the save always lands; the shelf chunk is
     best-effort and its failure is reported, not raised."""

@@ -1,30 +1,39 @@
 "use client";
 
 /* Studio — where an idea is typed, and the only place (2026-09-11,
-   ported from the Vite composer onto the Next shell). One box, a count
-   of 1–4 takes, references from uploads or the asset bank, and Create
-   posts multipart to /api/scenes/run — the same route the Jinja
-   composer posts. Create WRITES concepts and stops on the board:
-   enhancing, keyframing and rendering are the Director's job.
+   ported from the Vite composer onto the Next shell). One box,
+   references from uploads or the asset bank, and Create posts multipart
+   to /api/scenes/run — the same route the Jinja composer posts. Create
+   WRITES concepts and stops on the board: enhancing, keyframing and
+   rendering are the Director's job.
+
+   ONE Create writes ONE scene (2026-09-10, Mike's call; the server
+   enforces it as SCENE_COUNT_MAX = 1). The 1–4 takes pill this page
+   shipped with promised four and delivered one, so it is gone
+   (2026-09-15) and the result card names the scene that was written.
 
    Guide mode (talk the idea through first) shows only when the server
-   reports the creative_guide capability; on this branch it does not
-   exist yet, so Create is the primary action rather than a button that
-   404s. The model / length / frame pills likewise appear only when
-   their routes answer. */
+   reports the creative_guide capability, so Create is the primary action
+   rather than a button that 404s. The model / length / frame pills
+   likewise appear only when their routes answer. */
 import Link from "next/link";
-import { Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   AtSign,
   Brain,
+  Clapperboard,
   Clock,
+  Ellipsis,
   Image as ImageIcon,
+  ImageOff,
   MessageSquare,
   Play,
   Plus,
   RectangleVertical,
+  Search,
   Sparkles,
+  Workflow,
   X,
 } from "lucide-react";
 import { API_URL, apiFetch } from "@/lib/api";
@@ -44,6 +53,9 @@ import {
 } from "@/lib/studio-api";
 import { useMentions } from "@/components/studio/mentions";
 import { useShell } from "@/components/studio/shell";
+import { AddElement } from "@/components/studio/add-element";
+import { ElementSheet } from "@/components/studio/element-sheet";
+import { ELEMENT_KINDS, displayPhoto, drawable, elementKind, isElement, kindLabel, type ElementKind } from "@/lib/elements";
 
 type Attachment = { id: string; name: string; file: File; url: string };
 type Option = { id: string; label: string; note?: string };
@@ -60,8 +72,19 @@ type GuideMessage = {
   proposal?: GuideProposal | null;
   decided?: "done" | "skipped";
 };
+type Written = { conceptId: number | null; detail: string };
+/* the shelf under the box is ELEMENTS only -- the characters, props,
+   products and places a person created to @ in a prompt (Mike's call,
+   2026-09-15). Blank until one exists; the Assets wall's generated
+   stills never appear here. */
+type Filter = "all" | ElementKind;
 
-const COUNTS = [1, 2, 3, 4];
+const FILTERS: [Filter, string][] = [
+  ["all", "All elements"],
+  ...ELEMENT_KINDS.map(({ id, label }) => [id, label] as [Filter, string]),
+];
+
+const FRAMES_PER_ASSET = 3;
 
 function PillMenu({
   heading,
@@ -124,15 +147,20 @@ export default function StudioPage() {
   );
 }
 
+const imageFiles = (list: FileList | File[] | null | undefined) =>
+  Array.from(list ?? []).filter((f) => f.type.startsWith("image/"));
+
 function Composer() {
   const { brand, toast } = useShell();
   const params = useSearchParams();
   const attachId = params.get("attach");
   const [idea, setIdea] = useState("");
-  const [count, setCount] = useState(4);
   const [caps, setCaps] = useState<Capabilities>({});
   const [assets, setAssets] = useState<Asset[]>([]);
-  const [filter, setFilter] = useState<"all" | Asset["category"]>("all");
+  const [filter, setFilter] = useState<Filter>("all");
+  const [query, setQuery] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [open, setOpen] = useState<Asset | null>(null);
   const [picked, setPicked] = useState<string[]>([]); // asset photo urls
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [busy, setBusy] = useState(false);
@@ -144,6 +172,9 @@ function Composer() {
   // raises the shell's error toast, which is the loud surface.
   const [note, setNote] = useState<string | null>(null);
   const [noteBad, setNoteBad] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [written, setWritten] = useState<Written | null>(null);
+  const [dragging, setDragging] = useState(false);
   const [wantMode, setMode] = useState<"guide" | "create">("guide");
   const [thread, setThread] = useState<GuideMessage[]>([]);
   const [choices, setChoices] = useState<string[]>([]);
@@ -157,6 +188,12 @@ function Composer() {
   const [ratio, setRatio] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
+  const dragDepth = useRef(0);
+
+  const loadAssets = () =>
+    getAssets()
+      .then((r) => setAssets(r.items))
+      .catch(() => setAssets([]));
 
   useEffect(() => {
     getCapabilities().then(setCaps).catch(() => setCaps({}));
@@ -165,7 +202,7 @@ function Composer() {
         setAssets(r.items);
         // "Use in a shot" on Assets lands here with the asset attached
         const hit = attachId ? r.items.find((a) => a.id === attachId) : null;
-        if (hit) setPicked(hit.photos.slice(0, 3));
+        if (hit) setPicked(hit.photos.slice(0, FRAMES_PER_ASSET));
       })
       .catch(() => setAssets([]));
     apiFetch<{ brains: { id: string; label: string; note: string }[]; default: string }>("/brains")
@@ -189,6 +226,12 @@ function Composer() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // object URLs for uploads are revoked when the composer unmounts
+  useEffect(() => {
+    return () => attachments.forEach((a) => URL.revokeObjectURL(a.url));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Guide only when the server says the route is there; otherwise the
   // primary action is Create rather than a button that 404s
   const guideReady = caps.creative_guide === true;
@@ -197,7 +240,7 @@ function Composer() {
   // @Michael in the box attaches his frames as references
   const attachAsset = (hit: AssetHit) => {
     const asset = assets.find((a) => a.name === hit.name && a.category === hit.category);
-    const urls = asset ? asset.photos.slice(0, 3) : hit.thumb ? [hit.thumb] : [];
+    const urls = asset ? asset.photos.slice(0, FRAMES_PER_ASSET) : hit.thumb ? [hit.thumb] : [];
     if (!urls.length) {
       toast(`${hit.name} has no photos on file — add some on Elements`, "err");
       return;
@@ -208,6 +251,7 @@ function Composer() {
   const mentions = useMentions(textarea, idea, setIdea, attachAsset);
 
   const canSend = !busy && (mode === "create" ? !!(idea.trim() || brief.trim()) : !!idea.trim());
+  const referenceCount = picked.length + attachments.length;
 
   const say = (text: string | null, bad = false) => {
     setNote(text);
@@ -218,6 +262,8 @@ function Composer() {
   async function send() {
     if (!canSend) return;
     setBusy(true);
+    setProgress(0);
+    setWritten(null);
     say(null);
     let asking: GuideMessage[] | null = null;
     try {
@@ -225,18 +271,23 @@ function Composer() {
         const form = new FormData();
         form.append("idea", brief.trim() || idea.trim());
         if (brand) form.append("brand", brand);
-        form.append("count", String(count));
+        form.append("count", "1");
         if (brain) form.append("brain", brain);
         if (seconds) form.append("seconds", String(seconds));
         if (ratio) form.append("ratio", ratio);
         picked.forEach((u) => form.append("refs", u));
         attachments.forEach((a) => form.append("files", a.file, a.name));
         const started = await runScenes(form);
-        say("Writing — the takes appear on Pipeline as they land…");
-        const job = await waitForJob(started.job_id, (j) => say(j.detail || "Writing…"));
+        say("Writing the scene…");
+        const job = await waitForJob(started.job_id, (j) => {
+          setProgress(j.progress || 0);
+          say(j.detail || "Writing the scene…");
+        });
         if (job.status === "done") {
-          say(`Done — ${job.detail || "on the board"}`);
-          toast(`${count} take${count === 1 ? "" : "s"} written · open Pipeline to pick`);
+          setProgress(1);
+          say(null);
+          setWritten({ conceptId: job.ref_id ?? null, detail: job.detail || "on the board" });
+          toast("Scene written · it is on Pipeline to pick");
           setIdea("");
           announceQueueChange();
         } else {
@@ -263,9 +314,10 @@ function Composer() {
         // nothing at all, since the thread and the box are already
         // cleared by then.
         const started = await runCreativeGuide(form);
-        const job = await waitForJob(started.job_id, (j) =>
-          say(j.detail || "Considering your direction…"),
-        );
+        const job = await waitForJob(started.job_id, (j) => {
+          setProgress(j.progress || 0);
+          say(j.detail || "Considering your direction…");
+        });
         const reply = (job as unknown as { reply?: GuideReply }).reply;
         if (job.status !== "done" || !reply) throw new Error(job.error || "The guide stopped.");
         setThread([
@@ -328,31 +380,97 @@ function Composer() {
     }
   }
 
-  const attach = (files: FileList | null) => {
-    if (!files) return;
+  const attach = (files: FileList | File[] | null | undefined) => {
+    const images = imageFiles(files);
+    if (!images.length) return;
     setAttachments((was) => [
       ...was,
-      ...Array.from(files).map((f) => ({
+      ...images.map((f) => ({
         id: crypto.randomUUID(),
         name: f.name,
         file: f,
         url: URL.createObjectURL(f),
       })),
     ]);
+    toast(`${images.length} image${images.length === 1 ? "" : "s"} attached as reference`);
+  };
+  const removeAttachment = (id: string) =>
+    setAttachments((w) => {
+      const gone = w.find((x) => x.id === id);
+      if (gone) URL.revokeObjectURL(gone.url);
+      return w.filter((x) => x.id !== id);
+    });
+
+  /* drop anywhere on the box; the depth counter keeps the highlight
+     steady while the cursor crosses the box's own children */
+  const onDragEnter = (e: DragEvent) => {
+    if (!e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault();
+    dragDepth.current += 1;
+    setDragging(true);
+  };
+  const onDragLeave = () => {
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setDragging(false);
+  };
+  const onDrop = (e: DragEvent) => {
+    e.preventDefault();
+    dragDepth.current = 0;
+    setDragging(false);
+    attach(e.dataTransfer.files);
   };
 
-  const shown = assets.filter((a) => filter === "all" || a.category === filter);
-  const counts = {
-    all: assets.length,
-    character: assets.filter((a) => a.category === "character").length,
-    location: assets.filter((a) => a.category === "location").length,
-    prop: assets.filter((a) => a.category === "prop").length,
-  };
+  const elements = useMemo(() => assets.filter(isElement), [assets]);
+  const counts = useMemo(() => {
+    const c: Record<Filter, number> = { all: elements.length, character: 0, prop: 0, product: 0, place: 0 };
+    for (const a of elements) {
+      const k = elementKind(a);
+      if (k) c[k] += 1;
+    }
+    return c;
+  }, [elements]);
+  const shown = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    const pool = filter === "all" ? elements : elements.filter((a) => elementKind(a) === filter);
+    const hit = needle
+      ? pool.filter((a) => `${a.name} ${a.text || ""}`.toLowerCase().includes(needle))
+      : pool;
+    // things with frames first: an empty plate cannot be attached
+    return [...hit].sort((a, b) => Number(!!b.photos.length) - Number(!!a.photos.length));
+  }, [elements, filter, query]);
+
   const togglePlate = (a: Asset) => {
-    const urls = a.photos.slice(0, 3);
+    const urls = a.photos.slice(0, FRAMES_PER_ASSET);
+    if (!urls.length) {
+      toast(`${a.name} has no frames yet — add photos on Elements`, "err");
+      return;
+    }
     const on = urls.some((u) => picked.includes(u));
     setPicked((was) => (on ? was.filter((u) => !urls.includes(u)) : [...new Set([...was, ...urls])]));
   };
+
+  const modeSwitch = guideReady ? (
+    <span className="cmode" role="radiogroup" aria-label="What Send does">
+      <button
+        type="button"
+        role="radio"
+        aria-checked={mode === "guide"}
+        title="Talk the idea through first"
+        onClick={() => setMode("guide")}
+      >
+        <MessageSquare strokeWidth={1.6} /> Guide
+      </button>
+      <button
+        type="button"
+        role="radio"
+        aria-checked={mode === "create"}
+        title="Write the scene from what is in the box"
+        onClick={() => setMode("create")}
+      >
+        <Play strokeWidth={1.6} /> Create
+      </button>
+    </span>
+  ) : null;
 
   return (
     <section className="view" style={{ paddingTop: 0 }}>
@@ -363,7 +481,30 @@ function Composer() {
           want to create?
         </h1>
         <div className="stack">
-          <div className={`glass cbox${idea ? " awake" : ""}`}>
+          <div
+            className={`glass cbox${idea ? " awake" : ""}${dragging ? " drop" : ""}${busy ? " busy" : ""}`}
+            onDragEnter={onDragEnter}
+            onDragOver={(e) => e.preventDefault()}
+            onDragLeave={onDragLeave}
+            onDrop={onDrop}
+          >
+            {busy ? (
+              <span
+                className="cprogress"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={1}
+                aria-valuenow={progress}
+                style={{ width: `${Math.max(6, Math.round(progress * 100))}%` }}
+              />
+            ) : null}
+            {dragging ? (
+              <span className="cdrop" aria-hidden>
+                <ImageIcon strokeWidth={1.5} />
+                Drop to attach as a reference
+              </span>
+            ) : null}
+
             {thread.length && mode === "guide" ? (
               <div className="cthread">
                 {thread.map((m, i) => (
@@ -440,17 +581,19 @@ function Composer() {
               </button>
               {attachments.map((a) => (
                 <span key={a.id} className="cattach" title={a.name} style={{ backgroundImage: `url(${a.url})` }}>
-                  <button
-                    type="button"
-                    aria-label={`Remove ${a.name}`}
-                    onClick={() => setAttachments((w) => w.filter((x) => x.id !== a.id))}
-                  >
+                  <button type="button" aria-label={`Remove ${a.name}`} onClick={() => removeAttachment(a.id)}>
                     <X strokeWidth={2} />
                   </button>
                 </span>
               ))}
               {picked.map((u) => (
-                <span key={u} className="cattach" title={u} style={{ backgroundImage: `url(${API_URL}${u})` }}>
+                <span
+                  key={u}
+                  className={`cattach${drawable(u) ? "" : " raw"}`}
+                  title={u}
+                  data-ext={drawable(u) ? undefined : u.split(".").pop()?.split("?")[0]?.toUpperCase()}
+                  style={drawable(u) ? { backgroundImage: `url(${API_URL}${u})` } : undefined}
+                >
                   <button
                     type="button"
                     aria-label="Remove reference"
@@ -460,8 +603,31 @@ function Composer() {
                   </button>
                 </span>
               ))}
+              {referenceCount > 1 ? (
+                <button
+                  type="button"
+                  className="cclear"
+                  onClick={() => {
+                    attachments.forEach((a) => URL.revokeObjectURL(a.url));
+                    setAttachments([]);
+                    setPicked([]);
+                  }}
+                >
+                  Clear {referenceCount}
+                </button>
+              ) : null}
             </div>
-            <input ref={fileInput} type="file" accept="image/*" multiple hidden onChange={(e) => attach(e.target.files)} />
+            <input
+              ref={fileInput}
+              type="file"
+              accept="image/*"
+              multiple
+              hidden
+              onChange={(e) => {
+                attach(e.target.files);
+                e.target.value = "";
+              }}
+            />
 
             <div style={{ position: "relative" }}>
               <textarea
@@ -473,6 +639,16 @@ function Composer() {
                 onKeyDown={(e) => {
                   if (mentions.onKeyDown(e)) return;
                   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void send();
+                }}
+                onPaste={(e) => {
+                  const files = Array.from(e.clipboardData.items)
+                    .filter((it) => it.kind === "file")
+                    .map((it) => it.getAsFile())
+                    .filter((f): f is File => !!f);
+                  if (imageFiles(files).length) {
+                    e.preventDefault();
+                    attach(files);
+                  }
                 }}
                 onBlur={mentions.onBlur}
                 placeholder={
@@ -494,34 +670,31 @@ function Composer() {
               </div>
             ) : null}
 
+            {written ? (
+              <div className="cresult" role="status">
+                <span className="m">Scene written · {written.detail}</span>
+                <span className="cresult-links">
+                  <Link href="/studio/pipeline" className="pill chosen">
+                    <Workflow strokeWidth={1.6} /> Pick on Pipeline
+                  </Link>
+                  {written.conceptId ? (
+                    <Link href={`/studio/flows?concept=${written.conceptId}&shot=1`} className="pill">
+                      <Clapperboard strokeWidth={1.6} /> Open in Director
+                    </Link>
+                  ) : null}
+                  <button type="button" className="pill" onClick={() => setWritten(null)}>
+                    Write another
+                  </button>
+                </span>
+              </div>
+            ) : null}
+
             <div className="cfoot">
-              {guideReady ? (
-                <PillMenu
-                  heading="Send does"
-                  value={mode}
-                  onChange={(id) => setMode(id as "guide" | "create")}
-                  options={[
-                    { id: "guide", label: "Guide", note: "Talk the idea through first." },
-                    { id: "create", label: "Create", note: "Write scenes from what is in the box." },
-                  ]}
-                  trigger={(open) => (
-                    <button type="button" className="pill chosen" aria-expanded={open}>
-                      {mode === "create" ? <Play strokeWidth={1.6} /> : <MessageSquare strokeWidth={1.6} />}
-                      {mode === "create" ? "Create" : "Guide"}
-                    </button>
-                  )}
-                />
-              ) : null}
+              {modeSwitch}
               <button type="button" className="pill" title="Add media" onClick={() => fileInput.current?.click()}>
                 <Plus strokeWidth={1.6} />
               </button>
-              <span
-                className={`m cnote${noteBad ? " bad" : ""}`}
-                role={noteBad ? "alert" : undefined}
-                title={noteBad && note ? note : undefined}
-              >
-                {note ?? "references ride into every node — prompt, keyframe and clip"}
-              </span>
+              <span className="spacer" />
               {brains.length ? (
                 <PillMenu
                   heading="Which model writes"
@@ -567,22 +740,26 @@ function Composer() {
                   )}
                 />
               ) : null}
-              <PillMenu
-                heading="How many takes"
-                value={String(count)}
-                onChange={(v) => setCount(Number(v))}
-                options={COUNTS.map((n) => ({ id: String(n), label: `${n} concept${n === 1 ? "" : "s"}` }))}
-                end
-                trigger={(open) => (
-                  <button type="button" className="pill" aria-expanded={open}>
-                    {count} concept{count === 1 ? "" : "s"}
-                  </button>
-                )}
-              />
               <button type="button" className="go" disabled={!canSend} onClick={() => void send()}>
                 <Sparkles strokeWidth={2} />
-                {busy ? "Writing…" : mode === "create" ? "Create" : "Send"}
+                {busy ? (mode === "create" ? "Writing…" : "Thinking…") : mode === "create" ? "Create" : "Send"}
               </button>
+            </div>
+            <div className="cstatus">
+              <span
+                className={`m cnote${noteBad ? " bad" : note && !busy && !written ? " said" : ""}`}
+                role={noteBad ? "alert" : undefined}
+                title={noteBad && note ? note : undefined}
+              >
+                {note ??
+                  (referenceCount
+                    ? `${referenceCount} reference${referenceCount === 1 ? "" : "s"} attached · they ride into the prompt, the keyframe and the clip`
+                    : "references ride into every node — prompt, keyframe and clip")}
+              </span>
+              <span className="m ckbd">
+                <kbd>⌘</kbd>
+                <kbd>⏎</kbd> {mode === "create" ? "create" : "send"}
+              </span>
             </div>
           </div>
         </div>
@@ -590,14 +767,7 @@ function Composer() {
 
       <div className="row">
         <div className="rowfilters">
-          {(
-            [
-              ["all", "All"],
-              ["location", "Rooms"],
-              ["character", "Characters"],
-              ["prop", "Props"],
-            ] as const
-          ).map(([id, label]) => (
+          {FILTERS.map(([id, label]) => (
             <button
               type="button"
               key={id}
@@ -609,7 +779,21 @@ function Composer() {
               <u>{counts[id]}</u>
             </button>
           ))}
+          <label className="csearch">
+            <Search strokeWidth={1.6} />
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Find an element…"
+              aria-label="Find an element"
+            />
+          </label>
           <span className="spacer" />
+          <button type="button" className="cat" onClick={() => setAdding(true)}>
+            <Plus strokeWidth={2} size={12} style={{ marginRight: 6, verticalAlign: -2 }} />
+            New element
+          </button>
           <Link href="/studio/elements" className="cat">
             Elements ↗
           </Link>
@@ -617,32 +801,94 @@ function Composer() {
         {shown.length ? (
           <div className="hrail">
             {shown.map((a) => {
-              const on = a.photos.slice(0, 3).some((u) => picked.includes(u));
+              const frames = a.photos.length;
+              const on = a.photos.slice(0, FRAMES_PER_ASSET).some((u) => picked.includes(u));
+              const kind = kindLabel(elementKind(a) ?? "prop");
               return (
-                <button
-                  type="button"
-                  key={a.id}
-                  className="plate"
-                  aria-pressed={on}
-                  title={on ? "Attached — click to detach" : "Attach as a reference"}
-                  style={a.poster ? { backgroundImage: `url(${API_URL}${a.poster})` } : undefined}
-                  onClick={() => togglePlate(a)}
-                >
-                  {on ? <span className="pick">✓</span> : null}
-                  <span className="pn">
-                    <b>{a.name}</b>
-                    <span>
-                      {a.category} · {a.photos.length} frame{a.photos.length === 1 ? "" : "s"}
+                <div key={a.id} className={`plate${frames ? "" : " empty"}`} data-on={on ? "1" : undefined}>
+                  <button
+                    type="button"
+                    className="pattach"
+                    aria-pressed={on}
+                    title={
+                      !frames
+                        ? "No frames yet — add photos on Elements"
+                        : on
+                          ? "Attached — click to detach"
+                          : "Attach as a reference"
+                    }
+                    style={displayPhoto(a) ? { backgroundImage: `url(${API_URL}${displayPhoto(a)})` } : undefined}
+                    onClick={() => togglePlate(a)}
+                  >
+                    {on ? <span className="pick">✓</span> : null}
+                    {!frames ? <ImageOff className="pempty" strokeWidth={1.2} aria-hidden /> : null}
+                    <span className="pn">
+                      <b>{a.name}</b>
+                      <span>{frames ? `${kind} · ${frames} frame${frames === 1 ? "" : "s"}` : `${kind} · no frames yet`}</span>
                     </span>
-                  </span>
-                </button>
+                  </button>
+                  <button
+                    type="button"
+                    className="pmore"
+                    title={`${a.name} · options`}
+                    aria-label={`${a.name} options`}
+                    onClick={() => setOpen(a)}
+                  >
+                    <Ellipsis strokeWidth={2} />
+                  </button>
+                </div>
               );
             })}
           </div>
+        ) : elements.length ? (
+          <div className="stateline">{query ? `Nothing matches “${query}”` : "Nothing of this kind yet"}</div>
         ) : (
-          <div className="stateline">No assets yet — add a character, room or prop on Elements</div>
+          <div className="cblank">
+            <AtSign strokeWidth={1.4} />
+            <div>
+              <b>No elements yet</b>
+              <p>
+                Create a character, prop, product or place and its frames become something you can @ in a
+                prompt. They hold every shot to the same face, object or room.
+              </p>
+            </div>
+            <button type="button" className="go" style={{ padding: "11px 22px" }} onClick={() => setAdding(true)}>
+              <Plus strokeWidth={2} /> New element
+            </button>
+          </div>
         )}
       </div>
+
+      {open ? (
+        <ElementSheet
+          asset={open}
+          onClose={() => setOpen(null)}
+          onAttach={(a) => {
+            setOpen(null);
+            const urls = a.photos.slice(0, FRAMES_PER_ASSET);
+            setPicked((was) => [...new Set([...was, ...urls])]);
+            toast(`${a.name} attached · ${urls.length} frame${urls.length === 1 ? "" : "s"}`);
+          }}
+          onDeleted={(a) => {
+            setOpen(null);
+            setPicked((was) => was.filter((u) => !a.photos.includes(u)));
+            toast(`${a.name} deleted`);
+            void loadAssets();
+          }}
+        />
+      ) : null}
+
+      {adding ? (
+        <AddElement
+          title="New element"
+          onClose={() => setAdding(false)}
+          onSaved={(name, photos) => {
+            setAdding(false);
+            toast(`${name} saved · ${photos} photo${photos === 1 ? "" : "s"} · teaching the assets shelf`);
+            void loadAssets();
+          }}
+        />
+      ) : null}
     </section>
   );
 }

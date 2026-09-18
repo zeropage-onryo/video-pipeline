@@ -36,7 +36,9 @@ export const getCapabilities = () => apiFetch<Capabilities>("/capabilities");
 export type AssetCategory = "character" | "location" | "prop";
 export type Asset = {
   id: string;
-  category: AssetCategory;
+  /** the studio's own rendered stills come back as "generated" beside the
+   *  three element kinds (app/api.py _assets_all) */
+  category: AssetCategory | "generated";
   name: string;
   photos: string[];
   poster: string | null;
@@ -118,8 +120,10 @@ export const getMedia = (q?: string, category?: string) => {
   if (category && category !== "all") params.set("category", category);
   return apiFetch<{ items: MediaItem[]; counts: MediaCounts }>(`/media?${params}`);
 };
-export const deleteAsset = (kind: "characters" | "props", id: number) =>
-  apiFetch<{ ok: boolean }>(`/assets/${kind}/${id}`, { method: "DELETE" });
+/** DELETE /api/assets/{characters|locations|props}/{id} -- the row and its
+ *  RAG chunk go; the photo bytes stay where they are. */
+export const deleteAsset = (kind: "characters" | "locations" | "props", id: number) =>
+  apiFetch<{ deleted: number }>(`/assets/${kind}/${id}`, { method: "DELETE" });
 
 /* ── the board and the queue ── */
 export type Concept = {
