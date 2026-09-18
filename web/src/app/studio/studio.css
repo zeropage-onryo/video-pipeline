@@ -1021,6 +1021,9 @@ button.tag:hover {
   border-color: var(--line-hi);
   color: var(--text);
 }
+.cbrief-go {
+  margin-top: 8px;
+}
 
 /* the assets rail under the composer */
 .row {

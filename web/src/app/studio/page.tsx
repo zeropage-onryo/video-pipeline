@@ -352,7 +352,7 @@ function Composer() {
           reply.proposal
             ? "Confirm on the card, or skip it."
             : reply.brief
-              ? "Brief ready — switch to Create, or keep refining."
+              ? "Brief ready below — keep refining, or Create from it."
               : "Choose a direction or reply.",
         );
       }
@@ -678,12 +678,24 @@ function Composer() {
               {mentions.dropdown}
             </div>
 
-            {brief && mode === "create" ? (
+            {brief ? (
+              // The brief is shown in BOTH modes. It used to render only
+              // in Create, so the guide's "the text block below is your
+              // paste-ready prompt" pointed at an empty idea box while
+              // the brief sat in state behind the mode pill (2026-09-18).
               <div className="cbrief">
                 <span className="m" style={{ fontSize: 8.5, display: "block", marginBottom: 6 }}>
-                  Brief from the guide · editable · this is what Create writes from
+                  {mode === "create"
+                    ? "Brief from the guide · editable · this is what Create writes from"
+                    : "Brief from the guide · editable · Create writes from this, not from the box"}
                 </span>
                 <textarea value={brief} onChange={(e) => setBrief(e.target.value)} rows={5} />
+                {mode === "guide" ? (
+                  <button type="button" className="pill chosen cbrief-go" onClick={() => setMode("create")}>
+                    <Play strokeWidth={1.6} />
+                    Create from this brief
+                  </button>
+                ) : null}
               </div>
             ) : null}
 
