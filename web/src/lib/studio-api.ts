@@ -339,6 +339,28 @@ export const runScenes = (form: FormData) => apiForm<{ job_id: number }>("/scene
    tens of seconds. Guarded -- see GUARDED_HEADERS. */
 export const runCreativeGuide = (form: FormData) =>
   apiForm<{ job_id: number }>("/creative-guide", form, GUARDED_HEADERS);
+/* What a Guide turn comes back with (src/creative_guide.Reply). A
+   `proposal` is a WRITE the model asked for and nobody has run: the
+   thread draws it as a confirm card and the click is runGuideAction.
+   `tool_runs` are the READ tools it looked at before answering. */
+export type GuideProposal = { tool: string; args: Record<string, unknown>; label: string };
+export type GuideToolRun = { tool: string; args: Record<string, unknown>; ok: boolean };
+export type GuideReply = {
+  message: string;
+  choices?: string[];
+  brief?: string;
+  proposal?: GuideProposal | null;
+  tool_runs?: GuideToolRun[];
+};
+/* POST /api/creative-guide/act -- the confirm card's click, and the
+   ONLY thing that runs a write tool. Guarded like the turn. The server
+   re-checks the tool set and refuses any URL in the arguments. */
+export const runGuideAction = (proposal: GuideProposal) =>
+  apiFetch<{ ok: boolean; tool: string; result: string }>("/creative-guide/act", {
+    method: "POST",
+    headers: GUARDED_HEADERS,
+    body: JSON.stringify({ tool: proposal.tool, args: proposal.args }),
+  });
 export const getJob = (id: number) => apiFetch<Job>(`/jobs/${id}`);
 export async function waitForJob(id: number, onTick?: (job: Job) => void, everyMs = 1500) {
   for (;;) {
