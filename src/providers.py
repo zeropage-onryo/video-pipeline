@@ -40,11 +40,12 @@ unattended run is a different question nobody has answered yet.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from types import ModuleType
 from typing import Optional
 
-from . import fal, generative, higgsfield, runway, veo
+from . import account_keys, fal, generative, higgsfield, runway, veo
 
 # The contract: every callable a router or a future BYOK/cap check needs.
 # estimate_cost is checked with arity 1 in mind (n) -- runway and
@@ -567,8 +568,73 @@ def check_render_choice(provider: Optional[str] = None, model: Optional[str] = N
             "estimate_usd": ESTIMATORS[provider](model, seconds, framed)}
 
 
+@dataclass(frozen=True)
+class RenderContext:
+    """What ONE account holds right now, asked once: which vendors it has
+    a key for, what each has rendered today, and the account's stored key
+    rows (CIPHERTEXT, as read -- never a decrypted key) so a later "whose
+    key is this" in the same request needs no second read.
+
+    A listing builds one and hands it to render_default / render_options /
+    pricing.display for every card, so the per-account questions are
+    asked per REQUEST and not per card per vendor. It is a snapshot for
+    drawing a page and nothing else: no gate reads one. The approve route
+    passes none, so the spend still resolves, counts and refuses against
+    the database at the moment of the click.
+
+    A context is only ever honoured for the account (and database) it was
+    built for -- see _held."""
+    account_id: Optional[int]
+    db_path: Optional[str]
+    keyed: dict
+    today: dict
+    key_rows: Optional[dict] = field(default=None, repr=False)
+
+
+def render_context(account_id: Optional[int] = None, db_path=None) -> RenderContext:
+    """Build the snapshot. Every answer still comes through the seam that
+    answered it before -- the adapter's own has_key and generations_today,
+    account_keys.key_source -- with the same degrade (a key lookup that
+    breaks is "not keyed", an unreadable log is a None count). What changed
+    is underneath: one read of the account's key rows and one grouped
+    count, instead of a connection per question."""
+    keyed, today = {}, {}
+    with account_keys.preloaded(account_id, db_path) as key_rows:
+        for name in VIDEO_PROVIDERS:
+            keyed[name] = _keyed(name, account_id)
+    with generative.counted_today(account_id, db_path):
+        for name, module in VIDEO_PROVIDERS.items():
+            try:
+                today[name] = module.generations_today(db_path, account_id=account_id)
+            except Exception:
+                today[name] = None
+    return RenderContext(account_id=account_id, db_path=db_path,
+                         keyed=keyed, today=today, key_rows=key_rows)
+
+
+def _held(ctx: Optional[RenderContext], account_id: Optional[int],
+          db_path=None) -> Optional[RenderContext]:
+    """`ctx` when it answers for this account and database, else None --
+    a context built for somebody else is ignored, never trusted."""
+    if ctx is not None and ctx.account_id == account_id and ctx.db_path == db_path:
+        return ctx
+    return None
+
+
+@contextmanager
+def key_scope(ctx: Optional[RenderContext], account_id: Optional[int]):
+    """While open, account_keys answers for this account from the rows
+    the context already read. A no-op without a context that answers for
+    this account -- the lookup then reads for itself, as it always did."""
+    if ctx is None or ctx.account_id != account_id or ctx.key_rows is None:
+        yield
+        return
+    with account_keys.preloaded(account_id, ctx.db_path, rows=ctx.key_rows):
+        yield
+
+
 def provider_state(provider: str, account_id: Optional[int] = None,
-                   db_path=None) -> dict:
+                   db_path=None, ctx: Optional[RenderContext] = None) -> dict:
     """Whether approving on this renderer could even happen, and what it
     has already spent today. The daily count reads the generations log,
     which a database that has never rendered anything does not have yet --
@@ -576,19 +642,23 @@ def provider_state(provider: str, account_id: Optional[int] = None,
     failure, so the count degrades to None and the gates are still
     reported (_runway_state's rule, now for four vendors)."""
     module = VIDEO_PROVIDERS[provider]
-    try:
-        today = module.generations_today(db_path, account_id=account_id)
-    except Exception:
-        today = None
-    try:
-        # BYOK reads account_keys, which a database nobody has stored a
-        # key in yet may not have a table for. Same degrade as the count
-        # above: report the gate as shut, never take the Queue down with
-        # it -- a page that 500s because nothing is configured is the
-        # wrong failure for "nothing is configured".
-        available = bool(module.has_key(account_id))
-    except Exception:
-        available = False
+    held = _held(ctx, account_id, db_path)
+    if held is not None and provider in held.today and provider in held.keyed:
+        today, available = held.today[provider], held.keyed[provider]
+    else:
+        try:
+            today = module.generations_today(db_path, account_id=account_id)
+        except Exception:
+            today = None
+        try:
+            # BYOK reads account_keys, which a database nobody has stored a
+            # key in yet may not have a table for. Same degrade as the count
+            # above: report the gate as shut, never take the Queue down with
+            # it -- a page that 500s because nothing is configured is the
+            # wrong failure for "nothing is configured".
+            available = bool(module.has_key(account_id))
+        except Exception:
+            available = False
     return {
         "label": RENDER_LABELS.get(provider, provider),
         "available": available,
@@ -612,7 +682,8 @@ def provider_state(provider: str, account_id: Optional[int] = None,
     }
 
 
-def render_options(account_id: Optional[int] = None, db_path=None) -> dict:
+def render_options(account_id: Optional[int] = None, db_path=None,
+                   ctx: Optional[RenderContext] = None) -> dict:
     """Every renderer the Queue may offer, with its gates and its legal
     options. One call, because the card has to render the whole menu
     before the operator picks -- asking per provider would let two of
@@ -624,7 +695,7 @@ def render_options(account_id: Optional[int] = None, db_path=None) -> dict:
         except Exception:
             models = []
         out[name] = {
-            **provider_state(name, account_id, db_path),
+            **provider_state(name, account_id, db_path, ctx),
             "models": models,
             "default_model": default_model(name) if models else None,
         }
@@ -645,10 +716,14 @@ def render_options(account_id: Optional[int] = None, db_path=None) -> dict:
 # instead of refusing. One function so the doors cannot disagree -- the
 # same reason platform_default is one function.
 
-def _keyed(provider: str, account_id: Optional[int]) -> bool:
+def _keyed(provider: str, account_id: Optional[int],
+           ctx: Optional[RenderContext] = None) -> bool:
     """Has this account a key for this vendor (its own BYOK secret or the
     installation's environment one)? Never raises: a vendor whose key
     lookup breaks is a vendor this account cannot use right now."""
+    held = _held(ctx, account_id)
+    if held is not None and provider in held.keyed:
+        return held.keyed[provider]
     try:
         return bool(VIDEO_PROVIDERS[provider].has_key(account_id))
     except Exception:
@@ -669,7 +744,8 @@ def _default_cost(provider: str, spec: dict) -> float:
 def renderer_for(account_id: Optional[int] = None,
                  provider: Optional[str] = None,
                  model: Optional[str] = None, *,
-                 needs: str = "generate_for_shot") -> Optional[dict]:
+                 needs: str = "generate_for_shot",
+                 ctx: Optional[RenderContext] = None) -> Optional[dict]:
     """{"provider", "model"} this account can render on, or None.
 
     `provider`/`model` are the preference -- the shot's plan, or what a
@@ -682,10 +758,14 @@ def renderer_for(account_id: Optional[int] = None,
     handed it; the Queue calls generate_for_shot, which all four have.
 
     None means the account holds no key for any vendor that can do the
-    job -- the one case where a door should refuse, and say so."""
+    job -- the one case where a door should refuse, and say so.
+
+    `ctx` (a RenderContext for this account) answers "is it keyed" from a
+    snapshot instead of a lookup per vendor; a listing passes one, a door
+    that spends passes none."""
     name = (provider or "").strip().lower()
     if name in VIDEO_PROVIDERS and hasattr(VIDEO_PROVIDERS[name], needs) \
-            and _keyed(name, account_id):
+            and _keyed(name, account_id, ctx):
         try:
             spec = model_options(name, model or default_model(name))
         except ValueError:
@@ -697,7 +777,7 @@ def renderer_for(account_id: Optional[int] = None,
     for candidate in VIDEO_PROVIDERS:
         if not hasattr(VIDEO_PROVIDERS[candidate], needs):
             continue
-        if not _keyed(candidate, account_id):
+        if not _keyed(candidate, account_id, ctx):
             continue
         try:
             specs = models_for(candidate)
@@ -713,7 +793,8 @@ def renderer_for(account_id: Optional[int] = None,
 
 
 def render_default(tool: Optional[str],
-                   account_id: Optional[int] = None) -> dict:
+                   account_id: Optional[int] = None,
+                   ctx: Optional[RenderContext] = None) -> dict:
     """The Queue's default for a shot planned for `tool`: the plan when
     this account can render it, else the cheapest renderer it can, else
     the plan anyway (nothing is keyed, and the card then says which key
@@ -724,7 +805,7 @@ def render_default(tool: Optional[str],
     what an empty approve spends on cannot come apart."""
     planned = platform_default(tool)
     want = planned or (DEFAULT_PROVIDER, default_model(DEFAULT_PROVIDER))
-    usable_pick = renderer_for(account_id, want[0], want[1])
+    usable_pick = renderer_for(account_id, want[0], want[1], ctx=ctx)
     if usable_pick:
         return usable_pick
     return {"provider": want[0], "model": want[1]}

@@ -220,7 +220,8 @@ def content_hash(shot: dict, part: Optional[int] = None) -> str:
 # --------------------------------------------------------------------------
 
 def _resolve(account_id: Optional[int], shot: dict,
-             provider: Optional[str], model: Optional[str]) -> tuple[str, Optional[str]]:
+             provider: Optional[str], model: Optional[str],
+             ctx=None) -> tuple[str, Optional[str]]:
     """(provider, model-or-None). An explicit provider is the caller's
     choice and is kept as-is; nothing named means the card's own default,
     through the same call the card made."""
@@ -230,7 +231,7 @@ def _resolve(account_id: Optional[int], shot: dict,
         if model is None and planned and name == planned[0]:
             model = planned[1]
         return name, model
-    default = providers.render_default((shot or {}).get("tool"), account_id)
+    default = providers.render_default((shot or {}).get("tool"), account_id, ctx)
     return default["provider"], model or default["model"]
 
 
@@ -279,7 +280,8 @@ def _check_band(provider: str, model: str, seconds: int, tier: Optional[str]) ->
 
 def estimate(*, account_id: Optional[int], shot: dict, part: Optional[int] = None,
              provider: Optional[str] = None, model: Optional[str] = None,
-             seconds=None, frame=None, tier: Optional[str] = None) -> Estimate:
+             seconds=None, frame=None, tier: Optional[str] = None,
+             ctx=None) -> Estimate:
     """One render, resolved, checked and priced at the provider's rate.
 
     `seconds` None derives it: a PART renders at its own window fitted UP
@@ -290,7 +292,7 @@ def estimate(*, account_id: Optional[int], shot: dict, part: Optional[int] = Non
     rule). Raises ValueError / PricingRefused."""
     if tier is not None and tier not in providers.TIERS:
         raise PricingRefused("tier", f"unknown tier {tier!r} -- one of {list(providers.TIERS)}")
-    name, wanted = _resolve(account_id, shot, provider, model)
+    name, wanted = _resolve(account_id, shot, provider, model, ctx)
     if part is not None and seconds is None:
         window = _part_window(shot, part)
         base = providers.check_render_choice(name, wanted, None, frame)
@@ -306,7 +308,7 @@ def estimate(*, account_id: Optional[int], shot: dict, part: Optional[int] = Non
 def estimate_scene(*, account_id: Optional[int], shot: dict,
                    provider: Optional[str] = None, model: Optional[str] = None,
                    seconds=None, frame=None, tier: Optional[str] = None,
-                   whole: bool = False) -> list[Estimate]:
+                   whole: bool = False, ctx=None) -> list[Estimate]:
     """What approving this scene would render, in order: one estimate per
     timed shot STILL WITHOUT A CLIP (windows_to_render -- approving again
     resumes, so it prices only what is left), or the single
@@ -319,10 +321,11 @@ def estimate_scene(*, account_id: Optional[int], shot: dict,
     todo = None if whole else windows_to_render(shot)
     if todo is not None:
         return [estimate(account_id=account_id, shot=shot, part=w["n"],
-                         provider=provider, model=model, frame=frame, tier=tier)
+                         provider=provider, model=model, frame=frame, tier=tier,
+                         ctx=ctx)
                 for w in todo]
     return [estimate(account_id=account_id, shot=shot, provider=provider,
-                     model=model, seconds=seconds, frame=frame, tier=tier)]
+                     model=model, seconds=seconds, frame=frame, tier=tier, ctx=ctx)]
 
 
 # --------------------------------------------------------------------------
@@ -482,21 +485,29 @@ def configured() -> bool:
 def display(*, account_id: Optional[int], shot: dict, shot_id: int,
             provider: Optional[str] = None, model: Optional[str] = None,
             seconds=None, frame=None, tier: Optional[str] = None,
-            whole: bool = False) -> dict:
+            whole: bool = False, ctx=None) -> dict:
     """The priced plan for one approve, as JSON a card can print without
     doing arithmetic: every render it would make, its length, the
     provider's estimate, and the credits it would cost (None on BYOK).
 
     `estimate_usd` stays the PROVIDER's estimate -- the label the Queue
     has always shown -- so that while MARKUP is 1.0 no number on any
-    screen moves. Raises ValueError / PricingRefused."""
+    screen moves. Raises ValueError / PricingRefused.
+
+    `ctx` is a providers.RenderContext for this account -- a LISTING
+    passes one so the per-account lookups happen once per request, not
+    once per card. None (every other caller) is the behaviour before it
+    existed. quote(), the path toward a hold, takes none and always asks."""
     parts = estimate_scene(account_id=account_id, shot=shot, provider=provider,
                            model=model, seconds=seconds, frame=frame, tier=tier,
-                           whole=whole)
+                           whole=whole, ctx=ctx)
     if not parts:
         raise PricingRefused("nothing_to_render", "every shot of this scene has a clip")
     head = parts[0]
-    charged = billable(account_id, head.provider)
+    # a listing's ctx already read this account's key rows; the question
+    # and the rule are unchanged, only the read underneath is not repeated
+    with providers.key_scope(ctx, account_id):
+        charged = billable(account_id, head.provider)
     signed = charged and configured()
     renders = []
     for p in parts:
