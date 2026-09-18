@@ -302,7 +302,8 @@ part, in order, through the SAME `generate_for_shot(..., part=n)` each adapter a
 `timeline.attach_part` stores the clip), so the spend approval, the daily cap and the
 generations row are per clip exactly as before. Each part's length is its window fitted UP
 to the model (`timeline.fit_seconds`: a 3s window is a 5s Runway clip, trimmed in the edit),
-priced by `providers.check_timeline_choice`; the card's duration control is hidden for such a
+priced by `src/pricing.py` (`display()` on the card, `quote()` at approve — only the shots
+still without a clip are priced); the card's duration control is hidden for such a
 scene. Parts with a clip are skipped and the loop stops at the first failure, so approving
 again resumes rather than re-buying shot 1. When the LAST part lands, the scene's own
 `media_url` is set to shot 1's clip — the marker every existing reader means by "rendered" —
@@ -1521,6 +1522,25 @@ is yours, in Resolve, by hand.
   saves successfully and then resolves to nothing. `app/api.py`'s `_to_jpeg`/`_save_upload_ref`/
   `_resolve_asset_photo` now delegate. **The URL shape is the point**: a scouted image comes out
   as `/refs/<sha>.jpg`, so it rides the composer path with no new route or resolver.
+- **`src/pricing.py`** — what a render costs, and the signed quote that says so (steps 1–4 of
+  `docs/tasks/task-pricing-and-quotes.md`, on main 2026-09-18; read that doc's "As built"
+  section before touching it). Pure module, three answers: `estimate()` is the provider's USD
+  and always answers; `quote()` is credits and is `None` on BYOK (`ledger.is_billable` over
+  `account_keys.key_source`, the one rule); `display()` is the JSON every card reads —
+  `GET /api/queue/pending` carries it per card and `GET /api/queue/{id}/quote` re-prices a
+  changed pick, so there is no JS price twin any more (`fitSeconds` and
+  `providers.check_timeline_choice` are both deleted). `sign()`/`verify()` are an HMAC token
+  (`zpfq.<body>.<mac>`, 1-hour TTL) minted per render when `QUOTE_SIGNING_SECRET` is set —
+  its OWN secret, never `SESSION_SECRET`, and a different value on Fly from any dev box; unset
+  means prices without tokens and approve exactly as before. Six refusals, checked in order:
+  `bad_signature / retired_pricing / expired / wrong_account / wrong_render / stale_content`.
+  The content hash is `pricing.content_hash` = `timeline.source_hash(prompt, refs)` computed
+  on the LIVE shot, never the stored `timeline.source` — do not write a second one.
+  `MARKUP = "1.0"` is a string read through `Fraction` (a float there is a latent off-by-one)
+  and is pending Mike's number; `CREDIT_FLOOR = 10`. **Not built (steps 5–6):** a token is
+  still OPTIONAL on approve (`_verify_tokens` runs only when the body sends them), the four
+  adapters still take `approved=True`, and nothing is held on the ledger. The daily-cap check
+  stays in the route, not here.
 - **`src/spend.py`** / **`src/costs.py`** — the cost tracker (BACKLOG #2, 2026-09-04).
   `spend.record_call` writes one OWNED `llm_calls` row per Gemini call -- the model that
   actually answered, raw token counts, an estimated `cost_usd` from `DEFAULT_PRICES` (read off
@@ -1655,8 +1675,8 @@ reason, **11 picked**, **20 marked shot**, **359 recorded graph runs**, 113 gene
 optional material on 2026-08-31 and nothing has re-run `src.locations` since). Reference-grounded
 ideation is verified live both ways: `src.shootgen --spark "gearing up ritual"` printed "Grounding
 in 5 retrieved reference(s)" against the real library, and the same command with the store pointed
-at a dead URL printed the ungrounded note and still produced ideas (exit 0). 1956 tests pass, 8
-xfail, ruff clean, CI green on every push — last run 2026-09-09, not re-run for this update.
+at a dead URL printed the ungrounded note and still produced ideas (exit 0). 2171 tests pass, 8
+xfail, ruff clean, CI green on every push — last full run 2026-09-18 on the pricing merge (`7ddb947`).
 
 **THE LOOP CLOSED ON 2026-09-18.** Concept #375 "Neon City Ascent" went spark -> scene ->
 references -> keyframe -> pick -> render -> post -> measured, and it is the first one that ever
@@ -1668,6 +1688,11 @@ on the Fly volume, in `data/renders/runway/`, and mirrored to R2 so the deployed
 carries a real metrics snapshot: reach 19, likes 4, comments 1, average watch 4.59s against a
 10.042s clip (46%). The other 12 Instagram reels on the account were backfilled the same day with
 their own snapshots, so `posted_outcomes` has 13 rows to join instead of none.
+**No API-BILLED render has gone through yet.** #375 was the free lane. The one attempt through
+the Queue (#361 on Higgsfield `kling2.1`, 2026-09-18) died at the provider submit with `HTTP 423
+Locked` — the Higgsfield account, not the request — and Runway and fal are `available: false` on
+the deployed API (their keys are not in Fly's secrets). One billed render is the precondition for
+the ledger work (pricing step 6); see `docs/tasks/task-pricing-and-quotes.md`.
 
 **The number that matters now: 11 picks against 255 written, and 1 of 255 rendered.** Generation
 is cheap and abundant, selection is still the bottleneck, and the spend gate has been used once.
@@ -1703,9 +1728,7 @@ as `src.autopilot` — gated, dry-run, default off, executors unwired.
 - **Timed scenes (2026-09-10) are rendered shot by shot only at the Queue.** The graph's
   `generate_render` (a dry stub unless `ZEROPAGE_RENDER=1`) still renders a scene's whole
   prompt as one clip, and the Director canvas still edits the whole scene prompt rather than
-  one shot of it. Both read `shot["timeline"]` for free when they are taught to. The Queue
-  card's `fitSeconds` is a JS twin of `timeline.fit_seconds` (the price label); the server's
-  `check_timeline_choice` on the approve response is the authoritative figure.
+  one shot of it. Both read `shot["timeline"]` for free when they are taught to.
 - `src/fal.py`'s image-to-video field name is `image_url` for every model in the table;
   that is documented for Seedance 2.0 and inferred from the playground's "Start Image
   Url" label for Wan 3.0 and LTX-2.3. Verify on the first live i2v render for those two.
