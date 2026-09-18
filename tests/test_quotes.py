@@ -47,8 +47,17 @@ def test_one_flipped_byte_in_any_part_is_bad_signature(signing):
     head, body, mac = token.split(".")
 
     def flip(text):
-        ch = "B" if text[-1] != "B" else "C"
-        return text[:-1] + ch
+        # A character in the MIDDLE, never the last one: unpadded base64
+        # discards the last character's low bits on decode, so when the
+        # payload's length leaves 2 or 4 padding bits and its last
+        # character sits in A..P (or A..D), swapping it for "B" decodes
+        # to the SAME bytes, the HMAC still matches, and this test fails
+        # with "DID NOT RAISE" -- on some timestamps and not others
+        # (2026-09-18, CI on one push and green on the next). Every bit
+        # of a middle character is data, so the bytes always change.
+        i = len(text) // 2
+        ch = "B" if text[i] != "B" else "C"
+        return text[:i] + ch + text[i + 1:]
 
     for broken in (f"{flip(head)}.{body}.{mac}", f"{head}.{flip(body)}.{mac}",
                    f"{head}.{body}.{flip(mac)}", "zpf_notaquote", "", token + ".x"):
