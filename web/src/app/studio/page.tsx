@@ -44,7 +44,10 @@ import { useShell } from "@/components/studio/shell";
 
 type Attachment = { id: string; name: string; file: File; url: string };
 type Option = { id: string; label: string; note?: string };
-type GuideMessage = { role: "user" | "assistant"; content: string };
+/* `failed` marks a turn the guide never answered. It is drawn on the
+   bubble itself and dropped from the next turn's conversation, so a
+   retry neither repeats it on screen nor sends it twice. */
+type GuideMessage = { role: "user" | "assistant"; content: string; failed?: boolean };
 
 const COUNTS = [1, 2, 3, 4];
 
@@ -204,6 +207,7 @@ function Composer() {
     if (!canSend) return;
     setBusy(true);
     say(null);
+    let asking: GuideMessage[] | null = null;
     try {
       if (mode === "create") {
         const form = new FormData();
@@ -227,8 +231,12 @@ function Composer() {
           say(job.error || "That run did not finish.", true);
         }
       } else {
-        const next: GuideMessage[] = [...thread, { role: "user", content: idea.trim() }];
+        const next: GuideMessage[] = [
+          ...thread.filter((m) => !m.failed),
+          { role: "user", content: idea.trim() },
+        ];
         const asked = idea.trim();
+        asking = next;
         setThread(next);
         setIdea("");
         setChoices([]);
@@ -254,6 +262,14 @@ function Composer() {
         say(reply.brief ? "Brief ready — switch to Create, or keep refining." : "Choose a direction or reply.");
       }
     } catch (e) {
+      // The thread and the box were cleared before the request went out,
+      // so a failed turn must say so ON its own bubble, and hand the
+      // words back for a retry.
+      if (asking) {
+        const last = asking[asking.length - 1];
+        setThread([...asking.slice(0, -1), { ...last, failed: true }]);
+        setIdea((now) => now || last.content);
+      }
       say(e instanceof Error ? e.message : "That did not go through.", true);
     } finally {
       setBusy(false);
@@ -299,8 +315,12 @@ function Composer() {
             {thread.length && mode === "guide" ? (
               <div className="cthread">
                 {thread.map((m, i) => (
-                  <p key={i} className={`cmsg${m.role === "user" ? " me" : ""}`}>
+                  <p
+                    key={i}
+                    className={`cmsg${m.role === "user" ? " me" : ""}${m.failed ? " failed" : ""}`}
+                  >
                     {m.content}
+                    {m.failed ? <span className="cmsg-failed">Not sent — try again</span> : null}
                   </p>
                 ))}
                 {choices.length ? (
