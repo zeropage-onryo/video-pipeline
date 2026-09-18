@@ -408,10 +408,16 @@ async def creative_guide_reply(request: Request,
                 brand=brand, grounding=grounding, image_refs=image_refs)
         else:
             from google import genai
+            # The board's tools, in-process (src/guide_tools.py,
+            # 2026-09-18): READ tools run inside the turn, a WRITE
+            # tool comes back as `reply.proposal` for the confirm
+            # card, and nothing here spends. Absent `mcp`, the plain
+            # conversation it always was.
+            tools, run_tool = _guide_tools(account_id)
             reply = creative_guide.respond(
                 conversation, client=genai.Client(api_key=_gemini_key(account_id)),
                 brand=brand, grounding=grounding, image_refs=image_refs,
-                account_id=account_id, on_retry=note)
+                account_id=account_id, on_retry=note, tools=tools, run_tool=run_tool)
         # `billing` says WHOSE plan paid: a personal connection spends
         # the person's own ChatGPT/Claude subscription and never touches
         # this install's Gemini credit, and /costs must not count it.
@@ -421,6 +427,57 @@ async def creative_guide_reply(request: Request,
 
     job = jobs.start("guide", "creative guide", work, account_id=account_id)
     return {"job_id": job["id"]}
+
+
+def _guide_tools(account_id: int):
+    """(specs, run_tool) for a Guide turn, or (None, None) when the
+    `mcp` package is absent or the server cannot be opened. Never
+    raises: a board that cannot be read costs the answer its tools,
+    not the person their turn."""
+    from src import guide_tools
+
+    if not guide_tools.available():
+        return None, None
+    try:
+        return guide_tools.session(account_id=account_id)
+    except Exception as exc:
+        print(f"  guide tools unavailable: {exc}", file=sys.stderr)
+        return None, None
+
+
+@router.post("/creative-guide/act")
+async def creative_guide_act(request: Request,
+                             account_id: int = Depends(auth.current_account_id)):
+    """The confirm card's click: run ONE write tool the Guide proposed.
+
+    The model never reaches this -- a proposal comes back off a turn
+    unrun, and the person's click is the only thing that posts here.
+    Same header guard as the turn (a cross-site form post must not be
+    able to bank a spark either); the tool set is `guide_tools.WRITE_TOOLS`
+    and nothing else, checked again here rather than trusted from the
+    body; and the URL rule is enforced by `guide_tools.check_args` on
+    the way in. Runs inline: banking a row is milliseconds.
+    """
+    from src import guide_tools
+
+    model_connections.mutation_header(request)
+    try:
+        body = await request.json()
+    except Exception:
+        return _error(400, "bad_request", "expected JSON {tool, args}")
+    tool = str((body or {}).get("tool") or "")
+    args = (body or {}).get("args") or {}
+    if not guide_tools.is_write(tool):
+        return _error(400, "bad_tool", f"`{tool}` is not an action the Guide can take")
+    if not isinstance(args, dict):
+        return _error(400, "bad_request", "args must be an object")
+    if not guide_tools.available():
+        return _error(503, "tools_unavailable", "the board's tools are not installed here")
+    try:
+        result = guide_tools.run(tool, args, account_id=account_id)
+    except guide_tools.Refused as exc:
+        return _error(400, "refused", str(exc))
+    return {"ok": True, "tool": tool, "result": result}
 
 
 def _personal_connected(provider: str, scope) -> bool:
