@@ -16,7 +16,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Dialog } from "@base-ui/react/dialog";
-import { Archive, Check, Undo2, Workflow, X } from "lucide-react";
+import { Archive, Check, Search, Undo2, Workflow, X } from "lucide-react";
 import {
   announceQueueChange,
   archiveConcept,
@@ -71,8 +71,9 @@ function statusOf(c: Concept) {
 const K = "font-plex text-[11px] tracking-[0.14em] text-bone3";
 
 export default function PipelinePage() {
-  const { brand, toast } = useShell();
+  const { me, brand, toast } = useShell();
   const [filter, setFilter] = useState<Filter>("open");
+  const [query, setQuery] = useState("");
   const [all, setAll] = useState<Concept[] | null>(null);
   const [rate, setRate] = useState<PickRate | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -86,24 +87,48 @@ export default function PipelinePage() {
   // Base UI asks (finalFocus), closing has already set that state to null.
   const drawerFrom = useRef<{ id: number; trigger: HTMLElement | null } | null>(null);
 
+  /* ONE request per brand, and only the newest answer is kept. The page
+     used to fire as soon as it mounted -- before the shell knew who was
+     signed in, so with no brand -- and again once it did. The unfiltered
+     answer is the bigger one and lands second, so the board showed BOTH
+     brands' cards under a header naming one (2026-09-18: "zeropage · 21
+     open" over 16 Antihero cards; the brand has 5). Waiting for `me` drops
+     the first request; the sequence number drops any late one. */
+  const seq = useRef(0);
   const load = () => {
+    const mine = ++seq.current;
     boardConcepts(brand || undefined, true)
       .then((r) => {
+        if (mine !== seq.current) return;
         setAll(r.items.filter((c) => c.is_scene));
         setRate(r.pick ?? null);
         setError(null);
       })
-      .catch((e) => setError(e instanceof Error ? e.message : "Concepts unavailable"));
+      .catch((e) => {
+        if (mine === seq.current) setError(e instanceof Error ? e.message : "Concepts unavailable");
+      });
   };
   useEffect(() => {
-    if (brand === "" && all !== null) return;
+    if (!me) return; // the shell has not said who this is yet
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [brand]);
+  }, [me, brand]);
 
   const open = useMemo(() => (all || []).filter((c) => !c.archived), [all]);
   const gone = useMemo(() => (all || []).filter((c) => c.archived), [all]);
-  const cards = filter === "archived" ? gone : filter === "picked" ? open.filter((c) => c.picked) : open;
+  const picked = useMemo(() => open.filter((c) => c.picked), [open]);
+  const shelf = filter === "archived" ? gone : filter === "picked" ? picked : open;
+  const counts: Record<Filter, number> = { open: open.length, picked: picked.length, archived: gone.length };
+  const needle = query.trim().toLowerCase();
+  const cards = useMemo(
+    () =>
+      needle
+        ? shelf.filter((c) =>
+            `${c.title} ${c.summary} ${c.logline} ${c.spark || ""} #${c.id} ${c.n}`.toLowerCase().includes(needle),
+          )
+        : shelf,
+    [shelf, needle],
+  );
   const scope = `${brand || "—"} · ${open.length} open · ${gone.length} archived`;
   const countLine = rate?.generated ? `${scope} · ${rate.picked}/${rate.generated} picked all time, all brands` : scope;
   // the drawer reads the FRESH row, so a pick made while it is open reads back
@@ -142,10 +167,21 @@ export default function PipelinePage() {
       <div className="chead">
         <h3>Concepts</h3>
         <span className="spacer" />
+        <label className="csearch">
+          <Search strokeWidth={1.6} />
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Find a concept…"
+            aria-label="Find a concept"
+          />
+        </label>
         <div className="cats" style={{ margin: 0, padding: 0 }}>
           {(["open", "picked", "archived"] as Filter[]).map((f) => (
             <button type="button" key={f} className="cat" aria-pressed={filter === f} onClick={() => setFilter(f)}>
               {f[0].toUpperCase() + f.slice(1)}
+              {all ? <u>{counts[f]}</u> : null}
             </button>
           ))}
         </div>
@@ -154,7 +190,9 @@ export default function PipelinePage() {
       {error ? <div className="stateline err" style={{ padding: "0 42px 14px" }}>{error}</div> : null}
       {all && !cards.length ? (
         <p className="stateline" style={{ padding: "0 42px" }}>
-          {filter === "archived"
+          {needle && shelf.length
+            ? `Nothing here matches “${query.trim()}”`
+            : filter === "archived"
             ? "Nothing archived yet"
             : filter === "picked"
               ? "Nothing picked yet — the check on a card sends it to Queue"
@@ -166,7 +204,25 @@ export default function PipelinePage() {
           card line under it (c.summary is preprod.concept_summary); the
           logline, hook and prompt are the drawer's and are never printed or
           trimmed here. */}
-      <div className="mx-auto mb-4 grid max-w-[1680px] grid-cols-[repeat(auto-fill,minmax(min(400px,100%),1fr))] items-start gap-6 px-[42px]">
+      <div className="mx-auto mb-4 grid max-w-[1680px] grid-cols-[repeat(auto-fill,minmax(min(400px,100%),1fr))] items-start gap-6 px-[42px] max-sm:px-4">
+        {/* the board before its first answer: the cards' own shape, pulsing,
+            rather than an empty page that reads as "no concepts" */}
+        {!all && !error
+          ? Array.from({ length: 6 }, (_, i) => (
+              <div key={i} aria-hidden className={`${CARD} border-noir-line2 motion-safe:animate-pulse`}>
+                <div className="aspect-video w-full rounded-t-[9px] bg-noir-slate" />
+                <div className="flex flex-col gap-3 px-4 pb-4 pt-3.5">
+                  <div className="h-[26px] w-2/3 rounded-[4px] bg-noir-slate" />
+                  <div className="h-4 w-5/6 rounded-[4px] bg-noir-raise" />
+                  <div className="flex h-[52px] gap-2">
+                    {[0, 1, 2, 3].map((n) => (
+                      <div key={n} className="size-[52px] rounded-[6px] bg-noir-raise" />
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ))
+          : null}
         {cards.map((c) => {
           const gate = gateOf(c);
           const status = statusOf(c);
