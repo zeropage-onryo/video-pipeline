@@ -25,7 +25,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from src import (
     account_keys,
@@ -35,6 +35,8 @@ from src import (
     autopilot,
     crag,
     db,
+    edit_teach,
+    element_sheet,
     entities,
     evalstore,
     generative,
@@ -45,6 +47,7 @@ from src import (
     manual_lane,
     preprod,
     presets,
+    pricing,
     providers,
     rag,
     rag_eval,
@@ -179,6 +182,9 @@ def compute_capabilities(account_id: Optional[int] = None) -> dict:
         # holds a key for (providers.renderer_for), not on Runway alone
         "video.generate": providers.renderer_for(
             account_id, needs="generate_from_prompt") is not None,
+        # whether a price comes with a signed quote a client can echo on
+        # approve (pricing.sign; QUOTE_SIGNING_SECRET set)
+        "quote.sign": pricing.configured(),
         # `*.spend` is TRUE for anything a person drives (2026-09-09):
         # the click is the approval, so a key is the whole gate on a
         # human surface. It stays a live read for the unattended paths,
@@ -378,6 +384,14 @@ async def creative_guide_reply(request: Request,
     provider = (form.get("guide_provider") or "gemini").strip().lower()
     model = (form.get("guide_model") or "").strip() or None
     personal = provider != "gemini"
+    # Which brain answers (2026-09-18): the composer's Fast / Reasoning
+    # pill, the same one Create sends, clamped against BRAINS here the
+    # way scenes_run clamps it. Absent or unknown -> the Guide's own
+    # default (fast). Only the Gemini path reads it; a personal
+    # connection is the person's own model and has no tier.
+    from src import gemini_utils
+    brain_raw = (form.get("brain") or "").strip().lower()
+    brain = brain_raw if brain_raw in gemini_utils.BRAINS else creative_guide.DEFAULT_BRAIN
 
     scope = None
     if personal:
@@ -408,19 +422,78 @@ async def creative_guide_reply(request: Request,
                 brand=brand, grounding=grounding, image_refs=image_refs)
         else:
             from google import genai
+            # The board's tools, in-process (src/guide_tools.py,
+            # 2026-09-18): READ tools run inside the turn, a WRITE
+            # tool comes back as `reply.proposal` for the confirm
+            # card, and nothing here spends. Absent `mcp`, the plain
+            # conversation it always was.
+            tools, run_tool = _guide_tools(account_id)
             reply = creative_guide.respond(
                 conversation, client=genai.Client(api_key=_gemini_key(account_id)),
                 brand=brand, grounding=grounding, image_refs=image_refs,
-                account_id=account_id, on_retry=note)
+                account_id=account_id, on_retry=note, tools=tools, run_tool=run_tool,
+                brain=brain)
         # `billing` says WHOSE plan paid: a personal connection spends
         # the person's own ChatGPT/Claude subscription and never touches
         # this install's Gemini credit, and /costs must not count it.
         return {"reply": reply, "reference_urls": ref_urls,
                 "billing": "personal_plan" if personal else "studio_credits",
+                "brain": None if personal else brain,
                 "detail": "ready"}
 
     job = jobs.start("guide", "creative guide", work, account_id=account_id)
     return {"job_id": job["id"]}
+
+
+def _guide_tools(account_id: int):
+    """(specs, run_tool) for a Guide turn, or (None, None) when the
+    `mcp` package is absent or the server cannot be opened. Never
+    raises: a board that cannot be read costs the answer its tools,
+    not the person their turn."""
+    from src import guide_tools
+
+    if not guide_tools.available():
+        return None, None
+    try:
+        return guide_tools.session(account_id=account_id)
+    except Exception as exc:
+        print(f"  guide tools unavailable: {exc}", file=sys.stderr)
+        return None, None
+
+
+@router.post("/creative-guide/act")
+async def creative_guide_act(request: Request,
+                             account_id: int = Depends(auth.current_account_id)):
+    """The confirm card's click: run ONE write tool the Guide proposed.
+
+    The model never reaches this -- a proposal comes back off a turn
+    unrun, and the person's click is the only thing that posts here.
+    Same header guard as the turn (a cross-site form post must not be
+    able to bank a spark either); the tool set is `guide_tools.WRITE_TOOLS`
+    and nothing else, checked again here rather than trusted from the
+    body; and the URL rule is enforced by `guide_tools.check_args` on
+    the way in. Runs inline: banking a row is milliseconds.
+    """
+    from src import guide_tools
+
+    model_connections.mutation_header(request)
+    try:
+        body = await request.json()
+    except Exception:
+        return _error(400, "bad_request", "expected JSON {tool, args}")
+    tool = str((body or {}).get("tool") or "")
+    args = (body or {}).get("args") or {}
+    if not guide_tools.is_write(tool):
+        return _error(400, "bad_tool", f"`{tool}` is not an action the Guide can take")
+    if not isinstance(args, dict):
+        return _error(400, "bad_request", "args must be an object")
+    if not guide_tools.available():
+        return _error(503, "tools_unavailable", "the board's tools are not installed here")
+    try:
+        result = guide_tools.run(tool, args, account_id=account_id)
+    except guide_tools.Refused as exc:
+        return _error(400, "refused", str(exc))
+    return {"ok": True, "tool": tool, "result": result}
 
 
 def _personal_connected(provider: str, scope) -> bool:
@@ -455,50 +528,85 @@ def _slug(name: str) -> str:
 
 
 def _photo_names(base_dir: Path, folder: str) -> list:
+    """An element's photos on disk, uploads first and the drawn sheet
+    LAST (2026-09-18): `refs[0]` is what a clip anchors on, and a sheet
+    is a derivative of the face, never evidence of it."""
     directory = base_dir / folder
     if not directory.is_dir():
         return []
-    return sorted(p.name for p in directory.iterdir()
-                  if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS)
+    return sorted((p.name for p in directory.iterdir()
+                   if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS),
+                  key=lambda n: (element_sheet.is_sheet(n), n))
 
 
-def _asset_photo_urls(kind: str, base_dir: Path, slug: str) -> list:
+def _sheet_of(photos: list, thumbs: list):
+    """(sheet url, sheet thumb) off an element's photo lists, or Nones."""
+    for url, thumb in zip(photos, thumbs):
+        if element_sheet.is_sheet(str(url).split("?")[0].rsplit("/", 1)[-1]):
+            return url, thumb
+    return None, None
+
+
+def _asset_photo_urls(kind: str, base_dir: Path, slug: str,
+                      account_id: Optional[int] = None) -> list:
     """One asset's photos, as the URL they ride on everywhere.
 
-    Through asset_shelf.photo_url rather than an f-string (2026-09-08,
-    Mike: "the reference photos aren't appearing"). These strings are
-    not only what the gallery draws -- _auto_refs stores them on the
-    shot, and a site-relative /characters/... path is true only on the
-    machine holding the folder. characters/, props/ and locations/ are
+    Through asset_shelf rather than an f-string (2026-09-08, Mike: "the
+    reference photos aren't appearing"). These strings are not only what
+    the gallery draws -- _auto_refs stores them on the shot, and a
+    site-relative /characters/... path is true only on the machine
+    holding the folder. characters/, props/ and locations/ are
     gitignored AND dockerignored, so the deployed site 404s every one:
     four refs on the row, four empty tiles on the card, and a renderer
-    reaching for a face it cannot fetch. photo_url returns the public
-    R2 URL when R2 is configured, which src/asset_shelf.catalogue has
-    handed the nightly graph since the same day -- two catalogues
-    disagreeing about one photo's URL is the shape of bug this repo
-    keeps finding.
+    reaching for a face it cannot fetch.
 
-    ?thumb=1 rides only on the local route: it is a query this app's own
-    handler understands and R2 does not.
-
-    When the folder is missing (the deployed API: gitignored AND
-    dockerignored, so Fly has none of them -- 2026-09-15, every asset
-    answering photos: [] to the studio) the listing comes from the
-    bucket instead, through asset_shelf.r2_photo_urls: cached per
-    prefix per process, [] when R2 is off. Disk stays first so Mike's
-    Mac reads its own photos.
+    What is RETURNED is the storable name; `_asset_photo_thumbs` below
+    is what the gallery draws. Keeping them apart is the whole point --
+    `refs[0]` is the single frame Runway anchors a clip on, and a list
+    that quietly carried 480px versions would anchor the clip on one.
     """
     from src import asset_shelf as _shelf
 
-    urls = []
-    for fn in _photo_names(base_dir, slug):
-        url = _shelf.photo_url(kind, slug, fn)
-        urls.append(url if url.startswith("http") else f"{url}?thumb=1")
-    return urls or _shelf.r2_photo_urls(kind, slug)
+    # Disk first, so Mike's Mac reads its own photos. When the folder is
+    # missing -- the deployed API: characters/ props/ locations/ are
+    # gitignored AND dockerignored, so on Fly every asset answered
+    # photos: [] and the studio could attach none of them (2026-09-15) --
+    # the listing comes from the bucket, under THIS account's keys, as the
+    # same storable name photo_url returns.
+    local = [_shelf.photo_url(kind, slug, fn) for fn in _photo_names(base_dir, slug)]
+    return local or _shelf.r2_photo_urls(kind, slug, account_id)
 
 
-def _location_photos(space: str) -> list:
-    return _asset_photo_urls("location", LOCATIONS_DIR, space)
+def _asset_photo_thumbs(urls: list, account_id: Optional[int] = None) -> list:
+    """The drawable URL for each of those photos, small where a small
+    one exists.
+
+    BACKLOG #0: a Queue card drew four full-size tiles, which off an
+    iPhone is a 4.6MB JPEG each -- 18MB to render one card, on a phone,
+    to show four thumbnails. The derivative is made at mirror time
+    (src/media.mirror) and lives under its own `t/` prefix.
+
+    Falls back to `?thumb=1`, the local handler that has always done
+    this off disk, whenever there is no derivative to point at -- R2
+    off, a photo added before the migration, a foreign URL. A fallback
+    and not a failure: the tile is slow, never missing.
+    """
+    from src import media
+
+    out = []
+    for url in urls:
+        small = media.thumb_url_for(url, account_id)
+        if small:
+            out.append(small)
+        elif url.startswith("http"):
+            out.append(url)          # no local handler to ask for a thumb
+        else:
+            out.append(f"{url}?thumb=1")
+    return out
+
+
+def _location_photos(space: str, account_id: Optional[int] = None) -> list:
+    return _asset_photo_urls("location", LOCATIONS_DIR, space, account_id)
 
 
 def _description_text(desc) -> str:
@@ -520,14 +628,29 @@ def _description_text(desc) -> str:
     return " · ".join(parts)
 
 
-def _assets_all(account_id: Optional[int] = None) -> list:
+# Which half of the bank a caller wants (2026-09-18, Mike's call: Assets
+# are generated content, Elements are the characters / props / places a
+# scene is held to -- two things, not four chips on one wall). `all`
+# stays the default so every existing caller and test reads as before.
+ASSET_SCOPES = ("all", "elements", "generated")
+ELEMENT_CATEGORIES = ("location", "character", "prop")
+
+
+def _assets_all(account_id: Optional[int] = None, scope: str = "all") -> list:
+    if scope not in ASSET_SCOPES:
+        scope = "all"
     items = []
+    if scope == "generated":
+        return _generated_assets(account_id)
     for loc in preprod.list_locations(account_id=account_id):
-        photos = _location_photos(loc["name"])
+        photos = _location_photos(loc["name"], account_id)
+        thumbs = _asset_photo_thumbs(photos, account_id)
+        sheet, sheet_thumb = _sheet_of(photos, thumbs)
         items.append({
             "id": f"location-{loc['id']}", "category": "location",
-            "name": loc["name"], "photos": photos,
-            "poster": photos[0] if photos else None,
+            "name": loc["name"], "photos": photos, "photo_thumbs": thumbs,
+            "poster": sheet_thumb or (thumbs[0] if thumbs else None),
+            "sheet": sheet,
             "text": _description_text(loc.get("description")
                                       or loc.get("description_json") or ""),
             "meta": {"photo_count": loc.get("photo_count")},
@@ -535,26 +658,39 @@ def _assets_all(account_id: Optional[int] = None) -> list:
         })
     for c in entities.list_characters(account_id=account_id):
         slug = _slug(c["name"])
-        photos = _asset_photo_urls("character", CHARACTERS_DIR, slug)
+        photos = _asset_photo_urls("character", CHARACTERS_DIR, slug, account_id)
+        thumbs = _asset_photo_thumbs(photos, account_id)
+        sheet, sheet_thumb = _sheet_of(photos, thumbs)
         items.append({
             "id": f"character-{c['id']}", "category": "character",
-            "name": c["name"], "photos": photos,
-            "poster": photos[0] if photos else None,
+            "name": c["name"], "photos": photos, "photo_thumbs": thumbs,
+            "poster": sheet_thumb or (thumbs[0] if thumbs else None),
+            "sheet": sheet,
             "text": c.get("notes") or c.get("role") or "",
             "meta": {"role": c.get("role")},
             "created_at": c.get("created_at"),
         })
     for p in entities.list_props(account_id=account_id):
         slug = _slug(p["name"])
-        photos = _asset_photo_urls("prop", PROPS_DIR, slug)
+        photos = _asset_photo_urls("prop", PROPS_DIR, slug, account_id)
+        thumbs = _asset_photo_thumbs(photos, account_id)
+        sheet, sheet_thumb = _sheet_of(photos, thumbs)
         items.append({
             "id": f"prop-{p['id']}", "category": "prop",
-            "name": p["name"], "photos": photos,
-            "poster": photos[0] if photos else None,
+            "name": p["name"], "photos": photos, "photo_thumbs": thumbs,
+            "poster": sheet_thumb or (thumbs[0] if thumbs else None),
+            "sheet": sheet,
             "text": p.get("notes") or p.get("category") or "",
             "meta": {"kind": p.get("category")},
             "created_at": p.get("created_at"),
         })
+    if scope == "all":
+        items.extend(_generated_assets(account_id))
+    return items
+
+
+def _generated_assets(account_id: Optional[int]) -> list:
+    items = []
     for rendered in render_assets.list_all(account_id=account_id):
         url = rendered["media_url"]
         kind = rendered["media_kind"]
@@ -572,12 +708,15 @@ def _assets_all(account_id: Optional[int] = None) -> list:
                 meta[key] = rendered[key]
         items.append({
             "id": f"generated-{rendered['id']}", "category": "generated",
+            "generated_id": rendered["id"],
             "name": f"{rendered['provider']} {kind}",
             "photos": [url] if kind == "image" else [],
             "media": [{"url": url, "kind": kind}],
             "media_url": url, "media_kind": kind,
             "poster": url if kind == "image" else None,
             "text": rendered["prompt"], "meta": meta,
+            "folder": rendered.get("folder"),
+            "starred": bool(rendered.get("starred")),
             "created_at": rendered.get("created_at"),
         })
     return items
@@ -585,10 +724,10 @@ def _assets_all(account_id: Optional[int] = None) -> list:
 
 @router.get("/assets")
 def assets_list(q: Optional[str] = None, category: Optional[str] = None,
-                limit: int = 200,
+                limit: int = 200, scope: str = "all",
                 account_id: int = Depends(auth.current_account_id),
 ):
-    items = _assets_all(account_id)
+    items = _assets_all(account_id, scope)
     counts = {"all": len(items)}
     for cat in ("location", "character", "prop", "generated"):
         counts[cat] = sum(1 for i in items if i["category"] == cat)
@@ -603,7 +742,9 @@ def assets_list(q: Optional[str] = None, category: Optional[str] = None,
 
 @router.get("/media")
 def media_list(q: Optional[str] = None, category: Optional[str] = None,
-               kind: str = "image", limit: int = 500,
+               kind: str = "image", limit: int = 500, scope: str = "all",
+               folder: Optional[str] = None, starred: bool = False,
+               provider: Optional[str] = None,
                account_id: int = Depends(auth.current_account_id)):
     """This account's saved media as one flat, newest-first list.
 
@@ -616,7 +757,7 @@ def media_list(q: Optional[str] = None, category: Optional[str] = None,
     from datetime import datetime, timezone
 
     items = []
-    for asset in _assets_all(account_id):
+    for asset in _assets_all(account_id, scope):
         generated = asset["category"] == "generated"
         media = asset.get("media") or [
             {"url": url, "kind": "image"} for url in asset["photos"]]
@@ -649,27 +790,61 @@ def media_list(q: Optional[str] = None, category: Optional[str] = None,
                 else:
                     mtime = datetime.fromtimestamp(target.stat().st_mtime,
                                                     tz=timezone.utc)
-            items.append({
+            row = {
                 "url": url, "asset_id": asset["id"],
                 "asset_name": asset["name"], "category": asset["category"],
                 "kind": media_kind,
                 "haystack": (asset["name"] + " " + (asset["text"] or "")).lower(),
                 "date": mtime.date().isoformat(),
                 "ts": mtime.timestamp(),
-            })
+            }
+            if generated:
+                # what the Assets wall organizes by (2026-09-18)
+                meta = asset.get("meta") or {}
+                row.update({
+                    "generated_id": asset.get("generated_id"),
+                    "provider": meta.get("provider"),
+                    "model": meta.get("model"),
+                    "concept_id": meta.get("concept_id"),
+                    "shot_n": meta.get("shot_n"),
+                    "prompt": asset.get("text") or "",
+                    "folder": asset.get("folder"),
+                    "starred": bool(asset.get("starred")),
+                })
+            items.append(row)
     items.sort(key=lambda x: x["ts"], reverse=True)
     # counts are set totals, before any filter -- same rule as /api/assets
     counts = {"all": len(items)}
     for cat in ("location", "character", "prop", "generated"):
         counts[cat] = sum(1 for i in items if i["category"] == cat)
+    # the Assets wall's own tallies (2026-09-18), beside `counts` rather
+    # than inside it so the category contract above is unchanged
+    wall = {"image": sum(1 for i in items if i["kind"] == "image"),
+            "video": sum(1 for i in items if i["kind"] == "video"),
+            "starred": sum(1 for i in items if i.get("starred"))}
+    folders: dict = {}
+    providers: dict = {}
+    for i in items:
+        if i.get("folder"):
+            folders[i["folder"]] = folders.get(i["folder"], 0) + 1
+        if i.get("provider"):
+            providers[i["provider"]] = providers.get(i["provider"], 0) + 1
     if category in ("location", "character", "prop", "generated"):
         items = [i for i in items if i["category"] == category]
+    if folder:
+        items = [i for i in items if i.get("folder") == folder]
+    if starred:
+        items = [i for i in items if i.get("starred")]
+    if provider:
+        items = [i for i in items if i.get("provider") == provider]
     if q:
         needle = q.lower().strip()
         items = [i for i in items if needle in i["haystack"]]
     for item in items:
         item.pop("haystack", None)
-    return {"items": items[:limit], "counts": counts}
+    return {"items": items[:limit], "counts": counts, "wall": wall,
+            "folders": dict(sorted(folders.items())),
+            "providers": dict(sorted(providers.items()))}
 
 
 @router.get("/assets/search")
@@ -679,7 +854,9 @@ def assets_search(q: str = "", limit: int = 8, account_id: int = Depends(auth.cu
     substring matches after; slim rows (name, category, thumb) because
     the dropdown needs nothing heavier."""
     needle = q.lower().strip()
-    items = _assets_all(account_id)
+    # an @-mention is an element by definition: a render is not a thing
+    # a shot can be held to, and `@runway-image` was showing up here
+    items = _assets_all(account_id, "elements")
     if needle:
         starts = [i for i in items if i["name"].lower().startswith(needle)]
         start_ids = {i["id"] for i in starts}
@@ -741,47 +918,75 @@ def describe_entity_photos(kind: str, name: str, photos: list,
         return {"ok": False, "description": None, "error": str(e)}
 
 
-def _mirror_photos_to_r2(plural: str, slug: str, saved) -> None:
-    """Push newly saved asset photos to R2, best-effort.
+def _mirror_photos_to_r2(plural: str, slug: str, saved,
+                         account_id: Optional[int] = None) -> None:
+    """Push newly saved asset photos up, best-effort.
 
     The counterpart of asset_shelf.photo_url returning an R2 URL: a
     photo added after the 2026-09-08 backfill would otherwise be handed
     out under a URL whose object was never uploaded -- a broken tile
     that looks exactly like the bug this whole change fixes, only newer.
-    Never raises; an unconfigured or unreachable R2 leaves the file on
-    local disk, where the /characters/... route still serves it.
+
+    Delegates to `src/media.mirror`, which owns the key scheme and makes
+    the 480px derivative. This function used to build the key itself,
+    alongside refbin doing the same thing differently; the account
+    prefix is exactly the kind of change that would have landed in one
+    of them and not the other.
     """
-    try:
-        from src import storage
-        if not storage.configured():
-            return
-    except Exception:                                   # noqa: BLE001
-        return
+    from src import media
     for target in saved:
-        try:
-            storage.upload_file(target, key=f"{plural}/{slug}/{target.name}",
-                                content_type="image/jpeg")
-        except Exception as e:                          # noqa: BLE001
-            print(f"note: R2 mirror failed for {plural}/{slug}/{target.name}: "
-                  f"{type(e).__name__}: {e}", file=sys.stderr)
+        media.mirror(target, f"{plural}/{slug}/{target.name}", account_id,
+                     content_type="image/jpeg")
 
 
-async def _save_uploaded_photos(base_dir: Path, slug: str, photos) -> tuple:
+def _photos_from_urls(directory: Path, urls) -> list:
+    """"Make element" from the Assets wall (2026-09-18): a render's URL
+    handed to a create route instead of an upload. The bytes come
+    through _photo_bytes (disk first, SSRF-guarded fetch second) and
+    are written beside the uploads under a content-hashed name, so the
+    same render promoted twice is one file. A URL that yields nothing
+    is skipped, never an error -- the element still saves."""
+    import hashlib
+    saved = []
+    for url in urls or []:
+        url = str(url or "").strip()
+        if not url:
+            continue
+        data = _photo_bytes(url)
+        if not data:
+            continue
+        directory.mkdir(parents=True, exist_ok=True)
+        ext = Path(url.split("?")[0]).suffix.lower()
+        if ext not in IMAGE_EXTENSIONS:
+            ext = ".jpg"
+        target = directory / f"gen-{hashlib.sha1(data).hexdigest()[:16]}{ext}"
+        if not target.exists():
+            target.write_bytes(data)
+        saved.append(target)
+    return saved
+
+
+async def _save_uploaded_photos(base_dir: Path, slug: str, photos,
+                                account_id: Optional[int] = None,
+                                photo_urls=None) -> tuple:
     """(first filename, count) -- mirrors the old dev-console handler."""
     images = [p for p in photos
               if getattr(p, "filename", "") and (p.content_type or "").startswith("image/")]
-    if not images:
-        return "", 0
     directory = base_dir / slug
-    directory.mkdir(parents=True, exist_ok=True)
     saved = []
-    for upload in images:
-        target = directory / Path(upload.filename).name
-        target.write_bytes(await upload.read())
-        saved.append(target)
+    if images:
+        directory.mkdir(parents=True, exist_ok=True)
+        for upload in images:
+            target = directory / Path(upload.filename).name
+            target.write_bytes(await upload.read())
+            saved.append(target)
+    saved += _photos_from_urls(directory, photo_urls)
+    if not saved:
+        return "", 0
     _mirror_photos_to_r2(
-        "characters" if base_dir == CHARACTERS_DIR else "props", slug, saved)
-    return Path(images[0].filename).name, len(images)
+        "characters" if base_dir == CHARACTERS_DIR else "props", slug, saved,
+        account_id)
+    return saved[0].name, len(saved)
 
 
 @router.post("/assets/locations")
@@ -796,7 +1001,8 @@ async def asset_create_location(request: Request, account_id: int = Depends(auth
         return _error(400, "invalid_name", "a space name is required")
     photos = [p for p in form.getlist("photos") if getattr(p, "filename", "")]
     images = [p for p in photos if (p.content_type or "").startswith("image/")]
-    if not images:
+    photo_urls = [u for u in form.getlist("photo_urls") if str(u or "").strip()]
+    if not images and not photo_urls:
         return _error(400, "no_photos", "at least one photo is required")
 
     space_dir = LOCATIONS_DIR / slug
@@ -806,7 +1012,10 @@ async def asset_create_location(request: Request, account_id: int = Depends(auth
         target = space_dir / Path(upload.filename).name
         target.write_bytes(await upload.read())
         saved.append(target)
-    _mirror_photos_to_r2("locations", slug, saved)
+    saved += _photos_from_urls(space_dir, photo_urls)
+    if not saved:
+        return _error(400, "no_photos", "none of the photos could be read")
+    _mirror_photos_to_r2("locations", slug, saved, account_id)
 
     described = False
     note = None
@@ -833,8 +1042,12 @@ async def asset_create_location(request: Request, account_id: int = Depends(auth
     chunk = ingest_asset_chunk("location", slug, slug,
                                {"description": description or {}},
                                project=accounts.slug_of(account_id))
+    sheet_job = _maybe_sheet_job(form, "locations", slug, slug,
+                                 notes=(form.get("notes") or "").strip(),
+                                 account_id=account_id)
     return {"ok": True, "slug": slug, "described": described,
-            "photos": len(saved), "note": note, "rag": chunk}
+            "photos": len(saved), "note": note, "rag": chunk,
+            "sheet_job": sheet_job}
 
 
 async def _create_entity(kind: str, request: Request, account_id: int):
@@ -851,7 +1064,9 @@ async def _create_entity(kind: str, request: Request, account_id: int):
         return _error(400, "invalid_name", "a name is required")
     field = (form.get(label) or "").strip()
     notes = (form.get("notes") or "").strip()
-    ref, count = await _save_uploaded_photos(base_dir, slug, form.getlist("photos"))
+    ref, count = await _save_uploaded_photos(base_dir, slug, form.getlist("photos"),
+                                             account_id,
+                                             photo_urls=form.getlist("photo_urls"))
 
     # resolved against THIS route's base_dir, not asset_shelf's module
     # constant -- they're the same in production, but the photos that
@@ -876,8 +1091,12 @@ async def _create_entity(kind: str, request: Request, account_id: int):
     note = None if vision["ok"] else (
         f"photos saved but not described: {vision['error']}" if count
         else "no photos to describe")
+    sheet_job = _maybe_sheet_job(form, "characters" if kind == "character" else "props",
+                                 slug, name, detail=field, notes=notes,
+                                 account_id=account_id)
     return {"ok": True, "slug": slug, "photos": count,
-            "described": vision["ok"], "note": note, "rag": chunk}
+            "described": vision["ok"], "note": note, "rag": chunk,
+            "sheet_job": sheet_job}
 
 
 @router.post("/assets/characters")
@@ -933,6 +1152,21 @@ def asset_delete_character(character_id: int, account_id: int = Depends(auth.cur
     return {"deleted": character_id}
 
 
+@router.delete("/assets/locations/{location_id}")
+def asset_delete_location(location_id: int, account_id: int = Depends(auth.current_account_id)):
+    """The third delete (2026-09-15, Mike: "I want to be able to delete
+    assets or elements"): places had create and list but no delete, so
+    the element sheet could remove a character or a prop and not a room.
+    Same shape as the two below -- the row and its RAG chunk go, the
+    photo bytes stay."""
+    row = preprod.get_location(location_id, account_id=account_id)
+    if row is None:
+        return _error(404, "not_found", "no such location")
+    preprod.delete_location(location_id, account_id=account_id)
+    _drop_asset_chunk("location", _slug(row["name"]))
+    return {"deleted": location_id}
+
+
 @router.delete("/assets/props/{prop_id}")
 def asset_delete_prop(prop_id: int, account_id: int = Depends(auth.current_account_id)):
     row = entities.get_prop(prop_id, account_id=account_id)
@@ -941,6 +1175,130 @@ def asset_delete_prop(prop_id: int, account_id: int = Depends(auth.current_accou
     entities.delete_prop(prop_id, account_id=account_id)
     _drop_asset_chunk("prop", _slug(row["name"]))
     return {"deleted": prop_id}
+
+
+SHEET_KINDS = ("characters", "props", "locations")
+
+
+def _sheet_kind(plural: str) -> tuple:
+    """(kind, base_dir) for a create route's plural -- resolved per call,
+    so a patched *_DIR is honoured."""
+    return {"characters": ("character", CHARACTERS_DIR),
+            "props": ("prop", PROPS_DIR),
+            "locations": ("location", LOCATIONS_DIR)}[plural]
+
+
+def _sheet_wanted(form) -> bool:
+    """The create routes' `sheet` field: on unless the modal says off."""
+    value = str(form.get("sheet") if form.get("sheet") is not None else "1").strip().lower()
+    return value not in ("0", "false", "no", "off", "")
+
+
+def _start_sheet_job(plural: str, slug: str, name: str, *, detail: str = "",
+                     notes: str = "", account_id: int) -> dict:
+    """Draw an element's reference sheet as a job (2026-09-18): it spends
+    (cents, Nano Banana Pro, NANO_DAILY_CAP), so it runs off the request
+    like every other billed step, and the element is already saved
+    whatever happens here. The sheet lands beside the uploads as
+    sheet.jpg, mirrored to R2 like any photo, and `_photo_names` lists
+    it last."""
+    kind, base_dir = _sheet_kind(plural)
+
+    def work(job):
+        jobs.progress(job, 0.1, "reading the photos")
+        directory = base_dir / slug
+        photos = [directory / n for n in _photo_names(base_dir, slug)]
+        jobs.progress(job, 0.3, "drawing the sheet")
+        result = element_sheet.draw(kind, name, photos, directory,
+                                    detail=detail, notes=notes,
+                                    account_id=account_id)
+        if not result["ok"]:
+            raise RuntimeError(result["error"] or "the sheet did not render")
+        _mirror_photos_to_r2(plural, slug, [result["path"]], account_id)
+        from src import asset_shelf as _shelf
+        url = _shelf.photo_url(kind, slug, result["path"].name)
+        return {"detail": f"{name} · sheet drawn", "output": url}
+
+    return jobs.start("sheet", f"{name} · reference sheet", work,
+                      account_id=account_id)
+
+
+def _maybe_sheet_job(form, plural: str, slug: str, name: str, *,
+                     detail: str = "", notes: str = "",
+                     account_id: int) -> Optional[int]:
+    """The create routes' hook: a job id when a sheet was asked for and
+    can be drawn, else None -- with the reason in the response note, not
+    an error, because the element itself saved fine."""
+    if not _sheet_wanted(form) or not _gemini_key(account_id):
+        return None
+    if not _photo_names(_sheet_kind(plural)[1], slug):
+        return None
+    return _start_sheet_job(plural, slug, name, detail=detail, notes=notes,
+                            account_id=account_id)["id"]
+
+
+@router.post("/assets/{plural}/{item_id}/sheet")
+def asset_draw_sheet(plural: str, item_id: int,
+                     account_id: int = Depends(auth.current_account_id)):
+    """Draw (or redraw) an existing element's reference sheet -- the
+    Elements card's button, and how elements saved before 2026-09-18
+    get one. Returns the job."""
+    if plural not in SHEET_KINDS:
+        return _error(404, "not_found", "no such element kind")
+    if not _gemini_key(account_id):
+        return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
+    kind, base_dir = _sheet_kind(plural)
+    if kind == "location":
+        row = preprod.get_location(item_id, account_id=account_id)
+        detail = ""
+    elif kind == "character":
+        row = entities.get_character(item_id, account_id=account_id)
+        detail = (row or {}).get("role") or ""
+    else:
+        row = entities.get_prop(item_id, account_id=account_id)
+        detail = (row or {}).get("category") or ""
+    if row is None:
+        return _error(404, "not_found", f"no such {kind}")
+    slug = _slug(row["name"])
+    if not [n for n in _photo_names(base_dir, slug) if not element_sheet.is_sheet(n)]:
+        return _error(400, "no_photos", "add a photo first -- a sheet is drawn from the real ones")
+    job = _start_sheet_job(plural, slug, row["name"], detail=detail,
+                           notes=row.get("notes") or "", account_id=account_id)
+    return {"job_id": job["id"]}
+
+
+class OrganizeBody(BaseModel):
+    folder: Optional[str] = None
+    starred: Optional[bool] = None
+
+
+@router.patch("/assets/generated/{asset_id}")
+def asset_organize_generated(asset_id: int, body: OrganizeBody,
+                             account_id: int = Depends(auth.current_account_id)):
+    """Move a render into a folder and/or star it (2026-09-18). A field
+    left out of the body is left alone; `folder: ""` clears it."""
+    fields = body.model_dump(exclude_unset=True)
+    if not fields:
+        return _error(400, "nothing_to_change", "send folder and/or starred")
+    changed = render_assets.organize(
+        asset_id, account_id=account_id,
+        folder=fields.get("folder", ...), starred=fields.get("starred"))
+    if not changed:
+        return _error(404, "not_found", "no such generated asset")
+    row = render_assets.get(asset_id, account_id=account_id) or {}
+    return {"id": asset_id, "folder": row.get("folder"),
+            "starred": bool(row.get("starred"))}
+
+
+@router.delete("/assets/generated/{asset_id}")
+def asset_delete_generated(asset_id: int, account_id: int = Depends(auth.current_account_id)):
+    """A SOFT delete (2026-09-18): the render leaves the wall and the
+    assets shelf; the row and the file stay, so a concept whose shot
+    carries this clip keeps rendering it."""
+    if not render_assets.soft_delete(asset_id, account_id=account_id):
+        return _error(404, "not_found", "no such generated asset")
+    render_assets.drop_chunk(asset_id)
+    return {"deleted": asset_id}
 
 
 # --- retrieval --------------------------------------------------------------
@@ -981,7 +1339,46 @@ def retrieve(body: RetrieveBody, account_id: int = Depends(auth.current_account_
 
 # --- pipeline (adapted to pre-production) -----------------------------------
 
-def _concept_card(c: dict, subscription_ids: Optional[set] = None) -> dict:
+def _bin_filenames(concepts: list) -> list:
+    """Every bin image named by these concepts' refs, for ONE
+    scout.sources_for_refs call per board rather than one per card."""
+    names = []
+    for c in concepts:
+        for url in c.get("refs") or []:
+            ref = asset_shelf.parse_ref(url)
+            if ref and ref["kind"] == "refs":
+                names.append(ref["filename"])
+    return names
+
+
+def _ref_sources(refs: list, sources: Optional[dict]) -> list:
+    """`refs`, one entry each and in the same order, saying what each
+    picture IS and where it came from: {url, kind, slug, filename,
+    source_url, title, lane}.
+
+    `kind` is asset_shelf.parse_ref's -- the ONE parser, so a local route
+    and its R2 twin read the same: character / prop / location (the asset
+    bank; `slug` names the asset, and that IS its attribution), `refs` (the
+    reference bin) or "" for anything else. `source_url` is the page a
+    scouted frame was taken from, off scout_bin; empty for a composer
+    upload, which has no page. `refs` itself is unchanged -- it is what
+    the renderers read, and its order is load-bearing (urls[0] anchors)."""
+    out = []
+    for url in refs or []:
+        ref = asset_shelf.parse_ref(url) or {}
+        found = (sources or {}).get(ref.get("filename")) if ref.get("kind") == "refs" else None
+        out.append({"url": url, "kind": ref.get("kind") or "",
+                    "slug": ref.get("slug") or "",
+                    "filename": ref.get("filename") or "",
+                    "source_url": (found or {}).get("source_url") or "",
+                    "title": (found or {}).get("title") or "",
+                    "lane": (found or {}).get("lane") or ""})
+    return out
+
+
+def _concept_card(c: dict, subscription_ids: Optional[set] = None,
+                  gates: Optional[dict] = None,
+                  sources: Optional[dict] = None) -> dict:
     status = "shot" if c.get("shot_done") else (
         "planned" if c.get("has_shot_list") else "idea")
     location_names = [loc["name"] for loc in c.get("locations") or []]
@@ -997,7 +1394,8 @@ def _concept_card(c: dict, subscription_ids: Optional[set] = None) -> dict:
     ) if c.get("is_scene") else ""
     grounded = []
     for name in location_names:
-        photos = _location_photos(name)
+        # the row's own account: the bucket fallback is fenced per tenant
+        photos = _location_photos(name, c.get("account_id"))
         grounded.append({"name": name,
                          "poster": photos[0] if photos else None})
     return {
@@ -1054,6 +1452,23 @@ def _concept_card(c: dict, subscription_ids: Optional[set] = None) -> dict:
         # Absent set = not asked (a single-card read), which is why the
         # default is False rather than unknown.
         "subscription": bool(subscription_ids and c["id"] in subscription_ids),
+        # THE PROMPT GATE'S OWN VERDICT (2026-09-17): {score, passed, reason,
+        # reworks, status, outcome}, or None when no graph run ever ended on
+        # this concept -- a Studio Create stops on the board unscored, and
+        # the card has to say "never scored" rather than invent a pass. The
+        # cards drew a readiness dot from warnings and park_reason because
+        # this was only ever reachable through the MCP `idea` tool; it is
+        # the same reading (autonomy.gates_for_concepts), batched for a
+        # board. `passed` is what the gate SAID, not whether the run went
+        # on: in advisory mode a failed prompt still parks. Absent dict =
+        # not asked (a single-card read), the `subscription` rule.
+        "gate": (gates or {}).get(c["id"]),
+        # WHERE EACH REFERENCE CAME FROM (2026-09-17), parallel to `refs`.
+        # "A reference must be traceable to where it came from" was kept at
+        # banking time and lost on the shot, which stores bare URLs -- so
+        # the one surface where someone is about to spend a render on a
+        # frame showed it unattributed. See _ref_sources.
+        "ref_sources": _ref_sources(c.get("refs") or [], sources),
     }
 
 
@@ -1095,8 +1510,13 @@ def pipeline_concepts(brand: Optional[str] = None, status: Optional[str] = None,
     # whole limit and quietly shorten the other's board.
     # one query for the whole board rather than one per card
     subscription_ids = generative.subscription_rendered(account_id=account_id)
-    cards = [_concept_card(c, subscription_ids)
-             for c in preprod.list_concepts(account_id=account_id, brand=brand)]
+    concepts = preprod.list_concepts(account_id=account_id, brand=brand)
+    # ...and two for every card's gate verdict, not two per card
+    gates = autonomy.gates_for_concepts([c["id"] for c in concepts],
+                                        account_id=account_id)
+    # ...and one for every scouted frame's attribution
+    sources = scout.sources_for_refs(_bin_filenames(concepts))
+    cards = [_concept_card(c, subscription_ids, gates, sources) for c in concepts]
     if status in ("idea", "planned", "shot"):
         cards = [c for c in cards if c["status"] == status]
     if not archived:
@@ -1311,7 +1731,7 @@ def _attach_scene_refs(concept_id: int, manual: list,
     text = " ".join(str(shots[0].get(k) or "")
                     for k in ("desc", "prompt", "location"))
     refs = _auto_refs(text, manual, account_id, idea=idea)[:MAX_IMAGE_REFS]
-    refs = [asset_shelf.canonical_url(r) for r in refs]
+    refs = [asset_shelf.storable_ref(r) for r in refs]
     if not refs:
         return []
     shots[0]["refs"] = refs
@@ -1690,6 +2110,56 @@ def _board_verdict(concept: dict, verdict: str, note: str) -> bool:
     return True
 
 
+def _teach_prompt_edit(account_id, concept: dict, shot: dict,
+                       before: str, after: str, note: str) -> bool:
+    """Record a hand edit of one shot's prompt as a draft -> fix PAIR,
+    pending on the Teach tab. True if one was filed (src/edit_teach.py,
+    2026-09-18, Mike's call: his edits should teach; other tenants' do not).
+
+    Gated on the account's own row and fails closed, so for every
+    account that is off this is a no-op that touches nothing -- not even
+    the shot, whose `model_prompt` key is written only here.
+
+    The failed side is the model's draft: what the shot remembers as the
+    last model-written text, else the text that stood before this edit.
+    The fix is the edit. Same text, or no draft, teaches nothing.
+
+    Replacement, extending _board_verdict's rule: a pending board tap or
+    an earlier pending edit on this ref is replaced (one pending pair per
+    shot, latest wins); a Grade-tab verdict is never touched; anything
+    ingested is never touched. A board tap that comes AFTER an edit leaves
+    the pair alone, because an edit note is "not in BOARD_NOTES" -- the
+    pair already carries the pick's meaning and the contrast beside it.
+    """
+    if not edit_teach.allowed(account_id):
+        return False
+    draft = edit_teach.draft_of(shot, before)
+    after = (after or "").strip()
+    if not draft or not after:
+        return False
+    ref = f"concept-{concept['id']}-shot-{shot.get('n') or 1}"
+    existing = winners.recorded(ref)
+    if any(w.get("ingested") for w in existing):
+        return False
+    if any((w.get("note") or "") not in BOARD_NOTES
+           and not edit_teach.is_edit_note(w.get("note"))
+           for w in existing):
+        return False        # a considered verdict from the Grade tab wins
+    if draft == after:
+        # edited back to the draft: there is no fix to teach, and a pair
+        # filed by an earlier edit now claims a fix the shot no longer
+        # says -- withdraw it (pending only; a board tap is not ours)
+        if any(edit_teach.is_edit_note(w.get("note")) for w in existing):
+            winners.discard_pending(ref)
+        return False
+    winners.discard_pending(ref)
+    winners.record_pair(
+        (shot.get("tool") or "runway"), draft, after, note=note,
+        video_ref=ref, ingest=False)
+    shot[edit_teach.DRAFT_KEY] = draft
+    return True
+
+
 def _withdraw_board_verdict(concept: dict) -> int:
     """Undo a board ruling that has not taught anything yet. Un-picking or
     un-archiving must take its verdict with it, or the shelves learn from
@@ -1797,7 +2267,7 @@ def _runway_state() -> dict:
             "today": today}
 
 
-def _renderers_state(account_id: Optional[int] = None) -> dict:
+def _renderers_state(account_id: Optional[int] = None, ctx=None) -> dict:
     """Every renderer the Queue may spend on, with its gates and its legal
     options -- the four-vendor form of _runway_state.
 
@@ -1812,10 +2282,11 @@ def _renderers_state(account_id: Optional[int] = None) -> dict:
     `runway` is still returned alongside, unchanged. It is a public shape
     an older client may still be reading, and there is nothing to gain
     from breaking it on the same day the new one arrives."""
-    return providers.render_options(account_id)
+    return providers.render_options(account_id, ctx=ctx)
 
 
-def _waiting(account_id: Optional[int], brand: Optional[str]) -> list[tuple[dict, dict]]:
+def _waiting(account_id: Optional[int], brand: Optional[str],
+             include_blocked: bool = False) -> list[tuple[dict, dict]]:
     """The queue predicate -- parked by the chain or picked on the board,
     not archived, a scene, no clip yet -- as (concept, card) pairs.
 
@@ -1836,20 +2307,71 @@ def _waiting(account_id: Optional[int], brand: Optional[str]) -> list[tuple[dict
 
     Deliberately NOT a prompt check as well. A prompt is on `shots_json`
     only because score_prompts put it there, and a second bar here would
-    be a different opinion from the one that already ran."""
+    be a different opinion from the one that already ran.
+
+    `include_blocked` (2026-09-17, Mike's call) is for the Queue PAGE
+    alone. Those three ways in are real, and a picked scene that simply
+    was not on the Queue read as a lost pick -- nothing anywhere said why.
+    So the page may ask for the ungrounded rows too; each comes back with
+    `card["blocked"]` = the gate's own reason, and is drawn locked, with
+    its approve dead and "add references" on it. WHAT DID NOT CHANGE: the
+    default is still spendable-only, so the manual lane (a person's hands
+    on a render) never sees one; `queue_approve` still asks
+    `reference_gate` itself and refuses; ops/render_queue.py is untouched.
+    Listing a scene is not a way to spend on it."""
     # scoped in SQL, see above
     out = []
-    for concept in preprod.list_concepts(account_id=account_id, brand=brand):
-        card = _concept_card(concept)
-        if ((card["picked"] or card["parked"]) and not card["archived"]
+    concepts = preprod.list_concepts(account_id=account_id, brand=brand)
+    gates = autonomy.gates_for_concepts([c["id"] for c in concepts],
+                                        account_id=account_id)
+    sources = scout.sources_for_refs(_bin_filenames(concepts))
+    for concept in concepts:
+        card = _concept_card(concept, gates=gates, sources=sources)
+        if not ((card["picked"] or card["parked"]) and not card["archived"]
                 and card["is_scene"] and not card["media_url"]
-                # nothing reaches a spend ungrounded -- see above
-                and not preprod.reference_gate(concept)
                 # marked shot by hand (the camera button) -- a card you
                 # already made yourself isn't waiting on you to spend
                 and not card["shot_done"]):
-            out.append((concept, card))
+            continue
+        # nothing reaches a spend ungrounded -- see above
+        blocked = preprod.reference_gate(concept)
+        if blocked and not include_blocked:
+            continue
+        card["blocked"] = blocked or ""
+        out.append((concept, card))
+    # spendable first: a locked card must never be the first thing under
+    # the pointer on the page whose primary button spends money
+    out.sort(key=lambda pair: bool(pair[1]["blocked"]))
     return out
+
+
+def _card_quote(concept: dict, account_id: Optional[int], *, ctx=None, **pick) -> dict:
+    """What approving this card would render and cost, for the pick given
+    (none = the card's own default) -- pricing.display, or {"error"} when
+    that intent has no price. Never raises: a card that cannot be priced
+    still has to be listed, with the reason where the number would be.
+
+    `ctx` is the listing's providers.RenderContext (see queue_pending);
+    every other caller leaves it out and prices against fresh lookups."""
+    if ctx is not None:
+        pick["ctx"] = ctx
+    try:
+        return pricing.display(account_id=account_id, shot=concept["shots"][0],
+                               shot_id=concept["id"], **pick)
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _generate_node_quote(concept: dict, account_id: Optional[int]) -> dict:
+    """The Director Generate node's price: ONE clip, at the adapter's own
+    default length and frame, on the renderer workflow_exec_generate and
+    Run all resolve (providers.renderer_for, needs=generate_from_prompt).
+    {"error"} when no renderer is keyed or the intent has no price."""
+    pick = providers.renderer_for(account_id, needs="generate_from_prompt")
+    if pick is None:
+        return {"error": "no video renderer key is available for this account"}
+    return _card_quote(concept, account_id, provider=pick["provider"],
+                       model=pick["model"], whole=True)
 
 
 @router.get("/queue/pending")
@@ -1864,7 +2386,13 @@ def queue_pending(brand: Optional[str] = None, account_id: int = Depends(auth.cu
     rendered -- the next step is the one that costs money), or you pick
     a text-only concept off the board yourself."""
     items = []
-    for _, card in _waiting(account_id, brand):
+    # WHAT THIS ACCOUNT HOLDS, ASKED ONCE (2026-09-18). Which vendors are
+    # keyed, whose key each is and today's counts are facts about the
+    # account, not about a card -- but every card asked them again, per
+    # vendor, each on its own connection: four cards took ~45s from a
+    # laptop and the React Queue draws nothing until this answers.
+    ctx = providers.render_context(account_id)
+    for concept, card in _waiting(account_id, brand, include_blocked=True):
         # THE CARD'S OWN DEFAULT RENDERER, resolved here rather than in
         # the browser. The mapping from a shot's planned tool to a
         # (provider, model) pair lives in providers.platform_default and
@@ -1878,11 +2406,44 @@ def queue_pending(brand: Optional[str] = None, account_id: int = Depends(auth.cu
         # the cheapest renderer the account can use instead of on a dead
         # button -- providers.render_default, the same call an empty
         # approve body makes below.
-        items.append({**card, "render_default": providers.render_default(
-            card.get("tool"), account_id)})
+        items.append({**card,
+                      "render_default": providers.render_default(
+                          card.get("tool"), account_id, ctx),
+                      "quote": _card_quote(concept, account_id, ctx=ctx)})
     return {"items": items,
+            # how many of `items` can actually be approved. The rail's badge
+            # reads THIS, not len(items): it has always meant "waiting on you
+            # to spend", and a locked card is waiting on references instead.
+            "spendable": sum(1 for c in items if not c["blocked"]),
             "runway": _runway_state(),
-            "renderers": _renderers_state(account_id)}
+            "renderers": _renderers_state(account_id, ctx)}
+
+
+@router.get("/queue/count")
+def queue_count(brand: Optional[str] = None,
+                account_id: int = Depends(auth.current_account_id)):
+    """How many cards are waiting -- and NOTHING else (2026-09-18).
+
+    The rail's badge is on every studio page and re-asks on every pick,
+    decision and finished job. It used to call /queue/pending for one
+    number, and that route prices every card: signed quotes, a render
+    default and the renderer state per request. Timed against the live
+    database for four cards: the rows 2.4s, the quotes 21.7s, the defaults
+    12.9s, the renderer state 7.4s -- and the badge fired it unbranded on
+    top of the page's own call, so the Queue page waited behind its own
+    badge. This walks the same `_waiting` rows the listing does and counts
+    them, so the two cannot disagree about what "waiting" means.
+
+    `spendable` is the badge's number (the listing's own field, same
+    meaning: a card the reference gate blocks is waiting on photographs,
+    not on a spend); `blocked` is the rest."""
+    spendable = blocked = 0
+    for _concept, card in _waiting(account_id, brand, include_blocked=True):
+        if card.get("blocked"):
+            blocked += 1
+        else:
+            spendable += 1
+    return {"spendable": spendable, "blocked": blocked}
 
 
 def _lane_models() -> list:
@@ -2318,6 +2879,103 @@ class ApproveBody(BaseModel):
     model: Optional[str] = None
     duration: Optional[int] = None
     frame: Optional[str] = None
+    # The signed quotes the card showed (pricing.display's `renders[].token`,
+    # one per shot to render), echoed back so the price approved is
+    # provably the price rendered. REQUIRED whenever the card was handed
+    # them (step 5 of docs/tasks/task-pricing-and-quotes.md): a render
+    # that is billable here, on a server that can sign, is a 400
+    # `missing_quote` without one. A BYOK render, and any render on a
+    # server with no QUOTE_SIGNING_SECRET, was never given a token and
+    # approves without one -- a dev box with no secret is not locked out.
+    # Tokens that ARE sent are verified either way.
+    tokens: Optional[list[str]] = None
+
+
+def _verify_tokens(tokens: list, priced: dict, shot: dict, shot_id: int,
+                   account_id: Optional[int]) -> list:
+    """Every render `priced` would make, matched to a token that verifies
+    for it -- and says the same provider, model, length, frame and
+    credits the card is about to spend on. Returns the Quotes in render
+    order. Raises pricing.QuoteRefused (reason on it) or
+    SigningUnconfigured; never returns a partial answer."""
+    spare = [t for t in tokens if isinstance(t, str) and t.strip()]
+    quotes = []
+    for render in priced["renders"]:
+        bound = None
+        for token in list(spare):
+            try:
+                bound = pricing.verify(token, account_id=account_id, shot=shot,
+                                       shot_id=shot_id, part=render["part"])
+            except pricing.QuoteRefused as e:
+                # another shot's token is not a refusal yet -- it may be
+                # the next render's; anything else about it is
+                if e.reason != "wrong_render":
+                    raise
+                continue
+            spare.remove(token)
+            break
+        if bound is None:
+            raise pricing.QuoteRefused(
+                "missing_quote", f"no quote for shot {render['part']}" if render["part"]
+                else "no quote for this render")
+        same = (bound.provider == priced["provider"] and bound.model == priced["model"]
+                and bound.frame == priced["frame"] and bound.seconds == render["seconds"]
+                and bound.credits == render["credits"])
+        if not same:
+            raise pricing.QuoteRefused(
+                "wrong_render", "the renderer, length or frame changed since this "
+                                "price -- re-quote")
+        quotes.append(bound)
+    return quotes
+
+
+def _quote_required(account_id: Optional[int], provider: str) -> bool:
+    """Whether a render on `provider` must arrive with a signed quote:
+    it is billable to this account (not BYOK) AND this server can sign.
+    The same predicate as pricing.display()'s `signed`, for the routes
+    that have no display() in hand."""
+    return pricing.configured() and pricing.billable(account_id, provider)
+
+
+_QUEUE_ONLY = ("this render is billed in credits, and the Queue is where a "
+               "price is quoted and approved -- pick the scene and approve it there")
+
+
+def _quote_refusal(e: Exception, account_id: Optional[int]):
+    """The response for a token that did not verify: 503 with the
+    generation command when nothing can be verified here, else 400 with
+    the refusal's own reason as the code. wrong_account is logged at
+    warning -- it cannot happen through the UI, so it is a replay."""
+    if isinstance(e, pricing.SigningUnconfigured):
+        return _error(503, "signing_unconfigured", str(e))
+    if e.reason == "wrong_account":
+        print(f"[quote] wrong_account: a quote issued to another tenant was "
+              f"presented by account {account_id!r}", file=sys.stderr)
+        return _error(400, "wrong_account", "this quote isn't valid -- get a fresh price")
+    return _error(400, e.reason, str(e))
+
+
+@router.get("/queue/{concept_id}/quote")
+def queue_quote(concept_id: int, provider: Optional[str] = None,
+                model: Optional[str] = None, duration: Optional[int] = None,
+                frame: Optional[str] = None,
+                account_id: int = Depends(auth.current_account_id)):
+    """What approving this card WITH THIS PICK would render and cost --
+    pricing.display for the same four fields the approve body takes, so
+    the button's number and the approve's number are one computation
+    (2026-09-17). The listing already carries this for the card's default
+    pick; the card asks here when the person moves a control, instead of
+    doing the arithmetic -- and the window-fitting -- a second time in
+    JavaScript. Spends nothing and writes nothing."""
+    concept = preprod.get_concept(concept_id, account_id=account_id)
+    if concept is None or not concept.get("shots"):
+        return _error(404, "not_found", "no such concept")
+    try:
+        return pricing.display(account_id=account_id, shot=concept["shots"][0],
+                               shot_id=concept_id, provider=provider, model=model,
+                               seconds=duration, frame=frame)
+    except ValueError as e:
+        return _error(400, "bad_render_choice", str(e))
 
 
 @router.post("/queue/{concept_id}/approve")
@@ -2406,32 +3064,24 @@ def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
     # carrying windows, not whether the timeline happens to be planned yet
     # -- a stale or missing one is planned inside the job, before the first
     # clip, so the card can never render the old split of an edited scene.
-    windows = [p["seconds"] for p in (_timeline_card(shot) or {}).get("parts") or []]
+    # pricing.windows_to_render is that rule; `timed` below is its answer.
 
-    # The plan is the default, the body overrides it. A shot carries the
-    # tool shootgen chose; platform_default turns that into (provider,
-    # model) through the SAME binding orchestrator.generate_render holds,
-    # so "KLING" means one model in both places or in neither.
-    # An empty body resolves exactly as the card's default did
-    # (providers.render_default: the plan if this account can render it,
-    # else the cheapest renderer it can), so the two cannot come apart.
-    planned = providers.platform_default(shot.get("tool"))
-    if body.provider:
-        provider = body.provider
-        model = body.model
-        if model is None and planned and provider == planned[0]:
-            model = planned[1]
-    else:
-        default = providers.render_default(shot.get("tool"), account_id)
-        provider = default["provider"]
-        model = body.model or default["model"]
+    # The plan is the default, the body overrides it -- and BOTH are
+    # resolved, checked and priced in one place (src/pricing.py,
+    # 2026-09-17). A named provider is honoured exactly; an empty body
+    # resolves as the card's default did (providers.render_default: the
+    # plan if this account can render it, else the cheapest renderer it
+    # can); a shot's planned tool means one model here and in
+    # orchestrator.generate_render (providers.platform_default). The card
+    # printed pricing.display() for this same intent, so the number on the
+    # button and the number in this response are one computation.
+    #
+    # A timed scene's LENGTHS are its windows', fitted to the model -- the
+    # card's duration does not apply, so it is not checked either.
     try:
-        # A timed scene's LENGTHS are its windows', fitted to the model --
-        # the card's duration does not apply, so it is not checked either.
-        choice = (providers.check_timeline_choice(provider, model, body.frame, windows)
-                  if windows else
-                  providers.check_render_choice(
-                      provider, model, body.duration, body.frame))
+        priced = pricing.display(account_id=account_id, shot=shot, shot_id=concept_id,
+                                 provider=body.provider, model=body.model,
+                                 seconds=body.duration, frame=body.frame)
     except ValueError as e:
         # REFUSED, never clamped: a length or a frame outside the model's
         # own set is evidence the card and the model have come apart, and
@@ -2439,6 +3089,20 @@ def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
         # picked. (The adapters clamp internally -- that is their contract
         # with the nightly graph, which has no human to refuse to.)
         return _error(400, "bad_render_choice", str(e))
+    # priced["signed"] is "billable AND a secret to sign with" -- exactly
+    # the renders display() minted a token for, so the requirement and the
+    # offer are one predicate and cannot disagree
+    if priced["signed"] or body.tokens:
+        try:
+            _verify_tokens(body.tokens or [], priced, shot, concept_id, account_id)
+        except (pricing.QuoteRefused, pricing.SigningUnconfigured) as e:
+            return _quote_refusal(e, account_id)
+    timed = priced["timed"]
+    choice = {"provider": priced["provider"], "model": priced["model"],
+              "duration": None if timed else priced["durations"][0],
+              "frame": priced["frame"], "estimate_usd": priced["estimate_usd"]}
+    if timed:
+        choice["durations"] = priced["durations"]
 
     module = providers.VIDEO_PROVIDERS[choice["provider"]]
     label = providers.RENDER_LABELS.get(choice["provider"], choice["provider"])
@@ -2464,7 +3128,7 @@ def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
         preprod.set_picked(concept_id, True, account_id=account_id)
 
     def work(job):
-        if windows:
+        if timed:
             return _render_timeline(job, concept_id, shot_n, module, label, choice,
                                     frame_kw, account_id)
         jobs.progress(job, 0.2, f"rendering via {label} ({choice['model']})")
@@ -2483,7 +3147,9 @@ def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
     job = jobs.start("render",
                      f"approved · {concept['title']} · {label} {choice['model']}",
                      work, account_id=account_id)
-    return {"job_id": job["id"], "render": choice}
+    # `render` keeps the shape clients already read; `quote` beside it is
+    # the same intent as pricing.display printed it on the card
+    return {"job_id": job["id"], "render": choice, "quote": priced}
 
 
 def _render_timeline(job, concept_id: int, shot_n, module, label: str, choice: dict,
@@ -2596,7 +3262,7 @@ def concept_refs(concept_id: int, body: ConceptRefsBody, account_id: int = Depen
     if concept is None or not concept["shots"]:
         return _error(404, "not_found", "no such scene")
     shots = [dict(s) for s in concept["shots"]]
-    shots[0]["refs"] = [asset_shelf.canonical_url(r)
+    shots[0]["refs"] = [asset_shelf.storable_ref(r)
                         for r in body.refs if r][:MAX_IMAGE_REFS]
     # a plan dict, not a bare list: update_concept_shots re-validates the
     # whole plan, and carrying the existing warnings/duration through
@@ -2634,7 +3300,12 @@ def concept_detail(concept_id: int, account_id: int = Depends(auth.current_accou
             "shots": shots,
             # the render button's copy is server-sourced: availability,
             # the spend gate's state, and what one clip would cost
-            "runway": _runway_state()}
+            "runway": _runway_state(),
+            # ... and what the Generate node would ACTUALLY spend on. The
+            # chip read `runway.estimate_usd` -- Runway's default clip --
+            # on every account, including one whose only key is Higgsfield
+            # and whose Run therefore renders, and bills, somewhere else.
+            "generate": _generate_node_quote(concept, account_id)}
 
 
 class ShotMediaBody(BaseModel):
@@ -2662,6 +3333,51 @@ class DirectBody(BaseModel):
     note: str
 
 
+def _teach_direct_note(account_id, concept_id: int, before: dict, note: str) -> int:
+    """After a Direct note revised the scene: for every shot whose prompt
+    changed, file (prompt before the note -> revision) as a pending pair
+    carrying the note, through the same gate and rules as a hand edit.
+    Returns how many were filed; 0 for an account that is off.
+
+    The revision is model-written, but the NOTE is the person's stated
+    reason, which is the lesson. The model saw the whole shot JSON and
+    may echo `model_prompt` back; it is dropped here because a model
+    just rewrote the shot, so the next hand edit must snapshot afresh.
+    """
+    if not edit_teach.allowed(account_id):
+        return 0
+    concept = preprod.get_concept(concept_id, account_id=account_id)
+    if concept is None:
+        return 0
+    shots = concept.get("shots") or []
+    filed = 0
+    dirty = False
+    for shot in shots:
+        n = shot.get("n")
+        old = before.get(n)
+        if old is None:
+            continue
+        if edit_teach.DRAFT_KEY in shot:
+            edit_teach.forget_draft(shot)
+            dirty = True
+        # the draft for THIS pair is the pre-note text, never a remembered
+        # one: forget_draft above makes draft_of read `old`
+        if _teach_prompt_edit(account_id, concept, shot, old,
+                              shot.get("prompt") or "", edit_teach.direct_note(note)):
+            filed += 1
+            # _teach_prompt_edit remembers the pre-note text as the draft;
+            # the revision is the model's, so that memory is wrong here
+            edit_teach.forget_draft(shot)
+            dirty = True
+    if dirty:
+        preprod.update_concept_shots(
+            concept_id,
+            {"duration": concept.get("duration"), "shots": shots,
+             "edit": concept.get("edit_note") or concept.get("edit")},
+            warnings=concept.get("warnings"), account_id=account_id)
+    return filed
+
+
 @router.post("/concepts/{concept_id}/direct")
 def concept_direct(concept_id: int, body: DirectBody, account_id: int = Depends(auth.current_account_id)):
     """Director mode: one note revises the stored scene in place --
@@ -2677,19 +3393,28 @@ def concept_direct(concept_id: int, body: DirectBody, account_id: int = Depends(
     if concept is None:
         return _error(404, "not_found", "no such concept")
 
+    before_shots = {s.get("n"): (s.get("prompt") or "")
+                    for s in (concept.get("shots") or [])}
+
     def work(job):
         from google import genai
 
         from src import director
         jobs.progress(job, 0.3, "revising the scene")
+        # account_id was not passed here before 2026-09-18, so on an owned
+        # row (every live concept) the job died with "no concept N" while
+        # the route's own lookup above had just found it
         result = director.direct_scene(
             concept_id, note, gemini_client=genai.Client(api_key=api_key),
-            db_path=None)
+            db_path=None, account_id=account_id)
         if not result.get("ok"):
             raise RuntimeError(result.get("error") or "direction failed")
         detail = result.get("summary") or "revised"
         if result.get("warnings"):
             detail += f" · {len(result['warnings'])} warning(s)"
+        taught = _teach_direct_note(account_id, concept_id, before_shots, note)
+        if taught:
+            detail += f" · {taught} pair(s) on the Teach tab"
         return {"ref_id": concept_id, "detail": detail}
 
     job = jobs.start("direct", f"direct · {note[:60]}", work, account_id=account_id)
@@ -2714,7 +3439,7 @@ def shot_refine(concept_id: int, shot_n: int, account_id: int = Depends(auth.cur
         jobs.progress(job, 0.3, "polishing against technique references")
         result = director.refine_shot_prompt(
             concept_id, shot_n, gemini_client=genai.Client(api_key=api_key),
-            db_path=None)
+            db_path=None, account_id=account_id)
         if not result.get("ok"):
             raise RuntimeError(result.get("error") or "polish failed")
         return {"ref_id": concept_id, "detail": result.get("summary") or "polished"}
@@ -2739,6 +3464,12 @@ def shot_generate(concept_id: int, shot_n: int, account_id: int = Depends(auth.c
     concept = preprod.get_concept(concept_id, account_id=account_id)
     if concept is None:
         return _error(404, "not_found", "no such concept")
+    # No surface prints a price for this button and no front end calls it
+    # any more, so it mints and takes no quote: a billable render is sent
+    # to the Queue (step 5). BYOK, and a server that cannot sign, render
+    # here exactly as before.
+    if _quote_required(account_id, "runway"):
+        return _error(400, "missing_quote", _QUEUE_ONLY)
 
     def work(job):
         jobs.progress(job, 0.2, "rendering via Runway")
@@ -2787,6 +3518,39 @@ def _save_upload_ref(jpeg: bytes) -> Optional[str]:
     Best-effort: a full disk costs the reference, never the scene that
     was being written."""
     return refbin.save(jpeg)
+
+
+@router.post("/refs/upload")
+async def refs_upload(request: Request, account_id: int = Depends(auth.current_account_id)):
+    """Upload reference photos from disk, return the URLs they ride on.
+
+    The Director canvas's reference cards only took a pasted URL
+    (2026-09-18, Mike: "I'd have to paste a url"). This is the same
+    bin the composer's uploads land in -- normalised to JPEG,
+    content-addressed, mirrored to R2 -- so a frame added here resolves
+    exactly like one attached at Create, on this machine and on the
+    deploy. Field `photos` (the element create routes' name -- `files`
+    is the concept writers' collector, and the drift guard keeps that
+    one read to one place), up to MAX_IMAGE_REFS; anything that is not
+    a readable image is skipped and counted, never a 500. This writes
+    no concept: the card's frames reach a shot through the graph."""
+    form = await request.form()
+    urls: list = []
+    skipped = 0
+    for upload in form.getlist("photos"):
+        if not getattr(upload, "filename", ""):
+            continue
+        if len(urls) >= MAX_IMAGE_REFS:
+            skipped += 1
+            continue
+        jpeg = _to_jpeg(await upload.read())
+        saved = refbin.save(jpeg, account_id) if jpeg else None
+        if saved:
+            if saved not in urls:
+                urls.append(saved)
+        else:
+            skipped += 1
+    return {"urls": urls, "skipped": skipped}
 
 
 def _resolve_asset_photo(url_path: str) -> Optional[Path]:
@@ -3091,6 +3855,12 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
     attach_to = int(concept_id_raw) if concept_id_raw.isdigit() else None
     if attach_to is not None and preprod.get_concept(attach_to, account_id=account_id) is None:
         return _error(404, "not_found", "no such concept to attach to")
+    # the video branch spends on Runway with no price shown anywhere and
+    # no front end posting it -- a billable one goes to the Queue (step 5),
+    # refused BEFORE the job so no Gemini call is made for a clip that
+    # will not render
+    if output == "video" and runway.has_key() and _quote_required(account_id, "runway"):
+        return _error(400, "missing_quote", _QUEUE_ONLY)
 
     image_refs, ref_urls, video_refs = await _collect_refs(form, want_video=True)
 
@@ -3199,6 +3969,13 @@ class ShotPromptBody(BaseModel):
 
 
 class ShotGraphBody(BaseModel):
+    # An unknown field is a 422 naming it, not a silent drop. Both of this
+    # file's canvas models were loose, and that is how `images` was dropped
+    # without a word in 2026-08-28 (see WfGenerateBody) and how a save
+    # carrying seed_hash was accepted-and-ignored for weeks afterwards: the
+    # route answered 200 and the caller had no way to learn otherwise.
+    model_config = ConfigDict(extra="forbid")
+
     graph: dict
     states: Optional[dict] = None
     name: Optional[str] = None
@@ -3325,6 +4102,11 @@ def shot_prompt_update(concept_id: int, shot_n: int, body: ShotPromptBody,
     shot = next((s for s in shots if s.get("n") == shot_n), None)
     if shot is None:
         return _error(404, "not_found", f"no shot {shot_n}")
+    before = shot.get("prompt") or ""
+    # the edit teaches, for an account turned on (src/edit_teach.py) --
+    # recorded BEFORE the write, against the text that stood until now
+    taught = _teach_prompt_edit(account_id, concept, shot, before, text,
+                                edit_teach.EDIT_NOTE)
     shot["prompt"] = text
     warnings = shootgen.validate_concept(
         {**concept, "shots": shots},
@@ -3334,7 +4116,73 @@ def shot_prompt_update(concept_id: int, shot_n: int, body: ShotPromptBody,
         if concept.get("brand") == "zeropage" else None)
     preprod.update_concept_shots(concept_id, {"shots": shots},
                                  warnings=warnings, account_id=account_id)
-    return {"concept_id": concept_id, "shot_n": shot_n, "warnings": warnings}
+    # the canvas that made this edit is still a true drawing of the shot;
+    # hand it the new hash, or its very next autosave is refused as stale
+    return {"concept_id": concept_id, "shot_n": shot_n, "warnings": warnings,
+            "taught": taught,
+            "seed_hash": _shot_seed_hash({**concept, "shots": shots}, shot_n)}
+
+
+class ShotRefsBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    refs: list[str]
+    # what the canvas was drawn against; a mismatch means someone else
+    # re-grounded the scene since, and this list must not overwrite it
+    seed_hash: Optional[str] = None
+
+
+@router.put("/concepts/{concept_id}/shots/{shot_n}/refs")
+def shot_refs_update(concept_id: int, shot_n: int, body: ShotRefsBody,
+                     account_id: int = Depends(auth.current_account_id)):
+    """The Director's reference wiring, saved back onto the scene
+    (2026-09-18, Mike's call).
+
+    The canvas's element cards used to live only in the saved graph, so
+    rewiring a face changed what the canvas rendered but not the scene:
+    the Pipeline card, the reference gate and the Queue's approve all
+    kept reading the refs Create attached. Now the list the canvas has
+    wired in IS `shot["refs"]`.
+
+    An empty list is refused rather than stored. `preprod.reference_gate`
+    keeps a scene with no refs out of the Queue, so clearing the canvas
+    would silently make the scene unapprovable -- the scene keeps its
+    last references instead, and the caller says so."""
+    concept = preprod.get_concept(concept_id, account_id=account_id)
+    if concept is None:
+        return _error(404, "not_found", "no such concept")
+    current = _shot_seed_hash(concept, shot_n)
+    if current is None:
+        return _error(404, "not_found", f"no shot {shot_n}")
+    if body.seed_hash and body.seed_hash != current:
+        return _error(409, "stale_canvas",
+                      "the scene changed since this canvas was drawn -- reload it")
+    refs: list[str] = []
+    for ref in body.refs:
+        ref = (ref or "").strip()
+        if not ref:
+            continue
+        if not ref.startswith(("http://", "https://", "/")):
+            return _error(400, "invalid_url",
+                          "a reference is a public http(s) URL or a site-relative path")
+        stored = asset_shelf.storable_ref(ref)
+        if stored not in refs:
+            refs.append(stored)
+    refs = refs[:MAX_IMAGE_REFS]
+    if not refs:
+        return _error(400, "no_references",
+                      "a scene with no references can't reach the Queue -- "
+                      "it keeps the ones it has")
+    shots = [dict(s) for s in concept["shots"]]
+    shot = next(s for s in shots if s.get("n") == shot_n)
+    if refs == [asset_shelf.storable_ref(r) for r in (shot.get("refs") or [])]:
+        return {"ok": True, "changed": False, "refs": refs, "seed_hash": current}
+    shot["refs"] = refs
+    preprod.update_concept_shots(
+        concept_id, {"shots": shots, "duration": concept.get("duration")},
+        warnings=concept.get("warnings") or [], account_id=account_id)
+    return {"ok": True, "changed": True, "refs": refs,
+            "seed_hash": _shot_seed_hash({**concept, "shots": shots}, shot_n)}
 
 
 class ShotReferenceBody(BaseModel):
@@ -3901,6 +4749,8 @@ def workflow_exec_enhance(body: EnhanceBody, account_id: int = Depends(auth.curr
 
 
 class WfGenerateBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     prompt: str
     image: Optional[str] = None
     # The canvas posts the node's WHOLE reference list as `images`
@@ -3922,6 +4772,9 @@ class WfGenerateBody(BaseModel):
     # after the browser closed still lands where the Director expects it.
     concept_id: Optional[int] = None
     shot_n: Optional[int] = None
+    # the signed quote the chip showed (`generate.renders[0].token` on the
+    # concept) -- optional, see ApproveBody.tokens
+    token: Optional[str] = None
 
     def reference_urls(self) -> list[str]:
         urls, seen = [], set()
@@ -3980,6 +4833,26 @@ def workflow_exec_generate(body: WfGenerateBody, account_id: int = Depends(auth.
                       "no video renderer key is available for this account — "
                       "add a Runway, Higgsfield or fal key")
     label = providers.RENDER_LABELS.get(pick["provider"], pick["provider"])
+    required = _quote_required(account_id, pick["provider"])
+    if body.token or required:
+        if shot is None and body.token:
+            return _error(400, "wrong_render",
+                          "a quote names a concept's shot; this node has none")
+        if shot is None:
+            # a free-standing node has no shot for a quote to name, so there
+            # is nothing a billable render here could be priced against
+            return _error(400, "missing_quote",
+                          "this render is billed in credits and needs a quoted price -- "
+                          "open a concept's shot, or approve it in the Queue")
+        try:
+            priced = pricing.display(account_id=account_id, shot=shot, shot_id=body.concept_id,
+                                     provider=pick["provider"], model=pick["model"], whole=True)
+            _verify_tokens([body.token] if body.token else [], priced, shot,
+                           body.concept_id, account_id)
+        except (pricing.QuoteRefused, pricing.SigningUnconfigured) as e:
+            return _quote_refusal(e, account_id)
+        except ValueError as e:
+            return _error(400, "bad_render_choice", str(e))
 
     def work(job):
         jobs.progress(job, 0.2, f"rendering via {label} ({pick['model']})")
@@ -4174,3 +5047,13 @@ def job_clear(job_id: int, account_id: int = Depends(auth.current_account_id)):
     if not removed:
         return _error(409, "not_finished", "only finished jobs can be cleared")
     return {"deleted": job_id}
+
+
+# --- billing (2026-09-18) --------------------------------------------------
+# The customer-facing Stripe routes live in app/billing.py and are included
+# HERE so they sit under /api, behind the session gate, and inside the
+# route audit in tests/test_tenancy.py. The webhook is deliberately not.
+from . import billing as _billing  # noqa: E402  (bottom of the file on purpose)
+
+for _path, _endpoint, _methods in _billing.API_ROUTES:
+    router.add_api_route(_path, _endpoint, methods=_methods, tags=["billing"])

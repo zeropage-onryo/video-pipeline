@@ -1,15 +1,22 @@
 # Fly.io / Railway image for the always-on studio (backlog #14 phase 5).
 # Runs the SAME app.main:app that studio.command runs locally, plus the
-# two nightly jobs that today live in launchd plists (com.zeropage.
-# morningprompts at 22:00 ET, ops/com.zeropage.shadowrun at 03:30 ET) --
-# cron replaces launchd, one-for-one, same commands, same schedule, same
-# timezone (TZ=America/New_York below, so DST is handled the same way a
-# Mac handles it: by wall-clock time, not a fixed UTC offset).
+# ONE nightly job that today lives in a launchd plist (com.zeropage.
+# morningprompts at 22:00 ET) -- cron replaces launchd, one-for-one, same
+# command, same schedule, same timezone (TZ=America/New_York below, so DST
+# is handled the same way a Mac handles it: by wall-clock time, not a fixed
+# UTC offset).
+#
+# The 03:30 shadowrun (`python -m src.trigger`) was REMOVED 2026-09-14. It
+# was an eleventh generation run every night that took neither the
+# data/.nightly.lock nor the night marker run_morning_prompts.sh sets, and
+# counted against no budget -- so it could double-run beside the 22:00 walk
+# and overspend NIGHTLY_BUDGET_USD without appearing in it. src/trigger.py
+# stays as a manual one-off CLI; nothing schedules it.
 #
 # Explicitly NOT included: footage/ (149GB ProRes) and the photo-root
 # asset shelf framebank reads from -- backlog #14 phase 5 calls this out
 # as "a split, not a move." Those lanes stay on the Mac or get
-# pre-ingested to R2 first; this image only runs the web app + the two
+# pre-ingested to R2 first; this image only runs the web app + the one
 # scheduled jobs against Postgres (phase 4) / Supabase RAG.
 FROM node:22-bookworm-slim AS model-runtime
 RUN npm install --global @openai/codex@0.153.2
@@ -47,7 +54,6 @@ COPY . .
 
 RUN mkdir -p /var/log/zeropage \
     && echo "0 22 * * *  root  cd /app && . /app/.env.runtime && /bin/bash run_morning_prompts.sh   >> /var/log/zeropage/morning_prompts.log 2>&1" > /etc/cron.d/zeropage \
-    && echo "30 3 * * *  root  cd /app && . /app/.env.runtime && /usr/local/bin/python -m src.trigger >> /var/log/zeropage/shadowrun.log 2>&1"      >> /etc/cron.d/zeropage \
     && chmod 0644 /etc/cron.d/zeropage
 # NOTE: /etc/cron.d/zeropage (with its "root" user column) is picked up
 # automatically by the cron daemon -- do NOT also `crontab` it, that

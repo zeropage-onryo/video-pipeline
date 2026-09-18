@@ -25,6 +25,7 @@ import {
   useState,
   createContext,
   useContext,
+  type ReactNode,
 } from "react";
 import {
   ReactFlow,
@@ -46,6 +47,7 @@ import {
   ArrowUpRight,
   Box,
   Check,
+  ChevronDown,
   Clapperboard,
   Clock,
   Copy,
@@ -77,7 +79,9 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { apiFetch, API_URL } from "@/lib/api";
+import { apiFetch, API_URL, goToSignIn } from "@/lib/api";
+import { boardConcepts, uploadRefs, type Concept as BoardConcept } from "@/lib/studio-api";
+import { openable } from "@/lib/director-arrival";
 import {
   announceQueueChange,
   getAssets,
@@ -86,6 +90,7 @@ import {
   pickConcept,
   type Capabilities,
   type Preset,
+  type RenderQuote,
   type RunwayState,
 } from "@/lib/studio-api";
 import { useMentions } from "@/components/studio/mentions";
@@ -100,6 +105,7 @@ import {
   isMedia,
   isText,
   ports,
+  sceneRefs,
   seedScene,
   toLegacy,
   wireElement,
@@ -186,12 +192,13 @@ const ratioLabel = (r?: string) => (r === "720:1280" ? "9:16" : r === "1280:720"
 
 const Actions = createContext<{
   update: (id: string, data: Partial<CardData>) => void;
+  addFrames: (id: string, urls: string[]) => void;
   remove: (id: string) => void;
   duplicate: (id: string) => void;
   run: (id: string) => void;
   runway: RunwayState | null;
   caps: Capabilities;
-}>({ update: () => {}, remove: () => {}, duplicate: () => {}, run: () => {}, runway: null, caps: {} });
+}>({ update: () => {}, addFrames: () => {}, remove: () => {}, duplicate: () => {}, run: () => {}, runway: null, caps: {} });
 
 function KindIcon({ data, size, strokeWidth }: { data: CardData; size: number; strokeWidth: number }) {
   const props = { size, strokeWidth };
@@ -217,6 +224,91 @@ function gateNote(kind: Kind, caps: Capabilities) {
         : "";
   if (kind === "image" && caps["nano.generate"] === false) return "GEMINI_API_KEY not set";
   return "";
+}
+
+/* Frames from disk (2026-09-18, Mike: a pasted URL was the only way in).
+ * Upload button + drop-anywhere on the card; both go through
+ * /api/refs/upload, the composer's bin, so an uploaded frame resolves
+ * exactly like one attached at Create. */
+const imageFiles = (list: FileList | null | undefined) =>
+  Array.from(list || []).filter((f) => f.type.startsWith("image/") || /\.(heic|heif)$/i.test(f.name));
+
+function useFrameUpload(id: string) {
+  const actions = useContext(Actions);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");
+  const send = async (files: File[]) => {
+    if (!files.length) return;
+    setBusy(true);
+    setNote("");
+    try {
+      const res = await uploadRefs(files);
+      if (res.urls.length) actions.addFrames(id, res.urls);
+      if (res.skipped) setNote(`${res.skipped} skipped (not a readable image)`);
+    } catch (err) {
+      setNote(err instanceof Error ? err.message : "upload failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return { busy, note, send };
+}
+
+const FrameCtx = createContext<ReturnType<typeof useFrameUpload> | null>(null);
+
+function FrameDrop({ id, children }: { id: string; children: ReactNode }) {
+  const up = useFrameUpload(id);
+  const [over, setOver] = useState(false);
+  return (
+    <FrameCtx.Provider value={up}>
+      <div
+        className={`element-body nodrag${over ? " is-drop" : ""}`}
+        onDragOver={(e) => {
+          if (!e.dataTransfer.types.includes("Files")) return;
+          e.preventDefault();
+          e.stopPropagation();
+          setOver(true);
+        }}
+        onDragLeave={() => setOver(false)}
+        onDrop={(e) => {
+          if (!e.dataTransfer.files.length) return;
+          e.preventDefault();
+          e.stopPropagation();
+          setOver(false);
+          up.send(imageFiles(e.dataTransfer.files));
+        }}
+      >
+        {children}
+        {up.note ? (
+          <p role="alert" className="node-error nodrag nowheel">
+            {up.note}
+          </p>
+        ) : null}
+      </div>
+    </FrameCtx.Provider>
+  );
+}
+
+function FrameUpload() {
+  const up = useContext(FrameCtx);
+  const input = useRef<HTMLInputElement>(null);
+  if (!up) return null;
+  return (
+    <button className="ghost frame-upload" disabled={up.busy} onClick={() => input.current?.click()} title="Upload photos from your computer (or drop them on the card)">
+      {up.busy ? <LoaderCircle size={12} className="spin" /> : <Upload size={12} />} {up.busy ? "Uploading…" : "Upload"}
+      <input
+        ref={input}
+        type="file"
+        accept="image/*,.heic,.heif"
+        multiple
+        hidden
+        onChange={(e) => {
+          up.send(imageFiles(e.target.files));
+          e.target.value = "";
+        }}
+      />
+    </button>
+  );
 }
 
 function StudioNode({ id, data, selected }: NodeProps<FlowNode>) {
@@ -295,7 +387,7 @@ function StudioNode({ id, data, selected }: NodeProps<FlowNode>) {
           )}
         </>
       ) : data.kind === "element" ? (
-        <div className="element-body nodrag">
+        <FrameDrop id={id}>
           {data.urls?.length ? (
             <div className={`element-frames c${data.refKind === "location" ? 2 : 3}${data.refKind === "location" ? " wide" : ""}`}>
               {data.urls.map((u, i) => (
@@ -321,23 +413,9 @@ function StudioNode({ id, data, selected }: NodeProps<FlowNode>) {
             <span className="m">
               {data.urls?.length || 0} frame{data.urls?.length === 1 ? "" : "s"}
             </span>
-            <label className="ghost">
-              <Plus size={12} /> Add frame
-              <input
-                type="url"
-                placeholder="paste a photo url"
-                aria-label="Add a frame by url"
-                onKeyDown={(e) => {
-                  if (e.key !== "Enter") return;
-                  const v = (e.target as HTMLInputElement).value.trim();
-                  if (!v) return;
-                  actions.update(id, { urls: [...(data.urls || []), v] });
-                  (e.target as HTMLInputElement).value = "";
-                }}
-              />
-            </label>
+            <FrameUpload />
           </footer>
-        </div>
+        </FrameDrop>
       ) : data.kind === "reference" ? (
         <div className="reference-body nodrag">
           {data.url ? (
@@ -455,7 +533,97 @@ type Concept = {
   parked?: boolean;
   media_url?: string;
   runway?: RunwayState;
+  generate?: RenderQuote;
 };
+
+/* The scene switcher: the header chip is a menu of the brand's open scenes,
+   so moving from one scene's graph to another does not mean a trip back to
+   Pipeline. The list is read when the menu opens, not on mount -- the
+   canvas has enough to load. Leaving goes through `go` (flushAndGo), so
+   the canvas is saved against the scene it belongs to first. */
+function SceneSwitcher({
+  label,
+  currentId,
+  brand,
+  go,
+}: {
+  label: ReactNode;
+  currentId?: number;
+  brand: string;
+  go: (destination: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [rows, setRows] = useState<BoardConcept[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const box = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: PointerEvent) => {
+      if (!box.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const esc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", away);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("pointerdown", away);
+      document.removeEventListener("keydown", esc);
+    };
+  }, [open]);
+  const toggle = () => {
+    setOpen((was) => !was);
+    if (rows || open) return;
+    boardConcepts(brand || undefined)
+      .then((r) => setRows(r.items.filter(openable)))
+      .catch(() => setFailed(true));
+  };
+  const state = (c: BoardConcept) => (c.media_url ? "rendered" : c.picked ? "picked" : c.parked ? "in queue" : "");
+  return (
+    <span className="scene-switch" ref={box}>
+      <button type="button" className="chip" aria-haspopup="menu" aria-expanded={open} onClick={toggle} title="Switch scene">
+        {label}
+        <ChevronDown size={12} />
+      </button>
+      {open ? (
+        <span className="scene-menu" role="menu">
+          <span className="scene-menu-head">Scenes · {brand || "all"}</span>
+          <span className="scene-menu-list">
+            {failed ? <span className="scene-menu-note">Could not read the board</span> : null}
+            {!rows && !failed ? <span className="scene-menu-note">Reading the board…</span> : null}
+            {rows && !rows.length ? <span className="scene-menu-note">No scenes yet — write one on Studio</span> : null}
+            {(rows || []).map((c) => (
+              <button
+                type="button"
+                role="menuitem"
+                key={c.id}
+                aria-current={c.id === currentId ? "true" : undefined}
+                onClick={() => {
+                  setOpen(false);
+                  if (c.id !== currentId) go(`/studio/flows?concept=${c.id}&shot=1`);
+                }}
+              >
+                <span className="scene-menu-n">{c.n}</span>
+                <span className="scene-menu-title">{c.title || "Untitled"}</span>
+                {state(c) ? <span className="scene-menu-state">{state(c)}</span> : null}
+              </button>
+            ))}
+          </span>
+          <span className="scene-menu-foot">
+            <button type="button" role="menuitem" onClick={() => go("/studio/pipeline")}>
+              All concepts on Pipeline
+            </button>
+            {currentId ? (
+              <button type="button" role="menuitem" onClick={() => go("/studio/flows?draft=1")}>
+                Local draft canvas
+              </button>
+            ) : null}
+          </span>
+        </span>
+      ) : null}
+    </span>
+  );
+}
 
 function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number }) {
   const shell = useShell();
@@ -485,6 +653,9 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
   const [bar, setBar] = useState("");
   const graphBase = useRef<Partial<LegacyGraph>>({});
   const seedHash = useRef<string | null>(null);
+  // the reference list the scene holds right now, in the canvas's own
+  // spelling of each url -- what the wiring is compared against
+  const savedRefs = useRef<string[]>([]);
   const saveChain = useRef<Promise<unknown>>(Promise.resolve());
   const lastSaved = useRef("");
   const stopped = useRef(false);
@@ -592,6 +763,7 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
         if (video && shot.media_url) video.data.url = shot.media_url;
         graphBase.current = saved.graph || {};
         seedHash.current = saved.seed_hash || null;
+        savedRefs.current = shot.refs || [];
         setNodes(loaded.nodes);
         setEdges(loaded.edges);
         setName(detail.title);
@@ -611,6 +783,26 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
     };
   }, [conceptId, shotN, setNodes, setEdges]);
 
+  /* The canvas's reference wiring IS the scene's reference list
+     (2026-09-18): rewiring a face here changes what Pipeline shows,
+     what the reference gate checks and what Queue renders against --
+     not just this drawing. Runs inside the save chain, BEFORE the graph
+     save, because a new ref list is a new seed hash and the graph must
+     be saved against the hash it now matches. */
+  const pushRefs = async (ns: FlowNode[], es: Edge[]): Promise<string | null> => {
+    if (!conceptId || !activeShot) return null;
+    const next = sceneRefs(ns, es, savedRefs.current);
+    if (JSON.stringify(next) === JSON.stringify(savedRefs.current)) return null;
+    if (!next.length) return "keeps its last references — a scene with none can't reach the Queue";
+    const res = await apiFetch<{ changed: boolean; seed_hash?: string }>(
+      `/concepts/${conceptId}/shots/${activeShot}/refs`,
+      { method: "PUT", body: JSON.stringify({ refs: next, seed_hash: seedHash.current ?? undefined }) },
+    );
+    if (res.seed_hash) seedHash.current = res.seed_hash;
+    savedRefs.current = next;
+    return res.changed ? `references updated (${next.length})` : null;
+  };
+
   // autosave: the graph that ran and the graph you return to are one row
   useEffect(() => {
     if (!conceptId || !activeShot || !ready || sceneError) return;
@@ -624,6 +816,7 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
         .then(async () => {
           if (stopped.current) return;
           try {
+            const refNote = await pushRefs(nodes, edges);
             // seed_hash is what this canvas was drawn against; the server
             // refuses (409) a save for a scene revised underneath it rather
             // than overwriting a canvas nobody here has seen
@@ -633,13 +826,15 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
             });
             if (saved.seed_hash) seedHash.current = saved.seed_hash;
             lastSaved.current = fingerprint;
-            setSaveState("Saved to scene");
+            setSaveState(refNote ? `Saved to scene · ${refNote}` : "Saved to scene");
           } catch (error) {
             setSaveState(`Not saved: ${error instanceof Error ? error.message : "connection lost"}`);
           }
         });
     }, 650);
     return () => clearTimeout(timer);
+    // pushRefs reads refs and the deps listed here; it is not state of its own
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conceptId, activeShot, nodes, edges, name, ready, sceneError, saveRevision]);
 
   const savePrompt = async () => {
@@ -653,10 +848,13 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
     }
     try {
       await saveChain.current.catch(() => {});
-      await apiFetch(`/concepts/${conceptId}/shots/${activeShot}/prompt`, {
+      const res = await apiFetch<{ seed_hash?: string }>(`/concepts/${conceptId}/shots/${activeShot}/prompt`, {
         method: "POST",
         body: JSON.stringify({ prompt }),
       });
+      // this canvas made the edit, so it is still a true drawing of the
+      // shot: adopt the new hash or the next autosave is refused as stale
+      if (res?.seed_hash) seedHash.current = res.seed_hash;
       lastSaved.current = "";
       setSaveRevision((n) => n + 1);
       notify("Scene prompt updated");
@@ -669,6 +867,7 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
       try {
         stopped.current = true;
         await saveChain.current.catch(() => {});
+        await pushRefs(getNodes(), getEdges());
         const payload = toLegacy(getNodes(), getEdges(), graphBase.current, { conceptId, shotN: activeShot });
         await apiFetch(`/concepts/${conceptId}/shots/${activeShot}/graph`, {
           method: "PUT",
@@ -686,6 +885,19 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
   const update = useCallback(
     (id: string, data: Partial<CardData>) =>
       setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, data: { ...n.data, ...data } } : n))),
+    [setNodes],
+  );
+  // appended against the LIVE node, not the render's copy: an upload
+  // resolves seconds later and may race a remove or a second upload
+  const addFrames = useCallback(
+    (id: string, urls: string[]) =>
+      setNodes((ns) =>
+        ns.map((n) => {
+          if (n.id !== id) return n;
+          const have = n.data.urls || [];
+          return { ...n, data: { ...n.data, urls: [...have, ...urls.filter((u) => !have.includes(u))] } };
+        }),
+      ),
     [setNodes],
   );
   const remove = useCallback(
@@ -828,7 +1040,7 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
     }
     try {
       const data: unknown = JSON.parse(await file.text());
-      if (!validDraft(data)) throw new Error("Choose a ZeroPage workflow JSON export.");
+      if (!validDraft(data)) throw new Error("Choose a Zero Page workflow JSON export.");
       setNodes(data.nodes.map((n) => ({ ...n, data: { ...n.data, busy: !!n.data.jobId } })));
       setEdges(data.edges);
       setName(data.name);
@@ -890,7 +1102,16 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
               images,
               ground: !inputText("references"),
             }
-          : { prompt, images, ...(conceptId && activeShot ? { concept_id: conceptId, shot_n: activeShot } : {}) };
+          : {
+              prompt,
+              images,
+              ...(conceptId && activeShot ? { concept_id: conceptId, shot_n: activeShot } : {}),
+              // the signed quote the chip showed (pricing.sign); the route
+              // refuses the run if the scene or the renderer moved since
+              ...(node.data.kind === "video" && conceptId && scene?.generate?.renders?.[0]?.token
+                ? { token: scene.generate.renders[0].token }
+                : {}),
+            };
       const job = await apiFetch<{ job_id: number }>(`/workflows/exec/${endpoint}`, {
         method: "POST",
         body: JSON.stringify(body),
@@ -947,6 +1168,7 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
     if (runJob) return;
     try {
       await saveChain.current.catch(() => {});
+      await pushRefs(getNodes(), getEdges());
       const payload = toLegacy(getNodes(), getEdges(), graphBase.current, { conceptId, shotN: activeShot });
       const saved = await apiFetch<{ id: number }>(`/concepts/${conceptId}/shots/${activeShot}/graph`, {
         method: "PUT",
@@ -1041,6 +1263,8 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
       return;
     }
     try {
+      await saveChain.current.catch(() => {});
+      await pushRefs(getNodes(), getEdges());
       await pickConcept(scene.id, true);
       setScene({ ...scene, picked: true });
       announceQueueChange();
@@ -1074,12 +1298,21 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
   };
 
   const selectedNode = nodes.find((n) => n.selected);
-  const rw = scene?.runway ?? null;
+  // What the Generate node would render ON and cost: the server's own
+  // price (`generate`, pricing.display) laid over the Runway state the
+  // chips read. Without it every Run was priced at Runway's default clip,
+  // even on an account whose only key -- and bill -- is another vendor's.
+  const gen = scene?.generate && !scene.generate.error ? scene.generate : null;
+  const rw =
+    scene?.runway && gen
+      ? { ...scene.runway, model: gen.model, duration: gen.durations[0], estimate_usd: gen.estimate_usd }
+      : (scene?.runway ?? null);
 
   return (
     <Actions.Provider
       value={{
         update,
+        addFrames,
         remove,
         duplicate,
         run: (id) => {
@@ -1094,15 +1327,37 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
       <main className={`flows-workspace ${showTemplates ? "templates-open" : ""} tool-${tool}${selectedNode ? " has-inspector" : ""}`}>
         <header className="flow-topbar">
           <div className="flow-breadcrumb">
-            <button aria-label="Back to Pipeline" title="Back to Pipeline" onClick={() => flushAndGo(`${API_URL}/ui?view=pipeline`)}>
+            {/* the React board, not the API's legacy /ui (which only bounced
+                back here through a handoff) */}
+            <button aria-label="Back to Pipeline" title="Back to Pipeline" onClick={() => flushAndGo("/studio/pipeline")}>
               <ArrowLeft size={16} />
             </button>
             {scene ? (
-              <span className="chip">
-                <Clapperboard size={11} /> {scene.n.toLowerCase()} · {scene.title.toLowerCase().slice(0, 26)}
-              </span>
+              <SceneSwitcher
+                currentId={conceptId}
+                brand={shell.brand}
+                go={flushAndGo}
+                label={
+                  <>
+                    <Clapperboard size={11} /> {scene.n.toLowerCase()} · {scene.title.toLowerCase().slice(0, 26)}
+                  </>
+                }
+              />
             ) : (
-              <input aria-label="Workflow name" value={name} maxLength={80} onChange={(e) => setName(e.target.value)} />
+              <>
+                <input aria-label="Workflow name" value={name} maxLength={80} onChange={(e) => setName(e.target.value)} />
+                {!conceptId ? (
+                  <SceneSwitcher
+                    brand={shell.brand}
+                    go={flushAndGo}
+                    label={
+                      <>
+                        <Clapperboard size={11} /> open a scene
+                      </>
+                    }
+                  />
+                ) : null}
+              </>
             )}
             {scene && scene.shots.length > 1 && (
               <select aria-label="Shot" value={activeShot} onChange={(e) => flushAndGo(`/studio/flows?concept=${conceptId}&shot=${e.target.value}`)}>
@@ -1399,11 +1654,10 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
               <p>{sceneError || "Loading the saved prompt, references and canvas."}</p>
               {sceneError && (
                 <div>
-                  <a href={`${API_URL}/signin`} target="_blank" rel="noreferrer">
-                    Sign in
-                  </a>
+                  {/* the same sign-in every other page uses: it comes back here */}
+                  <button onClick={() => goToSignIn()}>Sign in</button>
                   <button onClick={() => window.location.reload()}>Retry</button>
-                  <a href={`${API_URL}/ui?view=director`}>Legacy Director</a>
+                  <a href="/studio/pipeline">Back to Pipeline</a>
                 </div>
               )}
             </section>

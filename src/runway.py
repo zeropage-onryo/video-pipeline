@@ -65,7 +65,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from . import account_keys, generative, render_assets, render_specs
+from . import account_keys, generative, ledger, render_assets, render_specs
+from . import charge as charging
 from .shot import Shot
 
 # The model list, the frame and the legal durations all come from
@@ -91,7 +92,12 @@ DAILY_CAP = int(os.environ.get("RUNWAY_DAILY_CAP", "6"))
 # SAME number, so a single-operator database behaves exactly as it did --
 # admitting a second account is what forces a deliberate decision about
 # whose card is paying, instead of the total quietly doubling.
-GLOBAL_DAILY_CAP = int(os.environ.get("RUNWAY_GLOBAL_DAILY_CAP", str(DAILY_CAP)))
+# 0 = no installation-wide ceiling (2026-09-14, Mike's call): a user who
+# brought their own key was still consuming the operator's shared budget and
+# could lock everyone else out of money nobody spent. The per-account cap
+# (RUNWAY_DAILY_CAP) is the wall that remains. Set RUNWAY_GLOBAL_DAILY_CAP to a
+# positive number to put the ceiling back -- see generative.cap_error.
+GLOBAL_DAILY_CAP = int(os.environ.get("RUNWAY_GLOBAL_DAILY_CAP", "0"))
 
 SPEND_ENV = "RUNWAY_SPEND_OK"
 
@@ -284,13 +290,15 @@ def estimate_cost(n: int, *, model: str = DEFAULT_MODEL,
     return round(n * credits * CREDIT_USD, 2)
 
 
-def generations_today(db_path=None, *, account_id=None, everyone: bool = False) -> int:
+def generations_today(db_path=None, *, account_id=None, everyone: bool = False,
+                      operator_billed_only: bool = False) -> int:
     """This account's runway generations since UTC midnight -- what
     DAILY_CAP counts against. `everyone=True` gives the installation-wide
     count that GLOBAL_DAILY_CAP counts against."""
     return generative.used_today(
         "runway", db_path,
         account_id=account_id, everyone=everyone,
+        operator_billed_only=operator_billed_only,
     )
 
 
@@ -328,12 +336,18 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
                    ratio: str = DEFAULT_RATIO, duration: int = DEFAULT_DURATION,
                    prompt_image=None, references=None, client=None, db_path=None,
                    approved: Optional[bool] = None,
-                   account_id: Optional[int] = None) -> Path:
+                   account_id: Optional[int] = None,
+                   charge: Optional[charging.Charge] = None) -> Path:
     """
     The thin wrapper: create -> wait -> download. Raises on anything --
     including a missing spend approval, which is checked HERE so no
-    caller can spend a credit around the gate. generate_candidates is
-    the layer that catches.
+    caller can spend a credit around the gate, and an empty credit
+    balance (ledger.InsufficientCredit), checked here for the same
+    reason (src/charge.py, 2026-09-18): the hold is taken AFTER the gate
+    and BEFORE the submit, so a refusal means no HTTP call was made.
+    `charge` is the caller's Charge when it will record the generation
+    and settle with its id; without one this call holds and settles its
+    own, at the estimate. generate_candidates is the layer that catches.
     """
     if not spend_approved(approved):
         raise RuntimeError(
@@ -349,20 +363,35 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
     client = client or _make_client(account_id)
     payload = build_prompt_image(prompt_image, references, model=model)
     kwargs = {"prompt_image": payload} if payload is not None else {}
-    task = client.image_to_video.create(
-        model=model,
-        prompt_text=prompt,
-        ratio=ratio,
-        duration=int(duration),
-        **kwargs,
-    ).wait_for_task_output()
-
-    outputs = getattr(task, "output", None) or []
-    if not outputs:
-        raise RuntimeError("Runway task finished with no output URL")
-
     out_path = Path(out_path)
-    _download(outputs[0], out_path)
+    own = charge is None
+    if own:
+        charge = charging.Charge(
+            account_id, provider="runway", ref=out_path.name,
+            estimate_usd=estimate_cost(1, model=model, duration=duration, ratio=ratio),
+            key_source=account_keys.key_source(account_id, "runway", db_path),
+            dsn=db_path)
+    charge.take()          # InsufficientCredit raises HERE: nothing submitted
+    charge.submitted()     # the last line before the provider call
+    try:
+        task = client.image_to_video.create(
+            model=model,
+            prompt_text=prompt,
+            ratio=ratio,
+            duration=int(duration),
+            **kwargs,
+        ).wait_for_task_output()
+
+        outputs = getattr(task, "output", None) or []
+        if not outputs:
+            raise RuntimeError("Runway task finished with no output URL")
+
+        _download(outputs[0], out_path)
+    except Exception as e:
+        charge.release(f"runway: {type(e).__name__}")
+        raise
+    if own:
+        charge.settle()
     return out_path
 
 
@@ -404,7 +433,8 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *, shot_id: Optional[i
             dsn=db_path,
             env_prefix="RUNWAY", phrase="generations used",
             used=generations_today(db_path=db_path, account_id=account_id),
-            used_everywhere=generations_today(db_path=db_path, everyone=True),
+            used_everywhere=generations_today(db_path=db_path, everyone=True,
+                                             operator_billed_only=True),
         )
         if refusal:
             return {"ok": False, "candidates": [], "error": refusal}
@@ -629,7 +659,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
     the field autopilot.build_plan requires before it will ever emit a
     post action.
     """
-    from . import preprod, storage
+    from . import media, preprod, storage
     kwargs = {"dsn": db_path} if db_path is not None else {}
 
     try:
@@ -639,7 +669,8 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
             dsn=db_path,
             env_prefix="RUNWAY", phrase="generations used",
             used=generations_today(db_path=db_path, account_id=account_id),
-            used_everywhere=generations_today(db_path=db_path, everyone=True),
+            used_everywhere=generations_today(db_path=db_path, everyone=True,
+                                             operator_billed_only=True),
         )
         if refusal:
             return {"ok": False, "error": refusal}
@@ -672,11 +703,16 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"c{concept_id}-s{shot_n}{f'-p{part}' if part else ''}-{stamp}.mp4"
+        key_source = account_keys.key_source(account_id, "runway", db_path)
+        charge = charging.Charge(
+            account_id, provider="runway", ref=out_path.name,
+            estimate_usd=estimate_cost(1, model=model, duration=duration, ratio=ratio),
+            key_source=key_source, dsn=db_path)
         generate_video(prompt, out_path, model=model,
                        duration=duration, ratio=ratio,
                        prompt_image=prompt_image, references=references,
                        client=client, db_path=db_path, approved=approved,
-                       account_id=account_id)
+                       account_id=account_id, charge=charge)
 
         shot_row_id = _shot_row_for_prompt(prompt, db_path, account_id)
         # what was ACTUALLY asked for, not the module defaults: the
@@ -695,8 +731,8 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                              # of a gen4 render, not a silence.
                              "references": len(references),
                              "reference_mode": bool(references),
-                             "key_source": account_keys.key_source(
-                                 account_id, "runway", db_path)}
+                             "key_source": key_source,
+                             **charge.params()}
         generation_id = generative.record_generation(
             shot_row_id, "runway", prompt,
             params=generation_params,
@@ -704,10 +740,14 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
             cost_usd=estimate_cost(1, model=model, duration=duration, ratio=ratio),
             **kwargs,
          account_id=account_id)
+        # the link from money to clip: closed at the estimate, which is
+        # what cost_usd above records, never above what was held
+        charge.settle(generation_id=generation_id)
 
         if storage.configured():
             media_url = storage.upload_file(
-                out_path, key=f"renders/runway/{out_path.name}",
+                out_path,
+                key=media.object_key(f"renders/runway/{out_path.name}", account_id),
                 content_type="video/mp4")
         else:
             media_url = f"/renders/runway/{out_path.name}"
@@ -730,6 +770,8 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                 "generation_id": generation_id, "path": str(out_path),
                 "asset_id": asset["id"], "asset_rag": asset["rag"],
                 "error": None}
+    except ledger.InsufficientCredit as e:
+        return {"ok": False, "error": charging.refusal(e)}
     except Exception as e:
         return {"ok": False, "error": _safe_error(e, account_id)}
 
@@ -754,7 +796,7 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
     mime read off the magic number. Anything else is dropped -- a
     reference is an enhancement, never a gate.
     """
-    from . import storage
+    from . import media, storage
     kwargs = {"dsn": db_path} if db_path is not None else {}
 
     try:
@@ -771,7 +813,8 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
             dsn=db_path,
             env_prefix="RUNWAY", phrase="generations used",
             used=generations_today(db_path=db_path, account_id=account_id),
-            used_everywhere=generations_today(db_path=db_path, everyone=True),
+            used_everywhere=generations_today(db_path=db_path, everyone=True,
+                                             operator_billed_only=True),
         )
         if refusal:
             return {"ok": False, "error": refusal}
@@ -780,17 +823,23 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"wf-{stamp}.mp4"
+        key_source = account_keys.key_source(account_id, "runway", db_path)
+        charge = charging.Charge(
+            account_id, provider="runway", ref=out_path.name,
+            estimate_usd=estimate_cost(1, model=model),
+            key_source=key_source, source="workflow", dsn=db_path)
         generate_video(prompt, out_path, model=model,
                        prompt_image=prompt_image, client=client,
-                       db_path=db_path, approved=approved, account_id=account_id)
+                       db_path=db_path, approved=approved, account_id=account_id,
+                       charge=charge)
 
         shot_row_id = _shot_row_for_prompt(prompt, db_path, account_id)
         generation_params = {"model": model, "ratio": DEFAULT_RATIO,
                              "duration": DEFAULT_DURATION,
                              "source": "workflow",
                              "prompt_image": bool(prompt_image),
-                             "key_source": account_keys.key_source(
-                                 account_id, "runway", db_path)}
+                             "key_source": key_source,
+                             **charge.params()}
         generation_id = generative.record_generation(
             shot_row_id, "runway", prompt,
             params=generation_params,
@@ -798,10 +847,12 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
             cost_usd=estimate_cost(1, model=model),
             **kwargs,
          account_id=account_id)
+        charge.settle(generation_id=generation_id)
 
         if storage.configured():
             media_url = storage.upload_file(
-                out_path, key=f"renders/runway/{out_path.name}",
+                out_path,
+                key=media.object_key(f"renders/runway/{out_path.name}", account_id),
                 content_type="video/mp4")
         else:
             media_url = f"/renders/runway/{out_path.name}"
@@ -818,5 +869,7 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
                 "generation_id": generation_id, "path": str(out_path),
                 "asset_id": asset["id"], "asset_rag": asset["rag"],
                 "error": None}
+    except ledger.InsufficientCredit as e:
+        return {"ok": False, "error": charging.refusal(e)}
     except Exception as e:
         return {"ok": False, "error": _safe_error(e, account_id)}

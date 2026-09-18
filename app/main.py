@@ -42,6 +42,7 @@ from src import (
     autonomy,
     autopilot,
     db,
+    edit_teach,
     entities,
     evalstore,
     generative,
@@ -60,11 +61,13 @@ from src import (
     workflows,
     youtube,
 )
+from src import billing as billing_core
 from src import (
     settings as settings_mod,
 )
 
 from . import api, auth, jobs, mcp_mount, seo
+from . import billing as billing_routes
 from .sparkline import render_sparkline
 
 load_dotenv()
@@ -178,6 +181,7 @@ async def lifespan(app: FastAPI):
         render_assets.init()  # generated_assets, owned (merged 2026-09-02)
         spend.init()          # llm_calls, the LLM meter (2026-09-04)
         ledger.init()         # credit_lots / credit_entries, the prepaid ledger
+        billing_core.init()   # credit_schedules, a yearly plan's unreleased months
         generative.init()    # generations log the render caps count
         accounts_mod.init()  # users / identities / accounts / members
         settings_mod.init()  # the Dev Studio tunables (gate/threshold/k)
@@ -300,6 +304,9 @@ if MCP_APP is not None:
     app.mount(mcp_mount.MOUNT_PATH, MCP_APP, name="mcp")
 app.include_router(api.router, dependencies=[Depends(auth.require_user_api)])
 app.include_router(auth.router)
+# Stripe's webhook: outside /api, because Stripe cannot sign in -- its
+# authentication is the signature over the raw body (app/billing.py)
+app.include_router(billing_routes.webhook)
 
 
 @app.get("/signin")
@@ -476,7 +483,9 @@ def healthz():
 @app.get("/privacy", response_class=HTMLResponse)
 def privacy_policy(request: Request):
     """Public legal page -- also doubles as the privacy-policy URL every
-    OAuth app registration (Instagram, Pinterest, ...) needs on file."""
+    OAuth app registration (Instagram, Pinterest, ...) needs on file. The
+    studio site renders the same policy (web/src/app/privacy/page.tsx);
+    a change to one is a change to both."""
     return templates.TemplateResponse(
         request, "privacy.html", {"site_url": seo.site_url()},
     )
@@ -850,6 +859,10 @@ def _graded_rows(account_id: int) -> list[dict]:
         entries = c.get("_entries") or []
         rows.append({**_concept_line(c),
                      "archived": bool(c.get("archived")),
+                     # a draft -> fix pair filed by a hand edit or a Direct
+                     # note (src/edit_teach.py), so the tab says which door
+                     "edited": any(edit_teach.is_edit_note(w.get("note"))
+                                   for w in entries),
                      "verdict": _verdict_label(entries),
                      "entries": len(entries),
                      "pending": c.get("_pending") or 0,
@@ -911,6 +924,27 @@ def _grade_context(mode: Optional[str], concept_id: Optional[int],
     return context
 
 
+def _tab_counts(account_id: int) -> dict:
+    """Live counts for the tab column (2026-09-14).
+
+    The queue depth is the whole point of this console and it used to
+    take a click to find: the tabs were pills with labels and nothing
+    else, so "184 concepts are waiting on you" was invisible from five
+    of the six tabs. Every count is best-effort and swallowed -- a badge
+    that 500s the console is strictly worse than a badge that is absent,
+    and this runs on every Dev Studio render.
+    """
+    counts: dict[str, int] = {}
+    for key, fn in (("grade", lambda: len(_ungraded_rows(account_id))),
+                    ("graded", lambda: len(_graded_rows(account_id))),
+                    ("dataset", lambda: len(evalstore.list_golden()))):
+        try:
+            counts[key] = fn()
+        except Exception:
+            pass
+    return counts
+
+
 @dev.get("/studio")
 def studio(request: Request, tab: Optional[str] = None, message: Optional[str] = None,
            q: Optional[str] = None, domain: Optional[str] = None,
@@ -925,6 +959,7 @@ def studio(request: Request, tab: Optional[str] = None, message: Optional[str] =
     active_tab = tab if tab in DEV_TABS else "stats"
     context = {"active_tab": active_tab, "active_nav": "home",
                "message": message}
+    context["tab_counts"] = _tab_counts(account_id)
     if active_tab == "stats":
         context["metrics"] = _pipeline_metrics(account_id)
         context["distribution"] = _distribution(account_id)
@@ -1654,13 +1689,14 @@ async def post_image_queue(request: Request,
 
             from PIL import Image
 
-            from src import storage
+            from src import media, storage
             data = await upload.read()
             jpeg = Image.open(io.BytesIO(data)).convert("RGB")
             tmp = Path("/tmp") / f"mj-{uuid.uuid4().hex}.jpg"
             jpeg.save(tmp, "JPEG", quality=92)
             image_url = storage.upload_file(
-                tmp, key=f"images/{tmp.name}", content_type="image/jpeg")
+                tmp, key=media.object_key(f"images/{tmp.name}", account_id),
+                content_type="image/jpeg")
         except Exception as e:
             return back(f"Upload failed: {e}")
 
@@ -2058,13 +2094,14 @@ async def concept_shot_reference(concept_id: int, shot_n: int, request: Request,
 
                 from PIL import Image
 
-                from src import storage
+                from src import media, storage
                 data = await upload.read()
                 jpeg = Image.open(io.BytesIO(data)).convert("RGB")
                 tmp = Path("/tmp") / f"ref-{uuid.uuid4().hex}.jpg"
                 jpeg.save(tmp, "JPEG", quality=92)
                 image_url = storage.upload_file(
-                    tmp, key=f"references/{tmp.name}", content_type="image/jpeg")
+                    tmp, key=media.object_key(f"references/{tmp.name}", account_id),
+                    content_type="image/jpeg")
             except Exception as e:
                 return back(f"Reference upload failed: {e}")
         if not image_url:
@@ -2237,10 +2274,14 @@ def concepts_grade_all(account_id: int = Depends(auth.dev_account_id)):
             "Nothing waiting — grade some concepts on the Grade tab first.")
 
     taught, failed = 0, 0
+    # label every lesson with the tenant that taught it (rag.py's
+    # `project`), so their own rank first for them -- the deferred path
+    # dropped the label the Grade tab's immediate path always carried
+    project = accounts_mod.slug_of(account_id)
     for c in waiting:
         result = {"ok": True}
         for ref in _concept_refs(c):
-            one = winners.ingest_pending(ref)
+            one = winners.ingest_pending(ref, project=project)
             if not one.get("ok"):
                 result = one
         if result.get("ok"):

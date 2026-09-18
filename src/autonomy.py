@@ -85,7 +85,8 @@ CREATE TABLE IF NOT EXISTS prompt_scores (
     passed        INTEGER,
     reason        TEXT,
     dims          TEXT,           -- json {subject, camera, motion, lighting, coherence}
-    human_verdict TEXT            -- 'post' | 'reject' | NULL, filled when the hold is graded
+    human_verdict TEXT,           -- 'post' | 'reject' | NULL, filled when the hold is graded
+    unreadable    INTEGER NOT NULL DEFAULT 0  -- 1 = the judge errored, so this row is NOT a verdict
 );
 CREATE INDEX IF NOT EXISTS idx_prompt_scores_run ON prompt_scores (run_id);
 """
@@ -125,6 +126,14 @@ def init(dsn=None) -> None:
         # database that is account 1, the one that owns every concept the
         # holds point at. Proved against a copy before it landed here.
         db.own_table(conn, "hold_queue")
+        # prompt_scores.unreadable (2026-09-14): a live database predates
+        # it, and the default is what makes the backfill a no-op -- every
+        # existing row WAS a real verdict as far as anyone can now tell,
+        # so 0 is both the honest value and the one that leaves
+        # prompt_gate_agreement reading exactly as it did before.
+        if "unreadable" not in db.columns(conn, "prompt_scores"):
+            conn.execute("ALTER TABLE prompt_scores ADD COLUMN "
+                         "unreadable INTEGER NOT NULL DEFAULT 0")
 
 
 # --- channels -------------------------------------------------------------
@@ -338,6 +347,69 @@ def prompt_scores_for_run(run_id: Optional[str], dsn=None) -> list[dict]:
     return out
 
 
+def gates_for_concepts(concept_ids, dsn=None, *,
+                       account_id: Optional[int]) -> dict:
+    """The prompt gate's verdict for MANY concepts at once: {concept_id:
+    {score, passed, reason, reworks, status, outcome}}, for a board that
+    prints a card per concept (2026-09-17).
+
+    The same reading `mcp_server._gate` makes one concept at a time --
+    the latest hold row this account owns, its payload's run_id, the
+    LAST score that run logged (a rework's revised verdict, not the first
+    draft's) -- in TWO queries however long the board is, where calling
+    hold_for_concept + prompt_scores_for_run per card would be two
+    hundred. A concept with no hold row is absent from the result: no
+    graph run ever ended on it (a Studio Create, a capture), which the
+    card must be able to tell apart from "scored badly". A run that held
+    before it reached the gate is present with score None.
+
+    `passed` is what the gate SAID, never what the run then did: under
+    ZEROPAGE_GATES=advisory a failed prompt still proceeds, and this
+    still reads False -- the log_prompt_scores rule.
+
+    Never raises and never guesses: a database with no graph history, or
+    an unreadable payload, reads as nothing to show."""
+    ids = sorted({int(i) for i in concept_ids or [] if i is not None})
+    if not ids:
+        return {}
+    try:
+        with db.connect(dsn) as conn:
+            holds = conn.execute(
+                "SELECT DISTINCT ON (concept_id) concept_id, status, reason, payload "
+                "FROM hold_queue WHERE concept_id = ANY(%s) "
+                "AND account_id IS NOT DISTINCT FROM %s "
+                "ORDER BY concept_id, id DESC",
+                (ids, account_id)).fetchall()
+            runs = {}
+            for row in holds:
+                payload = _parse_payload(dict(row)).get("payload")
+                run_id = payload.get("run_id") if isinstance(payload, dict) else None
+                runs[row["concept_id"]] = (dict(row), run_id)
+            wanted = sorted({r for _, r in runs.values() if r})
+            scores: dict = {}
+            if wanted:
+                for r in conn.execute(
+                        "SELECT run_id, score, passed, reason FROM prompt_scores "
+                        "WHERE run_id = ANY(%s) ORDER BY id", (wanted,)).fetchall():
+                    scores.setdefault(r["run_id"], []).append(dict(r))
+    except psycopg.Error:
+        return {}
+    out = {}
+    for concept_id, (hold, run_id) in runs.items():
+        logged = scores.get(run_id) or []
+        latest = logged[-1] if logged else None
+        out[concept_id] = {
+            "score": latest["score"] if latest else None,
+            "passed": bool(latest["passed"]) if latest else None,
+            "reason": (latest.get("reason") or "") if latest else "",
+            # how many times the gate sent it back before this verdict
+            "reworks": max(0, len(logged) - 1),
+            "status": hold.get("status") or "held",
+            "outcome": hold.get("reason") or "",
+        }
+    return out
+
+
 def resolve_hold(hold_id: int, status: str, dsn=None, *,
                  account_id: Optional[int]) -> bool:
     """Your morning verdict on a shadow run: approved (would have
@@ -409,10 +481,12 @@ def log_prompt_scores(run_id, scored: list, dsn=None) -> None:
         for x in scored:
             conn.execute(
                 "INSERT INTO prompt_scores (created_at, run_id, prompt, score, "
-                "passed, reason, dims) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                "passed, reason, dims, unreadable) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
                 (_now(), run_id, x.get("prompt"), x.get("score"),
                  int(bool(x.get("pass"))), x.get("reason"),
-                 json.dumps(x.get("dims", {}))),
+                 json.dumps(x.get("dims", {})),
+                 int(bool(x.get("unreadable")))),
             )
 
 
@@ -446,6 +520,12 @@ def prompt_gate_agreement(dsn=None) -> dict:
             " SUM(CASE WHEN passed = 1 AND human_verdict = 'reject' THEN 1 ELSE 0 END),"
             " SUM(CASE WHEN passed = 0 AND human_verdict = 'post' THEN 1 ELSE 0 END)"
             " FROM prompt_scores WHERE human_verdict IS NOT NULL"
+            # A row the judge never rendered a verdict on measures the
+            # Gemini API's uptime, not the gate's judgement. Genuine
+            # passed = 0 rows stay in, deliberately -- see
+            # orchestrator._gate_advisory on why the scores themselves
+            # are never massaged.
+            " AND unreadable = 0"
         ).fetchone()
     graded, agreed, expensive, cheap = (row[0], row[1] or 0, row[2] or 0, row[3] or 0)
     return {
@@ -461,7 +541,8 @@ def first_try_pass_rate(dsn=None) -> dict:
     Not the trust number -- that's prompt_gate_agreement."""
     with db.connect(dsn) as conn:
         row = conn.execute(
-            "SELECT COUNT(*), SUM(passed) FROM prompt_scores"
+            "SELECT COUNT(*), SUM(passed) FROM prompt_scores "
+            "WHERE unreadable = 0"
         ).fetchone()
     total, passed = row[0], row[1] or 0
     return {"total": total, "passed": passed,

@@ -263,7 +263,7 @@ def retry_delay(error, attempt: int) -> float:
 def generate_with_retry(client: genai.Client, model: str, contents,
                         *, on_retry=None, stage: str = "unknown",
                         account_id=None, run_id=None,
-                        config=None, fallbacks=None) -> str:
+                        config=None, fallbacks=None, raw: bool = False):
     """Retries transient errors on `model`; if it stays unavailable for the
     whole retry budget, falls through to FALLBACK_MODELS in order rather
     than failing the run outright.
@@ -294,7 +294,12 @@ def generate_with_retry(client: genai.Client, model: str, contents,
     raises SubstitutionRefused. That is the reasoning tier's posture,
     and the reason `fallbacks=[]` and `fallbacks=None` are different
     things -- None is "no opinion", which still means the default
-    chain."""
+    chain.
+
+    `raw=True` returns the response object instead of its text
+    (2026-09-18): a function-calling turn may carry no text at all --
+    `response.text` is None and `.strip()` on it is the crash -- and
+    the caller needs the parts. Metering is identical either way."""
     chain = FALLBACK_MODELS if fallbacks is None else list(fallbacks)
     models_to_try = [model] + [m for m in chain if m != model]
     no_substitute = fallbacks is not None and not chain
@@ -323,7 +328,7 @@ def generate_with_retry(client: genai.Client, model: str, contents,
                 spend.record_call(stage=stage, model_asked=model, model_used=current_model,
                                   response=response, account_id=account_id, run_id=run_id,
                                   ms=int((time.monotonic() - started) * 1000))
-                return response.text.strip()
+                return response if raw else response.text.strip()
             except Exception as e:
                 if not is_retriable(e):
                     spend.record_call(stage=stage, model_asked=model, model_used=current_model,

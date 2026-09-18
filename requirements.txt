@@ -5,6 +5,7 @@ google-genai
 python-dotenv
 requests
 boto3   # R2 speaks the S3 API; storage.py's client, no Cloudflare-specific SDK needed
+stripe>=15,<16   # app/billing.py + src/billing.py -- checkout, portal, the signed webhook (2026-09-18)
 runwayml   # runway.py's client -- API credit spend, gated behind RUNWAY_SPEND_OK=1
 pytest
 ruff
@@ -19,6 +20,14 @@ psycopg_pool>=3.2,<4   # reuse remote connections for the web server's lifespan
 pgvector
 pypdf   # /library/ingest's PDF file upload -- text extraction before chunking
 langgraph
+# The checkpointer's Postgres backend (src/orchestrator.checkpointed_graph).
+# A separate distribution from langgraph-checkpoint, which ships only the
+# in-memory saver -- without this the nightly walk is not resumable and a
+# run killed at node seven starts again from zero. Checked against the
+# psycopg pins above before it landed: it resolves 3.3.x and does NOT
+# drag psycopg backwards, unlike the langchain-mcp-adapters / mcp>=2
+# conflict documented below.
+langgraph-checkpoint-postgres
 langsmith
 # The research node (src/research_agent.py). Claude drives it while every
 # other node stays on Gemini, and langchain-mcp-adapters is how the graph

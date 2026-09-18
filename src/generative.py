@@ -24,9 +24,12 @@ discard. This records the decision instead of losing it.
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from . import account_keys
 from .db import _now, connect, own_table
 from .shot import TOOLS, Shot
 
@@ -135,17 +138,99 @@ def add_shot(
 # the daily spend wall
 # --------------------------------------------------------------------------
 
+def _billed_to_operator(params_json) -> bool:
+    """Whether this generation was paid for on the INSTALLATION's key.
+
+    True for an unlabelled row, and that default is the whole safety
+    property: `key_source` has only been written since BYOK, midjourney
+    does not write it at all, and a row we cannot read is a row we cannot
+    prove somebody else paid for. Counting it toward the operator's
+    ceiling errs toward refusing a render; the other default errs toward
+    spending money that was never budgeted."""
+    if not params_json:
+        return True
+    try:
+        source = json.loads(params_json).get("key_source")
+    except (TypeError, ValueError):
+        return True
+    return source != account_keys.SOURCE_ACCOUNT
+
+
+# (account_id, dsn, day, {tool: count}) while a counted_today() scope is
+# open on this thread/task, else None.
+_COUNTED: ContextVar[Optional[tuple]] = ContextVar("generative_counted_today",
+                                                   default=None)
+
+
+@contextmanager
+def counted_today(account_id: Optional[int], dsn: Optional[str] = None):
+    """Count ONE account's generations since UTC midnight for every tool
+    in one query, and let used_today() answer its per-account form from
+    that while the scope is open.
+
+    For a LISTING only -- the Queue reports today/cap for four vendors,
+    and fal alone is four tools, so that was seven connections to say
+    seven small numbers. cap_error never runs inside one: the wall in
+    front of a spend always reads the log itself. The installation-wide
+    counts (`everyone=True`) are never answered from here either.
+
+    Never raises on the way in: a database with no generations table
+    leaves the scope empty, and each used_today() then fails by itself
+    exactly as before (provider_state degrades that to None)."""
+    day = datetime.now(timezone.utc).date().isoformat()
+    counts = None
+    try:
+        with connect(dsn) as conn:
+            counts = {r[0]: int(r[1]) for r in conn.execute(
+                "SELECT tool, COUNT(*) FROM generations "
+                "WHERE created_at >= %s AND account_id IS NOT DISTINCT FROM %s "
+                "GROUP BY tool", (day, account_id)).fetchall()}
+    except Exception:
+        counts = None
+    if counts is None:
+        yield
+        return
+    token = _COUNTED.set((account_id, dsn, day, counts))
+    try:
+        yield
+    finally:
+        _COUNTED.reset(token)
+
+
 def used_today(tool: str, dsn: Optional[str] = None, *,
-               account_id: Optional[int] = None, everyone: bool = False) -> int:
+               account_id: Optional[int] = None, everyone: bool = False,
+               operator_billed_only: bool = False) -> int:
     """Generations logged for `tool` since UTC midnight.
 
     Reads the same generations table the scoreboards do, so a cap cannot
     drift from the log. `everyone=True` ignores ownership on purpose --
     that is the installation-wide count, and it is the only query here
     allowed to.
+
+    `operator_billed_only` (2026-09-14) narrows that installation-wide
+    count to the renders the OPERATOR actually paid for: rows whose
+    `key_source` is not `account`. See cap_error for why the ceiling
+    wants this and the per-account wall does not.
+
+    The key_source filter is applied in Python, not SQL, deliberately.
+    `params_json` is a TEXT column and predates any guarantee that it
+    holds valid JSON, so `params_json::jsonb ->> 'key_source'` would
+    raise on one malformed legacy row and take the whole cap check with
+    it -- turning "I cannot read the log" into "you may spend", which is
+    the wrong way for this particular function to fail. A day's rows for
+    one tool are tens at most.
     """
     today = datetime.now(timezone.utc).date().isoformat()
+    held = _COUNTED.get()
+    if (held is not None and not everyone and held[0] == account_id
+            and held[1] == dsn and held[2] == today):
+        return held[3].get(tool, 0)
     with connect(dsn) as conn:
+        if everyone and operator_billed_only:
+            rows = conn.execute(
+                "SELECT params_json FROM generations "
+                "WHERE tool = %s AND created_at >= %s", (tool, today)).fetchall()
+            return sum(1 for r in rows if _billed_to_operator(r["params_json"]))
         if everyone:
             row = conn.execute(
                 "SELECT COUNT(*) FROM generations WHERE tool = %s AND created_at >= %s",
@@ -173,6 +258,30 @@ def cap_error(tool: str, n: int = 1, *, account_id: Optional[int],
     times six renders is sixty renders billed to one person, and each of
     them is inside their limit the whole time.
 
+    WHAT CHANGED 2026-09-14, and why the sentence above still holds. The
+    ceiling was counting EVERY render on the installation, so a user who
+    brought their own key -- paying their own bill, costing the operator
+    nothing -- still consumed the operator's ceiling and could lock
+    everyone else out of a budget that was never spent. That was right
+    while Gemini and the renderers read the operator's key no matter who
+    asked; it stopped being right when account_keys resolved them per
+    account. So the ceiling now counts only what the operator actually
+    PAID for (`key_source` != account). Its job is unchanged -- it is
+    still the credit card -- it has just stopped charging the card for
+    other people's money.
+
+    A row we cannot read still counts: see _billed_to_operator.
+
+    AND THE CEILING IS OFF BY DEFAULT, 2026-09-14 (Mike's call). Every
+    *_GLOBAL_DAILY_CAP now defaults to 0, which means no ceiling: the
+    check is skipped entirely and only the per-account wall applies. The
+    paragraph above is still the argument FOR a ceiling, and it is still
+    true -- keyless accounts fall back to the operator's key, and N
+    accounts times their per-account cap is what he is now exposed to.
+    He accepted that to stop users blocking each other, and setting any
+    *_GLOBAL_DAILY_CAP to a positive number turns the wall back on with
+    no code change.
+
     Checked per-account first so the error a user sees names the limit
     they can actually do something about.
     """
@@ -186,8 +295,14 @@ def cap_error(tool: str, n: int = 1, *, account_id: Optional[int],
         more = f", {n} more would exceed it" if n > 1 else ""
         return (f"daily cap: {used}/{per_account} {phrase} today{more} "
                 f"({env_prefix}_DAILY_CAP to raise)")
+    # 0 (or anything non-positive) means NO ceiling -- not a ceiling of
+    # zero that refuses everything. Read it before counting, so an
+    # installation with the wall off does not pay for the query either.
+    if ceiling is None or ceiling <= 0:
+        return None
     everyone = (used_everywhere if used_everywhere is not None
-                else used_today(tool, dsn, everyone=True))
+                else used_today(tool, dsn, everyone=True,
+                                operator_billed_only=True))
     if everyone + n > ceiling:
         return (f"daily ceiling: {everyone}/{ceiling} {phrase} across "
                 f"all accounts today ({env_prefix}_GLOBAL_DAILY_CAP to raise)")

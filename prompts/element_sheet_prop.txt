@@ -1,0 +1,7 @@
+Make a product reference sheet for the object in the attached photos: {name}{detail_line}.
+Four panels side by side on one wide image, each labelled in small capitals along its top edge: FRONT, THREE-QUARTER, SIDE, DETAIL. The object must match the attached photos exactly in every panel — same make, colour, wear, markings and proportions. The DETAIL panel is a close crop of its most identifying feature.
+Notes: {wardrobe}
+Under the FRONT panel, a plain info block on ruled lines reading exactly:
+NAME: {name_upper}
+TYPE: {detail_upper}
+Visual style: photoreal product photography, true materials and reflections, no CGI gloss, soft even studio lighting, neutral light-grey seamless background in every panel, thin dark panel borders. No extra text, no logos beyond the object's own, no watermark.

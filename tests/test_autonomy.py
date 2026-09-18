@@ -147,6 +147,39 @@ def test_prompt_gate_agreement_separates_the_two_error_costs(tmp_db):
     assert result["held_but_posted"] == 1
 
 
+def test_a_judge_that_never_answered_is_not_counted_against_the_gate(tmp_db):
+    """A Gemini 503 is not evidence about the judge's taste.
+
+    The fail-closed path returns score 0 with empty dims, which is the
+    same shape as a real negative verdict, and it used to be written to
+    prompt_scores as passed = 0 -- so every API wobble moved the one
+    number that says whether the gate can be trusted, using rows where
+    the gate had no opinion at all. Genuine passed = 0 rows still count,
+    deliberately: see orchestrator._gate_advisory on why the scores
+    themselves are never massaged.
+    """
+    # a real verdict you agreed with
+    autonomy.log_prompt_scores("r1", [
+        {"prompt": "a", "score": 9, "pass": True, "reason": "", "dims": {}}], dsn=tmp_db)
+    autonomy.set_prompt_verdicts("r1", "post", dsn=tmp_db)
+    # a real verdict you disagreed with -- still counts
+    autonomy.log_prompt_scores("r2", [
+        {"prompt": "b", "score": 2, "pass": False, "reason": "thin", "dims": {}}], dsn=tmp_db)
+    autonomy.set_prompt_verdicts("r2", "post", dsn=tmp_db)
+    # the judge fell over; you graded the hold anyway
+    autonomy.log_prompt_scores("r3", [
+        {"prompt": "c", "score": 0, "pass": False, "unreadable": True,
+         "reason": "judge unreadable (503) — failed closed", "dims": {}}], dsn=tmp_db)
+    autonomy.set_prompt_verdicts("r3", "post", dsn=tmp_db)
+
+    result = autonomy.prompt_gate_agreement(dsn=tmp_db)
+    assert result["graded"] == 2, "the outage row is not a graded verdict"
+    assert result["agreement"] == 0.5, "one agreement, one real disagreement"
+    assert result["held_but_posted"] == 1, "and only the real one is a miss"
+    # the descriptive rate leaves it out too -- it is not a gate decision
+    assert autonomy.first_try_pass_rate(dsn=tmp_db)["total"] == 2
+
+
 def test_prompt_verdict_rejects_unknown_values(tmp_db):
     with pytest.raises(ValueError):
         autonomy.set_prompt_verdicts("r1", "maybe", dsn=tmp_db)
@@ -176,10 +209,52 @@ def test_hold_for_concept_is_the_latest_and_owner_scoped(tmp_db):
     assert autonomy.hold_for_concept(8, dsn=tmp_db, account_id=mine) is None
 
 
+def test_gates_for_concepts_reads_the_latest_run_and_its_last_score(tmp_db):
+    """The board's batched twin of hold_for_concept + prompt_scores_for_run:
+    the LATEST hold per concept, the LAST score its run logged (a rework's
+    verdict, not the first draft's), owner-scoped, and absent -- not
+    zero -- for a concept no graph run ever ended on."""
+    from src import accounts
+    mine = accounts.upsert_account("mine", "Mine", dsn=tmp_db)
+    theirs = accounts.upsert_account("theirs", "Theirs", dsn=tmp_db)
+    autonomy.to_hold("zeropage", "old run", concept_id=7,
+                     payload={"run_id": "old"}, dsn=tmp_db, account_id=mine)
+    autonomy.to_hold("zeropage", "advisory: prompt gate 8/10", concept_id=7,
+                     payload={"run_id": "r7"}, dsn=tmp_db, account_id=mine)
+    autonomy.log_prompt_scores("old", [{"prompt": "p", "score": 2, "pass": False, "reason": "thin"}], dsn=tmp_db)
+    autonomy.log_prompt_scores("r7", [{"prompt": "p", "score": 4, "pass": False, "reason": "no camera"}], dsn=tmp_db)
+    autonomy.log_prompt_scores("r7", [{"prompt": "p2", "score": 8, "pass": True, "reason": "clear"}], dsn=tmp_db)
+    # held before it ever reached the gate: present, unscored
+    autonomy.to_hold("zeropage", "camera-only concept", concept_id=8, dsn=tmp_db, account_id=mine)
+    autonomy.to_hold("zeropage", "someone else's", concept_id=9,
+                     payload={"run_id": "r9"}, dsn=tmp_db, account_id=theirs)
+
+    gates = autonomy.gates_for_concepts([7, 8, 9, 10, None], dsn=tmp_db, account_id=mine)
+    assert gates[7] == {"score": 8, "passed": True, "reason": "clear", "reworks": 1,
+                        "status": "held", "outcome": "advisory: prompt gate 8/10"}
+    assert gates[8]["score"] is None and gates[8]["passed"] is None
+    assert gates[8]["outcome"] == "camera-only concept"
+    assert 9 not in gates and 10 not in gates
+    assert autonomy.gates_for_concepts([], dsn=tmp_db, account_id=mine) == {}
+
+
+def test_an_advisory_run_still_reads_as_failed_by_the_gate(tmp_db):
+    """`passed` is what the gate SAID. In advisory mode the run goes on to
+    park; a card that read that as a pass would erase the disagreement the
+    gate-vs-you number exists to measure."""
+    autonomy.to_hold("zeropage", "advisory: prompt gate 4/10 — no camera direction",
+                     concept_id=3, payload={"run_id": "adv"}, dsn=tmp_db, account_id=None)
+    autonomy.log_prompt_scores("adv", [{"prompt": "p", "score": 4, "pass": False,
+                                        "reason": "no camera direction"}], dsn=tmp_db)
+    gate = autonomy.gates_for_concepts([3], dsn=tmp_db, account_id=None)[3]
+    assert gate["passed"] is False and gate["score"] == 4
+
+
 def test_the_readers_answer_nothing_on_a_database_with_no_graph_history(pg):
     fresh = pg                             # db.init_db only: no autonomy.init, no hold_queue yet
     assert autonomy.hold_for_concept(1, dsn=fresh, account_id=None) is None
     assert autonomy.prompt_scores_for_run("r", dsn=fresh) == []
+    assert autonomy.gates_for_concepts([1, 2], dsn=fresh, account_id=None) == {}
 
 
 def test_prompt_scores_for_run_keeps_the_order_the_gate_scored_in(tmp_db):

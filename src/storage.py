@@ -73,6 +73,18 @@ def configured() -> bool:
     )
 
 
+# One client per credential set. Building a boto3 client costs ~50ms of
+# session and endpoint resolution, which is invisible on the one upload
+# a render does and is most of the wall clock on a migration making
+# hundreds of copies. botocore's low-level clients are documented
+# thread-safe, so the pass can run its copies on a pool.
+#
+# Keyed on the account and access key (never the secret), so changing
+# the environment -- which is what the test suite does between cases --
+# yields a different client rather than a stale one.
+_CLIENT_CACHE: dict = {}
+
+
 def _client():
     """Thin wrapper: raises immediately if R2_ACCOUNT_ID (or the boto3
     dependency) is missing, rather than failing confusingly inside a
@@ -90,13 +102,18 @@ def _client():
             "boto3 not installed -- add it to requirements.txt (R2 speaks "
             "the S3 API; boto3 is the client, no Cloudflare-specific SDK)"
         ) from e
-    return boto3.client(
+    cached = _CLIENT_CACHE.get((acct, key_id))
+    if cached is not None:
+        return cached
+    client = boto3.client(
         "s3",
         endpoint_url=f"https://{acct}.r2.cloudflarestorage.com",
         aws_access_key_id=key_id,
         aws_secret_access_key=secret,
         region_name="auto",
     )
+    _CLIENT_CACHE[(acct, key_id)] = client
+    return client
 
 
 def url_for_key(key: str) -> Optional[str]:
@@ -129,25 +146,6 @@ def key_exists(key: str) -> bool:
         return True
     except Exception:                                   # noqa: BLE001
         return False
-
-
-def list_keys(prefix: str) -> list[str]:
-    """Every key in the bucket under `prefix`, paginated. The thin
-    raising wrapper: no config, no boto3, or a failed list all raise,
-    same as upload_file(). keys_under() below is the never-raising,
-    cached edge that callers on a request path actually use."""
-    client = _client()
-    bkt = bucket()
-    if not bkt:
-        raise RuntimeError("R2_BUCKET not set -- storage needs it")
-    keys: list[str] = []
-    paginator = client.get_paginator("list_objects_v2")
-    for page in paginator.paginate(Bucket=bkt, Prefix=prefix):
-        for obj in page.get("Contents") or []:
-            key = obj.get("Key")
-            if key:
-                keys.append(key)
-    return keys
 
 
 # One listing per PREFIX per process, not one per asset per request.
@@ -274,3 +272,135 @@ def publish_shot_media(concept_id: int, shot_n, local_path: Path | str,
         return {"ok": False, "error": f"uploaded but failed to record: {e}", "url": url}
 
     return {"ok": True, "url": url}
+
+
+# ---------------------------------------------------------------------
+# Signed reads, server-side copies, and the bulk helpers the media
+# migration needs. Everything below raises on failure like the wrappers
+# above -- the never-raising edges live in src/media.py and ops/.
+# ---------------------------------------------------------------------
+
+# (key, window) -> signed url. See media.SIGN_WINDOW_SECONDS for why a
+# signature is reused rather than minted fresh: a unique URL per page
+# render is a guaranteed browser cache miss on every tile of every card.
+# Bounded so a long-lived server cannot grow one entry per object ever
+# seen; the window rolls hourly and the map is dropped with it.
+_SIGNED_CACHE: dict = {}
+_SIGNED_CACHE_MAX = 4096
+
+
+def signed_url_for_key(key: str, ttl: Optional[int] = None) -> Optional[str]:
+    """A presigned GET for one key, or None if R2 isn't configured.
+
+    Presigning is local HMAC -- no network call, no round trip to
+    Cloudflare -- so this is cheap enough to run per tile. What it is
+    NOT is edge-cached: a presigned URL has to address the S3 API
+    endpoint (`<account>.r2.cloudflarestorage.com`), because an R2
+    custom domain serves the PUBLIC bucket path and does not accept a
+    SigV4 query signature. So `signed` mode trades the Cloudflare cache
+    in front of the custom domain for real per-tenant access control.
+    The memoised window below is what keeps the BROWSER cache, which is
+    the one that matters on a phone drawing twelve tiles.
+
+    (If origin bandwidth ever shows up in the bill, the way to get both
+    is a Worker on the custom domain validating a token against an R2
+    binding -- infrastructure, not Python, and deliberately not built
+    until there is a number saying it is needed.)
+    """
+    import time
+
+    from . import media
+
+    if not configured():
+        return None
+    ttl = ttl or media.SIGN_TTL_SECONDS
+    window = int(time.time()) // media.SIGN_WINDOW_SECONDS
+    cached = _SIGNED_CACHE.get((key, window))
+    if cached:
+        return cached
+    try:
+        url = _client().generate_presigned_url(
+            "get_object",
+            Params={"Bucket": bucket(), "Key": key},
+            ExpiresIn=ttl,
+        )
+    except Exception:                                   # noqa: BLE001
+        return None
+    if len(_SIGNED_CACHE) > _SIGNED_CACHE_MAX:
+        _SIGNED_CACHE.clear()
+    _SIGNED_CACHE[(key, window)] = url
+    return url
+
+
+def upload_bytes(data: bytes, key: str, content_type: Optional[str] = None) -> str:
+    """Put bytes at a key and return the public URL -- `upload_file`
+    without the temp file. The derivative path makes its thumbnail in
+    memory and has nothing on disk to hand over."""
+    client = _client()
+    bkt, base_url = bucket(), public_base_url()
+    if not (bkt and base_url):
+        raise RuntimeError(
+            "R2_BUCKET / R2_PUBLIC_BASE_URL not set -- storage needs both")
+    extra = {"ContentType": content_type} if content_type else {}
+    client.put_object(Bucket=bkt, Key=key, Body=data, **extra)
+    return f"{base_url}/{key}"
+
+
+def copy_key(source_key: str, dest_key: str) -> None:
+    """Server-side copy, source left exactly where it was.
+
+    The media migration moves ~every object in the bucket into the
+    tenant scheme. Downloading and re-uploading each one would be the
+    same bytes over the wire twice for no reason, and on a laptop it
+    would be the difference between minutes and an afternoon. COPY is
+    also why the migration is re-runnable and why nothing is lost if it
+    is interrupted: the old key is still there, still serving, until
+    somebody deliberately removes it.
+    """
+    bkt = bucket()
+    if not bkt:
+        raise RuntimeError("R2_BUCKET not set -- storage needs it")
+    _client().copy_object(Bucket=bkt, Key=dest_key,
+                          CopySource={"Bucket": bkt, "Key": source_key})
+
+
+def list_keys(prefix: str = "") -> list:
+    """Every key under a prefix, paginated. Raises like its neighbours;
+    the ops scripts above it are the ones that report instead."""
+    bkt = bucket()
+    if not bkt:
+        raise RuntimeError("R2_BUCKET not set -- storage needs it")
+    client = _client()
+    keys, token = [], None
+    while True:
+        kwargs = {"Bucket": bkt, "Prefix": prefix}
+        if token:
+            kwargs["ContinuationToken"] = token
+        page = client.list_objects_v2(**kwargs)
+        keys.extend(obj["Key"] for obj in page.get("Contents", []))
+        if not page.get("IsTruncated"):
+            return keys
+        token = page.get("NextContinuationToken")
+
+
+def get_lifecycle() -> Optional[dict]:
+    """The bucket's current lifecycle configuration, or None when there
+    is none set. Raises only on a broken client -- an empty rule set is
+    an answer, not a failure."""
+    bkt = bucket()
+    if not bkt:
+        raise RuntimeError("R2_BUCKET not set -- storage needs it")
+    try:
+        return _client().get_bucket_lifecycle_configuration(Bucket=bkt)
+    except Exception:                                   # noqa: BLE001
+        return None
+
+
+def put_lifecycle(rules: list) -> None:
+    """Replace the bucket's lifecycle rules. Thin and raising, like its
+    neighbours; ops/media_lifecycle.py is what reports."""
+    bkt = bucket()
+    if not bkt:
+        raise RuntimeError("R2_BUCKET not set -- storage needs it")
+    _client().put_bucket_lifecycle_configuration(
+        Bucket=bkt, LifecycleConfiguration={"Rules": rules})

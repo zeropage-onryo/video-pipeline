@@ -1,42 +1,38 @@
-import { MediaTile } from "@/components/landing/media-tile";
-import { LANDING_MEDIA } from "@/content/landing-media";
-
-// LTX-style first section: a full-bleed 3-up media grid directly under the
-// hero. The frames lead; each tile carries only a plain bottom-left label.
-// The frames are the studio's own newest keyframes (landing-media.ts) --
-// real output off the board, never stock.
-
+// Who the studio is for: three cards in the same warm-black card system as
+// the rest of the page. Copy carried over from the previous section.
 const TILES = [
-  { label: "Filmmakers", slate: "01 / FILM", copy: "Develop scenes, explore visual worlds, and direct the moments that make the story yours." },
-  { label: "Brands", slate: "02 / BRAND", copy: "Turn a brief into campaign concepts shaped around your product and identity." },
-  { label: "Creators", slate: "03 / CULTURE", copy: "Give your next short, series, or visual experiment a world of its own." },
+  {
+    label: "Filmmakers",
+    copy: "Develop scenes, explore visual worlds, and direct the moments that make the story yours.",
+  },
+  {
+    label: "Brands",
+    copy: "Turn a brief into campaign concepts shaped around your product and identity.",
+  },
+  {
+    label: "Creators",
+    copy: "Give your next short, series, or visual experiment a world of its own.",
+  },
 ];
 
 export function WorkSection() {
   return (
-    <section id="work" className="relative z-10 mx-auto max-w-6xl px-6 py-28">
-      <div className="mb-14 max-w-3xl">
-        <span className="kicker">Made for your kind of creative</span>
-        <h2 className="display mt-5 text-5xl sm:text-7xl">Big vision.<br />Meet your studio.</h2>
+    <section id="work" className="mx-auto max-w-[1200px] px-6 py-24 md:py-28">
+      <div className="max-w-[640px]">
+        <span className="eyebrow">Who it&apos;s for</span>
+        <h2 className="serif mt-5 text-[clamp(2rem,4.2vw,3.25rem)]">
+          Made for your kind of creative.
+        </h2>
       </div>
-      <div className="grid grid-cols-1 gap-px overflow-hidden border border-border bg-border md:grid-cols-3">
-        {TILES.map((tile, i) => (
-          <div
-            key={tile.slate}
-            className="group relative flex min-h-[360px] flex-col justify-between overflow-hidden bg-black p-7 md:min-h-[460px]"
+      <div className="mt-12 grid gap-3 md:grid-cols-3">
+        {TILES.map((tile) => (
+          <article
+            key={tile.label}
+            className="flex min-h-[260px] flex-col justify-between rounded-[14px] border border-border bg-card p-7 transition-colors hover:border-[#343331]"
           >
-            <MediaTile media={LANDING_MEDIA[i]} sizes="(min-width: 768px) 33vw, 100vw" priority={i === 0} />
-            {/* Bottom scrim so the label stays legible over any frame. */}
-            <div
-              aria-hidden
-              className="pointer-events-none absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-black/90 via-black/50 to-transparent"
-            />
-            <span className="film-slate relative text-foreground/80">{tile.slate}</span>
-            <div className="relative">
-              <h3 className="display text-4xl">{tile.label}</h3>
-              <p className="mt-4 text-sm leading-relaxed text-muted-foreground">{tile.copy}</p>
-            </div>
-          </div>
+            <h3 className="serif text-[28px]">{tile.label}</h3>
+            <p className="mt-10 text-[15px] leading-relaxed text-[#afafaf]">{tile.copy}</p>
+          </article>
         ))}
       </div>
     </section>

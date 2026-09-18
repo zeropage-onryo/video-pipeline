@@ -35,6 +35,15 @@ def signed_in(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def legacy_rung(monkeypatch):
+    """Pinned, never inherited. These tests assert the flat keys and the
+    public URLs of the `legacy` rung, and a developer's .env (tenant since
+    2026-09-15) must not decide what they measure. The tenant tests at the
+    bottom flip it for themselves."""
+    monkeypatch.setenv("ZEROPAGE_MEDIA", "legacy")
+
+
+@pytest.fixture(autouse=True)
 def fresh_listing_cache():
     storage.forget_listings()
     yield
@@ -119,10 +128,12 @@ def test_assets_read_the_bucket_when_the_folder_is_absent(
         f"{BASE}/characters/michael/IMG_1.jpg",
         f"{BASE}/characters/michael/IMG_2.jpg",
     ]
-    assert items["Michael"]["poster"] == f"{BASE}/characters/michael/IMG_1.jpg"
+    # the poster is the DRAWABLE one (main, 2026-09-15: the 480px derivative
+    # where one exists), never a second copy of refs[0]
+    assert items["Michael"]["poster"] == items["Michael"]["photo_thumbs"][0]
     assert items["Cyclops"]["photos"] == [f"{BASE}/characters/cyclops/face.png"]
     assert items["living-room"]["photos"] == [f"{BASE}/locations/living-room/plate.jpg"]
-    assert items["living-room"]["poster"] == f"{BASE}/locations/living-room/plate.jpg"
+    assert items["living-room"]["poster"] == items["living-room"]["photo_thumbs"][0]
     assert items["Motorcycle"]["photos"] == [f"{BASE}/props/motorcycle/side.HEIC"]
     # every URL is the canonical, public one -- what canonical_url would
     # hand a shot, so the composer's pick lands on the row unchanged
@@ -201,3 +212,81 @@ def test_an_upload_from_this_process_joins_the_cached_listing(
         f"{BASE}/characters/cyclops/new.jpg",
     ]
     assert fake_bucket == ["characters/"]
+
+
+# --- the tenant rung (src/media.py): per-account keys, names on rows -------
+#
+# The first version of this fallback predated the media ladder and listed
+# the flat `characters/` prefix, returning raw public URLs. On `tenant` that
+# is wrong twice: the flat key is shared by every account, and every other
+# writer puts the logical NAME on a row, not a URL.
+
+TENANT_BUCKET = {
+    "m/1/characters/": [
+        "m/1/characters/michael/IMG_2.jpg",
+        "m/1/characters/michael/IMG_1.jpg",
+    ],
+    "m/2/characters/": [
+        "m/2/characters/michael/other-face.jpg",
+    ],
+    # the flat keys the migration deliberately left in place
+    "characters/": [
+        "characters/michael/IMG_1.jpg",
+        "characters/michael/IMG_2.jpg",
+    ],
+}
+
+
+@pytest.fixture
+def tenant_bucket(monkeypatch):
+    monkeypatch.setenv("ZEROPAGE_MEDIA", "tenant")
+    calls = []
+
+    def list_keys(prefix):
+        calls.append(prefix)
+        return list(TENANT_BUCKET.get(prefix, []))
+
+    monkeypatch.setattr(storage, "list_keys", list_keys)
+    return calls
+
+
+def test_on_tenant_the_listing_reads_the_accounts_own_prefix(
+        no_photo_folders, r2_on, tenant_bucket):
+    assert asset_shelf.r2_photo_urls("character", "michael", 1) == [
+        "/characters/michael/photo/IMG_1.jpg",
+        "/characters/michael/photo/IMG_2.jpg",
+    ]
+    assert tenant_bucket == ["m/1/characters/"]
+
+
+def test_one_accounts_face_is_never_handed_to_another(
+        no_photo_folders, r2_on, tenant_bucket):
+    """Both accounts have a character called `michael`. Each sees its own
+    photos and nothing of the other's -- and neither reaches for the flat
+    `characters/` keys, which are the same string for every account."""
+    assert asset_shelf.r2_photo_urls("character", "michael", 2) == [
+        "/characters/michael/photo/other-face.jpg"]
+    assert asset_shelf.r2_photo_urls("character", "michael", 3) == []
+    assert "characters/" not in tenant_bucket
+
+
+def test_on_tenant_what_is_returned_is_what_photo_url_returns(
+        no_photo_folders, r2_on, tenant_bucket):
+    """The listing must hand out the same string shape as every other
+    writer, or a row ends up carrying a URL where the rest carry names."""
+    [first, _] = asset_shelf.r2_photo_urls("character", "michael", 1)
+    assert first == asset_shelf.photo_url("character", "michael", "IMG_1.jpg")
+    assert asset_shelf.storable_ref(first) == first
+    assert not first.startswith("http")
+
+
+def test_a_caller_with_no_account_keeps_the_flat_key(
+        no_photo_folders, r2_on, tenant_bucket):
+    """media.object_key's own rule: `m/None/...` would be a new global
+    namespace wearing a misleading name. The nightly graph and the CLIs
+    pass no account and read the flat keys, as they write them."""
+    assert asset_shelf.r2_photo_urls("character", "michael", None) == [
+        "/characters/michael/photo/IMG_1.jpg",
+        "/characters/michael/photo/IMG_2.jpg",
+    ]
+    assert tenant_bucket == ["characters/"]

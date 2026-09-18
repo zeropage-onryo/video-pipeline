@@ -1,104 +1,87 @@
 {% extends "base.html" %}
 {% block title %}Dev Studio — Zero Page{% endblock %}
 {% block head %}
-<style>
-  /* the tab bar + page-local pieces the skin doesn't carry. The evals
-     styles are carried over verbatim from the old /evals page. */
-  .sk .devtabs{ display:flex; gap:8px; margin:18px 0 22px; flex-wrap:wrap; }
-  .sk .devtab{ display:inline-block; padding:8px 16px; border:1px solid var(--line2);
-               border-radius:8px; font-family:var(--mono); font-size:12px; color:var(--dim);
-               text-decoration:none; letter-spacing:.4px; }
-  .sk .devtab:hover{ color:var(--ink); border-color:var(--steel); }
-  .sk .devtab[aria-current="page"]{ background:var(--red); border-color:var(--red); color:#fff; }
-  .sk .ebars{ display:flex; align-items:flex-end; gap:10px; height:140px; padding-top:22px; }
-  .sk .ebar{ flex:1; min-width:18px; max-width:64px; border:0; border-radius:6px 6px 3px 3px;
-             background:#26262c; position:relative; cursor:pointer; padding:0; }
-  .sk .ebar:hover{ background:#303038; }
-  .sk .ebar.sel{ background:var(--red); }
-  .sk .ebar::after{ content:attr(data-v); position:absolute; top:-19px; left:50%;
-                    transform:translateX(-50%); font-family:var(--mono); font-size:10px; color:var(--dim); }
-  .sk .prow{ display:grid; grid-template-columns:26px 1fr auto auto; gap:12px; align-items:center;
-             padding:8px 10px; border-bottom:1px solid var(--line); font-size:13px; }
-  .sk .prow:last-child{ border-bottom:none; }
-  .sk .prow .rank{ font-family:var(--mono); font-size:11px; color:var(--faint); }
-  .sk .prow .rn{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .sk .prow .rs{ font-family:var(--mono); font-size:12px; color:var(--dim); }
-  .sk .prow.gold{ background:#101a14; box-shadow:inset 2px 0 0 var(--good); }
-  .sk .mk{ width:28px; height:28px; border-radius:8px; border:1px solid var(--line2);
-           background:transparent; color:var(--faint); cursor:pointer; font-size:13px; padding:0; }
-  .sk .mk[aria-pressed="true"]{ background:#12241a; border-color:var(--good); color:var(--good); }
-  .sk .gq{ display:grid; grid-template-columns:1fr 170px 78px 58px 34px; gap:12px; align-items:center;
-           padding:10px; border-bottom:1px solid var(--line); font-size:13px; cursor:pointer; }
-  .sk .gq:hover{ background:var(--panel2); }
-  .sk .gq .v{ font-family:var(--mono); font-size:11.5px; color:var(--dim);
-              white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .sk .gq .v.ok{ color:var(--good); } .sk .gq .v.miss{ color:var(--red); }
-  .sk .gq .del{ border:0; background:transparent; color:var(--faint); cursor:pointer; font-size:12px; }
-  .sk .gq .del:hover{ color:var(--red); }
-  .sk .gdetail{ display:none; padding:2px 10px 12px; }
-  .sk .gdetail[data-open]{ display:block; }
-  .sk .blank{ padding:16px 4px; font-family:var(--mono); font-size:11px; color:var(--faint); }
-  .sk .delta{ font-family:var(--mono); font-size:11px; margin-left:8px; }
-  .sk #probefoot{ display:flex; align-items:center; gap:12px; margin-top:12px; }
-  .sk #probefoot[hidden]{ display:none; }
-  .sk .drawrow{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:18px; }
-  /* The ungraded queue: the whole pool on one screen, because the draw
-     below it is random and a count alone says nothing about what is in
-     it. Capped height so it never pushes the drawn card off-screen. */
-  /* .panel-head is display:flex, which already drops the marker in
-     Chrome; Safari needs this second rule. */
-  .sk summary.panel-head::-webkit-details-marker{ display:none; }
-  .sk .uqwrap{ max-height:340px; overflow-y:auto; }
-  .sk .uq{ display:grid; grid-template-columns:84px 1fr 168px 74px; gap:12px; align-items:center;
-           padding:8px 10px; border-bottom:1px solid var(--line); font-size:13px;
-           color:inherit; text-decoration:none; }
-  .sk .uq:last-child{ border-bottom:none; }
-  .sk .uq:hover{ background:var(--panel2); }
-  .sk .uq.here{ background:#101a14; box-shadow:inset 2px 0 0 var(--good); }
-  .sk .uq .uid{ font-family:var(--mono); font-size:11px; color:var(--faint); }
-  .sk .uq .ut{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .sk .uq .us{ display:block; font-size:12px; color:var(--dim); }
-  .sk .uq .ug{ font-family:var(--mono); font-size:11px; color:var(--faint); text-align:right;
-               white-space:nowrap; }
-  /* the tags sit on one line -- a second tag used to wrap and make the
-     row taller than its neighbours, which breaks the scan */
-  .sk .uq .utags{ display:flex; gap:6px; align-items:center; white-space:nowrap; }
-  /* the Graded tab: same row, one more column for the score */
-  .sk .uq.scored{ grid-template-columns:84px 1fr 168px 108px 64px; }
-  .sk .uq .sc{ font-family:var(--mono); font-size:15px; color:var(--dim); text-align:right; }
-  .sk .uq.strong .sc{ color:var(--good); }
-  .sk .uq .sc small{ display:block; font-size:10px; color:var(--faint); }
-</style>
+<link rel="stylesheet" href="/static/devstudio.css">
 {% endblock %}
 {% block content %}
-<div class="sk"><div class="page">
-  <div class="vhead">
-    <div>
-      <div class="rule">Dev Studio // stats + system improvement // nothing here ships to users</div>
-      <h1>Dev Studio</h1>
-      <p class="vsub">Grading, teaching, and threshold tuning done here change what
-        <span class="mono">/ui</span>'s next generation does — the improvement shows up in the
-        product's output, never as a dev-only number surfaced to a user.</p>
-    </div>
-    <div style="text-align:right"><a class="btnw" href="/ui">Open the studio →</a></div>
-  </div>
+{% set counts = tab_counts | default({}) %}
+{# Each tab is its own page, so the title is the tab's, not a generic
+   "Dev Studio" repeated six times. #}
+{% set TITLES = {
+     "stats":    ["Stats // system improvement // nothing here ships to users",
+                  "Is the machine getting better?",
+                  "Grading, teaching and threshold tuning done here change what the studio's next generation does. The improvement shows up in the output, never as a number a user sees."],
+     "grade":    ["Grade // the prompt is the grading surface",
+                  "Waiting on you",
+                  "Approve teaches it as written. Teach it records the pair \u2014 your version on the winning shelf, the model's on avoid. Pass archives with a reason and never deletes."],
+     "graded":   ["Teach // you grade, the system teaches",
+                  "The scoring pass",
+                  "Where a concept goes when it leaves the queue. One pass scores what you graded and ingests the lesson into RAG \u2014 one billed call."],
+     "library":  ["RAG Library // what the machine has read",
+                  "Reference library",
+                  "Material the generator grounds in. The craft shelves are what you fed it; the winning and avoid shelves are what it learned from you."],
+     "settings": ["Settings // takes effect on the next run, no restart",
+                  "Tunables",
+                  "Stored value beats env var beats shipped default. Clear a field to fall back."],
+     "dataset":  ["Dataset // golden set + run history",
+                  "The eval dataset",
+                  "The set grows from the Stats tab's probe \u2014 mark what should have come back, then add it."]
+   } %}
+{% set head = TITLES.get(active_tab, TITLES["stats"]) %}
+<div class="sk dev"><div class="page devshell">
 
-  <nav class="devtabs">
+  <nav class="devnav" aria-label="Dev Studio sections">
+    <div class="devmark">
+      <div class="zp">Zero Page</div>
+      <div class="ds">Dev Studio</div>
+    </div>
     {# The tab SLUGS stay "grade"/"graded" -- they are in every route, link
        and test. Only the labels change (2026-09-02). GRADE is where the
        ungraded concepts wait for Mike's verdict; TEACH is where he presses
        the one button that scores them and ingests them into RAG. He grades;
-       the system teaches. #}
-    {% for t, label in [("stats", "Stats"), ("grade", "Grade"),
-                        ("graded", "Teach"), ("library", "RAG Library"),
-                        ("settings", "Settings"), ("dataset", "Dataset")] %}
-    <a class="devtab" href="/studio?tab={{ t }}" {{ 'aria-current=page' if active_tab == t }}>{{ label }}</a>
-    {% endfor %}
+       the system teaches. The counts (2026-09-14) are the reason this is a
+       column: the queue depth is the whole point of this console and it
+       used to take a click to see. #}
+    <div class="devtabs">
+      {% for t, label in [("stats", "Stats"), ("grade", "Grade"),
+                          ("graded", "Teach"), ("library", "RAG Library"),
+                          ("settings", "Settings"), ("dataset", "Dataset")] %}
+      <a class="devtab" href="/studio?tab={{ t }}" {{ 'aria-current=page' if active_tab == t }}>
+        <span>{{ label }}</span>
+        {% if counts.get(t) is not none %}<span class="ct">{{ counts[t] }}</span>{% endif %}
+      </a>
+      {% endfor %}
+    </div>
+    <div class="devfoot">
+      <div class="kill"><span class="dot{{ ' on' if killed | default(false) }}"></span>
+        Kill switch {{ "on" if killed | default(false) else "off" }}</div>
+      <a href="/ui">Open the studio &rarr;</a>
+    </div>
   </nav>
+
+  <div class="devmain">
+  <div class="vhead">
+    <div>
+      <div class="rule">{{ head[0] }}</div>
+      <h1>{{ head[1] }}</h1>
+      <p class="vsub">{{ head[2] }}</p>
+    </div>
+  </div>
 
   {% if message %}<div class="toast">{{ message }}</div>{% endif %}
 
   {% if active_tab == "stats" %}
+  {# What is actually waiting on him leads the page. It used to open on
+     DISTRIBUTION, which is a zero -- a true number, but not the one that
+     changes what he does next. #}
+  {% if counts.get("grade") %}
+  <div class="attn">
+    <div class="n">{{ counts["grade"] }}</div>
+    <div class="t"><strong>concepts are waiting on your verdict</strong>
+      <span>{% if metrics.agreement.graded %}{{ metrics.agreement.graded }} graded so far &mdash; the agreement numbers below move as this queue does.{% else %}Nothing has been scored by the taste judge yet, so the loop has no signal to learn from until this queue moves.{% endif %}</span></div>
+    <a class="btnw" href="/studio?tab=grade">Start grading</a>
+  </div>
+  {% endif %}
   {% if metrics.killed %}<div class="warnings" style="margin-bottom:14px">Kill switch is ON — every channel holds regardless of autonomy.</div>{% endif %}
 
   {# ── DISTRIBUTION leads the page (2026-09-07) ──
@@ -349,6 +332,7 @@
     </div>
   </div>
   {% endif %}
+</div>
 </div></div>
 {% endblock %}
 {% block scripts %}
@@ -358,5 +342,12 @@
    login. Set before the deferred script runs. #}
 <script>window.ZP_API_BASE = "/studio";</script>
 <script src="/static/evals_dev.js" defer></script>
+{% endif %}
+{% if active_tab == "grade" %}
+{# the same reference preview the Pipeline board and the Queue open #}
+<script type="module">
+  import { wirePreview } from "/static/zpf/preview.js";
+  wirePreview();
+</script>
 {% endif %}
 {% endblock %}

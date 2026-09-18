@@ -68,11 +68,14 @@ venv/bin/python -m src.scout run  [--brand ...] [--count 4] [--lanes web,shorts,
 venv/bin/python -m src.scout list [--brand ...] [--unused]
 venv/bin/python -m src.scout next --brand zeropage       # the servable spark, or exit 1
 
-# THE NIGHTLY TRIGGER — one shadow run, spark rotated from prompts/sparks.txt.
-# ops/com.zeropage.shadowrun.plist schedules it at 03:30 (see its header to
-# install); grading happens on /holds each morning. --scout takes the
-# direction from the scout's bank instead, falling back to the rotation
-# when the bank is empty or under scout.SCORE_FLOOR.
+# THE SHADOW RUN — one run, spark rotated from prompts/sparks.txt. MANUAL
+# ONLY: nothing schedules this. The 03:30 launchd job was removed
+# 2026-09-14 because it took neither the nightly lock nor the budget, so it
+# ran an eleventh time beside the 22:00 walk. The scheduled path is
+# `src.nightly walk`; this is the hand-run door into the same graph.
+# Grading happens on /holds each morning. --scout takes the direction from
+# the scout's bank instead, falling back to the rotation when the bank is
+# empty or under scout.SCORE_FLOOR.
 venv/bin/python -m src.trigger [--spark ...] [--channel zeropage] [--scout]
 
 # GENERATIVE CLIPS — the Shot dataclass and its per-tool prompt renderers
@@ -112,6 +115,13 @@ venv/bin/python -m src.mcp_server --engine   # stdio; Claude Desktop launches th
 # env vars are gone), checked server-side against the account id on every
 # surface, fails closed (nobody, until somebody is turned on). Turn it on:
 venv/bin/python -m src.accounts operator <slug> --on   # --off to revoke
+# THE ACCOUNT FLAGS WRITE TO WHATEVER `DATABASE_URL` IS EXPORTED -- and
+# `src.accounts` never loads `.env`. With nothing exported, `operator`,
+# `edits-teach` and `credits` fall back to db.DEFAULT_DSN (the LOCAL throwaway
+# Postgres), create the auth tables there, and answer "no account '<slug>'"
+# with no list of known slugs -- that empty list is the tell (found 2026-09-18,
+# turning `credits` on for antihero). To move a flag on the LIVE database:
+set -a && source .env && set +a && venv/bin/python -m src.accounts credits <slug> --on
 # The API-billed adapters are untouched by it. See docs/RUNBOOK.md 2026-09-08.
 python3 ops/render_queue.py --account <slug> [--provider runway] list
 python3 ops/render_queue.py --provider runway --account <slug> import \
@@ -299,7 +309,8 @@ part, in order, through the SAME `generate_for_shot(..., part=n)` each adapter a
 `timeline.attach_part` stores the clip), so the spend approval, the daily cap and the
 generations row are per clip exactly as before. Each part's length is its window fitted UP
 to the model (`timeline.fit_seconds`: a 3s window is a 5s Runway clip, trimmed in the edit),
-priced by `providers.check_timeline_choice`; the card's duration control is hidden for such a
+priced by `src/pricing.py` (`display()` on the card, `quote()` at approve — only the shots
+still without a clip are priced); the card's duration control is hidden for such a
 scene. Parts with a clip are skipped and the loop stops at the first failure, so approving
 again resumes rather than re-buying shot 1. When the LAST part lands, the scene's own
 `media_url` is set to shot 1's clip — the marker every existing reader means by "rendered" —
@@ -368,17 +379,82 @@ mind when adding a fourth writer:
 his Mac reads its own photos off disk rather than over the network; `_photo_bytes` in
 `app/api.py` is the fetch fallback for the machine that does not.
 
-**And the LISTING falls back to the bucket too (2026-09-15).** The deployed API answered
-`photos: []` / `poster: null` for every asset, so the React composer and Elements page could
-attach none of them: `_assets_all` and `asset_shelf.catalogue` both built the list by scanning
-the folder, and Fly has no folder. `asset_shelf.r2_photo_urls(kind, slug)` lists the bucket
-under the asset's prefix and returns the same canonical URL `photo_url` would build (disk
-still first, on both listings, so the Mac reads its own photos). `storage.keys_under(prefix)`
-is the cached edge behind it: ONE `list_objects_v2` per top-level prefix (`characters/`,
-`locations/`, `props/`) per process, kept for `R2_LISTING_TTL` (600s), an upload from this
-process folded straight into the cache, a failed list remembered as empty for one TTL rather
-than retried per asset, `[]` outright when R2 is unconfigured. `tests/test_assets_r2_fallback.py`
-stands a fake listing in at `storage.list_keys`.
+**MEDIA IS MULTI-TENANT NOW, AND THE STORED STRING IS A NAME AGAIN (2026-09-14).** The flat
+scheme above is correct for one person and breaks on the second: `characters/michael/IMG_1.jpg`
+is the same key for every account, so the second studio to upload a character called `michael`
+overwrote the first one's face, and nothing in a key says who owns it, so per-account
+accounting, quota and deletion are all impossible. **`src/media.py` is the one owner** of the
+key scheme and of the read-time mint; `storage.py` stays the boto3 layer and
+`asset_shelf.parse_ref` stays THE parser.
+
+- **`ZEROPAGE_MEDIA` is one switch and a LADDER**, each rung a superset of the one below and
+  every rung reversible by setting it back: `legacy` (default — flat keys, public URLs, today's
+  behaviour byte for byte) → `tenant` (`m/<account>/<tail>`) → `signed` (the same keys,
+  presigned URLs, private bucket). An unrecognised value reads as `legacy`: a typo must leave
+  the system where it was, never make media private.
+- **THE BIN IS SHARED, and that is a decision (2026-09-15, Mike's call).** `/refs/<sha>.jpg` is
+  deliberately the same shape whether a composer uploaded it or the scout crawled it — "they
+  come out the far end identical", above — and `scout_bin` has no account column at all, being a
+  shared table by design. So at read time nothing can tell an owned bin image from a shared one,
+  and a scheme that needed to would have to guess. `refs/` routes to `m/shared/refs/...` for
+  everybody; characters, props, locations, renders and soul-training are fenced per account.
+  What that costs, stated plainly: a bin image is protected by an unguessable content-hash key
+  (and a signature under `signed`), not by a tenant fence. The privacy weight sits on the faces
+  and the renders, and those are fenced. `media.scope_for` is the one place that decides.
+- **Two top-level prefixes, `m/` for masters and `t/` for the 480px derivative, and that is not
+  cosmetic.** A lifecycle rule matches on a prefix, so masters age into Infrequent Access while
+  the thumbnails every card actually reads stay in Standard. Nest the thumbs under `m/` and
+  that rule cannot be written without demoting them.
+- **What goes ON a row is `asset_shelf.storable_ref`, not a URL.** Every reference bug this repo
+  has paid for came from storing a URL — a local route true only on the machine holding the
+  folder (2026-09-08), and now a signed URL true only for the next hour. From `tenant` up the
+  row carries the logical name and `media.url_for` mints the fetchable string on READ. Rows
+  written on either rung keep working on the other, which is what makes the ladder safe in both
+  directions and why the migration does not rewrite the database at all.
+- **One mirror.** `refbin.mirror_to_r2` and `api._mirror_photos_to_r2` were two implementations
+  of one scheme with two key builders between them; both delegate to `media.mirror` now, which
+  is also what writes the derivative. A new writer gets the tenant prefix and the thumbnail
+  without having to remember either.
+- **`refs` and `photo_thumbs` are deliberately NOT one list.** `refs[0]` is the single frame
+  Runway anchors a clip on; a list that quietly carried 480px versions would anchor the clip on
+  one. A card with no derivative falls back to `?thumb=1` — a slow tile, never a missing one.
+- **The migration COPIES and never moves** (`ops/migrate_media_keys.py`, report first, `--write`
+  to act, re-runnable). Old keys stay public and serving, so the flip is reversible. A flat key
+  does not say who owns it, so ownership is recovered from the database; anything unattributable
+  is reported and LEFT ALONE, and a slug held by two accounts is reported as ambiguous rather
+  than guessed — under the flat scheme one overwrote the other and nobody can now say which
+  bytes survived.
+- **`signed` trades the edge cache for access control**, knowingly: a presigned URL must address
+  the S3 API endpoint, because an R2 custom domain serves the public bucket path and will not
+  accept a SigV4 query signature. Signatures are memoised per hour so the BROWSER cache still
+  works on a card it has already drawn. The way to get both is a Worker on the custom domain
+  validating a token against an R2 binding — deliberately not built until a bill says to.
+- **Migrated 2026-09-15**: 303 objects copied (139 to account 1, 164 to the shared bin), 185
+  derivatives built, all 364 legacy keys left in place, `ZEROPAGE_MEDIA=tenant` locally. 61
+  objects were left where they are because NOTHING in the database references them — three prop
+  folders whose rows are gone, and superseded nano keyframes. Verified by fetching: a 2,258,681
+  byte location photo now draws as a 33,533 byte tile.
+- **`ops/media_lifecycle.py --write` needs an ADMIN token.** Lifecycle is a bucket-level
+  operation and the token in `.env` is scoped to Object Read & Write (correctly, for everything
+  else). It refuses with an explanation rather than a traceback and changes nothing.
+- Full operational sequence, including the custom domain and the tiering pass
+  (`ops/media_lifecycle.py`): **ops/r2-setup.md**.
+
+**And the LISTING falls back to the bucket too (written 2026-09-15, reworked for the ladder
+2026-09-18).** The deployed API answered `photos: []` / `poster: null` for every asset, so the
+React composer and Elements page could attach none of them: `_assets_all` and
+`asset_shelf.catalogue` both built the list by scanning the folder, and Fly has no folder.
+`asset_shelf.r2_photo_urls(kind, slug, account_id)` lists the bucket instead, disk still first on
+both listings so the Mac reads its own photos. Two rules, both learned by nearly merging the
+first version after `src/media.py` landed underneath it: the prefix comes from
+`media.object_key` (so on `tenant` it lists `m/<account>/characters/…`, never the flat
+`characters/` every account shares -- the second studio's `michael` must not be handed the
+first one's face), and what it RETURNS is `photo_url()`'s storable name, not a raw public URL,
+like every other writer. `storage.keys_under(prefix)` is the cached edge behind it: ONE
+`list_objects_v2` per (account, kind) prefix per process, kept for `R2_LISTING_TTL` (600s), an
+upload from this process folded straight into the cache, a failed list remembered as empty for
+one TTL rather than retried per asset, `[]` outright when R2 is unconfigured.
+`tests/test_assets_r2_fallback.py` stands a fake listing in at `storage.list_keys`.
 
 **`.heic` decodes now** (`pillow-heif`, registered in `_to_jpeg`, degrading if absent), and
 `_best_photo` prefers a natively-decodable sibling regardless. `IMAGE_EXTENSIONS` has always
@@ -486,6 +562,32 @@ row is called:
   itself on restart would be a queue that lies. The live job registry stays underneath it,
   and says so. Two ways in: the chain parks a scene once its keyframe is rendered, or you
   pick a text-only concept off the board.
+
+**A hand edit of a prompt teaches — for ONE account, by a column (2026-09-18, Mike's
+call: "only for my account specifically, not for other users").** Every prompt edit — the
+Director prompt bar, the Pipeline card's in-place edit (both `POST /api/concepts/{id}/shots/{n}/prompt`),
+a Direct note — used to write `shots_json` and nothing else, while the board's pick
+snapshotted the prompt at click time: edit-then-pick filed the human's text as "worked" with
+no record of the draft, pick-then-edit filed the draft and lost the edit. Now, when
+`accounts.prompt_edits_teach` is TRUE for the tenant (`python -m src.accounts edits-teach
+<slug> --on`; `src/edit_teach.py` is the gate, manual_lane's shape — fails closed, never
+membership, FALSE for every account until turned on by hand), an edit files a PENDING pair on
+the board's own `concept-{id}-shot-{n}` ref through `winners.record_pair`: the model's draft
+on the avoid side, the edit on the winning side, note `edited by hand` (or `directed: <note>`
+for a Direct note, where the pair is prompt-before → revision). Nothing reaches a shelf until
+the Teach tab's grade-all ingests it, same as a board tap; the tab marks these `✎ EDITED`.
+`shot["model_prompt"]` remembers the model's last draft across hand edits (so a re-edit still
+pairs draft → latest, one pending pair per shot, latest wins; editing back to the draft
+withdraws it) and every model writer drops it (`persist_prompt`, Polish, Direct). Replacement
+extends `api._board_verdict`'s asymmetry: a pending board tap is replaced by the pair, a board
+tap AFTER an edit leaves the pair alone, a Grade-tab verdict and anything ingested are never
+touched. Accounts that are off get no new key on their rows and no winners row — byte for
+byte the old behaviour. What the server cannot tell: Director's Save prompt may save the
+ENHANCE node's text, which Gemini wrote; it files as the person's fix. Found on the way:
+`/direct` and `/refine` never passed `account_id` into `director.*`, so on an owned row
+(every live concept) the job died with "no concept N" — fixed. Deferred ingest
+(`winners.ingest_pending`) now carries the tenant `project` label the immediate path always
+had. Live: on for accounts 1 and 2 (both Mike's brands), column added 2026-09-18.
 
 **Leaving the board is archiving, never deleting** (`archived_at`, additive ALTER, same
 shape as `picked_at`). An unpicked row is the only negative signal this system collects:
@@ -1091,6 +1193,44 @@ is yours, in Resolve, by hand.
   the vanilla canvas -- ported from the `workflows.js` edit, since that file
   no longer exists. The Generate node's gate note reads `video.generate`
   (any keyed renderer), not Runway's key alone.
+- **Assets and Elements are two things, not four chips on one wall (2026-09-18, Mike's
+  call).** `_assets_all()` had always returned locations + characters + props + `generated`
+  in one list, so the React Assets wall showed element photos beside renders, the Elements
+  page listed a render as an element (`@runway-image`), and the `@`-mention search offered
+  it. Now: **Assets** (`/studio/assets`) is GENERATED content only — `/api/media?scope=generated`,
+  one row per render carrying `provider`, `model`, `concept_id`, `prompt`, `folder`, `starred` —
+  and you can view, organize and delete it. **Elements** (`/studio/elements`) is the
+  characters / props / places a scene is held to — `/api/assets?scope=elements` — and a card
+  can be deleted (locations gained `DELETE /api/assets/locations/{id}` to match). `scope`
+  defaults to `all` so every existing caller reads as before; `/assets/search` is pinned to
+  `elements` because a mention is an element by definition. Organize = `folder` + `starred_at`
+  on `generated_assets` (additive ALTERs in `render_assets.init`, `PATCH
+  /api/assets/generated/{id}`); the wall's chips are Images / Clips / Starred / one per folder,
+  plus a provider select, all derived from the response's set totals (`wall`, `folders`,
+  `providers`). **Delete is SOFT** (`deleted_at`, `DELETE /api/assets/generated/{id}`): the
+  render leaves the wall and its RAG chunk is dropped, but the row and the file stay, so a
+  concept whose shot carries that clip keeps rendering it — a paid output is never thrown
+  away. **"Make element"** on a still opens the add-element modal with the render attached
+  by URL (`photo_urls` on the create routes, fetched through `_photo_bytes`), the Higgsfield
+  "Create Element" move and the only honest way a render becomes a reference here. And the
+  manual lane's `import_clip` now records a `generated_assets` row (lazily imported,
+  best-effort) — until today a hand-rendered Runway/Higgsfield clip lived on the concept and
+  nowhere else, so it never reached the wall. `web/` gained the `motion` package for the
+  rail slide and tile enter/exit.
+  **An element gets a REFERENCE SHEET, as part of adding one (same day, Mike's call).**
+  Creating an element used to save the photos, describe them (vision, text) and stop; the
+  frames a shot was held to were exactly the uploads. Now the create routes take `sheet`
+  (on unless the modal says off) and, once the row is saved, start a job that draws ONE
+  sheet from the real photos on Nano Banana Pro — `src/element_sheet.py`, prompts in
+  `prompts/element_sheet_{character,prop,location}.txt` (five panels + info block for a
+  person, a turnaround for a prop, plates for a place), through `nano_banana.generate_from_prompt`
+  with two new flags: `literal=True` (a sheet is not a video prompt, so no `as_still_frame`)
+  and `bank=False` (it lives with its element, not on the Assets wall; caps, the
+  generations row, the meter and R2 still apply). It lands as `<slug>/sheet.jpg` and
+  `_photo_names` sorts it LAST — a sheet is a derivative of the face, never evidence of it,
+  and `refs[0]` stays a real photo. `POST /api/assets/{kind}/{id}/sheet` redraws, and is how
+  elements saved before today get one (the card's button). Never a gate: no key, no photos
+  or a failed draw leaves the element exactly as saved, with the reason on the job.
 - **`src/mcp_server.py`** + **`app/mcp_mount.py`** — the MCP surface (2026-08-31), so the
   board can be read and decided on from a phone or an agent instead of only from this
   machine. **An adapter, never a store:** every tool is a thin call into `preprod` or
@@ -1153,6 +1293,23 @@ is yours, in Resolve, by hand.
   effect is visible, and how the run ended). `generate` returns the same `gate` with the
   run. `judge_*` keeps its name and its meaning. Nothing in `run_graph` returned early; the
   diagnosis was two surfaces being read as one.
+  **The board's cards carry the same verdict (2026-09-17).** `_concept_card` gained `gate`
+  (`autonomy.gates_for_concepts`: `{score, passed, reason, reworks, status, outcome}`, the
+  `_gate` reading batched into two queries for the whole board), on `/api/pipeline/concepts`
+  and `/api/queue/pending`. `None` means no graph run ever ended on the concept — never
+  scored, which the cards say as such and must never draw as a pass. `passed` is what the
+  gate SAID (the `log_prompt_scores` rule), so an advisory run that parked still reads
+  False; the cards show a failed gate as CHECK, never BLOCKED — BLOCKED is the reference
+  gate's alone. `gateOf` in `app/static/zpf/cards.js` and
+  `web/src/components/studio/concept-card.tsx` are twins.
+  **And where each reference came from (same day).** `ref_sources` is parallel to `refs`
+  (`refs` itself is untouched — its order anchors the render): `{url, kind, slug, filename,
+  source_url, title, lane}`, `kind` from `asset_shelf.parse_ref`, the rest from
+  `scout.sources_for_refs` — one query per board, joined on the bin's content-hash basename
+  (the same in `/refs/<sha>.jpg` and the R2 URL), the row WITH a `source_url` winning when
+  the same bytes were banked twice. "A reference must be traceable to where it came from"
+  was kept at banking time and lost on the shot; the preview overlay now links the page.
+  Only http(s) is ever linked, and an upload says it has no page rather than implying one.
   **Two layers, and the split is the testable part.** The tool functions are plain Python
   against a database path (so the whole surface is testable with no `mcp` package
   installed); `build_server` wraps them lazily. `app/jobs.py` is injected as callables
@@ -1388,6 +1545,33 @@ is yours, in Resolve, by hand.
   saves successfully and then resolves to nothing. `app/api.py`'s `_to_jpeg`/`_save_upload_ref`/
   `_resolve_asset_photo` now delegate. **The URL shape is the point**: a scouted image comes out
   as `/refs/<sha>.jpg`, so it rides the composer path with no new route or resolver.
+- **`src/pricing.py`** — what a render costs, and the signed quote that says so (steps 1–4 of
+  `docs/tasks/task-pricing-and-quotes.md`, on main 2026-09-18; read that doc's "As built"
+  section before touching it). Pure module, three answers: `estimate()` is the provider's USD
+  and always answers; `quote()` is credits and is `None` on BYOK (`ledger.is_billable` over
+  `account_keys.key_source`, the one rule); `display()` is the JSON every card reads —
+  `GET /api/queue/pending` carries it per card and `GET /api/queue/{id}/quote` re-prices a
+  changed pick, so there is no JS price twin any more (`fitSeconds` and
+  `providers.check_timeline_choice` are both deleted). `sign()`/`verify()` are an HMAC token
+  (`zpfq.<body>.<mac>`, 1-hour TTL) minted per render when `QUOTE_SIGNING_SECRET` is set —
+  its OWN secret, never `SESSION_SECRET`, and a different value on Fly from any dev box; unset
+  means prices without tokens and approve exactly as before. Six refusals, checked in order:
+  `bad_signature / retired_pricing / expired / wrong_account / wrong_render / stale_content`.
+  The content hash is `pricing.content_hash` = `timeline.source_hash(prompt, refs)` computed
+  on the LIVE shot, never the stored `timeline.source` — do not write a second one.
+  `MARKUP = "2.4"` (2026-09-18, Mike's call: $1.00 of provider cost = 240 credits) is a string
+  read through `Fraction` — a float there is a latent off-by-one; `CREDIT_FLOOR = 10`.
+  **A billable render needs its token (step 5, same commit as the markup):** when the server
+  can sign AND the render is not BYOK — `display()`'s `signed`, one predicate for the offer and
+  the requirement — `queue_approve` and the Director's Generate node answer 400 `missing_quote`
+  without one. The three doors that show no price send a billable render to the Queue instead:
+  `shot_generate`, `/api/generate/run`'s video branch (refused before the job, so no Gemini call
+  is made for it), and Run all's Generate node (skipped, not failed — the prompt it renders is
+  the enhance node's, which did not exist when any price was shown). BYOK, and a server with no
+  secret, behave exactly as before. **Not built (step 6):** the four adapters still take
+  `approved=True` and nothing is held on the ledger. Decided for it: zero credits REFUSES even
+  with a key on file, and Mike's own account is the exemption. The daily-cap check stays in the
+  route, not here.
 - **`src/spend.py`** / **`src/costs.py`** — the cost tracker (BACKLOG #2, 2026-09-04).
   `spend.record_call` writes one OWNED `llm_calls` row per Gemini call -- the model that
   actually answered, raw token counts, an estimated `cost_usd` from `DEFAULT_PRICES` (read off
@@ -1434,6 +1618,15 @@ is yours, in Resolve, by hand.
   + `queue_approve` and `ops/render_queue.py`'s `pending` all ask it again at the spend.
   `ops/archive_ungrounded.py` is the repair pass for rows written before it (87 archived on the
   day, of 152 live).
+  **The Queue PAGE lists them, blocked (2026-09-17, Mike's call).** A row still gets here
+  ungrounded three ways — written before the gate, un-archived, or its refs cleared later — and
+  dropping it from the list made a picked scene look like a lost pick. `_waiting(...,
+  include_blocked=True)` is `queue_pending`'s alone: such a card carries `blocked` (the gate's
+  own reason), sorts after every spendable card, and is left out of `spendable`, which is what
+  the rail's badge counts. Nothing about SPENDING moved: `_waiting`'s default is still
+  spendable-only, so the manual lane never sees one, `queue_approve` still asks
+  `reference_gate` itself and answers `no_reference`, and `ops/render_queue.py` is untouched.
+  Listing a scene is not a way to spend on it.
   What made this worth breaking the convention for: the board was showing cards reading
   "KEYFRAMED · AWAITING APPROVAL IN QUEUE" beside "NO REFERENCES". That keyframe is a still
   Nano drew **from the prompt**, so approving one spends a Runway credit anchoring the clip on
@@ -1505,42 +1698,85 @@ is yours, in Resolve, by hand.
 
 Everything below is current as of the last commit on `main`. Update it when it stops being true.
 
-**Working and verified against real data** (counts read off the live Postgres 2026-09-09):
-the ideation loop runs end to end on real Gemini calls. **232 concepts** written, **107**
-carrying reference images on the shot, **68** with a keyframe drawn, **178 archived** with a
-reason, **4 picked**, **9 marked shot**, **274 recorded graph runs**, 100 generation attempts,
-1610 metered LLM calls, 10 posted videos, 3 described rooms. Reference-grounded ideation is
-verified live both ways: `src.shootgen --spark "gearing up ritual"` printed "Grounding in 5
-retrieved reference(s)" against the real library, and the same command with the store pointed at
-a dead URL printed the ungrounded note and still produced ideas (exit 0). **1956 tests pass, 8
-xfail**, ruff clean, CI green on every push.
+**Working and verified against real data** (counts read off the live Postgres 2026-09-18):
+the ideation loop runs end to end on real Gemini calls. **255 concepts** written, **122**
+carrying reference images on the shot, **73** with a keyframe drawn, **205 archived** with a
+reason, **11 picked**, **20 marked shot**, **359 recorded graph runs**, 113 generation attempts,
+2403 metered LLM calls, **23 videos with 24 metrics snapshots**, 0 described rooms (rooms became
+optional material on 2026-08-31 and nothing has re-run `src.locations` since). Reference-grounded
+ideation is verified live both ways: `src.shootgen --spark "gearing up ritual"` printed "Grounding
+in 5 retrieved reference(s)" against the real library, and the same command with the store pointed
+at a dead URL printed the ungrounded note and still produced ideas (exit 0). 2171 tests pass, 8
+xfail, ruff clean, CI green on every push — last full run 2026-09-18 on the pricing merge (`7ddb947`).
+
+**Billing is in front of the ledger (2026-09-18, docs/BILLING.md).** `MARKUP` is 2.4,
+three plans live in `src/pricing.PLANS`, every adapter holds credit before its submit
+(`src/charge.py`) and settles on the row, Stripe grants through `/billing/webhook`
+(`app/billing.py` + `src/billing.py`), and the public site's `/pricing`, `/models` and
+`/faq` are generated off `web/src/content/pricing.json` (`python -m src.pricing export`).
+Yearly plans are a SCHEDULE (`credit_schedules`, released monthly by
+`python -m src.billing release` and lazily on the money path), never a twelve-month lot.
+**Your own account must be exempted once** -- `python -m src.accounts credits zeropage
+--on`, with `DATABASE_URL` exported first (the CLI does not read `.env`; see Commands) -- or
+the Queue refuses you for having no credit. Both `zeropage` and `antihero` are ON live as of
+2026-09-18. Unset `STRIPE_*` = the plan
+buttons say so and nothing else changes.
 
 **The number that matters and is not moving: 0 concepts carry a `media_url`.** Nothing has been
 rendered onto a concept row. 4 picks against 232 written is the real shape of this project —
 generation is cheap and abundant, selection is the bottleneck, and the spend gate has barely
 been used. Read every rate below in that light.
+**THE LOOP CLOSED ON 2026-09-18.** Concept #375 "Neon City Ascent" went spark -> scene ->
+references -> keyframe -> pick -> render -> post -> measured, and it is the first one that ever
+did. What that means concretely: **1 concept carries a `media_url`** (it was 0 for the whole life
+of the project), the clip is a 10.042s 720x1280 h264 with a stereo AAC track rendered on Runway
+gen4_turbo through Explore Mode — the subscription lane, `cost_usd` NULL, no ledger hold — filed
+on the Fly volume, in `data/renders/runway/`, and mirrored to R2 so the deployed card resolves.
+**`videos` row 11 is the first row in this project's history carrying a `concept_id`**, and it
+carries a real metrics snapshot: reach 19, likes 4, comments 1, average watch 4.59s against a
+10.042s clip (46%). The other 12 Instagram reels on the account were backfilled the same day with
+their own snapshots, so `posted_outcomes` has 13 rows to join instead of none.
+**No API-BILLED render has gone through yet.** #375 was the free lane. The one attempt through
+the Queue (#361 on Higgsfield `kling2.1`, 2026-09-18) died at the provider submit with `HTTP 423
+Locked` — the Higgsfield account, not the request — and Runway and fal are `available: false` on
+the deployed API (their keys are not in Fly's secrets). One billed render is the precondition for
+the ledger work (pricing step 6); see `docs/tasks/task-pricing-and-quotes.md`.
+
+**The number that matters now: 11 picks against 255 written, and 1 of 255 rendered.** Generation
+is cheap and abundant, selection is still the bottleneck, and the spend gate has been used once.
+Read every rate below in that light. The backfilled reels carry `duration_s` NULL because the IG
+Graph API returns no `media_url` for REELS on this token, so their `watch_time_seconds` cannot be
+turned into a completion rate — only clips this pipeline renders get a measured duration
+(ffprobe at import). Cross-video watch comparison is not valid until that is solved.
 
 Post-production (ingest/pitch/editgen, `/pitches`, the assistant's `cut` intent) was removed in
 Aug 2026 — the DB keeps historical pitch-run rows, but nothing generates new ones.
 
-**Structurally complete, statistically empty:** the L2→L3 loop is built and verified live —
-`promote_winners propose` honestly reports nothing clears the bar (no videos measured at equal
-age yet), and `src.rework` generates an evidence-free slate with the note. `pick_rate`,
-`shoot_rate` and `post_seo`'s signals are structurally correct and currently close to
-meaningless — they need weeks of real posting before a prompt change can be measured or a slate
-genuinely reworked from evidence. (`db.selection_rate` is a different, surviving thing: it
-measures kept-vs-attempted on generative CLIPS, not concepts.) **The most valuable next step is
-still not code** — it is taking one written concept all the way through Approve to a rendered
-clip, posting it, and recording metrics. L4 exists as `src.autopilot` — gated, dry-run, default
-off, executors unwired.
+**Structurally complete, statistically thin:** the L2->L3 loop is built, verified live, and now
+has exactly one measured concept in it. `promote_winners propose` still honestly reports nothing
+clears the bar — it compares at equal age and there is one linked video — and `src.rework` still
+generates an evidence-free slate with the note. `pick_rate`, `shoot_rate` and `post_seo`'s
+signals are structurally correct and now non-empty rather than meaningless; they need weeks of
+real posting before a prompt change can be measured. (`db.selection_rate` is a different,
+surviving thing: it measures kept-vs-attempted on generative CLIPS, not concepts — the first
+`kept=1` row in the table was written 2026-09-18.) **The most valuable next step is repetition,
+not code** — the path exists now, so the question is whether it can be walked weekly. L4 exists
+as `src.autopilot` — gated, dry-run, default off, executors unwired.
 
 **Known gaps, in rough priority:**
+- **`generations` has four columns no writer sets** (found 2026-09-18). `ai_model`,
+  `aspect_ratio`, `camera_motion` and `is_favorite` exist on the live table with hardcoded
+  defaults (`'Nano Banana Pro'`, `'16:9'`, the STRING `'None'`, false), are absent from
+  `generative.SCHEMA`, and are not parameters on `record_generation` — the only writer. So all
+  113 rows carried the same fake provenance and ratio until row 113 was corrected by hand, a
+  fresh `init()` builds a differently-shaped table than production, and `tests/test_tenancy.py`
+  cannot classify them as owned or shared. Fix: add them to `SCHEMA`, drop the literal defaults
+  in favour of NULL, take them as kwargs on `record_generation`, pass them from the adapters
+  that already know the answers.
 - **Timed scenes (2026-09-10) are rendered shot by shot only at the Queue.** The graph's
   `generate_render` (a dry stub unless `ZEROPAGE_RENDER=1`) still renders a scene's whole
   prompt as one clip, and the Director canvas still edits the whole scene prompt rather than
-  one shot of it. Both read `shot["timeline"]` for free when they are taught to. The Queue
-  card's `fitSeconds` is a JS twin of `timeline.fit_seconds` (the price label); the server's
-  `check_timeline_choice` on the approve response is the authoritative figure.
+  one shot of it. Both read `shot["timeline"]` for free when they are taught to.
 - `src/fal.py`'s image-to-video field name is `image_url` for every model in the table;
   that is documented for Seedance 2.0 and inferred from the playground's "Start Image
   Url" label for Wan 3.0 and LTX-2.3. Verify on the first live i2v render for those two.

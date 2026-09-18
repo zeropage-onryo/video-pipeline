@@ -53,7 +53,12 @@ DAILY_CAP = int(os.environ.get("NANO_DAILY_CAP", "20"))
 # SAME number, so a single-operator database behaves exactly as it did --
 # admitting a second account is what forces a deliberate decision about
 # whose card is paying, instead of the total quietly doubling.
-GLOBAL_DAILY_CAP = int(os.environ.get("NANO_GLOBAL_DAILY_CAP", str(DAILY_CAP)))
+# 0 = no installation-wide ceiling (2026-09-14, Mike's call): a user who
+# brought their own key was still consuming the operator's shared budget and
+# could lock everyone else out of money nobody spent. The per-account cap
+# (NANO_DAILY_CAP) is the wall that remains. Set NANO_GLOBAL_DAILY_CAP to a
+# positive number to put the ceiling back -- see generative.cap_error.
+GLOBAL_DAILY_CAP = int(os.environ.get("NANO_GLOBAL_DAILY_CAP", "0"))
 RETRIES = int(os.environ.get("NANO_RETRIES", "3"))
 RETRY_DELAY = 4.0
 
@@ -165,13 +170,15 @@ def _client(account_id: Optional[int] = None):
     return gemini_utils.client_for(account_id)
 
 
-def generations_today(db_path=None, *, account_id=None, everyone: bool = False) -> int:
+def generations_today(db_path=None, *, account_id=None, everyone: bool = False,
+                      operator_billed_only: bool = False) -> int:
     """This account's nano generations since UTC midnight -- what
     DAILY_CAP counts against. `everyone=True` gives the installation-wide
     count that GLOBAL_DAILY_CAP counts against."""
     return generative.used_today(
         "nano", db_path,
         account_id=account_id, everyone=everyone,
+        operator_billed_only=operator_billed_only,
     )
 
 
@@ -351,9 +358,20 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
                          concept_id=None,
                          beat: str = "",
                          account_id: Optional[int] = None,
+                         literal: bool = False,
+                         bank: bool = True,
+                         source: str = "workflow",
 ) -> dict:
     """
     Never raises: {"ok", "media_url", "generation_id", "path", "error"}.
+
+    `literal` (2026-09-18, the element sheets) sends the prompt as
+    typed instead of through as_still_frame -- a character sheet is
+    not a video prompt and the still-frame wrapper would fight its
+    panel layout. `bank=False` keeps the render out of generated_assets
+    (the Assets wall): a sheet lives with its element, and listing it
+    twice would be the kind of duplicate the wall was just cleaned of.
+    Caps, the generations row, the meter and R2 apply either way.
     The Workflows canvas's Nano Banana node: prompt in, an image under
     /renders/nano/ out (uploaded to R2 when configured). reference_image
     may be raw bytes (a picked asset photo or an upstream render) --
@@ -365,7 +383,7 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
     answers in prose instead of rendering. The thin generate_image
     wrapper stays literal for callers who mean exactly what they typed.
     """
-    from . import storage
+    from . import media, storage
     kwargs = {"dsn": db_path} if db_path is not None else {}
 
     try:
@@ -384,7 +402,8 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
             dsn=db_path,
             env_prefix="NANO", phrase="images generated",
             used=generations_today(db_path=db_path, account_id=account_id),
-            used_everywhere=generations_today(db_path=db_path, everyone=True),
+            used_everywhere=generations_today(db_path=db_path, everyone=True,
+                                             operator_billed_only=True),
         )
         if refusal:
             return {"ok": False, "error": refusal}
@@ -399,9 +418,9 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         who = f"c{concept_id}-" if concept_id else "wf-"
         out_path = RENDER_DIR / f"{who}{stamp}.png"
-        generate_image(as_still_frame(prompt, has_reference=len(references),
-                                      beat=beat),
-                       out_path, model=model,
+        framed = prompt if literal else as_still_frame(
+            prompt, has_reference=len(references), beat=beat)
+        generate_image(framed, out_path, model=model,
                        reference_bytes=references, client=client,
                        aspect_ratio=aspect_ratio, image_size=image_size,
                        account_id=account_id)
@@ -409,8 +428,9 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
         # the row logs the prompt the person wrote, not the constant
         # wrapper around it -- the flag says which framing was applied
         shot_row_id = _shot_row_for_prompt(prompt, db_path, account_id)
-        generation_params = {"model": model, "source": "workflow",
-                             "framing": "still", "references": len(references),
+        generation_params = {"model": model, "source": source,
+                             "framing": "literal" if literal else "still",
+                             "references": len(references),
                              **({"beat": beat} if beat else {}),
                              **({"concept_id": concept_id} if concept_id else {}),
                              # whose key paid for this image -- the label
@@ -430,18 +450,21 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
 
         if storage.configured():
             media_url = storage.upload_file(
-                out_path, key=f"renders/nano/{out_path.name}",
+                out_path,
+                key=media.object_key(f"renders/nano/{out_path.name}", account_id),
                 content_type="image/png")
         else:
             media_url = f"/renders/nano/{out_path.name}"
 
-        asset = render_assets.record_best_effort(
-            account_id=account_id,
-            generation_id=generation_id, tool="nano", model=model,
-            media_kind="image", prompt=prompt, media_url=media_url,
-            output_path=str(out_path), metadata=generation_params,
-            dsn=db_path,
-        )
+        asset = {"id": None, "rag": None}
+        if bank:
+            asset = render_assets.record_best_effort(
+                account_id=account_id,
+                generation_id=generation_id, tool="nano", model=model,
+                media_kind="image", prompt=prompt, media_url=media_url,
+                output_path=str(out_path), metadata=generation_params,
+                dsn=db_path,
+            )
 
         return {"ok": True, "media_url": media_url,
                 "generation_id": generation_id, "path": str(out_path),

@@ -90,7 +90,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from . import account_keys, generative
+from . import account_keys, generative, ledger
+from . import charge as charging
 from .shot import Shot
 
 HOST = os.environ.get("FAL_HOST", "https://queue.fal.run").rstrip("/")
@@ -101,7 +102,12 @@ DAILY_CAP = int(os.environ.get("FAL_DAILY_CAP", "6"))
 # SAME number so a single-operator database behaves exactly as it did --
 # runway.py/higgsfield.py's comment, and the same reasoning: admitting a
 # second account should force a decision about whose card is paying.
-GLOBAL_DAILY_CAP = int(os.environ.get("FAL_GLOBAL_DAILY_CAP", str(DAILY_CAP)))
+# 0 = no installation-wide ceiling (2026-09-14, Mike's call): a user who
+# brought their own key was still consuming the operator's shared budget and
+# could lock everyone else out of money nobody spent. The per-account cap
+# (FAL_DAILY_CAP) is the wall that remains. Set FAL_GLOBAL_DAILY_CAP to a
+# positive number to put the ceiling back -- see generative.cap_error.
+GLOBAL_DAILY_CAP = int(os.environ.get("FAL_GLOBAL_DAILY_CAP", "0"))
 POLL_SECONDS = 3
 TIMEOUT_SECONDS = int(os.environ.get("FAL_TIMEOUT_S", "900"))
 
@@ -479,7 +485,8 @@ def safe_prompt(prompt: str, db_path=None) -> str:
     return text
 
 
-def generations_today(db_path=None, *, account_id=None, everyone: bool = False) -> int:
+def generations_today(db_path=None, *, account_id=None, everyone: bool = False,
+                      operator_billed_only: bool = False) -> int:
     """This account's fal-rendered generations since UTC midnight -- what
     DAILY_CAP counts against. `everyone=True` gives the installation-wide
     count GLOBAL_DAILY_CAP counts against.
@@ -490,7 +497,8 @@ def generations_today(db_path=None, *, account_id=None, everyone: bool = False) 
     "fal" would count zero forever while the money went out the door.
     """
     return sum(
-        generative.used_today(tool, db_path, account_id=account_id, everyone=everyone)
+        generative.used_today(tool, db_path, account_id=account_id, everyone=everyone,
+                              operator_billed_only=operator_billed_only)
         for tool in VIDEO_LOG_TOOLS
     )
 
@@ -664,11 +672,15 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
                    negative_prompt: str = "",
                    http=None, db_path=None,
                    approved: Optional[bool] = None,
-                   account_id: Optional[int] = None) -> Path:
+                   account_id: Optional[int] = None,
+                   charge: Optional[charging.Charge] = None) -> Path:
     """
     The thin wrapper: submit -> poll -> fetch -> download. Raises on
     anything, including a missing spend approval, which is checked HERE so
-    no caller can spend around the gate.
+    no caller can spend around the gate -- and an empty credit balance,
+    held here between the gate and the submit (src/charge.py). `charge`
+    is the caller's when it will record the generation; otherwise this
+    call holds and settles its own at the estimate.
     """
     if not spend_approved(approved):
         raise RuntimeError(
@@ -684,14 +696,30 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
                                 duration=duration, aspect_ratio=aspect_ratio,
                                 resolution=resolution,
                                 negative_prompt=negative_prompt)
-    result, skip = _submit_and_wait(model_id, body, http=http, account_id=account_id)
-    url = _output_url(result, skip)
-    if not url:
-        raise RuntimeError(
-            f"fal job completed but no output URL was found in the result "
-            f"(keys: {sorted(result) if isinstance(result, dict) else type(result)})")
     out_path = Path(out_path)
-    _download(url, out_path)
+    own = charge is None
+    if own:
+        charge = charging.Charge(
+            account_id, provider="fal", ref=out_path.name,
+            estimate_usd=estimate_cost(1, model=model, duration=duration,
+                                       resolution=resolution),
+            key_source=account_keys.key_source(account_id, "fal", db_path),
+            dsn=db_path)
+    charge.take()          # InsufficientCredit raises HERE: nothing submitted
+    charge.submitted()     # the last line before the provider call
+    try:
+        result, skip = _submit_and_wait(model_id, body, http=http, account_id=account_id)
+        url = _output_url(result, skip)
+        if not url:
+            raise RuntimeError(
+                f"fal job completed but no output URL was found in the result "
+                f"(keys: {sorted(result) if isinstance(result, dict) else type(result)})")
+        _download(url, out_path)
+    except Exception as e:
+        charge.release(f"fal: {type(e).__name__}")
+        raise
+    if own:
+        charge.settle()
     return out_path
 
 
@@ -724,7 +752,8 @@ def generate_image(prompt: str, out_path, *, model: str = DEFAULT_IMAGE_MODEL,
     return out_path
 
 
-def as_image_url(value, *, resolve_photo=None) -> Optional[str]:
+def as_image_url(value, *, resolve_photo=None,
+                 account_id: Optional[int] = None) -> Optional[str]:
     """Anything stored as a reference -> a URL fal's servers can actually
     FETCH, or None.
 
@@ -738,7 +767,8 @@ def as_image_url(value, *, resolve_photo=None) -> Optional[str]:
     third vendor -- or with a fourth copy of the code.
     """
     from . import higgsfield
-    return higgsfield.as_image_url(value, resolve_photo=resolve_photo)
+    return higgsfield.as_image_url(value, resolve_photo=resolve_photo,
+                                   account_id=account_id)
 
 
 # --------------------------------------------------------------------------
@@ -762,7 +792,8 @@ def _cap_refusal(n: int, db_path, account_id):
         dsn=db_path,
         env_prefix="FAL", phrase="generations used",
         used=generations_today(db_path=db_path, account_id=account_id),
-        used_everywhere=generations_today(db_path=db_path, everyone=True),
+        used_everywhere=generations_today(db_path=db_path, everyone=True,
+                                             operator_billed_only=True),
     )
 
 
@@ -851,13 +882,15 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *,
         return {"ok": False, "candidates": [], "error": _safe_error(e, account_id)}
 
 
-def _publish(out_path: Path, content_type: str) -> str:
+def _publish(out_path: Path, content_type: str,
+             account_id: Optional[int] = None) -> str:
     """R2 when configured (Instagram needs a public URL), else the app's
-    own /renders mount."""
-    from . import storage
+    own /renders mount. The key carries the tenant -- see src/media.py."""
+    from . import media, storage
     if storage.configured():
         return storage.upload_file(
-            out_path, key=f"renders/fal/{out_path.name}",
+            out_path,
+            key=media.object_key(f"renders/fal/{out_path.name}", account_id),
             content_type=content_type)
     return f"/renders/fal/{out_path.name}"
 
@@ -925,15 +958,21 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
         # image_url server-side, so a local keyframe with no R2 behind it
         # is dropped and prompt_image records False -- nothing downstream
         # gets to claim an anchor that never left the building.
-        image_url = as_image_url(target["reference_image"],
+        image_url = as_image_url(target["reference_image"], account_id=account_id,
                                  resolve_photo=resolve_photo)
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"c{concept_id}-s{shot_n}{f'-p{part}' if part else ''}-{stamp}.mp4"
+        key_source = account_keys.key_source(account_id, "fal", db_path)
+        charge = charging.Charge(
+            account_id, provider="fal", ref=out_path.name,
+            estimate_usd=estimate_cost(1, model=model, duration=duration,
+                                       resolution=resolution),
+            key_source=key_source, dsn=db_path)
         generate_video(prompt, out_path, model=model, image_url=image_url,
                        duration=duration, resolution=resolution,
                        http=http, db_path=db_path, approved=approved,
-                       account_id=account_id)
+                       account_id=account_id, charge=charge)
 
         platform = model_spec(model)["platform"]
         shot_row_id = _shot_row_for_prompt(
@@ -944,8 +983,8 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                              "concept_id": concept_id, "shot_n": shot_n,
                              **({"part": part} if part else {}),
                              "prompt_image": bool(image_url),
-                             "key_source": account_keys.key_source(
-                                 account_id, "fal", db_path)}
+                             "key_source": key_source,
+                             **charge.params()}
         generation_id = generative.record_generation(
             shot_row_id, platform, prompt,
             params=generation_params,
@@ -954,8 +993,9 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                                    resolution=resolution),
             **kwargs,
             account_id=account_id)
+        charge.settle(generation_id=generation_id)
 
-        media_url = _publish(out_path, "video/mp4")
+        media_url = _publish(out_path, "video/mp4", account_id)
         if part:
             timeline.attach_part(concept_id, shot_n, part, "media_url", media_url,
                                  db_path=db_path, account_id=account_id)
@@ -975,6 +1015,8 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                 "generation_id": generation_id, "path": str(out_path),
                 "asset_id": asset["id"], "asset_rag": asset["rag"],
                 "error": None}
+    except ledger.InsufficientCredit as e:
+        return {"ok": False, "error": charging.refusal(e)}
     except Exception as e:
         return {"ok": False, "error": _safe_error(e, account_id)}
 
@@ -1002,13 +1044,19 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
         if refusal:
             return {"ok": False, "error": refusal}
 
-        image_url = as_image_url(reference_image, resolve_photo=resolve_photo)
+        image_url = as_image_url(reference_image, resolve_photo=resolve_photo,
+                                 account_id=account_id)
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"wf-{stamp}.mp4"
+        key_source = account_keys.key_source(account_id, "fal", db_path)
+        charge = charging.Charge(
+            account_id, provider="fal", ref=out_path.name,
+            estimate_usd=estimate_cost(1, model=model),
+            key_source=key_source, source="workflow", dsn=db_path)
         generate_video(prompt, out_path, model=model, image_url=image_url,
                        http=http, db_path=db_path, approved=approved,
-                       account_id=account_id)
+                       account_id=account_id, charge=charge)
 
         shot_row_id = _shot_row_for_prompt(
             prompt, db_path, "auto-created by fal.generate_from_prompt", account_id)
@@ -1017,15 +1065,18 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
             params={"provider": "fal", "model": model,
                     "duration": DEFAULT_DURATION, "source": "workflow",
                     "prompt_image": bool(image_url),
-                    "key_source": account_keys.key_source(
-                        account_id, "fal", db_path)},
+                    "key_source": key_source,
+                    **charge.params()},
             output_path=str(out_path),
             cost_usd=estimate_cost(1, model=model),
             **kwargs,
             account_id=account_id)
-        return {"ok": True, "media_url": _publish(out_path, "video/mp4"),
+        charge.settle(generation_id=generation_id)
+        return {"ok": True, "media_url": _publish(out_path, "video/mp4", account_id),
                 "generation_id": generation_id, "path": str(out_path),
                 "error": None}
+    except ledger.InsufficientCredit as e:
+        return {"ok": False, "error": charging.refusal(e)}
     except Exception as e:
         return {"ok": False, "error": _safe_error(e, account_id)}
 
@@ -1075,7 +1126,7 @@ def generate_image_from_prompt(prompt: str, *, db_path=None, http=None,
             cost_usd=estimate_image_cost(1),
             **kwargs,
             account_id=account_id)
-        return {"ok": True, "media_url": _publish(out_path, "image/jpeg"),
+        return {"ok": True, "media_url": _publish(out_path, "image/jpeg", account_id),
                 "generation_id": generation_id, "path": str(out_path),
                 "error": None}
     except Exception as e:

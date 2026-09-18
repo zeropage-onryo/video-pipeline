@@ -1065,6 +1065,48 @@ def agent_pass_id(finding_id: int) -> str:
     return f"agent-{int(finding_id)}"
 
 
+def sources_for_refs(filenames, dsn=None) -> dict:
+    """Where banked reference images CAME FROM, for many at once:
+    {filename: {source_url, title, lane}} (2026-09-17).
+
+    A scene's refs ride on its shot as bare URLs, so by the time a card
+    shows one -- and someone is about to spend a render anchored on it --
+    the attribution this module insists on at banking time ("a reference
+    must be traceable to where it came from") had fallen off. This is the
+    way back: the bin names a file by its content hash (refbin), and that
+    basename is the same in `/refs/<sha>.jpg` and in the R2 URL a shot
+    stores, so it is the join key. One query for a whole board.
+
+    The same bytes can be banked twice (two passes, a composer upload of a
+    scouted frame); the row that HAS a source_url wins, newest first, so
+    an upload's empty provenance never hides the page a frame came from.
+    `scout_bin` is a SHARED table keyed by pass, not by person: what this
+    returns is attribution for a file the caller already holds the hash
+    of, which is the point of attribution, not a leak of someone's bin.
+
+    Never raises: no table yet, or no match, is simply no attribution."""
+    names = sorted({str(n) for n in filenames or [] if n})
+    if not names:
+        return {}
+    try:
+        with db.connect(dsn) as conn:
+            rows = conn.execute(
+                "SELECT substring(url from '[^/]+$') AS filename, source_url, title, lane "
+                "FROM scout_bin WHERE substring(url from '[^/]+$') = ANY(%s) "
+                "ORDER BY (COALESCE(source_url, '') <> '') DESC, id DESC",
+                (names,)).fetchall()
+    except Exception:
+        return {}
+    out: dict = {}
+    for row in rows:
+        out.setdefault(row["filename"], {
+            "source_url": row["source_url"] or "",
+            "title": row["title"] or "",
+            "lane": row["lane"] or "",
+        })
+    return out
+
+
 def bin_add(brand: str, pass_id: str, url: str, source_url: str = "",
             title: str = "", lane: str = "agent", metric: str = "",
             limit: int = MAX_BIN_IMAGES, dsn=None) -> Optional[dict]:

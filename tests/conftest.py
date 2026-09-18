@@ -40,6 +40,24 @@ os.environ["DEV_TOOLS"] = "1"
 # runs under and the other mode is pinned per test.
 os.environ["ZEROPAGE_REQUIRE_REFS"] = "0"
 
+# The checkpointer is OFF for the suite, the same way DEV_TOOLS and the
+# reference rule above are pinned: a posture, chosen here, so the suite
+# runs one way and not two.
+#
+# It cannot be on. The saver opens its OWN connection on the configured
+# DSN and caches it for the process, while `pg` gives every test a
+# private schema and drops it afterwards -- so the first test to run the
+# graph creates the checkpoint tables inside a throwaway schema, and
+# every test after it queries a schema that no longer exists
+# ("relation \"checkpoints\" does not exist"). Nothing about that is a
+# bug in the checkpointer; it is two different ideas of which database
+# this is.
+#
+# The logic itself is covered without a database, in
+# tests/test_orchestrator.py -- fails-soft, the off switch, and what
+# resume does with the account on the checkpoint.
+os.environ["ZEROPAGE_CHECKPOINT"] = "0"
+
 
 from app.main import app as _APP_AT_IMPORT  # noqa: E402  (see account_scope)
 
@@ -90,6 +108,12 @@ POSTURE_ENV = R2_ENV + (
     "ZEROPAGE_GRAPH_RESEARCH",   # ... and the research agent runs
     "ZEROPAGE_SCENE_SECONDS",    # the scene length the writers fill (timeline.py)
     "LANGSMITH_TRACING",         # tracing is a live POST; the guard fails it
+    "QUOTE_SIGNING_SECRET",      # quotes sign only where a test says so
+    "STRIPE_SECRET_KEY",         # billing is configured only where a test says so
+    "STRIPE_WEBHOOK_SECRET",
+    "STRIPE_PRICE_STARTER", "STRIPE_PRICE_CREATOR", "STRIPE_PRICE_STUDIO", "STRIPE_PRICE_TOPUP",
+    "STRIPE_PRICE_STARTER_YEAR", "STRIPE_PRICE_CREATOR_YEAR", "STRIPE_PRICE_STUDIO_YEAR",
+    "BILLING_RETURN_URL",
 )
 
 

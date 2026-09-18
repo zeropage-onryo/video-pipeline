@@ -44,7 +44,9 @@ from typing import Any, Optional
 
 from .db import (
     OWNED_TABLES,
+    add_billing_columns,
     add_manual_lane_operator_column,
+    add_prompt_edits_teach_column,
     backfill_owner,
     columns,
     connect,
@@ -79,7 +81,18 @@ CREATE TABLE IF NOT EXISTS accounts (
     -- created, including the bootstrap one: the lane fails closed and
     -- the only way in is somebody turning it on by hand. db.py carries
     -- the ALTER for databases that predate the column.
-    manual_lane_operator BOOLEAN NOT NULL DEFAULT FALSE
+    manual_lane_operator BOOLEAN NOT NULL DEFAULT FALSE,
+    -- billing (docs/tasks/task-stripe-billing.md, 2026-09-18): does this
+    -- account render without being charged (the operator's own, by
+    -- hand, same fail-closed shape as the lane); which Stripe customer
+    -- pays for it; which plan its subscription bought (pricing.PLANS
+    -- keys; NULL is no subscription, never a default).
+    credit_exempt      BOOLEAN NOT NULL DEFAULT FALSE,
+    stripe_customer_id TEXT,
+    plan               TEXT,
+    -- may a hand edit of this account's scene prompts teach the RAG
+    -- shelves (src/edit_teach.py)? Same posture: FALSE until turned on.
+    prompt_edits_teach BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE TABLE IF NOT EXISTS account_members (
@@ -104,6 +117,8 @@ def init(dsn: Optional[str] = None) -> None:
         # runs before this table exists at all, so the ALTER is asked for
         # here as well as there -- both are no-ops once it has landed.
         add_manual_lane_operator_column(conn)
+        add_billing_columns(conn)
+        add_prompt_edits_teach_column(conn)
 
 
 # --------------------------------------------------------------------------
@@ -274,27 +289,187 @@ def set_manual_lane_operator(slug: str, on: bool,
     Raises ValueError for an unknown slug -- naming an account that does
     not exist must not read as success.
     """
+    return _set_account_flag("manual_lane_operator", slug, on, dsn=dsn)
+
+
+def _set_account_flag(column: str, slug: str, on: bool,
+                      dsn: Optional[str] = None) -> dict[str, Any]:
+    """Flip ONE boolean gate column on ONE account row, by slug. The
+    shared body of set_manual_lane_operator and set_prompt_edits_teach;
+    `column` is a literal from this module, never caller input."""
     init(dsn)
     slug = (slug or "").strip().lower()
     if not slug:
         raise ValueError("which account? -- pass the slug, e.g. zeropage")
     with connect(dsn) as conn:
         row = conn.execute(
-            "SELECT id, manual_lane_operator FROM accounts WHERE slug = %s",
+            f"SELECT id, {column} FROM accounts WHERE slug = %s",
             (slug,)).fetchone()
         if row is None:
             known = [r["slug"] for r in conn.execute(
                 "SELECT slug FROM accounts ORDER BY slug")]
             raise ValueError(
                 f"no account {slug!r}" + (f" -- try one of {known}" if known else ""))
-        was = bool(row["manual_lane_operator"])
+        was = bool(row[column])
         now = bool(on)
         if was != now:
             conn.execute(
-                "UPDATE accounts SET manual_lane_operator = %s WHERE id = %s",
+                f"UPDATE accounts SET {column} = %s WHERE id = %s",
                 (now, int(row["id"])))
         return {"slug": slug, "account_id": int(row["id"]),
                 "was": was, "now": now, "changed": was != now}
+
+
+def set_credit_exempt(slug: str, on: bool, dsn: Optional[str] = None) -> dict[str, Any]:
+    """Turn the credit exemption on or off for ONE account -- the
+    operator's own (docs/tasks/task-stripe-billing.md, phase 3).
+    set_manual_lane_operator's shape exactly: a deliberate act with a
+    person behind it, no route, no env var; idempotent; reports the
+    BEFORE; an unknown slug is an error, never a silent success. The
+    gate reads it in ONE place, ledger.hold_for_render."""
+    init(dsn)
+    slug = (slug or "").strip().lower()
+    if not slug:
+        raise ValueError("which account? -- pass the slug, e.g. zeropage")
+    with connect(dsn) as conn:
+        row = conn.execute(
+            "SELECT id, credit_exempt FROM accounts WHERE slug = %s", (slug,)).fetchone()
+        if row is None:
+            known = [r["slug"] for r in conn.execute(
+                "SELECT slug FROM accounts ORDER BY slug")]
+            raise ValueError(
+                f"no account {slug!r}" + (f" -- try one of {known}" if known else ""))
+        was = bool(row["credit_exempt"])
+        now = bool(on)
+        if was != now:
+            conn.execute("UPDATE accounts SET credit_exempt = %s WHERE id = %s",
+                         (now, int(row["id"])))
+        return {"slug": slug, "account_id": int(row["id"]),
+                "was": was, "now": now, "changed": was != now}
+
+
+def is_credit_exempt(account_id: Optional[int], dsn: Optional[str] = None) -> bool:
+    """One row, asked for by id -- manual_lane_allowed's shape. `None` is
+    never exempt; a missing table or column reads as not exempt, because
+    the failure mode of this predicate must be "charged", never "free"."""
+    if account_id is None:
+        return False
+    try:
+        wanted = int(account_id)
+    except (TypeError, ValueError):
+        return False
+    try:
+        with connect(dsn) as conn:
+            if not table_exists(conn, "accounts") or "credit_exempt" not in columns(conn, "accounts"):
+                return False
+            row = conn.execute(
+                "SELECT credit_exempt FROM accounts WHERE id = %s", (wanted,)).fetchone()
+    except Exception:
+        return False
+    return bool(row and row["credit_exempt"])
+
+
+def credit_exempt_accounts(dsn: Optional[str] = None) -> list[dict[str, Any]]:
+    """Every exempt account, for the CLI to print -- never for the gate."""
+    with connect(dsn) as conn:
+        if not table_exists(conn, "accounts") or "credit_exempt" not in columns(conn, "accounts"):
+            return []
+        rows = conn.execute(
+            "SELECT id, slug FROM accounts WHERE credit_exempt ORDER BY slug").fetchall()
+        return [{"account_id": int(r["id"]), "slug": r["slug"]} for r in rows]
+
+
+# --------------------------------------------------------------------------
+# billing identity -- which Stripe customer, which plan (app/billing.py)
+# --------------------------------------------------------------------------
+
+def plan_of(account_id: Optional[int], dsn: Optional[str] = None) -> Optional[str]:
+    """The plan this account's subscription bought (a pricing.PLANS key),
+    or None -- no subscription, or a row/table that predates the column.
+    Read on the pricing path (pricing.tier_for), so it never raises."""
+    if account_id is None:
+        return None
+    try:
+        with connect(dsn) as conn:
+            if not table_exists(conn, "accounts") or "plan" not in columns(conn, "accounts"):
+                return None
+            row = conn.execute("SELECT plan FROM accounts WHERE id = %s",
+                               (int(account_id),)).fetchone()
+    except Exception:
+        return None
+    return (row["plan"] or None) if row else None
+
+
+def set_plan(account_id: int, plan: Optional[str], dsn: Optional[str] = None) -> None:
+    """Record (or clear, with None) the plan a subscription bought. Called
+    by the webhook only; raises like every ledger-adjacent write."""
+    with connect(dsn) as conn:
+        conn.execute("UPDATE accounts SET plan = %s WHERE id = %s", (plan, int(account_id)))
+
+
+def stripe_customer_of(account_id: int, dsn: Optional[str] = None) -> Optional[str]:
+    with connect(dsn) as conn:
+        row = conn.execute("SELECT stripe_customer_id FROM accounts WHERE id = %s",
+                           (int(account_id),)).fetchone()
+    return (row["stripe_customer_id"] or None) if row else None
+
+
+def set_stripe_customer(account_id: int, customer_id: str, dsn: Optional[str] = None) -> None:
+    """Bind an account to the Stripe customer that pays for it. One
+    customer per account and one account per customer (the partial
+    unique index); rebinding to a different customer is refused, because
+    a webhook for the old one would otherwise credit the wrong tenant."""
+    customer_id = (customer_id or "").strip()
+    if not customer_id:
+        raise ValueError("a Stripe customer id is required")
+    with connect(dsn) as conn:
+        row = conn.execute("SELECT stripe_customer_id FROM accounts WHERE id = %s",
+                           (int(account_id),)).fetchone()
+        if row is None:
+            raise ValueError(f"no account {account_id}")
+        have = row["stripe_customer_id"]
+        if have and have != customer_id:
+            raise ValueError(f"account {account_id} already pays as {have}; "
+                             f"refusing to rebind to {customer_id}")
+        if not have:
+            conn.execute("UPDATE accounts SET stripe_customer_id = %s WHERE id = %s",
+                         (customer_id, int(account_id)))
+
+
+def account_for_stripe_customer(customer_id: str, dsn: Optional[str] = None) -> Optional[int]:
+    """The account a Stripe customer pays for, or None -- and None is
+    what the webhook acks with a 200 and a log line, never a guess."""
+    customer_id = (customer_id or "").strip()
+    if not customer_id:
+        return None
+    with connect(dsn) as conn:
+        if not table_exists(conn, "accounts") or "stripe_customer_id" not in columns(conn, "accounts"):
+            return None
+        row = conn.execute("SELECT id FROM accounts WHERE stripe_customer_id = %s",
+                           (customer_id,)).fetchone()
+    return int(row["id"]) if row else None
+
+
+def set_prompt_edits_teach(slug: str, on: bool,
+                           dsn: Optional[str] = None) -> dict[str, Any]:
+    """Turn hand-edit teaching on or off for ONE account
+    (src/edit_teach.py, 2026-09-18). Same contract as
+    set_manual_lane_operator: idempotent, reports before and after,
+    ValueError on an unknown slug, and no route or env var beside it --
+    `python -m src.accounts edits-teach <slug> --on`."""
+    return _set_account_flag("prompt_edits_teach", slug, on, dsn=dsn)
+
+
+def prompt_edits_teachers(dsn: Optional[str] = None) -> list[dict[str, Any]]:
+    """Every account whose hand edits teach, for the CLI to print. The
+    gate itself asks about one id (edit_teach.allowed)."""
+    with connect(dsn) as conn:
+        if not table_exists(conn, "accounts"):
+            return []
+        rows = conn.execute(
+            "SELECT id, slug FROM accounts WHERE prompt_edits_teach "
+            "ORDER BY slug").fetchall()
+        return [{"account_id": int(r["id"]), "slug": r["slug"]} for r in rows]
 
 
 def manual_lane_operators(dsn: Optional[str] = None) -> list[dict[str, Any]]:
@@ -529,7 +704,73 @@ def main(argv=None) -> None:
                       help="it may not (the state every account starts in)")
     p_op.set_defaults(on=None)
 
+    p_et = sub.add_parser(
+        "edits-teach",
+        help="turn on/off whether a hand edit of a scene prompt (Director, "
+             "Pipeline card, Direct note) teaches the RAG shelves for one account")
+    p_et.add_argument("slug", help="the account slug, e.g. zeropage")
+    door = p_et.add_mutually_exclusive_group(required=True)
+    door.add_argument("--on", dest="on", action="store_true",
+                      help="this account's prompt edits are recorded as "
+                           "draft -> fix pairs on the Teach tab")
+    door.add_argument("--off", dest="on", action="store_false",
+                      help="they are not (the state every account starts in)")
+    p_et.set_defaults(on=None)
+
+    p_cr = sub.add_parser(
+        "credits",
+        help="exempt one account from being charged credits for renders -- the "
+             "operator's own account, and the only way to make one")
+    p_cr.add_argument("slug", help="the account slug, e.g. zeropage")
+    wall = p_cr.add_mutually_exclusive_group(required=True)
+    wall.add_argument("--on", dest="on", action="store_true",
+                      help="this account renders without a credit hold")
+    wall.add_argument("--off", dest="on", action="store_false",
+                      help="it is charged like everyone else (the state every "
+                           "account starts in)")
+    p_cr.set_defaults(on=None)
+
     args = parser.parse_args(argv)
+
+    if args.command == "credits":
+        try:
+            result = set_credit_exempt(args.slug, args.on)
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            sys.exit(1)
+        state = "ON" if result["now"] else "OFF"
+        where = f"{result['slug']!r} (account {result['account_id']})"
+        if result["changed"]:
+            print(f"credit exemption {'OFF -> ON' if result['now'] else 'ON -> OFF'} "
+                  f"for {where}")
+        else:
+            print(f"credit exemption already {state} for {where} -- nothing changed")
+        others = [o for o in credit_exempt_accounts()
+                  if o["account_id"] != result["account_id"]]
+        if others:
+            print("also exempt: " + ", ".join(
+                f"{o['slug']} (account {o['account_id']})" for o in others))
+        return
+
+    if args.command == "edits-teach":
+        try:
+            result = set_prompt_edits_teach(args.slug, args.on)
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            sys.exit(1)
+        state = "ON" if result["now"] else "OFF"
+        where = f"{result['slug']!r} (account {result['account_id']})"
+        if result["changed"]:
+            print(f"prompt edits teach {'OFF -> ON' if result['now'] else 'ON -> OFF'} "
+                  f"for {where}")
+        else:
+            print(f"prompt edits teach already {state} for {where} -- nothing changed")
+        others = [o for o in prompt_edits_teachers()
+                  if o["account_id"] != result["account_id"]]
+        if others:
+            print("also on: " + ", ".join(
+                f"{o['slug']} (account {o['account_id']})" for o in others))
+        return
 
     if args.command == "operator":
         try:

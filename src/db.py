@@ -329,6 +329,9 @@ OWNED_TABLES = (
     # of money -- src/ledger.py.
     "credit_lots",
     "credit_entries",
+    # a yearly plan's unreleased months (2026-09-18, src/billing.py):
+    # credit somebody paid for and has not received yet
+    "credit_schedules",
 )
 
 # The tables that are global BY DECISION, each with the reason. This is
@@ -578,6 +581,19 @@ def add_legacy_column(conn: psycopg.Connection) -> bool:
 # two doors is one door: the weaker door decides, and a reader of either
 # half believes the wrong thing about the whole.
 MANUAL_LANE_COLUMN = "manual_lane_operator"
+# Billing (docs/tasks/task-stripe-billing.md, 2026-09-18): the operator's
+# exemption, the Stripe customer this account pays as, and the plan its
+# subscription bought (src/pricing.PLANS). All three additive, no backfill.
+CREDIT_EXEMPT_COLUMN = "credit_exempt"
+STRIPE_CUSTOMER_COLUMN = "stripe_customer_id"
+PLAN_COLUMN = "plan"
+
+# Whether a hand edit of a scene prompt teaches the RAG shelves
+# (src/edit_teach.py, 2026-09-18). Same shape as the lane gate and for the
+# same reason: it is ONE person's taste being written onto shelves every
+# tenant retrieves from, so it is a column on the account row, FALSE for
+# everybody until the operator turns their own account on by hand.
+EDIT_TEACH_COLUMN = "prompt_edits_teach"
 
 
 def add_manual_lane_operator_column(conn: psycopg.Connection) -> bool:
@@ -603,6 +619,54 @@ def add_manual_lane_operator_column(conn: psycopg.Connection) -> bool:
         return False
     conn.execute(
         f"ALTER TABLE accounts ADD COLUMN {MANUAL_LANE_COLUMN} "
+        "BOOLEAN NOT NULL DEFAULT FALSE"
+    )
+    return True
+
+
+def add_billing_columns(conn: psycopg.Connection) -> list[str]:
+    """Additive ALTERs on `accounts` for billing, add_manual_lane_operator_
+    column's shape exactly: guard on the table, guard on each column, no
+    backfill. Returns the columns added now.
+
+    `credit_exempt` fails closed the same way the lane does -- every
+    account starts FALSE, including the bootstrap one, and the operator
+    turns their own on by hand (`python -m src.accounts credits <slug>
+    --on`). `stripe_customer_id` and `plan` are NULL until a webhook
+    writes them (app/billing.py); a NULL plan is "no subscription", never
+    a default tier.
+    """
+    if not table_exists(conn, "accounts"):
+        return []
+    have = columns(conn, "accounts")
+    added = []
+    if CREDIT_EXEMPT_COLUMN not in have:
+        conn.execute(f"ALTER TABLE accounts ADD COLUMN {CREDIT_EXEMPT_COLUMN} "
+                     "BOOLEAN NOT NULL DEFAULT FALSE")
+        added.append(CREDIT_EXEMPT_COLUMN)
+    if STRIPE_CUSTOMER_COLUMN not in have:
+        conn.execute(f"ALTER TABLE accounts ADD COLUMN {STRIPE_CUSTOMER_COLUMN} TEXT")
+        conn.execute(f"CREATE UNIQUE INDEX IF NOT EXISTS accounts_{STRIPE_CUSTOMER_COLUMN}_idx "
+                     f"ON accounts({STRIPE_CUSTOMER_COLUMN}) WHERE {STRIPE_CUSTOMER_COLUMN} IS NOT NULL")
+        added.append(STRIPE_CUSTOMER_COLUMN)
+    if PLAN_COLUMN not in have:
+        conn.execute(f"ALTER TABLE accounts ADD COLUMN {PLAN_COLUMN} TEXT")
+        added.append(PLAN_COLUMN)
+    return added
+def add_prompt_edits_teach_column(conn: psycopg.Connection) -> bool:
+    """Additive ALTER TABLE on `accounts`. True if added now.
+
+    add_manual_lane_operator_column's twin (2026-09-18): no backfill, every
+    account comes out FALSE, and the one way on is
+    `python -m src.accounts edits-teach <slug> --on`. Missing table is
+    "not yet" -- accounts.init() asks again once there is one.
+    """
+    if not table_exists(conn, "accounts"):
+        return False
+    if EDIT_TEACH_COLUMN in columns(conn, "accounts"):
+        return False
+    conn.execute(
+        f"ALTER TABLE accounts ADD COLUMN {EDIT_TEACH_COLUMN} "
         "BOOLEAN NOT NULL DEFAULT FALSE"
     )
     return True
@@ -749,6 +813,11 @@ def init_db(dsn: Optional[str] = None) -> None:
         # who may spend the operator's subscription (src/manual_lane.py,
         # 2026-09-08) -- a no-op until accounts.init() has made the table
         add_manual_lane_operator_column(conn)
+        # billing (docs/tasks/task-stripe-billing.md, 2026-09-18) -- same
+        # no-op-until-accounts-exists shape
+        add_billing_columns(conn)
+        # whose hand edits teach the shelves (src/edit_teach.py, 2026-09-18)
+        add_prompt_edits_teach_column(conn)
 
 
 # --------------------------------------------------------------------------

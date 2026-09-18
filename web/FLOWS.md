@@ -43,8 +43,15 @@ rebuilds the canvas (the server compares on read). `Save scene prompt`
 writes the prompt card back onto the shot. A saved canvas wins over a
 rebuild — `DELETE /api/concepts/{id}/graph` is the reset.
 
-Without a concept the workspace is a browser-local draft with templates and
-JSON import/export.
+**Arrival is the nodes** (2026-09-18). `/studio/flows` with no `?concept=`
+opens the newest scene of the active brand that is still waiting on work
+(`src/lib/director-arrival.ts`; a rendered scene is the fallback), so the
+rail's Director link never lands on a dead end. The header chip is a scene
+switcher over the same board, and leaving through it saves the canvas first.
+
+The browser-local draft (templates, JSON import/export) is asked for by name,
+`/studio/flows?draft=1`, and is what arrival falls back to when the brand has
+no scene to open or nobody is signed in.
 
 ## Elements (`/studio/elements`)
 

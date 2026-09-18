@@ -35,6 +35,7 @@ import {
 import { API_URL, ApiError, goToSignIn, signOut } from "@/lib/api";
 import {
   getMe,
+  queueCount,
   queuePending,
   switchAccount,
   QUEUE_EVENT,
@@ -66,12 +67,15 @@ const VIEW_BY_PATH: [string, ViewId][] = [
 /* what the pages read from the shell: who, and a way to say something */
 type ShellContext = {
   me: Me | null;
+  /** /api/me answered 401: a visitor, not an account still loading */
+  signedOut: boolean;
   brand: string;
   toast: (text: string, kind?: "ok" | "err") => void;
   setBar: (node: ReactNode) => void;
 };
 const Ctx = createContext<ShellContext>({
   me: null,
+  signedOut: false,
   brand: "",
   toast: () => {},
   setBar: () => {},
@@ -123,9 +127,17 @@ export function StudioShell({ children }: { children: ReactNode }) {
   }, []);
 
   const refreshBadge = useCallback(() => {
-    queuePending()
-      .then((res) => setPending(res.items.length))
-      .catch(() => setPending(0));
+    // the count route, not the listing: the listing prices every card and
+    // the badge is on every page. An API from before the route existed
+    // answers 404 (or 405), so the listing stays as the fallback.
+    queueCount()
+      .then((res) => setPending(res.spendable))
+      .catch((err) => {
+        if (!(err instanceof ApiError) || ![404, 405].includes(err.status)) return setPending(0);
+        queuePending()
+          .then((res) => setPending(res.spendable ?? res.items.length))
+          .catch(() => setPending(0));
+      });
   }, []);
   useEffect(() => {
     refreshBadge();
@@ -163,7 +175,7 @@ export function StudioShell({ children }: { children: ReactNode }) {
     .toUpperCase();
 
   return (
-    <Ctx.Provider value={{ me, brand, toast, setBar }}>
+    <Ctx.Provider value={{ me, signedOut, brand, toast, setBar }}>
       <div className="zps" data-view={view} data-stage={stage ? "1" : undefined}>
         <div className="zps-field" aria-hidden />
 

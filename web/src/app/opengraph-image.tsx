@@ -5,7 +5,7 @@ import { ImageResponse } from "next/og";
 // <meta og:image> tags in layout.tsx's metadata point here automatically.
 // Satori ships its own default face, so no font fetch happens at build.
 
-export const alt = "ZeroPage — AI Creative Studio. From idea to creation.";
+export const alt = "Zero Page — The AI content studio that creates for you.";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
@@ -22,8 +22,8 @@ export default function OpenGraphImage() {
           flexDirection: "column",
           justifyContent: "space-between",
           padding: 72,
-          background: "radial-gradient(circle at 75% 35%, rgba(228,0,43,0.22), #0a0a0a 45%)",
-          color: "#f2f2f2",
+          background: "#0b0a08",
+          color: "#fafafa",
           fontFamily: "sans-serif",
         }}
       >
@@ -42,20 +42,18 @@ export default function OpenGraphImage() {
               display: "flex",
               flexDirection: "column",
               marginTop: 24,
-              fontSize: 132,
+              fontSize: 100,
               fontWeight: 800,
               lineHeight: 0.92,
               textTransform: "uppercase",
               letterSpacing: -2,
             }}
           >
-            <span>From idea</span>
-            {/* Satori drops the whitespace between a text node and a nested
-                span, so the gap is a margin rather than a space. */}
-            <span style={{ display: "flex" }}>
-              <span>to</span>
-              <span style={{ color: RED, marginLeft: 28 }}>creation.</span>
-            </span>
+            {/* One span per line: Satori does not balance wrapped text, and
+                the hero's own break (white, then the red payoff) is the design. */}
+            <span>The AI content</span>
+            <span>studio that</span>
+            <span style={{ color: RED }}>creates for you.</span>
           </div>
         </div>
         <div style={{ display: "flex", fontSize: 22, letterSpacing: 6, color: "#9a9a9a", textTransform: "uppercase" }}>
