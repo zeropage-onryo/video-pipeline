@@ -24,6 +24,8 @@ discard. This records the decision instead of losing it.
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -154,6 +156,47 @@ def _billed_to_operator(params_json) -> bool:
     return source != account_keys.SOURCE_ACCOUNT
 
 
+# (account_id, dsn, day, {tool: count}) while a counted_today() scope is
+# open on this thread/task, else None.
+_COUNTED: ContextVar[Optional[tuple]] = ContextVar("generative_counted_today",
+                                                   default=None)
+
+
+@contextmanager
+def counted_today(account_id: Optional[int], dsn: Optional[str] = None):
+    """Count ONE account's generations since UTC midnight for every tool
+    in one query, and let used_today() answer its per-account form from
+    that while the scope is open.
+
+    For a LISTING only -- the Queue reports today/cap for four vendors,
+    and fal alone is four tools, so that was seven connections to say
+    seven small numbers. cap_error never runs inside one: the wall in
+    front of a spend always reads the log itself. The installation-wide
+    counts (`everyone=True`) are never answered from here either.
+
+    Never raises on the way in: a database with no generations table
+    leaves the scope empty, and each used_today() then fails by itself
+    exactly as before (provider_state degrades that to None)."""
+    day = datetime.now(timezone.utc).date().isoformat()
+    counts = None
+    try:
+        with connect(dsn) as conn:
+            counts = {r[0]: int(r[1]) for r in conn.execute(
+                "SELECT tool, COUNT(*) FROM generations "
+                "WHERE created_at >= %s AND account_id IS NOT DISTINCT FROM %s "
+                "GROUP BY tool", (day, account_id)).fetchall()}
+    except Exception:
+        counts = None
+    if counts is None:
+        yield
+        return
+    token = _COUNTED.set((account_id, dsn, day, counts))
+    try:
+        yield
+    finally:
+        _COUNTED.reset(token)
+
+
 def used_today(tool: str, dsn: Optional[str] = None, *,
                account_id: Optional[int] = None, everyone: bool = False,
                operator_billed_only: bool = False) -> int:
@@ -178,6 +221,10 @@ def used_today(tool: str, dsn: Optional[str] = None, *,
     one tool are tens at most.
     """
     today = datetime.now(timezone.utc).date().isoformat()
+    held = _COUNTED.get()
+    if (held is not None and not everyone and held[0] == account_id
+            and held[1] == dsn and held[2] == today):
+        return held[3].get(tool, 0)
     with connect(dsn) as conn:
         if everyone and operator_billed_only:
             rows = conn.execute(

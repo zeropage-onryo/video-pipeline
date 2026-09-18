@@ -36,6 +36,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Optional
 
 from . import db as _db
@@ -172,6 +174,53 @@ SOURCE_ACCOUNT = "account"
 SOURCE_ENV = "env"
 
 
+# (account_id, dsn, {provider: ciphertext}) while a preloaded() scope is
+# open on this thread/task, else None.
+_PRELOADED: ContextVar[Optional[tuple]] = ContextVar("account_keys_preloaded",
+                                                     default=None)
+
+
+@contextmanager
+def preloaded(account_id: Optional[int], dsn: Optional[str] = None,
+              rows: Optional[dict] = None):
+    """Read every stored key row for ONE account in one query, and let
+    key_and_source() answer from that for as long as the scope is open.
+
+    A listing asks "whose key is this" of every vendor -- through each
+    adapter's has_key, and again through key_source for the price -- and
+    each ask was its own connection (the Queue made dozens of them for
+    four cards, 2026-09-18). The adapters' own has_key stays the seam
+    that is called; this only changes where the row underneath comes
+    from. Ciphertext is held, never a decrypted key, and nothing outlives
+    the scope.
+
+    Yields the rows it holds ({provider: ciphertext}, or None when there
+    is nothing to hold), and `rows` re-opens a scope over rows an earlier
+    one yielded without reading again -- how one request's snapshot serves
+    a lookup made later in that same request.
+
+    Never raises on the way in: a read that fails here leaves the scope
+    empty and every lookup falls back to its own read, where it fails --
+    or does not -- exactly as it would have."""
+    if account_id is not None and rows is None:
+        try:
+            with _db.connect(dsn) as conn:
+                rows = {r[0]: r[1] for r in conn.execute(
+                    "SELECT provider, ciphertext FROM account_keys "
+                    "WHERE account_id = %s", (account_id,)).fetchall()
+                } if _db.table_exists(conn, "account_keys") else {}
+        except Exception:
+            rows = None
+    if account_id is None or rows is None:
+        yield None
+        return
+    token = _PRELOADED.set((account_id, dsn, rows))
+    try:
+        yield rows
+    finally:
+        _PRELOADED.reset(token)
+
+
 def key_and_source(account_id: Optional[int], provider: str,
                    dsn: Optional[str] = None) -> tuple[Optional[dict], Optional[str]]:
     """
@@ -191,15 +240,21 @@ def key_and_source(account_id: Optional[int], provider: str,
         raise ValueError(f"unknown provider {provider!r}")
 
     if account_id is not None:
-        with _db.connect(dsn) as conn:
-            # A fresh database has no stored keys. Checking that is one
-            # read, rather than replaying table/FK/index setup for every
-            # renderer shown on the Queue.
-            row = conn.execute(
-                "SELECT ciphertext FROM account_keys "
-                "WHERE account_id = %s AND provider = %s",
-                (account_id, provider),
-            ).fetchone() if _db.table_exists(conn, "account_keys") else None
+        held = _PRELOADED.get()
+        if held is not None and held[0] == account_id and held[1] == dsn:
+            # preloaded(): this account's rows were read once already
+            cipher = held[2].get(provider)
+            row = (cipher,) if cipher else None
+        else:
+            with _db.connect(dsn) as conn:
+                # A fresh database has no stored keys. Checking that is one
+                # read, rather than replaying table/FK/index setup for every
+                # renderer shown on the Queue.
+                row = conn.execute(
+                    "SELECT ciphertext FROM account_keys "
+                    "WHERE account_id = %s AND provider = %s",
+                    (account_id, provider),
+                ).fetchone() if _db.table_exists(conn, "account_keys") else None
         if row:
             payload = json.loads(_fernet().decrypt(row[0].encode()).decode())
             if all(payload.get(f) for f in fields):

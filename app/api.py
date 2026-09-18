@@ -2259,7 +2259,7 @@ def _runway_state() -> dict:
             "today": today}
 
 
-def _renderers_state(account_id: Optional[int] = None) -> dict:
+def _renderers_state(account_id: Optional[int] = None, ctx=None) -> dict:
     """Every renderer the Queue may spend on, with its gates and its legal
     options -- the four-vendor form of _runway_state.
 
@@ -2274,7 +2274,7 @@ def _renderers_state(account_id: Optional[int] = None) -> dict:
     `runway` is still returned alongside, unchanged. It is a public shape
     an older client may still be reading, and there is nothing to gain
     from breaking it on the same day the new one arrives."""
-    return providers.render_options(account_id)
+    return providers.render_options(account_id, ctx=ctx)
 
 
 def _waiting(account_id: Optional[int], brand: Optional[str],
@@ -2337,11 +2337,16 @@ def _waiting(account_id: Optional[int], brand: Optional[str],
     return out
 
 
-def _card_quote(concept: dict, account_id: Optional[int], **pick) -> dict:
+def _card_quote(concept: dict, account_id: Optional[int], *, ctx=None, **pick) -> dict:
     """What approving this card would render and cost, for the pick given
     (none = the card's own default) -- pricing.display, or {"error"} when
     that intent has no price. Never raises: a card that cannot be priced
-    still has to be listed, with the reason where the number would be."""
+    still has to be listed, with the reason where the number would be.
+
+    `ctx` is the listing's providers.RenderContext (see queue_pending);
+    every other caller leaves it out and prices against fresh lookups."""
+    if ctx is not None:
+        pick["ctx"] = ctx
     try:
         return pricing.display(account_id=account_id, shot=concept["shots"][0],
                                shot_id=concept["id"], **pick)
@@ -2373,6 +2378,12 @@ def queue_pending(brand: Optional[str] = None, account_id: int = Depends(auth.cu
     rendered -- the next step is the one that costs money), or you pick
     a text-only concept off the board yourself."""
     items = []
+    # WHAT THIS ACCOUNT HOLDS, ASKED ONCE (2026-09-18). Which vendors are
+    # keyed, whose key each is and today's counts are facts about the
+    # account, not about a card -- but every card asked them again, per
+    # vendor, each on its own connection: four cards took ~45s from a
+    # laptop and the React Queue draws nothing until this answers.
+    ctx = providers.render_context(account_id)
     for concept, card in _waiting(account_id, brand, include_blocked=True):
         # THE CARD'S OWN DEFAULT RENDERER, resolved here rather than in
         # the browser. The mapping from a shot's planned tool to a
@@ -2388,15 +2399,16 @@ def queue_pending(brand: Optional[str] = None, account_id: int = Depends(auth.cu
         # button -- providers.render_default, the same call an empty
         # approve body makes below.
         items.append({**card,
-                      "render_default": providers.render_default(card.get("tool"), account_id),
-                      "quote": _card_quote(concept, account_id)})
+                      "render_default": providers.render_default(
+                          card.get("tool"), account_id, ctx),
+                      "quote": _card_quote(concept, account_id, ctx=ctx)})
     return {"items": items,
             # how many of `items` can actually be approved. The rail's badge
             # reads THIS, not len(items): it has always meant "waiting on you
             # to spend", and a locked card is waiting on references instead.
             "spendable": sum(1 for c in items if not c["blocked"]),
             "runway": _runway_state(),
-            "renderers": _renderers_state(account_id)}
+            "renderers": _renderers_state(account_id, ctx)}
 
 
 @router.get("/queue/count")
