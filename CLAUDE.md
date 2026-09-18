@@ -116,6 +116,13 @@ venv/bin/python -m src.mcp_server --engine   # stdio; Claude Desktop launches th
 # surface, fails closed (nobody, until somebody is turned on). Turn it on:
 venv/bin/python -m src.accounts operator <slug> --on   # --off to revoke
 # The API-billed adapters are untouched by it. See docs/RUNBOOK.md 2026-09-08.
+
+# THE CREDIT EXEMPTION — whose renders on the operator's key take NO credit hold
+# (accounts.credit_exempt, read once, inside ledger.hold_for_render). FALSE for
+# every account until turned on by hand; everyone else is refused at zero credit.
+# Exempt from the CHARGE only: the signed quote, the daily caps and the
+# generations row all still apply. Nothing calls hold_for_render yet (step 6).
+venv/bin/python -m src.accounts credits <slug> --on    # --off puts it back
 python3 ops/render_queue.py --account <slug> [--provider runway] list
 python3 ops/render_queue.py --provider runway --account <slug> import \
     --concept N --shot 1 --file clip.mp4 --model gen4_turbo --duration 10
@@ -1546,8 +1553,14 @@ is yours, in Resolve, by hand.
   is made for it), and Run all's Generate node (skipped, not failed — the prompt it renders is
   the enhance node's, which did not exist when any price was shown). BYOK, and a server with no
   secret, behave exactly as before. **Not built (step 6):** the four adapters still take
-  `approved=True` and nothing is held on the ledger. Decided for it: zero credits REFUSES even
-  with a key on file, and Mike's own account is the exemption. The daily-cap check stays in the
+  `approved=True` and nothing is held on the ledger. Decided and half-built for it
+  (2026-09-18): zero credit REFUSES a render on the operator's key (`ledger.hold` raising
+  `InsufficientCredit` is the refusal; an account's OWN key is BYOK and stays unbilled and
+  unrefused), and Mike's accounts are exempt through `accounts.credit_exempt` —
+  `ledger.credit_exempt()`, fail-closed, read in ONE place: `hold_for_render`, after
+  `is_billable`, before `hold`. That function now returns `RenderHold(hold_id, reason)`
+  (`held / byok / subscription / exempt`) and holds the Quote's `credits` when given, never a
+  1.0x re-derivation. Still uncalled. The daily-cap check stays in the
   route, not here.
 - **`src/spend.py`** / **`src/costs.py`** — the cost tracker (BACKLOG #2, 2026-09-04).
   `spend.record_call` writes one OWNED `llm_calls` row per Gemini call -- the model that

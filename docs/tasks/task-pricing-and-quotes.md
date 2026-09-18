@@ -604,3 +604,24 @@ here seeds real accounts and sets its own `dependency_overrides`.
 - Exempt approve with no token on a signing server → still `missing_quote`.
 - Exempt account over `RUNWAY_DAILY_CAP` → still capped.
 
+### As built — the exemption column (2026-09-18)
+
+Mike confirmed the table above: **own-key renders stay unbilled and unrefused.** Built:
+`db.CREDIT_EXEMPT_COLUMN` + `add_credit_exempt_column` (no backfill), the column inline in
+`accounts.SCHEMA`, `accounts.set_credit_exempt` / `credit_exempt_accounts`, the `credits` CLI
+verb, `ledger.credit_exempt()`, and `hold_for_render` returning `RenderHold(hold_id, reason)`
+with the predicate in it. `ledger.exempt_params(credits)` is what an adapter will merge into
+the generations row. `tests/test_credit_exempt.py`, every guard reverted and seen red.
+
+One thing the design did not know: **`ledger.hold` reconciles `credits` against
+`credits_for_usd(estimate_usd)` and raises on a mismatch** — at 1.0x. Handed a 2.4x quote with
+its estimate beside it, it would have refused every marked-up render as a conversion error.
+`hold_for_render` passes the Quote's credits WITHOUT the estimate; the fallback (no Quote in
+hand) still converts and reconciles as before.
+
+Not built, left for the wiring pass because nothing reads them yet: `display()`'s `exempt`
+field and the card's "not charged" label; the adapters stamping `exempt_params`. **Not done on
+the live database:** the column arrives with the deploy (`accounts.init`), FALSE for everyone;
+turning it on for `zeropage` and `antihero` is Mike's to run, and has no effect until step 6
+calls `hold_for_render`.
+
