@@ -24,6 +24,7 @@
    because a missing section is presentation and not protection. */
 import { ICON, brandName, heroMarkup, heroOf, partsOf, previewRefs, previewStills,
          refThumbs, shotsLabel, windowLabel } from './cards.js';
+import { openConceptInDirector } from './genspace.js';
 import { hydrateImages, imgTag } from './preview.js';
 import { renderRendererKeys } from './renderer-keys.js';
 import { api, bus, esc, refreshQueueBadge, state, stateline } from './shared.js';
@@ -490,6 +491,8 @@ async function renderPending() {
           <div class="nq-refs">${refThumbs(c, { max: 3, cls: 'nc-ref sm' })}</div>
         </div>
         <p class="nq-why" title="${esc(why)}">${esc(c.n || '')} · ${c.parked ? 'PARKED' : 'PICKED'} · ${esc(why)}</p>
+        ${locked ? `<button type="button" class="nq-fix" data-act="direct"
+                     aria-label="Open ${title} in Director to attach references">ATTACH REFERENCES IN DIRECTOR →</button>` : ''}
         <div class="nq-zone">${renderZone(c)}</div>
       </div>
     </article>`;
@@ -587,6 +590,7 @@ async function renderPending() {
       if (!act) return;
       if (act === 'key') { previewStills(card, card.reference_image, btn); return; }
       if (act === 'chip') { setPop(openPop === id ? null : id); return; }
+      if (act === 'direct') { openConceptInDirector(id); return; }
       if (openPop === id) setPop(null);
       const tag = status => {
         const node = el.querySelector('[data-role="status"]');

@@ -22,6 +22,7 @@
    `manual_lane` capability only decides whether the section is drawn). */
 /* eslint-disable @next/next/no-img-element */
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { Popover } from "@base-ui/react/popover";
 import { Camera, ChevronDown, Clock, Copy, Monitor, RectangleVertical, Upload, X } from "lucide-react";
 import { API_URL } from "@/lib/api";
@@ -477,6 +478,18 @@ export default function QueuePage() {
                 <p className="-mt-1 mb-0 truncate font-plex text-[11px] tracking-[0.04em] text-bone3" title={why}>
                   {c.n} · {c.parked ? "PARKED" : "PICKED"} · {why}
                 </p>
+                {locked ? (
+                  // the way out of a locked card: the same door the board's
+                  // Director icon opens. "Add references" with nowhere to add
+                  // them is a dead end.
+                  <Link
+                    href={`/studio/flows?concept=${c.id}&shot=1`}
+                    aria-label={`Open ${c.title} in Director to attach references`}
+                    className="-mt-1 inline-flex min-h-11 items-center self-start rounded-[8px] border border-noir-line px-3 font-plex! text-[11px]! tracking-[0.08em] text-noir-red2! hover:border-noir-red2"
+                  >
+                    ATTACH REFERENCES IN DIRECTOR →
+                  </Link>
+                ) : null}
 
                 {/* the renderer: ONE chip, and a popover over the same catalogue */}
                 <Popover.Root open={popId === c.id && !did && !locked && !!pick} onOpenChange={(o) => setPopId(o ? c.id : null)}>
