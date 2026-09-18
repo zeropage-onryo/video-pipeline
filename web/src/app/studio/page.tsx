@@ -253,6 +253,20 @@ function Composer() {
   const canSend = !busy && (mode === "create" ? !!(idea.trim() || brief.trim()) : !!idea.trim());
   const referenceCount = picked.length + attachments.length;
 
+  // The references on screen, in the two field names the API reads
+  // (app/api.py:_collect_refs): `files` for uploads, `asset_photos` for
+  // picks out of the asset bank. ONE helper for both buttons, the way
+  // the vanilla composer's collectRunForm is -- when the Guide built its
+  // own FormData it sent neither, so the model was told "0 reference
+  // images supplied" over two visible thumbnails; and Create sent the
+  // picks as `refs`, a field nothing server-side has ever read, so a
+  // @Michael pick reached the scene only when it was also a file
+  // (2026-09-18).
+  const appendReferences = (form: FormData) => {
+    attachments.forEach((a) => form.append("files", a.file, a.name));
+    picked.forEach((u) => form.append("asset_photos", u));
+  };
+
   const say = (text: string | null, bad = false) => {
     setNote(text);
     setNoteBad(bad);
@@ -275,8 +289,7 @@ function Composer() {
         if (brain) form.append("brain", brain);
         if (seconds) form.append("seconds", String(seconds));
         if (ratio) form.append("ratio", ratio);
-        picked.forEach((u) => form.append("refs", u));
-        attachments.forEach((a) => form.append("files", a.file, a.name));
+        appendReferences(form);
         const started = await runScenes(form);
         say("Writing the scene…");
         const job = await waitForJob(started.job_id, (j) => {
@@ -308,6 +321,10 @@ function Composer() {
         if (brand) form.append("brand", brand);
         form.append("guide_provider", "gemini");
         form.append("idea", asked);
+        // The same photos a Create would carry: the guide grounds on them
+        // (scene_chain.ground) and the model is shown them, so it can
+        // answer about a face instead of asking where the photos are.
+        appendReferences(form);
         // runCreativeGuide, never a bare fetch: the route is behind
         // mutation_header and a call without GUARDED_HEADERS is refused
         // 403 -- which lands in `note` and reads as the guide saying
