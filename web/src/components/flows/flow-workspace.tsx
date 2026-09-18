@@ -47,6 +47,7 @@ import {
   ArrowUpRight,
   Box,
   Check,
+  ChevronDown,
   Clapperboard,
   Clock,
   Copy,
@@ -78,8 +79,9 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { apiFetch, API_URL } from "@/lib/api";
-import { uploadRefs } from "@/lib/studio-api";
+import { apiFetch, API_URL, goToSignIn } from "@/lib/api";
+import { boardConcepts, uploadRefs, type Concept as BoardConcept } from "@/lib/studio-api";
+import { openable } from "@/lib/director-arrival";
 import {
   announceQueueChange,
   getAssets,
@@ -533,6 +535,95 @@ type Concept = {
   runway?: RunwayState;
   generate?: RenderQuote;
 };
+
+/* The scene switcher: the header chip is a menu of the brand's open scenes,
+   so moving from one scene's graph to another does not mean a trip back to
+   Pipeline. The list is read when the menu opens, not on mount -- the
+   canvas has enough to load. Leaving goes through `go` (flushAndGo), so
+   the canvas is saved against the scene it belongs to first. */
+function SceneSwitcher({
+  label,
+  currentId,
+  brand,
+  go,
+}: {
+  label: ReactNode;
+  currentId?: number;
+  brand: string;
+  go: (destination: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [rows, setRows] = useState<BoardConcept[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const box = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: PointerEvent) => {
+      if (!box.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const esc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", away);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("pointerdown", away);
+      document.removeEventListener("keydown", esc);
+    };
+  }, [open]);
+  const toggle = () => {
+    setOpen((was) => !was);
+    if (rows || open) return;
+    boardConcepts(brand || undefined)
+      .then((r) => setRows(r.items.filter(openable)))
+      .catch(() => setFailed(true));
+  };
+  const state = (c: BoardConcept) => (c.media_url ? "rendered" : c.picked ? "picked" : c.parked ? "in queue" : "");
+  return (
+    <span className="scene-switch" ref={box}>
+      <button type="button" className="chip" aria-haspopup="menu" aria-expanded={open} onClick={toggle} title="Switch scene">
+        {label}
+        <ChevronDown size={12} />
+      </button>
+      {open ? (
+        <span className="scene-menu" role="menu">
+          <span className="scene-menu-head">Scenes · {brand || "all"}</span>
+          <span className="scene-menu-list">
+            {failed ? <span className="scene-menu-note">Could not read the board</span> : null}
+            {!rows && !failed ? <span className="scene-menu-note">Reading the board…</span> : null}
+            {rows && !rows.length ? <span className="scene-menu-note">No scenes yet — write one on Studio</span> : null}
+            {(rows || []).map((c) => (
+              <button
+                type="button"
+                role="menuitem"
+                key={c.id}
+                aria-current={c.id === currentId ? "true" : undefined}
+                onClick={() => {
+                  setOpen(false);
+                  if (c.id !== currentId) go(`/studio/flows?concept=${c.id}&shot=1`);
+                }}
+              >
+                <span className="scene-menu-n">{c.n}</span>
+                <span className="scene-menu-title">{c.title || "Untitled"}</span>
+                {state(c) ? <span className="scene-menu-state">{state(c)}</span> : null}
+              </button>
+            ))}
+          </span>
+          <span className="scene-menu-foot">
+            <button type="button" role="menuitem" onClick={() => go("/studio/pipeline")}>
+              All concepts on Pipeline
+            </button>
+            {currentId ? (
+              <button type="button" role="menuitem" onClick={() => go("/studio/flows?draft=1")}>
+                Local draft canvas
+              </button>
+            ) : null}
+          </span>
+        </span>
+      ) : null}
+    </span>
+  );
+}
 
 function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number }) {
   const shell = useShell();
@@ -1236,15 +1327,37 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
       <main className={`flows-workspace ${showTemplates ? "templates-open" : ""} tool-${tool}${selectedNode ? " has-inspector" : ""}`}>
         <header className="flow-topbar">
           <div className="flow-breadcrumb">
-            <button aria-label="Back to Pipeline" title="Back to Pipeline" onClick={() => flushAndGo(`${API_URL}/ui?view=pipeline`)}>
+            {/* the React board, not the API's legacy /ui (which only bounced
+                back here through a handoff) */}
+            <button aria-label="Back to Pipeline" title="Back to Pipeline" onClick={() => flushAndGo("/studio/pipeline")}>
               <ArrowLeft size={16} />
             </button>
             {scene ? (
-              <span className="chip">
-                <Clapperboard size={11} /> {scene.n.toLowerCase()} · {scene.title.toLowerCase().slice(0, 26)}
-              </span>
+              <SceneSwitcher
+                currentId={conceptId}
+                brand={shell.brand}
+                go={flushAndGo}
+                label={
+                  <>
+                    <Clapperboard size={11} /> {scene.n.toLowerCase()} · {scene.title.toLowerCase().slice(0, 26)}
+                  </>
+                }
+              />
             ) : (
-              <input aria-label="Workflow name" value={name} maxLength={80} onChange={(e) => setName(e.target.value)} />
+              <>
+                <input aria-label="Workflow name" value={name} maxLength={80} onChange={(e) => setName(e.target.value)} />
+                {!conceptId ? (
+                  <SceneSwitcher
+                    brand={shell.brand}
+                    go={flushAndGo}
+                    label={
+                      <>
+                        <Clapperboard size={11} /> open a scene
+                      </>
+                    }
+                  />
+                ) : null}
+              </>
             )}
             {scene && scene.shots.length > 1 && (
               <select aria-label="Shot" value={activeShot} onChange={(e) => flushAndGo(`/studio/flows?concept=${conceptId}&shot=${e.target.value}`)}>
@@ -1541,11 +1654,10 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
               <p>{sceneError || "Loading the saved prompt, references and canvas."}</p>
               {sceneError && (
                 <div>
-                  <a href={`${API_URL}/signin`} target="_blank" rel="noreferrer">
-                    Sign in
-                  </a>
+                  {/* the same sign-in every other page uses: it comes back here */}
+                  <button onClick={() => goToSignIn()}>Sign in</button>
                   <button onClick={() => window.location.reload()}>Retry</button>
-                  <a href={`${API_URL}/ui?view=director`}>Legacy Director</a>
+                  <a href="/studio/pipeline">Back to Pipeline</a>
                 </div>
               )}
             </section>
