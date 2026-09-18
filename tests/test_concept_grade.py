@@ -64,7 +64,7 @@ def _rag_up(monkeypatch, ok=True):
     that flag is what the state machine reads, so a fake that skipped it
     would pass while the loop never retired anything.
     """
-    def fake(entry_id, dsn=None):
+    def fake(entry_id, dsn=None, project=None):
         if not ok:
             return {"ok": False, "error": "store unavailable"}
         with app_main.db.connect(dsn) as conn:

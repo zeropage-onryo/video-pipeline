@@ -86,3 +86,131 @@ they did and skipped.
 Nothing above requires R2 to be configured to keep working as before --
 every new call checks `storage.configured()` first and quietly falls
 back to the existing local-path behavior when it's not set.
+
+---
+
+# Multi-tenant media: the key scheme, thumbnails, signing, tiering
+
+Everything above describes the FLAT scheme -- one global key per object,
+a public bucket, and a `pub-<hash>.r2.dev` URL stored on the row. That
+was right for one person. It does not survive a second account:
+
+- `characters/michael/IMG_1.jpg` is the same key for every account, so
+  the second studio to upload a character called `michael` overwrote the
+  first one's face.
+- Nothing in a key says who owns it, so per-account accounting, quota
+  and deletion are all impossible.
+- A public bucket with guessable keys means anyone who guesses a URL
+  reads anybody's unreleased footage.
+- Nothing ever ages out, and every Queue card draws four full-size
+  iPhone JPEGs -- 18MB to show four thumbnails, on a phone.
+
+`src/media.py` is the one owner of the fix. `ZEROPAGE_MEDIA` is the one
+switch, and it is a LADDER -- each rung is a superset of the one below,
+and every rung is reversible by setting the variable back:
+
+    legacy   (default)  flat keys, public URLs. Today's behaviour, byte
+                        for byte.
+    tenant              m/<account>/<tail> keys, public URLs.
+    signed              the same keys, presigned URLs, bucket private.
+
+## Climbing to `tenant`
+
+1. **Copy the existing objects across.** New writes go to the new keys
+   the moment the rung changes; everything already in the bucket is on
+   the flat key, so flipping first gives you a studio full of empty
+   tiles.
+
+   ```
+   venv/bin/python -m ops.migrate_media_keys              # report only
+   venv/bin/python -m ops.migrate_media_keys --write --thumbs
+   ```
+
+   It COPIES -- the old keys stay, still public, still serving -- so it
+   is re-runnable, safe to interrupt, and the flip is reversible.
+
+   **The bin is shared.** `refs/` goes to `m/shared/refs/...` with no ownership lookup at
+   all: a composer upload and a crawled image are deliberately the same shape, and `scout_bin`
+   has no account column, so nothing at read time can tell them apart. Everything else —
+   characters, props, locations, renders, soul-training — is fenced per account.
+
+   Read the report before writing. A flat key does not say who owns it,
+   so ownership is recovered from the database; anything it cannot
+   attribute is listed and left alone rather than guessed. Two accounts
+   holding the same slug are reported as **ambiguous**: under the flat
+   scheme one of them overwrote the other and nobody can now say which
+   bytes survived. The honest repair is to re-upload from the account
+   that owns the photo.
+
+2. **Flip it.** Locally in `.env`, and as a Fly secret:
+
+   ```
+   ZEROPAGE_MEDIA=tenant
+   fly secrets set ZEROPAGE_MEDIA=tenant
+   ```
+
+   Rows do not need rewriting. `asset_shelf.parse_ref` reads the logical
+   name, the legacy absolute URL and the new one, and `media.url_for`
+   mints from any of them -- which is what makes both directions safe.
+
+## Climbing to `signed`
+
+3. **Put the bucket on the custom domain** (R2 -> the bucket ->
+   Settings -> Custom Domains). `pub-<hash>.r2.dev` is rate-limited and
+   Cloudflare calls it development-only: no cache, no WAF, no access
+   rules. Set `R2_PUBLIC_BASE_URL` to the custom domain, both locally
+   and as a Fly secret.
+
+4. **Turn off public access** on the bucket, then:
+
+   ```
+   ZEROPAGE_MEDIA=signed
+   ```
+
+   Every media URL is now a presigned GET, minted per read and good for
+   two hours, with the signature reused inside each hour so a browser
+   still gets cache hits on a card it has already drawn.
+
+   **Know what this costs.** A presigned URL has to address the S3 API
+   endpoint, because an R2 custom domain serves the public bucket path
+   and will not accept a SigV4 query signature. So `signed` trades the
+   Cloudflare cache in front of the custom domain for real per-tenant
+   access control, and origin reads go up. At current volume that is
+   pennies of Class B operations; if it ever shows up in the bill, the
+   way to get both is a Worker on the custom domain validating a token
+   against an R2 binding -- infrastructure, not Python, and deliberately
+   not built until there is a number saying it is needed.
+
+## Tiering
+
+```
+venv/bin/python -m ops.media_lifecycle            # show what is set
+venv/bin/python -m ops.media_lifecycle --write
+```
+
+**This one needs an ADMIN token.** Lifecycle is a bucket-level operation and the token from
+step 2 is scoped to Object Read & Write, which is right for everything else this repo does. The
+script refuses with an explanation and changes nothing; either add the rules by hand in the
+dashboard (R2 -> the bucket -> Settings -> Object lifecycle rules) or mint a second token with
+Admin Read & Write for the one run.
+
+Masters move to Infrequent Access after 30 days (two thirds the storage
+price, a per-GB charge on the way back out). Thumbnails under `t/` are
+deliberately left in Standard -- they are what every card reads, and a
+retrieval fee on the most-read object is the tiering decision made
+backwards. Nothing expires and nothing is deleted: archiving never
+deletes, and tiering is how that promise gets kept without per-account
+bytes growing forever.
+
+## Thumbnails
+
+`src/media.mirror` writes the 480px derivative beside every photo it
+mirrors, under `t/<account>/<same tail>`. `_assets_all` serves them as
+`photo_thumbs` and uses one as the `poster`.
+
+`refs` and `photo_thumbs` are deliberately NOT one list. `refs[0]` is
+the single frame Runway anchors a clip on, and anchoring a clip on a
+480px thumbnail is exactly the kind of quiet downgrade this reference
+layer keeps being bitten by. A card with no derivative to point at falls
+back to `?thumb=1`, the local handler that has always done this off
+disk: a slow tile, never a missing one.

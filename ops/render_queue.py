@@ -458,8 +458,26 @@ def import_clip(concept_id: int, shot_n, file: str, model: str,
 
     media_url = "/renders/" + str(path.relative_to(RENDERS_ROOT.resolve())).replace("\\", "/")
     preprod.set_shot_media_url(concept_id, shot_n, media_url, account_id=account_id)
+    # The Assets wall reads generated_assets, and until 2026-09-18 a
+    # hand-rendered clip never got a row there -- it was on the concept
+    # and nowhere else. Best-effort, and imported lazily: render_assets
+    # reaches google-genai through src.rag, which this script's own
+    # import list deliberately avoids (see the module docstring).
+    asset_id = None
+    try:
+        from src import render_assets
+        asset = render_assets.record_best_effort(
+            account_id=account_id, generation_id=generation_id,
+            tool=provider, model=model, media_kind="video", prompt=text,
+            media_url=media_url, output_path=str(path),
+            project=concept.get("brand"), concept_id=concept_id,
+            shot_n=shot_n, metadata=params)
+        asset_id = asset.get("id")
+    except Exception:
+        pass
     return {"ok": True, "generation_id": generation_id,
-            "media_url": media_url, "path": str(path), "provider": provider}
+            "media_url": media_url, "path": str(path), "provider": provider,
+            "asset_id": asset_id}
 
 
 def main() -> None:

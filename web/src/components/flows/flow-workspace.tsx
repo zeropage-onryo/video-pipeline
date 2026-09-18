@@ -101,6 +101,7 @@ import {
   isMedia,
   isText,
   ports,
+  sceneRefs,
   seedScene,
   toLegacy,
   wireElement,
@@ -487,6 +488,9 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
   const [bar, setBar] = useState("");
   const graphBase = useRef<Partial<LegacyGraph>>({});
   const seedHash = useRef<string | null>(null);
+  // the reference list the scene holds right now, in the canvas's own
+  // spelling of each url -- what the wiring is compared against
+  const savedRefs = useRef<string[]>([]);
   const saveChain = useRef<Promise<unknown>>(Promise.resolve());
   const lastSaved = useRef("");
   const stopped = useRef(false);
@@ -594,6 +598,7 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
         if (video && shot.media_url) video.data.url = shot.media_url;
         graphBase.current = saved.graph || {};
         seedHash.current = saved.seed_hash || null;
+        savedRefs.current = shot.refs || [];
         setNodes(loaded.nodes);
         setEdges(loaded.edges);
         setName(detail.title);
@@ -613,6 +618,26 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
     };
   }, [conceptId, shotN, setNodes, setEdges]);
 
+  /* The canvas's reference wiring IS the scene's reference list
+     (2026-09-18): rewiring a face here changes what Pipeline shows,
+     what the reference gate checks and what Queue renders against --
+     not just this drawing. Runs inside the save chain, BEFORE the graph
+     save, because a new ref list is a new seed hash and the graph must
+     be saved against the hash it now matches. */
+  const pushRefs = async (ns: FlowNode[], es: Edge[]): Promise<string | null> => {
+    if (!conceptId || !activeShot) return null;
+    const next = sceneRefs(ns, es, savedRefs.current);
+    if (JSON.stringify(next) === JSON.stringify(savedRefs.current)) return null;
+    if (!next.length) return "keeps its last references — a scene with none can't reach the Queue";
+    const res = await apiFetch<{ changed: boolean; seed_hash?: string }>(
+      `/concepts/${conceptId}/shots/${activeShot}/refs`,
+      { method: "PUT", body: JSON.stringify({ refs: next, seed_hash: seedHash.current ?? undefined }) },
+    );
+    if (res.seed_hash) seedHash.current = res.seed_hash;
+    savedRefs.current = next;
+    return res.changed ? `references updated (${next.length})` : null;
+  };
+
   // autosave: the graph that ran and the graph you return to are one row
   useEffect(() => {
     if (!conceptId || !activeShot || !ready || sceneError) return;
@@ -626,6 +651,7 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
         .then(async () => {
           if (stopped.current) return;
           try {
+            const refNote = await pushRefs(nodes, edges);
             // seed_hash is what this canvas was drawn against; the server
             // refuses (409) a save for a scene revised underneath it rather
             // than overwriting a canvas nobody here has seen
@@ -635,13 +661,15 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
             });
             if (saved.seed_hash) seedHash.current = saved.seed_hash;
             lastSaved.current = fingerprint;
-            setSaveState("Saved to scene");
+            setSaveState(refNote ? `Saved to scene · ${refNote}` : "Saved to scene");
           } catch (error) {
             setSaveState(`Not saved: ${error instanceof Error ? error.message : "connection lost"}`);
           }
         });
     }, 650);
     return () => clearTimeout(timer);
+    // pushRefs reads refs and the deps listed here; it is not state of its own
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conceptId, activeShot, nodes, edges, name, ready, sceneError, saveRevision]);
 
   const savePrompt = async () => {
@@ -655,10 +683,13 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
     }
     try {
       await saveChain.current.catch(() => {});
-      await apiFetch(`/concepts/${conceptId}/shots/${activeShot}/prompt`, {
+      const res = await apiFetch<{ seed_hash?: string }>(`/concepts/${conceptId}/shots/${activeShot}/prompt`, {
         method: "POST",
         body: JSON.stringify({ prompt }),
       });
+      // this canvas made the edit, so it is still a true drawing of the
+      // shot: adopt the new hash or the next autosave is refused as stale
+      if (res?.seed_hash) seedHash.current = res.seed_hash;
       lastSaved.current = "";
       setSaveRevision((n) => n + 1);
       notify("Scene prompt updated");
@@ -671,6 +702,7 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
       try {
         stopped.current = true;
         await saveChain.current.catch(() => {});
+        await pushRefs(getNodes(), getEdges());
         const payload = toLegacy(getNodes(), getEdges(), graphBase.current, { conceptId, shotN: activeShot });
         await apiFetch(`/concepts/${conceptId}/shots/${activeShot}/graph`, {
           method: "PUT",
@@ -958,6 +990,7 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
     if (runJob) return;
     try {
       await saveChain.current.catch(() => {});
+      await pushRefs(getNodes(), getEdges());
       const payload = toLegacy(getNodes(), getEdges(), graphBase.current, { conceptId, shotN: activeShot });
       const saved = await apiFetch<{ id: number }>(`/concepts/${conceptId}/shots/${activeShot}/graph`, {
         method: "PUT",
@@ -1052,6 +1085,8 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
       return;
     }
     try {
+      await saveChain.current.catch(() => {});
+      await pushRefs(getNodes(), getEdges());
       await pickConcept(scene.id, true);
       setScene({ ...scene, picked: true });
       announceQueueChange();

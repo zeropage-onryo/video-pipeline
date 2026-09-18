@@ -197,9 +197,11 @@ function Composer() {
 
   useEffect(() => {
     getCapabilities().then(setCaps).catch(() => setCaps({}));
-    getAssets()
+    // the picker lists elements only; a render handed over from the
+    // Assets wall ("Use in a shot") needs the wider scope to resolve
+    getAssets(undefined, attachId?.startsWith("generated-") ? "all" : "elements")
       .then((r) => {
-        setAssets(r.items);
+        setAssets(r.items.filter((a) => (a.category as string) !== "generated"));
         // "Use in a shot" on Assets lands here with the asset attached
         const hit = attachId ? r.items.find((a) => a.id === attachId) : null;
         if (hit) setPicked(hit.photos.slice(0, FRAMES_PER_ASSET));

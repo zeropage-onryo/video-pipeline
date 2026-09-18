@@ -18,6 +18,13 @@ list: `refs[0]` is what Runway anchors the clip on, and anchoring a clip
 on a thumbnail is the kind of quiet downgrade this reference layer keeps
 being bitten by.
 
+**DONE 2026-09-14.** `src/media.mirror` writes the 480px derivative under its own
+`t/<account>/<tail>` prefix on every mirror; `_assets_all` serves them as `photo_thumbs` and
+uses one as the `poster`; `?thumb=1` remains the fallback when there is no derivative to point
+at. The two lists stayed separate exactly as this entry required. Remaining: `queue.js` and
+`scenes.js` still draw `refs` directly — the server now offers the small list, the cards have
+not been switched to it yet.
+
 ## 1. UI readability pass  (parked — hold until Mike says go)
 Make the app simpler and easier to read. Same density problem on both pages:
 dense monospace prompt blocks, warnings, shot lists, and multiple button

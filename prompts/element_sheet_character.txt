@@ -1,0 +1,7 @@
+Make a character reference sheet for the person in the attached photos: {name}{detail_line}.
+Five panels side by side on one wide image, each panel labelled in small capitals along its top edge: FACE CLOSE UP, FRONT, BACK, LEFT PROFILE, RIGHT PROFILE. The face and every feature must match the attached photos exactly across all five panels — same person, same age, same hair, same skin, same build. Full body head to toe in the four standing panels, neutral stance, arms relaxed.
+Wardrobe: {wardrobe}
+Under the FACE CLOSE UP panel, a plain info block on ruled lines reading exactly:
+NAME: {name_upper}
+ROLE: {detail_upper}
+Visual style: photoreal cinematic still photography, natural skin texture with visible pores, no beauty retouching, no AI gloss, soft even studio lighting, neutral light-grey seamless background in every panel, thin dark panel borders. No extra text, no logos, no watermark.

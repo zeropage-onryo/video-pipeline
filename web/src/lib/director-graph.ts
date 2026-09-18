@@ -398,3 +398,45 @@ export function toLegacy(
     ids,
   };
 }
+
+/* ── the canvas's references, saved back onto the scene (2026-09-18) ──
+   What is wired in is the scene's reference list, not a copy of it:
+   every element / reference card with a wire into a refs or reference
+   port. A keyframe or clip card wired in is NOT a reference -- it is a
+   frame this pipeline drew, and preprod.reference_gate deliberately
+   refuses to count one as grounding.
+
+   Order is load-bearing (refs[0] is the one frame Runway anchors on), so
+   the scene's existing order is kept for every ref that survives, and a
+   newly wired one goes in after them -- a room still last, since a room
+   photo in the anchor slot makes the model reproduce the room. */
+const isRoom = (url: string) => /\/locations\//.test(url);  // local path, R2 URL or tenant key
+export function sceneRefs(nodes: FlowNode[], edges: Edge[], current: string[] = []): string[] {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const wired: string[] = [];
+  for (const node of nodes) {
+    if (!isSource(node.data.kind)) continue;
+    const feeds = edges.some(
+      (e) =>
+        e.source === node.id &&
+        ["refs", "reference"].includes(e.targetHandle || "") &&
+        byId.has(e.target),
+    );
+    if (!feeds) continue;
+    const urls = node.data.kind === "element" ? node.data.urls || [] : node.data.url ? [node.data.url] : [];
+    for (const url of urls) if (url && !wired.includes(url)) wired.push(url);
+  }
+  const kept = current.filter((url) => wired.includes(url));
+  const out = [...kept];
+  for (const url of wired) {
+    if (out.includes(url)) continue;
+    if (isRoom(url)) {
+      out.push(url);
+    } else {
+      const firstRoom = out.findIndex(isRoom);
+      if (firstRoom < 0) out.push(url);
+      else out.splice(firstRoom, 0, url);
+    }
+  }
+  return out;
+}
