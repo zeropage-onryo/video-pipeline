@@ -41,12 +41,12 @@ What this module deliberately does NOT do:
   bookkeeping. Every field of Quote is an int, a str or a tuple of them,
   so nothing in the signed body is a float that round-trips badly.
 
-MARKUP is 1.0: credits are the provider's estimate in cents, rounded up,
-which is what ledger.credits_for_usd has always charged. Raising it is
-the first real pricing decision in the repo and it is Mike's (the spec
-argues for 2.4). It lands in ONE commit with making the signed token
-required, because a raised markup beside an unsigned path silently
-undercharges.
+MARKUP is 2.4 (2026-09-18, Mike's call -- the spec's number): $1.00 of
+provider cost is 240 credits. It landed in ONE commit with making the
+signed token required on approve, because a raised markup beside an
+unsigned path silently undercharges. ledger.credits_for_usd is the 1.0x
+figure and no longer what a quote charges; hold_for_render (step 6)
+holds quote.credits, never a re-derivation.
 """
 
 from __future__ import annotations
@@ -76,7 +76,7 @@ CREDIT_CENTS = 1
 # markup is a decimal and a float is not: 100000 * 1.1 is
 # 110000.00000000001, and ceil() of that in cents is 12 credits for an
 # 11-credit render. Move this constant, never the call sites.
-MARKUP = "1.0"
+MARKUP = "2.4"
 # per render, per part: the least any billable render costs
 CREDIT_FLOOR = 10
 

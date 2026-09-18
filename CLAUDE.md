@@ -1536,11 +1536,19 @@ is yours, in Resolve, by hand.
   `bad_signature / retired_pricing / expired / wrong_account / wrong_render / stale_content`.
   The content hash is `pricing.content_hash` = `timeline.source_hash(prompt, refs)` computed
   on the LIVE shot, never the stored `timeline.source` — do not write a second one.
-  `MARKUP = "1.0"` is a string read through `Fraction` (a float there is a latent off-by-one)
-  and is pending Mike's number; `CREDIT_FLOOR = 10`. **Not built (steps 5–6):** a token is
-  still OPTIONAL on approve (`_verify_tokens` runs only when the body sends them), the four
-  adapters still take `approved=True`, and nothing is held on the ledger. The daily-cap check
-  stays in the route, not here.
+  `MARKUP = "2.4"` (2026-09-18, Mike's call: $1.00 of provider cost = 240 credits) is a string
+  read through `Fraction` — a float there is a latent off-by-one; `CREDIT_FLOOR = 10`.
+  **A billable render needs its token (step 5, same commit as the markup):** when the server
+  can sign AND the render is not BYOK — `display()`'s `signed`, one predicate for the offer and
+  the requirement — `queue_approve` and the Director's Generate node answer 400 `missing_quote`
+  without one. The three doors that show no price send a billable render to the Queue instead:
+  `shot_generate`, `/api/generate/run`'s video branch (refused before the job, so no Gemini call
+  is made for it), and Run all's Generate node (skipped, not failed — the prompt it renders is
+  the enhance node's, which did not exist when any price was shown). BYOK, and a server with no
+  secret, behave exactly as before. **Not built (step 6):** the four adapters still take
+  `approved=True` and nothing is held on the ledger. Decided for it: zero credits REFUSES even
+  with a key on file, and Mike's own account is the exemption. The daily-cap check stays in the
+  route, not here.
 - **`src/spend.py`** / **`src/costs.py`** — the cost tracker (BACKLOG #2, 2026-09-04).
   `spend.record_call` writes one OWNED `llm_calls` row per Gemini call -- the model that
   actually answered, raw token counts, an estimated `cost_usd` from `DEFAULT_PRICES` (read off

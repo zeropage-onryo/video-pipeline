@@ -453,3 +453,38 @@ row — step 6's hold-before-submit must leave one and release) and #19 (the Rea
 scoping and dead account switch). The handoff for steps 5–6 is
 `docs/tasks/task-pricing-and-quotes-handoff-2.md`.
 
+## As built — step 5 (2026-09-18)
+
+`MARKUP = "2.4"` and the token requirement, one commit. Mike's two decisions the same day:
+**2.4**, and for step 6 **zero credits refuses even with a key on file — his own account is the
+exemption** (how an account is marked exempt is step 6's to design; a column in
+`manual_lane_operator`'s shape, failing closed, is the house pattern).
+
+- **The requirement is `display()`'s `signed`, not `pricing.configured()`.** `signed` is
+  "billable AND a secret", exactly the renders a token was minted for, so the offer and the
+  requirement are one predicate. Keyed on `configured()` alone a BYOK approve would be refused
+  for lacking a token it was never given — `test_a_byok_render_still_approves_without_a_quote`
+  goes red on that swap.
+- **The spec's "five human callers", as found.** Two carry tokens and now require them
+  (`queue_approve`, `workflow_exec_generate`). The other three show no price anywhere, and two
+  of them (`shot_generate`, `/api/generate/run`) have NO front-end caller left in either shell —
+  so none of the three was taught to mint a quote; a billable render is sent to the Queue.
+  Run all could not carry one honestly anyway: its Generate node renders the enhance node's
+  output, which does not exist when a price is shown, so no content hash could bind it.
+- A free-standing Generate node (no concept) on a billable account is `missing_quote`: there is
+  no shot for a quote to name. With a token it stays `wrong_render`, as in step 4.
+- `/api/generate/run`'s video branch calls `runway.has_key()` and `generate_from_prompt` with
+  NO `account_id` — it can only ever spend the operator's env key, whatever the account holds.
+  Pre-existing, not fixed; the guard asks `billable(account_id, "runway")` like everything else.
+- `test_at_cost_it_charges_what_the_ledger_always_did` now pins 1.0x by monkeypatch rather than
+  asserting the shipped constant; `ledger.credits_for_usd` is therefore NOT what a quote
+  charges any more, and `hold_for_render` must hold `quote.credits`, never re-derive.
+- **A flaky test, found by it failing once:** `test_one_flipped_byte_in_any_part_is_bad_signature`
+  flipped the LAST base64 character of each part. The last character of a 32-byte mac carries
+  two unused bits, so `A -> B` there can decode to the same bytes and the token correctly still
+  verifies — pass or fail depended on the second the token was minted. It flips the first now.
+- `PRICING_VERSION` not bumped: the wire body did not change, and a token minted at 1.0x fails
+  `wrong_render` on its credits.
+- Every guard was reverted and seen red: the approve predicate (both ways), `shot_generate`,
+  `generate_run`, the Director node, Run all, and `MARKUP`.
+
