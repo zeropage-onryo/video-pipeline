@@ -191,10 +191,12 @@ export type RenderQuote = {
   byok: boolean;
   credits: number | null;
   content_hash: string;
-  renders: { part: number | null; seconds: number; estimate_usd: number; credits: number | null }[];
+  /** tokens ride only when there is something to charge and QUOTE_SIGNING_SECRET is set */
+  signed: boolean;
+  renders: { part: number | null; seconds: number; estimate_usd: number; credits: number | null; token: string | null }[];
 };
 /** what approve takes: providers.check_render_choice refuses, never clamps */
-export type RenderChoice = { provider?: string; model?: string; duration?: number; frame?: string };
+export type RenderChoice = { provider?: string; model?: string; duration?: number; frame?: string; tokens?: string[] };
 export type RenderResolved = { provider: string; model: string; duration: number; frame: string; estimate_usd: number };
 export type PickRate = { generated: number; picked: number; rate: number | null };
 /** GET /api/pipeline/concepts — the board. Ask for the archived rows

@@ -224,12 +224,24 @@ export default function QueuePage() {
     try {
       if (what === "approve") {
         const pick = pickFor(c);
-        const res = await queueApprove(c.id, {
+        const choice = {
           provider: pick.provider,
           model: pick.model,
           duration: pick.duration ?? undefined,
           frame: pick.frame ?? undefined,
-        } as RenderChoice);
+        } as RenderChoice;
+        // THE QUOTE THE APPROVE ECHOES: the server signs one token per shot
+        // into the price it shows (pricing.sign, when QUOTE_SIGNING_SECRET
+        // is set) and refuses the approve if the scene or the pick moved
+        // since. A pick the listing did not price is quoted on the click,
+        // so the tokens always describe THIS pick.
+        const served = c.quote;
+        const same =
+          served && !served.error && served.provider === pick.provider && served.model === pick.model &&
+          served.frame === pick.frame && (served.timed || served.durations[0] === pick.duration);
+        const quote = same ? served : await queueQuote(c.id, choice);
+        const tokens = (quote?.renders || []).map((r) => r.token).filter((t): t is string => !!t);
+        const res = await queueApprove(c.id, tokens.length ? { ...choice, tokens } : choice);
         const r = res.render;
         toast(
           r

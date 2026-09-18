@@ -892,7 +892,16 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
               images,
               ground: !inputText("references"),
             }
-          : { prompt, images, ...(conceptId && activeShot ? { concept_id: conceptId, shot_n: activeShot } : {}) };
+          : {
+              prompt,
+              images,
+              ...(conceptId && activeShot ? { concept_id: conceptId, shot_n: activeShot } : {}),
+              // the signed quote the chip showed (pricing.sign); the route
+              // refuses the run if the scene or the renderer moved since
+              ...(node.data.kind === "video" && conceptId && scene?.generate?.renders?.[0]?.token
+                ? { token: scene.generate.renders[0].token }
+                : {}),
+            };
       const job = await apiFetch<{ job_id: number }>(`/workflows/exec/${endpoint}`, {
         method: "POST",
         body: JSON.stringify(body),

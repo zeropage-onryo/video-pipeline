@@ -180,6 +180,9 @@ def compute_capabilities(account_id: Optional[int] = None) -> dict:
         # holds a key for (providers.renderer_for), not on Runway alone
         "video.generate": providers.renderer_for(
             account_id, needs="generate_from_prompt") is not None,
+        # whether a price comes with a signed quote a client can echo on
+        # approve (pricing.sign; QUOTE_SIGNING_SECRET set)
+        "quote.sign": pricing.configured(),
         # `*.spend` is TRUE for anything a person drives (2026-09-09):
         # the click is the approval, so a key is the whole gate on a
         # human surface. It stays a live read for the unattended paths,
@@ -2337,6 +2340,66 @@ class ApproveBody(BaseModel):
     model: Optional[str] = None
     duration: Optional[int] = None
     frame: Optional[str] = None
+    # The signed quotes the card showed (pricing.display's `renders[].token`,
+    # one per shot to render), echoed back so the price approved is
+    # provably the price rendered. OPTIONAL for now (step 4 of
+    # docs/tasks/task-pricing-and-quotes.md): a body without them falls
+    # to the click-is-the-approval gate exactly as before; a body WITH
+    # them is refused unless every one verifies against this scene as it
+    # is now and the pick as it was priced.
+    tokens: Optional[list[str]] = None
+
+
+def _verify_tokens(tokens: list, priced: dict, shot: dict, shot_id: int,
+                   account_id: Optional[int]) -> list:
+    """Every render `priced` would make, matched to a token that verifies
+    for it -- and says the same provider, model, length, frame and
+    credits the card is about to spend on. Returns the Quotes in render
+    order. Raises pricing.QuoteRefused (reason on it) or
+    SigningUnconfigured; never returns a partial answer."""
+    spare = [t for t in tokens if isinstance(t, str) and t.strip()]
+    quotes = []
+    for render in priced["renders"]:
+        bound = None
+        for token in list(spare):
+            try:
+                bound = pricing.verify(token, account_id=account_id, shot=shot,
+                                       shot_id=shot_id, part=render["part"])
+            except pricing.QuoteRefused as e:
+                # another shot's token is not a refusal yet -- it may be
+                # the next render's; anything else about it is
+                if e.reason != "wrong_render":
+                    raise
+                continue
+            spare.remove(token)
+            break
+        if bound is None:
+            raise pricing.QuoteRefused(
+                "missing_quote", f"no quote for shot {render['part']}" if render["part"]
+                else "no quote for this render")
+        same = (bound.provider == priced["provider"] and bound.model == priced["model"]
+                and bound.frame == priced["frame"] and bound.seconds == render["seconds"]
+                and bound.credits == render["credits"])
+        if not same:
+            raise pricing.QuoteRefused(
+                "wrong_render", "the renderer, length or frame changed since this "
+                                "price -- re-quote")
+        quotes.append(bound)
+    return quotes
+
+
+def _quote_refusal(e: Exception, account_id: Optional[int]):
+    """The response for a token that did not verify: 503 with the
+    generation command when nothing can be verified here, else 400 with
+    the refusal's own reason as the code. wrong_account is logged at
+    warning -- it cannot happen through the UI, so it is a replay."""
+    if isinstance(e, pricing.SigningUnconfigured):
+        return _error(503, "signing_unconfigured", str(e))
+    if e.reason == "wrong_account":
+        print(f"[quote] wrong_account: a quote issued to another tenant was "
+              f"presented by account {account_id!r}", file=sys.stderr)
+        return _error(400, "wrong_account", "this quote isn't valid -- get a fresh price")
+    return _error(400, e.reason, str(e))
 
 
 @router.get("/queue/{concept_id}/quote")
@@ -2473,6 +2536,11 @@ def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
         # picked. (The adapters clamp internally -- that is their contract
         # with the nightly graph, which has no human to refuse to.)
         return _error(400, "bad_render_choice", str(e))
+    if body.tokens:
+        try:
+            _verify_tokens(body.tokens, priced, shot, concept_id, account_id)
+        except (pricing.QuoteRefused, pricing.SigningUnconfigured) as e:
+            return _quote_refusal(e, account_id)
     timed = priced["timed"]
     choice = {"provider": priced["provider"], "model": priced["model"],
               "duration": None if timed else priced["durations"][0],
@@ -3969,6 +4037,9 @@ class WfGenerateBody(BaseModel):
     # after the browser closed still lands where the Director expects it.
     concept_id: Optional[int] = None
     shot_n: Optional[int] = None
+    # the signed quote the chip showed (`generate.renders[0].token` on the
+    # concept) -- optional, see ApproveBody.tokens
+    token: Optional[str] = None
 
     def reference_urls(self) -> list[str]:
         urls, seen = [], set()
@@ -4027,6 +4098,18 @@ def workflow_exec_generate(body: WfGenerateBody, account_id: int = Depends(auth.
                       "no video renderer key is available for this account — "
                       "add a Runway, Higgsfield or fal key")
     label = providers.RENDER_LABELS.get(pick["provider"], pick["provider"])
+    if body.token:
+        if shot is None:
+            return _error(400, "wrong_render",
+                          "a quote names a concept's shot; this node has none")
+        try:
+            priced = pricing.display(account_id=account_id, shot=shot, shot_id=body.concept_id,
+                                     provider=pick["provider"], model=pick["model"], whole=True)
+            _verify_tokens([body.token], priced, shot, body.concept_id, account_id)
+        except (pricing.QuoteRefused, pricing.SigningUnconfigured) as e:
+            return _quote_refusal(e, account_id)
+        except ValueError as e:
+            return _error(400, "bad_render_choice", str(e))
 
     def work(job):
         jobs.progress(job, 0.2, f"rendering via {label} ({pick['model']})")

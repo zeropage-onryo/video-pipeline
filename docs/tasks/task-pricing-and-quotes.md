@@ -387,9 +387,13 @@ Also: `conftest`'s `account_scope` override returns `None`, so a test about owne
 
 Run it the way CI runs it. `QUOTE_SIGNING_SECRET` goes in `POSTURE_ENV`, and the suite must not inherit a real one from `.env` — that is the `test_env_posture` failure mode where eleven tests passed on GitHub and failed on your Mac.
 
-## As built — steps 1–3 (2026-09-17), and where this spec was wrong about the code
+## As built — steps 1–4 (2026-09-17/18), and where this spec was wrong about the code
 
-Steps 1–3 are on `claude/pricing-quotes-handoff-944336`. `MARKUP` is `"1.0"`; nothing is signed, required or held. Steps 4–6 are not started.
+Steps 1–4 are on `claude/pricing-quotes-handoff-944336`. `MARKUP` is `"1.0"`; quotes are signed and verified but a token is still OPTIONAL on approve (step 4's rule), and nothing is held. Steps 5 and 6 are not started: 5 needs `MARKUP`, 6 needs the zero-credits-with-a-key decision above — with no credit ever granted, wiring `hold()` today would refuse every render on every account, including yours.
+
+**Step 4 as built.** `pricing.sign` / `pricing.verify` / `QuoteRefused(reason)` / `SigningUnconfigured`; `QUOTE_SIGNING_SECRET` (in `.env.example`, in `conftest.POSTURE_ENV`, unset in the suite — `test_the_suite_does_not_inherit_a_real_secret` was run with one leaked into the environment to prove that). `display()` mints one token per render into `renders[].token` when there is something to charge AND a secret (`signed: true`); the Queue (both front ends) and the Director (both) echo them — a pick the listing did not price is quoted on the click so the tokens describe THAT pick. `queue_approve` and `workflow_exec_generate` verify every token against the scene as it is now and the pick as it was priced (`_verify_tokens`: signature → version → expiry → account → shot/part → content hash, then provider/model/length/frame/credits must equal what is about to be spent, else `wrong_render`; a timed scene needs a token for every shot still to render, else `missing_quote`). No token → today's click-is-the-approval gate. A token with no secret → 503 `signing_unconfigured` with the generation command. Verified in a browser: edit the prompt behind a loaded Queue, click Approve, the request carries the token and comes back 400 `stale_content` before any job starts.
+
+Two spec deviations in step 4: `wrong_render` is a sixth refusal (the table has five) — another shot's or another concept's token, or a pick that changed since quoting, is not `stale_content` and not `bad_signature`; and `spend_approved` is NOT yet `spend_approved(quote=...)`. Verification happens at the route and the adapter still receives `approved=True` exactly as before, so the four adapters are untouched — that plumbing lands with step 6, which is in those files anyway and is the step that gives the Quote something to do inside them. `shot_generate` (the board's per-shot render button) and `/api/generate/run` mint no quote today because no surface prints a price for them; they accept no token yet and fall to the same gate as before.
 
 Where the code disagreed with the spec above, the code won and the reason is here:
 

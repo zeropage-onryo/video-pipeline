@@ -180,3 +180,156 @@ def test_the_content_hash_on_a_card_moves_with_its_prompt(tmp_db):
     scene = a_queued_scene(tmp_db)
     before = card_for(scene)["quote"]["content_hash"]
     assert before == timeline.source_hash("a long enough prompt to render", ["/refs/seed.jpg"])
+
+
+# --- step 4: the price approved is the price rendered ------------------------
+
+SECRET = "dGVzdC1zZWNyZXQtdGhpcnR5LXR3by1ieXRlcy1sb25nLW9r"
+
+
+@pytest.fixture
+def signing(tmp_db, monkeypatch):
+    monkeypatch.setenv(pricing.SIGNING_ENV, SECRET)
+    return tmp_db
+
+
+def never_submits(monkeypatch, module):
+    """An adapter whose submit must not be entered. Raising is not enough
+    on its own -- the route runs it in a job -- so it also records."""
+    entered = {}
+
+    def fake(*a, **kw):
+        entered["called"] = True
+        raise AssertionError("the adapter was entered")
+    monkeypatch.setattr(module, "generate_for_shot", fake)
+    return entered
+
+
+def test_the_listing_signs_and_the_approve_verifies(signing, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(runway, "generate_for_shot",
+                        lambda *a, **kw: seen.update(kw) or {"ok": True, "media_url": "https://x/c.mp4"})
+    scene = a_queued_scene(signing, prompt=TIMED)
+    quote = card_for(scene)["quote"]
+    tokens = [r["token"] for r in quote["renders"]]
+    assert quote["signed"] is True and all(t and t.startswith("zpfq.") for t in tokens)
+    assert client.get("/api/capabilities").json()["quote.sign"] is True
+    res = client.post(f"/api/queue/{scene}/approve",
+                      json={"provider": "runway", "model": "gen4_turbo", "tokens": tokens})
+    assert res.status_code == 200, res.text
+    assert wait_for_job(res.json()["job_id"])["status"] == "done"
+
+
+# guards: `_verify_tokens(...)` in queue_approve. THE ONE THAT MATTERS: a
+# refused quote means the adapter was never entered.
+def test_a_scene_edited_after_quoting_does_not_render(signing, monkeypatch):
+    entered = never_submits(monkeypatch, runway)
+    scene = a_queued_scene(signing)
+    tokens = [r["token"] for r in card_for(scene)["quote"]["renders"]]
+    concept = preprod.get_concept(scene, account_id=None)
+    shots = concept["shots"]
+    shots[0]["prompt"] += " He looks up."
+    preprod.update_concept_shots(scene, {"shots": shots}, account_id=None)
+    res = client.post(f"/api/queue/{scene}/approve",
+                      json={"provider": "runway", "model": "gen4_turbo", "duration": 5,
+                            "tokens": tokens})
+    assert res.status_code == 400
+    assert res.json()["error"]["code"] == "stale_content"
+    assert "called" not in entered
+    # and the fresh price signs again
+    fresh = [r["token"] for r in card_for(scene)["quote"]["renders"]]
+    assert fresh != tokens
+
+
+def test_a_quote_for_another_pick_does_not_render(signing, monkeypatch):
+    entered = never_submits(monkeypatch, fal)
+    monkeypatch.setenv("FAL_KEY", "fake")
+    scene = a_queued_scene(signing)
+    tokens = [r["token"] for r in card_for(scene)["quote"]["renders"]]   # priced on runway
+    res = client.post(f"/api/queue/{scene}/approve",
+                      json={"provider": "fal", "model": "ltx2.3", "tokens": tokens})
+    assert res.status_code == 400
+    assert res.json()["error"]["code"] == "wrong_render"
+    assert "called" not in entered
+
+
+def test_a_timed_scene_needs_a_quote_for_every_shot(signing, monkeypatch):
+    entered = never_submits(monkeypatch, runway)
+    scene = a_queued_scene(signing, prompt=TIMED)
+    tokens = [r["token"] for r in card_for(scene)["quote"]["renders"]]
+    res = client.post(f"/api/queue/{scene}/approve",
+                      json={"provider": "runway", "model": "gen4_turbo", "tokens": tokens[:1]})
+    assert res.status_code == 400
+    assert res.json()["error"]["code"] == "missing_quote"
+    assert "called" not in entered
+
+
+def test_another_tenants_quote_is_refused_and_named(signing, monkeypatch, capsys):
+    entered = never_submits(monkeypatch, runway)
+    scene = a_queued_scene(signing)
+    concept = preprod.get_concept(scene, account_id=None)
+    stranger = pricing.sign(pricing.quote(account_id=77, shot=concept["shots"][0], shot_id=scene,
+                                          provider="runway", model="gen4_turbo", seconds=5))
+    res = client.post(f"/api/queue/{scene}/approve",
+                      json={"provider": "runway", "model": "gen4_turbo", "duration": 5,
+                            "tokens": [stranger]})
+    assert res.status_code == 400 and res.json()["error"]["code"] == "wrong_account"
+    assert "wrong_account" in capsys.readouterr().err
+    assert "called" not in entered
+
+
+# guards: the SigningUnconfigured branch of _quote_refusal -- 503 with the
+# command, never a 500, never a default secret
+def test_a_token_with_no_secret_is_503_with_the_command(signing, monkeypatch):
+    entered = never_submits(monkeypatch, runway)
+    scene = a_queued_scene(signing)
+    tokens = [r["token"] for r in card_for(scene)["quote"]["renders"]]
+    monkeypatch.delenv(pricing.SIGNING_ENV)
+    assert card_for(scene)["quote"]["signed"] is False
+    res = client.post(f"/api/queue/{scene}/approve",
+                      json={"provider": "runway", "model": "gen4_turbo", "duration": 5,
+                            "tokens": tokens})
+    assert res.status_code == 503
+    assert res.json()["error"]["code"] == "signing_unconfigured"
+    assert pricing.SIGNING_COMMAND in res.json()["error"]["message"]
+    assert "called" not in entered
+
+
+def test_an_approve_without_tokens_still_works_for_now(signing, monkeypatch):
+    """Step 4 accepts a missing token (the front ends catch up); step 5
+    makes it required, in one commit with the markup."""
+    seen = {}
+    monkeypatch.setattr(runway, "generate_for_shot",
+                        lambda *a, **kw: seen.update(kw) or {"ok": True, "media_url": "https://x/c.mp4"})
+    scene = a_queued_scene(signing)
+    res = client.post(f"/api/queue/{scene}/approve")
+    assert res.status_code == 200 and wait_for_job(res.json()["job_id"])["status"] == "done"
+
+
+# guards: the token branch in workflow_exec_generate
+def test_the_director_run_carries_its_quote(signing, monkeypatch):
+    from app import workflow_runner
+    entered = {}
+    monkeypatch.setattr(workflow_runner, "render_generate_node",
+                        lambda *a, **kw: entered.update(ok=True) or {"ok": True, "media_url": "https://x/c.mp4"})
+    scene = a_queued_scene(signing)
+    gen = client.get(f"/api/concepts/{scene}").json()["generate"]
+    token = gen["renders"][0]["token"]
+    assert token
+    body = {"prompt": "a long enough prompt to render", "concept_id": scene, "shot_n": 1,
+            "token": token}
+    res = client.post("/api/workflows/exec/generate", json=body)
+    assert res.status_code == 200, res.text
+    assert wait_for_job(res.json()["job_id"])["status"] == "done" and entered
+    # the scene moved: the same token no longer runs it
+    entered.clear()
+    concept = preprod.get_concept(scene, account_id=None)
+    shots = concept["shots"]
+    shots[0]["prompt"] += " He looks up."
+    preprod.update_concept_shots(scene, {"shots": shots}, account_id=None)
+    res = client.post("/api/workflows/exec/generate", json=body)
+    assert res.status_code == 400 and res.json()["error"]["code"] == "stale_content"
+    assert not entered
+    # a free-standing node cannot carry one
+    res = client.post("/api/workflows/exec/generate", json={"prompt": "p", "token": token})
+    assert res.status_code == 400 and res.json()["error"]["code"] == "wrong_render"

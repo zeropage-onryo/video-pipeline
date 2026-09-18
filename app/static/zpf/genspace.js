@@ -1051,8 +1051,16 @@ async function runNode(node) {
       nodeJobs.set(res.job_id, node.id);
     } else if (node.type === 'zpf/generate') {
       setNodeState(node, 'running');
+      // the signed quote the chip showed rides along when this node is a
+      // concept's shot (pricing.sign); the route refuses the run if the
+      // scene or the renderer moved since
+      const gen = (directorConcept && directorConcept.generate) || {};
+      const token = gen.renders && gen.renders[0] && gen.renders[0].token;
+      const p = node.properties || {};
+      const shotRef = token && p.concept_id && p.shot_n && Number(p.concept_id) === Number(directorConcept.id)
+        ? { concept_id: Number(p.concept_id), shot_n: Number(p.shot_n), token } : {};
       const res = await api('/api/workflows/exec/generate', {
-        method: 'POST', body: { prompt: inputVal(node, 'prompt') || '', images: referenceUrls(node) } });
+        method: 'POST', body: { prompt: inputVal(node, 'prompt') || '', images: referenceUrls(node), ...shotRef } });
       nodeJobs.set(res.job_id, node.id);
     } else if (node.type === 'zpf/nano_banana') {
       setNodeState(node, 'running');

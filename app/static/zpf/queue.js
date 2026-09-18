@@ -185,17 +185,38 @@ async function renderPending() {
      Until that answers the button names the shots without a number,
      which is honest; it never shows arithmetic of its own. */
   const quotes = new Map();
-  const quoteKey = (card, pick) => `${card.id}|${pick.provider}|${pick.model}|${pick.frame}`;
-  const matches = (q, pick) => !!q && !q.error && q.timed
-    && q.provider === pick.provider && q.model === pick.model && q.frame === pick.frame;
+  const quoteKey = (card, pick) => `${card.id}|${pick.provider}|${pick.model}|${pick.frame}`
+    + (card.timeline ? '' : `|${pick.duration}`);
+  const matches = (q, pick, timed = true) => !!q && !q.error && q.timed === timed
+    && q.provider === pick.provider && q.model === pick.model && q.frame === pick.frame
+    && (timed || q.durations[0] === Number(pick.duration));
+  const pickQuery = (card, pick) => new URLSearchParams(card.timeline
+    ? { provider: pick.provider, model: pick.model, frame: pick.frame }
+    : { provider: pick.provider, model: pick.model, frame: pick.frame, duration: pick.duration });
+
+  /* THE QUOTE THE APPROVE ECHOES. The server signs one token per shot
+     into the price it shows (pricing.sign, when QUOTE_SIGNING_SECRET is
+     set); approving sends them back and the route refuses if the scene
+     or the pick moved since. A pick the listing did not price is asked
+     of /quote on the click, so the tokens always describe THIS pick --
+     never a stale set from the card's default. */
+  async function quoteFor(card, pick) {
+    const timed = !!card.timeline;
+    if (matches(card.quote, pick, timed)) return card.quote;
+    const key = quoteKey(card, pick);
+    const cached = quotes.get(key);
+    if (cached && !cached.error) return cached;
+    const q = await api(`/api/queue/${card.id}/quote?${pickQuery(card, pick)}`);
+    quotes.set(key, q);
+    return q;
+  }
 
   function timedQuote(card, pick) {
     if (matches(card.quote, pick)) return card.quote;
     const key = quoteKey(card, pick);
     if (quotes.has(key)) return quotes.get(key);
     quotes.set(key, null);                       // in flight: ask once
-    const query = new URLSearchParams({ provider: pick.provider, model: pick.model, frame: pick.frame });
-    api(`/api/queue/${card.id}/quote?${query}`)
+    api(`/api/queue/${card.id}/quote?${pickQuery(card, pick)}`)
       .then(q => quotes.set(key, q), e => quotes.set(key, { error: e.message }))
       .then(() => {
         const now = picks.get(card.id);
@@ -433,10 +454,18 @@ async function renderPending() {
       const label = btn.textContent;
       btn.textContent = approve ? 'Rendering…' : '…';
       try {
-        // the pick rides on the approve. An empty body still works and
-        // resolves to the shot's planned tool -- see ApproveBody.
+        // the pick rides on the approve, with the signed quotes for it
+        // (quoteFor). An empty body still works and resolves to the
+        // shot's planned tool -- see ApproveBody.
+        let body = {};
+        if (approve) {
+          const pick = picks.get(id) || {};
+          const q = await quoteFor(card, pick);
+          const tokens = ((q && q.renders) || []).map(r => r.token).filter(Boolean);
+          body = tokens.length ? { ...pick, tokens } : pick;
+        }
         await api(`/api/queue/${id}/${approve ? 'approve' : 'reject'}`,
-          { method: 'POST', body: approve ? (picks.get(id) || {}) : {} });
+          { method: 'POST', body });
         held.delete(id);
         renderPending();
         refreshQueueBadge();
