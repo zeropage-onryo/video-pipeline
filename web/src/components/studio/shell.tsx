@@ -67,12 +67,15 @@ const VIEW_BY_PATH: [string, ViewId][] = [
 /* what the pages read from the shell: who, and a way to say something */
 type ShellContext = {
   me: Me | null;
+  /** /api/me answered 401: a visitor, not an account still loading */
+  signedOut: boolean;
   brand: string;
   toast: (text: string, kind?: "ok" | "err") => void;
   setBar: (node: ReactNode) => void;
 };
 const Ctx = createContext<ShellContext>({
   me: null,
+  signedOut: false,
   brand: "",
   toast: () => {},
   setBar: () => {},
@@ -172,7 +175,7 @@ export function StudioShell({ children }: { children: ReactNode }) {
     .toUpperCase();
 
   return (
-    <Ctx.Provider value={{ me, brand, toast, setBar }}>
+    <Ctx.Provider value={{ me, signedOut, brand, toast, setBar }}>
       <div className="zps" data-view={view} data-stage={stage ? "1" : undefined}>
         <div className="zps-field" aria-hidden />
 

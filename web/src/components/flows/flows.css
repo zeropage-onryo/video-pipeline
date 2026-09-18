@@ -1306,3 +1306,124 @@
   opacity: 0.6;
   cursor: progress;
 }
+
+
+/* ── the scene switcher on the header chip ── */
+.scene-switch {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+}
+.scene-switch > .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  transition:
+    color 160ms,
+    border-color 160ms;
+}
+.scene-switch > .chip:hover,
+.scene-switch > .chip[aria-expanded="true"] {
+  color: var(--text);
+  border-color: var(--line-hi);
+}
+.scene-switch > .chip > svg:last-child {
+  transition: transform 160ms;
+}
+.scene-switch > .chip[aria-expanded="true"] > svg:last-child {
+  transform: rotate(180deg);
+}
+.scene-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  width: min(360px, 86vw);
+  border: 1px solid var(--line-hi);
+  border-radius: 14px;
+  background: rgb(14 14 17 / 0.98);
+  box-shadow: 0 22px 60px -18px rgb(0 0 0 / 0.85);
+  backdrop-filter: blur(16px);
+  overflow: hidden;
+}
+.scene-menu-head,
+.scene-menu-note {
+  padding: 12px 14px 6px;
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dimmer);
+}
+.scene-menu-note {
+  padding: 10px 14px 12px;
+  color: var(--dim);
+}
+.scene-menu-list {
+  display: flex;
+  flex-direction: column;
+  max-height: min(52vh, 420px);
+  overflow-y: auto;
+  padding: 0 6px 6px;
+}
+.scene-menu button {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 8px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--dim);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.scene-menu button:hover,
+.scene-menu button:focus-visible {
+  background: rgb(255 255 255 / 0.06);
+  color: var(--text);
+}
+.scene-menu button[aria-current] {
+  color: var(--text);
+  background: var(--signal-soft);
+}
+.scene-menu-n {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dimmer);
+}
+.scene-menu-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scene-menu-state {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--signal);
+}
+.scene-menu-foot {
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  border-top: 1px solid var(--line);
+}
+.scene-menu-foot button {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
