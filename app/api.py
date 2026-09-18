@@ -1869,7 +1869,8 @@ def _renderers_state(account_id: Optional[int] = None) -> dict:
     return providers.render_options(account_id)
 
 
-def _waiting(account_id: Optional[int], brand: Optional[str]) -> list[tuple[dict, dict]]:
+def _waiting(account_id: Optional[int], brand: Optional[str],
+             include_blocked: bool = False) -> list[tuple[dict, dict]]:
     """The queue predicate -- parked by the chain or picked on the board,
     not archived, a scene, no clip yet -- as (concept, card) pairs.
 
@@ -1890,7 +1891,18 @@ def _waiting(account_id: Optional[int], brand: Optional[str]) -> list[tuple[dict
 
     Deliberately NOT a prompt check as well. A prompt is on `shots_json`
     only because score_prompts put it there, and a second bar here would
-    be a different opinion from the one that already ran."""
+    be a different opinion from the one that already ran.
+
+    `include_blocked` (2026-09-17, Mike's call) is for the Queue PAGE
+    alone. Those three ways in are real, and a picked scene that simply
+    was not on the Queue read as a lost pick -- nothing anywhere said why.
+    So the page may ask for the ungrounded rows too; each comes back with
+    `card["blocked"]` = the gate's own reason, and is drawn locked, with
+    its approve dead and "add references" on it. WHAT DID NOT CHANGE: the
+    default is still spendable-only, so the manual lane (a person's hands
+    on a render) never sees one; `queue_approve` still asks
+    `reference_gate` itself and refuses; ops/render_queue.py is untouched.
+    Listing a scene is not a way to spend on it."""
     # scoped in SQL, see above
     out = []
     concepts = preprod.list_concepts(account_id=account_id, brand=brand)
@@ -1899,14 +1911,21 @@ def _waiting(account_id: Optional[int], brand: Optional[str]) -> list[tuple[dict
     sources = scout.sources_for_refs(_bin_filenames(concepts))
     for concept in concepts:
         card = _concept_card(concept, gates=gates, sources=sources)
-        if ((card["picked"] or card["parked"]) and not card["archived"]
+        if not ((card["picked"] or card["parked"]) and not card["archived"]
                 and card["is_scene"] and not card["media_url"]
-                # nothing reaches a spend ungrounded -- see above
-                and not preprod.reference_gate(concept)
                 # marked shot by hand (the camera button) -- a card you
                 # already made yourself isn't waiting on you to spend
                 and not card["shot_done"]):
-            out.append((concept, card))
+            continue
+        # nothing reaches a spend ungrounded -- see above
+        blocked = preprod.reference_gate(concept)
+        if blocked and not include_blocked:
+            continue
+        card["blocked"] = blocked or ""
+        out.append((concept, card))
+    # spendable first: a locked card must never be the first thing under
+    # the pointer on the page whose primary button spends money
+    out.sort(key=lambda pair: bool(pair[1]["blocked"]))
     return out
 
 
@@ -1922,7 +1941,7 @@ def queue_pending(brand: Optional[str] = None, account_id: int = Depends(auth.cu
     rendered -- the next step is the one that costs money), or you pick
     a text-only concept off the board yourself."""
     items = []
-    for _, card in _waiting(account_id, brand):
+    for _, card in _waiting(account_id, brand, include_blocked=True):
         # THE CARD'S OWN DEFAULT RENDERER, resolved here rather than in
         # the browser. The mapping from a shot's planned tool to a
         # (provider, model) pair lives in providers.platform_default and
@@ -1939,6 +1958,10 @@ def queue_pending(brand: Optional[str] = None, account_id: int = Depends(auth.cu
         items.append({**card, "render_default": providers.render_default(
             card.get("tool"), account_id)})
     return {"items": items,
+            # how many of `items` can actually be approved. The rail's badge
+            # reads THIS, not len(items): it has always meant "waiting on you
+            # to spend", and a locked card is waiting on references instead.
+            "spendable": sum(1 for c in items if not c["blocked"]),
             "runway": _runway_state(),
             "renderers": _renderers_state(account_id)}
 
