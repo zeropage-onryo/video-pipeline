@@ -14,6 +14,7 @@
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;
   --font-heading: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   --font-display: var(--font-oswald);
+  --font-serif: var(--font-lora);
   /* The image-first concept/render cards (2026-09-17) wear the noir
      identity from app/static/style.css inside the studio shell. Tokens, so
      the cards say bg-noir-panel / text-bone / font-bebas rather than hexes.
@@ -114,6 +115,41 @@
   --sidebar-accent-foreground: #f2f2f2;
   --sidebar-border: rgba(255, 255, 255, 0.1);
   --sidebar-ring: #e4002b;
+}
+
+/*
+ * The public site's skin (2026-09-18, Mike: "update my ui to look very much
+ * like [invideo.io]"): a warm near-black canvas, one serif face at weight
+ * 400 for every headline, white as the only button color, 8-24px radii,
+ * hairlines instead of alternating section backgrounds. Scoped to
+ * `.editorial` -- the landing page and the legal pages -- so /studio keeps
+ * the noir tokens above byte for byte. Red survives here only as `--signal`
+ * (the "You" cursor tag, focus rings), never as a fill.
+ */
+.editorial {
+  --background: #0b0a08;
+  --foreground: #fafafa;
+  --card: #11100f;
+  --card-foreground: #fafafa;
+  --popover: #11100f;
+  --popover-foreground: #fafafa;
+  --primary: #fafafa;
+  --primary-foreground: #0a0907;
+  --secondary: #181715;
+  --secondary-foreground: #fafafa;
+  --muted: #181715;
+  --muted-foreground: #9d9a95;
+  --accent: #1f1e1c;
+  --accent-foreground: #fafafa;
+  --border: #252422;
+  --input: #343331;
+  --ring: #e4002b;
+  --signal: #e4002b;
+  --radius: 0.5rem;
+  /* Inter for body copy, nav and buttons; the studio keeps Geist. */
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-sans);
+  color-scheme: dark;
 }
 
 @layer base {
@@ -229,6 +265,105 @@
   @media (prefers-reduced-motion: reduce) {
     .animate-aperture {
       animation: none;
+    }
+  }
+
+  /* ---- The editorial skin (landing + legal pages) ------------------- */
+
+  /* Serif headline: Lora 400, tight leading, slight negative tracking.
+     Never bold -- the weight of the page comes from size, not stroke. */
+  .serif {
+    font-family: var(--font-serif);
+    font-weight: 400;
+    line-height: 1.02;
+    letter-spacing: -0.025em;
+    text-wrap: pretty;
+  }
+
+  /* Mono eyebrow above a section: the only place the mono face appears. */
+  .eyebrow {
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 0.6875rem;
+    line-height: 1;
+    color: var(--muted-foreground);
+  }
+
+  /* The hero's hairline grid: two 1px gradients on a 22px cell, faded
+     out before the media frame so the frame sits on plain ground. */
+  .hero-grid {
+    background-image:
+      linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+      linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+    background-position: 0 -4px;
+    background-size: 22px 22px;
+    mask-image: linear-gradient(#000 0%, #000 55%, transparent 100%);
+  }
+
+  /* A cursor drifting on the hero. Staggered negative delays on each
+     instance keep the four out of phase. */
+  @keyframes cursor-float {
+    0%,
+    100% {
+      transform: translate3d(0, 0, 0);
+    }
+    50% {
+      transform: translate3d(0, -6px, 0);
+    }
+  }
+  .cursor-float {
+    animation: cursor-float 3.2s ease-in-out infinite;
+  }
+
+  /* The four-step strip under the hero media: each step's underline fills
+     in turn, one 12s loop, so the strip reads as the recording's progress. */
+  @keyframes step-fill {
+    0% {
+      transform: scaleX(0);
+      opacity: 0.35;
+    }
+    18% {
+      transform: scaleX(1);
+      opacity: 1;
+    }
+    25% {
+      transform: scaleX(1);
+      opacity: 1;
+    }
+    26%,
+    100% {
+      transform: scaleX(1);
+      opacity: 0.18;
+    }
+  }
+  .step-fill {
+    transform-origin: left;
+    animation: step-fill 12s linear infinite;
+  }
+
+  /* The nav: transparent at the top of the page, glass once scrolled. */
+  .glass-nav {
+    transition: background-color 0.26s, border-color 0.26s, backdrop-filter 0.26s;
+  }
+  .glass-nav[data-at-top="false"] {
+    background-color: rgba(16, 16, 16, 0.72);
+    border-bottom-color: rgba(255, 255, 255, 0.06);
+    -webkit-backdrop-filter: saturate(140%) blur(14px);
+    backdrop-filter: saturate(140%) blur(14px);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .cursor-float,
+    .step-fill {
+      animation: none;
+    }
+    .step-fill {
+      transform: none;
+      opacity: 0.35;
+    }
+    .step-fill:first-child {
+      opacity: 1;
     }
   }
 }
