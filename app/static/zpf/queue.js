@@ -246,18 +246,57 @@ async function renderPending() {
     return (per === undefined || per === null) ? null : per * seconds;
   }
 
-  /* A timed scene's shots each render at their own window's length,
-     fitted UP to what the model can make -- the JS twin of
-     timeline.fit_seconds, for the reason estimate() above exists: the
-     server's check_timeline_choice is the authoritative number and comes
-     back on the approve response; this is the label while you pick. */
-  function fitSeconds(axis, seconds) {
-    const want = Math.max(1, Math.ceil(Number(seconds) || 1));
-    if (axis.kind === 'range') return Math.min(Math.max(want, axis.min), axis.max);
-    const values = (axis.values || []).map(Number).sort((a, b) => a - b);
-    if (!values.length) return want;
-    if (axis.kind === 'fixed') return values[0];
-    return values.find(v => v >= want) ?? values[values.length - 1];
+  /* A TIMED SCENE'S PRICE IS THE SERVER'S (src/pricing.py, 2026-09-17).
+     Each shot renders at its own window's length fitted UP to what the
+     model can make, and that fitting used to be done twice -- here, as a
+     JS twin of timeline.fit_seconds, and again on approve. Two
+     implementations of a price is how a person is shown one number and
+     charged another, so the twin is gone: the listing carries
+     pricing.display for the card's default pick (`card.quote`), and a
+     pick that differs asks GET /api/queue/{id}/quote once and repaints.
+     Until that answers the button names the shots without a number,
+     which is honest; it never shows arithmetic of its own. */
+  const quotes = new Map();
+  const quoteKey = (card, pick) => `${card.id}|${pick.provider}|${pick.model}|${pick.frame}`
+    + (card.timeline ? '' : `|${pick.duration}`);
+  const matches = (q, pick, timed = true) => !!q && !q.error && q.timed === timed
+    && q.provider === pick.provider && q.model === pick.model && q.frame === pick.frame
+    && (timed || q.durations[0] === Number(pick.duration));
+  const pickQuery = (card, pick) => new URLSearchParams(card.timeline
+    ? { provider: pick.provider, model: pick.model, frame: pick.frame }
+    : { provider: pick.provider, model: pick.model, frame: pick.frame, duration: pick.duration });
+
+  function timedQuote(card, pick) {
+    if (matches(card.quote, pick)) return card.quote;
+    const key = quoteKey(card, pick);
+    if (quotes.has(key)) return quotes.get(key);
+    quotes.set(key, null);                       // in flight: ask once
+    api(`/api/queue/${card.id}/quote?${pickQuery(card, pick)}`)
+      .then(q => quotes.set(key, q), e => quotes.set(key, { error: e.message }))
+      .then(() => {
+        const now = picks.get(card.id);
+        // only if the person is still on this pick -- a slow answer must
+        // not repaint the zone back onto a model they have moved off
+        if (now && quoteKey(card, now) === key && repaintZone) repaintZone(card.id);
+      });
+    return null;
+  }
+
+  /* THE QUOTE THE APPROVE ECHOES. The server signs one token per shot
+     into the price it shows (pricing.sign, when QUOTE_SIGNING_SECRET is
+     set); approving sends them back and the route refuses if the scene
+     or the pick moved since. A pick the listing did not price is asked
+     of /quote on the click, so the tokens always describe THIS pick --
+     never a stale set from the card's default. */
+  async function quoteFor(card, pick) {
+    const timed = !!card.timeline;
+    if (matches(card.quote, pick, timed)) return card.quote;
+    const key = quoteKey(card, pick);
+    const cached = quotes.get(key);
+    if (cached && !cached.error) return cached;
+    const q = await api(`/api/queue/${card.id}/quote?${pickQuery(card, pick)}`);
+    quotes.set(key, q);
+    return q;
   }
 
   function shotsToRender(card) {
@@ -314,15 +353,19 @@ async function renderPending() {
   function plan(card, spec, pick) {
     const todo = shotsToRender(card);
     if (!todo) return { timed: false, n: 1, lengths: [pick.duration], usd: estimate(spec, pick) };
-    const lengths = todo.map(p => fitSeconds(spec.duration, p.seconds));
-    const each = lengths.map(sec => estimate(spec, pick, sec));
-    return { timed: true, n: todo.length, lengths,
-             usd: each.some(v => v === null || v === undefined) ? null
-               : each.reduce((sum, v) => sum + v, 0) };
+    const q = timedQuote(card, pick);
+    if (!q || q.error) {
+      // not priced yet (in flight), or refused: the shots are named, the
+      // number is not made up
+      return { timed: true, n: todo.length, lengths: [], usd: null,
+               pending: !q, refused: q ? q.error : '' };
+    }
+    return { timed: true, n: q.durations.length, lengths: q.durations, usd: q.estimate_usd };
   }
 
-  const approveText = ({ n, usd }) =>
-    `Approve · ${n} shot${n === 1 ? '' : 's'} · ${usd === null || usd === undefined ? 'unpriced' : '~$' + usd.toFixed(2)}`;
+  const approveText = ({ n, usd, pending, refused }) =>
+    `Approve · ${n} shot${n === 1 ? '' : 's'} · ${refused ? 'refused' : pending ? 'pricing…'
+      : usd === null || usd === undefined ? 'unpriced' : '~$' + usd.toFixed(2)}`;
 
   function renderZone(card) {
     const pick = pickFor(card);
@@ -363,7 +406,7 @@ async function renderPending() {
               <div class="nq-popk">LENGTH${p.timed ? ' · PER SHOT' : ''}</div>
               <div class="nq-pills">${p.timed
                 // no length control: every shot's length is its window's
-                ? `<span class="nq-note" title="each shot renders at its own window's length, fitted up to what ${esc(spec.id)} can make">${esc(p.lengths.join(' + '))}s · set by the windows</span>`
+                ? `<span class="nq-note" title="each shot renders at its own window's length, fitted up to what ${esc(spec.id)} can make">${p.lengths.length ? esc(p.lengths.join(' + ')) + 's · set by the windows' : (p.refused ? esc(p.refused) : 'pricing…')}</span>`
                 : pills('duration', spec.duration, pick.duration, 's')}</div>
             </div>
             <div>
@@ -576,10 +619,14 @@ async function renderPending() {
       const label = btn.textContent;
       btn.textContent = 'Rendering…';
       try {
-        // the pick rides on the approve. An empty body still works and
-        // resolves to the shot's planned tool -- see ApproveBody.
+        // the pick rides on the approve, with the signed quotes for it
+        // (quoteFor). An empty body still works and resolves to the
+        // shot's planned tool -- see ApproveBody.
+        const pick = picks.get(id) || {};
+        const q = await quoteFor(card, pick);
+        const tokens = ((q && q.renders) || []).map(r => r.token).filter(Boolean);
         const out = await api(`/api/queue/${id}/approve`,
-          { method: 'POST', body: picks.get(id) || {} });
+          { method: 'POST', body: tokens.length ? { ...pick, tokens } : pick });
         held.delete(id);
         acted.set(id, { status: 'RENDERING', job: out && out.job_id, at: Date.now() });
         renderPending();

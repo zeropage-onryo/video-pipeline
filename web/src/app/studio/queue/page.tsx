@@ -33,6 +33,7 @@ import {
   getCapabilities,
   listJobs,
   queueApprove,
+  queueQuote,
   queueManual,
   queuePending,
   queueReject,
@@ -42,6 +43,7 @@ import {
   type LaneItem,
   type LaneModel,
   type RenderChoice,
+  type RenderQuote,
   type RendererSpec,
   type RunwayState,
 } from "@/lib/studio-api";
@@ -98,7 +100,7 @@ export default function QueuePage() {
   const [jobs, setJobs] = useState<JobRow[]>([]);
   const [jobsError, setJobsError] = useState<string | null>(null);
   const [busy, setBusy] = useState<Record<number, string>>({});
-  const [, repaint] = useState(0); // held/acted live outside state (they outlive the page)
+  const [paint, repaint] = useState(0); // held/acted live outside state (they outlive the page)
   const [popId, setPopId] = useState<number | null>(null);
   const [preview, setPreview] = useState<PreviewState | null>(null);
   // the lane: drawn only when the capability says so; the routes re-ask the gate
@@ -200,6 +202,42 @@ export default function QueuePage() {
   // refuses whatever this button looks like. The refs check is the fallback
   // for a payload from before the field existed.
   const lockedFor = (c: Concept) => !!c.blocked || !(c.refs || []).length;
+
+  /* A TIMED SCENE'S PRICE IS THE SERVER'S (src/pricing.py). The listing
+     prices the card's default pick (`c.quote`); any other pick asks /quote
+     once, and the card says "pricing…" until it answers rather than fit
+     windows to a model here. The same quote carries the signed tokens the
+     approve echoes. */
+  const [quotes, setQuotes] = useState<Record<string, RenderQuote | { error: string }>>({});
+  const quoteKey = (c: Concept, pick: Pick) =>
+    `${c.id}|${pick.provider}|${pick.model}|${pick.frame}${c.timeline ? "" : `|${pick.duration}`}`;
+  const served = (c: Concept, pick: Pick): RenderQuote | null => {
+    const q = c.quote;
+    if (!q || q.error || q.provider !== pick.provider || q.model !== pick.model || q.frame !== pick.frame) return null;
+    if (!q.timed && q.durations[0] !== pick.duration) return null;
+    return q;
+  };
+  const quoteOf = (c: Concept, pick: Pick | null) => (pick ? served(c, pick) ?? quotes[quoteKey(c, pick)] ?? null : null);
+  const choiceOf = (pick: Pick): RenderChoice => ({
+    provider: pick.provider,
+    model: pick.model,
+    duration: pick.duration ?? undefined,
+    frame: pick.frame ?? undefined,
+  });
+  useEffect(() => {
+    for (const c of pending || []) {
+      if (!c.timeline || lockedFor(c)) continue;
+      const pick = pickOf(c);
+      if (!pick) continue;
+      const key = quoteKey(c, pick);
+      if (served(c, pick) || key in quotes) continue;
+      queueQuote(c.id, choiceOf(pick))
+        .then((q) => setQuotes((w) => ({ ...w, [key]: q })))
+        .catch((e) => setQuotes((w) => ({ ...w, [key]: { error: e instanceof Error ? e.message : "no price" } })));
+    }
+    // pickOf / served read only what is listed here
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pending, renderers, quotes, paint]);
   const gateLine = (p: string) => {
     const r = renderers[p];
     if (!r.available) return `${r.label}: no key`;
@@ -211,11 +249,19 @@ export default function QueuePage() {
     try {
       if (what === "approve") {
         const pick = pickOf(c);
-        // the pick rides on the approve; an empty body resolves to the plan
-        const res = await queueApprove(
-          c.id,
-          (pick ? { provider: pick.provider, model: pick.model, duration: pick.duration ?? undefined, frame: pick.frame ?? undefined } : {}) as RenderChoice,
-        );
+        // the pick rides on the approve with the signed quotes for it
+        // (pricing.sign; the route refuses if the scene or the pick moved
+        // since). A pick the listing did not price is quoted on the click,
+        // so the tokens always describe THIS pick. An empty body still
+        // resolves to the plan.
+        let choice: RenderChoice = pick ? choiceOf(pick) : {};
+        if (pick) {
+          const cached = quoteOf(c, pick);
+          const q = cached && !("error" in cached && cached.error) ? (cached as RenderQuote) : await queueQuote(c.id, choice);
+          const tokens = (q.renders || []).map((r) => r.token).filter((t): t is string => !!t);
+          if (tokens.length) choice = { ...choice, tokens };
+        }
+        const res = await queueApprove(c.id, choice);
         const r = res.render;
         toast(
           r
@@ -346,7 +392,8 @@ export default function QueuePage() {
           const did = didFor(c);
           const r = pick ? renderers[pick.provider] : undefined;
           const spec = pick ? specOf(catalogue, pick.provider, pick.model) : null;
-          const plan = pick && spec ? planFor(spec, pick, c.timeline ? partsOf(c) : null) : null;
+          const quote = quoteOf(c, pick);
+          const plan = pick && spec ? planFor(spec, pick, c.timeline ? partsOf(c) : null, quote) : null;
           // one reason left, and the only one a restart could ever have fixed
           const noKey = r && !r.available ? `${r.label} key not set` : "";
           const badLength = !!(pick && spec && plan && !plan.timed && !legalDuration(spec.duration as AxisLike, Number(pick.duration)));
@@ -487,7 +534,7 @@ export default function QueuePage() {
                                   {plan.timed ? (
                                     // no length control: every shot's length is its window's
                                     <span className="font-plex text-[11px] text-bone3" title={`each shot renders at its own window's length, fitted up to what ${spec.id} can make`}>
-                                      {plan.lengths.join(" + ")}s · set by the windows
+                                      {plan.lengths.length ? `${plan.lengths.join(" + ")}s · set by the windows` : plan.refused || "pricing…"}
                                     </span>
                                   ) : spec.duration.kind === "range" ? (
                                     // a real span, so 7s on a model that renders 1-20s is a real request

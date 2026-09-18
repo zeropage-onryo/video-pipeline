@@ -20,8 +20,12 @@
      check_render_choice / check_timeline_choice is authoritative and
      answers on the approve. tests/test_providers.py pins this shape
      (flat, or a per-second rate optionally keyed by frame) to the adapters.
-   - `fitSeconds` is the twin of timeline.fit_seconds: a timed shot renders
-     at its window's length fitted UP to what the model can make.
+   - A TIMED scene is priced by the SERVER (src/pricing.py): each shot
+     renders at its window's length fitted UP to what the model can make,
+     and that fitting is done once, on the server, never here -- the
+     listing serves `quote` for the card's default pick and /quote answers
+     any other. `planFor` takes that quote; without one it says "pricing…"
+     rather than make a number up. There is no fitSeconds twin any more.
 
    No "@/..." imports: tests/render-choice.test.mjs loads this with node. */
 
@@ -110,32 +114,27 @@ export function legalDuration(axis: AxisLike, seconds: number): boolean {
   return (axis.values || []).map(Number).includes(seconds);
 }
 
-export function fitSeconds(axis: AxisLike, seconds: number | null | undefined): number {
-  const want = Math.max(1, Math.ceil(Number(seconds) || 1));
-  if (axis.kind === "range") return Math.min(Math.max(want, axis.min ?? want), axis.max ?? want);
-  const values = (axis.values || []).map(Number).sort((a, b) => a - b);
-  if (!values.length) return want;
-  if (axis.kind === "fixed") return values[0];
-  return values.find((v) => v >= want) ?? values[values.length - 1];
-}
-
-export type Plan = { timed: boolean; n: number; lengths: number[]; usd: number | null };
+export type Plan = { timed: boolean; n: number; lengths: number[]; usd: number | null; pending?: boolean; refused?: string };
+/** the server's price for a pick (pricing.display), or its refusal */
+export type QuoteLike = { error?: string; timed?: boolean; durations?: number[]; estimate_usd?: number } | null | undefined;
 
 /** What an approve would make and cost. `parts` is the scene's timeline
- *  (null for a scene that renders whole); shots that already have a clip
- *  are skipped, as the server's resume does. */
-export function planFor(spec: ModelLike, pick: Pick, parts: PartLike[] | null | undefined): Plan {
+ *  (null for a scene that renders whole). A timed scene's lengths and
+ *  price are the server's `quote` for THIS pick: shots that already have
+ *  a clip are not in it, as the server's resume skips them. */
+export function planFor(spec: ModelLike, pick: Pick, parts: PartLike[] | null | undefined, quote?: QuoteLike): Plan {
   if (!parts || !parts.length) {
     return { timed: false, n: 1, lengths: [pick.duration ?? 0], usd: estimate(spec, pick.frame, pick.duration) };
   }
   const todo = parts.filter((p) => !p.media_url);
-  const lengths = todo.map((p) => fitSeconds(spec.duration, p.seconds));
-  const each = lengths.map((sec) => estimate(spec, pick.frame, sec));
-  return { timed: true, n: todo.length, lengths, usd: each.some((v) => v === null) ? null : each.reduce<number>((s, v) => s + (v as number), 0) };
+  if (!quote || quote.error || !quote.timed || !quote.durations) {
+    return { timed: true, n: todo.length, lengths: [], usd: null, pending: !quote, refused: quote?.error ?? "" };
+  }
+  return { timed: true, n: quote.durations.length, lengths: quote.durations, usd: quote.estimate_usd ?? null };
 }
 
 export const approveText = (plan: Plan): string =>
-  `Approve · ${plan.n} shot${plan.n === 1 ? "" : "s"} · ${plan.usd === null ? "unpriced" : "~$" + plan.usd.toFixed(2)}`;
+  `Approve · ${plan.n} shot${plan.n === 1 ? "" : "s"} · ${plan.refused ? "refused" : plan.pending ? "pricing…" : plan.usd === null ? "unpriced" : "~$" + plan.usd.toFixed(2)}`;
 
 export const chipText = (spec: ModelLike, pick: Pick, plan: Plan): string =>
   `${spec.label} · ${plan.timed ? `${plan.n} shot${plan.n === 1 ? "" : "s"}` : `${pick.duration}s`} · ${pick.frame ?? "—"}`.toUpperCase();
