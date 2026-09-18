@@ -119,9 +119,27 @@
         {% if s.location %}<span class="tag faint">{{ s.location|upper }}</span>{% endif %}
         {% if s.media_url %}<span class="tag">CLIP ATTACHED</span>{% endif %}
       </div>
+      {# the keyframe and the refs open the shared preview overlay
+         (static/zpf/preview.js, wired at the foot of dev_studio.html).
+         Two groups: a still the pipeline drew is not a reference. #}
       {% if s.reference_image %}
-      <img src="{{ s.reference_image }}" alt="Reference anchoring this scene"
-           style="max-width:100%; max-height:200px; border-radius:6px; margin:8px 0; display:block; border:1px solid #26323f">
+      <div class="zpv-row" data-zpv-group="{{ c.title }}" data-zpv-kind="KEYFRAME">
+        <button type="button" class="wide" data-zpv-src="{{ s.reference_image }}"
+                aria-label="Preview the keyframe anchoring this scene">
+          <img src="{{ s.reference_image }}" alt="Keyframe anchoring this scene">
+        </button>
+      </div>
+      {% endif %}
+      {% if s.refs %}
+      <div class="kicker">REFERENCES · {{ s.refs | length }}</div>
+      <div class="zpv-row" data-zpv-group="{{ c.title }}">
+        {% for url in s.refs %}
+        <button type="button" data-zpv-src="{{ url }}"
+                aria-label="Preview reference {{ loop.index }} of {{ s.refs | length }}">
+          <img src="{{ url }}" alt="" loading="lazy">
+        </button>
+        {% endfor %}
+      </div>
       {% endif %}
       <form method="post" action="/concepts/{{ c.id }}/shots/{{ s.n or loop.index }}/verdict"
             style="display:grid; gap:8px; margin-top:8px">

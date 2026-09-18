@@ -41,11 +41,15 @@ import {
   announceQueueChange,
   getAssets,
   getCapabilities,
+  runCreativeGuide,
   runScenes,
   waitForJob,
   type Asset,
   type AssetHit,
   type Capabilities,
+  runGuideAction,
+  type GuideProposal,
+  type GuideReply,
 } from "@/lib/studio-api";
 import { useMentions } from "@/components/studio/mentions";
 import { useShell } from "@/components/studio/shell";
@@ -55,7 +59,19 @@ import { ELEMENT_KINDS, displayPhoto, drawable, elementKind, isElement, kindLabe
 
 type Attachment = { id: string; name: string; file: File; url: string };
 type Option = { id: string; label: string; note?: string };
-type GuideMessage = { role: "user" | "assistant"; content: string };
+/* `failed` marks a turn the guide never answered. It is drawn on the
+   bubble itself and dropped from the next turn's conversation, so a
+   retry neither repeats it on screen nor sends it twice. */
+type GuideMessage = {
+  role: "user" | "assistant";
+  content: string;
+  failed?: boolean;
+  /** which board tools the guide looked at before this answer */
+  looked?: string[];
+  /** a write the guide proposed; drawn as a confirm card until decided */
+  proposal?: GuideProposal | null;
+  decided?: "done" | "skipped";
+};
 type Written = { conceptId: number | null; detail: string };
 /* the shelf under the box is ELEMENTS only -- the characters, props,
    products and places a person created to @ in a prompt (Mike's call,
@@ -148,8 +164,15 @@ function Composer() {
   const [picked, setPicked] = useState<string[]>([]); // asset photo urls
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [busy, setBusy] = useState(false);
-  const [progress, setProgress] = useState(0);
+  // Two kinds of note, and they used to render identically: progress
+  // ("Writing…") and failure. A failure in the hint's own slot, small
+  // caps and ellipsised, is how a 403 on every Guide turn read as the
+  // composer saying nothing at all (2026-09-14). `say(text, true)`
+  // marks the failing kind -- it turns the line signal-red and also
+  // raises the shell's error toast, which is the loud surface.
   const [note, setNote] = useState<string | null>(null);
+  const [noteBad, setNoteBad] = useState(false);
+  const [progress, setProgress] = useState(0);
   const [written, setWritten] = useState<Written | null>(null);
   const [dragging, setDragging] = useState(false);
   const [wantMode, setMode] = useState<"guide" | "create">("guide");
@@ -230,12 +253,19 @@ function Composer() {
   const canSend = !busy && (mode === "create" ? !!(idea.trim() || brief.trim()) : !!idea.trim());
   const referenceCount = picked.length + attachments.length;
 
+  const say = (text: string | null, bad = false) => {
+    setNote(text);
+    setNoteBad(bad);
+    if (bad && text) toast(text, "err");
+  };
+
   async function send() {
     if (!canSend) return;
     setBusy(true);
     setProgress(0);
-    setNote(null);
     setWritten(null);
+    say(null);
+    let asking: GuideMessage[] | null = null;
     try {
       if (mode === "create") {
         const form = new FormData();
@@ -248,24 +278,28 @@ function Composer() {
         picked.forEach((u) => form.append("refs", u));
         attachments.forEach((a) => form.append("files", a.file, a.name));
         const started = await runScenes(form);
-        setNote("Writing the scene…");
+        say("Writing the scene…");
         const job = await waitForJob(started.job_id, (j) => {
           setProgress(j.progress || 0);
-          setNote(j.detail || "Writing the scene…");
+          say(j.detail || "Writing the scene…");
         });
         if (job.status === "done") {
           setProgress(1);
-          setNote(null);
+          say(null);
           setWritten({ conceptId: job.ref_id ?? null, detail: job.detail || "on the board" });
           toast("Scene written · it is on Pipeline to pick");
           setIdea("");
           announceQueueChange();
         } else {
-          setNote(job.error || "That run did not finish.");
+          say(job.error || "That run did not finish.", true);
         }
       } else {
-        const next: GuideMessage[] = [...thread, { role: "user", content: idea.trim() }];
+        const next: GuideMessage[] = [
+          ...thread.filter((m) => !m.failed),
+          { role: "user", content: idea.trim() },
+        ];
         const asked = idea.trim();
+        asking = next;
         setThread(next);
         setIdea("");
         setChoices([]);
@@ -274,26 +308,73 @@ function Composer() {
         if (brand) form.append("brand", brand);
         form.append("guide_provider", "gemini");
         form.append("idea", asked);
-        const res = await fetch(`${API_URL}/api/creative-guide`, {
-          method: "POST",
-          credentials: "include",
-          body: form,
-        });
-        if (!res.ok) throw new Error(`The guide answered ${res.status}`);
-        const started = (await res.json()) as { job_id: number };
+        // runCreativeGuide, never a bare fetch: the route is behind
+        // mutation_header and a call without GUARDED_HEADERS is refused
+        // 403 -- which lands in `note` and reads as the guide saying
+        // nothing at all, since the thread and the box are already
+        // cleared by then.
+        const started = await runCreativeGuide(form);
         const job = await waitForJob(started.job_id, (j) => {
           setProgress(j.progress || 0);
-          setNote(j.detail || "Considering your direction…");
+          say(j.detail || "Considering your direction…");
         });
-        const reply = (job as unknown as { reply?: { message: string; choices?: string[]; brief?: string } }).reply;
+        const reply = (job as unknown as { reply?: GuideReply }).reply;
         if (job.status !== "done" || !reply) throw new Error(job.error || "The guide stopped.");
-        setThread([...next, { role: "assistant", content: reply.message }]);
+        setThread([
+          ...next,
+          {
+            role: "assistant",
+            content: reply.message,
+            looked: (reply.tool_runs ?? []).filter((r) => r.ok).map((r) => r.tool),
+            proposal: reply.proposal ?? null,
+          },
+        ]);
         setChoices(reply.choices ?? []);
         if (reply.brief) setBrief(reply.brief);
-        setNote(reply.brief ? "Brief ready — switch to Create, or keep refining." : "Choose a direction or reply.");
+        say(
+          reply.proposal
+            ? "Confirm on the card, or skip it."
+            : reply.brief
+              ? "Brief ready — switch to Create, or keep refining."
+              : "Choose a direction or reply.",
+        );
       }
     } catch (e) {
-      setNote(e instanceof Error ? e.message : "That did not go through.");
+      // The thread and the box were cleared before the request went out,
+      // so a failed turn must say so ON its own bubble, and hand the
+      // words back for a retry.
+      if (asking) {
+        const last = asking[asking.length - 1];
+        setThread([...asking.slice(0, -1), { ...last, failed: true }]);
+        setIdea((now) => now || last.content);
+      }
+      say(e instanceof Error ? e.message : "That did not go through.", true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /* The confirm card. Nothing has run until this: the guide's turn
+     ended on the proposal, and the click is what posts it. The result
+     goes into the thread as the guide's own words, so the next turn's
+     conversation says what was banked. */
+  async function decide(i: number, yes: boolean) {
+    const entry = thread[i];
+    if (!entry?.proposal || entry.decided || busy) return;
+    if (!yes) {
+      setThread((t) => t.map((m, j) => (j === i ? { ...m, decided: "skipped" } : m)));
+      return;
+    }
+    setBusy(true);
+    try {
+      const done = await runGuideAction(entry.proposal);
+      setThread((t) => [
+        ...t.map((m, j) => (j === i ? { ...m, decided: "done" as const } : m)),
+        { role: "assistant", content: `Done — ${done.result}` },
+      ]);
+      say("Banked.");
+    } catch (e) {
+      say(e instanceof Error ? e.message : "That did not go through.", true);
     } finally {
       setBusy(false);
     }
@@ -427,9 +508,40 @@ function Composer() {
             {thread.length && mode === "guide" ? (
               <div className="cthread">
                 {thread.map((m, i) => (
-                  <p key={i} className={`cmsg${m.role === "user" ? " me" : ""}`}>
-                    {m.content}
-                  </p>
+                  <div key={i} className="cturn">
+                    {m.looked?.length ? (
+                      <span className="clooked">looked at {m.looked.join(", ")}</span>
+                    ) : null}
+                    <p className={`cmsg${m.role === "user" ? " me" : ""}${m.failed ? " failed" : ""}`}>
+                      {m.content}
+                      {m.failed ? <span className="cmsg-failed">Not sent — try again</span> : null}
+                    </p>
+                    {m.proposal ? (
+                      <div className={`ccard${m.decided ? ` ${m.decided}` : ""}`}>
+                        <b>{m.proposal.label}</b>
+                        <dl>
+                          {Object.entries(m.proposal.args).map(([k, v]) => (
+                            <div key={k}>
+                              <dt>{k}</dt>
+                              <dd>{String(v)}</dd>
+                            </div>
+                          ))}
+                        </dl>
+                        {m.decided ? (
+                          <span className="ccard-state">{m.decided === "done" ? "Done" : "Skipped"}</span>
+                        ) : (
+                          <div className="ccard-actions">
+                            <button type="button" className="yes" disabled={busy} onClick={() => decide(i, true)}>
+                              Confirm
+                            </button>
+                            <button type="button" disabled={busy} onClick={() => decide(i, false)}>
+                              Skip
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
                 ))}
                 {choices.length ? (
                   <div className="cchoices">
@@ -634,7 +746,11 @@ function Composer() {
               </button>
             </div>
             <div className="cstatus">
-              <span className={`m cnote${note && !busy && !written ? " said" : ""}`}>
+              <span
+                className={`m cnote${noteBad ? " bad" : note && !busy && !written ? " said" : ""}`}
+                role={noteBad ? "alert" : undefined}
+                title={noteBad && note ? note : undefined}
+              >
                 {note ??
                   (referenceCount
                     ? `${referenceCount} reference${referenceCount === 1 ? "" : "s"} attached · they ride into the prompt, the keyframe and the clip`

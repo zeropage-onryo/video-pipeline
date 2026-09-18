@@ -997,8 +997,17 @@ ENGINE_TOOLS = (run_research, run_graph)
 
 
 def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
-                 start_job=None, job_status=None):
+                 start_job=None, job_status=None, account_id: Optional[int] = None,
+                 engine: Optional[bool] = None):
     """Wrap the functions above as an MCP server.
+
+    `account_id` is whose board this server reads (2026-09-18): the
+    Guide opens one in-process per signed-in request, and the board it
+    shows must be that account's, not the bootstrap account's. None
+    keeps the bearer-token posture (`_account`). `engine` overrides the
+    environment gate: the Guide passes False explicitly, the way
+    `research_agent._server_env` strips the variable -- `.env` has it
+    on and the server loads `.env` itself. None reads the environment.
 
     `mcp` is imported lazily so it stays an optional dependency: the
     tool surface is testable, and the pipeline runs, on a machine that
@@ -1071,7 +1080,8 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
         """List concepts on the pre-production board. status is one of
         open, picked, archived, parked, shot, all. brand is antihero or
         zeropage."""
-        return _t(list_ideas, brand=brand, status=status, limit=limit, dsn=dsn)
+        return _t(list_ideas, brand=brand, status=status, limit=limit, dsn=dsn,
+                  account_id=account_id)
 
     @server.tool(annotations=read_only)
     def idea(idea_id: int) -> dict:
@@ -1080,14 +1090,15 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
         score, pass/fail, reason, and how the run ended) and is null
         for a Studio Create row, which is never scored -- `judge_*` is
         the Dev Studio's manual taste judge, not the graph."""
-        return _t(get_idea, idea_id, dsn=dsn)
+        return _t(get_idea, idea_id, dsn=dsn, account_id=account_id)
 
     @server.tool(annotations=read_only)
     def search(query: str, brand: Optional[str] = None,
                limit: int = LIST_LIMIT) -> dict:
         """Find concepts whose title, hook, logline, spark or scene
         prompt contains this text."""
-        return _t(search_ideas, query, brand=brand, limit=limit, dsn=dsn)
+        return _t(search_ideas, query, brand=brand, limit=limit, dsn=dsn,
+                  account_id=account_id)
 
     @server.tool(annotations=writes)
     def capture(brand: str, title: str, hook: str = "", logline: str = "",
@@ -1217,9 +1228,9 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
     @server.tool(annotations=read_only)
     def stats() -> dict:
         """Pick rate, shoot rate, and what is sitting on the board."""
-        return _t(pipeline_stats, dsn=dsn)
+        return _t(pipeline_stats, dsn=dsn, account_id=account_id)
 
-    if engine_enabled():
+    if engine_enabled() if engine is None else engine:
         @server.tool(annotations=writes)
         def research(brand: str, count: int = 4,
                      lanes: Optional[list] = None) -> dict:

@@ -179,6 +179,57 @@ def test_pipeline_concepts_derive_status(tmp_db):
     assert data["deny_reasons"] == list(api_mod.DENY_REASONS)
 
 
+def test_the_card_carries_the_gates_verdict_or_says_it_was_never_scored(tmp_db):
+    """`gate` on the board and the Queue is the prompt gate's own verdict
+    (autonomy.gates_for_concepts), and None -- not a pass -- for a Studio
+    Create that no graph run ever scored."""
+    shot = [{"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
+             "prompt": "x", "refs": ["/refs/a.jpg"]}]
+    scored = seed_concept(tmp_db, "Scored", shots=shot)
+    created = seed_concept(tmp_db, "Created", shots=shot)
+    api_mod.autonomy.to_hold("antihero", "advisory: prompt gate 4/10 — no camera direction",
+                             concept_id=scored, payload={"run_id": "r1"},
+                             dsn=tmp_db, account_id=None)
+    api_mod.autonomy.log_prompt_scores(
+        "r1", [{"prompt": "x", "score": 4, "pass": False, "reason": "no camera direction"}],
+        dsn=tmp_db)
+    by_id = {c["id"]: c for c in client.get("/api/pipeline/concepts").json()["items"]}
+    assert by_id[scored]["gate"] == {
+        "score": 4, "passed": False, "reason": "no camera direction", "reworks": 0,
+        "status": "held", "outcome": "advisory: prompt gate 4/10 — no camera direction"}
+    assert by_id[created]["gate"] is None
+    # the Queue reads the same card
+    preprod.set_picked(scored, True, dsn=tmp_db, account_id=None)
+    [waiting] = client.get("/api/queue/pending").json()["items"]
+    assert waiting["id"] == scored and waiting["gate"]["score"] == 4
+
+
+def test_the_card_says_where_each_reference_came_from(tmp_db):
+    """`ref_sources` is parallel to `refs` (which is untouched -- its order
+    anchors the render): a scouted frame carries the page it was taken
+    from, in either stored URL shape; an asset photo is attributed by its
+    shelf and slug; an upload has no page and says so by being empty."""
+    api_mod.scout.init(tmp_db)
+    api_mod.scout.bin_add("antihero", "p1", "/refs/aaa.jpg",
+                          source_url="https://ex.test/post/1", title="stairwell",
+                          lane="feeds", dsn=tmp_db)
+    api_mod.scout.bin_add("antihero", "p1", "/refs/ccc.jpg", source_url="",
+                          lane="composer", dsn=tmp_db)
+    refs = ["/characters/michael/photo/a.jpg", "https://pub-x.r2.dev/refs/aaa.jpg",
+            "/refs/ccc.jpg", "https://cdn.test/other.png"]
+    cid = seed_concept(tmp_db, "Sourced", shots=[
+        {"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY", "prompt": "x", "refs": refs}])
+    card = {c["id"]: c for c in client.get("/api/pipeline/concepts").json()["items"]}[cid]
+    assert card["refs"] == refs
+    assert [r["url"] for r in card["ref_sources"]] == refs
+    asset, scouted, upload, other = card["ref_sources"]
+    assert (asset["kind"], asset["slug"], asset["source_url"]) == ("character", "michael", "")
+    assert scouted == {"url": refs[1], "kind": "refs", "slug": "", "filename": "aaa.jpg",
+                       "source_url": "https://ex.test/post/1", "title": "stairwell", "lane": "feeds"}
+    assert (upload["kind"], upload["lane"], upload["source_url"]) == ("refs", "composer", "")
+    assert (other["kind"], other["source_url"]) == ("", "")
+
+
 def test_pipeline_run_generates_through_a_job(tmp_db, monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     import src.shootgen as shootgen

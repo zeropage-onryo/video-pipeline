@@ -1141,6 +1141,23 @@ is yours, in Resolve, by hand.
   effect is visible, and how the run ended). `generate` returns the same `gate` with the
   run. `judge_*` keeps its name and its meaning. Nothing in `run_graph` returned early; the
   diagnosis was two surfaces being read as one.
+  **The board's cards carry the same verdict (2026-09-17).** `_concept_card` gained `gate`
+  (`autonomy.gates_for_concepts`: `{score, passed, reason, reworks, status, outcome}`, the
+  `_gate` reading batched into two queries for the whole board), on `/api/pipeline/concepts`
+  and `/api/queue/pending`. `None` means no graph run ever ended on the concept — never
+  scored, which the cards say as such and must never draw as a pass. `passed` is what the
+  gate SAID (the `log_prompt_scores` rule), so an advisory run that parked still reads
+  False; the cards show a failed gate as CHECK, never BLOCKED — BLOCKED is the reference
+  gate's alone. `gateOf` in `app/static/zpf/cards.js` and
+  `web/src/components/studio/concept-card.tsx` are twins.
+  **And where each reference came from (same day).** `ref_sources` is parallel to `refs`
+  (`refs` itself is untouched — its order anchors the render): `{url, kind, slug, filename,
+  source_url, title, lane}`, `kind` from `asset_shelf.parse_ref`, the rest from
+  `scout.sources_for_refs` — one query per board, joined on the bin's content-hash basename
+  (the same in `/refs/<sha>.jpg` and the R2 URL), the row WITH a `source_url` winning when
+  the same bytes were banked twice. "A reference must be traceable to where it came from"
+  was kept at banking time and lost on the shot; the preview overlay now links the page.
+  Only http(s) is ever linked, and an upload says it has no page rather than implying one.
   **Two layers, and the split is the testable part.** The tool functions are plain Python
   against a database path (so the whole surface is testable with no `mcp` package
   installed); `build_server` wraps them lazily. `app/jobs.py` is injected as callables
@@ -1422,6 +1439,15 @@ is yours, in Resolve, by hand.
   + `queue_approve` and `ops/render_queue.py`'s `pending` all ask it again at the spend.
   `ops/archive_ungrounded.py` is the repair pass for rows written before it (87 archived on the
   day, of 152 live).
+  **The Queue PAGE lists them, blocked (2026-09-17, Mike's call).** A row still gets here
+  ungrounded three ways — written before the gate, un-archived, or its refs cleared later — and
+  dropping it from the list made a picked scene look like a lost pick. `_waiting(...,
+  include_blocked=True)` is `queue_pending`'s alone: such a card carries `blocked` (the gate's
+  own reason), sorts after every spendable card, and is left out of `spendable`, which is what
+  the rail's badge counts. Nothing about SPENDING moved: `_waiting`'s default is still
+  spendable-only, so the manual lane never sees one, `queue_approve` still asks
+  `reference_gate` itself and answers `no_reference`, and `ops/render_queue.py` is untouched.
+  Listing a scene is not a way to spend on it.
   What made this worth breaking the convention for: the board was showing cards reading
   "KEYFRAMED · AWAITING APPROVAL IN QUEUE" beside "NO REFERENCES". That keyframe is a still
   Nano drew **from the prompt**, so approving one spends a Runway credit anchoring the clip on

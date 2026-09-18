@@ -384,6 +384,26 @@ def test_the_lane_takes_picked_scenes_not_merely_parked_ones(tmp_db, monkeypatch
     assert set(lane) == {parked, picked}
 
 
+def test_an_ungrounded_picked_scene_is_on_the_queue_page_but_never_on_the_lane(tmp_db, monkeypatch, api):
+    """The Queue page lists a scene with no reference photos as BLOCKED
+    (2026-09-17) so a pick does not look lost. The lane must not follow it
+    there: the lane is a person's hands rendering a clip, and a hand render
+    of an ungrounded scene is the same spend on the pipeline's own guess
+    that the reference gate exists to stop. Both lane doors -- the route
+    and ops/render_queue -- still see only what can be rendered."""
+    account_id = an_operator(tmp_db, monkeypatch)
+    blind = a_scene(tmp_db, account_id, title="No Photos")
+    grounded = a_scene(tmp_db, account_id, title="Has Photos", refs=["/refs/a.jpg"])
+    for cid in (blind, grounded):
+        preprod.set_picked(cid, True, dsn=tmp_db, account_id=account_id)
+    client = api(account_id)
+    page = client.get("/api/queue/pending").json()["items"]
+    assert {c["id"]: bool(c["blocked"]) for c in page} == {grounded: False, blind: True}
+    lane = [i["concept_id"] for i in client.get("/api/queue/manual").json()["items"]]
+    assert lane == [grounded]
+    assert [w["concept_id"] for w in rq.pending(account_id=account_id, provider="runway")] == [grounded]
+
+
 def test_the_route_refuses_a_non_operator(tmp_db, monkeypatch, api):
     an_operator(tmp_db, monkeypatch)
     other = accounts.upsert_account("pilot", "Pilot", dsn=tmp_db)

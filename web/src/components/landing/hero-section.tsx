@@ -21,9 +21,9 @@ export function HeroSection() {
       <div className="relative mx-auto grid max-w-6xl items-center gap-12 px-6 pb-16 pt-20 md:min-h-[calc(100svh-4rem)] md:grid-cols-[1.25fr_.75fr] md:py-20">
         <div>
           <span className={`kicker block ${REVEAL} motion-safe:duration-700`}>Your vision. Your studio.</span>
-          <h1 className={`display mt-6 text-balance text-6xl sm:text-8xl xl:text-[7.5rem] ${REVEAL} motion-safe:duration-700 motion-safe:delay-100`}>
-            From idea
-            <br />to <span className="text-primary">creation.</span>
+          <h1 className={`display mt-6 text-balance text-5xl sm:text-8xl xl:text-[7.5rem] ${REVEAL} motion-safe:duration-700 motion-safe:delay-100`}>
+            The AI content studio that{" "}
+            <span className="text-primary">creates for you.</span>
           </h1>
           <p className={`mt-8 max-w-xl text-lg font-light leading-relaxed text-muted-foreground sm:text-xl ${REVEAL} motion-safe:duration-700 motion-safe:delay-200`}>
             An AI creative studio for filmmakers, brands, and creators. Bring the spark, shape

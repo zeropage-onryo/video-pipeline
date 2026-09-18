@@ -40,6 +40,7 @@ unattended run is a different question nobody has answered yet.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from types import ModuleType
 from typing import Optional
 
@@ -333,7 +334,7 @@ _MODEL_PROJECTIONS = {
 # recomputed here. Veo takes neither argument (one flat preview price);
 # Higgsfield scales an estimate by duration; only fal's is close to an
 # invoice, because only fal publishes a per-second rate per model.
-_ESTIMATORS = {
+ESTIMATORS = {
     # `frame` IS the ratio on this lane, and Seedance bills per resolution
     # tier -- so a 1080p reference render prices at 68 credits/s here
     # instead of silently quoting the 720p rate on the approve button.
@@ -345,6 +346,58 @@ _ESTIMATORS = {
         1, model=model, duration=duration),
     "veo": lambda model, duration, frame: veo.estimate_cost(1),
 }
+
+# --------------------------------------------------------------------------
+# price bands -- which tier a model belongs to, and how long a render of it
+# may be QUOTED for (src/pricing.py reads these; nothing here prices)
+# --------------------------------------------------------------------------
+# One table beside the estimators, because the two answer the same
+# question from both ends: what a render costs, and whether that is a cost
+# this account's plan was sold. A 5s clip is ~$0.25 on gen4_turbo and ~$3
+# on Veo; on a bundled-credit plan, six of the second kind is the month.
+#
+# max_seconds caps the QUOTE, never the render (the render's length comes
+# from timeline.fit_seconds). None means the model's own legal maximum:
+# every length legal today still prices, and tightening one is a one-line
+# decision made here. WHICH TIER AN ACCOUNT IS ON IS NOT RECORDED ANYWHERE
+# YET -- pricing takes it as an argument and enforces nothing when it is
+# not given, so this table changes no behaviour until a plan exists.
+TIERS = ("standard", "premium")      # ascending: a tier may use itself and below
+
+
+@dataclass(frozen=True)
+class Band:
+    tier: str
+    max_seconds: Optional[int] = None
+
+
+BANDS: dict[tuple[str, str], Band] = {
+    ("runway", "gen4_turbo"): Band("standard"),
+    ("runway", "gen4.5"): Band("standard"),
+    ("runway", "seedance2_5"): Band("standard"),
+    ("fal", "ltx2.3"): Band("standard"),
+    ("fal", "wan3"): Band("standard"),
+    ("fal", "kling3-turbo-pro"): Band("standard"),
+    ("fal", "seedance2-fast"): Band("standard"),
+    ("fal", "seedance2"): Band("standard"),
+    ("higgsfield", "seedance-pro"): Band("standard"),
+    ("higgsfield", "seedance-lite"): Band("standard"),
+    ("higgsfield", "kling2.5"): Band("standard"),
+    ("higgsfield", "kling2.1"): Band("standard"),
+    ("higgsfield", "veo3.1-fast"): Band("premium", max_seconds=8),
+    ("higgsfield", "veo3.1"): Band("premium", max_seconds=8),
+    ("veo", "veo-3.1-generate-preview"): Band("premium", max_seconds=8),
+    ("veo", "veo-3"): Band("premium", max_seconds=8),
+    ("veo", "veo-3-fast"): Band("premium", max_seconds=8),
+}
+
+
+def band_for(provider: str, model: str) -> Band:
+    """A model nobody banded is PREMIUM: a new entry in a vendor's spec
+    table must not become quotable on every plan by being forgotten here
+    (tests/test_pricing.py also fails on the omission)."""
+    return BANDS.get((provider, model), Band("premium"))
+
 
 # shot.PLATFORMS name -> (provider, the model that platform renders on).
 # This is what lets a card default to the tool shootgen actually planned
@@ -511,27 +564,7 @@ def check_render_choice(provider: Optional[str] = None, model: Optional[str] = N
                          what=FRAME_AXIS.get(provider, "resolution"), model=model)
     return {"provider": provider, "model": model,
             "duration": seconds, "frame": framed,
-            "estimate_usd": _ESTIMATORS[provider](model, seconds, framed)}
-
-
-def check_timeline_choice(provider: Optional[str] = None, model: Optional[str] = None,
-                          frame=None, windows=()) -> dict:
-    """check_render_choice for a scene of several timed shots
-    (src/timeline.py, 2026-09-10): the same provider / model / frame
-    checks, refused the same way, but the LENGTH is not the card's to pick
-    -- each shot's window decides its own, fitted up to the nearest length
-    the model can make (timeline.fit_seconds: a 3s window is a 5s Runway
-    render, trimmed in the edit). Returns the per-shot lengths and the sum
-    of their estimates, so the card can show what the whole scene costs
-    before anything is billed."""
-    from . import timeline
-    choice = check_render_choice(provider, model, None, frame)
-    axis = model_options(choice["provider"], choice["model"])["duration"]
-    durations = [timeline.fit_seconds(axis, w) for w in windows or ()]
-    estimate = sum(_ESTIMATORS[choice["provider"]](choice["model"], d, choice["frame"])
-                   for d in durations)
-    return {**choice, "duration": None, "durations": durations,
-            "estimate_usd": round(estimate, 4)}
+            "estimate_usd": ESTIMATORS[provider](model, seconds, framed)}
 
 
 def provider_state(provider: str, account_id: Optional[int] = None,
@@ -626,7 +659,7 @@ def _default_cost(provider: str, spec: dict) -> float:
     """What one clip of this model costs at its own default length and
     frame -- the ranking key for the fallback. Unpriced sorts last."""
     try:
-        usd = _ESTIMATORS[provider](spec["id"], spec["duration"]["default"],
+        usd = ESTIMATORS[provider](spec["id"], spec["duration"]["default"],
                                     spec["frame"]["default"])
         return float(usd) if usd is not None else float("inf")
     except Exception:

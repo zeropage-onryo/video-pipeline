@@ -53,11 +53,26 @@ export type AssetHit = { name: string; category: AssetCategory; thumb: string | 
 export const searchAssets = (q: string) =>
   apiFetch<{ items: AssetHit[] }>(`/assets/search?q=${encodeURIComponent(q)}`);
 
+/* Routes behind app/model_connections.mutation_header refuse any request
+   that does not carry this header (403, before any work). It exists so a
+   SameSite=None studio session cannot be spent by a cross-site form post:
+   a custom header forces a CORS preflight. Send it from ONE place -- the
+   Jinja client sends it per call site and the React composer was ported
+   without it, which 403'd every Guide turn silently (2026-09-14). */
+export const GUARDED_HEADERS: Record<string, string> = {
+  "X-ZPF-Model-Connection": "1",
+};
+
 /* multipart: apiFetch pins a JSON content-type, so uploads go direct */
-async function apiForm<T>(path: string, form: FormData): Promise<T> {
+async function apiForm<T>(
+  path: string,
+  form: FormData,
+  headers?: Record<string, string>,
+): Promise<T> {
   const res = await fetch(`${API_URL}/api${path}`, {
     method: "POST",
     credentials: "include",
+    ...(headers ? { headers } : {}),
     body: form,
   });
   if (!res.ok) {
@@ -132,7 +147,47 @@ export type Concept = {
   created_at?: string;
   /** the card's own default renderer, resolved server-side from the shot's planned tool */
   render_default?: { provider: string; model: string };
+  /** pricing.display for the card's default pick (GET /api/queue/pending) */
+  quote?: RenderQuote;
+  /* the rest of app/api.py's _concept_card, read by the image-first cards */
+  hook?: string | null;
+  card_line?: string;
+  warnings?: string[];
+  graded?: boolean;
+  shot_done?: boolean;
+  subscription?: boolean;
+  tool?: string;
+  /** Queue only: why the reference gate refuses this card ("" when it can
+   *  be approved). Listed so a pick does not look lost; never approvable. */
+  blocked?: string;
+  /** where each reference came from, parallel to `refs` (app/api.py _ref_sources) */
+  ref_sources?: import("./refs").RefSource[];
+  /** the prompt gate's own verdict (autonomy.gates_for_concepts), or null
+   *  when no graph run ever ended on this concept -- never scored, NOT a
+   *  pass. `passed` is what the gate said, not whether the run went on. */
+  gate?: {
+    score: number | null;
+    passed: boolean | null;
+    reason: string;
+    reworks: number;
+    status: string;
+    outcome: string;
+  } | null;
+  /** the timed shots a scene renders as, or null for one that renders whole */
+  timeline?: Timeline | null;
 };
+export type TimelinePart = {
+  n: number;
+  start: number;
+  end: number;
+  seconds: number;
+  text?: string | null;
+  prompt?: string | null;
+  refs?: string[] | null;
+  reference_image?: string | null;
+  media_url?: string | null;
+};
+export type Timeline = { planned: boolean; seconds?: number | null; parts: TimelinePart[] };
 export type RunwayModel = { id: string; label: string; usd_per_second: number };
 /* the overnight branch's renderer catalogue (providers.render_options):
    every registered renderer with its gates, its models and each model's
@@ -177,8 +232,28 @@ export type RunwayState = {
   durations?: number[];
   today?: number | null;
 };
+/** src/pricing.py `display()` — the priced plan for one approve, or for
+ *  the Director's Generate node: every render it would make, at what
+ *  length, and the provider's estimate. `credits` is null on BYOK (the
+ *  account's own provider bills it). `{error}` when the intent has no
+ *  price. The server is the only place a price is computed. */
+export type RenderQuote = {
+  error?: string;
+  provider: string;
+  model: string;
+  frame: string;
+  timed: boolean;
+  durations: number[];
+  estimate_usd: number;
+  byok: boolean;
+  credits: number | null;
+  content_hash: string;
+  /** tokens ride only when there is something to charge and QUOTE_SIGNING_SECRET is set */
+  signed: boolean;
+  renders: { part: number | null; seconds: number; estimate_usd: number; credits: number | null; token: string | null }[];
+};
 /** what approve takes: providers.check_render_choice refuses, never clamps */
-export type RenderChoice = { provider?: string; model?: string; duration?: number; frame?: string };
+export type RenderChoice = { provider?: string; model?: string; duration?: number; frame?: string; tokens?: string[] };
 export type RenderResolved = { provider: string; model: string; duration: number; frame: string; estimate_usd: number };
 export type PickRate = { generated: number; picked: number; rate: number | null };
 /** GET /api/pipeline/concepts — the board. Ask for the archived rows
@@ -209,6 +284,14 @@ export const queueApprove = (id: number, choice?: RenderChoice) =>
     method: "POST",
     body: JSON.stringify(choice ?? {}),
   });
+/** what approving WITH THIS PICK would render and cost — the server's
+ *  own price; spends nothing. The Queue asks when a pick differs from the
+ *  one the listing already priced. */
+export const queueQuote = (id: number, choice: RenderChoice) => {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(choice)) if (v !== undefined && v !== null) q.set(k, String(v));
+  return apiFetch<RenderQuote>(`/queue/${id}/quote?${q}`);
+};
 export const queueReject = (id: number) =>
   apiFetch<{ ok: boolean }>(`/queue/${id}/reject`, { method: "POST", body: "{}" });
 /** made by hand, outside the render lane — drops it off the pending list */
@@ -258,7 +341,7 @@ export const listJobs = () => apiFetch<{ items: (Job & { cancellable?: boolean }
 export const cancelJob = (id: number) => apiFetch<Job>(`/jobs/${id}/cancel`, { method: "POST", body: "{}" });
 export const clearJob = (id: number) => apiFetch<{ deleted: number }>(`/jobs/${id}`, { method: "DELETE" });
 export const queuePending = (brand?: string) =>
-  apiFetch<{ items: Concept[]; runway: RunwayState; renderers?: Record<string, RendererSpec> }>(
+  apiFetch<{ items: Concept[]; spendable?: number; runway: RunwayState; renderers?: Record<string, RendererSpec> }>(
     `/queue/pending${brand ? `?brand=${encodeURIComponent(brand)}` : ""}`,
   );
 /** The pick. Puts a concept in front of the Queue's approval gate;
@@ -286,6 +369,32 @@ export type Job = {
  *  (asset photo urls) and files (uploads), exactly what the Jinja
  *  composer posts. */
 export const runScenes = (form: FormData) => apiForm<{ job_id: number }>("/scenes/run", form);
+/* One Guide turn. A job, not a plain response: the reasoning tier takes
+   tens of seconds. Guarded -- see GUARDED_HEADERS. */
+export const runCreativeGuide = (form: FormData) =>
+  apiForm<{ job_id: number }>("/creative-guide", form, GUARDED_HEADERS);
+/* What a Guide turn comes back with (src/creative_guide.Reply). A
+   `proposal` is a WRITE the model asked for and nobody has run: the
+   thread draws it as a confirm card and the click is runGuideAction.
+   `tool_runs` are the READ tools it looked at before answering. */
+export type GuideProposal = { tool: string; args: Record<string, unknown>; label: string };
+export type GuideToolRun = { tool: string; args: Record<string, unknown>; ok: boolean };
+export type GuideReply = {
+  message: string;
+  choices?: string[];
+  brief?: string;
+  proposal?: GuideProposal | null;
+  tool_runs?: GuideToolRun[];
+};
+/* POST /api/creative-guide/act -- the confirm card's click, and the
+   ONLY thing that runs a write tool. Guarded like the turn. The server
+   re-checks the tool set and refuses any URL in the arguments. */
+export const runGuideAction = (proposal: GuideProposal) =>
+  apiFetch<{ ok: boolean; tool: string; result: string }>("/creative-guide/act", {
+    method: "POST",
+    headers: GUARDED_HEADERS,
+    body: JSON.stringify({ tool: proposal.tool, args: proposal.args }),
+  });
 export const getJob = (id: number) => apiFetch<Job>(`/jobs/${id}`);
 export async function waitForJob(id: number, onTick?: (job: Job) => void, everyMs = 1500) {
   for (;;) {

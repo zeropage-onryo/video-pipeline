@@ -723,6 +723,19 @@ button.tag:hover {
   padding: 10px 16px 10px 20px;
   flex-wrap: wrap;
 }
+/* A failure, in the slot the composer's hint normally occupies. The
+   hint is one quiet line on purpose; an error is not, so it takes the
+   signal colour and is allowed to wrap to two lines rather than being
+   ellipsised down to a fragment nobody reads. The shell's error toast
+   carries the same text -- this is what remains after it fades. */
+.cnote.bad {
+  color: var(--signal);
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-clamp: 2;
+}
 .pill {
   display: inline-flex;
   align-items: center;
@@ -880,6 +893,100 @@ button.tag:hover {
   border-color: var(--line-hi);
   background: rgb(255 255 255 / 0.04);
   color: var(--text);
+}
+/* a turn the guide never answered: said on the bubble, not only in
+   the note line under the pills */
+.cmsg.failed {
+  border-color: var(--signal);
+  color: var(--dim);
+}
+.cmsg-failed {
+  display: block;
+  margin-top: 6px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--signal);
+}
+/* one turn: an optional "looked at" line, the bubble, an optional
+   confirm card (a write the guide proposed; nothing runs until Confirm) */
+.cturn {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.clooked {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dimmer);
+  padding-left: 4px;
+}
+.ccard {
+  margin-right: 32px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--signal);
+  background: rgb(255 255 255 / 0.03);
+  font-size: 12.5px;
+  color: var(--dim);
+}
+.ccard b {
+  display: block;
+  color: var(--text);
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.ccard dl {
+  margin: 0 0 10px;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+}
+.ccard dl > div {
+  display: contents;
+}
+.ccard dt {
+  color: var(--dimmer);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding-top: 2px;
+}
+.ccard dd {
+  margin: 0;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+.ccard-actions {
+  display: flex;
+  gap: 8px;
+}
+.ccard-actions button {
+  font-size: 12px;
+  padding: 7px 14px;
+  border-radius: var(--rp);
+  border: 1px solid var(--line-hi);
+  background: rgb(255 255 255 / 0.04);
+  color: var(--text);
+}
+.ccard-actions button.yes {
+  border-color: var(--signal);
+  background: var(--signal);
+  color: #fff;
+}
+.ccard-actions button:disabled {
+  opacity: 0.5;
+}
+.ccard.done,
+.ccard.skipped {
+  border-color: var(--line);
+}
+.ccard-state {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dimmer);
 }
 .cchoices {
   display: flex;
