@@ -126,6 +126,15 @@
   margin:-4px 0 0;font-family:var(--nc-mono);font-size:11px;letter-spacing:.04em;color:var(--nc-mute);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
+/* the way out of a locked card: the same door the board's Director icon
+   opens. A label that says "add references" with nowhere to add them is
+   a dead end. */
+.nq-fix{
+  align-self:flex-start;min-height:44px;padding:0 12px;margin-top:-4px;
+  border-radius:8px;border:1px solid var(--nc-line);background:transparent;
+  font-family:var(--nc-mono);font-size:11px;letter-spacing:.08em;color:var(--nc-red2);
+}
+.nq-fix:hover{border-color:var(--nc-red2)}
 .nq-zone{display:flex;flex-direction:column;gap:12px;min-width:0}
 .nq-chipwrap{position:relative}
 .nq-chip{
