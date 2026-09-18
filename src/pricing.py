@@ -94,9 +94,16 @@ CREDIT_FLOOR = 10
 # here are what the site prints and what tests/test_plans.py pins, the
 # Stripe Price is what is actually charged, and the two are kept equal by
 # a person (app/billing.py refuses a price whose amount disagrees).
-# Yearly billing is deliberately NOT offered yet: a lot expires two months
-# after it is granted, so a year's credit granted on one invoice would
-# die ten months early; it needs a monthly-release job first.
+# YEARLY IS A SCHEDULE, NOT A LOT (2026-09-18, second pass). A lot expires
+# two months after it lands, so a year's credit granted on one invoice
+# would die ten months early. A yearly invoice therefore grants month
+# one and writes a 12-month release schedule (src/billing.release_due);
+# each later month lands as its own lot with its own two-month clock.
+# `yearly_usd` is twelve months at YEARLY_DISCOUNT off, what the toggle
+# on /pricing prints; `price_env_yearly` names its Stripe Price.
+YEARLY_DISCOUNT = "0.20"
+MONTHS_PER_YEAR = 12
+
 
 @dataclass(frozen=True)
 class Plan:
@@ -108,6 +115,25 @@ class Plan:
     blurb: str
     price_env: str
     popular: bool = False
+
+    @property
+    def yearly_usd(self) -> int:
+        """Twelve months at the discount, in whole dollars (the three
+        plans all land on integers; a plan that would not should pick a
+        price that does)."""
+        cents = Fraction(self.monthly_usd * 100 * MONTHS_PER_YEAR) * (1 - Fraction(YEARLY_DISCOUNT))
+        assert cents.denominator == 1 and cents.numerator % 100 == 0, self.key
+        return int(cents) // 100
+
+    @property
+    def yearly_monthly_usd(self) -> int:
+        """What a year works out to per month -- the number the card shows
+        under the toggle ($12, $28, $76)."""
+        return self.yearly_usd // MONTHS_PER_YEAR
+
+    @property
+    def price_env_yearly(self) -> str:
+        return f"{self.price_env}_YEAR"
 
 
 PLANS: dict[str, Plan] = {
@@ -676,8 +702,10 @@ def public_catalog() -> dict:
         "expiry_months": ledger.EXPIRY_MONTHS,
         "clip_seconds": CATALOG_CLIP_SECONDS,
         "tiers": list(providers.TIERS),
+        "yearly_discount": YEARLY_DISCOUNT,
         "plans": [{"key": p.key, "name": p.name, "tier": p.tier,
-                   "monthly_usd": p.monthly_usd, "credits": p.credits,
+                   "monthly_usd": p.monthly_usd, "yearly_usd": p.yearly_usd,
+                   "yearly_monthly_usd": p.yearly_monthly_usd, "credits": p.credits,
                    "blurb": p.blurb, "popular": p.popular}
                   for p in PLANS.values()],
         "topup": {"key": TOPUP.key, "name": TOPUP.name, "usd": TOPUP.usd,

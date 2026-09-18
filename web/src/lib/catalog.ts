@@ -12,10 +12,14 @@ export type Plan = {
   name: string;
   tier: Tier;
   monthly_usd: number;
+  yearly_usd: number;
+  yearly_monthly_usd: number;
   credits: number;
   blurb: string;
   popular: boolean;
 };
+
+export type Interval = "month" | "year";
 
 export type CatalogModel = {
   provider: string;
@@ -36,6 +40,7 @@ export type Catalog = {
   credit_floor: number;
   expiry_months: number;
   clip_seconds: number;
+  yearly_discount: string;
   tiers: Tier[];
   plans: Plan[];
   topup: { key: string; name: string; usd: number; credits: number };
@@ -79,6 +84,15 @@ export function frameLabel(frame: string): string {
   if (m) return `${Math.min(Number(m[1]), Number(m[2]))}p`;
   if (/^\d+$/.test(frame)) return `${frame}p`;
   return frame;
+}
+
+/** The per-month figure a card prints at an interval. */
+export function monthlyAt(plan: Plan, interval: Interval): number {
+  return interval === "year" ? plan.yearly_monthly_usd : plan.monthly_usd;
+}
+
+export function discountPercent(): number {
+  return Math.round(Number(CATALOG.yearly_discount) * 100);
 }
 
 export function usd(n: number): string {

@@ -60,6 +60,7 @@ from src import (
     workflows,
     youtube,
 )
+from src import billing as billing_core
 from src import (
     settings as settings_mod,
 )
@@ -179,6 +180,7 @@ async def lifespan(app: FastAPI):
         render_assets.init()  # generated_assets, owned (merged 2026-09-02)
         spend.init()          # llm_calls, the LLM meter (2026-09-04)
         ledger.init()         # credit_lots / credit_entries, the prepaid ledger
+        billing_core.init()   # credit_schedules, a yearly plan's unreleased months
         generative.init()    # generations log the render caps count
         accounts_mod.init()  # users / identities / accounts / members
         settings_mod.init()  # the Dev Studio tunables (gate/threshold/k)

@@ -15,7 +15,8 @@ TWO ROUTERS, AND THE SPLIT IS THE SECURITY MODEL:
   tests/test_tenancy.py's route audit: every handler declares
   `Depends(auth.current_account_id)`, the parameter it cannot act without.
 
-  POST /api/billing/checkout {"item": "starter"|"creator"|"studio"|"topup"}
+  POST /api/billing/checkout {"item": "starter"|"creator"|"studio"|"topup",
+                              "interval": "month"|"year"}
        -> {"url"}: a Checkout Session for THIS account
   POST /api/billing/portal -> {"url"}: the Customer Portal
   GET  /api/billing/balance -> src/billing.balance: credits, plan, lots
@@ -81,6 +82,7 @@ async def stripe_webhook(request: Request):
 
 class CheckoutBody(BaseModel):
     item: str
+    interval: str = "month"       # "month" | "year" (plans only)
 
 
 def _no_account():
@@ -96,7 +98,7 @@ def billing_checkout(body: CheckoutBody, request: Request,
     user = auth.current_user(request) or {}
     try:
         url = billing.checkout_url(account_id, body.item.strip().lower(),
-                                   email=user.get("email"))
+                                   interval=body.interval, email=user.get("email"))
     except billing.BillingUnconfigured as e:
         return _error(503, "billing_unconfigured", str(e))
     except ValueError as e:

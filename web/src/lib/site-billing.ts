@@ -15,11 +15,13 @@ export type CheckoutOutcome =
   | { kind: "unconfigured"; message: string }
   | { kind: "error"; message: string };
 
-export async function startCheckout(item: string): Promise<CheckoutOutcome> {
+export type Interval = "month" | "year";
+
+export async function startCheckout(item: string, interval: Interval = "month"): Promise<CheckoutOutcome> {
   try {
     const { url } = await apiFetch<{ url: string }>("/billing/checkout", {
       method: "POST",
-      body: JSON.stringify({ item }),
+      body: JSON.stringify({ item, interval }),
     });
     return { kind: "redirect", url };
   } catch (e) {
@@ -33,9 +35,11 @@ export async function startCheckout(item: string): Promise<CheckoutOutcome> {
   }
 }
 
-export function signInThenCheckout(item: string) {
+export function signInThenCheckout(item: string, interval: Interval = "month") {
   if (typeof window === "undefined") return;
-  const next = encodeURIComponent(`${window.location.origin}/pricing?checkout=${encodeURIComponent(item)}`);
+  const next = encodeURIComponent(
+    `${window.location.origin}/pricing?checkout=${encodeURIComponent(item)}&interval=${interval}`,
+  );
   // eslint-disable-next-line @next/next/no-location-assign-relative-destination
   window.location.href = `${AUTH_ORIGIN}/signin?next=${next}`;
 }

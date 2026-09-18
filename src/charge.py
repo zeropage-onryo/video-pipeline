@@ -48,6 +48,7 @@ match a hold to the row it paid for.
 
 from __future__ import annotations
 
+import sys
 from typing import Optional
 
 from . import ledger
@@ -82,6 +83,16 @@ class Charge:
             # the ledger's tables exist only once something has made them;
             # app startup does, a route's test may not have
             ledger.init(self.dsn)
+            # a yearly plan's month that is due lands BEFORE the balance is
+            # read: a dead cron must not refuse a render somebody paid for.
+            # Best-effort here -- the hold below is the money path, and a
+            # release that fails is picked up by the next run.
+            try:
+                from . import billing
+                billing.release_due(self.account_id, dsn=self.dsn)
+            except Exception as e:  # pragma: no cover - logged, never fatal
+                print(f"[charge] release_due failed for account {self.account_id}: {e}",
+                      file=sys.stderr)
         self.hold_id = ledger.hold_for_render(
             self.account_id, ref=self.ref, provider=self.provider,
             estimate_usd=self.estimate_usd, key_source=self.key_source,

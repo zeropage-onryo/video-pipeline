@@ -1534,6 +1534,8 @@ three plans live in `src/pricing.PLANS`, every adapter holds credit before its s
 (`src/charge.py`) and settles on the row, Stripe grants through `/billing/webhook`
 (`app/billing.py` + `src/billing.py`), and the public site's `/pricing`, `/models` and
 `/faq` are generated off `web/src/content/pricing.json` (`python -m src.pricing export`).
+Yearly plans are a SCHEDULE (`credit_schedules`, released monthly by
+`python -m src.billing release` and lazily on the money path), never a twelve-month lot.
 **Your own account must be exempted once** -- `python -m src.accounts credits zeropage
 --on` -- or the Queue refuses you for having no credit. Unset `STRIPE_*` = the plan
 buttons say so and nothing else changes.

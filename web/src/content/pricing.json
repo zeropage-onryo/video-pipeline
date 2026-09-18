@@ -10,12 +10,15 @@
     "creator",
     "premium"
   ],
+  "yearly_discount": "0.20",
   "plans": [
     {
       "key": "starter",
       "name": "Starter",
       "tier": "standard",
       "monthly_usd": 15,
+      "yearly_usd": 144,
+      "yearly_monthly_usd": 12,
       "credits": 1500,
       "blurb": "For trying the studio on your own scenes.",
       "popular": false
@@ -25,6 +28,8 @@
       "name": "Creator",
       "tier": "creator",
       "monthly_usd": 35,
+      "yearly_usd": 336,
+      "yearly_monthly_usd": 28,
       "credits": 3500,
       "blurb": "For a channel that posts every week.",
       "popular": true
@@ -34,6 +39,8 @@
       "name": "Studio",
       "tier": "premium",
       "monthly_usd": 95,
+      "yearly_usd": 912,
+      "yearly_monthly_usd": 76,
       "credits": 9500,
       "blurb": "For a body of work, on every model.",
       "popular": false

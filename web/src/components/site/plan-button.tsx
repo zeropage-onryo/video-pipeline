@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { signInThenCheckout, startCheckout } from "@/lib/site-billing";
+import { signInThenCheckout, startCheckout, type Interval } from "@/lib/site-billing";
 
 type State =
   | { phase: "idle" }
@@ -17,26 +17,30 @@ type State =
 export function PlanButton({
   item,
   label,
+  interval = "month",
   variant = "default",
 }: {
   item: string;
   label: string;
+  interval?: Interval;
   variant?: "default" | "outline";
 }) {
   const [state, setState] = useState<State>({ phase: "idle" });
   const params = useSearchParams();
-  const resume = params.get("checkout") === item;
+  // back from sign-in: the item AND the interval have to match this button
+  const resume =
+    params.get("checkout") === item && (params.get("interval") ?? "month") === interval;
 
   // The async half. Every state write happens after an await, in a
   // continuation -- never synchronously inside the effect below.
   function run(): Promise<void> {
-    return startCheckout(item).then((outcome) => {
+    return startCheckout(item, interval).then((outcome) => {
       if (outcome.kind === "redirect") {
         window.location.href = outcome.url;
         return;
       }
       if (outcome.kind === "sign-in") {
-        signInThenCheckout(item);
+        signInThenCheckout(item, interval);
         return;
       }
       setState({

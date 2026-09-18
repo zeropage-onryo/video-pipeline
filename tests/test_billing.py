@@ -56,6 +56,8 @@ def shop(pg, monkeypatch):
     monkeypatch.setenv(billing.WEBHOOK_ENV, WHSEC)
     for key, item in billing.products().items():
         monkeypatch.setenv(item.price_env, f"price_{key}")
+        if billing.is_plan(key):
+            monkeypatch.setenv(item.price_env_yearly, f"price_{key}_year")
     with db.connect(pg) as conn:
         account_id = conn.execute(
             "SELECT id FROM accounts WHERE slug = 'zeropage'").fetchone()["id"]
@@ -275,7 +277,7 @@ def test_checkout_makes_a_session_for_this_account_and_binds_the_customer(shop, 
     assert calls["session"]["mode"] == "subscription"
     assert calls["session"]["customer"] == "cus_new"
     assert calls["session"]["line_items"] == [{"price": "price_creator", "quantity": 1}]
-    assert calls["session"]["metadata"] == {"account_id": str(acct), "item": "creator"}
+    assert calls["session"]["metadata"] == {"account_id": str(acct), "item": "creator", "interval": "month"}
     assert calls["session"]["success_url"].endswith("/pricing?checkout=success")
     assert accounts.stripe_customer_of(acct, dsn=shop["dsn"]) == "cus_new"
 
@@ -321,3 +323,130 @@ def test_the_return_url_is_the_public_site(monkeypatch):
     monkeypatch.setenv(billing.RETURN_ENV, "https://zeropage.example")
     assert billing.return_url("/pricing?checkout=success") == \
         "https://zeropage.example/pricing?checkout=success"
+
+
+# --- yearly: a schedule, not a lot ------------------------------------------
+
+def _months_later(stamp: str, n: int) -> str:
+    return ledger._plus_months(stamp, n)
+
+
+def test_a_yearly_invoice_grants_month_one_and_schedules_eleven_more(shop, monkeypatch):
+    acct, dsn = shop["account_id"], shop["dsn"]
+    monkeypatch.setenv(billing.SECRET_ENV, "sk_test_x")
+    post(checkout_paid(acct))                                     # binds cus_1
+    r = post(invoice_paid(price="price_creator_year", invoice="in_year"))
+    assert r.status_code == 200, r.text
+    assert r.json()["action"] == "scheduled"
+    assert r.json() == {**r.json(), "scheduled": 12, "released_now": 1, "plan": "creator"}
+    plan = pricing.PLANS["creator"]
+    assert ledger.available(acct, dsn) == pricing.TOPUP.credits + plan.credits   # month one only
+    sched = billing.schedules(acct, dsn=dsn)
+    assert len(sched) == 1
+    assert sched[0]["months_released"] == 1 and sched[0]["months_total"] == 12
+    assert sched[0]["next_release_at"] == _months_later(sched[0]["started_at"], 1)
+    lots = [lot for lot in ledger.lots(acct, dsn) if lot["kind"] == "subscription"]
+    assert [lot["source_ref"] for lot in lots] == ["in_year:m1"]
+    # the plan (and its tier) is recorded as on a monthly plan
+    assert accounts.plan_of(acct, dsn=dsn) == "creator"
+    # a redelivered invoice changes nothing
+    post(invoice_paid(price="price_creator_year", invoice="in_year"))
+    assert len(billing.schedules(acct, dsn=dsn)) == 1
+    assert ledger.available(acct, dsn) == pricing.TOPUP.credits + plan.credits
+    b = client.get("/api/billing/balance").json()
+    assert b["schedules"] == [{"plan": "creator", "months_released": 1, "months_total": 12,
+                               "next_release_at": sched[0]["next_release_at"]}]
+    assert b["yearly_configured"] is True
+
+
+def test_each_month_lands_on_its_date_as_its_own_lot_and_never_twice(shop):
+    acct, dsn = shop["account_id"], shop["dsn"]
+    post(checkout_paid(acct))
+    post(invoice_paid(price="price_starter_year", invoice="in_y"))
+    plan = pricing.PLANS["starter"]
+    started = billing.schedules(acct, dsn=dsn)[0]["started_at"]
+
+    assert billing.release_due(acct, now=_months_later(started, 1), dsn=dsn) == 1
+    assert billing.release_due(acct, now=_months_later(started, 1), dsn=dsn) == 0   # idempotent
+    assert ledger.available(acct, dsn) == pricing.TOPUP.credits + 2 * plan.credits
+    # a cron that slept three months releases three months, each with its
+    # own granted_at and therefore its own expiry
+    assert billing.release_due(None, now=_months_later(started, 4), dsn=dsn) == 3
+    lots = sorted((lot for lot in ledger.lots(acct, dsn) if lot["kind"] == "subscription"),
+                  key=lambda lot: lot["id"])
+    assert [lot["source_ref"] for lot in lots] == [f"in_y:m{n}" for n in range(1, 6)]
+    assert lots[4]["granted_at"] == _months_later(started, 4)
+    assert lots[4]["expires_at"] == _months_later(_months_later(started, 4), ledger.EXPIRY_MONTHS)
+    # ... and the twelfth month closes the schedule
+    assert billing.release_due(acct, now=_months_later(started, 30), dsn=dsn) == 7
+    sched = billing.schedules(acct, dsn=dsn)[0]
+    assert sched["months_released"] == 12 and sched["next_release_at"] is None
+    assert billing.release_due(acct, now=_months_later(started, 40), dsn=dsn) == 0
+    assert billing.main(["release"]) is None
+
+
+def test_a_lapse_cancels_the_schedule(shop):
+    acct, dsn = shop["account_id"], shop["dsn"]
+    post(checkout_paid(acct))
+    post(invoice_paid(price="price_studio_year", invoice="in_y"))
+    started = billing.schedules(acct, dsn=dsn)[0]["started_at"]
+    r = post(event("customer.subscription.deleted", {
+        "id": "sub_1", "object": "subscription", "customer": "cus_1", "status": "canceled"}))
+    assert r.json()["schedules_cancelled"] == 1
+    assert billing.release_due(acct, now=_months_later(started, 6), dsn=dsn) == 0
+    assert billing.schedules(acct, dsn=dsn)[0]["cancelled_at"]
+    assert accounts.plan_of(acct, dsn=dsn) is None
+
+
+def test_a_due_month_lands_before_a_hold_is_taken(shop, monkeypatch):
+    """The lazy release on the money path: a dead cron never refuses a
+    render somebody paid for."""
+    from src import charge as charging
+    acct, dsn = shop["account_id"], shop["dsn"]
+    post(invoice_paid(price="price_starter_year", invoice="in_y", customer="cus_1"))
+    assert ledger.lots(acct, dsn) == []                            # unknown customer: acked
+    post(checkout_paid(acct, item="topup"))                       # binds; +1000 purchase
+    post(invoice_paid(price="price_starter_year", invoice="in_y"))
+    started = billing.schedules(acct, dsn=dsn)[0]["started_at"]
+    # pretend a month passed: rewind the schedule's next date into the past
+    with db.connect(dsn) as conn:
+        conn.execute("UPDATE credit_schedules SET next_release_at = %s WHERE account_id = %s",
+                     (ledger._plus_months(started, -1), acct))
+    before = ledger.available(acct, dsn)
+    c = charging.Charge(acct, provider="runway", ref="r1", estimate_usd=1.0, key_source="env", dsn=dsn)
+    c.take()
+    assert ledger.available(acct, dsn) == before + pricing.PLANS["starter"].credits - c.held
+
+
+def test_yearly_checkout_uses_the_yearly_price(shop, monkeypatch):
+    monkeypatch.setenv(billing.SECRET_ENV, "sk_test_x")
+    calls = {}
+
+    class FakeStripe:
+        class Customer:
+            @staticmethod
+            def create(**kw):
+                return {"id": "cus_y"}
+
+        class checkout:
+            class Session:
+                @staticmethod
+                def create(**kw):
+                    calls["session"] = kw
+                    return {"url": "https://checkout.stripe.test/y"}
+
+    monkeypatch.setattr(billing, "_stripe", lambda: FakeStripe)
+    r = client.post("/api/billing/checkout", json={"item": "studio", "interval": "year"})
+    assert r.status_code == 200, r.text
+    assert calls["session"]["line_items"] == [{"price": "price_studio_year", "quantity": 1}]
+    assert calls["session"]["metadata"]["interval"] == "year"
+    assert billing.item_for_price("price_studio_year") == ("studio", "year")
+    assert billing.item_for_price("price_topup") == ("topup", "month")
+    r = client.post("/api/billing/checkout", json={"item": "studio", "interval": "decade"})
+    assert r.status_code == 400
+    monkeypatch.delenv(pricing.PLANS["studio"].price_env_yearly)
+    r = client.post("/api/billing/checkout", json={"item": "studio", "interval": "year"})
+    assert r.status_code == 503 and "STRIPE_PRICE_STUDIO_YEAR" in r.json()["error"]["message"]
+    # the top-up has no interval and ignores one
+    r = client.post("/api/billing/checkout", json={"item": "topup", "interval": "year"})
+    assert r.status_code == 200
