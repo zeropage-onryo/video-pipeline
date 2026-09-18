@@ -26,7 +26,7 @@ export function HeroSection() {
             <span className="text-primary">creates for you.</span>
           </h1>
           <p className={`mt-8 max-w-xl text-lg font-light leading-relaxed text-muted-foreground sm:text-xl ${REVEAL} motion-safe:duration-700 motion-safe:delay-200`}>
-            An AI creative studio for filmmakers, brands, and creators. Bring the spark, shape
+            An AI content studio for filmmakers, brands, and creators. Bring the spark, shape
             the story, and make something only you could imagine.
           </p>
           <div className={`mt-10 flex flex-wrap items-center gap-6 ${REVEAL} motion-safe:duration-700 motion-safe:delay-300`}>

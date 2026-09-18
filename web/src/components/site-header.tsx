@@ -11,7 +11,7 @@ export function SiteHeader() {
   return (
     <header className="sticky top-0 z-50 border-b border-border/60 bg-background/70 backdrop-blur-xl">
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-4 px-6">
-        <Link href="/" className="group flex shrink-0 items-center gap-2.5" aria-label="ZeroPage home">
+        <Link href="/" className="group flex shrink-0 items-center gap-2.5" aria-label="Zero Page home">
           <ApertureMark className="h-5 w-5 text-primary transition-transform duration-500 group-hover:rotate-45" />
           <span className="display text-lg tracking-normal">
             ZERO<span className="text-primary">PAGE</span>

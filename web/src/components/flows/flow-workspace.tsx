@@ -830,7 +830,7 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
     }
     try {
       const data: unknown = JSON.parse(await file.text());
-      if (!validDraft(data)) throw new Error("Choose a ZeroPage workflow JSON export.");
+      if (!validDraft(data)) throw new Error("Choose a Zero Page workflow JSON export.");
       setNodes(data.nodes.map((n) => ({ ...n, data: { ...n.data, busy: !!n.data.jobId } })));
       setEdges(data.edges);
       setName(data.name);

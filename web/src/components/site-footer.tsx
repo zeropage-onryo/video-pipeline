@@ -14,7 +14,7 @@ export function SiteFooter() {
               </span>
             </div>
             <p className="mt-4 text-sm leading-relaxed text-muted-foreground">
-              An AI creative studio for filmmakers, brands, and creators. From idea to creation.
+              The AI content studio that creates for you — for filmmakers, brands, and creators.
             </p>
           </div>
 
