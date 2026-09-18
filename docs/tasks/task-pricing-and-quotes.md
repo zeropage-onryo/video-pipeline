@@ -419,6 +419,27 @@ Not done, deliberately:
 - `ledger.credits_for_usd` still has its one caller, `hold_for_render` (step 6). `test_at_cost_it_charges_what_the_ledger_always_did` pins the two together at 1.0x for every model.
 - `QUOTE_SIGNING_SECRET` is not in `POSTURE_ENV` yet because nothing reads it yet; it goes in with the first line of step 4.
 
+## As built — steps 5 and 6 (2026-09-18)
+
+Landed together with Stripe (docs/BILLING.md), and not quite as the spec drew them:
+
+- **`MARKUP` is `"2.4"`** and `PRICING_VERSION` is `2026-09-18-video-v2` (the v1 tokens
+  are `retired_pricing`). The token is still OPTIONAL on approve: the hold is what now
+  makes an unsigned path safe -- it converts through the same `ledger.charge_credits`
+  the quote does, so an unsigned approve is charged the marked-up price, not the
+  at-cost one. Requiring the token is a front-end change for another day.
+- **The hold is inside `generate_video`, not threaded as a `Quote`.** `src/charge.py`'s
+  `Charge` carries it from the caller that writes the generations row into the
+  adapter that submits, so `spend_approved` kept its shape and the adapters' signatures
+  grew one `charge` kwarg. `hold_for_render` did not take a Quote; it takes the
+  adapter's own estimate and converts it with the quote's function.
+- **The settle is capped at what was held** (`ledger.settle(credits=..., cap=...)`), the
+  "ledger sandwich" rule. `ledger.hold`/`settle` themselves stay at-cost primitives
+  (their tests are the ledger's), and the charge conversion happens at the seam.
+- **Tiers:** `providers.TIERS` is `standard / creator / premium`; the Kling and Seedance
+  family moved to `creator`. `pricing.tier_for(account_id)` reads `accounts.plan`
+  (written by the webhook) and `estimate()` applies it when no tier is passed. No plan
+  = no tier = no band refusal: the ledger is that account's wall.
 ## Live attempt, 2026-09-18 — after the merge
 
 Steps 1–4 merged to `main` as PR #21 (`7ddb947`); the branch named at the top of "As built" is
@@ -488,3 +509,120 @@ exemption** (how an account is marked exempt is step 6's to design; a column in
 - Every guard was reverted and seen red: the approve predicate (both ways), `shot_generate`,
   `generate_run`, the Director node, Run all, and `MARKUP`.
 
+## Step 6 design — the operator's exemption (2026-09-18, designed, not built)
+
+> Design record, kept as written. It was built the same day, to this shape (`accounts.credit_exempt`, read once inside `ledger.hold_for_render`, `python -m src.accounts credits <slug> --on`) — see "As built — steps 5 and 6" above and `docs/BILLING.md`.
+
+Mike's rule: **zero credits refuses, even with a key on file; his own account is the
+exemption.** This section is the column and the one predicate that reads it. It does not
+invent a name: `docs/tasks/task-stripe-billing.md` Phase 3 already specified
+`accounts.credit_exempt`, and this is that column, fitted to the Quote that did not exist
+when Phase 3 was written.
+
+### What "refuse at zero" means in the code as it stands
+
+`account_keys.key_and_source` resolves the ACCOUNT's stored key first and the environment
+second. So "zero credits with its own key on file" is never a billable render: it is BYOK,
+`quote()` is `None`, `ledger.is_billable` says no, and no hold is asked for. Charging it would
+be the double charge `is_billable`'s docstring exists to prevent. The rule therefore lands as:
+
+| the render would run on | balance | result |
+|---|---|---|
+| the account's own key (BYOK) | any | renders, no hold — unchanged |
+| the operator's key, account not exempt | covers `quote.credits` | hold → submit → settle |
+| the operator's key, account not exempt | short, or zero | **refused, `insufficient_credit`, no submit** |
+| the operator's key, account `credit_exempt` | any, including zero | renders, no hold, row marked |
+
+"Refuse" is what `ledger.hold` already does (`InsufficientCredit`); "fall through" would
+have been code to write, and is not written. **If the rule was meant to be stricter — a BYOK
+account must ALSO hold credit to render at all — that is a paywall on top of BYOK, not a
+charge, and it is one more line in the predicate below. Say so before step 6 is built; the
+design here does not do it.**
+
+### The column
+
+- `accounts.credit_exempt BOOLEAN NOT NULL DEFAULT FALSE`. `db.CREDIT_EXEMPT_COLUMN` +
+  `db.add_credit_exempt_column(conn)`, `add_prompt_edits_teach_column`'s twin: additive
+  ALTER, **no backfill** (a migration that named anybody exempt would be the migration making
+  the money decision), missing `accounts` table is "not yet", and `accounts.SCHEMA` carries it
+  inline for a fresh database. `accounts.init()` calls it beside the other two.
+- `python -m src.accounts credits <slug> --on|--off` through the existing
+  `_set_account_flag`, and `accounts.credit_exempt_accounts()` to list who is on — the
+  `prompt_edits_teachers` shape. Live, it is turned on by hand for accounts 1 and 2 (both of
+  Mike's brands) and for nobody else. `accounts` is not an owned table, so `test_tenancy`'s
+  schema test needs no entry.
+
+### The predicate — one, inside the ledger
+
+`ledger.credit_exempt(account_id, dsn=None) -> bool`, `edit_teach.allowed`'s body exactly: one
+row by id, `None` (the unowned pool) is never exempt, and **every failure — no table, no
+column, no database — is NOT exempt.** That is the fail-closed direction for money: an error
+gets the operator refused at his own Queue (loud, his to fix), never a stranger rendered free.
+
+It is read in exactly one place, `hold_for_render`, after `is_billable` and before `hold`:
+
+```
+not is_billable(key_source, source)  -> no hold   reason "byok" / "subscription"
+credit_exempt(account_id)            -> no hold   reason "exempt"
+else                                 -> hold(account_id, quote.credits, ref=..., provider=...)
+                                        InsufficientCredit propagates: that IS the refusal
+```
+
+Never `if account_id == 1` at a call site, never in `pricing.py`, never in a route. BYOK is
+asked first on purpose: an exempt account rendering on its own stored key is still BYOK, and
+the row should say the truer thing.
+
+`hold_for_render` changes shape while it still has no callers: it takes the **Quote** (holds
+`quote.credits`, never `credits_for_usd(estimate)` — that is the 1.0x figure since step 5) and
+returns a small frozen `RenderHold(hold_id: Optional[int], reason: str)` instead of
+`Optional[int]`, because `None` can no longer mean one thing. The adapter's sandwich keys on
+`hold_id`: `mark_submitted` / `settle` / `release` run only when there is one.
+
+### Exempt from the charge, not from the path, and not from the record
+
+- **The quote is still required.** `pricing.billable` does not learn about the exemption, so
+  an exempt account's card is still `signed`, the token is still minted, and approve still
+  answers `missing_quote` without it. The operator is the heaviest user; exempting him from
+  the signed path would leave it exercised by nobody. `display()` gains one field,
+  `exempt: true`, so the card can say "not charged" beside the credits figure instead of
+  implying a debit that will not happen.
+- **The record is the `generations` row, not a ledger entry.** This is the one deviation from
+  Phase 3's "still write the entry". `credit_entries` has five kinds and no zero: `hold`
+  refuses a non-positive amount, the unique index and the reaper both read every `hold` as
+  outstanding money, and a zero-delta row would have to be special-cased in `outstanding`,
+  `reconcile` and `reap` — three readers taught to ignore a row that exists only to be
+  ignored. What Phase 3 wanted kept — cost-per-kept-clip for the heaviest user — is read off
+  `generations` by `costs.summary`, and an exempt render, unlike a manual-lane one, has a
+  REAL `cost_usd` (the provider billed the operator's key). So the row carries
+  `params.credit_exempt = true` and `params.quote_credits = <n>` beside `key_source`, and
+  `cost_usd` filled as for anyone. What it would have cost in credits stays answerable; the
+  ledger stays a record of money that moved.
+- **The daily caps still apply.** `generative.cap_error` stays in the route, ahead of the
+  hold, for every account. Who pays and what stops a 3am loop are different gates.
+- **BACKLOG #18 applies to the exempt path too:** a submit that fails must leave a
+  `generations` row whether or not there was a hold to release.
+
+### What is out of scope, said so it is not assumed
+
+The unattended callers (`orchestrator.generate_render`, `autopilot`) pass no `approved` and
+carry no Quote; they are the installation's own runs behind `ZEROPAGE_RENDER` + `*_SPEND_OK`
+and often have no account at all. Step 6 leaves them taking no hold. `spend_approved(quote=)`
+is the HUMAN doors' shape; an unattended door keeps the environment's.
+
+### Tests, each with its revert-and-red line
+
+`conftest`'s `account_scope` override returns `None`, which is never exempt — so every test
+here seeds real accounts and sets its own `dependency_overrides`.
+
+- No backfill: after `accounts.init`, every account including the bootstrap one reads FALSE.
+- `credit_exempt(None)` is False; a dropped column / unreachable DSN is False (not a raise).
+- **The refusal path, which the operator never walks:** a non-exempt account on the operator's
+  key with zero credit → `insufficient_credit`, and the stub adapter's submit was **never
+  entered**. Revert the `hold` call → red.
+- The same account with the flag ON → renders, zero `credit_entries` rows, the generations row
+  carries `credit_exempt` and `quote_credits`. Revert the predicate → red (it is refused).
+- **Two-way:** flag OFF again on Mike's own account with zero credit → refused like anyone.
+  An untested way back is not one.
+- Exempt + own stored key → reason `byok`, not `exempt`.
+- Exempt approve with no token on a signing server → still `missing_quote`.
+- Exempt account over `RUNWAY_DAILY_CAP` → still capped.

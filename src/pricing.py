@@ -41,6 +41,17 @@ What this module deliberately does NOT do:
   bookkeeping. Every field of Quote is an int, a str or a tuple of them,
   so nothing in the signed body is a float that round-trips badly.
 
+MARKUP IS 2.4 SINCE 2026-09-18 (Mike's call, the spec's number): a credit
+is one cent of CHARGE, a render costs its provider estimate times 2.4,
+rounded up, never under CREDIT_FLOOR. The same day the ledger started
+holding (src/charge.py, inside every adapter) and `ledger.charge_credits`
+became the ONE conversion a hold and a quote share, so the number on the
+card is the number debited by construction. PLANS below is what a person
+can buy (app/billing.py sells it through Stripe) and `tier_for` is how a
+plan's tier reaches the band check. The public site is GENERATED from
+`public_catalog()` -- `python -m src.pricing export` writes
+web/src/content/pricing.json, and tests/test_plans.py fails when the
+committed file and this module disagree.
 MARKUP is 2.4 (2026-09-18, Mike's call -- the spec's number): $1.00 of
 provider cost is 240 credits. It landed in ONE commit with making the
 signed token required on approve, because a raised markup beside an
@@ -64,7 +75,7 @@ from typing import Optional
 
 from . import account_keys, ledger, providers, timeline
 
-PRICING_VERSION = "2026-09-17-video-v1"
+PRICING_VERSION = "2026-09-18-video-v2"
 # A token minted under a version not listed here is refused as
 # `retired_pricing`: prices changed, re-quote. Retire a version by removing
 # it, never by changing what it means.
@@ -79,6 +90,110 @@ CREDIT_CENTS = 1
 MARKUP = "2.4"
 # per render, per part: the least any billable render costs
 CREDIT_FLOOR = 10
+
+
+# --- the plans --------------------------------------------------------------
+# What a person buys. `credits` is the monthly allowance, granted as ONE
+# subscription lot per paid invoice (ledger.EXPIRY_MONTHS governs its
+# life); `tier` is the highest band the plan may render (providers.TIERS).
+# `price_env` names the Stripe Price id the checkout uses -- the dollars
+# here are what the site prints and what tests/test_plans.py pins, the
+# Stripe Price is what is actually charged, and the two are kept equal by
+# a person (app/billing.py refuses a price whose amount disagrees).
+# YEARLY IS A SCHEDULE, NOT A LOT (2026-09-18, second pass). A lot expires
+# two months after it lands, so a year's credit granted on one invoice
+# would die ten months early. A yearly invoice therefore grants month
+# one and writes a 12-month release schedule (src/billing.release_due);
+# each later month lands as its own lot with its own two-month clock.
+# `yearly_usd` is twelve months at YEARLY_DISCOUNT off, what the toggle
+# on /pricing prints; `price_env_yearly` names its Stripe Price.
+YEARLY_DISCOUNT = "0.20"
+MONTHS_PER_YEAR = 12
+
+
+@dataclass(frozen=True)
+class Plan:
+    key: str
+    name: str
+    tier: str
+    monthly_usd: int
+    credits: int
+    blurb: str
+    price_env: str
+    popular: bool = False
+
+    @property
+    def yearly_usd(self) -> int:
+        """Twelve months at the discount, in whole dollars (the three
+        plans all land on integers; a plan that would not should pick a
+        price that does)."""
+        cents = Fraction(self.monthly_usd * 100 * MONTHS_PER_YEAR) * (1 - Fraction(YEARLY_DISCOUNT))
+        assert cents.denominator == 1 and cents.numerator % 100 == 0, self.key
+        return int(cents) // 100
+
+    @property
+    def yearly_monthly_usd(self) -> int:
+        """What a year works out to per month -- the number the card shows
+        under the toggle ($12, $28, $76)."""
+        return self.yearly_usd // MONTHS_PER_YEAR
+
+    @property
+    def price_env_yearly(self) -> str:
+        return f"{self.price_env}_YEAR"
+
+
+PLANS: dict[str, Plan] = {
+    "starter": Plan("starter", "Starter", "standard", 15, 1500,
+                    "For trying the studio on your own scenes.",
+                    "STRIPE_PRICE_STARTER"),
+    "creator": Plan("creator", "Creator", "creator", 35, 3500,
+                    "For a channel that posts every week.",
+                    "STRIPE_PRICE_CREATOR", popular=True),
+    "studio": Plan("studio", "Studio", "premium", 95, 9500,
+                   "For a body of work, on every model.",
+                   "STRIPE_PRICE_STUDIO"),
+}
+
+
+@dataclass(frozen=True)
+class Pack:
+    key: str
+    name: str
+    usd: int
+    credits: int
+    price_env: str
+
+
+# A one-time top-up: a `purchase` lot, bought by any account with a plan.
+TOPUP = Pack("topup", "1,000 credits", 10, 1000, "STRIPE_PRICE_TOPUP")
+
+
+def plan_for_tier(tier: str) -> Optional[Plan]:
+    return next((p for p in PLANS.values() if p.tier == tier), None)
+
+
+def tier_for(account_id: Optional[int], dsn: Optional[str] = None,
+             ctx=None) -> Optional[str]:
+    """The band an account may render up to: its plan's tier, or None.
+
+    None is NOT a tier and enforces nothing (`estimate` skips the band
+    check on it): an account with no plan holds no credit, so the ledger
+    is its wall, and a render on its own key is the provider's business.
+    A plan a webhook wrote that this module no longer lists reads as
+    None too -- a retired plan must not silently become the top tier.
+
+    `ctx` is a listing's providers.RenderContext: it read the account's
+    plan once for the request, so a page of cards is not a plan lookup
+    per render. A door that spends passes none and reads the row.
+    """
+    if account_id is None:
+        return None
+    from . import accounts
+    held = providers._held(ctx, account_id, dsn)
+    key = held.plan if held is not None and held.plan_known \
+        else accounts.plan_of(account_id, dsn=dsn)
+    plan = PLANS.get(key or "")
+    return plan.tier if plan else None
 
 _MICROS = 1_000_000
 _MICROS_PER_CENT = 10_000
@@ -292,6 +407,8 @@ def estimate(*, account_id: Optional[int], shot: dict, part: Optional[int] = Non
     rule). Raises ValueError / PricingRefused."""
     if tier is not None and tier not in providers.TIERS:
         raise PricingRefused("tier", f"unknown tier {tier!r} -- one of {list(providers.TIERS)}")
+    if tier is None:
+        tier = tier_for(account_id, ctx=ctx)
     name, wanted = _resolve(account_id, shot, provider, model, ctx)
     if part is not None and seconds is None:
         window = _part_window(shot, part)
@@ -548,3 +665,94 @@ __all__ = ["PRICING_VERSION", "CREDIT_CENTS", "MARKUP", "CREDIT_FLOOR",
            "windows_to_render", "estimate", "estimate_scene", "billable", "quote", "display",
            "SUPPORTED_PRICING_VERSIONS", "SIGNING_ENV", "SIGNING_COMMAND", "QUOTE_TTL",
            "SigningUnconfigured", "QuoteRefused", "sign", "verify", "configured"]
+
+
+# --------------------------------------------------------------------------
+# the public catalog -- what the site prints, generated here
+# --------------------------------------------------------------------------
+
+CATALOG_CLIP_SECONDS = 5
+# The public-facing name for every renderable (provider, model). A model
+# not listed here is still renderable and still priced; it just is not
+# advertised. Keep this the honest subset: what a plan can actually buy.
+CATALOG_MODELS: tuple[tuple[str, str, str, str], ...] = (
+    # provider, model id, public name, one line
+    ("fal", "ltx2.3", "LTX 2.3", "Fast, cheap, 1080p and up. The workhorse."),
+    ("runway", "gen4_turbo", "Runway Gen-4 Turbo", "Reference-anchored clips, quick turnaround."),
+    ("fal", "wan3", "Wan 3.0", "Open-weight realism up to 1080p."),
+    ("runway", "gen4.5", "Runway Gen-4.5", "Runway's flagship look."),
+    ("higgsfield", "kling2.5", "Kling 2.5", "Cinematic motion, strong on people."),
+    ("fal", "kling3-turbo-pro", "Kling 3 Turbo Pro", "Kling's fastest 1080p tier."),
+    ("fal", "seedance2-fast", "Seedance 2.0 Fast", "ByteDance's quick tier, with audio."),
+    ("fal", "seedance2", "Seedance 2.0", "Seedance at full quality."),
+    ("veo", "veo-3", "Veo 3", "Google's top model. Premium only."),
+)
+
+
+def catalog_models() -> list[dict]:
+    """Every advertised model with its tier, legal lengths and the credits
+    a CATALOG_CLIP_SECONDS render costs at the model's default frame --
+    priced by the same estimators the Queue prices with, so the site
+    cannot print a number the card would not."""
+    out = []
+    for provider, model, name, blurb in CATALOG_MODELS:
+        band = providers.band_for(provider, model)
+        try:
+            choice = providers.check_render_choice(provider, model, CATALOG_CLIP_SECONDS, None)
+            micros = usd_micros(choice["estimate_usd"])
+            seconds = int(choice["duration"])
+        except Exception:
+            # a model whose legal lengths exclude the catalog clip: price
+            # its default length and say so
+            choice = providers.check_render_choice(provider, model, None, None)
+            micros = usd_micros(choice["estimate_usd"])
+            seconds = int(choice["duration"])
+        out.append({"provider": provider, "model": model, "name": name, "blurb": blurb,
+                    "tier": band.tier, "max_seconds": band.max_seconds,
+                    "seconds": seconds, "credits": credits_for(micros),
+                    "frame": str(choice["frame"])})
+    return out
+
+
+def public_catalog() -> dict:
+    """The site's pricing data, in one JSON document: plans, the top-up,
+    the tiers in order, every advertised model and its price per clip, the
+    peg. web/src/content/pricing.json IS this, committed; the pages import
+    it and tests/test_plans.py pins the two together."""
+    return {
+        "pricing_version": PRICING_VERSION,
+        "credit_cents": CREDIT_CENTS,
+        "markup": MARKUP,
+        "credit_floor": CREDIT_FLOOR,
+        "expiry_months": ledger.EXPIRY_MONTHS,
+        "clip_seconds": CATALOG_CLIP_SECONDS,
+        "tiers": list(providers.TIERS),
+        "yearly_discount": YEARLY_DISCOUNT,
+        "plans": [{"key": p.key, "name": p.name, "tier": p.tier,
+                   "monthly_usd": p.monthly_usd, "yearly_usd": p.yearly_usd,
+                   "yearly_monthly_usd": p.yearly_monthly_usd, "credits": p.credits,
+                   "blurb": p.blurb, "popular": p.popular}
+                  for p in PLANS.values()],
+        "topup": {"key": TOPUP.key, "name": TOPUP.name, "usd": TOPUP.usd,
+                  "credits": TOPUP.credits},
+        "models": catalog_models(),
+    }
+
+
+CATALOG_PATH = "web/src/content/pricing.json"
+
+
+def export_catalog(path: str = CATALOG_PATH) -> str:
+    from pathlib import Path
+    text = json.dumps(public_catalog(), indent=2, sort_keys=False) + "\n"
+    Path(path).write_text(text)
+    return text
+
+
+if __name__ == "__main__":   # pragma: no cover
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "export":
+        export_catalog(sys.argv[2] if len(sys.argv) > 2 else CATALOG_PATH)
+        print(f"wrote {sys.argv[2] if len(sys.argv) > 2 else CATALOG_PATH}")
+    else:
+        print(json.dumps(public_catalog(), indent=2))

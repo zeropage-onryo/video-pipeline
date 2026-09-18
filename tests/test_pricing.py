@@ -85,6 +85,14 @@ def test_at_cost_it_charges_what_the_ledger_always_did(runway_only, monkeypatch)
     model in the catalogue at its default length and frame. Pins the two
     together so hold_for_render (step 6) has one arithmetic, not two."""
     monkeypatch.setattr(pricing, "MARKUP", "1.0")
+def test_the_quote_and_the_hold_share_one_conversion(runway_only):
+    """MARKUP is 2.4 since 2026-09-18, and the number the card shows must
+    be the number the ledger holds: for every model in the catalogue at
+    its default length and frame, a quote's credits are
+    ledger.charge_credits of the provider's own estimate -- the function
+    hold_for_render and Charge.settle convert with -- and are 2.4x the
+    at-cost peg above the floor."""
+    assert pricing.MARKUP == "2.4"
     seen = 0
     for provider in providers.VIDEO_PROVIDERS:
         for spec in providers.models_for(provider):
@@ -94,8 +102,12 @@ def test_at_cost_it_charges_what_the_ledger_always_did(runway_only, monkeypatch)
                                       model=spec["id"])
             choice = providers.check_render_choice(provider, spec["id"])
             assert priced.usd == pytest.approx(choice["estimate_usd"])
-            expected = max(ledger.credits_for_usd(choice["estimate_usd"]), pricing.CREDIT_FLOOR)
-            assert pricing.credits_for(priced.provider_usd_micros) == expected
+            quoted = pricing.credits_for(priced.provider_usd_micros)
+            assert quoted == ledger.charge_credits(choice["estimate_usd"])
+            at_cost = ledger.credits_for_usd(choice["estimate_usd"])
+            assert quoted >= max(at_cost, pricing.CREDIT_FLOOR)
+            if at_cost * 2.4 > pricing.CREDIT_FLOOR:
+                assert quoted == pytest.approx(at_cost * 2.4, abs=1)
             seen += 1
     assert seen >= 4
 

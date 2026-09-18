@@ -61,11 +61,13 @@ from src import (
     workflows,
     youtube,
 )
+from src import billing as billing_core
 from src import (
     settings as settings_mod,
 )
 
 from . import api, auth, jobs, mcp_mount, seo
+from . import billing as billing_routes
 from .sparkline import render_sparkline
 
 load_dotenv()
@@ -179,6 +181,7 @@ async def lifespan(app: FastAPI):
         render_assets.init()  # generated_assets, owned (merged 2026-09-02)
         spend.init()          # llm_calls, the LLM meter (2026-09-04)
         ledger.init()         # credit_lots / credit_entries, the prepaid ledger
+        billing_core.init()   # credit_schedules, a yearly plan's unreleased months
         generative.init()    # generations log the render caps count
         accounts_mod.init()  # users / identities / accounts / members
         settings_mod.init()  # the Dev Studio tunables (gate/threshold/k)
@@ -301,6 +304,9 @@ if MCP_APP is not None:
     app.mount(mcp_mount.MOUNT_PATH, MCP_APP, name="mcp")
 app.include_router(api.router, dependencies=[Depends(auth.require_user_api)])
 app.include_router(auth.router)
+# Stripe's webhook: outside /api, because Stripe cannot sign in -- its
+# authentication is the signature over the raw body (app/billing.py)
+app.include_router(billing_routes.webhook)
 
 
 @app.get("/signin")

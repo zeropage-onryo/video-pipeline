@@ -730,10 +730,24 @@ def test_the_generations_row_records_whose_key_paid_for_it(
     assert _params(byok, own["generation_id"])["key_source"] == "account"
 
     account_keys.clear_key(byok["account_id"], "runway", dsn=byok["dsn"])
+    # on the installation's key the render IS the ledger's business
+    # (2026-09-18): with no credit it is refused before any submit ...
+    from src import ledger
+    refused = runway.generate_from_prompt("a prompt", db_path=byok["dsn"],
+                                          account_id=byok["account_id"])
+    assert refused["ok"] is False and "out of credits" in refused["error"]
+    assert refused.get("generation_id") is None      # nothing rendered, nothing recorded
+    # ... and with credit it renders, records the key and settles the hold
+    ledger.grant(byok["account_id"], 5000, "purchase", dsn=byok["dsn"])
     ours = runway.generate_from_prompt("a prompt", db_path=byok["dsn"],
                                        account_id=byok["account_id"])
     assert _params(byok, ours["generation_id"])["key_source"] == "env"
-    assert sdk_keys == ["TENANT-SECRET", "OPERATOR-SECRET"]
+    # the client is built before the hold (a client is not a spend), so
+    # the refused attempt shows up here as a key and nowhere else
+    assert sdk_keys == ["TENANT-SECRET", "OPERATOR-SECRET", "OPERATOR-SECRET"]
+    assert ledger.available(byok["account_id"], byok["dsn"]) == 5000 - ledger.charge_credits(
+        runway.estimate_cost(1))
+    assert ledger.outstanding(byok["account_id"], byok["dsn"]) == 0
 
 
 def test_for_shot_renders_one_part_of_a_timed_scene(scene_db, approved, fake_download,

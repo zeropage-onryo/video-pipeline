@@ -1686,6 +1686,21 @@ in 5 retrieved reference(s)" against the real library, and the same command with
 at a dead URL printed the ungrounded note and still produced ideas (exit 0). 2171 tests pass, 8
 xfail, ruff clean, CI green on every push — last full run 2026-09-18 on the pricing merge (`7ddb947`).
 
+**Billing is in front of the ledger (2026-09-18, docs/BILLING.md).** `MARKUP` is 2.4,
+three plans live in `src/pricing.PLANS`, every adapter holds credit before its submit
+(`src/charge.py`) and settles on the row, Stripe grants through `/billing/webhook`
+(`app/billing.py` + `src/billing.py`), and the public site's `/pricing`, `/models` and
+`/faq` are generated off `web/src/content/pricing.json` (`python -m src.pricing export`).
+Yearly plans are a SCHEDULE (`credit_schedules`, released monthly by
+`python -m src.billing release` and lazily on the money path), never a twelve-month lot.
+**Your own account must be exempted once** -- `python -m src.accounts credits zeropage
+--on` -- or the Queue refuses you for having no credit. Unset `STRIPE_*` = the plan
+buttons say so and nothing else changes.
+
+**The number that matters and is not moving: 0 concepts carry a `media_url`.** Nothing has been
+rendered onto a concept row. 4 picks against 232 written is the real shape of this project —
+generation is cheap and abundant, selection is the bottleneck, and the spend gate has barely
+been used. Read every rate below in that light.
 **THE LOOP CLOSED ON 2026-09-18.** Concept #375 "Neon City Ascent" went spark -> scene ->
 references -> keyframe -> pick -> render -> post -> measured, and it is the first one that ever
 did. What that means concretely: **1 concept carries a `media_url`** (it was 0 for the whole life

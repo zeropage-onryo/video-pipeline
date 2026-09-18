@@ -384,6 +384,14 @@ async def creative_guide_reply(request: Request,
     provider = (form.get("guide_provider") or "gemini").strip().lower()
     model = (form.get("guide_model") or "").strip() or None
     personal = provider != "gemini"
+    # Which brain answers (2026-09-18): the composer's Fast / Reasoning
+    # pill, the same one Create sends, clamped against BRAINS here the
+    # way scenes_run clamps it. Absent or unknown -> the Guide's own
+    # default (fast). Only the Gemini path reads it; a personal
+    # connection is the person's own model and has no tier.
+    from src import gemini_utils
+    brain_raw = (form.get("brain") or "").strip().lower()
+    brain = brain_raw if brain_raw in gemini_utils.BRAINS else creative_guide.DEFAULT_BRAIN
 
     scope = None
     if personal:
@@ -423,12 +431,14 @@ async def creative_guide_reply(request: Request,
             reply = creative_guide.respond(
                 conversation, client=genai.Client(api_key=_gemini_key(account_id)),
                 brand=brand, grounding=grounding, image_refs=image_refs,
-                account_id=account_id, on_retry=note, tools=tools, run_tool=run_tool)
+                account_id=account_id, on_retry=note, tools=tools, run_tool=run_tool,
+                brain=brain)
         # `billing` says WHOSE plan paid: a personal connection spends
         # the person's own ChatGPT/Claude subscription and never touches
         # this install's Gemini credit, and /costs must not count it.
         return {"reply": reply, "reference_urls": ref_urls,
                 "billing": "personal_plan" if personal else "studio_credits",
+                "brain": None if personal else brain,
                 "detail": "ready"}
 
     job = jobs.start("guide", "creative guide", work, account_id=account_id)
@@ -2399,6 +2409,33 @@ def queue_pending(brand: Optional[str] = None, account_id: int = Depends(auth.cu
             "spendable": sum(1 for c in items if not c["blocked"]),
             "runway": _runway_state(),
             "renderers": _renderers_state(account_id, ctx)}
+
+
+@router.get("/queue/count")
+def queue_count(brand: Optional[str] = None,
+                account_id: int = Depends(auth.current_account_id)):
+    """How many cards are waiting -- and NOTHING else (2026-09-18).
+
+    The rail's badge is on every studio page and re-asks on every pick,
+    decision and finished job. It used to call /queue/pending for one
+    number, and that route prices every card: signed quotes, a render
+    default and the renderer state per request. Timed against the live
+    database for four cards: the rows 2.4s, the quotes 21.7s, the defaults
+    12.9s, the renderer state 7.4s -- and the badge fired it unbranded on
+    top of the page's own call, so the Queue page waited behind its own
+    badge. This walks the same `_waiting` rows the listing does and counts
+    them, so the two cannot disagree about what "waiting" means.
+
+    `spendable` is the badge's number (the listing's own field, same
+    meaning: a card the reference gate blocks is waiting on photographs,
+    not on a spend); `blocked` is the rest."""
+    spendable = blocked = 0
+    for _concept, card in _waiting(account_id, brand, include_blocked=True):
+        if card.get("blocked"):
+            blocked += 1
+        else:
+            spendable += 1
+    return {"spendable": spendable, "blocked": blocked}
 
 
 def _lane_models() -> list:
@@ -5002,3 +5039,13 @@ def job_clear(job_id: int, account_id: int = Depends(auth.current_account_id)):
     if not removed:
         return _error(409, "not_finished", "only finished jobs can be cleared")
     return {"deleted": job_id}
+
+
+# --- billing (2026-09-18) --------------------------------------------------
+# The customer-facing Stripe routes live in app/billing.py and are included
+# HERE so they sit under /api, behind the session gate, and inside the
+# route audit in tests/test_tenancy.py. The webhook is deliberately not.
+from . import billing as _billing  # noqa: E402  (bottom of the file on purpose)
+
+for _path, _endpoint, _methods in _billing.API_ROUTES:
+    router.add_api_route(_path, _endpoint, methods=_methods, tags=["billing"])

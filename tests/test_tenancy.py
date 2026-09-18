@@ -86,6 +86,8 @@ def test_every_owned_table_grows_an_account_id(pg):
     from src import ledger, spend
     spend.init(pg)
     ledger.init(pg)
+    from src import billing
+    billing.init(pg)
     with db.connect(pg) as conn:
         for table in db.OWNED_TABLES:
             assert "account_id" in db.columns(conn, table), f"{table} has no owner"
@@ -543,6 +545,11 @@ UNSCOPED_ALLOWED = {
     # generative.used_today(everyone=True) and spend.spent_today_everyone
     # are its two siblings. Scoping it would make it a different figure.
     "FROM credit_entries h WHERE h.kind = 'hold' AND NOT EXISTS (",
+    # billing.release_due(None): the cron's sweep of every yearly plan's
+    # month that is due -- across every account by definition, like the
+    # reaper. Every grant it makes is written to the row's own account_id,
+    # and the per-account form of the same query sits beside it.
+    "SELECT * FROM credit_schedules WHERE cancelled_at IS NULL AND next_release_at IS NOT NULL ",
 }
 
 # Built from the list, not written out beside it: adding a table to
@@ -966,9 +973,10 @@ def _init_everything(path):
     imagesearch.init(path)
     render_assets.init(path)
     account_keys.init(path)
-    from src import ledger, spend
+    from src import billing, ledger, spend
     spend.init(path)
     ledger.init(path)
+    billing.init(path)
 
 
 AUTH_SCHEMA = {"users", "accounts", "account_members"}

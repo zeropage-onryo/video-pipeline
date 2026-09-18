@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono, Inter, JetBrains_Mono, Oswald } from "next/font/google";
+import { Geist, Geist_Mono, Inter, JetBrains_Mono, Lora, Oswald } from "next/font/google";
 import "./globals.css";
-import { FilmGrain } from "@/components/film-grain";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -28,6 +27,15 @@ const inter = Inter({
   variable: "--font-inter",
   subsets: ["latin"],
   weight: ["300", "400", "500", "600"],
+});
+
+// The public site's headline face (2026-09-18): a serif at weight 400
+// carries every h1/h2 on the landing and legal pages. Oswald stays loaded
+// above because /studio's own CSS still reads --font-oswald.
+const lora = Lora({
+  variable: "--font-lora",
+  subsets: ["latin"],
+  weight: ["400", "500"],
 });
 
 const jetbrains = JetBrains_Mono({
@@ -74,10 +82,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} ${oswald.variable} ${inter.variable} ${jetbrains.variable} h-full antialiased bg-background`}
+      className={`${geistSans.variable} ${geistMono.variable} ${oswald.variable} ${inter.variable} ${jetbrains.variable} ${lora.variable} h-full antialiased bg-background`}
     >
       <body className="relative min-h-full flex flex-col">
-        <FilmGrain />
         {children}
       </body>
     </html>
