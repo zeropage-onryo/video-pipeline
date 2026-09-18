@@ -46,9 +46,18 @@ def test_one_flipped_byte_in_any_part_is_bad_signature(signing):
     token = pricing.sign(a_quote())
     head, body, mac = token.split(".")
 
+    # The FIRST character, never the last: an unpadded base64url part
+    # whose length is not a multiple of 3 bytes ends in a character with
+    # 2 or 4 unused low bits, so swapping it can decode to the identical
+    # bytes -- and then the token rightly still verifies (the MAC is
+    # random per run, which made this flaky). A part's first character
+    # is always the top six bits of byte 0.
     def flip(text):
-        ch = "B" if text[-1] != "B" else "C"
-        return text[:-1] + ch
+        ch = "B" if text[0] != "B" else "C"
+        flipped = ch + text[1:]
+        if text is not head:
+            assert pricing._unb64(flipped) != pricing._unb64(text)
+        return flipped
 
     for broken in (f"{flip(head)}.{body}.{mac}", f"{head}.{flip(body)}.{mac}",
                    f"{head}.{body}.{flip(mac)}", "zpf_notaquote", "", token + ".x"):
