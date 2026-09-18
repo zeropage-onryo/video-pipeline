@@ -108,7 +108,7 @@ import math
 import sys
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Any, Optional
+from typing import Any, NamedTuple, Optional
 
 from . import account_keys, db, manual_lane
 
@@ -284,6 +284,49 @@ def is_billable(key_source: Optional[str], *, source: Optional[str] = None) -> b
     if manual_lane.is_subscription_source(source):
         return False
     return key_source != BYOK_KEY_SOURCE
+
+
+# --------------------------------------------------------------------------
+# the operator's exemption
+# --------------------------------------------------------------------------
+
+# The column that IS the exemption (src/db.py's add_credit_exempt_column)
+# and the command that moves it.
+EXEMPT_COLUMN = db.CREDIT_EXEMPT_COLUMN
+EXEMPT_COMMAND = "python -m src.accounts credits <slug> --on"
+
+
+def credit_exempt(account_id: Optional[int], dsn: Optional[str] = None) -> bool:
+    """Whether this account renders on the operator's key WITHOUT a
+    credit hold (2026-09-18, Mike's call: zero credit refuses, and his own
+    accounts are the exemption). True only for an account whose own row
+    says so.
+
+    edit_teach.allowed's shape exactly: one row by id, None (the unowned
+    pool) is never exempt, and EVERY FAILURE -- no table, no column, no
+    database -- is NOT exempt. That is the closed direction for money:
+    an error gets the operator refused at his own Queue, which is loud
+    and his to fix, never a stranger rendered for free.
+
+    Exempt from the CHARGE only. The signed quote, the daily caps and the
+    generations row are nothing to do with this predicate, and it is read
+    in exactly one place -- hold_for_render, below. An `if account_id ==`
+    at a call site is the failure this exists to prevent.
+    """
+    if account_id is None:
+        return False
+    try:
+        wanted = int(account_id)
+    except (TypeError, ValueError):
+        return False
+    try:
+        with db.connect(dsn) as conn:
+            row = conn.execute(
+                f"SELECT {EXEMPT_COLUMN} FROM accounts WHERE id = %s",
+                (wanted,)).fetchone()
+    except Exception:
+        return False
+    return bool(row and row[EXEMPT_COLUMN])
 
 
 # --------------------------------------------------------------------------
@@ -1283,12 +1326,58 @@ def reap(older_than=DEFAULT_REAP_AGE, *, account_id: Optional[int] = None,
 # the seam the render path will call
 # --------------------------------------------------------------------------
 
+class RenderHold(NamedTuple):
+    """What hold_for_render decided. `hold_id` is None whenever no credit
+    was held; `reason` is one of HOLD_REASONS."""
+    hold_id: Optional[int]
+    reason: str
+
+
+HOLD_HELD, HOLD_BYOK, HOLD_SUBSCRIPTION, HOLD_EXEMPT = (
+    "held", "byok", "subscription", "exempt")
+HOLD_REASONS = (HOLD_HELD, HOLD_BYOK, HOLD_SUBSCRIPTION, HOLD_EXEMPT)
+
+
+def exempt_params(credits: Optional[int]) -> dict:
+    """What an adapter merges into `generations.params_json` for an
+    exempt render: that it was exempt, and what it WOULD have cost. The
+    row's cost_usd stays real -- unlike a lane render, the provider did
+    bill the operator's key -- so cost-per-kept-clip keeps its heaviest
+    user, and the ledger stays a record of money that moved."""
+    return {"credit_exempt": True,
+            "quote_credits": int(credits) if credits is not None else None}
+
+
 def hold_for_render(account_id: Optional[int], *, ref: str, provider: str,
-                    estimate_usd, key_source: Optional[str] = None,
+                    estimate_usd=None, credits: Optional[int] = None,
+                    key_source: Optional[str] = None,
                     source: Optional[str] = None,
-                    dsn: Optional[str] = None) -> Optional[int]:
-    """Take the hold for one render, or None when the render is not
-    billable. THE SEAM -- NOTHING CALLS IT YET, ON PURPOSE.
+                    dsn: Optional[str] = None) -> RenderHold:
+    """Take the hold for one render -- or say why none was taken. THE
+    SEAM -- NOTHING CALLS IT YET, ON PURPOSE.
+
+    Returns a RenderHold: `hold_id` is an int when credit was held and
+    None when it was not, and `reason` says which of the four it was
+    (held / byok / subscription / exempt). `None` alone stopped being an
+    answer on 2026-09-18, when a third way to take no hold arrived and
+    the adapter has to mark the row differently for it. The sandwich
+    below keys on `hold_id`: no id, nothing to mark, settle or release.
+
+    THREE QUESTIONS, IN THIS ORDER, and the order is deliberate:
+      1. is_billable -- somebody already paid elsewhere (BYOK, the lane).
+         Asked first so an exempt account on its OWN stored key still
+         reads `byok`, the truer thing.
+      2. credit_exempt -- the operator's own account: no hold, and the
+         adapter stamps EXEMPT_PARAMS onto the generations row, which is
+         the record (the ledger has no zero-delta entry and should not
+         grow one -- see docs/tasks/task-pricing-and-quotes.md).
+      3. otherwise hold(). InsufficientCredit propagates, and THAT is the
+         refusal at zero credit: nothing here catches it.
+
+    `credits` is the Quote's own figure (pricing.Quote.credits) and is
+    what is held when given. Since MARKUP left 1.0, credits_for_usd of
+    the estimate is NOT what a quote charges; it remains the fallback
+    only for a caller with no Quote in hand.
 
     WHERE THIS CALL GOES, when the wiring pass happens (this pass builds
     the module and its tests only; the adapters keep working exactly as
@@ -1338,9 +1427,19 @@ def hold_for_render(account_id: Optional[int], *, ref: str, provider: str,
     `ops/render_queue.py` can file a clip without ever touching credit.
     """
     if not is_billable(key_source, source=source):
-        return None
-    return hold(account_id, credits_for_usd(estimate_usd), ref=ref,
-                provider=provider, estimate_usd=estimate_usd, dsn=dsn)
+        return RenderHold(None, HOLD_SUBSCRIPTION
+                          if manual_lane.is_subscription_source(source) else HOLD_BYOK)
+    if credit_exempt(account_id, dsn):
+        return RenderHold(None, HOLD_EXEMPT)
+    if credits is not None:
+        # the Quote's figure, marked up. NOT handed to hold() with the
+        # estimate beside it: hold() reconciles the two at 1.0x and would
+        # refuse every marked-up quote as a conversion mismatch
+        held = hold(account_id, int(credits), ref=ref, provider=provider, dsn=dsn)
+    else:
+        held = hold(account_id, credits_for_usd(estimate_usd), ref=ref,
+                    provider=provider, estimate_usd=estimate_usd, dsn=dsn)
+    return RenderHold(held, HOLD_HELD)
 
 
 __all__ = [
@@ -1352,5 +1451,7 @@ __all__ = [
     "outstanding_everyone", "reconcile",
     "hold", "mark_submitted", "settle", "release", "expire_due",
     "on_subscription_lapsed",
-    "reap", "hold_for_render",
+    "reap", "hold_for_render", "RenderHold", "HOLD_REASONS",
+    "HOLD_HELD", "HOLD_BYOK", "HOLD_SUBSCRIPTION", "HOLD_EXEMPT",
+    "EXEMPT_COLUMN", "EXEMPT_COMMAND", "credit_exempt", "exempt_params",
 ]

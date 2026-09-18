@@ -467,7 +467,7 @@ def test_a_lane_render_takes_no_hold(tmp_db):
     hold_id = ledger.hold_for_render(account_id, ref="manual-1", provider="runway",
                                      estimate_usd=0.50,
                                      source=manual_lane.SOURCE, dsn=tmp_db)
-    assert hold_id is None
+    assert hold_id == ledger.RenderHold(None, "subscription")
     assert ledger.available(account_id, dsn=tmp_db) == before
     assert [e for e in ledger.entries(account_id, dsn=tmp_db)
             if e["kind"] == "hold"] == []

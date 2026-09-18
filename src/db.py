@@ -587,6 +587,15 @@ MANUAL_LANE_COLUMN = "manual_lane_operator"
 EDIT_TEACH_COLUMN = "prompt_edits_teach"
 
 
+# WHOSE RENDERS ARE NOT CHARGED TO CREDIT (src/ledger.py's credit_exempt,
+# 2026-09-18, Mike's call: "refuse, my account is the exemption"). Zero
+# credit refuses a render on the operator's key; the operator's own
+# accounts are exempt from the CHARGE -- never from the signed quote, the
+# daily caps or the record. A column on the account row for the reason the
+# two above are: it is a decision somebody makes about one account, by hand.
+CREDIT_EXEMPT_COLUMN = "credit_exempt"
+
+
 def add_manual_lane_operator_column(conn: psycopg.Connection) -> bool:
     """Additive ALTER TABLE on `accounts`. True if added now.
 
@@ -629,6 +638,28 @@ def add_prompt_edits_teach_column(conn: psycopg.Connection) -> bool:
         return False
     conn.execute(
         f"ALTER TABLE accounts ADD COLUMN {EDIT_TEACH_COLUMN} "
+        "BOOLEAN NOT NULL DEFAULT FALSE"
+    )
+    return True
+
+
+def add_credit_exempt_column(conn: psycopg.Connection) -> bool:
+    """Additive ALTER TABLE on `accounts`. True if added now.
+
+    add_manual_lane_operator_column's second twin (2026-09-18). NO
+    BACKFILL, and here that matters most of the three: a migration that
+    named anybody exempt would be the migration deciding who renders
+    without paying. Every account comes out FALSE, the bootstrap one
+    included, and the one way on is
+    `python -m src.accounts credits <slug> --on`. Missing table is "not
+    yet" -- accounts.init() asks again once there is one.
+    """
+    if not table_exists(conn, "accounts"):
+        return False
+    if CREDIT_EXEMPT_COLUMN in columns(conn, "accounts"):
+        return False
+    conn.execute(
+        f"ALTER TABLE accounts ADD COLUMN {CREDIT_EXEMPT_COLUMN} "
         "BOOLEAN NOT NULL DEFAULT FALSE"
     )
     return True
@@ -777,6 +808,9 @@ def init_db(dsn: Optional[str] = None) -> None:
         add_manual_lane_operator_column(conn)
         # whose hand edits teach the shelves (src/edit_teach.py, 2026-09-18)
         add_prompt_edits_teach_column(conn)
+        # whose renders are not charged to credit (ledger.credit_exempt,
+        # 2026-09-18)
+        add_credit_exempt_column(conn)
 
 
 # --------------------------------------------------------------------------

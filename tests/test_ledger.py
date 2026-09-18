@@ -482,7 +482,7 @@ def test_a_byok_render_takes_no_hold(led):
     ledger.grant(account, 500, "subscription", dsn=dsn)
     assert ledger.hold_for_render(account, ref="render-1", provider="runway",
                                   estimate_usd=2.00, key_source="account",
-                                  dsn=dsn) is None
+                                  dsn=dsn) == ledger.RenderHold(None, "byok")
     assert ledger.available(account, dsn) == 500
     assert ledger.entries(account, dsn, ref="render-1") == []
 
@@ -490,9 +490,9 @@ def test_a_byok_render_takes_no_hold(led):
 def test_a_render_on_the_installations_key_does_take_a_hold(led):
     dsn, account = led
     ledger.grant(account, 500, "subscription", dsn=dsn)
-    hold_id = ledger.hold_for_render(account, ref="render-1", provider="runway",
-                                     estimate_usd=2.00, key_source="env", dsn=dsn)
-    assert isinstance(hold_id, int)
+    hold_id, reason = ledger.hold_for_render(account, ref="render-1", provider="runway",
+                                             estimate_usd=2.00, key_source="env", dsn=dsn)
+    assert isinstance(hold_id, int) and reason == "held"
     assert ledger.available(account, dsn) == 300
 
 

@@ -44,6 +44,7 @@ from typing import Any, Optional
 
 from .db import (
     OWNED_TABLES,
+    add_credit_exempt_column,
     add_manual_lane_operator_column,
     add_prompt_edits_teach_column,
     backfill_owner,
@@ -83,7 +84,11 @@ CREATE TABLE IF NOT EXISTS accounts (
     manual_lane_operator BOOLEAN NOT NULL DEFAULT FALSE,
     -- may a hand edit of this account's scene prompts teach the RAG
     -- shelves (src/edit_teach.py)? Same posture: FALSE until turned on.
-    prompt_edits_teach BOOLEAN NOT NULL DEFAULT FALSE
+    prompt_edits_teach BOOLEAN NOT NULL DEFAULT FALSE,
+    -- is this account exempt from the CREDIT CHARGE on a render
+    -- (ledger.credit_exempt)? The operator's own accounts, by hand.
+    -- FALSE for everybody else, who is refused at zero credit.
+    credit_exempt BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE TABLE IF NOT EXISTS account_members (
@@ -109,6 +114,7 @@ def init(dsn: Optional[str] = None) -> None:
         # here as well as there -- both are no-ops once it has landed.
         add_manual_lane_operator_column(conn)
         add_prompt_edits_teach_column(conn)
+        add_credit_exempt_column(conn)
 
 
 # --------------------------------------------------------------------------
@@ -318,6 +324,30 @@ def set_prompt_edits_teach(slug: str, on: bool,
     ValueError on an unknown slug, and no route or env var beside it --
     `python -m src.accounts edits-teach <slug> --on`."""
     return _set_account_flag("prompt_edits_teach", slug, on, dsn=dsn)
+
+
+def set_credit_exempt(slug: str, on: bool,
+                      dsn: Optional[str] = None) -> dict[str, Any]:
+    """Exempt ONE account from the credit charge on a render, or put it
+    back (ledger.credit_exempt, 2026-09-18). Same contract as
+    set_manual_lane_operator: idempotent, reports before and after,
+    ValueError on an unknown slug, and no route or env var beside it --
+    `python -m src.accounts credits <slug> --on`. Two-way on purpose:
+    --off puts the operator back in front of the refusal everyone else
+    meets, which is the only way he ever walks it."""
+    return _set_account_flag("credit_exempt", slug, on, dsn=dsn)
+
+
+def credit_exempt_accounts(dsn: Optional[str] = None) -> list[dict[str, Any]]:
+    """Every account that renders without a credit charge, for the CLI
+    to print. The gate itself asks about one id (ledger.credit_exempt)."""
+    with connect(dsn) as conn:
+        if not table_exists(conn, "accounts"):
+            return []
+        rows = conn.execute(
+            "SELECT id, slug FROM accounts WHERE credit_exempt "
+            "ORDER BY slug").fetchall()
+        return [{"account_id": int(r["id"]), "slug": r["slug"]} for r in rows]
 
 
 def prompt_edits_teachers(dsn: Optional[str] = None) -> list[dict[str, Any]]:
@@ -577,7 +607,41 @@ def main(argv=None) -> None:
                       help="they are not (the state every account starts in)")
     p_et.set_defaults(on=None)
 
+    p_cr = sub.add_parser(
+        "credits",
+        help="exempt one account from the credit charge on a render, or put "
+             "it back -- the operator's own accounts; everyone else is "
+             "refused at zero credit")
+    p_cr.add_argument("slug", help="the account slug, e.g. zeropage")
+    door = p_cr.add_mutually_exclusive_group(required=True)
+    door.add_argument("--on", dest="on", action="store_true",
+                      help="this account's renders on the operator's key take "
+                           "no credit hold (still quoted, still capped, still recorded)")
+    door.add_argument("--off", dest="on", action="store_false",
+                      help="it is charged like anyone (the state every account starts in)")
+    p_cr.set_defaults(on=None)
+
     args = parser.parse_args(argv)
+
+    if args.command == "credits":
+        try:
+            result = set_credit_exempt(args.slug, args.on)
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            sys.exit(1)
+        state = "ON" if result["now"] else "OFF"
+        where = f"{result['slug']!r} (account {result['account_id']})"
+        if result["changed"]:
+            print(f"credit exemption {'OFF -> ON' if result['now'] else 'ON -> OFF'} "
+                  f"for {where}")
+        else:
+            print(f"credit exemption already {state} for {where} -- nothing changed")
+        others = [o for o in credit_exempt_accounts()
+                  if o["account_id"] != result["account_id"]]
+        if others:
+            print("also exempt: " + ", ".join(
+                f"{o['slug']} (account {o['account_id']})" for o in others))
+        return
 
     if args.command == "edits-teach":
         try:
