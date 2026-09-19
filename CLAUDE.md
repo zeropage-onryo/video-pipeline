@@ -1591,6 +1591,19 @@ is yours, in Resolve, by hand.
 
 ### Key conventions to preserve
 
+- **Render provenance lives in `generated_assets` and `params_json`, never in new columns on
+  `generations`.** `generations` is the ATTEMPT log; `generated_assets` is the record of what
+  successfully rendered (`tool`, `model`, `media_kind`, `metadata_json`, with
+  `render_assets._label` for the display name). On 2026-09-18 four columns — `ai_model`,
+  `aspect_ratio`, `camera_motion`, `is_favorite` — were found on the live table, absent from
+  `generative.SCHEMA`, unwritten by `record_generation` (the only writer) and unread by
+  anything in `src app ops tests web/src`. All 113 rows therefore carried their literal
+  defaults (`'Nano Banana Pro'`, `'16:9'`, the STRING `'None'`) as if they were data, and a
+  fresh `init()` built a differently-shaped table than production. They were dropped. If
+  structured per-attempt detail is wanted, it goes in `params_json` — which already carries
+  model, ratio, duration, lane and source — or in `generated_assets`. A second provenance
+  store beside the first is the mistake `asset_shelf` exists to prevent.
+
 - **Prompts and brand brief are plain text in `prompts/`, not hardcoded strings.** They're the
   highest-frequency edit surface in this system; treat `{brief}`, `{settings}`,
   `{locations}`, `{cast}`, `{brand}`, `{client}`, `{spark}`, `{count}`, `{references}`,
@@ -1764,15 +1777,6 @@ not code** — the path exists now, so the question is whether it can be walked 
 as `src.autopilot` — gated, dry-run, default off, executors unwired.
 
 **Known gaps, in rough priority:**
-- **`generations` has four columns no writer sets** (found 2026-09-18). `ai_model`,
-  `aspect_ratio`, `camera_motion` and `is_favorite` exist on the live table with hardcoded
-  defaults (`'Nano Banana Pro'`, `'16:9'`, the STRING `'None'`, false), are absent from
-  `generative.SCHEMA`, and are not parameters on `record_generation` — the only writer. So all
-  113 rows carried the same fake provenance and ratio until row 113 was corrected by hand, a
-  fresh `init()` builds a differently-shaped table than production, and `tests/test_tenancy.py`
-  cannot classify them as owned or shared. Fix: add them to `SCHEMA`, drop the literal defaults
-  in favour of NULL, take them as kwargs on `record_generation`, pass them from the adapters
-  that already know the answers.
 - **Timed scenes (2026-09-10) are rendered shot by shot only at the Queue.** The graph's
   `generate_render` (a dry stub unless `ZEROPAGE_RENDER=1`) still renders a scene's whole
   prompt as one clip, and the Director canvas still edits the whole scene prompt rather than
