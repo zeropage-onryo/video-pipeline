@@ -155,6 +155,70 @@ def photos_for(kind: str, slug: str) -> list:
                   if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS)
 
 
+def r2_photo_urls(kind: str, slug: str,
+                  account_id: Optional[int] = None) -> list[str]:
+    """The asset's photos as listed in the BUCKET -- the catalogue's
+    answer on a machine that has no photo folder.
+
+    2026-09-15: GET /api/assets on the deployed API answered photos: []
+    for every character, location and prop, so the studio's composer
+    and Elements page could attach none of them. photos_for() reads the
+    folder, and characters/ props/ locations/ are gitignored AND
+    dockerignored -- the bytes were in R2 and nothing looked.
+
+    REWORKED 2026-09-18 for the media ladder (src/media.py), which
+    landed between this being written and being merged. Two things the
+    first version got wrong for anything above the `legacy` rung:
+
+    - WHERE it looked. It listed the flat `characters/<slug>/`. From
+      `tenant` up the masters live at `m/<account>/characters/<slug>/`,
+      and the flat keys are the very thing the ladder exists to leave:
+      one key for every account, so the second studio with a character
+      called `michael` would have been handed the first one's face. The
+      prefix is built by media.object_key -- THE writer-side key builder
+      -- so the listing looks exactly where the mirror wrote, per
+      account, and is the flat key unchanged on `legacy` or for a caller
+      with no account.
+    - WHAT it returned. It returned the raw public URL. Every other
+      writer returns photo_url(): the public URL on `legacy`, the local
+      route (the logical name) from `tenant` up, minted into something
+      fetchable on READ by media.url_for. A listing that handed out a
+      different string shape would have put URLs on rows that every
+      other path treats as names.
+
+    Filtered to what photos_for() would accept off disk (IMAGE_
+    EXTENSIONS, files directly under the slug) and sorted by filename so
+    the two listings agree on order -- refs[0] is the frame a clip
+    anchors on. [] when R2 is off."""
+    from . import media, storage
+    from .locations import IMAGE_EXTENSIONS
+
+    if not storage.configured():
+        return []
+    plural = next(k for k, v in URL_ROOTS.items() if v == kind)
+    # one cached listing per (account, kind), not one per asset
+    root = media.object_key(f"{plural}/", account_id)
+    head = media.object_key(f"{plural}/{slug}/", account_id)
+    names = set()
+    for key in storage.keys_under(root):
+        if not key.startswith(head):
+            continue
+        name = key[len(head):]
+        if not name or "/" in name or Path(name).suffix.lower() not in IMAGE_EXTENSIONS:
+            continue
+        names.add(name)
+    return [photo_url(kind, slug, n) for n in sorted(names)]
+
+
+def photo_urls(kind: str, slug: str,
+               account_id: Optional[int] = None) -> list[str]:
+    """The asset's photo URLs: the local folder first (this machine's
+    own photos, off its own disk), the account's bucket listing when
+    the folder is absent or empty."""
+    local = [photo_url(kind, slug, f.name) for f in photos_for(kind, slug)]
+    return local or r2_photo_urls(kind, slug, account_id)
+
+
 # The site-relative URL every reference in this pipeline travels as.
 # `/characters/<slug>/photo/<file>`, `/props/...`, `/locations/...` for
 # the asset bank, `/refs/<sha>.jpg` for anything the composer uploaded
@@ -404,8 +468,7 @@ def catalogue(db_path=None, account_id: Optional[int] = None) -> list[dict]:
     items: list[dict] = []
 
     def photos(kind: str, name: str) -> list:
-        slug = slugify(name)
-        return [photo_url(kind, slug, f.name) for f in photos_for(kind, slug)]
+        return photo_urls(kind, slugify(name), account_id)
 
     for loc in preprod.list_locations(dsn=path, account_id=account_id):
         items.append({"category": "location", "name": loc["name"],

@@ -19,6 +19,9 @@ silently going nowhere.
 from __future__ import annotations
 
 import os
+import sys
+import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -145,6 +148,62 @@ def key_exists(key: str) -> bool:
         return False
 
 
+# One listing per PREFIX per process, not one per asset per request.
+# The deployed API has no characters/ props/ locations/ folders (all
+# three are gitignored AND dockerignored), so its asset catalogue reads
+# the bucket instead (2026-09-15) -- and a list call per asset on every
+# GET /api/assets is 76 round trips to Cloudflare per page load. Three
+# prefixes cover every asset; they are listed once and kept for
+# LISTING_TTL so a photo pushed from another machine shows up without a
+# restart. An upload from THIS process is folded straight into the
+# cached listing (see upload_file), so a fresh photo is never hidden
+# behind its own TTL.
+LISTING_TTL = float(os.environ.get("R2_LISTING_TTL", "600"))
+_LISTINGS: dict[str, tuple[float, list[str]]] = {}
+_LISTINGS_LOCK = threading.Lock()
+
+
+def keys_under(prefix: str, *, refresh: bool = False) -> list[str]:
+    """The cached keys under `prefix`. [] when R2 is off, exactly as
+    url_for_key() answers None -- a caller degrades to "no photos" in
+    one line. Never raises: a listing that fails is remembered as
+    whatever the last good answer was (or empty) for one TTL, so a
+    Cloudflare outage costs one failed call per prefix per TTL rather
+    than one per asset per request."""
+    if not configured():
+        return []
+    now = time.monotonic()
+    with _LISTINGS_LOCK:
+        hit = _LISTINGS.get(prefix)
+        if hit and not refresh and now - hit[0] < LISTING_TTL:
+            return list(hit[1])
+    try:
+        keys = list_keys(prefix)
+    except Exception as e:                              # noqa: BLE001
+        print(f"note: R2 listing of {prefix!r} failed: "
+              f"{type(e).__name__}: {e}", file=sys.stderr)
+        keys = list(hit[1]) if hit else []
+    with _LISTINGS_LOCK:
+        _LISTINGS[prefix] = (now, keys)
+    return list(keys)
+
+
+def forget_listings() -> None:
+    """Drop every cached listing (tests, and anything that knows the
+    bucket changed under it)."""
+    with _LISTINGS_LOCK:
+        _LISTINGS.clear()
+
+
+def _note_uploaded(key: str) -> None:
+    """A key this process just put in the bucket joins any cached
+    listing whose prefix covers it, so the catalogue sees it now."""
+    with _LISTINGS_LOCK:
+        for prefix, (stamp, keys) in _LISTINGS.items():
+            if key.startswith(prefix) and key not in keys:
+                keys.append(key)
+
+
 def upload_file(local_path: Path | str, key: Optional[str] = None,
                  content_type: Optional[str] = None) -> str:
     """
@@ -176,6 +235,7 @@ def upload_file(local_path: Path | str, key: Optional[str] = None,
     key = key or f"clips/{local_path.name}"
     extra_args = {"ContentType": content_type} if content_type else None
     client.upload_file(str(local_path), bkt, key, ExtraArgs=extra_args)
+    _note_uploaded(key)
     return f"{base_url}/{key}"
 
 

@@ -567,7 +567,14 @@ def _asset_photo_urls(kind: str, base_dir: Path, slug: str,
     """
     from src import asset_shelf as _shelf
 
-    return [_shelf.photo_url(kind, slug, fn) for fn in _photo_names(base_dir, slug)]
+    # Disk first, so Mike's Mac reads its own photos. When the folder is
+    # missing -- the deployed API: characters/ props/ locations/ are
+    # gitignored AND dockerignored, so on Fly every asset answered
+    # photos: [] and the studio could attach none of them (2026-09-15) --
+    # the listing comes from the bucket, under THIS account's keys, as the
+    # same storable name photo_url returns.
+    local = [_shelf.photo_url(kind, slug, fn) for fn in _photo_names(base_dir, slug)]
+    return local or _shelf.r2_photo_urls(kind, slug, account_id)
 
 
 def _asset_photo_thumbs(urls: list, account_id: Optional[int] = None) -> list:
@@ -598,8 +605,8 @@ def _asset_photo_thumbs(urls: list, account_id: Optional[int] = None) -> list:
     return out
 
 
-def _location_photos(space: str) -> list:
-    return _asset_photo_urls("location", LOCATIONS_DIR, space)
+def _location_photos(space: str, account_id: Optional[int] = None) -> list:
+    return _asset_photo_urls("location", LOCATIONS_DIR, space, account_id)
 
 
 def _description_text(desc) -> str:
@@ -636,7 +643,7 @@ def _assets_all(account_id: Optional[int] = None, scope: str = "all") -> list:
     if scope == "generated":
         return _generated_assets(account_id)
     for loc in preprod.list_locations(account_id=account_id):
-        photos = _location_photos(loc["name"])
+        photos = _location_photos(loc["name"], account_id)
         thumbs = _asset_photo_thumbs(photos, account_id)
         sheet, sheet_thumb = _sheet_of(photos, thumbs)
         items.append({
@@ -651,7 +658,7 @@ def _assets_all(account_id: Optional[int] = None, scope: str = "all") -> list:
         })
     for c in entities.list_characters(account_id=account_id):
         slug = _slug(c["name"])
-        photos = _asset_photo_urls("character", CHARACTERS_DIR, slug)
+        photos = _asset_photo_urls("character", CHARACTERS_DIR, slug, account_id)
         thumbs = _asset_photo_thumbs(photos, account_id)
         sheet, sheet_thumb = _sheet_of(photos, thumbs)
         items.append({
@@ -665,7 +672,7 @@ def _assets_all(account_id: Optional[int] = None, scope: str = "all") -> list:
         })
     for p in entities.list_props(account_id=account_id):
         slug = _slug(p["name"])
-        photos = _asset_photo_urls("prop", PROPS_DIR, slug)
+        photos = _asset_photo_urls("prop", PROPS_DIR, slug, account_id)
         thumbs = _asset_photo_thumbs(photos, account_id)
         sheet, sheet_thumb = _sheet_of(photos, thumbs)
         items.append({
@@ -1387,7 +1394,8 @@ def _concept_card(c: dict, subscription_ids: Optional[set] = None,
     ) if c.get("is_scene") else ""
     grounded = []
     for name in location_names:
-        photos = _location_photos(name)
+        # the row's own account: the bucket fallback is fenced per tenant
+        photos = _location_photos(name, c.get("account_id"))
         grounded.append({"name": name,
                          "poster": photos[0] if photos else None})
     return {

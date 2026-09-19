@@ -440,6 +440,22 @@ key scheme and of the read-time mint; `storage.py` stays the boto3 layer and
 - Full operational sequence, including the custom domain and the tiering pass
   (`ops/media_lifecycle.py`): **ops/r2-setup.md**.
 
+**And the LISTING falls back to the bucket too (written 2026-09-15, reworked for the ladder
+2026-09-18).** The deployed API answered `photos: []` / `poster: null` for every asset, so the
+React composer and Elements page could attach none of them: `_assets_all` and
+`asset_shelf.catalogue` both built the list by scanning the folder, and Fly has no folder.
+`asset_shelf.r2_photo_urls(kind, slug, account_id)` lists the bucket instead, disk still first on
+both listings so the Mac reads its own photos. Two rules, both learned by nearly merging the
+first version after `src/media.py` landed underneath it: the prefix comes from
+`media.object_key` (so on `tenant` it lists `m/<account>/characters/…`, never the flat
+`characters/` every account shares -- the second studio's `michael` must not be handed the
+first one's face), and what it RETURNS is `photo_url()`'s storable name, not a raw public URL,
+like every other writer. `storage.keys_under(prefix)` is the cached edge behind it: ONE
+`list_objects_v2` per (account, kind) prefix per process, kept for `R2_LISTING_TTL` (600s), an
+upload from this process folded straight into the cache, a failed list remembered as empty for
+one TTL rather than retried per asset, `[]` outright when R2 is unconfigured.
+`tests/test_assets_r2_fallback.py` stands a fake listing in at `storage.list_keys`.
+
 **`.heic` decodes now** (`pillow-heif`, registered in `_to_jpeg`, degrading if absent), and
 `_best_photo` prefers a natively-decodable sibling regardless. `IMAGE_EXTENSIONS` has always
 listed `.heic` and the gallery has always shown it, but Pillow could not read one — so a HEIC
