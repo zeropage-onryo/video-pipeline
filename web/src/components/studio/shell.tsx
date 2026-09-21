@@ -116,30 +116,41 @@ export function StudioShell({ children }: { children: ReactNode }) {
   const [bar, setBarNode] = useState<ReactNode>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const loadMe = useCallback(
+    () =>
+      getMe()
+        .then(setMe)
+        .catch((err) => {
+          setMe(null);
+          // a 401 is a visitor, not an outage: the account row becomes Sign in
+          if (err instanceof ApiError && err.status === 401) setSignedOut(true);
+        }),
+    [],
+  );
   useEffect(() => {
-    getMe()
-      .then(setMe)
-      .catch((err) => {
-        setMe(null);
-        // a 401 is a visitor, not an outage: the account row becomes Sign in
-        if (err instanceof ApiError && err.status === 401) setSignedOut(true);
-      });
-  }, []);
+    loadMe();
+  }, [loadMe]);
+  const brand = me?.account?.slug ?? "";
 
   const refreshBadge = useCallback(() => {
     // the count route, not the listing: the listing prices every card and
     // the badge is on every page. An API from before the route existed
     // answers 404 (or 405), so the listing stays as the fallback.
-    queueCount()
+    // branded, as the vanilla shell's badge is (shared.js sends ?brand=):
+    // the badge counts the list the Queue page is about to draw
+    queueCount(brand || undefined)
       .then((res) => setPending(res.spendable))
       .catch((err) => {
         if (!(err instanceof ApiError) || ![404, 405].includes(err.status)) return setPending(0);
-        queuePending()
+        queuePending(brand || undefined)
           .then((res) => setPending(res.spendable ?? res.items.length))
           .catch(() => setPending(0));
       });
-  }, []);
+  }, [brand]);
   useEffect(() => {
+    // not before /api/me has answered: an unbranded count would be asked,
+    // drawn, and replaced a beat later
+    if (!me) return;
     refreshBadge();
     const timer = setInterval(refreshBadge, 60_000);
     window.addEventListener(QUEUE_EVENT, refreshBadge);
@@ -147,7 +158,7 @@ export function StudioShell({ children }: { children: ReactNode }) {
       clearInterval(timer);
       window.removeEventListener(QUEUE_EVENT, refreshBadge);
     };
-  }, [refreshBadge]);
+  }, [refreshBadge, me]);
 
   const togglePin = () => {
     try {
@@ -165,7 +176,18 @@ export function StudioShell({ children }: { children: ReactNode }) {
   }, []);
   const setBar = useCallback((node: ReactNode) => setBarNode(node), []);
 
-  const brand = me?.account?.slug ?? "";
+  // The switch is a cookie on THIS origin (the proxy forwards POST /brand),
+  // and /api/me is what says it took: every page keys its fetches on the
+  // `brand` this context hands out, so re-reading /api/me is what makes the
+  // Queue, the board and the badge re-ask -- no reload (BACKLOG #19).
+  const pickAccount = (slug: string) => {
+    setMenu(false);
+    if (slug === brand) return;
+    switchAccount(slug)
+      .then(loadMe)
+      .catch(() => toast("Could not switch account", "err"));
+  };
+
   const who = me?.user.display_name || me?.user.email || "—";
   const initials = who
     .split(/\s+/)
@@ -251,7 +273,7 @@ export function StudioShell({ children }: { children: ReactNode }) {
                       key={a.id}
                       type="button"
                       aria-current={a.slug === brand ? "true" : undefined}
-                      onClick={() => switchAccount(a.slug)}
+                      onClick={() => pickAccount(a.slug)}
                     >
                       {a.label}
                     </button>

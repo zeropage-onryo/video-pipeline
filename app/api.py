@@ -320,7 +320,16 @@ def me(request: Request, account_id: int = Depends(auth.current_account_id)):
     belong to."""
     user = auth.current_user(request) or {}
     member_of = accounts.memberships(user["id"]) if user.get("id") else []
-    active = next((a for a in member_of if a["id"] == account_id), None)
+    # The BRAND, not the tenant (BACKLOG #19, 2026-09-21). This used to
+    # match on `account_id`, which is current_account_id -- the oldest
+    # membership whatever the cookie says -- so POST /brand/antihero set
+    # the cookie and this went on answering `zeropage`: the React account
+    # menu looked dead and the Queue, which asks ?brand=<this slug>, could
+    # never show the other brand. auth.current_account is what /ui reads
+    # for `data-brand`, so the two shells resolve the brand by one rule.
+    # `account_id` stays declared: it is the gate (401/403), not the answer.
+    slug = (auth.current_account(request, user or None) or {}).get("slug")
+    active = next((a for a in member_of if a["slug"] == slug), None)
     return {
         "user": {"id": user.get("id"), "email": user.get("email"),
                  "display_name": user.get("display_name") or (user.get("email") or "").split("@")[0],

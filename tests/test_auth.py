@@ -240,6 +240,24 @@ def test_picking_an_account_lands_in_the_shell(clean_slate, gotrue):
     assert 'data-brand="zeropage"' in shell.text
 
 
+def test_api_me_follows_the_brand_switch_like_the_shell_does(clean_slate, gotrue):
+    """BACKLOG #19: /api/me answered the TENANT (oldest membership) as the
+    active account, so the React menu's POST /brand/antihero changed the
+    cookie and nothing else -- the shell still read `zeropage`, and the
+    Queue, which asks ?brand=<that slug>, never showed the other brand.
+    /ui's data-brand and /api/me's account are one rule now, both ways."""
+    seed_mike(clean_slate, gotrue)
+    login("mike@example.com", "mikes-password-1")
+    for slug in ("antihero", "zeropage", "antihero"):
+        response = client.post(f"/brand/{slug}", data={"next": "/studio"},
+                               follow_redirects=False)
+        assert response.status_code == 303
+        me = client.get("/api/me").json()
+        assert me["account"]["slug"] == slug
+        assert f'data-brand="{slug}"' in client.get("/ui?legacy=1").text
+        assert {a["slug"] for a in me["accounts"]} == {"zeropage", "antihero"}
+
+
 def test_brand_cookie_cannot_grant_an_account_you_are_not_in(clean_slate, gotrue):
     """current_account is backed by membership: a forged/stale brand
     cookie can only pick among the accounts you actually belong to."""
