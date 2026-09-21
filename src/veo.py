@@ -110,7 +110,7 @@ def _safe_error(e: Exception, account_id: Optional[int] = None) -> str:
     return re.sub(r"key=[A-Za-z0-9_\-]+", "key=<redacted>", text)
 
 
-def spend_approved(approved: Optional[bool] = None) -> bool:
+def spend_approved(approved: Optional[bool] = None, quote=None) -> bool:
     """Is this ONE call approved to spend?
 
     THE APPROVAL IS THE CLICK NOW (2026-09-09, Mike's call). It used to
@@ -135,8 +135,19 @@ def spend_approved(approved: Optional[bool] = None) -> bool:
     VEO_SPEND_OK=1 set for it on purpose, on top of its own flags. Same for
     the CLI and the ops scripts.
     """
+    # `quote` (2026-09-21) is the verified pricing.Quote the route holds,
+    # when it holds one. A change of SHAPE, not of location: the check is
+    # still here, inside generate_video. A Quote for another renderer is
+    # refused whatever else was said -- it is a price for a different
+    # render -- and a Quote with no explicit answer IS the answer: a
+    # person pressed a priced button and the server verified the price.
+    # No Quote (BYOK, the nightly graph, the CLI) is exactly as before.
+    if quote is not None and getattr(quote, "provider", None) != "veo":
+        return False
     if approved is not None:
         return bool(approved)
+    if quote is not None:
+        return True
     return (os.environ.get(SPEND_ENV) or "").strip() == "1"
 
 
@@ -198,7 +209,7 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
     The spend gate is checked HERE, before the client is even built, so
     no caller can spend around it -- runway.generate_video's rule.
     """
-    if not spend_approved(approved):
+    if not spend_approved(approved, quote=getattr(charge, "quote", None)):
         raise RuntimeError(
             f"credit spend not approved: this call was not approved by a person. "
             f"Approve it at the Queue, or set {SPEND_ENV}=1 for an unattended run "
@@ -434,6 +445,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                       resolve_photo=None, client=None,
                       approved: Optional[bool] = None,
                       account_id: Optional[int] = None,
+                      quote=None,
                       part: Optional[int] = None,
 ) -> dict:
     """
@@ -494,7 +506,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
         key_source = account_keys.key_source(account_id, "veo", db_path)
         charge = charging.Charge(
             account_id, provider="veo", ref=out_path.name,
-            estimate_usd=estimate_cost(1), key_source=key_source, dsn=db_path)
+            estimate_usd=estimate_cost(1), key_source=key_source, dsn=db_path, quote=quote)
         def row_params():
             return {"model": model, "duration": duration,
                     "resolution": resolution,

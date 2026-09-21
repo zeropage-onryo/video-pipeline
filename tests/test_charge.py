@@ -248,3 +248,114 @@ def test_the_plans_are_the_three_tiers_in_ascending_order():
         assert p.credits == p.monthly_usd * 100
     assert pricing.TOPUP.credits == pricing.TOPUP.usd * 100
     assert sum(1 for p in pricing.PLANS.values() if p.popular) == 1
+
+
+# --- the hold is the verified Quote's, not a re-derivation (2026-09-21) ------
+
+def _quote(studio, *, credits, provider="runway", account_id="own"):
+    return pricing.Quote(
+        pricing_version=pricing.PRICING_VERSION,
+        account_id=studio["account_id"] if account_id == "own" else account_id,
+        shot_id=1, part=None, provider=provider, model=runway.DEFAULT_MODEL,
+        seconds=5, frame=runway.DEFAULT_RATIO, provider_usd_micros=250000,
+        credits=credits, content_hash="0" * 16, line_items=())
+
+
+def test_a_quote_in_hand_is_what_is_held_and_settled(studio, tmp_path, monkeypatch):
+    """A number the estimate could never produce, so the two cannot agree
+    by coincidence -- which is all that made them agree before."""
+    monkeypatch.setattr(runway, "RENDER_DIR", tmp_path / "renders")
+    monkeypatch.delenv(runway.SPEND_ENV)                # the Quote is the approval
+    ledger.grant(studio["account_id"], 1000, "purchase", dsn=studio["dsn"])
+    assert ledger.charge_credits(runway.estimate_cost(1)) != 777
+    result = runway.generate_from_prompt(PROMPT, db_path=studio["dsn"],
+                                         account_id=studio["account_id"],
+                                         quote=_quote(studio, credits=777))
+    assert result["ok"] is True, result
+    assert -sum(e["delta"] for e in _entries(studio, "hold")) == 777
+    assert ledger.available(studio["account_id"], studio["dsn"]) == 1000 - 777
+    assert ledger.outstanding(studio["account_id"], studio["dsn"]) == 0
+    assert all(e["generation_id"] == result["generation_id"] for e in _entries(studio, "settle"))
+
+
+def test_without_a_quote_the_estimate_is_still_the_fallback(studio, tmp_path, monkeypatch):
+    monkeypatch.setattr(runway, "RENDER_DIR", tmp_path / "renders")
+    ledger.grant(studio["account_id"], 1000, "purchase", dsn=studio["dsn"])
+    result = runway.generate_from_prompt(PROMPT, db_path=studio["dsn"],
+                                         account_id=studio["account_id"])
+    assert result["ok"] is True, result
+    price = ledger.charge_credits(runway.estimate_cost(1))
+    assert ledger.available(studio["account_id"], studio["dsn"]) == 1000 - price
+
+
+@pytest.mark.parametrize("wrong", [{"account_id": 999999}, {"provider": "fal"}])
+def test_somebody_elses_quote_holds_nothing_and_submits_nothing(studio, wrong):
+    ledger.grant(studio["account_id"], 1000, "purchase", dsn=studio["dsn"])
+    result = runway.generate_from_prompt(PROMPT, db_path=studio["dsn"], approved=True,
+                                         account_id=studio["account_id"],
+                                         quote=_quote(studio, credits=5, **wrong))
+    assert result["ok"] is False
+    assert studio["submits"] == []
+    assert _entries(studio, "hold") == []
+    assert ledger.available(studio["account_id"], studio["dsn"]) == 1000
+
+
+@pytest.mark.parametrize("name", ["runway", "fal", "veo", "higgsfield"])
+def test_spend_approved_changed_shape_not_location(name, monkeypatch):
+    module = providers.VIDEO_PROVIDERS[name]
+    monkeypatch.delenv(module.SPEND_ENV, raising=False)
+    mine = SimpleNamespace(provider=name)
+    theirs = SimpleNamespace(provider="somebody-else")
+    assert module.spend_approved() is False                       # unattended, unarmed
+    assert module.spend_approved(quote=mine) is True              # a verified, priced click
+    assert module.spend_approved(False, quote=mine) is False      # an explicit no is a no
+    assert module.spend_approved(True, quote=theirs) is False     # a price for another render
+    assert module.spend_approved(True) is True                    # BYOK: the click, no quote
+    monkeypatch.setenv(module.SPEND_ENV, "1")
+    assert module.spend_approved() is True                        # the nightly, armed on purpose
+
+
+@pytest.mark.parametrize("name,edge", [
+    (n, e) for n in ("runway", "fal", "veo", "higgsfield")
+    for e in ("generate_for_shot", "generate_from_prompt")
+    if not (n == "veo" and e == "generate_from_prompt")])      # veo has no such edge
+def test_every_person_driven_edge_hands_its_quote_to_the_charge(studio, monkeypatch, name, edge):
+    """The Quote has to arrive where the hold is taken, in every adapter:
+    a keyword accepted and then dropped would hold the estimate again and
+    nothing else in the suite would notice."""
+    from src import preprod
+    module = providers.VIDEO_PROVIDERS[name]
+    seen = []
+
+    def stop(prompt, out_path, **kw):
+        seen.append(kw["charge"].quote)
+        raise RuntimeError("stop before anything is submitted")
+    monkeypatch.setattr(module, "generate_video", stop)
+    quote = _quote(studio, credits=321, provider=name)
+    if edge == "generate_for_shot":
+        preprod.init(studio["dsn"])
+        concept_id = preprod.save_concept(
+            {"title": "t", "hook": "h", "logline": "l", "shots": [_scene()]},
+            "zeropage", dsn=studio["dsn"], account_id=studio["account_id"])
+        result = module.generate_for_shot(concept_id, 1, db_path=studio["dsn"],
+                                          account_id=studio["account_id"], quote=quote)
+    else:
+        result = module.generate_from_prompt(PROMPT, db_path=studio["dsn"],
+                                             account_id=studio["account_id"], quote=quote)
+    assert result["ok"] is False
+    assert seen == [quote]
+
+
+@pytest.mark.parametrize("name", ["runway", "fal", "veo", "higgsfield"])
+def test_generate_video_asks_the_gate_with_the_charges_quote(name, tmp_path, monkeypatch):
+    """The gate did not move: it is still inside generate_video, and it is
+    shown the Quote the Charge carries. A price for another renderer is
+    refused there even on an approved click -- before anything is held."""
+    module = providers.VIDEO_PROVIDERS[name]
+    monkeypatch.setenv(module.SPEND_ENV, "1")
+    charge = charging.Charge(None, provider=name, ref="x.mp4", estimate_usd=0.25,
+                             quote=SimpleNamespace(provider="somebody-else",
+                                                   account_id=None, credits=5))
+    with pytest.raises(RuntimeError, match="not approved"):
+        module.generate_video(PROMPT, tmp_path / "x.mp4", approved=True, charge=charge)
+    assert charge.hold_id is None and charge.held == 0

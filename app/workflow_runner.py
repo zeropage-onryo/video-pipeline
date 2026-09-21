@@ -167,7 +167,7 @@ def image_for_runway(value, resolve_photo=None):
 
 def render_generate_node(pick: dict, prompt: str, reference: Optional[str], *,
                          resolve_photo=None, db_path=None,
-                         account_id: Optional[int] = None) -> dict:
+                         account_id: Optional[int] = None, quote=None) -> dict:
     """One Generate-node render on the renderer providers.renderer_for
     picked -- the node's own Run and Run all both come through here, so
     one graph cannot render two different ways depending on which button
@@ -185,6 +185,9 @@ def render_generate_node(pick: dict, prompt: str, reference: Optional[str], *,
     kwargs = {"approved": True,     # a person pressed Run -- see spend_approved
               "db_path": db_path, "account_id": account_id,
               "model": pick["model"]}
+    if quote is not None:
+        # the node's own Run verified a price; Run all never has one
+        kwargs["quote"] = quote
     if pick["provider"] == "runway":
         kwargs["reference_image"] = image_for_runway(reference,
                                                      resolve_photo=resolve_photo)
