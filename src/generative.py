@@ -24,6 +24,7 @@ discard. This records the decision instead of losing it.
 from __future__ import annotations
 
 import json
+import sys
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
@@ -404,6 +405,84 @@ def mark_kept(
             "UPDATE shots SET resolved = 1 WHERE id = %s AND account_id IS NOT DISTINCT FROM %s",
             (row["shot_id"], account_id),
         )
+
+
+def record_failure(
+    tool: str,
+    prompt: str,
+    error: str,
+    *,
+    shot_row,
+    params: Optional[dict] = None,
+    dsn: Optional[str] = None,
+    account_id: Optional[int],
+) -> Optional[int]:
+    """
+    Log an attempt that reached the provider and came back with nothing
+    (BACKLOG #18, found 2026-09-18: Higgsfield answered the submit with
+    HTTP 423 and the only trace was the in-process jobs registry, which a
+    restart clears). NEVER RAISES -- it runs inside an `except`, and a
+    second failure there must not replace the provider's error with one
+    about bookkeeping. Returns the row id, or None when it could not be
+    written.
+
+    The row's shape is the one `ledger.reap` already reads as "found and
+    failed": NO `output_path`. `reject_reason` is left alone on purpose --
+    that column is a person's verdict on a take ("morphing hands") and
+    `failure_reasons` groups it to say what the PROMPTS keep inviting; a
+    locked provider account is not that. The error lives in `notes` and
+    in params (`failed`, `error`), beside whatever the caller's success
+    row would have carried (`key_source`, and `ledger_ref` when a hold was
+    taken, so a release that itself failed is still findable).
+
+    `cost_usd` is 0.0, not NULL: NULL is a FREE render (the subscription
+    lane) and would count as one on /costs. It IS counted by
+    `used_today`, like every other row -- "every attempt is a row under
+    the daily cap" -- which also bounds a retry loop against a provider
+    that is refusing everything.
+
+    `shot_row` and `params` may be callables: the adapters create the
+    shot row lazily and read `charge.params()` only after the hold, and
+    both must happen inside this function's try.
+    """
+    try:
+        shot_id = shot_row() if callable(shot_row) else shot_row
+        text = str(error or "failed")[:500]
+        if callable(params):
+            params = params()
+        return record_generation(
+            shot_id, tool, prompt,
+            params={**(params or {}), "failed": True, "error": text},
+            output_path=None, cost_usd=0.0, notes=f"failed: {text}",
+            dsn=dsn, account_id=account_id)
+    except Exception as e:
+        print(f"[generative] could not record the failed {tool} attempt: {e}",
+              file=sys.stderr)
+        return None
+
+
+@contextmanager
+def failed_attempt_row(charge, tool: str, prompt: str, *, safe_error, shot_row,
+                       params=None, dsn: Optional[str] = None,
+                       account_id: Optional[int]):
+    """Wrap an adapter's `generate_video(..., charge=charge)` call: a raise
+    that came AFTER `charge.submitted()` leaves a failed generations row
+    (`record_failure`), and is re-raised untouched either way. A raise from
+    BEFORE it -- the spend gate, an over-long prompt, an empty balance --
+    never reached the provider and is not an attempt. `safe_error` is the
+    adapter's own redactor, so a key can no more reach this row than the
+    result dict."""
+    try:
+        yield
+    except Exception as e:
+        if getattr(charge, "attempted", False):
+            try:
+                message = safe_error(e)
+            except Exception:
+                message = type(e).__name__
+            record_failure(tool, prompt, message, shot_row=shot_row,
+                           params=params, dsn=dsn, account_id=account_id)
+        raise
 
 
 def mark_rejected(

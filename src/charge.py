@@ -16,6 +16,10 @@ THE SANDWICH, and where each slice lives:
     <provider submit>
     charge.release("...")             # generate_video, on any raise after
                                       #   take(): the customer pays nothing
+    generative.record_failure(...)    # back in the caller, when the raise
+                                      #   came after submitted()
+                                      #   (`charge.attempted`): every attempt
+                                      #   is a row, a failed one included
     charge.settle(actual, gen_id)     # back in the caller, once the
                                       #   generations row exists -- the link
                                       #   from money to clip
@@ -49,6 +53,8 @@ match a hold to the row it paid for.
 from __future__ import annotations
 
 import sys
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 from . import ledger
@@ -56,7 +62,7 @@ from . import ledger
 
 class Charge:
     __slots__ = ("account_id", "provider", "ref", "estimate_usd", "key_source",
-                 "source", "dsn", "hold_id", "held", "_done")
+                 "source", "dsn", "hold_id", "held", "attempted", "_done")
 
     def __init__(self, account_id: Optional[int], *, provider: str, ref: str,
                  estimate_usd, key_source: Optional[str] = None,
@@ -70,6 +76,12 @@ class Charge:
         self.dsn = dsn
         self.hold_id: Optional[int] = None
         self.held: int = 0
+        # True once submitted() ran -- i.e. the provider was about to be
+        # called, hold or no hold (BYOK and exempt renders submit too). It
+        # is how the caller that writes the generations row knows a raise
+        # out of generate_video was an ATTEMPT, which owes a row, and not
+        # a gate or an empty balance, which does not (BACKLOG #18).
+        self.attempted = False
         self._done = False
 
     # -- the four slices ----------------------------------------------------
@@ -103,6 +115,7 @@ class Charge:
 
     def submitted(self) -> None:
         """The last line before the provider call."""
+        self.attempted = True
         if self.hold_id is not None:
             ledger.mark_submitted(self.hold_id, dsn=self.dsn)
 
@@ -137,6 +150,21 @@ class Charge:
         return ledger.ref_params(self.ref) if self.hold_id is not None else {}
 
 
+def attempt_ref(out_path) -> str:
+    """A ref for an output path that is NOT unique per attempt.
+
+    generate_for_shot and generate_from_prompt stamp their file names, so
+    the name is the ref. generate_candidates writes `cand1.mp4` into
+    whatever directory it is handed, every run -- and `ledger.hold` is
+    idempotent on the ref, so the second night's `cand1.mp4` was handed
+    the FIRST night's hold back, already settled, and rendered for
+    nothing. The name plus the microsecond it was asked for is unique.
+    """
+    path = Path(out_path)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
+    return f"{path.parent.name}-{path.stem}-{stamp}{path.suffix}"
+
+
 def refusal(e: ledger.InsufficientCredit) -> str:
     """The message a route returns for an empty balance -- the same shape
     as generative.cap_error's: a sentence with the numbers in it and what
@@ -145,4 +173,4 @@ def refusal(e: ledger.InsufficientCredit) -> str:
             f"{e.available} -- top up, or add your own renderer key to render on it")
 
 
-__all__ = ["Charge", "refusal"]
+__all__ = ["Charge", "attempt_ref", "refusal"]

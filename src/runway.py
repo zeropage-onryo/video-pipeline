@@ -447,23 +447,44 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *, shot_id: Optional[i
         candidates, errors = [], []
         for i in range(1, n + 1):
             out_path = out_dir / f"cand{i}.mp4"
+            # This layer writes the row, so this layer builds the Charge
+            # (src/charge.py): the same hold generate_video would have
+            # built for itself, now linked to the generation it paid for
+            # -- and `attempted` is readable here, so a candidate that
+            # died at the provider leaves a row too (BACKLOG #18).
+            key_source = account_keys.key_source(account_id, "runway", db_path)
+            charge = charging.Charge(
+                account_id, provider="runway", ref=charging.attempt_ref(out_path),
+                estimate_usd=estimate_cost(
+                    1, model=model, duration=duration,
+                    ratio=cfg.get("ratio", DEFAULT_RATIO)),
+                key_source=key_source, dsn=db_path)
+
+            def row_params(charge=charge, key_source=key_source):
+                return {"model": model, "key_source": key_source, **cfg,
+                        **charge.params()}
+
             try:
-                generate_video(prompt, out_path, model=model, client=client,
-                               db_path=db_path, approved=approved,
-                               account_id=account_id, **cfg)
+                with generative.failed_attempt_row(
+                        charge, "runway", prompt,
+                        safe_error=lambda e: _safe_error(e, account_id),
+                        shot_row=shot_id, params=row_params,
+                        dsn=db_path, account_id=account_id):
+                    generate_video(prompt, out_path, model=model, client=client,
+                                   db_path=db_path, approved=approved,
+                                   account_id=account_id, charge=charge, **cfg)
             except Exception as e:
                 errors.append(f"candidate {i}: {_safe_error(e, account_id)}")
                 continue
             generation_id = generative.record_generation(
                 shot_id, "runway", prompt,
-                params={"model": model,
-                        "key_source": account_keys.key_source(account_id, "runway", db_path),
-                        **cfg},
+                params=row_params(),
                 output_path=str(out_path),
                 cost_usd=estimate_cost(1, model=model, duration=duration),
                 notes=None,
                 **kwargs,
              account_id=account_id)
+            charge.settle(generation_id=generation_id)
             candidates.append({"path": str(out_path),
                                "generation_id": generation_id, "model": model})
 
@@ -708,31 +729,40 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
             account_id, provider="runway", ref=out_path.name,
             estimate_usd=estimate_cost(1, model=model, duration=duration, ratio=ratio),
             key_source=key_source, dsn=db_path)
-        generate_video(prompt, out_path, model=model,
-                       duration=duration, ratio=ratio,
-                       prompt_image=prompt_image, references=references,
-                       client=client, db_path=db_path, approved=approved,
-                       account_id=account_id, charge=charge)
-
-        shot_row_id = _shot_row_for_prompt(prompt, db_path, account_id)
         # what was ACTUALLY asked for, not the module defaults: the
         # Queue lets a person pick a length and a frame per approve, and
         # a row that records the default instead would make the tool
-        # scoreboard a measurement of a render nobody ran
-        generation_params = {"model": model, "ratio": ratio,
-                             "duration": duration,
-                             "concept_id": concept_id, "shot_n": shot_n,
-                             **({"part": part} if part else {}),
-                             "prompt_image": bool(prompt_image),
-                             # How many photos actually rode along, and
-                             # whether the anchor was a locked first frame
-                             # or demoted to a reference. A row reading 0
-                             # on a shot that HAS refs is the honest record
-                             # of a gen4 render, not a silence.
-                             "references": len(references),
-                             "reference_mode": bool(references),
-                             "key_source": key_source,
-                             **charge.params()}
+        # scoreboard a measurement of a render nobody ran. A function,
+        # read after the hold: a failed attempt's row carries it too.
+        def row_params():
+            return {"model": model, "ratio": ratio,
+                    "duration": duration,
+                    "concept_id": concept_id, "shot_n": shot_n,
+                    **({"part": part} if part else {}),
+                    "prompt_image": bool(prompt_image),
+                    # How many photos actually rode along, and
+                    # whether the anchor was a locked first frame
+                    # or demoted to a reference. A row reading 0
+                    # on a shot that HAS refs is the honest record
+                    # of a gen4 render, not a silence.
+                    "references": len(references),
+                    "reference_mode": bool(references),
+                    "key_source": key_source,
+                    **charge.params()}
+
+        with generative.failed_attempt_row(
+                charge, "runway", prompt,
+                safe_error=lambda e: _safe_error(e, account_id),
+                shot_row=lambda: _shot_row_for_prompt(prompt, db_path, account_id),
+                params=row_params, dsn=db_path, account_id=account_id):
+            generate_video(prompt, out_path, model=model,
+                           duration=duration, ratio=ratio,
+                           prompt_image=prompt_image, references=references,
+                           client=client, db_path=db_path, approved=approved,
+                           account_id=account_id, charge=charge)
+
+        shot_row_id = _shot_row_for_prompt(prompt, db_path, account_id)
+        generation_params = row_params()
         generation_id = generative.record_generation(
             shot_row_id, "runway", prompt,
             params=generation_params,
@@ -828,18 +858,26 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
             account_id, provider="runway", ref=out_path.name,
             estimate_usd=estimate_cost(1, model=model),
             key_source=key_source, source="workflow", dsn=db_path)
-        generate_video(prompt, out_path, model=model,
-                       prompt_image=prompt_image, client=client,
-                       db_path=db_path, approved=approved, account_id=account_id,
-                       charge=charge)
+        def row_params():
+            return {"model": model, "ratio": DEFAULT_RATIO,
+                    "duration": DEFAULT_DURATION,
+                    "source": "workflow",
+                    "prompt_image": bool(prompt_image),
+                    "key_source": key_source,
+                    **charge.params()}
+
+        with generative.failed_attempt_row(
+                charge, "runway", prompt,
+                safe_error=lambda e: _safe_error(e, account_id),
+                shot_row=lambda: _shot_row_for_prompt(prompt, db_path, account_id),
+                params=row_params, dsn=db_path, account_id=account_id):
+            generate_video(prompt, out_path, model=model,
+                           prompt_image=prompt_image, client=client,
+                           db_path=db_path, approved=approved, account_id=account_id,
+                           charge=charge)
 
         shot_row_id = _shot_row_for_prompt(prompt, db_path, account_id)
-        generation_params = {"model": model, "ratio": DEFAULT_RATIO,
-                             "duration": DEFAULT_DURATION,
-                             "source": "workflow",
-                             "prompt_image": bool(prompt_image),
-                             "key_source": key_source,
-                             **charge.params()}
+        generation_params = row_params()
         generation_id = generative.record_generation(
             shot_row_id, "runway", prompt,
             params=generation_params,

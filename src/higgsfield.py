@@ -804,24 +804,41 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *,
         candidates, errors = [], []
         for i in range(1, n + 1):
             out_path = out_dir / f"cand{i}.mp4"
+            # This layer writes the row, so this layer builds the Charge
+            # (src/charge.py) -- see runway.generate_candidates. The ref is
+            # NOT the file name: cand1.mp4 repeats every run.
+            key_source = account_keys.key_source(account_id, "higgsfield", db_path)
+            charge = charging.Charge(
+                account_id, provider="higgsfield",
+                ref=charging.attempt_ref(out_path),
+                estimate_usd=estimate_cost(1, model=model, duration=duration),
+                key_source=key_source, dsn=db_path)
+
+            def row_params(charge=charge, key_source=key_source):
+                return {"model": model, "key_source": key_source, **cfg,
+                        **charge.params()}
+
             try:
-                generate_video(prompt, out_path, model=model, http=http,
-                               db_path=db_path, approved=approved,
-                               account_id=account_id, **cfg)
+                with generative.failed_attempt_row(
+                        charge, "higgsfield", prompt,
+                        safe_error=lambda e: _safe_error(e, account_id),
+                        shot_row=shot_id, params=row_params,
+                        dsn=db_path, account_id=account_id):
+                    generate_video(prompt, out_path, model=model, http=http,
+                                   db_path=db_path, approved=approved,
+                                   account_id=account_id, charge=charge, **cfg)
             except Exception as e:
                 errors.append(f"candidate {i}: {_safe_error(e, account_id)}")
                 continue
             generation_id = generative.record_generation(
                 shot_id, "higgsfield", prompt,
-                params={"model": model,
-                        "key_source": account_keys.key_source(
-                            account_id, "higgsfield", db_path),
-                        **cfg},
+                params=row_params(),
                 output_path=str(out_path),
                 cost_usd=estimate_cost(1, model=model, duration=duration),
                 notes=None,
                 **kwargs,
              account_id=account_id)
+            charge.settle(generation_id=generation_id)
             candidates.append({"path": str(out_path),
                                "generation_id": generation_id, "model": model})
 
@@ -913,17 +930,8 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
             account_id, provider="higgsfield", ref=out_path.name,
             estimate_usd=estimate_cost(1, model=model, duration=duration),
             key_source=key_source, dsn=db_path)
-        generate_video(prompt, out_path, model=model, image_url=image_url,
-                       duration=duration, resolution=resolution,
-                       http=http, db_path=db_path, approved=approved,
-                       account_id=account_id, charge=charge)
-
-        shot_row_id = _shot_row_for_prompt(
-            prompt, db_path, "auto-created by higgsfield.generate_for_shot",
-            account_id)
-        generation_id = generative.record_generation(
-            shot_row_id, "higgsfield", prompt,
-            params={"model": model, "aspect_ratio": DEFAULT_ASPECT,
+        def row_params():
+            return {"model": model, "aspect_ratio": DEFAULT_ASPECT,
                     # the length actually asked for, not the module
                     # default -- see runway.generate_for_shot
                     "duration": duration, "resolution": resolution,
@@ -931,7 +939,29 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                     **({"part": part} if part else {}),
                     "prompt_image": bool(image_url),
                     "key_source": key_source,
-                    **charge.params()},
+                    **charge.params()}
+
+        def shot_row():
+            return _shot_row_for_prompt(
+                prompt, db_path, "auto-created by higgsfield.generate_for_shot",
+                account_id)
+
+        # the #361 case: the submit answered HTTP 423 and nothing recorded
+        # it (BACKLOG #18). A raise after the submit leaves a row.
+        with generative.failed_attempt_row(
+                charge, "higgsfield", prompt,
+                safe_error=lambda e: _safe_error(e, account_id),
+                shot_row=shot_row, params=row_params,
+                dsn=db_path, account_id=account_id):
+            generate_video(prompt, out_path, model=model, image_url=image_url,
+                           duration=duration, resolution=resolution,
+                           http=http, db_path=db_path, approved=approved,
+                           account_id=account_id, charge=charge)
+
+        shot_row_id = shot_row()
+        generation_id = generative.record_generation(
+            shot_row_id, "higgsfield", prompt,
+            params=row_params(),
             output_path=str(out_path),
             cost_usd=estimate_cost(1, model=model, duration=duration),
             **kwargs,
@@ -995,20 +1025,31 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
             account_id, provider="higgsfield", ref=out_path.name,
             estimate_usd=estimate_cost(1, model=model),
             key_source=key_source, source="workflow", dsn=db_path)
-        generate_video(prompt, out_path, model=model, image_url=image_url,
-                       http=http, db_path=db_path, approved=approved,
-                       account_id=account_id, charge=charge)
-
-        shot_row_id = _shot_row_for_prompt(
-            prompt, db_path, "auto-created by higgsfield.generate_from_prompt",
-            account_id)
-        generation_id = generative.record_generation(
-            shot_row_id, "higgsfield", prompt,
-            params={"model": model, "aspect_ratio": DEFAULT_ASPECT,
+        def row_params():
+            return {"model": model, "aspect_ratio": DEFAULT_ASPECT,
                     "duration": DEFAULT_DURATION, "source": "workflow",
                     "prompt_image": bool(image_url),
                     "key_source": key_source,
-                    **charge.params()},
+                    **charge.params()}
+
+        def shot_row():
+            return _shot_row_for_prompt(
+                prompt, db_path, "auto-created by higgsfield.generate_from_prompt",
+                account_id)
+
+        with generative.failed_attempt_row(
+                charge, "higgsfield", prompt,
+                safe_error=lambda e: _safe_error(e, account_id),
+                shot_row=shot_row, params=row_params,
+                dsn=db_path, account_id=account_id):
+            generate_video(prompt, out_path, model=model, image_url=image_url,
+                           http=http, db_path=db_path, approved=approved,
+                           account_id=account_id, charge=charge)
+
+        shot_row_id = shot_row()
+        generation_id = generative.record_generation(
+            shot_row_id, "higgsfield", prompt,
+            params=row_params(),
             output_path=str(out_path),
             cost_usd=estimate_cost(1, model=model),
             **kwargs,

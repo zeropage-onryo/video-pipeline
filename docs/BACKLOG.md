@@ -1030,7 +1030,7 @@ after approval, file the Pinterest support ticket. Then run
 `ops/pinterest_token_paste.sh` (or the full `pinterest_token.sh` flow) for
 real and set `PINTEREST_BOARD_ANTIHERO` / `PINTEREST_BOARD_ZEROPAGE`.
 
-## 18. A render that fails at the provider submit leaves no `generations` row  (found 2026-09-18, not fixed)
+## 18. A render that fails at the provider submit leaves no `generations` row  (found 2026-09-18, FIXED 2026-09-21)
 
 Reported from the live attempt, not yet reproduced in a test. Approving #361 on Higgsfield
 `kling2.1` returned 200, the job failed at the submit with `HTTP Error 423: Locked`, and the
@@ -1042,6 +1042,28 @@ Why it matters beyond bookkeeping: pricing step 6 takes a ledger hold BEFORE the
 exact path must leave a row and release the hold. Start by reading `src/higgsfield.py`'s
 never-raises edge and finding where the row is written relative to the submit, then check the
 other three adapters for the same ordering.
+
+**Fixed 2026-09-21, in all four adapters and every edge that spends** (`generate_for_shot`,
+`generate_from_prompt`, `generate_candidates`). What the reading found: the hold WAS released on
+a failed submit (`generate_video`'s own `except`); only the row was missing, because every edge
+wrote it after `generate_video` returned. `Charge.attempted` is set by `submitted()` -- the last
+line before the provider call, hold or no hold -- and `generative.failed_attempt_row` wraps the
+call: a raise from after it leaves a row through `record_failure`, a raise from before it (the
+spend gate, an empty balance) does not. No ledger write moved. The row's shape is the one
+`ledger.reap` already calls "found and failed": NO `output_path`. `reject_reason` is left alone
+(it is a person's verdict and feeds `failure_reasons`); the error is in `notes` and
+`params.failed/error`, with `key_source` and the hold's `ledger_ref`. Two decisions worth
+knowing: `cost_usd` is 0.0, not NULL (NULL is a free-lane render on /costs), and the row COUNTS
+against the daily cap like any attempt, which also bounds a retry loop against a provider that
+refuses everything -- six 423s lock that vendor for the day. Guard: `tests/test_failed_submit_row.py`,
+each adapter reverted and seen red on its own cases.
+
+Found on the way, and fixed because the same lines were open: **`generate_candidates` held under
+the ref `cand1.mp4`**, which repeats every run, and `ledger.hold` is idempotent on the ref -- so
+a billable account's second night was handed the first night's settled hold and rendered for
+nothing. The candidates edges now build their own `Charge` (as `src/charge.py`'s docstring
+always said they did) with `charging.attempt_ref`, settle it against the generation id, and
+write `ledger_ref` on the row. No live money moved: both live accounts are exempt.
 
 ## 19. The React Queue cannot show the other brand's scenes, and its account switch is dead  (found 2026-09-18, FIXED 2026-09-21)
 
