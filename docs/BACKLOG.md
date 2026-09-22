@@ -76,8 +76,16 @@ concepts, with no manual step. Still open:
   metrics/RAG loop (behind the `refresh_metrics` stub already in place), plus a
   Page access token from the *existing* Meta app (`FB_PAGE_ID` +
   `FB_PAGE_ACCESS_TOKEN`, scopes `pages_read_engagement` + `read_insights`).
-- **Instagram token refresh** — the long-lived token expires ~60 days and
-  auto-refresh isn't built, so the automation goes silently stale without it.
+- **Instagram token refresh** — SHIPPED 2026-09-21. The sweep's Instagram
+  pass first calls `instagram.refresh_token_step` (`graph.instagram.com/
+  refresh_access_token`, `ig_refresh_token`, allowed nightly once the token
+  is 24h old) and prints the days left — on stderr, loudly, when it needs a
+  person. `.env` is never written: a NEW token Meta issues is kept in
+  `data/ig_token.json` (`IG_TOKEN_STORE` overrides) beside a fingerprint of
+  the `.env` token it replaced, and `access_token()` serves it from there
+  exactly while `.env` still holds that token; the message names the file
+  and the update to make, never the value. Tests go through
+  `instagram.requests`, the module's one HTTP seam.
 - **TikTok** — SHIPPED as a module 2026-09-07, still dark as a lane.
   `src/tiktok.py` is the third platform beside instagram.py and youtube.py,
   same public surface: `has_key`, `post_video` (Content Posting API Direct

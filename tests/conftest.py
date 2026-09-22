@@ -166,6 +166,9 @@ OUTPUT_ROOTS = (
     ("src.orchestrator", "GENERATED_ROOT", "footage/generated"),
     ("src.autopilot", "GENERATED_DIR", "footage/generated"),
     ("src.autopilot", "KILL_SWITCH_PATH", "data/autopilot.off"),
+    # the refreshed Instagram token (BACKLOG #4): token_store_path() reads
+    # this constant per call unless IG_TOKEN_STORE says otherwise
+    ("src.instagram", "TOKEN_STORE", "data/ig_token.json"),
     ("src.refbin", "REFS_DIR", "data/refs"),
     ("src.research_agent", "STAMP_DIR", "data/.research"),
     # A personal model login is a folder of session files. Registered for

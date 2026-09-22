@@ -13,7 +13,9 @@ Never raises on a single video: a missing key or a failed call is
 recorded in the summary and the sweep moves on -- the same contract as
 youtube/instagram.refresh_metrics_for_video. TikTok joined the sweep on
 2026-09-07 (src/tiktok.py); Facebook is still stubbed until its module
-lands (BACKLOG #4).
+lands (BACKLOG #4). The Instagram pass first winds the long-lived token's
+60-day clock (instagram.refresh_token_step, 2026-09-21) and prints how
+long it has left -- loudly, on stderr, when it needs a person.
 """
 import argparse
 import os
@@ -36,9 +38,15 @@ def _refresh_platform(platform, videos, db_path=None):
                 for v in videos]
     if platform == "instagram":
         from . import instagram
+        # the long-lived token's clock is wound BEFORE the pass (BACKLOG
+        # #4, 2026-09-21): a refresh Meta answers with a new token lands
+        # in instagram's store, which is what access_token() reads next
+        token_state = instagram.refresh_token_step()
         token = instagram.access_token()
-        return [instagram.refresh_metrics_for_video(v, token=token, db_path=db_path)
-                for v in videos]
+        results = [instagram.refresh_metrics_for_video(v, token=token, db_path=db_path)
+                   for v in videos]
+        results.append({"token": token_state})
+        return results
     if platform == "tiktok":
         from . import tiktok
         token = tiktok.access_token()
@@ -70,6 +78,10 @@ def refresh_all(platform=None, db_path=None, account_id: Optional[int] = None):
     summary = {}
     for p, vids in by_platform.items():
         results = _refresh_platform(p, vids, db_path=db_path)
+        # the instagram pass carries its token refresh as a trailing
+        # {"token": state} entry, beside the per-video results
+        token_state = next((r["token"] for r in results if "token" in r), None)
+        results = [r for r in results if "token" not in r]
         ok = sum(1 for r in results if r.get("ok"))
         summary[p] = {
             "videos": len(vids),
@@ -77,6 +89,8 @@ def refresh_all(platform=None, db_path=None, account_id: Optional[int] = None):
             "failed": len(vids) - ok,
             "errors": sorted({r.get("error") for r in results if not r.get("ok") and r.get("error")}),
         }
+        if token_state is not None:
+            summary[p]["token"] = token_state
     return summary
 
 
@@ -105,6 +119,10 @@ def main(argv=None):
         if s["failed"]:
             line += f" (failed {s['failed']}: {'; '.join(s['errors'])})"
         print(line)
+        token = s.get("token")
+        if token:
+            # loud on stderr when it needs a person; the value is never in it
+            print(token["message"], file=sys.stderr if token["warning"] else sys.stdout)
     if not summary:
         print("no posted videos to refresh yet -- nothing to do.")
 

@@ -51,3 +51,43 @@ def test_tiktok_is_in_the_sweep_and_reports_a_missing_token(pg, monkeypatch):
     assert summary["tiktok"]["failed"] == 1
     assert any("TIKTOK_ACCESS_TOKEN" in e for e in summary["tiktok"]["errors"])
     assert "tiktok" in refresh_metrics.WIRED_PLATFORMS
+
+
+def test_the_instagram_pass_winds_the_token_first_and_reads_with_the_new_one(pg, monkeypatch, tmp_path):
+    """BACKLOG #4: the sweep refreshes the long-lived token BEFORE the
+    Instagram pass, and the pass reads insights with whatever the refresh
+    handed back -- so a token Meta replaced is never used stale. The
+    state rides on the summary as `token`, never as a per-video result."""
+    from src import instagram
+    monkeypatch.setenv("IG_ACCESS_TOKEN", "tok-1")
+    monkeypatch.setenv("IG_TOKEN_STORE", str(tmp_path / "ig_token.json"))
+    calls = []
+
+    def fake_get(url, params=None, timeout=None):
+        calls.append((url, dict(params or {})))
+        if url == instagram.REFRESH_URL:
+            return _Resp({"access_token": "tok-2", "expires_in": 60 * 86400})
+        return _Resp({"data": [{"name": "views", "values": [{"value": 12}]}]})
+
+    class _Resp:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self.payload
+
+    monkeypatch.setattr(instagram.requests, "get", fake_get)
+    path = pg
+    db.add_video("a reel", "instagram", "2026-09-01", url="ig://17900000000000001",
+                 dsn=path, account_id=None)
+
+    summary = refresh_metrics.refresh_all(platform="instagram", db_path=path)
+    assert summary["instagram"]["videos"] == 1
+    assert summary["instagram"]["refreshed"] == 1
+    assert summary["instagram"]["token"]["ok"] and summary["instagram"]["token"]["changed"]
+    assert calls[0][0] == instagram.REFRESH_URL
+    assert calls[1][0].endswith("/insights") and calls[1][1]["access_token"] == "tok-2"
+    assert "tok-2" not in summary["instagram"]["token"]["message"]

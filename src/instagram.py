@@ -15,10 +15,13 @@ The live-publish path is only ever reached through autopilot.execute's
 three-condition gate (see execute_post_action) -- this module never
 posts on import, on schedule, or by default.
 """
+import hashlib
+import json
 import os
 import re
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
@@ -47,8 +50,22 @@ def ig_user_id():
     return os.environ.get("IG_USER_ID") or os.environ.get("INSTAGRAM_USER_ID")
 
 
-def access_token():
+def _env_token():
     return os.environ.get("IG_ACCESS_TOKEN") or os.environ.get("INSTAGRAM_ACCESS_TOKEN")
+
+
+def access_token():
+    """The long-lived token every caller reads: `.env`'s, unless the nightly
+    refresh was handed a NEW one for it (BACKLOG #4, 2026-09-21) -- then the
+    stored replacement, and only while `.env` still holds the exact token it
+    replaced. A token typed into `.env` afterwards (a re-authorisation) is
+    newer than anything the sweep stored and wins. See `token_store_path`."""
+    env = _env_token()
+    stored = _read_token_store()
+    if stored and stored.get("access_token") \
+            and stored.get("replaces") == _fingerprint(env):
+        return stored["access_token"]
+    return env
 
 
 def _safe_error(e: Exception, token=None) -> str:
@@ -282,6 +299,160 @@ def refresh_metrics_for_video(video: dict, token=None, db_path=None, account_id:
     kwargs = {"dsn": db_path} if db_path is not None else {}
     db.record_metrics(video["id"], **stats, **kwargs, account_id=account_id)
     return {"ok": True, **stats}
+
+
+# --------------------------------------------------------------------------
+# the long-lived token's 60-day clock (BACKLOG #4, 2026-09-21)
+# --------------------------------------------------------------------------
+# A long-lived Instagram-Login token expires about 60 days after it was
+# issued or last refreshed, and nothing here refreshed it -- so every two
+# months the metrics sweep and the publish path would go dark with a
+# generic 400 and no warning. `refresh_token_step` runs in the nightly
+# sweep before the Instagram pass (src/refresh_metrics.py). Meta allows a
+# refresh once the token is at least 24 hours old, and the answer is good
+# for 60 days from THAT moment, so calling it nightly is the documented
+# pattern, not a workaround.
+#
+# WHERE THE REFRESHED TOKEN GOES. The token lives in `.env`, which the code
+# reads through `access_token()` and never writes -- a sweep that rewrote
+# the operator's env file would be a sweep that could eat it. Meta usually
+# answers a refresh with the SAME token string and a longer clock; when it
+# answers with a NEW one, that string has to be kept somewhere or the next
+# night refreshes a token the API no longer honours. It is kept in
+# TOKEN_STORE, under data/ (never committed), beside a fingerprint of the
+# `.env` token it replaced; `access_token()` prefers it exactly while
+# `.env` still holds that token, and forgets it the moment `.env` changes.
+# The token itself is NEVER printed -- the sweep names the file instead.
+REFRESH_URL = "https://graph.instagram.com/refresh_access_token"
+TOKEN_STORE = Path(__file__).resolve().parent.parent / "data" / "ig_token.json"
+TOKEN_WARN_DAYS = 14
+
+
+def token_store_path() -> Path:
+    """`IG_TOKEN_STORE` overrides the default (tests; a host whose data/
+    lives elsewhere)."""
+    return Path(os.environ.get("IG_TOKEN_STORE") or TOKEN_STORE)
+
+
+def _fingerprint(token) -> Optional[str]:
+    """A short hash: enough to say "this is the token", never the token."""
+    if not token:
+        return None
+    return hashlib.sha256(token.encode()).hexdigest()[:16]
+
+
+def _read_token_store() -> Optional[dict]:
+    try:
+        return json.loads(token_store_path().read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def _write_token_store(record: dict) -> None:
+    path = token_store_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record, indent=2))
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+
+
+def refresh_access_token(token: str) -> dict:
+    """Thin, raises: GET /refresh_access_token?grant_type=ig_refresh_token.
+    Answers {access_token, token_type, expires_in} -- `expires_in` in
+    seconds from now."""
+    response = requests.get(
+        REFRESH_URL,
+        params={"grant_type": "ig_refresh_token", "access_token": token},
+        timeout=10,
+    )
+    response.raise_for_status()
+    data = response.json() or {}
+    if not data.get("access_token"):
+        raise RuntimeError(f"refresh answered with no access_token: {sorted(data)}")
+    return data
+
+
+def refresh_token_step(token=None, now=None) -> dict:
+    """Refresh the long-lived token and say how long it has left. Never
+    raises, never prints or returns the token: the result is
+    {ok, days_left, changed, stored, path, warning, message, error} and
+    `message` is the one line the sweep prints.
+
+    `changed` is Meta answering with a different token string; then it is
+    kept in the store (see above) so `access_token()` serves it from now
+    on, and `message` says which file to copy it out of into `.env` --
+    the exact update to make, without the value in a log."""
+    token = token or access_token()
+    env = _env_token()
+    if not token:
+        return {"ok": False, "error": "IG_ACCESS_TOKEN not set", "days_left": None,
+                "changed": False, "stored": False, "path": str(token_store_path()),
+                "warning": True,
+                "message": "instagram token: IG_ACCESS_TOKEN not set -- nothing to refresh"}
+    now = now or datetime.now(timezone.utc)
+    path = token_store_path()
+    try:
+        data = refresh_access_token(token)
+    except Exception as e:                                  # noqa: BLE001
+        error = _safe_error(e, token)
+        stored = _read_token_store() or {}
+        left = ""
+        if stored.get("expires_at"):
+            try:
+                until = datetime.fromisoformat(stored["expires_at"])
+                left = f"; by the last record it expires in {(until - now).days} days"
+            except ValueError:
+                pass
+        return {"ok": False, "error": error, "days_left": None, "changed": False,
+                "stored": False, "path": str(path), "warning": True,
+                "message": ("instagram token: REFRESH FAILED: " + error + left
+                            + " -- re-authorise at developers.facebook.com before it "
+                              "expires or the metrics sweep and posting both stop")}
+
+    expires_in = int(data.get("expires_in") or 0)
+    days_left = expires_in // 86400
+    new = data["access_token"]
+    changed = new != token          # Meta issued a new string tonight
+    replacement = new != env        # the token in use is not .env's
+    record = {
+        "expires_at": (now + timedelta(seconds=expires_in)).isoformat(),
+        "refreshed_at": now.isoformat(),
+        "replaces": _fingerprint(env),
+        # the token itself only while it differs from .env's -- the `.env`
+        # token is not copied anywhere it was not already, and a stored
+        # replacement that Meta re-answered unchanged stays stored (the
+        # first version of this dropped it on the second night)
+        "access_token": new if replacement else None,
+    }
+    stored, store_error = False, ""
+    try:
+        _write_token_store(record)
+        stored = True
+    except OSError as e:
+        store_error = _safe_error(e, new)
+
+    warning = days_left < TOKEN_WARN_DAYS
+    message = f"instagram token: refreshed, {days_left} days left"
+    if changed and stored:
+        message += (f"; Meta issued a NEW token -- it is stored in {path} and "
+                    f"access_token() serves it from there while .env holds the old "
+                    f"one. To make .env match: set IG_ACCESS_TOKEN to the "
+                    f"access_token value in that file (not printed here)")
+    elif replacement and stored:
+        message += (f"; serving the replacement token stored in {path} -- .env "
+                    f"still holds the one it replaced; set IG_ACCESS_TOKEN to the "
+                    f"access_token value in that file (not printed here)")
+    elif changed:
+        warning = True
+        message += (f"; Meta issued a NEW token and it could NOT be saved to {path} "
+                    f"({store_error}) -- the old one keeps working until it expires; "
+                    f"fix the path and re-run, or re-authorise")
+    if days_left < TOKEN_WARN_DAYS:
+        message += f" !!! only {days_left} days left -- re-authorise if this keeps falling"
+    return {"ok": True, "error": None, "days_left": days_left, "changed": changed,
+            "stored": stored, "path": str(path), "warning": warning, "message": message}
 
 
 # --------------------------------------------------------------------------
