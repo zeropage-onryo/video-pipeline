@@ -396,3 +396,73 @@ def test_the_director_run_carries_its_quote(signing, monkeypatch):
     # a free-standing node cannot carry one
     res = client.post("/api/workflows/exec/generate", json={"prompt": "p", "token": token})
     assert res.status_code == 400 and res.json()["error"]["code"] == "wrong_render"
+
+
+# --- the verified Quote reaches the render it priced (2026-09-21) -----------
+# guards: `quotes = {q.part: q ...}` in queue_approve and the `_quote_kw`
+# on both adapter calls. The route used to verify a Quote and DROP it; the
+# adapter then held its own estimate, the same number only by coincidence
+# of both going through pricing.credits_for.
+
+def test_a_whole_scenes_verified_quote_is_handed_to_its_render(signing, monkeypatch):
+    seen = []
+    monkeypatch.setattr(runway, "generate_for_shot",
+                        lambda *a, **kw: seen.append(kw) or {"ok": True, "media_url": "https://x/c.mp4"})
+    scene = a_queued_scene(signing)
+    shown = card_for(scene)["quote"]
+    res = client.post(f"/api/queue/{scene}/approve",
+                      json={"provider": "runway", "model": shown["model"],
+                            "tokens": [r["token"] for r in shown["renders"]]})
+    assert res.status_code == 200, res.text
+    assert wait_for_job(res.json()["job_id"])["status"] == "done"
+    quote = seen[0]["quote"]
+    assert isinstance(quote, pricing.Quote)
+    assert (quote.shot_id, quote.part, quote.provider) == (scene, None, "runway")
+    assert quote.credits == shown["renders"][0]["credits"]
+    assert seen[0]["approved"] is True                  # the click is still the click
+
+
+def test_each_shot_of_a_timed_scene_is_handed_its_own_quote(signing, monkeypatch):
+    from src import timeline
+    seen = []
+    monkeypatch.setattr(runway, "generate_for_shot",
+                        lambda *a, **kw: seen.append(kw) or {"ok": True, "media_url": "https://x/c.mp4"})
+    scene = a_queued_scene(signing, prompt=TIMED)
+    shown = card_for(scene)["quote"]
+    parts = [{"n": r["part"], "seconds": r["seconds"]} for r in shown["renders"]]
+    monkeypatch.setattr(timeline, "ensure", lambda *a, **kw: {"parts": parts})
+    res = client.post(f"/api/queue/{scene}/approve",
+                      json={"provider": "runway", "model": shown["model"],
+                            "tokens": [r["token"] for r in shown["renders"]]})
+    assert res.status_code == 200, res.text
+    assert wait_for_job(res.json()["job_id"])["status"] == "done"
+    assert [kw["part"] for kw in seen] == [1, 2]
+    assert [kw["quote"].part for kw in seen] == [1, 2]   # never shot 1's price twice
+    assert [kw["quote"].credits for kw in seen] == [r["credits"] for r in shown["renders"]]
+
+
+def test_a_render_nobody_quoted_reaches_the_adapter_as_it_always_did(tmp_db, monkeypatch):
+    """No secret -> no tokens -> no Quote: the adapter is called without
+    the keyword at all, so the estimate stays the fallback."""
+    seen = []
+    monkeypatch.setattr(runway, "generate_for_shot",
+                        lambda *a, **kw: seen.append(kw) or {"ok": True, "media_url": "https://x/c.mp4"})
+    scene = a_queued_scene(tmp_db)
+    body = client.post(f"/api/queue/{scene}/approve").json()
+    assert wait_for_job(body["job_id"])["status"] == "done"
+    assert "quote" not in seen[0]
+
+
+def test_the_director_run_hands_its_verified_quote_to_the_node(signing, monkeypatch):
+    from app import workflow_runner
+    seen = []
+    monkeypatch.setattr(workflow_runner, "render_generate_node",
+                        lambda *a, **kw: seen.append(kw) or {"ok": True, "media_url": "https://x/c.mp4"})
+    scene = a_queued_scene(signing)
+    gen = client.get(f"/api/concepts/{scene}").json()["generate"]
+    res = client.post("/api/workflows/exec/generate",
+                      json={"prompt": "a long enough prompt to render", "concept_id": scene,
+                            "shot_n": 1, "token": gen["renders"][0]["token"]})
+    assert res.status_code == 200, res.text
+    assert wait_for_job(res.json()["job_id"])["status"] == "done"
+    assert seen[0]["quote"].credits == gen["renders"][0]["credits"]

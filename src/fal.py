@@ -383,7 +383,7 @@ def has_key(account_id: Optional[int] = None) -> bool:
     return _credential(account_id) is not None
 
 
-def spend_approved(approved: Optional[bool] = None) -> bool:
+def spend_approved(approved: Optional[bool] = None, quote=None) -> bool:
     """Is this ONE call approved to spend?
 
     THE APPROVAL IS THE CLICK NOW (2026-09-09, Mike's call). It used to
@@ -408,8 +408,19 @@ def spend_approved(approved: Optional[bool] = None) -> bool:
     FAL_SPEND_OK=1 set for it on purpose, on top of its own flags. Same for
     the CLI and the ops scripts.
     """
+    # `quote` (2026-09-21) is the verified pricing.Quote the route holds,
+    # when it holds one. A change of SHAPE, not of location: the check is
+    # still here, inside generate_video. A Quote for another renderer is
+    # refused whatever else was said -- it is a price for a different
+    # render -- and a Quote with no explicit answer IS the answer: a
+    # person pressed a priced button and the server verified the price.
+    # No Quote (BYOK, the nightly graph, the CLI) is exactly as before.
+    if quote is not None and getattr(quote, "provider", None) != "fal":
+        return False
     if approved is not None:
         return bool(approved)
+    if quote is not None:
+        return True
     return (os.environ.get(SPEND_ENV) or "").strip() == "1"
 
 
@@ -682,7 +693,7 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
     is the caller's when it will record the generation; otherwise this
     call holds and settles its own at the estimate.
     """
-    if not spend_approved(approved):
+    if not spend_approved(approved, quote=getattr(charge, "quote", None)):
         raise RuntimeError(
             f"spend not approved: this call was not approved by a person. "
             f"Approve it at the Queue, or set {SPEND_ENV}=1 for an unattended run "
@@ -919,6 +930,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                       resolve_photo=None, http=None,
                       approved: Optional[bool] = None,
                       account_id: Optional[int] = None,
+                      quote=None,
                       part: Optional[int] = None,
 ) -> dict:
     """
@@ -985,7 +997,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
             account_id, provider="fal", ref=out_path.name,
             estimate_usd=estimate_cost(1, model=model, duration=duration,
                                        resolution=resolution),
-            key_source=key_source, dsn=db_path)
+            key_source=key_source, dsn=db_path, quote=quote)
         platform = model_spec(model)["platform"]
 
         def row_params():
@@ -1053,7 +1065,8 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
 def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
                          model: str = DEFAULT_MODEL, resolve_photo=None,
                          http=None, approved: Optional[bool] = None,
-                         account_id: Optional[int] = None) -> dict:
+                         account_id: Optional[int] = None,
+                         quote=None) -> dict:
     """
     Never raises: {"ok", "media_url", "generation_id", "path", "error"}.
     The free-standing render behind the Workflows canvas's Generate node,
@@ -1082,7 +1095,8 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
         charge = charging.Charge(
             account_id, provider="fal", ref=out_path.name,
             estimate_usd=estimate_cost(1, model=model),
-            key_source=key_source, source="workflow", dsn=db_path)
+            key_source=key_source, source="workflow", dsn=db_path,
+            quote=quote)
         def row_params():
             return {"provider": "fal", "model": model,
                     "duration": DEFAULT_DURATION, "source": "workflow",

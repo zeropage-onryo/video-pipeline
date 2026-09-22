@@ -2989,6 +2989,12 @@ def _verify_tokens(tokens: list, priced: dict, shot: dict, shot_id: int,
     return quotes
 
 
+def _quote_kw(quote) -> dict:
+    """`quote=` for an adapter call, only when there is one: a BYOK or
+    unsigned render reaches the adapter exactly as it did before."""
+    return {"quote": quote} if quote is not None else {}
+
+
 def _quote_required(account_id: Optional[int], provider: str) -> bool:
     """Whether a render on `provider` must arrive with a signed quote:
     it is billable to this account (not BYOK) AND this server can sign.
@@ -3152,9 +3158,16 @@ def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
     # priced["signed"] is "billable AND a secret to sign with" -- exactly
     # the renders display() minted a token for, so the requirement and the
     # offer are one predicate and cannot disagree
+    # The verified Quotes are KEPT (2026-09-21): they used to be checked and
+    # dropped, and the adapter then held its own estimate -- the same number
+    # only because both go through pricing.credits_for. Keyed by part (None
+    # for a whole scene), each rides into the render it priced, where
+    # src/charge.py holds `quote.credits` rather than re-deriving them.
+    quotes: dict = {}
     if priced["signed"] or body.tokens:
         try:
-            _verify_tokens(body.tokens or [], priced, shot, concept_id, account_id)
+            quotes = {q.part: q for q in _verify_tokens(
+                body.tokens or [], priced, shot, concept_id, account_id)}
         except (pricing.QuoteRefused, pricing.SigningUnconfigured) as e:
             return _quote_refusal(e, account_id)
     timed = priced["timed"]
@@ -3190,7 +3203,7 @@ def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
     def work(job):
         if timed:
             return _render_timeline(job, concept_id, shot_n, module, label, choice,
-                                    frame_kw, account_id)
+                                    frame_kw, account_id, quotes=quotes)
         jobs.progress(job, 0.2, f"rendering via {label} ({choice['model']})")
         result = module.generate_for_shot(
             concept_id, shot_n, db_path=None,
@@ -3199,6 +3212,8 @@ def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
             # the adapter's gate is asking for -- see spend_approved.
             approved=True,
             account_id=account_id,
+            # the price this click was shown, when it was shown one
+            **_quote_kw(quotes.get(None)),
             **render_kwargs)
         if not result.get("ok"):
             raise RuntimeError(result.get("error") or "render failed")
@@ -3213,7 +3228,7 @@ def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
 
 
 def _render_timeline(job, concept_id: int, shot_n, module, label: str, choice: dict,
-                     frame_kw: str, account_id: int) -> dict:
+                     frame_kw: str, account_id: int, quotes: Optional[dict] = None) -> dict:
     """Render a timed scene ONE SHOT AT A TIME, in order (2026-09-10).
 
     Each part is its own call through the SAME adapter entry point a whole
@@ -3247,6 +3262,9 @@ def _render_timeline(job, concept_id: int, shot_n, module, label: str, choice: d
             resolve_photo=_resolve_asset_photo,
             approved=True,          # the priced button -- see queue_approve
             account_id=account_id,
+            # THIS shot's quote (one token per render). A part the re-plan
+            # above renumbered has none and falls back to the estimate.
+            **_quote_kw((quotes or {}).get(part["n"])),
             model=choice["model"], duration=seconds, **{frame_kw: choice["frame"]})
         if not result.get("ok"):
             raise RuntimeError(
@@ -4894,6 +4912,7 @@ def workflow_exec_generate(body: WfGenerateBody, account_id: int = Depends(auth.
                       "add a Runway, Higgsfield or fal key")
     label = providers.RENDER_LABELS.get(pick["provider"], pick["provider"])
     required = _quote_required(account_id, pick["provider"])
+    quote = None
     if body.token or required:
         if shot is None and body.token:
             return _error(400, "wrong_render",
@@ -4907,8 +4926,8 @@ def workflow_exec_generate(body: WfGenerateBody, account_id: int = Depends(auth.
         try:
             priced = pricing.display(account_id=account_id, shot=shot, shot_id=body.concept_id,
                                      provider=pick["provider"], model=pick["model"], whole=True)
-            _verify_tokens([body.token] if body.token else [], priced, shot,
-                           body.concept_id, account_id)
+            quote = _verify_tokens([body.token] if body.token else [], priced, shot,
+                                   body.concept_id, account_id)[0]
         except (pricing.QuoteRefused, pricing.SigningUnconfigured) as e:
             return _quote_refusal(e, account_id)
         except ValueError as e:
@@ -4923,7 +4942,7 @@ def workflow_exec_generate(body: WfGenerateBody, account_id: int = Depends(auth.
         result = workflow_runner.render_generate_node(
             pick, body.prompt, urls[0] if urls else None,
             resolve_photo=_resolve_asset_photo, db_path=None,
-            account_id=account_id)
+            account_id=account_id, quote=quote)
         if not result.get("ok"):
             raise RuntimeError(result.get("error") or "render failed")
         if shot is not None:

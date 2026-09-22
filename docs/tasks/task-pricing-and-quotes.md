@@ -626,3 +626,32 @@ here seeds real accounts and sets its own `dependency_overrides`.
 - Exempt + own stored key → reason `byok`, not `exempt`.
 - Exempt approve with no token on a signing server → still `missing_quote`.
 - Exempt account over `RUNWAY_DAILY_CAP` → still capped.
+
+## As built — the hold is bound to the verified Quote (2026-09-21)
+
+The last open item from "As built — steps 5 and 6": `hold_for_render` "did not take a Quote".
+
+- `queue_approve` and `workflow_exec_generate` KEEP what `_verify_tokens` returns. Queue approve
+  keys them by `part` (`None` for a whole scene) and hands each render its own:
+  `generate_for_shot(..., quote=)`; `_render_timeline` takes `quotes=` and gives shot *n* quote *n*.
+  The keyword is passed only when there is a Quote (`_quote_kw`), so a BYOK or unsigned render
+  reaches the adapter byte for byte as before.
+- `Charge(quote=)`: `take()` holds `quote.credits` through `ledger.hold_for_render(credits=)`,
+  `settle()` closes at it. No Quote -> the estimate, converted by `ledger.charge_credits`, as
+  before. A Quote for another account or provider raises `LedgerError` in `take()` -- before the
+  hold, so before the submit. No ledger write moved.
+- `spend_approved(approved=None, quote=None)` in all four adapters -- shape, not location: still
+  asked inside `generate_video`, now with `charge.quote`. A Quote for another renderer is refused
+  even on `approved=True`; a Quote with no explicit answer is the approval; `approved=False` stays
+  a no; no Quote is exactly the old function. The routes still pass `approved=True` (the click).
+- `generate_candidates` takes no `quote` on purpose: it is the unattended door.
+- A timed scene whose `timeline.ensure` re-plan renumbers its parts finds no Quote for the new
+  part and falls back to the estimate. Not a refusal: the content hash already verified the
+  prompt and refs the plan is made from.
+- Where the task list was wrong: nothing. Where it was silent: `Charge.settle()` also had to
+  change -- holding 777 and settling `charge_credits(estimate)` capped at 777 charges the
+  estimate, not the quote.
+- Guards: `tests/test_charge.py` (a Quote of 777 credits the estimate can never produce),
+  `tests/test_pricing_routes.py` (the Quote object arriving at the adapter, per shot). 29 single-line
+  reverts, each seen red.
+

@@ -1319,9 +1319,13 @@ def reap(older_than=DEFAULT_REAP_AGE, *, account_id: Optional[int] = None,
 def hold_for_render(account_id: Optional[int], *, ref: str, provider: str,
                     estimate_usd, key_source: Optional[str] = None,
                     source: Optional[str] = None,
+                    credits: Optional[int] = None,
                     dsn: Optional[str] = None) -> Optional[int]:
     """Take the hold for one render, or None when the render is not
     billable. THE SEAM -- NOTHING CALLS IT YET, ON PURPOSE.
+    (Called by src/charge.py since 2026-09-18. `credits`, 2026-09-21: the
+    verified Quote's number when the caller has one -- held as quoted,
+    never re-derived; None converts the estimate, as before.)
 
     WHERE THIS CALL GOES, when the wiring pass happens (this pass builds
     the module and its tests only; the adapters keep working exactly as
@@ -1390,8 +1394,9 @@ def hold_for_render(account_id: Optional[int], *, ref: str, provider: str,
         return None
     # the CHARGE, not the cost: hold() is handed the converted number and
     # no estimate to re-check, because its own guard is the at-cost peg
-    return hold(account_id, charge_credits(estimate_usd), ref=ref,
-                provider=provider, dsn=dsn)
+    return hold(account_id,
+                int(credits) if credits is not None else charge_credits(estimate_usd),
+                ref=ref, provider=provider, dsn=dsn)
 
 
 def credit_exempt(account_id: Optional[int], dsn: Optional[str] = None) -> bool:
