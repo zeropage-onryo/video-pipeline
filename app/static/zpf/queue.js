@@ -90,8 +90,11 @@ function shotStrip(c) {
   const tl = c.timeline;
   if (!tl || !(tl.parts || []).length) return '';
   const rows = tl.parts.map(p => {
-    const refs = (p.refs || []).map(url =>
-      `<span class="scref sm" style="background-image:url('${esc(url)}')"></span>`).join('');
+    // the part's own thumbnails (`ref_thumbs`, parallel -- BACKLOG #0),
+    // else the refs as they are on an older payload
+    const small = (p.ref_thumbs || []).length === (p.refs || []).length ? p.ref_thumbs : (p.refs || []);
+    const refs = (p.refs || []).map((url, i) =>
+      `<span class="scref sm" style="background-image:url('${esc(small[i] || url)}')"></span>`).join('');
     return `<li class="scpart${p.media_url ? ' done' : ''}">
       <span class="m scwin">${esc(p.start)}–${esc(p.end)}s</span>
       ${p.reference_image ? `<img class="scpartshot" src="${esc(p.reference_image)}" alt="">` : ''}

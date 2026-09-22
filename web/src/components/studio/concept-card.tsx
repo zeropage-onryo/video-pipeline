@@ -109,13 +109,24 @@ export function refItems(c: Concept) {
   return c.ref_sources && c.ref_sources.length === refs.length ? c.ref_sources.map(sourced) : refs.map((url) => ({ url }));
 }
 
+/** The server's thumbnail for reference i (`ref_thumbs`, parallel to
+ *  `refs` -- BACKLOG #0), or "" on an older payload without one, in which
+ *  case the image falls back to its own chain. `refs` itself is never read
+ *  for a size: refs[0] is the frame the render anchors on. */
+export function thumbOf(c: Concept, i: number): string {
+  const thumbs = c.ref_thumbs || [];
+  return thumbs.length === (c.refs || []).length ? thumbs[i] || "" : "";
+}
+
 /* ── pictures ── */
 
-/** An <img> that walks refs.sourcesFor (local route, then the stored URL)
- *  and becomes a labelled slate when every source failed. */
+/** An <img> that walks refs.sourcesFor (the server's thumbnail when the
+ *  card carries one, the local route, then the stored URL) and becomes a
+ *  labelled slate when every source failed. */
 export function RefImg({
   url,
   thumb = false,
+  small = "",
   eager = false,
   alt = "",
   className = "",
@@ -124,13 +135,14 @@ export function RefImg({
 }: {
   url: string;
   thumb?: boolean;
+  small?: string;
   eager?: boolean;
   alt?: string;
   className?: string;
   deadLabel?: string;
   deadClassName?: string;
 }) {
-  const sources = useMemo(() => sourcesFor(url, { thumb, base: API_URL }), [url, thumb]);
+  const sources = useMemo(() => sourcesFor(url, { thumb, base: API_URL, small }), [url, thumb, small]);
   const [failed, setFailed] = useState<{ url: string; n: number }>({ url, n: 0 });
   const n = failed.url === url ? failed.n : 0;
   /* Arrived yet? A board tile can wait seconds on a multi-megabyte original
@@ -187,15 +199,16 @@ export function NoReferenceSlate() {
    one headshot and no card can be told from its neighbour (2026-09-18:
    17 of 21). Ref 1 keeps the large cell -- it IS the anchor -- and up to
    three more stack beside it, which is what tells the scenes apart. */
-function RefMosaic({ refs }: { refs: string[] }) {
+function RefMosaic({ concept }: { concept: Concept }) {
+  const refs = concept.refs || [];
   const rest = refs.slice(1, 4);
   const cell = "block size-full min-h-0 min-w-0 object-cover";
   return (
     <span className="absolute inset-0 grid grid-cols-[3fr_2fr] gap-px bg-noir-bg group-enabled:group-hover:brightness-110">
-      <RefImg url={refs[0]} thumb className={cell} deadLabel="REF 1 UNAVAILABLE" deadClassName="size-full text-[11px] tracking-[0.16em]" />
+      <RefImg url={refs[0]} thumb small={thumbOf(concept, 0)} className={cell} deadLabel="REF 1 UNAVAILABLE" deadClassName="size-full text-[11px] tracking-[0.16em]" />
       <span className="grid min-h-0 min-w-0 gap-px" style={{ gridTemplateRows: `repeat(${rest.length}, minmax(0, 1fr))` }}>
         {rest.map((u, i) => (
-          <RefImg key={`${u}-${i}`} url={u} thumb className={cell} deadLabel="N/A" />
+          <RefImg key={`${u}-${i}`} url={u} thumb small={thumbOf(concept, i + 1)} className={cell} deadLabel="N/A" />
         ))}
       </span>
     </span>
@@ -244,11 +257,12 @@ export function Hero({
       {hero.kind === "none" ? (
         <NoReferenceSlate />
       ) : mosaic ? (
-        <RefMosaic refs={refs} />
+        <RefMosaic concept={concept} />
       ) : (
         <RefImg
           url={hero.url}
           thumb={hero.kind === "ref"}
+          small={hero.kind === "ref" ? thumbOf(concept, 0) : ""}
           className="block size-full object-cover group-enabled:group-hover:brightness-110"
           deadLabel={hero.kind === "keyframe" ? "KEYFRAME UNAVAILABLE" : "REFERENCE UNAVAILABLE"}
           deadClassName="absolute inset-0 text-[11px] tracking-[0.16em]"
@@ -310,7 +324,7 @@ export function RefThumbs({
           aria-label={`Preview reference ${i + 1} of ${refs.length}: ${fileName(url)}`}
           onClick={(e) => onOpen(i, e.currentTarget)}
         >
-          <RefImg url={url} thumb className="block size-full object-cover" deadLabel="N/A" />
+          <RefImg url={url} thumb small={thumbOf(concept, i)} className="block size-full object-cover" deadLabel="N/A" />
           {size === "sm" ? null : (
             <span className="pointer-events-none absolute bottom-[3px] left-1 font-plex text-[9px] leading-none text-bone [text-shadow:0_0_3px_#000,0_0_3px_#000]">
               {i + 1}

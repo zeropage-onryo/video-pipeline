@@ -1451,7 +1451,7 @@ def _concept_card(c: dict, subscription_ids: Optional[set] = None,
         # scene that renders whole. Only a CURRENT timeline: one planned
         # from a prompt that has since been edited describes shots nobody
         # will render, and the approve re-plans it first.
-        "timeline": _timeline_card((c.get("shots") or [{}])[0])
+        "timeline": _timeline_card((c.get("shots") or [{}])[0], c.get("account_id"))
                     if c.get("is_scene") else None,
         # WHO PAID FOR THIS CLIP. A hand-rendered clip off the operator's
         # subscription and an API-rendered one billed to somebody's credit
@@ -1478,10 +1478,38 @@ def _concept_card(c: dict, subscription_ids: Optional[set] = None,
         # the one surface where someone is about to spend a render on a
         # frame showed it unattributed. See _ref_sources.
         "ref_sources": _ref_sources(c.get("refs") or [], sources),
+        # THE DRAWABLE SIZE OF EACH REFERENCE (BACKLOG #0, 2026-09-21),
+        # parallel to `refs`. `refs` itself is untouched and stays the
+        # master: refs[0] is the frame Runway anchors the clip on, and a
+        # list that quietly carried 480px versions would anchor it on one.
+        # The cards try this URL first and fall back to their own chain.
+        "ref_thumbs": _ref_thumbs(c.get("refs") or [], c.get("account_id")),
     }
 
 
-def _timeline_card(shot: dict) -> Optional[dict]:
+def _ref_thumbs(refs: list, account_id: Optional[int]) -> list:
+    """`_asset_photo_thumbs` for a shot's refs: the 480px derivative where
+    one exists, else `?thumb=1` on an asset-photo route (the local handler
+    that has always done this off disk), else the URL itself. A bin image
+    (`/refs/<sha>.jpg`) is served by a static mount that knows no `?thumb`,
+    so without a derivative it is drawn as it is -- slow, never missing."""
+    from src import media
+
+    out = []
+    for url in refs:
+        small = media.thumb_url_for(url, account_id)
+        if small:
+            out.append(small)
+            continue
+        ref = asset_shelf.parse_ref(url)
+        if ref and ref["kind"] != "refs" and not url.startswith("http"):
+            out.append(f"{url}?thumb=1")
+        else:
+            out.append(url)
+    return out
+
+
+def _timeline_card(shot: dict, account_id: Optional[int] = None) -> Optional[dict]:
     """The card's view of a scene's shots: the timeline when it is current,
     else the bare windows the prompt carries (so the Queue can still show
     how many clips an approve will make, and price them), else None."""
@@ -1489,9 +1517,11 @@ def _timeline_card(shot: dict) -> Optional[dict]:
         tl = shot["timeline"]
         return {"planned": True, "seconds": tl.get("seconds"),
                 "planner": tl.get("planner"), "continuity": tl.get("continuity") or "",
-                "parts": [{k: p.get(k) for k in ("n", "start", "end", "seconds", "text",
-                                                  "prompt", "refs", "reference_image",
-                                                  "media_url")}
+                "parts": [{**{k: p.get(k) for k in ("n", "start", "end", "seconds", "text",
+                                                     "prompt", "refs", "reference_image",
+                                                     "media_url")},
+                           # parallel to the part's own refs, the card rule
+                           "ref_thumbs": _ref_thumbs(p.get("refs") or [], account_id)}
                           for p in tl.get("parts") or []]}
     windows = timeline.parse_windows(shot.get("prompt") or "")
     if not windows:

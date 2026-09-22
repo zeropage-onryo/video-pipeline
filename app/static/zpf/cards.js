@@ -80,6 +80,15 @@ export function gateOf(c) {
   return { level: 'pass', short: 'READY', long: `${unscored} · references attached` };
 }
 
+/* The server's thumbnail for reference i (`ref_thumbs`, parallel to
+   `refs` -- BACKLOG #0), or '' on an older payload without one, in which
+   case the image falls back to its own chain. `refs` itself is never read
+   for a size: refs[0] is the frame the render anchors on. */
+export function thumbOf(c, i) {
+  const thumbs = c.ref_thumbs || [];
+  return thumbs.length === (c.refs || []).length ? (thumbs[i] || '') : '';
+}
+
 /* The card's picture: the keyframe if one was drawn, else the first
    reference, else the red slate. `kind` says which, for the label. */
 export function heroOf(c) {
@@ -95,7 +104,7 @@ export function heroMarkup(c) {
     return `<span class="nc-slate"><span>NO REFERENCE</span><small>cannot render yet</small></span>`;
   }
   return imgTag(hero.url, {
-    thumb: hero.kind === 'ref', cls: 'nc-heroimg',
+    thumb: hero.kind === 'ref', small: hero.kind === 'ref' ? thumbOf(c, 0) : '', cls: 'nc-heroimg',
     dead: hero.kind === 'keyframe' ? 'KEYFRAME UNAVAILABLE' : 'REFERENCE UNAVAILABLE',
   }) + (hero.kind === 'ref' ? '<span class="nc-tag bl2">REF 1 · NO KEYFRAME YET</span>' : '');
 }
@@ -107,7 +116,7 @@ export function refThumbs(c, { max = 4, cls = 'nc-ref' } = {}) {
   const shown = refs.slice(0, max).map((url, i) => `
     <button type="button" class="${cls}" data-ref="${i}"
             aria-label="Preview reference ${i + 1} of ${refs.length}: ${esc(refItem(url).name)}">
-      ${imgTag(url, { thumb: true, dead: 'N/A' })}<span class="nc-num">${i + 1}</span>
+      ${imgTag(url, { thumb: true, small: thumbOf(c, i), dead: 'N/A' })}<span class="nc-num">${i + 1}</span>
     </button>`).join('');
   const more = refs.length > max
     ? `<button type="button" class="${cls} more" data-ref="${max}"

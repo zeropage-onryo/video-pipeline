@@ -51,10 +51,14 @@ function localRoute(ref, thumb) {
     + `${encodeURIComponent(ref.filename)}${thumb ? '?thumb=1' : ''}`;
 }
 
-/* every URL worth trying for this picture, best first */
-export function sourcesFor(url, { thumb = false } = {}) {
+/* every URL worth trying for this picture, best first. `small` is the
+   server's own thumbnail for it (the card payload's `ref_thumbs`, parallel
+   to `refs` -- BACKLOG #0): tried before anything else, so an R2 photo
+   draws its 480px derivative instead of the 4.6MB master. */
+export function sourcesFor(url, { thumb = false, small = '' } = {}) {
   const ref = parseRef(url);
-  const out = ref ? [localRoute(ref, thumb)] : [];
+  const out = small ? [small] : [];
+  if (ref && !out.includes(localRoute(ref, thumb))) out.push(localRoute(ref, thumb));
   if (thumb && ref && ref.kind !== 'refs') out.push(localRoute(ref, false));
   if (url && !out.includes(url)) out.push(url);
   return out;
@@ -132,11 +136,11 @@ export function hydrateImages(root) {
 
 /* the markup for one such image; `thumb` asks the photo route for its
    cached 480px JPEG first */
-export function imgTag(url, { thumb = false, cls = '', alt = '', dead = '' } = {}) {
+export function imgTag(url, { thumb = false, small = '', cls = '', alt = '', dead = '' } = {}) {
   const e = s => String(s).replace(/[&<>"']/g, c =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   return `<img class="${e(cls)}" alt="${e(alt)}" loading="lazy" decoding="async"`
-    + ` data-dead-label="${e(dead)}" data-srcs="${e(sourcesFor(url, { thumb }).join('|'))}">`;
+    + ` data-dead-label="${e(dead)}" data-srcs="${e(sourcesFor(url, { thumb, small }).join('|'))}">`;
 }
 
 /* ── the overlay ── */

@@ -307,6 +307,59 @@ def test_the_card_says_where_each_reference_came_from(tmp_db):
     assert (other["kind"], other["source_url"]) == ("", "")
 
 
+def test_the_card_carries_a_thumbnail_per_reference_and_refs_stay_the_master(tmp_db, monkeypatch):
+    """BACKLOG #0: `ref_thumbs` is parallel to `refs` -- the 480px
+    derivative when R2 holds one, `?thumb=1` on an asset-photo route when
+    it does not (the local handler that has always done this off disk),
+    the URL itself for a bin image or a foreign one. `refs` is byte for
+    byte what was stored: refs[0] anchors the render and a thumbnail there
+    would be a quiet downgrade. The timed shots carry the same pair."""
+    from src import media, timeline
+    for var in ("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY",
+                "R2_BUCKET", "R2_PUBLIC_BASE_URL"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("ZEROPAGE_MEDIA", "legacy")
+    refs = ["/characters/michael/photo/a.jpg", "https://pub-x.r2.dev/refs/aaa.jpg",
+            "/refs/ccc.jpg", "https://cdn.test/other.png"]
+    prompt = "(0-3s) He lifts the watch. (3-7s) The garage door opens."
+    parts = [{"n": 1, "start": 0, "end": 3, "seconds": 3, "text": "He lifts the watch.",
+              "prompt": "He lifts the watch.", "refs": refs[:2], "reference_image": None,
+              "media_url": None},
+             {"n": 2, "start": 3, "end": 7, "seconds": 4, "text": "The garage door opens.",
+              "prompt": "The garage door opens.", "refs": [refs[2]], "reference_image": None,
+              "media_url": None}]
+    shot = {"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY", "prompt": prompt,
+            "refs": refs, "timeline": {"seconds": 7, "planner": "model", "brain": "x",
+                                       "source": timeline.source_hash(prompt, refs),
+                                       "continuity": "", "parts": parts}}
+    cid = seed_concept(tmp_db, "Thumbed", shots=[shot])
+
+    def card():
+        return {c["id"]: c for c in client.get("/api/pipeline/concepts").json()["items"]}[cid]
+
+    c = card()
+    assert c["refs"] == refs
+    assert c["ref_thumbs"] == [refs[0] + "?thumb=1", refs[1], refs[2], refs[3]]
+    assert c["timeline"]["planned"] is True
+    assert [p["refs"] for p in c["timeline"]["parts"]] == [refs[:2], [refs[2]]]
+    assert [p["ref_thumbs"] for p in c["timeline"]["parts"]] == [[refs[0] + "?thumb=1", refs[1]], [refs[2]]]
+
+    # with R2 on, the derivative under its own `t/` prefix, for the bin image too
+    monkeypatch.setenv("R2_ACCOUNT_ID", "acct123")
+    monkeypatch.setenv("R2_ACCESS_KEY_ID", "key123")
+    monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "secret123")
+    monkeypatch.setenv("R2_BUCKET", "zpf-clips")
+    monkeypatch.setenv("R2_PUBLIC_BASE_URL", "https://pub-abc123.r2.dev/")
+    c = card()
+    assert c["refs"] == refs
+    small = c["ref_thumbs"]
+    assert small[0] == media.thumb_url_for(refs[0], None) and "/t/" in small[0]
+    assert small[1] == media.thumb_url_for(refs[1], None) and "/t/" in small[1]
+    assert small[2] == media.thumb_url_for(refs[2], None) and "/t/" in small[2]
+    assert small[3] == refs[3]
+    assert c["timeline"]["parts"][0]["ref_thumbs"] == small[:2]
+
+
 def test_pipeline_run_generates_through_a_job(tmp_db, monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     import src.shootgen as shootgen
