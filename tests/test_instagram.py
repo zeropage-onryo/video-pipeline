@@ -303,3 +303,124 @@ def test_execute_post_action_raises_on_failed_publish(monkeypatch):
     with pytest.raises(RuntimeError, match="container ERROR"):
         instagram.execute_post_action(
             {"kind": "post", "video_url": "https://x/v.mp4", "caption": "c"})
+
+
+# ---------- the long-lived token's 60-day clock (BACKLOG #4) ----------
+
+def _refresh_answers(monkeypatch, calls, token="tok-1", expires_in=60 * 86400):
+    """GET refresh_access_token answers `token`; anything else is a
+    surprise. Records every call's url and params."""
+    def fake_get(url, params=None, timeout=None):
+        calls.append((url, dict(params or {})))
+        assert url == instagram.REFRESH_URL, url
+        return FakeResponse({"access_token": token, "token_type": "bearer",
+                             "expires_in": expires_in})
+    monkeypatch.setattr(instagram.requests, "get", fake_get)
+
+
+@pytest.fixture
+def token_store(tmp_path, monkeypatch):
+    path = tmp_path / "ig_token.json"
+    monkeypatch.setenv("IG_TOKEN_STORE", str(path))
+    monkeypatch.setenv("IG_ACCESS_TOKEN", "tok-1")
+    monkeypatch.delenv("INSTAGRAM_ACCESS_TOKEN", raising=False)
+    return path
+
+
+def test_refresh_access_token_asks_for_the_ig_refresh_grant(monkeypatch):
+    calls = []
+    _refresh_answers(monkeypatch, calls)
+    data = instagram.refresh_access_token("tok-1")
+    assert data["access_token"] == "tok-1" and data["expires_in"] == 60 * 86400
+    assert calls == [(instagram.REFRESH_URL,
+                      {"grant_type": "ig_refresh_token", "access_token": "tok-1"})]
+
+
+def test_refresh_access_token_refuses_an_answer_with_no_token(monkeypatch):
+    monkeypatch.setattr(instagram.requests, "get",
+                        lambda *a, **k: FakeResponse({"expires_in": 5}))
+    with pytest.raises(RuntimeError):
+        instagram.refresh_access_token("tok-1")
+
+
+def test_an_unchanged_token_is_reported_with_its_days_left_and_not_copied(token_store, monkeypatch):
+    """Meta usually answers with the same string and a longer clock: the
+    step says how long is left, records the expiry, and the .env token
+    is written nowhere it was not already."""
+    calls = []
+    _refresh_answers(monkeypatch, calls, token="tok-1")
+    state = instagram.refresh_token_step()
+    assert state["ok"] and state["days_left"] == 60
+    assert state["changed"] is False and state["warning"] is False
+    assert "60 days left" in state["message"]
+    assert "tok-1" not in state["message"]
+    record = __import__("json").loads(token_store.read_text())
+    assert record["access_token"] is None and record["expires_at"]
+    assert instagram.access_token() == "tok-1"
+
+
+def test_a_new_token_is_stored_where_access_token_reads_it(token_store, monkeypatch):
+    """When Meta issues a NEW token it is kept in the store and served
+    from there -- every reader goes through access_token() -- while .env
+    still holds the one it replaced. The message names the file and the
+    exact update, never the value."""
+    calls = []
+    _refresh_answers(monkeypatch, calls, token="tok-2")
+    state = instagram.refresh_token_step()
+    assert state["ok"] and state["changed"] and state["stored"]
+    assert state["path"] == str(token_store)
+    assert "tok-2" not in state["message"] and "tok-1" not in state["message"]
+    assert str(token_store) in state["message"] and "IG_ACCESS_TOKEN" in state["message"]
+    assert instagram.access_token() == "tok-2"
+    # the next night refreshes the stored one, not the stale .env one
+    calls.clear()
+    _refresh_answers(monkeypatch, calls, token="tok-2")
+    instagram.refresh_token_step()
+    assert calls[0][1]["access_token"] == "tok-2"
+    assert instagram.access_token() == "tok-2"
+
+
+def test_a_token_typed_into_env_afterwards_outranks_the_store(token_store, monkeypatch):
+    """A re-authorisation is newer than anything the sweep stored: the
+    store only ever extends the exact .env token it replaced."""
+    _refresh_answers(monkeypatch, [], token="tok-2")
+    instagram.refresh_token_step()
+    assert instagram.access_token() == "tok-2"
+    monkeypatch.setenv("IG_ACCESS_TOKEN", "tok-3")
+    assert instagram.access_token() == "tok-3"
+    monkeypatch.delenv("IG_ACCESS_TOKEN")
+    assert instagram.access_token() is None
+
+
+def test_refresh_token_step_never_raises_and_never_leaks_the_token(token_store, monkeypatch):
+    def fake_get(url, params=None, timeout=None):
+        raise RuntimeError("400 at https://graph.instagram.com/x?access_token=tok-1")
+    monkeypatch.setattr(instagram.requests, "get", fake_get)
+    state = instagram.refresh_token_step()
+    assert state["ok"] is False and state["warning"] is True
+    assert "tok-1" not in state["error"] and "tok-1" not in state["message"]
+    assert "REFRESH FAILED" in state["message"]
+    assert instagram.access_token() == "tok-1"
+
+
+def test_a_failed_refresh_still_says_when_the_last_record_expires(token_store, monkeypatch):
+    _refresh_answers(monkeypatch, [], token="tok-1", expires_in=40 * 86400)
+    instagram.refresh_token_step()
+    monkeypatch.setattr(instagram.requests, "get",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("HTTP 400")))
+    state = instagram.refresh_token_step()
+    assert not state["ok"]
+    assert "expires in 40 days" in state["message"] or "expires in 39 days" in state["message"]
+
+
+def test_refresh_token_step_without_a_token_is_a_result_not_an_exception(token_store, monkeypatch):
+    monkeypatch.delenv("IG_ACCESS_TOKEN")
+    state = instagram.refresh_token_step()
+    assert state["ok"] is False and "IG_ACCESS_TOKEN" in state["error"]
+
+
+def test_refresh_token_step_shouts_when_few_days_are_left(token_store, monkeypatch):
+    _refresh_answers(monkeypatch, [], token="tok-1", expires_in=3 * 86400)
+    state = instagram.refresh_token_step()
+    assert state["ok"] and state["days_left"] == 3 and state["warning"] is True
+    assert "only 3 days left" in state["message"]

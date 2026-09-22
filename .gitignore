@@ -39,6 +39,7 @@ pitches.json
 concepts.json
 data/promotion_queue.json
 data/autopilot.off
+data/ig_token.json
 venv-studio/
 
 # Personal reference photos -- not public yet
