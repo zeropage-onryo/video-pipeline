@@ -1568,10 +1568,17 @@ is yours, in Resolve, by hand.
   `shot_generate`, `/api/generate/run`'s video branch (refused before the job, so no Gemini call
   is made for it), and Run all's Generate node (skipped, not failed — the prompt it renders is
   the enhance node's, which did not exist when any price was shown). BYOK, and a server with no
-  secret, behave exactly as before. **Not built (step 6):** the four adapters still take
-  `approved=True` and nothing is held on the ledger. Decided for it: zero credits REFUSES even
-  with a key on file, and Mike's own account is the exemption. The daily-cap check stays in the
-  route, not here.
+  secret, behave exactly as before. **Step 6 — the ledger hold — is built** (`src/charge.py`,
+  landed with the Stripe billing commit, 2026-09-18): every adapter's `generate_video` takes the
+  hold after the spend gate and BEFORE the submit (`InsufficientCredit` there means no HTTP call
+  is ever made), marks `submitted()` as the last line before the provider call, releases on any
+  raise after the take, and the caller settles against the generations row. `approved=True` is
+  still the spend gate's answer; the hold sits behind it, not instead of it. As decided: zero
+  credits REFUSES even with a key on file, and the operator's own accounts are exempt
+  (`accounts.credit_exempt`, `python -m src.accounts credits <slug> --on`; `ledger.hold_for_render`
+  returns None for BYOK, a manual-lane import and an exempt account, so every `Charge` method is a
+  no-op there). The daily-cap check stays in the route, not here. **Unverified with real money:**
+  no API-billed render has gone through yet (see "Where the project stands").
 - **`src/spend.py`** / **`src/costs.py`** — the cost tracker (BACKLOG #2, 2026-09-04).
   `spend.record_call` writes one OWNED `llm_calls` row per Gemini call -- the model that
   actually answered, raw token counts, an estimated `cost_usd` from `DEFAULT_PRICES` (read off
@@ -1735,10 +1742,6 @@ the Queue refuses you for having no credit. Both `zeropage` and `antihero` are O
 2026-09-18. Unset `STRIPE_*` = the plan
 buttons say so and nothing else changes.
 
-**The number that matters and is not moving: 0 concepts carry a `media_url`.** Nothing has been
-rendered onto a concept row. 4 picks against 232 written is the real shape of this project —
-generation is cheap and abundant, selection is the bottleneck, and the spend gate has barely
-been used. Read every rate below in that light.
 **THE LOOP CLOSED ON 2026-09-18.** Concept #375 "Neon City Ascent" went spark -> scene ->
 references -> keyframe -> pick -> render -> post -> measured, and it is the first one that ever
 did. What that means concretely: **1 concept carries a `media_url`** (it was 0 for the whole life
@@ -1752,8 +1755,9 @@ their own snapshots, so `posted_outcomes` has 13 rows to join instead of none.
 **No API-BILLED render has gone through yet.** #375 was the free lane. The one attempt through
 the Queue (#361 on Higgsfield `kling2.1`, 2026-09-18) died at the provider submit with `HTTP 423
 Locked` — the Higgsfield account, not the request — and Runway and fal are `available: false` on
-the deployed API (their keys are not in Fly's secrets). One billed render is the precondition for
-the ledger work (pricing step 6); see `docs/tasks/task-pricing-and-quotes.md`.
+the deployed API (their keys are not in Fly's secrets). One billed render is what verifies the
+ledger hold (`src/charge.py`, pricing step 6 — built, never exercised with real credit); see
+`docs/tasks/task-pricing-and-quotes.md`.
 
 **The number that matters now: 11 picks against 255 written, and 1 of 255 rendered.** Generation
 is cheap and abundant, selection is still the bottleneck, and the spend gate has been used once.
