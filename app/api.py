@@ -2294,6 +2294,22 @@ def _renderers_state(account_id: Optional[int] = None, ctx=None) -> dict:
     return providers.render_options(account_id, ctx=ctx)
 
 
+def _is_waiting(concept: dict) -> bool:
+    """The queue predicate on a parsed concept -- parked or picked, not
+    archived, a scene, no clip yet, not marked shot by hand. ONE copy,
+    shared by `_waiting` (the listing) and `queue_count` (the badge), so
+    the two cannot disagree about what "waiting" means. Reads the same
+    fields `_concept_card` copies onto the card."""
+    shots = concept.get("shots") or [{}]
+    return bool((concept.get("picked") or concept.get("parked"))
+                and not concept.get("archived")
+                and concept.get("is_scene")
+                and not (shots[0].get("media_url") or "")
+                # marked shot by hand (the camera button) -- a card you
+                # already made yourself isn't waiting on you to spend
+                and not concept.get("shot_done"))
+
+
 def _waiting(account_id: Optional[int], brand: Optional[str],
              include_blocked: bool = False) -> list[tuple[dict, dict]]:
     """The queue predicate -- parked by the chain or picked on the board,
@@ -2335,13 +2351,9 @@ def _waiting(account_id: Optional[int], brand: Optional[str],
                                         account_id=account_id)
     sources = scout.sources_for_refs(_bin_filenames(concepts))
     for concept in concepts:
-        card = _concept_card(concept, gates=gates, sources=sources)
-        if not ((card["picked"] or card["parked"]) and not card["archived"]
-                and card["is_scene"] and not card["media_url"]
-                # marked shot by hand (the camera button) -- a card you
-                # already made yourself isn't waiting on you to spend
-                and not card["shot_done"]):
+        if not _is_waiting(concept):
             continue
+        card = _concept_card(concept, gates=gates, sources=sources)
         # nothing reaches a spend ungrounded -- see above
         blocked = preprod.reference_gate(concept)
         if blocked and not include_blocked:
@@ -2441,14 +2453,23 @@ def queue_count(brand: Optional[str] = None,
     12.9s, the renderer state 7.4s -- and the badge fired it unbranded on
     top of the page's own call, so the Queue page waited behind its own
     badge. This walks the same `_waiting` rows the listing does and counts
-    them, so the two cannot disagree about what "waiting" means.
+    them, so the two cannot disagree about what "waiting" means. (Since
+    2026-09-21 it reads the same window through the lean
+    preprod.queue_candidates and the shared `_is_waiting`, rather than
+    building every card.)
 
     `spendable` is the badge's number (the listing's own field, same
     meaning: a card the reference gate blocks is waiting on photographs,
     not on a spend); `blocked` is the rest."""
+    # 2026-09-21: counts off preprod.queue_candidates -- the same window
+    # and the same `_is_waiting` + reference_gate as the listing, but only
+    # the columns that decide it. Going through `_waiting` built every
+    # card (holds, scores, bin sources) to throw it away, ~1 MB a poll.
     spendable = blocked = 0
-    for _concept, card in _waiting(account_id, brand, include_blocked=True):
-        if card.get("blocked"):
+    for concept in preprod.queue_candidates(account_id=account_id, brand=brand):
+        if not _is_waiting(concept):
+            continue
+        if preprod.reference_gate(concept):
             blocked += 1
         else:
             spendable += 1
