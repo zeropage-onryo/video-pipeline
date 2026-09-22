@@ -1043,7 +1043,7 @@ exact path must leave a row and release the hold. Start by reading `src/higgsfie
 never-raises edge and finding where the row is written relative to the submit, then check the
 other three adapters for the same ordering.
 
-## 19. The React Queue cannot show the other brand's scenes, and its account switch is dead  (found 2026-09-18, not fixed)
+## 19. The React Queue cannot show the other brand's scenes, and its account switch is dead  (found 2026-09-18, FIXED 2026-09-21)
 
 Contradicts #7 (the brand switcher, shipped and verified 2026-08-27) on the React side only.
 `GET /api/queue/pending` with no `brand` param returned all 18 waiting scenes while `/api/me`
@@ -1053,4 +1053,16 @@ brand's, so 15 of 18 were invisible. Clicking ANTIHERO in the account menu did n
 (`/ui?legacy=1&view=queue`) sends `?brand=antihero` and works, which is how #361 was approved.
 Two bugs, probably one fix: make the menu actually POST `/brand/{name}` (through the proxy, so
 the cookie lands first-party), then have the Queue refetch.
+
+**Fixed 2026-09-21, and the diagnosis above was wrong about where.** The menu always POSTed
+`/brand/{slug}` through the proxy and the Queue always sent `?brand=`; "no `/brand` request went
+out" was the network log being wiped by the `window.location.reload()` that followed it. The
+dead part was `GET /api/me`: it answered the account matching `current_account_id` -- the TENANT,
+the oldest membership whatever the cookie says -- so the cookie flipped and the shell went on
+reading `zeropage`. `/api/me` now resolves `account` through `auth.current_account`, the same
+call that writes `/ui`'s `data-brand`, so the two shells share one rule. The switch no longer
+reloads: it refetches `/api/me`, and every page keyed on the shell's `brand` re-asks. The rail
+badge sends `?brand=` too, as `shared.js` always did. Verified in a browser both ways on a
+throwaway schema (1 Zero Page scene, 2 Antihero): `pending?brand=` and `count?brand=` follow the
+click, badge 1 <-> 2. Guard: `test_api_me_follows_the_brand_switch_like_the_shell_does`.
 

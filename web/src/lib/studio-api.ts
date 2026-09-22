@@ -410,7 +410,10 @@ export const queuePending = (brand?: string) =>
  *  listing prices every card (signed quotes, a default and the renderer
  *  state per request), which is seconds of work the badge never needed
  *  and used to repeat on every studio page. */
-export const queueCount = () => apiFetch<{ spendable: number; blocked: number }>("/queue/count");
+export const queueCount = (brand?: string) =>
+  apiFetch<{ spendable: number; blocked: number }>(
+    `/queue/count${brand ? `?brand=${encodeURIComponent(brand)}` : ""}`,
+  );
 /** The pick. Puts a concept in front of the Queue's approval gate;
  *  approving THERE is what renders. */
 export const pickConcept = (id: number, picked = true) =>
@@ -478,6 +481,11 @@ export const getPresets = () =>
   apiFetch<{ items: Preset[]; enhance_system: string }>("/presets");
 
 /* ── the account switch and sign-out live at the API root ── */
+/** POST /brand/{slug} THROUGH THE PROXY (API_URL is empty in production, so
+ *  this is our own origin and the `brand` cookie lands first-party -- the
+ *  handoff lesson). The route answers 303; `manual` keeps fetch from
+ *  following it into a page nobody reads. Resolves once the cookie is set;
+ *  the caller refetches /api/me, which is what says the switch took. */
 export async function switchAccount(slug: string) {
   const body = new FormData();
   body.append("next", "/studio");
@@ -486,8 +494,7 @@ export async function switchAccount(slug: string) {
     credentials: "include",
     body,
     redirect: "manual",
-  }).catch(() => {});
-  window.location.reload();
+  });
 }
 
 /* the queue badge listens for this; anything that picks or decides fires it */
