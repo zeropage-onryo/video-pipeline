@@ -2,7 +2,7 @@
 
 Parked ideas and next builds. Nothing here is in progress.
 
-## 0. Reference tiles are full-size photos  (2026-09-08, small)
+## 0. Reference tiles are full-size photos  (2026-09-08, FIXED 2026-09-21)
 Now that a ref is a public R2 URL, the Queue and board cards draw the
 ORIGINAL file — `characters/michael/IMG_0586.JPG` is 4.6 MB, and a card
 carries four of them. Before today they were `?thumb=1`, a cached 480px
@@ -21,9 +21,11 @@ being bitten by.
 **DONE 2026-09-14.** `src/media.mirror` writes the 480px derivative under its own
 `t/<account>/<tail>` prefix on every mirror; `_assets_all` serves them as `photo_thumbs` and
 uses one as the `poster`; `?thumb=1` remains the fallback when there is no derivative to point
-at. The two lists stayed separate exactly as this entry required. Remaining: `queue.js` and
-`scenes.js` still draw `refs` directly — the server now offers the small list, the cards have
-not been switched to it yet.
+at. The two lists stayed separate exactly as this entry required.
+
+**CLOSED 2026-09-21 (PR #49).** `_concept_card` serves `ref_thumbs` parallel to `refs` (and
+per timed shot), and `cards.js`, `queue.js`, `scenes.js` and the React `concept-card.tsx`
+try it first, falling back to `?thumb=1` and the stored URL. `refs` untouched, pinned by test.
 
 ## 1. UI readability pass  (parked — hold until Mike says go)
 Make the app simpler and easier to read. Same density problem on both pages:

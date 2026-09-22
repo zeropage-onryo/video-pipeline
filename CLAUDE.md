@@ -1473,7 +1473,12 @@ is yours, in Resolve, by hand.
   insight metric names shift between Graph versions, so verify on bump. A `/reel/<shortcode>`
   permalink does **not** contain the numeric media id; store `ig://<media_id>` (or the raw id) in
   a video's url for refresh to work, or pass a `media_id` key. Token refresh (long-lived tokens
-  expire ~60 days) is a noted follow-up, not built.
+  expire ~60 days) is built (2026-09-21, BACKLOG #4): the nightly sweep's Instagram pass calls
+  `refresh_token_step` first and prints the days left, loudly on stderr when it needs a person.
+  `.env` is never written -- a NEW token Meta issues is kept in `data/ig_token.json`
+  (`IG_TOKEN_STORE` overrides) beside a fingerprint of the `.env` token it replaced, and
+  `access_token()`, the one reader, serves it from there exactly while `.env` still holds that
+  token. The value is never printed; the message names the file and the update to make.
 - **`src/scheduling.py`** — the publish queue, because Meta has no native future-scheduling: a
   `scheduled_posts` table (own `SCHEMA`/`init()`, the preprod.py pattern), pure `due_posts`
   windowing, and `run_due`, the worker step cron invokes. Queue management is ungated — rows are
@@ -1726,8 +1731,9 @@ reason, **11 picked**, **20 marked shot**, **359 recorded graph runs**, 113 gene
 optional material on 2026-08-31 and nothing has re-run `src.locations` since). Reference-grounded
 ideation is verified live both ways: `src.shootgen --spark "gearing up ritual"` printed "Grounding
 in 5 retrieved reference(s)" against the real library, and the same command with the store pointed
-at a dead URL printed the ungrounded note and still produced ideas (exit 0). 2171 tests pass, 8
-xfail, ruff clean, CI green on every push — last full run 2026-09-18 on the pricing merge (`7ddb947`).
+at a dead URL printed the ungrounded note and still produced ideas (exit 0). 2425 tests pass, 8
+xfail, ruff clean, CI green on every push — last full run 2026-09-22 on main's tip after the
+overnight merges (`ba9e1d8`, PRs #46–#52).
 
 **Billing is in front of the ledger (2026-09-18, docs/BILLING.md).** `MARKUP` is 2.4,
 three plans live in `src/pricing.PLANS`, every adapter holds credit before its submit
