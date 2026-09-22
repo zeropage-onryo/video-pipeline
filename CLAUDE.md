@@ -1787,10 +1787,13 @@ not code** — the path exists now, so the question is whether it can be walked 
 as `src.autopilot` — gated, dry-run, default off, executors unwired.
 
 **Known gaps, in rough priority:**
-- **Timed scenes (2026-09-10) are rendered shot by shot only at the Queue.** The graph's
-  `generate_render` (a dry stub unless `ZEROPAGE_RENDER=1`) still renders a scene's whole
-  prompt as one clip, and the Director canvas still edits the whole scene prompt rather than
-  one shot of it. Both read `shot["timeline"]` for free when they are taught to.
+- **Timed scenes (2026-09-10): the Queue and the graph render shot by shot; the Director
+  does not know them yet.** `generate_render` walks a CURRENT `shot["timeline"]` through the
+  same `generate_for_shot(part=n)` door the Queue uses (2026-09-22, `_render_timed`: one clip
+  entry per scene, `parts` on it, stop at the first failure, no failover, still dry unless
+  `ZEROPAGE_RENDER=1`). The Director canvas still seeds and edits the WHOLE scene prompt and
+  runs its keyframe/clip nodes on the whole scene; BACKLOG #20 has the design question that
+  has to be answered before it can edit one shot of a timed scene.
 - `src/fal.py`'s image-to-video field name is `image_url` for every model in the table;
   that is documented for Seedance 2.0 and inferred from the playground's "Start Image
   Url" label for Wan 3.0 and LTX-2.3. Verify on the first live i2v render for those two.

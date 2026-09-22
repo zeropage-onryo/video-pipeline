@@ -549,6 +549,125 @@ def test_render_stays_dry_without_the_credit_gate(tmp_db, monkeypatch):
     assert called == []
 
 
+def _timed_concept(tmp_db, tool="RUNWAY"):
+    """A scene with a CURRENT two-shot timeline, the shape keyframe leaves."""
+    from src import timeline as tl_mod
+    prompt = "(0-3s) He lifts the watch to the light. (3-7s) The garage door rolls open."
+    refs = ["/characters/michael/photo/a.jpg", "/refs/aaa.jpg"]
+    parts = [{"n": 1, "start": 0, "end": 3, "seconds": 3, "text": "He lifts the watch.",
+              "prompt": "He lifts the watch.", "refs": refs, "reference_image": None,
+              "media_url": None},
+             {"n": 2, "start": 3, "end": 7, "seconds": 4, "text": "The door rolls open.",
+              "prompt": "The door rolls open.", "refs": refs[1:], "reference_image": None,
+              "media_url": None}]
+    shot = {"n": 1, "type": "BROLL", "source": "AI", "tool": tool, "prompt": prompt,
+            "refs": refs, "timeline": {"seconds": 7, "planner": "model", "brain": "x",
+                                       "source": tl_mod.source_hash(prompt, refs),
+                                       "continuity": "", "parts": parts}}
+    cid = preprod.save_concept({"title": "Timed", "hook": "h", "logline": "l",
+                                "shots": [shot]}, brand="antihero", dsn=tmp_db,
+                               account_id=None)
+    return cid, prompt
+
+
+def test_the_nightly_render_takes_a_timed_scene_shot_by_shot(tmp_db, monkeypatch, tmp_path):
+    """The Queue's approve has rendered a timed scene one shot at a time
+    since 2026-09-10; the graph's render node still rendered the whole
+    scene as one clip. Now it walks the CURRENT timeline through the same
+    generate_for_shot(part=n) door: one call per part, each part's window
+    fitted up to the model (a 3s and a 4s window are both 5s Runway
+    clips), and ONE clip entry for the scene whose url is shot 1's file
+    -- the marker every reader means by rendered."""
+    monkeypatch.setenv("ZEROPAGE_RENDER", "1")
+    cid, prompt = _timed_concept(tmp_db)
+    from src import runway as runway_module
+    calls, files = [], {}
+
+    def fake_for_shot(concept_id, shot_n, *, part=None, duration=None, account_id=None, **k):
+        calls.append((concept_id, shot_n, part, duration, account_id))
+        f = tmp_path / f"p{part}.mp4"
+        f.write_bytes(b"\x00" * 2048)
+        files[part] = str(f)
+        return {"ok": True, "media_url": f"https://r2.test/p{part}.mp4", "path": str(f),
+                "generation_id": part, "error": None}
+
+    monkeypatch.setattr(runway_module, "generate_for_shot", fake_for_shot)
+    monkeypatch.setattr(runway_module, "generate_candidates",
+                        lambda *a, **k: pytest.fail("a timed scene never renders whole"))
+
+    out = orchestrator.generate_render(
+        {"concept_id": cid, "account_id": None,
+         "prompts": [{"n": 1, "tool": "RUNWAY", "prompt": prompt}]})
+
+    assert [(c[2], c[3]) for c in calls] == [(1, 5), (2, 5)]
+    assert all(c[0] == cid and c[1] == 1 for c in calls)
+    clip = out["clips"][0]
+    assert clip["ok"] is True and clip["timed"] is True
+    assert clip["url"] == files[1]
+    assert [(r["n"], r["ok"]) for r in clip["parts"]] == [(1, True), (2, True)]
+
+
+def test_a_timed_scene_stops_at_the_first_failed_shot_and_never_fails_over(tmp_db, monkeypatch, tmp_path):
+    """The Queue's rule: keep what rendered, stop at the failure (usually
+    the cap), say how far it got, and let the morning's approve resume.
+    No vendor failover -- shots 1-2 on Runway and 3 on Kling is not a
+    scene -- and the run holds honestly on the scene's `ok`."""
+    monkeypatch.setenv("ZEROPAGE_RENDER", "1")
+    cid, prompt = _timed_concept(tmp_db)
+    from src import providers
+    from src import runway as runway_module
+
+    def fake_for_shot(concept_id, shot_n, *, part=None, **k):
+        if part == 2:
+            return {"ok": False, "error": "runway: 6/6 generations used today"}
+        f = tmp_path / "p1.mp4"
+        f.write_bytes(b"\x00" * 2048)
+        return {"ok": True, "media_url": "https://r2.test/p1.mp4", "path": str(f),
+                "generation_id": 1, "error": None}
+
+    monkeypatch.setattr(runway_module, "generate_for_shot", fake_for_shot)
+    monkeypatch.setattr(providers, "choose_provider",
+                        lambda *a, **k: pytest.fail("no failover for a timed scene"))
+
+    out = orchestrator.generate_render(
+        {"concept_id": cid, "account_id": None,
+         "prompts": [{"n": 1, "tool": "RUNWAY", "prompt": prompt}]})
+
+    clip = out["clips"][0]
+    assert clip["ok"] is False and clip["url"] is None
+    assert "shot 2 of 2 failed" in clip["error"] and "1 of 2 rendered" in clip["error"]
+    assert [(r["n"], r["ok"]) for r in clip["parts"]] == [(1, True), (2, False)]
+    assert orchestrator.route_after_qc(orchestrator.qc_clip(out)) == "hold"
+
+
+def test_a_timed_scene_skips_shots_that_already_have_a_clip(tmp_db, monkeypatch, tmp_path):
+    """Approving again resumes rather than re-buying shot 1; the night
+    resuming a scene the Queue half-rendered follows the same rule."""
+    monkeypatch.setenv("ZEROPAGE_RENDER", "1")
+    cid, prompt = _timed_concept(tmp_db)
+    from src import timeline as tl_mod
+    tl_mod.attach_part(cid, 1, 1, "media_url", "https://r2.test/done1.mp4",
+                       db_path=tmp_db, account_id=None)
+    from src import runway as runway_module
+    calls = []
+
+    def fake_for_shot(concept_id, shot_n, *, part=None, **k):
+        calls.append(part)
+        f = tmp_path / "p2.mp4"
+        f.write_bytes(b"\x00" * 2048)
+        return {"ok": True, "media_url": "https://r2.test/p2.mp4", "path": str(f),
+                "generation_id": 2, "error": None}
+
+    monkeypatch.setattr(runway_module, "generate_for_shot", fake_for_shot)
+    out = orchestrator.generate_render(
+        {"concept_id": cid, "account_id": None,
+         "prompts": [{"n": 1, "tool": "RUNWAY", "prompt": prompt}]})
+    assert calls == [2]
+    clip = out["clips"][0]
+    assert clip["ok"] is True
+    assert clip["parts"][0]["skipped"] is True and clip["parts"][1]["ok"] is True
+
+
 def test_render_gate_open_routes_veo_prompts_through_the_connector(tmp_db, monkeypatch, tmp_path):
     monkeypatch.setenv("ZEROPAGE_RENDER", "1")
     clip = tmp_path / "cand1.mp4"

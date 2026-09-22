@@ -1040,6 +1040,46 @@ after approval, file the Pinterest support ticket. Then run
 `ops/pinterest_token_paste.sh` (or the full `pinterest_token.sh` flow) for
 real and set `PINTEREST_BOARD_ANTIHERO` / `PINTEREST_BOARD_ZEROPAGE`.
 
+## 20. The Director and timed scenes  (to decide, then build — found 2026-09-22)
+Since 2026-09-10 a scene is written as timed windows and `shot["timeline"]` carries one
+part per window (its composed prompt, its own refs, its still, its clip). The Queue's
+approve renders the parts one at a time, and since 2026-09-22 so does the nightly graph
+(`orchestrator._render_timed`). The Director does neither: `seedScene`
+(`web/src/lib/director-graph.ts`) seeds ONE chain from `shot.written_prompt || shot.prompt`
+with the scene's refs, its keyframe node writes `shot.reference_image` (which is shot 1's
+still) and its Runway node renders the whole scene prompt as one clip — so the one surface
+built for steering a scene by hand cannot steer a shot of it, and a clip it renders is not
+the clip the Queue would have made.
+
+**The question to answer first, because both answers are defensible and they exclude each
+other:** what is the source of truth for a part's prompt?
+
+- **A. The scene prompt is the source; the parts are derived.** This is what the code does
+  today: `timeline.source` hashes prompt + refs, `is_current` checks it on read, and a
+  Director edit to the scene prompt makes the plan stale and `timeline.ensure` re-plans it,
+  carrying over any still/clip whose window, sentence and refs did not change. Under A the
+  Director gets a *shot strip* (the parts, read-only text) and per-part **run** — the
+  keyframe node draws THIS part's still (`attach_part(..., "reference_image")`, the same
+  call `scene_chain._keyframe_timeline` makes) and the Runway node renders THIS part
+  (`generate_for_shot(part=n)`) — but editing a part means editing its window in the scene
+  prompt, and the plan re-derives. Cheap, consistent with the Queue and the graph, and the
+  prompt bar keeps meaning what it means now.
+- **B. A part's prompt is editable in place and pinned.** The natural thing to want on a
+  canvas, and what LTX Studio's gen space does. It needs `parts[n].prompt_override` (or a
+  `pinned` flag) that `timeline.ensure` carries over across re-plans instead of rewriting,
+  a rule for what happens when the scene prompt's window for that part changes underneath
+  it (keep the pin? drop it with a note?), and `render_prompt` to prefer the pin. More
+  machinery, and two places a shot's words can live.
+
+Recommendation: A first. It closes the two real gaps (the Director cannot run one part; the
+clip it renders is not the Queue's clip) with no new state, and B can be added on top if
+hand-editing a single shot turns out to be what Mike actually reaches for. What A needs:
+`workflow_runner` gains a `part` on the image and video nodes (today it has none — the
+runner renders the shot, full stop), `seedScene` takes a part and seeds from
+`timeline.render_prompt(part, tl)` with the part's refs and still, the dock lists the parts
+under the scene, and `FLOWS.md` says so. The vanilla `genspace.js` is the reference
+implementation and would follow.
+
 ## 18. A render that fails at the provider submit leaves no `generations` row  (found 2026-09-18, FIXED 2026-09-21)
 
 Reported from the live attempt, not yet reproduced in a test. Approving #361 on Higgsfield

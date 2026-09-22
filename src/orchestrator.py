@@ -1397,10 +1397,31 @@ def generate_render(state: GenState) -> GenState:
     }
     out_root = GENERATED_ROOT / f"concept-{state.get('concept_id', 'x')}"
     account_id = state.get("account_id")
+    concept_id = state.get("concept_id")
+    # THE TIMED SHOTS (2026-09-22). `keyframe` plans shot["timeline"] on the
+    # prompt that renders; until today this node ignored it and rendered
+    # the whole scene as one clip, while the Queue's approve rendered the
+    # same scene shot by shot -- two doors, two clips, for one row. Read
+    # from the database, not state["concept"]: the plan is written after
+    # gen_concept and the state's copy predates it.
+    stored = {}
+    if concept_id:
+        try:
+            row = preprod.get_concept(concept_id, account_id=account_id)
+            stored = {s.get("n", 1): s for s in (row or {}).get("shots") or []}
+        except Exception:                                   # noqa: BLE001
+            stored = {}
     clips = []
     for index, p in enumerate(prompts, start=1):
         tool_name = (p.get("tool") or "").upper()
         connector = connectors.get(tool_name)
+        shot = stored.get(p.get("n"))
+        if (connector is not None and shot is not None
+                and timeline.is_current(shot)
+                and (shot.get("timeline") or {}).get("parts")):
+            clips.append(_render_timed(p, shot, connector, tool_name,
+                                       concept_id=concept_id, account_id=account_id))
+            continue
         tried = {tool_name.lower()} if tool_name else set()
         # A connector may BE a provider under another name: the four fal
         # platforms are all provider "fal". Excluding the tool name alone
@@ -1437,6 +1458,73 @@ def generate_render(state: GenState) -> GenState:
                  else f"no adapter wired for {p.get('tool')}")
         clips.append({**p, "url": None, "ok": False, "error": error})
     return {"clips": clips}
+
+
+def _render_timed(p: dict, shot: dict, connector, tool_name: str, *,
+                  concept_id, account_id) -> dict:
+    """One scene's timed shots, rendered ONE AT A TIME through the SAME
+    per-shot entry point the Queue's approve uses (`generate_for_shot(...,
+    part=n)`, app/api.py `_render_timeline`), so every wall is per clip
+    exactly as it is there: the spend approval inside generate_video
+    (`*_SPEND_OK` for an unattended run), the daily cap before each call,
+    a generations row per attempt, the hold and its release. Each part's
+    length is its window fitted UP to the model (timeline.fit_seconds);
+    its prompt is the scene's continuity followed by that shot; its
+    anchor is its own still. The clip lands on the part (attach_part), and
+    when the LAST part lands the scene's media_url is shot 1's clip -- the
+    marker every reader means by "rendered".
+
+    ONE clip entry comes back for the scene, the shape the rest of the
+    graph reads (qc_clip, select_clip, _post_gate): `url` is shot 1's
+    file, `ok` only when every part rendered, `parts` the per-shot record.
+    Parts that already have a clip are skipped and the loop stops at the
+    first failure -- the Queue's rule, so a night that hits the cap on
+    shot 3 leaves a scene the morning's approve resumes rather than
+    re-buys. No provider failover for a timed scene: shots 1-2 on one
+    vendor and 3 on another is not a scene, and the Queue can still be
+    asked for the rest."""
+    from . import providers
+
+    tl = shot.get("timeline") or {}
+    parts = list(tl.get("parts") or [])
+    axis = None
+    try:
+        default = providers.platform_default(tool_name.lower())
+        if default:
+            axis = providers.model_options(*default).get("duration")
+    except Exception:                                       # noqa: BLE001
+        axis = None                       # fit_seconds falls back to the window
+    shot_n = shot.get("n", 1)
+    record = []
+    error = None
+    for part in parts:
+        if part.get("media_url"):
+            record.append({"n": part["n"], "ok": True, "url": None,
+                           "media_url": part["media_url"], "skipped": True})
+            continue
+        seconds = timeline.fit_seconds(axis, part.get("seconds"))
+        try:
+            result = connector.generate_for_shot(
+                concept_id, shot_n, db_path=None, part=part["n"],
+                account_id=account_id, duration=seconds) or {}
+        except Exception as e:                              # noqa: BLE001
+            result = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        entry = {"n": part["n"], "ok": bool(result.get("ok")),
+                 "url": result.get("path"), "media_url": result.get("media_url"),
+                 "seconds": seconds, "error": result.get("error")}
+        record.append(entry)
+        if not entry["ok"]:
+            done = sum(1 for r in record if r["ok"])
+            error = (f"shot {part['n']} of {len(parts)} failed: "
+                     f"{entry['error'] or 'render failed'} -- {done} of {len(parts)} "
+                     f"rendered; approve in the Queue to render the rest")
+            break
+    ok = error is None and bool(record) and all(r["ok"] for r in record)
+    first = record[0] if record else {}
+    return {**p, "ok": ok, "url": first.get("url") if ok else None,
+            "media_url": first.get("media_url") if ok else None,
+            "parts": record, "timed": True,
+            **({"error": error} if error else {})}
 
 
 def qc_clip(state: GenState) -> GenState:
