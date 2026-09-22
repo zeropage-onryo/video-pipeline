@@ -22,6 +22,16 @@ test('the local route is tried first, then the stored URL', () => {
   assert.deepEqual(sourcesFor('https://cdn.test/renders/k.png'), ['https://cdn.test/renders/k.png']);
 });
 
+test("the server's own thumbnail goes first, and refs stay the master (BACKLOG #0)", () => {
+  assert.deepEqual(
+    sourcesFor('https://pub-x.r2.dev/props/bike/b.jpg', { thumb: true, small: 'https://pub-x.r2.dev/t/1/props/bike/b.jpg' }),
+    ['https://pub-x.r2.dev/t/1/props/bike/b.jpg', '/props/bike/photo/b.jpg?thumb=1', '/props/bike/photo/b.jpg', 'https://pub-x.r2.dev/props/bike/b.jpg']);
+  // a local thumbnail rides the API base like any local route, and is not listed twice
+  assert.deepEqual(sourcesFor('/props/bike/photo/b.jpg', { thumb: true, base: 'https://api.test', small: '/props/bike/photo/b.jpg?thumb=1' }),
+    ['https://api.test/props/bike/photo/b.jpg?thumb=1', 'https://api.test/props/bike/photo/b.jpg']);
+  assert.deepEqual(sourcesFor('/refs/abc.jpg', { small: '' }), ['/refs/abc.jpg']);
+});
+
 test('the caption says the file and the shelf, never an invented source', () => {
   assert.equal(fileName('https://pub-x.r2.dev/props/bike/IMG%201.jpg'), 'IMG 1.jpg');
   assert.equal(sourceLabel('/props/bike/photo/b.jpg'), 'ASSET BANK · PROP · bike');

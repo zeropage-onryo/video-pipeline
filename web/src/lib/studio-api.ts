@@ -215,6 +215,9 @@ export type Concept = {
   blocked?: string;
   /** where each reference came from, parallel to `refs` (app/api.py _ref_sources) */
   ref_sources?: import("./refs").RefSource[];
+  /** the drawable size of each reference, parallel to `refs` (app/api.py
+   *  _ref_thumbs, BACKLOG #0). `refs` stays the master: refs[0] anchors the render. */
+  ref_thumbs?: string[];
   /** the prompt gate's own verdict (autonomy.gates_for_concepts), or null
    *  when no graph run ever ended on this concept -- never scored, NOT a
    *  pass. `passed` is what the gate said, not whether the run went on. */
@@ -237,6 +240,8 @@ export type TimelinePart = {
   text?: string | null;
   prompt?: string | null;
   refs?: string[] | null;
+  /** parallel to `refs`, the card rule (app/api.py _ref_thumbs) */
+  ref_thumbs?: string[] | null;
   reference_image?: string | null;
   media_url?: string | null;
 };

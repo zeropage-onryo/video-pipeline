@@ -67,14 +67,18 @@ function localRoute(ref: ParsedRef, thumb: boolean): string {
 
 /** Every URL worth trying for this picture, best first. `base` is the API
  *  origin ("" when the Next proxy serves the photo routes same-origin);
- *  `thumb` asks the photo route for its cached small JPEG first. */
-export function sourcesFor(url: string, opts: { thumb?: boolean; base?: string } = {}): string[] {
-  const { thumb = false, base = "" } = opts;
+ *  `thumb` asks the photo route for its cached small JPEG first; `small`
+ *  is the server's own thumbnail for it (the card payload's `ref_thumbs`,
+ *  parallel to `refs` -- BACKLOG #0) and goes before everything else, so
+ *  an R2 photo draws its 480px derivative instead of the master. */
+export function sourcesFor(url: string, opts: { thumb?: boolean; base?: string; small?: string } = {}): string[] {
+  const { thumb = false, base = "", small = "" } = opts;
   const ref = parseRef(url);
   const out: string[] = [];
   const push = (u: string) => {
     if (u && !out.includes(u)) out.push(u);
   };
+  if (small) push(small.startsWith("/") ? base + small : small);
   if (ref) {
     push(base + localRoute(ref, thumb));
     if (thumb && ref.kind !== "refs") push(base + localRoute(ref, false));
