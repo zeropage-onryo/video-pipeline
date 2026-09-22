@@ -231,6 +231,56 @@ def test_the_queue_count_agrees_with_the_listing_and_prices_nothing(tmp_db, monk
     assert priced == []
 
 
+def test_the_lean_queue_count_matches_the_listing_ungrounded_included(tmp_db):
+    """queue_count reads preprod.queue_candidates (only the columns the rule
+    needs) instead of building every card. It must still count exactly the
+    rows /queue/pending lists: parked-not-picked in, archived out, a scene
+    with a clip out, marked-shot out, ungrounded counted as blocked, and the
+    other brand out when a brand is asked for -- and it must not touch the
+    holds, prompt scores or bin sources the cards need."""
+    grounded = {"refs": ["/refs/a.jpg"]}
+
+    def scene(title, brand="antihero", **shot):
+        return preprod.save_concept(
+            {"title": title, "hook": "h", "logline": "l",
+             "shots": [{"n": 1, "prompt": "a long enough scene prompt " * 3, **shot}]},
+            brand=brand, dsn=tmp_db, account_id=None)
+
+    picked = scene("Picked", **grounded)
+    parked = scene("Parked", **grounded)
+    archived = scene("Archived", **grounded)
+    clipped = scene("Clipped", **grounded)
+    shot = scene("Shot", **grounded)
+    bare = scene("Bare")
+    other = scene("Other brand", brand="zeropage", **grounded)
+    idle = scene("Never picked", **grounded)
+    for cid in (picked, archived, clipped, shot, bare, other):
+        preprod.set_picked(cid, True, dsn=tmp_db, account_id=None)
+    preprod.set_shot_parked(parked, 1, "night", dsn=tmp_db, account_id=None)
+    preprod.set_archived(archived, True, dsn=tmp_db, account_id=None)
+    preprod.set_shot_media_url(clipped, 1, "https://x/clip.mp4", dsn=tmp_db, account_id=None)
+    preprod.mark_shot(shot, True, dsn=tmp_db, account_id=None)
+    assert idle  # written, never picked or parked: not waiting
+
+    for brand in (None, "antihero", "zeropage"):
+        q = f"?brand={brand}" if brand else ""
+        listing = client.get("/api/queue/pending" + q).json()
+        touched = []
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(api_mod.autonomy, "gates_for_concepts",
+                       lambda *a, **k: touched.append("gates"))
+            mp.setattr(api_mod.scout, "sources_for_refs",
+                       lambda *a, **k: touched.append("sources"))
+            counted = client.get("/api/queue/count" + q).json()
+        assert touched == []
+        assert counted["spendable"] == listing["spendable"], brand
+        assert counted["blocked"] == sum(1 for c in listing["items"] if c["blocked"]), brand
+        assert counted["spendable"] + counted["blocked"] == len(listing["items"]), brand
+
+    counted = client.get("/api/queue/count?brand=antihero").json()
+    assert counted == {"spendable": 2, "blocked": 1}   # picked + parked; bare
+
+
 def test_the_card_says_where_each_reference_came_from(tmp_db):
     """`ref_sources` is parallel to `refs` (which is untouched -- its order
     anchors the render): a scouted frame carries the page it was taken

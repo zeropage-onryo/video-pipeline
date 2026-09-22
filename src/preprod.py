@@ -648,6 +648,38 @@ def list_concepts(limit: int = 100, dsn: Optional[str] = None, *,
                 for r in rows]
 
 
+def queue_candidates(limit: int = 100, dsn: Optional[str] = None, *,
+                     account_id: int, brand: Optional[str] = None) -> list[dict[str, Any]]:
+    """The rows the Queue COUNT needs, and nothing it does not (2026-09-21).
+
+    The rail's badge polls this. It used to go through list_concepts --
+    `SELECT *` over the newest 100 concepts, every column, plus holds,
+    prompt scores and bin sources for each -- about 1 MB per poll, which
+    was most of the Supabase egress on the free plan. This reads the SAME
+    window (the newest `limit` for this account and brand, exactly as
+    list_concepts scopes it, so the badge and the Queue page count the
+    same rows) but returns only the columns the waiting predicate reads,
+    and pre-filters in SQL to rows that could possibly be waiting: not
+    archived, and picked or carrying a `parked_at` on the shot. The
+    LIKE is only a pre-filter -- the exact rule is still applied in
+    Python by the caller, on the same parsed shape _concept_row makes."""
+    scoped = brand if brand in BRANDS else None
+    window = ("SELECT id FROM shoot_concepts WHERE account_id IS NOT DISTINCT FROM %s "
+              + ("AND brand = %s " if scoped else "")
+              + "ORDER BY id DESC LIMIT %s")
+    params = (account_id, scoped, limit) if scoped else (account_id, limit)
+    with connect(dsn) as conn:
+        rows = conn.execute(
+            "SELECT id, account_id, picked_at, archived_at, shot_done, shots_json "
+            "FROM shoot_concepts WHERE id IN (" + window + ") "
+            "AND archived_at IS NULL "
+            "AND (picked_at IS NOT NULL OR shots_json LIKE '%%\"parked_at\"%%') "
+            "ORDER BY id DESC",
+            params,
+        ).fetchall()
+        return [_concept_row(r, conn, locations=[]) for r in rows]
+
+
 def save_concept_ideas(
     ideas: list,
     brand: str,

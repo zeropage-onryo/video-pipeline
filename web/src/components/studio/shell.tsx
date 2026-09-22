@@ -151,12 +151,26 @@ export function StudioShell({ children }: { children: ReactNode }) {
     // not before /api/me has answered: an unbranded count would be asked,
     // drawn, and replaced a beat later
     if (!me) return;
+    // Poll only while this tab is visible (2026-09-21): every background
+    // tab polling once a minute was a steady drain on the database's
+    // egress for a number nobody was looking at. Coming back to the tab
+    // refreshes at once, so the badge is never stale when it is seen;
+    // your own picks, decisions and finished jobs still fire QUEUE_EVENT.
+    const visible = () => document.visibilityState === "visible";
+    const tick = () => {
+      if (visible()) refreshBadge();
+    };
+    const onVisibility = () => {
+      if (visible()) refreshBadge();
+    };
     refreshBadge();
-    const timer = setInterval(refreshBadge, 60_000);
+    const timer = setInterval(tick, 60_000);
     window.addEventListener(QUEUE_EVENT, refreshBadge);
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
       clearInterval(timer);
       window.removeEventListener(QUEUE_EVENT, refreshBadge);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [refreshBadge, me]);
 
