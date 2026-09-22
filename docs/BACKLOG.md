@@ -1096,3 +1096,15 @@ badge sends `?brand=` too, as `shared.js` always did. Verified in a browser both
 throwaway schema (1 Zero Page scene, 2 Antihero): `pending?brand=` and `count?brand=` follow the
 click, badge 1 <-> 2. Guard: `test_api_me_follows_the_brand_switch_like_the_shell_does`.
 
+
+## 20. The studio's API and media traffic proxies through Vercel  (found 2026-09-22, blocked on the domain)
+`web/next.config.ts`'s rewrites send every `/api`, `/auth` and photo request
+browser → Vercel edge → Fly → Vercel → browser, and the Queue page polls the job
+list every 2.5 s through it. That is by design — the session cookie stays
+first-party, the 2026-09-14 lesson — and it is also Vercel's Edge Requests,
+Fast Origin Transfer and Fast Data Transfer meters. The way out is one
+registrable domain for both hosts (`zeropage.studio` / `api.zeropage.studio`)
+and a cookie scoped to it. `docs/tasks/task-api-domain-move.md` is the plan,
+down to the files and the dashboard settings; it starts when Mike owns the
+domain. The other leak found the same day — every monorepo push building
+`zpf-web` — is fixed by `web/vercel.json`'s `ignoreCommand`.

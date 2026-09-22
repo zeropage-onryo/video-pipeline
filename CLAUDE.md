@@ -1159,7 +1159,14 @@ is yours, in Resolve, by hand.
   Vercel (2026-09-14, Mike's call):** project `zpf-web`, git-connected, root directory
   `web`, `API_UPSTREAM` + `NEXT_PUBLIC_AUTH_ORIGIN` set to the API origin and no
   `NEXT_PUBLIC_API_URL`, live at `zpf-web.vercel.app`, which the API's `STUDIO_URL`
-  names; `web/README.md` has the recipe. The Fly app `zeropage-web` is scaled to zero,
+  names; `web/README.md` has the recipe. **A push that touches nothing under `web/` no
+  longer builds it** (2026-09-22, `web/vercel.json`'s `ignoreCommand`; the README says how
+  it decides and why it can only over-build). The studio's `/api`, `/auth` and media
+  traffic still proxies through Vercel's edge ON PURPOSE -- that is what keeps the session
+  cookie first-party (the 2026-09-14 note above) -- and every poll and every photo is
+  therefore a Vercel edge request plus origin transfer; `docs/tasks/task-api-domain-move.md`
+  is the plan to take it direct on `api.zeropage.studio`, blocked on the domain and not
+  started. The Fly app `zeropage-web` is scaled to zero,
   not destroyed. The API stays on Fly. `frontend/` is
   the Vite + React composer that preceded it, kept as received; its `/api/brains`,
   `/api/scene-lengths`, `/api/render-choices`, `/api/creative-guide` and the guide mode

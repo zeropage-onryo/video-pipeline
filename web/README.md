@@ -64,7 +64,20 @@ Three settings, the same on either host, all fixed at BUILD time:
 3. Environment Variables: the two from the table, for Production and
    Preview. Do not add `NEXT_PUBLIC_API_URL`.
 4. Deploy. Every later push to `main` deploys itself; branches get
-   preview URLs.
+   preview URLs. **A push that changes nothing under `web/` is skipped**
+   (`web/vercel.json`'s `ignoreCommand`, 2026-09-22): before it, every
+   docs/tests/adapter commit in the monorepo was a full `next build` and a
+   new deployment -- 51 of the 105 commits in the five days before the
+   file landed. The command diffs `VERCEL_GIT_PREVIOUS_SHA` (the last
+   deployment that actually built, so a push of several commits is judged
+   as a whole) against `HEAD`, falling back to `HEAD^`; the `:/web`
+   pathspec is anchored at the repo root, so it reads the same whether
+   Vercel runs it inside `web/` or at the root. Any git error -- a SHA
+   outside the shallow clone, a first commit -- is a non-zero exit and
+   the build proceeds: it can over-build, never under-build. Exit 0 is
+   the skip. The file is only read because Root Directory is `web`; move
+   the root and the setting moves to the dashboard (Settings -> Git ->
+   Ignored Build Step) with the same command.
 5. On the API, once the hostname is known (e.g. `zpf-web.vercel.app`):
    it must be in `FRONTEND_ORIGINS` (preview hosts match
    `FRONTEND_ORIGIN_REGEX`), and `STUDIO_URL` should point at it so `/ui`,
