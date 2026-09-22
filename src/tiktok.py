@@ -295,7 +295,17 @@ def refresh_metrics_for_video(video: dict, token=None, db_path=None,
         "shares": stats.get("share_count"),
     }
     kwargs = {"dsn": db_path} if db_path is not None else {}
-    db.record_metrics(video["id"], **numbers, **kwargs, account_id=account_id)
+    # THE OWNER IS THE ROW'S (2026-09-22). Every caller -- the nightly sweep,
+    # the app's refresh routes -- passed no account, record_metrics scopes
+    # on it, and an owned video was "not found" at the write: a ValueError
+    # out of a function whose whole contract is never raising, and no
+    # snapshot for any owned video anywhere. The video dict comes off
+    # `SELECT *`, so it carries account_id; that is the truth about it.
+    owner = account_id if account_id is not None else video.get("account_id")
+    try:
+        db.record_metrics(video["id"], **numbers, **kwargs, account_id=owner)
+    except Exception as e:                                  # noqa: BLE001
+        return {"ok": False, "error": f"metrics not recorded: {e}"}
     return {"ok": True, **numbers}
 
 
