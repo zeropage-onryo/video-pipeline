@@ -27,6 +27,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
+    JSONResponse,
     PlainTextResponse,
     RedirectResponse,
     Response,
@@ -66,7 +67,7 @@ from src import (
     settings as settings_mod,
 )
 
-from . import api, auth, jobs, mcp_mount, seo
+from . import api, auth, jobs, mcp_auth, mcp_mount, seo
 from . import billing as billing_routes
 from .sparkline import render_sparkline
 
@@ -302,6 +303,18 @@ app.mount("/refs", RefsStaticFiles(directory=str(UPLOAD_REFS_DIR)), name="refs")
 # browsers holding a login. Mounted only when build() returned an app.
 if MCP_APP is not None:
     app.mount(mcp_mount.MOUNT_PATH, MCP_APP, name="mcp")
+
+    # The OAuth discovery document (RFC 9728), and the reason it is
+    # registered HERE rather than on the mount: a client reads it BEFORE
+    # it has a token, so it cannot live behind the bearer guard -- and it
+    # must not exist at all on a deployment with no MCP surface, which is
+    # the `dev` router's omission-not-a-second-check rule. Both paths are
+    # served: the spec puts the resource's path after the well-known
+    # segment, and clients in the wild still ask for the bare one.
+    @app.get(mcp_auth.METADATA_PATH)
+    @app.get(f"{mcp_auth.METADATA_PATH}{mcp_mount.MOUNT_PATH}")
+    def oauth_protected_resource():
+        return JSONResponse(mcp_auth.protected_resource_metadata())
 app.include_router(api.router, dependencies=[Depends(auth.require_user_api)])
 app.include_router(auth.router)
 # Stripe's webhook: outside /api, because Stripe cannot sign in -- its

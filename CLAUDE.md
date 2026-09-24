@@ -1340,6 +1340,41 @@ is yours, in Resolve, by hand.
   job registry rather than grow a second one; the rule exists so the LIBRARY layer imports
   without the web app, and a process entry point is not that. `app/jobs.py` is stdlib-only, so
   it costs nothing.
+  **TWO DOORS SINCE 2026-09-24, and which one you came through decides whose
+  board you read** (`app/mcp_auth.py`, `app/mcp_mount.guarded`). The static
+  `ZEROPAGE_MCP_TOKEN` is the OPERATOR's key: compared with
+  `hmac.compare_digest` before the MCP app is entered, acting as the bootstrap
+  account exactly as it always did -- Claude Code, the research node and `ops/`
+  are untouched. Anything else is verified as a **Supabase access token**:
+  Supabase's own OAuth 2.1 server is the authorization server (it does PKCE,
+  consent and the dynamic client registration the claude.ai connector requires),
+  and this app is only the RESOURCE server. So what was built here is small and
+  all of it is refusal: `/.well-known/oauth-protected-resource` (+ the
+  `/mcp`-suffixed path RFC 9728 actually specifies), a `WWW-Authenticate` on the
+  401 naming that document (a 401 without it is a dead end for a connector), and
+  `account_for_token`, which resolves the caller to ONE account by the SAME rule
+  `auth.current_account_id` uses -- the tenant is the user's OLDEST membership,
+  `min(id)`, not the brand cookie. Two doors onto one board must not disagree
+  about whose board it is. A verified token with NO membership is 403, never a
+  fall-through: falling through is Mike's board.
+  **The caller reaches the tool through `mcp_server.CALLER_ACCOUNT`**, a
+  ContextVar set by the ASGI guard and reset in a `finally`. It lives in `src/`
+  because `src/` never imports `app/` and `_account` is the one place that
+  decides whose rows a tool reads. That the value survives the transport was
+  measured, not assumed: in STATELESS mode the tool body runs in a task that
+  inherits the request's context (a stateful session would not promise that --
+  one more reason the mount is stateless). `_account`'s order is explicit
+  `account_id` (the Guide) -> `CALLER_ACCOUNT` (a signed-in caller) -> bootstrap
+  (the operator's key), and the end-to-end test drives the REAL streamable-HTTP
+  app with two callers and asserts each resolved its own id. Deleting the
+  ContextVar branch makes exactly that test fail, which is the point of it.
+  **The audience is checked, twice over**: a token minted for another resource
+  server must not work here, so `verify` accepts only `aud` = this server's
+  canonical URI (`ZEROPAGE_MCP_RESOURCE`, set in fly.toml because `SITE_URL` is
+  deliberately unset there) or the ordinary session audience. The metadata
+  document is built off that same resource URI rather than `SITE_URL`, or the
+  deployed document would publish a localhost resource and discovery would fail
+  with nothing to read.
   `.claude/skills/idea-agent/` is the agent that drives these tools — and its first move is
   reading the board, not generating: a run that adds four concepts to eleven unreviewed ones
   buried the decision that was already the bottleneck.

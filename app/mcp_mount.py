@@ -66,22 +66,57 @@ def token() -> str:
     return os.environ.get(TOKEN_ENV, "")
 
 
-def _unauthorized(detail: str):
+def _unauthorized(detail: str, error: str = "unauthorized"):
     from starlette.responses import JSONResponse
 
-    return JSONResponse({"error": "unauthorized", "detail": detail},
+    from . import mcp_auth
+
+    # The challenge names the metadata document when there is an
+    # authorization server to discover; a bare "Bearer" otherwise, which
+    # is the honest answer on a deployment with no Supabase configured.
+    challenge = mcp_auth.challenge() if mcp_auth.configured() else "Bearer"
+    return JSONResponse({"error": error, "detail": detail},
                         status_code=401,
-                        headers={"WWW-Authenticate": "Bearer"})
+                        headers={"WWW-Authenticate": challenge})
 
 
-def guarded(app, secret: str):
-    """Wrap an ASGI app so every request must carry the bearer token.
+def _forbidden(detail: str):
+    from starlette.responses import JSONResponse
+
+    return JSONResponse({"error": "no_account", "detail": detail}, status_code=403)
+
+
+def guarded(app, secret: str, resolve=None):
+    """Wrap an ASGI app so every request names a caller.
 
     A plain ASGI wrapper rather than middleware on the parent app: the
     check must not apply to /ui or /api (which have their own cookie
     session), and it must apply to every method and path under the
     mount, including the ones the transport adds itself.
+
+    TWO DOORS, and which one a caller came through decides whose board
+    they read (see app/mcp_auth.py):
+
+    - The static token -- the operator's own key, compared with
+      `hmac.compare_digest` rather than `==`, before the MCP app is ever
+      entered, so an unauthenticated caller cannot open a session or
+      enumerate the tool list. It acts as the bootstrap account, exactly
+      as it did before OAuth existed.
+    - Anything else is offered to `resolve`, which verifies it as a
+      Supabase access token and answers with the caller's OWN account
+      id. That id is put on `mcp_server.CALLER_ACCOUNT` for the length of
+      this request and reset in a `finally` -- a leaked value here is
+      one caller reading another's board, so it is never left set.
+
+    `resolve` is injected (defaulting to `mcp_auth.account_for_token`)
+    for the reason the whole mount is injected: this module is the seam
+    where app-layer capability meets `src/`, and a test that has to mint
+    a real Supabase JWT to exercise the guard is a test nobody writes.
     """
+    if resolve is None:
+        from .mcp_auth import account_for_token as resolve
+
+    from src import mcp_server
 
     async def wrapper(scope, receive, send):
         if scope["type"] != "http":
@@ -93,10 +128,26 @@ def guarded(app, secret: str):
                 break
         prefix = "Bearer "
         supplied = header[len(prefix):] if header.startswith(prefix) else ""
-        if not supplied or not hmac.compare_digest(supplied, secret):
+        if not supplied:
             response = _unauthorized("send Authorization: Bearer <token>")
             return await response(scope, receive, send)
-        return await app(scope, receive, send)
+        if hmac.compare_digest(supplied, secret):
+            # The operator's own key: no caller is named, so
+            # mcp_server._account falls through to the bootstrap account.
+            return await app(scope, receive, send)
+        account_id, reason = resolve(supplied)
+        if reason == "no_account":
+            response = _forbidden(
+                "this sign-in has no account yet -- ask to be invited")
+            return await response(scope, receive, send)
+        if account_id is None:
+            response = _unauthorized("token not accepted", error="invalid_token")
+            return await response(scope, receive, send)
+        token = mcp_server.CALLER_ACCOUNT.set(account_id)
+        try:
+            return await app(scope, receive, send)
+        finally:
+            mcp_server.CALLER_ACCOUNT.reset(token)
 
     return wrapper
 
