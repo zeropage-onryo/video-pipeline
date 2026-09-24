@@ -101,7 +101,7 @@ def guarded(app, secret: str):
     return wrapper
 
 
-def build(path=None, start_job=None, job_status=None):
+def build(dsn=None, start_job=None, job_status=None):
     """The (asgi_app, session_manager) pair, or (None, None) when MCP is
     off or misconfigured.
 
@@ -126,7 +126,7 @@ def build(path=None, start_job=None, job_status=None):
 
     try:
         server = mcp_server.build_server(
-            path=path,
+            dsn=dsn,
             start_job=start_job,
             job_status=job_status,
         )

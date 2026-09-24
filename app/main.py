@@ -162,7 +162,7 @@ def seed_gold_standard():
 # served open when ZEROPAGE_MCP_TOKEN is unset -- see app/mcp_mount.py.
 # jobs.start/jobs.get are injected because src/ never imports app/.
 MCP_APP, MCP_SESSIONS = mcp_mount.build(
-    path=None, start_job=jobs.start, job_status=jobs.get
+    dsn=None, start_job=jobs.start, job_status=jobs.get
 )
 
 
