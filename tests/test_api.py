@@ -262,9 +262,22 @@ def test_the_lean_queue_count_matches_the_listing_ungrounded_included(tmp_db):
     preprod.mark_shot(shot, True, dsn=tmp_db, account_id=None)
     assert idle  # written, never picked or parked: not waiting
 
+    def old_path(brand):
+        # the listing as it was built before 2026-09-25: the whole board,
+        # the waiting rule, the reference gate, spendable first
+        rows = [c for c in preprod.list_concepts(account_id=None, brand=brand)
+                if api_mod._is_waiting(c)]
+        return [c["id"] for c in sorted(rows, key=lambda c: bool(preprod.reference_gate(c)))]
+
     for brand in (None, "antihero", "zeropage"):
         q = f"?brand={brand}" if brand else ""
-        listing = client.get("/api/queue/pending" + q).json()
+        expected = old_path(brand)
+        with pytest.MonkeyPatch.context() as mp:
+            # the listing picks its rows off the lean window, never the board
+            mp.setattr(api_mod.preprod, "list_concepts",
+                       lambda *a, **k: pytest.fail("the Queue listing read the whole board"))
+            listing = client.get("/api/queue/pending" + q).json()
+        assert [c["id"] for c in listing["items"]] == expected, brand
         touched = []
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(api_mod.autonomy, "gates_for_concepts",
@@ -279,6 +292,7 @@ def test_the_lean_queue_count_matches_the_listing_ungrounded_included(tmp_db):
 
     counted = client.get("/api/queue/count?brand=antihero").json()
     assert counted == {"spendable": 2, "blocked": 1}   # picked + parked; bare
+    assert expected  # the old path listed something to compare against
 
 
 def test_the_card_says_where_each_reference_came_from(tmp_db):

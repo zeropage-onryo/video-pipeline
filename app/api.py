@@ -2374,13 +2374,24 @@ def _waiting(account_id: Optional[int], brand: Optional[str],
     on a render) never sees one; `queue_approve` still asks
     `reference_gate` itself and refuses; ops/render_queue.py is untouched.
     Listing a scene is not a way to spend on it."""
-    # scoped in SQL, see above
+    # WHICH rows first, then the rows (2026-09-25). This used to read the
+    # whole board -- list_concepts' SELECT * over the newest 100, plus the
+    # holds, scores and bin sources of every one -- to keep a handful:
+    # ~0.9 MB of database egress per Queue visit. The window and the rule
+    # are queue_count's (preprod.queue_candidates + the one `_is_waiting`),
+    # so the badge and the page still count the same rows; only the cards
+    # that survive are loaded whole, and only they are batched for gates
+    # and sources. Scoped in SQL by account and brand, see above.
     out = []
-    concepts = preprod.list_concepts(account_id=account_id, brand=brand)
+    ids = [c["id"] for c in preprod.queue_candidates(account_id=account_id, brand=brand)
+           if _is_waiting(c)]
+    concepts = preprod.get_concepts(ids, account_id=account_id)
     gates = autonomy.gates_for_concepts([c["id"] for c in concepts],
                                         account_id=account_id)
     sources = scout.sources_for_refs(_bin_filenames(concepts))
     for concept in concepts:
+        # asked again on the whole row: it may have moved between the two
+        # reads, and this is the copy the card is built from
         if not _is_waiting(concept):
             continue
         card = _concept_card(concept, gates=gates, sources=sources)

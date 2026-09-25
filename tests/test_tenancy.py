@@ -216,6 +216,18 @@ def test_a_list_returns_only_your_own(two_accounts):
     assert [c["title"] for c in preprod.list_concepts(dsn=path, account_id=b)] == ["B concept"]
 
 
+def test_many_by_id_returns_only_your_own(two_accounts):
+    """preprod.get_concepts (the Queue listing's second read, 2026-09-25):
+    another account's id is simply absent, exactly like an id that does
+    not exist, and each row parses exactly as get_concept parses it."""
+    path, a, b = two_accounts
+    mine = preprod.list_concepts(dsn=path, account_id=a)[0]["id"]
+    theirs = preprod.list_concepts(dsn=path, account_id=b)[0]["id"]
+    got = preprod.get_concepts([mine, theirs, 999999], dsn=path, account_id=a)
+    assert got == [preprod.get_concept(mine, dsn=path, account_id=a)]
+    assert preprod.get_concepts([theirs], dsn=path, account_id=a) == []
+    assert preprod.get_concepts([], dsn=path, account_id=a) == []
+
 def test_fetching_someone_elses_concept_by_id_is_indistinguishable_from_missing(two_accounts):
     """Ids are sequential integers. If "not yours" answered differently
     from "no such row", counting from 1 would map the whole table."""

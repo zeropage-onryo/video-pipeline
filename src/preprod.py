@@ -630,22 +630,51 @@ def list_concepts(limit: int = 100, dsn: Optional[str] = None, *,
             + "ORDER BY id DESC LIMIT %s",
             (account_id, scoped, limit) if scoped else (account_id, limit),
         ).fetchall()
-        # The board and Queue read hundreds of rows. Hydrate locations in
-        # one round trip, including an explicit empty list for scenes without
-        # rooms, instead of making _concept_row query once per concept.
-        locations_by_concept: dict[int, list] = {r["id"]: [] for r in rows}
-        if rows:
-            for location in conn.execute(
-                "SELECT cl.concept_id, l.id, l.name FROM locations l "
-                "JOIN concept_locations cl ON cl.location_id = l.id "
-                "WHERE cl.concept_id = ANY(%s) "
-                "AND l.account_id IS NOT DISTINCT FROM %s ORDER BY l.name",
-                (list(locations_by_concept), account_id),
-            ):
-                locations_by_concept[location["concept_id"]].append(
-                    {"id": location["id"], "name": location["name"]})
-        return [_concept_row(r, conn, locations=locations_by_concept[r["id"]])
-                for r in rows]
+        return _concept_rows(rows, conn, account_id)
+
+
+def _concept_rows(rows, conn, account_id) -> list[dict[str, Any]]:
+    """Parse many rows, hydrating their locations in ONE round trip.
+
+    The board and Queue read hundreds of rows. Hydrate locations in one
+    round trip, including an explicit empty list for scenes without
+    rooms, instead of making _concept_row query once per concept."""
+    locations_by_concept: dict[int, list] = {r["id"]: [] for r in rows}
+    if rows:
+        for location in conn.execute(
+            "SELECT cl.concept_id, l.id, l.name FROM locations l "
+            "JOIN concept_locations cl ON cl.location_id = l.id "
+            "WHERE cl.concept_id = ANY(%s) "
+            "AND l.account_id IS NOT DISTINCT FROM %s ORDER BY l.name",
+            (list(locations_by_concept), account_id),
+        ):
+            locations_by_concept[location["concept_id"]].append(
+                {"id": location["id"], "name": location["name"]})
+    return [_concept_row(r, conn, locations=locations_by_concept[r["id"]])
+            for r in rows]
+
+
+def get_concepts(ids, dsn: Optional[str] = None, *,
+                 account_id: int) -> list[dict[str, Any]]:
+    """Several concepts by id, the ones this account owns, newest first
+    (2026-09-25).
+
+    For a caller that has already decided WHICH rows it needs off a lean
+    query -- the Queue listing picks its ids through queue_candidates and
+    the shared waiting rule -- and so must not pay for the whole board
+    to build a handful of cards. Same ownership rule as get_concept: an
+    id that is someone else's is simply absent, exactly like one that
+    does not exist, and `account_id` has no default."""
+    wanted = sorted({int(i) for i in ids or [] if i is not None})
+    if not wanted:
+        return []
+    with connect(dsn) as conn:
+        rows = conn.execute(
+            "SELECT * FROM shoot_concepts WHERE id = ANY(%s) "
+            "AND account_id IS NOT DISTINCT FROM %s ORDER BY id DESC",
+            (wanted, account_id),
+        ).fetchall()
+        return _concept_rows(rows, conn, account_id)
 
 
 def queue_candidates(limit: int = 100, dsn: Optional[str] = None, *,
