@@ -322,12 +322,63 @@ app.include_router(auth.router)
 app.include_router(billing_routes.webhook)
 
 
+def signin_showcase() -> list[dict]:
+    """The sign-in page's left panel: a few clips, one after another, each
+    with a label under its progress bar (Higgsfield's shape).
+    `SIGNIN_SHOWCASE` is a JSON list of {"label", "video"|"image",
+    "poster"?}; unset or unreadable falls back to SIGNIN_SHOWCASE_DEFAULT,
+    and an empty list shows the gradient panel alone. Only http(s) and
+    site-relative sources are kept."""
+    import json
+    raw = os.environ.get("SIGNIN_SHOWCASE")
+    try:
+        items = json.loads(raw) if raw else SIGNIN_SHOWCASE_DEFAULT
+    except ValueError:
+        items = SIGNIN_SHOWCASE_DEFAULT
+    ok = lambda u: isinstance(u, str) and (u.startswith(("https://", "http://", "/")))  # noqa: E731
+    out = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        src = {k: item[k] for k in ("video", "image", "poster") if ok(item.get(k))}
+        if src.get("video") or src.get("image"):
+            out.append({"label": str(item.get("label") or "")[:40], **src})
+    return out[:5]
+
+
+# Real studio output, the same R2 keyframes the landing page shows
+# (web/src/content/landing-media.ts), under the landing hero's four steps
+# (hero-media.ts HERO_STEPS) -- so the door looks like the site the person
+# just left, and never shows stock or a mock-up.
+_R2_NANO = "https://pub-62d6d70ed50d44449d464cd43245b69d.r2.dev/renders/nano"
+SIGNIN_SHOWCASE_DEFAULT: list[dict] = [
+    {"label": "Bring a spark", "image": f"{_R2_NANO}/c361-20260911-161358.png"},
+    {"label": "Write the scene", "image": f"{_R2_NANO}/c351-20260910-135712.png"},
+    {"label": "Pick the frame", "image": f"{_R2_NANO}/c353-20260909-181442.png"},
+    {"label": "Render the clip", "image": f"{_R2_NANO}/c348-20260908-073120.png"},
+]
+
+
+def _site_origin(url: Optional[str]) -> Optional[str]:
+    """scheme://host of a URL, or None."""
+    from urllib.parse import urlsplit
+    if not url:
+        return None
+    parts = urlsplit(url)
+    return f"{parts.scheme}://{parts.netloc}" if parts.scheme and parts.netloc else None
+
+
 @app.get("/signin")
 def signin(request: Request, error: Optional[str] = None,
            mode: Optional[str] = None, email: Optional[str] = None,
-           next: Optional[str] = None):
-    """The sign-in screen: Google + Discord + email/password. Already
-    signed in -> straight to the shell.
+           next: Optional[str] = None, step: Optional[str] = None,
+           open: Optional[str] = None):
+    """The one door (2026-09-24, InVideo's shape): Google / Discord /
+    Apple, or an email that gets a one-time code. Logging in and signing
+    up are the same form -- `mode=signup` only changes the heading -- and
+    `step=code` is the second screen of the email door. Email+password
+    survives behind "Use a password instead". Already signed in ->
+    straight to the shell.
 
     `next` lets a trusted external frontend (FRONTEND_ORIGINS) ask to be
     returned to itself after sign-in: stashed in the starlette session so
@@ -338,6 +389,9 @@ def signin(request: Request, error: Optional[str] = None,
         request.session["post_login_redirect"] = next
     user = auth.current_user(request)
     if user:
+        # somebody who signed in while the door was invite-only has a
+        # session and no workspace; walking through it now makes one
+        auth._provision(user["id"], user.get("email"), user.get("display_name"))
         # already signed in HERE; a trusted front end still needs the
         # session on its own origin (auth.handoff_redirect says why)
         destination = auth._post_login_redirect(request)
@@ -348,7 +402,16 @@ def signin(request: Request, error: Optional[str] = None,
     return templates.TemplateResponse(
         request, "signin.html",
         {"error": error, "mode": mode if mode in ("signin", "signup") else "signin",
-         "email": email,
+         "email": email, "step": "code" if step == "code" and email else "start",
+         # the terms and privacy pages live on the public site (web/), the
+         # origin STUDIO_URL names; no front end, no legal line
+         "site_url": _site_origin(auth.studio_url()),
+         "open": open if open in ("email", "password") else None,
+         # the promo row ("Sign up & get N free credits") shows only when a
+         # welcome grant is actually configured -- never a promise the
+         # ledger does not keep
+         "signup_credits": accounts_mod.signup_credits() if accounts_mod.open_signup() else 0,
+         "showcase": signin_showcase(),
          # live key presence, the /api/capabilities rule applied to the
          # modal: a provider button only renders when it can actually work
          "providers": auth.providers_available()})
@@ -362,6 +425,7 @@ def ui_accounts(request: Request):
     user = auth.current_user(request)
     if user is None:
         return RedirectResponse("/signin", status_code=303)
+    auth._provision(user["id"], user.get("email"), user.get("display_name"))
     member_of = accounts_mod.memberships(user["id"])
     return templates.TemplateResponse(
         request, "accounts.html", {"user": user, "member_of": member_of})

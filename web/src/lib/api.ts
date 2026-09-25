@@ -50,7 +50,10 @@ export async function apiFetch<T>(
   return text ? (JSON.parse(text) as T) : (undefined as T);
 }
 
-export function goToSignIn() {
+// `mode: "signup"` only changes the door's heading ("Create your account");
+// logging in and signing up are the same form since 2026-09-24 -- the
+// first pass through it makes the person's workspace (InVideo's shape).
+export function goToSignIn(mode?: "signup") {
   if (typeof window !== "undefined") {
     // Full navigation on purpose -- this leaves the Next.js app entirely
     // for the API's own origin (a different domain in production), not
@@ -59,7 +62,8 @@ export function goToSignIn() {
     // the API honours it only for an origin in its FRONTEND_ORIGINS.
     const next = encodeURIComponent(`${window.location.origin}/studio`);
     // eslint-disable-next-line @next/next/no-location-assign-relative-destination
-    window.location.href = `${AUTH_ORIGIN}/signin?next=${next}`;
+    const which = mode === "signup" ? "&mode=signup" : "";
+    window.location.href = `${AUTH_ORIGIN}/signin?next=${next}${which}`;
   }
 }
 

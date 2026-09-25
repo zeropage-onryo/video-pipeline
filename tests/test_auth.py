@@ -286,14 +286,14 @@ def test_ui_without_session_redirects_to_signin(clean_slate):
 
 def test_signin_page_shows_the_providers_supabase_has(clean_slate, monkeypatch):
     """Provider buttons follow SUPABASE_PROVIDERS -- what is switched on
-    in the dashboard, which the app cannot read. Email/password is
-    always there."""
+    in the dashboard, which the app cannot read. The email door (a
+    one-time code) and the password fallback are always there."""
     monkeypatch.setenv("SUPABASE_PROVIDERS", "google")
     page = client.get("/signin")
     assert "Continue with Google" in page.text
     assert "Continue with Discord" not in page.text
+    assert 'action="/auth/email"' in page.text
     assert 'action="/auth/login"' in page.text
-    assert 'action="/auth/signup"' in page.text
     assert 'type="password"' in page.text
 
 

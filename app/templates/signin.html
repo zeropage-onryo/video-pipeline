@@ -4,106 +4,243 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>ZPF / Sign in</title>
+<title>{% if step == 'code' %}Check your email{% else %}Welcome to Zero Page{% endif %}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@300;400;500;600&family=Inter:wght@300;400;500&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/zpf/zpf.css">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Archivo+Narrow:wght@700&display=swap" rel="stylesheet">
 <style>
-/* The sign-in modal: the reference screenshot's rounded-modal-on-blurred-
-   backdrop, translated into this shell's glass/panel system. One page,
-   one card, nothing else competes with it. */
-.authwrap{position:relative;z-index:1;min-height:100vh;display:grid;place-items:center;padding:24px}
-.authcard{width:min(400px,94vw);padding:34px 32px 28px}
-.authcard h1{font-family:var(--display);text-transform:uppercase;font-weight:500;
-  letter-spacing:.06em;font-size:24px;margin:0 0 6px}
-.authsub{color:var(--dim);font-size:13px;margin:0 0 22px}
-.oauthbtn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;
-  padding:12px;margin-bottom:10px;font-family:var(--body);font-size:13.5px;color:var(--text);
-  background:rgb(255 255 255 / .05);border:1px solid var(--line);border-radius:var(--rp);
-  cursor:pointer;text-decoration:none;transition:border-color var(--t)}
-.oauthbtn:hover{border-color:var(--line-hi)}
-.oauthbtn svg{width:17px;height:17px;flex:none}
-.oauthbtn.discord svg{fill:#5865F2}
-.oauthbtn.apple svg{fill:#fff}
-.authdiv{display:flex;align-items:center;gap:12px;margin:18px 0 14px;color:var(--dimmer);
-  font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase}
-.authdiv::before,.authdiv::after{content:"";flex:1;height:1px;background:var(--line)}
-.authform{display:grid;gap:10px}
-.authform input{background:rgb(255 255 255 / .04);border:1px solid var(--line);
-  border-radius:var(--rp);color:var(--text);font-family:var(--body);font-size:13.5px;
-  padding:12px 16px;width:100%}
-.authform input:focus{outline:0;border-color:var(--line-hi)}
-.autherr{background:var(--signal-soft);border:1px solid rgb(228 0 43 / .35);
-  border-radius:var(--r1);color:var(--text);font-size:12.5px;padding:10px 13px;margin-bottom:14px}
-.authswap{margin-top:18px;text-align:center;font-size:12.5px;color:var(--dim)}
-.authswap a{color:var(--text);cursor:pointer;text-decoration:underline;text-underline-offset:3px}
-.authfoot{margin-top:26px;text-align:center}
-.authcard .go{width:100%;padding:13px}
-[data-mode="signin"] .only-signup{display:none}
-[data-mode="signup"] .only-signin{display:none}
+/* The one door (2026-09-24), laid out the way Higgsfield's sign-in is:
+   a showcase panel on the left, one column of "Continue with ..." on the
+   right, email as the last button behind an OR. Self-contained on
+   purpose -- the public site retired the noir skin (red stays as the
+   accent), and this page is the first thing a new person sees after it. */
+:root{
+  --bg:#0b0b0c; --card:#161618; --panel:#1d1d20; --line:rgb(255 255 255 / .09);
+  --line-hi:rgb(255 255 255 / .22); --text:#f4f3f2; --dim:#9a9894; --dimmer:#6a6864;
+  --accent:#E4002B; --accent-soft:rgb(228 0 43 / .14);
+  --r:14px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{min-height:100%}
+body{background:var(--bg);color:var(--text);font:14px/1.5 Inter,-apple-system,sans-serif;
+  -webkit-font-smoothing:antialiased;display:grid;place-items:center;padding:24px;min-height:100vh}
+a{color:inherit}
+.door{position:relative;width:min(1100px,100%);min-height:min(720px,calc(100vh - 48px));
+  display:grid;grid-template-columns:1fr 1fr;background:var(--card);border:1px solid var(--line);
+  border-radius:22px;overflow:hidden;box-shadow:0 40px 120px -40px rgb(0 0 0 / .8)}
+.close{position:absolute;top:16px;right:16px;z-index:3;width:36px;height:36px;border-radius:50%;
+  display:grid;place-items:center;background:rgb(255 255 255 / .06);border:1px solid var(--line);
+  color:var(--text);text-decoration:none;font-size:18px;line-height:1}
+.close:hover{border-color:var(--line-hi)}
+
+/* the showcase */
+.show{position:relative;margin:8px;border-radius:16px;overflow:hidden;background:
+  radial-gradient(120% 90% at 20% 10%,rgb(228 0 43 / .35),transparent 55%),
+  radial-gradient(90% 80% at 90% 90%,rgb(90 40 160 / .35),transparent 60%),#111}
+.slide{position:absolute;inset:0;opacity:0;transition:opacity .7s ease}
+.slide.on{opacity:1}
+.slide img,.slide video{width:100%;height:100%;object-fit:cover;display:block}
+.show::after{content:"";position:absolute;inset:0;pointer-events:none;
+  background:linear-gradient(180deg,transparent 45%,rgb(0 0 0 / .78))}
+.showtext{position:absolute;left:22px;right:22px;bottom:22px;z-index:2}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.chip{font-size:11.5px;font-weight:500;padding:4px 9px;border-radius:7px;
+  background:rgb(0 0 0 / .45);backdrop-filter:blur(8px)}
+.chip::before{content:"\2713  ";opacity:.8}
+.showtitle{font:700 40px/1 'Archivo Narrow',Inter,sans-serif;text-transform:uppercase;letter-spacing:.01em}
+.showcap{color:rgb(255 255 255 / .75);font-size:13.5px;margin:8px 0 18px}
+.bars{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:6px}
+.bar{font-size:11.5px;color:rgb(255 255 255 / .6);cursor:pointer;background:none;border:0;
+  text-align:left;font-family:inherit}
+.bar i{display:block;height:3px;border-radius:2px;background:rgb(255 255 255 / .25);
+  margin-bottom:8px;overflow:hidden}
+.bar i b{display:block;height:100%;width:0;background:#fff}
+.bar.done i b{width:100%}
+.bar.on{color:#fff}
+.bar.on i b{animation:fill 5s linear forwards}
+@keyframes fill{to{width:100%}}
+
+/* the door */
+.side{display:flex;flex-direction:column;justify-content:center;align-items:center;padding:48px 40px}
+.col{width:min(384px,100%)}
+.mark{width:36px;height:36px;border-radius:10px;background:var(--accent);display:grid;place-items:center;
+  font:700 15px/1 'Archivo Narrow',sans-serif;letter-spacing:.02em;margin:0 auto 18px}
+h1{font-size:30px;font-weight:600;letter-spacing:-.01em;text-align:center;line-height:1.2}
+.sub{color:var(--dim);text-align:center;margin:8px 0 28px}
+.sub b{color:var(--text);font-weight:500}
+.btn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;height:54px;
+  margin-bottom:12px;border-radius:var(--r);border:1px solid var(--line);background:var(--panel);
+  color:var(--text);font:500 14.5px Inter,sans-serif;text-decoration:none;cursor:pointer;
+  transition:border-color .15s,background .15s}
+.btn:hover{border-color:var(--line-hi)}
+.btn svg{width:18px;height:18px;flex:none}
+.btn.promo{background:var(--accent-soft);border-color:rgb(228 0 43 / .35);color:#ffd6dd}
+.btn.primary{background:var(--text);color:#111;border-color:var(--text)}
+.btn.primary:hover{background:#fff}
+.or{display:flex;align-items:center;gap:12px;margin:6px 0 16px;color:var(--dimmer);
+  font-size:11.5px;letter-spacing:.08em;text-transform:uppercase}
+.or::before,.or::after{content:"";flex:1;height:1px;background:var(--line)}
+input{width:100%;height:54px;padding:0 16px;margin-bottom:12px;border-radius:var(--r);
+  border:1px solid var(--line);background:var(--panel);color:var(--text);font:15px Inter,sans-serif}
+input:focus{outline:0;border-color:var(--line-hi)}
+.code{text-align:center;letter-spacing:.45em;font-size:22px;font-variant-numeric:tabular-nums}
+.err{background:var(--accent-soft);border:1px solid rgb(228 0 43 / .35);border-radius:10px;
+  font-size:13px;padding:10px 13px;margin-bottom:16px}
+.foot{border-top:1px solid var(--line);margin-top:20px;padding-top:18px;text-align:center;
+  font-size:12.5px;color:var(--dim)}
+.link{color:var(--text);text-decoration:underline;text-underline-offset:3px;cursor:pointer;
+  background:none;border:0;font:inherit}
+.legal{margin-top:10px;font-size:11.5px;color:var(--dimmer)}
+.legal a{color:var(--dim)}
+
+/* email and password are steps of the same column: the button reveals
+   the field (JS); with no JS both forms simply show */
+.js .emailform,.js .pwform{display:none}
+.js [data-open="email"] .emailform{display:block}
+.js [data-open="email"] .emailbtn{display:none}
+.js [data-open="password"] .pwform{display:block}
+.js [data-open="password"] .emailbtn,.js [data-open="password"] .pwlink{display:none}
+
+@media (max-width:860px){
+  body{padding:0;place-items:stretch}
+  .door{grid-template-columns:1fr;border-radius:0;min-height:100vh;border:0}
+  .show{display:none}
+  .side{padding:72px 20px 32px}
+}
 </style>
+<script>document.documentElement.classList.add('js')</script>
 </head>
-<body data-mode="{{ mode or 'signin' }}">
+<body>
 
-<canvas id="gl"></canvas><div class="fb"></div>
+<main class="door">
+  {% if site_url %}<a class="close" href="{{ site_url }}/" aria-label="Back to the site">&times;</a>{% endif %}
 
-<div class="authwrap">
-  <div class="glass authcard">
-    <h1>Zero Page</h1>
-    <p class="authsub only-signin">Sign in to enter the studio.</p>
-    <p class="authsub only-signup">Create an account to get started.</p>
+  <section class="show" aria-hidden="true">
+    {% for s in showcase %}
+    <div class="slide{% if loop.first %} on{% endif %}">
+      {% if s.video %}<video src="{{ s.video }}" {% if s.poster %}poster="{{ s.poster }}"{% endif %} muted loop playsinline autoplay preload="metadata"></video>
+      {% elif s.image %}<img src="{{ s.image }}" alt="">{% endif %}
+    </div>
+    {% endfor %}
+    <div class="showtext">
+      <div class="chips"><span class="chip">Real references</span><span class="chip">Idea to clip</span></div>
+      <div class="showtitle">Zero Page Studio</div>
+      <p class="showcap">The AI content studio that creates for you.</p>
+      {% if showcase|length > 1 %}
+      <div class="bars">
+        {% for s in showcase %}<button class="bar{% if loop.first %} on{% endif %}" type="button"><i><b></b></i>{{ s.label }}</button>{% endfor %}
+      </div>
+      {% endif %}
+    </div>
+  </section>
 
-    {% if error %}<div class="autherr">{{ error }}</div>{% endif %}
+  <section class="side">
+    <div class="col" data-open="{{ open or '' }}">
+      <div class="mark">ZP</div>
 
-    {% if providers.google %}
-    <a class="oauthbtn" href="/auth/google/login">
-      <svg viewBox="0 0 24 24"><path fill="#4285F4" d="M23.5 12.27c0-.85-.08-1.66-.22-2.45H12v4.64h6.46a5.53 5.53 0 0 1-2.4 3.62v3h3.87c2.27-2.09 3.57-5.17 3.57-8.81Z"/><path fill="#34A853" d="M12 24c3.24 0 5.96-1.07 7.94-2.91l-3.87-3.01c-1.08.72-2.45 1.15-4.07 1.15-3.13 0-5.78-2.11-6.73-4.96H1.29v3.1A12 12 0 0 0 12 24Z"/><path fill="#FBBC05" d="M5.27 14.27a7.2 7.2 0 0 1 0-4.54v-3.1H1.29a12 12 0 0 0 0 10.74l3.98-3.1Z"/><path fill="#EA4335" d="M12 4.77c1.76 0 3.34.6 4.59 1.79l3.44-3.44A11.98 11.98 0 0 0 1.29 6.63l3.98 3.1c.95-2.85 3.6-4.96 6.73-4.96Z"/></svg>
-      Continue with Google
-    </a>
-    {% endif %}
-    {% if providers.discord %}
-    <a class="oauthbtn discord" href="/auth/discord/login">
-      <svg viewBox="0 0 24 24"><path d="M20.32 4.37a19.8 19.8 0 0 0-4.89-1.52.07.07 0 0 0-.08.04c-.21.38-.44.87-.6 1.25a18.27 18.27 0 0 0-5.5 0 12.6 12.6 0 0 0-.61-1.25.08.08 0 0 0-.08-.04 19.74 19.74 0 0 0-4.88 1.52.07.07 0 0 0-.04.03C.53 9.05-.32 13.58.1 18.06a.08.08 0 0 0 .03.05 19.9 19.9 0 0 0 6 3.03.08.08 0 0 0 .08-.02c.46-.63.87-1.3 1.22-2a.08.08 0 0 0-.04-.11 13.1 13.1 0 0 1-1.87-.9.08.08 0 0 1-.01-.12c.13-.1.25-.2.37-.29a.07.07 0 0 1 .08-.01c3.93 1.79 8.18 1.79 12.06 0a.07.07 0 0 1 .08 0c.12.11.25.21.37.3a.08.08 0 0 1 0 .12c-.6.35-1.22.64-1.87.9a.08.08 0 0 0-.04.1c.36.7.77 1.37 1.22 2a.08.08 0 0 0 .08.03 19.84 19.84 0 0 0 6.02-3.03.08.08 0 0 0 .03-.05c.5-5.18-.84-9.68-3.55-13.66a.06.06 0 0 0-.03-.03ZM8.02 15.33c-1.18 0-2.16-1.08-2.16-2.42 0-1.33.96-2.42 2.16-2.42 1.21 0 2.18 1.1 2.16 2.42 0 1.34-.96 2.42-2.16 2.42Zm7.97 0c-1.18 0-2.15-1.08-2.15-2.42 0-1.33.95-2.42 2.15-2.42 1.21 0 2.18 1.1 2.16 2.42 0 1.34-.95 2.42-2.16 2.42Z"/></svg>
-      Continue with Discord
-    </a>
-    {% endif %}
-    {% if providers.apple %}
-    <a class="oauthbtn apple" href="/auth/apple/login">
-      <svg viewBox="0 0 24 24"><path d="M16.36 1.43c0 1.14-.42 2.2-1.25 3.06-.98 1.03-2.3 1.66-3.63 1.55-.14-1.24.44-2.53 1.24-3.34C13.65.83 15.1.06 16.13 0c.12.48.23.96.23 1.43ZM20.6 17.24c-.5 1.15-.74 1.67-1.38 2.68-.9 1.42-2.16 3.19-3.73 3.2-1.39.02-1.75-.9-3.63-.9-1.89 0-2.29.88-3.66.92-1.57.05-2.77-1.53-3.67-2.95-2.5-3.94-2.77-8.57-1.22-11.03.96-1.53 2.7-2.63 4.42-2.66 1.5-.03 2.7.98 3.55.98.84 0 2.3-1.2 3.9-1.03.66.03 2.52.27 3.72 2.02-.1.06-2.22 1.3-2.2 3.86.03 3.06 2.7 4.08 2.9 4.91Z"/></svg>
-      Continue with Apple
-    </a>
-    {% endif %}
+      {% if step == 'code' %}
+      <h1>Check your email</h1>
+      <p class="sub">We sent a code to <b>{{ email }}</b>.<br>Enter it below, or click the link in that email.</p>
+      {% if error %}<div class="err">{{ error }}</div>{% endif %}
+      <form method="post" action="/auth/verify">
+        <input type="hidden" name="email" value="{{ email }}">
+        <input class="code" type="text" name="token" inputmode="numeric" autocomplete="one-time-code"
+               pattern="[0-9 ]{6,12}" maxlength="12" placeholder="000000" required autofocus>
+        <button class="btn primary" type="submit">Continue</button>
+      </form>
+      <form method="post" action="/auth/email" class="foot">
+        <input type="hidden" name="email" value="{{ email }}">
+        Didn't get it? <button class="link" type="submit">Send a new code</button>
+        &middot; <a class="link" href="/signin">Use a different email</a>
+      </form>
 
-    {% if providers.google or providers.discord or providers.apple %}
-    <div class="authdiv">Or use email</div>
-    {% endif %}
+      {% else %}
+      <h1>Welcome to Zero Page</h1>
+      <p class="sub">{% if mode == 'signup' %}Sign up and start creating{% else %}Log in or sign up &mdash; it's the same door{% endif %}</p>
+      {% if error %}<div class="err">{{ error }}</div>{% endif %}
 
-    <form class="authform only-signin" method="post" action="/auth/login">
-      <input type="email" name="email" placeholder="Email" required autocomplete="email"
-             value="{{ email or '' }}">
-      <input type="password" name="password" placeholder="Password" required
-             autocomplete="current-password">
-      <button class="go" type="submit">Sign in</button>
-    </form>
-    <form class="authform only-signup" method="post" action="/auth/signup">
-      <input type="email" name="email" placeholder="Email" required autocomplete="email"
-             value="{{ email or '' }}">
-      <input type="password" name="password" placeholder="Password (8+ characters)"
-             required minlength="8" autocomplete="new-password">
-      <button class="go" type="submit">Sign up</button>
-    </form>
+      {% if signup_credits %}
+      <button class="btn promo" type="button" data-open-step="email">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M20 12v9H4v-9M2 7h20v5H2zM12 21V7M12 7H7.5a2.5 2.5 0 1 1 0-5C11 2 12 7 12 7zM12 7h4.5a2.5 2.5 0 1 0 0-5C13 2 12 7 12 7z"/></svg>
+        Sign up &amp; get {{ signup_credits }} free credits
+      </button>
+      {% endif %}
 
-    <p class="authswap only-signin">Don't have an account? <a data-swap="signup">Sign up</a></p>
-    <p class="authswap only-signup">Already have an account? <a data-swap="signin">Sign in</a></p>
-  </div>
-</div>
+      {% if providers.google %}
+      <a class="btn" href="/auth/google/login">
+        <svg viewBox="0 0 24 24"><path fill="#4285F4" d="M23.5 12.27c0-.85-.08-1.66-.22-2.45H12v4.64h6.46a5.53 5.53 0 0 1-2.4 3.62v3h3.87c2.27-2.09 3.57-5.17 3.57-8.81Z"/><path fill="#34A853" d="M12 24c3.24 0 5.96-1.07 7.94-2.91l-3.87-3.01c-1.08.72-2.45 1.15-4.07 1.15-3.13 0-5.78-2.11-6.73-4.96H1.29v3.1A12 12 0 0 0 12 24Z"/><path fill="#FBBC05" d="M5.27 14.27a7.2 7.2 0 0 1 0-4.54v-3.1H1.29a12 12 0 0 0 0 10.74l3.98-3.1Z"/><path fill="#EA4335" d="M12 4.77c1.76 0 3.34.6 4.59 1.79l3.44-3.44A11.98 11.98 0 0 0 1.29 6.63l3.98 3.1c.95-2.85 3.6-4.96 6.73-4.96Z"/></svg>
+        Continue with Google
+      </a>
+      {% endif %}
+      {% if providers.apple %}
+      <a class="btn" href="/auth/apple/login">
+        <svg viewBox="0 0 24 24" fill="#fff"><path d="M16.36 1.43c0 1.14-.42 2.2-1.25 3.06-.98 1.03-2.3 1.66-3.63 1.55-.14-1.24.44-2.53 1.24-3.34C13.65.83 15.1.06 16.13 0c.12.48.23.96.23 1.43ZM20.6 17.24c-.5 1.15-.74 1.67-1.38 2.68-.9 1.42-2.16 3.19-3.73 3.2-1.39.02-1.75-.9-3.63-.9-1.89 0-2.29.88-3.66.92-1.57.05-2.77-1.53-3.67-2.95-2.5-3.94-2.77-8.57-1.22-11.03.96-1.53 2.7-2.63 4.42-2.66 1.5-.03 2.7.98 3.55.98.84 0 2.3-1.2 3.9-1.03.66.03 2.52.27 3.72 2.02-.1.06-2.22 1.3-2.2 3.86.03 3.06 2.7 4.08 2.9 4.91Z"/></svg>
+        Continue with Apple
+      </a>
+      {% endif %}
+      {% if providers.discord %}
+      <a class="btn" href="/auth/discord/login">
+        <svg viewBox="0 0 24 24" fill="#5865F2"><path d="M20.32 4.37a19.8 19.8 0 0 0-4.89-1.52.07.07 0 0 0-.08.04c-.21.38-.44.87-.6 1.25a18.27 18.27 0 0 0-5.5 0 12.6 12.6 0 0 0-.61-1.25.08.08 0 0 0-.08-.04 19.74 19.74 0 0 0-4.88 1.52.07.07 0 0 0-.04.03C.53 9.05-.32 13.58.1 18.06a.08.08 0 0 0 .03.05 19.9 19.9 0 0 0 6 3.03.08.08 0 0 0 .08-.02c.46-.63.87-1.3 1.22-2a.08.08 0 0 0-.04-.11 13.1 13.1 0 0 1-1.87-.9.08.08 0 0 1-.01-.12c.13-.1.25-.2.37-.29a.07.07 0 0 1 .08-.01c3.93 1.79 8.18 1.79 12.06 0a.07.07 0 0 1 .08 0c.12.11.25.21.37.3a.08.08 0 0 1 0 .12c-.6.35-1.22.64-1.87.9a.08.08 0 0 0-.04.1c.36.7.77 1.37 1.22 2a.08.08 0 0 0 .08.03 19.84 19.84 0 0 0 6.02-3.03.08.08 0 0 0 .03-.05c.5-5.18-.84-9.68-3.55-13.66a.06.06 0 0 0-.03-.03ZM8.02 15.33c-1.18 0-2.16-1.08-2.16-2.42 0-1.33.96-2.42 2.16-2.42 1.21 0 2.18 1.1 2.16 2.42 0 1.34-.96 2.42-2.16 2.42Zm7.97 0c-1.18 0-2.15-1.08-2.15-2.42 0-1.33.95-2.42 2.15-2.42 1.21 0 2.18 1.1 2.16 2.42 0 1.34-.95 2.42-2.16 2.42Z"/></svg>
+        Continue with Discord
+      </a>
+      {% endif %}
 
-<script type="module">
-import { initField } from '/static/zpf/field.js';
-initField();
-document.querySelectorAll('[data-swap]').forEach(a =>
-  a.onclick = () => { document.body.dataset.mode = a.dataset.swap; });
+      {% if providers.google or providers.apple or providers.discord %}<div class="or">or</div>{% endif %}
+
+      <button class="btn emailbtn" type="button" data-open-step="email">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 5h18a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Zm9 7.2L4 7v1.9l8 5.1 8-5.1V7l-8 5.2Z"/></svg>
+        Continue with Email
+      </button>
+      <form class="emailform" method="post" action="/auth/email">
+        <input type="email" name="email" placeholder="you@example.com" required autocomplete="email"
+               value="{{ email or '' }}">
+        <button class="btn primary" type="submit">Email me a code</button>
+      </form>
+      <form class="pwform" method="post" action="/auth/login">
+        <input type="email" name="email" placeholder="Email" required autocomplete="email" value="{{ email or '' }}">
+        <input type="password" name="password" placeholder="Password" required autocomplete="current-password">
+        <button class="btn primary" type="submit">Log in</button>
+      </form>
+
+      <div class="foot">
+        <span class="pwlink">Have a password? <a class="link" data-open-step="password">Log in with it</a></span>
+        {% if site_url %}
+        <p class="legal">By continuing you agree to the <a href="{{ site_url }}/terms">Terms</a>
+          and <a href="{{ site_url }}/privacy">Privacy Policy</a>.</p>
+        {% endif %}
+      </div>
+      {% endif %}
+    </div>
+  </section>
+</main>
+
+<script>
+// "Continue with Email" / "Log in with it" open their step in place
+document.querySelectorAll('[data-open-step]').forEach(el => el.addEventListener('click', () => {
+  const col = document.querySelector('.col');
+  col.dataset.open = el.dataset.openStep;
+  const field = col.querySelector(el.dataset.openStep === 'password' ? '.pwform input' : '.emailform input');
+  if (field) field.focus();
+}));
+// the showcase: one slide at a time, the bar under it filling as it plays
+(() => {
+  const slides = [...document.querySelectorAll('.slide')];
+  const bars = [...document.querySelectorAll('.bar')];
+  if (slides.length < 2) return;
+  let i = 0, timer;
+  const show = n => {
+    i = (n + slides.length) % slides.length;
+    slides.forEach((s, k) => s.classList.toggle('on', k === i));
+    bars.forEach((b, k) => {
+      b.classList.toggle('done', k < i);
+      b.classList.remove('on'); void b.offsetWidth;
+      b.classList.toggle('on', k === i);
+    });
+    clearTimeout(timer); timer = setTimeout(() => show(i + 1), 5000);
+  };
+  bars.forEach((b, k) => b.addEventListener('click', () => show(k)));
+  show(0);
+})();
 </script>
 </body>
 </html>
