@@ -36,6 +36,7 @@ rest of src/ follows.
 """
 from __future__ import annotations
 
+import contextvars
 import os
 import sys
 from pathlib import Path
@@ -223,17 +224,46 @@ def _check(value: str, allowed, label: str) -> str:
 
 # --- the board -------------------------------------------------------------
 
+CALLER_ACCOUNT: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar(
+    "zeropage_mcp_caller_account", default=None)
+"""The account a SIGNED-IN caller is acting as, for the length of one
+HTTP request. Set by app/mcp_mount.py's guard once a Supabase access
+token has been verified, and unset for every other caller.
+
+It lives here, in src/, rather than in the app layer for the reason the
+whole injection pattern exists: `src/` never imports `app/`, and
+`_account` is the one place that decides whose board a tool reads, so
+the value has to be readable from here. Verified empirically rather than
+assumed -- the streamable-HTTP transport in stateless mode runs a tool
+body in a task that inherits the request's context, so a value set in
+the ASGI wrapper reaches the tool. A stateful session would not
+guarantee that, which is one more reason the mount is stateless."""
+
+
 def _account(account_id: Optional[int], dsn) -> Optional[int]:
     """Which account an MCP call acts as.
 
-    There is no session here: the MCP surface is reached from a Claude
-    session on Mike's machine, holding a bearer token, not a cookie. So
-    it acts as the bootstrap account unless told otherwise -- the same
-    call the CLIs make, for the same reason. After the tenancy backfill,
-    acting as nobody means reading an empty database and reporting it as
-    an empty board.
+    Three callers, in order of precedence:
+
+    - An EXPLICIT `account_id`, which is how the Guide opens a server
+      per signed-in request.
+    - A caller the transport authenticated (`CALLER_ACCOUNT`) -- a person
+      who signed in through the OAuth door. Their own account, never the
+      operator's: the bootstrap fallback below is exactly the bug that
+      would hand a stranger Mike's board, so it must not be reachable
+      once somebody has identified themselves.
+    - Nobody named, which is the static-token door: an agent on the
+      operator's own machine holding `ZEROPAGE_MCP_TOKEN`, or a CLI. It
+      acts as the bootstrap account -- the same call the CLIs make, for
+      the same reason. After the tenancy backfill, acting as nobody means
+      reading an empty database and reporting it as an empty board.
     """
-    return account_id if account_id is not None else accounts.resolve_account(dsn=dsn)
+    if account_id is not None:
+        return account_id
+    caller = CALLER_ACCOUNT.get()
+    if caller is not None:
+        return caller
+    return accounts.resolve_account(dsn=dsn)
 
 
 def list_ideas(

@@ -12,6 +12,12 @@ primary_region = 'iad'
   # the React Director is the other Fly app (web/fly.toml); /ui hands a
   # planned concept over to it unless ?legacy=1 asks for the vanilla canvas
   DIRECTOR_FRONTEND_URL = 'https://zeropage-web.fly.dev/studio/flows'
+  # The MCP surface's canonical URI (RFC 8707), which the OAuth
+  # protected-resource document publishes. Set explicitly rather than
+  # derived from SITE_URL, which is unset here on purpose: SITE_URL also
+  # drives the landing page's canonical tags and sitemap, and the public
+  # site is the Vercel app, not this origin.
+  ZEROPAGE_MCP_RESOURCE = 'https://zeropage-studio.fly.dev/mcp'
 
 [[mounts]]
   source = 'zeropage_data'

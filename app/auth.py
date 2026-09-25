@@ -518,22 +518,28 @@ def gotrue(method: str, path: str, *, json: Optional[dict] = None,
     return response.status_code, body if isinstance(body, dict) else {}
 
 
-def verify_token(token: str) -> Optional[dict]:
+def verify_token(token: str, audience: str = JWT_AUDIENCE) -> Optional[dict]:
     """The claims of a Supabase access token, or None when it does not
     verify. HS256 on SUPABASE_JWT_SECRET when one is configured; the
     project's JWKS otherwise (newer projects sign asymmetrically).
-    Audience "authenticated" -- an anon or service token is not a
-    person."""
+
+    `audience` defaults to "authenticated" -- an anon or service token is
+    not a person -- and is a parameter only because Supabase's OAuth 2.1
+    server mints tokens FOR a resource: an MCP token's `aud` is this
+    server's canonical URI, not the session audience (app/mcp_auth.py).
+    It is never optional: dropping the audience check is what lets a
+    token minted for somebody else's resource be replayed at ours.
+    """
     import jwt
     try:
         secret = os.environ.get("SUPABASE_JWT_SECRET")
         if secret:
             return jwt.decode(token, secret, algorithms=["HS256"],
-                              audience=JWT_AUDIENCE)
+                              audience=audience)
         key = jwt.PyJWKClient(f"{supabase_url()}/auth/v1/.well-known/jwks.json") \
             .get_signing_key_from_jwt(token)
         return jwt.decode(token, key.key, algorithms=["ES256", "RS256"],
-                          audience=JWT_AUDIENCE)
+                          audience=audience)
     except Exception:
         return None
 
