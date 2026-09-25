@@ -1643,7 +1643,8 @@ def pipeline_concepts(brand: Optional[str] = None, status: Optional[str] = None,
     # whole limit and quietly shorten the other's board.
     # one query for the whole board rather than one per card
     subscription_ids = generative.subscription_rendered(account_id=account_id)
-    concepts = preprod.list_concepts(account_id=account_id, brand=brand)
+    # lean: only what a card draws (2026-09-25) -- see preprod._CARD_COLUMNS
+    concepts = preprod.list_concepts(account_id=account_id, brand=brand, lean=True)
     # ...and two for every card's gate verdict, not two per card
     gates = autonomy.gates_for_concepts([c["id"] for c in concepts],
                                         account_id=account_id)

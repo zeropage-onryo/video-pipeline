@@ -374,17 +374,27 @@ def gates_for_concepts(concept_ids, dsn=None, *,
         return {}
     try:
         with db.connect(dsn) as conn:
+            # run_id read IN Postgres (2026-09-25). The payload is the
+            # run's whole replay record -- prompts, clips, candidates --
+            # and this used to fetch it for every card to read one key:
+            # ~420 KB of a ~940 KB board. The nested CASE is the "never
+            # guesses" rule in SQL: a payload that is not a JSON object
+            # reads as no run, exactly as _parse_payload's fallback did,
+            # and CASE (unlike AND) evaluates in order, so the cast is
+            # never tried on text that would not parse.
             holds = conn.execute(
-                "SELECT DISTINCT ON (concept_id) concept_id, status, reason, payload "
+                "SELECT DISTINCT ON (concept_id) concept_id, status, reason, "
+                "CASE WHEN pg_input_is_valid(payload, 'jsonb') THEN "
+                "  CASE WHEN jsonb_typeof(payload::jsonb) = 'object' "
+                "  THEN payload::jsonb->>'run_id' END "
+                "END AS run_id "
                 "FROM hold_queue WHERE concept_id = ANY(%s) "
                 "AND account_id IS NOT DISTINCT FROM %s "
                 "ORDER BY concept_id, id DESC",
                 (ids, account_id)).fetchall()
             runs = {}
             for row in holds:
-                payload = _parse_payload(dict(row)).get("payload")
-                run_id = payload.get("run_id") if isinstance(payload, dict) else None
-                runs[row["concept_id"]] = (dict(row), run_id)
+                runs[row["concept_id"]] = (dict(row), row["run_id"])
             wanted = sorted({r for _, r in runs.values() if r})
             scores: dict = {}
             if wanted:

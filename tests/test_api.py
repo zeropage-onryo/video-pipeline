@@ -4,6 +4,7 @@ test_app.py: the store is unreachable by default, anything billed is
 patched at the function the route actually calls, and background jobs
 are polled to completion so a silently-dead thread fails loudly.
 """
+import json
 import time
 
 import pytest
@@ -1422,3 +1423,38 @@ def test_elements_carry_how_many_open_concepts_name_them(tmp_db):
     used = {i["name"]: i.get("used_in") for i in items}
     assert used["Michael"] == 2   # one concept naming him twice counts once
     assert used["Ducati"] == 1
+
+
+def test_the_lean_board_draws_exactly_the_cards_the_full_rows_draw(tmp_db):
+    """/pipeline/concepts reads list_concepts(lean=True): the columns a card
+    touches, and the first shot without written_prompt / model_prompt /
+    desc / frames (2026-09-25). Every card must come out identical to the
+    card built from SELECT * -- refs in the same order, the timeline, the
+    locations, a legacy multi-shot concept, an archived row."""
+    room = preprod.add_location("Stairwell", {}, dsn=tmp_db, account_id=None)
+    refs = ["/characters/michael/photo/a.jpg", "/refs/b.jpg", "/locations/stairwell/photo/c.jpg"]
+    heavy = {"n": 1, "prompt": "(0-3s) He climbs. (3-7s) He stops.", "refs": refs,
+             "written_prompt": "the model's draft " * 50, "model_prompt": "draft " * 50,
+             "desc": "legacy description " * 20, "frames": ["f1", "f2"], "tool": "KLING",
+             "reference_image": "/renders/k.png", "parked_at": "2026-09-25T00:00:00",
+             "park_reason": "advisory: prompt gate 6/10"}
+    a = preprod.save_concept({"title": "Heavy", "card_line": "one line", "shots": [heavy]},
+                             brand="antihero", location_ids=[room], dsn=tmp_db, account_id=None)
+    preprod.save_concept({"title": "Legacy", "shots": [{"n": 1, "prompt": "a", "source": "AI",
+                                                        "written_prompt": "w"},
+                                                       {"n": 2, "prompt": "b", "desc": "d"}]},
+                         brand="antihero", dsn=tmp_db, account_id=None)
+    gone = preprod.save_concept({"title": "Gone", "shots": [{"n": 1, "prompt": "p", "refs": refs}]},
+                                brand="zeropage", dsn=tmp_db, account_id=None)
+    preprod.set_archived(gone, True, dsn=tmp_db, account_id=None)
+    preprod.set_picked(a, True, dsn=tmp_db, account_id=None)
+
+    lean = preprod.list_concepts(account_id=None, lean=True)
+    assert "written_prompt" not in lean[-1]["shots"][0] and "desc" not in lean[-1]["shots"][0]
+    assert lean[-1]["refs"] == refs      # never reordered
+    for brand in (None, "antihero", "zeropage"):
+        q = "?archived=true" + (f"&brand={brand}" if brand else "")
+        served = client.get("/api/pipeline/concepts" + q).json()["items"]
+        full = preprod.list_concepts(account_id=None, brand=brand)
+        expected = [api_mod._concept_card(c, set(), {}, {}) for c in full]
+        assert served == json.loads(json.dumps(expected, default=str)), brand
