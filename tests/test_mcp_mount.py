@@ -102,7 +102,10 @@ def site(monkeypatch):
 def test_metadata_names_this_server_and_its_authorization_server(site):
     doc = mcp_auth.protected_resource_metadata()
     assert doc["resource"] == "https://zeropage-studio.fly.dev/mcp"
-    assert doc["authorization_servers"] == ["https://proj.supabase.co"]
+    # Supabase's issuer is /auth/v1, not the project root: the root 404s
+    # on every discovery path, which a client reports as "no OAuth server"
+    # rather than as a wrong URL.
+    assert doc["authorization_servers"] == ["https://proj.supabase.co/auth/v1"]
     # A scope this server does not enforce would be a claim, not a control.
     assert "scopes_supported" not in doc
 
