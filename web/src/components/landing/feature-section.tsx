@@ -2,6 +2,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { LANDING_MEDIA } from "@/content/landing-media";
+import { Reveal } from "@/components/reveal";
 
 // The pipeline as four alternating two-column features -- the sequence is
 // real (ground, write, pick, render) so the order is load-bearing. Each
@@ -75,7 +76,7 @@ export function FeatureSection() {
               i % 2 === 1 ? "md:[&>*:first-child]:order-2" : ""
             }`}
           >
-            <div className="max-w-[440px]">
+            <Reveal className="max-w-[440px]">
               <span className="eyebrow">Step {String(i + 1).padStart(2, "0")}</span>
               <h2 id={`feature-${i}`} className="serif mt-5 text-[clamp(2rem,4.2vw,3.25rem)]">
                 {feature.title}
@@ -88,9 +89,11 @@ export function FeatureSection() {
                 {feature.cta}
                 <ArrowRight className="size-4" />
               </Link>
-            </div>
+            </Reveal>
 
-            <FeatureMedia feature={feature} priority={i === 0} />
+            <Reveal delay={0.08}>
+              <FeatureMedia feature={feature} priority={i === 0} />
+            </Reveal>
           </div>
         </section>
       ))}

@@ -154,7 +154,10 @@ function Composer() {
   const { brand, toast } = useShell();
   const params = useSearchParams();
   const attachId = params.get("attach");
-  const [idea, setIdea] = useState("");
+  // An idea typed into the landing page's hero arrives as ?spark= and the
+  // composer opens already carrying it -- the sentence a visitor wrote is
+  // the one thing on that page that must not be thrown away.
+  const [idea, setIdea] = useState(params.get("spark") ?? "");
   const [caps, setCaps] = useState<Capabilities>({});
   const [assets, setAssets] = useState<Asset[]>([]);
   const [filter, setFilter] = useState<Filter>("all");

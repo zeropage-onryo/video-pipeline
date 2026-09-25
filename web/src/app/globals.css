@@ -316,30 +316,16 @@
     animation: cursor-float 3.2s ease-in-out infinite;
   }
 
-  /* The four-step strip under the hero media: each step's underline fills
-     in turn, one 12s loop, so the strip reads as the recording's progress. */
-  @keyframes step-fill {
-    0% {
-      transform: scaleX(0);
-      opacity: 0.35;
-    }
-    18% {
-      transform: scaleX(1);
-      opacity: 1;
-    }
-    25% {
-      transform: scaleX(1);
-      opacity: 1;
-    }
-    26%,
-    100% {
-      transform: scaleX(1);
-      opacity: 0.18;
-    }
-  }
-  .step-fill {
-    transform-origin: left;
-    animation: step-fill 12s linear infinite;
+  /* The same hairline grid, brighter, revealed in a circle around the
+     pointer (HeroSpotlight sets --x / --y). */
+  .hero-spot {
+    background-image:
+      linear-gradient(90deg, rgba(255, 255, 255, 0.11) 1px, transparent 1px),
+      linear-gradient(rgba(255, 255, 255, 0.11) 1px, transparent 1px);
+    background-position: 0 -4px;
+    background-size: 22px 22px;
+    -webkit-mask-image: radial-gradient(240px 240px at var(--x, 50%) var(--y, 0px), #000 0%, transparent 70%);
+    mask-image: radial-gradient(240px 240px at var(--x, 50%) var(--y, 0px), #000 0%, transparent 70%);
   }
 
   /* The nav: transparent at the top of the page, glass once scrolled. */
@@ -354,16 +340,8 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .cursor-float,
-    .step-fill {
+    .cursor-float {
       animation: none;
-    }
-    .step-fill {
-      transform: none;
-      opacity: 0.35;
-    }
-    .step-fill:first-child {
-      opacity: 1;
     }
   }
 }

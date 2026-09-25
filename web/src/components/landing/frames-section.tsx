@@ -1,3 +1,4 @@
+import { Reveal } from "@/components/reveal";
 import { MediaTile } from "@/components/landing/media-tile";
 import { LANDING_MEDIA } from "@/content/landing-media";
 
@@ -10,7 +11,7 @@ export function FramesSection() {
   return (
     <section id="frames" className="border-b border-border py-24">
       <div className="mx-auto max-w-[1200px] px-6">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <Reveal className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <span className="eyebrow">Off the board</span>
             <h2 className="serif mt-5 text-[clamp(2rem,4.2vw,3.25rem)]">Frames the studio drew.</h2>
@@ -19,7 +20,7 @@ export function FramesSection() {
             Keyframes from recent concepts, each the first frame its clip will anchor on. Nothing
             here is stock.
           </p>
-        </div>
+        </Reveal>
       </div>
 
       <ul className="mt-12 flex snap-x snap-mandatory gap-3 overflow-x-auto px-6 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">

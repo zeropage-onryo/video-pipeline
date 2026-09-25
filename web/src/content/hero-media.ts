@@ -1,22 +1,52 @@
-// The recording under the hero headline: the studio being driven, in a
-// rounded frame. Mike supplies it (2026-09-18: "Real Studio recording --
-// I'll provide it"); until `video` is set the frame shows `poster` -- a
-// real screenshot of the product -- or, with neither, three real keyframes
-// off the board (landing-media.ts). Never a mock-up. Put the mp4 on R2 and point `video` at it; `poster` is the
-// still shown before playback and under reduced motion.
-export type HeroMedia = {
-  video?: string;
-  poster?: string;
+// The four beats under the hero headline. Each one is a real recording of
+// the studio being driven (Mike's screen captures, 2026-09-24), cropped
+// free of browser chrome and cut to 3 seconds -- never a mock-up. The
+// strip under the frame is the control: clicking a beat plays it, and the
+// underline fills with that clip's own playback.
+//
+// Two encodes per beat, VP9 first and H.264 behind it: a browser takes the
+// first source it can decode, and a Chromium without the proprietary codec
+// (every headless build this project screenshots with) shows a broken
+// frame on an mp4 alone.
+//
+// `poster` is the clip's first frame. It is what shows before the video
+// can play, while it loads, and under reduced motion, where the frame
+// stays a still.
+export type HeroStep = {
+  label: string;
+  webm: string;
+  mp4: string;
+  poster: string;
   alt: string;
 };
 
-export const HERO_MEDIA: HeroMedia = {
-  // The Pipeline board (Mike's screenshot, 2026-09-18) stands in as the
-  // poster until the recording lands; the frame plays `video` over it.
-  poster: "/site/studio-pipeline.webp",
-  alt: "The Zero Page studio turning a spark into a rendered scene.",
-};
-
-// The four beats the recording walks through, in order. The strip under
-// the frame fills each one in turn on a 12s loop.
-export const HERO_STEPS = ["Bring a spark", "Write the scene", "Pick the frame", "Render the clip"];
+export const HERO_STEPS: HeroStep[] = [
+  {
+    label: "Bring a spark",
+    webm: "/site/hero/spark.webm",
+    mp4: "/site/hero/spark.mp4",
+    poster: "/site/hero/spark.webp",
+    alt: "An idea typed into the studio composer.",
+  },
+  {
+    label: "Write the scene",
+    webm: "/site/hero/scene.webm",
+    mp4: "/site/hero/scene.mp4",
+    poster: "/site/hero/scene.webp",
+    alt: "The scene's prompt, references and renderer on the Director canvas.",
+  },
+  {
+    label: "Pick the frame",
+    webm: "/site/hero/frame.webm",
+    mp4: "/site/hero/frame.mp4",
+    poster: "/site/hero/frame.webp",
+    alt: "Concepts on the Pipeline board, each with the frames behind it.",
+  },
+  {
+    label: "Render the clip",
+    webm: "/site/hero/clip.webm",
+    mp4: "/site/hero/clip.mp4",
+    poster: "/site/hero/clip.webp",
+    alt: "Rendered frames filling the studio's asset wall, newest first.",
+  },
+];

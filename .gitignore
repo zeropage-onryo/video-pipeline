@@ -102,3 +102,8 @@ docs/sprints/**/*.jpg
 
 # Personal model runtime logins: private credentials, never source or image layers.
 data/model_sessions/
+
+# The landing page's own media is a product asset, not a render output --
+# `*.mp4` above is for renders under data/, and it was silently swallowing
+# the hero recordings in web/public/site.
+!web/public/site/**
