@@ -55,6 +55,7 @@ import { useShell } from "@/components/studio/shell";
 import {
   approveText,
   chipText,
+  creditsText,
   held,
   legalDuration,
   pickFor as pickForCard,
@@ -93,7 +94,7 @@ const SIDE_BTN =
 const POPK = "mb-2 font-plex text-[11px] tracking-[0.14em] text-bone3";
 
 export default function QueuePage() {
-  const { me, brand, toast } = useShell();
+  const { me, brand, balance, toast } = useShell();
   const [pending, setPending] = useState<Concept[] | null>(null);
   const [runway, setRunway] = useState<RunwayState | null>(null);
   const [renderers, setRenderers] = useState<Record<string, RendererSpec>>({});
@@ -239,10 +240,13 @@ export default function QueuePage() {
     frame: pick.frame ?? undefined,
   });
   useEffect(() => {
+    // every card, timed or not (2026-09-25): the button's number is credits
+    // now, and only the server knows the credit price (markup, rounding up,
+    // a floor per render). A pick the listing already priced asks nothing.
     for (const c of pending || []) {
-      if (!c.timeline || lockedFor(c)) continue;
+      if (lockedFor(c)) continue;
       const pick = pickOf(c);
-      if (!pick) continue;
+      if (!pick || !renderers[pick.provider]?.available) continue;
       const key = quoteKey(c, pick);
       if (served(c, pick) || key in quotes) continue;
       queueQuote(c.id, choiceOf(pick))
@@ -280,9 +284,10 @@ export default function QueuePage() {
         }
         const res = await queueApprove(c.id, choice);
         const r = res.render;
+        const charge = res.quote && !res.quote.byok && res.quote.credits != null ? creditsText(res.quote.credits) : null;
         toast(
           r
-            ? `Rendering ${c.n} — ${r.provider} · ${r.model} · ${r.frame} · ~$${Number(r.estimate_usd).toFixed(2)}`
+            ? `Rendering ${c.n} — ${r.provider} · ${r.model} · ${r.frame} · ${charge ?? `~$${Number(r.estimate_usd).toFixed(2)}`}`
             : `${c.n} approved`,
         );
         acted.set(c.id, { status: "RENDERING", job: res.job_id, at: Date.now() });
@@ -378,18 +383,36 @@ export default function QueuePage() {
      approve is still its own click and its own signed quote. A card still
      pricing, refused or unpriced is counted out loud rather than as $0. */
   const spendable = (pending || []).filter((c) => !lockedFor(c) && !didFor(c));
+  // Credits and dollars are summed APART: credits are what this account is
+  // charged, dollars are what its own keys will be billed by the provider.
   const tally = spendable.reduce(
     (t, c) => {
       const pick = pickOf(c);
       const spec = pick ? specOf(catalogue, pick.provider, pick.model) : null;
       if (!pick || !spec || !renderers[pick.provider]?.available) return { ...t, open: t.open + 1 };
       const plan = planFor(spec, pick, c.timeline ? partsOf(c) : null, quoteOf(c, pick));
+      if (plan.pending || plan.refused) return { ...t, shots: t.shots + plan.n, open: t.open + 1 };
+      if (plan.credits !== null) return { ...t, shots: t.shots + plan.n, credits: t.credits + plan.credits };
       return plan.usd === null
         ? { ...t, shots: t.shots + plan.n, open: t.open + 1 }
         : { ...t, shots: t.shots + plan.n, usd: t.usd + plan.usd };
     },
-    { usd: 0, shots: 0, open: 0 },
+    { credits: 0, usd: 0, shots: 0, open: 0 },
   );
+  const charged = !!balance && !balance.exempt;
+  const short = charged && tally.credits > balance!.available ? tally.credits - Math.max(balance!.available, 0) : 0;
+  const tallyPrice = [
+    tally.credits ? `${creditsText(tally.credits)}` : "",
+    tally.usd ? `~$${tally.usd.toFixed(2)}${tally.credits ? " on your keys" : ""}` : "",
+  ]
+    .filter(Boolean)
+    .join(" + ") || "nothing priced";
+  /** A card this balance cannot pay for says so and does not offer the
+   *  click (the approve would fail at the hold). The hold at submit is
+   *  still what refuses (src/charge.py); this is only the early answer,
+   *  and the shell re-reads the balance on every queue change. */
+  const cannotAfford = (plan: { credits: number | null } | null) =>
+    !!plan && plan.credits !== null && charged && plan.credits > balance!.available;
   const blockedCount = (pending || []).filter(lockedFor).length;
   const clearFinished = async () => {
     // one at a time: the registry has no bulk route, and a row that is
@@ -406,7 +429,7 @@ export default function QueuePage() {
         <span className="m">
           {pending
             ? spendable.length
-              ? `${tally.shots} shot${tally.shots === 1 ? "" : "s"} across ${spendable.length} scene${spendable.length === 1 ? "" : "s"} · ~$${tally.usd.toFixed(2)} to approve all${tally.open ? ` · ${tally.open} not priced` : ""}`
+              ? `${tally.shots} shot${tally.shots === 1 ? "" : "s"} across ${spendable.length} scene${spendable.length === 1 ? "" : "s"} · ${tallyPrice} to approve all${tally.open ? ` · ${tally.open} not priced` : ""}${short ? ` · ${creditsText(short)} more than you have` : ""}`
               : "nothing to spend on"
             : "—"}
         </span>
@@ -705,7 +728,7 @@ export default function QueuePage() {
                 <div className="flex min-w-0 gap-2">
                   <button
                     type="button"
-                    disabled={locked || !pick || !!noKey || badLength || !!did || !!busy[c.id]}
+                    disabled={locked || !pick || !!noKey || badLength || cannotAfford(plan) || !!did || !!busy[c.id]}
                     onClick={() => decide(c, "approve")}
                     className="h-[52px] min-w-0 flex-1 truncate rounded-[8px] bg-noir-red px-2.5 font-bebas! text-[22px]! leading-none! tracking-[0.05em] text-noir-bg! hover:enabled:bg-noir-red2 focus-visible:rounded-[8px]! disabled:cursor-not-allowed disabled:bg-noir-line2 disabled:text-bone3!"
                   >
@@ -721,7 +744,9 @@ export default function QueuePage() {
                               ? noKey
                               : badLength
                                 ? `${spec.id} renders ${spec.duration.min}-${spec.duration.max}s`
-                                : approveText(plan)}
+                                : cannotAfford(plan)
+                                  ? `Need ${plan.credits!.toLocaleString("en-US")} cr · have ${Math.max(balance!.available, 0).toLocaleString("en-US")}`
+                                  : approveText(plan)}
                   </button>
                   <button
                     type="button"

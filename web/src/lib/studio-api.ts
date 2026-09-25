@@ -369,7 +369,7 @@ export const updateShotPrompt = (id: number, n: number, prompt: string) =>
   });
 /* the spend gate: approving is what calls Runway */
 export const queueApprove = (id: number, choice?: RenderChoice) =>
-  apiFetch<{ job_id?: number; render?: RenderResolved }>(`/queue/${id}/approve`, {
+  apiFetch<{ job_id?: number; render?: RenderResolved; quote?: RenderQuote | null }>(`/queue/${id}/approve`, {
     method: "POST",
     body: JSON.stringify(choice ?? {}),
   });
@@ -537,3 +537,35 @@ export async function switchAccount(slug: string) {
 export const QUEUE_EVENT = "zpf:queue";
 export const announceQueueChange = () =>
   window.dispatchEvent(new Event(QUEUE_EVENT));
+
+/* ── credits (2026-09-25) ──
+   GET /api/billing/balance -- src/billing.balance, the numbers the shell's
+   credit pill and the Queue read. `available` is spendable NOW (lots minus
+   holds still outstanding); `outstanding` is what renders in flight hold.
+   `exempt` is an operator account the ledger never charges: its pill says
+   so instead of a number that would never move. `portal` = a Stripe
+   customer exists, so "Manage billing" has somewhere to go. */
+export type CreditLot = {
+  id: number;
+  kind: string;
+  credits: number;
+  remaining: number;
+  granted_at: string;
+  expires_at: string | null;
+};
+export type Balance = {
+  available: number;
+  outstanding: number;
+  plan: { key: string; name: string; tier: string; credits: number; monthly_usd: number } | null;
+  exempt: boolean;
+  lots: CreditLot[];
+  schedules: { plan: string; months_released: number; months_total: number; next_release_at: string | null }[];
+  checkout_configured: boolean;
+  yearly_configured: boolean;
+  portal: boolean;
+};
+export const getBalance = () => apiFetch<Balance>("/billing/balance");
+/** fired after anything that moves credit: an approve takes a hold, a
+ *  finished render settles it. The shell re-reads the balance on it. */
+export const BALANCE_EVENT = "zpf:balance";
+export const announceBalanceChange = () => window.dispatchEvent(new Event(BALANCE_EVENT));

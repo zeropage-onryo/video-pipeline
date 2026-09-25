@@ -114,27 +114,85 @@ export function legalDuration(axis: AxisLike, seconds: number): boolean {
   return (axis.values || []).map(Number).includes(seconds);
 }
 
-export type Plan = { timed: boolean; n: number; lengths: number[]; usd: number | null; pending?: boolean; refused?: string };
+export type Plan = {
+  timed: boolean;
+  n: number;
+  lengths: number[];
+  /** the PROVIDER's estimate -- what the render costs whoever holds the key */
+  usd: number | null;
+  /** what it costs THIS account in credits (the server's quote, markup
+   *  included); null when not charged here (BYOK) or not priced yet */
+  credits: number | null;
+  /** rendered on the account's own key: its provider bills it, no credits */
+  byok: boolean;
+  pending?: boolean;
+  refused?: string;
+};
 /** the server's price for a pick (pricing.display), or its refusal */
-export type QuoteLike = { error?: string; timed?: boolean; durations?: number[]; estimate_usd?: number } | null | undefined;
+export type QuoteLike = {
+  error?: string;
+  timed?: boolean;
+  durations?: number[];
+  estimate_usd?: number;
+  credits?: number | null;
+  byok?: boolean;
+} | null | undefined;
 
 /** What an approve would make and cost. `parts` is the scene's timeline
  *  (null for a scene that renders whole). A timed scene's lengths and
  *  price are the server's `quote` for THIS pick: shots that already have
- *  a clip are not in it, as the server's resume skips them. */
+ *  a clip are not in it, as the server's resume skips them.
+ *
+ *  CREDITS COME ONLY FROM THE SERVER (2026-09-25). The credit price is
+ *  pricing.credits_for -- markup, rounding up, a floor per render -- and
+ *  this file does not keep a second copy of that rule. `quote`:
+ *    - a quote: its credits (null on BYOK) are the button's number
+ *    - null: asked for, not answered yet -- "pricing…", never a guess
+ *    - undefined: no server pricing at all (a scene that renders whole,
+ *      from a caller that never asks) -- the rate-card dollar label, as
+ *      before credits existed */
 export function planFor(spec: ModelLike, pick: Pick, parts: PartLike[] | null | undefined, quote?: QuoteLike): Plan {
+  const fromQuote = (q: NonNullable<QuoteLike>) => ({
+    credits: q.byok ? null : (q.credits ?? null),
+    byok: !!q.byok,
+  });
   if (!parts || !parts.length) {
-    return { timed: false, n: 1, lengths: [pick.duration ?? 0], usd: estimate(spec, pick.frame, pick.duration) };
+    const usd = estimate(spec, pick.frame, pick.duration);
+    const base = { timed: false, n: 1, lengths: [pick.duration ?? 0] };
+    if (quote === undefined) return { ...base, usd, credits: null, byok: false };
+    if (quote === null) return { ...base, usd, credits: null, byok: false, pending: true };
+    if (quote.error) return { ...base, usd, credits: null, byok: false, refused: quote.error };
+    return { ...base, usd: quote.estimate_usd ?? usd, ...fromQuote(quote) };
   }
   const todo = parts.filter((p) => !p.media_url);
   if (!quote || quote.error || !quote.timed || !quote.durations) {
-    return { timed: true, n: todo.length, lengths: [], usd: null, pending: !quote, refused: quote?.error ?? "" };
+    return { timed: true, n: todo.length, lengths: [], usd: null, credits: null, byok: false, pending: !quote, refused: quote?.error ?? "" };
   }
-  return { timed: true, n: quote.durations.length, lengths: quote.durations, usd: quote.estimate_usd ?? null };
+  return { timed: true, n: quote.durations.length, lengths: quote.durations, usd: quote.estimate_usd ?? null, ...fromQuote(quote) };
 }
 
+export const creditsText = (credits: number): string =>
+  `${credits.toLocaleString("en-US")} credit${credits === 1 ? "" : "s"}`;
+
+/** The price half of the button: credits when this account is charged,
+ *  the provider's dollars when its own key pays. "cr" rather than
+ *  "credits" because the button is 22px Bebas in a card a third of the
+ *  page wide -- the /models page abbreviates the same way. */
+export const priceText = (plan: Plan): string =>
+  plan.refused
+    ? "refused"
+    : plan.pending
+      ? "pricing…"
+      : plan.credits !== null
+        ? `${plan.credits.toLocaleString("en-US")} cr`
+        : plan.usd === null
+          ? "unpriced"
+          : plan.byok
+            ? `~$${plan.usd.toFixed(2)} on your key`
+            : `~$${plan.usd.toFixed(2)}`;
+
 export const approveText = (plan: Plan): string =>
-  `Approve · ${plan.n} shot${plan.n === 1 ? "" : "s"} · ${plan.refused ? "refused" : plan.pending ? "pricing…" : plan.usd === null ? "unpriced" : "~$" + plan.usd.toFixed(2)}`;
+  `Approve · ${plan.n} shot${plan.n === 1 ? "" : "s"} · ${priceText(plan)}`;
 
 export const chipText = (spec: ModelLike, pick: Pick, plan: Plan): string =>
   `${spec.label} · ${plan.timed ? `${plan.n} shot${plan.n === 1 ? "" : "s"}` : `${pick.duration}s`} · ${pick.frame ?? "—"}`.toUpperCase();

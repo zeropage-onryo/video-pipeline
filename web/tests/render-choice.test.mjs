@@ -1,6 +1,6 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { held, usable, firstUsable, defaultPick, pickFor, withModel, planFor, approveText, chipText, legalDuration, specOf } from '../src/lib/render-choice.ts';
+import { held, usable, firstUsable, defaultPick, pickFor, withModel, planFor, approveText, chipText, creditsText, legalDuration, specOf } from '../src/lib/render-choice.ts';
 
 const choices = (values, d) => ({ kind: 'choices', values, default: d });
 const renderers = {
@@ -66,4 +66,28 @@ test('the button carries shot count and price; a timed scene is priced by the se
   assert.equal(approveText(whole), 'Approve · 1 shot · ~$0.35');
   assert.equal(chipText(spec, pick, whole), 'KLING · 5S · 1080P');
   assert.equal(approveText(planFor({ ...spec, price: undefined }, pick, null)), 'Approve · 1 shot · unpriced');
+});
+
+test('a charged account sees credits from the server, never a client-side conversion', () => {
+  const spec = specOf(renderers, 'fal', 'kling');
+  const pick = withModel(renderers, 'fal', 'kling');
+  // a scene that renders whole, priced by the listing / /quote
+  const charged = planFor(spec, pick, null, { timed: false, durations: [5], estimate_usd: 0.35, credits: 84, byok: false });
+  assert.equal(charged.credits, 84);
+  assert.equal(approveText(charged), 'Approve · 1 shot · 84 cr');
+  assert.equal(approveText(planFor(spec, pick, null, { timed: false, durations: [5], estimate_usd: 0.35, credits: 1, byok: false })), 'Approve · 1 shot · 1 cr');
+  assert.equal(approveText(planFor(spec, pick, null, { timed: false, durations: [5], estimate_usd: 0.35, credits: 1840, byok: false })), 'Approve · 1 shot · 1,840 cr');
+  // the account's own key pays: dollars, and whose dollars
+  const own = planFor(spec, pick, null, { timed: false, durations: [5], estimate_usd: 0.35, credits: null, byok: true });
+  assert.equal(own.credits, null);
+  assert.equal(creditsText(1), '1 credit');
+  assert.equal(creditsText(1840), '1,840 credits');
+  assert.equal(approveText(own), 'Approve · 1 shot · ~$0.35 on your key');
+  // asked, not answered: no number is made up
+  assert.equal(approveText(planFor(spec, pick, null, null)), 'Approve · 1 shot · pricing…');
+  assert.equal(approveText(planFor(spec, pick, null, { error: 'band' })), 'Approve · 1 shot · refused');
+  // a timed scene's credits are the quote's sum
+  const parts = [{ seconds: 3 }, { seconds: 7 }];
+  const timed = planFor(spec, pick, parts, { timed: true, durations: [5, 10], estimate_usd: 1.05, credits: 252, byok: false });
+  assert.equal(approveText(timed), 'Approve · 2 shots · 252 cr');
 });
