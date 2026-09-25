@@ -677,6 +677,48 @@ def get_concepts(ids, dsn: Optional[str] = None, *,
         return _concept_rows(rows, conn, account_id)
 
 
+def board_index(limit: int = 100, dsn: Optional[str] = None, *,
+                account_id: int, brand: Optional[str] = None,
+                refs: bool = False) -> list[dict[str, Any]]:
+    """The board's OPEN rows as a few facts each, never the rows
+    (2026-09-25): {id, title, brand, picked, parked, has_media, is_scene,
+    has_prompt}, plus `refs` (the shot's list, in its own order) when
+    asked for.
+
+    For the readers that need a menu, one id, or a count, and were each
+    pulling list_concepts' SELECT * -- ~0.9 MB of database egress per
+    visit -- to get one. SAME window as list_concepts (the newest `limit`
+    for this account and brand, scoped in SQL before the LIMIT) and the
+    same "open" the board's default shows (not archived). The facts are
+    computed IN Postgres, so the prompts never leave the database; each
+    mirrors a _concept_row field: is_scene = exactly one shot, parked =
+    a truthy `parked_at` on it, has_media = a truthy `media_url`,
+    has_prompt = the prompt holds a non-blank character."""
+    scoped = brand if brand in BRANDS else None
+    window = ("SELECT id, title, brand, picked_at, archived_at, "
+              "shots_json::jsonb AS s FROM shoot_concepts "
+              "WHERE account_id IS NOT DISTINCT FROM %s "
+              + ("AND brand = %s " if scoped else "")
+              + "ORDER BY id DESC LIMIT %s")
+    params = (account_id, scoped, limit) if scoped else (account_id, limit)
+    with connect(dsn) as conn:
+        rows = conn.execute(
+            "SELECT id, title, brand, picked_at IS NOT NULL AS picked, "
+            "coalesce(s->0->>'parked_at', '') NOT IN ('', 'false') AS parked, "
+            "coalesce(s->0->>'media_url', '') <> '' AS has_media, "
+            "jsonb_typeof(s) = 'array' AND jsonb_array_length(s) = 1 AS is_scene, "
+            "coalesce(s->0->>'prompt', '') ~ '\\S' AS has_prompt"
+            + (", s->0->'refs' AS refs" if refs else "")
+            + " FROM (" + window + ") w WHERE archived_at IS NULL ORDER BY id DESC",
+            params,
+        ).fetchall()
+    out = [dict(r) for r in rows]
+    if refs:
+        for r in out:
+            r["refs"] = r["refs"] if isinstance(r["refs"], list) else []
+    return out
+
+
 def queue_candidates(limit: int = 100, dsn: Optional[str] = None, *,
                      account_id: int, brand: Optional[str] = None) -> list[dict[str, Any]]:
     """The rows the Queue COUNT needs, and nothing it does not (2026-09-21).

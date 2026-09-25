@@ -47,6 +47,9 @@ export type Asset = {
   text: string;
   meta: Record<string, unknown>;
   created_at?: string | null;
+  /** how many open concepts' refs name this element (scope=elements only,
+   *  counted server-side through asset_shelf.parse_ref, 2026-09-25) */
+  used_in?: number;
 };
 /* Which half of the bank (2026-09-18): `elements` is the characters /
    locations / props a shot is held to, `generated` is the renders, `all`
@@ -323,6 +326,27 @@ export const boardConcepts = (brand?: string, archived = false) => {
   if (archived) params.set("archived", "true");
   const qs = params.toString();
   return apiFetch<{ items: Concept[]; pick?: PickRate }>(`/pipeline/concepts${qs ? `?${qs}` : ""}`);
+};
+/** GET /api/pipeline/arrival — the ONE scene the Director opens on, or
+ *  null. The rule (app/api.py `_arrival`) lives on the server so the page
+ *  asks for an id, not the whole board (2026-09-25). */
+export const directorArrival = (brand?: string) =>
+  apiFetch<{ id: number | null }>(`/pipeline/arrival${brand ? `?brand=${encodeURIComponent(brand)}` : ""}`);
+/** A line in the Director's scene switcher: the openable board rows only
+ *  (`?view=menu`), no card, gates or sources. */
+export type SceneMenuRow = {
+  id: number;
+  n: string;
+  title: string | null;
+  brand: string;
+  picked: boolean;
+  parked: boolean;
+  has_media: boolean;
+};
+export const sceneMenu = (brand?: string) => {
+  const params = new URLSearchParams({ view: "menu" });
+  if (brand) params.set("brand", brand);
+  return apiFetch<{ items: SceneMenuRow[] }>(`/pipeline/concepts?${params}`);
 };
 /** Leaving the board is archiving, never deleting: an unpicked row is
  *  the only negative signal pick_rate has. */

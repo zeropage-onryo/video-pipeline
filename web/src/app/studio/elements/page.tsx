@@ -19,19 +19,17 @@
    same route for elements saved before, or a redraw. A click on a card
    opens the element sheet (frames, @handle, notes, where it grounds,
    its own delete) -- the hover buttons on the plate are the shortcuts. */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { ImageOff, Info, LayoutGrid, Plus, Trash2 } from "lucide-react";
 import { API_URL } from "@/lib/api";
 import {
-  boardConcepts,
   deleteAsset,
   drawSheet,
   getAssets,
   getCapabilities,
   getJob,
   type Asset,
-  type Concept,
   type ElementKind,
 } from "@/lib/studio-api";
 import { displayPhoto, elementKind, handleOf, kindLabel } from "@/lib/elements";
@@ -39,7 +37,6 @@ import { useShell } from "@/components/studio/shell";
 import { AddElement } from "@/components/studio/add-element";
 import { ElementSheet } from "@/components/studio/element-sheet";
 
-const slugOf = (url: string) => url.match(/^\/(characters|locations|props)\/([^/]+)\//)?.[2] ?? null;
 const ROUTE_KIND = { character: "characters", prop: "props", location: "locations" } as const;
 type RouteKind = ElementKind;
 /* "character-12" -> ["characters", 12]: the id the delete route takes */
@@ -51,7 +48,6 @@ const routeOf = (a: Asset): [RouteKind, number] | null => {
 export default function ElementsPage() {
   const { brand, toast } = useShell();
   const [assets, setAssets] = useState<Asset[] | null>(null);
-  const [concepts, setConcepts] = useState<Concept[]>([]);
   const [grid, setGrid] = useState(false);
   const [howto, setHowto] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -112,9 +108,6 @@ export default function ElementsPage() {
         setError(null);
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Could not load"));
-    boardConcepts()
-      .then((r) => setConcepts(r.items))
-      .catch(() => setConcepts([]));
   };
   useEffect(() => {
     load();
@@ -123,17 +116,6 @@ export default function ElementsPage() {
       .catch(() => setCanDraw(false));
   }, []);
 
-  // how many concepts an element has grounded: a ref url carries the
-  // asset's slug, so the count is the concepts whose refs name it
-  const usage = useMemo(() => {
-    const bySlug = new Map<string, number>();
-    for (const c of concepts) {
-      const slugs = new Set((c.refs || []).map(slugOf).filter(Boolean) as string[]);
-      for (const s of slugs) bySlug.set(s, (bySlug.get(s) || 0) + 1);
-    }
-    return bySlug;
-  }, [concepts]);
-  const slugFor = (a: Asset) => (a.photos[0] ? slugOf(a.photos[0]) : null) ?? handleOf(a.name).slice(1);
 
   const all = assets ?? [];
   const collage = all.filter((a) => displayPhoto(a)).slice(0, 4);
@@ -204,7 +186,7 @@ export default function ElementsPage() {
           </button>
           <AnimatePresence initial={false}>
           {all.map((a) => {
-            const used = usage.get(slugFor(a)) || 0;
+            const used = a.used_in ?? 0;
             const asking = confirming === a.id;
             const plate = displayPhoto(a);
             return (
@@ -321,7 +303,7 @@ export default function ElementsPage() {
       {open ? (
         <ElementSheet
           asset={open}
-          usedIn={usage.get(slugFor(open)) || 0}
+          usedIn={open.used_in ?? 0}
           onClose={() => setOpen(null)}
           onDeleted={(a) => {
             setOpen(null);
