@@ -1458,3 +1458,41 @@ def test_the_lean_board_draws_exactly_the_cards_the_full_rows_draw(tmp_db):
         full = preprod.list_concepts(account_id=None, brand=brand)
         expected = [api_mod._concept_card(c, set(), {}, {}) for c in full]
         assert served == json.loads(json.dumps(expected, default=str)), brand
+
+
+def test_the_board_counts_on_the_server_and_serves_archived_cards_on_demand(tmp_db):
+    """Step 4 (2026-09-25, Mike's call): `counts` is the tally the page used
+    to make over every card it fetched -- scenes only; open, open-and-picked,
+    archived -- and the default response carries no archived card. The
+    archived half comes from ?view=archived; the two halves together are
+    exactly what ?archived=true still returns."""
+    def scene(title, brand):
+        return preprod.save_concept({"title": title, "shots": [{"n": 1, "prompt": "p"}]},
+                                    brand=brand, dsn=tmp_db, account_id=None)
+    for brand in ("antihero", "zeropage"):
+        ids = [scene(f"{brand} {n}", brand) for n in range(6)]
+        preprod.set_picked(ids[0], True, dsn=tmp_db, account_id=None)
+        preprod.set_picked(ids[1], True, dsn=tmp_db, account_id=None)
+        for cid in ids[1:4]:             # a picked one archived counts as archived
+            preprod.set_archived(cid, True, dsn=tmp_db, account_id=None)
+        # a legacy multi-shot row: on neither shelf's count
+        preprod.save_concept({"title": "legacy", "shots": [{"n": 1}, {"n": 2}]},
+                             brand=brand, dsn=tmp_db, account_id=None)
+
+    for brand in (None, "antihero", "zeropage"):
+        b = f"brand={brand}&" if brand else ""
+        both = client.get(f"/api/pipeline/concepts?{b}archived=true").json()
+        scenes = [c for c in both["items"] if c["is_scene"]]
+        tally = {"open": sum(1 for c in scenes if not c["archived"]),
+                 "picked": sum(1 for c in scenes if not c["archived"] and c["picked"]),
+                 "archived": sum(1 for c in scenes if c["archived"])}
+        default = client.get(f"/api/pipeline/concepts?{b}").json()
+        gone = client.get(f"/api/pipeline/concepts?{b}view=archived").json()
+        assert default["counts"] == gone["counts"] == both["counts"] == tally, brand
+        assert not any(c["archived"] for c in default["items"]), brand
+        assert all(c["archived"] for c in gone["items"]), brand
+        assert [c["id"] for c in default["items"]] + [c["id"] for c in gone["items"]] == \
+            sorted([c["id"] for c in both["items"]], key=lambda i: (
+                i in {c["id"] for c in gone["items"]}, -i)), brand
+    assert client.get("/api/pipeline/concepts?brand=antihero").json()["counts"] == \
+        {"open": 3, "picked": 1, "archived": 3}

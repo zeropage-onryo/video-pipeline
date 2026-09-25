@@ -1,5 +1,23 @@
 # Task: lean card listings (Supabase egress per user)
 
+## Result (steps 1–4, measured 2026-09-25, not yet deployed)
+
+Bytes pulled from Postgres per visit, account 1, zeropage (antihero is similar):
+
+| Visit | before | after | PR |
+|---|---:|---:|---|
+| Pipeline page load (was `archived=true`) | 937,345 | **25,581** | #61, #62 |
+| Pipeline, opening the Archived filter | (included above) | 305,009, only when opened | #62 |
+| Queue page | 933,659 | **41,178** | #59, #61 |
+| Manual lane | 933,478 | **40,997** | #59, #61 |
+| Director arrival | 937,345 | **204** | #60 |
+| Director scene switcher | 937,345 | **204** | #60 |
+| Elements usage count | 896,205 | **2,161** | #60 |
+
+The response the browser receives on a Pipeline load (Vercel edge transfer)
+fell from 382,296 to 44,873 bytes. Still to do: deploy, then read the Supabase
+usage chart the next day, per day.
+
 ## Measurements (step 0, 2026-09-25, live Supabase, account 1)
 
 **Method.** Each route function called in-process against the live database
@@ -122,6 +140,36 @@ sources 4,631, rates 3,871.
 - What's left per row is mostly `spark` and the prompt, and a card draws both.
   The remaining lever is how many rows are read. Today about 80% of the window
   is archived; step 4 stops reading those unless asked.
+
+**Step 4 (`perf/board-archived-on-demand`): archived cards only when the
+Archived filter is opened.**
+
+| Call | before step 4 | after step 4 |
+|---|---|---|
+| Pipeline load, zeropage (was `archived=true`) | 326,711 / 382,296 | **25,581 / 44,873** (default) |
+| Pipeline load, antihero (was `archived=true`) | 329,978 / 442,126 | **24,307 / 52,794** (default) |
+| Archived filter opened, zeropage | (included above) | 305,009 / 356,029 (`view=archived`), once per visit |
+| Archived filter opened, antihero | (included above) | 309,550 / 407,938 (`view=archived`), once per visit |
+
+- Every board response carries `counts` = `{open, picked, archived}` from
+  `preprod.board_counts`: one `COUNT(*) FILTER` over the same window, scenes
+  only (the page's unit), `picked` meaning open and picked. The count line and
+  the filter badges read it.
+- `list_concepts(shelf="open"|"archived")` keeps one half of the same window in
+  SQL. The default response is the open half, `?view=archived` is the archived
+  half, and `?archived=true` still returns both (the vanilla `/ui` board reads
+  it and was left alone).
+- `web/src/app/studio/pipeline/page.tsx` loads the open half. It fetches the
+  archived half the first time the filter opens, caches it per brand (keyed, so
+  a brand switch never shows the other brand's archived cards), and re-reads it
+  after a pick, archive or restore once it has been loaded.
+- Clicked through in Chrome against a throwaway schema (8 scenes per brand):
+  load shows 5/2/3 with no archived request; opening Archived makes one
+  `view=archived` call; restoring a card moves the counts to 6/2 and the card to
+  Open; switching brand then opening Archived fetches that brand's own cards.
+- Test: `counts` equals the old client-side tally across both brands, the
+  default response has no archived card, and the two halves together equal the
+  `archived=true` list.
 
 Written 2026-09-25. Follows PR #48 (`perf/queue-count-egress`), which fixed the
 Queue badge. Read that commit (5fe9245) first: this task applies the same fix
