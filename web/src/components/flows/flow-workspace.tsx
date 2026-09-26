@@ -80,8 +80,7 @@ import {
   ZoomOut,
 } from "lucide-react";
 import { apiFetch, API_URL, goToSignIn } from "@/lib/api";
-import { boardConcepts, uploadRefs, type Concept as BoardConcept } from "@/lib/studio-api";
-import { openable } from "@/lib/director-arrival";
+import { sceneMenu, uploadRefs, type SceneMenuRow } from "@/lib/studio-api";
 import {
   announceQueueChange,
   getAssets,
@@ -553,7 +552,7 @@ function SceneSwitcher({
   go: (destination: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [rows, setRows] = useState<BoardConcept[] | null>(null);
+  const [rows, setRows] = useState<SceneMenuRow[] | null>(null);
   const [failed, setFailed] = useState(false);
   const box = useRef<HTMLSpanElement>(null);
   useEffect(() => {
@@ -574,11 +573,12 @@ function SceneSwitcher({
   const toggle = () => {
     setOpen((was) => !was);
     if (rows || open) return;
-    boardConcepts(brand || undefined)
-      .then((r) => setRows(r.items.filter(openable)))
+    // the server returns only what the canvas can open (api `_openable`)
+    sceneMenu(brand || undefined)
+      .then((r) => setRows(r.items))
       .catch(() => setFailed(true));
   };
-  const state = (c: BoardConcept) => (c.media_url ? "rendered" : c.picked ? "picked" : c.parked ? "in queue" : "");
+  const state = (c: SceneMenuRow) => (c.has_media ? "rendered" : c.picked ? "picked" : c.parked ? "in queue" : "");
   return (
     <span className="scene-switch" ref={box}>
       <button type="button" className="chip" aria-haspopup="menu" aria-expanded={open} onClick={toggle} title="Switch scene">

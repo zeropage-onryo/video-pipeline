@@ -71,6 +71,27 @@ rows off `queue_candidates` + `_is_waiting`, then load only those
 (`preprod.get_concepts`). Response bodies are byte-identical in size, and the
 test pins the ids to the old path.
 
+**Step 2 (`perf/board-side-readers`): the side readers stop pulling the board.**
+
+| Reader | before: what it fetched | db / response | after: what it fetches | db / response |
+|---|---|---:|---|---:|
+| Director arrival, zeropage | `/pipeline/concepts?brand=zeropage` | 937,345 / 44,828 | `/pipeline/arrival?brand=zeropage` | **204 / 10** |
+| Director arrival, antihero | `/pipeline/concepts?brand=antihero` | 852,401 / 52,749 | `/pipeline/arrival?brand=antihero` | **1,012 / 10** |
+| Scene switcher, zeropage | `/pipeline/concepts?brand=zeropage` | 937,345 / 44,828 | `/pipeline/concepts?brand=zeropage&view=menu` | **204 / 499** |
+| Scene switcher, antihero | `/pipeline/concepts?brand=antihero` | 852,401 / 52,749 | `/pipeline/concepts?brand=antihero&view=menu` | **1,012 / 254** |
+| Elements usage | `/pipeline/concepts` (unbranded) | 896,205 / 59,334 | `used_in` on `/assets?scope=elements` | **2,161** extra / a few bytes per element |
+
+Checked on the live rows: the server's arrival and menu give exactly the ids
+and states the old client-side `pickArrival`/`openable` gave, for both brands
+and unbranded. The arrival rule (`api._arrival` / `api._openable`) moved to the
+server, and `web/src/lib/director-arrival.ts` and its node test were deleted;
+the four cases were ported to `tests/test_api.py`. `used_in` goes through
+`asset_shelf.parse_ref`, so it also fixes a quiet bug: the page's old regex only
+knew the local `/characters/<slug>/` shape, and every canonical R2 ref counted
+as 0. Account 1 has no elements on the live database today, so there was
+nothing live to compare against there; the test covers local, R2 and repeated
+refs.
+
 Written 2026-09-25. Follows PR #48 (`perf/queue-count-egress`), which fixed the
 Queue badge. Read that commit (5fe9245) first: this task applies the same fix
 to the pages a person actually opens.

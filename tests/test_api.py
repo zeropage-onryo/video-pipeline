@@ -1320,3 +1320,105 @@ def test_queue_state_carries_the_selector_choices(tmp_db):
     assert all(m["usd_per_second"] > 0 for m in d["models"])
     assert d["ratios"] == list(render_specs.RUNWAY_RATIOS)
     assert d["durations"] == list(render_specs.RUNWAY_DURATIONS)
+
+
+# --- the board's side readers (2026-09-25) ----------------------------------
+# The Director arrival, its scene switcher and the Elements usage count each
+# fetched the whole board for an id, a menu and a number. They read
+# preprod.board_index now; none of them may touch list_concepts.
+
+def _no_board(mp):
+    mp.setattr(api_mod.preprod, "list_concepts",
+               lambda *a, **k: pytest.fail("a side reader read the whole board"))
+
+
+def _scene(tmp_db, title, brand="antihero", **shot):
+    return preprod.save_concept(
+        {"title": title, "hook": "h", "logline": "l",
+         "shots": [{"n": 1, "prompt": "a written scene", **shot}]},
+        brand=brand, dsn=tmp_db, account_id=None)
+
+
+def test_arrival_is_the_newest_scene_still_waiting_on_work(tmp_db):
+    older = _scene(tmp_db, "Older")
+    waiting = _scene(tmp_db, "Waiting")
+    rendered = _scene(tmp_db, "Rendered")
+    preprod.set_shot_media_url(rendered, 1, "/renders/x.mp4", dsn=tmp_db, account_id=None)
+    assert older < waiting < rendered
+    with pytest.MonkeyPatch.context() as mp:
+        _no_board(mp)
+        assert client.get("/api/pipeline/arrival?brand=antihero").json() == {"id": waiting}
+
+
+def test_a_rendered_scene_is_the_arrival_fallback(tmp_db):
+    rendered = _scene(tmp_db, "Rendered")
+    preprod.set_shot_media_url(rendered, 1, "/renders/x.mp4", dsn=tmp_db, account_id=None)
+    assert client.get("/api/pipeline/arrival").json() == {"id": rendered}
+
+
+def test_what_the_canvas_cannot_open_is_never_the_arrival_or_on_the_menu(tmp_db):
+    archived = _scene(tmp_db, "Archived")
+    preprod.set_archived(archived, True, dsn=tmp_db, account_id=None)
+    _scene(tmp_db, "Blank", prompt="   \n ")
+    preprod.save_concept({"title": "Two shots", "shots": [{"n": 1, "prompt": "a"},
+                                                          {"n": 2, "prompt": "b"}]},
+                         brand="antihero", dsn=tmp_db, account_id=None)
+    preprod.save_concept({"title": "No prompt", "shots": [{"n": 1}]},
+                         brand="antihero", dsn=tmp_db, account_id=None)
+    assert client.get("/api/pipeline/arrival").json() == {"id": None}
+    assert client.get("/api/pipeline/concepts?view=menu").json() == {"items": []}
+
+
+def test_an_empty_board_has_no_arrival(tmp_db):
+    assert client.get("/api/pipeline/arrival?brand=zeropage").json() == {"id": None}
+
+
+def test_the_scene_menu_is_the_openable_board_and_nothing_heavier(tmp_db):
+    picked = _scene(tmp_db, "Picked", refs=["/refs/a.jpg"])
+    parked = _scene(tmp_db, "Parked")
+    rendered = _scene(tmp_db, "Rendered")
+    other = _scene(tmp_db, "Other brand", brand="zeropage")
+    preprod.set_picked(picked, True, dsn=tmp_db, account_id=None)
+    preprod.set_shot_parked(parked, 1, "night", dsn=tmp_db, account_id=None)
+    preprod.set_shot_media_url(rendered, 1, "/renders/x.mp4", dsn=tmp_db, account_id=None)
+    with pytest.MonkeyPatch.context() as mp:
+        _no_board(mp)
+        mp.setattr(api_mod.autonomy, "gates_for_concepts", lambda *a, **k: pytest.fail("gates"))
+        mp.setattr(api_mod.scout, "sources_for_refs", lambda *a, **k: pytest.fail("sources"))
+        menu = client.get("/api/pipeline/concepts?view=menu&brand=antihero").json()["items"]
+    assert menu == [
+        {"id": rendered, "n": f"SHOOT-{rendered:02d}", "title": "Rendered", "brand": "antihero",
+         "picked": False, "parked": False, "has_media": True},
+        {"id": parked, "n": f"SHOOT-{parked:02d}", "title": "Parked", "brand": "antihero",
+         "picked": False, "parked": True, "has_media": False},
+        {"id": picked, "n": f"SHOOT-{picked:02d}", "title": "Picked", "brand": "antihero",
+         "picked": True, "parked": False, "has_media": False},
+    ]
+    everyone = client.get("/api/pipeline/concepts?view=menu").json()["items"]
+    assert [r["id"] for r in everyone] == [other, rendered, parked, picked]
+    # the menu agrees with the cards the full board would draw
+    cards = client.get("/api/pipeline/concepts?brand=antihero").json()["items"]
+    assert {c["id"]: (c["picked"], c["parked"], bool(c["media_url"])) for c in cards} == \
+        {r["id"]: (r["picked"], r["parked"], r["has_media"]) for r in menu}
+
+
+def test_elements_carry_how_many_open_concepts_name_them(tmp_db):
+    """`used_in` is counted server-side through asset_shelf.parse_ref, so a
+    canonical R2 URL counts the same as the local route -- the browser's
+    old regex only knew the local shape, and every R2 ref counted as 0."""
+    from src import entities
+    entities.add_character("Michael", dsn=tmp_db, account_id=None)
+    entities.add_prop("Ducati", dsn=tmp_db, account_id=None)
+    local = "/characters/michael/photo/a.jpg"
+    r2 = "https://pub-x.r2.dev/characters/michael/b.jpg"
+    _scene(tmp_db, "Local", refs=[local, "/refs/x.jpg"])
+    _scene(tmp_db, "R2 twice", refs=[r2, local], brand="zeropage")
+    _scene(tmp_db, "Prop", refs=["/props/ducati/photo/c.jpg"])
+    gone = _scene(tmp_db, "Archived", refs=[local])
+    preprod.set_archived(gone, True, dsn=tmp_db, account_id=None)
+    with pytest.MonkeyPatch.context() as mp:
+        _no_board(mp)
+        items = client.get("/api/assets?scope=elements").json()["items"]
+    used = {i["name"]: i.get("used_in") for i in items}
+    assert used["Michael"] == 2   # one concept naming him twice counts once
+    assert used["Ducati"] == 1

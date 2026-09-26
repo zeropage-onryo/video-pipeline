@@ -731,12 +731,53 @@ def _generated_assets(account_id: Optional[int]) -> list:
     return items
 
 
+def _element_key(item: dict) -> Optional[tuple]:
+    """(kind, slug) for an element, the way its photos' URLs name it --
+    asked of asset_shelf.parse_ref, THE parser, so a local route, a flat
+    R2 URL and a storable name all read the same. An element with no
+    photo falls back to the folder its photos would live under."""
+    for url in item.get("photos") or []:
+        ref = asset_shelf.parse_ref(url)
+        if ref and ref["kind"] == item["category"]:
+            return (ref["kind"], ref["slug"])
+    if item["category"] == "location":
+        return ("location", item["name"])
+    if item["category"] in ("character", "prop"):
+        return (item["category"], _slug(item["name"]))
+    return None
+
+
+def _count_uses(items: list, account_id: int) -> None:
+    """`used_in` on each element: how many open concepts' refs name it
+    (2026-09-25). The Elements page computed this in the browser from
+    the whole board -- ~0.9 MB of database egress for a number per card
+    -- with a regex that only matched the old local `/characters/<slug>/`
+    shape, so every canonical R2 ref counted as nothing. Same window as
+    that board read (the newest 100 of the account, all brands, not
+    archived), now off preprod.board_index's refs alone."""
+    uses: dict = {}
+    for row in preprod.board_index(account_id=account_id, refs=True):
+        named = set()
+        for url in row["refs"]:
+            ref = asset_shelf.parse_ref(url) if isinstance(url, str) else None
+            if ref and ref["kind"] != "refs":
+                named.add((ref["kind"], ref["slug"]))
+        for key in named:
+            uses[key] = uses.get(key, 0) + 1
+    for item in items:
+        key = _element_key(item)
+        if key:
+            item["used_in"] = uses.get(key, 0)
+
+
 @router.get("/assets")
 def assets_list(q: Optional[str] = None, category: Optional[str] = None,
                 limit: int = 200, scope: str = "all",
                 account_id: int = Depends(auth.current_account_id),
 ):
     items = _assets_all(account_id, scope)
+    if scope == "elements":
+        _count_uses(items, account_id)
     counts = {"all": len(items)}
     for cat in ("location", "character", "prop", "generated"):
         counts[cat] = sum(1 for i in items if i["category"] == cat)
@@ -1534,15 +1575,68 @@ def _timeline_card(shot: dict, account_id: Optional[int] = None) -> Optional[dic
                       for i, w in enumerate(windows, start=1)]}
 
 
+def _openable(row: dict) -> bool:
+    """A board row the Director canvas can open: a scene, still on the
+    board, with a prompt that is not blank (the canvas refuses one).
+    ONE copy, read by the arrival and the scene switcher, so the two
+    cannot disagree about what the Director can open (2026-09-25: it was
+    `openable` in web/src/lib/director-arrival.ts until then)."""
+    return bool(row.get("is_scene") and not row.get("archived")
+                and row.get("has_prompt"))
+
+
+def _arrival(rows: list) -> Optional[dict]:
+    """Where the Director opens when nobody named a scene. The standing
+    rule (Mike's, 2026-08-25): arrival is the NODES -- the newest scene's
+    graph -- never a composer and never a dead end. Rows come newest
+    first; a scene still waiting on work outranks one that already has
+    its clip, because the Director is where a scene gets worked; a
+    rendered one is the fallback so arrival is still a real graph.
+    Moved here from web/src/lib/director-arrival.ts (2026-09-25) so the
+    rule lives in one place and the page asks for an id, not the board."""
+    scenes = [r for r in rows if _openable(r)]
+    return next((r for r in scenes if not r.get("has_media")),
+                scenes[0] if scenes else None)
+
+
+@router.get("/pipeline/arrival")
+def pipeline_arrival(brand: Optional[str] = None,
+                     account_id: int = Depends(auth.current_account_id)):
+    """The ONE concept the Director opens on, `{id}` or `{id: null}`
+    (then the page falls back to its local draft). Read off
+    preprod.board_index -- the board's window, a few facts per row
+    computed in Postgres -- instead of the whole board, which this
+    page used to fetch (~0.9 MB of database egress) to keep one id."""
+    row = _arrival(preprod.board_index(account_id=account_id, brand=brand))
+    return {"id": row["id"] if row else None}
+
+
+def _scene_menu(account_id: int, brand: Optional[str]) -> dict:
+    """The Director's scene switcher: the openable rows, as much as a
+    menu line draws and no more -- no card, no gates, no sources."""
+    return {"items": [
+        {"id": r["id"], "n": f"SHOOT-{r['id']:02d}", "title": r["title"],
+         "brand": r["brand"], "picked": r["picked"], "parked": r["parked"],
+         "has_media": r["has_media"]}
+        for r in preprod.board_index(account_id=account_id, brand=brand)
+        if _openable(r)]}
+
+
 @router.get("/pipeline/concepts")
 def pipeline_concepts(brand: Optional[str] = None, status: Optional[str] = None,
-                      archived: bool = False,
+                      archived: bool = False, view: Optional[str] = None,
                       account_id: int = Depends(auth.current_account_id),
 ):
     """The board. Archived concepts are hidden by default -- they are
     decided about, and the board is for what is still open. They are
     still here (`?archived=true`) and still counted in pick_rate, which
-    reads the rows rather than this endpoint."""
+    reads the rows rather than this endpoint.
+
+    `?view=menu` (2026-09-25) is the Director's scene switcher: the
+    openable rows as {id, n, title, brand, picked, parked, has_media},
+    off a column-only query. It used to take the whole board for a menu."""
+    if view == "menu":
+        return _scene_menu(account_id, brand)
     # brand goes into the query, not a filter after it -- list_concepts
     # takes the newest 100 of THIS ACCOUNT, and both brands live in one
     # account, so filtering afterwards meant one brand could eat the
