@@ -604,8 +604,29 @@ def get_concept(concept_id: int, dsn: Optional[str] = None, *,
         return _concept_row(row, conn) if row else None
 
 
+# What a board CARD reads off a row, and no more (2026-09-25). The card
+# is api._concept_card; these are the columns it and _concept_row touch.
+# Left out: notes, edit_note, grade_note, the judge/uncanny reasons and
+# scores beyond judge_overall, client, format, duration, prompt_hash --
+# none of them reaches a card. ai_json stays (ai_shot_count derives from
+# it on legacy rows, and it is empty everywhere today).
+_CARD_COLUMNS = ("id, created_at, brand, spark, title, hook, logline, card_line, "
+                 "ai_json, shot_done, warnings_json, use_pov, judge_overall, "
+                 "picked_at, archived_at, archive_reason, account_id")
+# ...and inside the first shot, the keys no card draws: the model's own
+# drafts (`written_prompt`, `model_prompt` -- a third of shots_json, read
+# only when ONE scene is opened: Director, edit-teach, the grade queue,
+# all of which read the single concept) and the legacy `desc`/`frames`.
+# `refs` and its order are never touched: refs[0] is the frame Runway
+# anchors on. The prompt and the timeline stay (the card and
+# timeline.is_current read both).
+_CARD_SHOTS = ("(shots_json::jsonb #- '{0,written_prompt}' #- '{0,model_prompt}' "
+               "#- '{0,desc}' #- '{0,frames}')::text AS shots_json")
+
+
 def list_concepts(limit: int = 100, dsn: Optional[str] = None, *,
-                  account_id: int, brand: Optional[str] = None) -> list[dict[str, Any]]:
+                  account_id: int, brand: Optional[str] = None,
+                  lean: bool = False) -> list[dict[str, Any]]:
     """This account's concepts, newest first -- the ones you just
     generated are the ones you're deciding about.
 
@@ -621,11 +642,17 @@ def list_concepts(limit: int = 100, dsn: Optional[str] = None, *,
 
     An unknown brand is ignored rather than returning nothing -- callers
     pass a cookie value, and a stale cookie should show the board, not
-    empty it."""
+    empty it.
+
+    `lean=True` (2026-09-25) is the board's read: only the columns a
+    card draws (`_CARD_COLUMNS`) and the first shot without the keys no
+    card reads (`_CARD_SHOTS`). Same window, same parse. Every other
+    caller -- the judges, ops scripts, the MCP search -- keeps SELECT *."""
     scoped = brand if brand in BRANDS else None
+    columns = f"{_CARD_COLUMNS}, {_CARD_SHOTS}" if lean else "*"
     with connect(dsn) as conn:
         rows = conn.execute(
-            "SELECT * FROM shoot_concepts WHERE account_id IS NOT DISTINCT FROM %s "
+            f"SELECT {columns} FROM shoot_concepts WHERE account_id IS NOT DISTINCT FROM %s "
             + ("AND brand = %s " if scoped else "")
             + "ORDER BY id DESC LIMIT %s",
             (account_id, scoped, limit) if scoped else (account_id, limit),

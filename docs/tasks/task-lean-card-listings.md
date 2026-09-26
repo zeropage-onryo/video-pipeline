@@ -92,6 +92,37 @@ as 0. Account 1 has no elements on the live database today, so there was
 nothing live to compare against there; the test covers local, R2 and repeated
 refs.
 
+**Step 3 (`perf/board-lean-columns`): the board query stops shipping what no
+card draws.**
+
+| Route | before step 3 | after step 3 |
+|---|---|---|
+| `pipeline/concepts` zeropage (either `archived`) | 937,345 / 44,828 · 382,296 | **326,711** / unchanged |
+| `pipeline/concepts` antihero (either `archived`) | 852,401 / 52,749 · 442,126 | **329,978** / unchanged |
+| `queue/pending` zeropage | 52,052 / 27,806 | **41,178** / unchanged |
+| `queue/manual` zeropage | 51,871 / 5,640 | **40,997** / unchanged |
+
+Where the board's remaining 327 KB goes (zeropage): concept rows 280,613
+(was 482,913), `prompt_scores` 25,238, holds **12,358 (was 420,692)**, bin
+sources 4,631, rates 3,871.
+
+- `list_concepts(lean=True)`, used only by the board: `SELECT` names the
+  columns a card reads, and strips `written_prompt`, `model_prompt`, `desc` and
+  `frames` from the first shot in SQL (`#-`). `refs` and its order are
+  untouched. Every other caller keeps `SELECT *`.
+- `gates_for_concepts` reads `payload::jsonb->>'run_id'` in Postgres instead of
+  the whole payload. A nested `CASE` with `pg_input_is_valid` keeps the "never
+  guesses" rule: bad JSON or a non-object reads as no run. That needs
+  PostgreSQL 16 or later; Supabase runs 17.6 and CI runs pg17.
+- Checked on live rows: the lean board's cards are identical to the cards built
+  from `SELECT *` (100 of 100, both brands and unbranded, archived included),
+  and the SQL `run_id` matches the Python parse on all 424 hold rows. The card's
+  shape didn't change, so neither twin (`concept-card.tsx`, `cards.js`) lost a
+  field.
+- What's left per row is mostly `spark` and the prompt, and a card draws both.
+  The remaining lever is how many rows are read. Today about 80% of the window
+  is archived; step 4 stops reading those unless asked.
+
 Written 2026-09-25. Follows PR #48 (`perf/queue-count-egress`), which fixed the
 Queue badge. Read that commit (5fe9245) first: this task applies the same fix
 to the pages a person actually opens.

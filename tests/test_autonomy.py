@@ -250,6 +250,26 @@ def test_an_advisory_run_still_reads_as_failed_by_the_gate(tmp_db):
     assert gate["passed"] is False and gate["score"] == 4
 
 
+def test_the_gate_reads_run_id_in_sql_and_never_guesses_on_a_bad_payload(tmp_db):
+    """gates_for_concepts reads `run_id` inside Postgres (2026-09-25)
+    instead of fetching the whole payload. A payload that is not JSON, or
+    not a JSON object, or has no run_id, reads as a run that never
+    scored -- present, score None -- and never breaks the board."""
+    from src import db
+    autonomy.log_prompt_scores("good", [{"prompt": "p", "score": 7, "pass": True,
+                                         "reason": "fine"}], dsn=tmp_db)
+    for cid, payload in ((1, {"run_id": "good", "clips": ["x" * 5000]}),
+                         (2, {"clips": []}), (3, None), (4, None), (5, None)):
+        autonomy.to_hold("zeropage", f"hold {cid}", concept_id=cid, payload=payload,
+                         dsn=tmp_db, account_id=None)
+    with db.connect(tmp_db) as conn:
+        conn.execute("UPDATE hold_queue SET payload = 'not json {' WHERE concept_id = 4")
+        conn.execute("UPDATE hold_queue SET payload = '[\"run_id\"]' WHERE concept_id = 5")
+    gates = autonomy.gates_for_concepts([1, 2, 3, 4, 5], dsn=tmp_db, account_id=None)
+    assert gates[1]["score"] == 7 and gates[1]["passed"] is True
+    for cid in (2, 3, 4, 5):
+        assert gates[cid]["score"] is None and gates[cid]["outcome"] == f"hold {cid}", cid
+
 def test_the_readers_answer_nothing_on_a_database_with_no_graph_history(pg):
     fresh = pg                             # db.init_db only: no autonomy.init, no hold_queue yet
     assert autonomy.hold_for_concept(1, dsn=fresh, account_id=None) is None
