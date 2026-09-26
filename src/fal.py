@@ -82,6 +82,7 @@ import json
 import os
 import re
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -183,13 +184,18 @@ VIDEO_MODELS: dict[str, dict] = {
     # restrictions passed on. Nothing here constrains billing fal for a
     # render; all of it constrains shipping a LoRA trained on our footage.
     # https://huggingface.co/Lightricks/LTX-2.3/blob/main/LICENSE (2026-09-09)
+    # duration is an INTEGER on the wire, whatever the schema page shows:
+    # the /api tab renders the enum as "6", and the first live render
+    # (2026-09-26, concept #194) sent "6" and came back 422 from the
+    # RESULT fetch -- `literal_error ... Input should be 6, 8 or 10`. The
+    # submit accepts anything; the validation runs with the job.
     "ltx2.3": {
         "t2v": "fal-ai/ltx-2.3/text-to-video",
         "i2v": "fal-ai/ltx-2.3/image-to-video",
         "params": ("duration", "resolution", "aspect_ratio"),
         "durations": (6, 10),
         "duration_values": (6, 8, 10),
-        "duration_wire": "str",
+        "duration_wire": "int",
         "resolutions": ("1080p", "1440p", "2160p"),
         "default_resolution": "1080p",
         "prices": {"1080p": 0.06, "1440p": 0.12, "2160p": 0.24},
@@ -605,8 +611,21 @@ def _request(url: str, payload: Optional[dict] = None, *,
                  "Accept": "application/json"},
         method="POST" if payload is not None else "GET",
     )
-    with urllib.request.urlopen(req, timeout=60) as response:
-        return json.loads(response.read().decode())
+    try:
+        with urllib.request.urlopen(req, timeout=60) as response:
+            return json.loads(response.read().decode())
+    except urllib.error.HTTPError as e:
+        # fal's reason lives in the BODY (a 422's `detail` names the field
+        # and the legal values). Without it the first live render failed as
+        # a bare "HTTP Error 422" on the card and the row, and finding out
+        # why took a hand replay on the server. Capped, and the key is
+        # redacted by _safe_error on the way to any page or row.
+        try:
+            detail = e.read().decode(errors="replace")[:600]
+        except Exception:
+            detail = ""
+        raise RuntimeError(
+            f"HTTP Error {e.code}: {e.reason}" + (f" -- {detail}" if detail else "")) from e
 
 
 # fal's video payloads are documented as {"video": {"url": ...}}; image

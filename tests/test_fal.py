@@ -186,11 +186,12 @@ def test_duration_is_clamped_into_the_models_own_range():
 
 
 def test_an_enum_duration_is_fitted_up_and_sent_in_the_models_own_shape():
-    """LTX-2.3 takes 6/8/10 (strings), Veo 3.1 "4s"/"6s"/"8s", Wan a plain
-    integer. An off-enum value is a refused request after a queue wait."""
-    assert fal.build_body("x", model="ltx2.3", duration=5)[1]["duration"] == "6"
-    assert fal.build_body("x", model="ltx2.3", duration=7)[1]["duration"] == "8"
-    assert fal.build_body("x", model="ltx2.3", duration=30)[1]["duration"] == "10"
+    """LTX-2.3 takes 6/8/10 (integers -- verified live 2026-09-26), Veo 3.1
+    "4s"/"6s"/"8s", Wan a plain integer. An off-enum value is a refused request after a queue wait."""
+    # an integer on the wire: "6" was refused live (422 literal_error)
+    assert fal.build_body("x", model="ltx2.3", duration=5)[1]["duration"] == 6
+    assert fal.build_body("x", model="ltx2.3", duration=7)[1]["duration"] == 8
+    assert fal.build_body("x", model="ltx2.3", duration=30)[1]["duration"] == 10
     assert fal.build_body("x", model="veo3.1", duration=5)[1]["duration"] == "6s"
     assert fal.build_body("x", model="wan3", duration=5)[1]["duration"] == 5
     assert fal.fit_duration("ltx2.3", 3) == 6
@@ -663,3 +664,23 @@ def test_the_generation_row_records_the_anchor_that_was_actually_sent(
     with generative.connect(tmp_db) as conn:
         params = conn.execute("SELECT params_json FROM generations").fetchone()[0]
     assert json.loads(params)["prompt_image"] is False
+
+
+def test_an_http_error_carries_fals_reason(monkeypatch):
+    """The first live render failed as a bare "HTTP Error 422". fal puts
+    the reason in the body; the error has to carry it to the card and row."""
+    import io
+    import urllib.error
+    import urllib.request
+
+    monkeypatch.setenv("FAL_KEY", "fal-secret-key")
+    body = b'{"detail":[{"loc":["body","duration"],"msg":"Input should be 6, 8 or 10"}]}'
+
+    def refuse(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, 422, "Unprocessable Entity", {},
+                                     io.BytesIO(body))
+    monkeypatch.setattr(urllib.request, "urlopen", refuse)
+    with pytest.raises(RuntimeError) as err:
+        fal._request("https://queue.fal.run/x")
+    assert "422" in str(err.value) and "Input should be 6, 8 or 10" in str(err.value)
+    assert "fal-secret-key" not in fal._safe_error(err.value)
