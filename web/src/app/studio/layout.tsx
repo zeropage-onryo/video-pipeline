@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { cardFonts } from "@/components/studio/card-fonts";
 import { StudioShell } from "@/components/studio/shell";
 import { FilmGrain } from "@/components/film-grain";
+import { AssistantPill } from "@/components/studio/assistant-pill";
 
 export const metadata: Metadata = {
   title: "Studio",
@@ -21,7 +22,12 @@ export default function StudioLayout({ children }: { children: React.ReactNode }
   return (
     <div className={`${cardFonts} contents`}>
       <FilmGrain />
-      <StudioShell>{children}</StudioShell>
+      <StudioShell>
+        {children}
+        {/* the assistant pill: one per shell, so the conversation follows
+            the person from page to page (components/studio/assistant-pill.tsx) */}
+        <AssistantPill />
+      </StudioShell>
     </div>
   );
 }
