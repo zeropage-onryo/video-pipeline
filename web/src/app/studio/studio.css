@@ -2929,3 +2929,128 @@ select.zin {
     display: none;
   }
 }
+
+/* ── the credit pill + its popover (2026-09-25) ──
+   The popover is portalled to <body>, outside .zps, so it restates the
+   tokens it needs instead of reading the .zps custom properties. */
+.zcredit-pill {
+  white-space: nowrap;
+  flex: none;
+}
+.zcredit-pill .zcredit-word {
+  margin-left: -3px;
+}
+@media (max-width: 640px) {
+  .zcredit-pill {
+    padding: 7px 11px;
+  }
+  .zcredit-pill .zcredit-word {
+    display: none;
+  }
+  /* the pill is a second tag in a bar that had room for one */
+  .zps .bar {
+    gap: 8px;
+  }
+}
+.zcredit-pill.empty {
+  color: #e4002b;
+  border-color: rgb(228 0 43 / 0.45);
+}
+.zcredit {
+  width: 280px;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid rgb(255 255 255 / 0.08);
+  background: rgb(14 14 17 / 0.97);
+  box-shadow: 0 18px 60px -20px rgb(0 0 0 / 0.8);
+  backdrop-filter: blur(16px);
+  color: #f4f3f2;
+  font-family: var(--font-inter), "Inter", -apple-system, sans-serif;
+  outline: none;
+}
+.zcredit .m,
+.zcredit .u,
+.zcredit dt {
+  font-family: var(--font-jetbrains), "JetBrains Mono", ui-monospace, monospace;
+  font-size: 9px;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: #8e8c8a;
+}
+.zcredit-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgb(255 255 255 / 0.08);
+}
+.zcredit-head strong {
+  font-family: var(--font-oswald), "Oswald", "Archivo Narrow", sans-serif;
+  font-weight: 500;
+  font-size: 30px;
+  line-height: 1;
+  letter-spacing: 0.02em;
+}
+.zcredit-head strong.empty {
+  color: #e4002b;
+}
+.zcredit-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0 0;
+}
+.zcredit-rows > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.zcredit-rows dd {
+  margin: 0;
+  font-size: 12.5px;
+  color: #f4f3f2;
+  font-variant-numeric: tabular-nums;
+}
+.zcredit-note {
+  margin: 12px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #8e8c8a;
+}
+.zcredit-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+.zcredit-actions > * {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 34px;
+  border-radius: 999px;
+  border: 1px solid rgb(255 255 255 / 0.2);
+  background: transparent;
+  color: #f4f3f2;
+  font-size: 12.5px;
+  text-decoration: none;
+  transition:
+    border-color 180ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    background 180ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+.zcredit-actions > *:hover {
+  border-color: #f4f3f2;
+}
+.zcredit-actions > .primary {
+  background: #e4002b;
+  border-color: #e4002b;
+  color: #fff;
+}
+.zcredit-actions > .primary:hover {
+  background: #c80026;
+}
+.zcredit-actions > button:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
