@@ -151,7 +151,7 @@ def seed_gold_standard():
             with db.connect() as conn:
                 owner = db.bootstrap_account_id(conn)
             winners.record_and_learn(
-                "runway", text, note="gold standard structural exemplar",
+                winners.DEFAULT_TOOL, text, note="gold standard structural exemplar",
                 verdict="worked",
                 project=accounts_mod.slug_of(owner))
     except Exception:
@@ -1817,7 +1817,7 @@ def winners_page(request: Request, prompt: Optional[str] = None,
         request, "winners.html",
         {"winners": winners.list_all(),
          "prefill_prompt": prompt or "",
-         "prefill_tool": (tool or "runway").lower(),
+         "prefill_tool": (tool or winners.DEFAULT_TOOL).lower(),
          "prefill_verdict": (verdict or "worked").lower(),
          "message": message, "active_nav": "winners"},
     )
@@ -1837,7 +1837,7 @@ async def winners_add(request: Request,
             f"/winners?message={quote('A winning prompt cannot be empty.')}",
             status_code=303)
     result = winners.record_and_learn(
-        form.get("tool") or "runway", prompt,
+        form.get("tool") or winners.DEFAULT_TOOL, prompt,
         note=form.get("note") or "", video_ref=form.get("video_ref") or "",
         verdict=form.get("verdict") or "worked",
         project=accounts_mod.slug_of(account_id))
@@ -2225,7 +2225,7 @@ async def concept_shot_verdict(concept_id: int, shot_n: int, request: Request,
     text = (form.get("text") or "").strip()
     if not text:
         return _redirect_with_message(destination, "Nothing to record — the prompt was empty.")
-    tool = (form.get("tool") or "runway").strip().lower()
+    tool = (form.get("tool") or winners.DEFAULT_TOOL).strip().lower()
     message = teach_verdict(tool, text, form,
                             video_ref=f"concept-{concept_id}-shot-{shot_n}",
                             subject=f"shot {shot_n}", path=None,

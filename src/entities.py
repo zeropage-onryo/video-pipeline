@@ -193,3 +193,44 @@ def summary(dsn=None, *, account_id: int) -> dict:
             "SELECT COUNT(*) FROM props WHERE account_id IS NOT DISTINCT FROM %s", (account_id,)
         ).fetchone()[0]
     return {"characters": chars, "props": props}
+
+
+def render_aliases(dsn=None, *, account_id=None) -> dict:
+    """Asset name -> the phrase to use instead when talking to a renderer.
+
+    A renderer's moderation reads a NAME, not your intent: "Cyclops" is a
+    Marvel character to a classifier however Homeric yours is, and the
+    whole prompt is refused for "referencing third party content"
+    (2026-08-29, on Runway). The name was never doing the work anyway --
+    the keyframe carries the look -- so it costs nothing to describe the
+    thing instead.
+
+    Explicit per asset (`description.render_alias`), never guessed: no list
+    of trademarks could be complete, and swapping every asset name for its
+    full description would blow a prompt budget on the first sentence. Set
+    it on the assets that actually get flagged.
+
+    Moved here from src/runway.py on 2026-09-26, when that adapter was
+    retired -- the alias is a property of the ASSET, not of a vendor. It
+    also stopped silently doing nothing: the old copy ran json.loads over a
+    description list_characters had ALREADY decoded to a dict, the
+    TypeError was swallowed, and no alias was ever applied.
+    """
+    try:
+        rows = (list_characters(dsn, account_id=account_id)
+                + list_props(dsn, account_id=account_id))
+    except Exception:
+        return {}          # sanitising is a courtesy, never a gate
+    out = {}
+    for row in rows:
+        name = (row.get("name") or "").strip()
+        desc = row.get("description") or {}
+        if isinstance(desc, str):
+            try:
+                desc = json.loads(desc) or {}
+            except (ValueError, TypeError):
+                desc = {}
+        alias = desc.get("render_alias") if isinstance(desc, dict) else None
+        if name and isinstance(alias, str) and alias.strip():
+            out[name] = alias.strip()
+    return out

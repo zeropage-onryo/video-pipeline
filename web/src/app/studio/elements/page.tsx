@@ -11,7 +11,7 @@
    (/api/assets/{characters|locations|props}), which also teaches the
    RAG assets shelf. Since 2026-09-18 this page reads the `elements`
    scope only -- a render is an Asset, never an element (one used to
-   show up here as "@runway-image") -- and a card can be deleted: the
+   show up here as a render's own "@…-image" name) -- and a card can be deleted: the
    row and its RAG chunk go, the photos on disk stay. An element also
    gets a REFERENCE SHEET (2026-09-18, part of adding one): drawn on
    save as a job from the real photos, it becomes the card's plate and

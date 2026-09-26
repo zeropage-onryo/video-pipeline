@@ -105,9 +105,10 @@ venv/bin/python -m src.rag_eval <cases.json> [--k 5]   # hit@k + MRR over labele
 venv/bin/python -m src.mcp_server --engine   # stdio; Claude Desktop launches this itself
 # Registering it: ops/connect-claude.md (paste ops/claude-desktop-mcp.json, ⌘Q, reopen)
 
-# THE MANUAL RENDER LANES — a subscription spent by hand, never by the nightly.
-# The Higgsfield MCP (a Claude session) and Runway Explore Mode (a human in
-# Chrome; free on Unlimited, a web-app toggle with NO API parameter). `list`
+# THE MANUAL RENDER LANES — clips that reach a concept without an API render.
+# The Higgsfield MCP (a Claude session on the operator's app plan) and the
+# generic `manual` import (a clip rendered anywhere, filed free -- it was the
+# Runway Unlimited lane until 2026-09-26). `list`
 # says what is waiting, `import` files the mp4 into data/renders/<provider>/
 # and writes a FREE row (cost_usd NULL, params.source = the lane marker, so
 # ledger.is_billable takes no hold). BOTH lanes are OPERATOR-ONLY —
@@ -122,10 +123,10 @@ venv/bin/python -m src.accounts operator <slug> --on   # --off to revoke
 # with no list of known slugs -- that empty list is the tell (found 2026-09-18,
 # turning `credits` on for antihero). To move a flag on the LIVE database:
 set -a && source .env && set +a && venv/bin/python -m src.accounts credits <slug> --on
-# The API-billed adapters are untouched by it. See docs/RUNBOOK.md 2026-09-08.
-python3 ops/render_queue.py --account <slug> [--provider runway] list
-python3 ops/render_queue.py --provider runway --account <slug> import \
-    --concept N --shot 1 --file clip.mp4 --model gen4_turbo --duration 10
+# The API-billed renderer (fal) is untouched by it. See docs/RUNBOOK.md 2026-09-08.
+python3 ops/render_queue.py --account <slug> [--provider manual] list
+python3 ops/render_queue.py --provider manual --account <slug> import \
+    --concept N --shot 1 --file clip.mp4 --model "kling 3 web app" --duration 10
 
 # THE REFERENCE PHOTOS — the bytes behind every ref URL, pushed to R2 so they
 # resolve on the deployed site too (characters/props/locations/data/refs are
@@ -211,6 +212,28 @@ origin first-party. `/signin` does the same when already signed in here; `GET /a
 clears this origin's cookie after the studio has cleared its own through the proxy.
 
 ## Architecture
+
+**FAL IS THE ONLY VIDEO RENDERER, AND BYOK IS GONE (2026-09-26, Mike's call;
+docs/tasks/task-fal-only.md).** Every video door -- Queue approve, approve-all,
+the Director Generate node, the board's per-shot render, the nightly graph,
+autopilot -- renders through `src/fal.py` on the operator's `FAL_KEY` and holds
+credits (`src/charge.py`). `src/runway.py`, `src/veo.py` and
+`src/account_keys.py` are deleted; `src/higgsfield.py` keeps only its Soul
+STILLS path; Veo lives on as the fal model `veo3.1`. `providers.VIDEO_PROVIDERS`
+is `{"fal": fal}`. A shot still carrying `RUNWAY`/`HIGGSFIELD` as its tool is
+read as the fal default at render time (`providers.platform_default`,
+`RETIRED_PLATFORMS`) and never rewritten. `ledger.is_billable` has one
+exemption left -- the manual lanes' `source` marker -- plus the operator's
+`credit_exempt` column in `hold_for_render`. Pricing is v3
+(`2026-09-26-fal-v3`): model x RESOLUTION x seconds off `fal.VIDEO_MODELS`
+(dated, re-checked against each model's `/api` schema that day) x `MARKUP`;
+bands are per resolution (`providers.BAND_BY_FRAME`: 1080p Seedance and all of
+Veo are premium). `fal.fit_duration` fits a length UP to a model's enum
+(LTX-2.3 takes only 6/8/10s; Veo "4s"/"6s"/"8s") and `build_body` sends it in
+each model's wire shape and image field (Wan: `start_image_url`). The
+`account_keys` table is dropped by `db.drop_account_keys_table` once empty (it
+held 0 rows live). Much of the prose below predates this and still names
+Runway as a renderer; where it does, fal is what now happens.
 
 One phase, and it ends at a rendered clip: everything reasons about **an idea worth shooting
 and the reference images that ground it**. State lives in **Postgres** (`DATABASE_URL`, Supabase

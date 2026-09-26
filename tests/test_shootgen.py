@@ -308,13 +308,18 @@ def test_validate_warns_on_unknown_legacy_ai_tool():
     assert any("tool" in w for w in warnings)
 
 
-def test_validate_accepts_every_registered_platform():
-    """The legal tool set is the shot.py registry, not a hardcoded
-    pair -- a platform added there is legal here with no second edit."""
-    from src import shot as shot_mod
-    for tool in shot_mod.TOOLS:
-        concept = make_concept(ai={"tool": tool.upper(), "technique": "t", "prompt": "p"})
-        assert shootgen.validate_concept(concept, LOCATION_NAMES) == [], tool
+def test_validate_accepts_every_platform_fal_renders():
+    """The legal tool set is the shot.py registry narrowed to what fal
+    renders (2026-09-26) -- a platform added to both is legal here with no
+    second edit, and a retired one (RUNWAY) or an unrendered dialect
+    (OPENART) is flagged."""
+    from src import fal
+    for platform in fal.PLATFORM_MODELS:
+        concept = make_concept(ai={"tool": platform.upper(), "technique": "t", "prompt": "p"})
+        assert shootgen.validate_concept(concept, LOCATION_NAMES) == [], platform
+    for not_rendered in ("RUNWAY", "HIGGSFIELD", "OPENART"):
+        concept = make_concept(ai={"tool": not_rendered, "technique": "t", "prompt": "p"})
+        assert shootgen.validate_concept(concept, LOCATION_NAMES), not_rendered
 
 
 def test_validate_rejects_empty_shot_list():
@@ -561,9 +566,9 @@ def test_write_scene_validates_and_still_saves(tmp_db, monkeypatch):
     monkeypatch.setattr(shootgen, "generate_with_retry", lambda *a, **kw: SCENE_RESPONSE)
 
     result = shootgen.write_scene_for_concept(
-        concept_id, gemini_client=None, db_path=tmp_db, tool="VEO")
+        concept_id, gemini_client=None, db_path=tmp_db, tool="RUNWAY")
 
-    assert any("VEO" in w for w in result["warnings"])   # not a Zero Page tool
+    assert any("RUNWAY" in w for w in result["warnings"])   # retired 2026-09-26
     assert preprod.get_concept(concept_id, dsn=tmp_db, account_id=None)["has_shot_list"] is True
 
 
@@ -631,7 +636,7 @@ def test_scene_warnings_survive_on_the_row(tmp_db, monkeypatch):
     concept_id = preprod.save_concept({"title": "T"}, brand="zeropage", dsn=tmp_db, account_id=None)
     monkeypatch.setattr(shootgen, "generate_with_retry", lambda *a, **kw: SCENE_RESPONSE)
     shootgen.write_scene_for_concept(concept_id, gemini_client=None,
-                                     db_path=tmp_db, tool="VEO")
+                                     db_path=tmp_db, tool="RUNWAY")
     assert preprod.get_concept(concept_id, dsn=tmp_db, account_id=None)["warnings"]
 
 # ---------- director_prompt: the OpenArt Director rendering ----------

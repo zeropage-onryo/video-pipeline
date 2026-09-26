@@ -53,12 +53,6 @@ SHOT_SIZE = (
     "extreme_close",
 )
 
-# Runway is four sub-products with different prompt shapes (Gen-4 t2v/i2v,
-# Gen-4 References, Act-Two, Aleph). Only the two this repo actually renders
-# are modeled here: "generate" (Gen-4, from scratch) and "restyle" (Aleph,
-# video-to-video). References/Act-Two need an image/video attachment path
-# that doesn't exist in Shot yet -- see runway_parameters().
-RUNWAY_MODES = ("generate", "restyle")
 
 # Zero Page Films house style, from prompts/brief.txt and settings.txt.
 # Every rendered prompt carries this so generated clips cut against real
@@ -100,12 +94,9 @@ class Shot:
     # from/against -- the acting take or room plate that anchors the
     # generation. Empty means none; a reference is an enhancement to a
     # shot, never a gate on it. Travels as a generation parameter
-    # (openart_parameters / runway_parameters), never in the prompt text.
+    # (openart_parameters / veo_parameters), never in the prompt text.
     reference_image: str = ""
     tags: list[str] = field(default_factory=list)
-    # Which Runway product this shot targets. Other platforms ignore this
-    # field entirely -- it only changes what render_runway() does.
-    runway_mode: str = "generate"
 
     def __post_init__(self) -> None:
         if not self.subject.strip():
@@ -122,10 +113,6 @@ class Shot:
             raise ValueError(f"size must be one of {SHOT_SIZE}, got {self.size!r}")
         if not 0.5 <= self.duration_s <= 20:
             raise ValueError(f"duration_s out of range: {self.duration_s}")
-        if self.runway_mode not in RUNWAY_MODES:
-            raise ValueError(
-                f"runway_mode must be one of {RUNWAY_MODES}, got {self.runway_mode!r}"
-            )
 
     def as_dict(self) -> dict:
         return {
@@ -141,7 +128,6 @@ class Shot:
             "audio": self.audio,
             "reference_image": self.reference_image,
             "tags": list(self.tags),
-            "runway_mode": self.runway_mode,
         }
 
 
@@ -157,76 +143,6 @@ def _phrase(*parts: str) -> str:
 # --------------------------------------------------------------------------
 # renderers — one per tool, each a pure function of Shot -> str
 # --------------------------------------------------------------------------
-
-# NOT independently verified against Runway's own docs -- general pattern
-# only. task-runway-prompting-best-practices.md claims this was checked
-# against a vendored guide at
-# .claude/skills/video-prompting/references/models/runway/prompting.md,
-# fetched 2026-08-06 -- but that file does not exist in the repo (no
-# runway/ directory under references/models/, and Runway is absent from
-# video-prompting/SKILL.md's Model Index). Don't date this as verified
-# until that guide is actually fetched and vendored; the task doc's claim
-# appears to be aspirational, not something that happened.
-RUNWAY_CAMERA = {
-    "static": "static camera",
-    "pan_left": "camera pans left",
-    "pan_right": "camera pans right",
-    "tilt_up": "camera tilts up",
-    "tilt_down": "camera tilts down",
-    "push_in": "camera pushes in",
-    "pull_out": "camera pulls back",
-    "tracking": "tracking shot",
-    "handheld": "handheld camera",
-    "crane_up": "crane up",
-    "crane_down": "crane down",
-    "orbit": "camera orbits subject",
-}
-
-
-def render_runway(shot: Shot) -> str:
-    """
-    Dispatches on shot.runway_mode. "generate" (default) is the existing
-    Gen-4 t2v paragraph, for shots built from scratch. "restyle" hands off
-    to render_runway_restyle -- Aleph (video-to-video) wants a completely
-    different, much narrower shape and does not want the scene re-described.
-    """
-    if shot.runway_mode == "restyle":
-        return render_runway_restyle(shot)
-    return _phrase(
-        f"{_readable_size(shot.size)} shot of {shot.subject}",
-        shot.action,
-        shot.setting,
-        shot.lighting,
-        RUNWAY_CAMERA[shot.camera],
-        shot.look,
-    )
-
-
-def render_runway_restyle(shot: Shot) -> str:
-    """
-    Aleph-shaped restyle prompt: [action verb] + [outcome], one
-    transformation at a time. Deliberately does NOT re-describe
-    subject/setting/camera -- Aleph already has the source clip, so
-    restating the scene is noise, not signal, per
-    task-runway-prompting-best-practices.md. `notes` is the one place to
-    say what must survive the restyle unchanged (anatomy/geometry/identity
-    are exactly the things Aleph is most prone to drifting on).
-    """
-    transformation = _phrase(shot.action, shot.look)
-    if shot.notes.strip():
-        transformation = _phrase(transformation, f"preserving {shot.notes.strip()}")
-    return transformation
-
-
-def runway_parameters(shot: Shot) -> dict:
-    """
-    Generation-time attachments, kept OUT of the prompt text -- same
-    pattern as veo_parameters(). Gen-4 References takes up to 3 images;
-    this supplies the one the pipeline tracks: the real capture behind
-    the shot (Shot.reference_image, landed 2026-08-20 -- this was a
-    placeholder shape waiting for exactly that field).
-    """
-    return {"reference_images": [shot.reference_image] if shot.reference_image else []}
 
 
 # Veo 3.1 cinematography vocabulary — the standard camera terms Google Cloud's
@@ -484,55 +400,7 @@ def openart_parameters(shot: Shot) -> dict:
     """The attachment Director takes alongside the description -- the
     real capture (acting take, room plate) this shot is generated
     from/against. Same keep-it-out-of-the-prompt contract as
-    veo_parameters()/runway_parameters()."""
-    return {"reference_images": [shot.reference_image] if shot.reference_image else []}
-
-
-# Higgsfield -- checked 2026-08-25 against higgsfield.ai/camera-controls:
-# Higgsfield is preset-driven (named camera-motion presets: Static, Pan
-# Left/Right, Tilt Up/Down, Dolly In/Out, Crane Up, Jib Down, 360 Orbit,
-# Handheld...), so this map speaks the preset names rather than generic
-# "the camera does X" prose -- which is also what keeps its output
-# distinct from Runway's map above (test_renderers_disagree guards
-# that). crane_down maps to their Jib Down preset (no Crane Down preset
-# is listed). Added 2026-08-21: Zero Page's real, currently-usable tool
-# set is HIGGSFIELD and RUNWAY only (see shootgen.ZEROPAGE_AI_TOOLS) --
-# everything else in this registry stays real infrastructure for other
-# brands, but this is the platform Zero Page's shot-plan prompt names
-# first.
-HIGGSFIELD_CAMERA = {
-    "static": "static shot, locked-off camera",
-    "pan_left": "pan left",
-    "pan_right": "pan right",
-    "tilt_up": "tilt up",
-    "tilt_down": "tilt down",
-    "push_in": "dolly in",
-    "pull_out": "dolly out",
-    "tracking": "tracking shot following the subject",
-    "handheld": "handheld",
-    "crane_up": "crane up",
-    "crane_down": "jib down",
-    "orbit": "360 orbit",
-}
-
-
-def render_higgsfield(shot: Shot) -> str:
-    """Compact single-paragraph prompt -- subject/action first, then
-    setting, camera, and look. Negatives travel as their own field (see
-    negative_prompt()), same shape as Kling's renderer."""
-    return _phrase(
-        f"{_readable_size(shot.size)} shot of {shot.subject}",
-        shot.action,
-        shot.setting,
-        shot.lighting,
-        HIGGSFIELD_CAMERA[shot.camera],
-        shot.look,
-    )
-
-
-def higgsfield_parameters(shot: Shot) -> dict:
-    """Generation-time attachments kept OUT of the prompt text -- same
-    contract as veo_parameters()/runway_parameters()."""
+    veo_parameters()."""
     return {"reference_images": [shot.reference_image] if shot.reference_image else []}
 
 
@@ -555,14 +423,12 @@ class Platform:
 # renderer, so it is deliberately absent. `verified` dates the camera map
 # against the tool's own prompt guide (None = general pattern, not docs).
 PLATFORMS: dict[str, Platform] = {
-    "runway": Platform("runway", RUNWAY_CAMERA, render_runway, verified=None),
     "veo": Platform("veo", VEO_CAMERA, render_veo, verified="2026-08-04"),
     "kling": Platform("kling", KLING_CAMERA, render_kling, verified=None),
     "seedance": Platform("seedance", SEEDANCE_CAMERA, render_seedance, verified="2026-08-04"),
     "ltx": Platform("ltx", LTX_CAMERA, render_ltx, verified="2026-08-04"),
     "wan": Platform("wan", WAN_CAMERA, render_wan, verified="2026-08-04"),
     "openart": Platform("openart", CAMERA_PROSE, render_openart, verified="2026-08-20"),
-    "higgsfield": Platform("higgsfield", HIGGSFIELD_CAMERA, render_higgsfield, verified=None),
 }
 
 # Derived, never written by hand: the legal tool set everywhere else
@@ -584,7 +450,7 @@ def render_all(shot: Shot) -> dict[str, str]:
 
 def negative_prompt(shot: Shot) -> str:
     """
-    Kling and Runway take negatives as a separate field rather than inline.
+    Kling takes negatives as a separate field rather than inline.
     Veo's renderer already embeds it.
     """
     return shot.negative

@@ -148,7 +148,7 @@
       <form method="post" action="/concepts/{{ c.id }}/shots/{{ s.n or loop.index }}/verdict"
             style="display:grid; gap:8px; margin-top:8px">
         <input type="hidden" name="next" value="/grade/draw?mode=shot">
-        <input type="hidden" name="tool" value="{{ s.tool or 'runway' }}">
+        <input type="hidden" name="tool" value="{{ s.tool or 'ltx' }}">
         <div class="kicker">THE PROMPT — edit it here only to fix a typo before approving</div>
         <textarea name="text" rows="{{ 12 if one_scene else 6 }}" style="width:100%">{{ s.prompt }}</textarea>
         <div class="kicker">A BETTER PROMPT — required for “Teach it”</div>

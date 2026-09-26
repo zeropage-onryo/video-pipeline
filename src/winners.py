@@ -54,6 +54,13 @@ def init(dsn=None) -> None:
         conn.execute(SCHEMA)
 
 
+# The tool a lesson is filed under when its shot names none: the platform
+# fal's default model renders (fal became the only video renderer on
+# 2026-09-26; this was "runway"). Stored rows keep their own label -- the
+# column's DEFAULT 'runway' is left as the live table has it.
+DEFAULT_TOOL = "ltx"
+
+
 def add(tool, prompt, note="", video_ref="", verdict="worked", dsn=None) -> int:
     prompt = (prompt or "").strip()
     if not prompt:
@@ -63,7 +70,7 @@ def add(tool, prompt, note="", video_ref="", verdict="worked", dsn=None) -> int:
         row = conn.execute(
             "INSERT INTO winning_prompts (created_at, tool, prompt, note, "
             "video_ref, verdict) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
-            (_now(), (tool or "runway").strip().lower(), prompt,
+            (_now(), (tool or DEFAULT_TOOL).strip().lower(), prompt,
              (note or "").strip(), (video_ref or "").strip(), _norm_verdict(verdict))
         ).fetchone()
         return int(row["id"])
@@ -314,5 +321,5 @@ def avoid_guidance(limit=8, dsn=None) -> str:
     lines = ["AVOID what has failed before (do not repeat these):"]
     for r in rows:
         why = f" — {r['note']}" if r.get("note") else ""
-        lines.append(f"- [{(r.get('tool') or 'runway')}]{why}")
+        lines.append(f"- [{(r.get('tool') or DEFAULT_TOOL)}]{why}")
     return "\n".join(lines)

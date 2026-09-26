@@ -1,13 +1,13 @@
 """
 The operator-only manual render lanes (src/manual_lane.py, 2026-09-08).
 
-What these tests are actually protecting. Each lane spends one of the
-OPERATOR'S personal consumer plans -- Runway Unlimited, whose free
-Explore Mode has no API parameter so a human in Chrome is the only way
-to reach it, and the Higgsfield app plan behind the MCP. Rendering a
-paying tenant's shot on either is reselling a consumer subscription, and
-the penalty for that is not a refund, it is the operator's account,
-which on a shared install is every tenant's render path at once.
+What these tests are actually protecting. The Higgsfield MCP lane spends
+the OPERATOR'S personal consumer plan: rendering a paying tenant's shot on
+it is reselling a consumer subscription, and the penalty for that is the
+operator's account, which on a shared install is every tenant's render
+path at once. The manual lane -- a clip rendered anywhere, filed free; the
+Runway Unlimited lane until 2026-09-26 -- files a render with no hold, so
+it sits behind the same gate rather than being the wider door.
 
 So the properties under test are not features:
 
@@ -69,7 +69,7 @@ def renders_in_tmp(tmp_path, monkeypatch):
     root = tmp_path / "renders"
     monkeypatch.setattr(rq, "RENDERS_ROOT", root)
     monkeypatch.setattr(rq, "RENDER_DIR", root / "higgsfield")
-    monkeypatch.setattr(rq, "RUNWAY_RENDER_DIR", root / "runway")
+    monkeypatch.setattr(rq, "MANUAL_RENDER_DIR", root / "manual")
     return root
 
 
@@ -82,7 +82,7 @@ def an_operator(path, monkeypatch, slug="zeropage"):
 
 
 def a_scene(path, account_id, title="Cold Open", prompt="a close shot", **shot):
-    base = {"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
+    base = {"n": 1, "type": "BROLL", "source": "AI", "tool": "LTX",
             "desc": title, "prompt": prompt}
     base.update(shot)
     return preprod.save_concept(
@@ -151,7 +151,7 @@ def test_the_old_environment_variables_do_nothing_at_all(tmp_db, monkeypatch):
     assert manual_lane.manual_lane_allowed(other, tmp_db) is False
     assert manual_lane.operator_accounts(tmp_db) == frozenset()
     with pytest.raises(SystemExit, match=re.escape(manual_lane.REFUSAL)):
-        rq.pending(account_id=other, provider="runway")
+        rq.pending(account_id=other, provider="manual")
 
 
 def test_the_module_never_reads_the_environment_for_the_gate(tmp_db):
@@ -207,10 +207,10 @@ def test_the_operator_acting_as_the_other_account_is_refused(tmp_db, tmp_path,
     preprod.set_picked(cid, True, dsn=tmp_db, account_id=pilot)
 
     with pytest.raises(SystemExit, match=re.escape(manual_lane.REFUSAL)):
-        rq.pending(account_id=pilot, provider="runway")
+        rq.pending(account_id=pilot, provider="manual")
     with pytest.raises(SystemExit, match=re.escape(manual_lane.REFUSAL)):
         rq.import_clip(cid, 1, str(a_clip(tmp_path)), "gen4_turbo", None, None,
-                       True, account_id=pilot, provider="runway")
+                       True, account_id=pilot, provider="manual")
 
 
 def test_the_refusal_says_nothing_about_who_is_allowed(tmp_db, monkeypatch):
@@ -249,10 +249,10 @@ def test_the_cli_lists_only_the_operators_waiting_shots(tmp_db, monkeypatch):
     preprod.set_picked(mine, True, dsn=tmp_db, account_id=account_id)
     preprod.set_picked(theirs, True, dsn=tmp_db, account_id=other)
 
-    waiting = rq.pending(account_id=account_id, provider="runway")
+    waiting = rq.pending(account_id=account_id, provider="manual")
     assert [w["concept_id"] for w in waiting] == [mine]
     assert waiting[0]["prompt"] == "a close shot"
-    assert waiting[0]["lane"] == manual_lane.LANES["runway"]
+    assert waiting[0]["lane"] == manual_lane.LANES["manual"]
 
 
 def test_the_list_carries_what_the_web_app_actually_needs(tmp_db, monkeypatch):
@@ -265,7 +265,7 @@ def test_the_list_carries_what_the_web_app_actually_needs(tmp_db, monkeypatch):
     preprod.set_shot_reference_image(cid, 1, "/renders/nano/key.png",
                                      dsn=tmp_db, account_id=account_id)
 
-    row = rq.pending(account_id=account_id, provider="runway")[0]
+    row = rq.pending(account_id=account_id, provider="manual")[0]
     assert row["keyframe_url"] == "/renders/nano/key.png"
     assert row["duration"] == manual_lane.LANE_DURATION
     assert row["ratio"] == manual_lane.LANE_RATIO
@@ -278,10 +278,10 @@ def test_the_cli_refuses_a_non_operator_on_both_subcommands(tmp_db, tmp_path, mo
     preprod.set_picked(cid, True, dsn=tmp_db, account_id=other)
 
     with pytest.raises(SystemExit, match=re.escape(manual_lane.REFUSAL)):
-        rq.pending(account_id=other, provider="runway")
+        rq.pending(account_id=other, provider="manual")
     with pytest.raises(SystemExit, match=re.escape(manual_lane.REFUSAL)):
         rq.import_clip(cid, 1, str(a_clip(tmp_path)), "gen4_turbo", None, None,
-                       True, account_id=other, provider="runway")
+                       True, account_id=other, provider="manual")
 
 
 def test_a_refused_import_writes_no_file_and_no_row(tmp_db, tmp_path, monkeypatch,
@@ -294,8 +294,8 @@ def test_a_refused_import_writes_no_file_and_no_row(tmp_db, tmp_path, monkeypatc
     preprod.set_picked(cid, True, dsn=tmp_db, account_id=other)
     with pytest.raises(SystemExit):
         rq.import_clip(cid, 1, str(a_clip(tmp_path)), "gen4_turbo", None, None,
-                       True, account_id=other, provider="runway")
-    assert not (renders_in_tmp / "runway").exists()
+                       True, account_id=other, provider="manual")
+    assert not (renders_in_tmp / "manual").exists()
     with generative.connect(tmp_db) as conn:
         assert conn.execute("SELECT COUNT(*) FROM generations").fetchone()[0] == 0
 
@@ -303,9 +303,9 @@ def test_a_refused_import_writes_no_file_and_no_row(tmp_db, tmp_path, monkeypatc
 def test_the_cli_refuses_everyone_when_the_allowlist_is_unset(tmp_db):
     account_id = accounts.upsert_account("zeropage", "Zero Page", dsn=tmp_db)
     with pytest.raises(SystemExit, match=re.escape(manual_lane.REFUSAL)):
-        rq.pending(account_id=account_id, provider="runway")
+        rq.pending(account_id=account_id, provider="manual")
     with pytest.raises(SystemExit, match=re.escape(manual_lane.REFUSAL)):
-        rq.pending(account_id=None, provider="runway")
+        rq.pending(account_id=None, provider="manual")
 
 
 def test_there_is_no_caller_supplied_way_into_the_lane(tmp_db, monkeypatch):
@@ -378,7 +378,7 @@ def test_the_lane_takes_picked_scenes_not_merely_parked_ones(tmp_db, monkeypatch
     assert set(queued) == {parked, picked}                 # both await the spend gate
     lane = [i["concept_id"] for i in client.get("/api/queue/manual").json()["items"]]
     assert lane == [picked]                                # only the chosen one is hand work
-    assert [w["concept_id"] for w in rq.pending(account_id=account_id, provider="runway")] == [picked]
+    assert [w["concept_id"] for w in rq.pending(account_id=account_id, provider="manual")] == [picked]
     preprod.set_picked(parked, True, dsn=tmp_db, account_id=account_id)
     lane = [i["concept_id"] for i in client.get("/api/queue/manual").json()["items"]]
     assert set(lane) == {parked, picked}
@@ -401,7 +401,7 @@ def test_an_ungrounded_picked_scene_is_on_the_queue_page_but_never_on_the_lane(t
     assert {c["id"]: bool(c["blocked"]) for c in page} == {grounded: False, blind: True}
     lane = [i["concept_id"] for i in client.get("/api/queue/manual").json()["items"]]
     assert lane == [grounded]
-    assert [w["concept_id"] for w in rq.pending(account_id=account_id, provider="runway")] == [grounded]
+    assert [w["concept_id"] for w in rq.pending(account_id=account_id, provider="manual")] == [grounded]
 
 
 def test_the_route_refuses_a_non_operator(tmp_db, monkeypatch, api):
@@ -464,7 +464,7 @@ def test_a_lane_render_takes_no_hold(tmp_db):
     ledger.grant(account_id, 500, "subscription", dsn=tmp_db)
     before = ledger.available(account_id, dsn=tmp_db)
 
-    hold_id = ledger.hold_for_render(account_id, ref="manual-1", provider="runway",
+    hold_id = ledger.hold_for_render(account_id, ref="manual-1", provider="manual",
                                      estimate_usd=0.50,
                                      source=manual_lane.SOURCE, dsn=tmp_db)
     assert hold_id is None
@@ -481,7 +481,7 @@ def test_an_imported_lane_clip_is_a_row_the_ledger_would_not_bill(tmp_db, tmp_pa
     cid = a_scene(tmp_db, account_id)
     preprod.set_picked(cid, True, dsn=tmp_db, account_id=account_id)
     rq.import_clip(cid, 1, str(a_clip(tmp_path)), "gen4_turbo", None, None, True,
-                   account_id=account_id, provider="runway")
+                   account_id=account_id, provider="manual")
     with generative.connect(tmp_db) as conn:
         row = conn.execute("SELECT cost_usd, params_json FROM generations "
                            "ORDER BY id DESC LIMIT 1").fetchone()
@@ -493,47 +493,33 @@ def test_an_imported_lane_clip_is_a_row_the_ledger_would_not_bill(tmp_db, tmp_pa
 
 # ---------- the lane's own numbers ----------
 
-def test_both_lanes_ask_for_the_same_frame_from_one_source(tmp_db):
-    """The manual lane must ask the web app for the same frame the API
-    lane would have produced, or a hand-rendered clip is the odd one out
-    in a feed of verticals.
-
-    This used to be a DRIFT test between two literals -- an alarm, not a
-    fix, silent about the hours between an edit and a run. There is one
-    literal now, in src/render_specs.py (which imports nothing, so the
-    bare-python3 script can read it too), and both names are that object.
-    """
-    from src import render_specs, runway
+def test_the_lane_asks_for_the_house_frame_from_one_source(tmp_db):
+    """One literal, in src/render_specs.py (which imports nothing, so the
+    bare-python3 script can read it too), and the lane's name is that
+    object -- nothing left to drift."""
+    from src import render_specs
     assert manual_lane.LANE_RATIO is render_specs.RATIO_9_16
-    assert runway.DEFAULT_RATIO is render_specs.RATIO_9_16
-    # and the value is genuinely USED at both ends, not merely defined
-    assert rq.pending.__module__      # imported, so the row below is the lane's
     assert manual_lane.LANE_RATIO == "720:1280"
-    # deliberately NOT the adapter's duration: on Explore Mode the
-    # seconds are free and the queue is the price
-    assert manual_lane.LANE_DURATION > runway.DEFAULT_DURATION
+    assert manual_lane.LANE_DURATION == render_specs.LANE_DURATION == 10
 
 
-def test_neither_module_spells_the_ratio_out_for_itself(tmp_db):
+def test_the_lane_module_does_not_spell_the_ratio_out_for_itself(tmp_db):
     """The point of a shared constant is that there is nothing left to
-    drift, which is only true while neither reader keeps a copy."""
-    from src import runway
-    for module in (manual_lane, runway):
-        source = pathlib.Path(module.__file__).read_text()
-        code = "\n".join(line for line in source.splitlines()
-                         if not line.lstrip().startswith("#"))
-        body = code.split('"""', 2)[-1]
-        assert '"720:1280"' not in body, module.__name__
+    drift, which is only true while no reader keeps a copy."""
+    source = pathlib.Path(manual_lane.__file__).read_text()
+    code = "\n".join(line for line in source.splitlines()
+                     if not line.lstrip().startswith("#"))
+    body = code.split('"""', 2)[-1]
+    assert '"720:1280"' not in body
 
 
-def test_both_subscription_lanes_are_gated_and_the_billed_adapters_are_not(tmp_db):
-    """The gate is about the SUBSCRIPTION lanes. src/runway.py and
-    src/higgsfield.py spend a credential a tenant can own, metered per
-    call, under their own spend gates and daily caps -- they were not
-    touched and must not be."""
-    assert set(rq.GATED_PROVIDERS) == set(rq.PROVIDERS) == {"higgsfield", "runway"}
-    from src import higgsfield, runway
-    for adapter in (higgsfield, runway):
+def test_both_manual_lanes_are_gated_and_the_billed_adapter_is_not(tmp_db):
+    """The gate is about the MANUAL lanes. The API-billed renderer (fal)
+    spends the operator's key under its own spend gate, cap and credit
+    hold -- it was not touched and must not be."""
+    assert set(rq.GATED_PROVIDERS) == set(rq.PROVIDERS) == {"higgsfield", "manual"}
+    from src import fal, higgsfield
+    for adapter in (higgsfield, fal):
         assert not hasattr(adapter, "manual_lane_allowed")
         assert "manual_lane" not in dir(adapter)
 
@@ -552,16 +538,16 @@ def test_the_board_says_which_clips_a_subscription_paid_for(tmp_db, monkeypatch,
         preprod.set_picked(cid, True, dsn=tmp_db, account_id=account_id)
 
     rq.import_clip(lane, 1, str(a_clip(tmp_path)), "gen4_turbo", None, None, True,
-                   account_id=account_id, provider="runway")
+                   account_id=account_id, provider="manual")
     # the API lane's row: a price, no lane marker
     shot_row = generative.add_shot(Shot(subject="x", action="y"),
                                    dsn=tmp_db, account_id=account_id)
     generative.record_generation(
-        shot_row, "runway", "a close shot",
-        params={"model": "gen4_turbo", "key_source": "env", "concept_id": billed,
+        shot_row, "ltx", "a close shot",
+        params={"model": "ltx2.3", "key_source": "env", "concept_id": billed,
                 "shot_n": 1},
-        cost_usd=0.25, dsn=tmp_db, account_id=account_id)
-    preprod.set_shot_media_url(billed, 1, "/renders/runway/api.mp4",
+        cost_usd=0.36, dsn=tmp_db, account_id=account_id)
+    preprod.set_shot_media_url(billed, 1, "/renders/fal/api.mp4",
                                dsn=tmp_db, account_id=account_id)
 
     cards = api(account_id).get("/api/pipeline/concepts").json()["items"]
@@ -736,18 +722,19 @@ def test_a_dropped_clip_is_filed_free_with_the_lane_marker(tmp_db, monkeypatch,
     res = drop(client, cid)
     assert res.status_code == 200, res.text
     body = res.json()
-    assert body["media_url"] == f"/renders/runway/concept{cid}-shot1.mp4"
-    assert (renders_in_tmp / "runway" / f"concept{cid}-shot1.mp4").is_file()
+    assert body["media_url"] == f"/renders/manual/concept{cid}-shot1.mp4"
+    assert (renders_in_tmp / "manual" / f"concept{cid}-shot1.mp4").is_file()
 
     with generative.connect(tmp_db) as conn:
         row = conn.execute("SELECT tool, cost_usd, params_json FROM generations "
                            "ORDER BY id DESC LIMIT 1").fetchone()
-    assert row["tool"] == "runway"
+    assert row["tool"] == "manual"
     assert row["cost_usd"] is None            # FREE, never $0
     params = json.loads(row["params_json"])
     assert params["source"] == manual_lane.SOURCE
-    assert params["lane"] == manual_lane.LANES["runway"]
-    assert params["model"] == "gen4_turbo"
+    assert params["lane"] == manual_lane.LANES["manual"]
+    assert params["model"] == "gen4_turbo"      # as told, free text
+    assert params["model_verified"] is False    # nothing to check it against
     assert params["duration"] == 10
     assert params["key_source"] is None
     # ffprobe ran or honestly said it could not -- never a silent zero
@@ -766,7 +753,7 @@ def test_the_served_name_is_the_servers_own_not_the_uploaders(tmp_db, monkeypatc
     cid = a_waiting_scene(tmp_db, account_id)
     res = drop(api(account_id), cid, filename="../../etc/passwd.mp4")
     assert res.status_code == 200, res.text
-    assert res.json()["media_url"] == f"/renders/runway/concept{cid}-shot1.mp4"
+    assert res.json()["media_url"] == f"/renders/manual/concept{cid}-shot1.mp4"
 
 
 def test_the_drop_route_refuses_a_non_operator(tmp_db, monkeypatch, api):
@@ -826,7 +813,7 @@ def test_a_file_that_is_not_an_mp4_is_refused_on_its_magic_number(tmp_db, monkey
     res = drop(api(account_id), cid, blob=b"PK\x03\x04" + b"\x00" * 5000)
     assert res.status_code == 400
     assert res.json()["error"]["code"] == "not_an_mp4"
-    assert not (renders_in_tmp / "runway").exists()
+    assert not (renders_in_tmp / "manual").exists()
     with generative.connect(tmp_db) as conn:
         assert conn.execute("SELECT COUNT(*) FROM generations").fetchone()[0] == 0
 
@@ -850,7 +837,7 @@ def test_an_oversized_clip_is_refused(tmp_db, monkeypatch, api, renders_in_tmp):
     res = drop(api(account_id), cid, blob=an_mp4(200_000))
     assert res.status_code == 413
     assert res.json()["error"]["code"] == "clip_too_large"
-    assert not (renders_in_tmp / "runway").exists()
+    assert not (renders_in_tmp / "manual").exists()
 
 
 def test_a_second_drop_on_the_same_shot_is_refused(tmp_db, monkeypatch, api,
@@ -878,43 +865,39 @@ def test_a_second_drop_on_the_same_shot_is_refused(tmp_db, monkeypatch, api,
     # one row, one file: nothing was written the second time
     with generative.connect(tmp_db) as conn:
         assert conn.execute("SELECT COUNT(*) FROM generations").fetchone()[0] == 1
-    assert sorted(p.name for p in (renders_in_tmp / "runway").iterdir()) == [
+    assert sorted(p.name for p in (renders_in_tmp / "manual").iterdir()) == [
         f"concept{cid}-shot1.mp4"]
 
 
-def test_the_route_refuses_an_illegal_claim_exactly_as_the_cli_does(tmp_db, monkeypatch,
-                                                                    api, tmp_path,
-                                                                    renders_in_tmp):
-    """The shared verification, exercised from BOTH surfaces, and the
-    refusal compared byte for byte: `ops/render_queue.import_clip` is the
-    single implementation and the route is a caller, so a length neither
-    gen4 model generates has to come back the same way from each."""
+def test_the_route_and_the_cli_file_the_same_row(tmp_db, monkeypatch, api, tmp_path):
+    """`ops/render_queue.import_clip` is the single implementation and the
+    route is a caller: the same claim lands the same way from each."""
     account_id = an_operator(tmp_db, monkeypatch)
     for_cli = a_waiting_scene(tmp_db, account_id, title="CLI")
     for_route = a_waiting_scene(tmp_db, account_id, title="Route")
-
-    with pytest.raises(SystemExit) as refused:
-        rq.import_clip(for_cli, 1, str(a_clip(tmp_path)), "gen4_turbo", None, None,
-                       True, account_id=account_id, provider="runway", duration=7)
-    from_cli = str(refused.value)
-
-    res = drop(api(account_id), for_route, data={"duration": "7"})
-    assert res.status_code == 400
-    assert res.json()["error"]["message"] == from_cli
-    assert "does not generate 7s" in from_cli
-
-    # refused BEFORE anything is copied or written, on both surfaces
-    assert not (renders_in_tmp / "runway").exists()
+    rq.import_clip(for_cli, 1, str(a_clip(tmp_path)), "kling 3 web app", None, None,
+                   True, account_id=account_id, provider="manual", duration=7)
+    res = drop(api(account_id), for_route, data={"model": "kling 3 web app",
+                                                 "duration": "7"})
+    assert res.status_code == 200, res.text
     with generative.connect(tmp_db) as conn:
-        assert conn.execute("SELECT COUNT(*) FROM generations").fetchone()[0] == 0
+        rows = [json.loads(r["params_json"]) for r in conn.execute(
+            "SELECT params_json FROM generations ORDER BY id").fetchall()]
+    keep = ("model", "source", "lane", "duration", "model_verified")
+    assert [{k: r[k] for k in keep} for r in rows] == [
+        {"model": "kling 3 web app", "source": manual_lane.SOURCE,
+         "lane": manual_lane.LANES["manual"], "duration": 7, "model_verified": False}] * 2
 
 
-def test_an_unknown_model_is_refused_through_the_route_too(tmp_db, monkeypatch, api):
+def test_a_drop_with_no_model_is_filed_as_unspecified(tmp_db, monkeypatch, api):
     account_id = an_operator(tmp_db, monkeypatch)
     cid = a_waiting_scene(tmp_db, account_id)
-    res = drop(api(account_id), cid, data={"model": "gen9_ultra"})
-    assert res.status_code == 400
-    assert "unknown runway model" in res.json()["error"]["message"]
+    res = drop(api(account_id), cid, data={"model": ""})
+    assert res.status_code == 200, res.text
+    with generative.connect(tmp_db) as conn:
+        params = json.loads(conn.execute(
+            "SELECT params_json FROM generations ORDER BY id DESC LIMIT 1").fetchone()[0])
+    assert params["model"] == "unspecified"
 
 
 def test_the_route_does_not_reimplement_the_verification(tmp_db):
@@ -950,19 +933,16 @@ def test_the_route_does_not_reimplement_the_verification(tmp_db):
             f"one implementation, ops/render_queue.import_clip")
 
 
-def test_the_models_offered_are_the_ones_the_import_accepts(tmp_db, monkeypatch, api):
-    """The card's controls are filled from the server's own table, so it
-    cannot offer a claim the import would then refuse."""
-    from src import render_specs
+def test_the_lane_offers_no_model_list_to_pick_from(tmp_db, monkeypatch, api):
+    """A clip rendered anywhere has no list of legal models, so the card
+    takes the model as free text rather than offering a menu the import
+    could not check."""
     account_id = an_operator(tmp_db, monkeypatch)
     a_waiting_scene(tmp_db, account_id)
     body = api(account_id).get("/api/queue/manual").json()
-    assert [m["id"] for m in body["models"]] == sorted(render_specs.RUNWAY_MODELS)
-    assert body["default_model"] in render_specs.RUNWAY_MODELS
-    for offered in body["models"]:
-        assert render_specs.check_model("runway", offered["id"]) is True
-        for seconds in offered["durations"]:
-            assert render_specs.check_duration("runway", offered["id"], seconds) is True
+    assert body["models"] == [] and body["default_model"] is None
+    assert body["lane"] == manual_lane.LANES["manual"]
+    assert "--provider manual" in body["import_with"]
 
 
 # ---------- the section, and who sees it ----------
@@ -993,7 +973,7 @@ def test_the_queue_view_carries_the_lane_for_an_operator(tmp_db, monkeypatch, sh
     page = client.get("/ui")
     assert page.status_code == 200
     assert 'id="lanelist"' in page.text
-    assert "Subscription lane" in page.text
+    assert "Manual lane" in page.text
 
 
 def test_the_queue_view_has_no_lane_section_for_anybody_else(tmp_db, shell):

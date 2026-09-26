@@ -575,12 +575,13 @@ def test_the_nightly_render_takes_a_timed_scene_shot_by_shot(tmp_db, monkeypatch
     since 2026-09-10; the graph's render node still rendered the whole
     scene as one clip. Now it walks the CURRENT timeline through the same
     generate_for_shot(part=n) door: one call per part, each part's window
-    fitted up to the model (a 3s and a 4s window are both 5s Runway
-    clips), and ONE clip entry for the scene whose url is shot 1's file
+    fitted up to the model (a 3s and a 4s window are both 6s LTX clips --
+    a RUNWAY-planned scene renders on fal's default since 2026-09-26),
+    and ONE clip entry for the scene whose url is shot 1's file
     -- the marker every reader means by rendered."""
     monkeypatch.setenv("ZEROPAGE_RENDER", "1")
     cid, prompt = _timed_concept(tmp_db)
-    from src import runway as runway_module
+    from src import fal as fal_module
     calls, files = [], {}
 
     def fake_for_shot(concept_id, shot_n, *, part=None, duration=None, account_id=None, **k):
@@ -591,15 +592,15 @@ def test_the_nightly_render_takes_a_timed_scene_shot_by_shot(tmp_db, monkeypatch
         return {"ok": True, "media_url": f"https://r2.test/p{part}.mp4", "path": str(f),
                 "generation_id": part, "error": None}
 
-    monkeypatch.setattr(runway_module, "generate_for_shot", fake_for_shot)
-    monkeypatch.setattr(runway_module, "generate_candidates",
+    monkeypatch.setattr(fal_module, "generate_for_shot", fake_for_shot)
+    monkeypatch.setattr(fal_module, "generate_candidates",
                         lambda *a, **k: pytest.fail("a timed scene never renders whole"))
 
     out = orchestrator.generate_render(
         {"concept_id": cid, "account_id": None,
          "prompts": [{"n": 1, "tool": "RUNWAY", "prompt": prompt}]})
 
-    assert [(c[2], c[3]) for c in calls] == [(1, 5), (2, 5)]
+    assert [(c[2], c[3]) for c in calls] == [(1, 6), (2, 6)]
     assert all(c[0] == cid and c[1] == 1 for c in calls)
     clip = out["clips"][0]
     assert clip["ok"] is True and clip["timed"] is True
@@ -610,22 +611,22 @@ def test_the_nightly_render_takes_a_timed_scene_shot_by_shot(tmp_db, monkeypatch
 def test_a_timed_scene_stops_at_the_first_failed_shot_and_never_fails_over(tmp_db, monkeypatch, tmp_path):
     """The Queue's rule: keep what rendered, stop at the failure (usually
     the cap), say how far it got, and let the morning's approve resume.
-    No vendor failover -- shots 1-2 on Runway and 3 on Kling is not a
+    No failover -- shots 1-2 on one model and 3 on another is not a
     scene -- and the run holds honestly on the scene's `ok`."""
     monkeypatch.setenv("ZEROPAGE_RENDER", "1")
     cid, prompt = _timed_concept(tmp_db)
+    from src import fal as fal_module
     from src import providers
-    from src import runway as runway_module
 
     def fake_for_shot(concept_id, shot_n, *, part=None, **k):
         if part == 2:
-            return {"ok": False, "error": "runway: 6/6 generations used today"}
+            return {"ok": False, "error": "fal: 6/6 generations used today"}
         f = tmp_path / "p1.mp4"
         f.write_bytes(b"\x00" * 2048)
         return {"ok": True, "media_url": "https://r2.test/p1.mp4", "path": str(f),
                 "generation_id": 1, "error": None}
 
-    monkeypatch.setattr(runway_module, "generate_for_shot", fake_for_shot)
+    monkeypatch.setattr(fal_module, "generate_for_shot", fake_for_shot)
     monkeypatch.setattr(providers, "choose_provider",
                         lambda *a, **k: pytest.fail("no failover for a timed scene"))
 
@@ -648,7 +649,7 @@ def test_a_timed_scene_skips_shots_that_already_have_a_clip(tmp_db, monkeypatch,
     from src import timeline as tl_mod
     tl_mod.attach_part(cid, 1, 1, "media_url", "https://r2.test/done1.mp4",
                        db_path=tmp_db, account_id=None)
-    from src import runway as runway_module
+    from src import fal as fal_module
     calls = []
 
     def fake_for_shot(concept_id, shot_n, *, part=None, **k):
@@ -658,7 +659,7 @@ def test_a_timed_scene_skips_shots_that_already_have_a_clip(tmp_db, monkeypatch,
         return {"ok": True, "media_url": "https://r2.test/p2.mp4", "path": str(f),
                 "generation_id": 2, "error": None}
 
-    monkeypatch.setattr(runway_module, "generate_for_shot", fake_for_shot)
+    monkeypatch.setattr(fal_module, "generate_for_shot", fake_for_shot)
     out = orchestrator.generate_render(
         {"concept_id": cid, "account_id": None,
          "prompts": [{"n": 1, "tool": "RUNWAY", "prompt": prompt}]})
@@ -668,14 +669,14 @@ def test_a_timed_scene_skips_shots_that_already_have_a_clip(tmp_db, monkeypatch,
     assert clip["parts"][0]["skipped"] is True and clip["parts"][1]["ok"] is True
 
 
-def test_render_gate_open_routes_veo_prompts_through_the_connector(tmp_db, monkeypatch, tmp_path):
+def test_render_gate_open_routes_veo_prompts_through_fal(tmp_db, monkeypatch, tmp_path):
     monkeypatch.setenv("ZEROPAGE_RENDER", "1")
     clip = tmp_path / "cand1.mp4"
     clip.write_bytes(b"\x00" * 2048)
-    from src import veo as veo_module
+    from src import fal
     calls = []
     monkeypatch.setattr(
-        veo_module, "generate_candidates",
+        fal, "generate_candidates",
         lambda prompt, out_dir, n=1, **k: calls.append(prompt) or
         {"ok": True, "candidates": [{"path": str(clip)}], "error": None},
     )
@@ -733,29 +734,28 @@ def test_an_adapted_tool_with_no_key_stays_dry_but_says_so_honestly(tmp_db, monk
     assert "fal" in clip["error"]
 
 
-def test_render_failover_switches_to_a_usable_provider_when_the_assigned_one_fails(
-    tmp_db, monkeypatch, tmp_path,
+def test_render_failover_never_retries_the_renderer_that_just_failed(
+    tmp_db, monkeypatch,
 ):
-    """The aggregator registry (providers.py, 2026-09-04) is wired into
-    generate_render as a FAILOVER, not a tool-choice override: shootgen
-    still names RUNWAY, runway.generate_candidates still runs first and
-    still fails on its own here (no key in tests) -- but instead of
-    parking the shot, the router's next-best usable provider gets one
-    retry, and the clip records which tool actually rendered it."""
+    """The failover (providers.choose_provider) is asked with the failed
+    provider EXCLUDED. With fal the only renderer since 2026-09-26, a fal
+    failure is reported on its own reason, never "retried" on fal through
+    another door -- and a RUNWAY-planned shot went to fal in the first
+    place, so it is fal that is excluded."""
     monkeypatch.setenv("ZEROPAGE_RENDER", "1")
+    from src import fal
     from src import providers as providers_module
-    from src import veo as veo_module
 
-    clip = tmp_path / "fallback.mp4"
-    clip.write_bytes(b"\x00" * 2048)
     monkeypatch.setattr(
-        veo_module, "generate_candidates",
+        fal, "generate_candidates",
         lambda prompt, out_dir, n=1, **k:
-            {"ok": True, "candidates": [{"path": str(clip)}], "error": None},
-    )
-    monkeypatch.setattr(providers_module, "choose_provider",
-                        lambda account_id, exclude=(): "veo")
-    monkeypatch.setattr(orchestrator, "_clip_passes_qc", lambda url: bool(url))
+            {"ok": False, "candidates": [], "error": "fal: 6/6 generations used today"})
+    asked = {}
+
+    def choose(account_id=None, exclude=(), **k):
+        asked["exclude"] = exclude
+        return None
+    monkeypatch.setattr(providers_module, "choose_provider", choose)
     runway_concept = make_concept(shots=[
         {"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
          "location": "hallway", "desc": "x", "prompt": GOOD_PROMPT},
@@ -764,10 +764,10 @@ def test_render_failover_switches_to_a_usable_provider_when_the_assigned_one_fai
 
     result = orchestrator.run("ritual")
 
+    assert "fal" in asked["exclude"]
     clip_result = result["clips"][0]
-    assert clip_result["ok"] is True
-    assert clip_result["tool"] == "VEO"
-    assert clip_result["failover_from"] == "RUNWAY"
+    assert clip_result["ok"] is False
+    assert clip_result["error"] == "fal: 6/6 generations used today"
 
 
 def test_render_failover_leaves_the_original_error_when_nothing_else_is_usable(
@@ -777,10 +777,10 @@ def test_render_failover_leaves_the_original_error_when_nothing_else_is_usable(
     no key/spend approval in tests) means the shot parks on the
     ORIGINAL failure's own reason, same as before the registry existed."""
     monkeypatch.setenv("ZEROPAGE_RENDER", "1")
-    from src import runway as runway_module
+    from src import fal as fal_module
 
     monkeypatch.setattr(
-        runway_module, "generate_candidates",
+        fal_module, "generate_candidates",
         lambda prompt, out_dir, n=1, **k:
             {"ok": False, "candidates": [], "error": "credit spend not approved"},
     )
@@ -1881,12 +1881,11 @@ def test_the_nightly_render_carries_the_owner_into_the_connector(monkeypatch):
     choose_provider, then called the connector WITHOUT it -- so every
     nightly clip wrote generations.account_id = NULL, counted its cap
     against the unowned pool rather than this account's, and resolved
-    the provider key from the environment even for an account with its
-    own stored one (BYOK). The owner has to reach the call that spends
-    the money, not only the one that picks who spends it.
+    the provider key from the environment. The owner has to reach the
+    call that spends the money, not only the one that picks who spends it.
     """
     monkeypatch.setenv("ZEROPAGE_RENDER", "1")
-    from src import runway as runway_module
+    from src import fal as fal_module
 
     seen = {}
 
@@ -1894,7 +1893,7 @@ def test_the_nightly_render_carries_the_owner_into_the_connector(monkeypatch):
         seen.update(kwargs)
         return {"ok": False, "candidates": [], "error": "no key in tests"}
 
-    monkeypatch.setattr(runway_module, "generate_candidates", fake_candidates)
+    monkeypatch.setattr(fal_module, "generate_candidates", fake_candidates)
     monkeypatch.setattr("src.providers.choose_provider",
                         lambda account_id=None, **k: None)
 
@@ -1905,35 +1904,28 @@ def test_the_nightly_render_carries_the_owner_into_the_connector(monkeypatch):
         f"{seen.get('account_id')!r} -- the clip is billed to nobody")
 
 
-def test_the_failover_render_carries_the_owner_too(monkeypatch, tmp_path):
-    """The retry through the registry spends exactly as much money as
-    the first attempt, so it needs exactly as much ownership."""
+def test_the_failover_is_asked_on_behalf_of_the_owner(monkeypatch):
+    """The failover lookup spends nothing itself, but it is asked for the
+    account whose run this is, so any renderer it could pick is resolved
+    and capped for that owner."""
     monkeypatch.setenv("ZEROPAGE_RENDER", "1")
+    from src import fal
     from src import providers as providers_module
-    from src import runway as runway_module
-    from src import veo as veo_module
-
-    clip = tmp_path / "fallback.mp4"
-    clip.write_bytes(b"\x00" * 2048)
-    seen = {}
-
-    def fake_veo(prompt, out_dir, n=1, **kwargs):
-        seen.update(kwargs)
-        return {"ok": True, "candidates": [{"path": str(clip)}], "error": None}
 
     monkeypatch.setattr(
-        runway_module, "generate_candidates",
+        fal, "generate_candidates",
         lambda prompt, out_dir, n=1, **k: {"ok": False, "candidates": [],
                                            "error": "no key in tests"})
-    monkeypatch.setattr(veo_module, "generate_candidates", fake_veo)
-    monkeypatch.setattr(providers_module, "choose_provider",
-                        lambda account_id=None, exclude=(), db_path=None: "veo")
+    seen = {}
+
+    def choose(account_id=None, exclude=(), db_path=None):
+        seen["account_id"] = account_id
+        return None
+    monkeypatch.setattr(providers_module, "choose_provider", choose)
 
     orchestrator.generate_render(_one_prompt_state(42))
 
-    assert seen.get("account_id") == 42, (
-        "the failover connector was called with account_id="
-        f"{seen.get('account_id')!r} -- the retry is billed to nobody")
+    assert seen.get("account_id") == 42
 
 
 # --------------------------------------------------------------------------

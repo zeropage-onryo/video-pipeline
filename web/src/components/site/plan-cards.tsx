@@ -42,7 +42,6 @@ function planFeatures(plan: Plan): string[] {
   if (!below) {
     features.push("Keyframes drawn on every pick");
     features.push("The Director canvas and the Queue");
-    features.push("Bring your own renderer key — those renders cost no credits");
   }
   features.push(`Top up ${num(TOPUP.credits)} credits for ${usd(TOPUP.usd)} any time`);
   return features;

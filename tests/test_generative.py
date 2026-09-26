@@ -105,8 +105,8 @@ def test_renderers_are_pure():
 
 def test_attempts_increment_per_tool(tmp_db):
     sid = gen.add_shot(make_shot(), dsn=tmp_db, account_id=None)
-    a = gen.record_generation(sid, "runway", "p1", dsn=tmp_db, account_id=None)
-    b = gen.record_generation(sid, "runway", "p2", dsn=tmp_db, account_id=None)
+    a = gen.record_generation(sid, "ltx", "p1", dsn=tmp_db, account_id=None)
+    b = gen.record_generation(sid, "ltx", "p2", dsn=tmp_db, account_id=None)
     c = gen.record_generation(sid, "kling", "p3", dsn=tmp_db, account_id=None)
     with db.connect(tmp_db) as conn:
         rows = {r["id"]: r["attempt"] for r in
@@ -118,7 +118,7 @@ def test_attempts_increment_per_tool(tmp_db):
 def test_empty_prompt_rejected(tmp_db):
     sid = gen.add_shot(make_shot(), dsn=tmp_db, account_id=None)
     with pytest.raises(ValueError, match="prompt cannot be empty"):
-        gen.record_generation(sid, "runway", "   ", dsn=tmp_db, account_id=None)
+        gen.record_generation(sid, "kling", "   ", dsn=tmp_db, account_id=None)
 
 
 def test_unknown_tool_rejected_on_write(tmp_db):
@@ -129,7 +129,7 @@ def test_unknown_tool_rejected_on_write(tmp_db):
 
 def test_generation_for_missing_shot_rejected(tmp_db):
     with pytest.raises(ValueError, match="no shot"):
-        gen.record_generation(999, "runway", "x", dsn=tmp_db, account_id=None)
+        gen.record_generation(999, "kling", "x", dsn=tmp_db, account_id=None)
 
 
 def test_keeping_resolves_the_shot(tmp_db):
@@ -151,7 +151,7 @@ def test_spec_round_trips(tmp_db):
 def test_attempts_to_keeper_counts_the_winner(tmp_db):
     sid = gen.add_shot(make_shot(), dsn=tmp_db, account_id=None)
     for i in range(4):
-        g = gen.record_generation(sid, "runway", f"p{i}", cost_usd=0.5, dsn=tmp_db, account_id=None)
+        g = gen.record_generation(sid, "kling", f"p{i}", cost_usd=0.5, dsn=tmp_db, account_id=None)
     gen.mark_kept(g, dsn=tmp_db, account_id=None)
 
     rows = gen.attempts_to_keeper(dsn=tmp_db, account_id=None)
@@ -163,7 +163,7 @@ def test_attempts_to_keeper_counts_the_winner(tmp_db):
 def test_tool_scoreboard_ranks_by_hit_rate(tmp_db):
     s1 = gen.add_shot(make_shot(), dsn=tmp_db, account_id=None)
     for i in range(5):
-        g = gen.record_generation(s1, "runway", f"a{i}", cost_usd=1.0, dsn=tmp_db, account_id=None)
+        g = gen.record_generation(s1, "ltx", f"a{i}", cost_usd=1.0, dsn=tmp_db, account_id=None)
     gen.mark_kept(g, dsn=tmp_db, account_id=None)
 
     s2 = gen.add_shot(make_shot(subject="a door"), dsn=tmp_db, account_id=None)
@@ -171,9 +171,9 @@ def test_tool_scoreboard_ranks_by_hit_rate(tmp_db):
     gen.mark_kept(g2, dsn=tmp_db, account_id=None)
 
     board = {b["tool"]: b for b in gen.tool_scoreboard(tmp_db, account_id=None)}
-    assert board["runway"]["hit_rate"] == 0.2
+    assert board["ltx"]["hit_rate"] == 0.2
     assert board["kling"]["hit_rate"] == 1.0
-    assert board["runway"]["cost_per_keeper"] == 5.0
+    assert board["ltx"]["cost_per_keeper"] == 5.0
 
 
 def test_abandoned_shots_excluded_from_scoreboard(tmp_db):
@@ -193,7 +193,7 @@ def test_abandoned_shots_excluded_from_scoreboard(tmp_db):
 def test_failure_reasons_grouped(tmp_db):
     sid = gen.add_shot(make_shot(), dsn=tmp_db, account_id=None)
     for reason in ("morphing hands", "morphing hands", "wrong lighting"):
-        g = gen.record_generation(sid, "runway", "p", dsn=tmp_db, account_id=None)
+        g = gen.record_generation(sid, "kling", "p", dsn=tmp_db, account_id=None)
         gen.mark_rejected(g, reason, dsn=tmp_db, account_id=None)
     top = gen.failure_reasons(dsn=tmp_db, account_id=None)
     assert top[0] == {"reason": "morphing hands", "n": 2}
@@ -202,7 +202,7 @@ def test_failure_reasons_grouped(tmp_db):
 def test_winning_prompts_fewest_attempts_first(tmp_db):
     slow = gen.add_shot(make_shot(), dsn=tmp_db, account_id=None)
     for i in range(6):
-        g = gen.record_generation(slow, "runway", f"slow{i}", dsn=tmp_db, account_id=None)
+        g = gen.record_generation(slow, "kling", f"slow{i}", dsn=tmp_db, account_id=None)
     gen.mark_kept(g, dsn=tmp_db, account_id=None)
 
     fast = gen.add_shot(make_shot(subject="a door"), dsn=tmp_db, account_id=None)

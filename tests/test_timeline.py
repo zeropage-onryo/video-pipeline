@@ -22,7 +22,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from src import gemini_utils, imagery, nano_banana, preprod, runway, scene_chain, shootgen, timeline
+from src import fal, gemini_utils, imagery, nano_banana, preprod, scene_chain, shootgen, timeline
 
 client = TestClient(app)
 
@@ -138,10 +138,10 @@ def test_the_writers_are_told_how_long_the_scene_is(monkeypatch):
 # --- fitting a window to a model -------------------------------------------
 
 def test_a_window_is_fitted_up_to_a_length_the_model_can_make():
-    runway_like = {"kind": "choices", "values": [5, 10]}
-    assert timeline.fit_seconds(runway_like, 3) == 5     # trimmed in the edit
-    assert timeline.fit_seconds(runway_like, 7) == 10    # up, never down
-    assert timeline.fit_seconds(runway_like, 14) == 10   # the longest there is
+    ltx_like = {"kind": "choices", "values": [6, 8, 10]}
+    assert timeline.fit_seconds(ltx_like, 3) == 6        # trimmed in the edit
+    assert timeline.fit_seconds(ltx_like, 7) == 8        # up, never down
+    assert timeline.fit_seconds(ltx_like, 14) == 10      # the longest there is
     span = {"kind": "range", "min": 2, "max": 12}
     assert timeline.fit_seconds(span, 3.5) == 4
     assert timeline.fit_seconds(span, 1) == 2
@@ -150,12 +150,12 @@ def test_a_window_is_fitted_up_to_a_length_the_model_can_make():
 
 def test_the_timeline_price_is_the_sum_of_each_shots_own_render(monkeypatch):
     from src import pricing
-    monkeypatch.setenv("RUNWAYML_API_SECRET", "test-key")
+    monkeypatch.setenv("FAL_KEY", "test-key")
     shot = {"n": 1, "prompt": "BEATS (0-3s) one. (3-7s) two. (7-10s) three.", "refs": ["/refs/a.jpg"]}
     shown = pricing.display(account_id=None, shot=shot, shot_id=1,
-                            provider="runway", model=runway.DEFAULT_MODEL)
-    assert shown["durations"] == [5, 5, 5]
-    one = runway.estimate_cost(1, model=runway.DEFAULT_MODEL, duration=5)
+                            provider="fal", model="ltx2.3")
+    assert shown["durations"] == [6, 6, 6]          # LTX's shortest clip is 6s
+    one = fal.estimate_cost(1, model="ltx2.3", duration=6)
     assert shown["estimate_usd"] == pytest.approx(3 * one)
 
 
@@ -293,24 +293,24 @@ def test_the_motion_directive_leads_the_render_prompt_and_not_the_keyframe(tmp_d
 
 def test_the_directive_can_be_switched_off_for_a_prompt_that_needs_the_room(
         tmp_db, monkeypatch):
-    """gen4's cap is 1000 characters and refuses rather than truncating, so
-    there has to be a way to spend those 121 characters on the shot instead."""
+    """A model's prompt cap refuses rather than truncating, so there has to
+    be a way to spend those 121 characters on the shot instead."""
     monkeypatch.setenv("ZEROPAGE_MOTION_DIRECTIVE", "0")
     shot = {"prompt": "(0-10s) one long push in.", "seconds": 10}
     assert timeline.render_target(shot)["prompt"] == "(0-10s) one long push in."
 
 
-def test_the_directive_leaves_room_under_the_gen4_cap(tmp_db, monkeypatch):
+def test_the_directive_leaves_room_under_the_prompt_cap(tmp_db, monkeypatch):
     """The budget this is sized against. A continuity block plus a shot line
-    plus the directive has to still fit what runway.check_prompt_length lets
-    through, or this turns working renders into refusals."""
-    from src import runway
+    plus the directive has to still fit Kling v3's 2500-character prompt
+    cap (fal's schema, 2026-09-26), or this turns working renders into
+    refusals."""
     planner_answers(monkeypatch, GOOD)
     cid = a_scene(tmp_db)
     timeline.ensure(cid, gemini_client=object(), db_path=tmp_db)
     shot = preprod.get_concept(cid, dsn=tmp_db, account_id=None)["shots"][0]
     rendered = timeline.render_target(shot, 1)["prompt"]
-    runway.check_prompt_length(rendered, "gen4_turbo")          # no raise
+    assert len(rendered) <= 2500
     assert len(timeline.MOTION_DIRECTIVE) < 150
 
 
@@ -395,14 +395,14 @@ def wait_for_job(job_id, timeout=5.0):
     raise AssertionError(f"job {job_id} never finished")
 
 
-def fake_runway(monkeypatch, fail_on=None):
+def fake_fal(monkeypatch, fail_on=None):
     calls = []
 
     def fake(concept_id, shot_n, *, part=None, duration=None, db_path=None,
              account_id=None, **kw):
         calls.append({"part": part, "duration": duration, "approved": kw.get("approved")})
         if fail_on is not None and part == fail_on:
-            return {"ok": False, "error": "RUNWAY_DAILY_CAP reached"}
+            return {"ok": False, "error": "FAL_DAILY_CAP reached"}
         if part:
             timeline.attach_part(concept_id, shot_n, part, "media_url",
                                  f"https://x/clip{part}.mp4", db_path=db_path,
@@ -411,8 +411,8 @@ def fake_runway(monkeypatch, fail_on=None):
             preprod.set_shot_media_url(concept_id, shot_n, "https://x/clip.mp4",
                                        dsn=db_path, account_id=account_id)
         return {"ok": True, "media_url": f"https://x/clip{part}.mp4"}
-    monkeypatch.setattr(runway, "generate_for_shot", fake)
-    monkeypatch.setattr(runway, "has_key", lambda account_id=None: True)
+    monkeypatch.setattr(fal, "generate_for_shot", fake)
+    monkeypatch.setattr(fal, "has_key", lambda account_id=None: True)
     return calls
 
 
@@ -420,20 +420,20 @@ def test_approving_a_timed_scene_renders_each_shot_at_its_own_length(tmp_db, mon
     planner_answers(monkeypatch, GOOD)
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     monkeypatch.setattr("google.genai.Client", lambda **kw: object())
-    calls = fake_runway(monkeypatch)
+    calls = fake_fal(monkeypatch)
     cid = a_scene(tmp_db)
 
     card = next(c for c in client.get("/api/queue/pending?brand=antihero").json()["items"]
                 if c["id"] == cid)
     assert [p["seconds"] for p in card["timeline"]["parts"]] == [3, 4, 3]
 
-    res = client.post(f"/api/queue/{cid}/approve", json={"provider": "runway"})
+    res = client.post(f"/api/queue/{cid}/approve", json={"provider": "fal"})
     assert res.status_code == 200, res.text
-    assert res.json()["render"]["durations"] == [5, 5, 5]
+    assert res.json()["render"]["durations"] == [6, 6, 6]
     job = wait_for_job(res.json()["job_id"])
     assert job["status"] == "done", job.get("error")
     assert [c["part"] for c in calls] == [1, 2, 3]          # one by one, in order
-    assert all(c["duration"] == 5 and c["approved"] is True for c in calls)
+    assert all(c["duration"] == 6 and c["approved"] is True for c in calls)
     shot = preprod.get_concept(cid, dsn=tmp_db, account_id=None)["shots"][0]
     assert shot["media_url"] == "https://x/clip1.mp4"
     assert all(c["id"] != cid for c in
@@ -444,27 +444,27 @@ def test_a_render_stopped_by_the_cap_resumes_instead_of_paying_twice(tmp_db, mon
     planner_answers(monkeypatch, GOOD)
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     monkeypatch.setattr("google.genai.Client", lambda **kw: object())
-    calls = fake_runway(monkeypatch, fail_on=2)
+    calls = fake_fal(monkeypatch, fail_on=2)
     cid = a_scene(tmp_db)
     job = wait_for_job(client.post(f"/api/queue/{cid}/approve",
-                                   json={"provider": "runway"}).json()["job_id"])
+                                   json={"provider": "fal"}).json()["job_id"])
     assert job["status"] == "failed"
     assert "1 of 3 rendered" in job["error"]
     # still waiting: two shots have no clip
     assert any(c["id"] == cid for c in
                client.get("/api/queue/pending?brand=antihero").json()["items"])
 
-    calls = fake_runway(monkeypatch)
+    calls = fake_fal(monkeypatch)
     job = wait_for_job(client.post(f"/api/queue/{cid}/approve",
-                                   json={"provider": "runway"}).json()["job_id"])
+                                   json={"provider": "fal"}).json()["job_id"])
     assert job["status"] == "done", job.get("error")
     assert [c["part"] for c in calls] == [2, 3]              # shot 1 not re-bought
 
 
 def test_a_single_window_scene_still_approves_as_one_clip(tmp_db, monkeypatch):
-    calls = fake_runway(monkeypatch)
+    calls = fake_fal(monkeypatch)
     cid = a_scene(tmp_db, prompt="(0-10s) one long push in on the door, no cut.")
-    res = client.post(f"/api/queue/{cid}/approve", json={"provider": "runway",
+    res = client.post(f"/api/queue/{cid}/approve", json={"provider": "fal",
                                                          "duration": 10})
     job = wait_for_job(res.json()["job_id"])
     assert job["status"] == "done", job.get("error")

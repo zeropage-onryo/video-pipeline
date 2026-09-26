@@ -14,7 +14,7 @@ parked the run. Four of the eight platforms this project can WRITE for
 were platforms it could not RENDER on. fal.ai hosts all four behind one
 queue API and one key, so one adapter closes all four gaps at once.
 
-Layers, higgsfield.py's exactly (which is runway.py's):
+Layers (every video adapter this repo has had shared them):
 - generate_video     -- the thin wrapper. Submit, poll the status_url,
                         fetch the response_url, download. Raises on
                         anything, including a missing spend approval.
@@ -24,22 +24,21 @@ Layers, higgsfield.py's exactly (which is runway.py's):
 - generate_candidates -- the never-raises edge orchestrator.generate_render
                         calls; N attempts, a generations row each,
                         nothing ever auto-kept.
-- connector(platform) -- ONE module, MANY models (higgsfield's kling2.5
-                        handling, one size up). fal is a single entry in
+- connector(platform) -- ONE module, MANY models. fal is a single entry in
                         providers.VIDEO_PROVIDERS with a MODELS table;
                         the four platform names are bindings of this
                         module to one model each, not four registry
                         entries pretending to be four vendors.
 
-THE SPEND GATE, same order and same semantics as higgsfield/runway:
+THE SPEND GATE:
 - THE APPROVAL IS THE CLICK (2026-09-09, Mike's call). generate_video
   refuses unless the caller passes approved=True, which the routes a
   person drives do and nothing else does. FAL_SPEND_OK=1 still satisfies
   the gate when no caller says otherwise -- that is what keeps the
   unattended paths (orchestrator, autopilot, the CLI) needing a
   deliberate arming of their own. See spend_approved().
-  Unlike Runway and Higgsfield there is no free app to fall back to here:
-  fal is an API company, so the refusal points at the estimate instead of
+  There is no free app to fall back to here: fal is an API company, so
+  the refusal points at the estimate instead of
   at a cheaper door.
 - FAL_DAILY_CAP / FAL_GLOBAL_DAILY_CAP through generative.cap_error,
   counted from the generations table so a runaway loop hits a wall the DB
@@ -49,15 +48,13 @@ THE SPEND GATE, same order and same semantics as higgsfield/runway:
 
 THE QUEUE API, verified against fal.ai/docs 2026-09-08:
 - Base:   https://queue.fal.run
-- Auth:   Authorization: Key $FAL_KEY   (ONE secret, unlike higgsfield's
-          id:secret pair)
+- Auth:   Authorization: Key $FAL_KEY   (ONE secret)
 - Submit: POST https://queue.fal.run/{model_id}, JSON body of
           model-specific args -> {"request_id", "response_url",
           "status_url", "cancel_url", "queue_position"}
 - Poll:   GET {status_url} -> status IN_QUEUE | IN_PROGRESS | COMPLETED
-- Result: GET {response_url} -- a SEPARATE call. This is the one real
-          shape difference from higgsfield, whose terminal status payload
-          carries the output inline.
+- Result: GET {response_url} -- a SEPARATE call: the terminal status
+          payload is a receipt, not the output.
 - Cancel: PUT {cancel_url}
 
 **THERE IS NO FAILED STATUS**, and that is the fact worth carrying in
@@ -90,8 +87,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from . import generative, ledger
 from . import charge as charging
+from . import generative, ledger
 from .shot import Shot
 
 HOST = os.environ.get("FAL_HOST", "https://queue.fal.run").rstrip("/")
@@ -99,9 +96,9 @@ HOST = os.environ.get("FAL_HOST", "https://queue.fal.run").rstrip("/")
 SPEND_ENV = "FAL_SPEND_OK"
 DAILY_CAP = int(os.environ.get("FAL_DAILY_CAP", "6"))
 # The installation-wide wall beside the per-account one, defaulting to the
-# SAME number so a single-operator database behaves exactly as it did --
-# runway.py/higgsfield.py's comment, and the same reasoning: admitting a
-# second account should force a decision about whose card is paying.
+# SAME number so a single-operator database behaves exactly as it did:
+# admitting a second account should force a decision about whose card is
+# paying.
 # 0 = no installation-wide ceiling (2026-09-14, Mike's call): a user who
 # brought their own key was still consuming the operator's shared budget and
 # could lock everyone else out of money nobody spent. The per-account cap
@@ -487,7 +484,7 @@ def spend_approved(approved: Optional[bool] = None, quote=None) -> bool:
     # refused whatever else was said -- it is a price for a different
     # render -- and a Quote with no explicit answer IS the answer: a
     # person pressed a priced button and the server verified the price.
-    # No Quote (BYOK, the nightly graph, the CLI) is exactly as before.
+    # No Quote (the nightly graph, the CLI) is exactly as before.
     if quote is not None and getattr(quote, "provider", None) != "fal":
         return False
     if approved is not None:
@@ -519,14 +516,17 @@ def estimate_cost(n: int, *, model: str = DEFAULT_MODEL,
                   resolution: Optional[str] = None) -> float:
     """What n clips will cost, off the dated table above.
 
-    Real per-second pricing, not higgsfield's estimate: fal publishes a
+    Real per-second pricing, not an estimate scaled off a clip: fal publishes a
     rate card per model, so this is close to an invoice rather than a
     guess -- close, because the duration actually billed is the duration
     the model RETURNS, and a model asked for 5s that hands back 5.2s bills
-    the 5.2. Rounded to the cent the way every other adapter's does.
+    the 5.2. Rounded to a hundredth of a cent, not to the cent: fal's
+    rates run to four places ($0.3034/s), and a quote is this number times
+    MARKUP -- rounding here would under-quote the list rate (10s of 720p
+    Seedance is $3.034, not $3.03).
     """
     seconds = fit_duration(model, duration)
-    return round(n * price_per_second(model, resolution) * seconds, 2)
+    return round(n * price_per_second(model, resolution) * seconds, 4)
 
 
 def estimate_image_cost(n: int, *, megapixels: float = 1.0) -> float:
@@ -537,19 +537,10 @@ def estimate_image_cost(n: int, *, megapixels: float = 1.0) -> float:
 
 
 def _safe_error(e: Exception, account_id: Optional[int] = None) -> str:
-    """The key must never reach a page, a log line, or a DB row.
-
-    It takes the account because _credential() does, and that is the whole
-    bug this signature exists to avoid: called with no account, this
-    resolves the OPERATOR's FAL_KEY and redacts that, while a BYOK
-    customer's own stored key -- the one the failing request was actually
-    signed with -- passes straight through into an error string that
-    reaches a Queue card and a generations row. runway, veo and higgsfield
-    were all fixed for exactly this on 2026-09-07; this module was written
-    with the fix rather than into it.
-
-    Best effort on the lookup: redaction runs on the failure path and must
-    never be the thing that raises there.
+    """The key must never reach a page, a log line, or a DB row. Best
+    effort on the lookup: redaction runs on the failure path and must
+    never be the thing that raises there. (`account_id` is accepted for
+    the callers; the key is the operator's since BYOK went, 2026-09-26.)
     """
     text = str(e)
     try:
@@ -561,18 +552,17 @@ def _safe_error(e: Exception, account_id: Optional[int] = None) -> str:
     return re.sub(r"(Key\s+)[A-Za-z0-9_\-.:]+", r"\1<redacted>", text)
 
 
-def safe_prompt(prompt: str, db_path=None) -> str:
-    """Asset names swapped for their render aliases -- runway.py's table,
-    reused rather than copied.
+def safe_prompt(prompt: str, db_path=None, account_id: Optional[int] = None) -> str:
+    """Asset names swapped for their render aliases (entities.render_aliases).
 
     The alias is a property of the ASSET, not of the vendor: "Cyclops"
     trips a third-party-content classifier wherever it is sent, and the
-    keyframe was carrying the look anyway. Two lists would drift, and the
-    drift would only surface as a refused render mid-run.
+    keyframe was carrying the look anyway. Per account: an alias is read
+    off the assets of the account whose shot is rendering.
     """
-    from .runway import render_aliases
+    from .entities import render_aliases
     text = prompt or ""
-    for name, alias in render_aliases(db_path).items():
+    for name, alias in render_aliases(db_path, account_id=account_id).items():
         text = re.sub(r"(?<![\w])" + re.escape(name) + r"(?![\w])",
                       alias, text, flags=re.IGNORECASE)
     return text
@@ -704,8 +694,6 @@ def _submit_and_wait(model_id: str, body: dict, *, http=None,
 
     1. The result is a SECOND request. fal's terminal status payload is a
        receipt, not the output -- the video lives behind `response_url`.
-       (higgsfield's terminal payload carries the asset inline, which is
-       why this is the one place the two adapters diverge.)
     2. An UNKNOWN status keeps waiting. fal documents three states, and
        the safe reading of a fourth is "a state we do not understand yet",
        not "done" -- treating it as done would fetch a result that is not
@@ -790,7 +778,7 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
         raise RuntimeError("FAL_KEY not set (create one at fal.ai/dashboard/keys)")
     # Name-swap first, THEN build the body: what we check has to be what
     # we send.
-    prompt = safe_prompt(prompt, db_path)
+    prompt = safe_prompt(prompt, db_path, account_id)
     model_id, body = build_body(prompt, model=model, image_url=image_url,
                                 duration=duration, aspect_ratio=aspect_ratio,
                                 resolution=resolution,
@@ -837,7 +825,7 @@ def generate_image(prompt: str, out_path, *, model: str = DEFAULT_IMAGE_MODEL,
             f"spend not approved: this call was not approved by a person. "
             f"Approve it at the Queue, or set {SPEND_ENV}=1 for an unattended run "
             f"(~${estimate_image_cost(1)} at fal, {model})")
-    prompt = safe_prompt(prompt, db_path)
+    prompt = safe_prompt(prompt, db_path, account_id)
     body = {"prompt": prompt}
     if "width" in spec["params"]:
         body["width"], body["height"] = int(width), int(height)
@@ -851,23 +839,77 @@ def generate_image(prompt: str, out_path, *, model: str = DEFAULT_IMAGE_MODEL,
     return out_path
 
 
+def _local_render_bytes(value: str):
+    """A site-relative /renders/ URL -> that file's bytes, or None.
+    Anything escaping data/renders/ is refused."""
+    try:
+        root = RENDERS_ROOT.resolve()
+        target = (root / value[len("/renders/"):]).resolve()
+        if root in target.parents and target.is_file():
+            return target.read_bytes()
+    except OSError:
+        return None
+    return None
+
+
 def as_image_url(value, *, resolve_photo=None,
                  account_id: Optional[int] = None) -> Optional[str]:
     """Anything stored as a reference -> a URL fal's servers can actually
     FETCH, or None.
 
-    Delegated to higgsfield.as_image_url because the requirement is
-    identical and so is the failure it guards: fal's image-to-video
-    endpoints take an `image_url` their servers fetch, so a local keyframe
-    has to be uploaded somewhere public first, and without storage
-    configured the reference is DROPPED and the caller records
-    prompt_image=False. A silently dropped anchor while the Queue card
-    claims one is runway's old bug, and it is not being repeated with a
-    third vendor -- or with a fourth copy of the code.
+    fal's image-to-video endpoints take an image URL their servers fetch,
+    so a local keyframe has to be uploaded somewhere public first. With
+    storage configured that happens here; without it the reference is
+    DROPPED and the caller records prompt_image=False -- a silently dropped
+    anchor while the Queue card claims one is exactly the bug this guards.
+    (Lived in src/higgsfield.py until that module's video path was retired
+    on 2026-09-26; fal was the other caller, and now the only one.)
     """
-    from . import higgsfield
-    return higgsfield.as_image_url(value, resolve_photo=resolve_photo,
-                                   account_id=account_id)
+    from . import storage
+
+    if not value and not isinstance(value, (bytes, bytearray)):
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        if value.startswith(("http://", "https://")):
+            return value
+        if value.startswith("data:"):
+            return None        # not fetchable by a remote server
+        data = (_local_render_bytes(value) if value.startswith("/renders/")
+                else None)
+        if data is None and resolve_photo is not None:
+            try:
+                target = resolve_photo(value)
+            except Exception:
+                target = None
+            if target is not None:
+                try:
+                    data = Path(target).read_bytes()
+                except OSError:
+                    data = None
+    elif isinstance(value, (bytes, bytearray)):
+        data = bytes(value)
+    else:
+        return None
+
+    if not data or not storage.configured():
+        return None
+
+    import hashlib
+
+    from . import media
+    from .gemini_utils import sniff_mime
+    mime = sniff_mime(data)
+    ext = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}.get(mime, "png")
+    key = f"refs/fal/{hashlib.sha256(data).hexdigest()[:16]}.{ext}"
+    tmp = RENDER_DIR / "refs" / Path(key).name
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    tmp.write_bytes(data)
+    try:
+        return storage.upload_file(tmp, key=media.object_key(key, account_id),
+                                   content_type=mime)
+    except Exception:
+        return None            # a reference is an enhancement, never a gate
 
 
 # --------------------------------------------------------------------------
@@ -903,9 +945,9 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *,
                         account_id: Optional[int] = None, **cfg) -> dict:
     """
     Never raises. The interface orchestrator.generate_render calls --
-    identical in signature and result shape to runway/veo/higgsfield's,
-    which is the whole point: four dormant platforms come online through
-    four bindings of this one function.
+    identical in signature and result shape for every platform binding,
+    which is the whole point: every fal platform comes online through a
+    binding of this one function.
 
     {"ok", "candidates": [{path, generation_id, model}], "shot_id",
     "error"} -- a missing approval, a missing key, a failed job or the
@@ -953,7 +995,7 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *,
         for i in range(1, n + 1):
             out_path = out_dir / f"cand{i}.mp4"
             # This layer writes the row, so this layer builds the Charge
-            # (src/charge.py) -- see runway.generate_candidates. The ref is
+            # (src/charge.py). The ref is
             # NOT the file name: cand1.mp4 repeats every run.
             key_source = KEY_SOURCE
             charge = charging.Charge(
@@ -1027,9 +1069,8 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
     src/timeline.py). None is the whole scene, exactly as before.
 
     Never raises: {"ok", "media_url", "generation_id", "path", "error"}.
-    One render for one concept shot -- runway.generate_for_shot's contract
-    on this vendor, so the Queue's approve can dispatch to either without
-    caring which. Every wall this module already has still applies: the
+    One render for one concept shot -- the providers.REQUIRED contract the
+    Queue's approve dispatches through. Every wall this module already has still applies: the
     spend gate lives inside generate_video so this layer cannot spend
     around it, the cap is checked before any call, and the attempt is a
     generations row either way the pick later goes.
@@ -1071,7 +1112,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
             return {"ok": False,
                     "error": f"shot {shot_n} has no AI prompt to render from"}
 
-        # as_image_url, not runway's as_prompt_image: fal fetches an
+        # as_image_url: fal fetches an
         # image_url server-side, so a local keyframe with no R2 behind it
         # is dropped and prompt_image records False -- nothing downstream
         # gets to claim an anchor that never left the building.
@@ -1157,8 +1198,7 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
                          quote=None) -> dict:
     """
     Never raises: {"ok", "media_url", "generation_id", "path", "error"}.
-    The free-standing render behind the Workflows canvas's Generate node,
-    higgsfield.generate_from_prompt's twin.
+    The free-standing render behind the Director canvas's Generate node.
     """
     kwargs = {"dsn": db_path} if db_path is not None else {}
 

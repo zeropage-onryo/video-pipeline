@@ -216,7 +216,7 @@ def test_generate_run_saves_a_real_one_shot_concept(tmp_db, hermetic_generate,
     assert concept is not None
     assert len(concept["shots"]) == 1
     shot = concept["shots"][0]
-    assert shot["source"] == "AI" and shot["tool"] == "RUNWAY"
+    assert shot["source"] == "AI" and shot["tool"] == "LTX"    # fal's default platform
     assert shot["prompt"] == "ENHANCED[the Ducati tank badge, low key]"
     assert shot["desc"] == "the Ducati tank badge, low key"
     # the Nano image lands as the shot's reference anchor
@@ -243,9 +243,10 @@ def test_generate_run_attaches_to_an_existing_concept(tmp_db, hermetic_generate)
     assert concept["title"] == "Night ride"
 
 
-def test_generate_run_video_degrades_without_runway(tmp_db, hermetic_generate,
-                                                    monkeypatch):
-    monkeypatch.delenv("RUNWAYML_API_SECRET", raising=False)
+def test_generate_run_video_degrades_without_a_renderer_key(tmp_db, hermetic_generate,
+                                                            monkeypatch):
+    monkeypatch.delenv("FAL_KEY", raising=False)
+    monkeypatch.delenv("FAL_API_KEY", raising=False)
     job = wait_for_job(client.post("/api/generate/run", data={
         "prompt": "night ride", "output": "video",
     }).json()["job_id"])

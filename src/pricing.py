@@ -207,12 +207,12 @@ _MICROS_PER_CENT = 10_000
 
 
 # --- the signed quote -------------------------------------------------------
-# ITS OWN SECRET, not ACCOUNT_KEYS_SECRET. Rotating that one re-keys every
-# stored customer credential; rotating this one invalidates at most an
-# hour of outstanding quotes, and people press the button again. Tying
-# them together makes the cheap rotation as expensive as the catastrophic
-# one. Different per environment on purpose: a dev-minted quote must not
-# verify in production, which is the whole point of signing it.
+# ITS OWN SECRET, never SESSION_SECRET. Rotating this one invalidates at
+# most an hour of outstanding quotes, and people press the button again;
+# rotating the session secret signs everybody out. Tying them together
+# makes the cheap rotation as expensive as the disruptive one. Different
+# per environment on purpose: a dev-minted quote must not verify in
+# production, which is the whole point of signing it.
 SIGNING_ENV = "QUOTE_SIGNING_SECRET"
 SIGNING_COMMAND = ('python -c "import base64, os; '
                    'print(base64.urlsafe_b64encode(os.urandom(32)).decode())"')

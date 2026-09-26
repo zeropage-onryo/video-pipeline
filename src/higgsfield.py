@@ -1,67 +1,34 @@
 #!/usr/bin/env python3
 """
-The Higgsfield connector: prompt -> clip (or Soul still) -> pipeline.
-runway.py's exact shape -- a thin raising wrapper under never-raises
-edges -- because the economics are the same: Cloud API calls bill
-Higgsfield API credits, a balance separate from the app subscription,
-so the cheap path is their app and the API is a deliberate spend.
+The Higgsfield connector -- STILLS ONLY since 2026-09-26.
 
-WHY THIS MODULE EXISTS AT ALL. shootgen.ZEROPAGE_AI_TOOLS has been
-("HIGGSFIELD", "RUNWAY") since 2026-08-21 and the shot-plan prompt names
-HIGGSFIELD first, but orchestrator.generate_render only knew VEO and
-RUNWAY -- so every night a shot planned for Higgsfield came back
-"no adapter wired for HIGGSFIELD" and the run parked on it. shot.py
-already compiles the prompt (HIGGSFIELD_CAMERA, render_higgsfield);
-this is the missing half.
+fal became the only video renderer that day (Mike's call, docs/tasks/
+task-fal-only.md), and this module's video path -- generate_video,
+generate_candidates, generate_for_shot, generate_from_prompt, the
+VIDEO_MODELS table -- went with Runway and Veo. What stays is the Soul
+image path, which the video decision did not touch:
 
-Layers, runway.py's:
-- generate_video / generate_image  -- thin wrappers. Submit, poll the
-                                      status_url, download immediately.
-                                      Raise on anything; callers catch.
-- generate_candidates              -- the orchestrator's interface, the
-                                      same signature runway/veo expose,
-                                      so the nightly graph gains a tool
-                                      by one dict entry.
-- generate_for_shot                -- the Queue's approve-is-the-pick
-                                      render for one concept shot.
-- generate_from_prompt             -- the Workflows canvas's free-
-                                      standing render.
-- generate_image_from_prompt       -- a Soul still (keyframe / image
-                                      post), the same walls.
+- generate_image                -- the thin wrapper. Submit, poll the
+                                   status_url, download. Raises.
+- generate_image_from_prompt    -- a Soul still (the scene chain's visual
+                                   targets, the image post), never raises.
 
-THE SPEND GATE, and why it lives here and not in callers:
-- THE APPROVAL IS THE CLICK (2026-09-09, Mike's call). generate_video
-  refuses unless the caller passes approved=True, which the routes a
-  person drives do and nothing else does. HIGGSFIELD_SPEND_OK=1 still satisfies
-  the gate when no caller says otherwise -- that is what keeps the
-  unattended paths (orchestrator, autopilot, the CLI) needing a
-  deliberate arming of their own. See spend_approved().
-  The free path is still the honest default answer to "should this be an
-  API render at all": the Higgsfield app runs on the subscription you
-  already pay for, and the refusal still says so.
-- DAILY_CAP (HIGGSFIELD_DAILY_CAP, default 6) counted from the
-  generations table -- the same wall veo.py and runway.py have, enforced
-  by the DB so a runaway loop hits it.
-- estimate_cost() prices a plan before anyone approves it. Higgsfield
-  does not publish per-request API pricing (checked 2026-08-31), so the
-  numbers are env-overridable ESTIMATES, not an invoice.
+Refgen (src/refgen.py) and scene_chain's visual targets call these.
+
+THE SPEND GATE lives here, not in callers: generate_image refuses unless
+the caller passes approved=True or HIGGSFIELD_SPEND_OK=1 is set for an
+unattended run. DAILY_CAP (HIGGSFIELD_DAILY_CAP, default 6) is counted
+from the generations table under tool "higgsfield".
 
 API contract verified against docs.higgsfield.ai 2026-08-31:
-- Host:   https://api.higgsfield.ai   <- NOT platform.higgsfield.ai; an
-          earlier draft of this file (unmerged worktree, 2026-08-25)
-          used the platform host, which is why it was never live-tested.
+- Host:   https://api.higgsfield.ai
 - Auth:   Authorization: Key <key_id>:<key_secret>
 - Submit: POST <host><model path>, JSON body
           -> {"status": "queued", "request_id", "status_url", "cancel_url"}
-- Poll:   GET status_url until terminal. Terminal states documented as
-          completed / failed / nsfw / canceled.
-- Output: the completed payload carries the result inline. The IMAGE
-          shape is documented: {"images": [{"url": ...}]}. The VIDEO
-          shape is NOT published, so _output_url() prefers the likely
-          keys and falls back to walking the JSON for the first non-
-          control URL. PIN THE REAL KEY ON THE FIRST LIVE RENDER and
-          date the comment -- an unpinned walk is a guess that happens
-          to work.
+- Poll:   GET status_url until terminal (completed / failed / nsfw /
+          canceled).
+- Output: the completed payload carries the result inline,
+          {"images": [{"url": ...}]}.
 """
 from __future__ import annotations
 
@@ -75,8 +42,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from . import account_keys, generative, ledger
 from . import charge as charging
+from . import generative, ledger
 from .shot import Shot
 
 HOST = os.environ.get("HIGGSFIELD_HOST", "https://api.higgsfield.ai").rstrip("/")
@@ -138,9 +105,8 @@ def timeout_seconds() -> int:
     except (TypeError, ValueError):
         return int(TIMEOUT_SECONDS)
 
-# Not published on the docs (checked 2026-08-31) -- estimates for the
-# confirm dialog, not a promise. Override once a real invoice is known.
-COST_PER_CLIP_USD = float(os.environ.get("HIGGSFIELD_VIDEO_COST_USD", "0.40"))
+# Not published on the docs (checked 2026-08-31) -- an estimate, not a
+# promise. Override once a real invoice is known.
 COST_PER_IMAGE_USD = float(os.environ.get("HIGGSFIELD_IMAGE_COST_USD", "0.05"))
 
 DONE_STATUSES = {"completed", "succeeded", "success", "done"}
@@ -150,162 +116,22 @@ RENDER_DIR = Path(__file__).resolve().parent.parent / "data" / "renders" / "higg
 RENDERS_ROOT = Path(__file__).resolve().parent.parent / "data" / "renders"
 
 
-# --------------------------------------------------------------------------
-# the model registry -- paths and the params each endpoint actually takes
-# --------------------------------------------------------------------------
-# AVAILABILITY IS NOT THE SAME AS DOCUMENTED. The public OpenAPI spec
-# advertises seedance, kling and veo paths, but probed live against this
-# account's key on 2026-08-31 (POST with an empty body, so no job could
-# be created), only the kling routes answer: seedance and veo all return
-# 404 {"detail":"model_not_found"}, while kling returns 400 "'prompt' is
-# a required property" -- the route exists and rejected the body. The
-# Cloud dashboard agrees: it lists only Soul 2, Soul Cinema and Soul ID.
-# So the seedance/veo entries stay (the paths are right if the account
-# ever gains them) but are marked unavailable, and DEFAULT_MODEL is a
-# kling one. Re-probe before trusting an entry marked unavailable.
-#
-# `params` is a WHITELIST, not documentation: build_body() drops anything
-# a model does not declare rather than sending a field the API will
-# reject or silently ignore. `verified` dates the body schema against
-# docs.higgsfield.ai/docs/openapi.json; an unverified entry sends the
-# common fields only, which is the safe subset every model in the list
-# advertises (prompt, duration).
-VIDEO_MODELS: dict[str, dict] = {
-    # 404 model_not_found on this account, probed 2026-08-31
-    "seedance-pro": {
-        "available": False,
-        "t2v": "/bytedance/seedance/v1/pro/fast/text-to-video",
-        "i2v": "/bytedance/seedance/v1/pro/fast/image-to-video",
-        "params": ("duration", "resolution", "aspect_ratio", "camera_fixed"),
-        "durations": (2, 12),          # min/max, integer seconds
-        "verified": "2026-08-31",
-    },
-    # 404 model_not_found on this account, probed 2026-08-31
-    "seedance-lite": {
-        "available": False,
-        "t2v": "/bytedance/seedance/v1/lite/text-to-video",
-        "i2v": "/bytedance/seedance/v1/lite/image-to-video",
-        "params": ("duration", "resolution", "aspect_ratio", "camera_fixed"),
-        "durations": (2, 12),
-        "verified": None,
-    },
-    # route confirmed live 2026-08-31
-    "kling2.5": {
-        "available": True,
-        "t2v": "/kling-video/v2.5-turbo/pro/text-to-video",
-        "i2v": "/kling-video/v2.5-turbo/pro/image-to-video",
-        # kling takes NO aspect_ratio -- the frame comes from the source
-        # image on i2v and the model default on t2v. It does take a real
-        # negative_prompt field, which is where HOUSE_NEGATIVE belongs.
-        "params": ("duration", "cfg_scale", "negative_prompt"),
-        "durations": (5, 10),
-        "verified": "2026-08-31",
-    },
-    # route confirmed live 2026-08-31; BLOCKED 2026-09-18 -- every
-    # kling2.1 path now answers 423 {"detail":"model_blocked"} on this
-    # account (kling2.5 still answers 400 on an empty body). Found when a
-    # Queue approve on "Neon City Ascent" failed with bare "HTTP Error
-    # 423: Locked". Re-probe before flipping it back.
-    "kling2.1": {
-        "available": False,
-        "t2v": "/kling-video/v2.1/master/text-to-video",
-        "i2v": "/kling-video/v2.1/master/image-to-video",
-        "params": ("duration", "cfg_scale", "negative_prompt"),
-        "durations": (5, 10),
-        "verified": None,
-    },
-    # 404 model_not_found on this account, probed 2026-08-31
-    "veo3.1-fast": {
-        "available": False,
-        "t2v": "/veo3.1/fast",
-        "i2v": "/veo3.1/fast/image-to-video",
-        "params": ("duration", "resolution", "aspect_ratio", "generate_audio"),
-        "durations": (4, 8),
-        "verified": None,
-    },
-    # 404 model_not_found on this account, probed 2026-08-31
-    "veo3.1": {
-        "available": False,
-        "t2v": "/veo3.1",
-        "i2v": "/veo3.1/image-to-video",
-        "params": ("duration", "resolution", "aspect_ratio", "generate_audio"),
-        "durations": (4, 8),
-        "verified": None,
-    },
-}
-
-MODELS = tuple(VIDEO_MODELS)
-AVAILABLE_MODELS = tuple(k for k, v in VIDEO_MODELS.items() if v.get("available"))
-DEFAULT_MODEL = os.environ.get("HIGGSFIELD_MODEL", "kling2.5")
-# The platform vertical, shot.HOUSE_ASPECT. NOTE: kling -- the only
-# family this account can reach -- takes no aspect_ratio at all, so on
-# text-to-video the frame is whatever the model defaults to. The 9:16
-# house format therefore has to come from the KEYFRAME via
-# image-to-video, which is how the pipeline runs anyway (keyframe node
-# -> approve -> clip). A t2v kling render will not be vertical.
+# The platform vertical, shot.HOUSE_ASPECT.
 DEFAULT_ASPECT = "9:16"
-DEFAULT_RESOLUTION = os.environ.get("HIGGSFIELD_RESOLUTION", "720")
-DEFAULT_DURATION = 5
-
-
-def model_spec(model: str) -> dict:
-    spec = VIDEO_MODELS.get(model)
-    if spec is None:
-        raise ValueError(f"model must be one of {MODELS}, got {model!r}")
-    if not spec.get("available"):
-        raise ValueError(
-            f"{model!r} returned model_not_found on this account when probed "
-            f"2026-08-31 -- its path is right but the account cannot reach it. "
-            f"Available: {', '.join(AVAILABLE_MODELS)}. Re-probe before "
-            f"removing this guard.")
-    return spec
-
-
-def build_body(prompt: str, *, model: str = DEFAULT_MODEL,
-               image_url: Optional[str] = None, duration: int = DEFAULT_DURATION,
-               aspect_ratio: str = DEFAULT_ASPECT,
-               resolution: str = DEFAULT_RESOLUTION,
-               negative_prompt: str = "") -> tuple[str, dict]:
-    """(path, json body) for one render -- pure, so the whole request
-    shape is testable without spending a credit.
-
-    duration is clamped into the model's own range rather than sent as
-    given: every one of these endpoints rejects an out-of-range value,
-    and a refused request that costs a round-trip teaches nothing. The
-    cut wants what it wants; the tool gives the nearest it has, same
-    contract as Shot.duration_s.
-    """
-    spec = model_spec(model)
-    path = spec["i2v"] if image_url else spec["t2v"]
-    allowed = spec["params"]
-    body: dict = {"prompt": prompt}
-    if image_url:
-        body["image_url"] = image_url
-    if "duration" in allowed:
-        low, high = spec["durations"]
-        body["duration"] = int(min(max(int(duration), low), high))
-    if "aspect_ratio" in allowed:
-        body["aspect_ratio"] = aspect_ratio
-    if "resolution" in allowed:
-        body["resolution"] = resolution
-    if "negative_prompt" in allowed and negative_prompt:
-        body["negative_prompt"] = negative_prompt
-    return path, body
 
 
 # --------------------------------------------------------------------------
 # credentials, gates, cost
 # --------------------------------------------------------------------------
 def _credentials(account_id: Optional[int] = None) -> Optional[tuple[str, str]]:
-    """Key id + secret. account_id's own stored key (BYOK, backlog #10)
-    first, via account_keys.key_for() -- same fallback shape as
-    runway._make_client(): HIGGSFIELD_* names first, the docs' own HF_*
-    names as a fallback (HF_ collides with Hugging Face conventions, so
-    it is not what .env.example teaches)."""
-    creds = account_keys.key_for(account_id, "higgsfield")
-    if creds:
-        return (creds.get("api_key_id"), creds.get("api_key_secret"))
-    return None
+    """Key id + secret from the environment: HIGGSFIELD_* first, the docs'
+    own HF_* names as a fallback (HF_ collides with Hugging Face
+    conventions, so it is not what .env.example teaches). The operator's
+    credential only -- per-account keys were removed on 2026-09-26."""
+    key_id = os.environ.get("HIGGSFIELD_API_KEY_ID") or os.environ.get("HF_API_KEY_ID")
+    secret = (os.environ.get("HIGGSFIELD_API_KEY_SECRET")
+              or os.environ.get("HF_API_KEY_SECRET"))
+    return (key_id, secret) if key_id and secret else None
 
 
 def has_key(account_id: Optional[int] = None) -> bool:
@@ -328,7 +154,7 @@ def spend_approved(approved: Optional[bool] = None, quote=None) -> bool:
     So the approval became an ARGUMENT. `approved=True` is passed by the
     routes a human drives and by nothing else, which is what the env var
     was really standing in for. The check still lives inside
-    generate_video, so no caller can spend around it.
+    generate_image, so no caller can spend around it.
 
     The environment variable still satisfies the gate when no caller
     says otherwise. That is deliberate and it is what keeps the
@@ -337,13 +163,8 @@ def spend_approved(approved: Optional[bool] = None, quote=None) -> bool:
     HIGGSFIELD_SPEND_OK=1 set for it on purpose, on top of its own flags. Same for
     the CLI and the ops scripts.
     """
-    # `quote` (2026-09-21) is the verified pricing.Quote the route holds,
-    # when it holds one. A change of SHAPE, not of location: the check is
-    # still here, inside generate_video. A Quote for another renderer is
-    # refused whatever else was said -- it is a price for a different
-    # render -- and a Quote with no explicit answer IS the answer: a
-    # person pressed a priced button and the server verified the price.
-    # No Quote (BYOK, the nightly graph, the CLI) is exactly as before.
+    # A Quote for another renderer is refused whatever else was said --
+    # it is a price for a different render. (No still is quoted today.)
     if quote is not None and getattr(quote, "provider", None) != "higgsfield":
         return False
     if approved is not None:
@@ -353,26 +174,12 @@ def spend_approved(approved: Optional[bool] = None, quote=None) -> bool:
     return (os.environ.get(SPEND_ENV) or "").strip() == "1"
 
 
-def estimate_cost(n: int, *, model: str = DEFAULT_MODEL,
-                  duration: int = DEFAULT_DURATION) -> float:
-    """An ESTIMATE -- Higgsfield publishes no per-request API price
-    (2026-08-31). Scales with duration so a 10s plan does not read as a
-    5s one; the per-clip base is HIGGSFIELD_VIDEO_COST_USD."""
-    return round(n * COST_PER_CLIP_USD * (max(int(duration), 1) / DEFAULT_DURATION), 2)
-
-
 def estimate_image_cost(n: int) -> float:
     return round(n * COST_PER_IMAGE_USD, 2)
 
 
 def _safe_error(e: Exception, account_id: Optional[int] = None) -> str:
-    """Neither credential may reach a page, a log line, or a DB row.
-
-    It takes the account because _credentials() does: called with no
-    account this resolved the OPERATOR's env credentials and redacted
-    those, so a BYOK customer's own stored key -- the one the failing
-    request was actually signed with -- passed straight through into an
-    error string that reaches a Queue card and a generations row. Best
+    """Neither credential may reach a page, a log line, or a DB row. Best
     effort on the lookup: redaction runs on the failure path and must
     never be the thing that raises there."""
     text = str(e)
@@ -387,19 +194,12 @@ def _safe_error(e: Exception, account_id: Optional[int] = None) -> str:
     return re.sub(r"(Key\s+)[A-Za-z0-9_\-.:]+", r"\1<redacted>", text)
 
 
-def safe_prompt(prompt: str, db_path=None) -> str:
-    """Asset names swapped for their render aliases, the same table
-    runway.py sanitises against.
-
-    The alias is a property of the ASSET, not of the vendor: "Cyclops"
-    trips a third-party-content classifier wherever it is sent, and the
-    keyframe was carrying the look anyway. Reusing runway.render_aliases
-    keeps one list -- two would drift, and the drift would only show up
-    as a refused render mid-run.
-    """
-    from .runway import render_aliases
+def safe_prompt(prompt: str, db_path=None, account_id: Optional[int] = None) -> str:
+    """Asset names swapped for their render aliases (entities.render_aliases,
+    the one table every renderer sanitises against)."""
+    from .entities import render_aliases
     text = prompt or ""
-    for name, alias in render_aliases(db_path).items():
+    for name, alias in render_aliases(db_path, account_id=account_id).items():
         text = re.sub(r"(?<![\w])" + re.escape(name) + r"(?![\w])",
                       alias, text, flags=re.IGNORECASE)
     return text
@@ -468,11 +268,9 @@ def _request(url: str, payload: Optional[dict] = None, *,
         raise
 
 
-# The documented image shape is {"images": [{"url": ...}]}. The video
-# shape is not published, so these are the candidates in order of
-# likelihood, checked before falling back to the walk. PIN THE REAL ONE
-# after the first live clip and delete the guesswork.
-OUTPUT_KEYS = ("videos", "video", "images", "image", "output", "outputs", "result")
+# The documented image shape is {"images": [{"url": ...}]}, checked first;
+# the rest are the fallback walk's order.
+OUTPUT_KEYS = ("images", "image", "output", "outputs", "result")
 
 
 def _first_url(value, skip: set) -> Optional[str]:
@@ -562,63 +360,6 @@ def _submit_and_wait(path: str, body: dict, *, http=None,
         time.sleep(POLL_SECONDS)
 
 
-def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
-                   image_url: Optional[str] = None,
-                   duration: int = DEFAULT_DURATION,
-                   aspect_ratio: str = DEFAULT_ASPECT,
-                   resolution: str = DEFAULT_RESOLUTION,
-                   negative_prompt: str = "",
-                   http=None, db_path=None,
-                   approved: Optional[bool] = None,
-                   account_id: Optional[int] = None,
-                   charge: Optional[charging.Charge] = None) -> Path:
-    """
-    The thin wrapper: submit -> poll -> download. Raises on anything --
-    including a missing spend approval, which is checked HERE so no
-    caller can spend a credit around the gate, and an empty credit
-    balance, held here between the gate and the submit (src/charge.py).
-    `charge` is the caller's when it will record the generation;
-    otherwise this call holds and settles its own at the estimate.
-    """
-    if not spend_approved(approved, quote=getattr(charge, "quote", None)):
-        raise RuntimeError(
-            f"credit spend not approved: this call was not approved by a person. "
-            f"Render it in the Higgsfield app instead, approve it at the Queue, or "
-            f"set {SPEND_ENV}=1 for an unattended run "
-            f"(~${estimate_cost(1, model=model, duration=duration)} of API credits)"
-        )
-    # Name-swap first, THEN build the body: what we check has to be what
-    # we send.
-    prompt = safe_prompt(prompt, db_path)
-    path, body = build_body(prompt, model=model, image_url=image_url,
-                            duration=duration, aspect_ratio=aspect_ratio,
-                            resolution=resolution, negative_prompt=negative_prompt)
-    out_path = Path(out_path)
-    own = charge is None
-    if own:
-        charge = charging.Charge(
-            account_id, provider="higgsfield", ref=out_path.name,
-            estimate_usd=estimate_cost(1, model=model, duration=duration),
-            key_source=account_keys.key_source(account_id, "higgsfield", db_path),
-            dsn=db_path)
-    charge.take()          # InsufficientCredit raises HERE: nothing submitted
-    charge.submitted()     # the last line before the provider call
-    try:
-        state, skip = _submit_and_wait(path, body, http=http, account_id=account_id)
-        url = _output_url(state, skip)
-        if not url:
-            raise RuntimeError(
-                f"Higgsfield job finished but no output URL was found in the "
-                f"payload (keys: {sorted(state)})")
-        _download(url, out_path)
-    except Exception as e:
-        charge.release(f"higgsfield: {type(e).__name__}")
-        raise
-    if own:
-        charge.settle()
-    return out_path
-
-
 def generate_image(prompt: str, out_path, *, http=None, db_path=None,
                    aspect_ratio: str = DEFAULT_ASPECT,
                    approved: Optional[bool] = None,
@@ -633,7 +374,7 @@ def generate_image(prompt: str, out_path, *, http=None, db_path=None,
             f"Generate it in the Higgsfield app instead, or set {SPEND_ENV}=1 for "
             f"an unattended run (~${estimate_image_cost(1)} of API credits)"
         )
-    prompt = safe_prompt(prompt, db_path)
+    prompt = safe_prompt(prompt, db_path, account_id)
     body = {"prompt": prompt, "aspect_ratio": aspect_ratio}
     if soul_id is None:
         soul_id = os.environ.get("HIGGSFIELD_SOUL_ID", "").strip()
@@ -664,86 +405,6 @@ def generate_image(prompt: str, out_path, *, http=None, db_path=None,
 
 
 # --------------------------------------------------------------------------
-# references: Higgsfield needs a URL, not bytes
-# --------------------------------------------------------------------------
-def _local_render_bytes(value: str):
-    """A site-relative /renders/ URL -> that file's bytes, or None.
-    Mirrors runway._local_render_bytes; anything escaping data/renders/
-    is refused."""
-    try:
-        root = RENDERS_ROOT.resolve()
-        target = (root / value[len("/renders/"):]).resolve()
-        if root in target.parents and target.is_file():
-            return target.read_bytes()
-    except OSError:
-        return None
-    return None
-
-
-def as_image_url(value, *, resolve_photo=None,
-                 account_id: Optional[int] = None) -> Optional[str]:
-    """Anything we might have stored as a reference -> a URL Higgsfield
-    can actually FETCH, or None.
-
-    This is the one real difference from runway.as_prompt_image, and it
-    is worth stating plainly: Runway accepts an inline data: URI, so a
-    keyframe on a machine without R2 still anchors. Higgsfield's
-    image-to-video endpoints take `image_url` -- a URI their servers
-    fetch -- so a local keyframe MUST be uploaded somewhere public
-    first. With storage configured that happens here; without it the
-    reference is dropped and the caller records prompt_image=False, so
-    the Queue card cannot claim an anchor that was never sent. That was
-    exactly runway's old silent-drop bug (see as_prompt_image), and it
-    is not being repeated with a different vendor.
-    """
-    from . import storage
-
-    if not value and not isinstance(value, (bytes, bytearray)):
-        return None
-    if isinstance(value, str):
-        value = value.strip()
-        if value.startswith(("http://", "https://")):
-            return value
-        if value.startswith("data:"):
-            return None        # not fetchable by a remote server
-        data = (_local_render_bytes(value) if value.startswith("/renders/")
-                else None)
-        if data is None and resolve_photo is not None:
-            try:
-                target = resolve_photo(value)
-            except Exception:
-                target = None
-            if target is not None:
-                try:
-                    data = Path(target).read_bytes()
-                except OSError:
-                    data = None
-    elif isinstance(value, (bytes, bytearray)):
-        data = bytes(value)
-    else:
-        return None
-
-    if not data or not storage.configured():
-        return None
-
-    import hashlib
-
-    from . import media
-    from .gemini_utils import sniff_mime
-    mime = sniff_mime(data)
-    ext = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}.get(mime, "png")
-    key = f"refs/higgsfield/{hashlib.sha256(data).hexdigest()[:16]}.{ext}"
-    tmp = RENDER_DIR / "refs" / Path(key).name
-    tmp.parent.mkdir(parents=True, exist_ok=True)
-    tmp.write_bytes(data)
-    try:
-        return storage.upload_file(tmp, key=media.object_key(key, account_id),
-                                   content_type=mime)
-    except Exception:
-        return None            # a reference is an enhancement, never a gate
-
-
-# --------------------------------------------------------------------------
 # the never-raises edges
 # --------------------------------------------------------------------------
 def _shot_row_for_prompt(prompt: str, db_path, note: str, account_id: Optional[int] = None) -> int:
@@ -754,110 +415,6 @@ def _shot_row_for_prompt(prompt: str, db_path, note: str, account_id: Optional[i
     generative.init(**kwargs)
     shot = Shot(subject=prompt[:100], action="as prompted")
     return generative.add_shot(shot, notes=note, **kwargs, account_id=account_id)
-
-
-def generate_candidates(prompt: str, out_dir, n: int = 3, *,
-                        shot_id: Optional[int] = None, db_path=None,
-                        model: str = DEFAULT_MODEL, http=None,
-                        approved: Optional[bool] = None,
-                        account_id: Optional[int] = None, **cfg) -> dict:
-    """
-    Never raises. The interface orchestrator.generate_render calls --
-    identical in signature and result shape to runway.generate_candidates
-    and veo.generate_candidates, which is the whole point: the nightly
-    graph gains HIGGSFIELD by one entry in its connectors dict, and a
-    shot planned for Higgsfield stops coming back "no adapter wired".
-
-    {"ok", "candidates": [{path, generation_id, model}], "shot_id",
-    "error"} -- a missing approval, a missing key, a failed job or the
-    daily cap is a result the caller can show, not an exception that
-    takes the night down. Partial success is success.
-    """
-    n = int(os.environ.get("HIGGSFIELD_CANDIDATES", n))
-    kwargs = {"dsn": db_path} if db_path is not None else {}
-    duration = int(cfg.get("duration", DEFAULT_DURATION))
-
-    try:
-        if model not in VIDEO_MODELS:
-            return {"ok": False, "candidates": [],
-                    "error": f"unknown Higgsfield model {model!r} "
-                             f"(HIGGSFIELD_MODEL); known: {', '.join(MODELS)}"}
-        if not has_key(account_id):
-            return {"ok": False, "candidates": [],
-                    "error": "Higgsfield not configured — "
-                             "HIGGSFIELD_API_KEY_ID / _SECRET are unset"}
-        if not spend_approved(approved):
-            return {"ok": False, "candidates": [],
-                    "error": f"credit spend not approved: generate in the "
-                             f"Higgsfield app, or set {SPEND_ENV}=1 to approve "
-                             f"~${estimate_cost(n, model=model, duration=duration)} "
-                             f"of API credits for this run"}
-
-        generative.init(**kwargs)
-        refusal = generative.cap_error(
-            "higgsfield", n, account_id=account_id,
-            per_account=DAILY_CAP, ceiling=GLOBAL_DAILY_CAP,
-            dsn=db_path,
-            env_prefix="HIGGSFIELD", phrase="generations used",
-            used=generations_today(db_path=db_path, account_id=account_id),
-            used_everywhere=generations_today(db_path=db_path, everyone=True,
-                                             operator_billed_only=True),
-        )
-        if refusal:
-            return {"ok": False, "candidates": [], "error": refusal}
-
-        if shot_id is None:
-            shot_id = _shot_row_for_prompt(
-                prompt, db_path, "auto-created by higgsfield.generate_candidates",
-                account_id)
-
-        out_dir = Path(out_dir)
-        candidates, errors = [], []
-        for i in range(1, n + 1):
-            out_path = out_dir / f"cand{i}.mp4"
-            # This layer writes the row, so this layer builds the Charge
-            # (src/charge.py) -- see runway.generate_candidates. The ref is
-            # NOT the file name: cand1.mp4 repeats every run.
-            key_source = account_keys.key_source(account_id, "higgsfield", db_path)
-            charge = charging.Charge(
-                account_id, provider="higgsfield",
-                ref=charging.attempt_ref(out_path),
-                estimate_usd=estimate_cost(1, model=model, duration=duration),
-                key_source=key_source, dsn=db_path)
-
-            def row_params(charge=charge, key_source=key_source):
-                return {"model": model, "key_source": key_source, **cfg,
-                        **charge.params()}
-
-            try:
-                with generative.failed_attempt_row(
-                        charge, "higgsfield", prompt,
-                        safe_error=lambda e: _safe_error(e, account_id),
-                        shot_row=shot_id, params=row_params,
-                        dsn=db_path, account_id=account_id):
-                    generate_video(prompt, out_path, model=model, http=http,
-                                   db_path=db_path, approved=approved,
-                                   account_id=account_id, charge=charge, **cfg)
-            except Exception as e:
-                errors.append(f"candidate {i}: {_safe_error(e, account_id)}")
-                continue
-            generation_id = generative.record_generation(
-                shot_id, "higgsfield", prompt,
-                params=row_params(),
-                output_path=str(out_path),
-                cost_usd=estimate_cost(1, model=model, duration=duration),
-                notes=None,
-                **kwargs,
-             account_id=account_id)
-            charge.settle(generation_id=generation_id)
-            candidates.append({"path": str(out_path),
-                               "generation_id": generation_id, "model": model})
-
-        return {"ok": bool(candidates), "candidates": candidates,
-                "shot_id": shot_id,
-                "error": "; ".join(errors) if errors else None}
-    except Exception as e:
-        return {"ok": False, "candidates": [], "error": _safe_error(e, account_id)}
 
 
 def _publish(out_path: Path, content_type: str,
@@ -871,211 +428,6 @@ def _publish(out_path: Path, content_type: str,
             key=media.object_key(f"renders/higgsfield/{out_path.name}", account_id),
             content_type=content_type)
     return f"/renders/higgsfield/{out_path.name}"
-
-
-def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
-                      model: str = DEFAULT_MODEL,
-                      duration: int = DEFAULT_DURATION,
-                      resolution: str = DEFAULT_RESOLUTION,
-                      resolve_photo=None,
-                      http=None,
-                      approved: Optional[bool] = None,
-                      account_id: Optional[int] = None,
-                      quote=None,
-                      part: Optional[int] = None,
-) -> dict:
-    """
-    `part` (2026-09-10) renders ONE shot of a timed scene -- its composed
-    prompt, anchored on its own still, attached to that part (see
-    src/timeline.py). None is the whole scene, exactly as before.
-
-    Never raises: {"ok", "media_url", "generation_id", "path", "error"}.
-    One render for one concept shot, through every wall this module has
-    -- the spend gate lives inside generate_video, so this layer cannot
-    spend around it; the cap is checked before any call; the attempt is
-    a generations row either way the pick later goes.
-
-    Anchors on the shot's reference_image through as_image_url, and
-    records prompt_image as what was ACTUALLY sent -- False when the
-    keyframe could not be made fetchable (no R2), so nothing downstream
-    can claim an anchor that never left the building.
-    """
-    from . import preprod
-    kwargs = {"dsn": db_path} if db_path is not None else {}
-
-    try:
-        refusal = generative.cap_error(
-            "higgsfield", 1, account_id=account_id,
-            per_account=DAILY_CAP, ceiling=GLOBAL_DAILY_CAP,
-            dsn=db_path,
-            env_prefix="HIGGSFIELD", phrase="generations used",
-            used=generations_today(db_path=db_path, account_id=account_id),
-            used_everywhere=generations_today(db_path=db_path, everyone=True,
-                                             operator_billed_only=True),
-        )
-        if refusal:
-            return {"ok": False, "error": refusal}
-
-        concept = preprod.get_concept(concept_id, **kwargs, account_id=account_id)
-        if concept is None:
-            return {"ok": False, "error": f"no concept {concept_id}"}
-        shot = next((s for s in concept.get("shots") or []
-                     if s.get("n") == shot_n), None)
-        if shot is None:
-            return {"ok": False, "error": f"concept {concept_id} has no shot {shot_n}"}
-        from . import timeline
-        target = timeline.render_target(shot, part)
-        if target is None:
-            return {"ok": False, "error": f"shot {shot_n} has no part {part}"}
-        prompt = target["prompt"]
-        if not prompt:
-            return {"ok": False,
-                    "error": f"shot {shot_n} has no AI prompt to render from"}
-
-        image_url = as_image_url(target["reference_image"], account_id=account_id,
-                                 resolve_photo=resolve_photo)
-
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-        out_path = RENDER_DIR / f"c{concept_id}-s{shot_n}{f'-p{part}' if part else ''}-{stamp}.mp4"
-        key_source = account_keys.key_source(account_id, "higgsfield", db_path)
-        charge = charging.Charge(
-            account_id, provider="higgsfield", ref=out_path.name,
-            estimate_usd=estimate_cost(1, model=model, duration=duration),
-            key_source=key_source, dsn=db_path, quote=quote)
-        def row_params():
-            return {"model": model, "aspect_ratio": DEFAULT_ASPECT,
-                    # the length actually asked for, not the module
-                    # default -- see runway.generate_for_shot
-                    "duration": duration, "resolution": resolution,
-                    "concept_id": concept_id, "shot_n": shot_n,
-                    **({"part": part} if part else {}),
-                    "prompt_image": bool(image_url),
-                    "key_source": key_source,
-                    **charge.params()}
-
-        def shot_row():
-            return _shot_row_for_prompt(
-                prompt, db_path, "auto-created by higgsfield.generate_for_shot",
-                account_id)
-
-        # the #361 case: the submit answered HTTP 423 and nothing recorded
-        # it (BACKLOG #18). A raise after the submit leaves a row.
-        with generative.failed_attempt_row(
-                charge, "higgsfield", prompt,
-                safe_error=lambda e: _safe_error(e, account_id),
-                shot_row=shot_row, params=row_params,
-                dsn=db_path, account_id=account_id):
-            generate_video(prompt, out_path, model=model, image_url=image_url,
-                           duration=duration, resolution=resolution,
-                           http=http, db_path=db_path, approved=approved,
-                           account_id=account_id, charge=charge)
-
-        shot_row_id = shot_row()
-        generation_id = generative.record_generation(
-            shot_row_id, "higgsfield", prompt,
-            params=row_params(),
-            output_path=str(out_path),
-            cost_usd=estimate_cost(1, model=model, duration=duration),
-            **kwargs,
-         account_id=account_id)
-        charge.settle(generation_id=generation_id)
-        media_url = _publish(out_path, "video/mp4", account_id)
-        if part:
-            timeline.attach_part(concept_id, shot_n, part, "media_url", media_url,
-                                 db_path=db_path, account_id=account_id)
-        else:
-            preprod.set_shot_media_url(concept_id, shot_n, media_url, **kwargs, account_id=account_id)
-        return {"ok": True, "media_url": media_url,
-                "generation_id": generation_id, "path": str(out_path),
-                "error": None}
-    except ledger.InsufficientCredit as e:
-        return {"ok": False, "error": charging.refusal(e)}
-    except Exception as e:
-        return {"ok": False, "error": _safe_error(e, account_id)}
-
-
-def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
-                         model: str = DEFAULT_MODEL, resolve_photo=None,
-                         http=None,
-                         approved: Optional[bool] = None,
-                         account_id: Optional[int] = None,
-                      quote=None,
-) -> dict:
-    """
-    Never raises: {"ok", "media_url", "generation_id", "path", "error"}.
-    The free-standing render behind the Workflows canvas's Generate node
-    -- generate_for_shot's walls without its concept/shot coupling.
-    """
-    kwargs = {"dsn": db_path} if db_path is not None else {}
-
-    try:
-        prompt = (prompt or "").strip()
-        if not prompt:
-            return {"ok": False, "error": "an empty prompt renders nothing"}
-
-        # a fresh DB has no generations table until something inits it;
-        # the cap count must not be the thing that discovers that
-        generative.init(**kwargs)
-        refusal = generative.cap_error(
-            "higgsfield", 1, account_id=account_id,
-            per_account=DAILY_CAP, ceiling=GLOBAL_DAILY_CAP,
-            dsn=db_path,
-            env_prefix="HIGGSFIELD", phrase="generations used",
-            used=generations_today(db_path=db_path, account_id=account_id),
-            used_everywhere=generations_today(db_path=db_path, everyone=True,
-                                             operator_billed_only=True),
-        )
-        if refusal:
-            return {"ok": False, "error": refusal}
-
-        image_url = as_image_url(reference_image, resolve_photo=resolve_photo,
-                                 account_id=account_id)
-
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-        out_path = RENDER_DIR / f"wf-{stamp}.mp4"
-        key_source = account_keys.key_source(account_id, "higgsfield", db_path)
-        charge = charging.Charge(
-            account_id, provider="higgsfield", ref=out_path.name,
-            estimate_usd=estimate_cost(1, model=model),
-            key_source=key_source, source="workflow", dsn=db_path,
-            quote=quote)
-        def row_params():
-            return {"model": model, "aspect_ratio": DEFAULT_ASPECT,
-                    "duration": DEFAULT_DURATION, "source": "workflow",
-                    "prompt_image": bool(image_url),
-                    "key_source": key_source,
-                    **charge.params()}
-
-        def shot_row():
-            return _shot_row_for_prompt(
-                prompt, db_path, "auto-created by higgsfield.generate_from_prompt",
-                account_id)
-
-        with generative.failed_attempt_row(
-                charge, "higgsfield", prompt,
-                safe_error=lambda e: _safe_error(e, account_id),
-                shot_row=shot_row, params=row_params,
-                dsn=db_path, account_id=account_id):
-            generate_video(prompt, out_path, model=model, image_url=image_url,
-                           http=http, db_path=db_path, approved=approved,
-                           account_id=account_id, charge=charge)
-
-        shot_row_id = shot_row()
-        generation_id = generative.record_generation(
-            shot_row_id, "higgsfield", prompt,
-            params=row_params(),
-            output_path=str(out_path),
-            cost_usd=estimate_cost(1, model=model),
-            **kwargs,
-         account_id=account_id)
-        charge.settle(generation_id=generation_id)
-        return {"ok": True, "media_url": _publish(out_path, "video/mp4", account_id),
-                "generation_id": generation_id, "path": str(out_path),
-                "error": None}
-    except ledger.InsufficientCredit as e:
-        return {"ok": False, "error": charging.refusal(e)}
-    except Exception as e:
-        return {"ok": False, "error": _safe_error(e, account_id)}
 
 
 def generate_image_from_prompt(prompt: str, *, db_path=None, http=None, account_id: Optional[int] = None) -> dict:
@@ -1116,8 +468,7 @@ def generate_image_from_prompt(prompt: str, *, db_path=None, http=None, account_
         generation_id = generative.record_generation(
             shot_row_id, "higgsfield", prompt,
             params={"model": "soul-standard", "source": "workflow",
-                    "key_source": account_keys.key_source(
-                        account_id, "higgsfield", db_path)},
+                    "key_source": "env"},
             output_path=str(out_path),
             cost_usd=estimate_image_cost(1),
             **kwargs,

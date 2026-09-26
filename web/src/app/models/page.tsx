@@ -11,7 +11,7 @@ import { CATALOG, MODELS, PLANS, TIER_LABEL, frameLabel, num, type Tier } from "
 export const metadata: Metadata = {
   title: "Models",
   description:
-    "Every video model the Queue can dispatch to — Runway, Kling, LTX, Wan, Seedance, Veo — with the tier that unlocks it and what a clip costs.",
+    "Every video model the Queue can dispatch to — Kling, LTX, Wan, Seedance and Veo, all rendered through fal — with the tier that unlocks it and what a clip costs.",
 };
 
 const TIER_BLURB: Record<Tier, string> = {
@@ -97,11 +97,11 @@ export default function ModelsPage() {
               </p>
             </div>
             <div>
-              <span className="eyebrow">Your own keys</span>
-              <h2 className="serif mt-5 text-[clamp(1.75rem,3.5vw,2.5rem)]">Bring a key, skip the credits.</h2>
+              <span className="eyebrow">One renderer</span>
+              <h2 className="serif mt-5 text-[clamp(1.75rem,3.5vw,2.5rem)]">Every model, one bill in credits.</h2>
               <p className="mt-5 text-[17px] leading-relaxed text-[#afafaf]">
-                Add a Runway, fal, Higgsfield or Google key to your account and renders on it cost nothing
-                here — the provider bills you at its own rate, and the Queue still shows you the estimate first.
+                Kling, LTX, Wan, Seedance and Veo all render through fal, so there is nothing to connect and no
+                second bill. The Queue shows each clip&apos;s price in credits before you approve it.
               </p>
               <Button size="lg" variant="outline" className="mt-7" render={<Link href="/pricing" />}>
                 See the plans

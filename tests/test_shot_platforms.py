@@ -31,9 +31,11 @@ SHOT = Shot(
 
 # ---------- the registry is the single source ----------
 
-def test_registry_carries_all_eight_platforms():
-    assert set(PLATFORMS) == {"runway", "veo", "kling", "seedance", "ltx", "wan",
-                              "openart", "higgsfield"}
+def test_registry_carries_the_six_platforms():
+    """Runway and Higgsfield left on 2026-09-26: fal is the only video
+    renderer, and every video platform left is one it renders (OpenArt is
+    the hand-paste Director dialect, never rendered by the API)."""
+    assert set(PLATFORMS) == {"veo", "kling", "seedance", "ltx", "wan", "openart"}
 
 
 def test_tools_tuple_derives_from_the_registry():
@@ -160,15 +162,6 @@ def test_openart_parameters_attach_the_capture_not_the_prompt():
     assert "cdn.example" not in render(anchored, "openart")
 
 
-def test_runway_parameters_now_carry_the_capture_too():
-    """runway_parameters() was a placeholder shape waiting for exactly
-    this field -- with a reference attached it stops being empty."""
-    anchored = Shot(subject="a gloved hand", action="closes a steel drawer",
-                    reference_image="https://cdn.example/ref.jpg")
-    assert shot_mod.runway_parameters(anchored) == {
-        "reference_images": ["https://cdn.example/ref.jpg"]}
-
-
 # ---------- existing platforms keep their dialects ----------
 
 def test_veo_still_renders_the_five_part_formula():
@@ -177,6 +170,11 @@ def test_veo_still_renders_the_five_part_formula():
     assert "Audio:" in prompt
 
 
-def test_kling_and_runway_still_render():
+def test_kling_still_renders():
     assert "close shot" in render(SHOT, "kling")
-    assert "close shot" in render(SHOT, "runway")
+
+
+def test_a_retired_platform_is_not_a_legal_tool():
+    for retired in ("runway", "higgsfield"):
+        with pytest.raises(ValueError, match="tool must be one of"):
+            render(SHOT, retired)

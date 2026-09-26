@@ -25,51 +25,33 @@ FIRST_RETRY_DELAY = 1.0
 MAX_RETRY_DELAY = 20.0
 
 
-# --- WHOSE GEMINI KEY (BYOK, 2026-09-14) ----------------------------------
-# Every renderer in this repo already resolves its credential per account
-# through account_keys.key_for -- runway._make_client, veo._credentials,
-# higgsfield. Gemini did not: every client here was built straight off
-# GEMINI_API_KEY in the environment, which is the OPERATOR's key. That is
-# invisible while there is one operator and it is the bill the moment
-# there are users, because Gemini is not an occasional renderer on this
-# pipeline -- it writes every scene, plans every timeline, draws every
-# keyframe, runs the scout and the judge. It fires on every Create.
-#
-# account_keys already knew about it: PROVIDER_FIELDS["gemini"] and
-# PROVIDER_ENV_FALLBACK["gemini"] have been there since BYOK landed, with
-# nothing calling them. So this is a resolver, not a new mechanism.
-#
-# account_id=None keeps today's behaviour exactly -- the operator's env
-# key -- which is what the nightly walk, the scout, the CLI and every
-# unowned row already pass by not passing anything.
+# --- WHOSE GEMINI KEY -------------------------------------------------------
+# The operator's, always. Per-account Gemini keys (BYOK, 2026-09-14) were
+# removed on 2026-09-26 with the rest of BYOK (docs/tasks/task-fal-only.md).
+# `account_id` stays in the signatures because every caller passes it.
 GEMINI_PROVIDER = "gemini"
+GEMINI_KEY_ENV = ("GEMINI_API_KEY", "GOOGLE_API_KEY")
 
 
 def api_key_for(account_id=None, dsn=None):
-    """This account's Gemini key if it has stored one, else the
-    operator's from the environment, else None.
+    """The operator's Gemini key from the environment, or None.
 
     None is not an error here: callers already branch on a missing key
-    (`has_key()`, `if not _gemini_key()`) and say so in their own words.
-    Raising would turn a configuration answer into an exception at a
-    dozen call sites that currently handle it politely."""
-    from . import account_keys
-    creds = account_keys.key_for(account_id, GEMINI_PROVIDER, dsn)
-    return (creds or {}).get("api_key") or None
+    (`has_key()`, `if not _gemini_key()`) and say so in their own words."""
+    return next((os.environ[n] for n in GEMINI_KEY_ENV if os.environ.get(n)), None)
 
 
 def client_for(account_id=None, dsn=None):
     """A genai.Client on whichever key api_key_for resolves.
 
-    Raises when nothing resolves, matching runway._make_client: by the
-    time a caller asks for a CLIENT rather than a key it has already
-    decided it is going to spend, and a client built on no key fails
-    later and less legibly than one that refuses here."""
+    Raises when nothing resolves: by the time a caller asks for a CLIENT
+    rather than a key it has already decided it is going to spend, and a
+    client built on no key fails later and less legibly than one that
+    refuses here."""
     key = api_key_for(account_id, dsn)
     if not key:
         raise RuntimeError(
-            "no Gemini key for this account -- add one in Renderer keys, "
-            "or set GEMINI_API_KEY for the installation")
+            "no Gemini key -- set GEMINI_API_KEY for the installation")
     return genai.Client(api_key=key)
 
 

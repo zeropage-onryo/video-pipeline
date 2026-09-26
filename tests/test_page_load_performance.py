@@ -92,15 +92,15 @@ def test_concept_list_batches_locations_and_matches_single_reads(pg, monkeypatch
     assert [room['name'] for room in expected[0]['locations']] == ['Amber room', 'Zebra room']
 
 
-@pytest.mark.parametrize('initialized', [False, True])
-def test_provider_status_works_in_read_only_transaction(pg, monkeypatch, initialized):
+def test_provider_status_works_in_read_only_transaction(pg, monkeypatch):
+    """The Queue's renderer status is a READ: it must answer inside a
+    read-only transaction, with no DDL on a page load. (It read the BYOK key
+    table until 2026-09-26; there are no stored keys now, only FAL_KEY.)"""
     from contextlib import contextmanager
 
-    from src import account_keys
+    from src import providers
 
-    if initialized:
-        account_keys.init(pg)
-    monkeypatch.setenv('RUNWAYML_API_SECRET', 'test-fallback')
+    monkeypatch.setenv('FAL_KEY', 'test-operator-key')
     with db.connect(pg) as conn:
         conn.execute('SET TRANSACTION READ ONLY')
 
@@ -109,6 +109,5 @@ def test_provider_status_works_in_read_only_transaction(pg, monkeypatch, initial
             yield conn
 
         monkeypatch.setattr(db, 'connect', read_only)
-        assert account_keys.list_providers(1, pg) == []
-        assert account_keys.key_and_source(1, 'runway', pg) == (
-            {'api_secret': 'test-fallback'}, account_keys.SOURCE_ENV)
+        state = providers.provider_state('fal', 1, pg)
+        assert state['available'] is True

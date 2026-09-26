@@ -2597,6 +2597,24 @@ select.zin {
   outline: none;
   max-width: 200px;
 }
+/* the manual import lane's free-text claims (what rendered it, frame, length) */
+.scsel input[type="text"],
+.scsel input[type="number"] {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  outline: none;
+  width: 24ch;
+  max-width: 200px;
+  cursor: text;
+}
+.scsel:focus-within {
+  border-color: var(--line-hi);
+  color: var(--text);
+}
 .scsel select option {
   background: #141417;
   color: var(--text);

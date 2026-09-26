@@ -193,7 +193,7 @@ export function seedScene(
       id: "scene-video",
       type: "studio",
       position: { x: colX + 430, y: 40 },
-      data: { kind: "video", label: "Runway Gen-4 Turbo", url: shot.media_url || undefined, refs: shot.refs || [] },
+      data: { kind: "video", label: "Video clip", url: shot.media_url || undefined, refs: shot.refs || [] },
     },
   ];
   let y = 0;
@@ -406,7 +406,7 @@ export function toLegacy(
    frame this pipeline drew, and preprod.reference_gate deliberately
    refuses to count one as grounding.
 
-   Order is load-bearing (refs[0] is the one frame Runway anchors on), so
+   Order is load-bearing (refs[0] is the one frame an image-to-video render anchors on), so
    the scene's existing order is kept for every ref that survives, and a
    newly wired one goes in after them -- a room still last, since a room
    photo in the anchor slot makes the model reproduce the room. */

@@ -1642,35 +1642,3 @@ select.rmodel{max-width:260px}
 #cbox.ltxbox .guide-messages:empty,#cbox.ltxbox .guide-choices:empty{display:none}
 #cbox.ltxbox .guide-messages{padding:4px 22px 0;max-height:280px;overflow-y:auto}
 
-/* ── RENDERER KEYS (Queue) ──────────────────────────── */
-/* One card per vendor, folded away until somebody needs it. The panel
-   never displays a key -- the server does not return one -- so what is
-   styled here is whose credential pays and where to type a new one. */
-.keyspanel{max-width:1680px;margin:34px auto 0;padding:0 42px}
-.keyspanel>summary{
-  font-family:var(--mono);font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;
-  color:var(--dim);cursor:pointer;padding:10px 0;list-style:none;
-}
-.keyspanel>summary::-webkit-details-marker{display:none}
-.keyspanel>summary::before{content:"▸ ";color:var(--dimmer)}
-.keyspanel[open]>summary::before{content:"▾ "}
-.keyspanel>summary:hover{color:var(--text)}
-.keyspanel .stateline{padding:8px 0}
-.keysgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;padding:8px 0 6px}
-.keycard{
-  background:var(--glass);border:1px solid var(--line);border-top-color:var(--line-hi);
-  border-radius:var(--r3);padding:18px 20px;display:flex;flex-direction:column;gap:12px;
-}
-.keycard.off{border-color:rgb(228 0 43 / .28)}
-.keyhead{display:flex;align-items:center;gap:12px}
-.keyhead strong{font-family:var(--display);text-transform:uppercase;font-size:14px;letter-spacing:.02em}
-.keysource{font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase}
-.keyfield{display:flex;flex-direction:column;gap:5px}
-.keyfield input{
-  background:rgb(255 255 255 / .03);border:1px solid var(--line);border-radius:var(--r3);
-  color:var(--text);font-family:var(--mono);font-size:12px;padding:10px 12px;
-}
-.keyfield input:focus{outline:0;border-color:var(--line-hi)}
-.keyfoot{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.keyfoot .go{padding:9px 20px;font-size:11px}
-.keyfoot .m{font-family:var(--mono);font-size:9px;letter-spacing:.08em;text-transform:uppercase}

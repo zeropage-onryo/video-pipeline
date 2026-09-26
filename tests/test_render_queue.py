@@ -52,7 +52,7 @@ def renders_in_tmp(tmp_path, monkeypatch):
     root = tmp_path / "renders"
     monkeypatch.setattr(rq, "RENDERS_ROOT", root)
     monkeypatch.setattr(rq, "RENDER_DIR", root / "higgsfield")
-    monkeypatch.setattr(rq, "RUNWAY_RENDER_DIR", root / "runway")
+    monkeypatch.setattr(rq, "MANUAL_RENDER_DIR", root / "manual")
     return root
 
 
@@ -244,69 +244,64 @@ def test_render_queue_imports_without_third_party_packages():
             assert node.module.split(".")[0] in allowed, node.module
 
 
-# ---------- the runway lane (2026-09-08) ----------
+# ---------- the manual lane (the Runway lane until 2026-09-26) ----------
 #
-# Runway's Explore Mode is free on the Unlimited plan and reachable only
-# from the web app, so this lane is a human in Chrome. It spends the
-# OPERATOR'S subscription, which is why every test here has to name an
-# operator first -- the allowlist and its refusals are tested in
-# tests/test_manual_lane.py.
+# A clip rendered anywhere, filed free. It files a render with no hold,
+# which is why every test here has to name an operator first -- the
+# allowlist and its refusals are tested in tests/test_manual_lane.py.
 
 
-def a_runway_scene(path, account_id, title="Cold Open"):
+def a_manual_scene(path, account_id, title="Cold Open"):
     return preprod.save_concept(
         {"title": title, "hook": "", "logline": "",
-         "shots": [{"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
+         "shots": [{"n": 1, "type": "BROLL", "source": "AI", "tool": "LTX",
                     "desc": title, "prompt": "a close shot"}]},
         brand="zeropage", prompt_template="T", dsn=path, account_id=account_id)
 
 
-def test_a_runway_clip_lands_in_the_adapters_own_folder(tmp_db, tmp_path,
-                                                        renders_in_tmp, operator):
-    """data/renders/runway/ is where src/runway.py already writes, so the
-    /renders mount and the media_url derivation are unchanged -- a clip
-    rendered by hand is the same kind of file in the same place as one
-    rendered through the API."""
-    cid = a_runway_scene(tmp_db, operator)
+def test_a_manual_clip_lands_in_its_own_folder_under_renders(tmp_db, tmp_path,
+                                                             renders_in_tmp, operator):
+    """data/renders/manual/ sits under the /renders mount, so the media_url
+    derivation is the same as for any render."""
+    cid = a_manual_scene(tmp_db, operator)
     preprod.set_picked(cid, True, dsn=tmp_db, account_id=operator)
     out = rq.import_clip(cid, 1, str(a_clip(tmp_path)), "gen4_turbo", None, None,
-                         True, account_id=operator, provider="runway")
-    assert out["media_url"] == "/renders/runway/clip.mp4"
-    assert (renders_in_tmp / "runway" / "clip.mp4").is_file()
+                         True, account_id=operator, provider="manual")
+    assert out["media_url"] == "/renders/manual/clip.mp4"
+    assert (renders_in_tmp / "manual" / "clip.mp4").is_file()
     assert not (renders_in_tmp / "higgsfield").exists()
 
 
-def test_the_runway_row_is_free_and_carries_the_lane_marker(tmp_db, tmp_path, operator):
+def test_the_manual_row_is_free_and_carries_the_lane_marker(tmp_db, tmp_path, operator):
     """cost_usd NULL is how this repo says FREE (src/costs.py's NOTES);
     the marker is what src/ledger.py reads to refuse a hold."""
-    cid = a_runway_scene(tmp_db, operator)
+    cid = a_manual_scene(tmp_db, operator)
     preprod.set_picked(cid, True, dsn=tmp_db, account_id=operator)
     rq.import_clip(cid, 1, str(a_clip(tmp_path)), "gen4_turbo", None, None, True,
-                   account_id=operator, provider="runway", duration=10)
+                   account_id=operator, provider="manual", duration=10)
     with generative.connect(tmp_db) as conn:
         row = conn.execute("SELECT tool, cost_usd, params_json FROM generations "
                            "ORDER BY id DESC LIMIT 1").fetchone()
-    assert row["tool"] == "runway"
+    assert row["tool"] == "manual"
     assert row["cost_usd"] is None
     params = json.loads(row["params_json"])
     assert params["source"] == manual_lane.SOURCE
-    assert params["lane"] == manual_lane.LANES["runway"]
+    assert params["lane"] == manual_lane.LANES["manual"]
     assert params["model"] == "gen4_turbo"
     assert params["duration"] == 10
     assert params["ratio"] == manual_lane.LANE_RATIO
-    # no API credential was used, and the row says so rather than
-    # borrowing a label from the BYOK vocabulary
+    # no API credential was used, and the row says so
     assert params["key_source"] is None
 
 
-def test_importing_a_runway_clip_takes_the_scene_out_of_the_queue(tmp_db, tmp_path,
+def test_importing_a_manual_clip_takes_the_scene_out_of_the_queue(tmp_db, tmp_path,
                                                                   operator):
-    cid = a_runway_scene(tmp_db, operator)
+    cid = a_manual_scene(tmp_db, operator)
     preprod.set_picked(cid, True, dsn=tmp_db, account_id=operator)
-    assert len(rq.pending(account_id=operator, provider="runway")) == 1
+    assert len(rq.pending(account_id=operator, provider="manual")) == 1
     rq.import_clip(cid, 1, str(a_clip(tmp_path)), "gen4_turbo", None, None, True,
-                   account_id=operator, provider="runway")
-    assert rq.pending(account_id=operator, provider="runway") == []
+                   account_id=operator, provider="manual")
+    assert rq.pending(account_id=operator, provider="manual") == []
 
 
 def test_an_unknown_provider_is_refused(tmp_db, operator):
@@ -342,63 +337,21 @@ def test_the_refusal_tells_the_operator_what_to_run(tmp_db):
     assert manual_lane.OPERATOR_COMMAND in manual_lane.REFUSAL
 
 
-# ---------- what `import` checks instead of believing (2026-09-08) ----------
+# ---------- what `import` records (2026-09-08; the Runway checks went 2026-09-26) ----------
 #
-# --model, --ratio and --duration land in a generations row the tool
-# scoreboard reads. They used to be unverified strings, so a 1am typo
-# became a measurement of a model that never ran.
+# --model lands in a generations row the tool scoreboard reads. Neither
+# lane has a list to check it against, so the row says it was not checked.
 
 
-def test_an_unknown_runway_model_is_refused(tmp_db, tmp_path, operator):
-    cid = a_runway_scene(tmp_db, operator)
+def test_the_manual_row_records_that_the_model_claim_was_not_checked(tmp_db, tmp_path,
+                                                                    operator):
+    cid = a_manual_scene(tmp_db, operator)
     preprod.set_picked(cid, True, dsn=tmp_db, account_id=operator)
-    with pytest.raises(SystemExit, match="unknown runway model"):
-        rq.import_clip(cid, 1, str(a_clip(tmp_path)), "gen5_ultra", None, None,
-                       True, account_id=operator, provider="runway")
-
-
-def test_an_illegal_duration_is_refused_not_clamped(tmp_db, tmp_path, operator):
-    """Refused, because a number outside the model's set is evidence the
-    row and the clip have come apart -- and rounding it to the nearest
-    legal value hides exactly that."""
-    cid = a_runway_scene(tmp_db, operator)
-    preprod.set_picked(cid, True, dsn=tmp_db, account_id=operator)
-    with pytest.raises(SystemExit, match="does not generate 7s"):
-        rq.import_clip(cid, 1, str(a_clip(tmp_path)), "gen4_turbo", None, None,
-                       True, account_id=operator, provider="runway", duration=7)
-
-
-def test_an_illegal_ratio_is_refused(tmp_db, tmp_path, operator):
-    cid = a_runway_scene(tmp_db, operator)
-    preprod.set_picked(cid, True, dsn=tmp_db, account_id=operator)
-    with pytest.raises(SystemExit, match="does not render"):
-        rq.import_clip(cid, 1, str(a_clip(tmp_path)), "gen4_turbo", None, None,
-                       True, account_id=operator, provider="runway",
-                       ratio="1920:1080")
-
-
-def test_a_refused_claim_copies_no_file_and_writes_no_row(tmp_db, tmp_path,
-                                                          renders_in_tmp, operator):
-    """Checked before the clip moves and before a row exists -- the same
-    rule the gate keeps, for the same reason: a rejected import must
-    leave the install exactly as it found it."""
-    cid = a_runway_scene(tmp_db, operator)
-    preprod.set_picked(cid, True, dsn=tmp_db, account_id=operator)
-    with pytest.raises(SystemExit):
-        rq.import_clip(cid, 1, str(a_clip(tmp_path)), "gen4_turbo", None, None,
-                       True, account_id=operator, provider="runway", duration=7)
-    assert not (renders_in_tmp / "runway").exists()
-    with generative.connect(tmp_db) as conn:
-        assert conn.execute("SELECT COUNT(*) FROM generations").fetchone()[0] == 0
-    assert rq.pending(account_id=operator, provider="runway") != []
-
-
-def test_the_row_records_that_the_model_claim_was_checked(tmp_db, tmp_path, operator):
-    cid = a_runway_scene(tmp_db, operator)
-    preprod.set_picked(cid, True, dsn=tmp_db, account_id=operator)
-    rq.import_clip(cid, 1, str(a_clip(tmp_path)), "gen4_turbo", None, None, True,
-                   account_id=operator, provider="runway", duration=10)
-    assert _last_params(tmp_db)["model_verified"] is True
+    rq.import_clip(cid, 1, str(a_clip(tmp_path)), "kling 3 web app", None, None, True,
+                   account_id=operator, provider="manual", duration=7)
+    params = _last_params(tmp_db)
+    assert params["model_verified"] is False
+    assert params["model"] == "kling 3 web app" and params["duration"] == 7
 
 
 def test_the_higgsfield_lane_records_that_it_could_not_check(tmp_db, tmp_path,
@@ -432,10 +385,10 @@ def test_the_measured_duration_is_recorded_beside_the_claimed_one(tmp_db, tmp_pa
         stdout = "5.04\n"
 
     monkeypatch.setattr(rq.subprocess, "run", lambda *a, **k: Probed())
-    cid = a_runway_scene(tmp_db, operator)
+    cid = a_manual_scene(tmp_db, operator)
     preprod.set_picked(cid, True, dsn=tmp_db, account_id=operator)
     rq.import_clip(cid, 1, str(a_clip(tmp_path)), "gen4_turbo", None, None, True,
-                   account_id=operator, provider="runway", duration=10)
+                   account_id=operator, provider="manual", duration=10)
     params = _last_params(tmp_db)
     assert params["duration"] == 10            # what was claimed, kept
     assert params["duration_measured_s"] == 5.04
@@ -450,10 +403,10 @@ def test_a_missing_ffprobe_says_so_rather_than_asserting_a_measurement(tmp_db,
     is optional -- but an absent measurement must not read like one that
     agreed with the claim."""
     monkeypatch.setattr(rq.shutil, "which", lambda name: None)
-    cid = a_runway_scene(tmp_db, operator)
+    cid = a_manual_scene(tmp_db, operator)
     preprod.set_picked(cid, True, dsn=tmp_db, account_id=operator)
     rq.import_clip(cid, 1, str(a_clip(tmp_path)), "gen4_turbo", None, None, True,
-                   account_id=operator, provider="runway")
+                   account_id=operator, provider="manual")
     params = _last_params(tmp_db)
     assert params["duration_measured_s"] is None
     assert "ffprobe" in params["duration_source"]
@@ -484,10 +437,10 @@ def test_without_ffprobe_the_mp4_header_is_read_and_labelled_as_such(tmp_db, tmp
     mp4 states its own length in mvhd, so that is recorded rather than a
     not-knowing -- under a label that says it is the muxer's word."""
     monkeypatch.setattr(rq.shutil, "which", lambda name: None)
-    cid = a_runway_scene(tmp_db, operator)
+    cid = a_manual_scene(tmp_db, operator)
     preprod.set_picked(cid, True, dsn=tmp_db, account_id=operator)
     rq.import_clip(cid, 1, str(_mvhd_clip(tmp_path, 10.042)), "gen4_turbo", None, None, True,
-                   account_id=operator, provider="runway", duration=10)
+                   account_id=operator, provider="manual", duration=10)
     params = _last_params(tmp_db)
     assert params["duration_measured_s"] == 10.04
     assert params["duration_source"].startswith("mp4 mvhd header")
@@ -512,21 +465,18 @@ def test_an_unreadable_file_is_a_missing_measurement_not_a_zero(tmp_db, tmp_path
     monkeypatch.setattr(rq.shutil, "which", lambda name: "/usr/bin/ffprobe")
     monkeypatch.setattr(rq.subprocess, "run",
                         lambda *a, **k: (_ for _ in ()).throw(OSError("boom")))
-    cid = a_runway_scene(tmp_db, operator)
+    cid = a_manual_scene(tmp_db, operator)
     preprod.set_picked(cid, True, dsn=tmp_db, account_id=operator)
     rq.import_clip(cid, 1, str(a_clip(tmp_path)), "gen4_turbo", None, None, True,
-                   account_id=operator, provider="runway")
+                   account_id=operator, provider="manual")
     params = _last_params(tmp_db)
     assert params["duration_measured_s"] is None
     assert "could not read" in params["duration_source"]
 
 
-def test_the_lane_defaults_are_themselves_legal_for_the_lane_model(tmp_db):
-    """The defaults `list` prints as targets have to be values the model
-    can actually produce, or the lane tells a human to set a chip the
-    import will then refuse."""
+def test_the_lane_defaults_are_a_frame_the_composer_offers(tmp_db):
+    """The frame `list` prints as the target is one the Studio composer can
+    write a scene for, so the lane never asks for a shape nothing else uses."""
     from src import render_specs
-    assert render_specs.check_ratio("runway", "gen4_turbo",
-                                    manual_lane.LANE_RATIO) is True
-    assert render_specs.check_duration("runway", "gen4_turbo",
-                                       manual_lane.LANE_DURATION) is True
+    assert manual_lane.LANE_RATIO in render_specs.FRAME_SIZES
+    assert manual_lane.LANE_DURATION > 0

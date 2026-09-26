@@ -163,10 +163,6 @@ OUTPUT_ROOTS = (
     ("src.higgsfield", "RENDER_DIR", "data/renders/higgsfield"),
     ("src.fal", "RENDERS_ROOT", "data/renders"),
     ("src.fal", "RENDER_DIR", "data/renders/fal"),
-    ("src.runway", "RENDERS_ROOT", "data/renders"),
-    ("src.runway", "RENDER_DIR", "data/renders/runway"),
-    ("src.veo", "RENDERS_ROOT", "data/renders"),
-    ("src.veo", "RENDER_DIR", "data/renders/veo"),
     ("src.nano_banana", "RENDER_DIR", "data/renders/nano"),
     ("src.orchestrator", "GENERATED_ROOT", "footage/generated"),
     ("src.autopilot", "GENERATED_DIR", "footage/generated"),
@@ -188,7 +184,7 @@ OUTPUT_ROOTS = (
     ("app.api", "UPLOAD_REFS_DIR", "data/refs"),
     ("ops.render_queue", "RENDERS_ROOT", "data/renders"),
     ("ops.render_queue", "RENDER_DIR", "data/renders/higgsfield"),
-    ("ops.render_queue", "RUNWAY_RENDER_DIR", "data/renders/runway"),
+    ("ops.render_queue", "MANUAL_RENDER_DIR", "data/renders/manual"),
     ("ops.bank", "PLANS_DIR", "data/idea_agent"),
 )
 

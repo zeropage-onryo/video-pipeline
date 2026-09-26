@@ -5,8 +5,9 @@
    A scene arrives here two ways: the Studio chain PARKS it once it has
    a concept, an enhanced prompt and a keyframe -- everything that can
    be done without spending -- or you pick a text-only concept off the
-   Pipeline board yourself. Approving is what actually calls Runway,
-   and on a parked scene approving is also the pick.
+   Pipeline board yourself. Approving is what actually calls the
+   renderer (fal, holding credits), and on a parked scene approving is
+   also the pick.
 
    The pending list is derived from the rows (parked or picked, not
    archived, no clip yet) rather than from the jobs registry -- the registry is an
@@ -14,11 +15,9 @@
    quietly emptied itself on restart would be a queue that lies. The
    Jobs list underneath IS that registry, and says so.
 
-   Between the two sits the SUBSCRIPTION LANE, which is the opposite
-   kind of spend: Runway's Explore Mode is free on the operator's
-   Unlimited plan but has no API parameter, so the render happens by
-   hand in Chrome and the finished mp4 comes back as a drag onto its
-   card. Its markup is server-rendered behind the operator flag
+   Between the two sits the MANUAL LANE, which spends nothing: a clip
+   rendered anywhere comes back as a drag onto its card and is filed
+   free. Its markup is server-rendered behind the operator flag
    (app/main.py's /ui), so on any other account #lanelist does not exist
    and everything below no-ops -- and the routes re-ask the gate anyway,
    because a missing section is presentation and not protection. */
@@ -26,7 +25,6 @@ import { ICON, brandName, heroMarkup, heroOf, partsOf, previewRefs, previewStill
          refThumbs, shotsLabel, windowLabel } from './cards.js';
 import { openConceptInDirector } from './genspace.js';
 import { hydrateImages, imgTag } from './preview.js';
-import { renderRendererKeys } from './renderer-keys.js';
 import { api, bus, esc, refreshQueueBadge, state, stateline } from './shared.js';
 
 let wired = false;
@@ -126,8 +124,7 @@ export async function renderQueue() {
   // arriving on the view is not a repaint: a popover left open when
   // you walked away does not greet you on the way back (the PICK does)
   setPop(null);
-  await Promise.all([renderPending(), renderLane(), renderJobs(),
-                     renderRendererKeys()]);
+  await Promise.all([renderPending(), renderLane(), renderJobs()]);
 }
 
 /* ── awaiting approval ── */
@@ -158,7 +155,7 @@ async function renderPending() {
   $('rwstate').textContent = order.length
     ? order.map(name => {
         const r = renderers[name];
-        if (!r.available) return `${r.label}: no key`;
+        if (!r.available) return `${r.label}: not configured`;
         const today = (r.today === null || r.today === undefined) ? ''
           : ` · ${r.today}${r.cap ? '/' + r.cap : ''} today`;
         return `${r.label}: ready${today}`;
@@ -648,13 +645,11 @@ async function renderPending() {
 }
 
 
-/* ── the subscription lane ──
-   One card per waiting shot, carrying the three things a human needs in
-   front of the Runway web app: the gate-passed prompt to paste, the
-   keyframe to drag into the start-image slot, and the duration/ratio to
-   set (the app resets duration to 5s on every reload -- docs/RUNBOOK.md
-   2026-09-06 -- which is why it is printed on every card). The drop
-   target files what comes back. */
+/* ── the manual lane ──
+   One card per waiting shot, carrying what a human needs in front of
+   whatever app renders it: the gate-passed prompt to paste, the keyframe
+   to start from, and the duration to ask for. The drop target files what
+   comes back, free, with the model named in free text. */
 
 async function renderLane() {
   const list = $('lanelist');
@@ -671,10 +666,7 @@ async function renderLane() {
   stateline($('lanestate'), null);
   $('lanecount').textContent = `${data.items.length} to render`;
 
-  const models = data.models || [];
   list.innerHTML = data.items.length ? data.items.map(c => {
-    const opts = models.map(m =>
-      `<option value="${esc(m.id)}"${m.id === data.default_model ? ' selected' : ''}>${esc(m.id)}</option>`).join('');
     return `
     <article class="glass scene" data-id="${c.concept_id}" data-shot="${c.shot_n}">
       <div class="schead">
@@ -684,7 +676,7 @@ async function renderLane() {
         <span class="m">${esc(c.duration)}s · ${esc(c.ratio)}</span>
       </div>
       ${c.keyframe_url ? `
-      <a href="${esc(c.keyframe_url)}" download title="Drag me into Runway's start-image slot">
+      <a href="${esc(c.keyframe_url)}" download title="Drag me into your render app's start image">
         <img class="scshot" src="${esc(c.keyframe_url)}" alt="keyframe" draggable="true">
       </a>` : '<div class="probeblank">no keyframe — this one is text-to-video</div>'}
       <p class="scprompt">${esc(c.prompt)}</p>
@@ -698,11 +690,11 @@ async function renderLane() {
         <span data-role="dropnote">Drop the finished mp4 here</span>
       </label>
       <div class="scfoot">
-        <select class="tag" data-role="model">${opts}</select>
-        <select class="tag" data-role="duration">
-          ${[5, 10].map(d => `<option value="${d}"${d === c.duration ? ' selected' : ''}>${d}s</option>`).join('')}
-        </select>
-        <span class="m">as generated — a wrong number is refused, never rounded</span>
+        <input class="tag" data-role="model" type="text" maxlength="120"
+               placeholder="what rendered it, e.g. Kling 3 web app">
+        <input class="tag" data-role="duration" type="number" min="1" max="60"
+               value="${esc(c.duration)}" aria-label="seconds">
+        <span class="m">as generated — recorded beside what the file measures</span>
       </div>
     </article>`;
   }).join('')
@@ -723,7 +715,7 @@ function wireLaneCard(card) {
     const text = card.querySelector('.scprompt').textContent;
     try {
       await navigator.clipboard.writeText(text);
-      note.textContent = 'prompt copied — paste it into Runway';
+      note.textContent = 'prompt copied — paste it into your render app';
     } catch {
       // clipboard is permissioned; selecting the prompt is the fallback
       // that always works

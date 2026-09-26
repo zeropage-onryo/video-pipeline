@@ -1,5 +1,5 @@
 {
-  "pricing_version": "2026-09-18-video-v2",
+  "pricing_version": "2026-09-26-fal-v3",
   "credit_cents": 1,
   "markup": "2.4",
   "credit_floor": 10,
@@ -60,20 +60,9 @@
       "blurb": "Fast, cheap, 1080p and up. The workhorse.",
       "tier": "standard",
       "max_seconds": null,
-      "seconds": 5,
-      "credits": 72,
+      "seconds": 6,
+      "credits": 87,
       "frame": "1080p"
-    },
-    {
-      "provider": "runway",
-      "model": "gen4_turbo",
-      "name": "Runway Gen-4 Turbo",
-      "blurb": "Reference-anchored clips, quick turnaround.",
-      "tier": "standard",
-      "max_seconds": null,
-      "seconds": 5,
-      "credits": 60,
-      "frame": "720:1280"
     },
     {
       "provider": "fal",
@@ -87,32 +76,10 @@
       "frame": "720p"
     },
     {
-      "provider": "runway",
-      "model": "gen4.5",
-      "name": "Runway Gen-4.5",
-      "blurb": "Runway's flagship look.",
-      "tier": "standard",
-      "max_seconds": null,
-      "seconds": 5,
-      "credits": 144,
-      "frame": "720:1280"
-    },
-    {
-      "provider": "higgsfield",
-      "model": "kling2.5",
-      "name": "Kling 2.5",
-      "blurb": "Cinematic motion, strong on people.",
-      "tier": "creator",
-      "max_seconds": null,
-      "seconds": 5,
-      "credits": 96,
-      "frame": "720"
-    },
-    {
       "provider": "fal",
       "model": "kling3-turbo-pro",
       "name": "Kling 3 Turbo Pro",
-      "blurb": "Kling's fastest 1080p tier.",
+      "blurb": "Cinematic motion, strong on people.",
       "tier": "creator",
       "max_seconds": null,
       "seconds": 5,
@@ -123,7 +90,7 @@
       "provider": "fal",
       "model": "seedance2-fast",
       "name": "Seedance 2.0 Fast",
-      "blurb": "ByteDance's quick tier, with audio.",
+      "blurb": "ByteDance's quick tier, up to 720p.",
       "tier": "creator",
       "max_seconds": null,
       "seconds": 5,
@@ -134,22 +101,22 @@
       "provider": "fal",
       "model": "seedance2",
       "name": "Seedance 2.0",
-      "blurb": "Seedance at full quality.",
+      "blurb": "Seedance at full quality; 1080p is premium.",
       "tier": "creator",
       "max_seconds": null,
       "seconds": 5,
-      "credits": 363,
+      "credits": 365,
       "frame": "720p"
     },
     {
-      "provider": "veo",
-      "model": "veo-3",
-      "name": "Veo 3",
-      "blurb": "Google's top model. Premium only.",
+      "provider": "fal",
+      "model": "veo3.1",
+      "name": "Veo 3.1",
+      "blurb": "Google's top model, with sound. Premium only.",
       "tier": "premium",
       "max_seconds": 8,
-      "seconds": 8,
-      "credits": 768,
+      "seconds": 6,
+      "credits": 576,
       "frame": "720p"
     }
   ]

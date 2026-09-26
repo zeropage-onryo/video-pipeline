@@ -55,10 +55,6 @@ const SECTIONS: LegalSection[] = [
           gather visual reference for your own projects.
         </li>
         <li>
-          <strong>Your own provider keys</strong> — if you add an API key for a rendering service,
-          it is stored against your account and used only to run your own generations.
-        </li>
-        <li>
           <strong>Usage</strong> — basic operational data (timestamps, error logs, model-call
           counts) used to keep the pipeline running, meter cost and grade output quality.
         </li>
@@ -82,9 +78,9 @@ const SECTIONS: LegalSection[] = [
             your material.
           </li>
           <li>
-            <strong>Video rendering providers</strong> (Runway, fal.ai, Higgsfield, Google Veo) —
-            when you approve a render, the scene&apos;s prompt and its reference images are sent to
-            the provider you chose.
+            <strong>fal.ai</strong> (video rendering) — when you approve a render, the scene&apos;s
+            prompt and its reference images are sent to fal.ai, which serves the video models (from
+            Kling, ByteDance, Lightricks, Alibaba and Google).
           </li>
           <li>
             <strong>Cloudflare R2</strong> — storage for reference images and rendered media.

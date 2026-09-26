@@ -1,18 +1,13 @@
-"""The Queue's approve button, on four vendors instead of one.
+"""The Queue's approve button, and the one renderer behind it.
 
-Until 2026-09-08 `queue_approve` named runway in three places -- the key
-check, the render call and the button's price -- so the ONE surface in
-this project that spends money could reach exactly one of four working
-adapters. That was never a policy about which vendor may spend: Runway
-was simply the only module that had grown a `generate_for_shot`, and the
-route was written around the function that existed.
-
-The cost of it was two doors disagreeing. A concept shootgen planned for
-KLING rendered on Kling at 3:30am (orchestrator.generate_render's
-connectors dict) and on Runway if Michael approved the same row by hand,
-with nothing anywhere saying so. These tests are mostly about that
-disagreement being gone: the card, the route and the graph all resolve a
-shot's `tool` through providers.platform_default, or none of them do.
+Until 2026-09-08 `queue_approve` named runway in three places, so the ONE
+surface in this project that spends money could reach one adapter while the
+nightly graph rendered the same shot on another. Since 2026-09-26 fal is the
+only video renderer (docs/tasks/task-fal-only.md), and what these tests keep
+true is the part that outlived the vendor count: the card, the route and the
+graph all resolve a shot's `tool` through providers.platform_default, a
+retired tool (RUNWAY, HIGGSFIELD) reads as the fal default, and a pick
+outside the model's legal set is refused before anything is spent.
 """
 import time
 
@@ -20,7 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from src import fal, preprod, providers, runway, veo
+from src import fal, preprod, providers
 
 client = TestClient(app)
 
@@ -54,7 +49,7 @@ def wait_for_job(job_id, timeout=5.0):
     raise AssertionError(f"job {job_id} never finished")
 
 
-def a_queued_scene(path, tool="RUNWAY", refs=None):
+def a_queued_scene(path, tool="LTX", refs=None):
     """One grounded, parked scene planned for `tool` -- the row the Queue
     is looking at. Parked rather than picked because that is the case
     approving also has to PICK, and it is the one the chain produces."""
@@ -87,12 +82,9 @@ def capture(monkeypatch, module):
 # --- the plan is the default -------------------------------------------------
 
 def test_an_empty_approve_renders_on_the_tool_the_shot_was_planned_for(tmp_db, monkeypatch):
-    """THE BUG THIS WHOLE CHANGE IS ABOUT. A scene written for Kling used
-    to be rendered on Runway by this button, silently, because the route
-    named one vendor. An empty body is still the old call -- it just
-    resolves to the plan now instead of to a constant."""
+    """A scene written for Kling renders on fal's Kling model: an empty
+    body resolves to the plan, not to a constant."""
     on_fal = capture(monkeypatch, fal)
-    on_runway = capture(monkeypatch, runway)
 
     scene = a_queued_scene(tmp_db, tool="KLING")
     res = client.post(f"/api/queue/{scene}/approve")
@@ -101,31 +93,35 @@ def test_an_empty_approve_renders_on_the_tool_the_shot_was_planned_for(tmp_db, m
 
     assert on_fal["args"] == (scene, 1)
     assert on_fal["kwargs"]["model"] == fal.PLATFORM_MODELS["kling"]
-    assert "args" not in on_runway          # the point: Runway was not called
     # and the response says what it spent on, rather than leaving the
     # card to guess from a job id
     assert res.json()["render"]["provider"] == "fal"
 
 
-def test_a_shot_planned_for_runway_still_goes_to_runway(tmp_db, monkeypatch):
-    on_runway = capture(monkeypatch, runway)
-    capture(monkeypatch, fal)
-    scene = a_queued_scene(tmp_db, tool="RUNWAY")
-    res = client.post(f"/api/queue/{scene}/approve", json={})
-    assert wait_for_job(res.json()["job_id"])["status"] == "done"
-    assert on_runway["kwargs"]["model"] == runway.DEFAULT_MODEL
+def test_a_shot_planned_for_a_retired_tool_renders_on_the_fal_default(tmp_db, monkeypatch):
+    """A scene written for RUNWAY before 2026-09-26 still carries the word.
+    It is read as fal's default at render time -- the row is not rewritten,
+    and nothing refuses it."""
+    for retired in ("RUNWAY", "HIGGSFIELD"):
+        on_fal = capture(monkeypatch, fal)
+        scene = a_queued_scene(tmp_db, tool=retired)
+        res = client.post(f"/api/queue/{scene}/approve", json={})
+        assert res.status_code == 200, res.text
+        assert wait_for_job(res.json()["job_id"])["status"] == "done"
+        assert on_fal["kwargs"]["model"] == fal.DEFAULT_MODEL
+        stored = preprod.get_concept(scene, dsn=tmp_db, account_id=None)
+        assert stored["shots"][0]["tool"] == retired     # the row keeps its word
 
 
 def test_a_tool_no_adapter_renders_falls_back_rather_than_failing(tmp_db, monkeypatch):
-    """shot.PLATFORMS can name a tool the registry has no adapter for.
-    That is a reason to offer the default renderer, not to refuse to
-    render -- the prompt is written and the person is standing at the
-    spend gate."""
-    on_runway = capture(monkeypatch, runway)
+    """shot.PLATFORMS can name a tool nothing renders (OPENART). That is a
+    reason to offer the default renderer, not to refuse to render."""
+    on_fal = capture(monkeypatch, fal)
     scene = a_queued_scene(tmp_db, tool="SOMETHING_ELSE")
     res = client.post(f"/api/queue/{scene}/approve", json={})
     assert wait_for_job(res.json()["job_id"])["status"] == "done"
-    assert on_runway["args"] == (scene, 1)
+    assert on_fal["args"] == (scene, 1)
+    assert on_fal["kwargs"]["model"] == fal.DEFAULT_MODEL
 
 
 # --- the pick itself ---------------------------------------------------------
@@ -142,20 +138,16 @@ def test_the_picked_model_length_and_frame_reach_the_adapter(tmp_db, monkeypatch
     assert seen["kwargs"]["resolution"] == "1080p"
 
 
-def test_runway_is_handed_a_ratio_where_the_others_are_handed_a_resolution(tmp_db, monkeypatch):
-    """One axis, two parameter names. Runway takes a frame SIZE and calls
-    it `ratio`; fal, Higgsfield and Veo take a resolution tier. Passing
-    the wrong keyword is a TypeError inside a job, at the one moment
-    somebody is watching a spinner."""
-    seen = capture(monkeypatch, runway)
+def test_a_retired_renderer_named_explicitly_is_refused_before_it_spends(tmp_db, monkeypatch):
+    """An old client that still posts provider=runway is told so, before
+    anything is held or submitted -- never quietly rendered somewhere else."""
+    seen = capture(monkeypatch, fal)
     scene = a_queued_scene(tmp_db)
     res = client.post(f"/api/queue/{scene}/approve", json={
-        "provider": "runway", "model": "gen4_turbo",
-        "duration": 10, "frame": "1280:720"})
-    assert wait_for_job(res.json()["job_id"])["status"] == "done"
-    assert seen["kwargs"]["ratio"] == "1280:720"
-    assert seen["kwargs"]["duration"] == 10
-    assert "resolution" not in seen["kwargs"]
+        "provider": "runway", "model": "gen4_turbo", "duration": 10})
+    assert res.status_code == 400
+    assert res.json()["error"]["code"] == "bad_render_choice"
+    assert seen == {}
 
 
 def test_the_estimate_comes_back_with_the_job(tmp_db, monkeypatch):
@@ -172,32 +164,33 @@ def test_the_estimate_comes_back_with_the_job(tmp_db, monkeypatch):
 # --- what is refused, and before what ----------------------------------------
 
 def test_a_length_the_model_cannot_render_is_refused_before_it_spends(tmp_db, monkeypatch):
-    seen = capture(monkeypatch, runway)
+    seen = capture(monkeypatch, fal)
     scene = a_queued_scene(tmp_db)
+    # LTX-2.3 renders 6, 8 or 10 seconds -- 7 is not a length it takes
     res = client.post(f"/api/queue/{scene}/approve",
-                      json={"provider": "runway", "duration": 7})
+                      json={"provider": "fal", "model": "ltx2.3", "duration": 7})
     assert res.status_code == 400
     assert res.json()["error"]["code"] == "bad_render_choice"
     assert seen == {}          # the point: nothing was billed
 
 
-def test_no_key_for_the_picked_renderer_says_which_one(tmp_db, monkeypatch):
-    """The old message was "RUNWAYML_API_SECRET is not set" whatever you
-    had picked, which on a four-vendor picker is a sentence about the
-    wrong vendor."""
-    capture(monkeypatch, runway)
-    monkeypatch.setattr(veo, "has_key", lambda account_id=None: False)
+def test_no_operator_key_is_refused_and_says_so(tmp_db, monkeypatch):
+    """The renderer is the operator's: with FAL_KEY unset the approve is
+    refused with the reason, and nothing is spent."""
+    seen = capture(monkeypatch, fal)
+    monkeypatch.setattr(fal, "has_key", lambda account_id=None: False)
     scene = a_queued_scene(tmp_db)
-    res = client.post(f"/api/queue/{scene}/approve", json={"provider": "veo"})
+    res = client.post(f"/api/queue/{scene}/approve", json={"provider": "fal"})
     assert res.status_code == 503
     assert res.json()["error"]["code"] == "renderer_unavailable"
-    assert "Veo" in res.json()["error"]["message"]
+    assert "FAL_KEY" in res.json()["error"]["message"]
+    assert seen == {}
 
 
 def test_an_ungrounded_scene_is_refused_on_every_renderer(tmp_db, monkeypatch):
     """Picking a vendor does not move the queue's own doors. An
     ungrounded scene is refused at the spend gate on fal exactly as it is
-    on Runway -- reference_gate reads `refs`, and no vendor makes a scene
+    anywhere -- reference_gate reads `refs`, and no model makes a scene
     with no photographs behind it grounded.
 
     ("ungrounded" in the name is conftest's opt-in to
@@ -239,9 +232,9 @@ def test_the_queue_lists_every_renderer_and_the_cards_own_default(tmp_db, monkey
     # cannot come apart
     assert card["render_default"] == {
         "provider": "fal", "model": fal.PLATFORM_MODELS["seedance"]}
-    # and the single-vendor shape an older client may still read is
-    # deliberately still there
-    assert "runway" in data
+    # the default renderer's state the chips read (was `runway`)
+    assert data["renderer"]["provider"] == "fal"
+    assert "runway" not in data
 
 
 # --- the approval is the click ----------------------------------------------
@@ -255,9 +248,7 @@ def test_the_queue_lists_every_renderer_and_the_cards_own_default(tmp_db, monkey
 
 def test_approving_renders_with_no_spend_env_set(tmp_db, monkeypatch):
     """The whole ask: press Approve, it renders. No restart, no variable."""
-    for name in ("RUNWAY_SPEND_OK", "FAL_SPEND_OK", "VEO_SPEND_OK",
-                 "HIGGSFIELD_SPEND_OK"):
-        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("FAL_SPEND_OK", raising=False)
     seen = capture(monkeypatch, fal)
     scene = a_queued_scene(tmp_db, tool="LTX")
     res = client.post(f"/api/queue/{scene}/approve", json={"provider": "fal"})
@@ -270,12 +261,9 @@ def test_the_gate_still_refuses_a_caller_that_nobody_approved(monkeypatch, tmp_p
     """The other half, and the reason the check did not simply get
     deleted: an unattended caller passes no approval and still cannot
     spend. orchestrator.generate_render and autopilot are that caller."""
-    for name in ("RUNWAY_SPEND_OK", "FAL_SPEND_OK", "VEO_SPEND_OK",
-                 "HIGGSFIELD_SPEND_OK"):
-        monkeypatch.delenv(name, raising=False)
-    for module in (runway, fal, veo):
-        with pytest.raises(RuntimeError, match="not approved"):
-            module.generate_video("a prompt", tmp_path / "x.mp4")
+    monkeypatch.delenv("FAL_SPEND_OK", raising=False)
+    with pytest.raises(RuntimeError, match="not approved"):
+        fal.generate_video("a prompt", tmp_path / "x.mp4")
     # ...and the never-raises edge the graph actually calls says the same.
     # has_key is stubbed because "not configured" is checked first and
     # would answer a different question than the one under test.
@@ -289,12 +277,12 @@ def test_an_explicit_approval_satisfies_the_gate_and_a_false_one_does_not(monkey
     over the environment in BOTH directions -- approved=False refuses on
     a machine where the override happens to be armed, which is what lets
     an unattended path stay refused on a developer's own laptop."""
-    monkeypatch.setenv("RUNWAY_SPEND_OK", "1")
-    assert runway.spend_approved() is True
-    assert runway.spend_approved(False) is False
-    monkeypatch.delenv("RUNWAY_SPEND_OK", raising=False)
-    assert runway.spend_approved() is False
-    assert runway.spend_approved(True) is True
+    monkeypatch.setenv("FAL_SPEND_OK", "1")
+    assert fal.spend_approved() is True
+    assert fal.spend_approved(False) is False
+    monkeypatch.delenv("FAL_SPEND_OK", raising=False)
+    assert fal.spend_approved() is False
+    assert fal.spend_approved(True) is True
 
 
 def test_the_daily_cap_is_the_wall_that_is_left(tmp_db, monkeypatch):
@@ -316,79 +304,36 @@ def test_the_card_no_longer_dims_on_a_missing_env_var(tmp_db, monkeypatch):
     """What the Queue is handed: a key is the whole gate. `env_override`
     is still reported because an unattended run needs it, but nothing
     the card disables reads it."""
-    monkeypatch.delenv("RUNWAY_SPEND_OK", raising=False)
-    monkeypatch.setattr(runway, "has_key", lambda account_id=None: True)
+    monkeypatch.delenv("FAL_SPEND_OK", raising=False)
+    monkeypatch.setattr(fal, "has_key", lambda account_id=None: True)
     a_queued_scene(tmp_db)
     data = client.get("/api/queue/pending?brand=zeropage").json()
-    assert data["renderers"]["runway"]["spend_ok"] is True
-    assert data["renderers"]["runway"]["env_override"] is False
-    assert data["runway"]["spend_ok"] is True          # the legacy shape too
+    assert data["renderers"]["fal"]["spend_ok"] is True
+    assert data["renderers"]["fal"]["env_override"] is False
+    assert data["renderer"]["spend_ok"] is True
 
 
-# --- the plan leads only when this account can render it --------------------
-# 2026-09-11, Mike: "the render button doesn't work on queue page ... it
-# said runway key not set". Every scene the chain writes is planned for
-# RUNWAY, and his account holds a Higgsfield key and no Runway key -- so
-# every card opened on a dead button and an empty approve was refused.
-# providers.render_default: the plan if keyed, else the cheapest renderer
-# the account CAN use, else the plan (and the card names the missing key).
+# --- one renderer, the operator's key -----------------------------------------
 
-def keys(monkeypatch, **keyed):
-    from src import higgsfield
-    for name, module in (("runway", runway), ("fal", fal),
-                         ("higgsfield", higgsfield), ("veo", veo)):
-        monkeypatch.setattr(module, "has_key",
-                            lambda account_id=None, _on=keyed.get(name, False): _on)
+def keys(monkeypatch, fal=False):
+    from src import fal as fal_module
+    monkeypatch.setattr(fal_module, "has_key", lambda account_id=None, _on=fal: _on)
 
 
-def test_a_runway_plan_with_no_runway_key_defaults_to_what_is_keyed(tmp_db, monkeypatch):
-    from src import higgsfield
-    keys(monkeypatch, higgsfield=True)
-    a_queued_scene(tmp_db, tool="RUNWAY")
-    card = client.get("/api/queue/pending?brand=zeropage").json()["items"][0]
-    assert card["render_default"]["provider"] == "higgsfield"
-    assert higgsfield.VIDEO_MODELS[card["render_default"]["model"]]["available"]
+def test_a_keyed_plan_leads(monkeypatch):
+    keys(monkeypatch, fal=True)
+    assert providers.render_default("KLING", None) == {
+        "provider": "fal", "model": fal.PLATFORM_MODELS["kling"]}
+    assert providers.render_default("VEO", None) == {"provider": "fal", "model": "veo3.1"}
 
 
-def test_an_empty_approve_spends_where_the_card_pointed(tmp_db, monkeypatch):
-    from src import higgsfield
-    keys(monkeypatch, higgsfield=True)
-    on_hf = {}
-
-    def fake(concept_id, shot_n, **kwargs):
-        on_hf.update(kwargs, args=(concept_id, shot_n))
-        return {"ok": True, "media_url": "https://x/c.mp4",
-                "generation_id": 1, "error": None}
-
-    monkeypatch.setattr(higgsfield, "generate_for_shot", fake)
-    scene = a_queued_scene(tmp_db, tool="RUNWAY")
-    res = client.post(f"/api/queue/{scene}/approve", json={})
-    assert res.status_code == 200, res.text
-    assert wait_for_job(res.json()["job_id"])["status"] == "done"
-    assert on_hf["args"] == (scene, 1)
-    assert res.json()["render"]["provider"] == "higgsfield"
-
-
-def test_the_cheapest_keyed_renderer_wins_the_fallback(monkeypatch):
-    # Veo is keyed on the same Gemini key as everything else and is the
-    # most expensive clip in the repo -- a fallback that took registry
-    # order would open every card on a $3 render
-    keys(monkeypatch, higgsfield=True, veo=True)
-    pick = providers.renderer_for(None, "runway", None)
-    assert pick["provider"] == "higgsfield"
-
-
-def test_a_keyed_plan_still_leads(monkeypatch):
-    keys(monkeypatch, runway=True, higgsfield=True)
-    assert providers.render_default("RUNWAY", None)["provider"] == "runway"
-
-
-def test_nothing_keyed_keeps_the_plan_so_the_card_can_name_the_key(monkeypatch):
+def test_nothing_keyed_still_names_the_pick_so_the_card_can_say_why(monkeypatch):
     keys(monkeypatch)
-    assert providers.renderer_for(None, "runway", None) is None
-    assert providers.render_default("RUNWAY", None)["provider"] == "runway"
+    assert providers.renderer_for(None, "fal", None) is None
+    assert providers.render_default("KLING", None)["provider"] == "fal"
 
 
-def test_a_door_that_needs_generate_from_prompt_is_never_handed_veo(monkeypatch):
-    keys(monkeypatch, veo=True)
-    assert providers.renderer_for(None, needs="generate_from_prompt") is None
+def test_a_retired_preference_is_read_as_fal(monkeypatch):
+    keys(monkeypatch, fal=True)
+    pick = providers.renderer_for(None, "runway", "gen4_turbo")
+    assert pick == {"provider": "fal", "model": fal.DEFAULT_MODEL}

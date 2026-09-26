@@ -12,25 +12,24 @@ the split is:
     Claude session   -- picks the shots, calls the MCP, downloads the mp4
     this file        -- tells it what is waiting, and files what came back
 
-TWO LANES NOW, the same shape (`--provider`, default higgsfield):
+TWO LANES, the same shape (`--provider`, default higgsfield):
 
     higgsfield  the MCP, above. Reachable from a session, so a session
                 can do the whole job without a human's hands.
-    runway      NOT reachable from anything. Runway's API has exactly
-                one billing path (developer credits at $0.01), and the
-                Unlimited plan's free-but-queued Explore Mode is a
-                WEB-APP TOGGLE with no API parameter -- src/runway.py
-                cannot ask for it however much it wants to. So the
-                render happens in Chrome: `list` prints the prompt, the
-                keyframe URL to drag in as the start image, and the
-                target duration/ratio; a human renders it; `import`
-                files the mp4 exactly as the higgsfield lane does.
+    manual      the generic clip import: a clip rendered ANYWHERE, filed
+                free. `list` prints the prompt, the keyframe URL and the
+                target duration; `import` files the mp4. This was the
+                Runway Unlimited lane until 2026-09-26 -- Runway retired
+                Unlimited in June 2026 and fal became the only API
+                renderer, so the lane kept the part that was never about
+                Runway.
 
-BOTH LANES ARE OPERATOR-ONLY, AND THAT IS A SECURITY PROPERTY, not a
-convenience. Each spends one of the operator's PERSONAL consumer plans,
-so serving a paying tenant's shot on either is reselling a consumer
-subscription -- an account-termination risk that takes every tenant's
-renders down at once. `src/manual_lane.py` holds the allowlist and the
+BOTH LANES ARE OPERATOR-ONLY. The Higgsfield lane spends the operator's
+PERSONAL consumer plan, so serving a paying tenant's shot on it is
+reselling a consumer subscription -- an account-termination risk that
+takes every tenant's renders down at once. The manual import spends
+nothing, but files a render with no hold, so it sits behind the same
+gate rather than being the wider door. `src/manual_lane.py` holds the allowlist and the
 reasoning; this file only ever asks it (`manual_lane.require`), never
 re-decides. There is deliberately NO --operator flag, --force, or
 environment escape here -- and since 2026-09-08 no environment DOOR
@@ -46,21 +45,17 @@ Subcommands, all safe to run by hand:
     python3 ops/render_queue.py --account zeropage import --concept 128 \
         --shot 1 --file /tmp/clip.mp4 --model seedance1_5 --credits 4.8
 
-    python3 ops/render_queue.py --provider runway --account zeropage list
-    python3 ops/render_queue.py --provider runway --account zeropage import \
-        --concept 131 --shot 1 --file ~/Downloads/gen4-turbo.mp4 \
-        --model gen4_turbo --duration 10 --anchored
+    python3 ops/render_queue.py --provider manual --account zeropage list
+    python3 ops/render_queue.py --provider manual --account zeropage import \
+        --concept 131 --shot 1 --file ~/Downloads/clip.mp4 \
+        --model "kling 3 (web app)" --anchored
 
-WHAT `import` NOW CHECKS INSTEAD OF BELIEVING. `--model`, `--ratio` and
-`--duration` land in a `generations` row the tool scoreboard reads, so
-until 2026-09-08 a 1am typo became a measurement of a model that never
-ran. The runway lane's claims are checked against src/render_specs.py's
-per-model legal values and REFUSED, not clamped, when they do not fit --
-a value outside the set is evidence that the row and the clip have come
-apart, and rounding it hides exactly that. The Higgsfield lane's model
-names are the MCP's own and are published nowhere this repo can read, so
-they are recorded rather than checked, and the row says so
-(`model_verified`) instead of implying a check that never happened.
+WHAT `import` RECORDS. `--model` lands in a `generations` row the tool
+scoreboard reads. Neither lane has a list this repo could check a model
+name against -- the manual import takes clips from anywhere, and the
+Higgsfield MCP's names are its own -- so the model is recorded as told
+and the row says so (`model_verified: false`) instead of implying a check
+that never happened.
 
 And the file itself is asked how long it is: `ffprobe`, the same probe
 `orchestrator._clip_passes_qc` already uses, writes `duration_measured_s`
@@ -80,7 +75,7 @@ the URL from there.
 NO THIRD-PARTY IMPORT OF ITS OWN. It imports src.preprod / src.generative
 / src.accounts / src.manual_lane / src.render_specs and nothing else
 (note src.manual_lane imports src.db and stdlib only, src.render_specs
-imports NOTHING, and this file never imports src.runway -- that would
+imports NOTHING, and this file never imports an adapter -- that would
 drag google-genai in through render_assets), so it ran under any
 python3 while those were stdlib --
 the repo venvs are macOS builds and a Claude session's shell is Linux.
@@ -110,28 +105,19 @@ from src import accounts, generative, manual_lane, preprod, render_specs   # noq
 from src.shot import Shot                     # noqa: E402
 
 
-PROVIDERS = ("higgsfield", "runway")
+PROVIDERS = ("higgsfield", "manual")
 
 # The lanes that spend the OPERATOR'S personal consumer subscription
 # rather than a credential a tenant could have bought for themselves.
 # Membership here is what puts src/manual_lane.py's allowlist in front of
 # a call.
 #
-# BOTH lanes are here, and higgsfield joining runway on 2026-09-08 is a
-# DELIBERATE BREAK of a workflow that used to need no configuration. It
-# is the same exposure -- a consumer app subscription spent on any
-# account's shot -- and gating one lane while leaving the other open is
+# BOTH lanes are here: gating one lane while leaving the other open is
 # worse than gating neither, because it reads as though the question had
-# been asked and answered. The existing Higgsfield workflow now needs
-# `python -m src.accounts operator <slug> --on` run once against the
-# database; the refusal names that command, which is what anyone who
-# hits it needs.
-#
-# The API-billed adapters (src/higgsfield.py, src/runway.py) are NOT
-# affected and were not touched: they spend a credential a tenant can
-# own, metered per call, under their own spend gates and daily caps.
-# This gate is about the subscription lanes only.
-GATED_PROVIDERS = ("higgsfield", "runway")
+# been asked and answered. Each needs `python -m src.accounts operator
+# <slug> --on` run once against the database; the refusal names that
+# command, which is what anyone who hits it needs.
+GATED_PROVIDERS = ("higgsfield", "manual")
 
 
 def _provider(name) -> str:
@@ -167,12 +153,10 @@ def _guard(provider: str, account_id: int | None) -> None:
 def _lane_duration(shot: dict) -> int:
     """What to set the duration chip to before pressing Generate.
 
-    The shot's own number when it carries one, else the lane default --
-    which is NOT src/runway.py's DEFAULT_DURATION of 5. On the API every
-    second is a credit; on Explore Mode the queue is the price and the
-    seconds are free. Printed on every row because the web app resets
-    this control to 5s on each page load (docs/RUNBOOK.md 2026-09-06)
-    and a whole round once went out at half length because of it.
+    The shot's own number when it carries one, else the lane default.
+    Printed on every row because a vendor's web app tends to reset this
+    control on each page load (docs/RUNBOOK.md 2026-09-06), and a whole
+    round once went out at half length because of it.
     """
     try:
         return int(shot.get("duration"))
@@ -180,21 +164,12 @@ def _lane_duration(shot: dict) -> int:
         return manual_lane.LANE_DURATION
 
 
-def _verify_claims(provider: str, model: str, ratio, duration) -> bool:
-    """Check what the operator says they rendered, before anything is
-    written down. Returns whether the MODEL claim was actually checked.
-
-    Refuses (SystemExit, the script's own idiom) rather than clamping, and
-    refuses BEFORE the clip is copied and before any row exists -- a
-    rejected claim must leave the install exactly as it found it, the
-    same rule the gate above keeps.
-    """
-    for check, args in ((render_specs.check_ratio, (provider, model, ratio)),
-                        (render_specs.check_duration, (provider, model, duration))):
-        try:
-            check(*args)
-        except ValueError as wrong:
-            raise SystemExit(str(wrong)) from None
+def _verify_model(provider: str, model: str) -> bool:
+    """Check the model the operator says rendered the clip, where the lane
+    has a list to check it against. Returns whether it was CHECKED.
+    Refuses (SystemExit, the script's own idiom) BEFORE the clip is copied
+    and before any row exists -- a rejected claim must leave the install
+    exactly as it found it."""
     try:
         return render_specs.check_model(provider, model)
     except ValueError as wrong:
@@ -284,9 +259,9 @@ def pending(brand=None, account_id: int | None = None,
     ONE rule for both lanes, on purpose: which provider renders a shot is
     a decision made at the keyboard, not a property of the queue, and a
     second predicate here would be a second definition of "waiting" to
-    keep in sync with the Queue page. The runway lane adds fields to each
-    row (the keyframe to drag in, the duration and ratio to set) but
-    never changes which rows there are.
+    keep in sync with the Queue page. The manual lane adds fields to each
+    row (the keyframe to start from, the duration to ask for) but never
+    changes which rows there are.
 
     `prompt` is the stored shot prompt, which IS the gate-passed one:
     nothing reaches `shots_json` without going through the prompt gate
@@ -307,10 +282,9 @@ def pending(brand=None, account_id: int | None = None,
         if concept.get("archived") or not concept.get("is_scene"):
             continue
         # The lane is free, so the instinct is to let anything through.
-        # It is not the credit this protects: a human dragging a
-        # reference-less shot into Runway by hand produces the same
-        # ungrounded clip, and then it is in data/renders looking like
-        # output somebody chose.
+        # It is not the credit this protects: a reference-less shot
+        # rendered by hand is the same ungrounded clip, and then it is in
+        # data/renders looking like output somebody chose.
         if preprod.reference_gate(concept):
             continue
         for shot in concept.get("shots") or []:
@@ -326,33 +300,36 @@ def pending(brand=None, account_id: int | None = None,
                 "reference_image": shot.get("reference_image") or "",
                 "logline": concept.get("logline") or "",
             }
-            if provider == "runway":
-                # What a human actually needs in front of the web app:
-                # the frame to drag into the start-image slot, and the
-                # two controls to set before Generate.
+            if provider == "manual":
+                # What a human actually needs in front of a render app:
+                # the frame to start from, and the length to ask for.
                 row["keyframe_url"] = row["reference_image"]
                 row["duration"] = _lane_duration(shot)
                 row["ratio"] = shot.get("ratio") or manual_lane.LANE_RATIO
-                row["lane"] = manual_lane.LANES["runway"]
+                row["lane"] = manual_lane.LANES["manual"]
             out.append(row)
     return out
 
 
 RENDER_DIR = REPO / "data" / "renders" / "higgsfield"
-# src/runway.py's own output directory, not a new one: the /renders mount
-# and every media_url derived from it stay exactly as they are, so a clip
-# rendered by hand and a clip rendered through the API are the same kind
-# of file in the same place.
-RUNWAY_RENDER_DIR = REPO / "data" / "renders" / "runway"
+# Under data/renders/ so the /renders mount serves it like any render.
+MANUAL_RENDER_DIR = REPO / "data" / "renders" / "manual"
 RENDERS_ROOT = REPO / "data" / "renders"
 
 
 def _render_dir(provider: str):
     """Read through the module attributes rather than a dict, so the test
-    suite's redirect of RENDER_DIR / RUNWAY_RENDER_DIR away from the real
+    suite's redirect of RENDER_DIR / MANUAL_RENDER_DIR away from the real
     data/renders/ still lands (conftest's output_roots lesson: a stub clip
     in the owner's render folder is indistinguishable from a real one)."""
-    return RUNWAY_RENDER_DIR if provider == "runway" else RENDER_DIR
+    return MANUAL_RENDER_DIR if provider == "manual" else RENDER_DIR
+
+
+def _log_tool(provider: str) -> str:
+    """The generations/generated_assets tool a lane's clip is filed under:
+    "manual" for the generic import (generative.MANUAL_TOOLS), the vendor
+    name otherwise."""
+    return "manual" if provider == "manual" else provider
 
 
 def _place(src: Path, provider: str = "higgsfield") -> Path:
@@ -390,21 +367,16 @@ def import_clip(concept_id: int, shot_n, file: str, model: str,
     autopilot.build_plan requires before it will emit a post action.
 
     cost_usd is left NULL on purpose, in BOTH lanes. The clip was paid
-    for out of a subscription that was already bought, so a dollar figure
-    here would be invented -- src/costs.py reports such a row as FREE
-    with a count, never as $0.00 and never backfilled. What was really
-    spent goes in params_json, where it is honest: Higgsfield's app
-    credits as a number, Runway Explore's as nothing at all, because
-    Explore Mode's price is the queue rather than a balance.
+    for somewhere this pipeline cannot see, so a dollar figure here would
+    be invented -- src/costs.py reports such a row as FREE with a count,
+    never as $0.00 and never backfilled. What was really spent goes in
+    params_json, where it is honest: Higgsfield's app credits as a number,
+    a manual import's as nothing at all.
 
     NO LEDGER HOLD IS TAKEN, and there is no code here that decides that.
     `params["source"]` is the lane marker, and `ledger.is_billable` --
-    the one place that rule lives -- reads it and refuses to hold, for
-    the same structural reason a BYOK render takes no hold: somebody
-    already paid for this clip somewhere the ledger cannot see. Holding
-    would debit a CUSTOMER'S credit for a render made on the OPERATOR'S
-    personal plan, which is the exact inversion this lane exists to
-    avoid.
+    the one place that rule lives -- reads it and refuses to hold:
+    somebody already paid for this clip somewhere the ledger cannot see.
 
     `key_source` is written as None deliberately: no API credential was
     used at all. That value reads as "unknown, therefore billable" to
@@ -434,44 +406,35 @@ def import_clip(concept_id: int, shot_n, file: str, model: str,
     if not text:
         raise SystemExit("no prompt to log this attempt against")
 
-    # What was claimed, checked before the clip moves and before a row
-    # exists. `claimed_*` are what goes in the row as the claim; the
+    # What was claimed. `claimed_*` go in the row as the claim; the
     # measurement below is recorded beside them rather than replacing
     # them, because the row's job is to show the two and let a human see
     # a disagreement.
     claimed_duration = (int(duration) if duration else _lane_duration(shot))
     claimed_ratio = ratio or shot.get("ratio") or manual_lane.LANE_RATIO
-    if provider == "runway":
-        model_verified = _verify_claims(provider, model, claimed_ratio,
-                                        claimed_duration)
-    else:
-        # The Higgsfield lane's --duration/--ratio are not written into
-        # its row at all (the MCP call decided them), so there is nothing
-        # to check them against and nothing they could corrupt.
-        model_verified = _verify_claims(provider, model, None, None)
+    model_verified = _verify_model(provider, model)
 
     path = _place(path, provider)
     measured, measured_by = _measure_duration(path)
     generative.init()
 
-    if provider == "runway":
-        where = ("rendered by hand in the Runway web app on the operator's "
-                 "Unlimited subscription (Explore Mode)")
+    if provider == "manual":
+        where = "rendered outside this pipeline and filed by hand"
         params = {"model": model,
                   "source": manual_lane.SOURCE,
-                  "lane": manual_lane.LANES["runway"],
+                  "lane": manual_lane.LANES["manual"],
                   "key_source": None,
                   "duration": claimed_duration,
                   "ratio": claimed_ratio,
                   "concept_id": concept_id, "shot_n": shot_n,
                   "prompt_image": bool(anchored),
-                  # the claim, checked; and the file, measured
+                  # the claim, as told; and the file, measured
                   "model_verified": model_verified,
                   "duration_measured_s": measured,
                   "duration_source": measured_by}
         if credits is not None:
             params["credits"] = credits
-        notes = "subscription render, not API credits -- no ledger hold"
+        notes = "filed by hand, not an API render -- no ledger hold"
     else:
         where = "rendered via the Higgsfield MCP on subscription credits"
         params = {"model": model, "source": "mcp-subscription",
@@ -489,7 +452,7 @@ def import_clip(concept_id: int, shot_n, file: str, model: str,
         notes=f"{where} (concept {concept_id} shot {shot_n})",
         account_id=account_id)
     generation_id = generative.record_generation(
-        shot_row_id, provider, text,
+        shot_row_id, _log_tool(provider), text,
         params=params,
         output_path=str(path),
         cost_usd=None,
@@ -501,7 +464,7 @@ def import_clip(concept_id: int, shot_n, file: str, model: str,
     # which is the 2026-09-08 reference-URL lesson arriving at the clip:
     # #375 was imported on Fly, so the card 404'd everywhere else and the
     # only copy lived on a volume a redeploy recreates. Same spelling as
-    # src/runway.py's API path -- one way to put a render where it can be
+    # the API adapters use -- one way to put a render where it can be
     # fetched. Best-effort: an unconfigured R2 leaves the local route,
     # which is what every local-only setup has always had.
     try:
@@ -524,7 +487,7 @@ def import_clip(concept_id: int, shot_n, file: str, model: str,
         from src import render_assets
         asset = render_assets.record_best_effort(
             account_id=account_id, generation_id=generation_id,
-            tool=provider, model=model, media_kind="video", prompt=text,
+            tool=_log_tool(provider), model=model, media_kind="video", prompt=text,
             media_url=media_url, output_path=str(path),
             project=concept.get("brand"), concept_id=concept_id,
             shot_n=shot_n, metadata=params)
@@ -548,32 +511,27 @@ def main() -> None:
     p_imp.add_argument("--shot", type=int, default=1)
     p_imp.add_argument("--file", required=True)
     p_imp.add_argument("--model", required=True,
-                       help="the model that actually rendered it. Checked "
-                            "against the lane's known models where there are "
-                            "any (runway); recorded unverified where there "
-                            "are none (the higgsfield MCP)")
+                       help="the model that actually rendered it. Recorded "
+                            "as told (model_verified: false) -- neither lane "
+                            "has a list to check it against")
     p_imp.add_argument("--credits", type=float)
     p_imp.add_argument("--prompt")
     p_imp.add_argument("--anchored", action="store_true",
                        help="the render was anchored on the keyframe")
     p_imp.add_argument("--duration", type=int,
-                       help="seconds actually generated (runway lane: the "
-                            "duration chip you set before Generate). Checked "
-                            "against the model's legal lengths, and against "
-                            "the file itself when ffprobe is on PATH")
+                       help="seconds you asked for (manual lane). Recorded "
+                            "beside what the file itself measures")
     p_imp.add_argument("--ratio",
-                       help="aspect ratio actually generated (runway lane: "
-                            "uploading a 9:16 start image flips this chip). "
-                            "Checked against the model's legal frames")
+                       help="frame you asked for (manual lane), recorded")
 
     ap.add_argument(
         "--account", default=None,
         help="account slug to act as (default: the oldest on the database)")
     ap.add_argument(
         "--provider", default="higgsfield", choices=list(PROVIDERS),
-        help="which lane. `runway` is the operator's own Unlimited "
-             "subscription driven by hand in Chrome, and is refused for "
-             "any account the allowlist does not name.")
+        help="which lane. `manual` files a clip rendered anywhere; "
+             "`higgsfield` files an MCP render. Both are refused for any "
+             "account the operator column does not name.")
 
     args = ap.parse_args()
     # A Claude session drives this by hand; there is no cookie behind it.

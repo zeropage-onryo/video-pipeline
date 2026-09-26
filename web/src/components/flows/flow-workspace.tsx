@@ -4,7 +4,7 @@
 
    One shot's chain as cards on an infinite canvas: the prompt and its
    instructions, one element card per asset the scene was written
-   against, the Gemini enhance, the Nano keyframe and the Runway clip.
+   against, the Gemini enhance, the Nano keyframe and the video clip (fal).
    Wires are real links the runner executes (src/lib/director-graph.ts
    is the adapter). Underneath, a prompt bar edits the shot's prompt
    and an @-mention drops an element on the canvas already wired in;
@@ -90,7 +90,7 @@ import {
   type Capabilities,
   type Preset,
   type RenderQuote,
-  type RunwayState,
+  type RendererState,
 } from "@/lib/studio-api";
 import { useMentions } from "@/components/studio/mentions";
 import { useShell } from "@/components/studio/shell";
@@ -123,7 +123,7 @@ const KEY = "zeropage.flow-draft.v1";
 const titles: Record<Kind, string> = {
   prompt: "Prompt",
   image: "Nano Banana",
-  video: "Runway Gen-4 Turbo",
+  video: "Video clip",
   reference: "Reference image",
   element: "Element",
   system: "Instructions",
@@ -187,7 +187,6 @@ function makeTemplate(type: Template): { nodes: FlowNode[]; edges: Edge[] } {
 }
 
 const asSrc = (url: string) => (url.startsWith("/") ? `${API_URL}${url}` : url);
-const ratioLabel = (r?: string) => (r === "720:1280" ? "9:16" : r === "1280:720" ? "16:9" : r || "9:16");
 
 const Actions = createContext<{
   update: (id: string, data: Partial<CardData>) => void;
@@ -195,9 +194,9 @@ const Actions = createContext<{
   remove: (id: string) => void;
   duplicate: (id: string) => void;
   run: (id: string) => void;
-  runway: RunwayState | null;
+  renderer: RendererState | null;
   caps: Capabilities;
-}>({ update: () => {}, addFrames: () => {}, remove: () => {}, duplicate: () => {}, run: () => {}, runway: null, caps: {} });
+}>({ update: () => {}, addFrames: () => {}, remove: () => {}, duplicate: () => {}, run: () => {}, renderer: null, caps: {} });
 
 function KindIcon({ data, size, strokeWidth }: { data: CardData; size: number; strokeWidth: number }) {
   const props = { size, strokeWidth };
@@ -216,10 +215,10 @@ function KindIcon({ data, size, strokeWidth }: { data: CardData; size: number; s
 
 function gateNote(kind: Kind, caps: Capabilities) {
   if (kind === "video")
-    return !caps["runway.generate"]
-      ? "Runway · RUNWAYML_API_SECRET not set"
-      : !caps["runway.spend"]
-        ? "Runway · gated — RUNWAY_SPEND_OK=1 to arm"
+    return !caps["video.generate"]
+      ? "fal · FAL_KEY not set"
+      : caps["video.spend"] === false
+        ? "fal · spend not armed on this server"
         : "";
   if (kind === "image" && caps["nano.generate"] === false) return "GEMINI_API_KEY not set";
   return "";
@@ -314,7 +313,7 @@ function StudioNode({ id, data, selected }: NodeProps<FlowNode>) {
   const actions = useContext(Actions);
   const [menu, setMenu] = useState(false);
   const ins = ports(data.kind);
-  const rw = actions.runway;
+  const rw = actions.renderer;
   return (
     <article className={`flow-card ${selected ? "is-selected" : ""} kind-${data.kind}${data.busy ? " is-busy" : ""}${data.error ? " is-failed" : ""}${data.url || (isText(data.kind) && data.text && !["prompt", "system"].includes(data.kind)) ? " is-done" : ""}`}>
       {ins.map((port, i) => (
@@ -443,10 +442,10 @@ function StudioNode({ id, data, selected }: NodeProps<FlowNode>) {
                 <Clock size={11} /> {rw?.duration ?? 5} sec
               </span>
               <span className="chip">
-                <RectangleVertical size={11} /> {ratioLabel(rw?.ratio)}
+                <RectangleVertical size={11} /> {rw?.resolution ?? "—"}
               </span>
               <span className="chip">
-                <Monitor size={11} /> {rw?.model ?? "gen4_turbo"}
+                <Monitor size={11} /> {rw?.model ?? "video"}
               </span>
               {data.camera ? (
                 <span className="chip">
@@ -531,7 +530,7 @@ type Concept = {
   picked?: boolean;
   parked?: boolean;
   media_url?: string;
-  runway?: RunwayState;
+  renderer?: RendererState;
   generate?: RenderQuote;
 };
 
@@ -1299,14 +1298,14 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
 
   const selectedNode = nodes.find((n) => n.selected);
   // What the Generate node would render ON and cost: the server's own
-  // price (`generate`, pricing.display) laid over the Runway state the
-  // chips read. Without it every Run was priced at Runway's default clip,
-  // even on an account whose only key -- and bill -- is another vendor's.
+  // price (`generate`, pricing.display) laid over the renderer state the
+  // chips read. Without it every Run was priced at the renderer's default
+  // clip rather than the model the Generate node would actually use.
   const gen = scene?.generate && !scene.generate.error ? scene.generate : null;
   const rw =
-    scene?.runway && gen
-      ? { ...scene.runway, model: gen.model, duration: gen.durations[0], estimate_usd: gen.estimate_usd }
-      : (scene?.runway ?? null);
+    scene?.renderer && gen
+      ? { ...scene.renderer, model: gen.model, duration: gen.durations[0], estimate_usd: gen.estimate_usd, resolution: gen.frame || scene.renderer.resolution }
+      : (scene?.renderer ?? null);
 
   return (
     <Actions.Provider
@@ -1320,7 +1319,7 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
           if (node?.data.jobId) update(id, { busy: true, error: undefined });
           else setConfirm(id);
         },
-        runway: rw,
+        renderer: rw,
         caps,
       }}
     >
@@ -1478,7 +1477,7 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
                   <div className="insp-spend">
                     <b>{rw?.estimate_usd != null ? `$${Number(rw.estimate_usd).toFixed(2)}` : "—"}</b>
                     <span>
-                      per {rw?.duration ?? 5}-second clip · {rw?.model ?? "gen4_turbo"}
+                      per {rw?.duration ?? 5}-second clip · {rw?.model ?? "video"}
                     </span>
                   </div>
                   {gateNote("video", caps) ? <span className="m gate">{gateNote("video", caps)}</span> : null}
@@ -1626,10 +1625,10 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
             </div>
             <div className="gs-chips">
               <span className="chip">
-                <Sparkles size={11} /> {rw?.model ?? "runway"}
+                <Sparkles size={11} /> {rw?.model ?? "video"}
               </span>
               <span className="chip">
-                <RectangleVertical size={11} /> {ratioLabel(rw?.ratio)}
+                <RectangleVertical size={11} /> {rw?.resolution ?? "—"}
               </span>
               <span className="chip">
                 <Clock size={11} /> {rw?.duration ?? 5} sec
@@ -1694,7 +1693,7 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
               <h2 id="render-title">Run {nodes.find((n) => n.id === confirm)?.data.label}?</h2>
               <p>
                 {nodes.find((n) => n.id === confirm)?.data.kind === "video"
-                  ? "This renders a clip through Runway and spends real credit — the module's own gate (RUNWAY_SPEND_OK) still has the last word."
+                  ? "This renders a clip on fal and holds credits — the adapter's own gate still has the last word."
                   : "This is a billed model call under the project's daily caps."}
               </p>
               <div>

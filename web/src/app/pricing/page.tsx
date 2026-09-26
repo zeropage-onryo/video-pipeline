@@ -146,16 +146,6 @@ const BILLING_FAQ = [
     ),
   },
   {
-    q: "Can I use my own renderer keys?",
-    a: (
-      <p>
-        Yes. Add a Runway, fal, Higgsfield or Google key in the Queue&apos;s renderer keys panel and renders on
-        that key cost no credits at all — the provider bills you directly. Plans still decide which models the
-        studio quotes for you.
-      </p>
-    ),
-  },
-  {
     q: "Is writing scenes metered?",
     a: (
       <p>

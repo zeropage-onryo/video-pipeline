@@ -208,7 +208,7 @@ def _shot(dsn, account_id=None):
 def test_a_free_render_is_reported_as_free_not_as_zero_spend(tmp_db):
     shot = _shot(tmp_db)
     generative.record_generation(shot, "nano", "p", dsn=tmp_db, account_id=None)   # cost NULL
-    generative.record_generation(shot, "runway", "p", cost_usd=0.25, dsn=tmp_db, account_id=None)
+    generative.record_generation(shot, "kling", "p", cost_usd=0.25, dsn=tmp_db, account_id=None)
     render = costs.render_costs(tmp_db, account_id=None)
     assert render["attempts"] == 2 and render["free"] == 1
     assert render["spend"] == 0.25                     # the NULL is not folded in as 0
@@ -216,9 +216,9 @@ def test_a_free_render_is_reported_as_free_not_as_zero_spend(tmp_db):
 
 def test_cost_per_keeper_counts_the_losers_on_the_same_shot(tmp_db):
     shot = _shot(tmp_db)
-    g1 = generative.record_generation(shot, "runway", "p", cost_usd=0.25, dsn=tmp_db, account_id=None)
-    g2 = generative.record_generation(shot, "runway", "p", cost_usd=0.25, dsn=tmp_db, account_id=None)
-    g3 = generative.record_generation(shot, "runway", "p", cost_usd=0.25, dsn=tmp_db, account_id=None)
+    g1 = generative.record_generation(shot, "kling", "p", cost_usd=0.25, dsn=tmp_db, account_id=None)
+    g2 = generative.record_generation(shot, "kling", "p", cost_usd=0.25, dsn=tmp_db, account_id=None)
+    g3 = generative.record_generation(shot, "kling", "p", cost_usd=0.25, dsn=tmp_db, account_id=None)
     generative.mark_rejected(g1, "morphed", dsn=tmp_db, account_id=None)
     generative.mark_rejected(g2, "morphed", dsn=tmp_db, account_id=None)
     generative.mark_kept(g3, dsn=tmp_db, account_id=None)
@@ -245,17 +245,18 @@ def test_cost_per_stage_per_night_names_the_token_hog(tmp_db):
 
 
 def test_today_against_the_caps_reads_both_walls(tmp_db, monkeypatch):
-    from src import runway
-    monkeypatch.setattr(runway, "DAILY_CAP", 2)
-    monkeypatch.setattr(runway, "GLOBAL_DAILY_CAP", 3)
+    from src import fal
+    monkeypatch.setattr(fal, "DAILY_CAP", 2)
+    monkeypatch.setattr(fal, "GLOBAL_DAILY_CAP", 3)
     nine = accounts.resolve_account("nine", dsn=tmp_db)
-    generative.record_generation(_shot(tmp_db), "runway", "p", cost_usd=0.25, dsn=tmp_db,
+    generative.record_generation(_shot(tmp_db), "kling", "p", cost_usd=0.25, dsn=tmp_db,
                                  account_id=None)
-    generative.record_generation(_shot(tmp_db, nine), "runway", "p", cost_usd=0.25, dsn=tmp_db,
+    generative.record_generation(_shot(tmp_db, nine), "kling", "p", cost_usd=0.25, dsn=tmp_db,
                                  account_id=nine)
     today = costs.today(tmp_db, account_id=None)
-    runway_row = next(t for t in today["tools"] if t["tool"] == "runway")
-    assert (runway_row["used"], runway_row["cap"]) == (1, 2)
-    assert (runway_row["everyone"], runway_row["ceiling"]) == (2, 3)
-    assert runway_row["spend_env"] == "RUNWAY_SPEND_OK"
+    # fal's video usage is summed over its platforms (a kling row counts)
+    fal_row = next(t for t in today["tools"] if t["tool"] == "fal")
+    assert (fal_row["used"], fal_row["cap"]) == (1, 2)
+    assert (fal_row["everyone"], fal_row["ceiling"]) == (2, 3)
+    assert fal_row["spend_env"] == "FAL_SPEND_OK"
     assert next(t for t in today["tools"] if t["tool"] == "nano")["spend_env"] is None

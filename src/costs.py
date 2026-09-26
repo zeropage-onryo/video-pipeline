@@ -38,9 +38,19 @@ NOTES = (
 
 
 def _tools() -> list[tuple[str, Any]]:
-    from . import higgsfield, midjourney, nano_banana, runway, veo
-    return [("runway", runway), ("veo", veo), ("higgsfield", higgsfield),
+    # fal is the only video renderer since 2026-09-26; higgsfield renders
+    # Soul stills only. Each module answers its own count (fal sums its
+    # platforms -- a video row is logged under kling/ltx/..., never "fal").
+    from . import fal, higgsfield, midjourney, nano_banana
+    return [("fal", fal), ("higgsfield", higgsfield),
             ("midjourney", midjourney), ("nano", nano_banana)]
+
+
+def _used(name: str, module, dsn, **kw) -> int:
+    counter = getattr(module, "generations_today", None)
+    if name == "fal" and counter is not None:
+        return counter(dsn, **kw)
+    return generative.used_today(name, dsn, **kw)
 
 
 def render_costs(dsn: Optional[str] = None, *, account_id: Optional[int]) -> dict[str, Any]:
@@ -92,8 +102,8 @@ def today(dsn: Optional[str] = None, *, account_id: Optional[int]) -> dict[str, 
     today's LLM spend for this account and for the installation."""
     tools = []
     for name, module in _tools():
-        used = generative.used_today(name, dsn, account_id=account_id)
-        everyone = generative.used_today(name, dsn, everyone=True)
+        used = _used(name, module, dsn, account_id=account_id)
+        everyone = _used(name, module, dsn, everyone=True)
         tools.append({
             "tool": name,
             "used": used, "cap": module.DAILY_CAP,

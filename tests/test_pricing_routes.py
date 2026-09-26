@@ -12,13 +12,11 @@ from fastapi.testclient import TestClient
 
 from app import auth
 from app.main import app
-from src import accounts, db, fal, higgsfield, preprod, pricing, runway, timeline
+from src import accounts, db, fal, preprod, pricing, timeline
 
 client = TestClient(app)
 
-RENDER_KEYS = ("RUNWAYML_API_SECRET", "FAL_KEY", "FAL_API_KEY", "HIGGSFIELD_API_KEY_ID",
-               "HF_API_KEY_ID", "HIGGSFIELD_API_KEY_SECRET", "HF_API_KEY_SECRET",
-               "GEMINI_API_KEY", "GOOGLE_API_KEY")
+RENDER_KEYS = ("FAL_KEY", "FAL_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY")
 TIMED = ("BEATS (0-7s) he laces both boots, slowly, in the cold garage light. "
          "(7-10s) the visor drops and the engine catches.")
 
@@ -38,11 +36,11 @@ def tmp_db(pg, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", pg)
     for name in RENDER_KEYS:
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("RUNWAYML_API_SECRET", "OPERATOR-RUNWAY")
+    monkeypatch.setenv("FAL_KEY", "OPERATOR-FAL")
     return pg
 
 
-def a_queued_scene(path, *, prompt="a long enough prompt to render", tool="RUNWAY",
+def a_queued_scene(path, *, prompt="a long enough prompt to render", tool="LTX",
                    account_id=None):
     concept_id = preprod.save_concept(
         {"title": "scene", "hook": "", "logline": "",
@@ -73,20 +71,20 @@ def card_for(scene):
 def test_every_pending_card_carries_the_servers_price(tmp_db):
     scene = a_queued_scene(tmp_db)
     quote = card_for(scene)["quote"]
-    assert quote["provider"] == "runway" and quote["timed"] is False
-    assert quote["durations"] == [runway.DEFAULT_DURATION]
+    assert quote["provider"] == "fal" and quote["timed"] is False
+    assert quote["model"] == "ltx2.3"
+    assert quote["durations"] == [6]           # LTX-2.3's shortest clip
     assert quote["estimate_usd"] == pytest.approx(
-        runway.estimate_cost(1, model=quote["model"], duration=runway.DEFAULT_DURATION,
-                             ratio=quote["frame"]))
+        fal.estimate_cost(1, model=quote["model"], duration=6, resolution=quote["frame"]))
     assert quote["credits"] == pricing.credits_for(pricing.usd_micros(quote["estimate_usd"]))
-    assert quote["byok"] is False
+    assert "byok" not in quote                 # every render is charged (2026-09-26)
 
 
 # guards: queue_approve pricing through pricing.display. THE POINT OF
 # STEP 2: what the card printed and what the approve answers cannot differ.
 def test_the_card_and_an_empty_approve_agree(tmp_db, monkeypatch):
     seen = {}
-    monkeypatch.setattr(runway, "generate_for_shot",
+    monkeypatch.setattr(fal, "generate_for_shot",
                         lambda *a, **kw: seen.update(kw) or {"ok": True, "media_url": "https://x/c.mp4"})
     scene = a_queued_scene(tmp_db)
     shown = card_for(scene)["quote"]
@@ -98,28 +96,29 @@ def test_the_card_and_an_empty_approve_agree(tmp_db, monkeypatch):
 
 
 # guards: the timed branch reading pricing.windows_to_render -- a 7s and a
-# 3s window are a 10s and a 5s Runway render, fitted on the SERVER
+# 3s window are an 8s and a 6s LTX render (its lengths are 6/8/10), fitted
+# on the SERVER
 def test_a_timed_scene_is_priced_per_shot_by_the_server(tmp_db):
     scene = a_queued_scene(tmp_db, prompt=TIMED)
     quote = card_for(scene)["quote"]
-    assert quote["timed"] is True and quote["durations"] == [10, 5]
-    each = [runway.estimate_cost(1, model=quote["model"], duration=d, ratio=quote["frame"])
-            for d in (10, 5)]
+    assert quote["timed"] is True and quote["durations"] == [8, 6]
+    each = [fal.estimate_cost(1, model=quote["model"], duration=d, resolution=quote["frame"])
+            for d in (8, 6)]
     assert quote["estimate_usd"] == pytest.approx(sum(each))
     assert [r["part"] for r in quote["renders"]] == [1, 2]
     # another pick is asked of the same function, not computed in the browser
     other = client.get(f"/api/queue/{scene}/quote",
-                       params={"provider": "fal", "model": "ltx2.3"}).json()
+                       params={"provider": "fal", "model": "kling3-turbo-pro"}).json()
     assert other["provider"] == "fal" and other["durations"] == [7, 3]
     assert other["estimate_usd"] == pytest.approx(
-        sum(fal.estimate_cost(1, model="ltx2.3", duration=d, resolution=other["frame"])
+        sum(fal.estimate_cost(1, model="kling3-turbo-pro", duration=d, resolution=other["frame"])
             for d in (7, 3)))
 
 
 def test_a_pick_the_model_cannot_render_is_refused_with_the_reason(tmp_db):
     scene = a_queued_scene(tmp_db)
     res = client.get(f"/api/queue/{scene}/quote",
-                     params={"provider": "runway", "model": "gen4_turbo", "duration": 7})
+                     params={"provider": "fal", "model": "ltx2.3", "duration": 7})
     assert res.status_code == 400
     assert res.json()["error"]["code"] == "bad_render_choice"
     assert client.get("/api/queue/999999/quote").status_code == 404
@@ -143,27 +142,24 @@ def test_another_accounts_concept_has_no_price(tmp_db):
         app.dependency_overrides[auth.current_account_id] = lambda: None
 
 
-# guards: `"generate": _generate_node_quote(...)` on the concept. The
-# Director chip read runway.estimate_usd on every account, including one
-# that can only render -- and only be billed -- somewhere else.
+# guards: `"generate": _generate_node_quote(...)` on the concept -- the
+# Director chip prices the renderer the node would actually use.
 def test_the_director_prices_the_renderer_the_node_would_actually_use(tmp_db, monkeypatch):
-    monkeypatch.delenv("RUNWAYML_API_SECRET")
-    monkeypatch.setenv("HIGGSFIELD_API_KEY_ID", "id")
-    monkeypatch.setenv("HIGGSFIELD_API_KEY_SECRET", "secret")
-    assert higgsfield.has_key(None)
     scene = a_queued_scene(tmp_db, prompt=TIMED)
     detail = client.get(f"/api/concepts/{scene}").json()
     gen = detail["generate"]
-    assert gen["provider"] == "higgsfield"
+    assert gen["provider"] == "fal"
     # ONE clip, whatever windows the prompt carries: that is what Run renders
     assert gen["timed"] is False and len(gen["durations"]) == 1
     assert gen["estimate_usd"] == pytest.approx(
-        higgsfield.estimate_cost(1, model=gen["model"], duration=gen["durations"][0]))
-    assert detail["runway"]["estimate_usd"] is not None      # the old shape is still served
+        fal.estimate_cost(1, model=gen["model"], duration=gen["durations"][0],
+                          resolution=gen["frame"]))
+    assert detail["renderer"]["estimate_usd"] is not None    # was `runway`
+    assert "runway" not in detail
 
 
 def test_no_keyed_renderer_is_said_not_priced(tmp_db, monkeypatch):
-    monkeypatch.delenv("RUNWAYML_API_SECRET")
+    monkeypatch.delenv("FAL_KEY")
     scene = a_queued_scene(tmp_db)
     assert "error" in client.get(f"/api/concepts/{scene}").json()["generate"]
 
@@ -207,7 +203,7 @@ def never_submits(monkeypatch, module):
 
 def test_the_listing_signs_and_the_approve_verifies(signing, monkeypatch):
     seen = {}
-    monkeypatch.setattr(runway, "generate_for_shot",
+    monkeypatch.setattr(fal, "generate_for_shot",
                         lambda *a, **kw: seen.update(kw) or {"ok": True, "media_url": "https://x/c.mp4"})
     scene = a_queued_scene(signing, prompt=TIMED)
     quote = card_for(scene)["quote"]
@@ -215,7 +211,7 @@ def test_the_listing_signs_and_the_approve_verifies(signing, monkeypatch):
     assert quote["signed"] is True and all(t and t.startswith("zpfq.") for t in tokens)
     assert client.get("/api/capabilities").json()["quote.sign"] is True
     res = client.post(f"/api/queue/{scene}/approve",
-                      json={"provider": "runway", "model": "gen4_turbo", "tokens": tokens})
+                      json={"provider": "fal", "model": "ltx2.3", "tokens": tokens})
     assert res.status_code == 200, res.text
     assert wait_for_job(res.json()["job_id"])["status"] == "done"
 
@@ -223,7 +219,7 @@ def test_the_listing_signs_and_the_approve_verifies(signing, monkeypatch):
 # guards: `_verify_tokens(...)` in queue_approve. THE ONE THAT MATTERS: a
 # refused quote means the adapter was never entered.
 def test_a_scene_edited_after_quoting_does_not_render(signing, monkeypatch):
-    entered = never_submits(monkeypatch, runway)
+    entered = never_submits(monkeypatch, fal)
     scene = a_queued_scene(signing)
     tokens = [r["token"] for r in card_for(scene)["quote"]["renders"]]
     concept = preprod.get_concept(scene, account_id=None)
@@ -231,7 +227,7 @@ def test_a_scene_edited_after_quoting_does_not_render(signing, monkeypatch):
     shots[0]["prompt"] += " He looks up."
     preprod.update_concept_shots(scene, {"shots": shots}, account_id=None)
     res = client.post(f"/api/queue/{scene}/approve",
-                      json={"provider": "runway", "model": "gen4_turbo", "duration": 5,
+                      json={"provider": "fal", "model": "ltx2.3", "duration": 6,
                             "tokens": tokens})
     assert res.status_code == 400
     assert res.json()["error"]["code"] == "stale_content"
@@ -243,35 +239,34 @@ def test_a_scene_edited_after_quoting_does_not_render(signing, monkeypatch):
 
 def test_a_quote_for_another_pick_does_not_render(signing, monkeypatch):
     entered = never_submits(monkeypatch, fal)
-    monkeypatch.setenv("FAL_KEY", "fake")
     scene = a_queued_scene(signing)
-    tokens = [r["token"] for r in card_for(scene)["quote"]["renders"]]   # priced on runway
+    tokens = [r["token"] for r in card_for(scene)["quote"]["renders"]]   # priced on ltx2.3
     res = client.post(f"/api/queue/{scene}/approve",
-                      json={"provider": "fal", "model": "ltx2.3", "tokens": tokens})
+                      json={"provider": "fal", "model": "kling3-turbo-pro", "tokens": tokens})
     assert res.status_code == 400
     assert res.json()["error"]["code"] == "wrong_render"
     assert "called" not in entered
 
 
 def test_a_timed_scene_needs_a_quote_for_every_shot(signing, monkeypatch):
-    entered = never_submits(monkeypatch, runway)
+    entered = never_submits(monkeypatch, fal)
     scene = a_queued_scene(signing, prompt=TIMED)
     tokens = [r["token"] for r in card_for(scene)["quote"]["renders"]]
     res = client.post(f"/api/queue/{scene}/approve",
-                      json={"provider": "runway", "model": "gen4_turbo", "tokens": tokens[:1]})
+                      json={"provider": "fal", "model": "ltx2.3", "tokens": tokens[:1]})
     assert res.status_code == 400
     assert res.json()["error"]["code"] == "missing_quote"
     assert "called" not in entered
 
 
 def test_another_tenants_quote_is_refused_and_named(signing, monkeypatch, capsys):
-    entered = never_submits(monkeypatch, runway)
+    entered = never_submits(monkeypatch, fal)
     scene = a_queued_scene(signing)
     concept = preprod.get_concept(scene, account_id=None)
     stranger = pricing.sign(pricing.quote(account_id=77, shot=concept["shots"][0], shot_id=scene,
-                                          provider="runway", model="gen4_turbo", seconds=5))
+                                          provider="fal", model="ltx2.3", seconds=6))
     res = client.post(f"/api/queue/{scene}/approve",
-                      json={"provider": "runway", "model": "gen4_turbo", "duration": 5,
+                      json={"provider": "fal", "model": "ltx2.3", "duration": 6,
                             "tokens": [stranger]})
     assert res.status_code == 400 and res.json()["error"]["code"] == "wrong_account"
     assert "wrong_account" in capsys.readouterr().err
@@ -281,13 +276,13 @@ def test_another_tenants_quote_is_refused_and_named(signing, monkeypatch, capsys
 # guards: the SigningUnconfigured branch of _quote_refusal -- 503 with the
 # command, never a 500, never a default secret
 def test_a_token_with_no_secret_is_503_with_the_command(signing, monkeypatch):
-    entered = never_submits(monkeypatch, runway)
+    entered = never_submits(monkeypatch, fal)
     scene = a_queued_scene(signing)
     tokens = [r["token"] for r in card_for(scene)["quote"]["renders"]]
     monkeypatch.delenv(pricing.SIGNING_ENV)
     assert card_for(scene)["quote"]["signed"] is False
     res = client.post(f"/api/queue/{scene}/approve",
-                      json={"provider": "runway", "model": "gen4_turbo", "duration": 5,
+                      json={"provider": "fal", "model": "ltx2.3", "duration": 6,
                             "tokens": tokens})
     assert res.status_code == 503
     assert res.json()["error"]["code"] == "signing_unconfigured"
@@ -297,7 +292,7 @@ def test_a_token_with_no_secret_is_503_with_the_command(signing, monkeypatch):
 
 # guards: `priced["signed"] or` in queue_approve (step 5)
 def test_a_billable_approve_without_a_quote_does_not_render(signing, monkeypatch):
-    entered = never_submits(monkeypatch, runway)
+    entered = never_submits(monkeypatch, fal)
     scene = a_queued_scene(signing)
     for body in (None, {}, {"tokens": []}, {"tokens": [""]}):
         res = client.post(f"/api/queue/{scene}/approve", json=body)
@@ -306,24 +301,18 @@ def test_a_billable_approve_without_a_quote_does_not_render(signing, monkeypatch
     assert "called" not in entered
 
 
-# guards: the requirement reading display()'s `signed`, not configured() alone
-def test_a_byok_render_still_approves_without_a_quote(signing, monkeypatch):
-    monkeypatch.setattr(pricing, "billable", lambda account_id, provider: False)
-    seen = {}
-    monkeypatch.setattr(runway, "generate_for_shot",
-                        lambda *a, **kw: seen.update(kw) or {"ok": True, "media_url": "https://x/c.mp4"})
+# guards: the requirement reading display()'s `signed`. Since BYOK went
+# (2026-09-26) every render is billable, so a signing server signs every card.
+def test_every_card_is_signed_when_the_server_can_sign(signing):
     scene = a_queued_scene(signing)
     quote = card_for(scene)["quote"]
-    assert quote["byok"] is True and quote["signed"] is False
-    assert quote["renders"][0]["token"] is None
-    res = client.post(f"/api/queue/{scene}/approve")
-    assert res.status_code == 200 and wait_for_job(res.json()["job_id"])["status"] == "done"
-    assert seen["approved"] is True
+    assert quote["signed"] is True
+    assert quote["renders"][0]["token"] and quote["renders"][0]["credits"] > 0
 
 
 def test_a_server_with_no_secret_is_not_locked_out(tmp_db, monkeypatch):
     seen = {}
-    monkeypatch.setattr(runway, "generate_for_shot",
+    monkeypatch.setattr(fal, "generate_for_shot",
                         lambda *a, **kw: seen.update(kw) or {"ok": True, "media_url": "https://x/c.mp4"})
     scene = a_queued_scene(tmp_db)
     res = client.post(f"/api/queue/{scene}/approve")
@@ -332,17 +321,26 @@ def test_a_server_with_no_secret_is_not_locked_out(tmp_db, monkeypatch):
 
 # guards: the _quote_required line in shot_generate
 def test_the_boards_render_button_sends_a_billable_render_to_the_queue(signing, monkeypatch):
-    entered = never_submits(monkeypatch, runway)
+    entered = never_submits(monkeypatch, fal)
     scene = a_queued_scene(signing)
     res = client.post(f"/api/concepts/{scene}/shots/1/generate")
     assert res.status_code == 400 and res.json()["error"]["code"] == "missing_quote"
     assert "Queue" in res.json()["error"]["message"]
     assert "called" not in entered
-    # BYOK renders there as it always did
-    monkeypatch.setattr(pricing, "billable", lambda account_id, provider: False)
-    monkeypatch.setattr(runway, "generate_for_shot",
-                        lambda *a, **kw: {"ok": True, "media_url": "https://x/c.mp4"})
-    assert client.post(f"/api/concepts/{scene}/shots/1/generate").status_code == 200
+
+
+def test_the_boards_render_button_renders_on_fal_where_nothing_is_signed(tmp_db, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(fal, "generate_for_shot",
+                        lambda *a, **kw: seen.update(kw) or {"ok": True, "media_url": "https://x/c.mp4"})
+    scene = a_queued_scene(tmp_db, tool="KLING")
+    res = client.post(f"/api/concepts/{scene}/shots/1/generate")
+    assert res.status_code == 200 and wait_for_job(res.json()["job_id"])["status"] == "done"
+    assert seen["model"] == fal.PLATFORM_MODELS["kling"] and seen["approved"] is True
+    # and with no operator key it says so rather than rendering nowhere
+    monkeypatch.delenv("FAL_KEY")
+    res = client.post(f"/api/concepts/{scene}/shots/1/generate")
+    assert res.status_code == 503 and "FAL_KEY" in res.json()["error"]["message"]
 
 
 # guards: the _quote_required line in generate_run -- before the job, so no
@@ -406,18 +404,18 @@ def test_the_director_run_carries_its_quote(signing, monkeypatch):
 
 def test_a_whole_scenes_verified_quote_is_handed_to_its_render(signing, monkeypatch):
     seen = []
-    monkeypatch.setattr(runway, "generate_for_shot",
+    monkeypatch.setattr(fal, "generate_for_shot",
                         lambda *a, **kw: seen.append(kw) or {"ok": True, "media_url": "https://x/c.mp4"})
     scene = a_queued_scene(signing)
     shown = card_for(scene)["quote"]
     res = client.post(f"/api/queue/{scene}/approve",
-                      json={"provider": "runway", "model": shown["model"],
+                      json={"provider": "fal", "model": shown["model"],
                             "tokens": [r["token"] for r in shown["renders"]]})
     assert res.status_code == 200, res.text
     assert wait_for_job(res.json()["job_id"])["status"] == "done"
     quote = seen[0]["quote"]
     assert isinstance(quote, pricing.Quote)
-    assert (quote.shot_id, quote.part, quote.provider) == (scene, None, "runway")
+    assert (quote.shot_id, quote.part, quote.provider) == (scene, None, "fal")
     assert quote.credits == shown["renders"][0]["credits"]
     assert seen[0]["approved"] is True                  # the click is still the click
 
@@ -425,14 +423,14 @@ def test_a_whole_scenes_verified_quote_is_handed_to_its_render(signing, monkeypa
 def test_each_shot_of_a_timed_scene_is_handed_its_own_quote(signing, monkeypatch):
     from src import timeline
     seen = []
-    monkeypatch.setattr(runway, "generate_for_shot",
+    monkeypatch.setattr(fal, "generate_for_shot",
                         lambda *a, **kw: seen.append(kw) or {"ok": True, "media_url": "https://x/c.mp4"})
     scene = a_queued_scene(signing, prompt=TIMED)
     shown = card_for(scene)["quote"]
     parts = [{"n": r["part"], "seconds": r["seconds"]} for r in shown["renders"]]
     monkeypatch.setattr(timeline, "ensure", lambda *a, **kw: {"parts": parts})
     res = client.post(f"/api/queue/{scene}/approve",
-                      json={"provider": "runway", "model": shown["model"],
+                      json={"provider": "fal", "model": shown["model"],
                             "tokens": [r["token"] for r in shown["renders"]]})
     assert res.status_code == 200, res.text
     assert wait_for_job(res.json()["job_id"])["status"] == "done"
@@ -445,7 +443,7 @@ def test_a_render_nobody_quoted_reaches_the_adapter_as_it_always_did(tmp_db, mon
     """No secret -> no tokens -> no Quote: the adapter is called without
     the keyword at all, so the estimate stays the fallback."""
     seen = []
-    monkeypatch.setattr(runway, "generate_for_shot",
+    monkeypatch.setattr(fal, "generate_for_shot",
                         lambda *a, **kw: seen.append(kw) or {"ok": True, "media_url": "https://x/c.mp4"})
     scene = a_queued_scene(tmp_db)
     body = client.post(f"/api/queue/{scene}/approve").json()

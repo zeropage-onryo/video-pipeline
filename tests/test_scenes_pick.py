@@ -561,7 +561,7 @@ def test_pending_is_what_is_picked_and_not_yet_rendered(tmp_db):
 
     body = client.get("/api/queue/pending?brand=zeropage").json()
     assert [c["id"] for c in body["items"]] == [picked]
-    assert "spend_ok" in body["runway"]       # the gate is stated, not guessed at
+    assert "spend_ok" in body["renderer"]     # the gate is stated, not guessed at
 
 
 def test_a_parked_scene_is_pending_but_a_merely_keyframed_one_is_not(tmp_db):
@@ -590,7 +590,7 @@ def test_approving_something_not_in_the_queue_is_refused(tmp_db, monkeypatch):
     """The gate did not go away when approval became the pick: a concept
     that is neither parked by the chain nor picked on the board still
     cannot be rendered."""
-    monkeypatch.setattr("src.runway.has_key", lambda account_id=None: True)
+    monkeypatch.setattr("src.fal.has_key", lambda account_id=None: True)
     scene_id = a_scene(tmp_db)
     res = client.post(f"/api/queue/{scene_id}/approve")
     assert res.status_code == 400
@@ -645,9 +645,9 @@ def test_approving_an_ungrounded_scene_is_refused_before_it_spends(tmp_db, monke
     lose its refs between the two requests -- so the check has to sit
     where the money is actually spent.
     """
-    monkeypatch.setattr("src.runway.has_key", lambda account_id=None: True)
+    monkeypatch.setattr("src.fal.has_key", lambda account_id=None: True)
     called = []
-    monkeypatch.setattr("src.runway.generate_for_shot",
+    monkeypatch.setattr("src.fal.generate_for_shot",
                         lambda *a, **k: called.append(a) or {"ok": True})
 
     blind = a_scene(tmp_db, "no photos", refs=[])
@@ -664,7 +664,7 @@ def test_the_prompt_is_not_re_judged_at_the_queue(tmp_db, monkeypatch):
     because score_prompts put it there; re-judging it here would be a
     different opinion from the one that already ran, at the one place
     where disagreeing is expensive."""
-    monkeypatch.setattr("src.runway.has_key", lambda account_id=None: True)
+    monkeypatch.setattr("src.fal.has_key", lambda account_id=None: True)
     thin = a_scene(tmp_db, "thin prompt", prompt="x")
     preprod.set_shot_parked(thin, 1, "keyframe rendered", dsn=tmp_db,
                             account_id=None)
@@ -678,15 +678,15 @@ def test_approving_one_take_leaves_its_siblings_in_the_queue(tmp_db, monkeypatch
     picking was a separate bulk step done first. Now that approval IS
     the pick, that inference would archive takes 2-4 out from under you
     the moment you approved take 1 -- and racily, since it ran after
-    Runway returned. Rejecting is the only thing that archives now."""
+    the render returned. Rejecting is the only thing that archives now."""
     takes = [preprod.save_concept(
-        {"title": f"take{i}", "shots": [{"n": 1, "source": "AI", "tool": "RUNWAY",
+        {"title": f"take{i}", "shots": [{"n": 1, "source": "AI", "tool": "LTX",
                                          "prompt": "p", "refs": [SEED_REF]}]},
         brand="zeropage", spark="night ride", dsn=tmp_db, account_id=None) for i in range(3)]
     for scene_id in takes:
         preprod.set_shot_parked(scene_id, 1, "keyframe rendered", dsn=tmp_db, account_id=None)
 
-    monkeypatch.setattr("src.runway.has_key", lambda account_id=None: True)
+    monkeypatch.setattr("src.fal.has_key", lambda account_id=None: True)
     rendered = {}
 
     def fake_render(concept_id, shot_n, db_path=None, resolve_photo=None,
@@ -703,7 +703,7 @@ def test_approving_one_take_leaves_its_siblings_in_the_queue(tmp_db, monkeypatch
                                    dsn=db_path, account_id=account_id)
         return {"ok": True}
 
-    monkeypatch.setattr("src.runway.generate_for_shot", fake_render)
+    monkeypatch.setattr("src.fal.generate_for_shot", fake_render)
 
     job = wait_for_job(client.post(f"/api/queue/{takes[0]}/approve").json()["job_id"])
     assert job["status"] == "done", job.get("error")
@@ -718,14 +718,10 @@ def test_approving_one_take_leaves_its_siblings_in_the_queue(tmp_db, monkeypatch
 
 
 def test_approving_with_no_renderer_key_at_all_says_so(tmp_db, monkeypatch):
-    """EVERY vendor, not just Runway (2026-09-11): approving falls back to
-    whatever the account can render, so one keyed vendor is a render and
-    not a refusal. The suite inherits the operator's own .env on his
-    machine, where Higgsfield IS keyed -- asserting "unconfigured" means
-    saying so for all four, or this passes in CI and fails on his Mac."""
-    from src import fal, higgsfield, runway, veo
-    for vendor in (runway, fal, higgsfield, veo):
-        monkeypatch.setattr(vendor, "has_key", lambda account_id=None: False)
+    """The suite inherits the operator's own .env on his machine, so
+    "unconfigured" has to be asserted, not assumed."""
+    from src import fal
+    monkeypatch.setattr(fal, "has_key", lambda account_id=None: False)
     scene_id = a_scene(tmp_db)
     client.post(f"/api/concepts/{scene_id}/pick", json={"picked": True})
     assert client.post(f"/api/queue/{scene_id}/approve").status_code == 503

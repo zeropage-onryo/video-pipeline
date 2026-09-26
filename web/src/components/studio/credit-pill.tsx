@@ -12,7 +12,7 @@
                    so, rather than printing a number that never moves.
      - a number -- `available`: lots minus the holds renders in flight
                    still carry. Red at zero, because at zero the Queue
-                   refuses (charge.refusal), key on file or not.
+                   refuses (charge.refusal).
      - nothing  -- signed out, no account, or an API from before the route:
                    the pill is simply not drawn. A balance that failed to
                    load is not a balance of 0. */
@@ -121,7 +121,7 @@ export function CreditPill({ balance, onError }: { balance: Balance | null; onEr
               ) : null}
             </dl>
             {empty ? (
-              <p className="zcredit-note">At zero, approving a render in the Queue is refused — even with your own key on file.</p>
+              <p className="zcredit-note">At zero, approving a render in the Queue is refused until you add credits.</p>
             ) : null}
             <div className="zcredit-actions">
               <Link href="/pricing" className="primary" onClick={() => setOpen(false)}>
