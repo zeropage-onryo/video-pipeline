@@ -90,7 +90,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from . import account_keys, generative, ledger
+from . import generative, ledger
 from . import charge as charging
 from .shot import Shot
 
@@ -155,113 +155,144 @@ def _price_env(key: str, prices: dict[str, float]) -> dict[str, float]:
     return {resolution: float(override) for resolution in prices}
 
 
+# RE-CHECKED 2026-09-26 against each model's API schema page (the `/api`
+# tab, not the marketing page), the day fal became the only video renderer
+# (docs/tasks/task-fal-only.md). Three things the 2026-09-08 table had
+# wrong, every one of which would have failed the FIRST live render after a
+# queue wait: LTX-2.3 takes duration as an enum of 6/8/10 (the table said a
+# 1-20 span, and the default of 5 was not legal); Wan 3.0's image field is
+# `start_image_url`, not `image_url`; and Kling v3 turbo pro's i2v schema
+# carries neither `negative_prompt` nor `cfg_scale`, while its durations run
+# 3-15 rather than 5-10.
+#
+# `durations` is always the (min, max) BOUNDS. `duration_values`, when
+# present, is the ENUM inside them -- the only lengths the endpoint accepts
+# -- and build_body fits a request UP to the nearest one (a 5s window is a
+# 6s LTX clip, trimmed in the edit: timeline.fit_seconds' rule).
+# `duration_wire` is how the value travels: fal's enums are strings ("6"),
+# Veo's carry a unit ("8s"), Wan's field is a plain integer.
+# `image_field` is the i2v field name when it is not `image_url`.
 VIDEO_MODELS: dict[str, dict] = {
-    # $0.06/s at 1080p makes this the cheapest real clip in the whole
-    # repo (5s = $0.30, against runway's $0.25 and higgsfield's $0.40),
-    # which is why it is DEFAULT_MODEL. 9:16 native.
+    # $0.06/s at 1080p makes this the cheapest real clip in the repo, which
+    # is why it is DEFAULT_MODEL. NOTE: there is no 720p tier -- 1080p is
+    # LTX-2.3's floor -- and no 5s clip: 6s is its shortest, so the cheapest
+    # possible render here is 6s x $0.06 = $0.36.
     #
-    # THE WEIGHTS ARE OPEN, THE LICENSE IS NOT APACHE-2.0 (this comment
-    # said Apache-2.0 until 2026-09-09; it was never true for any LTX-2
-    # release). It is the LTX-2 Community License: free commercial use
-    # INCLUDING hosting for third parties (SaaS) under $10,000,000
-    # annual revenue, counted across all affiliates and entities under
-    # common control; a paid agreement above that line. Three terms that
-    # bind a fine-tune rather than a rented API call, which is the only
-    # reason this belongs in a price table: a Derivative -- explicitly
-    # including fine-tuned weights AND models trained on LTX Outputs --
-    # must be distributed under THIS license, the use restrictions
-    # (Attachment A) must be passed to anyone we distribute or serve to,
-    # and modified files must carry a notice saying they were changed.
-    # Nothing here constrains billing fal for a render; all of it
-    # constrains shipping a LoRA trained on our own footage.
-    # https://huggingface.co/Lightricks/LTX-2.3/blob/main/LICENSE
-    # checked 2026-09-09
+    # THE WEIGHTS ARE OPEN, THE LICENSE IS NOT APACHE-2.0. It is the LTX-2
+    # Community License: free commercial use INCLUDING hosting for third
+    # parties under $10,000,000 annual revenue across affiliates; a paid
+    # agreement above that. A Derivative -- fine-tuned weights AND models
+    # trained on LTX Outputs -- must ship under THIS license with its use
+    # restrictions passed on. Nothing here constrains billing fal for a
+    # render; all of it constrains shipping a LoRA trained on our footage.
+    # https://huggingface.co/Lightricks/LTX-2.3/blob/main/LICENSE (2026-09-09)
     "ltx2.3": {
         "t2v": "fal-ai/ltx-2.3/text-to-video",
         "i2v": "fal-ai/ltx-2.3/image-to-video",
-        "params": ("duration", "resolution", "aspect_ratio", "negative_prompt"),
-        "durations": (1, 20),
+        "params": ("duration", "resolution", "aspect_ratio"),
+        "durations": (6, 10),
+        "duration_values": (6, 8, 10),
+        "duration_wire": "str",
         "resolutions": ("1080p", "1440p", "2160p"),
         "default_resolution": "1080p",
         "prices": {"1080p": 0.06, "1440p": 0.12, "2160p": 0.24},
         "platform": "ltx",
-        "checked": "2026-09-08",
-        "source": "https://fal.ai/models/fal-ai/ltx-2.3/image-to-video",
+        "checked": "2026-09-26",
+        "source": "https://fal.ai/models/fal-ai/ltx-2.3/image-to-video/api",
     },
     # NOTE THE NAMESPACE: `alibaba/`, not `fal-ai/`. The older
     # fal-ai/wan-i2v and fal-ai/wan-pro routes still exist and are a
-    # different, older model -- do not "fix" this prefix.
+    # different, older model -- do not "fix" this prefix. The endpoint's own
+    # default resolution is 1080p; ours is 720p, the house default.
     "wan3": {
         "t2v": "alibaba/wan-3.0/text-to-video",
         "i2v": "alibaba/wan-3.0/image-to-video",
         "params": ("duration", "resolution", "aspect_ratio"),
         "durations": (2, 10),
+        "duration_wire": "int",
+        "image_field": "start_image_url",
         "resolutions": ("480p", "720p", "1080p"),
         "default_resolution": "720p",
         "prices": {"480p": 0.05, "720p": 0.10, "1080p": 0.20},
         "platform": "wan",
-        "checked": "2026-09-08",
-        "source": "https://fal.ai/models/alibaba/wan-3.0/image-to-video",
+        "checked": "2026-09-26",
+        "source": "https://fal.ai/models/alibaba/wan-3.0/image-to-video/api",
     },
     # Kling's current turbo pro. $0.14/s flat -- fal lists no per-
-    # resolution rate card for this one, so the single key is honest
-    # rather than three copies of the same number.
+    # resolution rate card and the endpoint takes no resolution field, so
+    # the single key is honest rather than three copies of one number.
     "kling3-turbo-pro": {
         "t2v": "fal-ai/kling-video/v3/turbo/pro/text-to-video",
         "i2v": "fal-ai/kling-video/v3/turbo/pro/image-to-video",
-        "params": ("duration", "aspect_ratio", "negative_prompt", "cfg_scale"),
-        "durations": (5, 10),
+        "params": ("duration", "aspect_ratio"),
+        "durations": (3, 15),
+        "duration_wire": "str",
         "resolutions": ("1080p",),
         "default_resolution": "1080p",
         "prices": {"1080p": 0.14},
         "platform": "kling",
-        "checked": "2026-09-08",
-        "source": "https://fal.ai/models/fal-ai/kling-video/v3/turbo/pro/image-to-video",
+        "checked": "2026-09-26",
+        "source": "https://fal.ai/models/fal-ai/kling-video/v3/turbo/pro/image-to-video/api",
     },
-    # Seedance 2.0's fast tier: $0.2419/s against the standard tier's
-    # $0.3024/s, capped at 720p. 720p IS the house format's ceiling for a
-    # 9:16 social clip, so paying 25% more for a resolution nothing
-    # downstream uses would be spending for the invoice's sake. The
-    # standard tier is the entry below when someone wants 1080p.
+    # Seedance 2.0's fast tier: $0.2419/s, capped at 720p. 720p IS the house
+    # format's ceiling for a 9:16 social clip, so this is the seedance
+    # platform's binding; the standard tier below is the one that goes to
+    # 1080p, at more than twice the rate.
     "seedance2-fast": {
         "t2v": "bytedance/seedance-2.0/fast/text-to-video",
         "i2v": "bytedance/seedance-2.0/fast/image-to-video",
-        "params": ("duration", "resolution", "aspect_ratio", "generate_audio", "seed"),
+        "params": ("duration", "resolution", "aspect_ratio"),
         "durations": (4, 15),
+        "duration_wire": "str",
         "resolutions": ("480p", "720p"),
         "default_resolution": "720p",
         "prices": {"480p": 0.2419, "720p": 0.2419},
         "platform": "seedance",
-        "checked": "2026-09-08",
-        "source": "https://fal.ai/models/bytedance/seedance-2.0/image-to-video",
+        "checked": "2026-09-26",
+        "source": "https://fal.ai/models/bytedance/seedance-2.0/fast/image-to-video/api",
     },
+    # 720p reads $0.3034/s and 1080p $0.682/s on the text-to-video rate
+    # card ("with audio"); the image-to-video page quotes $0.3024/s flat.
+    # The higher of the two is the one priced, so a quote is never under
+    # the invoice. 1080p is the premium band (providers.BANDS).
     "seedance2": {
         "t2v": "bytedance/seedance-2.0/text-to-video",
         "i2v": "bytedance/seedance-2.0/image-to-video",
-        "params": ("duration", "resolution", "aspect_ratio", "generate_audio", "seed"),
+        "params": ("duration", "resolution", "aspect_ratio"),
         "durations": (4, 15),
+        "duration_wire": "str",
         "resolutions": ("480p", "720p", "1080p"),
         "default_resolution": "720p",
-        # 720p i2v is $0.3024/s; the 1080p t2v rate card reads $0.682/s.
-        "prices": {"480p": 0.3024, "720p": 0.3024, "1080p": 0.682},
+        "prices": {"480p": 0.3034, "720p": 0.3034, "1080p": 0.682},
         "platform": "seedance",
-        "checked": "2026-09-08",
-        "source": "https://fal.ai/models/bytedance/seedance-2.0/image-to-video",
+        "checked": "2026-09-26",
+        "source": "https://fal.ai/models/bytedance/seedance-2.0/text-to-video",
+    },
+    # Veo 3.1 through fal (2026-09-26). It was deliberately absent while
+    # src/veo.py owned the platform on the Gemini key -- two adapters, one
+    # daily cap, two invoices. veo.py is gone, so fal is the one door to it.
+    # $0.40/s at 720p or 1080p WITH audio, which is the endpoint's default
+    # (generate_audio: true); $0.20/s without. Audio is what Veo is bought
+    # for, so the audio rate is the one priced. Durations are an enum with a
+    # unit ("4s"/"6s"/"8s"). 4k ($0.60/s) is left out on purpose.
+    "veo3.1": {
+        "t2v": "fal-ai/veo3.1",
+        "i2v": "fal-ai/veo3.1/image-to-video",
+        "params": ("duration", "resolution", "aspect_ratio", "negative_prompt"),
+        "durations": (4, 8),
+        "duration_values": (4, 6, 8),
+        "duration_wire": "seconds",
+        "resolutions": ("720p", "1080p"),
+        "default_resolution": "720p",
+        "prices": {"720p": 0.40, "1080p": 0.40},
+        "platform": "veo",
+        "checked": "2026-09-26",
+        "source": "https://fal.ai/models/fal-ai/veo3.1/image-to-video",
     },
 }
 
 for _key, _spec in VIDEO_MODELS.items():
     _spec["prices"] = _price_env(_key, _spec["prices"])
-
-# DELIBERATELY ABSENT: fal-ai/veo3.1/image-to-video ($0.40/s with audio at
-# 1080p, checked 2026-09-08, https://fal.ai/models/fal-ai/veo3.1/image-to-video).
-# It exists and it works, but veo has its own adapter (src/veo.py) on the
-# Gemini key, and a VEO row rendered here would land in the generations
-# table under tool "veo" -- silently sharing veo.py's daily cap with a
-# different vendor's invoice. Two adapters, one cap, two credit cards is
-# the kind of thing that is only discovered by a surprise bill. If fal
-# ever becomes the cheaper door to Veo, move the whole platform, don't
-# add a second one.
 
 MODELS = tuple(VIDEO_MODELS)
 DEFAULT_MODEL = os.environ.get("FAL_MODEL", "ltx2.3")
@@ -283,6 +314,8 @@ PLATFORM_MODELS: dict[str, str] = {
     "ltx": "ltx2.3",
     "wan": "wan3",
     "seedance": "seedance2-fast",
+    # Veo through fal since 2026-09-26: the platform survived veo.py.
+    "veo": "veo3.1",
 }
 # What generations_today() counts for the FAL daily cap: every tool name
 # this adapter can write. NOT "fal" -- a row is logged under the platform
@@ -328,6 +361,38 @@ def model_for_platform(platform: str) -> str:
     return model
 
 
+def fit_duration(model: str, duration) -> int:
+    """The length this model will actually render for a request of
+    `duration` seconds: clamped into its bounds and, for a model that takes
+    an enum of lengths, fitted UP to the nearest legal one (the largest when
+    nothing is long enough). Up, never down -- a clip longer than the window
+    is trimmed in the edit, a shorter one leaves a hole in it. Pure, and the
+    one place the rule lives: build_body sends this and estimate_cost prices
+    it, so the invoice and the quote are about the same clip."""
+    spec = model_spec(model)
+    low, high = spec["durations"]
+    try:
+        seconds = int(duration)
+    except (TypeError, ValueError):
+        seconds = DEFAULT_DURATION
+    seconds = int(min(max(seconds, low), high))
+    values = spec.get("duration_values")
+    if values:
+        seconds = next((v for v in sorted(values) if v >= seconds), max(values))
+    return seconds
+
+
+def _duration_wire(model: str, seconds: int):
+    """How the length travels on the wire: fal's duration enums are
+    strings ("6"), Veo's carry a unit ("8s"), Wan takes a bare integer."""
+    kind = model_spec(model).get("duration_wire", "int")
+    if kind == "seconds":
+        return f"{seconds}s"
+    if kind == "str":
+        return str(seconds)
+    return int(seconds)
+
+
 def build_body(prompt: str, *, model: str = DEFAULT_MODEL,
                image_url: Optional[str] = None, duration: int = DEFAULT_DURATION,
                aspect_ratio: str = DEFAULT_ASPECT,
@@ -336,11 +401,14 @@ def build_body(prompt: str, *, model: str = DEFAULT_MODEL,
     """(model_id, json body) for one render -- pure, so the entire request
     shape is testable without spending a cent.
 
-    duration is clamped into the model's own range rather than sent as
-    given: every one of these endpoints rejects an out-of-range value, and
-    a refused request that cost a queue wait teaches nothing. The cut wants
+    duration is FITTED (fit_duration) rather than sent as given: every one
+    of these endpoints rejects an out-of-range or off-enum value, and a
+    refused request that cost a queue wait teaches nothing. The cut wants
     what it wants; the tool gives the nearest it has, the same contract
     Shot.duration_s has always had.
+
+    The image goes in the model's own field (`image_field`, default
+    `image_url` -- Wan 3.0 calls it `start_image_url`).
 
     aspect_ratio is sent on text-to-video ONLY. Handed a keyframe, all of
     these models derive the frame from the image, and a 16:9 default
@@ -352,10 +420,9 @@ def build_body(prompt: str, *, model: str = DEFAULT_MODEL,
     allowed = spec["params"]
     body: dict = {"prompt": prompt}
     if image_url:
-        body["image_url"] = image_url
+        body[spec.get("image_field", "image_url")] = image_url
     if "duration" in allowed:
-        low, high = spec["durations"]
-        body["duration"] = int(min(max(int(duration), low), high))
+        body["duration"] = _duration_wire(model, fit_duration(model, duration))
     if "aspect_ratio" in allowed and not image_url:
         body["aspect_ratio"] = aspect_ratio
     if "resolution" in allowed:
@@ -368,15 +435,21 @@ def build_body(prompt: str, *, model: str = DEFAULT_MODEL,
 # --------------------------------------------------------------------------
 # credentials, gates, cost
 # --------------------------------------------------------------------------
+# THE OPERATOR'S KEY, AND ONLY IT (2026-09-26, Mike's call:
+# docs/tasks/task-fal-only.md). BYOK is gone -- a customer's own key paid
+# the provider while the operator paid for their Gemini, Nano, storage and
+# compute, and the render took no hold. Every render now goes through fal
+# on FAL_KEY and holds credits. `account_id` stays in the signatures
+# because every caller passes it; it no longer chooses a credential.
+KEY_ENV = ("FAL_KEY", "FAL_API_KEY")
+# What every generations row records as `key_source`: the operator's key.
+KEY_SOURCE = "env"
+
+
 def _credential(account_id: Optional[int] = None) -> Optional[str]:
-    """This account's own stored fal key (BYOK) first, then FAL_KEY from
-    the environment -- account_keys.key_for's whole job. One secret, not
-    higgsfield's pair, so the tuple-of-tuples in PROVIDER_ENV_FALLBACK has
-    exactly one field."""
-    creds = account_keys.key_for(account_id, "fal")
-    if creds:
-        return creds.get("api_key")
-    return None
+    """FAL_KEY from the environment (FAL_API_KEY accepted as the spelling
+    people reach for by habit). Never an account's stored key."""
+    return next((os.environ[n] for n in KEY_ENV if os.environ.get(n)), None)
 
 
 def has_key(account_id: Optional[int] = None) -> bool:
@@ -426,10 +499,19 @@ def spend_approved(approved: Optional[bool] = None, quote=None) -> bool:
 
 def price_per_second(model: str = DEFAULT_MODEL,
                      resolution: Optional[str] = None) -> float:
+    """USD per second of output at this resolution. A model that takes a
+    resolution REFUSES one it has no rate for rather than pricing it at the
+    default tier: that fallback is exactly how a 1080p Seedance clip
+    ($0.682/s) would quote at the 720p rate ($0.3034/s). A model that takes
+    no resolution field (Kling) has one rate whatever is asked."""
     spec = model_spec(model)
     prices = spec["prices"]
-    return prices.get(resolution or spec["default_resolution"],
-                      prices[spec["default_resolution"]])
+    tier = resolution or spec["default_resolution"]
+    if tier in prices:
+        return prices[tier]
+    if "resolution" not in spec["params"]:
+        return prices[spec["default_resolution"]]
+    raise ValueError(f"{model} has no {tier!r} rate -- one of {sorted(prices)}")
 
 
 def estimate_cost(n: int, *, model: str = DEFAULT_MODEL,
@@ -443,7 +525,7 @@ def estimate_cost(n: int, *, model: str = DEFAULT_MODEL,
     the model RETURNS, and a model asked for 5s that hands back 5.2s bills
     the 5.2. Rounded to the cent the way every other adapter's does.
     """
-    seconds = min(max(int(duration), 1), model_spec(model)["durations"][1])
+    seconds = fit_duration(model, duration)
     return round(n * price_per_second(model, resolution) * seconds, 2)
 
 
@@ -475,7 +557,7 @@ def _safe_error(e: Exception, account_id: Optional[int] = None) -> str:
     except Exception:
         secret = None
     if secret:
-        text = text.replace(secret, account_keys.redact("fal"))
+        text = text.replace(secret, "<fal key redacted>")
     return re.sub(r"(Key\s+)[A-Za-z0-9_\-.:]+", r"\1<redacted>", text)
 
 
@@ -700,6 +782,12 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
             f"(~${estimate_cost(1, model=model, duration=duration, resolution=resolution)} "
             f"at fal, {model}). There is no free app to fall back to here."
         )
+    # No key, no render -- and no hold. Checked BEFORE charge.take(): a
+    # render that cannot reach fal must not take credit from anyone, even
+    # for the moment a release would take to give it back. The HTTP layer
+    # would refuse too, but only after the hold.
+    if not has_key(account_id):
+        raise RuntimeError("FAL_KEY not set (create one at fal.ai/dashboard/keys)")
     # Name-swap first, THEN build the body: what we check has to be what
     # we send.
     prompt = safe_prompt(prompt, db_path)
@@ -714,7 +802,7 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
             account_id, provider="fal", ref=out_path.name,
             estimate_usd=estimate_cost(1, model=model, duration=duration,
                                        resolution=resolution),
-            key_source=account_keys.key_source(account_id, "fal", db_path),
+            key_source=KEY_SOURCE,
             dsn=db_path)
     charge.take()          # InsufficientCredit raises HERE: nothing submitted
     charge.submitted()     # the last line before the provider call
@@ -867,7 +955,7 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *,
             # This layer writes the row, so this layer builds the Charge
             # (src/charge.py) -- see runway.generate_candidates. The ref is
             # NOT the file name: cand1.mp4 repeats every run.
-            key_source = account_keys.key_source(account_id, "fal", db_path)
+            key_source = KEY_SOURCE
             charge = charging.Charge(
                 account_id, provider="fal", ref=charging.attempt_ref(out_path),
                 estimate_usd=estimate_cost(1, model=model, duration=duration,
@@ -992,7 +1080,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"c{concept_id}-s{shot_n}{f'-p{part}' if part else ''}-{stamp}.mp4"
-        key_source = account_keys.key_source(account_id, "fal", db_path)
+        key_source = KEY_SOURCE
         charge = charging.Charge(
             account_id, provider="fal", ref=out_path.name,
             estimate_usd=estimate_cost(1, model=model, duration=duration,
@@ -1091,7 +1179,7 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"wf-{stamp}.mp4"
-        key_source = account_keys.key_source(account_id, "fal", db_path)
+        key_source = KEY_SOURCE
         charge = charging.Charge(
             account_id, provider="fal", ref=out_path.name,
             estimate_usd=estimate_cost(1, model=model),
@@ -1174,8 +1262,7 @@ def generate_image_from_prompt(prompt: str, *, db_path=None, http=None,
         generation_id = generative.record_generation(
             shot_row_id, IMAGE_LOG_TOOL, prompt,
             params={"provider": "fal", "model": model, "source": "workflow",
-                    "key_source": account_keys.key_source(
-                        account_id, "fal", db_path)},
+                    "key_source": KEY_SOURCE},
             output_path=str(out_path),
             cost_usd=estimate_image_cost(1),
             **kwargs,

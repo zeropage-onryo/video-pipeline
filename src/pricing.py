@@ -10,15 +10,17 @@ the Director's chip, which priced every node at Runway's default whatever
 renderer the account would actually spend on. Two implementations of a
 price is how a person is shown one number and charged another.
 
-TWO LAYERS, and the split is the BYOK rule:
+TWO LAYERS:
 
-  estimate()  what the PROVIDER will charge for this render. Always
-              answers, because a customer rendering on their own key
-              still wants to know what their own provider will bill.
-  quote()     what WE will charge, in credits. None on BYOK: that render
-              is already paid for at the provider, and a price on a page
-              that never becomes a ledger entry is a lie with a number
-              in it (ledger.is_billable is the one rule; this asks it).
+  estimate()  what the PROVIDER (fal) will charge for this render: model x
+              resolution x seconds off fal.VIDEO_MODELS' dated rate card.
+  quote()     what WE will charge, in credits: that estimate x MARKUP,
+              rounded up to whole credits, never under CREDIT_FLOOR.
+
+Since 2026-09-26 every render is quoted: BYOK is gone (docs/tasks/
+task-fal-only.md), so there is no render "already paid for at the
+provider" any more -- every video render runs on the operator's fal key
+and holds credit.
 
 What this module deliberately does NOT do:
 
@@ -73,9 +75,14 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from fractions import Fraction
 from typing import Optional
 
-from . import account_keys, ledger, providers, timeline
+from . import ledger, providers, timeline
 
-PRICING_VERSION = "2026-09-18-video-v2"
+# v3 (2026-09-26): fal is the only renderer and a render is priced by
+# model + RESOLUTION + seconds (Seedance 2.0 is $0.3034/s at 720p and
+# $0.682/s at 1080p). Every v2 token was minted for a renderer or a band
+# that no longer exists, so v2 is retired, not carried: an old signed
+# quote refuses as `retired_pricing` and the card re-quotes.
+PRICING_VERSION = "2026-09-26-fal-v3"
 # A token minted under a version not listed here is refused as
 # `retired_pricing`: prices changed, re-quote. Retire a version by removing
 # it, never by changing what it means.
@@ -378,8 +385,9 @@ def _part_window(shot: dict, part: int):
     raise PricingRefused("no_such_part", f"this scene has no shot {part}")
 
 
-def _check_band(provider: str, model: str, seconds: int, tier: Optional[str]) -> None:
-    band = providers.band_for(provider, model)
+def _check_band(provider: str, model: str, seconds: int, tier: Optional[str],
+                frame: Optional[str] = None) -> None:
+    band = providers.band_for(provider, model, frame)
     if tier is not None and providers.TIERS.index(band.tier) > providers.TIERS.index(tier):
         # REFUSED WITH THE TIER NAMED, never quietly downgraded: a silent
         # downgrade is a cheaper render than the one that was picked, and
@@ -416,7 +424,8 @@ def estimate(*, account_id: Optional[int], shot: dict, part: Optional[int] = Non
         axis = providers.model_options(base["provider"], base["model"])["duration"]
         seconds = timeline.fit_seconds(axis, window)
     choice = providers.check_render_choice(name, wanted, seconds, frame)
-    _check_band(choice["provider"], choice["model"], int(choice["duration"]), tier)
+    _check_band(choice["provider"], choice["model"], int(choice["duration"]), tier,
+                choice["frame"])
     return Estimate(provider=choice["provider"], model=choice["model"],
                     seconds=int(choice["duration"]), frame=str(choice["frame"]),
                     part=part, provider_usd_micros=usd_micros(choice["estimate_usd"]))
@@ -450,18 +459,19 @@ def estimate_scene(*, account_id: Optional[int], shot: dict,
 # --------------------------------------------------------------------------
 
 def billable(account_id: Optional[int], provider: str) -> bool:
-    """Would a render on this vendor be debited? False on the account's
-    own stored key. The rule itself is ledger.is_billable's; an
-    unreadable credential reads as billable there, on purpose."""
-    return ledger.is_billable(account_keys.key_source(account_id, provider))
+    """Would a render on this vendor be debited? Always, since BYOK was
+    removed on 2026-09-26 -- the rule is still ledger.is_billable's, asked
+    here with no lane marker because a Queue render never carries one."""
+    return ledger.is_billable()
 
 
 def quote(*, account_id: Optional[int], shot: dict, shot_id: int,
           part: Optional[int] = None, provider: Optional[str] = None,
           model: Optional[str] = None, seconds=None, frame=None,
           tier: Optional[str] = None) -> Optional[Quote]:
-    """The price of one render in credits, or None when there is nothing
-    to charge (BYOK). `shot_id` is the concept's id: a scene is one row
+    """The price of one render in credits. (Optional because a caller
+    that finds nothing billable -- none since BYOK went, 2026-09-26 -- got
+    None.) `shot_id` is the concept's id: a scene is one row
     and its shot lives inside it, so that is the id a render is filed
     under everywhere else. Raises ValueError / PricingRefused."""
     priced = estimate(account_id=account_id, shot=shot, part=part, provider=provider,
@@ -605,7 +615,7 @@ def display(*, account_id: Optional[int], shot: dict, shot_id: int,
             whole: bool = False, ctx=None) -> dict:
     """The priced plan for one approve, as JSON a card can print without
     doing arithmetic: every render it would make, its length, the
-    provider's estimate, and the credits it would cost (None on BYOK).
+    provider's estimate, and the credits it would cost.
 
     `estimate_usd` stays the PROVIDER's estimate -- the label the Queue
     has always shown -- so that while MARKUP is 1.0 no number on any
@@ -649,7 +659,6 @@ def display(*, account_id: Optional[int], shot: dict, shot_id: int,
             "timed": head.part is not None,
             "durations": [p.seconds for p in parts],
             "estimate_usd": round(micros / _MICROS, 4),
-            "byok": not charged,
             # tokens ride only when there is something to charge AND a
             # secret to sign with; a client that finds none approves as
             # it always did, and the route falls to the same gate as before
@@ -676,16 +685,14 @@ CATALOG_CLIP_SECONDS = 5
 # not listed here is still renderable and still priced; it just is not
 # advertised. Keep this the honest subset: what a plan can actually buy.
 CATALOG_MODELS: tuple[tuple[str, str, str, str], ...] = (
-    # provider, model id, public name, one line
+    # provider, model id, public name, one line -- all on fal since
+    # 2026-09-26, the only video renderer
     ("fal", "ltx2.3", "LTX 2.3", "Fast, cheap, 1080p and up. The workhorse."),
-    ("runway", "gen4_turbo", "Runway Gen-4 Turbo", "Reference-anchored clips, quick turnaround."),
     ("fal", "wan3", "Wan 3.0", "Open-weight realism up to 1080p."),
-    ("runway", "gen4.5", "Runway Gen-4.5", "Runway's flagship look."),
-    ("higgsfield", "kling2.5", "Kling 2.5", "Cinematic motion, strong on people."),
-    ("fal", "kling3-turbo-pro", "Kling 3 Turbo Pro", "Kling's fastest 1080p tier."),
-    ("fal", "seedance2-fast", "Seedance 2.0 Fast", "ByteDance's quick tier, with audio."),
-    ("fal", "seedance2", "Seedance 2.0", "Seedance at full quality."),
-    ("veo", "veo-3", "Veo 3", "Google's top model. Premium only."),
+    ("fal", "kling3-turbo-pro", "Kling 3 Turbo Pro", "Cinematic motion, strong on people."),
+    ("fal", "seedance2-fast", "Seedance 2.0 Fast", "ByteDance's quick tier, up to 720p."),
+    ("fal", "seedance2", "Seedance 2.0", "Seedance at full quality; 1080p is premium."),
+    ("fal", "veo3.1", "Veo 3.1", "Google's top model, with sound. Premium only."),
 )
 
 

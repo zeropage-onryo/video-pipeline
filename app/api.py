@@ -3295,18 +3295,13 @@ def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
 
     module = providers.VIDEO_PROVIDERS[choice["provider"]]
     label = providers.RENDER_LABELS.get(choice["provider"], choice["provider"])
-    # the CALLER's key, not the operator's: a BYOK account with its own
-    # stored secret is available even on a server whose environment
-    # variable is unset, and generate_for_shot resolves it per account
-    # anyway (2026-09-08)
+    # the operator's key -- the only one since 2026-09-26
     if not module.has_key(account_id):
         return _error(503, "renderer_unavailable",
-                      f"no {label} key is available for this account — add one, "
-                      f"or approve on a renderer that has a key")
+                      f"{label} is not configured on this server (FAL_KEY is unset)")
 
-    # runway takes a frame SIZE and calls it `ratio`; the others take a
-    # resolution tier. One axis, two parameter names -- see ApproveBody.
-    frame_kw = "ratio" if choice["provider"] == "runway" else "resolution"
+    # the frame axis is a resolution tier ("720p") -- providers.FRAME_AXIS
+    frame_kw = "resolution"
     render_kwargs = {"model": choice["model"],
                      "duration": choice["duration"],
                      frame_kw: choice["frame"]}
@@ -3644,31 +3639,37 @@ def shot_refine(concept_id: int, shot_n: int, account_id: int = Depends(auth.cur
 
 @router.post("/concepts/{concept_id}/shots/{shot_n}/generate")
 def shot_generate(concept_id: int, shot_n: int, account_id: int = Depends(auth.current_account_id)):
-    """One click, one render: the shot's stored prompt through the
-    Runway API (anchored on its reference_image when set), the clip
-    downloaded, logged as a generations row, and attached to the shot.
+    """One click, one render: the shot's stored prompt through fal on the
+    model its planned tool binds to (providers.render_default -- the same
+    answer the Queue card opens on), anchored on its reference_image when
+    set, the clip downloaded, logged as a generations row, and attached to
+    the shot.
 
-    Billed and capped. The click is the spend approval (2026-09-09) --
-    this route passes approved=True into generate_for_shot, and the gate
-    itself still lives inside generate_video so nothing here spends
-    around it. RUNWAY_DAILY_CAP is what stops a stuck loop."""
-    # the caller's key, not the operator's -- see queue_approve
-    if not runway.has_key(account_id):
-        return _error(503, "runway_unavailable", "RUNWAYML_API_SECRET is not set")
+    Billed, held and capped. The click is the spend approval (2026-09-09)
+    -- this route passes approved=True into generate_for_shot, and the gate
+    itself still lives inside generate_video, with the credit hold, so
+    nothing here spends around it. FAL_DAILY_CAP is what stops a stuck
+    loop."""
     concept = preprod.get_concept(concept_id, account_id=account_id)
     if concept is None:
         return _error(404, "not_found", "no such concept")
+    shot = next((s for s in concept.get("shots") or [] if s.get("n") == shot_n), None)
+    planned = providers.render_default((shot or {}).get("tool"), account_id)
+    pick = providers.renderer_for(account_id, planned["provider"], planned["model"])
+    if pick is None:
+        return _error(503, "renderer_unavailable", "FAL_KEY is not set")
     # No surface prints a price for this button and no front end calls it
-    # any more, so it mints and takes no quote: a billable render is sent
-    # to the Queue (step 5). BYOK, and a server that cannot sign, render
-    # here exactly as before.
-    if _quote_required(account_id, "runway"):
+    # any more, so it mints and takes no quote: when the server signs
+    # quotes, a billable render -- every render, since 2026-09-26 -- is
+    # sent to the Queue (step 5). A server that cannot sign renders here.
+    if _quote_required(account_id, pick["provider"]):
         return _error(400, "missing_quote", _QUEUE_ONLY)
+    module = providers.VIDEO_PROVIDERS[pick["provider"]]
 
     def work(job):
-        jobs.progress(job, 0.2, "rendering via Runway")
-        result = runway.generate_for_shot(
-            concept_id, shot_n, db_path=None,
+        jobs.progress(job, 0.2, f"rendering via {pick['model']}")
+        result = module.generate_for_shot(
+            concept_id, shot_n, db_path=None, model=pick["model"],
             resolve_photo=_resolve_asset_photo, approved=True,
             account_id=account_id)
         if not result.get("ok"):
@@ -3676,7 +3677,8 @@ def shot_generate(concept_id: int, shot_n: int, account_id: int = Depends(auth.c
         return {"ref_id": concept_id,
                 "detail": f"clip attached to shot {shot_n}"}
 
-    job = jobs.start("render", f"runway · {concept['title']} shot {shot_n}", work, account_id=account_id)
+    job = jobs.start("render", f"{pick['model']} · {concept['title']} shot {shot_n}",
+                     work, account_id=account_id)
     return {"job_id": job["id"]}
 
 
@@ -4028,8 +4030,9 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
     references) -> Ground -> Enhance -> saved one-shot concept -> the
     render. The render is best-effort and honestly gated: an image goes
     through Nano Banana (cheap, capped) and lands as the shot's
-    reference_image; a video goes through Runway's spend gate and lands
-    as media_url; a refusal still leaves the saved concept + prompt."""
+    reference_image; a video goes through fal's spend gate and credit hold
+    and lands as media_url; a refusal still leaves the saved concept +
+    prompt."""
     form = await request.form()
     prompt = (form.get("prompt") or "").strip()
     if not prompt:
@@ -4049,11 +4052,13 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
     attach_to = int(concept_id_raw) if concept_id_raw.isdigit() else None
     if attach_to is not None and preprod.get_concept(attach_to, account_id=account_id) is None:
         return _error(404, "not_found", "no such concept to attach to")
-    # the video branch spends on Runway with no price shown anywhere and
-    # no front end posting it -- a billable one goes to the Queue (step 5),
+    # the video branch spends on fal with no price shown anywhere and no
+    # front end posting it -- a billable one goes to the Queue (step 5),
     # refused BEFORE the job so no Gemini call is made for a clip that
     # will not render
-    if output == "video" and runway.has_key() and _quote_required(account_id, "runway"):
+    video_pick = (providers.renderer_for(account_id, needs="generate_from_prompt")
+                  if output == "video" else None)
+    if video_pick and _quote_required(account_id, video_pick["provider"]):
         return _error(400, "missing_quote", _QUEUE_ONLY)
 
     image_refs, ref_urls, video_refs = await _collect_refs(form, want_video=True)
@@ -4083,7 +4088,8 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
             raise RuntimeError("enhancement came back empty")
 
         jobs.progress(job, 0.55, "saving concept")
-        shot = {"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
+        shot = {"n": 1, "type": "BROLL", "source": "AI",
+                "tool": shootgen.DEFAULT_SCENE_TOOL,
                 "desc": prompt, "prompt": enhanced}
         allowed = shootgen.ZEROPAGE_AI_TOOLS if brand == "zeropage" else None
         location_names = [loc["name"]
@@ -4128,14 +4134,15 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
             else:
                 notes.append(f"image render skipped: {result.get('error')}")
         elif output == "video":
-            if runway.has_key():
-                jobs.progress(job, 0.7, "rendering via Runway")
-                result = runway.generate_from_prompt(
+            if video_pick:
+                jobs.progress(job, 0.7, f"rendering via {video_pick['model']}")
+                result = providers.VIDEO_PROVIDERS[video_pick["provider"]].generate_from_prompt(
                     enhanced,
                     reference_image=image_refs[0][0] if image_refs else None,
+                    model=video_pick["model"],
                     # a person asked for a video from this composer
                     approved=True,
-                    db_path=None)
+                    db_path=None, account_id=account_id)
                 if result.get("ok"):
                     preprod.set_shot_media_url(
                         concept_id, shot["n"], result["media_url"], account_id=account_id)
@@ -4143,7 +4150,7 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
                 else:
                     notes.append(f"render skipped: {result.get('error')}")
             else:
-                notes.append("render skipped: RUNWAYML_API_SECRET not set")
+                notes.append("render skipped: FAL_KEY not set")
 
         detail = "prompt saved" if output == "prompt" else (notes[0] if notes else "saved")
         if warnings:

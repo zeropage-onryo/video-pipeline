@@ -47,15 +47,16 @@ Build ONE concept as a short AI shot list (2-4 shots -- fewer, stronger shots
 means fewer prompts that can fail the gate and more attention on each one),
 8-15s total vertical (9:16), engineered so second 1 is the uncanny hook.
 
-REAL TOOL NAMES -- exactly two exist for this channel, nothing else:
-HIGGSFIELD, RUNWAY. Never invent or substitute a name that is not one of
-these two words -- not Midjourney, not Luma, not Pika, not Sora, not Veo, not
-Kling, not any versioned model name ("Runway Gen-3" is wrong -- just
-"RUNWAY"). Copy one of the two words verbatim into every shot's "tool" field.
+REAL TOOL NAMES -- exactly five exist for this channel, nothing else:
+KLING, SEEDANCE, LTX, WAN, VEO. Never invent or substitute a name that is not
+one of these five words -- not Midjourney, not Luma, not Pika, not Sora, not
+Runway, not Higgsfield, not any versioned model name ("Kling 3" is wrong --
+just "KLING"). Copy one of the five words verbatim into every shot's "tool"
+field.
 
 EVERY SHOT:
-- "source" is exactly "AI"; "tool" is exactly "HIGGSFIELD" or "RUNWAY" --
-  copy one of those two words verbatim, nothing else.
+- "source" is exactly "AI"; "tool" is exactly one of KLING, SEEDANCE, LTX,
+  WAN, VEO -- copy one of those words verbatim, nothing else.
 - "type" is an APP CATEGORY, not a cinematography or shot-scale term -- it is
   exactly the word "CHARACTER" or exactly the word "BROLL", nothing else
   (never "close-up", "medium shot", "wide", or any framing description --
@@ -89,6 +90,6 @@ Describe every look in cinematography and colour-grade terms only — never name
 films, directors, brands, or real people.
 
 Output STRICT JSON ONLY in this exact shape:
-{"concept": {"title": "2-4 word title", "format": "which skeleton it rides", "hook": "the grounded-uncanny image in second 1", "logline": "one sentence micro-story", "shots": [{"n": 1, "type": "CHARACTER" or "BROLL" -- exactly one of these two words, nothing else, "source": "AI", "tool": "HIGGSFIELD" or "RUNWAY" -- exactly one of these two words, nothing else, "prompt": "full grounded-realism generation prompt for this shot, ordered per the instructions above"}]}}
+{"concept": {"title": "2-4 word title", "format": "which skeleton it rides", "hook": "the grounded-uncanny image in second 1", "logline": "one sentence micro-story", "shots": [{"n": 1, "type": "CHARACTER" or "BROLL" -- exactly one of these two words, nothing else, "source": "AI", "tool": "KLING", "SEEDANCE", "LTX", "WAN" or "VEO" -- exactly one of these words, nothing else, "prompt": "full grounded-realism generation prompt for this shot, ordered per the instructions above"}]}}
 
 Be specific and concrete. Never generic.

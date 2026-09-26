@@ -239,27 +239,9 @@ def key_and_source(account_id: Optional[int], provider: str,
     if not fields:
         raise ValueError(f"unknown provider {provider!r}")
 
-    if account_id is not None:
-        held = _PRELOADED.get()
-        if held is not None and held[0] == account_id and held[1] == dsn:
-            # preloaded(): this account's rows were read once already
-            cipher = held[2].get(provider)
-            row = (cipher,) if cipher else None
-        else:
-            with _db.connect(dsn) as conn:
-                # A fresh database has no stored keys. Checking that is one
-                # read, rather than replaying table/FK/index setup for every
-                # renderer shown on the Queue.
-                row = conn.execute(
-                    "SELECT ciphertext FROM account_keys "
-                    "WHERE account_id = %s AND provider = %s",
-                    (account_id, provider),
-                ).fetchone() if _db.table_exists(conn, "account_keys") else None
-        if row:
-            payload = json.loads(_fernet().decrypt(row[0].encode()).decode())
-            if all(payload.get(f) for f in fields):
-                return payload, SOURCE_ACCOUNT
-
+    # BYOK IS GONE (2026-09-26, docs/tasks/task-fal-only.md). A stored key
+    # is never read again: every render is on the operator's key and holds
+    # credit. The table itself is dropped in phase 2 of that task.
     per_field_names = PROVIDER_ENV_FALLBACK.get(provider, ())
     resolved = {}
     for field, candidates in zip(fields, per_field_names):

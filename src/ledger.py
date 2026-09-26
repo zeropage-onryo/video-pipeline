@@ -110,7 +110,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
 
-from . import account_keys, db, manual_lane
+from . import db, manual_lane
 
 # --------------------------------------------------------------------------
 # the vocabulary
@@ -246,63 +246,38 @@ def ref_params(ref: str) -> dict:
 # wrong differently
 # --------------------------------------------------------------------------
 
-# What `account_keys.key_and_source` returns when the account rendered on
-# its own stored credential rather than on the installation's env key.
-BYOK_KEY_SOURCE = account_keys.SOURCE_ACCOUNT
-
 # What an adapter writes into `generations.params_json` as `source` when
 # the clip came off a subscription instead of a metered API call --
 # `src/manual_lane.py` owns the vocabulary and the lane behind it.
 SUBSCRIPTION_SOURCES = manual_lane.SUBSCRIPTION_SOURCES
 
 
-def is_billable(key_source: Optional[str], *, source: Optional[str] = None) -> bool:
+def is_billable(key_source: Optional[str] = None, *,
+                source: Optional[str] = None) -> bool:
     """Whether a render may be debited. THE ONE PLACE that rule lives.
 
-    TWO WAYS A RENDER IS NOT THIS LEDGER'S BUSINESS, and they are the
-    same structural fact wearing different clothes: **somebody already
-    paid for this clip somewhere the ledger cannot see, so a debit here
-    is a second charge for one render.**
+    ONE WAY A RENDER IS NOT THIS LEDGER'S BUSINESS: somebody already paid
+    for the clip somewhere the ledger cannot see. That is THE SUBSCRIPTION
+    LANE -- `source` in `SUBSCRIPTION_SOURCES`, the marker
+    `ops/render_queue.py` writes when a human rendered the shot by hand in
+    a vendor's web app on a plan bought before the render existed
+    (`src/manual_lane.py`). There is no per-render price to debit, and a
+    hold would debit a CUSTOMER'S credit for a clip rendered on the
+    OPERATOR'S personal plan.
 
-    1. **BYOK** -- `key_source == "account"`, the case
-       `src/account_keys.py` made visible on 2026-09-07. The customer's
-       card was charged by the provider directly.
-    2. **THE SUBSCRIPTION LANE** -- `source` in `SUBSCRIPTION_SOURCES`,
-       the marker `ops/render_queue.py` writes when a human rendered the
-       shot by hand in a vendor's web app on a plan that was bought
-       before the render existed (`src/manual_lane.py`). Runway Explore
-       Mode and the Higgsfield MCP are both this. There is no per-render
-       price to debit -- `cost_usd` on that row is NULL on purpose and
-       `src/costs.py` reports it as FREE with a count, never $0 -- and a
-       hold would be worse than merely wrong: it would debit a CUSTOMER'S
-       credit for a clip rendered on the OPERATOR'S personal plan.
+    BYOK WAS THE SECOND WAY, AND IT IS GONE (2026-09-26, Mike's call,
+    docs/tasks/task-fal-only.md). A render on the customer's own key took
+    no hold, so a BYOK account cost the operator Gemini, Nano, storage and
+    compute and paid nothing. Every render now runs on the operator's fal
+    key and holds. `key_source` is still accepted because the adapters
+    still stamp it on their rows; it no longer decides anything.
 
-    Both facts are already on the row -- every adapter writes
-    `key_source` into `generations.params_json`, and the lane writes
-    `source` beside it -- so what must not happen is four call sites each
-    deciding what to do with them, because the one that spells a constant
-    wrong bills a BYOK customer, or a customer for the operator's
-    subscription, and nothing fails.
-
-    Note that these two arguments do NOT read the same way round, and
-    that is deliberate. `key_source` is unbillable on ONE known value and
-    billable otherwise; `source` is unbillable on a known SET and
-    billable otherwise. Both directions point the same way: the caller
-    has to positively demonstrate that a render was already paid for.
-
-    An UNKNOWN credential (`key_source` None -- nothing resolved at all,
-    or `key_source()` swallowed a decrypt error) reads as billable. That
-    is the deliberate direction to be wrong in: it holds credit for a
-    render that may not happen, which `release()` and the reaper give
-    back, rather than rendering for free on the installation's key and
-    finding out at the invoice. A manual-lane row carries `key_source`
-    None for the honest reason that no API credential was used, which is
-    exactly why the LANE MARKER and not the missing credential is what
-    makes it unbillable.
+    `source` reads unbillable only on a known SET, billable otherwise: the
+    caller has to positively demonstrate that a render was already paid
+    for. An unknown marker holds credit that `release()` and the reaper
+    give back, which is the direction to be wrong in.
     """
-    if manual_lane.is_subscription_source(source):
-        return False
-    return key_source != BYOK_KEY_SOURCE
+    return not manual_lane.is_subscription_source(source)
 
 
 # --------------------------------------------------------------------------
@@ -1366,11 +1341,10 @@ def hold_for_render(account_id: Optional[int], *, ref: str, provider: str,
     outstanding, shout about it). Skip it and every dead worker looks
     like a free refund.
 
-    `key_source` is what `account_keys.key_source(account_id, provider)`
-    returned for this render, and `source` is the `params["source"]` the
-    adapter is about to write -- the same two values that land in
-    `generations.params_json`. On BYOK ("account") or on a subscription
-    lane marker this returns None and takes NO hold: see `is_billable`.
+    `source` is the `params["source"]` the adapter is about to write. On a
+    subscription lane marker this returns None and takes NO hold: see
+    `is_billable`. (`key_source` is accepted and ignored since BYOK was
+    removed on 2026-09-26 -- every render holds.)
     A manual-lane import is the second case, and it is why
     `ops/render_queue.py` can file a clip without ever touching credit.
     """
@@ -1412,7 +1386,7 @@ def credit_exempt(account_id: Optional[int], dsn: Optional[str] = None) -> bool:
 
 __all__ = [
     "EXPIRY_MONTHS", "LAPSE_POLICY", "LOT_KINDS", "ENTRY_KINDS",
-    "GENERATION_REF_KEY", "BYOK_KEY_SOURCE", "SUBSCRIPTION_SOURCES",
+    "GENERATION_REF_KEY", "SUBSCRIPTION_SOURCES",
     "LedgerError", "InsufficientCredit",
     "credits_for_usd", "charge_credits", "is_billable", "ref_params", "credit_exempt",
     "init", "grant", "available", "lots", "entries", "outstanding",

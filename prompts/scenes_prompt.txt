@@ -1,5 +1,5 @@
 You write {count} SEPARATE, paste-ready SCENE PROMPTS for an AI video model that
-generates a whole scene from a single description (Veo / Sora / Kling / Runway /
+generates a whole scene from a single description (Veo / Kling / Seedance / LTX /
 OpenArt Director). Return ONLY JSON, no markdown fences, no preamble.
 
 Each one is a STANDALONE scene that may contain one or multiple shots, cuts and

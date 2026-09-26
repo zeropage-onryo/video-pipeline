@@ -99,15 +99,17 @@ def _unwired(kind: str) -> Callable[[dict], Any]:
 
 def execute_generate_action(action: dict):
     """
-    The headless half of the Veo connector: same core as the
-    interactive path (veo.generate_candidates -- daily cap, genlog
-    logging, never-raises), reached ONLY through the full gate above,
-    because every call costs real money. Nothing is auto-kept: the
-    clips land as candidates and the keeper is still a human pick.
+    The headless half of the video renderer: same core as the
+    interactive path (fal.generate_candidates -- daily cap, a
+    generations row per attempt, the credit hold, never-raises), reached
+    ONLY through the full gate above, because every call costs real
+    money. fal since 2026-09-26, the only video renderer (it was Veo on
+    the Gemini key before). Nothing is auto-kept: the clips land as
+    candidates and the keeper is still a human pick.
     """
-    from . import veo
+    from . import fal
     out_dir = GENERATED_DIR / f"autopilot-{action.get('concept_id', 'x')}"
-    return veo.generate_candidates(
+    return fal.generate_candidates(
         action.get("prompt", ""), out_dir,
         n=int(action.get("candidates", 1)),
     )
@@ -115,8 +117,8 @@ def execute_generate_action(action: dict):
 
 # kind -> callable(action). Both adapters are real but only ever run in
 # live mode -- the gate above them is unchanged. post refuses without
-# IG_USER_ID/IG_ACCESS_TOKEN; generate goes through veo.py's daily cap
-# and logs every attempt through genlog.
+# IG_USER_ID/IG_ACCESS_TOKEN; generate goes through fal.py's daily cap
+# and logs every attempt as a generations row.
 def post_approved() -> bool:
     """The per-run human approval for publishing. Same contract as the
     render tools' spend_approved(): set ZEROPAGE_POST_OK=1 on the
@@ -282,8 +284,8 @@ def execute(plan: dict, approve: bool = False, dry_run: bool = True) -> dict[str
         preview = {"mode": mode, "executed": 0, "skipped": [],
                    "would_execute": described}
         if generate_count:
-            from . import veo
-            preview["estimated_generation_cost_usd"] = veo.estimate_cost(generate_count)
+            from . import fal
+            preview["estimated_generation_cost_usd"] = fal.estimate_cost(generate_count)
         return preview
 
     executed = 0

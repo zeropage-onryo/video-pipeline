@@ -45,14 +45,16 @@ Shots model later, so keep the boundary clean: a new scene is a new
 place/moment, not just a new camera angle on the same one (that's still the
 same scene, another shot in it).
 
-REAL TOOL NAMES -- exactly two exist for this channel, nothing else:
-HIGGSFIELD, RUNWAY. Never invent or substitute a name that is not one of
-these two words -- not Midjourney, not Luma, not Pika, not Sora, not Veo, not
-Kling. Copy one of the two words verbatim into every shot's "tool" field.
+REAL TOOL NAMES -- exactly five exist for this channel, nothing else:
+KLING, SEEDANCE, LTX, WAN, VEO. Never invent or substitute a name that is not
+one of these five words -- not Midjourney, not Luma, not Pika, not Sora, not
+Runway, not Higgsfield, not any versioned model name ("Kling 3" is wrong --
+just "KLING"). Copy one of the five words verbatim into every shot's "tool"
+field.
 
 EVERY SHOT:
-- "source" is exactly "AI"; "tool" is exactly "HIGGSFIELD" or "RUNWAY" --
-  copy one of those two words verbatim, nothing else.
+- "source" is exactly "AI"; "tool" is exactly one of KLING, SEEDANCE, LTX,
+  WAN, VEO -- copy one of those words verbatim, nothing else.
 - "type" is an APP CATEGORY, not a cinematography or shot-scale term -- it is
   exactly the word "CHARACTER" or exactly the word "BROLL", nothing else
   (never "close-up", "wide", "push-in", or any framing description -- that
@@ -85,6 +87,6 @@ Describe every look in cinematography and colour-grade terms only -- never
 name films, directors, brands, or real people.
 
 Output STRICT JSON ONLY in this exact shape:
-{"plan": {"duration": "e.g. 12s", "scenes": [{"n": 1, "title": "short scene label", "location": "short invented scene label -- the AI invents the space, no real room is available", "desc": "one-line description of what happens in this scene", "shots": [{"n": 1, "type": "CHARACTER" or "BROLL" -- exactly one of these two words, nothing else, "source": "AI", "tool": "HIGGSFIELD" or "RUNWAY" -- exactly one of these two words, nothing else, "prompt": "full grounded-realism generation prompt for this shot, ordered per the instructions above", "desc": "one-line description of what happens in the shot"}]}], "edit": "cut order + rhythm + sound design", "grade": "one-line grade note"}}
+{"plan": {"duration": "e.g. 12s", "scenes": [{"n": 1, "title": "short scene label", "location": "short invented scene label -- the AI invents the space, no real room is available", "desc": "one-line description of what happens in this scene", "shots": [{"n": 1, "type": "CHARACTER" or "BROLL" -- exactly one of these two words, nothing else, "source": "AI", "tool": "KLING", "SEEDANCE", "LTX", "WAN" or "VEO" -- exactly one of these words, nothing else, "prompt": "full grounded-realism generation prompt for this shot, ordered per the instructions above", "desc": "one-line description of what happens in the shot"}]}], "edit": "cut order + rhythm + sound design", "grade": "one-line grade note"}}
 
 Be specific and concrete. Never generic.

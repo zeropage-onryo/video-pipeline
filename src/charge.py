@@ -43,17 +43,18 @@ person was shown and the server signed -- and `settle()` closes at it.
 Before that the route verified the Quote and dropped it, and the hold
 re-derived the price from the adapter's estimate: the same number only
 because both went through `pricing.credits_for`. The estimate is still
-the fallback for callers nobody quoted: the nightly graph, the CLI, a
-BYOK click (which takes no hold anyway). A Quote for another account or
-provider raises in `take()`, before the hold and so before the submit.
+the fallback for callers nobody quoted: the nightly graph, the CLI.
+A Quote for another account or provider raises in `take()`, before the
+hold and so before the submit.
 
 WHAT IS NOT CHARGED, decided in ONE place and not here: `ledger.
-hold_for_render` returns None on BYOK, on a manual-lane import and for
-a credit-exempt account (the operator), and every method below is a
-no-op on a Charge with no hold. `settle` is capped at what was held --
-the quoted price is the price rendered, and an estimator that guessed
-low is our error, not the customer's (task-pricing-and-quotes.md, "the
-ledger sandwich").
+hold_for_render` returns None on a manual-lane import and for a
+credit-exempt account (the operator), and every method below is a
+no-op on a Charge with no hold. (BYOK renders took no hold either until
+2026-09-26, when BYOK was removed: every other render holds.)
+`settle` is capped at what was held -- the quoted price is the price
+rendered, and an estimator that guessed low is our error, not the
+customer's (task-pricing-and-quotes.md, "the ledger sandwich").
 
 `ref` IS THE IDEMPOTENCY KEY, and it is the output file's name: unique
 per attempt, already written into the generations row's `output_path`,
@@ -90,13 +91,13 @@ class Charge:
         # there is one, IT is what is held and settled -- the number the
         # person was shown and the server signed -- and the estimate is
         # only the fallback for callers nobody quoted (the nightly graph,
-        # the CLI, a BYOK click). Duck-typed: this module never imports
+        # the CLI). Duck-typed: this module never imports
         # pricing (pricing -> providers -> the adapters -> here).
         self.quote = quote
         self.hold_id: Optional[int] = None
         self.held: int = 0
         # True once submitted() ran -- i.e. the provider was about to be
-        # called, hold or no hold (BYOK and exempt renders submit too). It
+        # called, hold or no hold (exempt renders submit too). It
         # is how the caller that writes the generations row knows a raise
         # out of generate_video was an ATTEMPT, which owes a row, and not
         # a gate or an empty balance, which does not (BACKLOG #18).
@@ -211,7 +212,7 @@ def refusal(e: ledger.InsufficientCredit) -> str:
     as generative.cap_error's: a sentence with the numbers in it and what
     to do, never a stack."""
     return (f"out of credits: this render needs {e.requested} and the account has "
-            f"{e.available} -- top up, or add your own renderer key to render on it")
+            f"{e.available} -- top up to render it")
 
 
 __all__ = ["Charge", "attempt_ref", "refusal"]
