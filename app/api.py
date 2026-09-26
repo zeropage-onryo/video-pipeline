@@ -4441,13 +4441,24 @@ def holds_post(hold_id: int, account_id: int = Depends(auth.current_account_id))
         return _error(400, "no_targets", "this channel has no post targets")
 
     payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    # A target already published to on an earlier click is never posted
+    # again (2026-09-26). The fan-out used to abort at its first failure
+    # with the hold still `held`: Instagram published, YouTube raised,
+    # and the next click published to Instagram a second time.
+    already = dict(payload.get("posted") or {})
+    pending = [t for t in targets if t not in already]
+    if not pending:
+        autonomy.resolve_hold(hold_id, "posted", account_id=account_id)
+        return {"id": hold_id, "posted": True, "targets": targets,
+                "posted_to": already, "mode": "live"}
+
     caption = row.get("caption") or ""
     image_url = (payload.get("image_url") or "").strip()
     if image_url:
         actions = [{
             "kind": "post", "platform": platform, "concept_id": row.get("concept_id"),
             "caption": caption, "image_url": image_url,
-        } for platform in targets]
+        } for platform in pending]
     else:
         clips = payload.get("clips") or []
         media_url = next((c.get("url") for c in clips if c.get("url")), "") or ""
@@ -4457,17 +4468,38 @@ def holds_post(hold_id: int, account_id: int = Depends(auth.current_account_id))
             "caption": caption,
             "video_url": media_url,
             "video_path": media_url if is_local else "",
-        } for platform in targets]
+        } for platform in pending]
 
     try:
         result = autopilot.execute({"actions": actions}, approve=True, dry_run=False)
     except Exception as e:
-        return _error(502, "post_failed", str(e))
+        return _error(502, "post_failed", autopilot.safe_error(e))
 
     mode = result.get("mode")
-    if mode == "live" and result.get("executed"):
-        autonomy.resolve_hold(hold_id, "posted", account_id=account_id)
-        return {"id": hold_id, "posted": True, "targets": targets, "mode": mode}
+    if mode == "live":
+        # Record what went out BEFORE deciding anything else: this map is
+        # the only thing standing between a retry and a double post.
+        newly = {p["platform"]: p.get("media_id") or "posted"
+                 for p in result.get("posted") or [] if p.get("platform")}
+        if newly:
+            already = autonomy.record_hold_posts(
+                hold_id, newly, account_id=account_id) or {**already, **newly}
+        failures = result.get("failed") or []
+        failed_text = "; ".join(f"{f['platform']} failed: {f['error']}" for f in failures)
+        if all(t in already for t in targets):
+            autonomy.resolve_hold(hold_id, "posted", account_id=account_id)
+            return {"id": hold_id, "posted": True, "targets": targets,
+                    "posted_to": already, "mode": mode}
+        if already and (failures or result.get("skipped")):
+            # Partial: the hold stays `held` so the rest can be retried,
+            # and the retry skips every target named in posted_to.
+            done = ", ".join(t for t in targets if t in already)
+            rest = failed_text or "; ".join(result.get("skipped") or [])
+            return {"id": hold_id, "posted": False, "partial": True,
+                    "targets": targets, "posted_to": already, "mode": mode,
+                    "detail": f"posted to {done}; {rest}"}
+        if failures:
+            return _error(502, "post_failed", failed_text)
     if mode == "live":
         detail = "; ".join(result.get("skipped") or ["no rendered media to post yet"])
     elif mode == "disabled":

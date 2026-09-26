@@ -1738,7 +1738,10 @@ async def post_image_fire(request: Request):
     try:
         result = autopilot.execute({"actions": [action]}, approve=True, dry_run=False)
     except Exception as e:
-        return back(f"Post failed: {e}")
+        return back(f"Post failed: {autopilot.safe_error(e)}")
+    if result.get("failed"):
+        # execute records an executor's failure rather than raising it
+        return back(f"Post failed: {result['failed'][0]['error']}")
     mode = result.get("mode")
     if mode == "live" and result.get("executed"):
         media = (action.get("result") or {}).get("media_id")

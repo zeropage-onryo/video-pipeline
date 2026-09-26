@@ -437,6 +437,38 @@ def resolve_hold(hold_id: int, status: str, dsn=None, *,
         return cursor.rowcount > 0
 
 
+def record_hold_posts(hold_id: int, posted: dict, dsn=None, *,
+                      account_id: Optional[int]) -> dict:
+    """Merge {platform: media_id} into the hold's `payload.posted` and
+    return the merged map. This is what makes a partial fan-out safe to
+    retry: holds_post skips every platform named here, so a hold that
+    reached Instagram and failed on YouTube never publishes to Instagram
+    twice. Read and written under one row lock, owner-scoped like every
+    other hold statement; {} for someone else's hold or a missing id."""
+    with db.connect(dsn) as conn:
+        row = conn.execute(
+            "SELECT payload FROM hold_queue WHERE id = %s "
+            "AND account_id IS NOT DISTINCT FROM %s FOR UPDATE",
+            (hold_id, account_id),
+        ).fetchone()
+        if row is None:
+            return {}
+        try:
+            payload = json.loads(row["payload"]) if row["payload"] else {}
+        except (ValueError, TypeError):
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        merged = dict(payload.get("posted") or {})
+        merged.update({k: v for k, v in (posted or {}).items() if k})
+        payload["posted"] = merged
+        conn.execute(
+            "UPDATE hold_queue SET payload = %s WHERE id = %s "
+            "AND account_id IS NOT DISTINCT FROM %s",
+            (json.dumps(payload), hold_id, account_id))
+        return merged
+
+
 def posts_today(channel: str, dsn=None) -> int:
     """Posted rows for this channel since UTC midnight -- what the rate
     cap in the publish gate counts against.
