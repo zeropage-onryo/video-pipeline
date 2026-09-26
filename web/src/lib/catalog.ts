@@ -77,7 +77,7 @@ export function clipsPerMonth(plan: Plan, model: CatalogModel): number {
   return Math.floor(plan.credits / model.credits);
 }
 
-/** "720:1280" (Runway's ratio) and "720p" (fal's resolution) read the same. */
+/** A "720:1280" ratio form and a "720p" resolution read the same. */
 export function frameLabel(frame: string): string {
   if (/^\d+p$/.test(frame)) return frame;
   const m = frame.match(/^(\d+):(\d+)$/);

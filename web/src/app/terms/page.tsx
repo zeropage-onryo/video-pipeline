@@ -76,8 +76,8 @@ const SECTIONS: LegalSection[] = [
       <p>
         The Studio runs on third-party services — model and rendering providers, storage and
         hosting — listed in the <Link href="/privacy">Privacy Policy</Link>. Your use of them
-        through the Studio is also subject to their own terms. Where you connect your own provider
-        key or subscription, charges from that provider are yours; the Studio&apos;s cost figures
+        through the Studio is also subject to their own terms. Renders are charged in credits at the
+        price the Queue shows before you approve; any dollar figures the Studio shows beside them
         are estimates, not invoices. Rendering only happens when you approve it.
       </p>
     ),

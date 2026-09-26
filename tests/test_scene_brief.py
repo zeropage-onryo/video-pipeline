@@ -133,6 +133,6 @@ def test_scene_concept_validates_the_tool_per_brand(pg, monkeypatch):
         lambda client, model, contents, **_: '{"title": "T", "brief": "b"}')
 
     result = shootgen.generate_scene_concept(
-        brand="zeropage", gemini_client=object(), db_path=path, tool="VEO")
-    assert result["warnings"]                       # VEO is not a Zero Page tool
+        brand="zeropage", gemini_client=object(), db_path=path, tool="RUNWAY")
+    assert result["warnings"]                       # RUNWAY is retired (2026-09-26)
     assert preprod.get_concept(result["concept_id"], dsn=path, account_id=None) is not None

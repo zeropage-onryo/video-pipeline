@@ -250,7 +250,7 @@ export type TimelinePart = {
   media_url?: string | null;
 };
 export type Timeline = { planned: boolean; seconds?: number | null; parts: TimelinePart[] };
-export type RunwayModel = { id: string; label: string; usd_per_second: number };
+export type RendererModel = { id: string; label: string; usd_per_second: number };
 /* the overnight branch's renderer catalogue (providers.render_options):
    every registered renderer with its gates, its models and each model's
    legal duration and frame axis; a price shape the card may multiply */
@@ -282,22 +282,26 @@ export type RendererSpec = {
   models: ModelSpec[];
   default_model: string | null;
 };
-export type RunwayState = {
+/** The default video renderer's state (app/api.py `_render_state`): fal.ai
+ *  since 2026-09-26, the only video renderer. What the chips and older
+ *  cards read; `renderers` is the full catalogue. */
+export type RendererState = {
+  label: string;
+  provider: string;
   available: boolean;
   spend_ok: boolean;
   model: string;
   estimate_usd: number;
-  ratio?: string;
   duration?: number;
-  models?: RunwayModel[];
-  ratios?: string[];
+  resolution?: string;
+  models?: RendererModel[];
   durations?: number[];
   today?: number | null;
 };
 /** src/pricing.py `display()` — the priced plan for one approve, or for
  *  the Director's Generate node: every render it would make, at what
- *  length, and the provider's estimate. `credits` is null on BYOK (the
- *  account's own provider bills it). `{error}` when the intent has no
+ *  length, the provider's estimate and the credits it holds (every video
+ *  render holds credits since 2026-09-26). `{error}` when the intent has no
  *  price. The server is the only place a price is computed. */
 export type RenderQuote = {
   error?: string;
@@ -307,7 +311,6 @@ export type RenderQuote = {
   timed: boolean;
   durations: number[];
   estimate_usd: number;
-  byok: boolean;
   credits: number | null;
   content_hash: string;
   /** tokens ride only when there is something to charge and QUOTE_SIGNING_SECRET is set */
@@ -368,7 +371,7 @@ export const updateShotPrompt = (id: number, n: number, prompt: string) =>
     method: "POST",
     body: JSON.stringify({ prompt }),
   });
-/* the spend gate: approving is what calls Runway */
+/* the spend gate: approving is what calls the renderer (fal) */
 export const queueApprove = (id: number, choice?: RenderChoice) =>
   apiFetch<{ job_id?: number; render?: RenderResolved; quote?: RenderQuote | null }>(`/queue/${id}/approve`, {
     method: "POST",
@@ -387,9 +390,9 @@ export const queueReject = (id: number) =>
 /** made by hand, outside the render lane — drops it off the pending list */
 export const queueShot = (id: number) =>
   apiFetch<{ ok: boolean }>(`/queue/${id}/shot`, { method: "POST", body: JSON.stringify({ shot: true }) });
-/* ── the subscription lane (operator-gated server-side; the `manual_lane`
-   capability only says whether to draw the section) ── */
-export type LaneModel = { id: string; durations: number[]; ratios: string[] };
+/* ── the manual import lane (operator-gated server-side; the `manual_lane`
+   capability only says whether to draw the section): a clip rendered
+   anywhere, dropped on its card and filed free ── */
 export type LaneItem = {
   concept_id: number;
   title: string;
@@ -402,15 +405,16 @@ export type LaneItem = {
   lane?: string;
 };
 /** GET /api/queue/manual — the same waiting shots, addressed to a pair of
- *  hands in Chrome; a 404 for an account the lane is not open for. */
+ *  hands; a 404 for an account the lane is not open for. There is no model
+ *  list: what rendered the clip is free text on the drop. */
 export const queueManual = (brand?: string) =>
-  apiFetch<{ items: LaneItem[]; models: LaneModel[]; default_model: string }>(
+  apiFetch<{ items: LaneItem[]; lane?: string; import_with?: string }>(
     `/queue/manual${brand ? `?brand=${encodeURIComponent(brand)}` : ""}`,
   );
 /** POST /api/queue/manual/{id}/clip — the finished mp4, filed by
- *  ops/render_queue.import_clip as a FREE row; the claimed model, frame
- *  and length are refused by render_specs if the lane cannot have
- *  produced them; a second drop is refused (409). */
+ *  ops/render_queue.import_clip as a FREE row. `model` is free text (what
+ *  rendered it; the server says "unspecified" when absent); a second drop
+ *  is refused (409). */
 export const fileLaneClip = (
   id: number,
   file: File,
@@ -440,7 +444,7 @@ export const listJobs = () => apiFetch<{ items: (Job & { cancellable?: boolean }
 export const cancelJob = (id: number) => apiFetch<Job>(`/jobs/${id}/cancel`, { method: "POST", body: "{}" });
 export const clearJob = (id: number) => apiFetch<{ deleted: number }>(`/jobs/${id}`, { method: "DELETE" });
 export const queuePending = (brand?: string) =>
-  apiFetch<{ items: Concept[]; spendable?: number; runway: RunwayState; renderers?: Record<string, RendererSpec> }>(
+  apiFetch<{ items: Concept[]; spendable?: number; renderer: RendererState; renderers?: Record<string, RendererSpec> }>(
     `/queue/pending${brand ? `?brand=${encodeURIComponent(brand)}` : ""}`,
   );
 /** GET /api/queue/count -- the rail badge's number and nothing else. The

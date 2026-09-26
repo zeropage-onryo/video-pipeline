@@ -5,24 +5,23 @@ POST /api/workflows/{id}/run.
 The input is LiteGraph's own serialize() JSON (nodes + links), walked
 with Kahn's algorithm: start from nodes with no unmet inputs, run
 them, then whatever they unblock. Sequential on purpose -- several
-node types are billed, rate-limited API calls (Gemini, Runway), so
+node types are billed, rate-limited API calls (Gemini, fal), so
 independent branches do NOT run concurrently in v1.
 
 Node handlers map onto what already exists rather than reimplementing
 it: Ground calls shootgen.reference_block, Enhance calls Gemini through
 gemini_utils.generate_with_retry (the director.py path), Generate calls
-runway.generate_from_prompt -- whose spend gate (RUNWAY_SPEND_OK) sits
-inside runway.generate_video, so a workflow cannot become a second,
-ungated route to spend.
+fal.generate_from_prompt -- whose spend gate and credit hold sit inside
+fal.generate_video, so a workflow cannot become a second, ungated route
+to spend.
 
 A failed node fails, its dependents are skipped, and everything else
 still runs -- partial results are results. The caller decides whether
-a run with failures is a failed job. A connector that was never
-configured (Runway with no API secret) is SKIPPED rather than failed --
-an unadapted tool honestly staying dry is the designed behaviour, not a
-break. The spend gate is different and still fails loudly: a configured
-Runway without this run's approval must refuse where everyone can see
-it.
+a run with failures is a failed job. A renderer that was never
+configured (no FAL_KEY) is SKIPPED rather than failed -- an unconfigured
+tool honestly staying dry is the designed behaviour, not a break. The
+spend gate is different and still fails loudly: a configured renderer
+without this run's approval must refuse where everyone can see it.
 """
 from __future__ import annotations
 
@@ -145,55 +144,29 @@ def _input_values(node: dict, name: str, links: dict, outputs: dict) -> list:
     return []
 
 
-def image_for_runway(value, resolve_photo=None):
-    """A Generate node's reference input -> something Runway can anchor
-    on. A picked asset photo is a site-relative URL Runway could never
-    fetch, so it becomes bytes here (runway.generate_from_prompt turns
-    bytes into a data URI); public URLs and data URIs pass through.
-
-    An upstream Nano Banana keyframe is the same problem: /renders/ is
-    local until R2 is configured, so it becomes bytes too -- otherwise
-    the keyframe silently stops anchoring the clip the moment it is
-    wired in, which is the whole point of the chain."""
-    if not value or not isinstance(value, str):
-        return None
-    if value.startswith(("http://", "https://", "data:image/")):
-        return value
-    if value.startswith("/renders/"):
-        return imagery.render_bytes(value)
-    target = resolve_photo(value) if resolve_photo else None
-    return imagery.upright(target.read_bytes()) if target is not None else None
-
-
 def render_generate_node(pick: dict, prompt: str, reference: Optional[str], *,
                          resolve_photo=None, db_path=None,
                          account_id: Optional[int] = None, quote=None) -> dict:
     """One Generate-node render on the renderer providers.renderer_for
     picked -- the node's own Run and Run all both come through here, so
     one graph cannot render two different ways depending on which button
-    was pressed (2026-09-11: the node used to be Runway-only).
+    was pressed.
 
-    Runway takes an inline data URI, so a local reference becomes bytes
-    here (image_for_runway). Higgsfield and fal take a URL their servers
-    FETCH and resolve local references themselves (as_image_url, which
-    uploads to R2 or drops the anchor honestly), so they are handed the
-    reference and the resolver as-is. Never raises -- the adapters'
-    generate_from_prompt contract."""
+    fal takes a URL its servers FETCH and resolves local references itself
+    (as_image_url, which uploads to R2 or drops the anchor honestly), so it
+    is handed the reference and the resolver as-is. Never raises -- the
+    adapters' generate_from_prompt contract."""
     from src import providers
 
     module = providers.VIDEO_PROVIDERS[pick["provider"]]
     kwargs = {"approved": True,     # a person pressed Run -- see spend_approved
               "db_path": db_path, "account_id": account_id,
-              "model": pick["model"]}
+              "model": pick["model"],
+              "reference_image": reference,
+              "resolve_photo": resolve_photo}
     if quote is not None:
         # the node's own Run verified a price; Run all never has one
         kwargs["quote"] = quote
-    if pick["provider"] == "runway":
-        kwargs["reference_image"] = image_for_runway(reference,
-                                                     resolve_photo=resolve_photo)
-    else:
-        kwargs["reference_image"] = reference
-        kwargs["resolve_photo"] = resolve_photo
     return module.generate_from_prompt(prompt, **kwargs)
 
 
@@ -405,8 +378,8 @@ def execute_graph(graph: dict, *, gemini_client=None, resolve_photo=None,
                 if pick is None:
                     states[node_id] = {
                         "status": "skipped", "kind": None, "output": None,
-                        "error": "no video renderer key on this account — "
-                                 "add a Runway, Higgsfield or fal key"}
+                        "error": "video rendering is not configured on this "
+                                 "server (FAL_KEY is unset)"}
                     mark_downstream_skipped(node_id, f"upstream skipped: {title}")
                     push((index + 1) / total, f"{title} skipped")
                     continue
@@ -416,8 +389,7 @@ def execute_graph(graph: dict, *, gemini_client=None, resolve_photo=None,
                 # did not exist when any price was shown. So it is
                 # skipped -- the enhance and the keyframe upstream still
                 # ran -- and the clip is approved at its price in the
-                # Queue. BYOK, and a server that cannot sign, render here
-                # exactly as before.
+                # Queue. A server that cannot sign renders here.
                 from src import pricing
                 if pricing.configured() and pricing.billable(account_id, pick["provider"]):
                     states[node_id] = {
@@ -428,8 +400,8 @@ def execute_graph(graph: dict, *, gemini_client=None, resolve_photo=None,
                     push((index + 1) / total, f"{title} skipped")
                     continue
                 prompt = _input_value(node, "prompt", links, outputs) or ""
-                # Runway anchors a clip on exactly ONE frame (its API
-                # takes a single prompt_image), so of the references this
+                # A clip anchors on exactly ONE frame (fal's i2v takes a
+                # single start image), so of the references this
                 # node carries only the first is usable -- the wired
                 # keyframe when there is one, else the scene's own
                 # reference. The rest already informed the prompt that

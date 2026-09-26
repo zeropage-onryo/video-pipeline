@@ -25,7 +25,7 @@ def shot_id(tmp_db):
 
 
 def test_record_logs_a_generation_and_prints_id(shot_id, tmp_db, capsys):
-    genlog.main(["record", str(shot_id), "runway", "a gloved hand closes a drawer"],
+    genlog.main(["record", str(shot_id), "kling", "a gloved hand closes a drawer"],
                 db_path=tmp_db)
 
     out = capsys.readouterr().out
@@ -33,7 +33,7 @@ def test_record_logs_a_generation_and_prints_id(shot_id, tmp_db, capsys):
 
     with db.connect(tmp_db) as conn:
         row = conn.execute("SELECT tool, prompt FROM generations").fetchone()
-    assert row["tool"] == "runway"
+    assert row["tool"] == "kling"
     assert row["prompt"] == "a gloved hand closes a drawer"
 
 

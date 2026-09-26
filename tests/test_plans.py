@@ -31,7 +31,8 @@ def test_the_catalog_prices_every_plan_at_the_published_peg():
         assert plan["credits"] == plan["monthly_usd"] * 100
         assert plan["tier"] in catalog["tiers"]
     names = {m["name"] for m in catalog["models"]}
-    assert {"LTX 2.3", "Runway Gen-4 Turbo", "Kling 3 Turbo Pro", "Seedance 2.0", "Veo 3"} <= names
+    assert {"LTX 2.3", "Kling 3 Turbo Pro", "Seedance 2.0", "Veo 3.1"} <= names
+    assert {m["provider"] for m in catalog["models"]} == {"fal"}
     for m in catalog["models"]:
         # every advertised clip is priced by the same estimators the Queue uses
         assert m["credits"] >= pricing.CREDIT_FLOOR

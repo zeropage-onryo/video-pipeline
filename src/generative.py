@@ -30,7 +30,6 @@ from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from . import account_keys
 from .db import _now, connect, own_table
 from .shot import TOOLS, Shot
 
@@ -46,8 +45,14 @@ from .shot import TOOLS, Shot
 # makes keepable clips and "fal" would average four models that cost
 # $0.30 and $1.51 into one meaningless row. The split is also what keeps
 # fal's video daily cap from moving when someone renders a still.
-IMAGE_TOOLS = ("midjourney", "nano", "fal")
-LOG_TOOLS = TOOLS + IMAGE_TOOLS
+#
+# "higgsfield" joined on 2026-09-26: its video path was retired (fal is the
+# only video renderer), so it left shot.PLATFORMS and logs Soul STILLS only.
+# "manual" is the generic clip import (ops/render_queue.py): a clip rendered
+# anywhere, filed free. Neither is a platform a concept may plan a shot on.
+IMAGE_TOOLS = ("midjourney", "nano", "fal", "higgsfield")
+MANUAL_TOOLS = ("manual",)
+LOG_TOOLS = TOOLS + IMAGE_TOOLS + MANUAL_TOOLS
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS shots (
@@ -154,7 +159,10 @@ def _billed_to_operator(params_json) -> bool:
         source = json.loads(params_json).get("key_source")
     except (TypeError, ValueError):
         return True
-    return source != account_keys.SOURCE_ACCOUNT
+    # "account" is what a BYOK render wrote (per-account keys, removed
+    # 2026-09-26). Historical rows keep their label and keep reading as
+    # paid by somebody else; nothing writes it any more.
+    return source != "account"
 
 
 # (account_id, dsn, day, {tool: count}) while a counted_today() scope is
@@ -585,7 +593,7 @@ def _subscription_rows(dsn, account_id, sources) -> list:
     table: this is a LABEL on a card, and a database that has never
     rendered anything has no `generations` table at all. The board 500ing
     because nothing has ever been billed on it is the wrong failure --
-    the same degrade `_runway_state` makes for the daily count. An
+    the same degrade `_render_state` makes for the daily count. An
     unlabelled card is honest; a dead board is not.
     """
     try:

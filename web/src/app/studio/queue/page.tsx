@@ -7,19 +7,19 @@
    or picked, not archived, no clip yet), so it survives a restart; the
    Jobs list underneath IS the in-process registry, and says so.
 
-   ANY REGISTERED RENDERER (the overnight branch, reconciled 2026-09-12):
-   the card's selectors are `renderers` off /api/queue/pending — every
-   provider with its gates, its models and each model's legal duration
-   and frame axis — and approve posts {provider, model, duration, frame},
+   THE RENDERER CATALOGUE: the card's selectors are `renderers` off
+   /api/queue/pending — since 2026-09-26 only fal.ai, on the operator's key,
+   every render holding credits — with its gates, its models and each
+   model's legal duration and resolution — and approve posts {provider, model, duration, frame},
    which providers.check_render_choice refuses rather than clamps. The
    card's price is a label multiplied from the rate card; the authoritative
    estimate comes back on the approve.
 
-   Between the two sits the SUBSCRIPTION LANE: Runway's Explore mode is
-   free on the operator's Unlimited plan but has no API parameter, so the
-   render happens by hand in Chrome and the finished mp4 comes back as a
-   drop on its card (/api/queue/manual, operator-gated server-side; the
-   `manual_lane` capability only decides whether the section is drawn). */
+   Between the two sits the MANUAL IMPORT LANE: a clip rendered anywhere,
+   by hand, comes back as a drop on its card and is filed free
+   (/api/queue/manual, operator-gated server-side; the `manual_lane`
+   capability only decides whether the section is drawn). What rendered it
+   is free text: there is no model table to check it against. */
 /* eslint-disable @next/next/no-img-element */
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
@@ -42,11 +42,10 @@ import {
   type Concept,
   type Job,
   type LaneItem,
-  type LaneModel,
   type RenderChoice,
   type RenderQuote,
   type RendererSpec,
-  type RunwayState,
+  type RendererState,
 } from "@/lib/studio-api";
 import { cardFonts } from "@/components/studio/card-fonts";
 import { CARD, Hero, RefImg, RefThumbs, TAG, TAG_DARK, TitleBlock, brandName, partsOf, refItems, shotsLabel, stillsOf, windowLabel } from "@/components/studio/concept-card";
@@ -67,14 +66,6 @@ import {
   type Renderers,
 } from "@/lib/render-choice";
 
-const RATIO_NAMES: Record<string, string> = {
-  "720:1280": "9:16 · vertical",
-  "1280:720": "16:9 · wide",
-  "832:1104": "3:4 · portrait",
-  "1104:832": "4:3 · landscape",
-  "960:960": "1:1 · square",
-  "1584:672": "21:9 · cinema",
-};
 type JobRow = Job & { cancellable?: boolean };
 /* What you just did to a card, shown on it as a bone tag: RENDERING for as
    long as the approve's job is live, ARCHIVED / SHOT BY HAND for the beat
@@ -96,7 +87,7 @@ const POPK = "mb-2 font-plex text-[11px] tracking-[0.14em] text-bone3";
 export default function QueuePage() {
   const { me, brand, balance, toast } = useShell();
   const [pending, setPending] = useState<Concept[] | null>(null);
-  const [runway, setRunway] = useState<RunwayState | null>(null);
+  const [renderer, setRenderer] = useState<RendererState | null>(null);
   const [renderers, setRenderers] = useState<Record<string, RendererSpec>>({});
   const [error, setError] = useState<string | null>(null);
   const [jobs, setJobs] = useState<JobRow[]>([]);
@@ -108,8 +99,6 @@ export default function QueuePage() {
   // the lane: drawn only when the capability says so; the routes re-ask the gate
   const [laneOn, setLaneOn] = useState(false);
   const [lane, setLane] = useState<LaneItem[] | null>(null);
-  const [laneModels, setLaneModels] = useState<LaneModel[]>([]);
-  const [laneDefault, setLaneDefault] = useState("");
   const [lanePicks, setLanePicks] = useState<Record<number, { model?: string; ratio?: string; duration?: number; anchored?: boolean }>>({});
   const [dropping, setDropping] = useState<Record<number, string>>({});
 
@@ -122,7 +111,7 @@ export default function QueuePage() {
       .then((r) => {
         if (stale()) return;
         setPending(r.items);
-        setRunway(r.runway);
+        setRenderer(r.renderer ?? null);
         setRenderers(r.renderers || {});
         setError(null);
       })
@@ -135,8 +124,6 @@ export default function QueuePage() {
       .then((r) => {
         if (stale()) return;
         setLane(r.items);
-        setLaneModels(r.models || []);
-        setLaneDefault(r.default_model || "");
       })
       .catch(() => {
         if (!stale()) setLane([]);
@@ -258,7 +245,7 @@ export default function QueuePage() {
   }, [pending, renderers, quotes, paint]);
   const gateLine = (p: string) => {
     const r = renderers[p];
-    if (!r.available) return `${r.label}: no key`;
+    if (!r.available) return `${r.label}: not configured on this server`;
     return `${r.label}: ready${r.today != null ? ` · ${r.today}${r.cap ? `/${r.cap}` : ""} today` : ""}`;
   };
   const decide = async (c: Concept, what: "approve" | "reject" | "shot") => {
@@ -284,7 +271,7 @@ export default function QueuePage() {
         }
         const res = await queueApprove(c.id, choice);
         const r = res.render;
-        const charge = res.quote && !res.quote.byok && res.quote.credits != null ? creditsText(res.quote.credits) : null;
+        const charge = res.quote && res.quote.credits != null ? creditsText(res.quote.credits) : null;
         toast(
           r
             ? `Rendering ${c.n} — ${r.provider} · ${r.model} · ${r.frame} · ${charge ?? `~$${Number(r.estimate_usd).toFixed(2)}`}`
@@ -329,15 +316,16 @@ export default function QueuePage() {
     }
   };
 
-  /* ── the subscription lane ── */
+  /* ── the manual import lane: what rendered it is free text, and the frame
+     and length are what the person says they are (no model table) ── */
   const lanePick = (item: LaneItem) => {
     const p = lanePicks[item.concept_id] || {};
-    const model = p.model ?? (laneModels.some((m) => m.id === laneDefault) ? laneDefault : laneModels[0]?.id ?? "");
-    const spec = laneModels.find((m) => m.id === model);
-    const ratio = p.ratio ?? (spec?.ratios.includes(item.ratio) ? item.ratio : spec?.ratios[0] ?? item.ratio);
-    const duration = p.duration ?? (spec?.durations.includes(item.duration) ? item.duration : spec?.durations[0] ?? item.duration);
-    const anchored = p.anchored ?? !!item.keyframe_url;
-    return { model, ratio, duration, anchored, spec };
+    return {
+      model: p.model ?? "",
+      ratio: p.ratio ?? item.ratio,
+      duration: p.duration ?? item.duration,
+      anchored: p.anchored ?? !!item.keyframe_url,
+    };
   };
   const fileClip = async (item: LaneItem, file: File | undefined) => {
     if (!file) return;
@@ -346,12 +334,12 @@ export default function QueuePage() {
     try {
       const res = await fileLaneClip(item.concept_id, file, {
         shot_n: item.shot_n,
-        model: pick.model,
+        model: pick.model.trim() || undefined,
         ratio: pick.ratio,
         duration: pick.duration,
         anchored: pick.anchored,
       });
-      toast(`${item.title} filed — free on the subscription${res.media_url ? ` · ${res.media_url}` : ""}`);
+      toast(`${item.title} filed — free, imported by hand${res.media_url ? ` · ${res.media_url}` : ""}`);
       loadPending();
       loadLane();
       announceQueueChange();
@@ -368,7 +356,7 @@ export default function QueuePage() {
   const copyPrompt = async (item: LaneItem) => {
     try {
       await navigator.clipboard.writeText(item.prompt);
-      toast(`${item.title}'s prompt copied — paste it into Runway`);
+      toast(`${item.title}'s prompt copied — paste it into your render app`);
     } catch {
       toast("Clipboard blocked — select the prompt and copy it by hand", "err");
     }
@@ -383,8 +371,8 @@ export default function QueuePage() {
      approve is still its own click and its own signed quote. A card still
      pricing, refused or unpriced is counted out loud rather than as $0. */
   const spendable = (pending || []).filter((c) => !lockedFor(c) && !didFor(c));
-  // Credits and dollars are summed APART: credits are what this account is
-  // charged, dollars are what its own keys will be billed by the provider.
+  // Credits are what this account is charged. Dollars appear only for a
+  // card the server has not priced in credits (the rate card's label).
   const tally = spendable.reduce(
     (t, c) => {
       const pick = pickOf(c);
@@ -403,7 +391,7 @@ export default function QueuePage() {
   const short = charged && tally.credits > balance!.available ? tally.credits - Math.max(balance!.available, 0) : 0;
   const tallyPrice = [
     tally.credits ? `${creditsText(tally.credits)}` : "",
-    tally.usd ? `~$${tally.usd.toFixed(2)}${tally.credits ? " on your keys" : ""}` : "",
+    tally.usd ? `~$${tally.usd.toFixed(2)}` : "",
   ]
     .filter(Boolean)
     .join(" + ") || "nothing priced";
@@ -459,7 +447,7 @@ export default function QueuePage() {
                   <i className={`size-1.5 flex-none rounded-full ${!v.available ? "bg-[#4a4843]" : full ? "bg-gate-warn" : "bg-gate-pass"}`} />
                   {v.label.toUpperCase()}
                   <span className="text-bone3">
-                    {!v.available ? "NO KEY" : v.today != null ? `${v.today}${v.cap ? `/${v.cap}` : ""}` : "READY"}
+                    {!v.available ? "OFF" : v.today != null ? `${v.today}${v.cap ? `/${v.cap}` : ""}` : "READY"}
                   </span>
                 </span>
               );
@@ -467,10 +455,10 @@ export default function QueuePage() {
           </div>
         ) : (
           <span className="m">
-            {runway
-              ? runway.available
-                ? `${runway.model} · ~$${(runway.estimate_usd || 0).toFixed(2)} a clip`
-                : "Runway key not set — approving cannot render"
+            {renderer
+              ? renderer.available
+                ? `${renderer.label} · ${renderer.model} · ~$${(renderer.estimate_usd || 0).toFixed(2)} a clip`
+                : "Video rendering isn't configured on this server — approving cannot render"
               : "—"}
           </span>
         )}
@@ -505,7 +493,7 @@ export default function QueuePage() {
           const quote = quoteOf(c, pick);
           const plan = pick && spec ? planFor(spec, pick, c.timeline ? partsOf(c) : null, quote) : null;
           // one reason left, and the only one a restart could ever have fixed
-          const noKey = r && !r.available ? `${r.label} key not set` : "";
+          const noKey = r && !r.available ? `${r.label} is not configured` : "";
           const badLength = !!(pick && spec && plan && !plan.timed && !legalDuration(spec.duration as AxisLike, Number(pick.duration)));
           // a blocked card says WHY, in the gate's own words, not how it would anchor
           // park_reason is what the NIGHT said ("no keyframe: daily ceiling
@@ -633,11 +621,11 @@ export default function QueuePage() {
                               <div className="flex flex-wrap items-center gap-1.5">
                                 {providerIds.map((name) => {
                                   const v = renderers[name];
-                                  // a vendor with no key is one dead pill, not a row of them
+                                  // an unconfigured renderer is one dead pill, not a row of them
                                   if (!v.available)
                                     return (
                                       <button type="button" key={name} disabled className={pill(false, true)}>
-                                        {v.label} · no key
+                                        {v.label} · not configured
                                       </button>
                                     );
                                   return (v.models || []).map((m) => (
@@ -706,7 +694,7 @@ export default function QueuePage() {
                                       type="button"
                                       key={String(f)}
                                       disabled={spec.frame.kind === "fixed"}
-                                      title={spec.frame.kind === "fixed" ? spec.frame.note || "the only frame this model offers" : RATIO_NAMES[String(f)]}
+                                      title={spec.frame.kind === "fixed" ? spec.frame.note || "the only frame this model offers" : undefined}
                                       aria-pressed={String(f) === pick.frame}
                                       className={pill(String(f) === pick.frame, spec.frame.kind === "fixed")}
                                       onClick={() => hold(c, { ...pick, frame: String(f) })}
@@ -717,7 +705,7 @@ export default function QueuePage() {
                                 </div>
                               </div>
                             </div>
-                            <div className="font-plex text-[11px] text-bone3">Greyed out = no API key on this account</div>
+                            <div className="font-plex text-[11px] text-bone3">Greyed out = not available on this server</div>
                           </>
                         ) : null}
                       </Popover.Popup>
@@ -779,10 +767,10 @@ export default function QueuePage() {
       {laneOn ? (
         <>
           <div className="chead">
-            <h3>Subscription lane</h3>
+            <h3>Manual import</h3>
             <span className="m">{lane ? `${lane.length} to render by hand` : ""}</span>
             <span className="spacer" />
-            <span className="m">Runway Explore · free on Unlimited · rendered by hand in Chrome</span>
+            <span className="m">Manual import · a clip rendered anywhere · filed free</span>
           </div>
           {lane && !lane.length ? (
             <p className="stateline" style={{ padding: "0 42px" }}>
@@ -809,7 +797,7 @@ export default function QueuePage() {
                   </div>
                   <div className="scframe drag">
                     {still ? (
-                      <img src={still} alt="" draggable title="Drag me into Runway's start-image slot" />
+                      <img src={still} alt="" draggable title="Drag me into your render app's start-image slot" />
                     ) : (
                       <span className="scempty">
                         <span className="m">no keyframe · text-to-video</span>
@@ -818,40 +806,38 @@ export default function QueuePage() {
                   </div>
                   <p className="scpre">{item.prompt}</p>
                   <div className="scchoice">
-                    <label className="scsel" title="What Runway rendered it as">
+                    <label className="scsel" title="What rendered it — free text, optional">
                       <Monitor size={11} />
-                      <select
-                        aria-label="Model rendered"
+                      <input
+                        type="text"
+                        aria-label="What rendered it"
+                        placeholder="what rendered it, e.g. Kling 3 web app"
                         value={pick.model}
-                        onChange={(e) => setLanePicks((w) => ({ ...w, [item.concept_id]: { ...w[item.concept_id], model: e.target.value, ratio: undefined, duration: undefined } }))}
-                      >
-                        {laneModels.map((m) => (
-                          <option key={m.id} value={m.id}>
-                            {m.id}
-                          </option>
-                        ))}
-                      </select>
+                        onChange={(e) => setLanePicks((w) => ({ ...w, [item.concept_id]: { ...w[item.concept_id], model: e.target.value } }))}
+                      />
                     </label>
                     <label className="scsel" title="Frame rendered">
                       <RectangleVertical size={11} />
-                      <select aria-label="Frame rendered" value={pick.ratio} onChange={(e) => setLanePicks((w) => ({ ...w, [item.concept_id]: { ...w[item.concept_id], ratio: e.target.value } }))}>
-                        {(pick.spec?.ratios || [item.ratio]).map((r) => (
-                          <option key={r} value={r}>
-                            {r}
-                            {RATIO_NAMES[r] ? ` · ${RATIO_NAMES[r]}` : ""}
-                          </option>
-                        ))}
-                      </select>
+                      <input
+                        type="text"
+                        aria-label="Frame rendered"
+                        value={pick.ratio}
+                        onChange={(e) => setLanePicks((w) => ({ ...w, [item.concept_id]: { ...w[item.concept_id], ratio: e.target.value } }))}
+                        style={{ width: "10ch" }}
+                      />
                     </label>
-                    <label className="scsel" title="Length rendered">
+                    <label className="scsel" title="Length rendered, in seconds">
                       <Clock size={11} />
-                      <select aria-label="Length rendered" value={String(pick.duration)} onChange={(e) => setLanePicks((w) => ({ ...w, [item.concept_id]: { ...w[item.concept_id], duration: Number(e.target.value) } }))}>
-                        {(pick.spec?.durations || [item.duration]).map((d) => (
-                          <option key={d} value={String(d)}>
-                            {d} sec
-                          </option>
-                        ))}
-                      </select>
+                      <input
+                        type="number"
+                        min={1}
+                        step={1}
+                        aria-label="Length rendered, in seconds"
+                        value={Number.isFinite(pick.duration) ? String(pick.duration) : ""}
+                        onChange={(e) => setLanePicks((w) => ({ ...w, [item.concept_id]: { ...w[item.concept_id], duration: e.target.value === "" ? undefined : Number(e.target.value) } }))}
+                        style={{ width: "6ch" }}
+                      />
+                      sec
                     </label>
                     {still ? (
                       <label className="scsel" title="Was the keyframe used as the start image">
@@ -882,7 +868,7 @@ export default function QueuePage() {
                       <Copy size={12} strokeWidth={1.6} /> Copy prompt
                     </button>
                     <span className="spacer" />
-                    <span className="m">{item.lane || "runway explore"} · filed as free</span>
+                    <span className="m">{item.lane || "manual import"} · filed as free</span>
                   </div>
                 </article>
               );

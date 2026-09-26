@@ -1,10 +1,10 @@
 """
 Tests for the Workflows surface: the saved-graph store
-(src/workflows.py), the free-standing Runway wrapper
-(runway.generate_from_prompt), the server-side executor
-(app/workflow_runner.py), and the /api/workflows routes.
+(src/workflows.py), the server-side executor (app/workflow_runner.py),
+the Generate node's renderer (fal.generate_from_prompt, the only video
+renderer since 2026-09-26), and the /api/workflows routes.
 
-Hermetic throughout: Gemini and Runway are patched at the function the
+Hermetic throughout: Gemini and fal are patched at the function the
 code actually calls, the spend gate is exercised for real (refusal is
 the default, exactly as production), and jobs are polled to completion
 so a silently-dead thread fails loudly.
@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 
 from app import jobs, workflow_runner
 from app.main import app
-from src import generative, imagery, render_assets, runway, workflows
+from src import fal, generative, imagery, render_assets, workflows
 
 client = TestClient(app)
 
@@ -58,13 +58,10 @@ def tmp_db(pg, monkeypatch):
 
 
 def unkeyed(monkeypatch):
-    """No vendor has a key, for this account or in the environment. The
-    suite inherits the operator's real .env on his machine (Higgsfield and
-    Gemini are set there), so "unconfigured" has to be asserted, never
-    assumed -- see [[test_env_posture]]."""
-    from src import fal, higgsfield, veo
-    for vendor in (runway, fal, higgsfield, veo):
-        monkeypatch.setattr(vendor, "has_key", lambda account_id=None: False)
+    """The operator's fal key is not set. The suite inherits the
+    operator's real .env on his machine, so "unconfigured" has to be
+    asserted, never assumed -- see [[test_env_posture]]."""
+    monkeypatch.setattr(fal, "has_key", lambda account_id=None: False)
 
 
 def wait_for_job(job_id, timeout=5.0):
@@ -143,95 +140,13 @@ def test_workflow_list_scopes_by_brand(tmp_db):
     assert len(workflows.list_workflows(dsn=tmp_db, account_id=None)) == 2
 
 
-# --- runway.generate_from_prompt --------------------------------------------
-
-class FakeClient:
-    def __init__(self, outputs=("https://fake.runway/clip.mp4",)):
-        self.calls = []
-        self._outputs = list(outputs)
-        self.image_to_video = SimpleNamespace(create=self._create)
-
-    def _create(self, **kwargs):
-        self.calls.append(kwargs)
-        task = SimpleNamespace(output=self._outputs)
-        return SimpleNamespace(wait_for_task_output=lambda: task)
-
-
 @pytest.fixture
 def fake_download(monkeypatch):
     def _fake(url, out_path):
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_bytes(b"\x00" * 2048)
 
-    monkeypatch.setattr(runway, "_download", _fake)
-
-
-def test_generate_from_prompt_refuses_without_spend_approval(tmp_db, tmp_path,
-                                                             monkeypatch):
-    monkeypatch.delenv(runway.SPEND_ENV, raising=False)
-    monkeypatch.setattr(runway, "RENDER_DIR", tmp_path / "renders")
-    fake = FakeClient()
-    result = runway.generate_from_prompt("x", db_path=tmp_db, client=fake)
-    assert result["ok"] is False
-    assert "not approved" in result["error"]
-    assert fake.calls == []
-    with generative.connect(tmp_db) as conn:
-        assert conn.execute("SELECT COUNT(*) FROM generations").fetchone()[0] == 0
-
-
-def test_generate_from_prompt_honours_the_daily_cap(tmp_db, tmp_path, monkeypatch):
-    monkeypatch.setenv(runway.SPEND_ENV, "1")
-    monkeypatch.setattr(runway, "RENDER_DIR", tmp_path / "renders")
-    monkeypatch.setattr(runway, "generations_today",
-                        lambda db_path=None, **kw:
-                        runway.DAILY_CAP)
-    result = runway.generate_from_prompt("x", db_path=tmp_db, client=FakeClient())
-    assert result["ok"] is False
-    assert "daily cap" in result["error"]
-
-
-def test_generate_from_prompt_renders_and_logs(tmp_db, tmp_path, monkeypatch,
-                                               fake_download):
-    monkeypatch.setenv(runway.SPEND_ENV, "1")
-    monkeypatch.setattr(runway, "RENDER_DIR", tmp_path / "renders")
-    monkeypatch.setattr("src.storage.configured", lambda: False)
-    fake = FakeClient()
-    result = runway.generate_from_prompt("a drawer closing", db_path=tmp_db,
-                                         client=fake)
-    assert result["ok"] is True
-    assert result["media_url"].startswith("/renders/runway/wf-")
-    assert "prompt_image" not in fake.calls[0]      # no reference, none sent
-    with generative.connect(tmp_db) as conn:
-        row = conn.execute("SELECT tool, params_json FROM generations").fetchone()
-    assert row["tool"] == "runway"
-    assert '"source": "workflow"' in row["params_json"]
-    asset = render_assets.list_all(dsn=tmp_db, account_id=None)[0]
-    assert result["asset_id"] == asset["id"]
-    assert asset["media_kind"] == "video"
-    assert asset["prompt"] == "a drawer closing"
-    assert asset["model"] == runway.DEFAULT_MODEL
-
-
-def test_generate_from_prompt_turns_bytes_into_a_data_uri(tmp_db, tmp_path,
-                                                          monkeypatch, fake_download):
-    monkeypatch.setenv(runway.SPEND_ENV, "1")
-    monkeypatch.setattr(runway, "RENDER_DIR", tmp_path / "renders")
-    monkeypatch.setattr("src.storage.configured", lambda: False)
-    fake = FakeClient()
-    result = runway.generate_from_prompt("x", reference_image=b"\xff\xd8jpg",
-                                         db_path=tmp_db, client=fake)
-    assert result["ok"] is True
-    assert fake.calls[0]["prompt_image"].startswith("data:image/jpeg;base64,")
-    # an http URL passes straight through
-    runway.generate_from_prompt("x", reference_image="https://x.test/a.jpg",
-                                db_path=tmp_db, client=fake)
-    assert fake.calls[1]["prompt_image"] == "https://x.test/a.jpg"
-
-
-def test_generate_from_prompt_refuses_an_empty_prompt(tmp_db):
-    result = runway.generate_from_prompt("  ", db_path=tmp_db)
-    assert result["ok"] is False
-    assert "empty prompt" in result["error"]
+    monkeypatch.setattr(fal, "_download", _fake)
 
 
 # --- app/workflow_runner ----------------------------------------------------
@@ -265,14 +180,14 @@ def test_execute_graph_flows_values_through_the_reference_shape(tmp_db, monkeypa
 
     def fake_generate(prompt, *, reference_image=None, db_path=None, **kw):
         calls.append(("generate", prompt))
-        return {"ok": True, "media_url": "/renders/runway/wf-1.mp4",
+        return {"ok": True, "media_url": "/renders/fal/wf-1.mp4",
                 "generation_id": 1, "path": "x", "error": None}
 
     monkeypatch.setattr(workflow_runner, "enhance", fake_enhance)
-    monkeypatch.setattr(runway, "generate_from_prompt", fake_generate)
+    monkeypatch.setattr(fal, "generate_from_prompt", fake_generate)
     # this test is "a CONFIGURED Runway renders" -- an unconfigured one
     # is skipped, not run (see the unarmed-connector test below)
-    monkeypatch.setenv("RUNWAYML_API_SECRET", "k")
+    monkeypatch.setenv("FAL_KEY", "k")
 
     emitted = []
     result = workflow_runner.execute_graph(
@@ -283,14 +198,14 @@ def test_execute_graph_flows_values_through_the_reference_shape(tmp_db, monkeypa
     assert calls == [("enhance", "SYS", "USER"),
                      ("generate", "ENHANCED[SYS|USER]")]
     assert result["nodes"]["4"] == {"status": "done", "kind": "media",
-                                    "output": "/renders/runway/wf-1.mp4",
+                                    "output": "/renders/fal/wf-1.mp4",
                                     "error": None}
     assert emitted  # progress was pushed along the way
 
 
 def test_execute_graph_skips_downstream_of_a_failure(tmp_db, monkeypatch):
     called = []
-    monkeypatch.setattr(runway, "generate_from_prompt",
+    monkeypatch.setattr(fal, "generate_from_prompt",
                         lambda *a, **k: called.append(a) or {"ok": True})
     # no gemini client -> the enhance node fails, generate must be skipped
     result = workflow_runner.execute_graph(reference_shape_graph(),
@@ -299,7 +214,7 @@ def test_execute_graph_skips_downstream_of_a_failure(tmp_db, monkeypatch):
     assert result["nodes"]["3"]["status"] == "failed"
     assert "GEMINI_API_KEY" in result["nodes"]["3"]["error"]
     assert result["nodes"]["4"]["status"] == "skipped"
-    assert called == []                    # runway was never touched
+    assert called == []                    # the renderer was never touched
     # the pure nodes upstream still ran
     assert result["nodes"]["1"]["status"] == "done"
 
@@ -367,7 +282,7 @@ def test_api_run_generate_node_carries_the_persons_approval(tmp_db, monkeypatch)
     """The acceptance line MOVED (2026-09-09, Mike's call).
 
     It used to be "a Workflows render does NOT fire without
-    RUNWAY_SPEND_OK=1". Running this canvas is a person pressing a
+    *_SPEND_OK=1". Running this canvas is a person pressing a
     priced button, and making that person restart the server with an
     environment variable to make it work meant the variable ended up set
     for the whole session anyway -- an approval that was always on,
@@ -380,8 +295,8 @@ def test_api_run_generate_node_carries_the_persons_approval(tmp_db, monkeypatch)
     That half is tests/test_queue_renderers.py::
     test_the_gate_still_refuses_a_caller_that_nobody_approved.
     """
-    monkeypatch.delenv(runway.SPEND_ENV, raising=False)
-    monkeypatch.setenv("RUNWAYML_API_SECRET", "k")
+    monkeypatch.delenv(fal.SPEND_ENV, raising=False)
+    monkeypatch.setenv("FAL_KEY", "k")
     seen = {}
 
     def fake(prompt, **kw):
@@ -389,7 +304,7 @@ def test_api_run_generate_node_carries_the_persons_approval(tmp_db, monkeypatch)
         return {"ok": True, "media_url": "https://x/clip.mp4",
                 "generation_id": 1, "error": None}
 
-    monkeypatch.setattr(runway, "generate_from_prompt", fake)
+    monkeypatch.setattr(fal, "generate_from_prompt", fake)
     graph = {
         "nodes": [node(1, "zpf/user_prompt", properties={"text": "night ride"}),
                   node(2, "zpf/generate", inputs=[slot("prompt", "text", 1),
@@ -560,8 +475,8 @@ def test_api_exec_generate_carries_the_persons_approval(tmp_db, monkeypatch):
     """The Generate node's own Run, on the same terms as Run all above:
     pressing it is the approval, and the route says so explicitly rather
     than depending on what is in the server's environment."""
-    monkeypatch.setenv("RUNWAYML_API_SECRET", "k")
-    monkeypatch.delenv(runway.SPEND_ENV, raising=False)
+    monkeypatch.setenv("FAL_KEY", "k")
+    monkeypatch.delenv(fal.SPEND_ENV, raising=False)
     seen = {}
 
     def fake(prompt, **kw):
@@ -569,7 +484,7 @@ def test_api_exec_generate_carries_the_persons_approval(tmp_db, monkeypatch):
         return {"ok": True, "media_url": "https://x/clip.mp4",
                 "generation_id": 1, "error": None}
 
-    monkeypatch.setattr(runway, "generate_from_prompt", fake)
+    monkeypatch.setattr(fal, "generate_from_prompt", fake)
     job = wait_for_job(client.post("/api/workflows/exec/generate",
                                    json={"prompt": "x"}).json()["job_id"])
     assert job["status"] == "done", job.get("error")
@@ -1027,7 +942,7 @@ def test_a_scenes_references_inform_every_node_that_runs(tmp_db, monkeypatch):
     JPEG = b"\xff\xd8\xff\xe0face"
     refs = ["https://cdn.test/face.jpg", "https://cdn.test/jacket.jpg"]
     monkeypatch.setattr(imagery, "fetch_image_bytes", lambda url: JPEG)
-    monkeypatch.setattr(runway, "has_key", lambda account_id=None: True)
+    monkeypatch.setattr(fal, "has_key", lambda account_id=None: True)
 
     seen = {}
     monkeypatch.setattr(workflow_runner, "enhance",
@@ -1038,9 +953,9 @@ def test_a_scenes_references_inform_every_node_that_runs(tmp_db, monkeypatch):
                         seen.__setitem__("nano", reference_image) or
                         {"ok": True, "media_url": "https://cdn.test/key.png",
                          "generation_id": 1, "path": "k", "error": None})
-    monkeypatch.setattr(runway, "generate_from_prompt",
+    monkeypatch.setattr(fal, "generate_from_prompt",
                         lambda prompt, *, reference_image=None, **kw:
-                        seen.__setitem__("runway", reference_image) or
+                        seen.__setitem__("fal", reference_image) or
                         {"ok": True, "media_url": "/c.mp4", "generation_id": 2,
                          "path": "c", "error": None})
 
@@ -1071,7 +986,7 @@ def test_a_scenes_references_inform_every_node_that_runs(tmp_db, monkeypatch):
     # the /characters/... case that carries a name.
     assert seen["nano"] == [("", JPEG), ("", JPEG)]
     # Runway's API anchors on ONE frame, so it takes the first only
-    assert seen["runway"] == "https://cdn.test/face.jpg"
+    assert seen["fal"] == "https://cdn.test/face.jpg"
 
 
 def test_nano_attaches_every_reference_and_says_how_many(tmp_db, tmp_path, monkeypatch):
@@ -1154,22 +1069,6 @@ def test_nano_does_not_retry_a_real_refusal(tmp_db, tmp_path, monkeypatch):
     assert not result["ok"] and len(calls) == 1
 
 
-def test_image_for_runway_carries_an_upstream_keyframe(tmp_path, monkeypatch):
-    """The Nano keyframe feeds Generate's image port, but /renders/ is
-    local until R2 is configured -- Runway could never fetch it, so it
-    must arrive as bytes or the anchor is silently lost."""
-    renders = tmp_path / "data" / "renders" / "nano"
-    renders.mkdir(parents=True)
-    (renders / "wf-1.png").write_bytes(b"KEYFRAME")
-    monkeypatch.setattr(imagery, "render_bytes",
-                        lambda v: (tmp_path / "data" / "renders"
-                                   / v[len("/renders/"):]).read_bytes())
-    assert workflow_runner.image_for_runway("/renders/nano/wf-1.png") == b"KEYFRAME"
-    # public URLs still pass straight through as prompt_image
-    assert workflow_runner.image_for_runway(
-        "https://cdn.test/a.jpg") == "https://cdn.test/a.jpg"
-
-
 def test_render_bytes_refuses_a_path_that_escapes_the_render_dir():
     # pyproject.toml is tracked, so it definitely exists -- the guard is
     # what refuses it, not a missing file
@@ -1183,8 +1082,8 @@ def test_generate_falls_back_to_the_shots_reference_like_the_other_nodes(
     button was pressed: the per-node Run sends properties.image_url, so
     Run all has to honour the same fallback enhance and nano already do."""
     seen = {}
-    monkeypatch.setattr(runway, "has_key", lambda account_id=None: True)
-    monkeypatch.setattr(runway, "generate_from_prompt",
+    monkeypatch.setattr(fal, "has_key", lambda account_id=None: True)
+    monkeypatch.setattr(fal, "generate_from_prompt",
                         lambda prompt, *, reference_image=None, **kw:
                         seen.__setitem__("ref", reference_image) or
                         {"ok": True, "media_url": "/x.mp4", "generation_id": 1,
@@ -1201,18 +1100,15 @@ def test_generate_falls_back_to_the_shots_reference_like_the_other_nodes(
     assert seen["ref"] == "https://cdn.test/plate.jpg"
 
 
-def test_an_unconfigured_runway_node_is_skipped_not_failed(tmp_db, monkeypatch):
+def test_an_unconfigured_video_node_is_skipped_not_failed(tmp_db, monkeypatch):
     """A chain whose keyframe rendered must not report itself failed
     just because no renderer was ever set up. The spend gate is the
     opposite case and still fails loudly -- see
     test_api_run_generate_node_carries_the_persons_approval.
 
-    EVERY vendor has to be unkeyed for this to be the unconfigured case
-    (2026-09-11): the node renders on whatever the account holds a key
-    for, and the suite inherits the operator's own .env on his machine
-    while CI has none -- a test that only cleared Runway passed in CI and
-    failed on his Mac, which is the posture leak conftest's r2_off exists
-    for."""
+    The key has to be cleared, not assumed absent: the suite inherits the
+    operator's own .env on his machine while CI has none, which is the
+    posture leak conftest's r2_off exists for."""
     unkeyed(monkeypatch)
     graph = {
         "nodes": [node(1, "zpf/user_prompt", properties={"text": "night ride"}),
@@ -1223,7 +1119,7 @@ def test_an_unconfigured_runway_node_is_skipped_not_failed(tmp_db, monkeypatch):
     result = workflow_runner.execute_graph(graph, gemini_client=object(),
                                            db_path=tmp_db)
     assert result["nodes"]["2"]["status"] == "skipped"
-    assert "no video renderer key" in result["nodes"]["2"]["error"]
+    assert "FAL_KEY" in result["nodes"]["2"]["error"]
     assert result["nodes"]["1"]["status"] == "done"       # the rest still ran
 
 
@@ -1235,8 +1131,8 @@ def test_run_all_does_not_render_a_billable_clip_without_a_quote(tmp_db, monkeyp
     not rendered around the Queue's price."""
     from src import pricing
     entered = []
-    monkeypatch.setattr(runway, "has_key", lambda account_id=None: True)
-    monkeypatch.setattr(runway, "generate_from_prompt",
+    monkeypatch.setattr(fal, "has_key", lambda account_id=None: True)
+    monkeypatch.setattr(fal, "generate_from_prompt",
                         lambda prompt, **kw: entered.append(prompt) or
                         {"ok": True, "media_url": "/x.mp4", "generation_id": 1,
                          "path": "p", "error": None})
@@ -1311,17 +1207,15 @@ def test_api_exec_nano_sends_every_reference_the_canvas_posted(
 
 
 def test_api_exec_generate_anchors_on_the_first_reference(tmp_db, monkeypatch):
-    """Runway takes exactly one prompt_image, so of the list the canvas
-    posts only the first is usable -- the same rule the graph runner's
-    Generate branch follows."""
+    """A clip anchors on exactly one start image, so of the list the
+    canvas posts only the first is usable -- the same rule the graph
+    runner's Generate branch follows."""
     seen = {}
 
-    monkeypatch.setattr(runway, "has_key", lambda account_id=None: True)
-    monkeypatch.setattr(runway, "generate_from_prompt",
+    monkeypatch.setattr(fal, "has_key", lambda account_id=None: True)
+    monkeypatch.setattr(fal, "generate_from_prompt",
                         lambda prompt, **kw: seen.update(kw) or {
                             "ok": True, "media_url": "/renders/clip.mp4"})
-    monkeypatch.setattr("app.workflow_runner.image_for_runway",
-                        lambda url, resolve_photo=None: url)
 
     response = client.post("/api/workflows/exec/generate", json={
         "prompt": "a ride",
@@ -1419,8 +1313,8 @@ def test_every_shot_row_call_site_forwards_the_account():
     """The guard the two tests above cannot give on their own.
 
     The bug was one dropped argument at one of eight call sites across
-    three renderer modules -- and runway's and higgsfield's were dropped
-    the same way, reachable the moment their spend gates open. A
+    three renderer modules -- and the others were dropped the same way,
+    reachable the moment their spend gates open. A
     keyword-only `account_id` that defaults to None turns a missed call
     site into a silent mis-write, so assert on the source: nothing may
     call _shot_row_for_prompt without forwarding an account.
@@ -1430,7 +1324,7 @@ def test_every_shot_row_call_site_forwards_the_account():
 
     root = pathlib.Path(__file__).resolve().parent.parent
     unstamped = []
-    for name in ("nano_banana", "runway", "higgsfield"):
+    for name in ("nano_banana", "fal", "higgsfield"):
         path = root / "src" / f"{name}.py"
         tree = ast.parse(path.read_text())
         for node in ast.walk(tree):
@@ -1537,15 +1431,18 @@ def test_a_saved_gen_space_graph_round_trips_through_the_api(tmp_db):
     assert saved["graph"]["nodes"][4]["inputs"][4]["links"] == [3, 4]
 
 
-def test_the_runway_block_says_what_a_clip_is(tmp_db):
-    """The Gen Space's model chips (duration, ratio) read the same block
-    the Queue prices from, on both the queue and the concept detail."""
-    from src import preprod
+def test_the_renderer_block_says_what_a_clip_is(tmp_db):
+    """The Gen Space's model chips (duration, resolution) read the same
+    block the Queue prices from (was `runway`, the fal default since
+    2026-09-26)."""
+    from src import preprod, providers
     preprod.init(tmp_db)                 # the queue reads the concept rows
-    data = client.get("/api/queue/pending").json()["runway"]
-    assert data["ratio"] == runway.DEFAULT_RATIO
-    assert data["duration"] == runway.DEFAULT_DURATION
-    assert "estimate_usd" in data and "model" in data
+    data = client.get("/api/queue/pending").json()["renderer"]
+    default = providers.check_render_choice()
+    assert (data["provider"], data["model"]) == (default["provider"], default["model"])
+    assert data["duration"] == default["duration"]
+    assert data["resolution"] == default["frame"]
+    assert data["estimate_usd"] == pytest.approx(default["estimate_usd"])
 
 
 # --- the React shell's account block (2026-09-11) ----------------------------
@@ -1580,8 +1477,7 @@ def test_scene_render_attaches_output_even_without_browser(monkeypatch, endpoint
     attached = []
     render_inputs = []
     monkeypatch.setattr(imagery, "image_bytes_for_gemini", lambda url, **k: b"face")
-    monkeypatch.setattr(workflow_runner, "image_for_runway", lambda url, **k: url)
-    vendor = nano_banana if endpoint == "nano" else runway
+    vendor = nano_banana if endpoint == "nano" else fal
     monkeypatch.setattr(vendor, "has_key", lambda account_id=None: True)
     def render(prompt, **kwargs):
         render_inputs.append(kwargs.get("reference_image"))
@@ -1599,67 +1495,11 @@ def test_scene_render_attaches_output_even_without_browser(monkeypatch, endpoint
     assert render_inputs[0] == ([b"face"] if endpoint == "nano" else "/refs/face.jpg")
 
 
-# --- the Generate node renders on whatever this account can use ------------
-# 2026-09-11, Mike: the node was Runway-only, so an account holding a
-# Higgsfield key and no Runway key got "RUNWAYML_API_SECRET not set" on
-# every Run. Both of its doors -- the node's own Run and Run all -- now ask
-# providers.renderer_for.
+# --- the Generate node renders on fal -----------------------------------------
 
-def only_higgsfield_keyed(monkeypatch):
-    from src import fal, higgsfield
-    monkeypatch.setattr(runway, "has_key", lambda account_id=None: False)
-    monkeypatch.setattr(fal, "has_key", lambda account_id=None: False)
-    monkeypatch.setattr(higgsfield, "has_key", lambda account_id=None: True)
-    seen = {}
-
-    def render(prompt, **kwargs):
-        seen["prompt"] = prompt
-        seen.update(kwargs)
-        return {"ok": True, "media_url": "https://cdn.test/hf.mp4",
-                "generation_id": 1, "path": "p", "error": None}
-
-    monkeypatch.setattr(higgsfield, "generate_from_prompt", render)
-    monkeypatch.setattr(runway, "generate_from_prompt",
-                        lambda *a, **k: pytest.fail("Runway was called"))
-    return seen
-
-
-def test_the_nodes_own_run_renders_on_higgsfield_when_that_is_the_key(
-        tmp_db, monkeypatch):
-    seen = only_higgsfield_keyed(monkeypatch)
-    response = client.post("/api/workflows/exec/generate", json={
-        "prompt": "a ride", "images": ["/characters/michael/photo/a.jpg"]})
-    assert response.status_code == 200, response.text
-    job = wait_for_job(response.json()["job_id"])
-    assert job["status"] == "done", job.get("error")
-    assert seen["approved"] is True
-    assert "account_id" in seen
-    # Higgsfield fetches by URL and resolves local refs itself, so it is
-    # handed the reference as-is plus the resolver -- never Runway's bytes
-    assert seen["reference_image"] == "/characters/michael/photo/a.jpg"
-    assert callable(seen["resolve_photo"])
-
-
-def test_run_all_renders_on_higgsfield_when_that_is_the_key(tmp_db, monkeypatch):
-    seen = only_higgsfield_keyed(monkeypatch)
-    graph = {
-        "nodes": [node(1, "zpf/user_prompt", properties={"text": "night ride"}),
-                  node(2, "zpf/generate",
-                       inputs=[slot("prompt", "text", 1),
-                               slot("image", "image", None)])],
-        "links": [[1, 1, 0, 2, 0, "text"]],
-    }
-    result = workflow_runner.execute_graph(graph, gemini_client=object(),
-                                           db_path=tmp_db, account_id=7)
-    assert result["nodes"]["2"]["status"] == "done", result["nodes"]["2"]
-    assert seen["prompt"] == "night ride"
-    assert seen["account_id"] == 7
-
-
-def test_no_key_anywhere_still_refuses_and_says_what_to_add(tmp_db, monkeypatch):
-    from src import fal, higgsfield
-    for vendor in (runway, fal, higgsfield):
-        monkeypatch.setattr(vendor, "has_key", lambda account_id=None: False)
+def test_no_key_still_refuses_and_says_what_is_missing(tmp_db, monkeypatch):
+    unkeyed(monkeypatch)
     res = client.post("/api/workflows/exec/generate", json={"prompt": "x"})
     assert res.status_code == 503
-    assert "Higgsfield" in res.json()["error"]["message"]
+    assert "FAL_KEY" in res.json()["error"]["message"]
+    assert "Runway" not in res.json()["error"]["message"]

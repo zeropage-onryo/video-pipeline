@@ -103,7 +103,7 @@ const GROUPS: { title: string; items: Faq[] }[] = [
         q: "Which models can I render on?",
         a: (
           <p>
-            Runway, Kling, LTX, Wan, Seedance and Veo, chosen per approve. The{" "}
+            Kling, LTX, Wan, Seedance and Veo, all rendered through fal and chosen per approve. The{" "}
             <Link href="/models">models page</Link> lists each with its tier and what a clip costs.
           </p>
         ),
@@ -129,15 +129,6 @@ const GROUPS: { title: string; items: Faq[] }[] = [
           <p>
             {CATALOG.expiry_months} months after they land. Your monthly allowance is spent before any credit
             you bought.
-          </p>
-        ),
-      },
-      {
-        q: "Can I use my own API keys instead?",
-        a: (
-          <p>
-            Yes. Renders on a key you add cost no credits; the provider bills you directly. A plan still decides
-            which models the studio quotes.
           </p>
         ),
       },

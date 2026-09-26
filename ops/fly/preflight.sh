@@ -11,7 +11,6 @@ for name in \
     SUPABASE_URL \
     SUPABASE_ANON_KEY \
     SESSION_SECRET \
-    ACCOUNT_KEYS_SECRET \
     SITE_URL
 do
     if [ -z "${!name:-}" ]; then
@@ -51,18 +50,14 @@ if [ "${DEV_TOOLS:-0}" = "1" ]; then
     exit 1
 fi
 
-python - <<'PY'
-import os
-from cryptography.fernet import Fernet
-
-try:
-    Fernet(os.environ["ACCOUNT_KEYS_SECRET"].encode())
-except Exception as exc:
-    raise SystemExit("ACCOUNT_KEYS_SECRET is not a valid Fernet key") from exc
-PY
-
 if [ -z "${GEMINI_API_KEY:-${GOOGLE_API_KEY:-}}" ]; then
     echo "warning: no Gemini key is configured; generation will be unavailable" >&2
+fi
+
+# fal is the only video renderer (2026-09-26). A warning, not a refusal:
+# the studio still writes, picks and keyframes without it.
+if [ -z "${FAL_KEY:-${FAL_API_KEY:-}}" ]; then
+    echo "warning: no FAL_KEY is configured; video rendering will be unavailable" >&2
 fi
 
 echo "deployment configuration: ok"

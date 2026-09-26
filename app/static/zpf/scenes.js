@@ -9,7 +9,7 @@
    the references it was written against; the prompt that came back is
    in the card's drawer (2026-09-17). Picking one is the
    label (preprod.pick_rate). Nothing renders from here: a picked
-   concept moves to Queue, and approving it there is what calls Runway.
+   concept moves to Queue, and approving it there is what renders it.
 
    The card leads with ONE line saying what happens (2026-08-31). A
    scene prompt is ~1200 characters of camera, grade, beats and

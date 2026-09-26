@@ -11,7 +11,7 @@
    and the RAG shelf, the file stays, and a concept whose shot already
    carries the clip keeps it. "Make element" is the bridge to the other
    side: a still becomes a character / prop / place with that frame as
-   its first photo (the Higgsfield "Create Element" move). The zoom
+   its first photo (the "Create Element" move). The zoom
    slider is five whole-column stops, so a row never ends on a half tile. */
 /* eslint-disable @next/next/no-img-element */
 import { useEffect, useMemo, useRef, useState } from "react";

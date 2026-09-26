@@ -68,7 +68,7 @@ a commit, or a log line.**
 
 Required (`ops/fly/preflight.sh` refuses to boot without them):
 `DATABASE_URL`, `RAG_DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`,
-`SESSION_SECRET`, `ACCOUNT_KEYS_SECRET`, `SITE_URL`.
+`SESSION_SECRET`, `SITE_URL`.
 
 Required for the walk to generate anything: `GEMINI_API_KEY` (or
 `GOOGLE_API_KEY`).

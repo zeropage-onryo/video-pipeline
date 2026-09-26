@@ -56,8 +56,8 @@ EVERY SHOT IS EITHER CAPTURED OR GENERATED — decide per shot:
   negative clause: no glossy CGI, no plastic AI sheen, no dramatic slow
   motion, no smooth commercial camera moves, no over-grading.
   Tools: VEO (text-to-video, generates audio), KLING (image-to-video
-  from a still or last frame), RUNWAY (video-to-video restyle or
-  extension), SEEDANCE (multi-shot, reference-driven, audio),
+  from a still or last frame), SEEDANCE (multi-shot, reference-driven,
+  audio),
   LTX (fast cinematic text/image-to-video), WAN (text/image-to-video,
   strong motion control).
   If the shot uses a character or prop listed above that has reference
@@ -82,6 +82,6 @@ expect it to be flagged for review):
 - Shot 1 must deliver the hook above.
 
 Output STRICT JSON ONLY in this exact shape:
-{"plan": {"duration": "e.g. 12s", "shots": [{"n": 1, "type": "CHARACTER or BROLL", "source": "CAMERA or AI", "cam": {cam_values} (CAMERA shots only), "tool": "VEO/KLING/RUNWAY/SEEDANCE/LTX/WAN (AI shots only)", "prompt": "paste-ready generation prompt (AI shots only), grounded in the named room and matching the grade", "location": "one of the location names", "desc": "exact camera position/framing/movement/action", "light": "lighting using what is actually visible there, or cheap practicals"}], "edit": "cut order + rhythm + sound design", "grade": "one-line grade note"}}
+{"plan": {"duration": "e.g. 12s", "shots": [{"n": 1, "type": "CHARACTER or BROLL", "source": "CAMERA or AI", "cam": {cam_values} (CAMERA shots only), "tool": "VEO/KLING/SEEDANCE/LTX/WAN (AI shots only)", "prompt": "paste-ready generation prompt (AI shots only), grounded in the named room and matching the grade", "location": "one of the location names", "desc": "exact camera position/framing/movement/action", "light": "lighting using what is actually visible there, or cheap practicals"}], "edit": "cut order + rhythm + sound design", "grade": "one-line grade note"}}
 
 Be specific to these real spaces. Never generic.

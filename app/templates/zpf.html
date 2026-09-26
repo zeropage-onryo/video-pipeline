@@ -313,7 +313,7 @@
            One shot's chain as DOM cards on an infinite canvas: the
            prompt and its instructions, the reference sets the scene was
            written against (a character's frames, a room's plates, the
-           composer's uploads), the enhance, the keyframe, the Runway
+           composer's uploads), the enhance, the keyframe, the video
            model and its output. Wires are real links the runner
            executes; the prompt bar underneath edits the shot's prompt
            and @-mentions drop an element on the canvas already wired
@@ -357,7 +357,7 @@
                 <div class="mentiondrop up" id="gsmentions" hidden></div>
               </div>
               <div class="gschips" id="gschips">
-                <span class="gschip" id="gschipmodel" title="Model"><svg viewBox="0 0 24 24"><path d="m12 3 1.8 4.6L18.5 9l-4.7 1.4L12 15l-1.8-4.6L5.5 9l4.7-1.4z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg><span>Runway</span></span>
+                <span class="gschip" id="gschipmodel" title="Model"><svg viewBox="0 0 24 24"><path d="m12 3 1.8 4.6L18.5 9l-4.7 1.4L12 15l-1.8-4.6L5.5 9l4.7-1.4z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg><span>fal</span></span>
                 <span class="gschip" id="gschipratio" title="Aspect ratio"><svg viewBox="0 0 24 24"><rect x="7" y="3" width="10" height="18" rx="2"/></svg><span>9:16</span></span>
                 <span class="gschip" id="gschipdur" title="Duration"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg><span>5 sec</span></span>
               </div>
@@ -437,16 +437,6 @@
       <span class="spacer"></span><span class="m" id="qcount">—</span>
     </div>
 
-    <!-- Bring your own renderer key (2026-09-12). On the Queue because
-         this is where a missing key is discovered; the panel is closed by
-         default because most days there is nothing to do here. The server
-         never returns a stored key -- see app/api.py's renderer-keys. -->
-    <details class="keyspanel" id="keyspanel">
-      <summary id="keyssummary">Renderer keys</summary>
-      <div class="stateline" id="keysstate" hidden></div>
-      <div class="keysgrid" id="keyslist"></div>
-    </details>
-
     <div class="chead">
       <h3>Awaiting approval</h3>
       <span class="m" id="pendcount">—</span>
@@ -457,15 +447,15 @@
     <div class="scenegrid" id="pendlist"></div>
 
 {% if manual_lane %}
-    <!-- The subscription lane. Server-rendered behind the operator flag
+    <!-- The manual lane. Server-rendered behind the operator flag
          (app/main.py's /ui), so a non-operator's page does not contain
          this section at all -- and every route it talks to re-asks the
          same gate, because a template condition is presentation. -->
     <div class="chead">
-      <h3>Subscription lane</h3>
+      <h3>Manual lane</h3>
       <span class="m" id="lanecount">—</span>
       <span class="spacer"></span>
-      <span class="m">Runway Explore · free on Unlimited · rendered by hand in Chrome</span>
+      <span class="m">Manual import · a clip rendered anywhere · filed free</span>
     </div>
     <div class="stateline" id="lanestate" hidden></div>
     <div class="scenegrid" id="lanelist"></div>

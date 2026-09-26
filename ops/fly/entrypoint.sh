@@ -4,7 +4,7 @@
 # "looks healthy, isn't" failure launchd_tcc.md already burned a night on
 # once, on the Mac. Dump the real environment to a file before cron ever
 # runs, and have both cron jobs source it first, so the nightly walk sees
-# GEMINI_API_KEY / DATABASE_URL / RAG_DATABASE_URL / ACCOUNT_KEYS_SECRET
+# GEMINI_API_KEY / FAL_KEY / DATABASE_URL / RAG_DATABASE_URL
 # exactly as the web process does.
 set -e
 

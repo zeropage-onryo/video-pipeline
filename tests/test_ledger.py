@@ -472,25 +472,26 @@ def test_expiry_never_hands_an_overdrawn_account_a_gift(led):
 
 
 # --------------------------------------------------------------------------
-# BYOK
+# every render holds (BYOK removed 2026-09-26)
 # --------------------------------------------------------------------------
 
-def test_a_byok_render_takes_no_hold(led):
-    """The customer paid their provider directly. Debiting them again
-    is charging twice for one clip."""
+def test_a_render_labelled_as_the_customers_own_key_still_holds(led):
+    """BYOK is gone: a customer's own key used to take no hold, which
+    left the operator paying for their Gemini, Nano, storage and compute.
+    A render still stamped key_source="account" is billed like any other."""
     dsn, account = led
     ledger.grant(account, 500, "subscription", dsn=dsn)
-    assert ledger.hold_for_render(account, ref="render-1", provider="runway",
-                                  estimate_usd=2.00, key_source="account",
-                                  dsn=dsn) is None
-    assert ledger.available(account, dsn) == 500
-    assert ledger.entries(account, dsn, ref="render-1") == []
+    hold_id = ledger.hold_for_render(account, ref="render-1", provider="fal",
+                                     estimate_usd=2.00, key_source="account",
+                                     dsn=dsn)
+    assert isinstance(hold_id, int)
+    assert ledger.available(account, dsn) == 500 - 480
 
 
 def test_a_render_on_the_installations_key_does_take_a_hold(led):
     dsn, account = led
     ledger.grant(account, 500, "subscription", dsn=dsn)
-    hold_id = ledger.hold_for_render(account, ref="render-1", provider="runway",
+    hold_id = ledger.hold_for_render(account, ref="render-1", provider="fal",
                                      estimate_usd=2.00, key_source="env", dsn=dsn)
     assert isinstance(hold_id, int)
     # the CHARGE, not the cost (2026-09-18): $2.00 at MARKUP 2.4 is 480
@@ -498,19 +499,14 @@ def test_a_render_on_the_installations_key_does_take_a_hold(led):
     assert ledger.available(account, dsn) == 500 - 480
 
 
-def test_an_unknown_key_source_is_billable(led):
-    """Wrong in the recoverable direction: a hold that should not have
-    been taken is released, while a render given away free on the
-    installation's key is found at the invoice."""
-    assert ledger.is_billable(None) is True
-    assert ledger.is_billable("env") is True
-    assert ledger.is_billable("account") is False
-    assert ledger.BYOK_KEY_SOURCE == "account"
-
-
-def test_the_byok_constant_is_the_one_account_keys_writes():
-    from src import account_keys
-    assert ledger.BYOK_KEY_SOURCE == account_keys.SOURCE_ACCOUNT
+def test_only_the_lane_marker_makes_a_render_unbillable(led):
+    """Whatever the credential label, a render is billable; only the
+    manual lanes' marker (paid outside the ledger) is not."""
+    for key_source in (None, "env", "account"):
+        assert ledger.is_billable(key_source) is True
+    assert not hasattr(ledger, "BYOK_KEY_SOURCE")
+    for marker in ledger.SUBSCRIPTION_SOURCES:
+        assert ledger.is_billable("env", source=marker) is False
 
 
 # --------------------------------------------------------------------------
@@ -523,7 +519,7 @@ def _generation(dsn, account, ref, *, output_path=None, cost_usd=None,
     shot_id = generative.add_shot(Shot(subject="a bike", action="idles"),
                                  dsn=dsn, account_id=account)
     gen_id = generative.record_generation(
-        shot_id, "runway", "a prompt",
+        shot_id, "kling", "a prompt",
         params={**ledger.ref_params(ref), "key_source": "env"},
         output_path=output_path, cost_usd=cost_usd, dsn=dsn, account_id=account)
     if reject_reason:

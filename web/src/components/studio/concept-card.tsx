@@ -194,7 +194,7 @@ export function NoReferenceSlate() {
 }
 
 /* The references as the card's picture, when nothing has been drawn yet.
-   The asset sort puts the character first (it is what Runway anchors on),
+   The asset sort puts the character first (it is what an image-to-video render anchors on),
    so with ref 1 alone as the hero a board of Michael scenes is a wall of
    one headshot and no card can be told from its neighbour (2026-09-18:
    17 of 21). Ref 1 keeps the large cell -- it IS the anchor -- and up to

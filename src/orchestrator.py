@@ -1347,54 +1347,33 @@ def keyframe(state: GenState) -> GenState:
 def generate_render(state: GenState) -> GenState:
     """The credit gate: rendering is dry by default (ZEROPAGE_RENDER != 1)
     -- every clip comes back url=None, ok=False and the run parks
-    downstream, so no credits are ever spent. With ZEROPAGE_RENDER=1,
-    tool==RUNWAY routes through runway.py (wired 2026-08-12), which has
-    its own second gate: no RUNWAY_SPEND_OK=1 means the clip comes back
-    ok=False with "render it in the app" as the reason -- the Runway API
-    has no Explore Mode, so API credits are always a deliberate, per-run
-    human approval.
+    downstream, so no credits are ever spent. With ZEROPAGE_RENDER=1 a
+    shot renders through fal (src/fal.py), which has its own second gate:
+    no FAL_SPEND_OK=1 means the clip comes back ok=False -- API spend is a
+    deliberate, per-run approval for an unattended night.
 
-    tool==HIGGSFIELD routes through higgsfield.py (wired 2026-08-31),
-    which has the same two gates -- and until it existed every night a
-    shot planned for Higgsfield came back "no adapter wired for
-    HIGGSFIELD" and parked, though shootgen names HIGGSFIELD first in
-    ZEROPAGE_AI_TOOLS and shot.py already compiled its prompt.
+    FAL IS THE ONLY VIDEO RENDERER SINCE 2026-09-26 (docs/tasks/
+    task-fal-only.md). A shot's planned tool picks the MODEL: KLING / LTX
+    / WAN / SEEDANCE / VEO are fal bound to one model each (fal.
+    PLATFORM_MODELS), and the row it writes is logged under that platform.
+    RUNWAY and HIGGSFIELD -- tools a shot planned before that day may still
+    carry -- read as the fal default, without the row being rewritten.
 
-    tool==KLING / LTX / WAN / SEEDANCE route through fal.py (wired
-    2026-09-08), one adapter over fal.ai's queue API bound to one model
-    each. Those four platforms have had prompt renderers in shot.PLATFORMS
-    since the registry existed and no execution adapter at all, so every
-    shot planned for one of them came back "no adapter wired" -- half the
-    tool vocabulary was writable and unrenderable.
-
-    tool==VEO keeps the legacy veo.py path for when Veo
-    returns to the registry; anything else is honestly "no adapter
-    wired" -- unless the aggregator registry (providers.py, 2026-09-04)
-    has a usable fallback: a missing adapter, a provider without a key/
-    spend approval, or a failed attempt no longer parks the shot
-    outright. choose_provider() picks the next-best usable tool by this
-    account's real cost-per-keeper and one retry is made through it.
-    This is failover only -- shootgen's upstream tool choice still wins
-    whenever the assigned connector actually works, so creative
-    selection is untouched; the registry only steps in on failure."""
+    choose_provider() is the failover after a failed attempt, and it
+    excludes the provider that just failed -- with one renderer that means
+    a fal failure is reported, not retried on fal through another door."""
     prompts = state.get("prompts", [])
     if os.environ.get("ZEROPAGE_RENDER") != "1":
         return {"clips": [{**p, "url": None, "ok": False} for p in prompts]}
 
-    from . import fal, higgsfield, providers, runway, veo
-    connectors = {
-        "VEO": veo, "RUNWAY": runway, "HIGGSFIELD": higgsfield,
-        # The four that had prompt renderers in shot.PLATFORMS and no way
-        # to execute them since the registry was written. Each is this one
-        # fal adapter bound to one model (fal.PLATFORM_MODELS), so a shot
-        # shootgen planned for KLING renders on Kling rather than parking
-        # -- and the row it writes is logged under "kling", the tool that
-        # actually made the clip.
-        "KLING": fal.connector("kling"),
-        "LTX": fal.connector("ltx"),
-        "WAN": fal.connector("wan"),
-        "SEEDANCE": fal.connector("seedance"),
-    }
+    from . import fal, providers
+    # One binding per fal platform (fal.PLATFORM_MODELS), so a shot planned
+    # for KLING renders on Kling and is logged under "kling". The retired
+    # tools read as the fal default's binding (providers.platform_default).
+    connectors = {name.upper(): fal.connector(name) for name in fal.PLATFORM_MODELS}
+    fallback_platform = fal.model_spec(fal.DEFAULT_MODEL)["platform"]
+    for retired in providers.RETIRED_PLATFORMS:
+        connectors[retired.upper()] = fal.connector(fallback_platform)
     out_root = GENERATED_ROOT / f"concept-{state.get('concept_id', 'x')}"
     account_id = state.get("account_id")
     concept_id = state.get("concept_id")
@@ -1432,12 +1411,8 @@ def generate_render(state: GenState) -> GenState:
         result = None
         if connector is not None:
             # account_id, or the clip is billed to nobody: the row lands
-            # with account_id=NULL, its cap counts against the unowned
-            # pool instead of this account's, and the provider key is
-            # resolved from the environment even when the account has
-            # its own stored one (BYOK). choose_provider() below was
-            # already being told whose run this is -- the render itself
-            # was not.
+            # with account_id=NULL and its cap counts against the unowned
+            # pool instead of this account's.
             result = connector.generate_candidates(
                 p["prompt"], out_root / f"shot{index}", n=1, db_path=None,
                 account_id=account_id)

@@ -316,10 +316,6 @@ OWNED_TABLES = (
     # main's assets archive (9444f23), decided at the merge (2026-09-02):
     # a generated asset is one account's paid render
     "generated_assets",
-    # BYOK (backlog #10, 2026-09-03): an account's encrypted provider keys.
-    # A credential is the one row that must never be readable across the
-    # boundary, so it is owned like everything else, not declared shared.
-    "account_keys",
     "creative_projects",
     # the LLM meter (2026-09-04): a metered call is one account's spend
     "llm_calls",
@@ -787,6 +783,33 @@ def mark_legacy(video_id: int, legacy: bool = True, dsn: Optional[str] = None, *
         return cur.rowcount > 0
 
 
+def drop_account_keys_table(conn: psycopg.Connection) -> bool:
+    """Drop the BYOK key table, once it is empty. True if dropped now.
+
+    BYOK was removed on 2026-09-26 (docs/tasks/task-fal-only.md): every
+    render runs on the operator's key and holds credit, so `account_keys`
+    (Fernet-encrypted per-account provider keys) has no reader and no
+    writer. The live database held 0 rows that day.
+
+    A SUBTRACTIVE migration, so it refuses to destroy data: a table that
+    still holds a row is left exactly where it is, with a line on stderr
+    saying so. A credential nobody can decrypt any more is still not
+    something to delete as a side effect of starting the app -- somebody
+    deletes those rows on purpose, and the next start drops the table.
+    """
+    if not table_exists(conn, "account_keys"):
+        return False
+    remaining = conn.execute("SELECT COUNT(*) FROM account_keys").fetchone()[0]
+    if remaining:
+        import sys
+        print(f"note: account_keys still holds {remaining} row(s); BYOK is gone, "
+              f"so delete them on purpose and the table is dropped at the next "
+              f"init", file=sys.stderr)
+        return False
+    conn.execute("DROP TABLE account_keys")
+    return True
+
+
 def init_db(dsn: Optional[str] = None) -> None:
     """Create the tables. Safe to run repeatedly.
 
@@ -818,6 +841,8 @@ def init_db(dsn: Optional[str] = None) -> None:
         add_billing_columns(conn)
         # whose hand edits teach the shelves (src/edit_teach.py, 2026-09-18)
         add_prompt_edits_teach_column(conn)
+        # BYOK removed (2026-09-26): the key table goes once it is empty
+        drop_account_keys_table(conn)
 
 
 # --------------------------------------------------------------------------

@@ -90,8 +90,8 @@ EVERY SHOT IS EITHER CAPTURED OR GENERATED — decide per shot:
   motion, no smooth commercial camera moves, no over-grading. Grounded and
   slightly rough beats polished, every time.
   Tools: VEO (text-to-video, generates audio), KLING (image-to-video
-  from a still or last frame), RUNWAY (video-to-video restyle or
-  extension), SEEDANCE (multi-shot, reference-driven, audio),
+  from a still or last frame), SEEDANCE (multi-shot, reference-driven,
+  audio),
   LTX (fast cinematic text/image-to-video), WAN (text/image-to-video,
   strong motion control).
   If the shot uses a character or prop listed above that has reference
@@ -117,6 +117,6 @@ expect it to be flagged for review):
 - Shot 1 delivers the hook.
 
 Output STRICT JSON ONLY in this exact shape:
-{"concept": {"title": "2-4 word cinematic title", "hook": "what happens in second 1 that stops the scroll", "duration": "e.g. 12s", "logline": "one sentence micro-story", "shots": [{"n": 1, "type": "CHARACTER or BROLL", "source": "CAMERA or AI", "cam": {cam_values} (CAMERA shots only), "tool": "VEO/KLING/RUNWAY/SEEDANCE/LTX/WAN (AI shots only)", "prompt": "paste-ready generation prompt (AI shots only), grounded in the named room and matching the grade", "location": "a listed room (camera shots) or a short scene label (invented AI shots)", "desc": "exact camera position/framing/movement/action", "light": "lighting using what is actually visible there, or cheap practicals"}], "edit": "cut order + rhythm + sound design", "grade": "one-line grade note"}}
+{"concept": {"title": "2-4 word cinematic title", "hook": "what happens in second 1 that stops the scroll", "duration": "e.g. 12s", "logline": "one sentence micro-story", "shots": [{"n": 1, "type": "CHARACTER or BROLL", "source": "CAMERA or AI", "cam": {cam_values} (CAMERA shots only), "tool": "VEO/KLING/SEEDANCE/LTX/WAN (AI shots only)", "prompt": "paste-ready generation prompt (AI shots only), grounded in the named room and matching the grade", "location": "a listed room (camera shots) or a short scene label (invented AI shots)", "desc": "exact camera position/framing/movement/action", "light": "lighting using what is actually visible there, or cheap practicals"}], "edit": "cut order + rhythm + sound design", "grade": "one-line grade note"}}
 
 Be specific and concrete. Never generic.

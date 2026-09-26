@@ -27,7 +27,6 @@ import pytest
 from starlette.datastructures import State
 
 from src import (
-    account_keys,
     accounts,
     autonomy,
     db,
@@ -82,7 +81,6 @@ def test_every_owned_table_grows_an_account_id(pg):
     autonomy.init(pg)
     workflows.init(pg)
     render_assets.init(pg)
-    account_keys.init(pg)
     from src import ledger, spend
     spend.init(pg)
     ledger.init(pg)
@@ -326,7 +324,7 @@ def test_cast_and_props_are_stamped_and_checked(two_accounts):
 # caps -- your renders are not billed to their day, and neither is the card
 # --------------------------------------------------------------------------
 
-def _log_render(path, account_id, tool="runway", n=1):
+def _log_render(path, account_id, tool="kling", n=1):
     from src.shot import Shot
     shot_id = generative.add_shot(
         Shot(subject="a bike", action="idles"), dsn=path, account_id=account_id)
@@ -338,16 +336,16 @@ def _log_render(path, account_id, tool="runway", n=1):
 def test_one_accounts_renders_do_not_count_against_anothers_cap(two_accounts):
     path, a, b = two_accounts
     _log_render(path, a, n=3)
-    assert generative.used_today("runway", path, account_id=a) == 3
-    assert generative.used_today("runway", path, account_id=b) == 0
+    assert generative.used_today("kling", path, account_id=a) == 3
+    assert generative.used_today("kling", path, account_id=b) == 0
 
 
 def test_the_per_account_cap_refuses_before_the_ceiling_does(two_accounts):
     path, a, _b = two_accounts
     _log_render(path, a, n=2)
     refusal = generative.cap_error(
-        "runway", 1, account_id=a, per_account=2, ceiling=99,
-        dsn=path, env_prefix="RUNWAY")
+        "kling", 1, account_id=a, per_account=2, ceiling=99,
+        dsn=path, env_prefix="FAL")
     assert refusal is not None and "daily cap" in refusal
 
 
@@ -358,24 +356,24 @@ def test_the_global_ceiling_catches_what_per_account_caps_cannot(two_accounts):
     path, a, b = two_accounts
     _log_render(path, a, n=3)
     _log_render(path, b, n=3)
-    assert generative.cap_error("runway", 1, account_id=a, per_account=10,
-                                ceiling=99, dsn=path, env_prefix="RUNWAY") is None
-    refusal = generative.cap_error("runway", 1, account_id=a, per_account=10,
-                                   ceiling=6, dsn=path, env_prefix="RUNWAY")
+    assert generative.cap_error("kling", 1, account_id=a, per_account=10,
+                                ceiling=99, dsn=path, env_prefix="FAL") is None
+    refusal = generative.cap_error("kling", 1, account_id=a, per_account=10,
+                                   ceiling=6, dsn=path, env_prefix="FAL")
     assert refusal is not None and "daily ceiling" in refusal
 
 
-def _log_render_on_own_key(path, account_id, tool="runway", n=1):
-    """A render the ACCOUNT paid for -- the key_source label every adapter
-    stamps once account_keys resolved a stored key rather than the env."""
-    from src import account_keys
+def _log_render_on_own_key(path, account_id, tool="kling", n=1):
+    """A render the ACCOUNT paid for -- the key_source label a BYOK render
+    wrote until per-account keys were removed on 2026-09-26. Historical
+    rows keep it, and still read as not the operator's."""
     from src.shot import Shot
     shot_id = generative.add_shot(
         Shot(subject="a bike", action="idles"), dsn=path, account_id=account_id)
     for _ in range(n):
         generative.record_generation(
             shot_id, tool, "a prompt", dsn=path, account_id=account_id,
-            params={"key_source": account_keys.SOURCE_ACCOUNT})
+            params={"key_source": "account"})
 
 
 def test_a_byok_render_does_not_eat_the_operators_ceiling(two_accounts):
@@ -385,12 +383,12 @@ def test_a_byok_render_does_not_eat_the_operators_ceiling(two_accounts):
     by filling a budget that was never spent."""
     path, a, b = two_accounts
     _log_render_on_own_key(path, b, n=6)          # b pays for all six
-    assert generative.used_today("runway", path, everyone=True) == 6
-    assert generative.used_today("runway", path, everyone=True,
+    assert generative.used_today("kling", path, everyone=True) == 6
+    assert generative.used_today("kling", path, everyone=True,
                                  operator_billed_only=True) == 0
     # so a, on the operator's key, still has the whole ceiling to spend
-    assert generative.cap_error("runway", 1, account_id=a, per_account=10,
-                                ceiling=6, dsn=path, env_prefix="RUNWAY") is None
+    assert generative.cap_error("kling", 1, account_id=a, per_account=10,
+                                ceiling=6, dsn=path, env_prefix="FAL") is None
 
 
 def test_the_ceiling_still_catches_renders_on_the_operators_key(two_accounts):
@@ -400,10 +398,10 @@ def test_the_ceiling_still_catches_renders_on_the_operators_key(two_accounts):
     path, a, b = two_accounts
     _log_render(path, a, n=3)                     # no key_source -> operator's
     _log_render(path, b, n=3)
-    assert generative.used_today("runway", path, everyone=True,
+    assert generative.used_today("kling", path, everyone=True,
                                  operator_billed_only=True) == 6
-    refusal = generative.cap_error("runway", 1, account_id=a, per_account=10,
-                                   ceiling=6, dsn=path, env_prefix="RUNWAY")
+    refusal = generative.cap_error("kling", 1, account_id=a, per_account=10,
+                                   ceiling=6, dsn=path, env_prefix="FAL")
     assert refusal is not None and "daily ceiling" in refusal
 
 
@@ -415,10 +413,10 @@ def test_an_unreadable_row_counts_toward_the_ceiling(two_accounts):
     from src.shot import Shot
     shot_id = generative.add_shot(
         Shot(subject="a bike", action="idles"), dsn=path, account_id=a)
-    generative.record_generation(shot_id, "runway", "p", dsn=path, account_id=a)
+    generative.record_generation(shot_id, "kling", "p", dsn=path, account_id=a)
     with generative.connect(path) as conn:
         conn.execute("UPDATE generations SET params_json = 'not json at all'")
-    assert generative.used_today("runway", path, everyone=True,
+    assert generative.used_today("kling", path, everyone=True,
                                  operator_billed_only=True) == 1
     assert generative._billed_to_operator(None) is True
     assert generative._billed_to_operator("") is True
@@ -430,9 +428,9 @@ def test_the_per_account_cap_is_untouched_by_whose_key_paid(two_accounts):
     with the installation."""
     path, a, _ = two_accounts
     _log_render_on_own_key(path, a, n=3)
-    assert generative.used_today("runway", path, account_id=a) == 3
-    refusal = generative.cap_error("runway", 1, account_id=a, per_account=3,
-                                   ceiling=99, dsn=path, env_prefix="RUNWAY")
+    assert generative.used_today("kling", path, account_id=a) == 3
+    refusal = generative.cap_error("kling", 1, account_id=a, per_account=3,
+                                   ceiling=99, dsn=path, env_prefix="FAL")
     assert refusal is not None and "daily cap" in refusal
 
 
@@ -440,18 +438,18 @@ def test_no_ceiling_is_the_default_and_means_no_ceiling(two_accounts):
     """2026-09-14, Mike's call: every *_GLOBAL_DAILY_CAP defaults to 0, and
     0 means the wall is OFF -- not a wall at zero that refuses everything,
     which is the reading that would brick every render on the install."""
-    from src import fal, higgsfield, midjourney, nano_banana, runway, veo
-    for mod in (runway, veo, fal, higgsfield, midjourney, nano_banana):
+    from src import fal, higgsfield, midjourney, nano_banana
+    for mod in (fal, higgsfield, midjourney, nano_banana):
         assert mod.GLOBAL_DAILY_CAP == 0, mod.__name__
 
     path, a, b = two_accounts
     _log_render(path, a, n=50)
     _log_render(path, b, n=50)
     # a hundred renders on the operator's own key, and no ceiling refuses
-    assert generative.cap_error("runway", 1, account_id=a, per_account=999,
-                                ceiling=0, dsn=path, env_prefix="RUNWAY") is None
-    assert generative.cap_error("runway", 1, account_id=a, per_account=999,
-                                ceiling=None, dsn=path, env_prefix="RUNWAY") is None
+    assert generative.cap_error("kling", 1, account_id=a, per_account=999,
+                                ceiling=0, dsn=path, env_prefix="FAL") is None
+    assert generative.cap_error("kling", 1, account_id=a, per_account=999,
+                                ceiling=None, dsn=path, env_prefix="FAL") is None
 
 
 def test_the_per_account_wall_is_what_remains(two_accounts):
@@ -459,8 +457,8 @@ def test_the_per_account_wall_is_what_remains(two_accounts):
     that still stops a single runaway account."""
     path, a, _ = two_accounts
     _log_render(path, a, n=6)
-    refusal = generative.cap_error("runway", 1, account_id=a, per_account=6,
-                                   ceiling=0, dsn=path, env_prefix="RUNWAY")
+    refusal = generative.cap_error("kling", 1, account_id=a, per_account=6,
+                                   ceiling=0, dsn=path, env_prefix="FAL")
     assert refusal is not None and "daily cap" in refusal
 
 
@@ -470,8 +468,8 @@ def test_a_ceiling_that_is_set_still_works(two_accounts):
     path, a, b = two_accounts
     _log_render(path, a, n=3)
     _log_render(path, b, n=3)
-    refusal = generative.cap_error("runway", 1, account_id=a, per_account=10,
-                                   ceiling=6, dsn=path, env_prefix="RUNWAY")
+    refusal = generative.cap_error("kling", 1, account_id=a, per_account=10,
+                                   ceiling=6, dsn=path, env_prefix="FAL")
     assert refusal is not None and "daily ceiling" in refusal
 
 
@@ -482,7 +480,7 @@ def test_a_generation_cannot_be_logged_against_someone_elses_shot(two_accounts):
         Shot(subject="a bike", action="idles"), dsn=path, account_id=a)
     with pytest.raises(ValueError):
         generative.record_generation(
-            shot_id, "runway", "a prompt", dsn=path, account_id=b)
+            shot_id, "kling", "a prompt", dsn=path, account_id=b)
 
 
 # --------------------------------------------------------------------------
@@ -984,7 +982,6 @@ def _init_everything(path):
     instagram.init(path)
     imagesearch.init(path)
     render_assets.init(path)
-    account_keys.init(path)
     from src import billing, ledger, spend
     spend.init(path)
     ledger.init(path)
@@ -1145,7 +1142,7 @@ def test_posting_needs_the_per_run_approval_even_for_the_owner(two_tenants, tmp_
     fired = []
     monkeypatch.setattr(autopilot, "EXECUTORS",
                         {"post": lambda a: fired.append(a), "generate": lambda a: fired.append(a)})
-    plan = {"actions": [{"kind": "generate", "tool": "veo", "prompt": "p"},
+    plan = {"actions": [{"kind": "generate", "tool": "ltx", "prompt": "p"},
                         {"kind": "post", "platform": "instagram", "caption": "c"}]}
     result = autopilot.execute(plan, approve=True, dry_run=False)
     assert result["mode"] == "post-unapproved"
@@ -1230,24 +1227,26 @@ def test_signed_in_with_no_membership_is_refused_everywhere(two_tenants):
 # the two numbers
 # --------------------------------------------------------------------------
 
-def test_veo_has_the_same_spend_gate_as_every_other_paid_tool(tmp_path, monkeypatch):
-    """estimate_cost(6) is $19.20 -- the most expensive tool in the repo
-    was the only one with no per-run approval."""
-    from src import runway, veo
-    assert veo.SPEND_ENV == "VEO_SPEND_OK"
-    assert veo.spend_approved.__doc__ and runway.spend_approved.__doc__
-    monkeypatch.delenv(veo.SPEND_ENV, raising=False)
+def test_the_video_renderer_refuses_an_unapproved_unattended_run(tmp_path, monkeypatch):
+    """Every paid tool needs a per-run approval for an unattended caller.
+    Veo was the one without it until 2026-09-02; since 2026-09-26 Veo is a
+    fal model and fal's gate covers it."""
+    from src import fal
+    assert fal.SPEND_ENV == "FAL_SPEND_OK"
+    monkeypatch.delenv(fal.SPEND_ENV, raising=False)
+    monkeypatch.setenv("FAL_KEY", "k")
+    calls = []
 
-    class Untouchable:
-        def __getattr__(self, name):
-            raise AssertionError("the SDK was reached with no spend approval")
+    def untouchable(url, payload=None):
+        calls.append(url)
+        raise AssertionError("fal was reached with no spend approval")
 
-    with pytest.raises(RuntimeError, match="VEO_SPEND_OK"):
-        veo.generate_video("x", tmp_path / "c.mp4", client=Untouchable())
-    result = veo.generate_candidates("x", tmp_path / "out", n=6,
-                                     db_path=tmp_path / "v.db", client=Untouchable())
-    assert result["ok"] is False
-    assert "VEO_SPEND_OK" in result["error"] and "$19.2" in result["error"]
+    with pytest.raises(RuntimeError, match="FAL_SPEND_OK"):
+        fal.generate_video("x", tmp_path / "c.mp4", model="veo3.1", http=untouchable)
+    result = fal.generate_candidates("x", tmp_path / "out", n=6, model="veo3.1",
+                                     db_path=tmp_path / "v.db", http=untouchable)
+    assert result["ok"] is False and "FAL_SPEND_OK" in result["error"]
+    assert calls == []
 
 
 def test_the_global_ceiling_is_off_by_default_and_says_how_to_restore_it():
@@ -1255,7 +1254,8 @@ def test_the_global_ceiling_is_off_by_default_and_says_how_to_restore_it():
     its per-account cap. That rule existed because every render billed the
     operator's keys; BYOK ended that for every provider, Gemini last
     (2026-09-14), and a shared ceiling was locking users out of a budget
-    nobody had spent.
+    nobody had spent. (BYOK itself was removed on 2026-09-26; the per-account
+    caps and the credit hold are the walls now.)
 
     What this holds in place now: the shipped default is 0 (off), nothing
     in .env.example silently turns it back on, and the arithmetic for
@@ -1269,7 +1269,7 @@ def test_the_global_ceiling_is_off_by_default_and_says_how_to_restore_it():
         "these turn the installation-wide ceiling back on for every "
         f"deployment that copies the example: {sorted(live)}")
 
-    for module in ("runway", "veo", "higgsfield", "midjourney", "nano_banana", "fal"):
+    for module in ("higgsfield", "midjourney", "nano_banana", "fal"):
         source = (root / "src" / f"{module}.py").read_text()
         shipped = re.search(
             r'environ\.get\("[A-Z_]+_GLOBAL_DAILY_CAP", "(\d+)"\)', source)
@@ -1278,7 +1278,7 @@ def test_the_global_ceiling_is_off_by_default_and_says_how_to_restore_it():
 
     # the way back is documented, with the arithmetic that sized it
     assert "people" in text and "x 3" in text
-    assert "# RUNWAY_GLOBAL_DAILY_CAP=" in text
+    assert "# FAL_GLOBAL_DAILY_CAP=" in text
 
 
 # --------------------------------------------------------------------------
@@ -1373,7 +1373,7 @@ def test_the_render_path_carries_the_owner(two_tenants, monkeypatch):
     import time
 
     from app import jobs
-    from src import preprod, runway
+    from src import fal, preprod
 
     t = two_tenants
     seen = {}
@@ -1382,8 +1382,8 @@ def test_the_render_path_carries_the_owner(two_tenants, monkeypatch):
         seen.update(kwargs)
         return {"ok": True, "media_url": "file:///clip.mp4", "generation_id": 1}
 
-    monkeypatch.setattr(runway, "generate_for_shot", fake_generate_for_shot)
-    monkeypatch.setattr(runway, "has_key", lambda account_id=None: True)
+    monkeypatch.setattr(fal, "generate_for_shot", fake_generate_for_shot)
+    monkeypatch.setattr(fal, "has_key", lambda account_id=None: True)
 
     owner = t["a"]
     concept_id = preprod.save_concept(
@@ -1444,89 +1444,53 @@ def test_no_job_closure_shadows_the_route_owner():
 
 
 # --------------------------------------------------------------------------
-# BYOK: which key, and whose
-#
-# key_for() answers "what credential do I render with" and cannot answer
-# "whose is it" -- the account's own stored key and the operator's env
-# fallback come back looking identical. The prepaid credit ledger has to
-# tell them apart: a render the customer's own key paid for at the
-# provider must not also be debited here.
+# BYOK is gone (2026-09-26): the key table is dropped, and never read
 # --------------------------------------------------------------------------
 
-@pytest.fixture
-def byok_account(two_accounts, monkeypatch):
-    """Account A stores its own Runway secret; account B has none and
-    falls through to the operator's environment key."""
-    from cryptography.fernet import Fernet
-
-    path, a, b = two_accounts
-    monkeypatch.setenv("ACCOUNT_KEYS_SECRET", Fernet.generate_key().decode())
-    monkeypatch.setenv("RUNWAYML_API_SECRET", "OPERATOR-SECRET")
-    account_keys.set_key(a, "runway", "TENANT-SECRET", dsn=path)
-    return path, a, b
-
-
-def test_key_source_says_whose_credential_a_render_would_use(byok_account):
-    path, a, b = byok_account
-    assert account_keys.key_source(a, "runway", path) == account_keys.SOURCE_ACCOUNT
-    assert account_keys.key_source(b, "runway", path) == account_keys.SOURCE_ENV
-    assert account_keys.key_source(None, "runway", path) == account_keys.SOURCE_ENV
-
-
-def test_key_source_is_none_when_nothing_would_resolve(byok_account, monkeypatch):
-    """No stored key and no environment fallback is not "the operator
-    pays" -- it is "this render cannot happen", and the ledger must not
-    read it as either of the other two."""
-    path, a, b = byok_account
-    monkeypatch.delenv("RUNWAYML_API_SECRET")
-    assert account_keys.key_source(b, "runway", path) is None
-    assert account_keys.key_source(a, "runway", path) == account_keys.SOURCE_ACCOUNT
+def test_the_byok_key_table_is_dropped_when_empty_and_kept_when_not(pg, capsys):
+    """db.drop_account_keys_table is subtractive, so it refuses to destroy
+    a credential as a side effect of starting the app: an empty table goes,
+    a table still holding a row stays and says so."""
+    with db.connect(pg) as conn:
+        conn.execute("CREATE TABLE account_keys (account_id BIGINT, provider TEXT, "
+                     "ciphertext TEXT, updated_at TEXT)")
+        conn.execute("INSERT INTO account_keys VALUES (1, 'runway', 'x', 'now')")
+        assert db.drop_account_keys_table(conn) is False
+        assert db.table_exists(conn, "account_keys")
+    assert "still holds 1 row" in capsys.readouterr().err
+    with db.connect(pg) as conn:
+        conn.execute("DELETE FROM account_keys")
+        assert db.drop_account_keys_table(conn) is True
+        assert not db.table_exists(conn, "account_keys")
+        assert db.drop_account_keys_table(conn) is False       # idempotent
+    assert "account_keys" not in db.OWNED_TABLES
 
 
-def test_key_for_still_answers_exactly_what_it_always_did(byok_account):
-    """The source is a second question, not a change to the first one:
-    key_for has many callers and every one of them wants the key."""
-    path, a, b = byok_account
-    assert account_keys.key_for(a, "runway", path) == {"api_secret": "TENANT-SECRET"}
-    assert account_keys.key_for(b, "runway", path) == {"api_secret": "OPERATOR-SECRET"}
-    assert account_keys.key_and_source(a, "runway", path) == (
-        {"api_secret": "TENANT-SECRET"}, account_keys.SOURCE_ACCOUNT)
-
-
-def test_labelling_a_render_never_costs_it_its_row(byok_account, monkeypatch):
-    """key_source runs AFTER the money is spent, on the way to writing
-    the row that records the spend. An unreadable ciphertext (a rotated
-    ACCOUNT_KEYS_SECRET, say) must cost the row its label, never the
-    row: an unlabelled render is a ledger question, a lost one is a
-    render nobody can account for."""
-    from cryptography.fernet import Fernet
-
-    path, a, b = byok_account
-    monkeypatch.setenv("ACCOUNT_KEYS_SECRET", Fernet.generate_key().decode())
-    with pytest.raises(Exception):
-        account_keys.key_for(a, "runway", path)
-    assert account_keys.key_source(a, "runway", path) is None
+def test_no_module_reads_a_stored_key_any_more():
+    root = pathlib.Path(__file__).resolve().parent.parent
+    assert not (root / "src" / "account_keys.py").exists()
+    for folder in ("src", "app", "ops"):
+        for path in (root / folder).rglob("*.py"):
+            text = path.read_text()
+            assert "account_keys." not in text, path
+            assert "ACCOUNT_KEYS_SECRET" not in text, path
 
 
 def test_the_availability_check_asks_about_the_callers_own_key(two_tenants, monkeypatch):
-    """Both render routes asked `runway.has_key()` with no account, so
-    availability was judged on the OPERATOR's environment key: a BYOK
-    account with its own stored secret was told 503 on a server whose
-    RUNWAYML_API_SECRET is unset, and an account with no key at all was
-    waved through onto someone else's. The render underneath resolves
-    the key per account (generate_for_shot), so the gate in front of it
-    has to ask the same question."""
+    """Both render routes ask the renderer's has_key ON BEHALF OF the
+    caller. The key is the operator's since 2026-09-26, but the question
+    still names the account, so the cap and the row are the caller's."""
     import time
 
     from app import jobs
-    from src import preprod, runway
+    from src import fal, preprod
 
     t = two_tenants
     asked = []
 
-    monkeypatch.setattr(runway, "has_key",
+    monkeypatch.setattr(fal, "has_key",
                         lambda account_id=None: asked.append(account_id) or True)
-    monkeypatch.setattr(runway, "generate_for_shot",
+    monkeypatch.setattr(fal, "generate_for_shot",
                         lambda concept_id, shot_n, **kwargs: {
                             "ok": True, "media_url": "file:///clip.mp4",
                             "generation_id": 1})

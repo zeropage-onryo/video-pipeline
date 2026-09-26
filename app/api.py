@@ -28,7 +28,6 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from src import (
-    account_keys,
     accounts,
     asset_shelf,
     autonomy,
@@ -40,7 +39,6 @@ from src import (
     entities,
     evalstore,
     generative,
-    higgsfield,
     imagery,
     inspiration,
     instagram,
@@ -54,7 +52,6 @@ from src import (
     refbin,
     render_assets,
     render_specs,
-    runway,
     scout,
     settings,
     timeline,
@@ -107,18 +104,10 @@ def _error(status: int, code: str, message: str) -> JSONResponse:
 # --- capabilities -----------------------------------------------------------
 
 def _gemini_key(account_id: Optional[int] = None) -> Optional[str]:
-    """This account's Gemini key, falling back to the installation's.
-
-    Was a bare read of GEMINI_API_KEY, which is the OPERATOR's key --
-    so every scene write, timeline plan, keyframe, enhance and judge a
-    SECOND account ran was billed to Mike. The renderers never had this
-    problem because they all go through account_keys.key_for; Gemini was
-    the one provider that didn't, despite account_keys having had a
-    "gemini" entry since BYOK landed (2026-09-14).
-
-    Passing account_id is what makes a route tenant-aware, and leaving it
-    off is still correct for the paths that are genuinely the
-    installation's -- the nightly walk, the scout, the CLI."""
+    """The installation's Gemini key (GEMINI_API_KEY), or None. It was
+    per account while BYOK existed; since 2026-09-26 it is the operator's
+    for every account (docs/tasks/task-fal-only.md). `account_id` stays
+    so the call sites need not change."""
     from src import gemini_utils
     return gemini_utils.api_key_for(account_id)
 
@@ -177,26 +166,22 @@ def compute_capabilities(account_id: Optional[int] = None) -> dict:
         "analytics": True,
         "analytics.youtube": bool(os.environ.get("YOUTUBE_API_KEY")),
         "analytics.instagram": bool(instagram.access_token()),
-        "runway.generate": runway.has_key(),
-        # the Director's Generate node renders on whatever this account
-        # holds a key for (providers.renderer_for), not on Runway alone
+        # the video renderer (fal, since 2026-09-26) is configured -- the
+        # Director's Generate node and the Queue render on it
         "video.generate": providers.renderer_for(
             account_id, needs="generate_from_prompt") is not None,
         # whether a price comes with a signed quote a client can echo on
         # approve (pricing.sign; QUOTE_SIGNING_SECRET set)
         "quote.sign": pricing.configured(),
-        # `*.spend` is TRUE for anything a person drives (2026-09-09):
-        # the click is the approval, so a key is the whole gate on a
+        # `video.spend` is TRUE for anything a person drives (2026-09-09):
+        # the click is the approval, so the key is the whole gate on a
         # human surface. It stays a live read for the unattended paths,
-        # which still need *_SPEND_OK set for them on purpose -- see
-        # runway.spend_approved. The UI reads these to decide whether to
-        # dim a button, and dimming a button a person is allowed to
-        # press was the whole complaint.
-        "runway.spend": runway.has_key(),
-        # Higgsfield is the other half of ZEROPAGE_AI_TOOLS, and it
-        # bills its own API credits on the same terms
-        "higgsfield.generate": higgsfield.has_key(),
-        "higgsfield.spend": higgsfield.has_key(),
+        # which still need FAL_SPEND_OK set for them on purpose -- see
+        # fal.spend_approved. The UI reads it to decide whether to dim a
+        # button, and dimming a button a person is allowed to press was
+        # the whole complaint.
+        "video.spend": providers.renderer_for(
+            account_id, needs="generate_from_prompt") is not None,
         "nano.generate": gemini,               # Nano Banana rides the Gemini key
         "workflows": True,
         "jobs": True,
@@ -280,7 +265,7 @@ def brains(account_id: int = Depends(auth.current_account_id)):
 @router.get("/render-choices")
 def render_choices(account_id: int = Depends(auth.current_account_id)):
     """The frames a scene can be written for, PROJECTED from
-    src/render_specs.py rather than listed again here.
+    src/render_specs.FRAME_SIZES rather than listed again here.
 
     There is deliberately no "resolution" beside it: a ratio in this
     project is a frame SIZE ("720:1280"), so width and height are the
@@ -288,7 +273,7 @@ def render_choices(account_id: int = Depends(auth.current_account_id)):
     renderers do not take would be a pill that changes nothing.
 
     The label is derived, not stored -- one place decides that 720:1280
-    is 9:16, so a size added to RUNWAY_RATIOS shows up here correctly
+    is 9:16, so a size added to FRAME_SIZES shows up here correctly
     without anyone remembering to name it.
     """
     from math import gcd
@@ -303,7 +288,7 @@ def render_choices(account_id: int = Depends(auth.current_account_id)):
 
     return {
         "ratios": [{"id": r, "label": label(r), "size": r}
-                   for r in render_specs.RUNWAY_RATIOS],
+                   for r in render_specs.FRAME_SIZES],
         "default": render_specs.RATIO_9_16,
     }
 
@@ -608,7 +593,7 @@ def _asset_photo_urls(kind: str, base_dir: Path, slug: str,
 
     What is RETURNED is the storable name; `_asset_photo_thumbs` below
     is what the gallery draws. Keeping them apart is the whole point --
-    `refs[0]` is the single frame Runway anchors a clip on, and a list
+    `refs[0]` is the single frame a clip is anchored on, and a list
     that quietly carried 480px versions would anchor the clip on one.
     """
     from src import asset_shelf as _shelf
@@ -837,8 +822,8 @@ def media_list(q: Optional[str] = None, category: Optional[str] = None,
 
     Image-only is the safe default because this endpoint also feeds image
     reference pickers.  The Asset Bank requests ``kind=all`` so generated
-    Runway clips appear in its gallery without being offered as still-image
-    inputs to Nano or Runway. Photo dates come from the file on disk;
+    clips appear in its gallery without being offered as still-image
+    inputs to Nano or a renderer. Photo dates come from the file on disk;
     generated media from its record.
     """
     from datetime import datetime, timezone
@@ -1558,7 +1543,7 @@ def _concept_card(c: dict, subscription_ids: Optional[set] = None,
         "ref_sources": _ref_sources(c.get("refs") or [], sources),
         # THE DRAWABLE SIZE OF EACH REFERENCE (BACKLOG #0, 2026-09-21),
         # parallel to `refs`. `refs` itself is untouched and stays the
-        # master: refs[0] is the frame Runway anchors the clip on, and a
+        # master: refs[0] is the frame the clip is anchored on, and a
         # list that quietly carried 480px versions would anchor it on one.
         # The cards try this URL first and fall back to their own chain.
         "ref_thumbs": _ref_thumbs(c.get("refs") or [], c.get("account_id")),
@@ -1827,8 +1812,8 @@ def _auto_refs(text: str, already: list,
 
     Two passes, because a slot is worth different things to different
     assets. Pass one takes ONE photo of every asset the scene named, so
-    nothing named goes unattached and the anchor slot (Runway reads
-    whichever is first) still holds the character the scene opens on.
+    nothing named goes unattached and the anchor slot (a renderer
+    reads whichever is first) still holds the character the scene opens on.
     Pass two spends what is left on more angles of the characters.
 
     Grounding shapes, it doesn't gate: no match, or no assets at all,
@@ -1903,7 +1888,7 @@ def _attach_scene_refs(concept_id: int, manual: list,
     On the shot rather than on the concept because that is what the
     Director graph reads (`ref_urls` on the enhance, keyframe and clip
     nodes), and manual first because an explicit pick outranks anything
-    inferred -- and because Runway anchors on whichever one is first.
+    inferred -- and because a clip anchors on whichever one is first.
     """
     concept = preprod.get_concept(concept_id, account_id=account_id)
     if concept is None or not concept["shots"]:
@@ -1982,7 +1967,7 @@ async def scenes_run(request: Request, account_id: int = Depends(auth.current_ac
     # providers.check_render_choice follows, and for the same reason: a
     # silently corrected frame is a clip that comes back the wrong shape.
     ratio = (form.get("ratio") or "").strip()
-    if ratio and ratio not in render_specs.RUNWAY_RATIOS:
+    if ratio and ratio not in render_specs.FRAME_SIZES:
         return _error(400, "bad_ratio",
                       f"{ratio} is not a frame the renderers take")
     # The scene's total length (2026-09-10). Clamped by scene_seconds,
@@ -2001,7 +1986,7 @@ async def scenes_run(request: Request, account_id: int = Depends(auth.current_ac
     # spark that wrote nothing would silently throw away research -- and
     # (b) that pass's images do not ride along either. The second half
     # matters more than it looks: those photos become the shot's `refs`,
-    # and refs[0] is the frame Runway anchors the whole clip on. His own
+    # and refs[0] is the frame the whole clip is anchored on. His own
     # idea anchored on a stranger's thumbnail is not his own idea.
     try:
         scout_finding_id = int(form.get("scout_finding_id") or 0)
@@ -2286,7 +2271,7 @@ def _board_verdict(concept: dict, verdict: str, note: str) -> bool:
         return False        # a considered verdict from the Grade tab wins
     winners.discard_pending(ref)
     winners.record_and_learn(
-        (shots[0].get("tool") or "runway"), shots[0]["prompt"], note=note,
+        shots[0].get("tool"), shots[0]["prompt"], note=note,
         video_ref=ref, verdict=verdict, ingest=False)
     return True
 
@@ -2335,7 +2320,7 @@ def _teach_prompt_edit(account_id, concept: dict, shot: dict,
         return False
     winners.discard_pending(ref)
     winners.record_pair(
-        (shot.get("tool") or "runway"), draft, after, note=note,
+        shot.get("tool"), draft, after, note=note,
         video_ref=ref, ingest=False)
     shot[edit_teach.DRAFT_KEY] = draft
     return True
@@ -2403,66 +2388,47 @@ def concept_archive(concept_id: int, body: ArchiveBody,
 # A picked concept is not rendered yet -- rendering costs money, so the
 # pick and the spend are two different decisions. Everything picked and
 # not yet rendered waits in the Queue, and approving one there is what
-# actually calls Runway.
+# actually calls the renderer (fal).
 
 
-def _runway_state() -> dict:
-    """What approving one of these would cost and whether it can even
-    happen. The daily count reads the generations log, which a database
-    that has never rendered anything does not have yet -- a queue that
-    500s because nothing has been billed on it is the wrong failure, so
-    the count degrades to None and the gate is still reported."""
+def _render_state(account_id: Optional[int] = None) -> dict:
+    """The default renderer's state for the chips and older cards: what a
+    clip on it is, what it costs, and whether it can happen. fal's default
+    model since 2026-09-26 (it was `_runway_state`, keyed `runway`). The
+    daily count reads the generations log, which a database that has never
+    rendered anything does not have yet -- it degrades to None rather than
+    500ing, and the gate is still reported."""
+    from src import fal
     try:
-        today = runway.generations_today(db_path=None)
+        today = fal.generations_today(db_path=None, account_id=account_id)
     except Exception:
         today = None
-    return {"available": runway.has_key(),
-            # TRUE since 2026-09-09: there is no separate spend approval
-            # for a person any more, so an older client reading this
-            # shape must not dim a button it is allowed to press. The
-            # env override still exists for unattended runs and is
-            # reported as `env_override` on the per-renderer payload.
-            "spend_ok": runway.has_key(),
-            "model": runway.DEFAULT_MODEL,
-            "estimate_usd": runway.estimate_cost(1),
-            # the Gen Space's model chips say what a clip IS before the
-            # spend, not just what it costs
-            "ratio": runway.DEFAULT_RATIO,
-            "duration": runway.DEFAULT_DURATION,
-            # the Queue's selectors (2026-09-12): every model with what a
-            # second of it costs, and the frames and lengths the endpoint
-            # takes -- so the approve button can price the actual choice
-            # priced through runway.credits_per_second, never the flat
-            # table: seedance bills by the frame's resolution tier, so its
-            # per-second figure is quoted at the default frame
-            "models": [{"id": m,
-                        "label": (m.replace("gen4_turbo", "Gen-4 Turbo").replace("gen4.5", "Gen-4.5")
-                                  .replace("seedance2_5", "Seedance 2.5")),
+    pick = providers.check_render_choice()
+    spec = providers.model_options(pick["provider"], pick["model"])
+    axis = spec["duration"]
+    return {"label": providers.RENDER_LABELS.get(pick["provider"], pick["provider"]),
+            "provider": pick["provider"],
+            "available": fal.has_key(account_id),
+            # TRUE whenever the key is: the click is the approval (2026-09-09)
+            "spend_ok": fal.has_key(account_id),
+            "model": pick["model"],
+            "estimate_usd": pick["estimate_usd"],
+            "duration": pick["duration"],
+            "resolution": pick["frame"],
+            # every model with what a second of it costs at its default
+            # resolution -- projected off fal.VIDEO_MODELS, never a copy
+            "models": [{"id": m["id"], "label": m["label"],
                         "usd_per_second": round(
-                            runway.credits_per_second(m, runway.DEFAULT_RATIO) * runway.CREDIT_USD, 3)}
-                       for m in runway.MODELS],
-            # projected off src/render_specs.py, the one table the lane
-            # import and providers.check_render_choice refuse against
-            "ratios": list(render_specs.RUNWAY_RATIOS),
-            "durations": list(render_specs.RUNWAY_DURATIONS),
+                            fal.price_per_second(m["id"], m["frame"]["default"]), 4)}
+                       for m in providers.models_for(pick["provider"])],
+            "durations": (list(axis["values"]) if axis["kind"] != "range"
+                          else list(range(axis["min"], axis["max"] + 1))),
             "today": today}
 
 
 def _renderers_state(account_id: Optional[int] = None, ctx=None) -> dict:
     """Every renderer the Queue may spend on, with its gates and its legal
-    options -- the four-vendor form of _runway_state.
-
-    Until 2026-09-08 this surface reported exactly one vendor, because
-    approving could only call one: `queue_approve` named runway in the
-    route body and the card's disabled state was read off `data.runway`.
-    A concept shootgen planned for KLING rendered on Kling at 3:30am
-    through orchestrator.generate_render's connectors dict and on Runway
-    if a human approved the same row by hand -- two doors disagreeing
-    about what a shot's `tool` means.
-
-    `runway` is still returned alongside, unchanged. It is a public shape
-    an older client may still be reading, and there is nothing to gain
-    from breaking it on the same day the new one arrives."""
+    options (providers.render_options) -- fal alone since 2026-09-26."""
     return providers.render_options(account_id, ctx=ctx)
 
 
@@ -2573,7 +2539,7 @@ def _generate_node_quote(concept: dict, account_id: Optional[int]) -> dict:
     {"error"} when no renderer is keyed or the intent has no price."""
     pick = providers.renderer_for(account_id, needs="generate_from_prompt")
     if pick is None:
-        return {"error": "no video renderer key is available for this account"}
+        return {"error": "video rendering is not configured on this server"}
     return _card_quote(concept, account_id, provider=pick["provider"],
                        model=pick["model"], whole=True)
 
@@ -2619,7 +2585,7 @@ def queue_pending(brand: Optional[str] = None, account_id: int = Depends(auth.cu
             # reads THIS, not len(items): it has always meant "waiting on you
             # to spend", and a locked card is waiting on references instead.
             "spendable": sum(1 for c in items if not c["blocked"]),
-            "runway": _runway_state(),
+            "renderer": _render_state(account_id),
             "renderers": _renderers_state(account_id, ctx)}
 
 
@@ -2659,39 +2625,18 @@ def queue_count(brand: Optional[str] = None,
     return {"spendable": spendable, "blocked": blocked}
 
 
-def _lane_models() -> list:
-    """The lane's legal models, each with what it may claim, for the
-    drop card's controls. `render_specs` is the one table; this is a
-    projection of it, never a second copy."""
-    return [{"id": name,
-             "durations": list(spec.get("durations") or ()),
-             "ratios": list(spec.get("ratios") or ())}
-            for name, spec in sorted((render_specs.RUNWAY_MODELS or {}).items())]
-
-
-def _lane_default_model() -> str:
-    """What the card offers first: the adapter's own default when the
-    lane can actually render it, else the first legal model. RUNWAY_MODEL
-    is an env var, so it can name something render_specs does not know --
-    and offering that as the default would mean every drop refused."""
-    known = render_specs.RUNWAY_MODELS or {}
-    if runway.DEFAULT_MODEL in known:
-        return runway.DEFAULT_MODEL
-    return sorted(known)[0] if known else runway.DEFAULT_MODEL
-
-
 @router.get("/queue/manual")
 def queue_manual(brand: Optional[str] = None,
                  account_id: int = Depends(auth.current_account_id)):
-    """The same waiting shots, addressed to a pair of hands in Chrome.
+    """The same waiting shots, addressed to a pair of hands: the generic
+    clip import (src/manual_lane.py). A clip rendered anywhere -- a
+    vendor's web app, a local model -- is dropped on its card and filed
+    free. It was the Runway Unlimited lane until 2026-09-26; Runway retired
+    Unlimited in June 2026 and fal became the only API renderer.
 
-    THE OPERATOR'S LANE, AND ONLY THE OPERATOR'S. Runway's free Explore
-    Mode is a web-app toggle with no API parameter, so the only way to
-    spend the Unlimited plan is a human driving the app -- and that plan
-    is the operator's personal consumer subscription, so rendering a
-    paying tenant's shot on it would be reselling it. That is an
-    account-termination risk which, on a shared install, takes every
-    tenant's renders down at once.
+    THE OPERATOR'S LANE, AND ONLY THE OPERATOR'S. It files a render with
+    no ledger hold, so it sits behind the same gate as the Higgsfield MCP
+    lane rather than being the one door that is wider.
 
     So the gate is `manual_lane.manual_lane_allowed(account_id)`, called
     on the TENANT resolved server-side by `auth.current_account_id` --
@@ -2745,144 +2690,15 @@ def queue_manual(brand: Optional[str] = None,
             "keyframe_url": card["reference_image"],
             "duration": duration,
             "ratio": shot.get("ratio") or manual_lane.LANE_RATIO,
-            "lane": manual_lane.LANES["runway"],
+            "lane": manual_lane.LANES["manual"],
         })
-    return {"items": items, "lane": manual_lane.LANES["runway"],
-            # The models this lane may claim, and the lengths and frames
-            # each of them legally renders, straight off src/render_specs.py
-            # -- the same table `import_clip` refuses against. Served
-            # rather than written into the JS so the drop card's controls
-            # cannot offer a value the import would then refuse, and so a
-            # model leaving the table leaves the UI in the same commit.
-            "models": _lane_models(),
-            "default_model": _lane_default_model(),
-            "import_with": "ops/render_queue.py --provider runway import"}
-
-
-# --- renderer keys (BYOK) ----------------------------------------------------
-#
-# 2026-09-12, Mike: "is there a long term solution for this so other users can
-# start using this product". src/account_keys.py has held per-account encrypted
-# credentials since 2026-09-03, and until today the only way to enter one was
-# `python -m src.account_keys set` on the server -- so a pilot user could not
-# bring their own key at all, and every render they approved billed the
-# operator's. This is that table's front door and nothing more: it stores and
-# clears, it never reads a key back out.
-#
-# THREE RULES, each load-bearing:
-#   * a stored key is NEVER returned, not even masked. The row says whose
-#     credential would be used (account / env / nothing) and when it was
-#     stored, which is everything a person needs to decide what to do next,
-#     and none of what an attacker who got a session would want.
-#   * mutations require the x-zpf-renderer-key header, model_connections'
-#     rule: the session cookie is SameSite=None on the hosted deployment
-#     (FRONTEND_ORIGINS), so a form on another origin could otherwise POST a
-#     key onto somebody's account. A custom header forces a CORS preflight.
-#   * the vendors offered are exactly providers.VIDEO_PROVIDERS, plus nothing.
-#     Gemini and Midjourney are deliberately absent: the cheap Gemini steps
-#     are the operator's to pay for (backlog #10's "split by cost"), and
-#     Midjourney has no API to hold a key for.
-
-RENDERER_KEY_HEADER = "x-zpf-renderer-key"
-
-# What to call each field on the form. account_keys.PROVIDER_FIELDS is the
-# contract; this is only its spelling for a human.
-_KEY_FIELD_LABELS = {
-    "api_secret": "API secret",
-    "api_key": "API key",
-    "api_key_id": "Key id",
-    "api_key_secret": "Key secret",
-}
-
-
-def _renderer_key_row(provider: str, account_id: Optional[int],
-                      stored: Optional[dict] = None) -> dict:
-    """One vendor's state: whose key would pay, when this account stored
-    one, and what the environment fallback is called. Never the key.
-
-    `stored` is the whole listing when the caller already has it -- four
-    rows on one page load is one query, not four."""
-    if stored is None:
-        stored = {row["provider"]: row["updated_at"]
-                  for row in account_keys.list_providers(account_id)} if account_id else {}
-    try:
-        source = account_keys.key_source(account_id, provider)
-    except ValueError:
-        source = None
-    return {
-        "provider": provider,
-        "label": providers.RENDER_LABELS.get(provider, provider),
-        "fields": [{"name": name,
-                    "label": _KEY_FIELD_LABELS.get(name, name.replace("_", " "))}
-                   for name in account_keys.PROVIDER_FIELDS.get(provider, ())],
-        # "account" = this account's own stored key, "env" = the operator's
-        # environment key, None = nothing resolves and approving refuses
-        "source": source,
-        "stored_at": stored.get(provider),
-        "env_names": [list(names) for names in
-                      account_keys.PROVIDER_ENV_FALLBACK.get(provider, ())],
-    }
-
-
-def _renderer_keys(account_id: Optional[int]) -> dict:
-    stored = {row["provider"]: row["updated_at"]
-              for row in account_keys.list_providers(account_id)} if account_id else {}
-    return {"items": [_renderer_key_row(name, account_id, stored)
-                      for name in providers.VIDEO_PROVIDERS]}
-
-
-class RendererKeyBody(BaseModel):
-    """The key's parts, in PROVIDER_FIELDS order. A list and not named
-    fields because higgsfield takes two and the others one, and the order
-    is already the contract every adapter resolves through."""
-    values: list[str]
-
-
-@router.get("/renderer-keys")
-def renderer_keys(account_id: int = Depends(auth.current_account_id)):
-    """Which renderers this account can spend on, and on whose credential."""
-    return _renderer_keys(account_id)
-
-
-@router.put("/renderer-keys/{provider}")
-def renderer_key_set(provider: str, body: RendererKeyBody, request: Request,
-                     account_id: int = Depends(auth.current_account_id)):
-    """Store this account's own key for one renderer. Encrypted at rest
-    (Fernet, ACCOUNT_KEYS_SECRET); overwrites whatever was there."""
-    if request.headers.get(RENDERER_KEY_HEADER) != "1":
-        return _error(403, "forbidden", "use the studio's renderer key controls")
-    if provider not in providers.VIDEO_PROVIDERS:
-        return _error(404, "not_found", f"no renderer {provider!r}")
-    fields = account_keys.PROVIDER_FIELDS.get(provider, ())
-    values = [(v or "").strip() for v in body.values]
-    if len(values) != len(fields) or not all(values):
-        return _error(400, "bad_key",
-                      f"{providers.RENDER_LABELS.get(provider, provider)} takes "
-                      f"{len(fields)} value(s): "
-                      f"{', '.join(_KEY_FIELD_LABELS.get(f, f) for f in fields)}")
-    try:
-        account_keys.set_key(account_id, provider, *values)
-    except RuntimeError as e:
-        # ACCOUNT_KEYS_SECRET unset: there is nothing to encrypt with, and
-        # storing the key in the clear instead is exactly what that secret
-        # exists to prevent. Say so rather than failing as a 500.
-        return _error(503, "encryption_unavailable", str(e))
-    return _renderer_key_row(provider, account_id)
-
-
-@router.delete("/renderer-keys/{provider}")
-def renderer_key_clear(provider: str, request: Request,
-                       account_id: int = Depends(auth.current_account_id)):
-    """Forget this account's key. The environment fallback (the operator's
-    own key, where there is one) takes over again -- which the returned
-    row says, so nobody has to guess whether removing it turned rendering
-    off."""
-    if request.headers.get(RENDERER_KEY_HEADER) != "1":
-        return _error(403, "forbidden", "use the studio's renderer key controls")
-    if provider not in providers.VIDEO_PROVIDERS:
-        return _error(404, "not_found", f"no renderer {provider!r}")
-    account_keys.clear_key(account_id, provider)
-    return _renderer_key_row(provider, account_id)
+    return {"items": items, "lane": manual_lane.LANES["manual"],
+            # A clip rendered anywhere has no list of legal models to
+            # check a claim against, so the card takes the model as free
+            # text and the row records it unverified (render_specs).
+            "models": [],
+            "default_model": None,
+            "import_with": "ops/render_queue.py --provider manual import"}
 
 
 # --- the manual lane's drop target ------------------------------------------
@@ -2893,8 +2709,8 @@ def renderer_key_clear(provider: str, request: Request,
 # import` command line, which is a lot of ceremony for a file that is
 # already sitting in ~/Downloads.
 
-# What a Runway Explore clip actually weighs: a 10s 9:16 gen4 render is
-# tens of megabytes. The cap is generous against that and still bounded,
+# What a rendered clip actually weighs: a 10s 9:16 render is tens of
+# megabytes. The cap is generous against that and still bounded,
 # because an unbounded multipart body is a way to fill the disk this
 # app's own renders live on. Enforced while STREAMING (see below), not
 # after the read, or the cap would be enforced by first accepting the
@@ -2909,7 +2725,7 @@ _MAGIC_BYTES = 12
 # mp4 however much the filename insists. Named rather than allow-listing
 # mp4 brands, because that list is long, vendor-specific and still
 # growing (isom, iso2, mp41, mp42, avc1, dash, mmp4...) -- an allowlist
-# that refuses a real Runway render is worse than a denylist that lets a
+# that refuses a real render is worse than a denylist that lets a
 # rare sibling format through to ffprobe.
 _NOT_MP4_BRANDS = (b"qt  ",)
 
@@ -2953,7 +2769,7 @@ async def _spool_clip(upload, dest: Path) -> Optional[JSONResponse]:
                     return _error(
                         400, "not_an_mp4",
                         "that is not an mp4 -- the file's own header says so, "
-                        "whatever it is called. Drop the clip Runway gave you.")
+                        "whatever it is called. Drop the rendered clip.")
             size += len(chunk)
             if size > MANUAL_CLIP_MAX_BYTES:
                 return _error(
@@ -3022,7 +2838,7 @@ async def queue_manual_import(concept_id: int, request: Request,
     form = await request.form()
     upload = form.get("file")
     if upload is None or not hasattr(upload, "read"):
-        return _error(400, "no_file", "attach the mp4 Runway rendered")
+        return _error(400, "no_file", "attach the rendered mp4")
 
     concept = preprod.get_concept(concept_id, account_id=account_id)
     if concept is None:
@@ -3040,7 +2856,9 @@ async def queue_manual_import(concept_id: int, request: Request,
             "this shot already has a clip -- it left the queue when the "
             "first one landed. Clear its media_url if you meant to replace it.")
 
-    model = (form.get("model") or "").strip() or runway.DEFAULT_MODEL
+    # free text: whatever rendered it, as the person says (recorded
+    # unverified -- there is no list to check a clip from anywhere against)
+    model = (form.get("model") or "").strip()[:120] or "unspecified"
     ratio = (form.get("ratio") or "").strip() or None
     duration_raw = (form.get("duration") or "").strip()
     try:
@@ -3061,7 +2879,7 @@ async def queue_manual_import(concept_id: int, request: Request,
         try:
             filed = render_queue.import_clip(
                 concept_id, shot_n, str(landing), model, None, None, anchored,
-                account_id=account_id, provider="runway",
+                account_id=account_id, provider="manual",
                 duration=duration, ratio=ratio)
         except SystemExit as refusal:
             # render_specs said no (a model, a ratio or a length this
@@ -3077,16 +2895,14 @@ class ApproveBody(BaseModel):
 
     Every field is optional, and an empty body is the pre-2026-09-08
     call: it resolves to the tool the shot was actually PLANNED for
-    (`providers.platform_default`), falling back to Runway. So an older
+    (`providers.platform_default`), falling back to fal's default. So an older
     client keeps working, and what it gets is the plan rather than a
     hardcoded vendor -- which is what the route did before, and was
     wrong about for every concept shootgen wrote for Kling or Seedance.
 
-    `frame` is one field for two vocabularies on purpose: Runway takes a
-    frame SIZE ("720:1280"), the other three take a resolution tier
-    ("720p"). providers.FRAME_AXIS says which one a given renderer is
-    talking about, and the card labels its control from that -- one axis
-    with two names beats two fields where only ever one is legal.
+    `frame` is the resolution tier ("720p") -- a pricing input, since
+    fal bills per second per resolution. providers.FRAME_AXIS names it
+    per renderer so the card can label its control.
     """
     provider: Optional[str] = None
     model: Optional[str] = None
@@ -3097,8 +2913,8 @@ class ApproveBody(BaseModel):
     # provably the price rendered. REQUIRED whenever the card was handed
     # them (step 5 of docs/tasks/task-pricing-and-quotes.md): a render
     # that is billable here, on a server that can sign, is a 400
-    # `missing_quote` without one. A BYOK render, and any render on a
-    # server with no QUOTE_SIGNING_SECRET, was never given a token and
+    # `missing_quote` without one. A render on a server with no
+    # QUOTE_SIGNING_SECRET was never given a token and
     # approves without one -- a dev box with no secret is not locked out.
     # Tokens that ARE sent are verified either way.
     tokens: Optional[list[str]] = None
@@ -3143,14 +2959,14 @@ def _verify_tokens(tokens: list, priced: dict, shot: dict, shot_id: int,
 
 
 def _quote_kw(quote) -> dict:
-    """`quote=` for an adapter call, only when there is one: a BYOK or
-    unsigned render reaches the adapter exactly as it did before."""
+    """`quote=` for an adapter call, only when there is one: an unsigned
+    render reaches the adapter exactly as it did before."""
     return {"quote": quote} if quote is not None else {}
 
 
 def _quote_required(account_id: Optional[int], provider: str) -> bool:
     """Whether a render on `provider` must arrive with a signed quote:
-    it is billable to this account (not BYOK) AND this server can sign.
+    it is billable (every render, since 2026-09-26) AND this server can sign.
     The same predicate as pricing.display()'s `signed`, for the routes
     that have no display() in hand."""
     return pricing.configured() and pricing.billable(account_id, provider)
@@ -3332,18 +3148,13 @@ def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
 
     module = providers.VIDEO_PROVIDERS[choice["provider"]]
     label = providers.RENDER_LABELS.get(choice["provider"], choice["provider"])
-    # the CALLER's key, not the operator's: a BYOK account with its own
-    # stored secret is available even on a server whose environment
-    # variable is unset, and generate_for_shot resolves it per account
-    # anyway (2026-09-08)
+    # the operator's key -- the only one since 2026-09-26
     if not module.has_key(account_id):
         return _error(503, "renderer_unavailable",
-                      f"no {label} key is available for this account — add one, "
-                      f"or approve on a renderer that has a key")
+                      f"{label} is not configured on this server (FAL_KEY is unset)")
 
-    # runway takes a frame SIZE and calls it `ratio`; the others take a
-    # resolution tier. One axis, two parameter names -- see ApproveBody.
-    frame_kw = "ratio" if choice["provider"] == "runway" else "resolution"
+    # the frame axis is a resolution tier ("720p") -- providers.FRAME_AXIS
+    frame_kw = "resolution"
     render_kwargs = {"model": choice["model"],
                      "duration": choice["duration"],
                      frame_kw: choice["frame"]}
@@ -3451,7 +3262,7 @@ class ShotBody(BaseModel):
 def queue_mark_shot(concept_id: int, body: ShotBody,
                     account_id: int = Depends(auth.current_account_id)):
     """The camera: you made this yourself, outside the render pipeline --
-    a manual Runway session, a hand-tweaked prompt, your own stills, cut
+    a render in a vendor's own app, a hand-tweaked prompt, your own stills, cut
     together by hand -- and it worked. `shot_done` is the ground-truth
     column shoot_rate() has always read (preprod.py's own docstring:
     "you generate several concepts and go shoot some of them; that
@@ -3463,8 +3274,8 @@ def queue_mark_shot(concept_id: int, body: ShotBody,
     manual shoot proves the idea, not that the system's OWN automated
     render was good -- queue_approve already owns that meaning and
     stays as-is). It does NOT attach media -- paste the finished clip's
-    URL through /concepts/{id}/shots/{n}/media, same as any manual
-    Runway render. And it does NOT rule for RAG -- grade the corrected
+    URL through /concepts/{id}/shots/{n}/media, same as any clip
+    rendered by hand. And it does NOT rule for RAG -- grade the corrected
     prompt and the reason it worked on the Grade/Teach tabs same as
     anything else; this button only marks that the shoot happened, not
     what it taught. Toggleable, so a wrong click un-marks it.
@@ -3510,7 +3321,7 @@ def concept_detail(concept_id: int, account_id: int = Depends(auth.current_accou
     """The scene board's data: the full shot list, each shot carrying its
     stored per-tool AI prompt plus the OpenArt Director rendering
     (pure text composition, zero model calls). This is the surface the
-    plug-into-Runway loop works from: copy a shot's prompt, generate in
+    render-by-hand loop works from: copy a shot's prompt, generate in
     the tool's own UI, paste the rendered clip's URL back onto the shot."""
     from src import shootgen
 
@@ -3531,11 +3342,9 @@ def concept_detail(concept_id: int, account_id: int = Depends(auth.current_accou
             "shots": shots,
             # the render button's copy is server-sourced: availability,
             # the spend gate's state, and what one clip would cost
-            "runway": _runway_state(),
-            # ... and what the Generate node would ACTUALLY spend on. The
-            # chip read `runway.estimate_usd` -- Runway's default clip --
-            # on every account, including one whose only key is Higgsfield
-            # and whose Run therefore renders, and bills, somewhere else.
+            "renderer": _render_state(account_id),
+            # ... and what the Generate node would ACTUALLY spend on, priced
+            # by pricing.display for this concept
             "generate": _generate_node_quote(concept, account_id)}
 
 
@@ -3547,7 +3356,7 @@ class ShotMediaBody(BaseModel):
 def shot_media_attach(concept_id: int, shot_n: int, body: ShotMediaBody,
                       account_id: int = Depends(auth.current_account_id)):
     """Attach the rendered clip's URL to one shot -- the paste-back half
-    of the Runway loop, and the field autopilot.build_plan() requires
+    of the render-by-hand loop, and the field autopilot.build_plan() requires
     before it will ever emit a post action."""
     url = body.url.strip()
     if not url.startswith(("http://", "https://")):
@@ -3681,31 +3490,37 @@ def shot_refine(concept_id: int, shot_n: int, account_id: int = Depends(auth.cur
 
 @router.post("/concepts/{concept_id}/shots/{shot_n}/generate")
 def shot_generate(concept_id: int, shot_n: int, account_id: int = Depends(auth.current_account_id)):
-    """One click, one render: the shot's stored prompt through the
-    Runway API (anchored on its reference_image when set), the clip
-    downloaded, logged as a generations row, and attached to the shot.
+    """One click, one render: the shot's stored prompt through fal on the
+    model its planned tool binds to (providers.render_default -- the same
+    answer the Queue card opens on), anchored on its reference_image when
+    set, the clip downloaded, logged as a generations row, and attached to
+    the shot.
 
-    Billed and capped. The click is the spend approval (2026-09-09) --
-    this route passes approved=True into generate_for_shot, and the gate
-    itself still lives inside generate_video so nothing here spends
-    around it. RUNWAY_DAILY_CAP is what stops a stuck loop."""
-    # the caller's key, not the operator's -- see queue_approve
-    if not runway.has_key(account_id):
-        return _error(503, "runway_unavailable", "RUNWAYML_API_SECRET is not set")
+    Billed, held and capped. The click is the spend approval (2026-09-09)
+    -- this route passes approved=True into generate_for_shot, and the gate
+    itself still lives inside generate_video, with the credit hold, so
+    nothing here spends around it. FAL_DAILY_CAP is what stops a stuck
+    loop."""
     concept = preprod.get_concept(concept_id, account_id=account_id)
     if concept is None:
         return _error(404, "not_found", "no such concept")
+    shot = next((s for s in concept.get("shots") or [] if s.get("n") == shot_n), None)
+    planned = providers.render_default((shot or {}).get("tool"), account_id)
+    pick = providers.renderer_for(account_id, planned["provider"], planned["model"])
+    if pick is None:
+        return _error(503, "renderer_unavailable", "FAL_KEY is not set")
     # No surface prints a price for this button and no front end calls it
-    # any more, so it mints and takes no quote: a billable render is sent
-    # to the Queue (step 5). BYOK, and a server that cannot sign, render
-    # here exactly as before.
-    if _quote_required(account_id, "runway"):
+    # any more, so it mints and takes no quote: when the server signs
+    # quotes, a billable render -- every render, since 2026-09-26 -- is
+    # sent to the Queue (step 5). A server that cannot sign renders here.
+    if _quote_required(account_id, pick["provider"]):
         return _error(400, "missing_quote", _QUEUE_ONLY)
+    module = providers.VIDEO_PROVIDERS[pick["provider"]]
 
     def work(job):
-        jobs.progress(job, 0.2, "rendering via Runway")
-        result = runway.generate_for_shot(
-            concept_id, shot_n, db_path=None,
+        jobs.progress(job, 0.2, f"rendering via {pick['model']}")
+        result = module.generate_for_shot(
+            concept_id, shot_n, db_path=None, model=pick["model"],
             resolve_photo=_resolve_asset_photo, approved=True,
             account_id=account_id)
         if not result.get("ok"):
@@ -3713,7 +3528,8 @@ def shot_generate(concept_id: int, shot_n: int, account_id: int = Depends(auth.c
         return {"ref_id": concept_id,
                 "detail": f"clip attached to shot {shot_n}"}
 
-    job = jobs.start("render", f"runway · {concept['title']} shot {shot_n}", work, account_id=account_id)
+    job = jobs.start("render", f"{pick['model']} · {concept['title']} shot {shot_n}",
+                     work, account_id=account_id)
     return {"job_id": job["id"]}
 
 
@@ -3968,7 +3784,7 @@ async def pipeline_run(request: Request, account_id: int = Depends(auth.current_
     return {"job_id": job["id"], "image_refs": len(image_refs)}
 
 
-# --- generate tab (Higgsfield-style one-shot generation) --------------------
+# --- generate tab (one-shot generation) --------------------------------------
 # One run through the same four primitives Concept uses -- Reference /
 # Ground / Enhance / Generate -- for a single image or clip. The result
 # is NOT a second data model: it saves as an ordinary shoot_concepts
@@ -4065,8 +3881,9 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
     references) -> Ground -> Enhance -> saved one-shot concept -> the
     render. The render is best-effort and honestly gated: an image goes
     through Nano Banana (cheap, capped) and lands as the shot's
-    reference_image; a video goes through Runway's spend gate and lands
-    as media_url; a refusal still leaves the saved concept + prompt."""
+    reference_image; a video goes through fal's spend gate and credit hold
+    and lands as media_url; a refusal still leaves the saved concept +
+    prompt."""
     form = await request.form()
     prompt = (form.get("prompt") or "").strip()
     if not prompt:
@@ -4086,11 +3903,13 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
     attach_to = int(concept_id_raw) if concept_id_raw.isdigit() else None
     if attach_to is not None and preprod.get_concept(attach_to, account_id=account_id) is None:
         return _error(404, "not_found", "no such concept to attach to")
-    # the video branch spends on Runway with no price shown anywhere and
-    # no front end posting it -- a billable one goes to the Queue (step 5),
+    # the video branch spends on fal with no price shown anywhere and no
+    # front end posting it -- a billable one goes to the Queue (step 5),
     # refused BEFORE the job so no Gemini call is made for a clip that
     # will not render
-    if output == "video" and runway.has_key() and _quote_required(account_id, "runway"):
+    video_pick = (providers.renderer_for(account_id, needs="generate_from_prompt")
+                  if output == "video" else None)
+    if video_pick and _quote_required(account_id, video_pick["provider"]):
         return _error(400, "missing_quote", _QUEUE_ONLY)
 
     image_refs, ref_urls, video_refs = await _collect_refs(form, want_video=True)
@@ -4120,7 +3939,8 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
             raise RuntimeError("enhancement came back empty")
 
         jobs.progress(job, 0.55, "saving concept")
-        shot = {"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
+        shot = {"n": 1, "type": "BROLL", "source": "AI",
+                "tool": shootgen.DEFAULT_SCENE_TOOL,
                 "desc": prompt, "prompt": enhanced}
         allowed = shootgen.ZEROPAGE_AI_TOOLS if brand == "zeropage" else None
         location_names = [loc["name"]
@@ -4165,14 +3985,15 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
             else:
                 notes.append(f"image render skipped: {result.get('error')}")
         elif output == "video":
-            if runway.has_key():
-                jobs.progress(job, 0.7, "rendering via Runway")
-                result = runway.generate_from_prompt(
+            if video_pick:
+                jobs.progress(job, 0.7, f"rendering via {video_pick['model']}")
+                result = providers.VIDEO_PROVIDERS[video_pick["provider"]].generate_from_prompt(
                     enhanced,
                     reference_image=image_refs[0][0] if image_refs else None,
+                    model=video_pick["model"],
                     # a person asked for a video from this composer
                     approved=True,
-                    db_path=None)
+                    db_path=None, account_id=account_id)
                 if result.get("ok"):
                     preprod.set_shot_media_url(
                         concept_id, shot["n"], result["media_url"], account_id=account_id)
@@ -4180,7 +4001,7 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
                 else:
                     notes.append(f"render skipped: {result.get('error')}")
             else:
-                notes.append("render skipped: RUNWAYML_API_SECRET not set")
+                notes.append("render skipped: FAL_KEY not set")
 
         detail = "prompt saved" if output == "prompt" else (notes[0] if notes else "saved")
         if warnings:
@@ -4888,7 +4709,7 @@ def video_refresh(video_id: int, account_id: int = Depends(auth.current_account_
 # stored whole; execution (Run all) walks it server-side in topological
 # order through app/workflow_runner.py, one node at a time -- billed
 # calls are sequential on purpose. The Generate node goes through
-# runway.generate_from_prompt. Its spend gate still lives inside
+# fal.generate_from_prompt. Its spend gate still lives inside
 # generate_video so this surface cannot become a second route that
 # spends around it -- what satisfies the gate here is the person running
 # the canvas (approved=True), not an environment variable.
@@ -5048,10 +4869,8 @@ def _shot_refs(shot) -> list:
 @router.post("/workflows/exec/generate")
 def workflow_exec_generate(body: WfGenerateBody, account_id: int = Depends(auth.current_account_id)):
     """The Generate node's own Run: one clip from a free-standing prompt
-    + optional reference, on WHATEVER RENDERER THIS ACCOUNT CAN USE
-    (2026-09-11) -- providers.renderer_for, the same resolver the Queue
-    uses, so an account with a Higgsfield key and no Runway key renders
-    instead of being told about a key it never meant to hold. Billed and
+    + optional reference, on the renderer providers.renderer_for resolves
+    -- the same resolver the Queue uses (fal, since 2026-09-26). Billed and
     capped; the click is the spend approval (2026-09-09) -- the gate
     still lives inside each adapter's generate_video."""
     shot = _exec_shot(body, account_id)
@@ -5061,8 +4880,8 @@ def workflow_exec_generate(body: WfGenerateBody, account_id: int = Depends(auth.
                                   needs="generate_from_prompt")
     if pick is None:
         return _error(503, "renderer_unavailable",
-                      "no video renderer key is available for this account — "
-                      "add a Runway, Higgsfield or fal key")
+                      "video rendering is not configured on this server "
+                      "(FAL_KEY is unset)")
     label = providers.RENDER_LABELS.get(pick["provider"], pick["provider"])
     required = _quote_required(account_id, pick["provider"])
     quote = None
@@ -5115,7 +4934,7 @@ def workflow_exec_nano(body: WfGenerateBody, account_id: int = Depends(auth.curr
     free-standing prompt + optional reference. Billed on the same
     GEMINI_API_KEY as everything else, capped by NANO_DAILY_CAP inside
     generate_from_prompt -- no separate spend gate, an image costs
-    cents where a Runway render burns credits."""
+    cents where a video render burns credits."""
     from src import nano_banana
 
     shot = _exec_shot(body, account_id)

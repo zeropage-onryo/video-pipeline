@@ -24,7 +24,7 @@ from typing import Optional
 from dotenv import load_dotenv
 from google import genai
 
-from . import accounts, crag, entities, gemini_utils, looks, preprod, rag
+from . import accounts, crag, entities, fal, gemini_utils, looks, preprod, rag
 from . import shot as shot_module
 from .db import init_db
 from .gemini_utils import generate_with_retry, strip_fences
@@ -57,18 +57,17 @@ DEFAULT_IDEA_COUNT = 5
 SHOT_TYPES = ("CHARACTER", "BROLL")
 SHOT_SOURCES = ("CAMERA", "AI")
 CAMERAS = ("BMPCC", "ACTION5")
-# The legal AI tool set is the shot.py platform registry — uppercase to
-# match how concepts name tools. One registry, no second list to drift.
-AI_TOOLS = tuple(t.upper() for t in shot_module.TOOLS)
+# The legal AI tool set: the shot.py platform registry, narrowed to the
+# platforms fal renders (fal.PLATFORM_MODELS). Since 2026-09-26 fal is the
+# only video renderer (docs/tasks/task-fal-only.md), so a tool that fal
+# does not host -- RUNWAY, HIGGSFIELD -- is no longer something a planner
+# may write: a concept naming it would be planning a shot nothing renders.
+AI_TOOLS = tuple(t.upper() for t in shot_module.TOOLS if t in fal.PLATFORM_MODELS)
 
-# Zero Page's real, currently-usable tool set -- deliberately narrower than
-# AI_TOOLS above. Everything else in the shot.py registry (Veo/Kling/
-# Seedance/LTX/Wan) is real infrastructure for other brands and stays in
-# AI_TOOLS for them, but Michael only actually generates Zero Page's AI
-# shots on these two, so the shot-plan prompt and its validation are
-# scoped to just these. Filtered from AI_TOOLS rather than hardcoded a
-# second time, so it can never name a tool the registry doesn't have.
-ZEROPAGE_AI_TOOLS = tuple(t for t in AI_TOOLS if t in ("HIGGSFIELD", "RUNWAY"))
+# Zero Page's tool set. It was HIGGSFIELD and RUNWAY -- the two vendors
+# Michael actually rendered on -- until both were retired on 2026-09-26.
+# Every tool left is one fal renders, so Zero Page may plan on any of them.
+ZEROPAGE_AI_TOOLS = AI_TOOLS
 
 NO_LOCATIONS_NOTE = (
     "note: no described locations -- generating ungrounded. Photograph and "
@@ -1274,7 +1273,11 @@ def parse_scene_brief_response(text: str) -> dict:
             "brief": (data.get("brief") or "").strip()}
 
 
-DEFAULT_SCENE_TOOL = "RUNWAY"
+# The tool a written scene is planned for: the platform fal's default
+# model renders (LTX for ltx2.3, unless FAL_MODEL names another). It was
+# RUNWAY until 2026-09-26. A scene still carrying RUNWAY reads as this at
+# render time (providers.platform_default); nothing rewrites the row.
+DEFAULT_SCENE_TOOL = fal.model_spec(fal.DEFAULT_MODEL)["platform"].upper()
 
 
 def generate_scene_concept(brand: str, spark=None, steer: str = "",
@@ -1660,9 +1663,8 @@ def validate_concept(concept: dict, location_names: list, use_pov: bool = False,
     means CAMERA -- every concept written before the de-cap.
 
     `allowed_tools` narrows which AI tool names pass -- Zero Page's plans
-    should be checked against ZEROPAGE_AI_TOOLS (Higgsfield/Runway only),
-    not every tool in the shot.py registry; omit it and every registered
-    tool is legal, same as before this existed.
+    should be checked against ZEROPAGE_AI_TOOLS; omit it and every tool
+    fal renders is legal (AI_TOOLS).
     """
     allowed_tools = allowed_tools or AI_TOOLS
     warnings = []

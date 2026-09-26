@@ -5,7 +5,6 @@ import os
 import subprocess
 from pathlib import Path
 
-from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -22,7 +21,6 @@ def configured_env(**overrides: str) -> dict[str, str]:
         "SUPABASE_URL": "https://example.supabase.co",
         "SUPABASE_ANON_KEY": "test-anon-key",
         "SESSION_SECRET": "test-session-secret",
-        "ACCOUNT_KEYS_SECRET": Fernet.generate_key().decode(),
         "SITE_URL": "https://example.fly.dev",
     }
     env.update(overrides)
@@ -45,7 +43,9 @@ def test_preflight_names_missing_secrets_without_printing_values():
 
     assert result.returncode == 1
     assert "DATABASE_URL" in result.stderr
-    assert "ACCOUNT_KEYS_SECRET" in result.stderr
+    # the BYOK key secret is no longer required (per-account keys were
+    # removed 2026-09-26), so a machine without it boots
+    assert "ACCOUNT_KEYS_SECRET" not in result.stderr
 
 
 def test_preflight_accepts_public_supabase_configuration():
@@ -54,6 +54,9 @@ def test_preflight_accepts_public_supabase_configuration():
     assert result.returncode == 0
     assert "deployment configuration: ok" in result.stdout
     assert "no Gemini key" in result.stderr
+    assert "no FAL_KEY" in result.stderr        # warned, never refused
+    ok = run_preflight(configured_env(FAL_KEY="k", GEMINI_API_KEY="g"))
+    assert ok.returncode == 0 and "FAL_KEY" not in ok.stderr
 
 
 def test_preflight_refuses_public_dev_console():
@@ -61,15 +64,6 @@ def test_preflight_refuses_public_dev_console():
 
     assert result.returncode == 1
     assert "DEV_TOOLS=1 is refused" in result.stderr
-
-
-def test_preflight_refuses_invalid_account_key_without_echoing_it():
-    bad_key = "not-a-fernet-key"
-    result = run_preflight(configured_env(ACCOUNT_KEYS_SECRET=bad_key))
-
-    assert result.returncode == 1
-    assert "not a valid Fernet key" in result.stderr
-    assert bad_key not in result.stderr
 
 
 def test_fly_health_probe_is_public_and_minimal():

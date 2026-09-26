@@ -5,7 +5,7 @@
    the prompt and its instructions, the reference sets the scene was
    written against (a character's frames, a room's plates, the
    composer's uploads), the Gemini enhance, the Nano keyframe, the
-   Runway model and its output — wired with real links, and a floating
+   video model (fal) and its output — wired with real links, and a floating
    prompt bar underneath that edits the shot's prompt and drops an
    element onto the canvas (already wired in) when you @-mention it.
 
@@ -19,8 +19,8 @@
    swap. One addition on both sides: a `refs` port that takes several
    wires, because the character AND the room feed one billed node.
 
-   Every billed node stays behind its module's own gate (RUNWAY_SPEND_OK,
-   NANO_DAILY_CAP) — this canvas cannot spend around them, and Send to
+   Every billed node stays behind its module's own gate (the fal spend
+   gate and credit hold, NANO_DAILY_CAP) — this canvas cannot spend around them, and Send to
    Queue only PICKS the concept: approving in Queue is what renders. */
 import { api, bus, enhanceSystemText, esc, loadAssets, loadPresets,
          refreshQueueBadge, state, stateline, wireMentions } from './shared.js';
@@ -82,7 +82,7 @@ const CATALOG = {
     note: 'Renders the keyframe the clip starts from — the enhanced prompt as a still, grounded on every reference wired in.',
     inputs: [['prompt', 'text'], ['image', 'image'], ['refs', 'images']],
     outputs: [['image', 'image']], props: () => ({}) },
-  'zpf/generate': { title: 'Runway Gen-4 Turbo', icon: 'sparkles', cat: 'Video', w: 380,
+  'zpf/generate': { title: 'Video clip', icon: 'sparkles', cat: 'Video', w: 380,
     note: 'Takes every wire coming in and renders one clip, anchored on the keyframe. The only step that spends money — approving in Queue is what calls it unattended.',
     inputs: [['prompt', 'text'], ['image', 'image'], ['refs', 'images']],
     outputs: [['media', 'media']], props: () => ({}) },
@@ -420,16 +420,13 @@ function nodeTitle(node) {
 
 /* What the Generate node would render ON and what that costs: the
    server's own price (pricing.display, served as `generate` on the
-   concept) laid over the Runway state the chips were built around.
-   Without it the chip priced every Run at Runway's default clip, even on
-   an account whose only key -- and therefore whose bill -- is another
-   vendor's. */
+   concept) laid over the default renderer's state the chips read. */
 function generateState() {
   const c = directorConcept || {};
   const g = c.generate && !c.generate.error ? c.generate : null;
   return g
-    ? { ...(c.runway || {}), model: g.model, duration: g.durations[0], estimate_usd: g.estimate_usd }
-    : (c.runway || {});
+    ? { ...(c.renderer || {}), model: g.model, duration: g.durations[0], estimate_usd: g.estimate_usd }
+    : (c.renderer || {});
 }
 
 function gateNote(type) {
@@ -438,7 +435,7 @@ function gateNote(type) {
     // renders on whatever this account has a key for (providers.renderer_for,
     // 2026-09-11) -- so a missing key is the only thing that can gate it
     return state.caps['video.generate'] ? ''
-      : 'No video renderer key — add a Runway, Higgsfield or fal key';
+      : 'Video rendering is not configured on this server (FAL_KEY)';
   }
   if (type === 'zpf/nano_banana' && !state.caps['nano.generate']) return 'GEMINI_API_KEY not set';
   if (type === 'zpf/enhance' && !state.caps['enhance']) return 'GEMINI_API_KEY not set';
@@ -495,7 +492,7 @@ function bodyHTML(node) {
       return `<div class="gschips">
           <span class="gschip">${icon('clock')}${esc(String(rw.duration || 5))} sec</span>
           <span class="gschip">${icon('ratio')}${esc(ratio)}</span>
-          <span class="gschip">${icon('monitor')}${esc(rw.model || 'gen4_turbo')}</span>${cam}</div>${errline}
+          <span class="gschip">${icon('monitor')}${esc(rw.model || 'video')}</span>${cam}</div>${errline}
         <div class="gsfoot"><span class="m">${rw.estimate_usd != null ? 'est. $' + Number(rw.estimate_usd).toFixed(2) : esc(gateNote(node.type) || 'text/image → video')}</span><span class="spacer"></span>
           <button class="gsbtn pri" data-act="run">${icon('play')}${node._state === 'running' ? 'Running' : 'Run'}</button></div>`;
     }
@@ -581,7 +578,7 @@ function nodeAction(node, act, data = {}) {
   }
 }
 
-/* the derived output card under a Runway node: the clip (or the
+/* the derived output card under a video node: the clip (or the
    keyframe while there is none), status, re-roll and export */
 function outputHTML(node) {
   const running = node._state === 'running';
@@ -597,7 +594,7 @@ function outputHTML(node) {
       <div class="gsplate video">
         ${clip ? `<video src="${esc(clip)}" muted loop playsinline preload="metadata" controls></video>`
           : still ? `<img src="${esc(still)}" alt="" class="${running ? 'dimmed' : 'dimmed more'}">` : '<span class="gschecker"></span><span class="gsempty">The clip lands here</span>'}
-        ${running ? overlayHTML('rendering · lane ' + esc(rw.model || 'runway')) : ''}
+        ${running ? overlayHTML('rendering · lane ' + esc(rw.model || 'video')) : ''}
       </div>
       ${node._state === 'failed' ? `<div class="gserr">✕ ${esc(node._note || 'failed')}</div>` : node._state === 'skipped' ? `<div class="gserr dim">${esc(node._note || 'skipped')}</div>` : ''}
       <div class="gsfoot">
@@ -815,7 +812,7 @@ function paintInspector() {
     paintCamera(node);
     const rw = generateState();
     $('gsispend').textContent = rw.estimate_usd != null ? '$' + Number(rw.estimate_usd).toFixed(2) : '—';
-    $('gsispendnote').textContent = `per ${rw.duration || 5}-second clip · ${rw.model || 'gen4_turbo'}`;
+    $('gsispendnote').textContent = `per ${rw.duration || 5}-second clip · ${rw.model || 'video'}`;
     $('gsigate').textContent = gateNote(node.type) || (rw.today != null ? `${rw.today} rendered today` : '');
   }
 
@@ -1739,7 +1736,7 @@ function estSetHeight(set) {
 
 async function shotChainGraph(d, s) {
   // The shot's short prompt → Instructions → Gemini 2.5 Flash → Nano
-  // keyframe → Runway clip, with the scene's reference sets as their
+  // keyframe → video clip, with the scene's reference sets as their
   // own cards wired into the three billed nodes' `refs` port. The
   // User Prompt seeds from what the GENERATOR wrote (written_prompt),
   // never the enhanced text, or Run would enhance an enhanced prompt.
@@ -1767,7 +1764,7 @@ async function shotChainGraph(d, s) {
     properties: { auto_ground: true, ref_urls: refs, image_url: s.reference_image || '' } });
   const nano = makeNode('zpf/nano_banana', { title: 'Nano Banana', pos: [colX, 330],
     properties: { ...shot, ref_urls: refs, image_url: s.reference_image || '' } });
-  const gen = makeNode('zpf/generate', { title: 'Runway Gen-4 Turbo', pos: [colX + 430, 40],
+  const gen = makeNode('zpf/generate', { title: 'Video clip', pos: [colX + 430, 40],
     properties: { ...shot, ref_urls: refs, image_url: s.reference_image || '',
                   out_pos: [colX + 430, 350] } });
   connect(prompt, 0, enhance, 1);

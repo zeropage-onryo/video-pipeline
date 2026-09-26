@@ -744,35 +744,42 @@ def test_refine_endpoint_surfaces_failure(tmp_db, monkeypatch):
     assert "technique references" in job["error"]
 
 
-def test_shot_generate_gated_on_the_runway_key(tmp_db, monkeypatch):
+def test_shot_generate_gated_on_the_fal_key(tmp_db, monkeypatch):
     concept_id = seed_concept(tmp_db)
-    monkeypatch.delenv("RUNWAYML_API_SECRET", raising=False)
+    monkeypatch.delenv("FAL_KEY", raising=False)
+    monkeypatch.delenv("FAL_API_KEY", raising=False)
     caps = client.get("/api/capabilities").json()
-    assert caps["runway.generate"] is False
-    assert caps["runway.spend"] is False     # gate off unless set per run
+    assert caps["video.generate"] is False
+    assert caps["video.spend"] is False
+    for retired in ("runway.generate", "runway.spend",
+                    "higgsfield.generate", "higgsfield.spend"):
+        assert retired not in caps
     response = client.post(f"/api/concepts/{concept_id}/shots/1/generate")
     assert response.status_code == 503
 
 
-def test_concept_detail_carries_runway_availability(tmp_db, monkeypatch):
+def test_concept_detail_carries_the_renderers_availability(tmp_db, monkeypatch):
     concept_id = seed_concept(tmp_db)
-    monkeypatch.delenv("RUNWAYML_API_SECRET", raising=False)
+    monkeypatch.delenv("FAL_KEY", raising=False)
+    monkeypatch.delenv("FAL_API_KEY", raising=False)
     d = client.get(f"/api/concepts/{concept_id}").json()
-    assert d["runway"]["available"] is False
-    assert d["runway"]["estimate_usd"] > 0   # priced server-side either way
+    assert d["renderer"]["available"] is False
+    assert d["renderer"]["estimate_usd"] > 0   # priced server-side either way
+    assert "runway" not in d
 
 
 def test_shot_generate_runs_the_render_as_a_job(tmp_db, monkeypatch):
     concept_id = seed_concept(tmp_db)
-    monkeypatch.setattr(api_mod.runway, "has_key", lambda account_id=None: True)
+    from src import fal
+    monkeypatch.setattr(fal, "has_key", lambda account_id=None: True)
     monkeypatch.setattr(
-        api_mod.runway, "generate_for_shot",
+        fal, "generate_for_shot",
         # account_id in the stub because the route passes it (2026-09-02):
         # without it the render found none of the caller's own concepts.
         # **kw because it also passes approved=True now (2026-09-09) --
         # the click is the spend approval; see test_queue_renderers.
         lambda cid, n, db_path=None, resolve_photo=None, account_id=None, **kw: {
-            "ok": True, "media_url": "/renders/runway/x.mp4",
+            "ok": True, "media_url": "/renders/fal/x.mp4",
             "generation_id": 1, "error": None})
     job_id = client.post(
         f"/api/concepts/{concept_id}/shots/1/generate").json()["job_id"]
@@ -783,9 +790,10 @@ def test_shot_generate_runs_the_render_as_a_job(tmp_db, monkeypatch):
 
 def test_shot_generate_surfaces_render_failure(tmp_db, monkeypatch):
     concept_id = seed_concept(tmp_db)
-    monkeypatch.setattr(api_mod.runway, "has_key", lambda account_id=None: True)
+    from src import fal
+    monkeypatch.setattr(fal, "has_key", lambda account_id=None: True)
     monkeypatch.setattr(
-        api_mod.runway, "generate_for_shot",
+        fal, "generate_for_shot",
         lambda cid, n, db_path=None, resolve_photo=None, account_id=None, **kw: {
             "ok": False, "error": "daily cap: 6/6"})
     job_id = client.post(
@@ -1312,15 +1320,15 @@ def test_holds_resolve_writes_the_prompt_verdict(tmp_db):
 # --- the Queue's selectors (2026-09-12) --------------------------------------
 
 def test_queue_state_carries_the_selector_choices(tmp_db):
-    """The React Queue's Runway lists are projections of src/render_specs.py,
-    the one table the lane import and providers.check_render_choice refuse
-    against -- never a second copy."""
-    from src import render_specs, runway
-    d = client.get("/api/queue/pending").json()["runway"]
-    assert [m["id"] for m in d["models"]] == list(runway.MODELS)
+    """The renderer block's lists are projections of fal.VIDEO_MODELS, the
+    one table providers.check_render_choice refuses against -- never a
+    second copy."""
+    from src import fal, providers
+    d = client.get("/api/queue/pending").json()["renderer"]
+    assert sorted(m["id"] for m in d["models"]) == sorted(fal.VIDEO_MODELS)
     assert all(m["usd_per_second"] > 0 for m in d["models"])
-    assert d["ratios"] == list(render_specs.RUNWAY_RATIOS)
-    assert d["durations"] == list(render_specs.RUNWAY_DURATIONS)
+    axis = providers.model_options("fal", d["model"])["duration"]
+    assert d["durations"] == list(axis.get("values") or range(axis["min"], axis["max"] + 1))
 
 
 # --- the board's side readers (2026-09-25) ----------------------------------

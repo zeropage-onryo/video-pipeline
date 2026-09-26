@@ -1,24 +1,31 @@
 #!/usr/bin/env python3
 """
-The manual (subscription) render lane, and the one gate in front of it.
+The manual render lanes, and the one gate in front of them.
 
-WHAT THE LANE IS. Runway's API has exactly one billing path: developer
-portal credits at $0.01 each (src/runway.py's header). The Unlimited/Max
-plan's free-but-queued **Explore Mode is a web-app toggle with no API
-parameter**, so no adapter in this repo can reach it -- the only way to
-spend that subscription is a human (or a Claude session) driving Chrome
-and dragging the keyframe in by hand. `ops/render_queue.py` is the repo
-side of that: `list` says what is waiting, the human renders it, `import`
-files the mp4 back into data/renders/ where /renders can serve it.
+WHAT THE LANES ARE. Two ways a clip reaches a concept without an API
+render through the Queue:
 
-WHY IT NEEDS A GATE, WHICH THE HIGGSFIELD LANE NEVER HAD.
-The subscription being spent is the OPERATOR'S PERSONAL CONSUMER PLAN.
-Rendering a paying customer's shot on it is reselling a consumer
-subscription: the plan's own terms, not ours, and the penalty is not a
-refund but termination of the account -- which on a multi-tenant install
-takes EVERY tenant's render path down at once, not just the one whose
-shot was rendered. So the lane is deliberately not a feature: it is the
-operator's own hands, and the account id is what says so.
+- **manual** -- the generic clip import. A clip rendered ANYWHERE (a
+  vendor's web app, a local model, the Resolve timeline) is dropped on its
+  card or filed with `ops/render_queue.py --provider manual import`, and
+  lands as a FREE generations row plus a generated_assets row. It spends
+  nothing, which is why it takes no ledger hold.
+- **higgsfield** -- the Higgsfield MCP: a Claude session renders on the
+  operator's app subscription and files the clip back.
+
+Until 2026-09-26 the first was the RUNWAY UNLIMITED lane: the plan's
+free-but-queued Explore Mode had no API parameter, so a human rendered in
+Chrome and filed the mp4. Runway retired Unlimited in June 2026 and fal
+became the only API renderer (docs/tasks/task-fal-only.md), so the lane
+became the generic import -- the part of it that was never about Runway.
+
+WHY IT NEEDS A GATE. The Higgsfield lane spends the OPERATOR'S PERSONAL
+CONSUMER PLAN. Rendering a paying customer's shot on it is reselling a
+consumer subscription -- the plan's own terms, and the penalty is
+termination of the account, which on a multi-tenant install takes EVERY
+tenant's render path down at once. The generic import spends nothing, but
+it files a clip as a concept's render with no hold, so it stays behind the
+same operator gate rather than being the one door that is wider.
 
 THE RULES THIS MODULE EXISTS TO KEEP IN ONE PLACE:
 
@@ -98,34 +105,30 @@ OPERATOR_COMMAND = "python -m src.accounts operator <slug> --on"
 # it may and may not carry. It names the COLUMN and the COMMAND, which
 # are true on every install and are in this repo's source anyway; it
 # never names an account, a slug, an id or an email.
-REFUSAL = ("no manual render lane on this account -- the subscription lanes are "
+REFUSAL = ("no manual render lane on this account -- the manual lanes are "
            "operator-only (accounts.manual_lane_operator, set with "
            f"`{OPERATOR_COMMAND}`, see docs/RUNBOOK.md)")
 
-# The marker that goes in `generations.params_json` for a render filed
-# through this lane, beside the `key_source` field the adapters write.
-# `src/ledger.py` reads it (`is_billable`) and `src/costs.py`'s honesty
-# rule reads its consequence (cost_usd NULL == FREE, never $0).
-SOURCE = "manual-unlimited"
+# The marker that goes in `generations.params_json` for a clip filed
+# through the generic import. `src/ledger.py` reads it (`is_billable`) and
+# `src/costs.py`'s honesty rule reads its consequence (cost_usd NULL ==
+# FREE, never $0).
+SOURCE = "manual-import"
 LANES = {
-    "runway": "runway-explore",
+    "manual": "manual-import",
     # The Higgsfield MCP lane predates this module and writes its own
     # marker; named here so the ledger has one list to read.
     "higgsfield": "higgsfield-mcp",
 }
 
-# Every `params.source` that means "a subscription already paid for this
-# clip, outside the ledger". `mcp-subscription` is what
-# ops/render_queue.py has written for the Higgsfield lane since it was
-# built; it is the same structural fact under an older name, so it is
-# listed rather than migrated.
-SUBSCRIPTION_SOURCES = frozenset({SOURCE, "mcp-subscription"})
+# Every `params.source` that means "this clip was paid for outside the
+# ledger". `mcp-subscription` is what ops/render_queue.py writes for the
+# Higgsfield lane; `manual-unlimited` is what the retired Runway Unlimited
+# lane wrote (#375 and its kind) -- kept so those rows still read as FREE.
+SUBSCRIPTION_SOURCES = frozenset({SOURCE, "mcp-subscription", "manual-unlimited"})
 
-# What the Runway web app is asked for on this lane. BOTH are
-# src/render_specs.py's, which is also where src/runway.py's DEFAULT_RATIO
-# comes from -- one literal, so the by-hand render and the API render ask
-# for the same frame and there is nothing left to drift. Re-exported here
-# because every caller in the lane already speaks to this module.
+# The frame and length a lane card offers by default -- src/render_specs.py's,
+# re-exported because every caller in the lane already speaks to this module.
 LANE_RATIO = render_specs.LANE_RATIO
 LANE_DURATION = render_specs.LANE_DURATION
 

@@ -5,7 +5,7 @@
   <div class="vhead"><div>
     <div class="rule">Outcome loop // what worked and what didn't // grounds every future run</div>
     <h1>Prompt feedback</h1>
-    <p class="vsub">Tweak a prompt, run it in Runway, then tell the pipeline how it went. "Worked" is taught as a pattern to imitate; "Didn't work" is taught as a pattern to avoid. Both feed RAG, so the next batch is smarter.</p>
+    <p class="vsub">Tweak a prompt, render it, then tell the pipeline how it went. "Worked" is taught as a pattern to imitate; "Didn't work" is taught as a pattern to avoid. Both feed RAG, so the next batch is smarter.</p>
   </div></div>
 
   {% if message %}<div class="toast">{{ message }}</div>{% endif %}
@@ -23,7 +23,7 @@
           </label>
           <label>Tool
             <select name="tool">
-              <option value="runway" {{ "selected" if prefill_tool == "runway" }}>Runway (video)</option>
+              <option value="ltx" {{ "selected" if prefill_tool not in ("midjourney",) }}>Video (fal)</option>
               <option value="midjourney" {{ "selected" if prefill_tool == "midjourney" }}>Midjourney (still)</option>
             </select>
           </label>

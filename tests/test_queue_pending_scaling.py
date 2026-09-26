@@ -1,7 +1,7 @@
 """GET /api/queue/pending asks its per-ACCOUNT questions once per request.
 
-Which vendors the account holds a key for, whose key each is, and today's
-count per vendor are facts about the account. Until 2026-09-18 every card
+Whether the renderer is keyed, today's count and the account's plan are
+facts about the account. Until 2026-09-18 every card
 asked them again, per vendor, each on its own connection: four cards were
 ~45 connections and ~45s from a laptop against Supabase. These tests count
 connections and key/cap lookups for a listing of one card and of several,
@@ -14,13 +14,11 @@ from fastapi.testclient import TestClient
 import app.main as app_main
 from app import api, auth
 from app.main import app
-from src import account_keys, accounts, db, generative, preprod, pricing, providers
+from src import accounts, db, generative, preprod, pricing, providers
 
 client = TestClient(app)
 
-RENDER_KEYS = ("RUNWAYML_API_SECRET", "FAL_KEY", "FAL_API_KEY", "HIGGSFIELD_API_KEY_ID",
-               "HF_API_KEY_ID", "HIGGSFIELD_API_KEY_SECRET", "HF_API_KEY_SECRET",
-               "GEMINI_API_KEY", "GOOGLE_API_KEY")
+RENDER_KEYS = ("FAL_KEY", "FAL_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY")
 
 
 @pytest.fixture(autouse=True)
@@ -38,7 +36,6 @@ def tmp_db(pg, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", pg)
     for name in RENDER_KEYS:
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("RUNWAYML_API_SECRET", "OPERATOR-RUNWAY")
     monkeypatch.setenv("FAL_KEY", "OPERATOR-FAL")
     return pg
 
@@ -145,13 +142,9 @@ def test_without_the_context_the_same_listing_pays_per_card(tmp_db, monkeypatch)
 
 # guards: the context changing WHERE an answer is read, never the answer
 def test_the_listing_says_what_the_uncached_calls_say(tmp_db, monkeypatch):
-    from cryptography.fernet import Fernet
     monkeypatch.delenv(pricing.SIGNING_ENV, raising=False)   # tokens carry a timestamp
-    monkeypatch.setenv("ACCOUNT_KEYS_SECRET", Fernet.generate_key().decode())
     account_id = accounts.upsert_account("zeropage", "Zero Page", dsn=tmp_db)
     acting_as(account_id)
-    # the account's OWN fal key: that vendor is BYOK, runway is the operator's
-    account_keys.set_key(account_id, "fal", "THEIR-FAL", dsn=tmp_db)
     concepts = [queue_scene(tmp_db, account_id, tool)
                 for tool in ("RUNWAY", "KLING", "VEO", None)]
     payload = listing()
@@ -162,8 +155,9 @@ def test_the_listing_says_what_the_uncached_calls_say(tmp_db, monkeypatch):
         card = by_id[concept_id]
         assert card["render_default"] == providers.render_default(card.get("tool"), account_id)
         assert card["quote"] == api._card_quote(concept, account_id)
-    byok = {by_id[c]["quote"]["provider"]: by_id[c]["quote"]["byok"] for c in concepts}
-    assert byok == {"runway": False, "fal": True}
+    # every card on the one renderer, every card charged
+    assert {by_id[c]["quote"]["provider"] for c in concepts} == {"fal"}
+    assert all(by_id[c]["quote"]["credits"] for c in concepts)
 
 
 # guards: _held -- a context is honoured only for the account it was built for
@@ -183,6 +177,6 @@ def test_the_snapshot_never_answers_the_installation_wide_count(tmp_db, monkeypa
     with generative.counted_today(None, tmp_db):
         monkeypatch.setattr(generative, "connect",
                             lambda dsn=None: (_ for _ in ()).throw(RuntimeError("read")))
-        assert generative.used_today("runway", tmp_db, account_id=None) == 0
+        assert generative.used_today("kling", tmp_db, account_id=None) == 0
         with pytest.raises(RuntimeError):
-            generative.used_today("runway", tmp_db, everyone=True)
+            generative.used_today("kling", tmp_db, everyone=True)

@@ -17,16 +17,16 @@ SECRET = "dGVzdC1zZWNyZXQtdGhpcnR5LXR3by1ieXRlcy1sb25nLW9r"
 @pytest.fixture
 def signing(monkeypatch):
     monkeypatch.setenv(pricing.SIGNING_ENV, SECRET)
-    monkeypatch.setenv("RUNWAYML_API_SECRET", "OPERATOR-RUNWAY")
+    monkeypatch.setenv("FAL_KEY", "OPERATOR-FAL")
 
 
 def scene(prompt="A man laces his boots in a cold garage.", refs=("/refs/a.jpg",)):
-    return {"n": 1, "tool": "RUNWAY", "prompt": prompt, "refs": list(refs)}
+    return {"n": 1, "tool": "LTX", "prompt": prompt, "refs": list(refs)}
 
 
 def a_quote(shot=None, account_id=1, part=None):
     return pricing.quote(account_id=account_id, shot=shot or scene(), shot_id=361, part=part,
-                         provider="runway", model="gen4_turbo", seconds=5)
+                         provider="fal", model="ltx2.3", seconds=6)
 
 
 def test_round_trip(signing):
@@ -121,10 +121,26 @@ def test_a_retired_pricing_version_is_retired_pricing(signing, monkeypatch):
     assert refused.value.reason == "retired_pricing"
 
 
+# guards: the v3 bump (2026-09-26, fal-only pricing). A token minted under
+# the Runway-era v2 is a price for a renderer or a band that no longer
+# exists; it must refuse as retired, never verify.
+def test_a_v2_token_refuses_as_retired_pricing(signing, monkeypatch):
+    assert pricing.PRICING_VERSION == "2026-09-26-fal-v3"
+    assert "2026-09-18-video-v2" not in pricing.SUPPORTED_PRICING_VERSIONS
+    monkeypatch.setattr(pricing, "PRICING_VERSION", "2026-09-18-video-v2")
+    old = pricing.sign(a_quote())
+    monkeypatch.undo()
+    monkeypatch.setenv(pricing.SIGNING_ENV, SECRET)
+    monkeypatch.setenv("FAL_KEY", "OPERATOR-FAL")
+    with pytest.raises(pricing.QuoteRefused) as refused:
+        pricing.verify(old, account_id=1, shot=scene(), shot_id=361)
+    assert refused.value.reason == "retired_pricing"
+
+
 # guards: _secret() raising rather than defaulting
 def test_no_secret_means_no_signing_and_no_default(monkeypatch):
     monkeypatch.delenv(pricing.SIGNING_ENV, raising=False)
-    monkeypatch.setenv("RUNWAYML_API_SECRET", "OPERATOR-RUNWAY")
+    monkeypatch.setenv("FAL_KEY", "OPERATOR-FAL")
     assert pricing.configured() is False
     with pytest.raises(pricing.SigningUnconfigured) as unset:
         pricing.sign(a_quote())
@@ -132,8 +148,8 @@ def test_no_secret_means_no_signing_and_no_default(monkeypatch):
     with pytest.raises(pricing.SigningUnconfigured):
         pricing.verify("zpfq.x.y", account_id=1, shot=scene(), shot_id=361)
     # the price still shows; no token rides with it
-    shown = pricing.display(account_id=1, shot=scene(), shot_id=361, provider="runway",
-                            model="gen4_turbo", seconds=5)
+    shown = pricing.display(account_id=1, shot=scene(), shot_id=361, provider="fal",
+                            model="ltx2.3", seconds=6)
     assert shown["signed"] is False and shown["renders"][0]["token"] is None
 
 
@@ -143,10 +159,10 @@ def test_the_suite_does_not_inherit_a_real_secret():
     assert pricing.configured() is False
 
 
-def test_the_secret_is_its_own_not_the_account_keys_one(signing, monkeypatch):
-    monkeypatch.setenv("ACCOUNT_KEYS_SECRET", "something-else")
+def test_the_secret_is_its_own_not_the_sessions(signing, monkeypatch):
+    monkeypatch.setenv("SESSION_SECRET", "something-else")
     token = pricing.sign(a_quote())
-    monkeypatch.setenv("ACCOUNT_KEYS_SECRET", "rotated")
+    monkeypatch.setenv("SESSION_SECRET", "rotated")
     assert pricing.verify(token, account_id=1, shot=scene(), shot_id=361)
     monkeypatch.setenv(pricing.SIGNING_ENV, SECRET + "x")
     with pytest.raises(pricing.QuoteRefused) as refused:
@@ -157,14 +173,14 @@ def test_the_secret_is_its_own_not_the_account_keys_one(signing, monkeypatch):
 def test_display_signs_one_token_per_shot(signing):
     prompt = "BEATS (0-7s) he laces both boots. (7-10s) the visor drops."
     shot = scene(prompt)
-    shown = pricing.display(account_id=1, shot=shot, shot_id=361, provider="runway",
-                            model="gen4_turbo")
+    shown = pricing.display(account_id=1, shot=shot, shot_id=361, provider="fal",
+                            model="ltx2.3")
     assert shown["signed"] is True
     tokens = [r["token"] for r in shown["renders"]]
     assert len(tokens) == 2 and len(set(tokens)) == 2
     for r in shown["renders"]:
         q = pricing.verify(r["token"], account_id=1, shot=shot, shot_id=361, part=r["part"])
         assert (q.part, q.seconds, q.credits) == (r["part"], r["seconds"], r["credits"])
-    # BYOK-shaped: nothing to charge, nothing to sign
-    assert pricing.display(account_id=None, shot=shot, shot_id=361, provider="runway",
-                           model="gen4_turbo")["signed"] is True   # env key: billable
+    # every render is billable since BYOK went, so every display signs
+    assert pricing.display(account_id=None, shot=shot, shot_id=361, provider="fal",
+                           model="ltx2.3")["signed"] is True

@@ -19,16 +19,16 @@ What these actually guard:
   and hang or lie on the only case that matters;
 - a job that never terminates hits the deadline and RAISES rather than
   holding the night open;
-- the key never reaches an error string -- for the operator's env key and
-  for a BYOK account's own stored key, which is the bug the other three
-  adapters were fixed for;
+- the key never reaches an error string, and it is only ever the
+  operator's (per-account keys were removed 2026-09-26);
 - both walls (cap, spend approval) refuse before a single HTTP call;
-- a KLING / LTX / WAN / SEEDANCE shot renders and logs a row under its own
-  tool name with a key_source, instead of parking as "no adapter wired".
+- a KLING / LTX / WAN / SEEDANCE / VEO shot renders and logs a row under
+  its own tool name with a key_source, instead of parking as "no adapter
+  wired" -- and a retired RUNWAY / HIGGSFIELD shot renders on fal's default.
 """
 import pytest
 
-from src import account_keys, fal, generative
+from src import fal, generative
 
 
 @pytest.fixture
@@ -125,14 +125,30 @@ def test_every_model_entry_is_dated_and_sourced():
 def test_estimate_cost_matches_the_table():
     """Per-second, times duration, times n. If the table is re-dated with
     new numbers this test is what says the estimate followed."""
-    assert fal.estimate_cost(1, model="ltx2.3", duration=5) == 0.30
-    assert fal.estimate_cost(2, model="ltx2.3", duration=5) == 0.60
+    # LTX-2.3 renders 6/8/10s only, so a 5s ask is priced as the 6s it gets
+    assert fal.estimate_cost(1, model="ltx2.3", duration=5) == 0.36
+    assert fal.estimate_cost(1, model="ltx2.3", duration=6) == 0.36
+    assert fal.estimate_cost(2, model="ltx2.3", duration=6) == 0.72
     assert fal.estimate_cost(1, model="ltx2.3", duration=10) == 0.60
-    assert fal.estimate_cost(1, model="ltx2.3", duration=5,
-                             resolution="2160p") == 1.20
+    assert fal.estimate_cost(1, model="ltx2.3", duration=6,
+                             resolution="2160p") == 1.44
     assert fal.estimate_cost(1, model="kling3-turbo-pro", duration=5) == 0.70
     assert fal.estimate_cost(1, model="wan3", duration=5) == 0.50
-    assert fal.estimate_cost(1, model="seedance2-fast", duration=5) == 1.21
+    assert fal.estimate_cost(1, model="seedance2-fast", duration=5) == 1.2095
+    assert fal.estimate_cost(1, model="veo3.1", duration=8) == 3.20
+
+
+def test_resolution_is_a_pricing_input_and_an_unknown_one_refuses():
+    """Seedance 2.0 bills $0.3034/s at 720p and $0.682/s at 1080p on fal
+    (2026-09-26). A 10s 1080p clip must never be priced at the 720p rate --
+    and a tier the model has no rate for is refused, not defaulted."""
+    at_720 = fal.estimate_cost(1, model="seedance2", duration=10, resolution="720p")
+    at_1080 = fal.estimate_cost(1, model="seedance2", duration=10, resolution="1080p")
+    assert (at_720, at_1080) == (3.034, 6.82)
+    with pytest.raises(ValueError, match="no '4k' rate"):
+        fal.estimate_cost(1, model="seedance2", duration=10, resolution="4k")
+    # a model with no resolution field has one rate whatever is asked
+    assert fal.price_per_second("kling3-turbo-pro", "720p") == 0.14
 
 
 def test_a_price_can_be_overridden_by_env(monkeypatch):
@@ -144,8 +160,8 @@ def test_a_price_can_be_overridden_by_env(monkeypatch):
 
 
 def test_the_default_model_is_the_cheapest_one_in_the_table():
-    """DEFAULT_ORDER puts fal second on the strength of this number. If
-    the default moves to a dearer model the registry position is wrong."""
+    """The default render is the cheapest clip there is -- what a card
+    opens on and an empty approve spends."""
     cheapest = min(fal.MODELS, key=lambda m: fal.estimate_cost(1, model=m))
     assert fal.DEFAULT_MODEL == cheapest
 
@@ -153,25 +169,49 @@ def test_the_default_model_is_the_cheapest_one_in_the_table():
 # ---------- the request body ----------
 
 def test_body_carries_only_fields_the_endpoint_declares():
-    model_id, body = fal.build_body("a shot", model="kling3-turbo-pro")
+    model_id, body = fal.build_body("a shot", model="kling3-turbo-pro",
+                                    negative_prompt="no CGI")
     assert model_id == "fal-ai/kling-video/v3/turbo/pro/text-to-video"
-    assert set(body) <= {"prompt", "duration", "aspect_ratio",
-                         "negative_prompt", "cfg_scale"}
+    # the i2v schema carries neither negative_prompt nor cfg_scale
+    assert set(body) == {"prompt", "duration", "aspect_ratio"}
     assert "resolution" not in body       # kling declares none
 
 
 def test_duration_is_clamped_into_the_models_own_range():
+    """Kling v3 turbo pro takes 3-15s, as a string enum."""
     _, long = fal.build_body("x", model="kling3-turbo-pro", duration=99)
-    assert long["duration"] == 10
+    assert long["duration"] == "15"
     _, short = fal.build_body("x", model="kling3-turbo-pro", duration=1)
-    assert short["duration"] == 5
+    assert short["duration"] == "3"
 
 
-def test_a_reference_routes_to_the_image_to_video_id():
+def test_an_enum_duration_is_fitted_up_and_sent_in_the_models_own_shape():
+    """LTX-2.3 takes 6/8/10 (strings), Veo 3.1 "4s"/"6s"/"8s", Wan a plain
+    integer. An off-enum value is a refused request after a queue wait."""
+    assert fal.build_body("x", model="ltx2.3", duration=5)[1]["duration"] == "6"
+    assert fal.build_body("x", model="ltx2.3", duration=7)[1]["duration"] == "8"
+    assert fal.build_body("x", model="ltx2.3", duration=30)[1]["duration"] == "10"
+    assert fal.build_body("x", model="veo3.1", duration=5)[1]["duration"] == "6s"
+    assert fal.build_body("x", model="wan3", duration=5)[1]["duration"] == 5
+    assert fal.fit_duration("ltx2.3", 3) == 6
+
+
+def test_a_reference_routes_to_the_image_to_video_id_in_the_models_own_field():
     model_id, body = fal.build_body("x", model="wan3",
                                     image_url="https://cdn/i.png")
     assert model_id == "alibaba/wan-3.0/image-to-video"
+    assert body["start_image_url"] == "https://cdn/i.png"   # Wan 3.0's name for it
+    assert "image_url" not in body
+    model_id, body = fal.build_body("x", model="ltx2.3", image_url="https://cdn/i.png")
+    assert model_id == "fal-ai/ltx-2.3/image-to-video"
     assert body["image_url"] == "https://cdn/i.png"
+
+
+def test_veo_is_a_fal_model_now():
+    model_id, body = fal.build_body("x", model="veo3.1", image_url="https://cdn/i.png")
+    assert model_id == "fal-ai/veo3.1/image-to-video"
+    assert fal.build_body("x", model="veo3.1")[0] == "fal-ai/veo3.1"
+    assert fal.PLATFORM_MODELS["veo"] == "veo3.1"
 
 
 def test_aspect_ratio_is_sent_on_text_to_video_only():
@@ -356,35 +396,15 @@ def test_the_env_key_never_reaches_an_error_string(keys):
     assert "fal-secret-key" not in text
 
 
-def test_a_byok_accounts_own_key_never_reaches_an_error_string(
-        pg, approved, monkeypatch, tmp_path):
-    """The bug runway, veo and higgsfield were all fixed for: _safe_error
-    resolved the credential with NO account, so it redacted the OPERATOR's
-    env key and let the account's own stored key -- the one the failing
-    request was actually signed with -- through into a string that reaches
-    a Queue card and a generations row."""
-    from cryptography.fernet import Fernet
-
-    from src import accounts, db
-
-    monkeypatch.setenv("DATABASE_URL", pg)
-    monkeypatch.setenv("ACCOUNT_KEYS_SECRET", Fernet.generate_key().decode())
+def test_only_the_operators_key_is_ever_used(monkeypatch):
+    """Per-account keys were removed on 2026-09-26: whatever account asks,
+    the credential is FAL_KEY from the environment."""
     monkeypatch.setenv("FAL_KEY", "operator-key")
-    generative.init(pg)
-    accounts.seed("mike@example.com", dsn=pg)
-    with db.connect(pg) as conn:
-        owner = conn.execute(
-            "SELECT id FROM accounts WHERE slug = 'zeropage'").fetchone()["id"]
-    account_keys.set_key(owner, "fal", "tenant-key-abcdef", dsn=pg)
-
-    def boom(url, payload=None):
-        raise RuntimeError("401 rejected tenant-key-abcdef")
-
-    result = fal.generate_from_prompt("a prompt", db_path=pg, http=boom,
-                                      account_id=owner)
-    assert result["ok"] is False
-    assert "tenant-key-abcdef" not in result["error"]
-    assert "operator-key" not in result["error"]
+    assert fal._credential(None) == "operator-key"
+    assert fal._credential(12345) == "operator-key"
+    monkeypatch.delenv("FAL_KEY")
+    monkeypatch.delenv("FAL_API_KEY", raising=False)
+    assert fal.has_key(12345) is False
 
 
 # ---------- the logging edge ----------
@@ -412,7 +432,7 @@ def test_the_row_records_the_key_source(tmp_db, approved, keys, fake_download,
     with generative.connect(tmp_db) as conn:
         params = conn.execute(
             "SELECT params_json FROM generations ORDER BY id").fetchone()[0]
-    assert json.loads(params)["key_source"] == account_keys.SOURCE_ENV
+    assert json.loads(params)["key_source"] == fal.KEY_SOURCE
 
 
 def test_a_dead_candidate_does_not_take_the_run_down(tmp_db, approved, keys,
@@ -449,10 +469,9 @@ def test_a_platform_connector_conforms_too():
     assert providers.conforms(fal.connector("kling")) == []
 
 
-def test_fal_sits_where_its_real_cost_per_clip_puts_it():
+def test_fal_is_the_whole_default_order():
     from src import providers
-    assert providers.DEFAULT_ORDER.index("fal") == 1     # after runway, before higgsfield
-    assert fal.estimate_cost(1) < 0.40                   # higgsfield's per-clip base
+    assert providers.DEFAULT_ORDER == ("fal",)
 
 
 def test_the_four_dormant_platforms_are_wired_into_the_nightly_graph():
@@ -463,8 +482,8 @@ def test_the_four_dormant_platforms_are_wired_into_the_nightly_graph():
 
     from src import orchestrator
     source = inspect.getsource(orchestrator.generate_render)
-    for tool in ("KLING", "LTX", "WAN", "SEEDANCE"):
-        assert f'"{tool}": fal.connector(' in source
+    assert "fal.connector(name) for name in fal.PLATFORM_MODELS" in source
+    assert set(fal.PLATFORM_MODELS) >= {"kling", "ltx", "wan", "seedance", "veo"}
 
 
 def test_every_fal_platform_is_a_real_shot_platform():
@@ -473,7 +492,7 @@ def test_every_fal_platform_is_a_real_shot_platform():
         assert platform in PLATFORMS
 
 
-@pytest.mark.parametrize("tool", ["KLING", "LTX", "WAN", "SEEDANCE"])
+@pytest.mark.parametrize("tool", ["KLING", "LTX", "WAN", "SEEDANCE", "VEO"])
 def test_a_shot_on_a_dormant_platform_now_actually_renders(
         tool, tmp_db, approved, keys, fake_download, monkeypatch):
     """End to end through orchestrator.generate_render: the shot renders,
@@ -511,7 +530,7 @@ def test_a_shot_on_a_dormant_platform_now_actually_renders(
     params = json.loads(row[1])
     assert params["provider"] == "fal"
     assert params["model"] == fal.PLATFORM_MODELS[tool.lower()]
-    assert params["key_source"] == account_keys.SOURCE_ENV
+    assert params["key_source"] == fal.KEY_SOURCE
 
 
 def test_shootgens_tool_choice_is_still_authoritative(tmp_db, approved, keys,
@@ -581,3 +600,66 @@ def test_an_image_needs_the_same_spend_approval(tmp_path, keys, monkeypatch):
     with pytest.raises(RuntimeError, match="spend not approved"):
         fal.generate_image("x", tmp_path / "a.png", http=http)
     assert http.calls == []
+
+
+@pytest.mark.parametrize("tool", ["RUNWAY", "HIGGSFIELD"])
+def test_a_shot_planned_for_a_retired_tool_renders_on_the_fal_default(
+        tool, tmp_db, approved, keys, fake_download, monkeypatch):
+    """A row written before 2026-09-26 may still say RUNWAY or HIGGSFIELD.
+    The graph reads it as fal's default at render time -- it neither parks
+    the shot nor rewrites the row."""
+    import json
+
+    from src import orchestrator
+
+    monkeypatch.setenv("ZEROPAGE_RENDER", "1")
+    http = FakeHttp()
+    real = fal.generate_candidates
+
+    def patched(prompt, out_dir, n=3, **kw):
+        kw["http"] = http
+        kw["db_path"] = tmp_db
+        return real(prompt, out_dir, n, **kw)
+
+    monkeypatch.setattr(fal, "generate_candidates", patched)
+    state = orchestrator.generate_render(
+        {"prompts": [{"tool": tool, "prompt": "a long enough prompt to render"}],
+         "concept_id": 1})
+    assert state["clips"][0]["ok"] is True, state["clips"][0].get("error")
+    with generative.connect(tmp_db) as conn:
+        params = json.loads(conn.execute(
+            "SELECT params_json FROM generations ORDER BY id DESC LIMIT 1").fetchone()[0])
+    assert params["model"] == fal.DEFAULT_MODEL
+
+
+# ---------- references: a URL or nothing, never a lie (from higgsfield) ----------
+
+def test_a_public_url_passes_straight_through():
+    assert fal.as_image_url("https://cdn/i.png") == "https://cdn/i.png"
+
+
+def test_a_data_uri_is_refused_because_their_server_must_fetch_it():
+    """fal takes an image URL it fetches. Passing a data URI would spend a
+    credit on a reference that never arrives."""
+    assert fal.as_image_url("data:image/png;base64,AAAA") is None
+
+
+def test_a_local_keyframe_without_storage_is_dropped_not_faked(monkeypatch):
+    from src import storage
+    monkeypatch.setattr(storage, "configured", lambda: False)
+    assert fal.as_image_url(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64) is None
+
+
+def test_the_generation_row_records_the_anchor_that_was_actually_sent(
+        tmp_db, approved, keys, fake_download, monkeypatch):
+    import json
+
+    from src import storage
+    monkeypatch.setattr(storage, "configured", lambda: False)
+    result = fal.generate_from_prompt(
+        "x", reference_image=b"\x89PNG\r\n\x1a\n" + b"\x00" * 64,
+        db_path=tmp_db, http=FakeHttp(), approved=True)
+    assert result["ok"] is True, result
+    with generative.connect(tmp_db) as conn:
+        params = conn.execute("SELECT params_json FROM generations").fetchone()[0]
+    assert json.loads(params)["prompt_image"] is False

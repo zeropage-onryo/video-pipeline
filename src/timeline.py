@@ -78,8 +78,8 @@ MAX_PARTS = 8
 # that describes the scene again is spending its whole budget restating what
 # the model can see, and saying nothing about the only thing it has to
 # invent, which is what changes across the window. Worse on the reference
-# lane (runway.reference_mode), where there is no locked first frame at all
-# and the prompt is carrying MORE of the load, not less.
+# lane, where there is no locked first frame at all and the prompt is
+# carrying MORE of the load, not less.
 #
 # Two rules, both from the shot-prompt playbook and both things the models
 # get wrong by default: a clip that starts and stops from a dead stop reads
@@ -89,9 +89,10 @@ MAX_PARTS = 8
 # render boundary, where asking is no longer good enough -- the planner is a
 # model too, and a scene written before this line existed never heard it.
 #
-# Deliberately ~130 characters. The gen4 cap is 1000 (runway.PROMPT_LIMITS)
-# and a director's prompt with its continuity block already runs close to
-# it, so anything longer would start turning working renders into refusals.
+# Deliberately ~130 characters. Prompt caps refuse rather than truncate
+# (Kling v3 on fal: 2500) and a director's prompt with its continuity block
+# already runs long, so anything longer would start turning working renders
+# into refusals.
 # ZEROPAGE_MOTION_DIRECTIVE=0 turns it off for a prompt that needs the room.
 MOTION_DIRECTIVE = (
     "RENDER THE CHANGE, not the frame: open already mid-motion, end still "

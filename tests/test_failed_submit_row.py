@@ -5,8 +5,8 @@ Higgsfield answered 200, the submit came back `HTTP Error 423: Locked`,
 and the newest generations row was still the previous day's. The only
 record was the in-process jobs registry, which a restart clears.)
 
-What each test guards, in all four adapters and through every
-never-raises edge that spends:
+What each test guards, in the video adapter (fal, the only one since
+2026-09-26) and through every never-raises edge that spends:
 - a submit that raises leaves ONE row: no output_path (the shape
   ledger.reap already reads as "found and failed"), the error on it,
   cost 0, the key_source and the hold's ledger_ref beside it
@@ -20,11 +20,10 @@ never-raises edge that spends:
 
 import json
 import urllib.error
-from types import SimpleNamespace
 
 import pytest
 
-from src import accounts, db, fal, generative, higgsfield, ledger, preprod, runway, veo
+from src import accounts, db, fal, generative, ledger, preprod
 
 PROMPT = "a man walks into a rain-lit bar and does not look back " * 2
 LOCKED = "HTTP Error 423: Locked"
@@ -34,17 +33,7 @@ def _locked(*a, **k):
     raise urllib.error.HTTPError("https://provider.test/submit", 423, "Locked", {}, None)
 
 
-def _client_that_is_locked():
-    return SimpleNamespace(
-        image_to_video=SimpleNamespace(create=_locked),      # runway
-        text_to_video=SimpleNamespace(create=_locked),
-        models=SimpleNamespace(generate_videos=_locked))     # veo
-
-
 ADAPTERS = {
-    "runway": (runway, {"client": _client_that_is_locked()}, "runway"),
-    "veo": (veo, {"client": _client_that_is_locked()}, "veo"),
-    "higgsfield": (higgsfield, {"http": _locked}, "higgsfield"),
     "fal": (fal, {"http": _locked}, fal.model_spec(fal.DEFAULT_MODEL)["platform"]),
 }
 
@@ -54,8 +43,7 @@ def studio(pg, monkeypatch, tmp_path):
     """A funded, NOT exempt account rendering on the installation's keys,
     so the ledger is its business and a hold is really taken."""
     monkeypatch.setenv("DATABASE_URL", pg)
-    for name in ("RUNWAYML_API_SECRET", "FAL_KEY", "GEMINI_API_KEY",
-                 "HIGGSFIELD_API_KEY_ID", "HIGGSFIELD_API_KEY_SECRET"):
+    for name in ("FAL_KEY", "GEMINI_API_KEY"):
         monkeypatch.setenv(name, "OPERATOR-SECRET")
     generative.init(pg)
     preprod.init(pg)
@@ -65,8 +53,7 @@ def studio(pg, monkeypatch, tmp_path):
         account_id = int(conn.execute(
             "SELECT id FROM accounts WHERE slug = 'zeropage'").fetchone()["id"])
     ledger.grant(account_id, 100000, "purchase", dsn=pg)
-    for module in (runway, veo, higgsfield, fal):
-        monkeypatch.setattr(module, "RENDER_DIR", tmp_path / "renders")
+    monkeypatch.setattr(fal, "RENDER_DIR", tmp_path / "renders")
     return {"dsn": pg, "account_id": account_id, "funded": 100000}
 
 
@@ -130,7 +117,7 @@ def test_a_submit_that_raises_leaves_a_row_from_the_queue_path(studio, name):
     assert not concept["shots"][0].get("media_url")
 
 
-@pytest.mark.parametrize("name", sorted(n for n in ADAPTERS if n != "veo"))
+@pytest.mark.parametrize("name", sorted(ADAPTERS))
 def test_a_submit_that_raises_leaves_a_row_from_the_director_path(studio, name):
     module, seam, tool = ADAPTERS[name]
     result = module.generate_from_prompt(
@@ -169,7 +156,7 @@ def test_an_empty_balance_is_not_an_attempt(studio):
     with db.connect(studio["dsn"]) as conn:
         conn.execute("UPDATE credit_lots SET credits_remaining = 0")
         conn.execute("DELETE FROM credit_entries")
-    result = higgsfield.generate_from_prompt(
+    result = fal.generate_from_prompt(
         PROMPT, db_path=studio["dsn"], approved=True,
         account_id=studio["account_id"], http=_locked)
     assert result["ok"] is False and "out of credits" in result["error"]
@@ -182,7 +169,7 @@ def test_recording_the_failure_can_never_replace_the_providers_error(studio, mon
     def broken(*a, **k):
         raise RuntimeError("the database is on fire")
     monkeypatch.setattr(generative, "record_generation", broken)
-    result = higgsfield.generate_from_prompt(
+    result = fal.generate_from_prompt(
         PROMPT, db_path=studio["dsn"], approved=True,
         account_id=studio["account_id"], http=_locked)
     assert result["ok"] is False and "423" in result["error"]
@@ -190,10 +177,10 @@ def test_recording_the_failure_can_never_replace_the_providers_error(studio, mon
 
 
 def test_a_failed_row_counts_against_the_daily_cap_like_any_attempt(studio):
-    higgsfield.generate_from_prompt(
+    fal.generate_from_prompt(
         PROMPT, db_path=studio["dsn"], approved=True,
         account_id=studio["account_id"], http=_locked)
-    assert higgsfield.generations_today(
+    assert fal.generations_today(
         db_path=studio["dsn"], account_id=studio["account_id"]) == 1
 
 

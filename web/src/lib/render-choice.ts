@@ -3,16 +3,17 @@
    Ported from app/static/zpf/queue.js so the React Queue and the vanilla
    one cannot disagree about what a card opens on or what its button says:
 
-   - `usable` needs BOTH a vendor key and a reachable model. Runway's models
-     always report available (render_specs has no per-account probe), so
-     reading only the model let a keyless vendor win the default.
+   - `usable` needs BOTH a configured renderer and a reachable model. A
+     model always reports available (render_specs has no per-account
+     probe), so reading only the model let an unconfigured renderer win the
+     default. Since 2026-09-26 the only renderer is fal.ai, on the
+     operator's key; the catalogue stays keyed by provider regardless.
    - `firstUsable` is the CHEAPEST usable model at its own default length,
-     not the first in registry order -- the registry lists Veo second, and a
-     card quietly defaulting to a $3 preview render because Runway had no
-     key is a silent spend. Unpriced models sort last.
+     not the first in registry order -- a card quietly defaulting to a $3
+     Veo render is a silent spend. Unpriced models sort last.
    - `defaultPick`: the plan leads when this account can render it, else
      the cheapest it can; a plan nobody can render is not a default (the
-     2026-09-11 dead-Runway-button fix).
+     2026-09-11 dead-button fix).
    - `held` keeps a pick by concept id for the life of the tab, so it
      survives repaints AND leaving the page and coming back. Dropped once
      the card is approved or rejected.
@@ -75,7 +76,7 @@ export function estimate(spec: ModelLike | null, frame: string | null, seconds: 
 export function firstUsable(renderers: Renderers): Pick | null {
   let best: { pick: Pick; cost: number } | null = null;
   for (const [name, r] of Object.entries(renderers)) {
-    // a vendor with no key is not usable, however many models it lists
+    // an unconfigured renderer is not usable, however many models it lists
     if (!r.available) continue;
     for (const m of r.models || []) {
       if (m.available === false) continue;
@@ -102,7 +103,7 @@ export function pickFor(renderers: Renderers, id: number, want?: { provider?: st
 }
 
 /** Changing the model takes the NEW model's defaults, never the old values:
- *  20s is legal on LTX and refused by Runway. */
+ *  10s is legal on LTX and refused by Veo. */
 export function withModel(renderers: Renderers, provider: string, model: string): Pick | null {
   const spec = specOf(renderers, provider, model);
   return spec ? asPick(provider, spec) : null;
@@ -118,13 +119,11 @@ export type Plan = {
   timed: boolean;
   n: number;
   lengths: number[];
-  /** the PROVIDER's estimate -- what the render costs whoever holds the key */
+  /** the PROVIDER's estimate -- what the render costs the operator */
   usd: number | null;
   /** what it costs THIS account in credits (the server's quote, markup
-   *  included); null when not charged here (BYOK) or not priced yet */
+   *  included); null only when not priced yet */
   credits: number | null;
-  /** rendered on the account's own key: its provider bills it, no credits */
-  byok: boolean;
   pending?: boolean;
   refused?: string;
 };
@@ -135,7 +134,6 @@ export type QuoteLike = {
   durations?: number[];
   estimate_usd?: number;
   credits?: number | null;
-  byok?: boolean;
 } | null | undefined;
 
 /** What an approve would make and cost. `parts` is the scene's timeline
@@ -146,27 +144,24 @@ export type QuoteLike = {
  *  CREDITS COME ONLY FROM THE SERVER (2026-09-25). The credit price is
  *  pricing.credits_for -- markup, rounding up, a floor per render -- and
  *  this file does not keep a second copy of that rule. `quote`:
- *    - a quote: its credits (null on BYOK) are the button's number
+ *    - a quote: its credits are the button's number
  *    - null: asked for, not answered yet -- "pricing…", never a guess
  *    - undefined: no server pricing at all (a scene that renders whole,
  *      from a caller that never asks) -- the rate-card dollar label, as
  *      before credits existed */
 export function planFor(spec: ModelLike, pick: Pick, parts: PartLike[] | null | undefined, quote?: QuoteLike): Plan {
-  const fromQuote = (q: NonNullable<QuoteLike>) => ({
-    credits: q.byok ? null : (q.credits ?? null),
-    byok: !!q.byok,
-  });
+  const fromQuote = (q: NonNullable<QuoteLike>) => ({ credits: q.credits ?? null });
   if (!parts || !parts.length) {
     const usd = estimate(spec, pick.frame, pick.duration);
     const base = { timed: false, n: 1, lengths: [pick.duration ?? 0] };
-    if (quote === undefined) return { ...base, usd, credits: null, byok: false };
-    if (quote === null) return { ...base, usd, credits: null, byok: false, pending: true };
-    if (quote.error) return { ...base, usd, credits: null, byok: false, refused: quote.error };
+    if (quote === undefined) return { ...base, usd, credits: null };
+    if (quote === null) return { ...base, usd, credits: null, pending: true };
+    if (quote.error) return { ...base, usd, credits: null, refused: quote.error };
     return { ...base, usd: quote.estimate_usd ?? usd, ...fromQuote(quote) };
   }
   const todo = parts.filter((p) => !p.media_url);
   if (!quote || quote.error || !quote.timed || !quote.durations) {
-    return { timed: true, n: todo.length, lengths: [], usd: null, credits: null, byok: false, pending: !quote, refused: quote?.error ?? "" };
+    return { timed: true, n: todo.length, lengths: [], usd: null, credits: null, pending: !quote, refused: quote?.error ?? "" };
   }
   return { timed: true, n: quote.durations.length, lengths: quote.durations, usd: quote.estimate_usd ?? null, ...fromQuote(quote) };
 }
@@ -174,8 +169,8 @@ export function planFor(spec: ModelLike, pick: Pick, parts: PartLike[] | null | 
 export const creditsText = (credits: number): string =>
   `${credits.toLocaleString("en-US")} credit${credits === 1 ? "" : "s"}`;
 
-/** The price half of the button: credits when this account is charged,
- *  the provider's dollars when its own key pays. "cr" rather than
+/** The price half of the button: credits whenever the server priced it,
+ *  the rate card's dollar label only for a caller that never asked. "cr" rather than
  *  "credits" because the button is 22px Bebas in a card a third of the
  *  page wide -- the /models page abbreviates the same way. */
 export const priceText = (plan: Plan): string =>
@@ -187,9 +182,7 @@ export const priceText = (plan: Plan): string =>
         ? `${plan.credits.toLocaleString("en-US")} cr`
         : plan.usd === null
           ? "unpriced"
-          : plan.byok
-            ? `~$${plan.usd.toFixed(2)} on your key`
-            : `~$${plan.usd.toFixed(2)}`;
+          : `~$${plan.usd.toFixed(2)}`;
 
 export const approveText = (plan: Plan): string =>
   `Approve · ${plan.n} shot${plan.n === 1 ? "" : "s"} · ${priceText(plan)}`;

@@ -43,7 +43,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from . import account_keys, gemini_utils, generative, render_assets, spend
+from . import gemini_utils, generative, render_assets, spend
 from .gemini_utils import sniff_mime
 from .shot import Shot
 
@@ -392,8 +392,8 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
             return {"ok": False, "error": "an empty prompt renders nothing"}
         if not has_key(account_id):
             return {"ok": False,
-                    "error": "no Gemini key -- add one in Renderer keys, or "
-                             "set GEMINI_API_KEY for the installation"}
+                    "error": "no Gemini key -- set GEMINI_API_KEY for the "
+                             "installation"}
 
         generative.init(**kwargs)
         refusal = generative.cap_error(
@@ -433,13 +433,9 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
                              "references": len(references),
                              **({"beat": beat} if beat else {}),
                              **({"concept_id": concept_id} if concept_id else {}),
-                             # whose key paid for this image -- the label
-                             # every renderer's row already carries, and the
-                             # one that tells a billable draw from one the
-                             # customer paid for themselves. Never raises.
-                             "key_source": account_keys.key_source(
-                                 account_id, gemini_utils.GEMINI_PROVIDER,
-                                 db_path)}
+                             # whose key paid for this image: the operator's
+                             # (per-account keys were removed 2026-09-26)
+                             "key_source": "env"}
         generation_id = generative.record_generation(
             shot_row_id, "nano", prompt,
             params=generation_params,
