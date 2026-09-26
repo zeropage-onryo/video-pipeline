@@ -626,7 +626,8 @@ _CARD_SHOTS = ("(shots_json::jsonb #- '{0,written_prompt}' #- '{0,model_prompt}'
 
 def list_concepts(limit: int = 100, dsn: Optional[str] = None, *,
                   account_id: int, brand: Optional[str] = None,
-                  lean: bool = False) -> list[dict[str, Any]]:
+                  lean: bool = False,
+                  shelf: Optional[str] = None) -> list[dict[str, Any]]:
     """This account's concepts, newest first -- the ones you just
     generated are the ones you're deciding about.
 
@@ -647,17 +648,55 @@ def list_concepts(limit: int = 100, dsn: Optional[str] = None, *,
     `lean=True` (2026-09-25) is the board's read: only the columns a
     card draws (`_CARD_COLUMNS`) and the first shot without the keys no
     card reads (`_CARD_SHOTS`). Same window, same parse. Every other
-    caller -- the judges, ops scripts, the MCP search -- keeps SELECT *."""
+    caller -- the judges, ops scripts, the MCP search -- keeps SELECT *.
+
+    `shelf` (2026-09-25) keeps only the "open" (not archived) or the
+    "archived" rows OF THAT SAME WINDOW -- the window is still the newest
+    `limit`, so the board's open cards and its archived cards are the two
+    halves of one list, as they were when the page split it itself. The
+    board reads the open half on load and the archived half only when its
+    Archived filter is opened; ~80% of a window is archived."""
     scoped = brand if brand in BRANDS else None
     columns = f"{_CARD_COLUMNS}, {_CARD_SHOTS}" if lean else "*"
+    window = ("SELECT id FROM shoot_concepts WHERE account_id IS NOT DISTINCT FROM %s "
+              + ("AND brand = %s " if scoped else "")
+              + "ORDER BY id DESC LIMIT %s")
+    keep = {"open": "AND archived_at IS NULL ",
+            "archived": "AND archived_at IS NOT NULL "}.get(shelf or "", "")
     with connect(dsn) as conn:
         rows = conn.execute(
-            f"SELECT {columns} FROM shoot_concepts WHERE account_id IS NOT DISTINCT FROM %s "
-            + ("AND brand = %s " if scoped else "")
-            + "ORDER BY id DESC LIMIT %s",
-            (account_id, scoped, limit) if scoped else (account_id, limit),
+            f"SELECT {columns} FROM shoot_concepts "
+            f"WHERE account_id IS NOT DISTINCT FROM %s AND id IN ({window}) "
+            + keep + "ORDER BY id DESC",
+            (account_id, account_id, scoped, limit) if scoped else (account_id, account_id, limit),
         ).fetchall()
         return _concept_rows(rows, conn, account_id)
+
+
+def board_counts(limit: int = 100, dsn: Optional[str] = None, *,
+                 account_id: int, brand: Optional[str] = None) -> dict[str, int]:
+    """The board's count line, counted in Postgres (2026-09-25):
+    {open, picked, archived} over list_concepts' window, SCENES ONLY
+    (exactly one shot) -- the board's unit, the same tally the page used
+    to make over every card it fetched. `picked` is open-and-picked, as
+    the Picked filter shows it. So the page can say where every card went
+    (the 2026-09-02 lesson) without fetching the archived ones to count."""
+    scoped = brand if brand in BRANDS else None
+    window = ("SELECT id, picked_at, archived_at, shots_json FROM shoot_concepts "
+              "WHERE account_id IS NOT DISTINCT FROM %s "
+              + ("AND brand = %s " if scoped else "")
+              + "ORDER BY id DESC LIMIT %s")
+    with connect(dsn) as conn:
+        row = conn.execute(
+            "SELECT count(*) FILTER (WHERE archived_at IS NULL) AS open, "
+            "count(*) FILTER (WHERE archived_at IS NULL AND picked_at IS NOT NULL) AS picked, "
+            "count(*) FILTER (WHERE archived_at IS NOT NULL) AS archived "
+            "FROM (" + window + ") w "
+            "WHERE jsonb_typeof(shots_json::jsonb) = 'array' "
+            "AND jsonb_array_length(shots_json::jsonb) = 1",
+            (account_id, scoped, limit) if scoped else (account_id, limit),
+        ).fetchone()
+    return {k: int(row[k] or 0) for k in ("open", "picked", "archived")}
 
 
 def _concept_rows(rows, conn, account_id) -> list[dict[str, Any]]:

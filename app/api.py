@@ -1634,9 +1634,19 @@ def pipeline_concepts(brand: Optional[str] = None, status: Optional[str] = None,
 
     `?view=menu` (2026-09-25) is the Director's scene switcher: the
     openable rows as {id, n, title, brand, picked, parked, has_media},
-    off a column-only query. It used to take the whole board for a menu."""
+    off a column-only query. It used to take the whole board for a menu.
+
+    ARCHIVED ROWS ON DEMAND (2026-09-25, Mike's call). Every response
+    carries `counts` = {open, picked, archived} (preprod.board_counts:
+    the same window, scenes only), so the count line can say where every
+    card went without the archived cards being fetched to count them.
+    The default is the open cards; `?view=archived` is the archived half
+    of the same window, which the React board asks for only when its
+    Archived filter is opened. `?archived=true` still returns both halves
+    (the vanilla shell reads it)."""
     if view == "menu":
         return _scene_menu(account_id, brand)
+    shelf = "archived" if view == "archived" else (None if archived else "open")
     # brand goes into the query, not a filter after it -- list_concepts
     # takes the newest 100 of THIS ACCOUNT, and both brands live in one
     # account, so filtering afterwards meant one brand could eat the
@@ -1644,7 +1654,8 @@ def pipeline_concepts(brand: Optional[str] = None, status: Optional[str] = None,
     # one query for the whole board rather than one per card
     subscription_ids = generative.subscription_rendered(account_id=account_id)
     # lean: only what a card draws (2026-09-25) -- see preprod._CARD_COLUMNS
-    concepts = preprod.list_concepts(account_id=account_id, brand=brand, lean=True)
+    concepts = preprod.list_concepts(account_id=account_id, brand=brand, lean=True,
+                                     shelf=shelf)
     # ...and two for every card's gate verdict, not two per card
     gates = autonomy.gates_for_concepts([c["id"] for c in concepts],
                                         account_id=account_id)
@@ -1653,10 +1664,9 @@ def pipeline_concepts(brand: Optional[str] = None, status: Optional[str] = None,
     cards = [_concept_card(c, subscription_ids, gates, sources) for c in concepts]
     if status in ("idea", "planned", "shot"):
         cards = [c for c in cards if c["status"] == status]
-    if not archived:
-        cards = [c for c in cards if not c["archived"]]
     return {
         "items": cards,
+        "counts": preprod.board_counts(account_id=account_id, brand=brand),
         "deny_reasons": list(DENY_REASONS),
         "shoot": preprod.shoot_rate(account_id=account_id),
         "pick": preprod.pick_rate(account_id=account_id),

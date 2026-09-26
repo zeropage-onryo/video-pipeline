@@ -23,6 +23,7 @@ import {
   boardConcepts,
   pickConcept,
   updateShotPrompt,
+  type BoardCounts,
   type Concept,
   type PickRate,
 } from "@/lib/studio-api";
@@ -74,7 +75,15 @@ export default function PipelinePage() {
   const { me, brand, toast } = useShell();
   const [filter, setFilter] = useState<Filter>("open");
   const [query, setQuery] = useState("");
-  const [all, setAll] = useState<Concept[] | null>(null);
+  // the open cards, and the archived half of the same window -- null
+  // until the Archived filter is first opened (2026-09-25: ~80% of a
+  // window is archived, and the count line no longer needs them)
+  const [open, setOpen] = useState<Concept[] | null>(null);
+  // keyed by the brand it was read for, so switching brands shows no
+  // other brand's archived cards and needs no reset
+  const [goneRead, setGoneRead] = useState<{ brand: string; items: Concept[] } | null>(null);
+  const gone = goneRead && goneRead.brand === brand ? goneRead.items : null;
+  const [counts, setCounts] = useState<BoardCounts | null>(null);
   const [rate, setRate] = useState<PickRate | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<Record<number, boolean>>({});
@@ -95,41 +104,64 @@ export default function PipelinePage() {
      open" over 16 Antihero cards; the brand has 5). Waiting for `me` drops
      the first request; the sequence number drops any late one. */
   const seq = useRef(0);
-  const load = () => {
+  const goneSeq = useRef(0);
+  const loadGone = () => {
+    const mine = ++goneSeq.current;
+    boardConcepts(brand || undefined, "archived")
+      .then((r) => {
+        if (mine !== goneSeq.current) return;
+        setGoneRead({ brand, items: r.items.filter((c) => c.is_scene) });
+        setCounts(r.counts);
+      })
+      .catch((e) => {
+        if (mine === goneSeq.current) setError(e instanceof Error ? e.message : "Archived concepts unavailable");
+      });
+  };
+  // `reread`: after a pick, archive or restore. The open half and the
+  // counts always come back; an archived half already on the page is
+  // re-read too, so a card archived or restored lands on the right shelf.
+  const load = (reread = false) => {
     const mine = ++seq.current;
-    boardConcepts(brand || undefined, true)
+    boardConcepts(brand || undefined)
       .then((r) => {
         if (mine !== seq.current) return;
-        setAll(r.items.filter((c) => c.is_scene));
+        setOpen(r.items.filter((c) => c.is_scene));
+        setCounts(r.counts);
         setRate(r.pick ?? null);
         setError(null);
       })
       .catch((e) => {
         if (mine === seq.current) setError(e instanceof Error ? e.message : "Concepts unavailable");
       });
+    if (reread && gone) loadGone();
   };
   useEffect(() => {
     if (!me) return; // the shell has not said who this is yet
+    goneSeq.current++; // a late archived answer for the old brand is dropped
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [me, brand]);
+  // the archived half is fetched the first time the Archived filter opens
+  useEffect(() => {
+    if (me && filter === "archived" && !gone) loadGone();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [me, brand, filter, gone]);
 
-  const open = useMemo(() => (all || []).filter((c) => !c.archived), [all]);
-  const gone = useMemo(() => (all || []).filter((c) => c.archived), [all]);
-  const picked = useMemo(() => open.filter((c) => c.picked), [open]);
-  const shelf = filter === "archived" ? gone : filter === "picked" ? picked : open;
-  const counts: Record<Filter, number> = { open: open.length, picked: picked.length, archived: gone.length };
+  const all = useMemo(() => (open ? [...open, ...(gone || [])] : null), [open, gone]);
+  const picked = useMemo(() => (open || []).filter((c) => c.picked), [open]);
+  // the shelf showing, or null while its half is still being read
+  const shelf = filter === "archived" ? gone : filter === "picked" ? (open ? picked : null) : open;
   const needle = query.trim().toLowerCase();
   const cards = useMemo(
     () =>
       needle
-        ? shelf.filter((c) =>
+        ? (shelf || []).filter((c) =>
             `${c.title} ${c.summary} ${c.logline} ${c.spark || ""} #${c.id} ${c.n}`.toLowerCase().includes(needle),
           )
-        : shelf,
+        : shelf || [],
     [shelf, needle],
   );
-  const scope = `${brand || "—"} · ${open.length} open · ${gone.length} archived`;
+  const scope = counts ? `${brand || "—"} · ${counts.open} open · ${counts.archived} archived` : `${brand || "—"}`;
   const countLine = rate?.generated ? `${scope} · ${rate.picked}/${rate.generated} picked all time, all brands` : scope;
   // the drawer reads the FRESH row, so a pick made while it is open reads back
   const shown = drawer ? (all || []).find((c) => c.id === drawer.id) || null : null;
@@ -139,7 +171,7 @@ export default function PipelinePage() {
     try {
       await fn();
       if (done) toast(done);
-      load();
+      load(true);
       announceQueueChange();
     } catch (e) {
       toast(e instanceof Error ? e.message : "That did not go through", "err");
@@ -181,14 +213,14 @@ export default function PipelinePage() {
           {(["open", "picked", "archived"] as Filter[]).map((f) => (
             <button type="button" key={f} className="cat" aria-pressed={filter === f} onClick={() => setFilter(f)}>
               {f[0].toUpperCase() + f.slice(1)}
-              {all ? <u>{counts[f]}</u> : null}
+              {counts ? <u>{counts[f]}</u> : null}
             </button>
           ))}
         </div>
       </div>
 
       {error ? <div className="stateline err" style={{ padding: "0 42px 14px" }}>{error}</div> : null}
-      {all && !cards.length ? (
+      {shelf && !cards.length ? (
         <p className="stateline" style={{ padding: "0 42px" }}>
           {needle && shelf.length
             ? `Nothing here matches “${query.trim()}”`
@@ -207,7 +239,7 @@ export default function PipelinePage() {
       <div className="mx-auto mb-4 grid max-w-[1680px] grid-cols-[repeat(auto-fill,minmax(min(400px,100%),1fr))] items-start gap-6 px-[42px] max-sm:px-4">
         {/* the board before its first answer: the cards' own shape, pulsing,
             rather than an empty page that reads as "no concepts" */}
-        {!all && !error
+        {!shelf && !error
           ? Array.from({ length: 6 }, (_, i) => (
               <div key={i} aria-hidden className={`${CARD} border-noir-line2 motion-safe:animate-pulse`}>
                 <div className="aspect-video w-full rounded-t-[9px] bg-noir-slate" />

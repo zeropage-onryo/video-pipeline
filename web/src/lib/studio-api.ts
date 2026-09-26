@@ -317,15 +317,22 @@ export type RenderQuote = {
 export type RenderChoice = { provider?: string; model?: string; duration?: number; frame?: string; tokens?: string[] };
 export type RenderResolved = { provider: string; model: string; duration: number; frame: string; estimate_usd: number };
 export type PickRate = { generated: number; picked: number; rate: number | null };
-/** GET /api/pipeline/concepts — the board. Ask for the archived rows
- *  too and filter client-side, so the count line can say where every
- *  card went (the 2026-09-02 lesson). */
-export const boardConcepts = (brand?: string, archived = false) => {
+/** The board's count line, counted on the server over the same window:
+ *  scenes only; `picked` is open-and-picked (the Picked filter). */
+export type BoardCounts = { open: number; picked: number; archived: number };
+/** GET /api/pipeline/concepts — the board. `open` (the default) is the
+ *  open cards; `archived` is the archived half of the same window, asked
+ *  for only when the Archived filter is opened (2026-09-25). Either way
+ *  `counts` says where every card went (the 2026-09-02 lesson) without
+ *  the archived cards being fetched to count them. */
+export const boardConcepts = (brand?: string, shelf: "open" | "archived" = "open") => {
   const params = new URLSearchParams();
   if (brand) params.set("brand", brand);
-  if (archived) params.set("archived", "true");
+  if (shelf === "archived") params.set("view", "archived");
   const qs = params.toString();
-  return apiFetch<{ items: Concept[]; pick?: PickRate }>(`/pipeline/concepts${qs ? `?${qs}` : ""}`);
+  return apiFetch<{ items: Concept[]; counts: BoardCounts; pick?: PickRate }>(
+    `/pipeline/concepts${qs ? `?${qs}` : ""}`,
+  );
 };
 /** GET /api/pipeline/arrival — the ONE scene the Director opens on, or
  *  null. The rule (app/api.py `_arrival`) lives on the server so the page
