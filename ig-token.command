@@ -1,9 +1,9 @@
 #!/bin/bash
-# Double-click me. Finishes the IG_GRAPH_TOKEN setup for the scout's
-# instagram lane: exchanges the short-lived token for a 60-day one,
-# installs it in .env, and verifies the lane can actually run.
+# Double-click me. Checks both Instagram tokens (read-only) and names the
+# fix for any that needs one. For the other commands -- refresh, publish,
+# research -- run `bash ops/ig_token.sh <command>` in Terminal.
 cd "$(dirname "$0")" || exit 1
-bash ops/ig_token.sh
+bash ops/ig_token.sh check
 echo
 echo "Press return to close."
 read -r _

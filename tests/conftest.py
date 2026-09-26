@@ -119,6 +119,10 @@ POSTURE_ENV = R2_ENV + (
     "STRIPE_PRICE_STARTER", "STRIPE_PRICE_CREATOR", "STRIPE_PRICE_STUDIO", "STRIPE_PRICE_TOPUP",
     "STRIPE_PRICE_STARTER_YEAR", "STRIPE_PRICE_CREATOR_YEAR", "STRIPE_PRICE_STUDIO_YEAR",
     "BILLING_RETURN_URL",
+    # the Instagram credentials: the nightly preflight checks them live, so
+    # a suite that inherited .env's would call Meta from a test
+    "IG_ACCESS_TOKEN", "INSTAGRAM_ACCESS_TOKEN", "IG_GRAPH_TOKEN", "FB_GRAPH_TOKEN",
+    "IG_USER_ID", "INSTAGRAM_USER_ID", "IG_BUSINESS_ID", "IG_RESEARCH_APP_ID",
 )
 
 
