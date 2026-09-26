@@ -34,13 +34,17 @@ import {
 } from "lucide-react";
 import { API_URL, ApiError, goToSignIn, signOut } from "@/lib/api";
 import {
+  BALANCE_EVENT,
+  getBalance,
   getMe,
   queueCount,
   queuePending,
   switchAccount,
   QUEUE_EVENT,
+  type Balance,
   type Me,
 } from "@/lib/studio-api";
+import { CreditPill } from "@/components/studio/credit-pill";
 /* eslint-disable @next/next/no-img-element */
 import "@/app/studio/studio.css";
 
@@ -70,6 +74,9 @@ type ShellContext = {
   /** /api/me answered 401: a visitor, not an account still loading */
   signedOut: boolean;
   brand: string;
+  /** /api/billing/balance for the active account; null until it answers,
+   *  and null for good when it cannot (signed out, no account, older API) */
+  balance: Balance | null;
   toast: (text: string, kind?: "ok" | "err") => void;
   setBar: (node: ReactNode) => void;
 };
@@ -77,6 +84,7 @@ const Ctx = createContext<ShellContext>({
   me: null,
   signedOut: false,
   brand: "",
+  balance: null,
   toast: () => {},
   setBar: () => {},
 });
@@ -112,6 +120,9 @@ export function StudioShell({ children }: { children: ReactNode }) {
   const pinned = useSyncExternalStore(subscribePin, readPin, () => false);
   const [menu, setMenu] = useState(false);
   const [pending, setPending] = useState(0);
+  // keyed by the account it was read for, so a switch never shows the
+  // previous account's number while the new one is being asked
+  const [balanceRead, setBalanceRead] = useState<{ account: number; value: Balance | null } | null>(null);
   const [toastState, setToastState] = useState<{ text: string; kind: "ok" | "err" } | null>(null);
   const [bar, setBarNode] = useState<ReactNode>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -174,6 +185,41 @@ export function StudioShell({ children }: { children: ReactNode }) {
     };
   }, [refreshBadge, me]);
 
+  // THE BALANCE (2026-09-25). Re-read when the account changes, when
+  // anything announces that credit moved (an approve takes a hold; the
+  // Queue announces QUEUE_EVENT on its decisions and finished jobs, which
+  // is when a hold settles), and when the tab comes back. No timer: a
+  // balance only moves when this account spends or pays, and paying is a
+  // round trip through Stripe that lands back on a fresh page load.
+  const accountId = me?.account?.id ?? null;
+  const refreshBalance = useCallback(() => {
+    if (accountId === null) return;
+    getBalance()
+      .then((value) => setBalanceRead({ account: accountId, value }))
+      // a failed read is "unknown", never "0": the pill hides rather than
+      // telling a paying customer they have nothing
+      .catch(() => setBalanceRead({ account: accountId, value: null }));
+  }, [accountId]);
+  const balance = balanceRead && balanceRead.account === accountId ? balanceRead.value : null;
+  useEffect(() => {
+    if (accountId === null) return;
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") refreshBalance();
+    };
+    refreshBalance();
+    window.addEventListener(BALANCE_EVENT, refreshBalance);
+    window.addEventListener(QUEUE_EVENT, refreshBalance);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener(BALANCE_EVENT, refreshBalance);
+      window.removeEventListener(QUEUE_EVENT, refreshBalance);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+    // keyed on the account id (through refreshBalance), not the object:
+    // /api/me is re-read on a switch and hands back a new object for the
+    // same account
+  }, [accountId, refreshBalance]);
+
   const togglePin = () => {
     try {
       localStorage.setItem(PIN_KEY, pinned ? "0" : "1");
@@ -211,7 +257,7 @@ export function StudioShell({ children }: { children: ReactNode }) {
     .toUpperCase();
 
   return (
-    <Ctx.Provider value={{ me, signedOut, brand, toast, setBar }}>
+    <Ctx.Provider value={{ me, signedOut, brand, balance, toast, setBar }}>
       <div className="zps" data-view={view} data-stage={stage ? "1" : undefined}>
         <div className="zps-field" aria-hidden />
 
@@ -308,6 +354,7 @@ export function StudioShell({ children }: { children: ReactNode }) {
             <span className="cur">{view}</span>
             {bar}
             <span className="spacer" />
+            <CreditPill balance={balance} onError={(text) => toast(text, "err")} />
             <button
               type="button"
               className="tag"
