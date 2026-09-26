@@ -21,8 +21,10 @@ Supabase cannot know -- which of OUR accounts a person may enter:
 
 The gate that matters lives in the shape of this data: a fresh sign-in
 gets a users row and ZERO account_members rows. Membership is granted
-by an existing member (`invite`), never by signing up -- these are
-Mike's real accounts, not a public product.
+by an existing member (`invite`) -- or, since 2026-09-24 and while
+`open_signup()` is on (the default), by `provision_personal`, which
+gives a brand-new sign-in its OWN empty workspace. It never adds anyone
+to an existing account. `ZEROPAGE_OPEN_SIGNUP=0` restores invite-only.
 
 **The invite still works before the person has ever visited.** An
 invite creates a users row by EMAIL with a locally minted placeholder
@@ -256,7 +258,8 @@ def add_member(account_id: int, user_id: str, role: str = "owner",
 
 def memberships(user_id: str, dsn: Optional[str] = None) -> list[dict[str, Any]]:
     """The accounts this user may enter. Empty list == signed in but no
-    access -- the state the membership gate renders, never auto-fixed."""
+    access -- the state the membership gate renders, fixed only by an
+    invite or, at sign-in, by provision_personal (open sign-up)."""
     with connect(dsn) as conn:
         rows = conn.execute(
             "SELECT a.*, m.role FROM accounts a "
@@ -659,6 +662,134 @@ def invite(email: str, slug: str, display_name: Optional[str] = None,
     return {"user_id": user_id, "account_id": account_id, "slug": slug,
             "created_user": created_user, "created_account": created_account,
             "role": role}
+
+
+
+# --------------------------------------------------------------------------
+# open sign-up -- a first sign-in gets its own workspace (2026-09-24)
+# --------------------------------------------------------------------------
+
+# Slugs a stranger's email must never turn into: the operator's own
+# brands (taken anyway, but that should not be the only reason), the
+# media layer's shared prefix, and names that read as the system.
+RESERVED_SLUGS = frozenset({
+    "zeropage", "antihero", "shared", "admin", "api", "www", "studio",
+    "support", "billing", "system", "root", "none", "null",
+})
+
+
+def open_signup() -> bool:
+    """Does a brand-new sign-in get its own workspace?
+
+    What InVideo and LTX Studio do (2026-09-24, Mike's call): one door,
+    and walking through it the first time IS signing up -- you land in
+    your own empty studio, not on a page saying you have no access.
+    `ZEROPAGE_OPEN_SIGNUP=0` puts the invite-only gate back exactly as
+    it was: a fresh sign-in gets a mirror row and zero memberships.
+    Anything but an explicit off value reads as on, because on is the
+    shipped posture."""
+    import os
+    return os.environ.get("ZEROPAGE_OPEN_SIGNUP", "1").strip().lower() not in (
+        "0", "false", "off", "no")
+
+
+def _slug_base(email: Optional[str], display_name: Optional[str]) -> str:
+    import re
+    raw = (email or "").split("@")[0] or (display_name or "")
+    base = re.sub(r"[^a-z0-9]+", "-", raw.lower()).strip("-")[:24].strip("-")
+    if len(base) < 3 or base in RESERVED_SLUGS:
+        base = f"studio-{base}" if base else "studio"
+    return base
+
+
+def _workspace_name(email: Optional[str], display_name: Optional[str]) -> str:
+    first = (display_name or "").strip().split(" ")[0]
+    if not first:
+        first = (email or "").split("@")[0]
+    return f"{first}'s studio" if first else "My studio"
+
+
+def provision_personal(user_id: str, email: Optional[str] = None,
+                       display_name: Optional[str] = None, *,
+                       dsn: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """Give a signed-in person with NO membership their own account.
+
+    Returns {"account_id", "slug", "created": True} when one was made,
+    None when they already belong somewhere (every sign-in after the
+    first, every invited pilot, Mike) or open sign-up is off.
+
+    **Their OWN account, never an existing one** -- invite()'s rule, for
+    the same reason: account_id is the tenancy boundary, so joining an
+    existing slug would hand a stranger somebody's whole board. The slug
+    comes from the email's local part and takes a numeric suffix when
+    taken; it never reuses a row.
+
+    Idempotent and race-safe: the check and the insert run under a
+    per-user advisory lock in one transaction, so two tabs finishing
+    sign-in at once make one workspace, not two.
+
+    Nothing is switched on here: the account starts at zero credits, not
+    exempt, not an operator, not teaching -- every flag on `accounts`
+    fails closed and stays that way. `grant_signup_credits` is the
+    separate, optional welcome grant."""
+    if not open_signup():
+        return None
+    user_id = str(user_id)
+    with connect(dsn) as conn:
+        conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))",
+                     ("zp-provision:" + user_id,))
+        if conn.execute("SELECT 1 FROM users WHERE id = %s",
+                        (user_id,)).fetchone() is None:
+            return None
+        if conn.execute("SELECT 1 FROM account_members WHERE user_id = %s LIMIT 1",
+                        (user_id,)).fetchone():
+            return None
+        base = _slug_base(email, display_name)
+        slug, n = base, 1
+        while conn.execute("SELECT 1 FROM accounts WHERE slug = %s",
+                           (slug,)).fetchone():
+            n += 1
+            slug = f"{base}-{n}"
+        row = conn.execute(
+            "INSERT INTO accounts (created_at, slug, display_name) "
+            "VALUES (%s, %s, %s) RETURNING id",
+            (_now(), slug, _workspace_name(email, display_name))).fetchone()
+        account_id = int(row["id"])
+        conn.execute(
+            "INSERT INTO account_members (account_id, user_id, role) "
+            "VALUES (%s, %s, 'owner')", (account_id, user_id))
+    return {"account_id": account_id, "slug": slug, "created": True}
+
+
+def signup_credits() -> int:
+    """`ZEROPAGE_SIGNUP_CREDITS`: the welcome grant a new workspace gets.
+    0 (the default) grants nothing -- how much free rendering a stranger
+    gets is a pricing decision, not a default somebody inherits."""
+    import os
+    try:
+        return max(0, int(os.environ.get("ZEROPAGE_SIGNUP_CREDITS", "0")))
+    except ValueError:
+        return 0
+
+
+def grant_signup_credits(account_id: int, *, dsn: Optional[str] = None) -> int:
+    """The welcome grant, once per account (the ledger's source_ref is the
+    guard, so a retry cannot grant twice). Returns the credits granted,
+    0 when none are configured. Never raises: a welcome that failed is a
+    workspace with no free credit, never a failed sign-in."""
+    credits = signup_credits()
+    if credits <= 0:
+        return 0
+    try:
+        from . import ledger
+        ledger.grant(account_id, credits, "promo",
+                     source_ref=f"signup:{account_id}",
+                     note="welcome credits (open sign-up)", dsn=dsn)
+        return credits
+    except Exception as exc:  # noqa: BLE001 -- see docstring
+        print(f"[accounts] signup credits not granted to {account_id}: {exc}",
+              file=sys.stderr)
+        return 0
 
 
 def main(argv=None) -> None:

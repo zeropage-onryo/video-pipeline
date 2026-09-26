@@ -29,8 +29,14 @@ is stored. Logout clears the cookie (this device only).
 Identity resolution after any successful GoTrue sign-in is
 accounts.claim: existing mirror row -> sign in; unclaimed row with this
 email (an invite, the seeded bootstrap user) -> claim it; claimed by a
-different id -> refuse; new -> new mirror row, zero memberships (the
-gate).
+different id -> refuse; new -> new mirror row. Then, since 2026-09-24,
+accounts.provision_personal: a person with no membership gets their OWN
+empty workspace (open sign-up, what InVideo and LTX Studio do), unless
+ZEROPAGE_OPEN_SIGNUP=0 keeps the invite-only gate.
+
+Email is a one-time CODE now (`/auth/email` then `/auth/verify`, GoTrue's
+/otp and /verify): one door that signs a new address up and an existing
+one in. Email+password stays for accounts that already have one.
 
 Config (env): SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_JWT_SECRET
 (optional when the project uses asymmetric signing keys),
@@ -458,7 +464,8 @@ def _redirect(url: str) -> Exception:
 # --------------------------------------------------------------------------
 
 _hits: dict[tuple, deque] = defaultdict(deque)
-RATE_LIMITS = {"login": (10, 60.0), "signup": (5, 60.0)}   # (max, window s)
+RATE_LIMITS = {"login": (10, 60.0), "signup": (5, 60.0),     # (max, window s)
+               "otp": (5, 60.0), "verify": (10, 60.0)}
 
 
 def _rate_limited(request: Request, bucket: str) -> bool:
@@ -554,9 +561,14 @@ def _error_text(body: dict, fallback: str) -> str:
     return fallback
 
 
-def _signin_error(message: str, mode: str = "signin") -> RedirectResponse:
+def _signin_error(message: str, mode: str = "signin",
+                  open_step: Optional[str] = None) -> RedirectResponse:
+    """Back to the door with the message. `open_step` reopens the step
+    the error came from (the email field, the password form), so the
+    person is not sent back to the list of buttons to find it again."""
+    step = f"&open={open_step}" if open_step in ("email", "password") else ""
     return RedirectResponse(
-        f"/signin?error={quote(message)}&mode={mode}", status_code=303)
+        f"/signin?error={quote(message)}&mode={mode}{step}", status_code=303)
 
 
 def _not_configured() -> RedirectResponse:
@@ -571,12 +583,13 @@ def _finish(request: Request, session: dict) -> RedirectResponse:
     if not claims or not claims.get("sub"):
         return _signin_error("sign-in could not be verified -- try again")
     meta = claims.get("user_metadata") or {}
+    display_name = meta.get("full_name") or meta.get("name") or meta.get("user_name")
     user_id, error = accounts.claim(
-        claims["sub"], claims.get("email"),
-        meta.get("full_name") or meta.get("name") or meta.get("user_name"),
+        claims["sub"], claims.get("email"), display_name,
         meta.get("avatar_url") or meta.get("picture"))
     if error:
         return _signin_error(error)
+    _provision(user_id, claims.get("email"), display_name)
     # An external frontend (FRONTEND_ORIGINS) that sent the person here
     # gets them back on its own origin THROUGH THE HANDOFF, so the cookie
     # is set there too (see handoff_redirect); otherwise the built-in /ui
@@ -594,8 +607,108 @@ def _finish(request: Request, session: dict) -> RedirectResponse:
     return response
 
 
+def _provision(user_id: str, email: Optional[str],
+               display_name: Optional[str]) -> None:
+    """The first time through the door IS signing up (2026-09-24, what
+    InVideo and LTX Studio do): a person with no membership gets their
+    own empty workspace, so the studio handoff below has somewhere to
+    send them instead of the no-access page. A no-op for everyone who
+    already belongs somewhere, and when ZEROPAGE_OPEN_SIGNUP=0.
+
+    Never fails the sign-in: a workspace that could not be made leaves
+    the person on the no-access page they would have seen before, with
+    the reason on stderr."""
+    try:
+        made = accounts.provision_personal(user_id, email, display_name)
+    except Exception as exc:  # noqa: BLE001 -- see docstring
+        print(f"[auth] could not create a workspace for {user_id}: {exc}",
+              file=sys.stderr)
+        return
+    if made:
+        accounts.grant_signup_credits(made["account_id"])
+
+
 # --------------------------------------------------------------------------
-# email + password
+# email one-time code -- the one door for email (2026-09-24)
+#
+# InVideo's shape: no password to invent, no separate sign-up form. Type
+# an email, get a code, type the code. The same two calls sign a new
+# person up and an existing one in (`create_user: true`), so the page
+# never has to ask which they are -- and never reveals whether an email
+# already has an account.
+#
+# The code request carries a PKCE challenge, so if the project's email
+# template still sends a LINK instead of (or beside) {{ .Token }}, the
+# link lands on /auth/callback?code= and finishes exactly like an OAuth
+# return. Typing the code works on any device; the link only in the
+# browser that asked for it (the verifier lives in its session cookie).
+# --------------------------------------------------------------------------
+
+OTP_EMAIL_KEY = "sb_otp_email"
+
+
+def _code_page(email: str, error: Optional[str] = None) -> RedirectResponse:
+    query = {"step": "code", "email": email}
+    if error:
+        query["error"] = error
+    return RedirectResponse(f"/signin?{urlencode(query)}", status_code=303)
+
+
+def _valid_email(email: str) -> bool:
+    return "@" in email and "." in email.split("@")[-1] and " " not in email
+
+
+@router.post("/email")
+async def email_code(request: Request, email: str = Form(...)):
+    """Send a one-time code to this address (creating the Supabase user
+    if it is new). Always lands on the code step, never says whether the
+    address already had an account."""
+    email = email.strip().lower()
+    if _rate_limited(request, "otp"):
+        return _signin_error("too many codes requested -- wait a minute",
+                             open_step="email")
+    if not configured():
+        return _not_configured()
+    if not _valid_email(email):
+        return _signin_error("enter a real email address", open_step="email")
+    verifier, challenge = _pkce_pair()
+    request.session[PKCE_SESSION_KEY] = verifier
+    request.session[OTP_EMAIL_KEY] = email
+    status, body = gotrue(
+        "POST", "/otp",
+        params={"redirect_to": str(request.url_for("auth_callback"))},
+        json={"email": email, "create_user": True,
+              "code_challenge": challenge, "code_challenge_method": "s256"})
+    if status >= 400:
+        return _signin_error(_error_text(body, "could not send a code -- try again"),
+                             open_step="email")
+    return _code_page(email)
+
+
+@router.post("/verify")
+async def verify_code(request: Request, email: str = Form(...),
+                      token: str = Form(...)):
+    """The code from the email -> a GoTrue session -> the same _finish
+    every other door ends in."""
+    email = email.strip().lower()
+    token = "".join(ch for ch in token if ch.isdigit())
+    if _rate_limited(request, "verify"):
+        return _code_page(email, "too many attempts -- wait a minute")
+    if not configured():
+        return _not_configured()
+    if not _valid_email(email) or not 6 <= len(token) <= 10:
+        return _code_page(email, "enter the code from the email")
+    status, body = gotrue("POST", "/verify",
+                          json={"type": "email", "email": email, "token": token})
+    if status >= 400 or not body.get("access_token"):
+        return _code_page(email, "that code didn't work -- check it, or send a new one")
+    request.session.pop(OTP_EMAIL_KEY, None)
+    return _finish(request, body)
+
+
+# --------------------------------------------------------------------------
+# email + password -- kept for accounts made with a password before the
+# code door; the page offers it behind "Use a password instead"
 # --------------------------------------------------------------------------
 
 @router.post("/signup")
@@ -632,7 +745,7 @@ async def signup(request: Request, email: str = Form(...),
 async def login(request: Request, email: str = Form(...),
                 password: str = Form(...)):
     if _rate_limited(request, "login"):
-        return _signin_error("too many attempts -- wait a minute")
+        return _signin_error("too many attempts -- wait a minute", open_step="password")
     if not configured():
         return _not_configured()
     status, body = gotrue("POST", "/token", params={"grant_type": "password"},
@@ -640,7 +753,7 @@ async def login(request: Request, email: str = Form(...),
     # One generic error for every failure mode -- never reveal whether
     # the email exists or the password was wrong.
     if status >= 400 or not body.get("access_token"):
-        return _signin_error("invalid email or password")
+        return _signin_error("invalid email or password", open_step="password")
     return _finish(request, body)
 
 

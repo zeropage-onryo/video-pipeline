@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
+import { goToSignIn } from "@/lib/api";
 import { Wordmark } from "@/components/wordmark";
 
 // Fixed 60px bar: transparent while the page is at the top, glass (blur +
@@ -52,11 +53,16 @@ export function SiteHeader() {
         </nav>
 
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" className="text-foreground" render={<Link href="/studio" />}>
-            Sign in
+          {/* Straight to the one sign-in door, the way InVideo and LTX
+              Studio do it: both buttons open the same page, and the first
+              pass through it creates the workspace. "Sign up" only
+              asks for the sign-up heading. A visitor who is already signed
+              in is handed on to /studio by the door itself. */}
+          <Button variant="ghost" size="sm" className="text-foreground" onClick={() => goToSignIn()}>
+            Log in
           </Button>
-          <Button size="sm" render={<Link href="/studio" />}>
-            Start creating
+          <Button size="sm" onClick={() => goToSignIn("signup")}>
+            Sign up
           </Button>
         </div>
       </div>

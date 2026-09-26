@@ -27,6 +27,11 @@ import pytest
 # in app.main. The public posture has its own tests (test_dev_tools.py),
 # which reload app.main under DEV_TOOLS=0.
 os.environ["DEV_TOOLS"] = "1"
+# Open sign-up (a first sign-in gets its own workspace) is the shipped
+# posture since 2026-09-24, but most of the suite signs fresh users in and
+# asserts the invite-only gate's 403. Pinned off here, like DEV_TOOLS
+# above; tests/test_open_signup.py turns it on per test.
+os.environ["ZEROPAGE_OPEN_SIGNUP"] = "0"
 
 # The reference rule (2026-09-08): in production a spark with no pictures
 # behind it does not get written from at all -- `orchestrator.planner`
