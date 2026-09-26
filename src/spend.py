@@ -66,6 +66,8 @@ STAGES = (
     "evaluate",        # the orchestrator's evaluate-and-retry critique
     "crag",            # the one query rewrite
     "scout",           # research crawl + digest
+    "reference_map",   # reference_needs.plan: what a scene needs photos OF
+    "reference_check", # refcheck: looking at the frames a lane returned
     "research",        # the research agent (langchain), per model turn
     "caption",         # scheduling.build_caption
     "director",        # director.direct_scene

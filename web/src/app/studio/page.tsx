@@ -56,6 +56,7 @@ import { useShell } from "@/components/studio/shell";
 import { AddElement } from "@/components/studio/add-element";
 import { ElementSheet } from "@/components/studio/element-sheet";
 import { ELEMENT_KINDS, displayPhoto, drawable, elementKind, isElement, kindLabel, type ElementKind } from "@/lib/elements";
+import { FILL_EVENT, announceComposer, takePendingFill } from "@/lib/assistant";
 
 type Attachment = { id: string; name: string; file: File; url: string };
 type Option = { id: string; label: string; note?: string };
@@ -189,6 +190,9 @@ function Composer() {
   const [seconds, setSeconds] = useState(0);
   const [ratios, setRatios] = useState<Option[]>([]);
   const [ratio, setRatio] = useState("");
+  // the assistant pill filled the box: who, so the tag can say so and
+  // Create can wear a ring until the person presses it (or edits it away)
+  const [filledBy, setFilledBy] = useState<{ name: string; avatar?: string } | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const dragDepth = useRef(0);
@@ -230,6 +234,29 @@ function Composer() {
       .catch(() => setRatios([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // The assistant pill writes into this box through a window event (it
+  // floats over every page; this state lives here). A fill asked for from
+  // another page waited in sessionStorage and is taken on mount. It only
+  // ever FILLS: Create is still the person's click.
+  useEffect(() => {
+    const take = () => {
+      const fill = takePendingFill();
+      if (!fill) return;
+      if (fill.text) {
+        setIdea(fill.text);
+        setMode("create");
+        setFilledBy({ name: fill.by, avatar: fill.avatar });
+      }
+      if (fill.refs?.length) setPicked((was) => [...new Set([...was, ...fill.refs!])]);
+    };
+    take();
+    window.addEventListener(FILL_EVENT, take);
+    return () => window.removeEventListener(FILL_EVENT, take);
+  }, []);
+  useEffect(() => {
+    announceComposer({ idea, picked });
+  }, [idea, picked]);
 
   // object URLs for uploads are revoked when the composer unmounts
   useEffect(() => {
@@ -283,6 +310,7 @@ function Composer() {
     setBusy(true);
     setProgress(0);
     setWritten(null);
+    setFilledBy(null);
     say(null);
     let asking: GuideMessage[] | null = null;
     try {
@@ -662,7 +690,10 @@ function Composer() {
                 value={idea}
                 maxLength={10000}
                 rows={3}
-                onChange={(e) => setIdea(e.target.value)}
+                onChange={(e) => {
+                  setIdea(e.target.value);
+                  if (!e.target.value.trim()) setFilledBy(null);
+                }}
                 onKeyDown={(e) => {
                   if (mentions.onKeyDown(e)) return;
                   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void send();
@@ -734,6 +765,11 @@ function Composer() {
                 <Plus strokeWidth={1.6} />
               </button>
               <span className="spacer" />
+              {filledBy && idea.trim() ? (
+                <span className="zpa-filled">
+                  {filledBy.avatar ? `${filledBy.avatar} ` : ""}Filled by {filledBy.name}
+                </span>
+              ) : null}
               {brains.length ? (
                 <PillMenu
                   heading={mode === "guide" ? "Which model answers" : "Which model writes"}
@@ -779,7 +815,12 @@ function Composer() {
                   )}
                 />
               ) : null}
-              <button type="button" className="go" disabled={!canSend} onClick={() => void send()}>
+              <button
+                type="button"
+                className={`go${filledBy && idea.trim() && mode === "create" && !busy ? " zpa-ring" : ""}`}
+                disabled={!canSend}
+                onClick={() => void send()}
+              >
                 <Sparkles strokeWidth={2} />
                 {busy ? (mode === "create" ? "Writing…" : "Thinking…") : mode === "create" ? "Create" : "Send"}
               </button>
