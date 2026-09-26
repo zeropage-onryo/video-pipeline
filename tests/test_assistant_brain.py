@@ -166,6 +166,28 @@ def test_departments_narrow_the_hunt_and_empty_lanes_are_named():
     assert "no lane configured" in result["sheet"][0]["note"]
 
 
+def test_a_long_query_that_finds_nothing_is_asked_again_shorter():
+    asked = []
+
+    def search(query, brand, limit=6, dsn=None):
+        asked.append(query)
+        return _cands("bar") if len(query.split()) <= 4 else []
+
+    result = assistant_brain.find_references(
+        "a dive bar", plan=lambda *a, **k: _needs(("place", "empty weathered wood bar counter teal amber")),
+        search=search,
+        screen=lambda c, need, **kw: {"checked": True, "keepers": c[:1], "rejected": [], "note": ""})
+    assert asked == ["empty weathered wood bar counter teal amber", "empty weathered wood bar"]
+    assert result["ok"] and result["sheet"][0]["query"] == "empty weathered wood bar"
+
+
+def test_an_empty_sheet_tells_the_model_it_found_nothing():
+    result = assistant_brain.find_references(
+        "a dive bar", plan=lambda *a, **k: _needs(("place", "dive bar")),
+        search=lambda *a, **k: [], screen=lambda *a, **k: pytest.fail("nothing to screen"))
+    assert "NO FRAMES WERE FOUND" in assistant_brain.sheet_for_model(result)
+
+
 def test_find_references_without_a_scene():
     assert assistant_brain.find_references("  ")["note"] == "no scene to hunt for"
 

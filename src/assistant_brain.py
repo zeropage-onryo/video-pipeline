@@ -346,7 +346,12 @@ def find_references(scene: str, *, brand: str = "", account_id=None,
         entry = {"role": need.get("role", ""), "query": need.get("query", ""),
                  "keepers": [], "rejected": [], "note": ""}
         try:
-            candidates = search(need["query"], brand, limit=CHAT_CANDIDATES, dsn=dsn)
+            candidates = []
+            for query in _broader(need["query"]):
+                candidates = search(query, brand, limit=CHAT_CANDIDATES, dsn=dsn)
+                if candidates:
+                    entry["query"] = query
+                    break
         except Exception as e:
             entry["note"] = f"search failed: {e}"
             sheet.append(entry)
@@ -379,6 +384,21 @@ def find_references(scene: str, *, brand: str = "", account_id=None,
                      + (f"; {unchecked} need(s) could not be looked at" if unchecked else ""))}
 
 
+def _broader(query: str) -> list[str]:
+    """The query, then shorter prefixes of it. The keyless floor lane
+    (Openverse) matches every word, so the planner's eight-word queries
+    ("empty weathered wood bar counter teal amber night") found nothing
+    while their first four found six frames (measured live 2026-09-26).
+    Longest first: a broader query is only asked when a narrower one
+    came back empty."""
+    words = " ".join(str(query or "").split()).split(" ")
+    out = [" ".join(words)]
+    for n in (4, 3):
+        if len(words) > n:
+            out.append(" ".join(words[:n]))
+    return [q for q in out if q]
+
+
 def _public(row: dict) -> dict:
     """The fields a contact-sheet card draws. `image_url` rides along for
     the THUMBNAIL (the browser has to load something); the model is never
@@ -392,6 +412,12 @@ def _public(row: dict) -> dict:
 def sheet_for_model(result: dict) -> str:
     """What the MODEL sees of a hunt: ids and reasons, no URLs."""
     lines = [result.get("note") or ""]
+    if not any(e.get("keepers") for e in result.get("sheet") or []):
+        # A live turn (2026-09-26) got a sheet with 0 frames back and
+        # still told the person it had "pulled a contact sheet of the
+        # keepers". The pill draws the sheet's own note beside the
+        # message; this is the model's half of the same truth.
+        lines.append("NO FRAMES WERE FOUND. Say so plainly; do not claim a contact sheet or keepers.")
     if result.get("faces"):
         lines.append(f"{result['faces']} face need(s) skipped -- faces come from Elements, never the web.")
     lines += [_need_line(e) for e in result.get("sheet") or []]
