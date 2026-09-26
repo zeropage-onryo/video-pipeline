@@ -402,6 +402,24 @@ async def creative_guide_reply(request: Request,
     brain_raw = (form.get("brain") or "").strip().lower()
     brain = brain_raw if brain_raw in gemini_utils.BRAINS else creative_guide.DEFAULT_BRAIN
 
+    # The assistant pill (2026-09-26, src/assistant_brain.py): a turn
+    # that says which page it floats over / which step the project is on
+    # gets the step's playbook, what is already known (look, must-not
+    # list, the board's picks and passes), the reference hunt as a tool
+    # and a judged set of directions. `brain=auto` picks the tier per
+    # step. A turn without `assistant` is the Guide exactly as it was.
+    assistant = None
+    if (form.get("assistant") or "").strip() in ("1", "true", "on"):
+        from src import assistant_brain
+        assistant = {
+            "name": assistant_brain.clean_name(form.get("assistant_name")),
+            "tone": assistant_brain.clean_tone(form.get("assistant_tone")),
+            "stage": assistant_brain.clean_stage(form.get("stage")),
+            "page": assistant_brain.clean_page(form.get("page")),
+        }
+        last = conversation.messages[-1].content
+        brain = assistant_brain.pick_brain(brain_raw, assistant["stage"], last)
+
     scope = None
     if personal:
         scope = model_connections.connection_scope(request, account_id)
@@ -425,10 +443,15 @@ async def creative_guide_reply(request: Request,
         grounding = scene_chain.ground(idea, brand=brand, account_id=account_id,
                                        refs=ref_urls)
         note = lambda text: jobs.progress(job, 0.5, text)   # noqa: E731
+        if assistant is not None:
+            from src import assistant_brain
+            note("remembering what you like")
+            assistant["memory"] = assistant_brain.memory(brand, account_id)
         if personal:
             reply = creative_guide.respond_personal(
                 conversation, provider=provider, scope=scope, model=model,
-                brand=brand, grounding=grounding, image_refs=image_refs)
+                brand=brand, grounding=grounding, image_refs=image_refs,
+                assistant=assistant)
         else:
             from google import genai
             # The board's tools, in-process (src/guide_tools.py,
@@ -436,12 +459,13 @@ async def creative_guide_reply(request: Request,
             # tool comes back as `reply.proposal` for the confirm
             # card, and nothing here spends. Absent `mcp`, the plain
             # conversation it always was.
-            tools, run_tool = _guide_tools(account_id)
+            tools, run_tool = _guide_tools(account_id, local=assistant is not None,
+                                           brand=brand)
             reply = creative_guide.respond(
                 conversation, client=genai.Client(api_key=_gemini_key(account_id)),
                 brand=brand, grounding=grounding, image_refs=image_refs,
                 account_id=account_id, on_retry=note, tools=tools, run_tool=run_tool,
-                brain=brain)
+                brain=brain, assistant=assistant)
         # `billing` says WHOSE plan paid: a personal connection spends
         # the person's own ChatGPT/Claude subscription and never touches
         # this install's Gemini credit, and /costs must not count it.
@@ -454,17 +478,18 @@ async def creative_guide_reply(request: Request,
     return {"job_id": job["id"]}
 
 
-def _guide_tools(account_id: int):
+def _guide_tools(account_id: int, *, local: bool = False, brand: str = ""):
     """(specs, run_tool) for a Guide turn, or (None, None) when the
     `mcp` package is absent or the server cannot be opened. Never
     raises: a board that cannot be read costs the answer its tools,
-    not the person their turn."""
+    not the person their turn. `local` adds the assistant's own tools
+    (find/keep references), which need no MCP at all."""
     from src import guide_tools
 
-    if not guide_tools.available():
+    if not guide_tools.available() and not local:
         return None, None
     try:
-        return guide_tools.session(account_id=account_id)
+        return guide_tools.session(account_id=account_id, local=local, brand=brand)
     except Exception as exc:
         print(f"  guide tools unavailable: {exc}", file=sys.stderr)
         return None, None
@@ -496,12 +521,24 @@ async def creative_guide_act(request: Request,
         return _error(400, "bad_tool", f"`{tool}` is not an action the Guide can take")
     if not isinstance(args, dict):
         return _error(400, "bad_request", "args must be an object")
-    if not guide_tools.available():
+    if not guide_tools.is_local(tool) and not guide_tools.available():
         return _error(503, "tools_unavailable", "the board's tools are not installed here")
+    extra = {}
+    if guide_tools.is_local(tool):
+        account = auth.current_account(request) or {}
+        extra["brand"] = (account.get("slug") if account.get("slug") in preprod.BRANDS
+                          else "antihero")
     try:
-        result = guide_tools.run(tool, args, account_id=account_id)
+        result = guide_tools.run(tool, args, account_id=account_id, **extra)
     except guide_tools.Refused as exc:
         return _error(400, "refused", str(exc))
+    if tool == "keep_references":
+        # {kept: [{id, url: "/refs/<sha>.jpg", ...}], refused: [...]} --
+        # the composer adds each `url` to its asset_photos picks.
+        try:
+            return {"ok": True, "tool": tool, "result": json.loads(result)}
+        except ValueError:
+            pass
     return {"ok": True, "tool": tool, "result": result}
 
 
