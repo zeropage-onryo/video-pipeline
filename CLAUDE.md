@@ -68,6 +68,13 @@ venv/bin/python -m src.scout run  [--brand ...] [--count 4] [--lanes web,shorts,
 venv/bin/python -m src.scout list [--brand ...] [--unused]
 venv/bin/python -m src.scout next --brand zeropage       # the servable spark, or exit 1
 
+# THE INSTAGRAM TOKENS — two credentials, two hosts (src/instagram.py).
+# check is read-only (one call each, never prints a value) and is what the
+# nightly preflight runs; refresh/publish/research write .env with a backup.
+venv/bin/python -m ops.ig_tokens check [--probe]
+venv/bin/python -m ops.ig_tokens refresh|publish
+venv/bin/python -m ops.ig_tokens research --app-id <research app id>
+
 # THE SHADOW RUN — one run, spark rotated from prompts/sparks.txt. MANUAL
 # ONLY: nothing schedules this. The 03:30 launchd job was removed
 # 2026-09-14 because it took neither the nightly lock nor the budget, so it
@@ -1515,7 +1522,10 @@ is yours, in Resolve, by hand.
   insight metric names shift between Graph versions, so verify on bump. A `/reel/<shortcode>`
   permalink does **not** contain the numeric media id; store `ig://<media_id>` (or the raw id) in
   a video's url for refresh to work, or pass a `media_id` key. Token refresh (long-lived tokens
-  expire ~60 days) is built (2026-09-21, BACKLOG #4): the nightly sweep's Instagram pass calls
+  expire ~60 days) is built (2026-09-21, BACKLOG #4), and since 2026-09-26 the nightly
+  preflight also checks BOTH tokens read-only (`instagram.token_health`: IG_ACCESS_TOKEN by
+  `/me`, IG_GRAPH_TOKEN by `debug_token`) and logs `!!! INSTAGRAM TOKEN NEEDS YOU` naming the
+  token and the fix -- never a reason to stop the walk. The nightly sweep's Instagram pass calls
   `refresh_token_step` first and prints the days left, loudly on stderr when it needs a person.
   `.env` is never written -- a NEW token Meta issues is kept in `data/ig_token.json`
   (`IG_TOKEN_STORE` overrides) beside a fingerprint of the `.env` token it replaced, and

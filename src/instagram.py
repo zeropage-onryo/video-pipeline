@@ -31,8 +31,12 @@ from . import db
 
 # Graph API version, one place. Dated 2026-08-04 -- verify against
 # Meta's changelog before bumping; insights metric names shift between
-# versions.
+# versions. Re-checked 2026-09-26 against
+# developers.facebook.com/docs/graph-api/changelog/versions: v23.0 is
+# served until 2027-10-08 (newest is v26.0, 2026-07-29), so it stays --
+# a bump is a change to the insights names above, not a free upgrade.
 VERSION = "v23.0"
+VERSION_EXPIRES = "2027-10-08"
 API_ROOT = f"https://graph.instagram.com/{VERSION}"
 
 # Insight metric names as of v22+ (dated 2026-08-04): `views` is the
@@ -463,6 +467,137 @@ def refresh_token_step(token=None, now=None) -> dict:
         message += f" !!! only {days_left} days left -- re-authorise if this keeps falling"
     return {"ok": True, "error": None, "days_left": days_left, "changed": changed,
             "stored": stored, "path": str(path), "warning": warning, "message": message}
+
+
+# --------------------------------------------------------------------------
+# is each token alive? (read-only, for the nightly preflight)
+# --------------------------------------------------------------------------
+# Both tokens have expired SILENTLY -- a night with a dead token looks
+# exactly like a night with nothing to post or research. These two checks
+# make one read-only call each (no refresh, no publish, no hashtag lookup),
+# never raise, never return or print the token, and answer with a `fix`
+# line that names the token and the command that repairs it.
+#
+# state: valid | expiring | expired | invalid | missing | unreachable.
+# `warning` is what makes the preflight loud. A MISSING research token is
+# not a warning: that lane is off by default and dark on purpose until the
+# research app exists. A missing publishing token is.
+
+PUBLISH_FIX = ("re-issue it: Meta app ZeroPageFilms -> Instagram API with "
+               "Instagram login -> Generate token (scopes instagram_business_basic, "
+               "instagram_business_content_publish, instagram_business_manage_insights), "
+               "then `python -m ops.ig_tokens publish` to install it")
+REFRESH_FIX = "`python -m ops.ig_tokens refresh` winds it another 60 days"
+GRAPH_FIX = ("re-issue it: Graph API Explorer on the research app -> short-lived "
+             "user token, then `python -m ops.ig_tokens research`")
+
+
+def _expired_error(body: dict) -> bool:
+    """Meta's expired-session shape: OAuthException code 190, subcode 463
+    (or the message, which is all some hosts send)."""
+    err = (body or {}).get("error") or {}
+    return err.get("error_subcode") == 463 or "expired" in str(err.get("message", "")).lower()
+
+
+def _days_until(stamp, now) -> Optional[int]:
+    if not stamp:
+        return None
+    try:
+        when = (datetime.fromtimestamp(int(stamp), timezone.utc)
+                if str(stamp).isdigit() else datetime.fromisoformat(str(stamp)))
+    except (ValueError, OSError, OverflowError):
+        return None
+    return (when - now).days
+
+
+def check_publish_token(token=None, *, get=None, now=None) -> dict:
+    """IG_ACCESS_TOKEN: one GET /me on graph.instagram.com. Days left come
+    from the refresh store (Instagram Login has no debug endpoint), so they
+    are known only after the nightly sweep has refreshed once."""
+    get = get or requests.get
+    now = now or datetime.now(timezone.utc)
+    token = token or access_token()
+    out = {"name": "IG_ACCESS_TOKEN", "state": "missing", "ok": False,
+           "warning": True, "days_left": None, "username": None,
+           "detail": "not set", "fix": PUBLISH_FIX}
+    if not token:
+        return out
+    try:
+        resp = get(f"{API_ROOT}/me", params={"fields": "user_id,username",
+                                              "access_token": token}, timeout=10)
+        body = resp.json()
+    except Exception as e:                                  # noqa: BLE001
+        out.update(state="unreachable", warning=True, detail=_safe_error(e, token),
+                   fix="check the network; the token itself was not tested")
+        return out
+    if "error" in (body or {}):
+        message = _safe_error(Exception(body["error"].get("message", "")), token)
+        out.update(state="expired" if _expired_error(body) else "invalid",
+                   detail=message)
+        return out
+    stored = _read_token_store() or {}
+    days = _days_until(stored.get("expires_at"), now)
+    state = "expiring" if days is not None and days < TOKEN_WARN_DAYS else "valid"
+    out.update(state=state, ok=True, warning=state == "expiring", days_left=days,
+               username=body.get("username"),
+               detail=f"@{body.get('username') or '?'}"
+                      + (f", {days} days left" if days is not None else ", expiry unknown"),
+               fix=REFRESH_FIX if state == "expiring" else "")
+    return out
+
+
+def check_graph_token(token=None, *, get=None, now=None) -> dict:
+    """IG_GRAPH_TOKEN: one GET /debug_token on graph.facebook.com, the
+    token inspecting itself -- validity, expiry and scopes in one read."""
+    get = get or requests.get
+    now = now or datetime.now(timezone.utc)
+    token = token or graph_token()
+    out = {"name": "IG_GRAPH_TOKEN", "state": "missing", "ok": False,
+           "warning": False, "days_left": None, "scopes": [],
+           "detail": "not set (research lane dark)", "fix": GRAPH_FIX}
+    if not token:
+        return out
+    try:
+        resp = get(f"{GRAPH_ROOT}/debug_token",
+                   params={"input_token": token, "access_token": token}, timeout=10)
+        body = resp.json()
+    except Exception as e:                                  # noqa: BLE001
+        out.update(state="unreachable", warning=True, detail=_safe_error(e, token),
+                   fix="check the network; the token itself was not tested")
+        return out
+    if "error" in (body or {}):
+        message = _safe_error(Exception(body["error"].get("message", "")), token)
+        out.update(state="expired" if _expired_error(body) else "invalid",
+                   warning=True, detail=message)
+        return out
+    data = (body or {}).get("data") or {}
+    if not data.get("is_valid"):
+        message = (data.get("error") or {}).get("message") or "Meta says is_valid=false"
+        expired = "expired" in str(message).lower()
+        out.update(state="expired" if expired else "invalid", warning=True,
+                   detail=_safe_error(Exception(message), token))
+        return out
+    # expires_at 0 means "never" (a Page token); the data-access window
+    # (90 days) is the clock that still runs then
+    expires = data.get("expires_at") or data.get("data_access_expires_at")
+    days = _days_until(expires, now) if expires else None
+    state = "expiring" if days is not None and days < TOKEN_WARN_DAYS else "valid"
+    out.update(state=state, ok=True, warning=state == "expiring", days_left=days,
+               scopes=list(data.get("scopes") or []),
+               detail=(f"{days} days left" if days is not None else "no expiry"),
+               fix=GRAPH_FIX if state == "expiring" else "")
+    return out
+
+
+def token_health(*, get=None, now=None) -> list:
+    """Both checks, publishing first. Never raises."""
+    return [check_publish_token(get=get, now=now), check_graph_token(get=get, now=now)]
+
+
+def health_line(check: dict) -> str:
+    """One loud line for a check that needs a person, naming the token."""
+    line = f"{check['name']}: {check['state'].upper()} -- {check['detail']}"
+    return line + (f" -- fix: {check['fix']}" if check.get("fix") else "")
 
 
 # --------------------------------------------------------------------------

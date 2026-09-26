@@ -224,6 +224,25 @@ def check_image_cap(dsn: Optional[str] = None, *, account_id: Optional[int] = No
     }
 
 
+def check_instagram() -> dict:
+    """Are the two Instagram tokens alive -- read-only, one call each
+    (instagram.token_health). Never a reason to stop: concepts do not need
+    Instagram. It exists to be LOUD, because both tokens have died silently
+    before and a night with a dead token reads exactly like a quiet one."""
+    from . import instagram
+    try:
+        checks = instagram.token_health()
+    except Exception as e:                                  # noqa: BLE001
+        return {"ok": False, "checks": [], "warnings": [
+            f"instagram token check itself failed: {_first_line(e)}"]}
+    warnings = [instagram.health_line(c) for c in checks if c.get("warning")]
+    summary = " ".join(f"{c['name']}={c['state']}"
+                       + (f"({c['days_left']}d)" if c.get("days_left") is not None else "")
+                       for c in checks)
+    return {"ok": not warnings, "checks": checks, "warnings": warnings,
+            "detail": summary}
+
+
 def preflight(dsn: Optional[str] = None, *, account_id: Optional[int] = None,
               gemini_client=None) -> dict:
     """The three checks, once, before sixteen runs discover them the hard
@@ -233,6 +252,7 @@ def preflight(dsn: Optional[str] = None, *, account_id: Optional[int] = None,
         "ok": False, "detail": "not checked (database unreachable)"}
     images = check_image_cap(dsn, account_id=account_id) if database["ok"] else {
         "ok": True, "headroom": None, "detail": "not checked"}
+    instagram = check_instagram()
 
     stop = None
     if not database["ok"]:
@@ -241,6 +261,7 @@ def preflight(dsn: Optional[str] = None, *, account_id: Optional[int] = None,
         stop = f"gemini unreachable: {gemini['detail']}"
     return {
         "db": database, "gemini": gemini, "images": images,
+        "instagram": instagram,
         "stop": stop,
         "keyframes": bool(images.get("ok")),
     }
@@ -256,6 +277,8 @@ def preflight_line(report: dict) -> str:
     return (f"nightly preflight: db={'ok' if report['db']['ok'] else 'FAIL'} "
             f"gemini={'ok' if report['gemini']['ok'] else 'FAIL'} "
             f"images={images.get('detail')} -- {keyframes}"
+            + (f" -- ig: {report['instagram'].get('detail')}"
+               if report.get("instagram", {}).get("detail") else "")
             + (f" -- STOP: {report['stop']}" if report["stop"] else ""))
 
 
@@ -419,6 +442,10 @@ def walk(*, sparks: Optional[list] = None, pairs=PAIRS,
 
     report = preflight(dsn, account_id=account_id, gemini_client=gemini_client)
     log(preflight_line(report))
+    # the one place the night shouts: a token that needs a person gets its
+    # own line, naming the token and the command that fixes it
+    for warning in report.get("instagram", {}).get("warnings") or []:
+        log(f"nightly: !!! INSTAGRAM TOKEN NEEDS YOU -- {warning}")
 
     summary = {"started_at": started, "attempted": 0, "succeeded": 0,
                "held": 0, "failed": 0, "spent_usd": 0.0, "stopped_reason": None,
@@ -533,6 +560,8 @@ def main(argv=None) -> int:
     if args.command == "preflight":
         report = preflight()
         print(preflight_line(report))
+        for warning in report.get("instagram", {}).get("warnings") or []:
+            print(f"!!! INSTAGRAM TOKEN NEEDS YOU -- {warning}", file=sys.stderr)
         return 0 if not report["stop"] else 1
 
     if args.command == "status":
