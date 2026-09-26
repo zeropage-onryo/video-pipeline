@@ -1,0 +1,798 @@
+/* The assistant pill (2026-09-26). Studio tokens (.zps in studio.css):
+   signal red, Oswald display, mono labels. Everything is prefixed zpa-
+   so nothing here restyles the page it floats over. */
+.zpa {
+  position: fixed;
+  right: 36px;
+  bottom: 36px;
+  z-index: 110;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  font-family: var(--body);
+  color: var(--text);
+  transition:
+    right var(--t),
+    bottom var(--t);
+}
+.zpa-mono {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #a3a3a3;
+}
+.zpa-mono.dim {
+  color: var(--dim);
+  line-height: 1.7;
+}
+.zpa-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+/* ── collapsed ── */
+.zpa-perch {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  margin: 0 0 -14px 14px;
+  pointer-events: none;
+}
+.zpa-avatar {
+  width: 56px;
+  height: 56px;
+  flex: none;
+  border-radius: 999px;
+  background: #151515;
+  border: 2px solid var(--signal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28px;
+  line-height: 1;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.6);
+}
+.zpa-bubble {
+  max-width: 260px;
+  margin-bottom: 22px;
+  padding: 8px 12px;
+  border-radius: 14px 14px 14px 4px;
+  border: 1px solid #2a2a2a;
+  background: #151515;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #e6e6e6;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.5);
+  animation: zpa-rise 260ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+.zpa-pill {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 58px;
+  max-width: 380px;
+  padding: 0 9px 0 84px;
+  border-radius: 999px;
+  border: 1px solid var(--signal);
+  background: #0d0d0d;
+  color: var(--text);
+  text-align: left;
+  box-shadow:
+    0 12px 40px rgb(0 0 0 / 0.7),
+    0 0 34px rgb(228 0 43 / 0.2);
+  transition:
+    box-shadow var(--t),
+    transform var(--t);
+}
+.zpa-pill:hover {
+  box-shadow:
+    0 12px 40px rgb(0 0 0 / 0.7),
+    0 0 44px rgb(228 0 43 / 0.32);
+}
+.zpa-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.zpa-nudge {
+  font-size: 14px;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.zpa-go {
+  width: 40px;
+  height: 40px;
+  flex: none;
+  margin-left: 6px;
+  border-radius: 999px;
+  background: #d10024;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.zpa-go svg {
+  width: 16px;
+  height: 16px;
+  color: #fff;
+}
+
+/* ── opened ── */
+.zpa-card {
+  position: relative;
+  width: 400px;
+  max-height: calc(100vh - 110px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--signal);
+  border-radius: 26px;
+  background: #0b0b0b;
+  box-shadow:
+    0 20px 60px rgb(0 0 0 / 0.75),
+    0 0 40px rgb(228 0 43 / 0.16);
+  animation: zpa-rise 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+.zpa-avatar.big {
+  position: absolute;
+  left: 22px;
+  top: -30px;
+  width: 60px;
+  height: 60px;
+  font-size: 30px;
+}
+.zpa-head {
+  padding: 38px 20px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-bottom: 1px solid #1a1a1a;
+}
+.zpa-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.zpa-title b {
+  font-family: var(--display);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.zpa-title > span {
+  font-size: 13px;
+  color: #a3a3a3;
+}
+.zpa-title .zpa-icon:first-of-type {
+  margin-left: auto;
+}
+.zpa-icon {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border-radius: 999px;
+  border: 1px solid #2a2a2a;
+  background: none;
+  color: #a3a3a3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.zpa-icon:hover {
+  color: var(--text);
+  border-color: var(--line-hi);
+}
+.zpa-icon svg {
+  width: 14px;
+  height: 14px;
+}
+.zpa-steps {
+  display: flex;
+  gap: 4px;
+}
+.zpa-steps span {
+  flex: 1;
+  height: 3px;
+  border-radius: 2px;
+  background: #2a2a2a;
+}
+.zpa-steps span[data-state="done"] {
+  background: #e6e6e6;
+}
+.zpa-steps span[data-state="now"] {
+  background: var(--signal);
+}
+.zpa-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overscroll-behavior: contain;
+}
+.zpa-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.zpa-msg {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
+  color: #d4d4d4;
+  white-space: pre-wrap;
+}
+.zpa-msg.me {
+  align-self: flex-end;
+  max-width: 85%;
+  padding: 8px 12px;
+  border-radius: 16px 16px 4px 16px;
+  background: #171717;
+  color: var(--text);
+}
+.zpa-msg.failed {
+  border: 1px dashed rgb(228 0 43 / 0.6);
+}
+.zpa-failed {
+  display: block;
+  margin-top: 4px;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--signal);
+}
+.zpa-working {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.zpa-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--signal);
+  animation: zpa-pulse 1.1s ease-in-out infinite;
+}
+.zpa-q {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 14px;
+  color: #d4d4d4;
+}
+.zpa-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.zpa-chip {
+  min-height: 34px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid #2a2a2a;
+  background: #0d0d0d;
+  color: #d4d4d4;
+  font-size: 13px;
+  line-height: 1.3;
+  text-align: left;
+  transition:
+    border-color var(--t),
+    background var(--t);
+}
+.zpa-chip:hover:not(:disabled),
+.zpa-chip[aria-pressed="true"] {
+  border-color: var(--signal);
+  background: #24070d;
+  color: #fff;
+}
+.zpa-chip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.zpa-dirs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.zpa-dir {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  border: 1px solid #242424;
+  background: #0f0f0f;
+  text-align: left;
+  transition:
+    border-color var(--t),
+    background var(--t);
+}
+.zpa-dir:hover {
+  border-color: var(--line-hi);
+}
+.zpa-dir.on {
+  border-color: var(--signal);
+  background: #13060a;
+}
+.zpa-dir .zpa-mono {
+  display: flex;
+  gap: 8px;
+  color: #8a8a8a;
+}
+.zpa-dir.on .zpa-mono {
+  color: var(--signal);
+}
+.zpa-dir .zpa-mono em {
+  margin-left: auto;
+  font-style: normal;
+  color: var(--text);
+}
+.zpa-dir b {
+  font-size: 14px;
+  font-weight: 600;
+}
+.zpa-log {
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: #e6e6e6;
+}
+.zpa-verdict {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--dim);
+}
+
+/* the contact sheet */
+.zpa-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.zpa-face {
+  padding: 8px 10px;
+  border: 1px dashed #333;
+  border-radius: 10px;
+  font-size: 12px;
+  color: #a3a3a3;
+}
+.zpa-need {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.zpa-needhead {
+  display: flex;
+  gap: 8px;
+}
+.zpa-needhead .zpa-mono:first-child {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.zpa-needhead .zpa-mono:last-child {
+  margin-left: auto;
+}
+.zpa-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+.zpa-frame-wrap {
+  position: relative;
+}
+.zpa-frame {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 74px;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 10px;
+  border: 2px solid #2a2a2a;
+  background: #161616;
+  transition:
+    opacity var(--t),
+    border-color var(--t);
+}
+.zpa-frame img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.zpa-frame.on {
+  border-color: var(--signal);
+}
+.zpa-frame.rej:not(.on) {
+  opacity: 0.42;
+  filter: grayscale(1);
+}
+.zpa-frame:disabled {
+  cursor: default;
+}
+.zpa-tag {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: 4px;
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: left;
+  color: #fff;
+  text-shadow: 0 1px 3px #000;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.zpa-src {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: rgb(0 0 0 / 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  opacity: 0;
+  transition: opacity var(--t);
+}
+.zpa-frame-wrap:hover .zpa-src,
+.zpa-src:focus-visible {
+  opacity: 1;
+}
+.zpa-src svg {
+  width: 11px;
+  height: 11px;
+}
+.zpa-keep {
+  height: 44px;
+  padding: 0 18px;
+  border-radius: 999px;
+  border: 1px solid #d10024;
+  background: #d10024;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 500;
+}
+.zpa-keep:disabled {
+  background: #1a1a1a;
+  border-color: #2a2a2a;
+  color: var(--dim);
+  cursor: default;
+}
+
+/* credits, on the Queue */
+.zpa-credits {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid #2a2a2a;
+  background: #111;
+}
+.zpa-credits b {
+  font-size: 15px;
+  font-weight: 600;
+}
+.zpa-costline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+}
+.zpa-cost {
+  font-family: var(--mono);
+  font-size: 18px;
+}
+.zpa-cost.short {
+  font-size: 14px;
+  color: var(--signal);
+}
+.zpa-buy {
+  font-size: 13px;
+  text-decoration: underline !important;
+  text-underline-offset: 3px;
+}
+
+.zpa-input {
+  display: flex;
+  gap: 8px;
+  padding: 0 20px 18px;
+}
+.zpa-input input {
+  flex: 1;
+  min-width: 0;
+  height: 44px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid #2a2a2a;
+  background: #121212;
+  color: var(--text);
+  font-size: 14px;
+  outline: none;
+}
+.zpa-input input:focus {
+  border-color: var(--line-hi);
+}
+.zpa-input button {
+  width: 44px;
+  height: 44px;
+  flex: none;
+  border: 0;
+  border-radius: 999px;
+  background: #d10024;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.zpa-input button:disabled {
+  background: #1a1a1a;
+  color: var(--dim);
+  cursor: default;
+}
+.zpa-input svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* setup */
+.zpa-setup {
+  padding: 40px 20px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.zpa-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.zpa-field > input {
+  height: 44px;
+  padding: 0 16px;
+  border-radius: 14px;
+  border: 1px solid #2a2a2a;
+  background: #121212;
+  color: var(--text);
+  font-size: 15px;
+  outline: none;
+}
+.zpa-avs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.zpa-av {
+  width: 48px;
+  height: 48px;
+  border-radius: 999px;
+  border: 1px solid #2a2a2a;
+  background: #121212;
+  font-size: 22px;
+  line-height: 1;
+  text-align: center;
+  padding: 0;
+}
+.zpa-av[aria-pressed="true"] {
+  border: 2px solid var(--signal);
+  background: #24070d;
+}
+.zpa-av.any {
+  width: 76px;
+  font-size: 13px;
+  color: var(--text);
+  outline: none;
+}
+
+/* the page's own button, pointed at: Create on Studio, Approve on the Queue */
+.zps .zpa-ring {
+  box-shadow:
+    0 0 0 2px var(--signal),
+    0 0 0 6px rgb(228 0 43 / 0.25),
+    0 0 30px rgb(228 0 43 / 0.45) !important;
+  animation: zpa-ring 1.6s ease-in-out infinite;
+}
+.zps .zpa-filled {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--signal);
+}
+
+/* ── staying out of the way ── */
+/* the last row of any page can scroll clear of the pill */
+.zps:has(.zpa) .view::after {
+  content: "";
+  display: block;
+  height: 72px;
+}
+/* Director: the minimap owns the corner and the prompt bar the bottom
+   middle, so the collapsed pill is just the face, above the minimap */
+.zps[data-view="director"] .zpa:not(.open) {
+  bottom: 160px;
+  right: 22px;
+}
+.zps[data-view="director"] .zpa:not(.open) .zpa-pill {
+  width: 58px;
+  max-width: 58px;
+  padding: 0;
+  opacity: 0;
+  position: absolute;
+  inset: 0;
+}
+.zps[data-view="director"] .zpa:not(.open) .zpa-perch {
+  margin: 0;
+  pointer-events: none;
+}
+.zps[data-view="director"] .zpa:not(.open) .zpa-bubble {
+  position: absolute;
+  right: 66px;
+  bottom: 8px;
+  width: max-content;
+  margin: 0;
+}
+.zps:has(.flows-workspace.has-inspector) .zpa {
+  right: 342px;
+}
+/* an open side panel (the Assets detail rail) pushes it left */
+.zps:has(.adetail) .zpa {
+  right: 384px;
+}
+
+@keyframes zpa-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+@keyframes zpa-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@keyframes zpa-ring {
+  50% {
+    box-shadow:
+      0 0 0 2px var(--signal),
+      0 0 0 9px rgb(228 0 43 / 0.12),
+      0 0 40px rgb(228 0 43 / 0.55);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .zpa-bubble,
+  .zpa-card,
+  .zpa-dot,
+  .zps .zpa-ring {
+    animation: none;
+  }
+}
+
+/* ── phones: the rail is a 64px bottom bar, so the pill sits on it ── */
+@media (max-width: 720px) {
+  .zpa {
+    left: 16px;
+    right: 16px;
+    bottom: calc(64px + 14px + env(safe-area-inset-bottom));
+  }
+  .zps:has(.adetail) .zpa,
+  .zps:has(.flows-workspace.has-inspector) .zpa {
+    right: 16px;
+  }
+  .zpa-pill {
+    width: 100%;
+    max-width: none;
+    height: 60px;
+    padding: 0 8px 0 76px;
+  }
+  .zpa-nudge {
+    font-size: 14px;
+  }
+  .zpa-perch {
+    margin: 0 0 -18px 14px;
+  }
+  /* the Queue's Approve bars and the Director's prompt bar run the full
+     width of a phone: there the pill is just the face, at the edge */
+  .zps[data-view="queue"] .zpa:not(.open),
+  .zps[data-view="director"] .zpa:not(.open) {
+    left: auto;
+    right: 12px;
+  }
+  .zps[data-view="queue"] .zpa:not(.open) .zpa-pill,
+  .zps[data-view="director"] .zpa:not(.open) .zpa-pill {
+    position: absolute;
+    inset: 0;
+    width: 52px;
+    height: 52px;
+    padding: 0;
+    opacity: 0;
+  }
+  .zps[data-view="queue"] .zpa:not(.open) .zpa-perch,
+  .zps[data-view="director"] .zpa:not(.open) .zpa-perch {
+    margin: 0;
+  }
+  .zps[data-view="queue"] .zpa:not(.open) .zpa-bubble,
+  .zps[data-view="director"] .zpa:not(.open) .zpa-bubble {
+    position: absolute;
+    right: 60px;
+    bottom: 6px;
+    margin: 0;
+    width: max-content;
+  }
+  .zpa-avatar {
+    width: 52px;
+    height: 52px;
+    font-size: 26px;
+  }
+  .zpa-bubble {
+    max-width: calc(100vw - 120px);
+  }
+  /* opened: a bottom sheet over the rail */
+  /* ...sitting on the rail, so the rail stays reachable and nothing
+     covers the sheet's own input */
+  .zpa.open,
+  .zps[data-view="director"] .zpa.open {
+    left: 0;
+    right: 0;
+    bottom: calc(64px + env(safe-area-inset-bottom));
+  }
+  .zpa-card,
+  .zps[data-view="director"] .zpa.open .zpa-card {
+    width: 100%;
+    max-height: calc(100dvh - 64px - 90px);
+    border-radius: 26px 26px 0 0;
+    border-bottom: 0;
+  }
+  .zpa-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* Opened on Studio, the card would sit on the composer's right edge --
+   where Create is, the one button it points at. Below ~1780px the hero
+   makes room for it instead (the design's "pill opened" frame). */
+@media (min-width: 721px) and (max-width: 1780px) {
+  .zps .hero {
+    transition: padding-right var(--t);
+  }
+  .zps:has(.zpa.open) .hero {
+    padding-right: 470px;
+  }
+}
+
+/* Director, opened: above the minimap and the prompt bar, never on them */
+@media (min-width: 721px) {
+  .zps[data-view="director"] .zpa.open {
+    bottom: 160px;
+    right: 22px;
+  }
+  .zps[data-view="director"] .zpa.open .zpa-card {
+    max-height: calc(100vh - 160px - 150px);
+  }
+}

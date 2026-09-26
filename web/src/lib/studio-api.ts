@@ -5,6 +5,7 @@
    billed routes (scenes/run, the exec/* nodes) are the same gated ones
    the Jinja shell calls, and Send to Queue only PICKS. */
 import { API_URL, ApiError, apiFetch } from "@/lib/api";
+import type { AssistantDirection, AssistantQuestion, ContactSheet } from "@/lib/assistant";
 
 export { ApiError };
 
@@ -491,6 +492,13 @@ export type GuideReply = {
   brief?: string;
   proposal?: GuideProposal | null;
   tool_runs?: GuideToolRun[];
+  /* the assistant pill's fields (assistant=1 on the form; src/lib/assistant.ts
+     has their shapes). A plain Guide turn answers them empty. */
+  questions?: AssistantQuestion[];
+  directions?: AssistantDirection[];
+  nudge?: string;
+  stage?: string;
+  sheet?: ContactSheet | null;
 };
 /* POST /api/creative-guide/act -- the confirm card's click, and the
    ONLY thing that runs a write tool. Guarded like the turn. The server
