@@ -87,6 +87,27 @@ def metadata_url() -> str:
     return f"{origin}{METADATA_PATH}{path}"
 
 
+def authorization_server() -> str:
+    """Supabase's OAuth 2.1 issuer, which is NOT the project URL.
+
+    Probed against the live project rather than assumed (2026-09-25),
+    because publishing the wrong one fails in the least readable way
+    there is -- the client fetches our document, discovers nothing, and
+    reports a generic "no OAuth server":
+
+        {project}/.well-known/oauth-authorization-server        -> 404
+        {project}/.well-known/openid-configuration              -> 404
+        {project}/auth/v1/.well-known/oauth-authorization-server -> 200
+        {project}/.well-known/oauth-authorization-server/auth/v1 -> 200
+
+    The last one is the form a client derives from an issuer WITH a
+    path (RFC 8414 inserts the well-known segment before it), so naming
+    `/auth/v1` is what makes discovery resolve either way round.
+    """
+    base = auth.supabase_url()
+    return f"{base}/auth/v1" if base else ""
+
+
 def protected_resource_metadata() -> dict[str, Any]:
     """The RFC 9728 document. Pure, so the exact bytes a connector reads
     are testable without a server -- app/seo.py's rule.
@@ -98,7 +119,7 @@ def protected_resource_metadata() -> dict[str, Any]:
     """
     return {
         "resource": resource_url(),
-        "authorization_servers": [auth.supabase_url()] if auth.supabase_url() else [],
+        "authorization_servers": [authorization_server()] if authorization_server() else [],
         "bearer_methods_supported": ["header"],
         "resource_documentation": f"{_origin_and_path()[0]}/llms.txt",
     }

@@ -1,0 +1,44 @@
+You are looking at {count} frame(s) that a search returned as possible
+reference material, and deciding which are usable. Each frame appears above
+as an image, preceded by the line FRAME <id>. Answer about those ids only.
+
+WHAT THIS NEED IS
+role: {role}
+wanted: {want}
+searched as: {query}
+
+THE LOOK it has to sit inside
+{look}
+
+MUST NOT LOOK LIKE (anti-references)
+{anti}
+
+Answer with JSON and nothing else:
+
+{{"frames": [
+  {{"id": "<the id from its FRAME line>",
+    "keep": true or false,
+    "flags": ["<any of: {flags}>"],
+    "why": "one short line — what it shows, or why it is out",
+    "caption": "one line a director could read later: what THIS frame is for"}}
+]}}
+
+THE CLEAN-FRAME FLOOR — flag it, always, however good the picture is:
+{hard}
+That means: any watermark or stock overlay, burned-in subtitles or captions,
+video player chrome or progress bars, a channel or brand logo, large text laid
+over the image, a grid or collage of several images, or a screenshot of an app
+or web page. A reference carries its defects into the render.
+
+ALSO FLAG
+- wrong_subject: it does not show what was wanted.
+- wrong_look: real photograph, wrong world — the grade, era or register fights
+  the look above.
+- stock_gloss: the well-lit, well-composed, sellable look of stock photography.
+- recognisable_person: a recognisable actor or public figure, or a film still
+  that would be recognised as that film.
+- low_quality: too small, soft, heavily compressed, or badly blown out.
+
+Keep a frame when it answers the need, sits inside the look, and is clean.
+Say false when in doubt: an empty result is a fine answer, a poisoned
+reference is not.
