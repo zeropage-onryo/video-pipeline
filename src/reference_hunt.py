@@ -27,8 +27,6 @@ The decisions, all of which are this module's and not the pieces':
 """
 from __future__ import annotations
 
-from typing import Optional
-
 NEEDS_PER_HUNT = 4        # a contact sheet each; more is a chore, not coverage
 CANDIDATES_PER_NEED = 6   # what one query is asked for
 KEEP_PER_NEED = 2         # so no single need eats the bin
