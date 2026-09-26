@@ -46,6 +46,7 @@ from src import (
     edit_teach,
     entities,
     evalstore,
+    fal_requests,
     generative,
     inspiration,
     instagram,
@@ -186,6 +187,14 @@ async def lifespan(app: FastAPI):
         generative.init()    # generations log the render caps count
         accounts_mod.init()  # users / identities / accounts / members
         settings_mod.init()  # the Dev Studio tunables (gate/threshold/k)
+        fal_requests.init()  # fal's queue receipts, persisted at submit
+        # A deploy restarts this process mid-render and app/jobs.py's
+        # threads die with it (2026-09-26: #121 and #135 orphaned). The
+        # sweep reattaches to any fal job whose worker stopped beating and
+        # finishes it -- settle and attach, or release with fal's reason.
+        # Off with FAL_RECOVER=0.
+        if os.environ.get("FAL_RECOVER", "1") != "0":
+            fal_requests.start_background()
         seed_gold_standard()                # records the canonical example as a winner
         # The MCP transport is not self-starting: its session manager has
         # to be entered by whoever hosts it. A no-op when MCP is off.

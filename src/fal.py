@@ -89,7 +89,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import charge as charging
-from . import generative, ledger
+from . import fal_requests, generative, ledger
 from .shot import Shot
 
 HOST = os.environ.get("FAL_HOST", "https://queue.fal.run").rstrip("/")
@@ -704,7 +704,8 @@ def _download(url: str, out_path: Path) -> None:
 
 def _submit_and_wait(model_id: str, body: dict, *, http=None,
                      timeout_s: Optional[int] = None,
-                     account_id: Optional[int] = None) -> tuple[dict, set]:
+                     account_id: Optional[int] = None,
+                     tracker: Optional[fal_requests.Tracker] = None) -> tuple[dict, set]:
     """Submit -> poll to COMPLETED -> fetch the result. Returns (result
     payload, queue URLs to skip). Raises on an error payload or the
     deadline.
@@ -721,6 +722,11 @@ def _submit_and_wait(model_id: str, body: dict, *, http=None,
     3. The deadline is checked on every pass, so a job that never leaves
        IN_QUEUE raises instead of holding the night open forever. There is
        no failure status to rescue us here; the clock is the only wall.
+
+    `tracker` (2026-09-26) persists the receipt the moment fal returns it
+    and beats while this loop runs, so a worker that dies here -- a deploy
+    restarting the API, as on 2026-09-26 -- leaves a job the sweep in
+    src/fal_requests.py can reattach to instead of an orphaned hold.
     """
     # Read the module constant HERE rather than as a default argument: a
     # default binds at import, so TIMEOUT_SECONDS could never be changed
@@ -740,9 +746,13 @@ def _submit_and_wait(model_id: str, body: dict, *, http=None,
     failed = _error_in(submitted)
     if failed:
         raise RuntimeError(f"fal refused the job at submit: {failed}")
+    if tracker is not None:
+        tracker.submitted(submitted)     # before the first poll, always
 
     deadline = time.time() + timeout_s
     while True:
+        if tracker is not None:
+            tracker.beat()
         state = http(status_url)
         status = str(state.get("status") or "").upper()
         failed = _error_in(state)
@@ -773,7 +783,8 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
                    http=None, db_path=None,
                    approved: Optional[bool] = None,
                    account_id: Optional[int] = None,
-                   charge: Optional[charging.Charge] = None) -> Path:
+                   charge: Optional[charging.Charge] = None,
+                   track: Optional[dict] = None) -> Path:
     """
     The thin wrapper: submit -> poll -> fetch -> download. Raises on
     anything, including a missing spend approval, which is checked HERE so
@@ -781,6 +792,12 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
     held here between the gate and the submit (src/charge.py). `charge`
     is the caller's when it will record the generation; otherwise this
     call holds and settles its own at the estimate.
+
+    `track` is the caller's description of what to do with the clip if
+    this worker dies before it can (see `_finish_recovered`); with it, or
+    with a hold taken, fal's receipt is persisted after the submit
+    (src/fal_requests.py). A caller that passes it resolves the request
+    once its own row is written; this call resolves only what it owns.
     """
     if not spend_approved(approved, quote=getattr(charge, "quote", None)):
         raise RuntimeError(
@@ -812,20 +829,36 @@ def generate_video(prompt: str, out_path, *, model: str = DEFAULT_MODEL,
             key_source=KEY_SOURCE,
             dsn=db_path)
     charge.take()          # InsufficientCredit raises HERE: nothing submitted
+    tracker = None
+    if track is not None or charge.billed:
+        tracker = fal_requests.Tracker(
+            account_id=account_id, ref=charge.ref, hold_id=charge.hold_id,
+            held=charge.held, model=model, model_id=model_id, out_path=out_path,
+            context=track if track is not None else {"kind": "video"},
+            dsn=db_path)
     charge.submitted()     # the last line before the provider call
     try:
-        result, skip = _submit_and_wait(model_id, body, http=http, account_id=account_id)
+        result, skip = _submit_and_wait(model_id, body, http=http,
+                                        account_id=account_id, tracker=tracker)
         url = _output_url(result, skip)
         if not url:
             raise RuntimeError(
                 f"fal job completed but no output URL was found in the result "
                 f"(keys: {sorted(result) if isinstance(result, dict) else type(result)})")
+        if tracker is not None:
+            tracker.beat(force=True)     # the download is the long silence
         _download(url, out_path)
+        if tracker is not None:
+            tracker.beat(force=True)
     except Exception as e:
         charge.release(f"fal: {type(e).__name__}")
+        if tracker is not None:
+            tracker.resolve(f"failed: {_safe_error(e, account_id)}")
         raise
     if own:
         charge.settle()
+        if tracker is not None:
+            tracker.resolve("rendered")
     return out_path
 
 
@@ -1023,10 +1056,18 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *,
                                            resolution=cfg.get("resolution")),
                 key_source=key_source, dsn=db_path)
 
-            def row_params(charge=charge, key_source=key_source):
-                return {"provider": "fal", "model": model,
-                        "model_id": model_spec(model)["t2v"],
-                        "key_source": key_source, **cfg, **charge.params()}
+            base_params = {"provider": "fal", "model": model,
+                           "model_id": model_spec(model)["t2v"],
+                           "key_source": key_source, **cfg,
+                           **fal_requests.ref_params(charge.ref)}
+            cost_usd = estimate_cost(1, model=model, duration=duration)
+            track = {"kind": "row", "platform": tool, "prompt": prompt,
+                     "shot_id": shot_id, "params": base_params,
+                     "cost_usd": cost_usd,
+                     "note": "auto-created by fal.generate_candidates"}
+
+            def row_params(charge=charge, base_params=base_params):
+                return {**base_params, **charge.params()}
 
             try:
                 with generative.failed_attempt_row(
@@ -1036,7 +1077,8 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *,
                         dsn=db_path, account_id=account_id):
                     generate_video(prompt, out_path, model=model, http=http,
                                    db_path=db_path, approved=approved,
-                                   account_id=account_id, charge=charge, **cfg)
+                                   account_id=account_id, charge=charge,
+                                   track=track, **cfg)
             except Exception as e:
                 errors.append(f"candidate {i}: {_safe_error(e, account_id)}")
                 continue
@@ -1044,11 +1086,13 @@ def generate_candidates(prompt: str, out_dir, n: int = 3, *,
                 shot_id, tool, prompt,
                 params=row_params(),
                 output_path=str(out_path),
-                cost_usd=estimate_cost(1, model=model, duration=duration),
+                cost_usd=cost_usd,
                 notes=None,
                 **kwargs,
                 account_id=account_id)
             charge.settle(generation_id=generation_id)
+            fal_requests.resolve(charge.ref, "rendered", account_id=account_id,
+                                 generation_id=generation_id, dsn=db_path)
             candidates.append({"path": str(out_path),
                                "generation_id": generation_id, "model": model})
 
@@ -1106,7 +1150,7 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
     (providers.check_render_choice) precisely because there is a human
     to refuse TO; the clamp stays for the graph, which has none.
     """
-    from . import preprod, render_assets
+    from . import preprod
     kwargs = {"dsn": db_path} if db_path is not None else {}
 
     try:
@@ -1147,16 +1191,24 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
                                        resolution=resolution),
             key_source=key_source, dsn=db_path, quote=quote)
         platform = model_spec(model)["platform"]
+        base_params = {"provider": "fal", "model": model,
+                       "duration": duration,
+                       "resolution": resolution or model_spec(model)["default_resolution"],
+                       "concept_id": concept_id, "shot_n": shot_n,
+                       **({"part": part} if part else {}),
+                       "prompt_image": bool(image_url),
+                       "key_source": key_source,
+                       **fal_requests.ref_params(charge.ref)}
+        # everything the tail below needs, persisted with fal's receipt so
+        # a worker that dies mid-poll can still be finished by the sweep
+        track = {"kind": "shot", "concept_id": concept_id, "shot_n": shot_n,
+                 "part": part, "model": model, "duration": duration,
+                 "resolution": resolution, "prompt": prompt,
+                 "platform": platform, "brand": concept.get("brand"),
+                 "params": base_params}
 
         def row_params():
-            return {"provider": "fal", "model": model,
-                    "duration": duration,
-                    "resolution": resolution or model_spec(model)["default_resolution"],
-                    "concept_id": concept_id, "shot_n": shot_n,
-                    **({"part": part} if part else {}),
-                    "prompt_image": bool(image_url),
-                    "key_source": key_source,
-                    **charge.params()}
+            return {**base_params, **charge.params()}
 
         def shot_row():
             return _shot_row_for_prompt(
@@ -1170,44 +1222,134 @@ def generate_for_shot(concept_id: int, shot_n, *, db_path=None,
             generate_video(prompt, out_path, model=model, image_url=image_url,
                            duration=duration, resolution=resolution,
                            http=http, db_path=db_path, approved=approved,
-                           account_id=account_id, charge=charge)
+                           account_id=account_id, charge=charge, track=track)
 
-        shot_row_id = shot_row()
-        generation_params = row_params()
-        generation_id = generative.record_generation(
-            shot_row_id, platform, prompt,
-            params=generation_params,
-            output_path=str(out_path),
-            cost_usd=estimate_cost(1, model=model, duration=duration,
-                                   resolution=resolution),
-            **kwargs,
-            account_id=account_id)
-        charge.settle(generation_id=generation_id)
-
-        media_url = _publish(out_path, "video/mp4", account_id)
-        if part:
-            timeline.attach_part(concept_id, shot_n, part, "media_url", media_url,
-                                 db_path=db_path, account_id=account_id)
-        else:
-            preprod.set_shot_media_url(concept_id, shot_n, media_url,
-                                       **kwargs, account_id=account_id)
-        asset = render_assets.record_best_effort(
-            account_id=account_id,
-            generation_id=generation_id, tool=platform, model=model,
-            media_kind="video", prompt=prompt, media_url=media_url,
-            output_path=str(out_path), project=concept.get("brand"),
-            concept_id=concept_id, shot_n=shot_n,
-            metadata=generation_params,
-            dsn=db_path,
-        )
-        return {"ok": True, "media_url": media_url,
-                "generation_id": generation_id, "path": str(out_path),
-                "asset_id": asset["id"], "asset_rag": asset["rag"],
-                "error": None}
+        result = _finish_shot(
+            track, out_path,
+            settle=lambda gid: charge.settle(generation_id=gid),
+            extra_params=charge.params(), db_path=db_path, account_id=account_id)
+        fal_requests.resolve(charge.ref, "rendered", account_id=account_id,
+                             generation_id=result["generation_id"], dsn=db_path)
+        return result
     except ledger.InsufficientCredit as e:
         return {"ok": False, "error": charging.refusal(e)}
     except Exception as e:
         return {"ok": False, "error": _safe_error(e, account_id)}
+
+
+def _finish_shot(track: dict, out_path: Path, *, settle, extra_params: dict,
+                 db_path=None, account_id: Optional[int] = None,
+                 generation_id: Optional[int] = None) -> dict:
+    """The tail of a shot render once the clip is on disk: the generations
+    row, the settle, publish, attach to the concept (or to its part), and
+    the Assets wall. ONE implementation for the live worker and for the
+    sweep that finishes a worker's job after it died (src/fal_requests.py)
+    -- two copies of "attach the clip" are two things that drift.
+
+    `generation_id` is given when the row already exists (the worker died
+    after writing it); the row is then reused, never duplicated.
+    """
+    from . import preprod, render_assets, timeline
+    kwargs = {"dsn": db_path} if db_path is not None else {}
+    concept_id, shot_n, part = track["concept_id"], track["shot_n"], track.get("part")
+    prompt, platform, model = track["prompt"], track["platform"], track["model"]
+    params = {**track["params"], **extra_params}
+    if generation_id is None:
+        shot_row_id = _shot_row_for_prompt(
+            prompt, db_path, "auto-created by fal.generate_for_shot", account_id)
+        generation_id = generative.record_generation(
+            shot_row_id, platform, prompt,
+            params=params,
+            output_path=str(out_path),
+            cost_usd=estimate_cost(1, model=model, duration=track["duration"],
+                                   resolution=track.get("resolution")),
+            **kwargs,
+            account_id=account_id)
+    settle(generation_id)
+
+    media_url = _publish(out_path, "video/mp4", account_id)
+    if part:
+        timeline.attach_part(concept_id, shot_n, part, "media_url", media_url,
+                             db_path=db_path, account_id=account_id)
+    else:
+        preprod.set_shot_media_url(concept_id, shot_n, media_url,
+                                   **kwargs, account_id=account_id)
+    asset = render_assets.record_best_effort(
+        account_id=account_id,
+        generation_id=generation_id, tool=platform, model=model,
+        media_kind="video", prompt=prompt, media_url=media_url,
+        output_path=str(out_path), project=track.get("brand"),
+        concept_id=concept_id, shot_n=shot_n,
+        metadata=params,
+        dsn=db_path,
+    )
+    return {"ok": True, "media_url": media_url,
+            "generation_id": generation_id, "path": str(out_path),
+            "asset_id": asset["id"], "asset_rag": asset["rag"],
+            "error": None}
+
+
+def _recovered_params(row: dict, track: dict) -> dict:
+    """The row params the dead worker would have written: its own, plus
+    the ledger ref when it had taken a hold (Charge.params's rule)."""
+    extra = ledger.ref_params(row["ref"]) if row.get("hold_id") is not None else {}
+    return {**(track.get("params") or {}), **extra}
+
+
+def _finish_recovered(row: dict, out_path: Path, *, generation_id: Optional[int],
+                      dsn=None) -> dict:
+    """fal_requests' sweep found a finished job and has the clip on disk:
+    do what the worker's caller would have done after generate_video
+    returned, per the `track` it persisted."""
+    track = json.loads(row.get("context_json") or "{}")
+    account_id = row["account_id"]
+    kind = track.get("kind")
+    extra = ledger.ref_params(row["ref"]) if row.get("hold_id") is not None else {}
+
+    def settle(gid):
+        fal_requests._settle(row, gid, dsn)
+
+    if kind == "shot":
+        result = _finish_shot(track, out_path, settle=settle, extra_params=extra,
+                              db_path=dsn, account_id=account_id,
+                              generation_id=generation_id)
+        generation_id = result["generation_id"]
+    elif kind == "row":
+        if generation_id is None:
+            kwargs = {"dsn": dsn} if dsn is not None else {}
+            shot_id = track.get("shot_id") or _shot_row_for_prompt(
+                track["prompt"], dsn, track.get("note") or "auto-created by fal",
+                account_id)
+            generation_id = generative.record_generation(
+                shot_id, track["platform"], track["prompt"],
+                params=_recovered_params(row, track),
+                output_path=str(out_path), cost_usd=track.get("cost_usd"),
+                **kwargs, account_id=account_id)
+        settle(generation_id)
+    else:
+        # a bare generate_video: it wrote no row, so the sweep writes none
+        settle(None)
+    fal_requests.resolve(row["ref"], "rendered (recovered)", account_id=account_id,
+                         generation_id=generation_id, dsn=dsn)
+    return {"ref": row["ref"], "outcome": "rendered", "generation_id": generation_id}
+
+
+def _record_recovered_failure(row: dict, reason: str, *, dsn=None) -> Optional[int]:
+    """The failed-attempt row `generative.failed_attempt_row` would have
+    written had the worker been alive to see fal say no."""
+    track = json.loads(row.get("context_json") or "{}")
+    if track.get("kind") not in ("shot", "row"):
+        return None
+    account_id = row["account_id"]
+
+    def shot_row():
+        return track.get("shot_id") or _shot_row_for_prompt(
+            track["prompt"], dsn, track.get("note") or "auto-created by fal",
+            account_id)
+
+    return generative.record_failure(
+        track["platform"], track["prompt"], reason, shot_row=shot_row,
+        params=_recovered_params(row, track), dsn=dsn, account_id=account_id)
 
 
 def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
@@ -1244,12 +1386,19 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
             estimate_usd=estimate_cost(1, model=model),
             key_source=key_source, source="workflow", dsn=db_path,
             quote=quote)
+        platform = model_spec(model)["platform"]
+        base_params = {"provider": "fal", "model": model,
+                       "duration": DEFAULT_DURATION, "source": "workflow",
+                       "prompt_image": bool(image_url),
+                       "key_source": key_source,
+                       **fal_requests.ref_params(charge.ref)}
+        track = {"kind": "row", "platform": platform, "prompt": prompt,
+                 "shot_id": None, "params": base_params,
+                 "cost_usd": estimate_cost(1, model=model),
+                 "note": "auto-created by fal.generate_from_prompt"}
+
         def row_params():
-            return {"provider": "fal", "model": model,
-                    "duration": DEFAULT_DURATION, "source": "workflow",
-                    "prompt_image": bool(image_url),
-                    "key_source": key_source,
-                    **charge.params()}
+            return {**base_params, **charge.params()}
 
         def shot_row():
             return _shot_row_for_prompt(
@@ -1262,17 +1411,19 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
                 dsn=db_path, account_id=account_id):
             generate_video(prompt, out_path, model=model, image_url=image_url,
                            http=http, db_path=db_path, approved=approved,
-                           account_id=account_id, charge=charge)
+                           account_id=account_id, charge=charge, track=track)
 
         shot_row_id = shot_row()
         generation_id = generative.record_generation(
-            shot_row_id, model_spec(model)["platform"], prompt,
+            shot_row_id, platform, prompt,
             params=row_params(),
             output_path=str(out_path),
-            cost_usd=estimate_cost(1, model=model),
+            cost_usd=track["cost_usd"],
             **kwargs,
             account_id=account_id)
         charge.settle(generation_id=generation_id)
+        fal_requests.resolve(charge.ref, "rendered", account_id=account_id,
+                             generation_id=generation_id, dsn=db_path)
         return {"ok": True, "media_url": _publish(out_path, "video/mp4", account_id),
                 "generation_id": generation_id, "path": str(out_path),
                 "error": None}
