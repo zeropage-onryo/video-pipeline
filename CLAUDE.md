@@ -135,6 +135,11 @@ python3 ops/render_queue.py --account <slug> [--provider manual] list
 python3 ops/render_queue.py --provider manual --account <slug> import \
     --concept N --shot 1 --file clip.mp4 --model "kling 3 web app" --duration 10
 
+# THE CUT (Assemble v0, docs/CUT_EDITOR.md) — a rendered scene's clips, in the
+# order it was written, on a versioned timeline -> ONE MP4 (ffmpeg, -14 LUFS,
+# optional music bed ducked under the clips' own sound). No CLI: the Queue's
+# "Ready to cut" strip posts /api/cut/assemble. Nothing here spends.
+
 # THE REFERENCE PHOTOS — the bytes behind every ref URL, pushed to R2 so they
 # resolve on the deployed site too (characters/props/locations/data/refs are
 # gitignored AND dockerignored). Re-runnable; run it after adding photos to a
@@ -1625,6 +1630,23 @@ is yours, in Resolve, by hand.
   saves successfully and then resolves to nothing. `app/api.py`'s `_to_jpeg`/`_save_upload_ref`/
   `_resolve_asset_photo` now delegate. **The URL shape is the point**: a scouted image comes out
   as `/refs/<sha>.jpg`, so it rides the composer path with no new route or resolver.
+- **`src/cut/`** — the editor, phase 1 of `docs/CUT_EDITOR.md` (Assemble v0, 2026-09-26).
+  `doc.py` is the timeline document (OTIO-shaped, INTEGER FRAMES at the project fps, tracks
+  V / A with a role voice|music|sfx / T captions, media named by `gen:<generated_assets.id>` or
+  `asset:<cut_media.id>` HANDLES, never URLs); `ops.py` is ten pure doc -> doc edits (the only
+  edits the future agent may emit; a clip and its `link`ed sound move as one) and
+  `validate.py` the rail every doc passes before it is stored or rendered (overlaps except a
+  transition's exact overlap, src_out past the media, unknown handles, duration mismatch, and
+  speed/lanes REFUSED until they render). `sources.py` is the only place a handle becomes a
+  file (local first, else `media.url_for` fetched through `refbin.public_host`); `store.py`
+  owns `timelines` (insert-only versions with `parent_id`; the one later write is
+  `export_url`, a derivative of that frozen doc), `timeline_heads` (rollback moves the
+  pointer) and `cut_media` (uploaded audio), all three OWNED; a project is `concept:<id>` for
+  now. `assemble.py` refuses a part with no clip or a clip with no Asset Bank row rather than
+  fall back to a URL; `render.py` compiles one `filter_complex` and files the MP4 under
+  `data/renders/cut/`, mirrored like any render. **Homebrew's ffmpeg has no libass**, so on the
+  Mac captions are NOT burned (the `.ass` lands beside the MP4 and the job says so); the Fly
+  image's Debian ffmpeg burns them. CI installs ffmpeg so the render tests run rather than skip.
 - **`src/pricing.py`** — what a render costs, and the signed quote that says so (steps 1–4 of
   `docs/tasks/task-pricing-and-quotes.md`, on main 2026-09-18; read that doc's "As built"
   section before touching it). Pure module, three answers: `estimate()` is the provider's USD

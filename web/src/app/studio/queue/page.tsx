@@ -19,17 +19,28 @@
    by hand, comes back as a drop on its card and is filed free
    (/api/queue/manual, operator-gated server-side; the `manual_lane`
    capability only decides whether the section is drawn). What rendered it
-   is free text: there is no model table to check it against. */
+   is free text: there is no model table to check it against.
+
+   And under both, READY TO CUT (Assemble v0, 2026-09-26): a scene whose
+   every shot has a clip has left the pending list, so it is listed here
+   with an Export button -- /api/cut/assemble puts the clips on a versioned
+   timeline in the order the scene was written and renders ONE MP4 with
+   ffmpeg (loudness-normalised, an optional music bed ducked under the
+   clips' own sound). Nothing here spends; the export is a job in the
+   registry below, and the card's link is the head version's MP4. */
 /* eslint-disable @next/next/no-img-element */
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { Popover } from "@base-ui/react/popover";
-import { Camera, ChevronDown, Clock, Copy, Monitor, RectangleVertical, Upload, X } from "lucide-react";
+import { Camera, ChevronDown, Clock, Copy, Film, Monitor, Music, RectangleVertical, Upload, X } from "lucide-react";
 import { API_URL } from "@/lib/api";
 import {
   announceQueueChange,
   cancelJob,
   clearJob,
+  cutAssemble,
+  cutReady,
+  cutUploadMedia,
   fileLaneClip,
   getCapabilities,
   listJobs,
@@ -40,6 +51,7 @@ import {
   queueReject,
   queueShot,
   type Concept,
+  type CutReady,
   type Job,
   type LaneItem,
   type RenderChoice,
@@ -75,6 +87,8 @@ type JobRow = Job & { cancellable?: boolean };
    the same reason render-choice's `held` is: it outlives the page. */
 type Acted = { status: "RENDERING" | "ARCHIVED" | "SHOT BY HAND"; job?: number; at: number };
 const acted = new Map<number, Acted>();
+/* export jobs whose ending has already been toasted */
+const announced = new Set<number>();
 
 const PILL =
   "min-h-11 rounded-[6px] border px-3 font-plex! text-xs! focus-visible:rounded-[6px]! disabled:cursor-not-allowed";
@@ -101,6 +115,12 @@ export default function QueuePage() {
   const [lane, setLane] = useState<LaneItem[] | null>(null);
   const [lanePicks, setLanePicks] = useState<Record<number, { model?: string; ratio?: string; duration?: number; anchored?: boolean }>>({});
   const [dropping, setDropping] = useState<Record<number, string>>({});
+  // ready to cut: the rendered scenes, the export job each one has running,
+  // and the music bed picked for it (an asset:<id> handle once uploaded)
+  const [ready, setReady] = useState<CutReady[] | null>(null);
+  const [cutOk, setCutOk] = useState(true);
+  const [cutting, setCutting] = useState<Record<number, number>>({});
+  const [beds, setBeds] = useState<Record<number, { handle?: string; name: string }>>({});
 
   // `stale` lets an effect drop a response that arrives after the brand
   // changed: the shell resolves the brand a beat after mount, and the
@@ -127,6 +147,17 @@ export default function QueuePage() {
       })
       .catch(() => {
         if (!stale()) setLane([]);
+      });
+  }, [brand]);
+  const loadReady = useCallback((stale: () => boolean = () => false) => {
+    cutReady(brand || undefined)
+      .then((r) => {
+        if (stale()) return;
+        setReady(r.ready);
+        setCutOk(r.ffmpeg);
+      })
+      .catch(() => {
+        if (!stale()) setReady([]);
       });
   }, [brand]);
   const loadJobs = useCallback(() => {
@@ -170,6 +201,25 @@ export default function QueuePage() {
       stale = true;
     };
   }, [active, me, loadPending]);
+  useEffect(() => {
+    if (active || !me) return;
+    let stale = false;
+    loadReady(() => stale);
+    return () => {
+      stale = true;
+    };
+  }, [active, me, loadReady]);
+  // an export that ended says how it went, once. Whether a card is still
+  // cutting is READ off the registry (cutLive), never stored beside it.
+  useEffect(() => {
+    for (const jobId of Object.values(cutting)) {
+      const j = jobs.find((x) => x.id === jobId);
+      if (!j || ["queued", "running"].includes(j.status) || announced.has(jobId)) continue;
+      announced.add(jobId);
+      if (j.status === "done") toast(`Cut v${j.version ?? "?"} ready — ${j.detail || "exported"}`);
+      else toast(j.error || "The export did not finish", "err");
+    }
+  }, [jobs, cutting, toast]);
   useEffect(() => {
     if (active || !me || !laneOn) return;
     let stale = false;
@@ -353,6 +403,42 @@ export default function QueuePage() {
       });
     }
   };
+  /* ── ready to cut ── */
+  const pickBed = async (item: CutReady, file: File | undefined) => {
+    if (!file) return;
+    setBeds((w) => ({ ...w, [item.concept_id]: { name: `${file.name} · uploading…` } }));
+    try {
+      const res = await cutUploadMedia(file);
+      setBeds((w) => ({ ...w, [item.concept_id]: { handle: res.handle, name: res.filename } }));
+    } catch (e) {
+      setBeds((w) => {
+        const next = { ...w };
+        delete next[item.concept_id];
+        return next;
+      });
+      toast(e instanceof Error ? e.message : "Could not upload the music", "err");
+    }
+  };
+  const exportCut = async (item: CutReady) => {
+    const bed = beds[item.concept_id];
+    try {
+      const res = await cutAssemble(item.concept_id, bed?.handle ? { music: bed.handle } : {});
+      setCutting((w) => ({ ...w, [item.concept_id]: res.job_id }));
+      toast(`Cutting ${item.title} — ${res.clips} clip${res.clips === 1 ? "" : "s"}${bed?.handle ? " + music bed" : ""}`);
+      loadJobs();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Could not start the export", "err");
+    }
+  };
+  // just started and not in the registry yet counts as cutting
+  const cutLive = (cid: number) => {
+    const id = cutting[cid];
+    if (id == null || announced.has(id)) return false;
+    const j = jobs.find((x) => x.id === id);
+    return !j || ["queued", "running"].includes(j.status);
+  };
+  const mediaHref = (url: string) => (url.startsWith("/") ? `${API_URL}${url}` : url);
+
   const copyPrompt = async (item: LaneItem) => {
     try {
       await navigator.clipboard.writeText(item.prompt);
@@ -763,6 +849,84 @@ export default function QueuePage() {
         })}
       </div>
       {preview ? <PreviewOverlay key={`${preview.title}-${preview.kind}-${preview.index}`} state={preview} onClose={() => setPreview(null)} /> : null}
+
+      {ready && ready.length ? (
+        <>
+          <div className="chead">
+            <h3>Ready to cut</h3>
+            <span className="m">{`${ready.length} rendered scene${ready.length === 1 ? "" : "s"}`}</span>
+            <span className="spacer" />
+            <span className="m">{cutOk ? "Export · the clips in shot order, one MP4 · free" : "Export needs ffmpeg on the server"}</span>
+          </div>
+          <div className="scenegrid">
+            {ready.map((item) => {
+              const busyCut = cutLive(item.concept_id);
+              const bed = beds[item.concept_id];
+              const poster = item.poster ? mediaHref(item.poster) : null;
+              return (
+                <article key={`cut-${item.concept_id}`} className="scene lane">
+                  <div className="schead">
+                    <h4>{item.title}</h4>
+                    <span className="m">
+                      {item.clips} clip{item.clips === 1 ? "" : "s"}
+                    </span>
+                    <span className="spacer" />
+                    <span className="m">{item.export ? `v${item.export.version}` : "not cut yet"}</span>
+                  </div>
+                  <div className="scframe">
+                    {poster ? (
+                      <img src={poster} alt="" />
+                    ) : (
+                      <span className="scempty">
+                        <span className="m">no keyframe</span>
+                      </span>
+                    )}
+                  </div>
+                  <div className="scchoice">
+                    <label className="scsel" title="An optional music bed — it ducks under the clips' own sound">
+                      <Music size={11} />
+                      <input type="file" accept="audio/*" hidden onChange={(e) => void pickBed(item, e.target.files?.[0])} />
+                      {bed ? bed.name : "add a music bed"}
+                    </label>
+                    {bed ? (
+                      <button
+                        type="button"
+                        className="tag"
+                        aria-label="Remove the music bed"
+                        onClick={() =>
+                          setBeds((w) => {
+                            const next = { ...w };
+                            delete next[item.concept_id];
+                            return next;
+                          })
+                        }
+                      >
+                        <X size={12} strokeWidth={1.6} />
+                      </button>
+                    ) : null}
+                  </div>
+                  <div className="scfoot">
+                    {item.export?.url ? (
+                      <a className="tag" href={mediaHref(item.export.url)} target="_blank" rel="noreferrer">
+                        <Film size={12} strokeWidth={1.6} /> Open v{item.export.version} MP4
+                      </a>
+                    ) : null}
+                    <span className="spacer" />
+                    <button
+                      type="button"
+                      className="tag"
+                      disabled={!cutOk || busyCut || (!!bed && !bed.handle)}
+                      onClick={() => void exportCut(item)}
+                    >
+                      {busyCut ? "Cutting…" : item.export ? "Export again" : "Export"}
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </>
+      ) : null}
 
       {laneOn ? (
         <>

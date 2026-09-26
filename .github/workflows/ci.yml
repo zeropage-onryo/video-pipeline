@@ -68,6 +68,12 @@ jobs:
           pip install -r requirements.txt
           pip install -e .
 
+      - name: Install ffmpeg
+        # the cut's render tests (tests/test_cut_assemble.py) build fixture
+        # clips with testsrc/sine and render them for real; without ffmpeg
+        # they skip, which would make a green run mean nothing about them
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
       - name: Lint with ruff
         run: ruff check .
 

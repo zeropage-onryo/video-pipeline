@@ -439,6 +439,36 @@ export const uploadRefs = (files: File[]) => {
   return apiForm<{ urls: string[]; skipped: number }>("/refs/upload", form);
 };
 
+/* the cut (Assemble v0, docs/tasks/CUT_ASSEMBLE_V0.md): a rendered scene's
+   clips -> a versioned timeline -> one MP4. Nothing here spends. */
+export type CutReady = {
+  concept_id: number;
+  title: string;
+  brand?: string | null;
+  clips: number;
+  poster?: string | null;
+  export: { timeline_id: number; version: number; url: string | null } | null;
+};
+/** GET /api/cut/ready — scenes whose every shot has a clip, not archived. */
+export const cutReady = (brand?: string) =>
+  apiFetch<{ ready: CutReady[]; ffmpeg: boolean; captions_burn: boolean }>(
+    `/cut/ready${brand ? `?brand=${encodeURIComponent(brand)}` : ""}`,
+  );
+/** POST /api/cut/assemble — a job; its result carries mp4_url + version.
+ *  `music` / `voice` are asset:<id> handles from cutUploadMedia. A scene
+ *  that is not ready is refused (409) before any job starts. */
+export const cutAssemble = (concept_id: number, opts: { music?: string; voice?: string; captions?: string } = {}) =>
+  apiFetch<{ job_id: number; clips: number; notes: string[] }>("/cut/assemble", {
+    method: "POST",
+    body: JSON.stringify({ concept_id, ...opts }),
+  });
+/** POST /api/cut/media — an uploaded music bed or voiceover -> asset:<id>. */
+export const cutUploadMedia = (file: File) => {
+  const form = new FormData();
+  form.append("file", file, file.name);
+  return apiForm<{ handle: string; seconds: number; filename: string }>("/cut/media", form);
+};
+
 /* the in-process job registry (clears on restart, and says so) */
 export const listJobs = () => apiFetch<{ items: (Job & { cancellable?: boolean })[] }>("/jobs");
 export const cancelJob = (id: number) => apiFetch<Job>(`/jobs/${id}/cancel`, { method: "POST", body: "{}" });
@@ -475,6 +505,9 @@ export type Job = {
   error?: string | null;
   ref_id?: number | null;
   ended_at?: string | null;
+  /** a finished cut job (/api/cut/assemble) */
+  mp4_url?: string | null;
+  version?: number | null;
 };
 /** POST /api/scenes/run — multipart: idea, brand, count (1–4), refs
  *  (asset photo urls) and files (uploads), exactly what the Jinja

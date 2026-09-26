@@ -48,10 +48,12 @@ def _modules():
     import ops
     import src
 
+    # walk_packages, not iter_modules: a subpackage (src/cut/) is walked
+    # too, or its output roots would be invisible to the audit
     for package in (src, app, ops):
-        for info in pkgutil.iter_modules(package.__path__):
-            if info.name.isidentifier():
-                yield f"{package.__name__}.{info.name}"
+        for info in pkgutil.walk_packages(package.__path__, package.__name__ + "."):
+            if all(part.isidentifier() for part in info.name.split(".")):
+                yield info.name
 
 
 def _inside_a_write_tree(value: Path) -> bool:

@@ -5108,3 +5108,11 @@ from . import billing as _billing  # noqa: E402  (bottom of the file on purpose)
 
 for _path, _endpoint, _methods in _billing.API_ROUTES:
     router.add_api_route(_path, _endpoint, methods=_methods, tags=["billing"])
+
+
+# --- the cut (2026-09-26, docs/tasks/CUT_ASSEMBLE_V0.md) -------------------
+# Assemble v0: approved clips -> a versioned timeline -> one MP4. Same
+# placement as billing above, for the same reasons.
+from . import cut_routes as _cut_routes  # noqa: E402
+
+router.include_router(_cut_routes.router)
