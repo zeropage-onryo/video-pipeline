@@ -21,9 +21,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, ChevronDown, ChevronUp, ExternalLink, Settings2 } from "lucide-react";
 import { useShell } from "@/components/studio/shell";
 import {
+  getBalance,
   queuePending,
   runCreativeGuide,
   waitForJob,
+  type Balance,
   type Concept,
   type GuideReply,
 } from "@/lib/studio-api";
@@ -35,7 +37,6 @@ import {
   TONES,
   cleanName,
   firstEmoji,
-  getAssistantBalance,
   isStage,
   keepReferences,
   laterStage,
@@ -44,7 +45,6 @@ import {
   pageStage,
   savePersona,
   sendToComposer,
-  type Balance,
   type ComposerState,
   type ContactSheet,
   type Persona,
@@ -580,7 +580,7 @@ function Credits({ brand, onShow }: { brand: string; onShow: () => void }) {
   const [card, setCard] = useState<Concept | null | undefined>(undefined);
   useEffect(() => {
     let live = true;
-    getAssistantBalance()
+    getBalance()
       .then((b) => live && setBalance(b))
       .catch(() => live && setBalance(null));
     queuePending(brand || undefined)

@@ -137,16 +137,6 @@ export const keepReferences = (ids: string[]) =>
     },
   );
 
-/* GET /api/billing/balance (src/billing.balance). The same shape the
-   feat/studio-credits shell pill reads; a failed read hides the line --
-   unknown is never drawn as 0. */
-export type Balance = {
-  available: number;
-  outstanding: number;
-  exempt: boolean;
-  plan: { key: string; name: string; credits: number } | null;
-};
-export const getAssistantBalance = () => apiFetch<Balance>("/billing/balance");
 
 /* ── the composer bridge ── */
 export const FILL_EVENT = "zpf:assistant-fill";
