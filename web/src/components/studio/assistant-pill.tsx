@@ -597,7 +597,6 @@ function Credits({ brand, onShow }: { brand: string; onShow: () => void }) {
   const have = balance?.available;
   let line: React.ReactNode;
   if (balance?.exempt) line = <span className="zpa-cost">Not charged</span>;
-  else if (q.byok) line = <span className="zpa-cost">~${q.estimate_usd.toFixed(2)} on your key</span>;
   else if (typeof have === "number" && credits > have)
     line = (
       <>

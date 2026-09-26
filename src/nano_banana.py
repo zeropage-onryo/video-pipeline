@@ -392,8 +392,8 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
             return {"ok": False, "error": "an empty prompt renders nothing"}
         if not has_key(account_id):
             return {"ok": False,
-                    "error": "no Gemini key -- add one in Renderer keys, or "
-                             "set GEMINI_API_KEY for the installation"}
+                    "error": "no Gemini key -- set GEMINI_API_KEY for the "
+                             "installation"}
 
         generative.init(**kwargs)
         refusal = generative.cap_error(
