@@ -89,3 +89,15 @@ test('a charged account sees credits from the server, never a client-side conver
   const timed = planFor(spec, pick, parts, { timed: true, durations: [5, 10], estimate_usd: 1.05, credits: 252 });
   assert.equal(approveText(timed), 'Approve · 2 shots · 252 cr');
 });
+
+test('an exempt account still sees the price, marked not charged', () => {
+  const spec = specOf(renderers, 'fal', 'kling');
+  const pick = withModel(renderers, 'fal', 'kling');
+  const plan = planFor(spec, pick, null, { timed: false, durations: [5], estimate_usd: 0.3, credits: 72 });
+  assert.equal(approveText(plan, true), 'Approve · 1 shot · 72 cr · not charged');
+  assert.equal(approveText(plan), 'Approve · 1 shot · 72 cr');
+  assert.equal(creditsText(72, true), '72 credits · not charged');
+  // nothing priced yet: no suffix on a number that is not there
+  assert.equal(approveText(planFor(spec, pick, null, null), true), 'Approve · 1 shot · pricing…');
+  assert.equal(approveText(planFor(spec, pick, null, { error: 'band' }), true), 'Approve · 1 shot · refused');
+});

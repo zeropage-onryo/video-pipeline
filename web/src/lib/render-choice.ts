@@ -166,26 +166,31 @@ export function planFor(spec: ModelLike, pick: Pick, parts: PartLike[] | null | 
   return { timed: true, n: quote.durations.length, lengths: quote.durations, usd: quote.estimate_usd ?? null, ...fromQuote(quote) };
 }
 
-export const creditsText = (credits: number): string =>
-  `${credits.toLocaleString("en-US")} credit${credits === 1 ? "" : "s"}`;
+/** Beside a credit price on an exempt (operator) account. */
+export const NOT_CHARGED = " · not charged";
+
+export const creditsText = (credits: number, exempt = false): string =>
+  `${credits.toLocaleString("en-US")} credit${credits === 1 ? "" : "s"}${exempt ? NOT_CHARGED : ""}`;
 
 /** The price half of the button: credits whenever the server priced it,
  *  the rate card's dollar label only for a caller that never asked. "cr" rather than
  *  "credits" because the button is 22px Bebas in a card a third of the
- *  page wide -- the /models page abbreviates the same way. */
-export const priceText = (plan: Plan): string =>
+ *  page wide -- the /models page abbreviates the same way. An exempt
+ *  account still sees the price (it is still what the render costs) with
+ *  "not charged" beside it, so the button agrees with the shell's pill. */
+export const priceText = (plan: Plan, exempt = false): string =>
   plan.refused
     ? "refused"
     : plan.pending
       ? "pricing…"
       : plan.credits !== null
-        ? `${plan.credits.toLocaleString("en-US")} cr`
+        ? `${plan.credits.toLocaleString("en-US")} cr${exempt ? NOT_CHARGED : ""}`
         : plan.usd === null
           ? "unpriced"
           : `~$${plan.usd.toFixed(2)}`;
 
-export const approveText = (plan: Plan): string =>
-  `Approve · ${plan.n} shot${plan.n === 1 ? "" : "s"} · ${priceText(plan)}`;
+export const approveText = (plan: Plan, exempt = false): string =>
+  `Approve · ${plan.n} shot${plan.n === 1 ? "" : "s"} · ${priceText(plan, exempt)}`;
 
 export const chipText = (spec: ModelLike, pick: Pick, plan: Plan): string =>
   `${spec.label} · ${plan.timed ? `${plan.n} shot${plan.n === 1 ? "" : "s"}` : `${pick.duration}s`} · ${pick.frame ?? "—"}`.toUpperCase();

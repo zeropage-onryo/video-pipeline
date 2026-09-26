@@ -55,6 +55,7 @@ import {
   approveText,
   chipText,
   creditsText,
+  NOT_CHARGED,
   held,
   legalDuration,
   pickFor as pickForCard,
@@ -271,7 +272,7 @@ export default function QueuePage() {
         }
         const res = await queueApprove(c.id, choice);
         const r = res.render;
-        const charge = res.quote && res.quote.credits != null ? creditsText(res.quote.credits) : null;
+        const charge = res.quote && res.quote.credits != null ? creditsText(res.quote.credits, !!balance?.exempt) : null;
         toast(
           r
             ? `Rendering ${c.n} — ${r.provider} · ${r.model} · ${r.frame} · ${charge ?? `~$${Number(r.estimate_usd).toFixed(2)}`}`
@@ -388,6 +389,7 @@ export default function QueuePage() {
     { credits: 0, usd: 0, shots: 0, open: 0 },
   );
   const charged = !!balance && !balance.exempt;
+  const exempt = !!balance?.exempt;
   const short = charged && tally.credits > balance!.available ? tally.credits - Math.max(balance!.available, 0) : 0;
   const tallyPrice = [
     tally.credits ? `${creditsText(tally.credits)}` : "",
@@ -417,7 +419,7 @@ export default function QueuePage() {
         <span className="m">
           {pending
             ? spendable.length
-              ? `${tally.shots} shot${tally.shots === 1 ? "" : "s"} across ${spendable.length} scene${spendable.length === 1 ? "" : "s"} · ${tallyPrice} to approve all${tally.open ? ` · ${tally.open} not priced` : ""}${short ? ` · ${creditsText(short)} more than you have` : ""}`
+              ? `${tally.shots} shot${tally.shots === 1 ? "" : "s"} across ${spendable.length} scene${spendable.length === 1 ? "" : "s"} · ${tallyPrice} to approve all${exempt && tally.credits ? NOT_CHARGED : ""}${tally.open ? ` · ${tally.open} not priced` : ""}${short ? ` · ${creditsText(short)} more than you have` : ""}`
               : "nothing to spend on"
             : "—"}
         </span>
@@ -734,7 +736,7 @@ export default function QueuePage() {
                                 ? `${spec.id} renders ${spec.duration.min}-${spec.duration.max}s`
                                 : cannotAfford(plan)
                                   ? `Need ${plan.credits!.toLocaleString("en-US")} cr · have ${Math.max(balance!.available, 0).toLocaleString("en-US")}`
-                                  : approveText(plan)}
+                                  : approveText(plan, exempt)}
                   </button>
                   <button
                     type="button"
