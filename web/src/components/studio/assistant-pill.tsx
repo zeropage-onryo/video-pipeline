@@ -500,11 +500,19 @@ function Extras({
             >
               <span className="zpa-mono">
                 {String.fromCharCode(65 + j)} · {picked === j ? "in composer" : d.title}
-                <em>{typeof d.score === "number" ? `${Math.round(d.score * 10)}/10` : "not judged"}</em>
+                <em>
+                  {typeof d.score === "number"
+                    ? `${d.rubric === "ad" ? "ad " : ""}${Math.round(d.score * 10)}/10`
+                    : "not judged"}
+                </em>
               </span>
               {picked === j ? <b>{d.title}</b> : null}
               <span className="zpa-log">{d.logline}</span>
-              {d.verdict ? <span className="zpa-verdict">Judge: {d.verdict}</span> : null}
+              {d.verdict ? (
+                <span className="zpa-verdict">
+                  {d.rubric === "ad" ? "Ad judge" : "Judge"}: {d.verdict}
+                </span>
+              ) : null}
             </button>
           ))}
         </div>

@@ -59,6 +59,8 @@ class JudgedDirection(Direction):
     in the model's schema: a writer does not get to grade itself."""
     score: Optional[float] = None
     verdict: str = ""
+    # which rubric graded it: "ad" (story_judge.judge_ad) or "story"
+    rubric: str = ""
 
 
 class Answer(BaseModel):
@@ -160,11 +162,13 @@ def respond(conversation, *, client, brand, grounding, image_refs=(),
         reply = _respond_with_tools(client, brain, config, contents, tools, run_tool,
                                     account_id=account_id, on_retry=on_retry)
     if assistant is not None:
-        reply = _finish(reply, client=client, judge=judge, on_retry=on_retry)
+        reply = _finish(reply, client=client, judge=judge, on_retry=on_retry,
+                        said=" ".join(m.content for m in conversation.messages
+                                      if m.role == "user"))
     return reply
 
 
-def _finish(reply: dict, *, client, judge=None, on_retry=None) -> dict:
+def _finish(reply: dict, *, client, judge=None, on_retry=None, said: str = "") -> dict:
     """The assistant's checking step, after the model has answered:
     grade the directions with the independent judge, best first, and
     keep `stage` inside the known steps. Never raises."""
@@ -175,8 +179,12 @@ def _finish(reply: dict, *, client, judge=None, on_retry=None) -> dict:
         if on_retry is not None:
             on_retry("checking the directions")
         try:
+            # an ad is graded as an ad; `said` is the person's side of the
+            # conversation, which is where "a 6-second ad" was said
+            kind, seconds = assistant_brain.direction_kind(said)
             reply["directions"] = assistant_brain.check_directions(
-                reply["directions"], client=client, judge=judge)
+                reply["directions"], client=client, judge=judge,
+                kind=kind, seconds=seconds)
         except Exception:                       # the unjudged list is still an answer
             pass
     return Reply.model_validate(reply).model_dump()

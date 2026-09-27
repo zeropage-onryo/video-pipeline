@@ -430,3 +430,49 @@ def test_keep_click_returns_ref_paths(client, monkeypatch):
     assert r.json()["result"]["kept"][0]["url"] == "/refs/abc.jpg"
     assert seen == {"tool": "keep_references", "args": {"candidate_ids": ["c-1"]},
                     "account_id": 42, "brand": "zeropage"}
+
+
+# ---------- an ad is graded as an ad (2026-09-27) ----------
+
+@pytest.mark.parametrize("said, want", [
+    ("I want to make an ad for a nice watch. As a short clip: 6 seconds, vertical.", ("ad", 6)),
+    ("a 15s spot for the brand -- actually make it a 6-second bumper", ("ad", 6)),
+    ("a bartender closes a neon dive bar at 2am", ("story", None)),
+    ("a commercial, 90 seconds", ("ad", None)),       # outside the range an ad is measured in
+])
+def test_direction_kind_reads_the_persons_own_words(said, want):
+    assert assistant_brain.direction_kind(said) == want
+
+
+def test_ad_directions_go_to_the_ad_judge_with_the_length(monkeypatch):
+    from src import story_judge
+    asked = []
+    monkeypatch.setattr(story_judge, "judge_ad",
+                        lambda text, turn, client, model, seconds=None:
+                        asked.append(seconds) or {"ok": True, "score": 0.7, "verdict": "hook lands"})
+    monkeypatch.setattr(story_judge, "judge_spark",
+                        lambda *a, **k: pytest.fail("an ad must not meet the story gate"))
+    out = assistant_brain.check_directions(
+        [{"title": "Time Freeze", "logline": "the rain stops when the second hand does"}],
+        client=object(), model="m", kind="ad", seconds=6)
+    assert asked == [6]
+    assert out[0]["rubric"] == "ad" and out[0]["score"] == 0.7
+
+
+def test_story_directions_still_meet_the_story_gate(monkeypatch):
+    from src import story_judge
+    monkeypatch.setattr(story_judge, "judge_ad", lambda *a, **k: pytest.fail("not an ad"))
+    monkeypatch.setattr(story_judge, "judge_spark",
+                        lambda *a, **k: {"ok": True, "score": 0.4, "verdict": "no reversal"})
+    out = assistant_brain.check_directions([{"title": "Last call", "logline": "x"}],
+                                           client=object(), model="m")
+    assert out[0]["rubric"] == "story" and out[0]["score"] == 0.4
+
+
+def test_the_turn_tells_the_judge_what_the_person_asked_for(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(assistant_brain, "check_directions",
+                        lambda directions, **kw: seen.update(kw) or directions)
+    reply = {"message": "three ways", "directions": [{"title": "A", "logline": "b"}]}
+    creative_guide._finish(reply, client=object(), said="an ad for a nice watch, 6 seconds")
+    assert seen["kind"] == "ad" and seen["seconds"] == 6

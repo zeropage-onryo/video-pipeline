@@ -475,8 +475,30 @@ def run_local(name: str, args: dict, *, brand: str = "", account_id=None,
 
 # --- the checking step ------------------------------------------------------------
 
+# An ad is graded as an ad (story_judge.judge_ad), everything else as a
+# story. Read off the person's own words -- the words a brief is written in,
+# not a form field nobody fills: "an ad for a nice watch", "a 15s spot",
+# "a bumper for the brand".
+_AD_WORDS = re.compile(
+    r"(?i)\b(ads?|advert(isement)?s?|commercials?|spots?|promos?|bumpers?|campaigns?|"
+    r"sponsor(ed|ship)?|product (shot|film|video)|for (a|the|our) brand)\b")
+_SECONDS = re.compile(r"(?i)\b(\d{1,2})\s*(?:-\s*)?(?:s|sec|secs|seconds?)\b")
+
+
+def direction_kind(text: str) -> tuple[str, Optional[int]]:
+    """("ad" | "story", seconds or None) for a conversation's text. The
+    length is the last one said (a person narrows "15s" to "6 seconds"),
+    kept only in the short range an ad is measured in."""
+    text = str(text or "")
+    kind = "ad" if _AD_WORDS.search(text) else "story"
+    said = [int(m.group(1)) for m in _SECONDS.finditer(text)]
+    seconds = next((n for n in reversed(said) if 2 <= n <= 60), None)
+    return kind, seconds
+
+
 def check_directions(directions, *, client, model: str = "",
-                     judge: Optional[Callable] = None) -> list[dict]:
+                     judge: Optional[Callable] = None, kind: str = "story",
+                     seconds: Optional[int] = None) -> list[dict]:
     """Grade each proposed story direction with the independent judge
     before the person sees it -- a writer grading its own homework is the
     bug story_judge was built for. Best first; unscored ones keep their
@@ -486,8 +508,14 @@ def check_directions(directions, *, client, model: str = "",
     directions = [dict(d) for d in (directions or [])]
     if not directions:
         return []
+    rubric = "ad" if kind == "ad" else "story"
     if judge is None:
-        from .story_judge import judge_spark as judge
+        from . import story_judge
+        if rubric == "ad":
+            def judge(text, turn, client, model):
+                return story_judge.judge_ad(text, turn, client, model, seconds=seconds)
+        else:
+            judge = story_judge.judge_spark
     if not model:
         from . import gemini_utils
         model = gemini_utils.FAST_MODEL
@@ -497,6 +525,7 @@ def check_directions(directions, *, client, model: str = "",
             verdict = judge(text, d.get("turn") or "", client, model)
         except Exception as e:
             verdict = {"ok": False, "error": str(e)}
+        d["rubric"] = rubric
         if verdict.get("ok"):
             d["score"] = verdict.get("score")
             d["verdict"] = (verdict.get("verdict") or "")[:300]
