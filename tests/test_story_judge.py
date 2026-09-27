@@ -131,3 +131,42 @@ def test_judge_spark_degrades_gracefully_with_no_network(monkeypatch):
     assert result["ok"] is False
     assert result["score"] is None
     assert "error" in result
+
+
+# ---------- judge_ad: a short ad graded on its own terms ----------
+
+class _AdClient:
+    def __init__(self, text):
+        self.prompts, self._text = [], text
+        self.models = self
+
+    def generate_content(self, model, contents):
+        self.prompts.append(contents)
+        return type("R", (), {"text": self._text})()
+
+
+def test_judge_ad_grades_on_the_ad_rubric_even_with_no_library(monkeypatch):
+    from src import rag, story_judge
+
+    def dead(*a, **k):
+        raise RuntimeError("password authentication failed")
+    monkeypatch.setattr(rag, "connect", dead)
+    client = _AdClient('{"score": 0.72, "verdict": "the product causes the turn", "missing": []}')
+    out = story_judge.judge_ad("Time Freeze: the second hand stops the rain", "rain freezes",
+                               client, "m", seconds=6)
+    assert out["ok"] and out["score"] == 0.72
+    prompt = client.prompts[0]
+    assert "6 seconds" in prompt and "THE PRODUCT CAUSES THE TURN" in prompt
+    assert "(nothing on file yet)" in prompt              # graded without the library, not skipped
+    assert "{spark}" not in prompt and "{length}" not in prompt
+
+
+def test_judge_ad_never_raises(monkeypatch):
+    from src import rag, story_judge
+
+    monkeypatch.setattr(rag, "connect", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no store")))
+
+    class Boom:
+        models = property(lambda self: (_ for _ in ()).throw(RuntimeError("no network")))
+    out = story_judge.judge_ad("x", "", Boom(), "m")
+    assert not out["ok"] and out["score"] is None
