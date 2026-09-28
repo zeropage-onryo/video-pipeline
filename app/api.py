@@ -4407,6 +4407,47 @@ def holds_resolve(hold_id: int, body: ResolveBody,
     return {"id": hold_id, "status": body.status}
 
 
+def _hold_concept_media(concept_id, account_id: int) -> tuple[str, Optional[tuple[str, str]]]:
+    """What a hold with no media of its own can post: its CONCEPT's render
+    (2026-09-26). The graph parks a run before anything renders, so every
+    hold's payload is clip-less, while the Queue's approve and the manual
+    lane write the clip onto the concept -- the hold never learned about
+    it. Returns (url, None), or ("", (code, reason)) for a refusal.
+
+    Read the way autopilot.build_plan reads a rendered concept: the first
+    shot carrying a `media_url`. EXCEPT a timed scene, whose `media_url`
+    is shot 1's clip and not the scene (the edit is Mike's, the L1 hold):
+    that posts only as the finished cut src/cut assembled for it -- the
+    head version's `export_url` -- and is refused until one exists."""
+    if not concept_id:
+        return "", ("no_media", "this hold has no rendered media and no concept to take it from")
+    concept = preprod.get_concept(int(concept_id), account_id=account_id)
+    if concept is None:
+        return "", ("no_media", f"this hold's concept #{concept_id} is gone")
+    rendered = next((s for s in concept.get("shots") or []
+                     if (s.get("media_url") or "").strip()), None)
+    if rendered is None:
+        return "", ("no_media", f"concept #{concept_id} has not been rendered yet — "
+                                "approve it in the Queue first")
+    from src import media
+    parts = ((rendered.get("timeline") or {}).get("parts")) or []
+    if len(parts) > 1:
+        from src.cut import store as cut_store
+        try:
+            head = cut_store.head(cut_store.project_for_concept(concept_id),
+                                  account_id=account_id)
+        except Exception:
+            head = None      # no cut tables on this database: nothing is assembled
+        export = ((head or {}).get("export_url") or "").strip()
+        if not export:
+            return "", ("timed_scene_uncut",
+                        f"concept #{concept_id} is a timed scene of {len(parts)} shots: its "
+                        "clip is shot 1 alone, not the scene — assemble its cut first, "
+                        "and the finished MP4 is what posts")
+        return media.url_for(export, account_id), None
+    return media.url_for(rendered["media_url"].strip(), account_id), None
+
+
 @router.post("/holds/{hold_id}/post")
 def holds_post(hold_id: int, account_id: int = Depends(auth.current_account_id)):
     """The explicit 'post now' -- moved here from the retired /holds dev
@@ -4462,6 +4503,10 @@ def holds_post(hold_id: int, account_id: int = Depends(auth.current_account_id))
     else:
         clips = payload.get("clips") or []
         media_url = next((c.get("url") for c in clips if c.get("url")), "") or ""
+        if not media_url:
+            media_url, refusal = _hold_concept_media(row.get("concept_id"), account_id)
+            if refusal:
+                return _error(409, refusal[0], refusal[1])
         is_local = bool(media_url) and not media_url.startswith("http")
         actions = [{
             "kind": "post", "platform": platform, "concept_id": row.get("concept_id"),
