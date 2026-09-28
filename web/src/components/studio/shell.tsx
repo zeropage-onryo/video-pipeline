@@ -30,6 +30,7 @@ import {
   ListVideo,
   LogOut,
   PanelLeft,
+  Scissors,
   Workflow,
 } from "lucide-react";
 import { API_URL, ApiError, goToSignIn, signOut } from "@/lib/api";
@@ -48,19 +49,21 @@ import { CreditPill } from "@/components/studio/credit-pill";
 /* eslint-disable @next/next/no-img-element */
 import "@/app/studio/studio.css";
 
-export type ViewId = "studio" | "assets" | "pipeline" | "director" | "elements" | "queue";
+export type ViewId = "studio" | "assets" | "pipeline" | "director" | "cut" | "elements" | "queue";
 
 const NAV: { id: ViewId; label: string; href: string; icon: typeof House; external?: boolean }[] = [
   { id: "studio", label: "Studio", href: "/studio", icon: House },
   { id: "assets", label: "Assets", href: "/studio/assets", icon: Layers },
   { id: "pipeline", label: "Pipeline", href: "/studio/pipeline", icon: Workflow },
   { id: "director", label: "Director", href: "/studio/flows", icon: Clapperboard },
+  { id: "cut", label: "Edit", href: "/studio/cut", icon: Scissors },
   { id: "elements", label: "Elements", href: "/studio/elements", icon: AtSign },
   { id: "queue", label: "Queue", href: "/studio/queue", icon: ListVideo },
 ];
 
 const VIEW_BY_PATH: [string, ViewId][] = [
   ["/studio/flows", "director"],
+  ["/studio/cut", "cut"],
   ["/studio/elements", "elements"],
   ["/studio/assets", "assets"],
   ["/studio/pipeline", "pipeline"],
@@ -114,7 +117,10 @@ const readPin = () => {
 export function StudioShell({ children }: { children: ReactNode }) {
   const pathname = usePathname() || "/studio";
   const view = VIEW_BY_PATH.find(([p]) => pathname.startsWith(p))?.[1] ?? "studio";
-  const stage = view === "director";
+  // an open project (/studio/cut/<id>) is the editor: it takes the whole
+  // stage and draws its own top bar, so the shell's bar steps aside
+  const editor = /^\/studio\/cut\/[^/]+/.test(pathname);
+  const stage = view === "director" || editor;
   const [me, setMe] = useState<Me | null>(null);
   const [signedOut, setSignedOut] = useState(false);
   const pinned = useSyncExternalStore(subscribePin, readPin, () => false);
@@ -258,7 +264,7 @@ export function StudioShell({ children }: { children: ReactNode }) {
 
   return (
     <Ctx.Provider value={{ me, signedOut, brand, balance, toast, setBar }}>
-      <div className="zps" data-view={view} data-stage={stage ? "1" : undefined}>
+      <div className="zps" data-view={view} data-stage={stage ? "1" : undefined} data-editor={editor ? "1" : undefined}>
         <div className="zps-field" aria-hidden />
 
         <nav className={`rail${pinned ? " pinned" : ""}`} aria-label="Primary">

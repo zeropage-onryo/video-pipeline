@@ -267,6 +267,9 @@ export function AssistantPill() {
   }
 
   if (signedOut || !me?.account) return null;
+  // the editor seats its agent in its own left panel (invideo's place), so
+  // a floating pill over the timeline would be a second, competing one
+  if (/^\/studio\/cut\/[^/]+/.test(pathname)) return null;
 
   const pillLine = !project
     ? "Start a project, or ask me anything"
