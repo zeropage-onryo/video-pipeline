@@ -21,11 +21,15 @@ import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { cardFonts } from "@/components/studio/card-fonts";
 import { RefImg } from "@/components/studio/concept-card";
 import { fileName, sourceLabel } from "@/lib/refs";
+import { API_URL } from "@/lib/api";
+
+/* a rendered clip rather than a picture: the renders are mp4s */
+const isClip = (url: string) => /\.(mp4|webm|mov)(\?|#|$)/i.test(url);
 
 export type PreviewItem = { url: string; name?: string; source?: string; href?: string };
 export type PreviewState = {
   title: string;
-  kind: "REFERENCE" | "KEYFRAME";
+  kind: "REFERENCE" | "KEYFRAME" | "CLIP";
   items: PreviewItem[];
   index: number;
   /** the element that opened it; focus goes back there */
@@ -80,6 +84,30 @@ export function PreviewOverlay({ state, onClose }: { state: PreviewState; onClos
               </button>
             ) : null}
             <div className="flex h-full min-w-0 max-w-[1280px] flex-1 items-center justify-center">
+              {isClip(it.url) ? (
+                // a rendered shot: the clip itself, not a still of it
+                // (2026-09-28: #384's first shot existed and nobody could play it)
+                <video
+                  key={it.url}
+                  src={/^https?:/.test(it.url) ? it.url : `${API_URL}${it.url}`}
+                  controls
+                  // muted so the browser lets it start (autoplay with sound
+                  // is refused and the element then never loaded at all,
+                  // measured 2026-09-28); the controls unmute it. Set and
+                  // started from the ref: React applies `muted` after the
+                  // autoplay decision, so the attribute alone never plays.
+                  ref={(el) => {
+                    if (!el) return;
+                    el.muted = true;
+                    void el.play().catch(() => {});
+                  }}
+                  muted
+                  preload="auto"
+                  playsInline
+                  className="block max-h-full max-w-full rounded-[6px] bg-black"
+                  aria-label={`${kind} ${at + 1}: ${it.name || fileName(it.url)}`}
+                />
+              ) : (
               <RefImg
                 key={it.url}
                 url={it.url}
@@ -89,6 +117,7 @@ export function PreviewOverlay({ state, onClose }: { state: PreviewState; onClos
                 deadLabel={`IMAGE UNAVAILABLE · ${it.name || fileName(it.url)}`}
                 deadClassName="size-full rounded-[6px] border border-dashed border-[#5a2320] p-6 text-xs tracking-[0.14em]"
               />
+              )}
             </div>
             {many ? (
               <button type="button" className={navBtn} aria-label="Next image" onClick={() => step(1)}>
@@ -125,7 +154,13 @@ export function PreviewOverlay({ state, onClose }: { state: PreviewState; onClos
                   onClick={() => setAt(i)}
                   className={`h-11 w-16 flex-none overflow-hidden rounded-[4px] border-2 bg-noir-slate focus-visible:rounded-[4px]! ${i === at ? "border-noir-red" : "border-transparent"}`}
                 >
-                  <RefImg url={t.url} thumb eager className="block size-full object-cover" deadLabel="" />
+                  {isClip(t.url) ? (
+                    <span className="flex size-full items-center justify-center text-[10px] tracking-[0.1em] text-bone">
+                      ▶ {i + 1}
+                    </span>
+                  ) : (
+                    <RefImg url={t.url} thumb eager className="block size-full object-cover" deadLabel="" />
+                  )}
                 </button>
               ))}
             </div>

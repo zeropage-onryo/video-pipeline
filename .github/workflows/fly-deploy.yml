@@ -14,6 +14,36 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: superfly/flyctl-actions/setup-flyctl@master
+      # A deploy restarts the one API machine, and render work lives in its
+      # memory: on 2026-09-28 a deploy at 15:40 killed #384's three-shot
+      # render after shot 1 (the sweep saved that clip; shots 2 and 3 were
+      # never started). So wait while fal is still rendering something --
+      # `--open` counts submitted clips with no answer yet and changes
+      # nothing. Bounded: after 25 minutes, or if the machine cannot be
+      # asked at all, deploy anyway. A clip caught mid-render is still
+      # finished by the startup sweep; this only makes that rare.
+      - name: Wait for renders in flight
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          deadline=$(( $(date +%s) + 25 * 60 ))
+          while :; do
+            n=$(flyctl ssh console -a zeropage-studio -C "python -m src.fal_requests --open" 2>/dev/null | tr -d '\r' | tail -n 1)
+            case "$n" in
+              ''|*[!0-9]*)
+                echo "::warning::could not ask the machine how many renders are in flight ('$n'); deploying anyway"
+                break ;;
+              0)
+                echo "no renders in flight"
+                break ;;
+            esac
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::warning::$n render(s) still in flight after 25 minutes; deploying anyway -- the startup sweep will finish them"
+              break
+            fi
+            echo "$n render(s) in flight; checking again in 30s"
+            sleep 30
+          done
       - run: flyctl deploy --remote-only
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

@@ -422,3 +422,39 @@ def test_the_startup_sweep_finishes_the_orphan_then_stops(studio, stale_now,
     assert not thread.is_alive()
     assert fal_requests.open_count(dsn=studio["dsn"]) == 0
     assert _shot(studio)["media_url"].endswith(".mp4")
+
+
+# --- what a deploy waits for (2026-09-28) -----------------------------------
+
+def test_a_render_in_flight_is_counted_and_a_finished_one_is_not(studio, stale_now):
+    """The deploy workflow asks `python -m src.fal_requests --open` before it
+    restarts the machine (a deploy killed #384's three-shot render after
+    shot 1). A clip fal is still rendering counts; once the sweep finishes
+    it, nothing is left to wait for."""
+    assert fal_requests.in_flight_count(dsn=studio["dsn"]) == 0
+    http = Fal(die_on_poll=True)
+    _die_mid_render(studio, http)
+    assert fal_requests.in_flight_count(dsn=studio["dsn"]) == 1
+    fal_requests.recover(dsn=studio["dsn"], http=http)
+    assert fal_requests.in_flight_count(dsn=studio["dsn"]) == 0
+
+
+def test_a_request_past_the_give_up_does_not_hold_deploys_hostage(studio):
+    """open_count still sees an old unresolved row (the CLI and reap want
+    it); in_flight_count does not, or one stuck request would make every
+    deploy wait out its whole timeout."""
+    _die_mid_render(studio, Fal(die_on_poll=True))
+    with db.connect(studio["dsn"]) as conn:
+        conn.execute("UPDATE fal_requests SET submitted_at = %s "
+                     "WHERE account_id = %s",
+                     ("2026-01-01T00:00:00+00:00", studio["account_id"]))
+    assert fal_requests.open_count(dsn=studio["dsn"]) == 1
+    assert fal_requests.in_flight_count(dsn=studio["dsn"]) == 0
+
+
+def test_the_open_flag_counts_and_changes_nothing(monkeypatch, capsys):
+    monkeypatch.setattr(fal_requests, "in_flight_count", lambda **k: 2)
+    monkeypatch.setattr(fal_requests, "recover",
+                        lambda **k: pytest.fail("--open must not sweep"))
+    assert fal_requests.main(["--open"]) == 0
+    assert capsys.readouterr().out.strip() == "2"

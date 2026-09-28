@@ -428,6 +428,24 @@ def open_count(account_id: Optional[int] = None, dsn: Optional[str] = None) -> i
     return int(row["n"])
 
 
+def in_flight_count(within: float = GIVE_UP_SECONDS, account_id: Optional[int] = None,
+                    dsn: Optional[str] = None) -> int:
+    """Renders fal may still be working on: unresolved requests submitted
+    within `within` seconds. What a deploy should wait for. A row older
+    than that is one the sweep has given up on (GIVE_UP_SECONDS), and it
+    must not hold every future deploy hostage -- `open_count` still sees
+    it, for the CLI and reap."""
+    with db.connect(dsn) as conn:
+        if not db.table_exists(conn, "fal_requests"):
+            return 0
+        # every account's when None: a deploy restarts everyone's renders
+        rows = conn.execute(
+            "SELECT submitted_at FROM fal_requests "
+            "WHERE (%s::bigint IS NULL OR account_id IS NOT DISTINCT FROM %s) "
+            "AND resolved_at IS NULL", (account_id, account_id)).fetchall()
+    return sum(1 for r in rows if _age_seconds(r) <= within)
+
+
 def _sweep_until_quiet(dsn: Optional[str], every: float) -> None:
     """Sweep now, then every `every` seconds while anything is still open.
 
@@ -465,17 +483,26 @@ def start_background(dsn: Optional[str] = None,
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    """`python -m src.fal_requests` -- one sweep, by hand, printed."""
+    """`python -m src.fal_requests` -- one sweep, by hand, printed.
+    `--open` sweeps nothing: it prints how many renders are in flight (a
+    submitted clip with no answer yet) and exits, which is what the deploy
+    workflow asks before it restarts the machine (2026-09-28: a deploy at
+    15:40 killed #384's three-shot render after shot 1)."""
     import argparse
     parser = argparse.ArgumentParser(description=main.__doc__)
     parser.add_argument("--account", type=int, default=None)
+    parser.add_argument("--open", action="store_true",
+                        help="print the number of unresolved requests and exit; changes nothing")
     args = parser.parse_args(argv)
+    if args.open:
+        print(in_flight_count())
+        return 0
     print(json.dumps(recover(account_id=args.account), indent=2))
     return 0
 
 
 __all__ = ["GENERATION_REF_KEY", "Tracker", "init", "resolve", "get",
-           "ref_params", "recover", "open_count", "start_background"]
+           "ref_params", "recover", "open_count", "in_flight_count", "start_background"]
 
 
 if __name__ == "__main__":  # pragma: no cover

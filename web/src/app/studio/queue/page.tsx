@@ -596,6 +596,12 @@ export default function QueuePage() {
               : c.park_reason || (c.reference_image ? "anchors on the keyframe" : "text-to-video · no keyframe yet");
           const stills = stillsOf(c);
           const parts = partsOf(c);
+          // A timed scene renders shot by shot and counts as rendered only
+          // when its LAST shot lands, so a card with some clips and not
+          // others must say so (2026-09-28: #384 had shot 1 of 3 after a
+          // deploy killed its render, and read as if nothing had happened).
+          const clips = parts.filter((p) => p.media_url).map((p) => ({ url: p.media_url!, name: `shot ${p.n} · ${windowLabel(p)}` }));
+          const partial = parts.length > 0 && clips.length > 0 && clips.length < parts.length;
           return (
             <article
               key={c.id}
@@ -631,7 +637,22 @@ export default function QueuePage() {
                       </span>
                     );
                     const grow = { flexGrow: Number(p.seconds) > 0 ? Number(p.seconds) : 1 };
-                    return p.reference_image ? (
+                    return p.media_url ? (
+                      <button
+                        type="button"
+                        key={p.n}
+                        style={grow}
+                        className={`${frame} focus-visible:rounded-[4px]!`}
+                        title={`Play shot ${p.n} · ${p.text || p.prompt || ""}`}
+                        aria-label={`Play shot ${p.n} clip, ${windowLabel(p)}`}
+                        onClick={(e) =>
+                          setPreview({ title: c.title, kind: "CLIP", trigger: e.currentTarget, index: Math.max(0, clips.findIndex((x) => x.url === p.media_url)), items: clips })
+                        }
+                      >
+                        {p.reference_image ? <RefImg url={p.reference_image} className="block size-full object-cover" deadLabel="" /> : null}
+                        {label}
+                      </button>
+                    ) : p.reference_image ? (
                       <button
                         type="button"
                         key={p.n}
@@ -671,6 +692,11 @@ export default function QueuePage() {
                   {/* a pick is the person's act and outranks the night's park */}
                   {c.n} · {c.picked ? "PICKED" : "PARKED"} · {why}
                 </p>
+                {partial ? (
+                  <p className="-mt-2 mb-0 font-plex text-[11px] tracking-[0.08em] text-noir-red2" role="status">
+                    {clips.length} OF {parts.length} SHOTS RENDERED · APPROVE RENDERS THE OTHER {parts.length - clips.length}
+                  </p>
+                ) : null}
                 {locked ? (
                   // the way out of a locked card: the same door the board's
                   // Director icon opens. "Add references" with nowhere to add
