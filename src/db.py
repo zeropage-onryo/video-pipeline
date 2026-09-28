@@ -328,6 +328,11 @@ OWNED_TABLES = (
     # a yearly plan's unreleased months (2026-09-18, src/billing.py):
     # credit somebody paid for and has not received yet
     "credit_schedules",
+    # the cut (2026-09-26, src/cut/store.py): an account's edit versions,
+    # the pointer to the one it is on, and the audio it uploaded for them
+    "timelines",
+    "timeline_heads",
+    "cut_media",
 )
 
 # The tables that are global BY DECISION, each with the reason. This is

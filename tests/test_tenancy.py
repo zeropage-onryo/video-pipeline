@@ -86,6 +86,8 @@ def test_every_owned_table_grows_an_account_id(pg):
     ledger.init(pg)
     from src import billing
     billing.init(pg)
+    from src.cut import store as cut_store
+    cut_store.init(pg)
     with db.connect(pg) as conn:
         for table in db.OWNED_TABLES:
             assert "account_id" in db.columns(conn, table), f"{table} has no owner"
@@ -645,7 +647,7 @@ def test_no_query_against_an_owned_table_forgets_its_owner():
     """
     offenders = []
     root = pathlib.Path(__file__).resolve().parent.parent
-    modules = (sorted((root / "src").glob("*.py"))
+    modules = (sorted((root / "src").rglob("*.py"))
                + sorted((root / "app").glob("*.py"))
                + sorted((root / "ops").glob("*.py")))
     for module in modules:
@@ -983,9 +985,11 @@ def _init_everything(path):
     imagesearch.init(path)
     render_assets.init(path)
     from src import billing, ledger, spend
+    from src.cut import store as cut_store
     spend.init(path)
     ledger.init(path)
     billing.init(path)
+    cut_store.init(path)
 
 
 AUTH_SCHEMA = {"users", "accounts", "account_members"}
