@@ -26,6 +26,7 @@ import {
   Clapperboard,
   ChevronsUpDown,
   House,
+  Images,
   Layers,
   ListVideo,
   LogOut,
@@ -44,7 +45,7 @@ import {
 /* eslint-disable @next/next/no-img-element */
 import "@/app/studio/studio.css";
 
-export type ViewId = "studio" | "assets" | "pipeline" | "director" | "elements" | "queue";
+export type ViewId = "studio" | "assets" | "pipeline" | "director" | "elements" | "references" | "queue";
 
 const NAV: { id: ViewId; label: string; href: string; icon: typeof House; external?: boolean }[] = [
   { id: "studio", label: "Studio", href: "/studio", icon: House },
@@ -52,12 +53,14 @@ const NAV: { id: ViewId; label: string; href: string; icon: typeof House; extern
   { id: "pipeline", label: "Pipeline", href: "/studio/pipeline", icon: Workflow },
   { id: "director", label: "Director", href: "/studio/flows", icon: Clapperboard },
   { id: "elements", label: "Elements", href: "/studio/elements", icon: AtSign },
+  { id: "references", label: "References", href: "/studio/references", icon: Images },
   { id: "queue", label: "Queue", href: "/studio/queue", icon: ListVideo },
 ];
 
 const VIEW_BY_PATH: [string, ViewId][] = [
   ["/studio/flows", "director"],
   ["/studio/elements", "elements"],
+  ["/studio/references", "references"],
   ["/studio/assets", "assets"],
   ["/studio/pipeline", "pipeline"],
   ["/studio/queue", "queue"],

@@ -180,3 +180,35 @@ def test_hunt_bare_reports_what_is_still_unservable(monkeypatch):
     out = reference_hunt.hunt_bare("zeropage", log=notes.append)
     assert out == {"checked": 2, "hunted": 1, "bare": 1}
     assert notes == ["hunt: spark 2 left bare — no lane configured"]
+
+
+def test_propose_banks_nothing_and_keeps_the_rejections_with_their_reasons():
+    """The contact sheet's data. A rejection a person cannot see the
+    cause of is one they cannot overrule."""
+    def screen(candidates, need=None, **kw):
+        return {"ok": True, "checked": True,
+                "keepers": [{**candidates[0], "kept_for": "the water line"}],
+                "rejected": [{**c, "why": "watermark — not a clean frame",
+                              "flags": ["watermark"]} for c in candidates[1:]],
+                "note": "1 of 3 frame(s) kept"}
+
+    banked = []
+    result = reference_hunt.propose(
+        7, plan=_plan("place", "light"), search=lambda *a, **k: _candidates(3),
+        screen=screen)
+    assert banked == [] and result["banked"] == 0
+    assert result["proposed"] == 2                      # one per need, unbanked
+    assert [s["role"] for s in result["sheet"]] == ["place", "light"]
+    place = result["sheet"][0]
+    assert [k["id"] for k in place["keepers"]] == ["c1"]
+    assert place["keepers"][0]["kept_for"] == "the water line"
+    assert len(place["rejected"]) == 2
+    assert "watermark" in place["rejected"][0]["why"]
+
+
+def test_propose_still_refuses_to_offer_frames_nobody_looked_at():
+    result = reference_hunt.propose(
+        7, plan=_plan("place"), search=lambda *a, **k: _candidates(3),
+        screen=_screen(keep=2, checked=False, note="no model client"))
+    assert result["proposed"] == 0 and result["checked"] is False
+    assert result["sheet"][0]["keepers"] == []

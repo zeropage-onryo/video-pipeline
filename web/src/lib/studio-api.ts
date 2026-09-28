@@ -480,6 +480,51 @@ export async function waitForJob(id: number, onTick?: (job: Job) => void, everyM
   }
 }
 
+/* ── the reference hunt (2026-09-25) ──
+   The hunt plans what a spark needs photographs OF, searches one need at
+   a time and LOOKS at every frame before offering it. It banks nothing:
+   the sheet is the proposal, `keepReferences` is the approval, and a
+   frame is named by the candidate id the hunt served -- a URL typed here
+   would be refused server-side. */
+export type SparkRow = { id: number; spark: string; score: number | null; images: number };
+export const getReferenceSparks = (brand?: string) =>
+  apiFetch<{ brand: string; items: SparkRow[] }>(
+    `/references/sparks${brand ? `?brand=${encodeURIComponent(brand)}` : ""}`);
+
+export type SheetFrame = {
+  id: string;
+  image_url?: string;
+  source_url?: string;
+  title?: string;
+  kept_for?: string;
+  why?: string;
+  flags?: string[];
+};
+export type SheetNeed = {
+  role: string;
+  query: string;
+  found: number;
+  kept: number;
+  note: string;
+  keepers: SheetFrame[];
+  rejected: SheetFrame[];
+};
+export type ReferenceSheet = {
+  ok: boolean;
+  checked: boolean;
+  planner: string;
+  proposed: number;
+  note: string;
+  sheet: SheetNeed[];
+};
+/** POST /api/references/{id}/hunt — a job; its `output` is the sheet. */
+export const runReferenceHunt = (findingId: number) =>
+  apiFetch<{ job_id: number }>(`/references/${findingId}/hunt`, { method: "POST" });
+export const keepReferences = (findingId: number, candidateIds: string[]) =>
+  apiFetch<{ banked: number; refused: { id: string; error: string }[]; bin: { url: string }[] }>(
+    `/references/${findingId}/keep`,
+    { method: "POST", body: JSON.stringify({ candidate_ids: candidateIds }) });
+
 /* ── presets (the camera chips) ── */
 export type Preset = { id: string; label: string; how: string };
 export const getPresets = () =>

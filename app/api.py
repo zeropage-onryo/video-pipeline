@@ -42,6 +42,7 @@ from src import (
     generative,
     higgsfield,
     imagery,
+    imagesearch,
     inspiration,
     instagram,
     manual_lane,
@@ -52,6 +53,7 @@ from src import (
     rag,
     rag_eval,
     refbin,
+    reference_hunt,
     render_assets,
     render_specs,
     runway,
@@ -2003,6 +2005,98 @@ def scout_run(body: ScoutRunBody, account_id: int = Depends(auth.current_account
 
     job = jobs.start("scout", f"research · {brand}", work, account_id=account_id)
     return {"job_id": job["id"], "brand": brand}
+
+
+# ---- THE REFERENCE HUNT (2026-09-25) --------------------------------
+# `reference_needs` reads the spark and lists what it needs photographs
+# OF; `imagesearch` answers one need at a time; `refcheck` LOOKS at every
+# frame that comes back. These two routes are the human half: the hunt
+# BANKS NOTHING and returns a contact sheet, and keeping is a separate
+# click. Two rules carry over from the layers underneath and are worth
+# not losing here: a frame reaches the sheet only by candidate id (an
+# invented id is unredeemable -- `imagesearch.get`), and the rejected
+# frames travel WITH their reason, because the sheet is where a person
+# overrules the check and a rejection with no visible cause is one
+# nobody can argue with.
+
+
+class ReferenceKeepBody(BaseModel):
+    candidate_ids: list[str] = Field(default_factory=list)
+
+
+@router.get("/references/sparks")
+def references_sparks(brand: Optional[str] = None,
+                      account_id: int = Depends(auth.current_account_id)):
+    """The sparks a hunt can be pointed at: banked, not yet used, newest
+    first, each with how many pictures it already has.
+
+    `images` is the number that decides whether this spark can be
+    generated from at all (preprod.reference_gate), so it is the column
+    worth sorting a person's attention by -- 0 means the night would
+    write a scene that never reaches the board."""
+    brand = brand if brand in preprod.BRANDS else "antihero"
+    items = []
+    for row in scout.list_findings(brand=brand, unused_only=True, limit=20):
+        items.append({
+            "id": row["id"],
+            "spark": row.get("spark") or "",
+            "score": row.get("score"),
+            "images": len(scout.bin_for_finding(row["id"])),
+        })
+    return {"brand": brand, "items": items}
+
+
+@router.post("/references/{finding_id}/hunt")
+def references_hunt(finding_id: int,
+                    account_id: int = Depends(auth.current_account_id)):
+    """Plan, search and look -- as a job, because it is several model
+    calls and a search per need. The job's output is the contact sheet."""
+    if not _gemini_key(account_id):
+        return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
+    if not scout.get_finding(finding_id):
+        return _error(404, "no_finding", f"no spark {finding_id}")
+
+    def work(job):
+        jobs.progress(job, 0.2, "reading the scene")
+        result = reference_hunt.propose(finding_id, account_id=account_id)
+        jobs.progress(job, 0.9, f"{result['proposed']} frame(s) to review")
+        return {"detail": result["note"], "output": json.dumps(result)}
+
+    job = jobs.start("hunt", f"references · spark {finding_id}", work,
+                     account_id=account_id)
+    return {"job_id": job["id"]}
+
+
+@router.post("/references/{finding_id}/keep")
+def references_keep(finding_id: int, body: ReferenceKeepBody,
+                    account_id: int = Depends(auth.current_account_id)):
+    """Bank the frames a person kept, by id.
+
+    The spend here is nil and the guard is not about money: it is the
+    fabrication rule. An id this install never served is refused rather
+    than fetched, so the sheet cannot be talked into banking a URL that
+    came from somewhere else.
+    """
+    finding = scout.get_finding(finding_id)
+    if not finding:
+        return _error(404, "no_finding", f"no spark {finding_id}")
+    banked, refused = 0, []
+    for candidate_id in (body.candidate_ids or [])[:scout.MAX_BIN_IMAGES]:
+        candidate = imagesearch.get(candidate_id)
+        if not candidate:
+            refused.append({"id": candidate_id,
+                            "error": "ids come from a hunt and cannot be composed"})
+            continue
+        result = scout.bank_candidate(finding, {**candidate, "lane": "hunt"})
+        if result.get("ok"):
+            banked += 1
+        else:
+            refused.append({"id": candidate_id,
+                            "error": result.get("error") or "not banked"})
+    return {"banked": banked, "refused": refused,
+            "bin": [{"url": b["url"], "source_url": b.get("source_url") or "",
+                     "title": b.get("title") or "", "lane": b.get("lane") or ""}
+                    for b in scout.bin_for_finding(finding_id)]}
 
 
 def _keyframe_on_pick(concept: dict, account_id: int):

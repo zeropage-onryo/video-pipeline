@@ -40,6 +40,51 @@ def _report(need: dict, found: int = 0, kept: int = 0, banked: int = 0,
             "found": found, "kept": kept, "banked": banked, "note": note}
 
 
+def propose(finding_id: int, *, dsn=None, client=None, model: str = "",
+            account_id=None, plan=None, search=None, screen=None,
+            cap=None) -> dict:
+    """A hunt that banks NOTHING — the contact sheet's data.
+
+    Same walk as `hunt`, with the bank step replaced by a collector, and
+    the REJECTED frames kept with their reasons: the sheet is where a
+    person overrides the check, and a rejection with no visible cause is
+    one nobody can argue with. `sheet` is one entry per need.
+    """
+    collected: list[dict] = []
+
+    def collect(finding, candidate, dsn=None):
+        collected.append(candidate)
+        return {"ok": True}
+
+    rejected: list[dict] = []
+
+    def watching_screen(candidates, need=None, **kw):
+        looked = (screen or _default_screen())(candidates, need, **kw)
+        for row in looked.get("rejected") or []:
+            rejected.append({**row, "role": (need or {}).get("role", "")})
+        return looked
+
+    result = hunt(finding_id, dsn=dsn, client=client, model=model,
+                  account_id=account_id, plan=plan, search=search,
+                  screen=watching_screen, bank=collect, cap=cap,
+                  require_check=True)
+    by_role: dict = {}
+    for row in collected:
+        by_role.setdefault(row.get("role") or "", []).append(row)
+    sheet = []
+    for report in result["needs"]:
+        role = report["role"]
+        sheet.append({**report,
+                      "keepers": by_role.get(role, []),
+                      "rejected": [r for r in rejected if r.get("role") == role]})
+    return {**result, "banked": 0, "proposed": len(collected), "sheet": sheet}
+
+
+def _default_screen():
+    from .refcheck import screen
+    return screen
+
+
 def hunt(finding_id: int, *, dsn=None, client=None, model: str = "",
          require_check: bool = True, account_id=None,
          plan=None, search=None, screen=None, bank=None, cap=None) -> dict:
@@ -112,7 +157,9 @@ def hunt(finding_id: int, *, dsn=None, client=None, model: str = "",
         for keeper in kept[:KEEP_PER_NEED]:
             if room <= 0:
                 break
-            result = bank(finding, {**keeper, "lane": "hunt"}, dsn=dsn)
+            result = bank(finding, {**keeper, "lane": "hunt",
+                                    "role": keeper.get("role") or need.get("role", "")},
+                          dsn=dsn)
             if result.get("ok"):
                 banked_here += 1
                 banked_total += 1
