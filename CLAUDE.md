@@ -1750,8 +1750,8 @@ is yours, in Resolve, by hand.
   credits REFUSES even with a key on file, and the operator's own accounts are exempt
   (`accounts.credit_exempt`, `python -m src.accounts credits <slug> --on`; `ledger.hold_for_render`
   returns None for BYOK, a manual-lane import and an exempt account, so every `Charge` method is a
-  no-op there). The daily-cap check stays in the route, not here. **Unverified with real money:**
-  no API-billed render has gone through yet (see "Where the project stands").
+  no-op there). The daily-cap check stays in the route, not here. **Verified with real money
+  2026-09-26** on fal (see "Where the project stands").
 - **`src/spend.py`** / **`src/costs.py`** — the cost tracker (BACKLOG #2, 2026-09-04).
   `spend.record_call` writes one OWNED `llm_calls` row per Gemini call -- the model that
   actually answered, raw token counts, an estimated `cost_usd` from `DEFAULT_PRICES` (read off
@@ -1926,15 +1926,24 @@ on the Fly volume, in `data/renders/runway/`, and mirrored to R2 so the deployed
 carries a real metrics snapshot: reach 19, likes 4, comments 1, average watch 4.59s against a
 10.042s clip (46%). The other 12 Instagram reels on the account were backfilled the same day with
 their own snapshots, so `posted_outcomes` has 13 rows to join instead of none.
-**No API-BILLED render has gone through yet.** #375 was the free lane. The one attempt through
-the Queue (#361 on Higgsfield `kling2.1`, 2026-09-18) died at the provider submit with `HTTP 423
-Locked` — the Higgsfield account, not the request — and Runway and fal are `available: false` on
-the deployed API (their keys are not in Fly's secrets). One billed render is what verifies the
-ledger hold (`src/charge.py`, pricing step 6 — built, never exercised with real credit); see
-`docs/tasks/task-pricing-and-quotes.md`.
+**THE FIRST API-BILLED RENDERS AND THE LEDGER HOLD WERE VERIFIED ON 2026-09-26**, on fal
+(the only video renderer since that day; `FAL_KEY` and `QUOTE_SIGNING_SECRET` are Fly secrets,
+`FAL_SPEND_OK` deliberately unset). Run through the deployed Queue on account 1 with
+`credit_exempt` switched OFF for the test and back ON after, so the hold was real:
+concept #194 on LTX 2.3 (6s 1080p, $0.36) held 87 credits and settled against generation 124;
+#121 on Kling 3 turbo (101) and #135 on Seedance 2 fast (233) settled against 125/126. Every
+row is `key_source = env` with `cost_usd` populated; #194's clip is on R2 and on the Assets wall
+(`generated_assets` 82). **Both
+halves of the hold are exercised:** the first LTX attempt 422'd at fal (LTX wants an INT
+duration on the wire, fixed in #69) and its hold was RELEASED automatically four seconds later
+(ledger entries 4/5). Account 1's lot went 500 -> 79 with no hold outstanding.
+The same day found that a deploy restarting the machine mid-poll orphaned the render (the job
+thread died with the hold `submitted` and no stored request id); holds 8/9 died that way and were
+released by hand. PR #73 fixed it: `src/fal_requests.py` persists the request id so a restart
+reattaches instead of orphaning the hold.
 
 **The number that matters now: 11 picks against 255 written, and 1 of 255 rendered.** Generation
-is cheap and abundant, selection is still the bottleneck, and the spend gate has been used once.
+is cheap and abundant, selection is still the bottleneck, and the spend gate has barely been used.
 Read every rate below in that light. The backfilled reels carry `duration_s` NULL because the IG
 Graph API returns no `media_url` for REELS on this token, so their `watch_time_seconds` cannot be
 turned into a completion rate — only clips this pipeline renders get a measured duration
