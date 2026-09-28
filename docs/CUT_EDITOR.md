@@ -196,6 +196,7 @@ Three extras:
 2. **The index:** proxies, transcripts, shots and shot logs, plus pgvector search. Ship Search as a pill tool.
 3. **Agent jobs on the doc:** Cleanup, Restructure / cut to length and Versions (cutdowns and 9:16), with a diff card and rollback.
 4. **The /studio/cut timeline UI**, minimal.
+   - *Server half as built (2026-09-28):* `cut_projects` (scratch `cut:<uuid>` or a concept's `concept:<id>`), `POST /api/cut/projects/{id}/ops` with a `base_id` optimistic lock, undo/redo on the head pointer, a media bin of renders + uploads (video, stills, audio), per-file proxies / filmstrips / waveforms (`src/cut/preview.py`), and export of any version. New ops: `lift`, `set_canvas`, `set_cue`, `delete_cue`, `set_caption_style`. See CLAUDE.md's `src/cut/` notes.
 5. **Assembly from uploaded footage** plus a script (the "first cut" door), Multicam, Grade and Sound.
 6. **OTIO export and import**, dubbing with lip-sync, review links with frame comments, and Reference match and Beat sync.
 
