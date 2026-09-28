@@ -21,6 +21,8 @@ import {
 
 /* an image has no length of its own: it lands as a 5 s still */
 export const STILL_SECONDS = 5;
+/* what a drop asks for when a render's length is not known yet */
+const UNPROBED_SECONDS = 600;
 
 const state = () => useCut.getState();
 
@@ -134,7 +136,8 @@ export async function placeMedia(
     state().toast("Text tracks take captions, not media — use the Text tab", "err");
     return false;
   }
-  if (track.kind === "audio" && !item.has_audio) {
+  // has_audio is null for a render nobody has probed yet: unknown, not "no"
+  if (track.kind === "audio" && item.has_audio === false) {
     state().toast(`${item.name} has no sound to put on ${track.id}`, "err");
     return false;
   }
@@ -142,7 +145,10 @@ export async function placeMedia(
     state().toast("That is a sound file — drop it on an audio track", "err");
     return false;
   }
-  const frames = mediaFrames(item, d.fps);
+  // a render nobody has probed yet has no length on its bin row; ask for
+  // a generous one and let the server's refusal name the real length
+  const unknownLength = item.kind === "video" && !item.seconds && !range;
+  const frames = unknownLength ? UNPROBED_SECONDS * d.fps : mediaFrames(item, d.fps);
   const where = at === undefined ? trackEnd(track) : nearestCutPoint(track, Math.max(0, at));
   const args: Record<string, unknown> = {
     track_id: track.id,
@@ -151,12 +157,37 @@ export async function placeMedia(
       : { media: item.handle, src_in: 0, src_out: frames },
     at: where,
   };
-  if (track.kind === "video" && item.kind === "video" && item.has_audio) {
+  if (track.kind === "video" && item.kind === "video" && item.has_audio !== false) {
     const audio = d.tracks.filter((t) => t.kind === "audio");
     const sound = audio.find((t) => t.role === "sfx") ?? audio.find((t) => t.role === "voice") ?? audio[0];
     if (sound) args.sound_track = sound.id;
   }
-  return state().op("insert", args);
+  const unsure = unknownLength || (item.has_audio === null && !!args.sound_track);
+  if (!unsure) return state().op("insert", args);
+
+  // Up to two silent corrections, each read off the validator's own words:
+  // "src_out N is past the end of <h> (F frames)" and "<h> has no sound".
+  for (let tries = 0; tries < 3; tries++) {
+    if (await state().op("insert", args, { silent: tries < 2 })) return true;
+    const problems = state().lastError?.problems ?? [];
+    let changed = false;
+    for (const p of problems) {
+      const end = new RegExp(`past the end of ${item.handle} \\((\\d+) frames\\)`).exec(p);
+      if (end && Number(end[1]) > 0) {
+        (args.clip as { src_out: number }).src_out = Number(end[1]);
+        changed = true;
+      }
+      if (p.includes(`${item.handle} has no sound`) && args.sound_track) {
+        delete args.sound_track;
+        changed = true;
+      }
+    }
+    if (!changed) {
+      if (tries < 2) state().toast(problems.slice(0, 3).join(" · ") || "the insert failed", "err");
+      return false;
+    }
+  }
+  return false;
 }
 
 /* frame navigation */

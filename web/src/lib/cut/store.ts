@@ -82,7 +82,14 @@ export type CutStore = {
   setToast: (t: Toast) => void;
   load: (id: string) => Promise<void>;
   refresh: () => Promise<void>;
-  op: (op: string, args: Record<string, unknown>, opts?: { ghost?: Doc; quiet?: boolean }) => Promise<boolean>;
+  /** `silent`: a refusal is not toasted but left in `lastError` for the
+   *  caller, which is how a drop learns an unprobed file's real length */
+  op: (
+    op: string,
+    args: Record<string, unknown>,
+    opts?: { ghost?: Doc; quiet?: boolean; silent?: boolean },
+  ) => Promise<boolean>;
+  lastError: CutError | null;
   undo: () => Promise<void>;
   redo: () => Promise<void>;
   restore: (timelineId: number) => Promise<void>;
@@ -159,6 +166,7 @@ export const useCut = create<CutStore>((set, get) => {
     mix: {},
     previews: {},
     highlight: null,
+    lastError: null,
     bin: [],
     binLoading: false,
     leftTab: "media",
@@ -190,7 +198,7 @@ export const useCut = create<CutStore>((set, get) => {
         const { projectId, head, doc } = get();
         if (!projectId || !head || !doc) return false;
         if (opts.ghost) set({ ghost: opts.ghost });
-        set({ busy: true });
+        set({ busy: true, lastError: null });
         const attempt = async (baseId: number, retried: boolean): Promise<boolean> => {
           try {
             const res = await applyOp(projectId, baseId, op, args);
@@ -204,7 +212,8 @@ export const useCut = create<CutStore>((set, get) => {
               const fresh = get().head;
               if (fresh) return attempt(fresh.id, true);
             }
-            set({ ghost: null });
+            set({ ghost: null, lastError: e instanceof CutError ? e : null });
+            if (opts.silent) return false;
             const reason =
               e instanceof CutError && e.problems.length
                 ? e.problems.slice(0, 3).join(" · ")
