@@ -233,6 +233,12 @@ def upload_file(local_path: Path | str, key: Optional[str] = None,
         )
 
     key = key or f"clips/{local_path.name}"
+    # A clip's index goes to the front before it leaves this machine, so a
+    # browser can draw its first frame without reading the whole file
+    # (src/faststart.py; best-effort, no-op for anything that is not an
+    # MP4 laid out index-last).
+    from . import faststart
+    faststart.faststart(local_path)
     extra_args = {"ContentType": content_type} if content_type else None
     client.upload_file(str(local_path), bkt, key, ExtraArgs=extra_args)
     _note_uploaded(key)
