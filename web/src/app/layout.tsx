@@ -76,6 +76,13 @@ export const metadata: Metadata = {
     description: DESCRIPTION,
   },
   robots: { index: true, follow: true },
+  icons: {
+    icon: [
+      { url: "/brand/zp_black_favicon_32.png", sizes: "32x32", type: "image/png" },
+      { url: "/brand/zp_black_favicon_512.png", sizes: "512x512", type: "image/png" },
+    ],
+    apple: "/brand/zp_black_favicon_512.png",
+  },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
