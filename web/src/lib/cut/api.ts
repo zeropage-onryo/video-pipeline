@@ -122,8 +122,18 @@ export type Preview = {
 
 /* ── projects ── */
 export const listProjects = () => cutFetch<{ projects: Project[] }>("/projects");
-export const createProject = (body: { title?: string; aspect?: Aspect; concept_id?: number }) =>
+/** `concept_id`: that scene's cut (created or returned). `handles`: a
+ *  scratch project whose first version already holds those media, in
+ *  order -- the Assets tile's Edit. */
+export const createProject = (body: { title?: string; aspect?: Aspect; concept_id?: number; handles?: string[] }) =>
   post<{ project: Project }>("/projects", body);
+
+/* The one door every entry point uses (T23): make-or-find the project,
+   then the editor's own URL. */
+export async function openInEditor(body: { concept_id?: number; handles?: string[]; title?: string }): Promise<string> {
+  const res = await createProject(body);
+  return `/studio/cut/${encodeURIComponent(res.project.id)}`;
+}
 export const getProject = (id: string) => cutFetch<EditorState>(`/projects/${encodeURIComponent(id)}`);
 export const renameProject = (id: string, title: string) =>
   cutFetch<{ project: Project }>(`/projects/${encodeURIComponent(id)}`, {
@@ -175,3 +185,37 @@ export type SearchHit = {
 };
 export const searchFootage = (q: string) =>
   cutFetch<{ results: SearchHit[]; notes: string[] }>(`/search?q=${encodeURIComponent(q)}`);
+
+/* ── the agent (Phase E) ──
+   A Proposal is an edit nobody has made yet: the ops, validated against
+   `base_id` on the server BEFORE it was shown, and the doc they produce.
+   Keep posts the ops back (the server re-applies and validates them again
+   against the head, and saves ONE version authored "agent"); Undo is the
+   card going away -- nothing was saved, so there is nothing to discard. */
+export type ProposedOp = { op: string; args: Record<string, unknown> };
+export type Proposal = {
+  summary: string;
+  ops: ProposedOp[];
+  base_id: number;
+  region: { from: number; to: number } | null;
+  duration_delta: number;
+  doc: Doc;
+  kind: "agent" | "cleanup" | "captions";
+};
+export type AgentReply = {
+  reply: string;
+  proposal: Proposal | null;
+  tool_runs?: { tool: string; args: Record<string, unknown>; ok: boolean }[];
+  notes?: string[];
+};
+export const askAgent = (id: string, body: { message: string; playhead?: number; selection?: string[] }) =>
+  post<{ job_id: number }>(`/projects/${encodeURIComponent(id)}/agent`, body);
+export const keepProposal = (id: string, p: Pick<Proposal, "base_id" | "ops" | "summary" | "kind">) =>
+  post<OpResult>(`/projects/${encodeURIComponent(id)}/agent/keep`, p);
+export type Suggested = { proposal: Proposal | null; needs_index: string[]; notes: string[] };
+export const proposeCleanup = (id: string, body: { base_id?: number; min_silence?: number; fillers?: boolean } = {}) =>
+  post<Suggested & { found: { silences: number; fillers: number } }>(`/projects/${encodeURIComponent(id)}/cleanup`, body);
+export const proposeCaptions = (id: string, body: { base_id?: number; track_id?: string; max_words?: number } = {}) =>
+  post<Suggested & { cues: number }>(`/projects/${encodeURIComponent(id)}/captions`, body);
+export const indexProject = (id: string) =>
+  post<{ job_id: number; handles: string[] }>(`/projects/${encodeURIComponent(id)}/index`);

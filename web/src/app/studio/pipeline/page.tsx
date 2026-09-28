@@ -23,7 +23,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Dialog } from "@base-ui/react/dialog";
-import { Archive, Check, Search, Undo2, Workflow, X } from "lucide-react";
+import { Archive, Check, Scissors, Search, Undo2, Workflow, X } from "lucide-react";
+import { OpenInEditor } from "@/components/cut/open-in-editor";
 import {
   announceQueueChange,
   archiveConcept,
@@ -346,6 +347,15 @@ export default function PipelinePage() {
                         </button>
                       </>
                     )}
+                    {c.media_url ? (
+                      <OpenInEditor
+                        concept_id={c.id}
+                        className={`${ICON_BTN} hover:border-bone hover:text-bone!`}
+                        title={`Edit ${c.title} in the editor`}
+                      >
+                        <Scissors size={18} strokeWidth={2} aria-hidden />
+                      </OpenInEditor>
+                    ) : null}
                     <Link
                       href={`/studio/flows?concept=${c.id}&shot=1`}
                       className={`${ICON_BTN} hover:border-bone hover:text-bone!`}

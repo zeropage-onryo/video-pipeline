@@ -37,6 +37,7 @@ import {
   type OpResult,
   type Preview,
   type Project,
+  type Proposal,
   type VersionRow,
 } from "@/lib/cut/api";
 import { describeOp, endOf, type Doc } from "@/lib/cut/timeline";
@@ -45,6 +46,20 @@ export type Tool = "select" | "blade";
 export type Selection = { ids: string[]; kind: "clip" | "cue" | null };
 export type TrackMix = { mute?: boolean; solo?: boolean };
 export type LeftTab = "agent" | "media" | "text" | "audio" | "search";
+/* one line of the agent's thread. A proposal's status is the person's
+   click: pending until Keep or Undo, and nothing else changes it. */
+export type Turn = {
+  id: string;
+  role: "me" | "agent";
+  text: string;
+  proposal?: Proposal | null;
+  status?: "pending" | "kept" | "undone";
+  notes?: string[];
+  needsIndex?: string[];
+  /** the action to re-run once the clips are indexed */
+  retry?: "cleanup" | "captions";
+  working?: boolean;
+};
 
 type Toast = (text: string, kind?: "ok" | "err") => void;
 
@@ -77,6 +92,9 @@ export type CutStore = {
   bin: BinItem[];
   binLoading: boolean;
   leftTab: LeftTab;
+  thread: Turn[];
+  /** the proposal whose AFTER is on screen (its doc is the ghost) */
+  previewing: string | null;
 
   toast: Toast;
   setToast: (t: Toast) => void;
@@ -108,6 +126,9 @@ export type CutStore = {
   loadBin: () => Promise<void>;
   addToBin: (item: BinItem) => void;
   setLeftTab: (t: LeftTab) => void;
+  pushTurn: (t: Omit<Turn, "id">) => string;
+  updateTurn: (id: string, patch: Partial<Turn>) => void;
+  preview: (turnId: string | null) => void;
 };
 
 let chain: Promise<unknown> = Promise.resolve();
@@ -120,6 +141,7 @@ export const useCut = create<CutStore>((set, get) => {
       head,
       doc: head.doc,
       ghost: null,
+      previewing: null,
       canUndo: res.can_undo,
       canRedo: res.can_redo,
       media: res.media ? { ...s.media, ...res.media } : s.media,
@@ -170,12 +192,25 @@ export const useCut = create<CutStore>((set, get) => {
     bin: [],
     binLoading: false,
     leftTab: "media",
+    thread: [],
+    previewing: null,
 
     toast: () => {},
     setToast: (toast) => set({ toast }),
 
     load: async (id) => {
-      set({ projectId: id, loading: true, error: null, previews: {}, selection: { ids: [], kind: null }, playhead: 0 });
+      set({
+        projectId: id,
+        loading: true,
+        error: null,
+        previews: {},
+        selection: { ids: [], kind: null },
+        playhead: 0,
+        thread: [],
+        previewing: null,
+        ghost: null,
+        highlight: null,
+      });
       try {
         const res = await getProject(id);
         set({ project: res.project, loading: false, media: res.media ?? {} });
@@ -303,6 +338,21 @@ export const useCut = create<CutStore>((set, get) => {
     },
     addToBin: (item) => set((s) => ({ bin: [item, ...s.bin.filter((b) => b.handle !== item.handle)] })),
     setLeftTab: (leftTab) => set({ leftTab }),
+    pushTurn: (t) => {
+      const id = `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+      set((s) => ({ thread: [...s.thread.slice(-59), { ...t, id }] }));
+      return id;
+    },
+    updateTurn: (id, patch) => set((s) => ({ thread: s.thread.map((t) => (t.id === id ? { ...t, ...patch } : t)) })),
+    /* Before/after: the proposal's doc drawn as the ghost -- the viewer and
+       the timeline both read the ghost, so "after" plays as well as shows.
+       Nothing is saved; switching back is dropping the ghost. */
+    preview: (turnId) => {
+      if (!turnId) return set({ previewing: null, ghost: null, highlight: null });
+      const t = get().thread.find((x) => x.id === turnId);
+      if (!t?.proposal) return;
+      set({ previewing: turnId, ghost: t.proposal.doc, highlight: t.proposal.region });
+    },
 
     /* T6's artifacts, asked for once per handle per session; a `pending`
        answer is asked again a few seconds later until it settles. */

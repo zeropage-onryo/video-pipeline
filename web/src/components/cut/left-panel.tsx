@@ -4,12 +4,10 @@
    Five tabs -- Agent, Media, Text, Audio, Search -- and the tool strip's
    buttons open the same tabs, so there is one media bin, not two.
 
-   AGENT is a composer with two modes, like invideo's. EDITOR mode is a
-   command palette over the manual tools (type "split", Enter) and works
-   today. AGENT mode -- a model proposing ops that arrive as Keep / Undo
-   diff cards (T19-T22) -- is the next phase; its seat is here and says so
-   rather than pretending. */
-import { useMemo, useRef, useState } from "react";
+   AGENT is its own module (agent-panel.tsx): a composer with invideo's two
+   modes -- Agent (a model proposing edits as Keep / Undo cards) and Editor
+   (a command palette over the manual tools). */
+import { useRef, useState } from "react";
 import {
   AudioLines,
   Bot,
@@ -20,8 +18,6 @@ import {
   Music,
   Plus,
   Search,
-  Sparkles,
-  TerminalSquare,
   Upload,
 } from "lucide-react";
 import { useCut, useDrawnDoc } from "@/lib/cut/store";
@@ -30,7 +26,7 @@ import { searchFootage, uploadMedia, type BinItem, type SearchHit } from "@/lib/
 import { clipAt, timecode, type Doc, type Track } from "@/lib/cut/timeline";
 import { MEDIA_MIME } from "@/components/cut/timeline";
 import { CaptionStyle } from "@/components/cut/inspector";
-import { COMMANDS, runCommand, type Command } from "@/components/cut/commands";
+import { AgentPanel, suggest } from "@/components/cut/agent-panel";
 
 const TABS = [
   { id: "agent", label: "Agent", icon: Bot },
@@ -52,120 +48,12 @@ export function LeftPanel() {
           </button>
         ))}
       </div>
-      {tab === "agent" ? <AgentTab /> : null}
+      {tab === "agent" ? <AgentPanel /> : null}
       {tab === "media" ? <MediaTab /> : null}
       {tab === "text" ? <TextTab /> : null}
       {tab === "audio" ? <AudioTab /> : null}
       {tab === "search" ? <SearchTab /> : null}
     </div>
-  );
-}
-
-/* ── Agent / Editor ── */
-function AgentTab() {
-  const [mode, setMode] = useState<"agent" | "editor">("editor");
-  const [text, setText] = useState("");
-  const [active, setActive] = useState(0);
-  const ref = useRef<HTMLTextAreaElement>(null);
-  const matches = useMemo(() => {
-    const q = text.trim().toLowerCase();
-    if (!q) return COMMANDS;
-    return COMMANDS.filter((c) => c.label.toLowerCase().includes(q) || c.words?.some((w) => w.includes(q)));
-  }, [text]);
-  const run = (c: Command | undefined) => {
-    if (!c) return;
-    runCommand(c);
-    setText("");
-    setActive(0);
-  };
-  return (
-    <>
-      <div className="cx-pane-body">
-        <div className="cx-thread">
-          {mode === "agent" ? (
-            <div className="cx-diff">
-              <p className="cx-h" style={{ marginBottom: 6 }}>
-                <Sparkles size={12} style={{ verticalAlign: -1, marginRight: 6 }} />
-                The editing agent
-              </p>
-              <p className="cx-note">
-                Next phase: ask for “clean up the silences” or “cut this to 30 seconds”, and every edit it proposes lands
-                here as a card — the change on the timeline, Keep or Undo. Nothing it does touches the cut without your
-                click.
-              </p>
-              <p className="cx-note" style={{ marginTop: 8 }}>
-                Today, Editor mode runs every manual tool from this box.
-              </p>
-            </div>
-          ) : (
-            <>
-              <p className="cx-note">Type a tool — split, marker, caption, fit — and press Enter.</p>
-              <div className="cx-palette" role="listbox">
-                {matches.map((c, i) => (
-                  <button
-                    key={c.id}
-                    type="button"
-                    role="option"
-                    aria-selected={i === active}
-                    data-active={i === active}
-                    onMouseEnter={() => setActive(i)}
-                    onClick={() => run(c)}
-                  >
-                    <c.icon />
-                    {c.label}
-                    {c.keys ? <kbd>{c.keys}</kbd> : null}
-                  </button>
-                ))}
-                {!matches.length ? <p className="cx-note">No tool by that name.</p> : null}
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-      <div className="cx-composer">
-        <textarea
-          ref={ref}
-          value={text}
-          placeholder={mode === "editor" ? "Split, marker, add caption, zoom to fit…" : "Arrives in the next phase"}
-          disabled={mode === "agent"}
-          onChange={(e) => {
-            setText(e.target.value);
-            setActive(0);
-          }}
-          onKeyDown={(e) => {
-            e.stopPropagation();
-            if (mode !== "editor") return;
-            if (e.key === "ArrowDown") {
-              e.preventDefault();
-              setActive((a) => Math.min(matches.length - 1, a + 1));
-            } else if (e.key === "ArrowUp") {
-              e.preventDefault();
-              setActive((a) => Math.max(0, a - 1));
-            } else if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              run(matches[active]);
-            } else if (e.key === "Escape") {
-              setText("");
-              ref.current?.blur();
-            }
-          }}
-        />
-        <div className="cx-composer-row">
-          <span className="cx-seg">
-            <button type="button" aria-pressed={mode === "agent"} onClick={() => setMode("agent")}>
-              <Bot size={11} style={{ verticalAlign: -1, marginRight: 4 }} />
-              Agent
-            </button>
-            <button type="button" aria-pressed={mode === "editor"} onClick={() => setMode("editor")}>
-              <TerminalSquare size={11} style={{ verticalAlign: -1, marginRight: 4 }} />
-              Editor
-            </button>
-          </span>
-          <span className="spacer" />
-          <span className="cx-label">⏎ run</span>
-        </div>
-      </div>
-    </>
   );
 }
 
@@ -404,10 +292,13 @@ function TextTab() {
 
       <div className="cx-card">
         <h4 className="cx-h">Captions from speech</h4>
-        <p className="cx-note">
-          Builds cues from the words spoken in your clips, once they are indexed (≈ a cent a clip). It arrives with the
-          agent phase, beside Clean up — both read the same word timings.
+        <p className="cx-note" style={{ marginBottom: 10 }}>
+          Cues built from the words spoken in the sound on your timeline. They arrive as a proposal you play and keep —
+          clips have to be indexed first (≈ a cent a clip, offered when needed).
         </p>
+        <button type="button" className="cx-btn ghost" onClick={() => void suggest("captions")}>
+          <Captions /> Make captions from speech
+        </button>
       </div>
     </div>
   );
