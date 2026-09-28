@@ -8,7 +8,8 @@
 # not exist in this image, so it exited 1 every night into /var/log, which
 # a redeploy wipes. The concept walk, the research agent and the scout
 # crawl are no longer scheduled anywhere (the Mac's LaunchAgent went the
-# same day); `python -m src.nightly walk` still runs by hand.
+# same day, and the Mac runs none at all now); `python -m src.nightly
+# walk` still runs by hand.
 #
 # What stays is `ops.ig_tokens keep`, daily at 10:00 ET (TZ below): it
 # makes no Meta call until the publishing token's last refresh is 30 days

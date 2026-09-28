@@ -438,12 +438,10 @@ def test_the_image_schedules_the_keeper_and_not_the_walk():
     assert "run_morning_prompts" not in cron and "src.nightly" not in cron
 
 
-def test_the_mac_agent_is_the_keeper():
-    import plistlib
+def test_the_repo_installs_no_launch_agent():
+    """2026-09-28, Mike's call: Fly is the only scheduler. A plist in the
+    repo is an invitation to reinstall the walk (or a keeper nobody runs)."""
     from pathlib import Path
     root = Path(__file__).resolve().parent.parent
-    assert not (root / "com.zeropage.morningprompts.plist").exists()
-    plist = plistlib.loads((root / "com.zeropage.igtoken.plist").read_bytes())
-    assert plist["ProgramArguments"][-3:] == ["keep", "--days", "30"]
-    assert plist["ProgramArguments"][1].endswith("/ops/ig_token.sh")
-    assert "Documents" not in plist["StandardOutPath"]        # launchd opens it pre-exec
+    assert not list(root.glob("com.zeropage.*.plist"))
+    assert not (root / "ops" / "install-launchagents.sh").exists()
