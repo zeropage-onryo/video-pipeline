@@ -474,6 +474,7 @@ def import_clip(concept_id: int, shot_n, file: str, model: str,
                 path,
                 key=media.object_key(f"renders/{tail}", account_id),
                 content_type="video/mp4")
+            media.mirror_poster(path, f"renders/{tail}", account_id)
     except Exception:
         pass
     preprod.set_shot_media_url(concept_id, shot_n, media_url, account_id=account_id)

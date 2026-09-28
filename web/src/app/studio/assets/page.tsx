@@ -247,7 +247,18 @@ export default function AssetsPage() {
                       }
                     }}
                   >
-                    {m.kind === "video" ? <video src={`${API_URL}${m.url}`} muted loop playsInline preload="metadata" /> : null}
+                    {m.kind === "video" ? (
+                      // #t=0.5 makes Safari draw a frame instead of a dark box
+                      // when a clip has no poster yet (renders before 2026-09-28)
+                      <video
+                        src={`${API_URL}${m.url}#t=0.5`}
+                        poster={m.poster ? `${API_URL}${m.poster}` : undefined}
+                        muted
+                        loop
+                        playsInline
+                        preload="metadata"
+                      />
+                    ) : null}
                     {m.starred ? <Star size={11} strokeWidth={2} className="absolute top-2 right-2 fill-current text-[var(--signal)]" /> : null}
                     <span className="wname">
                       {m.kind === "video" ? <Film size={11} strokeWidth={1.6} /> : <Sparkles size={11} strokeWidth={1.6} />}
@@ -295,7 +306,14 @@ export default function AssetsPage() {
             <div className="adbody">
               <div className="adframe">
                 {open.kind === "video" ? (
-                  <video src={`${API_URL}${open.url}`} controls muted playsInline preload="metadata" />
+                  <video
+                    src={`${API_URL}${open.url}`}
+                    poster={open.poster ? `${API_URL}${open.poster}` : undefined}
+                    controls
+                    muted
+                    playsInline
+                    preload="metadata"
+                  />
                 ) : (
                   <img src={`${API_URL}${open.url}`} alt="" />
                 )}

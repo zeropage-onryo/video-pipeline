@@ -1108,11 +1108,14 @@ def _publish(out_path: Path, content_type: str,
     """R2 when configured (Instagram needs a public URL), else the app's
     own /renders mount. The key carries the tenant -- see src/media.py."""
     from . import media, storage
+    tail = f"renders/fal/{out_path.name}"
     if storage.configured():
-        return storage.upload_file(
-            out_path,
-            key=media.object_key(f"renders/fal/{out_path.name}", account_id),
+        url = storage.upload_file(
+            out_path, key=media.object_key(tail, account_id),
             content_type=content_type)
+        if content_type.startswith("video/"):
+            media.mirror_poster(out_path, tail, account_id)   # the Assets tile
+        return url
     return f"/renders/fal/{out_path.name}"
 
 

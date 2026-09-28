@@ -1267,7 +1267,12 @@ is yours, in Resolve, by hand.
   on `generated_assets` (additive ALTERs in `render_assets.init`, `PATCH
   /api/assets/generated/{id}`); the wall's chips are Images / Clips / Starred / one per folder,
   plus a provider select, all derived from the response's set totals (`wall`, `folders`,
-  `providers`). **Delete is SOFT** (`deleted_at`, `DELETE /api/assets/generated/{id}`): the
+  `providers`). **A clip's tile is its poster (2026-09-28):** `fal._publish` and the manual
+  import draw one frame (`media.mirror_poster`, ffmpeg, 480px) under the clip's own tail in
+  `t/`, so `media.thumb_url_for(media_url)` finds it with no new column; clips from before
+  that got theirs from `ops/backfill_video_posters.py` (report first, `--write`). The
+  provider label is the model's catalog name (`pricing.CATALOG_MODELS`: "LTX 2.3", not
+  "Ltx"). **Delete is SOFT** (`deleted_at`, `DELETE /api/assets/generated/{id}`): the
   render leaves the wall and its RAG chunk is dropped, but the row and the file stay, so a
   concept whose shot carries that clip keeps rendering it — a paid output is never thrown
   away. **"Make element"** on a still opens the add-element modal with the render attached

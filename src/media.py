@@ -396,3 +396,67 @@ def thumb_bytes(data: bytes) -> Optional[bytes]:
         return buf.getvalue()
     except Exception:                                   # noqa: BLE001
         return None
+
+
+# A clip's poster (2026-09-28). The Assets wall drew every fal clip as a
+# dark tile: there was no image for it, so the browser lazy-loaded the mp4
+# and showed frame zero, or nothing. The poster is the SAME derivative a
+# photo gets -- the clip's own tail under `t/`, a 480px JPEG -- so
+# `thumb_url_for(media_url)` finds it with no new column and no second key
+# scheme. The object keeps the clip's `.mp4` name; its Content-Type is what
+# a browser reads.
+POSTER_AT_SECONDS = 0.5
+
+
+def poster_bytes(video_path, *, at: float = POSTER_AT_SECONDS,
+                 timeout: float = 30.0) -> Optional[bytes]:
+    """One frame of a local clip -> 480px JPEG bytes, or None (no ffmpeg,
+    unreadable file, a clip shorter than `at`). Never raises.
+
+    Half a second in rather than frame zero: an i2v clip's first frame IS
+    the keyframe, and a fade-in's is black."""
+    import shutil
+    import subprocess
+
+    exe = shutil.which("ffmpeg")
+    if not exe:
+        return None
+    for seek in (at, 0.0):
+        try:
+            proc = subprocess.run(
+                [exe, "-hide_banner", "-loglevel", "error", "-ss", f"{seek}",
+                 "-i", str(video_path), "-frames:v", "1", "-f", "image2pipe",
+                 "-vcodec", "mjpeg", "-"],
+                capture_output=True, timeout=timeout, check=False)
+        except (subprocess.SubprocessError, OSError):
+            return None
+        if proc.returncode == 0 and proc.stdout:
+            return thumb_bytes(proc.stdout)
+    return None
+
+
+def mirror_poster(video_path, tail: str,
+                  account_id: Optional[int] = None) -> Optional[str]:
+    """Draw a clip's poster and upload it where `thumb_url_for` looks.
+    Best-effort like `mirror`: returns the poster's URL, or None when R2
+    is off or no frame could be drawn -- the wall then falls back to the
+    clip itself, which is what it did before."""
+    import sys
+
+    from . import storage
+
+    try:
+        if not storage.configured():
+            return None
+    except Exception:                                   # noqa: BLE001
+        return None
+    data = poster_bytes(video_path)
+    if not data:
+        return None
+    try:
+        return storage.upload_bytes(data, thumb_key_for_tail(tail, account_id),
+                                    content_type="image/jpeg")
+    except Exception as e:                              # noqa: BLE001
+        print(f"note: poster upload failed for {tail}: {type(e).__name__}: {e}",
+              file=sys.stderr)
+        return None

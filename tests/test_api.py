@@ -524,6 +524,25 @@ def test_generated_media_carries_organize_fields_and_folders(tmp_db, monkeypatch
     assert client.patch("/api/assets/generated/9999", json={"starred": True}).status_code == 404
 
 
+def test_a_generated_clip_carries_its_poster(tmp_db, monkeypatch):
+    """2026-09-28: a clip's tile draws its t/ derivative (media.mirror_poster
+    writes it at publish time) instead of a dark box. No R2, no poster --
+    the page then falls back to the clip itself, as before."""
+    from src import media
+    image_id, video_id = _bank_two(tmp_db, monkeypatch)
+    monkeypatch.setattr(media, "thumb_url_for",
+                        lambda url, account_id=None: "https://r2.test/t/" + url.rsplit("/", 1)[-1])
+    items = {i["generated_id"]: i
+             for i in client.get("/api/media?kind=all&scope=generated").json()["items"]}
+    assert items[video_id]["poster"] == "https://r2.test/t/b.mp4"
+    assert items[image_id]["poster"] is None      # a still is its own tile
+
+    monkeypatch.setattr(media, "thumb_url_for", lambda url, account_id=None: None)
+    items = {i["generated_id"]: i
+             for i in client.get("/api/media?kind=all&scope=generated").json()["items"]}
+    assert items[video_id]["poster"] is None
+
+
 def test_deleting_a_render_is_soft(tmp_db, monkeypatch):
     """The wall and the shelf forget it; the row and the file stay, so a
     concept whose shot carries that clip keeps rendering it."""
