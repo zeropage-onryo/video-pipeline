@@ -73,6 +73,17 @@ def _label(tool: str, model: str) -> str:
         return "Nano Banana Pro" if "pro" in model.lower() else "Nano Banana"
     if tool == "runway":
         return "Runway"
+    # a fal render stores the platform as its tool ("ltx", "kling") and the
+    # catalog key as its model ("ltx2.3"): the wall says the model's public
+    # name, the one /models and the Queue print (2026-09-28). Lazy -- pricing
+    # reaches providers and the ledger, which this module does not need.
+    try:
+        from . import pricing
+        names = {m: name for _, m, name, _ in pricing.CATALOG_MODELS}
+    except Exception:                                   # noqa: BLE001
+        names = {}
+    if model in names:
+        return names[model]
     return tool.replace("_", " ").title()
 
 

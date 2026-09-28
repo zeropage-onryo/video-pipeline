@@ -1,6 +1,6 @@
 # Task: lean card listings (Supabase egress per user)
 
-## Result (steps 1–4, measured 2026-09-25, not yet deployed)
+## Result (steps 1–4, measured 2026-09-25; merged and deployed 2026-09-26, ~04:16 UTC, on Fly and Vercel)
 
 Bytes pulled from Postgres per visit, account 1, zeropage (antihero is similar):
 
@@ -15,8 +15,32 @@ Bytes pulled from Postgres per visit, account 1, zeropage (antihero is similar):
 | Elements usage count | 896,205 | **2,161** | #60 |
 
 The response the browser receives on a Pipeline load (Vercel edge transfer)
-fell from 382,296 to 44,873 bytes. Still to do: deploy, then read the Supabase
-usage chart the next day, per day.
+fell from 382,296 to 44,873 bytes.
+
+### Egress per day (Supabase usage chart)
+
+| Day (2026) | Total egress | Shared Pooler (database) | Auth | Note |
+|---|---:|---:|---:|---|
+| 22 Sep | 1.377 GB | 1.377 GB (100%) | — | baseline: Queue badge polling |
+| 23 Sep | 14.33 MB | 14.328 MB | 1.7 KB | after #48 |
+| 24 Sep | 33.07 MB | 33.064 MB | 8.6 KB | after #48 |
+| 25 Sep | 74.97 MB | 74.958 MB | 9.1 KB | after #48 |
+| 26 Sep | 44.92 MB | 44.902 MB | 19.8 KB | mixed: #59–#62 deployed ~04:16 UTC |
+| 27 Sep | **11.12 MB** | 11.116 MB (100%) | — | first full day after #59–#62 |
+
+27 Sep is the lowest day on the chart since 22 Sep: 11.1 MB against a
+23–25 Sep mean of ~40.8 MB (−73%), and ~7% of the free plan's ~165 MB/day.
+The direction matches the per-visit measurements, but one day cannot separate
+the fix from a quiet day (27 Sep was a Sunday, and the 23–25 spread of 14–75 MB
+shows how much usage alone moves the number), so read a few more weekdays before
+calling it settled. Nearly all egress is the Shared Pooler, i.e. database
+traffic; storage, realtime and cached egress are zero or absent.
+
+Source: Supabase dashboard, Organization → Usage → "Egress per day", project
+`zeropage-studio`, read 2026-09-28 by hovering each bar (tooltip values, not
+estimated off the axis). The chart does not label its time zone; the page's
+request asks for the cycle starting `2026-09-03T00:00:00Z`, so the buckets are
+most likely UTC days.
 
 ## Measurements (step 0, 2026-09-25, live Supabase, account 1)
 

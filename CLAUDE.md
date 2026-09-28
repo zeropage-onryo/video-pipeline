@@ -69,17 +69,33 @@ venv/bin/python -m src.scout list [--brand ...] [--unused]
 venv/bin/python -m src.scout next --brand zeropage       # the servable spark, or exit 1
 
 # THE INSTAGRAM TOKENS — two credentials, two hosts (src/instagram.py).
-# check is read-only (one call each, never prints a value) and is what the
-# nightly preflight runs; refresh/publish/research write .env with a backup.
+# check is read-only (one call each, never prints a value); refresh/publish/
+# research write .env with a backup. `keep` is THE ONLY SCHEDULED JOB in the
+# project (2026-09-28): daily at 10:00 ET on the Mac (com.zeropage.igtoken,
+# ops/install-launchagents.sh) and on Fly (the image's one cron line, log in
+# /app/data/ig_token_keeper.log); it makes no Meta call until the publishing
+# token's last refresh is 30 days old, then refreshes it into the store --
+# never .env. Each host keeps its OWN copy of the token alive.
 venv/bin/python -m ops.ig_tokens check [--probe]
 venv/bin/python -m ops.ig_tokens refresh|publish
+venv/bin/python -m ops.ig_tokens keep [--days 30]
 venv/bin/python -m ops.ig_tokens research --app-id <research app id>
+
+# THE NIGHTLY WALK IS NOT SCHEDULED (2026-09-28, Mike's call). The Mac's
+# com.zeropage.morningprompts agent is retired (install-launchagents.sh
+# renames it .disabled), and the Fly cron line that called
+# run_morning_prompts.sh -- which never once ran there: its first line cds
+# into the Mac's folder -- was replaced by the token keeper. Concept walks,
+# the research agent, the scout crawl and the metrics sweep now run only by
+# hand: `src.nightly walk`, `src.research_agent`, `src.scout run`,
+# `src.refresh_metrics`. Everything below that says "the nightly" or "the
+# night" describes those commands, not a schedule.
 
 # THE SHADOW RUN — one run, spark rotated from prompts/sparks.txt. MANUAL
 # ONLY: nothing schedules this. The 03:30 launchd job was removed
 # 2026-09-14 because it took neither the nightly lock nor the budget, so it
-# ran an eleventh time beside the 22:00 walk. The scheduled path is
-# `src.nightly walk`; this is the hand-run door into the same graph.
+# ran an eleventh time beside the 22:00 walk. `src.nightly walk` is the
+# batch door; this is the one-run door into the same graph.
 # Grading happens on /holds each morning. --scout takes the direction from
 # the scout's bank instead, falling back to the rotation when the bank is
 # empty or under scout.SCORE_FLOOR.
@@ -1267,7 +1283,12 @@ is yours, in Resolve, by hand.
   on `generated_assets` (additive ALTERs in `render_assets.init`, `PATCH
   /api/assets/generated/{id}`); the wall's chips are Images / Clips / Starred / one per folder,
   plus a provider select, all derived from the response's set totals (`wall`, `folders`,
-  `providers`). **Delete is SOFT** (`deleted_at`, `DELETE /api/assets/generated/{id}`): the
+  `providers`). **A clip's tile is its poster (2026-09-28):** `fal._publish` and the manual
+  import draw one frame (`media.mirror_poster`, ffmpeg, 480px) under the clip's own tail in
+  `t/`, so `media.thumb_url_for(media_url)` finds it with no new column; clips from before
+  that got theirs from `ops/backfill_video_posters.py` (report first, `--write`). The
+  provider label is the model's catalog name (`pricing.CATALOG_MODELS`: "LTX 2.3", not
+  "Ltx"). **Delete is SOFT** (`deleted_at`, `DELETE /api/assets/generated/{id}`): the
   render leaves the wall and its RAG chunk is dropped, but the row and the file stay, so a
   concept whose shot carries that clip keeps rendering it — a paid output is never thrown
   away. **"Make element"** on a still opens the add-element modal with the render attached

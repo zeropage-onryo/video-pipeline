@@ -5,6 +5,7 @@ one's clock, install a fresh one of either.
 
     python -m ops.ig_tokens check [--probe]   # read-only; the default
     python -m ops.ig_tokens refresh           # IG_ACCESS_TOKEN +60 days, into .env
+    python -m ops.ig_tokens keep [--days 30]  # the scheduled job: refresh when due
     python -m ops.ig_tokens publish           # install a re-issued IG_ACCESS_TOKEN
     python -m ops.ig_tokens research          # issue + install IG_GRAPH_TOKEN
     python -m ops.ig_tokens fly-export NAME.. | fly secrets import -a zeropage-studio
@@ -165,6 +166,60 @@ def cmd_refresh(*, env_path: Path = None, refresh=None, say=print, now=None) -> 
     say("     if Fly posts or refreshes metrics, copy it there too (no value on screen):")
     say(f"     {FLY_PIPE}")
     return 0
+
+
+KEEP_DAYS = 30
+
+
+def refresh_due(days: int = KEEP_DAYS, now=None) -> tuple:
+    """(due, why). Due when the refresh store has no record for the token in
+    use, or its last refresh is `days` or more old. Reads the store only --
+    deciding costs no Meta call."""
+    now = now or datetime.now(timezone.utc)
+    record = instagram._read_token_store() or {}
+    if record.get("replaces") != instagram._fingerprint(instagram._env_token()):
+        return True, "no refresh on record for the token in use"
+    try:
+        last = datetime.fromisoformat(record["refreshed_at"])
+    except (KeyError, TypeError, ValueError):
+        return True, "no refresh date on record"
+    age = (now - last).days
+    if age >= days:
+        return True, f"last refreshed {age} days ago"
+    return False, f"last refreshed {age} days ago; next refresh in {days - age} days"
+
+
+def cmd_keep(days: int = KEEP_DAYS, *, step=None, now=None, say=print,
+             warn=None) -> int:
+    """The one scheduled Instagram job (2026-09-28, replacing the nightly
+    walk): refresh IG_ACCESS_TOKEN once it is `days` old, otherwise do
+    nothing. Run daily -- a missed day (a sleeping Mac, a redeploy) only
+    moves the refresh to the next run, well inside the 60-day life.
+
+    Goes through instagram.refresh_token_step, which keeps a new token in
+    the refresh store and NEVER writes .env, so it is safe on Fly, where
+    the token is a secret and there is no .env to write."""
+    warn = warn or (lambda line: print(line, file=sys.stderr))
+    now = now or datetime.now(timezone.utc)
+    stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    if not instagram.access_token():
+        warn(f"{stamp} !!! IG_ACCESS_TOKEN not set -- nothing to keep alive. "
+             + instagram.PUBLISH_FIX)
+        return 1
+    due, why = refresh_due(days, now=now)
+    if not due:
+        record = instagram._read_token_store() or {}
+        left = instagram._days_until(record.get("expires_at"), now)
+        say(f"{stamp} instagram token: not due ({why})"
+            + (f", {left} days left" if left is not None else ""))
+        return 0
+    result = (step or instagram.refresh_token_step)()
+    line = f"{stamp} {result['message']} ({why})"
+    if result.get("ok") and not result.get("warning"):
+        say(line)
+        return 0
+    warn(line.replace("instagram token:", "!!! instagram token:", 1))
+    return 0 if result.get("ok") else 1
 
 
 def cmd_publish(*, env_path: Path = None, ask: Callable = getpass.getpass,
@@ -375,6 +430,9 @@ def main(argv=None) -> int:
                          help="also read @zeropagefilms through business_discovery "
                               "(read-only, no hashtag budget)")
     sub.add_parser("refresh", help="wind IG_ACCESS_TOKEN another 60 days, into .env")
+    p_keep = sub.add_parser("keep", help="the scheduled job: refresh IG_ACCESS_TOKEN "
+                                         "once it is --days old (store only, never .env)")
+    p_keep.add_argument("--days", type=int, default=KEEP_DAYS)
     p_pub = sub.add_parser("publish", help="install a re-issued IG_ACCESS_TOKEN")
     p_pub.add_argument("--exchange", action="store_true",
                        help="the pasted token is short-lived: exchange it (asks for "
@@ -391,7 +449,8 @@ def main(argv=None) -> int:
 
     if args.command == "fly-export":
         return cmd_fly_export(args.names)
-
+    if args.command == "keep":
+        return cmd_keep(days=args.days)
     if args.command == "refresh":
         return cmd_refresh()
     if args.command == "publish":

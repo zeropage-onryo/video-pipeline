@@ -721,6 +721,7 @@ def _assets_all(account_id: Optional[int] = None, scope: str = "all") -> list:
 
 
 def _generated_assets(account_id: Optional[int]) -> list:
+    from src import media
     items = []
     for rendered in render_assets.list_all(account_id=account_id):
         url = rendered["media_url"]
@@ -744,7 +745,9 @@ def _generated_assets(account_id: Optional[int]) -> list:
             "photos": [url] if kind == "image" else [],
             "media": [{"url": url, "kind": kind}],
             "media_url": url, "media_kind": kind,
-            "poster": url if kind == "image" else None,
+            # a clip's poster is its t/ derivative (media.mirror_poster at
+            # publish time); None when R2 is off or it predates 2026-09-28
+            "poster": url if kind == "image" else media.thumb_url_for(url, account_id),
             "text": rendered["prompt"], "meta": meta,
             "folder": rendered.get("folder"),
             "starred": bool(rendered.get("starred")),
@@ -882,6 +885,7 @@ def media_list(q: Optional[str] = None, category: Optional[str] = None,
                     "prompt": asset.get("text") or "",
                     "folder": asset.get("folder"),
                     "starred": bool(asset.get("starred")),
+                    "poster": asset.get("poster") if media_kind == "video" else None,
                 })
             items.append(row)
     items.sort(key=lambda x: x["ts"], reverse=True)

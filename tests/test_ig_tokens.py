@@ -346,3 +346,104 @@ def test_fly_export_with_an_unset_value_exports_nothing(monkeypatch):
     out, said = _Out(tty=False), []
     assert ig_tokens.cmd_fly_export(["IG_GRAPH_TOKEN"], out=out, say=said.append) == 1
     assert out.written == ""
+
+
+# --------------------------------------------------------------------------
+# keep -- the one scheduled job since the nightly walk was retired
+# --------------------------------------------------------------------------
+
+def _store(tmp_path, monkeypatch, record):
+    import json
+    store = tmp_path / "ig_token.json"
+    monkeypatch.setenv("IG_TOKEN_STORE", str(store))
+    if record is not None:
+        store.write_text(json.dumps(record))
+    return store
+
+
+def test_keep_does_nothing_before_thirty_days(monkeypatch, tmp_path):
+    monkeypatch.setenv("IG_ACCESS_TOKEN", SECRET_TOKEN)
+    _store(tmp_path, monkeypatch, {
+        "replaces": instagram._fingerprint(SECRET_TOKEN), "access_token": None,
+        "refreshed_at": (NOW - timedelta(days=29)).isoformat(),
+        "expires_at": (NOW + timedelta(days=31)).isoformat()})
+    said = []
+    code = ig_tokens.cmd_keep(30, now=NOW, say=said.append,
+                              step=lambda: pytest.fail("refreshed before it was due"))
+    assert code == 0
+    assert "not due" in said[0] and "31 days left" in said[0]
+    assert SECRET_TOKEN not in said[0]
+
+
+def test_keep_refreshes_at_thirty_days(monkeypatch, tmp_path):
+    monkeypatch.setenv("IG_ACCESS_TOKEN", SECRET_TOKEN)
+    _store(tmp_path, monkeypatch, {
+        "replaces": instagram._fingerprint(SECRET_TOKEN), "access_token": None,
+        "refreshed_at": (NOW - timedelta(days=30)).isoformat()})
+    calls, said = [], []
+
+    def step():
+        calls.append(1)
+        return {"ok": True, "warning": False,
+                "message": "instagram token: refreshed, 60 days left"}
+    assert ig_tokens.cmd_keep(30, now=NOW, step=step, say=said.append) == 0
+    assert calls == [1] and "refreshed, 60 days left" in said[0]
+    assert "30 days ago" in said[0]
+
+
+def test_keep_refreshes_when_the_record_is_for_another_token(monkeypatch, tmp_path):
+    """A token re-issued into .env has no refresh of its own on record."""
+    monkeypatch.setenv("IG_ACCESS_TOKEN", "a-newly-issued-token")
+    _store(tmp_path, monkeypatch, {
+        "replaces": instagram._fingerprint(SECRET_TOKEN), "access_token": None,
+        "refreshed_at": NOW.isoformat()})
+    due, why = ig_tokens.refresh_due(30, now=NOW)
+    assert due and "token in use" in why
+
+
+def test_keep_with_no_record_refreshes(monkeypatch, tmp_path):
+    monkeypatch.setenv("IG_ACCESS_TOKEN", SECRET_TOKEN)
+    _store(tmp_path, monkeypatch, None)
+    assert ig_tokens.refresh_due(30, now=NOW)[0] is True
+
+
+def test_a_failed_refresh_is_loud_and_exits_one(monkeypatch, tmp_path):
+    monkeypatch.setenv("IG_ACCESS_TOKEN", SECRET_TOKEN)
+    _store(tmp_path, monkeypatch, None)
+    loud = []
+    code = ig_tokens.cmd_keep(
+        30, now=NOW, say=lambda s: pytest.fail("a failure went to stdout"),
+        warn=loud.append,
+        step=lambda: {"ok": False, "warning": True,
+                      "message": "instagram token: REFRESH FAILED: Session has expired"})
+    assert code == 1 and loud[0].count("!!!") == 1 and "REFRESH FAILED" in loud[0]
+
+
+def test_keep_with_no_token_says_so(monkeypatch, tmp_path):
+    _store(tmp_path, monkeypatch, None)
+    loud = []
+    assert ig_tokens.cmd_keep(30, now=NOW, warn=loud.append) == 1
+    assert "IG_ACCESS_TOKEN not set" in loud[0]
+
+
+def test_the_image_schedules_the_keeper_and_not_the_walk():
+    """2026-09-28: the nightly walk is unscheduled. The image's one cron
+    line refreshes the Instagram token, logging onto the volume."""
+    from pathlib import Path
+    dockerfile = (Path(__file__).resolve().parent.parent / "Dockerfile").read_text()
+    [cron] = [ln for ln in dockerfile.splitlines()
+              if "/etc/cron.d/zeropage" in ln and "echo" in ln]
+    assert "ops.ig_tokens keep --days 30" in cron
+    assert "/app/data/" in cron                    # the volume, survives a deploy
+    assert "run_morning_prompts" not in cron and "src.nightly" not in cron
+
+
+def test_the_mac_agent_is_the_keeper():
+    import plistlib
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    assert not (root / "com.zeropage.morningprompts.plist").exists()
+    plist = plistlib.loads((root / "com.zeropage.igtoken.plist").read_bytes())
+    assert plist["ProgramArguments"][-3:] == ["keep", "--days", "30"]
+    assert plist["ProgramArguments"][1].endswith("/ops/ig_token.sh")
+    assert "Documents" not in plist["StandardOutPath"]        # launchd opens it pre-exec

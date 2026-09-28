@@ -350,3 +350,110 @@ def test_mirror_does_nothing_at_all_with_no_r2(unconfigured_env, tmp_path):
     photo = tmp_path / "IMG_1.jpg"
     photo.write_bytes(_jpeg())
     assert media.mirror(photo, "characters/mike/IMG_1.jpg", 7) is None
+
+
+# ---------- a clip's poster (2026-09-28) ----------
+needs_ffmpeg = pytest.mark.skipif(
+    __import__("shutil").which("ffmpeg") is None, reason="ffmpeg not installed")
+
+
+def _clip(path, seconds=1):
+    import subprocess
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+         "-i", f"color=c=red:s=720x1280:d={seconds}", "-pix_fmt", "yuv420p",
+         str(path)], check=True)
+    return path
+
+
+@needs_ffmpeg
+def test_poster_bytes_draws_a_480px_frame_of_the_clip(tmp_path):
+    still = media.poster_bytes(_clip(tmp_path / "c.mp4"))
+    image = Image.open(io.BytesIO(still))
+    assert image.format == "JPEG"
+    assert max(image.size) <= media.THUMB_EDGE
+    assert image.size[1] > image.size[0]          # still vertical
+
+
+@needs_ffmpeg
+def test_a_clip_shorter_than_the_seek_still_gets_a_poster(tmp_path):
+    assert media.poster_bytes(_clip(tmp_path / "c.mp4"), at=5.0) is not None
+
+
+def test_no_ffmpeg_means_no_poster_not_an_error(tmp_path, monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    assert media.poster_bytes(tmp_path / "c.mp4") is None
+
+
+def test_an_unreadable_clip_has_no_poster(tmp_path):
+    bad = tmp_path / "c.mp4"
+    bad.write_bytes(b"not a video")
+    assert media.poster_bytes(bad) is None
+
+
+def test_the_poster_lands_where_thumb_url_for_looks(configured_env, fake_s3,
+                                                    tmp_path, monkeypatch):
+    """No new column: the wall asks thumb_url_for(media_url), so the poster
+    must be written under exactly the key that asks for."""
+    monkeypatch.setenv("ZEROPAGE_MEDIA", "tenant")
+    monkeypatch.setattr(media, "poster_bytes", lambda path: _jpeg(480, 853))
+    media.mirror_poster(tmp_path / "x.mp4", "renders/fal/x.mp4", 7)
+    bucket, key, size, ctype = fake_s3.put[0]
+    assert key == "t/7/renders/fal/x.mp4"
+    assert ctype == "image/jpeg"
+    clip_url = media.url_for("/renders/fal/x.mp4", 7)
+    assert media.thumb_url_for(clip_url, 7).endswith("/t/7/renders/fal/x.mp4")
+
+
+def test_no_r2_means_no_poster_upload(unconfigured_env, fake_s3, tmp_path, monkeypatch):
+    monkeypatch.setattr(media, "poster_bytes", lambda path: pytest.fail("drew"))
+    assert media.mirror_poster(tmp_path / "x.mp4", "renders/fal/x.mp4", 7) is None
+    assert fake_s3.put == []
+
+
+def test_a_failed_poster_never_costs_the_clip(configured_env, fake_s3,
+                                              tmp_path, monkeypatch):
+    from src import fal
+    monkeypatch.setenv("ZEROPAGE_MEDIA", "tenant")
+    monkeypatch.setattr(media, "poster_bytes", lambda path: None)
+    clip = tmp_path / "x.mp4"
+    clip.write_bytes(b"mp4")
+    url = fal._publish(clip, "video/mp4", 7)
+    assert url.endswith("/m/7/renders/fal/x.mp4")
+    assert fake_s3.put == []
+
+
+def test_publishing_a_fal_clip_writes_its_poster(configured_env, fake_s3,
+                                                 tmp_path, monkeypatch):
+    from src import fal
+    monkeypatch.setenv("ZEROPAGE_MEDIA", "tenant")
+    monkeypatch.setattr(media, "poster_bytes", lambda path: _jpeg(480, 853))
+    clip = tmp_path / "x.mp4"
+    clip.write_bytes(b"mp4")
+    fal._publish(clip, "video/mp4", 7)
+    assert fake_s3.uploaded[0][2] == "m/7/renders/fal/x.mp4"
+    assert fake_s3.put[0][1] == "t/7/renders/fal/x.mp4"
+
+
+def test_an_image_publish_draws_no_poster(configured_env, fake_s3, tmp_path,
+                                          monkeypatch):
+    from src import fal
+    monkeypatch.setattr(media, "mirror_poster", lambda *a, **k: pytest.fail("poster"))
+    still = tmp_path / "x.png"
+    still.write_bytes(b"png")
+    fal._publish(still, "image/png", 7)
+
+
+# ---------- the wall's provider label ----------
+@pytest.mark.parametrize("tool,model,label", [
+    ("ltx", "ltx2.3", "LTX 2.3"),
+    ("kling", "kling3-turbo-pro", "Kling 3 Turbo Pro"),
+    ("seedance", "seedance2-fast", "Seedance 2.0 Fast"),
+    ("veo", "veo3.1", "Veo 3.1"),
+    ("nano", "gemini-2.5-flash-image", "Nano Banana"),
+    ("runway", "gen4_turbo", "Runway"),
+    ("manual", "kling 3 web app", "Manual"),
+])
+def test_the_wall_names_the_model_not_the_platform(tool, model, label):
+    from src import render_assets
+    assert render_assets._label(tool, model) == label
