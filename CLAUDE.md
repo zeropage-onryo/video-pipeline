@@ -1756,6 +1756,29 @@ is yours, in Resolve, by hand.
   data/renders/cut/preview/ and mirrored to R2. `POST .../export {timeline_id?, aspect?}`
   renders any version in a job; another aspect first becomes a user `set_canvas` version.
   Nothing in any of it spends.
+  **The agent (phase E, 2026-09-28, Mike's D4)** never edits: every edit is a PROPOSAL
+  (`{summary, ops, base_id, region, duration_delta, doc, kind}`) the person Keeps or Undoes.
+  `POST /api/cut/projects/{id}/agent {message, playhead?, selection?}` is a job;
+  `src/cut/agent_tools.py` shows the model the head doc as text (`read_timeline`, with names
+  from `store.handle_names`), the playhead, the selection and an op catalogue DERIVED from
+  `ops.OPS` signatures + `OP_NOTES` (a test fails when an op has no line), and gives it three
+  tools: `read_timeline`, the pill's `search_footage`, `propose_ops`. A proposal is run through
+  `projects.check_ops` (the ops in order via `ops.apply`, against the measured media, with the
+  add-media rule) BEFORE it is shown; a refusal goes back with the validator's reasons ONCE,
+  a second ends the turn with the reasons in `notes`. `call_model` is the one seam (tests
+  script it); metered as stage `cut_agent`; no key or a dead model finishes the job with a
+  reply saying so. `.../agent/keep {base_id, ops, summary}` RE-APPLIES the ops to the head
+  (409 `stale`, 422 `invalid`) and saves ONE version by `agent`; Undo is client-side, nothing
+  was saved. `src/cut/cleanup.py` is the two model-free jobs, both answering a proposal off
+  the index's WORD timings: `.../cleanup` (silences between words over `min_silence`, 0.12 s of
+  air left each side, and um/uh/erm/er/ah/hmm -- split+split+ripple_delete, or a ripple trim at
+  a clip edge, applied from the END backwards; only sound that is on the timeline, a clip
+  whose sound is not is skipped with a note; captions are NOT moved and it says so) and
+  `.../captions` (cues of <= max_words and 2.5 s, broken at 0.4 s pauses, mapped through each
+  clip's src_in/at; a new track, or `set_cue` onto an existing one without overlapping it).
+  Both list `needs_index`; `.../index` indexes exactly the head's unindexed media (cents: the
+  click is the approval). `POST /api/cut/projects {handles}` (phase F) starts a scratch cut
+  from a selection: footage on V1 with its sound on A1, stills held 5 s, audio-only on A2.
 - **`src/pricing.py`** — what a render costs, and the signed quote that says so (steps 1–4 of
   `docs/tasks/task-pricing-and-quotes.md`, on main 2026-09-18; read that doc's "As built"
   section before touching it). Pure module, three answers: `estimate()` is the provider's USD

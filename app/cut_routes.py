@@ -25,6 +25,15 @@ The editor (phase B, 2026-09-28 -- web/src/app/studio/cut/ reads these):
     GET    /api/cut/projects/{id}/exports      the versions that have an MP4
     GET    /api/cut/media/{handle}/preview     proxy + filmstrip + waveform (builds on first ask)
 
+The agent (phase E, 2026-09-28 -- every edit is a PROPOSAL the person
+Keeps or Undoes; nothing below saves a version except /agent/keep):
+
+    POST   /api/cut/projects/{id}/agent        one agent turn (a job): a reply, maybe a proposal
+    POST   /api/cut/projects/{id}/agent/keep   save a proposal's ops as ONE version by "agent"
+    POST   /api/cut/projects/{id}/cleanup      silences + filler words -> a proposal (no model)
+    POST   /api/cut/projects/{id}/captions     cues from the word timings -> a proposal (no model)
+    POST   /api/cut/projects/{id}/index        index this cut's media not indexed yet (a job)
+
 A project's path segments never collide with `/{concept_id}/...`: those
 take an int and exactly one of `timeline` / `rollback` after it.
 
@@ -51,9 +60,12 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from src import preprod
+from src.cut import agent_tools as cut_agent
 from src.cut import assemble as cut_assemble
+from src.cut import cleanup as cut_cleanup
 from src.cut import doc as cut_doc
 from src.cut import index as cut_index
+from src.cut import moments as cut_moments
 from src.cut import ops as cut_ops
 from src.cut import preview as cut_preview
 from src.cut import projects as cut_projects
@@ -364,8 +376,16 @@ def cut_index_route(body: IndexBody, account_id: int = Depends(auth.current_acco
             return _error(409, "nothing_to_index", "there are no clips to index yet")
     if not cut_sources.ffmpeg_bin():
         return _error(503, "no_ffmpeg", "ffmpeg is not installed on this server")
-    force = body.force
+    label = f"index · concept {body.concept_id}" if body.concept_id else "index · every clip"
+    job = _index_job(handles, label, account_id=account_id, force=body.force,
+                     ref_id=body.concept_id)
+    return {"job_id": job["id"], "handles": handles}
 
+
+def _index_job(handles: list[str], label: str, *, account_id: int, force: bool = False,
+               ref_id=None) -> dict:
+    """The indexing job both index routes start: one index_media per
+    handle, cancellable between clips, a failure reported and not fatal."""
     def work(job):
         done = []
         for i, h in enumerate(handles):
@@ -382,11 +402,9 @@ def cut_index_route(body: IndexBody, account_id: int = Depends(auth.current_acco
                              "skipped": r.get("skipped"), "shots": r.get("shots"),
                              "words": r.get("words"), "speech": r.get("speech"),
                              "notes": r.get("notes")} for r in done],
-                "ref_id": body.concept_id}
+                "ref_id": ref_id}
 
-    label = f"index · concept {body.concept_id}" if body.concept_id else "index · every clip"
-    job = jobs.start("index", label, work, cancellable=True, account_id=account_id)
-    return {"job_id": job["id"], "handles": handles}
+    return jobs.start("index", label, work, cancellable=True, account_id=account_id)
 
 
 @router.get("/search")
@@ -429,6 +447,8 @@ class NewProject(BaseModel):
     title: Optional[str] = Field(default=None, max_length=200)
     aspect: Aspect = "9:16"
     concept_id: Optional[int] = None
+    # phase F: start the cut from these, in order (the bin's "New cut from selection")
+    handles: Optional[list[str]] = Field(default=None, max_length=cut_projects.MAX_START_MEDIA)
 
 
 @router.get("/projects")
@@ -440,12 +460,23 @@ def cut_projects_list(account_id: int = Depends(auth.current_account_id)):
 def cut_projects_create(body: NewProject, account_id: int = Depends(auth.current_account_id)):
     """A scratch project, or -- with `concept_id` -- the concept's cut,
     created or returned (Mike's D2: its key is `concept:<id>`, so it
-    shares the history Export already wrote)."""
+    shares the history Export already wrote). With `handles` (and no
+    concept) the scratch project's v1 already holds those media, in
+    order; one that is not this account's is 404 `bad_media` and no
+    project is made."""
     if body.concept_id is not None:
         try:
             row = cut_projects.open_concept(body.concept_id, account_id=account_id)
         except LookupError:
             return _error(404, "not_found", f"no concept {body.concept_id}")
+    elif body.handles:
+        try:
+            row = cut_projects.create_from_media(account_id=account_id, handles=body.handles,
+                                                 title=body.title, aspect=body.aspect)
+        except cut_projects.BadMedia as e:
+            return _error(404, "bad_media", str(e))
+        except cut_ops.OpError as e:
+            return _error(422, "invalid", str(e), problems=e.problems)
     else:
         row = cut_projects.create_scratch(account_id=account_id, title=body.title,
                                           aspect=body.aspect)
@@ -678,6 +709,156 @@ def cut_project_exports(project_id: str, account_id: int = Depends(auth.current_
          "op_summary": v["op_summary"]}
         for v in cut_store.history(project["timeline_key"], account_id=account_id)
         if v.get("export_url")]}
+
+
+# --------------------------------------------------------------------------
+# the agent (phase E): proposals the person Keeps or Undoes
+# --------------------------------------------------------------------------
+
+class AgentBody(BaseModel):
+    message: str = Field(min_length=1, max_length=2000)
+    playhead: Optional[int] = Field(default=None, ge=0)
+    selection: Optional[list[str]] = Field(default=None, max_length=200)
+
+
+@router.post("/projects/{project_id}/agent")
+def cut_project_agent(project_id: str, body: AgentBody,
+                      account_id: int = Depends(auth.current_account_id)):
+    """One agent turn, as a job (a model turn takes seconds). The job's
+    result is {reply, proposal, tool_runs, notes, ref_id}: a proposal has
+    already passed ops.apply against the head it names as base_id, and
+    NOTHING is saved -- Keep is its own route, and Undo is the client
+    dropping the card. The turn degrades rather than fails: no key or a
+    dead model finishes the job with a reply that says so."""
+    project, err = _project_or_404(project_id, account_id)
+    if err:
+        return err
+    head, err = _head_or_409(project, account_id)
+    if err:
+        return err
+    message = body.message.strip()
+    if not message:
+        return _error(400, "empty", "say what to change")
+    selection = [str(s)[:40] for s in (body.selection or [])]
+
+    def work(job):
+        jobs.progress(job, 0.1, "reading the timeline")
+        out = cut_agent.run_turn(project, head, message, account_id=account_id,
+                                 playhead=body.playhead, selection=selection)
+        return {**out, "detail": (out["reply"] or "")[:160]}
+
+    job = jobs.start("cut_agent", f"agent · {project['title'][:60]}", work,
+                     account_id=account_id)
+    return {"job_id": job["id"]}
+
+
+class ProposedOp(BaseModel):
+    op: str = Field(min_length=1, max_length=40)
+    args: dict = Field(default_factory=dict)
+
+
+class KeepBody(BaseModel):
+    base_id: int
+    ops: list[ProposedOp] = Field(min_length=1, max_length=cut_projects.MAX_OPS)
+    summary: str = Field(default="", max_length=2000)
+    kind: Optional[str] = Field(default=None, max_length=20)
+
+
+@router.post("/projects/{project_id}/agent/keep")
+def cut_project_agent_keep(project_id: str, body: KeepBody,
+                           account_id: int = Depends(auth.current_account_id)):
+    """Keep a proposal: its ops are RE-APPLIED against the head (the doc
+    the card showed is never trusted) and saved as ONE version by "agent",
+    under the card's summary. Clears redo, like any new version. Answers
+    exactly what /ops answers; 409 `stale` when the head moved since the
+    proposal was made, 422 `invalid` when an op no longer applies."""
+    project, err = _project_or_404(project_id, account_id)
+    if err:
+        return err
+    try:
+        head = cut_projects.keep(project, base_id=body.base_id,
+                                 op_list=[o.model_dump() for o in body.ops],
+                                 summary=body.summary, account_id=account_id)
+    except cut_projects.StaleEdit as e:
+        return _error(409, "stale", str(e), head_id=e.head_id)
+    except cut_ops.OpError as e:
+        return _error(422, "invalid", str(e), problems=e.problems)
+    return cut_projects.state(project, head, account_id=account_id)
+
+
+class CleanupBody(BaseModel):
+    base_id: Optional[int] = None
+    min_silence: float = Field(default=cut_cleanup.DEFAULT_MIN_SILENCE, ge=0.1, le=10)
+    fillers: bool = True
+
+
+@router.post("/projects/{project_id}/cleanup")
+def cut_project_cleanup(project_id: str, body: CleanupBody,
+                        account_id: int = Depends(auth.current_account_id)):
+    """Silences and filler words, off the index's word timings, as ONE
+    proposal of ops that remove them. No model call, nothing saved;
+    `needs_index` lists the media on the timeline the index has not seen
+    (index them with /index, then ask again)."""
+    project, err = _project_or_404(project_id, account_id)
+    if err:
+        return err
+    try:
+        return cut_cleanup.propose_cleanup(project, account_id=account_id, base_id=body.base_id,
+                                           min_silence=body.min_silence, fillers=body.fillers)
+    except cut_cleanup.Stale as e:
+        return _error(409, "stale", str(e), head_id=e.head_id)
+    except cut_ops.OpError as e:
+        return _error(422, "invalid", str(e), problems=e.problems)
+
+
+class CaptionsBody(BaseModel):
+    base_id: Optional[int] = None
+    track_id: Optional[str] = Field(default=None, min_length=1, max_length=20)
+    max_words: int = Field(default=cut_cleanup.DEFAULT_MAX_WORDS, ge=1, le=20)
+
+
+@router.post("/projects/{project_id}/captions")
+def cut_project_captions(project_id: str, body: CaptionsBody,
+                         account_id: int = Depends(auth.current_account_id)):
+    """Caption cues from the words of the sound on the timeline, as ONE
+    proposal: a new caption track, or -- when `track_id` names a caption
+    track that exists -- set_cue for every cue that does not overlap one
+    already there. No model call, nothing saved."""
+    project, err = _project_or_404(project_id, account_id)
+    if err:
+        return err
+    try:
+        return cut_cleanup.propose_captions(project, account_id=account_id, base_id=body.base_id,
+                                            track_id=body.track_id, max_words=body.max_words)
+    except cut_cleanup.Stale as e:
+        return _error(409, "stale", str(e), head_id=e.head_id)
+    except cut_ops.OpError as e:
+        return _error(422, "invalid", str(e), problems=e.problems)
+
+
+@router.post("/projects/{project_id}/index")
+def cut_project_index(project_id: str, account_id: int = Depends(auth.current_account_id)):
+    """Index the media on this cut's head that the index has not finished
+    -- and nothing else. Spends cents (a Gemini shot log, fal Whisper when
+    someone speaks); the click is the approval, as on /api/cut/index."""
+    project, err = _project_or_404(project_id, account_id)
+    if err:
+        return err
+    head, err = _head_or_409(project, account_id)
+    if err:
+        return err
+    handles = []
+    for h in cut_doc.handles(head["doc"]):
+        row = cut_moments.indexed(h, account_id=account_id)
+        if row is None or row.get("status") != "done":
+            handles.append(h)
+    if not handles:
+        return _error(409, "nothing_to_index", "everything on this cut is indexed already")
+    if not cut_sources.ffmpeg_bin():
+        return _error(503, "no_ffmpeg", "ffmpeg is not installed on this server")
+    job = _index_job(handles, f"index · {project['title'][:60]}", account_id=account_id,
+                     ref_id=project["id"])
+    return {"job_id": job["id"], "handles": handles}
 
 
 # --------------------------------------------------------------------------

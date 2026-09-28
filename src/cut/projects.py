@@ -68,6 +68,66 @@ def create_scratch(*, account_id: Optional[int], title: Optional[str] = None,
     return row
 
 
+STILL_HOLD_SECONDS = 5
+MAX_START_MEDIA = 20
+
+
+class BadMedia(LookupError):
+    pass
+
+
+def create_from_media(*, account_id: Optional[int], handles: list[str],
+                      title: Optional[str] = None, aspect: str = "9:16",
+                      dsn: Optional[str] = None) -> dict[str, Any]:
+    """A scratch project whose version 1 already holds `handles`, in
+    order (phase F, "start a cut from these"): footage on V1 with its own
+    sound linked on A1 when the file has any, a still held for
+    STILL_HOLD_SECONDS, audio with no picture onto A2 (music). Built with
+    the same insert op an editor would use, against the same measured
+    probe, so v1 is exactly the cut the person could have clicked
+    together. Raises BadMedia -- before any row is written -- for a handle
+    that is not this account's, not a handle at all, or cannot be read.
+    Title defaults to the first media's name."""
+    size = d.ASPECT_SIZES.get(aspect)
+    if size is None:
+        raise ValueError(f"aspect must be one of {list(d.ASPECT_SIZES)}")
+    handles = list(handles)
+    fps = d.DEFAULT_FPS
+    bad = [h for h in handles if d.parse_handle(h) is None]
+    if bad:
+        raise BadMedia(f"{bad[0]!r} is not a gen:<id> or asset:<id> handle")
+    media = sources.measure(handles, account_id=account_id, fps=fps, dsn=dsn)
+    for h in handles:
+        if h not in media:
+            raise BadMedia(f"no media {h}")
+        if media[h] is None:
+            raise BadMedia(f"could not read {h} -- it cannot be added until its file is reachable")
+    doc = d.starter_doc(fps, size)
+    for h in handles:
+        m = media[h]
+        if m.get("still"):
+            clip = {"media": h, "src_in": 0, "src_out": STILL_HOLD_SECONDS * fps}
+            doc = ops.apply(doc, "insert", {"track_id": "V1", "clip": clip}, media=media)
+        elif m.get("video"):
+            args = {"track_id": "V1", "clip": {"media": h, "src_in": 0, "src_out": m["frames"]}}
+            if m.get("audio"):
+                args["sound_track"] = "A1"
+            doc = ops.apply(doc, "insert", args, media=media)
+        else:
+            clip = {"media": h, "src_in": 0, "src_out": m["frames"]}
+            doc = ops.apply(doc, "insert", {"track_id": "A2", "clip": clip}, media=media)
+    if not (title or "").strip():
+        title = (store.handle_names(handles[:1], account_id=account_id, dsn=dsn)
+                 .get(handles[0], {}).get("name")) if handles else None
+    row = store.create_project(account_id=account_id,
+                               title=(title or "").strip()[:200] or "Untitled cut",
+                               fps=fps, dsn=dsn)
+    store.save_version(row["timeline_key"], doc, account_id=account_id, author="user",
+                       op_summary=f"new project from {len(handles)} clip"
+                                  f"{'s' if len(handles) != 1 else ''}", dsn=dsn)
+    return row
+
+
 def _first_cut(concept_id: int, *, account_id: Optional[int],
                dsn: Optional[str]) -> tuple[dict, str, str, list[str]]:
     """(doc, author, op_summary, notes) for a concept whose cut has no
@@ -248,17 +308,15 @@ def _arg_handles(args: Any) -> list[str]:
     return found
 
 
-def edit(project: dict, *, base_id: int, op: str, args: Optional[dict],
-         account_id: Optional[int], dsn: Optional[str] = None) -> dict[str, Any]:
-    """Apply one op to the head and save it as a new version. Raises
-    StaleEdit (the head is not `base_id`), ops.OpError (with .problems)."""
-    key = project["timeline_key"]
-    head = store.head(key, account_id=account_id, dsn=dsn)
-    if head is None or head["id"] != base_id:
-        raise StaleEdit(head["id"] if head else None)
-    doc = head["doc"]
+def media_for(doc: dict, args: Any = None, *, account_id: Optional[int],
+              dsn: Optional[str] = None) -> dict[str, Optional[dict[str, Any]]]:
+    """The media map ops.apply validates against, for edits whose args are
+    `args` (one op's args, or a whole list of ops): every handle on the
+    timeline (unmeasurable -> None, known), plus every handle the args
+    would ADD, which must be this account's and measurable. Raises
+    MediaRefused otherwise -- nothing is inserted on faith."""
     on_timeline = set(d.handles(doc))
-    adding = [h for h in _arg_handles(args or {}) if h not in on_timeline]
+    adding = [h for h in dict.fromkeys(_arg_handles(args or {})) if h not in on_timeline]
     measured = sources.measure(list(on_timeline) + adding, account_id=account_id,
                                fps=doc["fps"], dsn=dsn)
     refused = []
@@ -273,11 +331,84 @@ def edit(project: dict, *, base_id: int, op: str, args: Optional[dict],
         raise MediaRefused(refused[0], refused)
     media = {h: measured.get(h) for h in on_timeline}   # absent -> None: unmeasured, known
     media.update({h: measured[h] for h in adding if h in measured})
-    new = ops.apply(doc, op, args or {}, media=media)
+    return media
+
+
+def edit(project: dict, *, base_id: int, op: str, args: Optional[dict],
+         account_id: Optional[int], dsn: Optional[str] = None) -> dict[str, Any]:
+    """Apply one op to the head and save it as a new version. Raises
+    StaleEdit (the head is not `base_id`), ops.OpError (with .problems)."""
+    key = project["timeline_key"]
+    head = store.head(key, account_id=account_id, dsn=dsn)
+    if head is None or head["id"] != base_id:
+        raise StaleEdit(head["id"] if head else None)
+    doc = head["doc"]
+    new = ops.apply(doc, op, args or {}, media=media_for(doc, args, account_id=account_id,
+                                                         dsn=dsn))
     try:
         saved = store.save_version(key, new, account_id=account_id, author="user",
                                    op_summary=ops.describe(op, args, doc["fps"]),
                                    parent_id=head["id"], expect_head=head["id"], dsn=dsn)
+    except store.StaleHead as e:
+        raise StaleEdit(e.head_id) from None
+    store.update_project(project["id"], account_id=account_id, dsn=dsn)
+    return store.head(key, account_id=account_id, dsn=dsn) or saved
+
+
+# --------------------------------------------------------------------------
+# a list of ops: the agent's proposals (phase E, docs/CUT_EDITOR.md 5.2/5.6)
+# --------------------------------------------------------------------------
+
+MAX_OPS = 200
+
+
+def apply_all(doc: dict, op_list: Any, *, media: dict) -> dict:
+    """Run a list of `{"op", "args"}` IN ORDER, each through ops.apply, and
+    return the doc after the last. One OpError for the whole list, every
+    problem prefixed with the op it came from ("op 3 (split): ...") --
+    that is what goes back to the model on a refused proposal, and what
+    the Keep route answers 422 with."""
+    if not isinstance(op_list, list) or not op_list:
+        raise ops.OpError("ops must be a non-empty list of {op, args}")
+    if len(op_list) > MAX_OPS:
+        raise ops.OpError(f"at most {MAX_OPS} ops in one edit, got {len(op_list)}")
+    for i, item in enumerate(op_list, 1):
+        name = item.get("op") if isinstance(item, dict) else None
+        args = item.get("args", {}) if isinstance(item, dict) else None
+        if not isinstance(name, str) or not isinstance(args, dict):
+            raise ops.OpError(f"op {i} must be {{op: <name>, args: {{...}}}}, got {item!r}"[:300])
+        try:
+            doc = ops.apply(doc, name, args, media=media)
+        except ops.OpError as e:
+            where = f"op {i} ({name})"
+            raise ops.OpError(f"{where}: {e}", [f"{where}: {p}" for p in e.problems]) from None
+    return doc
+
+
+def check_ops(doc: dict, op_list: Any, *, account_id: Optional[int],
+              dsn: Optional[str] = None) -> dict:
+    """apply_all against the measured media -- the check a proposal passes
+    BEFORE anyone is shown it, and again at Keep."""
+    return apply_all(doc, op_list, media=media_for(doc, op_list, account_id=account_id,
+                                                   dsn=dsn))
+
+
+def keep(project: dict, *, base_id: int, op_list: list, summary: str,
+         account_id: Optional[int], dsn: Optional[str] = None) -> dict[str, Any]:
+    """Keep a proposal: re-apply its ops against the head (which must still
+    be `base_id`) and save ONE version by "agent". The proposal's own doc
+    is never trusted -- the client sent it back, and what is saved is what
+    the ops make of the head now. Raises StaleEdit, ops.OpError."""
+    key = project["timeline_key"]
+    head = store.head(key, account_id=account_id, dsn=dsn)
+    if head is None or head["id"] != base_id:
+        raise StaleEdit(head["id"] if head else None)
+    new = check_ops(head["doc"], op_list, account_id=account_id, dsn=dsn)
+    summary = " ".join(str(summary or "").split())[:200] or "agent edit"
+    try:
+        saved = store.save_version(key, new, account_id=account_id, author="agent",
+                                   op_summary=summary, parent_id=head["id"],
+                                   expect_head=head["id"], dsn=dsn)
     except store.StaleHead as e:
         raise StaleEdit(e.head_id) from None
     store.update_project(project["id"], account_id=account_id, dsn=dsn)
