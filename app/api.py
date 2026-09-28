@@ -2124,7 +2124,7 @@ def scout_run(body: ScoutRunBody, account_id: int = Depends(auth.current_account
 
     def work(job):
         jobs.progress(job, 0.15, "crawling")
-        result = scout.scout(brand, count)
+        result = scout.scout(brand, count, lanes=scout.default_lanes(account_id))
         jobs.progress(job, 0.9, "banking")
         if not result["ok"]:
             raise RuntimeError(result["errors"][0] if result["errors"]

@@ -146,7 +146,7 @@ def test_run_without_a_key_is_a_503_not_a_dead_job(tmp_db, monkeypatch):
 
 def test_run_banks_what_the_pass_found(tmp_db, monkeypatch):
     monkeypatch.setattr(api_mod, "_gemini_key", lambda *a, **k: "test-key")
-    monkeypatch.setattr(api_mod.scout, "scout", lambda brand, count, dsn=None: {
+    monkeypatch.setattr(api_mod.scout, "scout", lambda brand, count, dsn=None, **kw: {
         "ok": True, "signals": 5, "pass_id": "p",
         "findings": [{"spark": "a crawled idea", "score": 0.8}],
         "bin": [{"url": "/refs/a.jpg"}], "errors": []})
@@ -161,7 +161,7 @@ def test_run_banks_what_the_pass_found(tmp_db, monkeypatch):
 def test_a_crawl_that_finds_nothing_fails_the_job_loudly(tmp_db, monkeypatch):
     """A silent empty crawl looks exactly like a healthy one."""
     monkeypatch.setattr(api_mod, "_gemini_key", lambda *a, **k: "test-key")
-    monkeypatch.setattr(api_mod.scout, "scout", lambda brand, count, dsn=None: {
+    monkeypatch.setattr(api_mod.scout, "scout", lambda brand, count, dsn=None, **kw: {
         "ok": False, "signals": 0, "pass_id": "p", "findings": [], "bin": [],
         "errors": ["every lane came back empty"]})
 

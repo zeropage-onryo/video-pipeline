@@ -1681,6 +1681,14 @@ is yours, in Resolve, by hand.
   (`scout_ig_hashtags_paused`, `{until, reason}`) and hashtags are skipped for
   `HASHTAG_PAUSE_DAYS` (7) -- a lane that fails the same way every night is noise in `errors`.
   The budget refusal is deliberately not a pause; it has its own window.
+  **The lane joins ONE account's default pass, by a column (2026-09-28, Mike's call).**
+  `scout.DEFAULT_LANES` stays web/shorts/pinterest/creators; `scout.default_lanes(account_id)`
+  adds `instagram` only when `accounts.scout_instagram` is TRUE for that account
+  (`python -m src.accounts scout-instagram <slug> --on`; FALSE for everyone until turned on,
+  fails closed, edit_teach's shape). The Studio `/api/scout/run`, the MCP `research` tool and
+  a bare `scout run` (as the bootstrap account) all ask it; an explicit lane list is honoured
+  either way. The MCP tool used to default to its own `LANES`, which ran Instagram for every
+  caller and had drifted (named `feeds`, missed `pinterest`); it is `scout.KNOWN_LANES` now.
 - **`src/refbin.py`** — one owner for `data/refs`, both directions: the content-addressed name,
   the JPEG normalisation (EXIF transpose BEFORE `convert("RGB")`, HEIC when `pillow-heif` is
   present), `save`, `fetch` (bounded download for scouted images) and `resolve`. It exists

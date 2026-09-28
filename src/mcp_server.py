@@ -824,7 +824,11 @@ def spark_images(finding_id: int, dsn: Optional[str] = None) -> dict[str, Any]:
 # that trips a live render.
 
 ENGINE_ENV = "ZEROPAGE_MCP_ENGINE"
-LANES = ("web", "shorts", "feeds", "instagram", "creators")
+# Every lane the scout can dispatch -- ITS list, never a copy: this one had
+# drifted (still naming `feeds` as a default, missing `pinterest`) and, as
+# the tool's default, ran Instagram for every caller. The default is now
+# scout.default_lanes(<the caller's account>).
+LANES = scout.KNOWN_LANES
 
 
 def engine_enabled() -> bool:
@@ -832,7 +836,8 @@ def engine_enabled() -> bool:
 
 
 def run_research(brand: str, count: int = 4, lanes=None,
-                 dsn: Optional[str] = None) -> dict[str, Any]:
+                 dsn: Optional[str] = None,
+                 account_id: Optional[int] = None) -> dict[str, Any]:
     """One full scout pass: crawl the lanes, digest to scored sparks,
     bank them, and stash the images behind them.
 
@@ -842,7 +847,7 @@ def run_research(brand: str, count: int = 4, lanes=None,
     layer out.
     """
     _check(brand, scout.BRANDS, "brand")
-    lanes = tuple(lanes) if lanes else LANES
+    lanes = tuple(lanes) if lanes else scout.default_lanes(_account(account_id, dsn), dsn=dsn)
     unknown = [lane for lane in lanes if lane not in LANES]
     if unknown:
         raise ValueError(f"unknown lanes {unknown}; known: {list(LANES)}")
@@ -1268,7 +1273,12 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
             and download the reference images behind them. Spends a
             grounded search and one digest call."""
             return _run(run_research, brand=brand, count=count, lanes=lanes,
-                        dsn=dsn, _label=f"research {brand}")
+                        dsn=dsn,
+                        # resolved HERE, in the request: the job runs on
+                        # another thread, where the signed-in caller's
+                        # ContextVar is not promised to follow
+                        account_id=_account(account_id, dsn),
+                        _label=f"research {brand}")
 
         @server.tool(annotations=writes)
         def generate(spark: str = "", brand: str = "", goal: str = "",

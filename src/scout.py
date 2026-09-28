@@ -1638,8 +1638,46 @@ def mark_used(finding_id: int, run_id: str = "", dsn=None) -> None:
 
 # --- the pass --------------------------------------------------------------
 
+# The lanes a bare pass runs, and every lane scout() can dispatch.
+# `instagram` is in the second and never the first: it joins ONE account's
+# default through default_lanes() below, by that account's own row.
+DEFAULT_LANES = ("web", "shorts", "pinterest", "creators")
+KNOWN_LANES = ("web", "shorts", "pinterest", "feeds", "instagram", "creators")
+
+
+def instagram_default(account_id, dsn=None) -> bool:
+    """Whether this account's DEFAULT pass reads Instagram -- its own
+    `accounts.scout_instagram` column, edit_teach.allowed's shape: one row
+    by id, None (the unowned pool) is never on, every failure is a no.
+
+    Per account because the lane reads with the OPERATOR's IG_GRAPH_TOKEN
+    and spends Meta's budget for the installation; a pilot user's research
+    pass must not turn it on by default (2026-09-28, Mike's call)."""
+    if account_id is None:
+        return False
+    try:
+        wanted = int(account_id)
+        with db.connect(dsn) as conn:
+            row = conn.execute(
+                f"SELECT {db.SCOUT_INSTAGRAM_COLUMN} FROM accounts WHERE id = %s",
+                (wanted,)).fetchone()
+            return bool(row and row[db.SCOUT_INSTAGRAM_COLUMN])
+    except Exception:
+        return False
+
+
+def default_lanes(account_id, dsn=None) -> tuple:
+    """The lanes a pass runs when the caller named none, for THIS account.
+    Every door that starts a pass on someone's behalf asks this -- the
+    Studio route, the MCP research tool, the CLI -- so they cannot drift
+    into three ideas of what "the default" is."""
+    if instagram_default(account_id, dsn=dsn):
+        return DEFAULT_LANES + ("instagram",)
+    return DEFAULT_LANES
+
+
 def scout(brand: str = "zeropage", count: int = 4, *, client=None, model=None,
-          lanes=("web", "shorts", "pinterest", "creators"),
+          lanes=DEFAULT_LANES,
           judge: bool = False, dsn=None, fetch=None) -> dict:
     """One full research pass. Returns
     {"ok", "findings": [...], "errors": [...], "signals": <int>}.
@@ -1821,6 +1859,16 @@ def scout(brand: str = "zeropage", count: int = 4, *, client=None, model=None,
             "pass_id": pass_id, "bin": bin_rows, "errors": errors}
 
 
+def _cli_default_lanes() -> tuple:
+    """A bare `scout run` acts as the bootstrap account, the call every
+    CLI here makes (mcp_server._account's static-token door, same reason)."""
+    try:
+        from . import accounts
+        return default_lanes(accounts.resolve_account())
+    except Exception:
+        return DEFAULT_LANES
+
+
 def main(argv=None) -> int:
     load_dotenv()
     parser = argparse.ArgumentParser(description="Research scout: find tonight's spark.")
@@ -1829,8 +1877,10 @@ def main(argv=None) -> int:
     p_run = sub.add_parser("run", help="one research pass; banks scored sparks")
     p_run.add_argument("--brand", choices=BRANDS, default="zeropage")
     p_run.add_argument("--count", type=int, default=4)
-    p_run.add_argument("--lanes", default="web,shorts,pinterest,creators",
-                       help="comma-separated subset to run")
+    p_run.add_argument("--lanes", default=None,
+                       help="comma-separated subset to run (default: the bootstrap "
+                            "account's default_lanes -- the four, plus instagram "
+                            "when its scout_instagram flag is on)")
     p_run.add_argument("--judge", action="store_true",
                        help="grade each candidate with the independent RAG-grounded "
                             "story judge (src/story_judge.py) instead of trusting the "
@@ -1848,7 +1898,8 @@ def main(argv=None) -> int:
 
     if args.command == "run":
         result = scout(args.brand, args.count,
-                       lanes=tuple(x.strip() for x in args.lanes.split(",") if x.strip()),
+                       lanes=(tuple(x.strip() for x in args.lanes.split(",") if x.strip())
+                              if args.lanes else _cli_default_lanes()),
                        judge=args.judge)
         for e in result["errors"]:
             print(f"  note: {e}", file=sys.stderr)
