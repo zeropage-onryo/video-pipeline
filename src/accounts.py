@@ -49,6 +49,7 @@ from .db import (
     add_billing_columns,
     add_manual_lane_operator_column,
     add_prompt_edits_teach_column,
+    add_scout_instagram_column,
     backfill_owner,
     columns,
     connect,
@@ -94,7 +95,10 @@ CREATE TABLE IF NOT EXISTS accounts (
     plan               TEXT,
     -- may a hand edit of this account's scene prompts teach the RAG
     -- shelves (src/edit_teach.py)? Same posture: FALSE until turned on.
-    prompt_edits_teach BOOLEAN NOT NULL DEFAULT FALSE
+    prompt_edits_teach BOOLEAN NOT NULL DEFAULT FALSE,
+    -- does this account's DEFAULT research pass read Instagram
+    -- (src/scout.default_lanes)? Same posture: FALSE until turned on.
+    scout_instagram    BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE TABLE IF NOT EXISTS account_members (
@@ -121,6 +125,7 @@ def init(dsn: Optional[str] = None) -> None:
         add_manual_lane_operator_column(conn)
         add_billing_columns(conn)
         add_prompt_edits_teach_column(conn)
+        add_scout_instagram_column(conn)
 
 
 # --------------------------------------------------------------------------
@@ -461,6 +466,26 @@ def set_prompt_edits_teach(slug: str, on: bool,
     ValueError on an unknown slug, and no route or env var beside it --
     `python -m src.accounts edits-teach <slug> --on`."""
     return _set_account_flag("prompt_edits_teach", slug, on, dsn=dsn)
+
+
+def set_scout_instagram(slug: str, on: bool,
+                        dsn: Optional[str] = None) -> dict[str, Any]:
+    """Put the Instagram lane in ONE account's default research pass, or
+    take it out (src/scout.default_lanes, 2026-09-28). Same contract as
+    set_prompt_edits_teach -- `python -m src.accounts scout-instagram
+    <slug> --on`. An explicit lane list is honoured either way."""
+    return _set_account_flag("scout_instagram", slug, on, dsn=dsn)
+
+
+def scout_instagram_accounts(dsn: Optional[str] = None) -> list[dict[str, Any]]:
+    """Every account whose default pass reads Instagram, for the CLI."""
+    with connect(dsn) as conn:
+        if not table_exists(conn, "accounts"):
+            return []
+        rows = conn.execute(
+            "SELECT id, slug FROM accounts WHERE scout_instagram "
+            "ORDER BY slug").fetchall()
+        return [{"account_id": int(r["id"]), "slug": r["slug"]} for r in rows]
 
 
 def prompt_edits_teachers(dsn: Optional[str] = None) -> list[dict[str, Any]]:
@@ -848,6 +873,18 @@ def main(argv=None) -> None:
                       help="they are not (the state every account starts in)")
     p_et.set_defaults(on=None)
 
+    p_si = sub.add_parser(
+        "scout-instagram",
+        help="put the Instagram lane in one account's DEFAULT research pass "
+             "(web, shorts, pinterest, creators + instagram)")
+    p_si.add_argument("slug", help="the account slug, e.g. zeropage")
+    door = p_si.add_mutually_exclusive_group(required=True)
+    door.add_argument("--on", dest="on", action="store_true",
+                      help="this account's default research pass reads Instagram")
+    door.add_argument("--off", dest="on", action="store_false",
+                      help="it does not (the state every account starts in)")
+    p_si.set_defaults(on=None)
+
     p_cr = sub.add_parser(
         "credits",
         help="exempt one account from being charged credits for renders -- the "
@@ -880,6 +917,26 @@ def main(argv=None) -> None:
                   if o["account_id"] != result["account_id"]]
         if others:
             print("also exempt: " + ", ".join(
+                f"{o['slug']} (account {o['account_id']})" for o in others))
+        return
+
+    if args.command == "scout-instagram":
+        try:
+            result = set_scout_instagram(args.slug, args.on)
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            sys.exit(1)
+        state = "ON" if result["now"] else "OFF"
+        where = f"{result['slug']!r} (account {result['account_id']})"
+        if result["changed"]:
+            print(f"scout instagram lane {'OFF -> ON' if result['now'] else 'ON -> OFF'} "
+                  f"for {where}")
+        else:
+            print(f"scout instagram lane already {state} for {where} -- nothing changed")
+        others = [o for o in scout_instagram_accounts()
+                  if o["account_id"] != result["account_id"]]
+        if others:
+            print("also on: " + ", ".join(
                 f"{o['slug']} (account {o['account_id']})" for o in others))
         return
 

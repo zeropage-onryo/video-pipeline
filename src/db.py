@@ -603,6 +603,11 @@ PLAN_COLUMN = "plan"
 # tenant retrieves from, so it is a column on the account row, FALSE for
 # everybody until the operator turns their own account on by hand.
 EDIT_TEACH_COLUMN = "prompt_edits_teach"
+# Whether the research scout's DEFAULT pass reads Instagram for this account
+# (src/scout.default_lanes, 2026-09-28). Same shape again: the lane reads
+# with the operator's IG_GRAPH_TOKEN, so it is a column on the account row,
+# FALSE for everybody until the operator turns their own account on by hand.
+SCOUT_INSTAGRAM_COLUMN = "scout_instagram"
 
 
 def add_manual_lane_operator_column(conn: psycopg.Connection) -> bool:
@@ -662,6 +667,21 @@ def add_billing_columns(conn: psycopg.Connection) -> list[str]:
         conn.execute(f"ALTER TABLE accounts ADD COLUMN {PLAN_COLUMN} TEXT")
         added.append(PLAN_COLUMN)
     return added
+def add_scout_instagram_column(conn: psycopg.Connection) -> bool:
+    """Additive ALTER TABLE on `accounts`, add_prompt_edits_teach_column's
+    twin (2026-09-28): no backfill, every account FALSE, and the one way on
+    is `python -m src.accounts scout-instagram <slug> --on`."""
+    if not table_exists(conn, "accounts"):
+        return False
+    if SCOUT_INSTAGRAM_COLUMN in columns(conn, "accounts"):
+        return False
+    conn.execute(
+        f"ALTER TABLE accounts ADD COLUMN {SCOUT_INSTAGRAM_COLUMN} "
+        "BOOLEAN NOT NULL DEFAULT FALSE"
+    )
+    return True
+
+
 def add_prompt_edits_teach_column(conn: psycopg.Connection) -> bool:
     """Additive ALTER TABLE on `accounts`. True if added now.
 
@@ -854,6 +874,8 @@ def init_db(dsn: Optional[str] = None) -> None:
         add_billing_columns(conn)
         # whose hand edits teach the shelves (src/edit_teach.py, 2026-09-18)
         add_prompt_edits_teach_column(conn)
+        # whose default research pass reads Instagram (src/scout.py, 2026-09-28)
+        add_scout_instagram_column(conn)
         # BYOK removed (2026-09-26): the key table goes once it is empty
         drop_account_keys_table(conn)
 
