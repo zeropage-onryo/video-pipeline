@@ -2,48 +2,33 @@
 """
 The repo side of rendering the queue on SUBSCRIPTION credits.
 
-Why this file exists. src/higgsfield.py talks to Higgsfield Cloud, which
-bills API credits -- real money, a balance separate from the app plan.
-The Higgsfield MCP spends the app subscription's credits instead (~997
-already paid for, ~4.8 per seedance clip), but an MCP server is only
-reachable from a Claude session, never from the nightly LangGraph. So
-the split is:
+ONE LANE since 2026-09-28: the generic clip import. A clip rendered
+ANYWHERE (a vendor's web app, a local model, the Resolve timeline) is
+filed free: `list` prints the prompt, the keyframe URL and the target
+duration; `import` files the mp4. This was the Runway Unlimited lane until
+2026-09-26 -- Runway retired Unlimited in June 2026 and fal became the
+only API renderer, so the lane kept the part that was never about Runway.
 
-    Claude session   -- picks the shots, calls the MCP, downloads the mp4
-    this file        -- tells it what is waiting, and files what came back
+The Higgsfield-MCP lane (`--provider higgsfield`: a Claude session
+rendering on the operator's Higgsfield app subscription and filing the
+clip here) was removed on 2026-09-28, Mike's call. Its rows keep their
+`mcp-subscription` source marker, which src/manual_lane.py still lists so
+they read as FREE. src/higgsfield.py's Soul STILL path is untouched --
+refgen and scene_chain's visual targets use it.
 
-TWO LANES, the same shape (`--provider`, default higgsfield):
-
-    higgsfield  the MCP, above. Reachable from a session, so a session
-                can do the whole job without a human's hands.
-    manual      the generic clip import: a clip rendered ANYWHERE, filed
-                free. `list` prints the prompt, the keyframe URL and the
-                target duration; `import` files the mp4. This was the
-                Runway Unlimited lane until 2026-09-26 -- Runway retired
-                Unlimited in June 2026 and fal became the only API
-                renderer, so the lane kept the part that was never about
-                Runway.
-
-BOTH LANES ARE OPERATOR-ONLY. The Higgsfield lane spends the operator's
-PERSONAL consumer plan, so serving a paying tenant's shot on it is
-reselling a consumer subscription -- an account-termination risk that
-takes every tenant's renders down at once. The manual import spends
-nothing, but files a render with no hold, so it sits behind the same
-gate rather than being the wider door. `src/manual_lane.py` holds the allowlist and the
-reasoning; this file only ever asks it (`manual_lane.require`), never
-re-decides. There is deliberately NO --operator flag, --force, or
-environment escape here -- and since 2026-09-08 no environment DOOR
-either: the gate is `accounts.manual_lane_operator`, a column on the
-account row, and the answer is a function of the account id alone,
-resolved server-side. An account nobody has turned on is refused, so
-BOTH commands below need `python -m src.accounts operator <slug> --on`
-run once and an --account that names that slug.
+THE LANE IS OPERATOR-ONLY. It spends nothing, but it files a render with
+no ledger hold, so it sits behind the operator gate. `src/manual_lane.py`
+holds the allowlist and the reasoning; this file only ever asks it
+(`manual_lane.require`), never re-decides. There is deliberately NO
+--operator flag, --force, or environment escape here -- and since
+2026-09-08 no environment DOOR either: the gate is
+`accounts.manual_lane_operator`, a column on the account row, and the
+answer is a function of the account id alone, resolved server-side. An
+account nobody has turned on is refused, so both commands below need
+`python -m src.accounts operator <slug> --on` run once and an --account
+that names that slug.
 
 Subcommands, all safe to run by hand:
-
-    python3 ops/render_queue.py --account zeropage list
-    python3 ops/render_queue.py --account zeropage import --concept 128 \
-        --shot 1 --file /tmp/clip.mp4 --model seedance1_5 --credits 4.8
 
     python3 ops/render_queue.py --provider manual --account zeropage list
     python3 ops/render_queue.py --provider manual --account zeropage import \
@@ -51,9 +36,8 @@ Subcommands, all safe to run by hand:
         --model "kling 3 (web app)" --anchored
 
 WHAT `import` RECORDS. `--model` lands in a `generations` row the tool
-scoreboard reads. Neither lane has a list this repo could check a model
-name against -- the manual import takes clips from anywhere, and the
-Higgsfield MCP's names are its own -- so the model is recorded as told
+scoreboard reads. The lane has no list this repo could check a model
+name against -- it takes clips from anywhere -- so the model is recorded as told
 and the row says so (`model_verified: false`) instead of implying a check
 that never happened.
 
@@ -67,10 +51,8 @@ like a measurement that agreed.
 WHERE THE CLIP HAS TO LIVE. app/main.py mounts /renders on data/renders/,
 so that directory is the only place a media_url can point at -- a file
 left in footage/generated/ 404s in the Queue however real it is. import
-copies whatever you hand it into data/renders/<provider>/ -- the same
-folder that provider's adapter already writes to, so the /renders mount
-and the media_url derivation are unchanged for both lanes -- and derives
-the URL from there.
+copies whatever you hand it into data/renders/manual/ and derives the
+URL from there.
 
 NO THIRD-PARTY IMPORT OF ITS OWN. It imports src.preprod / src.generative
 / src.accounts / src.manual_lane / src.render_specs and nothing else
@@ -105,24 +87,21 @@ from src import accounts, generative, manual_lane, preprod, render_specs   # noq
 from src.shot import Shot                     # noqa: E402
 
 
-PROVIDERS = ("higgsfield", "manual")
+# One lane since 2026-09-28 (the Higgsfield-MCP lane was removed). Still a
+# tuple, and still named on the CLI, so `--provider manual` keeps working
+# and `--provider higgsfield` is refused by name rather than silently read
+# as the import.
+PROVIDERS = ("manual",)
 
-# The lanes that spend the OPERATOR'S personal consumer subscription
-# rather than a credential a tenant could have bought for themselves.
-# Membership here is what puts src/manual_lane.py's allowlist in front of
-# a call.
-#
-# BOTH lanes are here: gating one lane while leaving the other open is
-# worse than gating neither, because it reads as though the question had
-# been asked and answered. Each needs `python -m src.accounts operator
-# <slug> --on` run once against the database; the refusal names that
-# command, which is what anyone who hits it needs.
-GATED_PROVIDERS = ("higgsfield", "manual")
+# The lanes that sit behind src/manual_lane.py's allowlist -- every one.
+# The refusal names `python -m src.accounts operator <slug> --on`, which is
+# what anyone who hits it needs.
+GATED_PROVIDERS = ("manual",)
 
 
 def _provider(name) -> str:
     """The lane, normalised, or a refusal naming the ones that exist."""
-    provider = (name or "higgsfield").strip().lower()
+    provider = (name or "manual").strip().lower()
     if provider not in PROVIDERS:
         raise SystemExit(f"unknown provider {provider!r} -- one of {list(PROVIDERS)}")
     return provider
@@ -247,7 +226,7 @@ def _measure_duration(path: Path) -> tuple[float | None, str]:
 
 
 def pending(brand=None, account_id: int | None = None,
-            provider: str = "higgsfield") -> list[dict]:
+            provider: str = "manual") -> list[dict]:
     """What is waiting on a spend, by exactly the rule app/api.py's
     /queue/manual uses: picked (not merely parked), not archived, a scene, no clip
     yet, and reference photos attached. Duplicated deliberately in ONE
@@ -256,11 +235,9 @@ def pending(brand=None, account_id: int | None = None,
     preprod.reference_gate, which is why the manual lane cannot hand a
     human a shot the Queue page would refuse to render.
 
-    ONE rule for both lanes, on purpose: which provider renders a shot is
-    a decision made at the keyboard, not a property of the queue, and a
-    second predicate here would be a second definition of "waiting" to
-    keep in sync with the Queue page. The manual lane adds fields to each
-    row (the keyframe to start from, the duration to ask for) but never
+    A second predicate here would be a second definition of "waiting" to
+    keep in sync with the Queue page. The lane adds fields to each row
+    (the keyframe to start from, the duration to ask for) but never
     changes which rows there are.
 
     `prompt` is the stored shot prompt, which IS the gate-passed one:
@@ -300,39 +277,36 @@ def pending(brand=None, account_id: int | None = None,
                 "reference_image": shot.get("reference_image") or "",
                 "logline": concept.get("logline") or "",
             }
-            if provider == "manual":
-                # What a human actually needs in front of a render app:
-                # the frame to start from, and the length to ask for.
-                row["keyframe_url"] = row["reference_image"]
-                row["duration"] = _lane_duration(shot)
-                row["ratio"] = shot.get("ratio") or manual_lane.LANE_RATIO
-                row["lane"] = manual_lane.LANES["manual"]
+            # What a human actually needs in front of a render app: the
+            # frame to start from, and the length to ask for.
+            row["keyframe_url"] = row["reference_image"]
+            row["duration"] = _lane_duration(shot)
+            row["ratio"] = shot.get("ratio") or manual_lane.LANE_RATIO
+            row["lane"] = manual_lane.LANES["manual"]
             out.append(row)
     return out
 
 
-RENDER_DIR = REPO / "data" / "renders" / "higgsfield"
 # Under data/renders/ so the /renders mount serves it like any render.
 MANUAL_RENDER_DIR = REPO / "data" / "renders" / "manual"
 RENDERS_ROOT = REPO / "data" / "renders"
 
 
 def _render_dir(provider: str):
-    """Read through the module attributes rather than a dict, so the test
-    suite's redirect of RENDER_DIR / MANUAL_RENDER_DIR away from the real
-    data/renders/ still lands (conftest's output_roots lesson: a stub clip
-    in the owner's render folder is indistinguishable from a real one)."""
-    return MANUAL_RENDER_DIR if provider == "manual" else RENDER_DIR
+    """Read through the module attribute at call time, so the test suite's
+    redirect of MANUAL_RENDER_DIR away from the real data/renders/ still
+    lands (conftest's output_roots lesson: a stub clip in the owner's render
+    folder is indistinguishable from a real one)."""
+    return MANUAL_RENDER_DIR
 
 
 def _log_tool(provider: str) -> str:
     """The generations/generated_assets tool a lane's clip is filed under:
-    "manual" for the generic import (generative.MANUAL_TOOLS), the vendor
-    name otherwise."""
-    return "manual" if provider == "manual" else provider
+    "manual" (generative.MANUAL_TOOLS)."""
+    return "manual"
 
 
-def _place(src: Path, provider: str = "higgsfield") -> Path:
+def _place(src: Path, provider: str = "manual") -> Path:
     """The clip, sitting somewhere /renders can actually serve it.
     Already under data/renders/ -> left alone. Anywhere else -> copied
     (not moved: a Claude session's shell cannot delete, and a half-moved
@@ -358,7 +332,7 @@ def import_clip(concept_id: int, shot_n, file: str, model: str,
                 credits: float | None, prompt: str | None,
                 anchored: bool,
                 account_id: int | None = None,
-                provider: str = "higgsfield",
+                provider: str = "manual",
                 duration: int | None = None,
                 ratio: str | None = None,
 ) -> dict:
@@ -366,12 +340,11 @@ def import_clip(concept_id: int, shot_n, file: str, model: str,
     the tool scoreboard see the attempt, then the media_url that
     autopilot.build_plan requires before it will emit a post action.
 
-    cost_usd is left NULL on purpose, in BOTH lanes. The clip was paid
+    cost_usd is left NULL on purpose. The clip was paid
     for somewhere this pipeline cannot see, so a dollar figure here would
     be invented -- src/costs.py reports such a row as FREE with a count,
     never as $0.00 and never backfilled. What was really spent goes in
-    params_json, where it is honest: Higgsfield's app credits as a number,
-    a manual import's as nothing at all.
+    params_json, where it is honest: `--credits` as told, else nothing.
 
     NO LEDGER HOLD IS TAKEN, and there is no code here that decides that.
     `params["source"]` is the lane marker, and `ledger.is_billable` --
@@ -418,34 +391,22 @@ def import_clip(concept_id: int, shot_n, file: str, model: str,
     measured, measured_by = _measure_duration(path)
     generative.init()
 
-    if provider == "manual":
-        where = "rendered outside this pipeline and filed by hand"
-        params = {"model": model,
-                  "source": manual_lane.SOURCE,
-                  "lane": manual_lane.LANES["manual"],
-                  "key_source": None,
-                  "duration": claimed_duration,
-                  "ratio": claimed_ratio,
-                  "concept_id": concept_id, "shot_n": shot_n,
-                  "prompt_image": bool(anchored),
-                  # the claim, as told; and the file, measured
-                  "model_verified": model_verified,
-                  "duration_measured_s": measured,
-                  "duration_source": measured_by}
-        if credits is not None:
-            params["credits"] = credits
-        notes = "filed by hand, not an API render -- no ledger hold"
-    else:
-        where = "rendered via the Higgsfield MCP on subscription credits"
-        params = {"model": model, "source": "mcp-subscription",
-                  "credits": credits, "concept_id": concept_id,
-                  "shot_n": shot_n, "prompt_image": bool(anchored),
-                  # false, and honestly so: the MCP publishes no model
-                  # list this script could have checked the name against
-                  "model_verified": model_verified,
-                  "duration_measured_s": measured,
-                  "duration_source": measured_by}
-        notes = "subscription credits, not API credits"
+    where = "rendered outside this pipeline and filed by hand"
+    params = {"model": model,
+              "source": manual_lane.SOURCE,
+              "lane": manual_lane.LANES["manual"],
+              "key_source": None,
+              "duration": claimed_duration,
+              "ratio": claimed_ratio,
+              "concept_id": concept_id, "shot_n": shot_n,
+              "prompt_image": bool(anchored),
+              # the claim, as told; and the file, measured
+              "model_verified": model_verified,
+              "duration_measured_s": measured,
+              "duration_source": measured_by}
+    if credits is not None:
+        params["credits"] = credits
+    notes = "filed by hand, not an API render -- no ledger hold"
 
     shot_row_id = generative.add_shot(
         Shot(subject=text[:100], action="as prompted"),
@@ -513,26 +474,26 @@ def main() -> None:
     p_imp.add_argument("--file", required=True)
     p_imp.add_argument("--model", required=True,
                        help="the model that actually rendered it. Recorded "
-                            "as told (model_verified: false) -- neither lane "
-                            "has a list to check it against")
+                            "as told (model_verified: false) -- the lane "
+                            "has no list to check it against")
     p_imp.add_argument("--credits", type=float)
     p_imp.add_argument("--prompt")
     p_imp.add_argument("--anchored", action="store_true",
                        help="the render was anchored on the keyframe")
     p_imp.add_argument("--duration", type=int,
-                       help="seconds you asked for (manual lane). Recorded "
+                       help="seconds you asked for. Recorded "
                             "beside what the file itself measures")
     p_imp.add_argument("--ratio",
-                       help="frame you asked for (manual lane), recorded")
+                       help="frame you asked for, recorded")
 
     ap.add_argument(
         "--account", default=None,
         help="account slug to act as (default: the oldest on the database)")
     ap.add_argument(
-        "--provider", default="higgsfield", choices=list(PROVIDERS),
-        help="which lane. `manual` files a clip rendered anywhere; "
-             "`higgsfield` files an MCP render. Both are refused for any "
-             "account the operator column does not name.")
+        "--provider", default="manual", choices=list(PROVIDERS),
+        help="which lane: `manual`, a clip rendered anywhere (the only one "
+             "since the Higgsfield-MCP lane was removed 2026-09-28). "
+             "Refused for any account the operator column does not name.")
 
     args = ap.parse_args()
     # A Claude session drives this by hand; there is no cookie behind it.

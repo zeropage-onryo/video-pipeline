@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """
-The manual render lanes, and the one gate in front of them.
+The manual render lane, and the one gate in front of it.
 
-WHAT THE LANES ARE. Two ways a clip reaches a concept without an API
-render through the Queue:
+WHAT THE LANE IS. One way a clip reaches a concept without an API render
+through the Queue: the generic clip import. A clip rendered ANYWHERE (a
+vendor's web app, a local model, the Resolve timeline) is dropped on its
+card or filed with `ops/render_queue.py --provider manual import`, and
+lands as a FREE generations row plus a generated_assets row. It spends
+nothing, which is why it takes no ledger hold.
 
-- **manual** -- the generic clip import. A clip rendered ANYWHERE (a
-  vendor's web app, a local model, the Resolve timeline) is dropped on its
-  card or filed with `ops/render_queue.py --provider manual import`, and
-  lands as a FREE generations row plus a generated_assets row. It spends
-  nothing, which is why it takes no ledger hold.
-- **higgsfield** -- the Higgsfield MCP: a Claude session renders on the
-  operator's app subscription and files the clip back.
+There were two lanes until 2026-09-28: the Higgsfield MCP (a Claude
+session rendering on the operator's Higgsfield app subscription) was
+removed that day, Mike's call. Its `mcp-subscription` rows stay in
+SUBSCRIPTION_SOURCES below so they still read as FREE. Mike also expects
+to retire this import in time (docs/BACKLOG.md) -- until then it stays
+behind the operator gate.
 
 Until 2026-09-26 the first was the RUNWAY UNLIMITED lane: the plan's
 free-but-queued Explore Mode had no API parameter, so a human rendered in
@@ -19,13 +22,12 @@ Chrome and filed the mp4. Runway retired Unlimited in June 2026 and fal
 became the only API renderer (docs/tasks/task-fal-only.md), so the lane
 became the generic import -- the part of it that was never about Runway.
 
-WHY IT NEEDS A GATE. The Higgsfield lane spends the OPERATOR'S PERSONAL
-CONSUMER PLAN. Rendering a paying customer's shot on it is reselling a
-consumer subscription -- the plan's own terms, and the penalty is
-termination of the account, which on a multi-tenant install takes EVERY
-tenant's render path down at once. The generic import spends nothing, but
-it files a clip as a concept's render with no hold, so it stays behind the
-same operator gate rather than being the one door that is wider.
+WHY IT NEEDS A GATE. The import spends nothing, but it files a clip as a
+concept's render with no ledger hold -- on a multi-tenant install, a free
+way round the spend gate. So it is operator-only. (The gate was written
+for the Higgsfield lane, which spent the operator's personal consumer
+plan; rendering a paying customer's shot on that was reselling a consumer
+subscription. That lane is gone; the reasoning for the gate is not.)
 
 THE RULES THIS MODULE EXISTS TO KEEP IN ONE PLACE:
 
@@ -116,15 +118,12 @@ REFUSAL = ("no manual render lane on this account -- the manual lanes are "
 SOURCE = "manual-import"
 LANES = {
     "manual": "manual-import",
-    # The Higgsfield MCP lane predates this module and writes its own
-    # marker; named here so the ledger has one list to read.
-    "higgsfield": "higgsfield-mcp",
 }
 
 # Every `params.source` that means "this clip was paid for outside the
-# ledger". `mcp-subscription` is what ops/render_queue.py writes for the
-# Higgsfield lane; `manual-unlimited` is what the retired Runway Unlimited
-# lane wrote (#375 and its kind) -- kept so those rows still read as FREE.
+# ledger". Two are from retired lanes and kept so their rows still read as
+# FREE: `mcp-subscription` (the Higgsfield-MCP lane, removed 2026-09-28)
+# and `manual-unlimited` (the Runway Unlimited lane -- #375 and its kind).
 SUBSCRIPTION_SOURCES = frozenset({SOURCE, "mcp-subscription", "manual-unlimited"})
 
 # The frame and length a lane card offers by default -- src/render_specs.py's,

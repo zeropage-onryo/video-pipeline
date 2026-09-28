@@ -2639,8 +2639,8 @@ def queue_manual(brand: Optional[str] = None,
     Unlimited in June 2026 and fal became the only API renderer.
 
     THE OPERATOR'S LANE, AND ONLY THE OPERATOR'S. It files a render with
-    no ledger hold, so it sits behind the same gate as the Higgsfield MCP
-    lane rather than being the one door that is wider.
+    no ledger hold, so it sits behind the operator gate (the one the
+    Higgsfield-MCP lane had, until that lane was removed 2026-09-28).
 
     So the gate is `manual_lane.manual_lane_allowed(account_id)`, called
     on the TENANT resolved server-side by `auth.current_account_id` --

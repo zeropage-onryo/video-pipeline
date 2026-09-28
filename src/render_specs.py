@@ -16,9 +16,9 @@ What is left:
 
 - the FRAME SIZES the Studio composer offers a scene ("720:1280") -- a
   scene's shape, stored on its shot, which the keyframe is drawn at;
-- the two by-hand lanes' model lists, both None: the generic clip import
-  files a clip rendered anywhere, and the Higgsfield MCP's model names are
-  its own and published nowhere this repo can read. A lane with no list
+- the by-hand lane's model list, None: the generic clip import files a
+  clip rendered anywhere (the Higgsfield-MCP lane went 2026-09-28). A lane
+  with no list
   records the model it was told, UNVERIFIED (`model_verified: false` in
   the row), rather than checking it against a list this repo made up.
 """
@@ -34,13 +34,11 @@ RATIO_9_16 = "720:1280"
 FRAME_SIZES = ("1280:720", "720:1280", "1104:832",
                "832:1104", "960:960", "1584:672")
 
-# The by-hand lanes. None == no list to check a model claim against.
-HIGGSFIELD_LANE_MODELS: Optional[dict[str, dict]] = None
+# The by-hand lane. None == no list to check a model claim against.
 MANUAL_LANE_MODELS: Optional[dict[str, dict]] = None
 
 LANE_MODELS: dict[str, Optional[dict]] = {
     "manual": MANUAL_LANE_MODELS,
-    "higgsfield": HIGGSFIELD_LANE_MODELS,
 }
 
 LANE_RATIO = RATIO_9_16
@@ -69,7 +67,7 @@ def check_model(lane: str, model: str) -> bool:
 
 __all__ = [
     "RATIO_9_16", "FRAME_SIZES",
-    "HIGGSFIELD_LANE_MODELS", "MANUAL_LANE_MODELS", "LANE_MODELS",
+    "MANUAL_LANE_MODELS", "LANE_MODELS",
     "LANE_RATIO", "LANE_DURATION",
     "models_for", "check_model",
 ]

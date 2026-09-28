@@ -128,13 +128,16 @@ venv/bin/python -m src.rag_eval <cases.json> [--k 5]   # hit@k + MRR over labele
 venv/bin/python -m src.mcp_server --engine   # stdio; Claude Desktop launches this itself
 # Registering it: ops/connect-claude.md (paste ops/claude-desktop-mcp.json, ⌘Q, reopen)
 
-# THE MANUAL RENDER LANES — clips that reach a concept without an API render.
-# The Higgsfield MCP (a Claude session on the operator's app plan) and the
-# generic `manual` import (a clip rendered anywhere, filed free -- it was the
-# Runway Unlimited lane until 2026-09-26). `list`
-# says what is waiting, `import` files the mp4 into data/renders/<provider>/
+# THE MANUAL RENDER LANE — a clip that reaches a concept without an API render.
+# ONE lane since 2026-09-28: the generic `manual` import (a clip rendered
+# anywhere, filed free -- it was the Runway Unlimited lane until 2026-09-26).
+# The Higgsfield-MCP lane was REMOVED that day (Mike's call); its old
+# `mcp-subscription` rows still read as FREE, and src/higgsfield.py's Soul
+# STILL path is untouched. Mike expects to retire this import too
+# (docs/BACKLOG.md #21). `list`
+# says what is waiting, `import` files the mp4 into data/renders/manual/
 # and writes a FREE row (cost_usd NULL, params.source = the lane marker, so
-# ledger.is_billable takes no hold). BOTH lanes are OPERATOR-ONLY —
+# ledger.is_billable takes no hold). The lane is OPERATOR-ONLY —
 # src/manual_lane.py's gate is the accounts.manual_lane_operator COLUMN (the
 # env vars are gone), checked server-side against the account id on every
 # surface, fails closed (nobody, until somebody is turned on). Turn it on:
