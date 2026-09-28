@@ -81,17 +81,30 @@ def word_timings(handles, *, account_id: Optional[int],
     return found, needs
 
 
-def _words_in(clip: dict, timing: dict, fps: int) -> list[tuple[int, int, str]]:
+def _words_in(clip: dict, timing: dict, fps: int, *,
+              context: bool = False) -> list[tuple[int, int, str]]:
     """The words of `clip`'s media inside the part of the file it uses,
-    as (start, end, text) in PROJECT frames of the source, sorted."""
+    as (start, end, text) in PROJECT frames of the source, sorted.
+
+    `context` also keeps the nearest word on either side of that span.
+    A silence is measured between two words, and a cut placed in a pause
+    -- the most natural place to cut -- leaves each half of the pause in
+    a different clip with only ONE of its two words: without the
+    neighbour, the half at a clip's head or tail is invisible. Callers
+    clamp to the clip's span, so a neighbour only ever bounds a gap."""
     scale = fps / (timing.get("fps") or fps)
-    out = []
+    every = []
     for w in timing.get("words") or []:
         a = int(round(int(w["start_f"]) * scale))
         b = int(round(int(w["end_f"]) * scale))
-        if b > clip["src_in"] and a < clip["src_out"]:
-            out.append((a, max(b, a + 1), str(w.get("text") or "")))
-    return sorted(out)
+        every.append((a, max(b, a + 1), str(w.get("text") or "")))
+    every.sort()
+    inside = [w for w in every if w[1] > clip["src_in"] and w[0] < clip["src_out"]]
+    if not context:
+        return inside
+    before = [w for w in every if w[1] <= clip["src_in"]]
+    after = [w for w in every if w[0] >= clip["src_out"]]
+    return before[-1:] + inside + after[:1]
 
 
 # --------------------------------------------------------------------------
@@ -155,12 +168,17 @@ def find_regions(doc: dict, timings: dict[str, dict], units, *,
         timing = timings.get(c.get("media"))
         if not timing:
             continue
-        words = _words_in(c, timing, fps)
+        words = _words_in(c, timing, fps, context=True)
         found: list[list] = []
         for (_, a_end, _), (b_start, _, _) in zip(words, words[1:]):
-            gap_a, gap_b = max(a_end, c["src_in"]), min(b_start, c["src_out"])
-            if gap_b - gap_a > min_gap and gap_b - air > gap_a + air:
-                found.append([gap_a + air, gap_b - air, 1, 0])
+            # a silence is measured word to word, even when a cut splits
+            # it; the air is left beside a WORD, never beside a clip edge
+            if b_start - a_end <= min_gap:
+                continue
+            lo = a_end + air if a_end >= c["src_in"] else c["src_in"]
+            hi = b_start - air if b_start <= c["src_out"] else c["src_out"]
+            if hi > lo:
+                found.append([lo, hi, 1, 0])
         if fillers:
             for a, b, text in words:
                 if _norm(text) in FILLERS:

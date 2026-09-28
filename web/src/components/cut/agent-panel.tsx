@@ -365,6 +365,8 @@ function AgentTurn({ turn }: { turn: Turn }) {
   const previewing = useCut((s) => s.previewing === turn.id);
   const [openOps, setOpenOps] = useState(false);
   const p = turn.proposal;
+  // a note the reply already says is not said twice
+  const notes = (turn.notes ?? []).filter((n) => !turn.text.toLowerCase().includes(n.toLowerCase()));
 
   if (turn.working) {
     return (
@@ -378,9 +380,9 @@ function AgentTurn({ turn }: { turn: Turn }) {
     return (
       <div className="cx-msg">
         {turn.text}
-        {turn.notes?.length ? (
+        {notes.length ? (
           <ul className="cx-note" style={{ margin: "6px 0 0", paddingLeft: 16 }}>
-            {turn.notes.map((n) => (
+            {notes.map((n) => (
               <li key={n}>{n}</li>
             ))}
           </ul>
@@ -407,7 +409,7 @@ function AgentTurn({ turn }: { turn: Turn }) {
       {turn.text && turn.text !== p.summary ? <p className="cx-note" style={{ color: "var(--text)", marginBottom: 8 }}>{turn.text}</p> : null}
       <p className="cx-h" style={{ textTransform: "none", letterSpacing: "0.02em", fontSize: 13 }}>
         {p.summary}
-        {p.duration_delta ? (
+        {p.duration_delta && !/[−-]\d|\+\d/.test(p.summary) ? (
           <span className="cx-label" style={{ marginLeft: 8, color: p.duration_delta < 0 ? "#6fcf97" : "var(--dim)" }}>
             {signed(p.duration_delta, fps)}
           </span>

@@ -486,6 +486,23 @@ def test_cleanup_options_and_a_filler_at_the_head_is_a_trim(api):
     assert res.status_code == 409 and res.json()["error"]["head_id"] == trimmed["head"]["id"]
 
 
+def test_cleanup_finds_a_silence_a_cut_was_placed_in(api):
+    """A cut placed in a pause leaves each half of the pause in a different
+    clip, beside only ONE of its two words. Both halves are still dead air
+    (found in the browser, 2026-09-28: a split at 2s hid a 2s silence)."""
+    client, w = api
+    p, got = _cut(client, w["g1"])
+    _words(w["dsn"], w["g1"], w["a"], G1_WORDS)
+    base = got["head"]
+    c1 = d.track(base["doc"], "V1")["clips"][0]["id"]
+    split = _op(client, p["id"], base["id"], "split", clip_id=c1, frame=60)  # inside 40-80
+    out = _ok(client.post(f"/api/cut/projects/{p['id']}/cleanup", json={}))
+    # the same 32 frames of silence and 6 of filler as the unsplit clip
+    assert out["proposal"]["duration_delta"] == -38
+    assert out["found"]["fillers"] == 1 and out["found"]["silences"] >= 1
+    _replays(split["head"]["doc"], out["proposal"], w["a"], w["dsn"])
+
+
 def test_cleanup_skips_a_clip_whose_sound_is_not_on_the_timeline(api):
     client, w = api
     p = _ok(client.post("/api/cut/projects", json={}))["project"]
