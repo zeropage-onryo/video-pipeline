@@ -252,3 +252,86 @@ def test_instagram_is_off_by_default_but_still_runs_if_asked_for():
     assert "instagram" not in default
     [signal] = scout.gather_instagram("zeropage")
     assert signal["lane"] == "instagram"
+
+
+# ---------- the hashtag half is its own opt-in (2026-09-26) ----------
+
+def _one_handle(monkeypatch, tmp_db):
+    inspiration.add("faceless_guy", "", "p", brand="zeropage", dsn=tmp_db)
+    monkeypatch.setattr(instagram, "business_discovery",
+                        lambda handle, **k: {"ok": True, "handle": handle, "posts": [
+                            {"caption": "a real post", "media_type": "IMAGE",
+                             "media_url": "https://cdn/a.jpg", "permalink": "https://ig/p/1"}]})
+
+
+def test_hashtags_off_by_default_calls_no_hashtag_function(tmp_db, monkeypatch):
+    _configured(monkeypatch)
+    monkeypatch.delenv(scout.HASHTAGS_ENV, raising=False)
+    _one_handle(monkeypatch, tmp_db)
+
+    def boom(*a, **k):
+        raise AssertionError("a hashtag call went out with the switch off")
+    monkeypatch.setattr(instagram, "hashtag_top_media", boom)
+    monkeypatch.setattr(instagram, "hashtag_id", boom)
+
+    signals = scout.gather_instagram("zeropage", dsn=tmp_db)
+    assert any("a real post" in (s.get("detail") or "") for s in signals)
+    notes = [s["error"] for s in signals if "hashtags off" in (s.get("error") or "")]
+    assert len(notes) == 1                               # once per pass, not per tag
+
+
+def test_hashtags_run_when_switched_on(tmp_db, monkeypatch):
+    _configured(monkeypatch)
+    monkeypatch.setenv(scout.HASHTAGS_ENV, "1")
+    _one_handle(monkeypatch, tmp_db)
+    asked = []
+    monkeypatch.setattr(instagram, "hashtag_top_media",
+                        lambda tag, **k: asked.append(tag) or {"ok": True, "media": []})
+    scout.gather_instagram("zeropage", dsn=tmp_db)
+    assert asked == scout.INSTAGRAM_TAGS["zeropage"][:3]
+
+
+def test_a_permission_error_is_remembered_and_not_retried(tmp_db, monkeypatch):
+    _configured(monkeypatch)
+    monkeypatch.setenv(scout.HASHTAGS_ENV, "1")
+    _one_handle(monkeypatch, tmp_db)
+    asked = []
+
+    def refused(tag, **k):
+        asked.append(tag)
+        return {"ok": False, "media": [], "error": (
+            "(#10) To use 'Instagram Public Content Access', your use of this "
+            "endpoint must be reviewed and approved by Facebook.")}
+    monkeypatch.setattr(instagram, "hashtag_top_media", refused)
+
+    first = scout.gather_instagram("zeropage", dsn=tmp_db)
+    assert len(asked) == 1                               # stopped at the first tag
+    assert any("paused for 7 days" in (s.get("error") or "") for s in first)
+    assert scout.hashtag_pause(tmp_db) is not None
+
+    second = scout.gather_instagram("zeropage", dsn=tmp_db)
+    assert len(asked) == 1                               # the next pass does not retry
+    assert sum("hashtags paused until" in (s.get("error") or "") for s in second) == 1
+
+
+def test_a_budget_refusal_is_not_a_permission_pause(tmp_db, monkeypatch):
+    _configured(monkeypatch)
+    monkeypatch.setenv(scout.HASHTAGS_ENV, "1")
+    _one_handle(monkeypatch, tmp_db)
+    monkeypatch.setattr(instagram, "hashtag_top_media", lambda tag, **k: {
+        "ok": False, "media": [],
+        "error": "hashtag budget spent (30/30 new tags in 7 days) — cached tags still work"})
+    scout.gather_instagram("zeropage", dsn=tmp_db)
+    assert scout.hashtag_pause(tmp_db) is None
+
+
+def test_an_expired_pause_lets_hashtags_run_again(tmp_db, monkeypatch):
+    import json
+
+    from src import settings
+    settings.init(dsn=tmp_db)
+    with db.connect(tmp_db) as conn:
+        conn.execute("INSERT INTO settings (key, value) VALUES (%s, %s)",
+                     (scout.HASHTAG_PAUSE_KEY,
+                      json.dumps({"until": "2020-01-01T00:00:00+00:00", "reason": "old"})))
+    assert scout.hashtag_pause(tmp_db) is None
