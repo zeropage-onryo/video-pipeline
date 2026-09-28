@@ -62,6 +62,7 @@ STAGES = (
     "timeline",        # timeline.plan: a scene's timed windows -> its shots
     "shot_log",        # src/cut/index: Gemini logs each shot of a clip
     "transcribe",      # src/cut/index: fal Whisper, word level (unpriced: fal states no rate)
+    "cut_agent",       # src/cut/agent_tools: the editor's agent turn (proposes ops, never edits)
     "prompt_gate",     # the orchestrator's credit-gate judge
     "taste_judge",
     "uncanny_judge",

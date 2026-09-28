@@ -515,6 +515,39 @@ def handle_sources(handles, *, account_id: Optional[int],
     return out
 
 
+def handle_names(handles, *, account_id: Optional[int],
+                 dsn: Optional[str] = None) -> dict[str, dict[str, Any]]:
+    """handle -> {"name", "about"} -- what a person (or the agent) calls a
+    piece of media: the bin tile's name ("Runway #812", an upload's
+    filename) and, for a render, the start of its prompt. Two queries,
+    scoped like handle_sources; a render the Asset Bank soft-deleted is
+    still named, since a timeline may still hold it."""
+    from .. import render_assets
+    gen, asset = [], []
+    for h in handles:
+        parsed = d.parse_handle(h)
+        if parsed:
+            (gen if parsed[0] == "gen" else asset).append(parsed[1])
+    out: dict[str, dict[str, Any]] = {}
+    with db.connect(dsn) as conn:
+        if gen and db.table_exists(conn, "generated_assets"):
+            for r in conn.execute(
+                    "SELECT id, tool, model, left(prompt, 90) AS about FROM generated_assets "
+                    "WHERE id = ANY(%s) AND account_id IS NOT DISTINCT FROM %s",
+                    (gen, account_id)).fetchall():
+                label = render_assets._label(r["tool"] or "", r["model"] or "")
+                out[f"gen:{r['id']}"] = {"name": f"{label} #{r['id']}",
+                                         "about": " ".join((r["about"] or "").split())}
+        if asset:
+            for r in conn.execute(
+                    "SELECT id, filename FROM cut_media "
+                    "WHERE id = ANY(%s) AND account_id IS NOT DISTINCT FROM %s",
+                    (asset, account_id)).fetchall():
+                out[f"asset:{r['id']}"] = {"name": r["filename"] or f"asset:{r['id']}",
+                                           "about": ""}
+    return out
+
+
 def cached(handles, *, account_id: Optional[int],
            dsn: Optional[str] = None) -> dict[str, dict[str, Any]]:
     handles = list(handles)
