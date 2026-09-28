@@ -248,8 +248,9 @@ def test_local_tools_are_published_only_when_asked(monkeypatch):
     with pytest.raises(guide_tools.Refused):
         guide_tools.session()
     specs, run_tool = guide_tools.session(local=True, brand="zeropage")
-    assert {s["name"] for s in specs} == {"find_references", "keep_references"}
+    assert {s["name"] for s in specs} == {"find_references", "keep_references", "search_footage"}
     assert guide_tools.is_write("keep_references") and not guide_tools.is_write("find_references")
+    assert not guide_tools.is_write("search_footage")
 
     def fake_find(scene, **kw):
         return {"ok": True, "checked": True, "faces": 0, "note": "kept 1",

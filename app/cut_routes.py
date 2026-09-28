@@ -5,6 +5,8 @@ docs/tasks/CUT_ASSEMBLE_V0.md).
     GET  /api/cut/ready                  rendered scenes a cut can be made from
     POST /api/cut/assemble               concept -> timeline v(N+1) -> MP4 (a job)
     POST /api/cut/media                  upload a music bed / voiceover -> asset:<id>
+    POST /api/cut/index                  index a concept's clips (or all of them) -- a job
+    GET  /api/cut/search?q=              search the index: the shot, the line, the moment
     GET  /api/cut/{concept_id}/timeline  the head doc + the version chain
     POST /api/cut/{concept_id}/rollback  move the head; nothing is deleted
 
@@ -32,6 +34,7 @@ from pydantic import BaseModel, Field
 
 from src import preprod
 from src.cut import assemble as cut_assemble
+from src.cut import index as cut_index
 from src.cut import render as cut_render
 from src.cut import sources as cut_sources
 from src.cut import store as cut_store
@@ -207,6 +210,69 @@ async def cut_media_upload(request: Request,
                               output_path=str(target), seconds=info["seconds"], sha256=sha)
     return {"handle": f"asset:{row['id']}", "seconds": info["seconds"],
             "filename": row["filename"]}
+
+
+# --------------------------------------------------------------------------
+# the index (phase 2): what is in each clip, and search over it
+# --------------------------------------------------------------------------
+
+class IndexBody(BaseModel):
+    concept_id: Optional[int] = None
+    force: bool = False
+
+
+@router.post("/index")
+def cut_index_route(body: IndexBody, account_id: int = Depends(auth.current_account_id)):
+    """Index one concept's clips, or (no concept_id) every clip and upload
+    not indexed yet. A job: each clip is a Gemini call and, when someone
+    speaks, a fal Whisper call -- cents, metered, not charged in credits."""
+    if body.concept_id is not None:
+        try:
+            handles = cut_index.handles_for_concept(body.concept_id, account_id=account_id)
+        except LookupError:
+            return _error(404, "not_found", f"no concept {body.concept_id}")
+        if not handles:
+            return _error(409, "nothing_to_index",
+                          f"concept {body.concept_id} has no clip in the Asset Bank yet")
+    else:
+        handles = cut_index.all_handles(account_id=account_id)
+        if not handles:
+            return _error(409, "nothing_to_index", "there are no clips to index yet")
+    if not cut_sources.ffmpeg_bin():
+        return _error(503, "no_ffmpeg", "ffmpeg is not installed on this server")
+    force = body.force
+
+    def work(job):
+        done = []
+        for i, h in enumerate(handles):
+            jobs.check_cancelled(job)
+            jobs.progress(job, i / len(handles), f"indexing {h}")
+            done.append(cut_index.index_media(h, account_id=account_id, force=force))
+        indexed = [r for r in done if r.get("status") == "done" and not r.get("skipped")]
+        failed = [r for r in done if r.get("status") == "failed"]
+        detail = (f"{len(indexed)} indexed · {len(done) - len(indexed) - len(failed)} already current"
+                  + (f" · {len(failed)} failed: " + "; ".join(
+                      f"{r['media']}: {r.get('notes')}" for r in failed)[:400] if failed else ""))
+        return {"detail": detail,
+                "indexed": [{"media": r["media"], "status": r.get("status"),
+                             "skipped": r.get("skipped"), "shots": r.get("shots"),
+                             "words": r.get("words"), "speech": r.get("speech"),
+                             "notes": r.get("notes")} for r in done],
+                "ref_id": body.concept_id}
+
+    label = f"index · concept {body.concept_id}" if body.concept_id else "index · every clip"
+    job = jobs.start("index", label, work, cancellable=True, account_id=account_id)
+    return {"job_id": job["id"], "handles": handles}
+
+
+@router.get("/search")
+def cut_search(q: str = "", k: int = 8, account_id: int = Depends(auth.current_account_id)):
+    if not q.strip():
+        return _error(400, "empty", "say what to look for")
+    out = cut_index.find(q, account_id=account_id, k=k)
+    for h in out["results"]:
+        h["media_url"] = _mint(h.get("media_url"), account_id)
+    return out
 
 
 # --------------------------------------------------------------------------

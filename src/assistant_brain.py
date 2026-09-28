@@ -286,9 +286,29 @@ KEEP_SPEC = {
     "write": True,
 }
 
-LOCAL_READ = ("find_references",)
+SEARCH_SPEC = {
+    "name": "search_footage",
+    "description": (
+        "Search the person's own clips by what is IN them -- what is on screen and what "
+        "is said: 'the shot where he laughs', 'the wide of the rooftop', 'where she says "
+        "hello'. Reads the editor's index (a log of every shot, and the words spoken with "
+        "their timings); costs nothing. Returns clip handles (gen:<id>) with the concept "
+        "each belongs to and the moment in seconds -- never URLs. A clip that has not been "
+        "indexed yet cannot be found; say so rather than guess."),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "What to look for, in plain words."},
+            "k": {"type": "integer", "description": "How many moments, 1-20 (default 8)."},
+        },
+        "required": ["query"],
+    },
+    "write": False,
+}
+
+LOCAL_READ = ("find_references", "search_footage")
 LOCAL_WRITE = ("keep_references",)
-LOCAL_SPECS = (FIND_SPEC, KEEP_SPEC)
+LOCAL_SPECS = (FIND_SPEC, KEEP_SPEC, SEARCH_SPEC)
 WRITE_LABELS = {"keep_references": "Keep these references and attach them to the composer"}
 
 
@@ -470,7 +490,32 @@ def run_local(name: str, args: dict, *, brand: str = "", account_id=None,
     if name == "keep_references":
         return json.dumps(keep_references(args.get("candidate_ids"), account_id=account_id,
                                           dsn=dsn))
+    if name == "search_footage":
+        return footage_for_model(search_footage(args.get("query") or "", k=args.get("k") or 8,
+                                                account_id=account_id, dsn=dsn))
     raise ValueError(f"unknown local tool {name}")
+
+
+def search_footage(query: str, *, k: int = 8, account_id=None, dsn=None) -> dict:
+    from .cut import index as cut_index
+    try:
+        k = max(1, min(int(k), 20))
+    except (TypeError, ValueError):
+        k = 8
+    return cut_index.find(query, account_id=account_id, k=k, dsn=dsn)
+
+
+def footage_for_model(found: dict) -> str:
+    """What the model reads: one line per moment, handles and times only."""
+    lines = []
+    for h in found.get("results") or []:
+        where = (f"{h['concept_title']} (concept #{h['concept_id']})"
+                 if h.get("concept_id") else "an uploaded file")
+        who = f" [{h['speaker']}]" if h.get("speaker") else ""
+        lines.append(f"- {h['media']} · {where} · {h['start_s']:.1f}-{h['end_s']:.1f}s · "
+                     f"{h['kind']}{who}: {str(h.get('text') or '')[:200]}")
+    notes = [f"note: {n}" for n in found.get("notes") or []]
+    return "\n".join(lines + notes) or "no moment matched -- the clip may not be indexed yet"
 
 
 # --- the checking step ------------------------------------------------------------

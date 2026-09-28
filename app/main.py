@@ -67,6 +67,7 @@ from src import billing as billing_core
 from src import (
     settings as settings_mod,
 )
+from src.cut import moments as cut_moments
 from src.cut import store as cut_store
 
 from . import api, auth, jobs, mcp_auth, mcp_mount, seo
@@ -183,6 +184,7 @@ async def lifespan(app: FastAPI):
         workflows.seed_default()  # "Prompt enhancement" starter canvas
         render_assets.init()  # generated_assets, owned (merged 2026-09-02)
         cut_store.init()      # timelines / timeline_heads / cut_media (Assemble v0)
+        cut_moments.init()    # media_index / media_moments (the index, phase 2)
         spend.init()          # llm_calls, the LLM meter (2026-09-04)
         ledger.init()         # credit_lots / credit_entries, the prepaid ledger
         billing_core.init()   # credit_schedules, a yearly plan's unreleased months
