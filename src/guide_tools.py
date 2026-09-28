@@ -63,7 +63,7 @@ WRITE_LABELS = {
 # is a WRITE and waits for the click like every other write here.
 # Published only when a turn asks for them (`session(local=True)`), so
 # the board's closed set above is unchanged for every other caller.
-LOCAL_READ = ("find_references",)
+LOCAL_READ = ("find_references", "search_footage")
 LOCAL_WRITE = ("keep_references",)
 LOCAL_TOOLS = LOCAL_READ + LOCAL_WRITE
 WRITE_LABELS["keep_references"] = "Keep these references and attach them to the composer"
@@ -129,6 +129,12 @@ def check_args(name: str, args: dict) -> dict:
                                 if isinstance(d, str)][:7],
                 "avoid": [str(a)[:120] for a in (args.get("avoid") or [])
                           if isinstance(a, str)][:8]}
+    if name == "search_footage":
+        if not str(args.get("query") or "").strip():
+            raise Refused("`search_footage` needs something to look for")
+        k = args.get("k")
+        args = {"query": str(args["query"])[:300],
+                "k": k if isinstance(k, int) and not isinstance(k, bool) else 8}
     if name == "reference":
         for key in ("image_url", "source_url"):
             if args.get(key):

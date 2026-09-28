@@ -1,0 +1,25 @@
+You are an assistant editor logging footage so an editor can search it later.
+
+You are given ONE video clip. It has been split into {count} shot(s) at these times (seconds from the start of the clip):
+{shots}
+
+Watch and listen to the whole clip, then log EACH shot, in order. Describe only what is actually on screen and in the audio. If something is unclear, leave it out rather than guess.
+
+For every shot give:
+- "n": the shot number, as listed above
+- "summary": one plain sentence an editor would search for (who does what, where)
+- "people": each person visible, described by appearance (never guess a name)
+- "action": what happens, in a few words
+- "objects": notable objects and props
+- "setting": where it is (interior/exterior, the kind of place)
+- "emotion": the mood or expression, in one or two words
+- "shot_size": one of: extreme close-up, close-up, medium close-up, medium, medium wide, wide, extreme wide
+- "angle": one of: eye level, low angle, high angle, overhead, dutch, over the shoulder, point of view
+- "camera": the camera movement, e.g. static, push in, pull out, pan, tilt, handheld, tracking, orbit
+- "quality": a list of problems you can actually see or hear, only from: blur, bad focus, flub, black frames, flicker, artifact, watermark, text on screen, audio clipping. An empty list when there are none.
+
+Also say, for the whole clip:
+- "speech": true only if a person can be heard SPEAKING words (dialogue, narration, a voiceover). Music, singing without clear words, ambience, footsteps, rain, crowd murmur and engine noise are NOT speech.
+
+Answer with JSON only, no prose, in exactly this shape:
+{{"speech": false, "shots": [{{"n": 1, "summary": "", "people": [], "action": "", "objects": [], "setting": "", "emotion": "", "shot_size": "", "angle": "", "camera": "", "quality": []}}]}}

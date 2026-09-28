@@ -336,6 +336,10 @@ OWNED_TABLES = (
     "timelines",
     "timeline_heads",
     "cut_media",
+    # the index (2026-09-28, src/cut/moments.py): what is in each clip,
+    # and the words, sentences and shots search runs over
+    "media_index",
+    "media_moments",
 )
 
 # The tables that are global BY DECISION, each with the reason. This is

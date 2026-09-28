@@ -144,6 +144,12 @@ venv/bin/python -m src.fal_requests [--account N]
 # order it was written, on a versioned timeline -> ONE MP4 (ffmpeg, -14 LUFS,
 # optional music bed ducked under the clips' own sound). No CLI: the Queue's
 # "Ready to cut" strip posts /api/cut/assemble. Nothing here spends.
+# THE INDEX (phase 2) — what is IN each clip, so the editor can search it.
+# One Gemini shot log per clip + fal Whisper (word level) only when the log
+# heard speech. Cents per clip, metered (stages shot_log / transcribe), not
+# charged in credits. Export DATABASE_URL first, like src.accounts.
+venv/bin/python -m src.cut.index backfill [--account <slug>] [--dry-run]
+venv/bin/python -m src.cut.index one gen:85 [--force]
 
 # THE REFERENCE PHOTOS — the bytes behind every ref URL, pushed to R2 so they
 # resolve on the deployed site too (characters/props/locations/data/refs are
@@ -1670,6 +1676,18 @@ is yours, in Resolve, by hand.
   `data/renders/cut/`, mirrored like any render. **Homebrew's ffmpeg has no libass**, so on the
   Mac captions are NOT burned (the `.ass` lands beside the MP4 and the job says so); the Fly
   image's Debian ffmpeg burns them. CI installs ffmpeg so the render tests run rather than skip.
+  **The index (phase 2, 2026-09-28)** is `index.py` + `moments.py`: per file (by sha256, stale
+  on read) a proxy when the source is over 720p, shot cuts from ffmpeg's scene score (no
+  OpenCV), ONE Gemini shot log for all shots (`prompts/cut/shot_log.txt`, JSON checked by
+  `check_log` -- sizes/angles/quality flags off the list are dropped), and fal Whisper at word
+  level with diarisation ONLY when the log heard speech (Whisper invents words over ambience,
+  which is most generated clips). `media_index` / `media_moments` are OWNED; words carry
+  timing, only segments and shots are embedded (the RAG library's 768-dim space, in the main
+  database, the vector type schema-qualified because a test schema cannot see `public`).
+  `index.find` is THE search (hybrid: vector + text, reciprocal rank) behind both
+  `GET /api/cut/search` and the pill's read-only `search_footage` tool, which returns handles
+  and times, never URLs. Captions on Export were considered and dropped (Mike, 2026-09-28):
+  editorial features belong to the editor, not to Assemble.
 - **`src/pricing.py`** — what a render costs, and the signed quote that says so (steps 1–4 of
   `docs/tasks/task-pricing-and-quotes.md`, on main 2026-09-18; read that doc's "As built"
   section before touching it). Pure module, three answers: `estimate()` is the provider's USD
