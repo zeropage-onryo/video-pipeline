@@ -7,6 +7,7 @@ one's clock, install a fresh one of either.
     python -m ops.ig_tokens refresh           # IG_ACCESS_TOKEN +60 days, into .env
     python -m ops.ig_tokens publish           # install a re-issued IG_ACCESS_TOKEN
     python -m ops.ig_tokens research          # issue + install IG_GRAPH_TOKEN
+    python -m ops.ig_tokens fly-export NAME.. | fly secrets import -a zeropage-studio
 
 (`bash ops/ig_token.sh <command>` is the same thing from a double-click.)
 
@@ -161,8 +162,8 @@ def cmd_refresh(*, env_path: Path = None, refresh=None, say=print, now=None) -> 
     say(f"ok -- IG_ACCESS_TOKEN refreshed, {days} days left"
         + (" (Meta issued a new string)" if new != token else " (same string, longer clock)"))
     say(f"     .env updated; previous copy at {backup.name}")
-    say("     if Fly posts or refreshes metrics, copy it there too: "
-        "fly secrets set IG_ACCESS_TOKEN=... -a zeropage-studio")
+    say("     if Fly posts or refreshes metrics, copy it there too (no value on screen):")
+    say(f"     {FLY_PIPE}")
     return 0
 
 
@@ -206,6 +207,8 @@ def cmd_publish(*, env_path: Path = None, ask: Callable = getpass.getpass,
     say(f"ok -- IG_ACCESS_TOKEN installed for @{user.get('username') or '?'}"
         + (f", IG_USER_ID={values['IG_USER_ID']}" if "IG_USER_ID" in values else ""))
     say(f"     .env updated; previous copy at {backup.name}")
+    say("     for Fly: python -m ops.ig_tokens fly-export IG_ACCESS_TOKEN IG_USER_ID "
+        f"| fly secrets import -a {FLY_APP}")
     return 0
 
 
@@ -287,6 +290,8 @@ def cmd_research(*, app_id: str, page_id: str = RESEARCH_PAGE_ID,
     backup = set_env({"IG_GRAPH_TOKEN": long, "IG_BUSINESS_ID": ig_id}, env_path)
     say(f"3/3  .env updated (IG_GRAPH_TOKEN, IG_BUSINESS_ID); previous copy at "
         f"{backup.name}")
+    say("     for Fly: python -m ops.ig_tokens fly-export IG_GRAPH_TOKEN IG_BUSINESS_ID "
+        f"| fly secrets import -a {FLY_APP}")
 
     check = instagram.check_graph_token(long, get=get)
     say(("!!! " if check.get("warning") else "    ") + instagram.health_line(check))
@@ -300,6 +305,65 @@ def cmd_research(*, app_id: str, page_id: str = RESEARCH_PAGE_ID,
     say("    a permissions / Advanced Access message means App Review; a "
         "'not a professional account' message means the Page link, not the token")
     return 1
+
+
+# --------------------------------------------------------------------------
+# fly-export -- into `fly secrets import` without the value touching a screen
+# --------------------------------------------------------------------------
+
+FLY_APP = "zeropage-studio"
+FLY_PIPE = f"python -m ops.ig_tokens fly-export IG_ACCESS_TOKEN | fly secrets import -a {FLY_APP}"
+# name -> what this machine would serve for it. IG_ACCESS_TOKEN goes through
+# instagram.access_token(), the one reader, so a replacement the nightly
+# refresh stored in data/ig_token.json wins over a stale .env copy -- Fly
+# must get the token that actually works, not the one .env last saw.
+FLY_EXPORTABLE: dict[str, Callable[[], Optional[str]]] = {
+    "IG_ACCESS_TOKEN": lambda: instagram.access_token(),
+    "IG_GRAPH_TOKEN": lambda: instagram.graph_token(),
+    "IG_USER_ID": lambda: instagram.ig_user_id(),
+    "IG_BUSINESS_ID": lambda: os.environ.get("IG_BUSINESS_ID"),
+}
+
+
+def cmd_fly_export(names: list, *, out=None, say=None) -> int:
+    """Write NAME=value lines for `fly secrets import` to stdout.
+
+    `fly secrets set IG_ACCESS_TOKEN=<value>` puts the value in shell
+    history; a pipe does not. So this REFUSES when stdout is a terminal --
+    the only way to read its output is to pipe it somewhere -- and exports
+    only the IG names in FLY_EXPORTABLE. All-or-nothing: an unknown name or
+    an unset value writes no line at all, so a pipe never imports half a
+    set. Messages go to stderr, never stdout, which is the payload."""
+    out = out or sys.stdout
+    say = say or (lambda msg: print(msg, file=sys.stderr))
+    if not names:
+        say(f"FAIL: name at least one of {', '.join(FLY_EXPORTABLE)}")
+        return 2
+    unknown = [n for n in names if n not in FLY_EXPORTABLE]
+    if unknown:
+        say(f"FAIL: not exportable: {', '.join(unknown)} -- only "
+            f"{', '.join(FLY_EXPORTABLE)}")
+        return 2
+    try:
+        tty = out.isatty()
+    except Exception:
+        tty = False
+    if tty:
+        say("REFUSED: stdout is a terminal, and this would print a secret. Pipe it:")
+        say(f"    {FLY_PIPE}")
+        return 2
+    values = {}
+    for name in dict.fromkeys(names):
+        value = (FLY_EXPORTABLE[name]() or "").strip()
+        if not value:
+            say(f"FAIL: {name} is not set here -- nothing exported")
+            return 1
+        values[name] = value
+    for name, value in values.items():
+        out.write(f"{name}={value}\n")
+    out.flush()
+    say(f"exported {', '.join(values)} (values not shown)")
+    return 0
 
 
 def main(argv=None) -> int:
@@ -319,7 +383,14 @@ def main(argv=None) -> int:
     p_res.add_argument("--app-id", default=os.environ.get("IG_RESEARCH_APP_ID", ""),
                        help="the research app's id (or IG_RESEARCH_APP_ID)")
     p_res.add_argument("--page-id", default=RESEARCH_PAGE_ID)
+    p_fly = sub.add_parser("fly-export",
+                           help="NAME=value lines for `fly secrets import` (pipe only)")
+    p_fly.add_argument("names", nargs="+", metavar="NAME",
+                       help=" | ".join(FLY_EXPORTABLE))
     args = parser.parse_args(argv)
+
+    if args.command == "fly-export":
+        return cmd_fly_export(args.names)
 
     if args.command == "refresh":
         return cmd_refresh()
