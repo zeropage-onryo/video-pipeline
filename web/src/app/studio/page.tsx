@@ -38,6 +38,7 @@ import {
 } from "lucide-react";
 import { API_URL, apiFetch } from "@/lib/api";
 import {
+  announceBalanceChange,
   announceQueueChange,
   getAssets,
   getCapabilities,
@@ -329,6 +330,9 @@ function Composer() {
           setProgress(j.progress || 0);
           say(j.detail || "Writing the scene…");
         });
+        // a Create is charged quietly, the way InVideo does it: no price on
+        // the button, the balance pill just moves (2026-09-28, Mike's call)
+        announceBalanceChange();
         if (job.status === "done") {
           setProgress(1);
           say(null);

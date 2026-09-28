@@ -84,6 +84,10 @@ def test_literal_skips_the_still_frame_wrapper_and_bank_false_keeps_it_off_the_w
     monkeypatch.setattr(generative, "cap_error", lambda *a, **k: None)
     monkeypatch.setattr(nano_banana, "generations_today", lambda **k: 0)
     monkeypatch.setattr(nano_banana, "RENDER_DIR", tmp_path)
+    # a still is charged since 2026-09-28; this test is about the two flags,
+    # not the ledger, and passes no database -- so no hold is taken at all
+    # (an unstubbed take() would read whatever DATABASE_URL resolves to)
+    monkeypatch.setattr(nano_banana.charging.Charge, "take", lambda self: None)
 
     def fake_image(prompt, out_path, **kw):
         seen["prompt"] = prompt

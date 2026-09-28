@@ -119,5 +119,15 @@
       "credits": 576,
       "frame": "720p"
     }
-  ]
+  ],
+  "actions": {
+    "create": {
+      "fast": 15,
+      "reasoning": 44
+    },
+    "still": {
+      "standard": 10,
+      "pro": 33
+    }
+  }
 }

@@ -207,12 +207,13 @@ def attempt_ref(out_path) -> str:
     return f"{path.parent.name}-{path.stem}-{stamp}{path.suffix}"
 
 
-def refusal(e: ledger.InsufficientCredit) -> str:
+def refusal(e: ledger.InsufficientCredit, what: str = "this render") -> str:
     """The message a route returns for an empty balance -- the same shape
     as generative.cap_error's: a sentence with the numbers in it and what
-    to do, never a stack."""
-    return (f"out of credits: this render needs {e.requested} and the account has "
-            f"{e.available} -- top up to render it")
+    to do, never a stack. `what` names the thing refused ("this scene",
+    "this still") now that renders are not the only thing charged."""
+    return (f"out of credits: {what} needs {e.requested} and the account has "
+            f"{e.available} -- top up to continue")
 
 
 __all__ = ["Charge", "attempt_ref", "refusal"]

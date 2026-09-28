@@ -192,7 +192,7 @@ export function AddElement({
                   <LayoutGrid size={11} strokeWidth={1.7} /> Draw a reference sheet
                 </span>
                 <span className="text-[12px] leading-snug text-[var(--dim)]">
-                  {SHEET_NOTE[kind]}, drawn from the photos on Nano Banana Pro after the save — a few cents. Your photos stay first; the
+                  {SHEET_NOTE[kind]}, drawn from the photos after the save. Your photos stay first; the
                   sheet rides behind them into every shot.
                 </span>
               </span>
