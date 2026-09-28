@@ -275,19 +275,3 @@ def test_the_unowned_nightly_pool_is_not_charged(studio, nano):
     assert result["ok"], result["error"]
     assert _kinds(studio) == []
 
-
-# --- the labels ---------------------------------------------------------------
-
-
-@pytest.mark.parametrize("model, still", [("gemini-2.5-flash-image", 10),
-                                          ("gemini-3-pro-image", 33)])
-def test_the_balance_carries_the_prices_this_server_charges(client, studio,
-                                                            monkeypatch, model, still):
-    """The buttons label themselves off this. The still is priced for the
-    image model the SERVER draws with -- Flash on the deployed API, Pro on
-    a machine configured for it -- never a hard-coded one."""
-    monkeypatch.setattr(nano_banana, "MODEL", model)
-    res = client.get("/api/billing/balance")
-    assert res.status_code == 200, res.text
-    assert res.json()["prices"] == {"create": {"fast": 15, "reasoning": 44},
-                                    "still": still}

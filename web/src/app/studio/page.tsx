@@ -37,8 +37,6 @@ import {
   X,
 } from "lucide-react";
 import { API_URL, apiFetch } from "@/lib/api";
-import { CATALOG } from "@/lib/catalog";
-import { creditsText } from "@/lib/render-choice";
 import {
   announceBalanceChange,
   announceQueueChange,
@@ -155,7 +153,7 @@ const imageFiles = (list: FileList | File[] | null | undefined) =>
   Array.from(list ?? []).filter((f) => f.type.startsWith("image/"));
 
 function Composer() {
-  const { brand, balance, toast } = useShell();
+  const { brand, toast } = useShell();
   const params = useSearchParams();
   const attachId = params.get("attach");
   // An idea typed into the landing page's hero arrives as ?spark= and the
@@ -308,14 +306,6 @@ function Composer() {
     if (bad && text) toast(text, "err");
   };
 
-  // What one Create costs (2026-09-28): the same number the server holds,
-  // off the generated catalog. An unknown brain reads as the dearer tier,
-  // exactly as pricing.create_action prices it.
-  const createCredits =
-    CATALOG.actions.create[(brain || "fast") as keyof typeof CATALOG.actions.create] ??
-    CATALOG.actions.create.reasoning;
-  const createPrice = creditsText(createCredits, !!balance?.exempt);
-
   async function send() {
     if (!canSend) return;
     setBusy(true);
@@ -340,6 +330,8 @@ function Composer() {
           setProgress(j.progress || 0);
           say(j.detail || "Writing the scene…");
         });
+        // a Create is charged quietly, the way InVideo does it: no price on
+        // the button, the balance pill just moves (2026-09-28, Mike's call)
         announceBalanceChange();
         if (job.status === "done") {
           setProgress(1);
@@ -832,11 +824,9 @@ function Composer() {
                 className={`go${filledBy && idea.trim() && mode === "create" && !busy ? " zpa-ring" : ""}`}
                 disabled={!canSend}
                 onClick={() => void send()}
-                title={mode === "create" ? `Writes one scene · ${createPrice}` : undefined}
               >
                 <Sparkles strokeWidth={2} />
                 {busy ? (mode === "create" ? "Writing…" : "Thinking…") : mode === "create" ? "Create" : "Send"}
-                {mode === "create" && !busy ? <span className="price"> · {createCredits} cr</span> : null}
               </button>
             </div>
             <div className="cstatus">
