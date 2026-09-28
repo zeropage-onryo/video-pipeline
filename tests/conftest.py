@@ -187,7 +187,6 @@ OUTPUT_ROOTS = (
     ("app.main", "THUMB_DIR", "data/thumbs"),
     ("app.api", "UPLOAD_REFS_DIR", "data/refs"),
     ("ops.render_queue", "RENDERS_ROOT", "data/renders"),
-    ("ops.render_queue", "RENDER_DIR", "data/renders/higgsfield"),
     ("ops.render_queue", "MANUAL_RENDER_DIR", "data/renders/manual"),
     ("ops.bank", "PLANS_DIR", "data/idea_agent"),
     # the cut (src/cut/, 2026-09-26): where a handle's local file is looked

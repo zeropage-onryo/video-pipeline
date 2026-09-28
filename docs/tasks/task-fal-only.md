@@ -90,10 +90,14 @@ failed the first live render after a queue wait:**
   `retired_pricing`.
 
 ## Still Mike's call
-- Whether the Higgsfield-MCP operator lane survives (step 10).
+- ~~Whether the Higgsfield-MCP operator lane survives (step 10).~~
+  **Removed 2026-09-28** (Mike's call): `ops/render_queue.py` has one lane,
+  `manual`; `mcp-subscription` stays in `manual_lane.SUBSCRIPTION_SOURCES`
+  so its old rows read as FREE; the Soul still path is untouched.
 - Metering Create (Gemini) and Nano keyframes through the ledger (the next
   task; open sign-up should not go live before it).
 - Whether the generic manual import should stay operator-only (it spends
-  nothing, but files a render with no hold).
+  nothing, but files a render with no hold). **Mike, 2026-09-28: it goes
+  eventually** -- recorded as docs/BACKLOG.md #21; operator-only until then.
 - The one live LTX render (step 6) -- needs a deploy of this branch and costs
   ~$0.36 of fal credit.

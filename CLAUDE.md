@@ -69,17 +69,33 @@ venv/bin/python -m src.scout list [--brand ...] [--unused]
 venv/bin/python -m src.scout next --brand zeropage       # the servable spark, or exit 1
 
 # THE INSTAGRAM TOKENS — two credentials, two hosts (src/instagram.py).
-# check is read-only (one call each, never prints a value) and is what the
-# nightly preflight runs; refresh/publish/research write .env with a backup.
+# check is read-only (one call each, never prints a value); refresh/publish/
+# research write .env with a backup. `keep` is THE ONLY SCHEDULED JOB in the
+# project (2026-09-28): daily at 10:00 ET on the Mac (com.zeropage.igtoken,
+# ops/install-launchagents.sh) and on Fly (the image's one cron line, log in
+# /app/data/ig_token_keeper.log); it makes no Meta call until the publishing
+# token's last refresh is 30 days old, then refreshes it into the store --
+# never .env. Each host keeps its OWN copy of the token alive.
 venv/bin/python -m ops.ig_tokens check [--probe]
 venv/bin/python -m ops.ig_tokens refresh|publish
+venv/bin/python -m ops.ig_tokens keep [--days 30]
 venv/bin/python -m ops.ig_tokens research --app-id <research app id>
+
+# THE NIGHTLY WALK IS NOT SCHEDULED (2026-09-28, Mike's call). The Mac's
+# com.zeropage.morningprompts agent is retired (install-launchagents.sh
+# renames it .disabled), and the Fly cron line that called
+# run_morning_prompts.sh -- which never once ran there: its first line cds
+# into the Mac's folder -- was replaced by the token keeper. Concept walks,
+# the research agent, the scout crawl and the metrics sweep now run only by
+# hand: `src.nightly walk`, `src.research_agent`, `src.scout run`,
+# `src.refresh_metrics`. Everything below that says "the nightly" or "the
+# night" describes those commands, not a schedule.
 
 # THE SHADOW RUN — one run, spark rotated from prompts/sparks.txt. MANUAL
 # ONLY: nothing schedules this. The 03:30 launchd job was removed
 # 2026-09-14 because it took neither the nightly lock nor the budget, so it
-# ran an eleventh time beside the 22:00 walk. The scheduled path is
-# `src.nightly walk`; this is the hand-run door into the same graph.
+# ran an eleventh time beside the 22:00 walk. `src.nightly walk` is the
+# batch door; this is the one-run door into the same graph.
 # Grading happens on /holds each morning. --scout takes the direction from
 # the scout's bank instead, falling back to the rotation when the bank is
 # empty or under scout.SCORE_FLOOR.
@@ -112,13 +128,16 @@ venv/bin/python -m src.rag_eval <cases.json> [--k 5]   # hit@k + MRR over labele
 venv/bin/python -m src.mcp_server --engine   # stdio; Claude Desktop launches this itself
 # Registering it: ops/connect-claude.md (paste ops/claude-desktop-mcp.json, ⌘Q, reopen)
 
-# THE MANUAL RENDER LANES — clips that reach a concept without an API render.
-# The Higgsfield MCP (a Claude session on the operator's app plan) and the
-# generic `manual` import (a clip rendered anywhere, filed free -- it was the
-# Runway Unlimited lane until 2026-09-26). `list`
-# says what is waiting, `import` files the mp4 into data/renders/<provider>/
+# THE MANUAL RENDER LANE — a clip that reaches a concept without an API render.
+# ONE lane since 2026-09-28: the generic `manual` import (a clip rendered
+# anywhere, filed free -- it was the Runway Unlimited lane until 2026-09-26).
+# The Higgsfield-MCP lane was REMOVED that day (Mike's call); its old
+# `mcp-subscription` rows still read as FREE, and src/higgsfield.py's Soul
+# STILL path is untouched. Mike expects to retire this import too
+# (docs/BACKLOG.md #21). `list`
+# says what is waiting, `import` files the mp4 into data/renders/manual/
 # and writes a FREE row (cost_usd NULL, params.source = the lane marker, so
-# ledger.is_billable takes no hold). BOTH lanes are OPERATOR-ONLY —
+# ledger.is_billable takes no hold). The lane is OPERATOR-ONLY —
 # src/manual_lane.py's gate is the accounts.manual_lane_operator COLUMN (the
 # env vars are gone), checked server-side against the account id on every
 # surface, fails closed (nobody, until somebody is turned on). Turn it on:
@@ -144,6 +163,12 @@ venv/bin/python -m src.fal_requests [--account N]
 # order it was written, on a versioned timeline -> ONE MP4 (ffmpeg, -14 LUFS,
 # optional music bed ducked under the clips' own sound). No CLI: the Queue's
 # "Ready to cut" strip posts /api/cut/assemble. Nothing here spends.
+# THE INDEX (phase 2) — what is IN each clip, so the editor can search it.
+# One Gemini shot log per clip + fal Whisper (word level) only when the log
+# heard speech. Cents per clip, metered (stages shot_log / transcribe), not
+# charged in credits. Export DATABASE_URL first, like src.accounts.
+venv/bin/python -m src.cut.index backfill [--account <slug>] [--dry-run]
+venv/bin/python -m src.cut.index one gen:85 [--force]
 
 # THE REFERENCE PHOTOS — the bytes behind every ref URL, pushed to R2 so they
 # resolve on the deployed site too (characters/props/locations/data/refs are
@@ -1645,6 +1670,15 @@ is yours, in Resolve, by hand.
   generic API error. `INSTAGRAM_TAGS` is deliberately short and stable; churning it is what
   would starve the lane. Note hashtag media carries **no `username`** (Meta strips it), so the
   permalink is the only attribution and the bin stores it as `source_url`.
+  **The hashtag half is its own opt-in (2026-09-26): `SCOUT_IG_HASHTAGS=1`**, read per call,
+  off by default. Hashtag search needs Meta's *Instagram Public Content Access* feature (App
+  Review, not decided) and a new tag spends budget even when Meta refuses it, so switching the
+  LANE on must not switch this on. Off, `gather_instagram` runs `business_discovery` only and
+  says so once per pass. A permission/feature refusal (`scout._PERMISSION_ERROR`: codes
+  #10/#200/#3 or the words) is remembered in the shared `settings` table
+  (`scout_ig_hashtags_paused`, `{until, reason}`) and hashtags are skipped for
+  `HASHTAG_PAUSE_DAYS` (7) -- a lane that fails the same way every night is noise in `errors`.
+  The budget refusal is deliberately not a pause; it has its own window.
 - **`src/refbin.py`** — one owner for `data/refs`, both directions: the content-addressed name,
   the JPEG normalisation (EXIF transpose BEFORE `convert("RGB")`, HEIC when `pillow-heif` is
   present), `save`, `fetch` (bounded download for scouted images) and `resolve`. It exists
@@ -1670,6 +1704,18 @@ is yours, in Resolve, by hand.
   `data/renders/cut/`, mirrored like any render. **Homebrew's ffmpeg has no libass**, so on the
   Mac captions are NOT burned (the `.ass` lands beside the MP4 and the job says so); the Fly
   image's Debian ffmpeg burns them. CI installs ffmpeg so the render tests run rather than skip.
+  **The index (phase 2, 2026-09-28)** is `index.py` + `moments.py`: per file (by sha256, stale
+  on read) a proxy when the source is over 720p, shot cuts from ffmpeg's scene score (no
+  OpenCV), ONE Gemini shot log for all shots (`prompts/cut/shot_log.txt`, JSON checked by
+  `check_log` -- sizes/angles/quality flags off the list are dropped), and fal Whisper at word
+  level with diarisation ONLY when the log heard speech (Whisper invents words over ambience,
+  which is most generated clips). `media_index` / `media_moments` are OWNED; words carry
+  timing, only segments and shots are embedded (the RAG library's 768-dim space, in the main
+  database, the vector type schema-qualified because a test schema cannot see `public`).
+  `index.find` is THE search (hybrid: vector + text, reciprocal rank) behind both
+  `GET /api/cut/search` and the pill's read-only `search_footage` tool, which returns handles
+  and times, never URLs. Captions on Export were considered and dropped (Mike, 2026-09-28):
+  editorial features belong to the editor, not to Assemble.
 - **`src/pricing.py`** — what a render costs, and the signed quote that says so (steps 1–4 of
   `docs/tasks/task-pricing-and-quotes.md`, on main 2026-09-18; read that doc's "As built"
   section before touching it). Pure module, three answers: `estimate()` is the provider's USD

@@ -2675,8 +2675,8 @@ def queue_manual(brand: Optional[str] = None,
     Unlimited in June 2026 and fal became the only API renderer.
 
     THE OPERATOR'S LANE, AND ONLY THE OPERATOR'S. It files a render with
-    no ledger hold, so it sits behind the same gate as the Higgsfield MCP
-    lane rather than being the one door that is wider.
+    no ledger hold, so it sits behind the operator gate (the one the
+    Higgsfield-MCP lane had, until that lane was removed 2026-09-28).
 
     So the gate is `manual_lane.manual_lane_allowed(account_id)`, called
     on the TENANT resolved server-side by `auth.current_account_id` --
@@ -4465,6 +4465,47 @@ def holds_resolve(hold_id: int, body: ResolveBody,
     return {"id": hold_id, "status": body.status}
 
 
+def _hold_concept_media(concept_id, account_id: int) -> tuple[str, Optional[tuple[str, str]]]:
+    """What a hold with no media of its own can post: its CONCEPT's render
+    (2026-09-26). The graph parks a run before anything renders, so every
+    hold's payload is clip-less, while the Queue's approve and the manual
+    lane write the clip onto the concept -- the hold never learned about
+    it. Returns (url, None), or ("", (code, reason)) for a refusal.
+
+    Read the way autopilot.build_plan reads a rendered concept: the first
+    shot carrying a `media_url`. EXCEPT a timed scene, whose `media_url`
+    is shot 1's clip and not the scene (the edit is Mike's, the L1 hold):
+    that posts only as the finished cut src/cut assembled for it -- the
+    head version's `export_url` -- and is refused until one exists."""
+    if not concept_id:
+        return "", ("no_media", "this hold has no rendered media and no concept to take it from")
+    concept = preprod.get_concept(int(concept_id), account_id=account_id)
+    if concept is None:
+        return "", ("no_media", f"this hold's concept #{concept_id} is gone")
+    rendered = next((s for s in concept.get("shots") or []
+                     if (s.get("media_url") or "").strip()), None)
+    if rendered is None:
+        return "", ("no_media", f"concept #{concept_id} has not been rendered yet — "
+                                "approve it in the Queue first")
+    from src import media
+    parts = ((rendered.get("timeline") or {}).get("parts")) or []
+    if len(parts) > 1:
+        from src.cut import store as cut_store
+        try:
+            head = cut_store.head(cut_store.project_for_concept(concept_id),
+                                  account_id=account_id)
+        except Exception:
+            head = None      # no cut tables on this database: nothing is assembled
+        export = ((head or {}).get("export_url") or "").strip()
+        if not export:
+            return "", ("timed_scene_uncut",
+                        f"concept #{concept_id} is a timed scene of {len(parts)} shots: its "
+                        "clip is shot 1 alone, not the scene — assemble its cut first, "
+                        "and the finished MP4 is what posts")
+        return media.url_for(export, account_id), None
+    return media.url_for(rendered["media_url"].strip(), account_id), None
+
+
 @router.post("/holds/{hold_id}/post")
 def holds_post(hold_id: int, account_id: int = Depends(auth.current_account_id)):
     """The explicit 'post now' -- moved here from the retired /holds dev
@@ -4499,33 +4540,69 @@ def holds_post(hold_id: int, account_id: int = Depends(auth.current_account_id))
         return _error(400, "no_targets", "this channel has no post targets")
 
     payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    # A target already published to on an earlier click is never posted
+    # again (2026-09-26). The fan-out used to abort at its first failure
+    # with the hold still `held`: Instagram published, YouTube raised,
+    # and the next click published to Instagram a second time.
+    already = dict(payload.get("posted") or {})
+    pending = [t for t in targets if t not in already]
+    if not pending:
+        autonomy.resolve_hold(hold_id, "posted", account_id=account_id)
+        return {"id": hold_id, "posted": True, "targets": targets,
+                "posted_to": already, "mode": "live"}
+
     caption = row.get("caption") or ""
     image_url = (payload.get("image_url") or "").strip()
     if image_url:
         actions = [{
             "kind": "post", "platform": platform, "concept_id": row.get("concept_id"),
             "caption": caption, "image_url": image_url,
-        } for platform in targets]
+        } for platform in pending]
     else:
         clips = payload.get("clips") or []
         media_url = next((c.get("url") for c in clips if c.get("url")), "") or ""
+        if not media_url:
+            media_url, refusal = _hold_concept_media(row.get("concept_id"), account_id)
+            if refusal:
+                return _error(409, refusal[0], refusal[1])
         is_local = bool(media_url) and not media_url.startswith("http")
         actions = [{
             "kind": "post", "platform": platform, "concept_id": row.get("concept_id"),
             "caption": caption,
             "video_url": media_url,
             "video_path": media_url if is_local else "",
-        } for platform in targets]
+        } for platform in pending]
 
     try:
         result = autopilot.execute({"actions": actions}, approve=True, dry_run=False)
     except Exception as e:
-        return _error(502, "post_failed", str(e))
+        return _error(502, "post_failed", autopilot.safe_error(e))
 
     mode = result.get("mode")
-    if mode == "live" and result.get("executed"):
-        autonomy.resolve_hold(hold_id, "posted", account_id=account_id)
-        return {"id": hold_id, "posted": True, "targets": targets, "mode": mode}
+    if mode == "live":
+        # Record what went out BEFORE deciding anything else: this map is
+        # the only thing standing between a retry and a double post.
+        newly = {p["platform"]: p.get("media_id") or "posted"
+                 for p in result.get("posted") or [] if p.get("platform")}
+        if newly:
+            already = autonomy.record_hold_posts(
+                hold_id, newly, account_id=account_id) or {**already, **newly}
+        failures = result.get("failed") or []
+        failed_text = "; ".join(f"{f['platform']} failed: {f['error']}" for f in failures)
+        if all(t in already for t in targets):
+            autonomy.resolve_hold(hold_id, "posted", account_id=account_id)
+            return {"id": hold_id, "posted": True, "targets": targets,
+                    "posted_to": already, "mode": mode}
+        if already and (failures or result.get("skipped")):
+            # Partial: the hold stays `held` so the rest can be retried,
+            # and the retry skips every target named in posted_to.
+            done = ", ".join(t for t in targets if t in already)
+            rest = failed_text or "; ".join(result.get("skipped") or [])
+            return {"id": hold_id, "posted": False, "partial": True,
+                    "targets": targets, "posted_to": already, "mode": mode,
+                    "detail": f"posted to {done}; {rest}"}
+        if failures:
+            return _error(502, "post_failed", failed_text)
     if mode == "live":
         detail = "; ".join(result.get("skipped") or ["no rendered media to post yet"])
     elif mode == "disabled":

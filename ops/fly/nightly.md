@@ -1,5 +1,11 @@
 # Running the nightly walk on Fly
 
+> **Superseded 2026-09-28: the nightly walk is not scheduled anywhere.**
+> The image's one cron line is now the Instagram token keeper
+> (`python -m ops.ig_tokens keep --days 30`, see the Dockerfile header).
+> This recipe is kept for the day a scheduled walk comes back; nothing
+> below is live.
+
 **Recipe only. Nothing here has been deployed** (written 2026-09-07). It
 describes how to move the night off the Mac's launchd and onto the
 existing `zeropage-studio` app, using the Dockerfile that already builds
