@@ -19,6 +19,10 @@ tenant prefix like every other render).
 No ledger hold: nothing generative runs here. Manual editing stays free,
 the bet invideo made.
 
+A still image (an uploaded photo, a Nano render) is an input like any
+clip, read with `-loop 1 -framerate fps -t <what the cut asks of it>`, so
+the same trim chain holds it on screen (`stills_in`).
+
 What v0 does not render, and refuses rather than fakes: more than one
 video track with clips on it (V2 overlays need `overlay`, which is the
 Grade/B-roll phase), and any doc the validator rejects. What it degrades
@@ -52,9 +56,21 @@ CUT_DIR = sources.RENDERS_DIR / "cut"
 DUCK = "threshold=0.02:ratio=8:attack=20:release=400"
 
 CAPTION_PRESETS = {
-    # font scale is a fraction of frame height; margin keeps text clear
-    # of the platform UI at the bottom of a 9:16 frame
-    "preset:bold_center": {"font": "Arial", "scale": 0.045, "margin": 0.2, "bold": -1},
+    # font scale is a fraction of frame height; margin (vertical) keeps
+    # text clear of the platform UI at the bottom of a 9:16 frame. `align`
+    # is the ASS numpad alignment (2 bottom-centre, 1 bottom-left, 8
+    # top-centre); `box` draws an opaque box behind the text (BorderStyle
+    # 3) instead of an outline.
+    "preset:bold_center": {"font": "Arial", "scale": 0.045, "margin": 0.2, "bold": -1,
+                           "align": 2, "box": False, "side": 0.08},
+    # a lower third: smaller, left-aligned, on a dark box -- a name or a
+    # place, not the dialogue
+    "preset:lower_third": {"font": "Arial", "scale": 0.032, "margin": 0.12, "bold": -1,
+                           "align": 1, "box": True, "side": 0.06},
+    # quiet text at the top, thin outline, no bold -- keeps the bottom of
+    # the frame (and the platform's own UI there) clear
+    "preset:minimal_top": {"font": "Arial", "scale": 0.03, "margin": 0.08, "bold": 0,
+                           "align": 8, "box": False, "side": 0.08},
 }
 
 
@@ -119,10 +135,14 @@ def ass_document(doc: dict) -> Optional[str]:
         p = CAPTION_PRESETS.get(t.get("style"), CAPTION_PRESETS["preset:bold_center"])
         name = f"S{i + 1}"
         size = max(12, round(h * p["scale"]))
+        # BorderStyle 3 paints OutlineColour as a box; 1 is outline+shadow
+        border, outline_colour = ((3, "&H99000000") if p["box"] else (1, "&H00000000"))
+        outline = max(4, size // 5) if p["box"] else max(2, size // 14)
         styles.append(
-            f"Style: {name},{p['font']},{size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,"
-            f"{p['bold']},0,0,0,100,100,0,0,1,{max(2, size // 14)},1,2,"
-            f"{round(w * 0.08)},{round(w * 0.08)},{round(h * p['margin'])},1")
+            f"Style: {name},{p['font']},{size},&H00FFFFFF,&H00FFFFFF,{outline_colour},&H80000000,"
+            f"{p['bold']},0,0,0,100,100,0,0,{border},{outline},{0 if p['box'] else 1},"
+            f"{p['align']},{round(w * p['side'])},{round(w * p['side'])},"
+            f"{round(h * p['margin'])},1")
         for q in t["cues"]:
             events.append(f"Dialogue: 0,{_ass_time(q['start'], fps)},{_ass_time(q['end'], fps)},"
                           f"{name},,0,0,0,,{_ass_text(q['text'])}")
@@ -279,10 +299,23 @@ def _audio_graph(doc: dict, index: dict[str, int], parts: list[str]) -> str:
     return "aout"
 
 
+def stills_in(media: Optional[dict], paths: dict[str, Path]) -> set[str]:
+    """The handles that are still images: flagged by the probe, or named
+    by an image extension when no probe was passed."""
+    out = {h for h, info in (media or {}).items() if info and info.get("still")}
+    return out | {h for h, p in paths.items() if Path(p).suffix.lower() in sources.IMAGE_EXTS}
+
+
 def compile_args(doc: dict, paths: dict[str, Path], out: Path, *,
-                 burn: Optional[str] = None, ffmpeg: str = "ffmpeg") -> list[str]:
+                 burn: Optional[str] = None, ffmpeg: str = "ffmpeg",
+                 stills=()) -> list[str]:
     """The whole ffmpeg argv for one doc. Pure. `burn` is the .ass file
-    name to burn in (relative to the cwd ffmpeg runs in), or None."""
+    name to burn in (relative to the cwd ffmpeg runs in), or None.
+
+    A handle in `stills` is an image: it is read with `-loop 1` at the
+    project fps, bounded by `-t` to the furthest frame any clip asks of
+    it, so the same trim/setpts chain that cuts a video cuts a held
+    still -- and an image never becomes an endless input."""
     handles = d.handles(doc)
     missing = [h for h in handles if h not in paths]
     if missing:
@@ -292,7 +325,11 @@ def compile_args(doc: dict, paths: dict[str, Path], out: Path, *,
     vout = _video_graph(doc, index, parts, burn)
     aout = _audio_graph(doc, index, parts)
     argv = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
+    fps = doc["fps"]
     for h in handles:
+        if h in stills:
+            need = max([c["src_out"] for _, c in d.all_clips(doc) if c.get("media") == h] or [1])
+            argv += ["-loop", "1", "-framerate", str(fps), "-t", _s(need, fps)]
         argv += ["-i", str(paths[h])]
     argv += ["-filter_complex", ";".join(parts),
              "-map", f"[{vout}]", "-map", f"[{aout}]",
@@ -339,7 +376,8 @@ def render(doc: dict, *, account_id: Optional[int], name: str,
                 notes.append("captions NOT burned in: this ffmpeg has no libass -- "
                              f"written beside the MP4 as {name}.ass")
         tmp_out = work / "out.mp4"
-        argv = compile_args(doc, paths, tmp_out, burn=burn, ffmpeg=exe)
+        argv = compile_args(doc, paths, tmp_out, burn=burn, ffmpeg=exe,
+                            stills=stills_in(media, paths))
         started = time.monotonic()
         try:
             proc = subprocess.run(argv, cwd=work, capture_output=True, text=True,

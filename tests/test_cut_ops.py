@@ -424,8 +424,14 @@ def test_add_caption_track_numbers_itself_and_ids_its_cues():
     assert [q["id"] for q in t["cues"]] == ["q1", "q2"] and t["cues"][0]["text"] == "one"
     doc = ops.add_caption_track(doc, [{"start": 0, "end": 30, "text": "fr"}])
     assert d.track(doc, "T2") is not None
+    # an explicitly EMPTY track is allowed (the editor types cues onto it);
+    # a missing or non-list `cues` is still refused
+    empty = ops.add_caption_track(cut(), [])
+    assert d.track(empty, "T1")["cues"] == [] and v.problems(empty, MEDIA) == []
     with pytest.raises(ops.OpError):
-        ops.add_caption_track(cut(), [])
+        ops.add_caption_track(cut(), None)
+    with pytest.raises(ops.OpError):
+        ops.apply(cut(), "add_caption_track", {})
 
 
 def test_captions_past_the_picture_extend_the_duration_and_validate():
