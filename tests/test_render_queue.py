@@ -1,20 +1,17 @@
 """
-ops/render_queue.py -- the repo side of rendering on SUBSCRIPTION credits.
-
-The split it serves: a Claude session picks shots and calls the Higgsfield
-MCP (which spends the app plan's credits, not API credits), and this file
-tells that session what is waiting and files what came back. These tests
-guard the three things that would silently corrupt the pipeline:
+ops/render_queue.py -- the manual clip import: a clip rendered anywhere,
+filed free against the scene it was rendered for. (The Higgsfield-MCP lane
+this file also served was removed 2026-09-28.) These tests guard the three
+things that would silently corrupt the pipeline:
 
 - `pending` must mean exactly what /queue/pending means, or the session
   renders things that were never queued;
 - a clip must land somewhere /renders can actually serve, or the Queue
   card shows a broken video for a render that really happened;
-- the attempt must be logged with credits, not invented dollars.
+- the attempt must be logged as FREE, never as invented dollars.
 
-Since 2026-09-08 BOTH lanes are operator-only -- the Higgsfield app plan
-is the same kind of personal consumer subscription the Runway one is --
-so every test here acts as a configured operator. The gate itself, and
+The lane is operator-only (it files a render with no ledger hold), so
+every test here acts as a configured operator. The gate itself, and
 its refusals, are tested in tests/test_manual_lane.py.
 """
 import json
@@ -38,7 +35,7 @@ def tmp_db(pg, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def no_inherited_environment(monkeypatch):
-    """Both lanes are operator-only (src/manual_lane.py), and since
+    """The lane is operator-only (src/manual_lane.py), and since
     2026-09-08 the gate is a column rather than these two variables. They
     are unset here so a stray one in a developer's shell cannot be
     mistaken for the reason a test passed."""
@@ -51,7 +48,6 @@ def renders_in_tmp(tmp_path, monkeypatch):
     """Never write into the real data/renders/ from a test."""
     root = tmp_path / "renders"
     monkeypatch.setattr(rq, "RENDERS_ROOT", root)
-    monkeypatch.setattr(rq, "RENDER_DIR", root / "higgsfield")
     monkeypatch.setattr(rq, "MANUAL_RENDER_DIR", root / "manual")
     return root
 
@@ -59,7 +55,7 @@ def renders_in_tmp(tmp_path, monkeypatch):
 def a_scene(path, account_id, title="Cold Open", prompt="a close shot"):
     return preprod.save_concept(
         {"title": title, "hook": "", "logline": "",
-         "shots": [{"n": 1, "type": "BROLL", "source": "AI", "tool": "HIGGSFIELD",
+         "shots": [{"n": 1, "type": "BROLL", "source": "AI", "tool": "LTX",
                     "desc": title, "prompt": prompt,
                     # the lane shares the Queue's predicate, which since
                     # 2026-09-08 requires reference photos
@@ -108,7 +104,7 @@ def test_an_archived_scene_is_not_waiting(tmp_db, operator):
 def test_a_scene_that_already_has_a_clip_is_not_waiting(tmp_db, tmp_path, operator):
     cid = a_scene(tmp_db, operator)
     preprod.set_picked(cid, True, dsn=tmp_db, account_id=operator)
-    preprod.set_shot_media_url(cid, 1, "/renders/higgsfield/x.mp4", dsn=tmp_db, account_id=operator)
+    preprod.set_shot_media_url(cid, 1, "/renders/manual/x.mp4", dsn=tmp_db, account_id=operator)
     assert rq.pending(account_id=operator) == []
 
 
@@ -128,8 +124,8 @@ def test_a_clip_lands_where_renders_can_serve_it(tmp_db, tmp_path, renders_in_tm
     preprod.set_picked(cid, True, dsn=tmp_db, account_id=operator)
     out = rq.import_clip(cid, 1, str(a_clip(tmp_path)), "seedance1_5", 4.8, None, True,
                          account_id=operator)
-    assert out["media_url"] == "/renders/higgsfield/clip.mp4"
-    assert (renders_in_tmp / "higgsfield" / "clip.mp4").is_file()
+    assert out["media_url"] == "/renders/manual/clip.mp4"
+    assert (renders_in_tmp / "manual" / "clip.mp4").is_file()
 
 
 def test_a_second_clip_does_not_overwrite_the_first(tmp_db, tmp_path, renders_in_tmp, operator):
@@ -141,12 +137,12 @@ def test_a_second_clip_does_not_overwrite_the_first(tmp_db, tmp_path, renders_in
     preprod.set_picked(cid2, True, dsn=tmp_db, account_id=operator)
     out = rq.import_clip(cid2, 1, str(a_clip(tmp_path)), "seedance1_5", 4.8, None, True,
                          account_id=operator)
-    assert out["media_url"] == "/renders/higgsfield/clip-1.mp4"
+    assert out["media_url"] == "/renders/manual/clip-1.mp4"
 
 
-def test_the_attempt_is_logged_in_credits_not_invented_dollars(tmp_db, tmp_path, operator):
-    """The clip came out of a subscription already paid for. A cost_usd
-    here would be a number nobody spent."""
+def test_the_attempt_is_logged_free_not_in_invented_dollars(tmp_db, tmp_path, operator):
+    """The clip was paid for somewhere this pipeline cannot see. A cost_usd
+    here would be a number nobody spent; --credits is kept as told."""
     cid = a_scene(tmp_db, operator)
     preprod.set_picked(cid, True, dsn=tmp_db, account_id=operator)
     rq.import_clip(cid, 1, str(a_clip(tmp_path)), "seedance1_5", 4.8, None, True,
@@ -154,11 +150,11 @@ def test_the_attempt_is_logged_in_credits_not_invented_dollars(tmp_db, tmp_path,
     with generative.connect(tmp_db) as conn:
         row = conn.execute("SELECT tool, cost_usd, params_json FROM generations "
                            "ORDER BY id DESC LIMIT 1").fetchone()
-    assert row["tool"] == "higgsfield"
+    assert row["tool"] == "manual"
     assert row["cost_usd"] is None
     params = json.loads(row["params_json"])
     assert params["credits"] == 4.8
-    assert params["source"] == "mcp-subscription"
+    assert params["source"] == manual_lane.SOURCE
     assert params["model"] == "seedance1_5"
 
 
@@ -269,7 +265,6 @@ def test_a_manual_clip_lands_in_its_own_folder_under_renders(tmp_db, tmp_path,
                          True, account_id=operator, provider="manual")
     assert out["media_url"] == "/renders/manual/clip.mp4"
     assert (renders_in_tmp / "manual" / "clip.mp4").is_file()
-    assert not (renders_in_tmp / "higgsfield").exists()
 
 
 def test_the_manual_row_is_free_and_carries_the_lane_marker(tmp_db, tmp_path, operator):
@@ -309,15 +304,19 @@ def test_an_unknown_provider_is_refused(tmp_db, operator):
         rq.pending(account_id=operator, provider="midjourney")
 
 
-def test_the_higgsfield_lane_is_gated_too(tmp_db, tmp_path):
-    """2026-09-08, and a DELIBERATE BREAK of a workflow that needed no
-    configuration. The Higgsfield app plan is the same kind of personal
-    consumer subscription the Runway one is, so gating one lane and
-    leaving the other open would only look like the question had been
-    asked and answered.
+def test_the_higgsfield_lane_is_gone_and_refused_by_name(tmp_db, operator):
+    """Removed 2026-09-28. `--provider higgsfield` must be refused as a
+    lane that does not exist -- never silently read as the manual import,
+    which would file an MCP render under the wrong marker."""
+    with pytest.raises(SystemExit, match="unknown provider"):
+        rq.pending(account_id=operator, provider="higgsfield")
+    assert rq.PROVIDERS == ("manual",)
 
-    Nobody has been turned on in this test, which is what an install
-    that has not been told who the operator is looks like."""
+
+def test_the_default_lane_is_gated(tmp_db, tmp_path):
+    """Nobody has been turned on in this test, which is what an install
+    that has not been told who the operator is looks like -- and the
+    lane a bare `list` / `import` reaches is refused."""
     account_id = accounts.upsert_account("zeropage", "Zero Page", dsn=tmp_db)
     cid = a_scene(tmp_db, account_id)
     preprod.set_picked(cid, True, dsn=tmp_db, account_id=account_id)
@@ -339,8 +338,8 @@ def test_the_refusal_tells_the_operator_what_to_run(tmp_db):
 
 # ---------- what `import` records (2026-09-08; the Runway checks went 2026-09-26) ----------
 #
-# --model lands in a generations row the tool scoreboard reads. Neither
-# lane has a list to check it against, so the row says it was not checked.
+# --model lands in a generations row the tool scoreboard reads. The lane
+# has no list to check it against, so the row says it was not checked.
 
 
 def test_the_manual_row_records_that_the_model_claim_was_not_checked(tmp_db, tmp_path,
@@ -352,19 +351,6 @@ def test_the_manual_row_records_that_the_model_claim_was_not_checked(tmp_db, tmp
     params = _last_params(tmp_db)
     assert params["model_verified"] is False
     assert params["model"] == "kling 3 web app" and params["duration"] == 7
-
-
-def test_the_higgsfield_lane_records_that_it_could_not_check(tmp_db, tmp_path,
-                                                             operator):
-    """The MCP's model names are its own and are published nowhere this
-    repo can read. A list invented here would refuse models that are
-    perfectly real, so the row says the claim was not checked rather than
-    implying a check that never happened."""
-    cid = a_scene(tmp_db, operator)
-    preprod.set_picked(cid, True, dsn=tmp_db, account_id=operator)
-    rq.import_clip(cid, 1, str(a_clip(tmp_path)), "seedance1_5", 4.8, None, True,
-                   account_id=operator)
-    assert _last_params(tmp_db)["model_verified"] is False
 
 
 def _last_params(path):

@@ -8,6 +8,16 @@
 #   bash ops/ig_token.sh publish      # install a re-issued IG_ACCESS_TOKEN
 #   bash ops/ig_token.sh research --app-id <research app id>
 #
+# Getting a token into Fly WITHOUT printing it (never `fly secrets set
+# NAME=<value>`: that puts the value in shell history). fly-export refuses a
+# terminal, so the only thing that can read it is the pipe:
+#
+#   bash ops/ig_token.sh fly-export IG_ACCESS_TOKEN | fly secrets import -a zeropage-studio
+#
+# Exportable: IG_ACCESS_TOKEN (what instagram.access_token() serves, so the
+# nightly refresh's stored replacement wins over .env), IG_GRAPH_TOKEN,
+# IG_USER_ID, IG_BUSINESS_ID.
+#
 # Everything runs on this Mac; secrets are read without echo and no token
 # is ever printed. Every .env write keeps a .env.bak.<stamp> copy.
 #

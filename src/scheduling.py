@@ -24,7 +24,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from . import autopilot, instagram, post_seo, tiktok
+from . import autopilot, instagram, post_seo
 from .db import connect
 
 SCHEMA = """
@@ -252,19 +252,21 @@ def run_due(now: Optional[str] = None, approve: bool = False, live: bool = False
             action["caption"] = build_caption(row["video_ref"], db_path=db_path)
 
         mark_status(row["id"], "publishing", db_path=db_path)
+        # execute records an executor's failure instead of raising it
+        # (2026-09-26), already redacted for BOTH credentials. The except
+        # stays for anything raised outside the executor, redacted the
+        # same way: a stored error is read on a page.
         try:
-            autopilot.execute(plan, approve=approve, dry_run=not live)
+            outcome = autopilot.execute(plan, approve=approve, dry_run=not live)
+            error = next((f["error"] for f in outcome.get("failed") or []), None)
+        except Exception as e:
+            error = autopilot.safe_error(e)
+        if error is None:
             result = action.get("result") or {}
             mark_status(row["id"], "posted", media_id=result.get("media_id"),
                         db_path=db_path)
             published += 1
-        except Exception as e:
-            # Redact BOTH credentials, whatever the row's platform says:
-            # a failure can be raised anywhere in the dispatch, and a
-            # stored error is read on a page. Cheap, and the alternative
-            # is a token in a db row the day the routing surprises us.
-            error = instagram._safe_error(e, instagram.access_token())
-            error = tiktok._safe_error(Exception(error), tiktok.access_token())
+        else:
             mark_status(row["id"], "failed", error=error, db_path=db_path)
             failed.append(str(row["id"]))
 

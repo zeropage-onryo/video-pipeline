@@ -1,13 +1,12 @@
 """
-The operator-only manual render lanes (src/manual_lane.py, 2026-09-08).
+The operator-only manual render lane (src/manual_lane.py, 2026-09-08).
 
-What these tests are actually protecting. The Higgsfield MCP lane spends
-the OPERATOR'S personal consumer plan: rendering a paying tenant's shot on
-it is reselling a consumer subscription, and the penalty for that is the
-operator's account, which on a shared install is every tenant's render
-path at once. The manual lane -- a clip rendered anywhere, filed free; the
-Runway Unlimited lane until 2026-09-26 -- files a render with no hold, so
-it sits behind the same gate rather than being the wider door.
+What these tests are actually protecting. The manual lane -- a clip
+rendered anywhere, filed free; the Runway Unlimited lane until 2026-09-26
+-- files a render with no ledger hold, which on a multi-tenant install is
+a free way round the spend gate. The gate was written for the Higgsfield
+MCP lane (the operator's personal consumer plan, removed 2026-09-28); the
+reasoning survives it.
 
 So the properties under test are not features:
 
@@ -68,7 +67,6 @@ def renders_in_tmp(tmp_path, monkeypatch):
     """Never write into the real data/renders/ from a test."""
     root = tmp_path / "renders"
     monkeypatch.setattr(rq, "RENDERS_ROOT", root)
-    monkeypatch.setattr(rq, "RENDER_DIR", root / "higgsfield")
     monkeypatch.setattr(rq, "MANUAL_RENDER_DIR", root / "manual")
     return root
 
@@ -450,7 +448,7 @@ def test_the_ordinary_queue_is_untouched_by_the_lane(tmp_db, monkeypatch, api):
 def test_a_lane_render_is_not_billable(tmp_db):
     assert ledger.is_billable(None, source=manual_lane.SOURCE) is False
     assert ledger.is_billable("env", source=manual_lane.SOURCE) is False
-    # the higgsfield MCP lane is the same structural fact, older name
+    # the retired higgsfield MCP lane's rows keep reading as FREE
     assert ledger.is_billable("env", source="mcp-subscription") is False
     # and an ordinary API render still is
     assert ledger.is_billable("env", source="workflow") is True
@@ -513,11 +511,11 @@ def test_the_lane_module_does_not_spell_the_ratio_out_for_itself(tmp_db):
     assert '"720:1280"' not in body
 
 
-def test_both_manual_lanes_are_gated_and_the_billed_adapter_is_not(tmp_db):
-    """The gate is about the MANUAL lanes. The API-billed renderer (fal)
+def test_the_manual_lane_is_gated_and_the_billed_adapter_is_not(tmp_db):
+    """The gate is about the MANUAL lane. The API-billed renderer (fal)
     spends the operator's key under its own spend gate, cap and credit
     hold -- it was not touched and must not be."""
-    assert set(rq.GATED_PROVIDERS) == set(rq.PROVIDERS) == {"higgsfield", "manual"}
+    assert set(rq.GATED_PROVIDERS) == set(rq.PROVIDERS) == {"manual"}
     from src import fal, higgsfield
     for adapter in (higgsfield, fal):
         assert not hasattr(adapter, "manual_lane_allowed")
@@ -558,14 +556,21 @@ def test_the_board_says_which_clips_a_subscription_paid_for(tmp_db, monkeypatch,
 
 def test_provenance_reads_rows_written_before_the_field_existed(tmp_db, monkeypatch,
                                                                 tmp_path, api):
-    """It is derived from params_json, not a new column, so the
-    higgsfield lane's older `mcp-subscription` rows are covered with no
-    backfill."""
+    """It is derived from params_json, not a new column, so the retired
+    higgsfield lane's `mcp-subscription` rows are covered with no
+    backfill -- written here the way that lane wrote them."""
     account_id = an_operator(tmp_db, monkeypatch)
     cid = a_scene(tmp_db, account_id)
     preprod.set_picked(cid, True, dsn=tmp_db, account_id=account_id)
-    rq.import_clip(cid, 1, str(a_clip(tmp_path)), "seedance1_5", 4.8, None, True,
-                   account_id=account_id)
+    shot_row = generative.add_shot(Shot(subject="x", action="y"),
+                                   dsn=tmp_db, account_id=account_id)
+    generative.record_generation(
+        shot_row, "higgsfield", "a close shot",
+        params={"model": "seedance1_5", "source": "mcp-subscription",
+                "credits": 4.8, "concept_id": cid, "shot_n": 1},
+        cost_usd=None, dsn=tmp_db, account_id=account_id)
+    preprod.set_shot_media_url(cid, 1, "/renders/higgsfield/clip.mp4",
+                               dsn=tmp_db, account_id=account_id)
     assert generative.subscription_rendered(tmp_db, account_id=account_id) == {cid}
 
 

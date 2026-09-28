@@ -575,8 +575,9 @@ def add_legacy_column(conn: psycopg.Connection) -> bool:
 # who may spend the operator's own subscription (2026-09-08)
 # --------------------------------------------------------------------------
 
-# The manual render lanes (ops/render_queue.py, src/manual_lane.py) spend
-# the OPERATOR'S personal consumer plans, so who may use them is a
+# The manual render lane (ops/render_queue.py, src/manual_lane.py) files
+# a render with no ledger hold -- and until 2026-09-28 a second lane spent
+# the OPERATOR'S personal Higgsfield plan -- so who may use it is a
 # security decision. Until this column it was `ZEROPAGE_OPERATOR_ACCOUNTS`
 # / `_EMAILS`: anyone who could set an env var on the process -- a deploy
 # config, a `.env` on a shared box, a wrapper script -- could name

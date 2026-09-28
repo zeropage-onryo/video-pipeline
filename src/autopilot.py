@@ -281,24 +281,49 @@ def execute(plan: dict, approve: bool = False, dry_run: bool = True) -> dict[str
     if mode != "live":
         # money reads as money before anyone approves: N generations ≈ $X
         generate_count = sum(1 for a in actions if a.get("kind") == "generate")
-        preview = {"mode": mode, "executed": 0, "skipped": [],
-                   "would_execute": described}
+        preview = {"mode": mode, "executed": 0, "skipped": [], "failed": [],
+                   "posted": [], "would_execute": described}
         if generate_count:
             from . import fal
             preview["estimated_generation_cost_usd"] = fal.estimate_cost(generate_count)
         return preview
 
+    # One result per action, never an abort at the first failure
+    # (2026-09-26). A fan-out used to raise out of this loop on its
+    # second target, so the caller never learned the first one had
+    # PUBLISHED -- holds_post left the hold `held`, and the next click
+    # posted to Instagram again. What went out is in `posted`; what did
+    # not is in `failed`, its error redacted before anyone reads it.
     executed = 0
     skipped: list[str] = []
+    failed: list[dict] = []
+    posted: list[dict] = []
     for action in actions:
         executor = EXECUTORS.get(action.get("kind"))
         if executor is None:
             skipped.append(f"no executor for kind {action.get('kind')!r}")
             continue
-        executor(action)
+        platform = action.get("platform") or action.get("tool") or ""
+        try:
+            executor(action)
+        except Exception as e:
+            failed.append({"platform": platform, "error": safe_error(e)})
+            continue
         executed += 1
+        if action.get("kind") == "post":
+            result = action.get("result") if isinstance(action.get("result"), dict) else {}
+            posted.append({"platform": platform, "media_id": result.get("media_id")})
     return {"mode": "live", "executed": executed, "skipped": skipped,
-            "would_execute": described}
+            "failed": failed, "posted": posted, "would_execute": described}
+
+
+def safe_error(e: Exception) -> str:
+    """An executor's error with BOTH posting credentials redacted,
+    whatever platform the action named: a failure can be raised anywhere
+    in the dispatch, and this text is shown on a page and stored on a
+    row. The rule scheduling.run_due has always applied, in one place."""
+    error = instagram._safe_error(e, instagram.access_token())
+    return tiktok._safe_error(Exception(error), tiktok.access_token())
 
 
 def main(argv: Optional[list] = None) -> None:

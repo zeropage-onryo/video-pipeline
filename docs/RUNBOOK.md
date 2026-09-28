@@ -54,11 +54,9 @@ account that is on. `--off` revokes. Do it for `antihero` too if you
 render from that brand's account. The refusal names the command, so if
 `list` starts refusing this is what it is telling you to run.
 
-**The Higgsfield lane needs this too, and that is a deliberate break.**
-It used to run with no configuration at all. It is the same exposure — a
-consumer app subscription spent on any account's shot — and gating one
-lane while leaving the other open is worse than gating neither, because
-it reads as though the question had been asked and answered.
+**The Higgsfield lane was removed on 2026-09-28** (Mike's call).
+`ops/render_queue.py --provider higgsfield` is now refused as an unknown
+lane; only `--provider manual` remains, behind this same gate.
 
 The **API-billed adapters are untouched** by any of this: `src/runway.py`,
 `src/higgsfield.py`, `src/veo.py` and `src/fal.py` spend a credential a
@@ -161,10 +159,10 @@ the same day. Kept as a record of what the failure actually was:
   **ffprobe** how long the file really is and writes
   `duration_measured_s` beside the claimed `duration`; with no ffprobe on
   PATH the row says so in `duration_source` rather than implying a
-  measurement nobody took. The Higgsfield lane's model names are the
-  MCP's own and published nowhere this repo can read, so they are
-  recorded with `model_verified: false` instead of being checked against
-  a list this repo invented.
+  measurement nobody took. The manual import takes clips from
+  anywhere, so its model names are recorded with `model_verified: false`
+  instead of being checked against a list this repo invented. (The
+  Higgsfield lane, removed 2026-09-28, recorded its the same way.)
 - **`manual_lane.LANE_RATIO` duplicated `runway.DEFAULT_RATIO`**, with a
   drift test standing in for a shared source. Both now read
   `src/render_specs.py` — a module that imports nothing at all, so the

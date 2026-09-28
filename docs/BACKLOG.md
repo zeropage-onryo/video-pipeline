@@ -1150,3 +1150,23 @@ and a cookie scoped to it. `docs/tasks/task-api-domain-move.md` is the plan,
 down to the files and the dashboard settings; it starts when Mike owns the
 domain. The other leak found the same day — every monorepo push building
 `zpf-web` — is fixed by `web/vercel.json`'s `ignoreCommand`.
+
+## 21. Retire the manual clip import  (Mike's call 2026-09-28 — "in the future", not now)
+
+The last manual render lane: `ops/render_queue.py --provider manual` and
+`POST /api/queue/manual/{id}/clip` file a clip rendered anywhere as a
+concept's render, FREE, with no ledger hold. It stays operator-only
+(`accounts.manual_lane_operator`) until it goes. The Higgsfield-MCP lane
+beside it was removed on 2026-09-28.
+
+What removing it touches, so it is one PR when the day comes:
+`ops/render_queue.py` (the whole file), `src/manual_lane.py` (the gate, but
+keep `SUBSCRIPTION_SOURCES` -- `manual-import`, `manual-unlimited` and
+`mcp-subscription` rows must keep reading as FREE in `ledger.is_billable`
+and `generative.subscription_rendered`), `GET /api/queue/manual` and the
+clip route in `app/api.py`, the React Queue's lane panel
+(`web/src/app/studio/queue/page.tsx`, `manual_lane` on `/api/capabilities`),
+the `operator` subcommand of `src.accounts` and the
+`manual_lane_operator` column (leave the column; drop the CLI), and
+`tests/test_render_queue.py` / `tests/test_manual_lane.py`. #375, the first
+posted clip, was filed through this lane -- its row must still render.

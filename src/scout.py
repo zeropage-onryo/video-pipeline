@@ -522,6 +522,65 @@ INSTAGRAM_TAGS = {
     "zeropage": ["experimentalfilm", "liminalspaces", "analoghorror"],
 }
 
+# THE HASHTAG HALF IS ITS OWN OPT-IN (2026-09-26). Hashtag search needs
+# Meta's "Instagram Public Content Access" feature, which is App Review,
+# which Mike has not decided on -- and every tag never looked up spends
+# one of the 30 per 7 days whether or not the answer is a permission
+# error. So turning the lane on must not quietly turn this on: it runs
+# only with SCOUT_IG_HASHTAGS=1, read per call, and a permission/feature
+# refusal pauses it for HASHTAG_PAUSE_DAYS rather than failing the same
+# way every night. business_discovery is untouched by either.
+HASHTAGS_ENV = "SCOUT_IG_HASHTAGS"
+HASHTAG_PAUSE_KEY = "scout_ig_hashtags_paused"     # a row in the shared `settings` table
+HASHTAG_PAUSE_DAYS = 7
+# What Meta says when the app lacks the feature or the permission: codes
+# (#10) / (#200) / (#3), or the words. The budget refusal ("hashtag budget
+# spent") matches none of these -- it has its own window and must not
+# stack a week's pause on top of it.
+_PERMISSION_ERROR = re.compile(
+    r"\(#(?:10|200|3)\)|permission|public content access|must be reviewed"
+    r"|not been approved|does not have the capability|feature", re.IGNORECASE)
+
+
+def hashtags_enabled() -> bool:
+    return (os.environ.get(HASHTAGS_ENV) or "").strip() == "1"
+
+
+def hashtag_pause(dsn=None) -> Optional[dict]:
+    """{"until", "reason"} while a remembered permission refusal is still
+    in force, else None. Never raises: an unreadable row reads as no pause."""
+    from . import settings
+    raw = settings.get_raw(HASHTAG_PAUSE_KEY, dsn=dsn)
+    if not raw:
+        return None
+    try:
+        pause = json.loads(raw)
+        if datetime.fromisoformat(pause["until"]) > datetime.now(timezone.utc):
+            return pause
+    except (ValueError, TypeError, KeyError):
+        pass
+    return None
+
+
+def pause_hashtags(reason: str, dsn=None) -> dict:
+    """Remember a permission/feature refusal for HASHTAG_PAUSE_DAYS. Best
+    effort: a pause that cannot be written costs one more failed call
+    tomorrow, never this pass."""
+    from . import settings
+    pause = {"until": (datetime.now(timezone.utc)
+                       + timedelta(days=HASHTAG_PAUSE_DAYS)).isoformat(),
+             "reason": reason[:300]}
+    try:
+        settings.init(dsn=dsn)
+        with db.connect(dsn) as conn:
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES (%s, %s) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (HASHTAG_PAUSE_KEY, json.dumps(pause)))
+    except Exception:
+        pass
+    return pause
+
 
 def gather_instagram(brand: str, dsn=None, limit_per_source: int = 4) -> list[dict]:
     """Two reads, one lane.
@@ -538,6 +597,9 @@ def gather_instagram(brand: str, dsn=None, limit_per_source: int = 4) -> list[di
     ideation: not what an algorithm decided to show HIM, but what is
     demonstrably landing -- posts with their like and comment counts,
     and Meta's own "top" ranking for a tag.
+
+    The hashtag half runs only with SCOUT_IG_HASHTAGS=1 and is paused for
+    a week after a permission refusal -- see HASHTAGS_ENV above.
 
     Dark until IG_GRAPH_TOKEN exists, and it says so once rather than
     once per handle: a lane that needs a credential should report the
@@ -566,11 +628,30 @@ def gather_instagram(brand: str, dsn=None, limit_per_source: int = 4) -> list[di
         for post in result["posts"]:
             signals.append(_ig_signal(post, source=f"@{handle}"))
 
-    for tag in (INSTAGRAM_TAGS.get(brand) or [])[:3]:
+    tags = (INSTAGRAM_TAGS.get(brand) or [])[:3]
+    pause = hashtag_pause(dsn) if tags else None
+    if tags and not hashtags_enabled():
+        # once per pass, not once per tag
+        signals.append({"lane": "instagram", "error": (
+            f"hashtags off ({HASHTAGS_ENV} is not 1) -- business_discovery only")})
+        tags = []
+    elif pause:
+        signals.append({"lane": "instagram", "error": (
+            f"hashtags paused until {pause['until'][:10]} after a permission "
+            f"refusal: {pause.get('reason', '')}")})
+        tags = []
+    for tag in tags:
         result = instagram.hashtag_top_media(tag, limit=limit_per_source, dsn=dsn)
         if not result.get("ok"):
-            signals.append({"lane": "instagram",
-                            "error": f"#{tag}: {result.get('error', 'unavailable')}"})
+            error = result.get("error", "unavailable")
+            if _PERMISSION_ERROR.search(error or ""):
+                # The app lacks the feature: every other tag fails the same
+                # way, and tomorrow's pass would too. Stop here, for a week.
+                pause_hashtags(f"#{tag}: {error}", dsn=dsn)
+                signals.append({"lane": "instagram", "error": (
+                    f"#{tag}: {error} -- hashtags paused for {HASHTAG_PAUSE_DAYS} days")})
+                break
+            signals.append({"lane": "instagram", "error": f"#{tag}: {error}"})
             continue
         for post in result["media"]:
             signals.append(_ig_signal(post, source=f"#{tag}"))
