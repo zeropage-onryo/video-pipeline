@@ -194,6 +194,8 @@ OUTPUT_ROOTS = (
     ("src.cut.sources", "RENDERS_DIR", "data/renders"),
     ("src.cut.render", "CUT_DIR", "data/renders/cut"),
     ("app.cut_routes", "MEDIA_DIR", "data/renders/cut/media"),
+    # the editor's browser previews (src/cut/preview.py, 2026-09-28)
+    ("src.cut.preview", "PREVIEW_DIR", "data/renders/cut/preview"),
 )
 
 
