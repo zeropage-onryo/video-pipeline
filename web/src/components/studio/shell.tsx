@@ -357,7 +357,7 @@ export function StudioShell({ children }: { children: ReactNode }) {
           <div className="bar">
             <span className="brand">ZPF</span>
             <span className="sep">/</span>
-            <span className="cur">{view}</span>
+            <span className="cur">{view === "cut" ? "edit" : view}</span>
             {bar}
             <span className="spacer" />
             <CreditPill balance={balance} onError={(text) => toast(text, "err")} />

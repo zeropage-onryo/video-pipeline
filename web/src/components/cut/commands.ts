@@ -141,6 +141,11 @@ export function useEditorKeys() {
         return openExport();
       }
       if (mod) return;
+      // Shift+Z, whichever case the platform reports the key in
+      if (e.shiftKey && key.toLowerCase() === "z") {
+        handled();
+        return zoomToFit();
+      }
 
       switch (key) {
         case " ":
@@ -209,12 +214,6 @@ export function useEditorKeys() {
         case "t":
         case "T":
           return st.setLeftTab("text");
-        case "Z":
-          if (e.shiftKey) {
-            handled();
-            return zoomToFit();
-          }
-          return;
         case "+":
         case "=":
           handled();

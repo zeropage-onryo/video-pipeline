@@ -47,8 +47,8 @@ export function LeftPanel() {
     <div className="cx-pane">
       <div className="cx-pane-head" role="tablist">
         {TABS.map(({ id, label, icon: Icon }) => (
-          <button key={id} type="button" role="tab" className="cx-tab" aria-selected={tab === id} onClick={() => setTab(id)}>
-            <Icon /> {label}
+          <button key={id} type="button" role="tab" title={label} className="cx-tab" aria-selected={tab === id} onClick={() => setTab(id)}>
+            <Icon /> <span className="cx-tab-l">{label}</span>
           </button>
         ))}
       </div>

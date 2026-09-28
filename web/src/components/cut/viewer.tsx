@@ -305,8 +305,10 @@ function PictureEl({
       playsInline
       preload="auto"
       style={{ opacity, zIndex: z }}
-      onLoadedMetadata={(e) => {
-        e.currentTarget.currentTime = sourceTime(clip, Math.max(playhead, clip.at), fps);
+      onLoadedData={(e) => {
+        // a paused <video> sitting at 0 is never painted until something
+        // seeks it; a hair past the wanted time forces the first frame up
+        e.currentTarget.currentTime = Math.max(0.001, sourceTime(clip, Math.max(playhead, clip.at), fps));
       }}
     />
   );

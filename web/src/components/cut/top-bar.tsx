@@ -261,8 +261,9 @@ function ExportDialog({ onClose }: { onClose: () => void }) {
             </Dialog.Close>
           </div>
           <p className="cx-note" style={{ marginBottom: 16 }}>
-            An MP4 rendered by ffmpeg from the exact version you pick — loudness-normalised to −14 LUFS, captions burned
-            in. This is the render of record; the preview only approximates it. It costs no credits.
+            An MP4 rendered by ffmpeg from the exact version you pick, loudness-normalised to −14 LUFS, with captions
+            burned in where the server&apos;s ffmpeg can (the render says so when it cannot). This is the render of record;
+            the preview only approximates it. It costs no credits.
           </p>
 
           <div className="cx-field">
@@ -307,6 +308,12 @@ function ExportDialog({ onClose }: { onClose: () => void }) {
             </div>
           ) : null}
 
+          {job?.status === "done" && job.detail ? (
+            // the render's own notes: what it did and anything it could not
+            <p className="cx-note" style={{ marginBottom: 10 }}>
+              {job.detail}
+            </p>
+          ) : null}
           {result ? (
             <div className="cx-card">
               <video src={result} controls playsInline style={{ width: "100%", maxHeight: 320, background: "#000", borderRadius: 8 }} />
