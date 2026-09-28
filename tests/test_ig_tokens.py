@@ -2,6 +2,7 @@
 nightly preflight, and the operator CLI that installs tokens
 (ops/ig_tokens.py). Every Meta answer here is a stub `get`: nothing reaches
 the network, and no assertion may find a token value in anything printed."""
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -274,6 +275,77 @@ def test_check_exits_one_when_a_token_needs_a_person():
     said = []
     assert ig_tokens.cmd_check(get=stub_get([]), say=said.append) == 1
     assert said[0].startswith("!!! IG_ACCESS_TOKEN: MISSING")
+
+
+# ---------- fly-export: into `fly secrets import`, never onto a screen ----------
+
+class _Out:
+    """A stdout stand-in that says whether it is a terminal."""
+    def __init__(self, tty):
+        self.tty, self.written = tty, ""
+
+    def isatty(self):
+        return self.tty
+
+    def write(self, text):
+        self.written += text
+
+    def flush(self):
+        pass
+
+
+def test_fly_export_refuses_a_terminal_and_shows_the_pipe(monkeypatch):
+    monkeypatch.setenv("IG_ACCESS_TOKEN", "IGQ-secret-value")
+    out, said = _Out(tty=True), []
+    assert ig_tokens.cmd_fly_export(["IG_ACCESS_TOKEN"], out=out, say=said.append) == 2
+    assert out.written == ""                             # nothing reached the screen
+    text = "\n".join(said)
+    assert "| fly secrets import -a zeropage-studio" in text
+    assert "IGQ-secret-value" not in text
+
+
+def test_fly_export_allows_only_the_instagram_names(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "not-yours")
+    monkeypatch.setenv("IG_ACCESS_TOKEN", "IGQ-x")
+    out, said = _Out(tty=False), []
+    assert ig_tokens.cmd_fly_export(["IG_ACCESS_TOKEN", "GEMINI_API_KEY"],
+                                    out=out, say=said.append) == 2
+    assert out.written == ""                             # all or nothing
+    assert "GEMINI_API_KEY" in said[0]
+    assert set(ig_tokens.FLY_EXPORTABLE) == {
+        "IG_ACCESS_TOKEN", "IG_GRAPH_TOKEN", "IG_USER_ID", "IG_BUSINESS_ID"}
+
+
+def test_fly_export_writes_import_lines_to_a_pipe(monkeypatch):
+    monkeypatch.setenv("IG_ACCESS_TOKEN", "IGQ-x")
+    monkeypatch.setenv("IG_USER_ID", "1784")
+    monkeypatch.setenv("IG_TOKEN_STORE", "/nonexistent/ig_token.json")
+    out, said = _Out(tty=False), []
+    assert ig_tokens.cmd_fly_export(["IG_ACCESS_TOKEN", "IG_USER_ID"],
+                                    out=out, say=said.append) == 0
+    assert out.written == "IG_ACCESS_TOKEN=IGQ-x\nIG_USER_ID=1784\n"
+    assert not any("IGQ-x" in line for line in said)     # messages never carry it
+
+
+def test_fly_export_ships_the_stored_replacement_over_a_stale_env(monkeypatch, tmp_path):
+    """The nightly refresh keeps a NEW token in the store while .env still
+    holds the one it replaced; Fly must get the one that works."""
+    store = tmp_path / "ig_token.json"
+    monkeypatch.setenv("IG_TOKEN_STORE", str(store))
+    monkeypatch.setenv("IG_ACCESS_TOKEN", "IGQ-stale-in-env")
+    store.write_text(json.dumps({"access_token": "IGQ-refreshed",
+                                 "replaces": instagram._fingerprint("IGQ-stale-in-env")}))
+    out = _Out(tty=False)
+    assert ig_tokens.cmd_fly_export(["IG_ACCESS_TOKEN"], out=out, say=lambda m: None) == 0
+    assert out.written == "IG_ACCESS_TOKEN=IGQ-refreshed\n"
+
+
+def test_fly_export_with_an_unset_value_exports_nothing(monkeypatch):
+    monkeypatch.delenv("IG_GRAPH_TOKEN", raising=False)
+    monkeypatch.delenv("FB_GRAPH_TOKEN", raising=False)
+    out, said = _Out(tty=False), []
+    assert ig_tokens.cmd_fly_export(["IG_GRAPH_TOKEN"], out=out, say=said.append) == 1
+    assert out.written == ""
 
 
 # --------------------------------------------------------------------------

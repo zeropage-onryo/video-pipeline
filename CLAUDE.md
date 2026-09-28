@@ -1664,6 +1664,15 @@ is yours, in Resolve, by hand.
   generic API error. `INSTAGRAM_TAGS` is deliberately short and stable; churning it is what
   would starve the lane. Note hashtag media carries **no `username`** (Meta strips it), so the
   permalink is the only attribution and the bin stores it as `source_url`.
+  **The hashtag half is its own opt-in (2026-09-26): `SCOUT_IG_HASHTAGS=1`**, read per call,
+  off by default. Hashtag search needs Meta's *Instagram Public Content Access* feature (App
+  Review, not decided) and a new tag spends budget even when Meta refuses it, so switching the
+  LANE on must not switch this on. Off, `gather_instagram` runs `business_discovery` only and
+  says so once per pass. A permission/feature refusal (`scout._PERMISSION_ERROR`: codes
+  #10/#200/#3 or the words) is remembered in the shared `settings` table
+  (`scout_ig_hashtags_paused`, `{until, reason}`) and hashtags are skipped for
+  `HASHTAG_PAUSE_DAYS` (7) -- a lane that fails the same way every night is noise in `errors`.
+  The budget refusal is deliberately not a pause; it has its own window.
 - **`src/refbin.py`** — one owner for `data/refs`, both directions: the content-addressed name,
   the JPEG normalisation (EXIF transpose BEFORE `convert("RGB")`, HEIC when `pillow-heif` is
   present), `save`, `fetch` (bounded download for scouted images) and `resolve`. It exists
