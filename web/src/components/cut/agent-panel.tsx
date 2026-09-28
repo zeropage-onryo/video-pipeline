@@ -259,7 +259,7 @@ export function AgentPanel() {
                       key={p}
                       type="button"
                       className="cx-btn ghost"
-                      style={{ justifyContent: "flex-start" }}
+                      style={{ justifyContent: "flex-start", height: "auto", minHeight: 28, padding: "5px 9px", textAlign: "left" }}
                       onClick={() => {
                         setText(p);
                         input.current?.focus();
