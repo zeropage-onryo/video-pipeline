@@ -9,8 +9,15 @@
    image-first restyle -- ported from app/static/zpf/scenes.js).
 
    Picking is the label (pick_rate) and puts the concept in front of the
-   Queue; approving THERE renders. Leaving the board is archiving, never
-   deleting — an unpicked row is the only negative signal this system
+   Queue; approving THERE renders.
+
+   The board holds ONLY scenes still in progress (2026-09-28, Mike's
+   call): a picked or parked scene lives in the Queue, and a rendered one
+   is a clip on the Assets wall -- neither is drawn here. The count line
+   still says where every card went (in Queue, rendered), so nothing
+   leaves the board without a trace. Archived stays its own shelf.
+
+   Leaving the board is archiving, never deleting — an unpicked row is the only negative signal this system
    collects. Only one-shot concepts are the unit; a legacy multi-shot row
    is left to the Dev Studio. */
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -51,7 +58,12 @@ import {
 import { PreviewOverlay, type PreviewState } from "@/components/studio/preview-overlay";
 import { useShell } from "@/components/studio/shell";
 
-type Filter = "open" | "picked" | "archived";
+type Filter = "open" | "archived";
+
+/** Still being decided on: not picked, not parked for the Queue, no clip. */
+const inProgress = (c: Concept) => !c.archived && !c.picked && !c.parked && !c.media_url;
+
+const FILTER_LABEL: Record<Filter, string> = { open: "In progress", archived: "Archived" };
 
 /* Which concepts have their prompt open in the drawer. Out here, not in
    state: the board re-reads on every pick, and a prompt that snapped shut
@@ -148,9 +160,18 @@ export default function PipelinePage() {
   }, [me, brand, filter, gone]);
 
   const all = useMemo(() => (open ? [...open, ...(gone || [])] : null), [open, gone]);
-  const picked = useMemo(() => (open || []).filter((c) => c.picked), [open]);
+  const working = useMemo(() => (open ? open.filter(inProgress) : null), [open]);
+  // where the rest of the open half went -- counted off the cards already
+  // read (the open half IS every non-archived scene in the window)
+  const moved = useMemo(() => {
+    const live = open || [];
+    return {
+      queued: live.filter((c) => !c.media_url && (c.picked || c.parked)).length,
+      rendered: live.filter((c) => !!c.media_url).length,
+    };
+  }, [open]);
   // the shelf showing, or null while its half is still being read
-  const shelf = filter === "archived" ? gone : filter === "picked" ? (open ? picked : null) : open;
+  const shelf = filter === "archived" ? gone : working;
   const needle = query.trim().toLowerCase();
   const cards = useMemo(
     () =>
@@ -161,7 +182,9 @@ export default function PipelinePage() {
         : shelf || [],
     [shelf, needle],
   );
-  const scope = counts ? `${brand || "—"} · ${counts.open} open · ${counts.archived} archived` : `${brand || "—"}`;
+  const scope = counts
+    ? `${brand || "—"} · ${working?.length ?? 0} in progress · ${moved.queued} in Queue · ${moved.rendered} rendered · ${counts.archived} archived`
+    : `${brand || "—"}`;
   const countLine = rate?.generated ? `${scope} · ${rate.picked}/${rate.generated} picked all time, all brands` : scope;
   // the drawer reads the FRESH row, so a pick made while it is open reads back
   const shown = drawer ? (all || []).find((c) => c.id === drawer.id) || null : null;
@@ -210,10 +233,10 @@ export default function PipelinePage() {
           />
         </label>
         <div className="cats" style={{ margin: 0, padding: 0 }}>
-          {(["open", "picked", "archived"] as Filter[]).map((f) => (
+          {(["open", "archived"] as Filter[]).map((f) => (
             <button type="button" key={f} className="cat" aria-pressed={filter === f} onClick={() => setFilter(f)}>
-              {f[0].toUpperCase() + f.slice(1)}
-              {counts ? <u>{counts[f]}</u> : null}
+              {FILTER_LABEL[f]}
+              {f === "open" ? (working ? <u>{working.length}</u> : null) : counts ? <u>{counts.archived}</u> : null}
             </button>
           ))}
         </div>
@@ -226,9 +249,7 @@ export default function PipelinePage() {
             ? `Nothing here matches “${query.trim()}”`
             : filter === "archived"
             ? "Nothing archived yet"
-            : filter === "picked"
-              ? "Nothing picked yet — the check on a card sends it to Queue"
-              : "No concepts open — type an idea on Studio and hit Create"}
+            : "Nothing in progress — picked scenes wait in Queue, rendered ones are in Assets. Type an idea on Studio and hit Create"}
         </p>
       ) : null}
 
