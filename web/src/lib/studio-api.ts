@@ -140,6 +140,8 @@ export type MediaItem = {
   prompt?: string;
   folder?: string | null;
   starred?: boolean;
+  /* a clip's still (2026-09-28): its t/ derivative, when R2 has one */
+  poster?: string | null;
 };
 export type MediaCounts = Record<string, number> & { all: number };
 export type MediaWall = {
