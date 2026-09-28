@@ -19,7 +19,9 @@ exactly as missing as a handle that never existed.
 
 `probe` asks ffprobe what a file is -- length in project frames, whether
 it has picture and sound, and its size -- which is what validate needs to
-check a doc against reality.
+check a doc against reality. `measure` is the same answer through the
+cut_media_cache (store.py): what the editor asks on every edit, so a file
+is fetched and probed once, not once per keystroke.
 """
 from __future__ import annotations
 
@@ -36,6 +38,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 RENDERS_DIR = PROJECT_ROOT / "data" / "renders"
 MAX_FETCH_BYTES = 500 * 1024 * 1024
 FETCH_TIMEOUT = 30
+IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp")
 
 
 class SourceError(RuntimeError):
@@ -110,11 +113,7 @@ def _download(url: str, workdir: Path) -> Path:
     return target
 
 
-def resolve(handle: str, *, account_id: Optional[int], workdir: Path,
-            dsn: Optional[str] = None) -> Path:
-    row = _row_for(handle, account_id, dsn)
-    if not row:
-        raise SourceError(f"unknown media handle {handle}")
+def file_for(handle: str, row: dict, account_id: Optional[int], workdir: Path) -> Path:
     stored = row.get("media_url") or ""
     local = local_path_for(stored, row.get("output_path"))
     if local:
@@ -126,17 +125,29 @@ def resolve(handle: str, *, account_id: Optional[int], workdir: Path,
     return _download(url, Path(workdir))
 
 
+def resolve(handle: str, *, account_id: Optional[int], workdir: Path,
+            dsn: Optional[str] = None) -> Path:
+    row = _row_for(handle, account_id, dsn)
+    if not row:
+        raise SourceError(f"unknown media handle {handle}")
+    return file_for(handle, row, account_id, workdir)
+
+
 def probe(path: Path, fps: int) -> dict[str, Any]:
-    """{"frames", "seconds", "video", "audio", "width", "height"} for a
-    file. Raises SourceError when there is no ffprobe or it cannot read
-    the file -- a cut cannot be checked against media nobody measured."""
+    """{"frames", "seconds", "video", "audio", "width", "height", "still"}
+    for a file. Raises SourceError when there is no ffprobe or it cannot
+    read the file -- a cut cannot be checked against media nobody measured.
+
+    An image is a STILL: it has no length of its own, so it is reported as
+    d.STILL_SECONDS of picture and no sound -- as long as anyone will hold
+    one -- and render.py reads it with `-loop 1`."""
     exe = ffprobe_bin()
     if not exe:
         raise SourceError("ffprobe is not installed on this machine")
     try:
         out = subprocess.run(
             [exe, "-v", "error", "-show_entries",
-             "format=duration:stream=codec_type,width,height,duration",
+             "format=duration,format_name:stream=codec_type,width,height,duration",
              "-of", "json", str(path)],
             capture_output=True, text=True, timeout=30, check=True).stdout
         info = json.loads(out)
@@ -145,6 +156,13 @@ def probe(path: Path, fps: int) -> dict[str, Any]:
     streams = info.get("streams") or []
     vid = next((s for s in streams if s.get("codec_type") == "video"), None)
     aud = next((s for s in streams if s.get("codec_type") == "audio"), None)
+    fmt = str((info.get("format") or {}).get("format_name") or "")
+    if vid is not None and aud is None and (
+            Path(path).suffix.lower() in IMAGE_EXTS or fmt == "image2" or fmt.endswith("_pipe")):
+        return {"frames": d.STILL_SECONDS * fps, "seconds": float(d.STILL_SECONDS),
+                "video": True, "audio": False, "still": True,
+                "width": int(vid["width"]) if vid.get("width") else None,
+                "height": int(vid["height"]) if vid.get("height") else None}
     try:
         seconds = float((info.get("format") or {}).get("duration")
                         or (vid or aud or {}).get("duration") or 0)
@@ -153,9 +171,70 @@ def probe(path: Path, fps: int) -> dict[str, Any]:
     if seconds <= 0:
         raise SourceError(f"{Path(path).name} has no measurable length")
     return {"frames": d.to_frames(seconds, fps), "seconds": seconds,
-            "video": vid is not None, "audio": aud is not None,
+            "video": vid is not None, "audio": aud is not None, "still": False,
             "width": int(vid["width"]) if vid and vid.get("width") else None,
             "height": int(vid["height"]) if vid and vid.get("height") else None}
+
+
+def frames_of(facts: dict, fps: int) -> dict[str, Any]:
+    """A cached probe row -> the {"frames", "video", "audio", "seconds",
+    "still"} shape validate takes, at THIS doc's fps (the cache stores
+    seconds, so one probe serves a 24 and a 30 fps cut alike)."""
+    still = bool(facts.get("still"))
+    seconds = float(facts.get("seconds") or 0)
+    return {"frames": d.STILL_SECONDS * fps if still else d.to_frames(seconds, fps),
+            "seconds": seconds, "video": bool(facts.get("has_video")),
+            "audio": bool(facts.get("has_audio")), "still": still,
+            "width": facts.get("width"), "height": facts.get("height")}
+
+
+def measure(handles, *, account_id: Optional[int], fps: int,
+            dsn: Optional[str] = None) -> dict[str, Optional[dict[str, Any]]]:
+    """What each handle's file is, from the cache when it can be.
+
+    Returns handle -> the validate shape, or -> None when the handle is
+    this account's but its file could not be read. A handle that is not
+    this account's (or never existed) is ABSENT, so the validator calls
+    it unknown -- the caller decides what an unmeasured one means (the
+    editor lets a clip already on the timeline through, and refuses to
+    insert one).
+
+    A miss is probed once -- off this disk, or downloaded into a scratch
+    directory that is gone when this returns -- and written back, keyed
+    to the row's `media_url` so a re-pointed handle is measured again
+    rather than trusted. That is the whole point of the cache: on the
+    deployed box a `gen:` file lives in R2, and an op must not download
+    every clip on the timeline to validate one trim."""
+    import tempfile
+
+    from . import store
+    wanted = [h for h in dict.fromkeys(handles) if d.parse_handle(h)]
+    rows = store.handle_sources(wanted, account_id=account_id, dsn=dsn)
+    known = store.cached(list(rows), account_id=account_id, dsn=dsn)
+    out: dict[str, Optional[dict[str, Any]]] = {}
+    misses = []
+    for h, row in rows.items():
+        hit = known.get(h)
+        if hit and hit.get("source") == (row.get("media_url") or "") and hit.get("probed_at"):
+            out[h] = frames_of(hit, fps)
+        else:
+            misses.append(h)
+    if misses:
+        with tempfile.TemporaryDirectory(prefix="zpf-probe-") as tmp:
+            for h in misses:
+                row = rows[h]
+                try:
+                    path = file_for(h, row, account_id, Path(tmp))
+                    info = probe(path, fps)
+                    size = path.stat().st_size
+                except Exception:                       # noqa: BLE001 -- unmeasured, not fatal
+                    out[h] = None
+                    continue
+                store.put_probe(h, row.get("media_url") or "", info, account_id=account_id,
+                                size_bytes=size, dsn=dsn)
+                out[h] = {k: info.get(k) for k in
+                          ("frames", "seconds", "video", "audio", "still", "width", "height")}
+    return out
 
 
 def gather(handles, *, account_id: Optional[int], fps: int, workdir: Path,

@@ -36,6 +36,7 @@ business.
 from __future__ import annotations
 
 import re
+from math import gcd
 from typing import Any, Optional
 
 DEFAULT_FPS = 30
@@ -53,6 +54,18 @@ HANDLE_KINDS = ("gen", "asset")
 _HANDLE_RE = re.compile(r"^(gen|asset):([1-9][0-9]*)$")
 
 DEFAULT_CAPTION_STYLE = "preset:bold_center"
+# Every caption look render.py can actually draw -- the validator refuses
+# any other name, so a style the renderer would quietly swap for the
+# default never reaches a stored doc.
+CAPTION_STYLES = ("preset:bold_center", "preset:lower_third", "preset:minimal_top")
+
+# The three canvases the editor offers, by the name a person picks them
+# by. Even sizes: libx264 refuses odd ones, and so does the validator.
+ASPECT_SIZES = {"9:16": (720, 1280), "16:9": (1280, 720), "1:1": (1080, 1080)}
+
+# An image has no length. On a timeline it is a still that can be held
+# for up to this long -- ten minutes, far past any cut this studio makes.
+STILL_SECONDS = 600
 
 
 def parse_handle(handle: Any) -> Optional[tuple[str, int]]:
@@ -77,9 +90,33 @@ def to_frames(seconds: float, fps: int) -> int:
     return max(0, int(float(seconds) * fps + 1e-6))
 
 
+def aspect_of(size) -> str:
+    """[w, h] -> "9:16" / "16:9" / "1:1" when it is one of the offered
+    canvases (to within 1%), else the reduced ratio ("4:5"). A label for
+    a card, never an input to anything."""
+    w, h = int(size[0]), int(size[1])
+    for name, (aw, ah) in ASPECT_SIZES.items():
+        if h and abs(w / h - aw / ah) <= 0.01 * (aw / ah):
+            return name
+    g = gcd(w, h) or 1
+    return f"{w // g}:{h // g}"
+
+
 def new_doc(fps: int = DEFAULT_FPS, size=DEFAULT_SIZE) -> dict:
     return {"fps": int(fps), "size": [int(size[0]), int(size[1])],
             "duration": 0, "tracks": [], "markers": []}
+
+
+def starter_doc(fps: int = DEFAULT_FPS, size=DEFAULT_SIZE) -> dict:
+    """An empty cut with somewhere to put things: picture on V1, the
+    clips' own sound on A1 (sfx), a music bed on A2. A2 does not duck --
+    whether a bed drops under the sound is a choice, and `duck` is the op
+    that makes it."""
+    doc = new_doc(fps, size)
+    doc["tracks"] = [{"id": "V1", "kind": "video", "clips": []},
+                     {"id": "A1", "kind": "audio", "role": "sfx", "clips": []},
+                     {"id": "A2", "kind": "audio", "role": "music", "clips": []}]
+    return doc
 
 
 def clip_length(clip: dict) -> int:

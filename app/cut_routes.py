@@ -10,6 +10,24 @@ docs/tasks/CUT_ASSEMBLE_V0.md).
     GET  /api/cut/{concept_id}/timeline  the head doc + the version chain
     POST /api/cut/{concept_id}/rollback  move the head; nothing is deleted
 
+The editor (phase B, 2026-09-28 -- web/src/app/studio/cut/ reads these):
+
+    GET    /api/cut/projects                   the account's projects, newest-edited first
+    POST   /api/cut/projects                   new scratch project, or a concept's (create-or-return)
+    GET    /api/cut/projects/{id}              project + head doc + versions + measured media
+    PATCH  /api/cut/projects/{id}              rename
+    DELETE /api/cut/projects/{id}              soft delete; the versions stay
+    POST   /api/cut/projects/{id}/ops          one op against base_id -> a new version
+    POST   /api/cut/projects/{id}/undo|redo    move the head along the chain
+    POST   /api/cut/projects/{id}/rollback     put any version on top (clears redo)
+    GET    /api/cut/projects/{id}/media        the bin: renders (gen:) + uploads (asset:)
+    POST   /api/cut/projects/{id}/export       render any version (a job)
+    GET    /api/cut/projects/{id}/exports      the versions that have an MP4
+    GET    /api/cut/media/{handle}/preview     proxy + filmstrip + waveform (builds on first ask)
+
+A project's path segments never collide with `/{concept_id}/...`: those
+take an int and exactly one of `timeline` / `rollback` after it.
+
 Included into app/api.py's router at the bottom of that file, so every
 route sits under /api, behind the session gate, and inside
 tests/test_tenancy.py's route audit. Every route resolves the account
@@ -26,7 +44,7 @@ from __future__ import annotations
 import hashlib
 import tempfile
 from pathlib import Path
-from typing import Optional, Union
+from typing import Literal, Optional, Union
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
@@ -34,7 +52,11 @@ from pydantic import BaseModel, Field
 
 from src import preprod
 from src.cut import assemble as cut_assemble
+from src.cut import doc as cut_doc
 from src.cut import index as cut_index
+from src.cut import ops as cut_ops
+from src.cut import preview as cut_preview
+from src.cut import projects as cut_projects
 from src.cut import render as cut_render
 from src.cut import sources as cut_sources
 from src.cut import store as cut_store
@@ -46,8 +68,15 @@ router = APIRouter(prefix="/cut")
 
 MEDIA_DIR = cut_render.CUT_DIR / "media"
 MAX_MEDIA_BYTES = 100 * 1024 * 1024
+# footage is bigger than a music bed; still one request, so still capped
+MAX_VIDEO_BYTES = 500 * 1024 * 1024
 AUDIO_TYPES = {".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".aac": "audio/aac",
                ".wav": "audio/wav", ".ogg": "audio/ogg", ".flac": "audio/flac"}
+VIDEO_TYPES = {".mp4": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm",
+               ".m4v": "video/x-m4v"}
+IMAGE_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+               ".webp": "image/webp"}
+UPLOAD_TYPES = {**AUDIO_TYPES, **VIDEO_TYPES, **IMAGE_TYPES}
 
 
 def _error(status: int, code: str, message: str, **extra) -> JSONResponse:
@@ -174,21 +203,101 @@ def cut_assemble_route(body: AssembleBody,
 # uploads: what an asset:<id> handle names
 # --------------------------------------------------------------------------
 
+def _kind_of_upload(ext: str) -> Optional[str]:
+    if ext in AUDIO_TYPES:
+        return "audio"
+    if ext in VIDEO_TYPES:
+        return "video"
+    if ext in IMAGE_TYPES:
+        return "image"
+    return None
+
+
+def _bin_item(r: dict, account_id: Optional[int]) -> dict:
+    """One store.media_bin row (or an upload shaped like one) -> M, the
+    bin tile. Every URL minted here, for this reader; a still has no
+    length (`seconds` null) even though the editor may hold it for
+    d.STILL_SECONDS."""
+    from src import media, render_assets
+    kind = r["kind"]
+    render = r.get("origin") == "render"
+    url = r.get("media_url") or ""
+    if render:
+        handle = f"gen:{r['id']}"
+        name = f"{render_assets._label(r.get('tool') or '', r.get('model') or '')} #{r['id']}"
+    else:
+        handle = f"asset:{r['id']}"
+        name = r.get("filename") or handle
+    if kind == "image":
+        poster = media.url_for(url, account_id)
+    elif kind == "video":
+        poster = (media.thumb_url_for(url, account_id) if render else None) \
+            or _mint(r.get("poster_url"), account_id)
+    else:
+        poster = None
+    has_video = r.get("has_video")
+    has_audio = r.get("has_audio")
+    if has_video is None:
+        has_video = kind in ("video", "image")
+    if kind == "image":
+        has_audio = False
+    elif kind == "audio":
+        has_video = False
+        if has_audio is None:
+            has_audio = True
+    seconds = None if kind == "image" else r.get("seconds")
+    return {"handle": handle, "kind": kind, "name": name,
+            "seconds": round(float(seconds), 3) if seconds is not None else None,
+            "width": r.get("width"), "height": r.get("height"),
+            "has_video": bool(has_video), "has_audio": has_audio,
+            "size_bytes": r.get("size_bytes"), "url": media.url_for(url, account_id),
+            "poster": poster, "created_at": r.get("created_at"),
+            "source": "render" if render else "upload"}
+
+
+def _start_preview(handle: str, source: str, account_id: Optional[int]) -> bool:
+    """Claim and start the preview build for one handle, if nobody has
+    (the claim is a compare-and-set, so two polls start one job)."""
+    if not cut_sources.ffmpeg_bin():
+        return False
+    if not cut_store.claim_preview(handle, source, account_id=account_id,
+                                   stale_before=cut_preview.stale_before()):
+        return False
+
+    def work(job):
+        jobs.progress(job, 0.1, f"previews for {handle}")
+        out = cut_preview.ensure(handle, account_id=account_id)
+        if out["status"] != "ready":
+            raise RuntimeError(out.get("note") or "preview failed")
+        return {"detail": f"previews ready · {handle}", "handle": handle}
+
+    jobs.start("cut_preview", f"previews · {handle}", work, account_id=account_id)
+    return True
+
+
 @router.post("/media")
 async def cut_media_upload(request: Request,
                            account_id: int = Depends(auth.current_account_id)):
+    """Upload a music bed, voiceover, piece of footage or still -> an
+    `asset:<id>` handle. Probed on the way in (a file ffprobe cannot read
+    is refused here, not at the first edit that uses it), the probe
+    written to the cache so the first op on it downloads nothing, and the
+    preview build started."""
     form = await request.form()
     upload = form.get("file")
     if not getattr(upload, "filename", ""):
-        return _error(400, "no_file", "send the audio as `file`")
+        return _error(400, "no_file", "send the media as `file`")
     ext = Path(upload.filename).suffix.lower()
-    if ext not in AUDIO_TYPES:
-        return _error(400, "bad_type", f"audio only: {', '.join(sorted(AUDIO_TYPES))}")
+    kind = _kind_of_upload(ext)
+    if kind is None:
+        return _error(400, "bad_type", "audio, video or an image: "
+                      f"{', '.join(sorted(UPLOAD_TYPES))}")
     data = await upload.read()
     if not data:
         return _error(400, "empty", "the file is empty")
-    if len(data) > MAX_MEDIA_BYTES:
-        return _error(413, "too_big", f"over {MAX_MEDIA_BYTES // (1024 * 1024)}MB")
+    cap = MAX_VIDEO_BYTES if kind == "video" else MAX_MEDIA_BYTES
+    if len(data) > cap:
+        return _error(413, "too_big", f"over {cap // (1024 * 1024)}MB")
     sha = hashlib.sha256(data).hexdigest()
     MEDIA_DIR.mkdir(parents=True, exist_ok=True)
     target = MEDIA_DIR / f"{sha[:24]}{ext}"
@@ -198,18 +307,33 @@ async def cut_media_upload(request: Request,
     except cut_sources.SourceError as e:
         target.unlink(missing_ok=True)
         return _error(400, "unreadable", str(e))
-    if not info["audio"]:
+    refusal = None
+    if kind == "audio" and not info["audio"]:
+        refusal = ("no_audio", "that file has no sound in it")
+    elif kind == "video" and (not info["video"] or info.get("still")):
+        refusal = ("no_video", "that file has no moving picture in it")
+    elif kind == "image" and not info.get("still"):
+        refusal = ("not_an_image", "that file is not a still image")
+    if refusal:
         target.unlink(missing_ok=True)
-        return _error(400, "no_audio", "that file has no sound in it")
+        return _error(400, *refusal)
     from src import media
     stored = f"/renders/cut/media/{target.name}"
-    media.mirror(target, stored.lstrip("/"), account_id, content_type=AUDIO_TYPES[ext],
+    media.mirror(target, stored.lstrip("/"), account_id, content_type=UPLOAD_TYPES[ext],
                  derive=False)
-    row = cut_store.add_media(account_id=account_id, kind="audio",
+    row = cut_store.add_media(account_id=account_id, kind=kind,
                               filename=Path(upload.filename).name[:200], media_url=stored,
-                              output_path=str(target), seconds=info["seconds"], sha256=sha)
-    return {"handle": f"asset:{row['id']}", "seconds": info["seconds"],
-            "filename": row["filename"]}
+                              output_path=str(target),
+                              seconds=None if kind == "image" else info["seconds"], sha256=sha)
+    handle = f"asset:{row['id']}"
+    cut_store.put_probe(handle, stored, info, account_id=account_id, size_bytes=len(data),
+                        sha256=sha)
+    _start_preview(handle, stored, account_id)
+    item = _bin_item({**row, "origin": "upload", "width": info.get("width"),
+                      "height": info.get("height"), "has_video": info["video"],
+                      "has_audio": info["audio"], "size_bytes": len(data)}, account_id)
+    return {"handle": handle, "kind": kind, "seconds": item["seconds"],
+            "filename": row["filename"], "item": item}
 
 
 # --------------------------------------------------------------------------
@@ -276,6 +400,287 @@ def cut_search(q: str = "", k: int = 8, account_id: int = Depends(auth.current_a
 
 
 # --------------------------------------------------------------------------
+# the editor (phase B): projects, edits, undo, the bin, previews, export
+# --------------------------------------------------------------------------
+
+Aspect = Literal["9:16", "16:9", "1:1"]
+
+
+class RollbackBody(BaseModel):
+    timeline_id: int
+
+
+def _project_or_404(project_id: str, account_id: int):
+    row = cut_store.get_project(project_id, account_id=account_id)
+    if row is None:
+        return None, _error(404, "not_found", f"no project {project_id}")
+    return row, None
+
+
+def _head_or_409(project: dict, account_id: int):
+    head = cut_store.head(project["timeline_key"], account_id=account_id)
+    if head is None:
+        # only reachable for a project whose versions were never written
+        return None, _error(409, "no_head", "this project has no version yet")
+    return head, None
+
+
+class NewProject(BaseModel):
+    title: Optional[str] = Field(default=None, max_length=200)
+    aspect: Aspect = "9:16"
+    concept_id: Optional[int] = None
+
+
+@router.get("/projects")
+def cut_projects_list(account_id: int = Depends(auth.current_account_id)):
+    return {"projects": cut_projects.cards(account_id=account_id)}
+
+
+@router.post("/projects")
+def cut_projects_create(body: NewProject, account_id: int = Depends(auth.current_account_id)):
+    """A scratch project, or -- with `concept_id` -- the concept's cut,
+    created or returned (Mike's D2: its key is `concept:<id>`, so it
+    shares the history Export already wrote)."""
+    if body.concept_id is not None:
+        try:
+            row = cut_projects.open_concept(body.concept_id, account_id=account_id)
+        except LookupError:
+            return _error(404, "not_found", f"no concept {body.concept_id}")
+    else:
+        row = cut_projects.create_scratch(account_id=account_id, title=body.title,
+                                          aspect=body.aspect)
+    return {"project": _project_card(row, account_id)}
+
+
+def _project_card(row: dict, account_id: int, head: Optional[dict] = None) -> dict:
+    head = head or cut_store.head(row["timeline_key"], account_id=account_id)
+    first = cut_projects.first_picture(head["doc"]) if head else None
+    posters = cut_projects.poster_urls([first], account_id=account_id) if first else {}
+    return cut_projects.card(row, account_id=account_id, head=head, poster=posters.get(first))
+
+
+@router.get("/projects/{project_id}")
+def cut_project_get(project_id: str, account_id: int = Depends(auth.current_account_id)):
+    project, err = _project_or_404(project_id, account_id)
+    if err:
+        return err
+    head, err = _head_or_409(project, account_id)
+    if err:
+        return err
+    versions = cut_store.history(project["timeline_key"], account_id=account_id)
+    out = cut_projects.state(project, head, account_id=account_id)
+    return {"project": _project_card(project, account_id, head), "head": out["head"],
+            "versions": [cut_projects.version_view(v, account_id=account_id) for v in versions],
+            "can_undo": out["can_undo"], "can_redo": out["can_redo"], "media": out["media"]}
+
+
+class ProjectPatch(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=200)
+
+
+@router.patch("/projects/{project_id}")
+def cut_project_patch(project_id: str, body: ProjectPatch,
+                      account_id: int = Depends(auth.current_account_id)):
+    title = body.title.strip() if body.title else None
+    row = cut_store.update_project(project_id, account_id=account_id, title=title or None)
+    if row is None:
+        return _error(404, "not_found", f"no project {project_id}")
+    return {"project": _project_card(row, account_id)}
+
+
+@router.delete("/projects/{project_id}")
+def cut_project_delete(project_id: str, account_id: int = Depends(auth.current_account_id)):
+    """Soft: the project leaves the list; its versions and exports stay."""
+    if not cut_store.delete_project(project_id, account_id=account_id):
+        return _error(404, "not_found", f"no project {project_id}")
+    return {"ok": True}
+
+
+class OpBody(BaseModel):
+    base_id: int
+    op: str = Field(min_length=1, max_length=40)
+    args: dict = Field(default_factory=dict)
+
+
+@router.post("/projects/{project_id}/ops")
+def cut_project_op(project_id: str, body: OpBody,
+                   account_id: int = Depends(auth.current_account_id)):
+    """One edit: the op runs against the version the client edited
+    (`base_id`, which must still be the head), is validated against the
+    measured media, and is saved as a new version. 409 `stale` when the
+    head has moved (the client refetches); 422 `invalid` with every
+    problem when the op or its result is refused."""
+    project, err = _project_or_404(project_id, account_id)
+    if err:
+        return err
+    try:
+        head = cut_projects.edit(project, base_id=body.base_id, op=body.op, args=body.args,
+                                 account_id=account_id)
+    except cut_projects.StaleEdit as e:
+        return _error(409, "stale", str(e), head_id=e.head_id)
+    except cut_ops.OpError as e:
+        return _error(422, "invalid", str(e), problems=e.problems)
+    return cut_projects.state(project, head, account_id=account_id)
+
+
+@router.post("/projects/{project_id}/undo")
+def cut_project_undo(project_id: str, account_id: int = Depends(auth.current_account_id)):
+    project, err = _project_or_404(project_id, account_id)
+    if err:
+        return err
+    head = cut_store.undo(project["timeline_key"], account_id=account_id)
+    if head is None:
+        return _error(409, "nothing_to_undo", "this is the first version")
+    cut_store.update_project(project["id"], account_id=account_id)
+    return cut_projects.state(project, head, account_id=account_id)
+
+
+@router.post("/projects/{project_id}/redo")
+def cut_project_redo(project_id: str, account_id: int = Depends(auth.current_account_id)):
+    project, err = _project_or_404(project_id, account_id)
+    if err:
+        return err
+    head = cut_store.redo(project["timeline_key"], account_id=account_id)
+    if head is None:
+        return _error(409, "nothing_to_redo", "there is nothing to redo")
+    cut_store.update_project(project["id"], account_id=account_id)
+    return cut_projects.state(project, head, account_id=account_id)
+
+
+@router.post("/projects/{project_id}/rollback")
+def cut_project_rollback(project_id: str, body: RollbackBody,
+                         account_id: int = Depends(auth.current_account_id)):
+    """Put any version back on top. It clears redo -- a rollback is new
+    history -- and deletes nothing."""
+    project, err = _project_or_404(project_id, account_id)
+    if err:
+        return err
+    if cut_store.rollback(project["timeline_key"], body.timeline_id,
+                          account_id=account_id) is None:
+        return _error(404, "not_found", f"no version {body.timeline_id} of this project")
+    cut_store.update_project(project["id"], account_id=account_id)
+    head = cut_store.head(project["timeline_key"], account_id=account_id)
+    return cut_projects.state(project, head, account_id=account_id)
+
+
+@router.get("/projects/{project_id}/media")
+def cut_project_media(project_id: str, account_id: int = Depends(auth.current_account_id)):
+    """The bin: this account's renders (gen:) and uploads (asset:). The
+    project only scopes the question today -- every project of an account
+    sees the same bin -- but it is in the path so a per-project bin later
+    is not a new route."""
+    project, err = _project_or_404(project_id, account_id)
+    if err:
+        return err
+    rows = cut_store.media_bin(account_id=account_id)
+    items = [_bin_item(r, account_id) for r in rows]
+    items.sort(key=lambda i: str(i.get("created_at") or ""), reverse=True)
+    return {"items": items}
+
+
+@router.get("/media/{handle}/preview")
+def cut_media_preview(handle: str, account_id: int = Depends(auth.current_account_id)):
+    """The proxy, filmstrip and waveform for one handle. Starts the build
+    the first time it is asked for (or when the handle now points at a
+    different file) and answers `pending` until it lands; `unavailable`
+    when this box has no ffmpeg to build with."""
+    if parse_handle(handle) is None:
+        return _error(404, "not_found", f"no media {handle}")
+    source = cut_store.handle_sources([handle], account_id=account_id).get(handle)
+    if source is None:
+        return _error(404, "not_found", f"no media {handle}")
+    stored = source.get("media_url") or ""
+    row = cut_store.cached([handle], account_id=account_id).get(handle)
+    if row and row.get("source") == stored and row.get("preview_status") == "ready":
+        return cut_preview.view(row, account_id)
+    if not cut_sources.ffmpeg_bin():
+        return {"status": "unavailable", "proxy": None, "filmstrip": None, "waveform": None,
+                "note": "ffmpeg is not installed on this server"}
+    if cut_preview.needs_build(row, stored):
+        _start_preview(handle, stored, account_id)
+        row = cut_store.cached([handle], account_id=account_id).get(handle)
+    return cut_preview.view(row, account_id)
+
+
+class ExportBody(BaseModel):
+    timeline_id: Optional[int] = None
+    aspect: Optional[Aspect] = None
+
+
+@router.post("/projects/{project_id}/export")
+def cut_project_export(project_id: str, body: ExportBody,
+                       account_id: int = Depends(auth.current_account_id)):
+    """Render any version -- the head by default -- to an MP4 (a job, like
+    /assemble). An `aspect` other than the version's first becomes a NEW
+    user version (`set_canvas` on that version) and that is what renders:
+    an export must always be of a version that exists, or its export_url
+    would describe a doc nobody can open. Nothing spends: ffmpeg here."""
+    project, err = _project_or_404(project_id, account_id)
+    if err:
+        return err
+    key = project["timeline_key"]
+    if body.timeline_id is not None:
+        target = cut_store.get(body.timeline_id, account_id=account_id)
+        if target is None or target.get("project_id") != key:
+            return _error(404, "not_found", f"no version {body.timeline_id} of this project")
+    else:
+        target, err = _head_or_409(project, account_id)
+        if err:
+            return err
+    if not cut_sources.ffmpeg_bin():
+        return _error(503, "no_ffmpeg", "ffmpeg is not installed on this server")
+    doc = target["doc"]
+    if doc.get("duration", 0) <= 0:
+        return _error(409, "empty", "there is nothing on this timeline to export")
+    if body.aspect and cut_doc.aspect_of(doc["size"]) != body.aspect:
+        w, h = cut_doc.ASPECT_SIZES[body.aspect]
+        try:
+            new = cut_ops.apply(doc, "set_canvas", {"width": w, "height": h})
+        except cut_ops.OpError as e:
+            return _error(422, "invalid", str(e), problems=e.problems)
+        target = cut_store.save_version(
+            key, new, account_id=account_id, author="user", parent_id=target["id"],
+            op_summary=f"{cut_ops.describe('set_canvas', {'width': w, 'height': h})} "
+                       f"({body.aspect}) for export")
+        cut_store.update_project(project["id"], account_id=account_id)
+    tl_id, version, doc = target["id"], target["version"], target["doc"]
+    name = f"{key.replace(':', '-')}-v{version}-{tl_id}"
+
+    def work(job):
+        jobs.progress(job, 0.1, "fetching the media")
+        with tempfile.TemporaryDirectory(prefix="zpf-export-") as tmp:
+            paths, media = cut_sources.gather(cut_doc.handles(doc), account_id=account_id,
+                                              fps=doc["fps"], workdir=Path(tmp))
+            jobs.progress(job, 0.4, f"rendering version {version}")
+            result = cut_render.render(doc, account_id=account_id, name=name,
+                                       paths=paths, media=media)
+        cut_store.set_export(tl_id, result["stored"], account_id=account_id)
+        detail = f"export v{version} · {result['seconds']:.1f}s"
+        for note in result["notes"]:
+            detail += f" · {note}"
+        return {"detail": detail, "timeline_id": tl_id, "version": version,
+                "mp4_url": result["url"], "seconds": result["seconds"],
+                "notes": result["notes"], "ref_id": project["id"]}
+
+    job = jobs.start("cut", f"export · {project['title'][:60]} v{version}", work,
+                     account_id=account_id)
+    return {"job_id": job["id"], "timeline_id": tl_id, "version": version}
+
+
+@router.get("/projects/{project_id}/exports")
+def cut_project_exports(project_id: str, account_id: int = Depends(auth.current_account_id)):
+    project, err = _project_or_404(project_id, account_id)
+    if err:
+        return err
+    return {"exports": [
+        {"timeline_id": v["id"], "version": v["version"],
+         "export_url": _mint(v["export_url"], account_id), "created_at": v["created_at"],
+         "op_summary": v["op_summary"]}
+        for v in cut_store.history(project["timeline_key"], account_id=account_id)
+        if v.get("export_url")]}
+
+
+# --------------------------------------------------------------------------
 # versions
 # --------------------------------------------------------------------------
 
@@ -290,10 +695,6 @@ def cut_timeline(concept_id: int, account_id: int = Depends(auth.current_account
     for row in versions:
         row["export_url"] = _mint(row.get("export_url"), account_id)
     return {"head": head, "versions": versions}
-
-
-class RollbackBody(BaseModel):
-    timeline_id: int
 
 
 @router.post("/{concept_id}/rollback")
