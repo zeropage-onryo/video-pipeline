@@ -328,6 +328,9 @@ OWNED_TABLES = (
     # a yearly plan's unreleased months (2026-09-18, src/billing.py):
     # credit somebody paid for and has not received yet
     "credit_schedules",
+    # fal's queue receipts (2026-09-26, src/fal_requests.py): which job a
+    # hold paid for, and the URLs to reattach to it -- one account's render
+    "fal_requests",
     # the cut (2026-09-26, src/cut/store.py): an account's edit versions,
     # the pointer to the one it is on, and the audio it uploaded for them
     "timelines",

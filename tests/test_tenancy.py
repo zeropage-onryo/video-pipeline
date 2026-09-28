@@ -84,8 +84,9 @@ def test_every_owned_table_grows_an_account_id(pg):
     from src import ledger, spend
     spend.init(pg)
     ledger.init(pg)
-    from src import billing
+    from src import billing, fal_requests
     billing.init(pg)
+    fal_requests.init(pg)
     from src.cut import store as cut_store
     cut_store.init(pg)
     with db.connect(pg) as conn:
@@ -989,6 +990,8 @@ def _init_everything(path):
     spend.init(path)
     ledger.init(path)
     billing.init(path)
+    from src import fal_requests
+    fal_requests.init(path)
     cut_store.init(path)
 
 

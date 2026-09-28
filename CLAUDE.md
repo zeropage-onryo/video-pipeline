@@ -135,6 +135,11 @@ python3 ops/render_queue.py --account <slug> [--provider manual] list
 python3 ops/render_queue.py --provider manual --account <slug> import \
     --concept N --shot 1 --file clip.mp4 --model "kling 3 web app" --duration 10
 
+# FAL RECOVERY — a fal render whose worker died (a deploy restarting the API
+# mid-poll) is finished, not orphaned. The app lifespan runs this on boot
+# (FAL_RECOVER=0 turns it off); by hand it is one sweep, printed:
+venv/bin/python -m src.fal_requests [--account N]
+
 # THE CUT (Assemble v0, docs/CUT_EDITOR.md) — a rendered scene's clips, in the
 # order it was written, on a versioned timeline -> ONE MP4 (ffmpeg, -14 LUFS,
 # optional music bed ducked under the clips' own sound). No CLI: the Queue's
@@ -940,6 +945,19 @@ is yours, in Resolve, by hand.
   the vendor namespaces (`alibaba/wan-3.0/*`, `bytedance/seedance-2.0/*`, not `fal-ai/`).
   Veo is available on fal and deliberately NOT registered here — veo.py owns that
   platform and two adapters sharing one daily cap is a surprise bill.
+  **fal's receipt is persisted at submit (2026-09-26, `src/fal_requests.py`).** A deploy
+  restarted the API while #121 and #135 were polling; `app/jobs.py`'s threads died with it,
+  the holds sat `submitted` with no generations row, and fal's request_id/status_url/
+  response_url had only lived in a local. Now `generate_video` writes a `fal_requests` row
+  (OWNED, keyed by the hold's ref) right after the submit and before the first poll, beats
+  it while polling, and the caller resolves it once its row is written. The lifespan's sweep
+  claims any unresolved row whose beat is older than `FAL_RECOVER_STALE_S` (600s, longer than
+  a download) and finishes it through `fal._finish_shot` -- the SAME tail the live
+  `generate_for_shot` runs: COMPLETED -> download, generations row (reused if the worker got
+  that far), settle, attach to the concept/part. fal's own "no" (error payload, 404/410/422,
+  no output, still queued past `FAL_RECOVER_GIVE_UP_S`) -> failed row + release. No answer
+  from fal (network, 5xx, 429, no key) is never a release. Nothing is written to the ledger
+  after the submit except by settle/release; the new table is not the ledger.
 - **`src/shot.py`** / **`src/promptgen.py`** / **`src/genlog.py`** / **`src/generative.py`** — the
   generative-clip side: the typed vocabulary every tool prompt compiles from. `shot.py` is a `Shot`
   dataclass with a controlled camera/size vocabulary and one **pure** renderer per tool; no model
