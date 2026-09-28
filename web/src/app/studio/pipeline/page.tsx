@@ -57,6 +57,7 @@ import {
 } from "@/components/studio/concept-card";
 import { PreviewOverlay, type PreviewState } from "@/components/studio/preview-overlay";
 import { useShell } from "@/components/studio/shell";
+import { creditsText } from "@/lib/render-choice";
 
 type Filter = "open" | "archived";
 
@@ -84,7 +85,25 @@ function statusOf(c: Concept) {
 const K = "font-plex text-[11px] tracking-[0.14em] text-bone3";
 
 export default function PipelinePage() {
-  const { me, brand, toast } = useShell();
+  const { me, brand, balance, toast } = useShell();
+  // What a pick will draw, and cost (2026-09-28): picking a scene draws its
+  // keyframe -- one still per timed shot still missing one -- and a still
+  // is charged. Mirrors scene_chain.pick_skip_reason, the server's rule.
+  const pickTitle = (c: Concept): string => {
+    if (c.picked) return "Picked — click to unpick";
+    const parts = c.timeline?.planned ? c.timeline.parts : [];
+    const stills = !c.is_scene
+      ? 0
+      : parts.length
+        ? parts.filter((p) => !p.reference_image).length
+        : c.reference_image
+          ? 0
+          : 1;
+    const each = balance?.prices?.still;
+    if (!stills || !each) return "Pick this";
+    const noun = stills === 1 ? "its keyframe" : `${stills} keyframes, one per shot`;
+    return `Pick this — draws ${noun} · ${creditsText(stills * each, !!balance?.exempt)}`;
+  };
   const [filter, setFilter] = useState<Filter>("open");
   const [query, setQuery] = useState("");
   // the open cards, and the archived half of the same window -- null
@@ -323,7 +342,7 @@ export default function PipelinePage() {
                         <button
                           type="button"
                           className={`${ICON_BTN} ${c.picked ? "border-noir-red! bg-noir-red! text-noir-bg!" : "text-bone!"}`}
-                          title={c.picked ? "Picked — click to unpick" : "Pick this"}
+                          title={pickTitle(c)}
                           aria-label={`${c.picked ? "Unpick" : "Pick"} ${c.title}`}
                           aria-pressed={c.picked}
                           disabled={busy[c.id] || !!c.media_url}

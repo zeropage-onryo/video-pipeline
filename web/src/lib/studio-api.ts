@@ -610,6 +610,8 @@ export type Balance = {
   checkout_configured: boolean;
   yearly_configured: boolean;
   portal: boolean;
+  /** what a Create and a still cost on THIS server (app/billing.action_prices) */
+  prices?: { create: { fast: number; reasoning: number }; still: number };
 };
 export const getBalance = () => apiFetch<Balance>("/billing/balance");
 /** fired after anything that moves credit: an approve takes a hold, a

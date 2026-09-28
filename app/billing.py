@@ -121,7 +121,19 @@ def billing_portal(account_id: int = Depends(auth.current_account_id)):
 def billing_balance(account_id: int = Depends(auth.current_account_id)):
     if account_id is None:
         return _no_account()
-    return billing.balance(account_id)
+    return {**billing.balance(account_id), "prices": action_prices()}
+
+
+def action_prices() -> dict:
+    """What the studio charges before a clip exists (2026-09-28), for the
+    labels on the buttons that spend it. The still is priced for the image
+    model THIS server draws with (NANO_BANANA_MODEL: Flash on the deployed
+    API, Pro on a machine configured for it), so a label never quotes the
+    other model's price."""
+    from src import nano_banana, pricing
+    return {"create": {"fast": pricing.action_credits("create:fast"),
+                       "reasoning": pricing.action_credits("create:reasoning")},
+            "still": pricing.still_credits(nano_banana.MODEL)}
 
 
 # (path under /api, handler, methods) -- app/api.py registers these

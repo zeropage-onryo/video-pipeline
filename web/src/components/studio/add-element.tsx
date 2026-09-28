@@ -14,6 +14,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Image as ImageIcon, LayoutGrid, X } from "lucide-react";
 import { API_URL } from "@/lib/api";
 import { createAsset, getCapabilities } from "@/lib/studio-api";
+import { useShell } from "@/components/studio/shell";
+import { creditsText } from "@/lib/render-choice";
 import { CREATE_ROUTE, ELEMENT_KINDS, PRODUCT_KIND, type ElementKind } from "@/lib/elements";
 
 type Kind = ElementKind;
@@ -58,6 +60,9 @@ export function AddElement({
   const [files, setFiles] = useState<File[]>([]);
   const [urls, setUrls] = useState<string[]>(initialPhotoUrls);
   const [sheet, setSheet] = useState(true);
+  // the sheet is one still, charged like any other (2026-09-28)
+  const { balance } = useShell();
+  const sheetPrice = balance?.prices ? creditsText(balance.prices.still, !!balance.exempt) : null;
   const [canDraw, setCanDraw] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -192,8 +197,8 @@ export function AddElement({
                   <LayoutGrid size={11} strokeWidth={1.7} /> Draw a reference sheet
                 </span>
                 <span className="text-[12px] leading-snug text-[var(--dim)]">
-                  {SHEET_NOTE[kind]}, drawn from the photos on Nano Banana Pro after the save — a few cents. Your photos stay first; the
-                  sheet rides behind them into every shot.
+                  {SHEET_NOTE[kind]}, drawn from the photos after the save
+                  {sheetPrice ? ` — ${sheetPrice}` : ""}. Your photos stay first; the sheet rides behind them into every shot.
                 </span>
               </span>
             </label>
@@ -202,7 +207,7 @@ export function AddElement({
         </div>
         <div className="zdfoot">
           <span className="m">
-            saves the {kind} + teaches the RAG assets shelf{willDraw ? " + draws the sheet" : ""}
+            saves the {kind} + teaches the RAG assets shelf{willDraw ? ` + draws the sheet${sheetPrice ? ` (${sheetPrice})` : ""}` : ""}
           </span>
           <span className="spacer" />
           <button type="button" className="zbtn" onClick={onClose}>
