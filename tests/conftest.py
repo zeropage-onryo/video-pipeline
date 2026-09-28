@@ -190,6 +190,11 @@ OUTPUT_ROOTS = (
     ("ops.render_queue", "RENDER_DIR", "data/renders/higgsfield"),
     ("ops.render_queue", "MANUAL_RENDER_DIR", "data/renders/manual"),
     ("ops.bank", "PLANS_DIR", "data/idea_agent"),
+    # the cut (src/cut/, 2026-09-26): where a handle's local file is looked
+    # for, where the MP4 lands, and where uploaded music/VO is kept
+    ("src.cut.sources", "RENDERS_DIR", "data/renders"),
+    ("src.cut.render", "CUT_DIR", "data/renders/cut"),
+    ("app.cut_routes", "MEDIA_DIR", "data/renders/cut/media"),
 )
 
 

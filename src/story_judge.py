@@ -33,6 +33,14 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 JUDGE_PROMPT_PATH = PROJECT_ROOT / "prompts" / "story_judge_prompt.txt"
+# A short ad is graded on its own terms (2026-09-27, Mike's call): the
+# story gate wants a WANT, a RULE and a REVERSAL, which a 6-second product
+# spot almost never has, so every ad direction the assistant wrote came
+# back 1-2/10 -- a verdict on the wrong genre, not on the idea.
+AD_JUDGE_PROMPT_PATH = PROJECT_ROOT / "prompts" / "ad_judge_prompt.txt"
+# the craft shelf an ad is graded against; the account's own
+# winning/avoid shelves are shared with the story judge
+AD_DOMAIN = "marketing"
 
 # The RAG shelves a judgment is grounded in. story_craft is the standing
 # definition of "a good idea" (data/rag_seed/story_craft.md, ingested with
@@ -108,6 +116,62 @@ def parse_judge_response(text: str) -> dict:
     missing = [m for m in (data.get("missing") or []) if isinstance(m, str)]
     return {"ok": True, "score": score,
             "verdict": (data.get("verdict") or "").strip(), "missing": missing}
+
+
+def build_ad_prompt(concept: str, turn: str, craft_context: str,
+                    reference_context: str, seconds=None) -> str:
+    template = AD_JUDGE_PROMPT_PATH.read_text()
+    length = f"{seconds} seconds" if seconds else "short (under 30 seconds); length not given"
+    return (template
+            .replace("{spark}", concept)
+            .replace("{rationale}", turn or "(none given)")
+            .replace("{length}", length)
+            .replace("{craft_context}", craft_context)
+            .replace("{reference_context}", reference_context))
+
+
+def _grounding(text: str, craft_domain: str, *, rag_client=None, rag_conn=None, k: int = 4):
+    """(craft refs, reference refs) for a judgment. An unreachable library
+    grades without it -- "(nothing on file yet)" -- rather than not at
+    all: on 2026-09-26 a bad RAG_DATABASE_URL on Fly made every judgment
+    come back unscored, which read as the judge having an opinion."""
+    try:
+        from . import rag
+        conn = rag_conn
+        close_conn = False
+        if conn is None:
+            conn = rag.connect()
+            close_conn = True
+        try:
+            r_client = rag_client or rag.make_client()
+            craft = rag.query(text, r_client, conn, k=k, domain=craft_domain)
+            refs = rag.query(text, r_client, conn, k=k, domain=list(REFERENCE_DOMAINS))
+        finally:
+            if close_conn:
+                conn.close()
+        return craft, refs
+    except Exception as e:
+        import sys
+        print(f"  judge grounding unavailable ({type(e).__name__}); grading without it",
+              file=sys.stderr)
+        return [], []
+
+
+def judge_ad(concept: str, turn: str, client, model: str, *, seconds=None,
+             rag_client=None, rag_conn=None, k: int = 4) -> dict:
+    """judge_spark's twin for a short ad: same independence, same return
+    shape, a rubric about hook / the product causing the turn / one idea /
+    shootable / the button instead of the story spine. Never raises."""
+    try:
+        craft, refs = _grounding(f"{concept}\n{turn or ''}", AD_DOMAIN,
+                                 rag_client=rag_client, rag_conn=rag_conn, k=k)
+        prompt = build_ad_prompt(concept, turn, _format_context(craft),
+                                 _format_context(refs), seconds=seconds)
+        resp = client.models.generate_content(model=model, contents=prompt)
+        return parse_judge_response(getattr(resp, "text", "") or "")
+    except Exception as e:
+        return {"ok": False, "score": None, "verdict": "", "missing": [],
+                "error": f"{type(e).__name__}: {e}"}
 
 
 def judge_spark(spark: str, rationale: str, client, model: str, *,

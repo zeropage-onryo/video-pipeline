@@ -31,8 +31,12 @@ ENV TZ=America/New_York \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
+# ffmpeg (2026-09-26, Assemble v0 -- src/cut/render.py): the cut's render of
+# record, and ffprobe for measuring clips. Debian's build carries libass, so
+# captions burn in here even though a Homebrew ffmpeg on the Mac cannot.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         cron \
+        ffmpeg \
         supervisor \
         libheif1 \
         curl \

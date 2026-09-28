@@ -108,6 +108,8 @@ export type AssistantDirection = {
   /** story_judge's 0..1, null when the judge could not run */
   score?: number | null;
   verdict?: string;
+  /** which rubric graded it: "ad" (story_judge.judge_ad) or "story" */
+  rubric?: string;
 };
 export type SheetFrame = {
   id: string;
