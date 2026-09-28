@@ -1,10 +1,20 @@
 # Fly.io / Railway image for the always-on studio (backlog #14 phase 5).
-# Runs the SAME app.main:app that studio.command runs locally, plus the
-# ONE nightly job that today lives in a launchd plist (com.zeropage.
-# morningprompts at 22:00 ET) -- cron replaces launchd, one-for-one, same
-# command, same schedule, same timezone (TZ=America/New_York below, so DST
-# is handled the same way a Mac handles it: by wall-clock time, not a fixed
-# UTC offset).
+# Runs the SAME app.main:app that studio.command runs locally, plus ONE
+# scheduled job: the Instagram token keeper.
+#
+# THE NIGHTLY WALK IS GONE (2026-09-28, Mike's call). This image used to
+# cron `run_morning_prompts.sh` at 22:00 -- and it never once ran here:
+# that script's first line cds into the Mac's project folder, which does
+# not exist in this image, so it exited 1 every night into /var/log, which
+# a redeploy wipes. The concept walk, the research agent and the scout
+# crawl are no longer scheduled anywhere (the Mac's LaunchAgent went the
+# same day); `python -m src.nightly walk` still runs by hand.
+#
+# What stays is `ops.ig_tokens keep`, daily at 10:00 ET (TZ below): it
+# makes no Meta call until the publishing token's last refresh is 30 days
+# old, then refreshes it into data/ig_token.json on the volume -- the
+# long-lived token dies at 60 days, and nothing else refreshes it now.
+# Its log lives on the volume too, so a deploy does not erase it.
 #
 # The 03:30 shadowrun (`python -m src.trigger`) was REMOVED 2026-09-14. It
 # was an eleventh generation run every night that took neither the
@@ -56,13 +66,12 @@ COPY . .
 # .dockerignore excludes them. If a step here needs them it belongs on
 # the Mac (phase 5's "split, not a move"), not in this image.
 
-RUN mkdir -p /var/log/zeropage \
-    && echo "0 22 * * *  root  cd /app && . /app/.env.runtime && /bin/bash run_morning_prompts.sh   >> /var/log/zeropage/morning_prompts.log 2>&1" > /etc/cron.d/zeropage \
+RUN echo "0 10 * * *  root  cd /app && . /app/.env.runtime && python -m ops.ig_tokens keep --days 30   >> /app/data/ig_token_keeper.log 2>&1" > /etc/cron.d/zeropage \
     && chmod 0644 /etc/cron.d/zeropage
 # NOTE: /etc/cron.d/zeropage (with its "root" user column) is picked up
 # automatically by the cron daemon -- do NOT also `crontab` it, that
 # command expects the OTHER format (no user column) and installing both
-# would either error at build time or double-run the nightly jobs.
+# would either error at build time or run the job twice.
 
 COPY ops/fly/supervisord.conf /etc/supervisor/conf.d/zeropage.conf
 
