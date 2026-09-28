@@ -45,6 +45,11 @@ export type Catalog = {
   plans: Plan[];
   topup: { key: string; name: string; usd: number; credits: number };
   models: CatalogModel[];
+  /** what the studio charges before a clip exists (src/pricing.py ACTION_USD) */
+  actions: {
+    create: { fast: number; reasoning: number };
+    still: { standard: number; pro: number };
+  };
 };
 
 export const CATALOG = catalog as Catalog;

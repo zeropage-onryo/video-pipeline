@@ -43,7 +43,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from . import gemini_utils, generative, render_assets, spend
+from . import charge as charging
+from . import gemini_utils, generative, ledger, render_assets, spend
 from .gemini_utils import sniff_mime
 from .shot import Shot
 
@@ -371,7 +372,12 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
     panel layout. `bank=False` keeps the render out of generated_assets
     (the Assets wall): a sheet lives with its element, and listing it
     twice would be the kind of duplicate the wall was just cleaned of.
-    Caps, the generations row, the meter and R2 apply either way.
+    Caps, the generations row, the meter and R2 apply either way -- and
+    so does the CHARGE (2026-09-28): a still costs credits like a render
+    does (pricing.still_credits, the meter's own price at the render
+    markup), held before the model call, settled on the generations row,
+    released when no image came back. The operator's exempt accounts and
+    the unowned nightly pool take no hold, exactly as for a clip.
     The Workflows canvas's Nano Banana node: prompt in, an image under
     /renders/nano/ out (uploaded to R2 when configured). reference_image
     may be raw bytes (a picked asset photo or an upstream render) --
@@ -420,29 +426,50 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
         out_path = RENDER_DIR / f"{who}{stamp}.png"
         framed = prompt if literal else as_still_frame(
             prompt, has_reference=len(references), beat=beat)
-        generate_image(framed, out_path, model=model,
-                       reference_bytes=references, client=client,
-                       aspect_ratio=aspect_ratio, image_size=image_size,
-                       account_id=account_id)
 
-        # the row logs the prompt the person wrote, not the constant
-        # wrapper around it -- the flag says which framing was applied
-        shot_row_id = _shot_row_for_prompt(prompt, db_path, account_id)
-        generation_params = {"model": model, "source": source,
-                             "framing": "literal" if literal else "still",
-                             "references": len(references),
-                             **({"beat": beat} if beat else {}),
-                             **({"concept_id": concept_id} if concept_id else {}),
-                             # whose key paid for this image: the operator's
-                             # (per-account keys were removed 2026-09-26)
-                             "key_source": "env"}
-        generation_id = generative.record_generation(
-            shot_row_id, "nano", prompt,
-            params=generation_params,
-            output_path=str(out_path),
-            **kwargs,
-        
-            account_id=account_id,)
+        from . import pricing
+        charge = charging.Charge(
+            account_id, provider="nano", ref=charging.attempt_ref(out_path),
+            estimate_usd=pricing.still_usd(model), dsn=db_path)
+        try:
+            charge.take()     # an empty balance refuses HERE: no model call
+        except ledger.InsufficientCredit as e:
+            return {"ok": False, "media_url": None, "generation_id": None,
+                    "path": None, "error": charging.refusal(e, "this still")}
+        try:
+            generate_image(framed, out_path, model=model,
+                           reference_bytes=references, client=client,
+                           aspect_ratio=aspect_ratio, image_size=image_size,
+                           account_id=account_id)
+        except Exception as e:
+            charge.release(f"nano: {type(e).__name__}")
+            raise
+
+        try:
+            # the row logs the prompt the person wrote, not the constant
+            # wrapper around it -- the flag says which framing was applied
+            shot_row_id = _shot_row_for_prompt(prompt, db_path, account_id)
+            generation_params = {"model": model, "source": source,
+                                 "framing": "literal" if literal else "still",
+                                 "references": len(references),
+                                 **({"beat": beat} if beat else {}),
+                                 **({"concept_id": concept_id} if concept_id else {}),
+                                 # whose key paid for this image: the operator's
+                                 # (per-account keys were removed 2026-09-26)
+                                 "key_source": "env",
+                                 **charge.params()}
+            generation_id = generative.record_generation(
+                shot_row_id, "nano", prompt,
+                params=generation_params,
+                output_path=str(out_path),
+                **kwargs,
+                account_id=account_id,)
+        except Exception as e:
+            # the image exists and cost money, but nothing records it: the
+            # person is not charged for a still the studio cannot show them
+            charge.release(f"nano: unrecorded ({type(e).__name__})")
+            raise
+        charge.settle(generation_id=generation_id)
 
         if storage.configured():
             media_url = storage.upload_file(

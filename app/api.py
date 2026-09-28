@@ -101,6 +101,28 @@ def _error(status: int, code: str, message: str) -> JSONResponse:
                         content={"error": {"code": code, "message": message}})
 
 
+def _create_charge(account_id: Optional[int], brain: Optional[str]):
+    """Hold the credits one Create costs (2026-09-28, pricing.ACTION_USD),
+    or raise ledger.InsufficientCredit BEFORE any job or model call. The
+    job settles it when a scene was written and releases it when none
+    was. Exempt accounts and the unowned pool take no hold (charge.py)."""
+    import uuid
+
+    from src import charge as charging
+    from src import pricing
+    action = pricing.create_action(brain)
+    charge = charging.Charge(account_id, provider="gemini",
+                             ref=f"{action.replace(':', '-')}-{uuid.uuid4().hex}",
+                             estimate_usd=pricing.ACTION_USD[action])
+    charge.take()
+    return charge
+
+
+def _out_of_credits(e, what: str) -> JSONResponse:
+    from src import charge as charging
+    return _error(402, "out_of_credits", charging.refusal(e, what))
+
+
 # --- capabilities -----------------------------------------------------------
 
 def _gemini_key(account_id: Optional[int] = None) -> Optional[str]:
@@ -2019,6 +2041,12 @@ async def scenes_run(request: Request, account_id: int = Depends(auth.current_ac
     if scout_claimed:
         scout.bank_urls(scout_finding_id, refs, lane="composer")
 
+    from src import ledger
+    try:
+        charge = _create_charge(account_id, brain)
+    except ledger.InsufficientCredit as e:
+        return _out_of_credits(e, "this scene")
+
     def work(job):
         from google import genai
 
@@ -2036,15 +2064,23 @@ async def scenes_run(request: Request, account_id: int = Depends(auth.current_ac
         # the clip are the Director canvas's job when a person is doing
         # this by hand -- and the nightly graph's job when nobody is
         # (src/orchestrator.py calls the same stage functions).
-        result = scene_chain.run(
-            idea, brand, count=count, refs=refs, image_refs=image_refs or None,
-            db_path=None, account_id=account_id,
-            gemini_client=client, video_parts=video_parts,
-            resolve_photo=_resolve_asset_photo,
-            attach_refs=_attach_scene_refs,
-            brain=brain, ratio=ratio or None, seconds=seconds,
-            progress=lambda fraction, detail: jobs.progress(job, fraction, detail))
+        try:
+            result = scene_chain.run(
+                idea, brand, count=count, refs=refs, image_refs=image_refs or None,
+                db_path=None, account_id=account_id,
+                gemini_client=client, video_parts=video_parts,
+                resolve_photo=_resolve_asset_photo,
+                attach_refs=_attach_scene_refs,
+                brain=brain, ratio=ratio or None, seconds=seconds,
+                progress=lambda fraction, detail: jobs.progress(job, fraction, detail))
+        except BaseException as e:
+            charge.release(f"create: {type(e).__name__}")
+            raise
         saved = result["scenes"]
+        if saved:
+            charge.settle()
+        else:
+            charge.release("create: wrote nothing")
         if scout_claimed and saved:
             scout.mark_used(scout_finding_id,
                             run_id=f"concept:{saved[0]['concept_id']}")
@@ -3735,7 +3771,25 @@ async def pipeline_run(request: Request, account_id: int = Depends(auth.current_
 
     image_refs, refs, _ = await _collect_refs(form)
 
+    from src import ledger
+    try:
+        charge = _create_charge(account_id, None)
+    except ledger.InsufficientCredit as e:
+        return _out_of_credits(e, "this scene")
+
     def work(job):
+        try:
+            out = _brief_work(job)
+        except BaseException as e:
+            charge.release(f"create: {type(e).__name__}")
+            raise
+        if out.get("ref_id"):
+            charge.settle()
+        else:
+            charge.release("create: wrote nothing")
+        return out
+
+    def _brief_work(job):
         from google import genai
 
         from src import scene_chain, shootgen
