@@ -829,8 +829,8 @@ def main(argv=None) -> None:
     p_op.add_argument("slug", help="the account slug, e.g. zeropage")
     door = p_op.add_mutually_exclusive_group(required=True)
     door.add_argument("--on", dest="on", action="store_true",
-                      help="this account may use the manual render lanes "
-                           "(the Higgsfield MCP and the manual clip import)")
+                      help="this account may use the manual clip import "
+                           "(the one manual render lane)")
     door.add_argument("--off", dest="on", action="store_false",
                       help="it may not (the state every account starts in)")
     p_op.set_defaults(on=None)
