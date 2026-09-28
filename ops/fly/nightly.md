@@ -161,8 +161,8 @@ launchctl unload ~/Library/LaunchAgents/com.zeropage.shadowrun.plist
 ```
 
 Remember `~/Library/LaunchAgents` holds a **copy** — editing the repo's
-plist changes nothing (`ops/install-launchagents.sh --check` reports
-drift). Unloading the installed copy is what actually stops it. Do this
+plist changed nothing. (Both were unloaded and renamed `.disabled` on
+2026-09-28, and the repo no longer carries a plist.) Unloading the installed copy is what actually stops it. Do this
 only once a `nightly_runs` row has appeared from Fly on a night you
 watched; until then, running both is a duplicate, and running neither is
 the failure this whole file exists to end.

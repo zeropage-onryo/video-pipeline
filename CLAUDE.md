@@ -71,19 +71,21 @@ venv/bin/python -m src.scout next --brand zeropage       # the servable spark, o
 # THE INSTAGRAM TOKENS — two credentials, two hosts (src/instagram.py).
 # check is read-only (one call each, never prints a value); refresh/publish/
 # research write .env with a backup. `keep` is THE ONLY SCHEDULED JOB in the
-# project (2026-09-28): daily at 10:00 ET on the Mac (com.zeropage.igtoken,
-# ops/install-launchagents.sh) and on Fly (the image's one cron line, log in
-# /app/data/ig_token_keeper.log); it makes no Meta call until the publishing
-# token's last refresh is 30 days old, then refreshes it into the store --
-# never .env. Each host keeps its OWN copy of the token alive.
+# project (2026-09-28): daily at 10:00 ET on FLY ONLY (the image's one cron
+# line, log in /app/data/ig_token_keeper.log); it makes no Meta call until
+# the publishing token's last refresh is 30 days old, then refreshes it into
+# the store -- never .env. The Mac runs NO LaunchAgent, by Mike's choice: its
+# copy of the token (last refreshed 2026-09-26) is kept alive only by a hand
+# `refresh`, and matters only for posting or metrics from the local server.
 venv/bin/python -m ops.ig_tokens check [--probe]
 venv/bin/python -m ops.ig_tokens refresh|publish
 venv/bin/python -m ops.ig_tokens keep [--days 30]
 venv/bin/python -m ops.ig_tokens research --app-id <research app id>
 
 # THE NIGHTLY WALK IS NOT SCHEDULED (2026-09-28, Mike's call). The Mac's
-# com.zeropage.morningprompts agent is retired (install-launchagents.sh
-# renames it .disabled), and the Fly cron line that called
+# com.zeropage.morningprompts and com.zeropage.shadowrun agents were unloaded
+# and renamed .disabled.20260928 in ~/Library/LaunchAgents (nothing in the
+# repo installs a LaunchAgent any more), and the Fly cron line that called
 # run_morning_prompts.sh -- which never once ran there: its first line cds
 # into the Mac's folder -- was replaced by the token keeper. Concept walks,
 # the research agent, the scout crawl and the metrics sweep now run only by
@@ -802,8 +804,8 @@ into the hashed prompt template so `by_prompt` does not average two meanings of 
 - **The nightly job has two failure modes, and it hit both** (2026-08-31). First:
   `~/Library/LaunchAgents` holds a **copy** of the plist, so editing the repo's copy
   changes nothing — the installed one kept pointing at `/Users/iphone/Documents/Github
-  Portfolio` after the folder was renamed. `ops/install-launchagents.sh` now copies and
-  reloads it in one step, and `--check` reports whether the installed copy has drifted.
+  Portfolio` after the folder was renamed. (`ops/install-launchagents.sh` copied and
+  reloaded it in one step; it was deleted on 2026-09-28 with the last LaunchAgent.)
   Second, and the one that actually stopped it around 2026-08-20: `data/morning_prompts.err`
   reads `/bin/bash: …/run_morning_prompts.sh: Operation not permitted`. **`EPERM`, not
   `ENOENT`** — that is macOS TCC denying a LaunchAgent access to `~/Documents`, which is a
