@@ -344,6 +344,12 @@ OWNED_TABLES = (
     # and the words, sentences and shots search runs over
     "media_index",
     "media_moments",
+    # the assistant pill's memory (2026-09-29, src/assistant_store.py): an
+    # account's persona, its conversation, and its Keep clicks on the
+    # contact sheets -- other people's taste must not steer yours
+    "assistants",
+    "assistant_projects",
+    "reference_verdicts",
 )
 
 # The tables that are global BY DECISION, each with the reason. This is

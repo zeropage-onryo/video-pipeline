@@ -139,6 +139,44 @@ export const keepReferences = (ids: string[]) =>
     },
   );
 
+/* ── what the server remembers (2026-09-29, src/assistant_store.py) ──
+   The persona and the open project used to live only in this browser, so a
+   closed tab lost the thread. localStorage/sessionStorage stay as a fast
+   first paint and an offline fallback; the server's copy wins on load. */
+export type SavedProject = { id: number; title: string; stage: string; turns: unknown[]; updated_at: string };
+export const getAssistantMemory = () =>
+  apiFetch<{ persona: (Persona & { updated_at?: string }) | null; project: SavedProject | null }>("/assistant");
+export const putPersona = (p: Persona) =>
+  apiFetch<{ persona: Persona }>("/assistant/persona", {
+    method: "PUT",
+    headers: GUARDED_HEADERS,
+    body: JSON.stringify(p),
+  });
+export const putProject = (turns: unknown[], stage: string) =>
+  apiFetch<{ project: Omit<SavedProject, "turns"> }>("/assistant/project", {
+    method: "PUT",
+    headers: GUARDED_HEADERS,
+    body: JSON.stringify({ turns, stage }),
+  });
+export const startNewProject = () =>
+  apiFetch<{ ok: boolean }>("/assistant/project/new", { method: "POST", headers: GUARDED_HEADERS, body: "{}" });
+/* the Keep click against the checker, one entry per frame the sheet showed */
+export type FrameVerdict = {
+  id: string;
+  role: string;
+  query: string;
+  checker_kept: boolean;
+  why: string;
+  person_kept: boolean;
+  source_url: string;
+};
+export const postVerdicts = (frames: FrameVerdict[]) =>
+  apiFetch<{ recorded: number }>("/assistant/reference-verdicts", {
+    method: "POST",
+    headers: GUARDED_HEADERS,
+    body: JSON.stringify({ frames }),
+  });
+
 
 /* ── the composer bridge ── */
 export const FILL_EVENT = "zpf:assistant-fill";

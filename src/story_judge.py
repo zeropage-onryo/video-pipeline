@@ -186,22 +186,12 @@ def judge_spark(spark: str, rationale: str, client, model: str, *,
     candidates in one pass can open the connection once rather than once
     per spark -- omit them and this opens and closes its own."""
     try:
-        from . import rag
-        query_text = f"{spark}\n{rationale or ''}"
-        conn = rag_conn
-        close_conn = False
-        if conn is None:
-            conn = rag.connect()
-            close_conn = True
-        try:
-            r_client = rag_client or rag.make_client()
-            craft_refs = rag.query(query_text, r_client, conn, k=k, domain=STORY_DOMAIN)
-            reference_refs = rag.query(query_text, r_client, conn, k=k,
-                                       domain=list(REFERENCE_DOMAINS))
-        finally:
-            if close_conn:
-                conn.close()
-
+        # An unreachable library grades without its context rather than not
+        # at all -- the ad judge's rule (2026-09-29). With the Fly secret
+        # broken, "story judge unavailable" was every spark's only note.
+        craft_refs, reference_refs = _grounding(
+            f"{spark}\n{rationale or ''}", STORY_DOMAIN,
+            rag_client=rag_client, rag_conn=rag_conn, k=k)
         prompt = build_judge_prompt(spark, rationale,
                                     _format_context(craft_refs),
                                     _format_context(reference_refs))
