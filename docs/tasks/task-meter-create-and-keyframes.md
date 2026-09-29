@@ -1,6 +1,6 @@
 # Task: charge Create (Gemini) and Nano keyframes through the credit ledger
 
-**Status: DESIGN — waiting on Mike's answers (section 6). Nothing is built.**
+**Status: DECIDED (Mike, 2026-09-29 — section 0). Not built yet.**
 Written 2026-09-28. Follows `task-fal-only.md` ("Still Mike's call": metering
 Create and Nano keyframes) and phase 4 of `task-stripe-billing.md`.
 
@@ -9,6 +9,39 @@ things a new account does FIRST — Create a scene, pick it (which draws its
 keyframes) — run on the operator's `GEMINI_API_KEY` with nothing in front of
 them except `NANO_DAILY_CAP`. Open sign-up must not go live until a stranger's
 Create costs the stranger, not Mike.
+
+---
+
+## 0. Decisions (Mike, 2026-09-29) — these override the proposals below
+
+| # | question | decision |
+|---|---|---|
+| 1 | flat or metered | **Flat per action.** |
+| 2 | what a Create costs | **0 credits per Create — included in the subscription, and its cost is priced INTO the plan, not absorbed.** See "Create is in the plan" below. |
+| 3 | creative guide, Direct, Polish | **Free** (per-account daily Gemini budget is their wall — phase 4 of the Stripe task). |
+| 4 | scout / research / nightly | MCP `research` / `generate` from a non-exempt account **hold like a Create**; the nightly walk stays operator-only and uncharged. |
+| 5 | balance runs out | **Refuse**, with "top up credits" and the link to buy. Never a partial keyframe strip. |
+| 6 | `NANO_DAILY_CAP` | **Removed for everyone** (exempt accounts included). The credit balance is the limit for paying and trial accounts. |
+| 7 | element reference sheets | **Do what InVideo does:** a character/element sheet is an ordinary image generation, charged image credits like any other image — no free sheet, no separate fee. Priced at the Pro still (the sheet is drawn on Nano Banana Pro), shown on the "draw a reference sheet" toggle before the element is saved. |
+| 8 | keyframes | **Charged, behind an APPROVE step.** A pick no longer draws its stills automatically: the card shows `Draw keyframes · N stills · X cr` and nothing is spent until that is pressed — the same shape as the Queue's render approve. Same for the Director's Nano node and `/api/generate/run`'s image branch. |
+| 9 | new sign-ups | **One-time trial grant of 100 credits** (InVideo's shape: no card, try it, then subscribe or buy credits). After it is spent: refuse with "subscribe or top up". |
+| 10 | Higgsfield | **Remove it entirely**, the Soul still path too. `refgen` and `scene_chain`'s visual targets move to Nano (charged like any keyframe). |
+
+**Create is in the plan (decision 2).** No per-Create debit; the cost sits inside the
+subscription price. Checked against today's plans (`pricing.PLANS`, credits sold at
+2.4x provider cost): a Starter plan ($15, 1,500 credits) spent entirely on renders costs
+$6.25 at the provider, leaving $8.75 — which covers ~580 Creates a month at ~$0.015 each
+before the plan loses money. Creator and Studio scale the same way. So no price change
+is needed now; the number to watch is Creates per account per month against that
+headroom (`llm_calls`, stage `concepts` + `timeline`, grouped by account).
+**Who may Create:** an account with an active plan, or with any credit balance (the trial
+grant counts). An account with neither is refused with "subscribe or top up" — Create
+is free per click, not free forever to an account that has never paid or trialled.
+
+**What this changes from the proposal below:** no Create hold (section 3's Create
+price is dropped); the pick's automatic keyframe draw becomes an approve step (changes
+`scene_chain.draw_on_pick` and MCP `pick`, which today spend on pick); the Nano cap
+goes rather than being raised; Higgsfield goes.
 
 ---
 
@@ -140,7 +173,7 @@ constants the hold uses (no JS price twin — the rule since pricing step 4).
 
 ---
 
-## 6. Questions for Mike
+## 6. Questions for Mike (ANSWERED 2026-09-29 — see section 0)
 
 1. **Flat or settle-to-actual?** Recommendation: flat per action (Create = one
    price, keyframe = per image). A Create really costs ~4 credits, so both
@@ -185,14 +218,26 @@ constants the hold uses (no JS price twin — the rule since pricing step 4).
 
 ---
 
-## 7. Build order once answered
+## 7. Build order (revised for section 0)
 
-1. `spend`: price `reference_map` / `reference_check`; `bind(charge_ref=)`.
-2. `pricing`: `ACTION_PRICES` (create, per-image by model, sheet) +
-   `GET /api/prices/actions`; exempt accounts read "not charged".
-3. `scene_chain.run` (Create) and `draw_on_pick` / `_keyframe_timeline`
-   take a `Charge`; the three Nano routes and `element_sheet` likewise.
-4. `ledger.reap` learns the non-render providers.
-5. The studio surfaces in section 4.
-6. One real Create and one real pick on a non-exempt test account, read back
-   from `credit_entries` (hold → settle) before sign-up opens.
+1. **Trial grant + Create gate.** `ledger.grant(kind="trial", 100)` once per account at
+   first sign-in (idempotent on a source ref); Create refuses an account with no plan
+   and no balance, message "subscribe or top up". Exempt accounts untouched.
+2. **Keyframes behind approve.** `pricing` gains the per-image price (Flash 10 / Pro 33,
+   off `nano_banana`'s price table) and `GET /api/prices/actions`; `draw_on_pick` stops
+   auto-drawing and becomes `POST /api/concepts/{id}/keyframes` (approve), holding the
+   whole strip through `Charge` and settling per still drawn; the MCP `pick` stops
+   spending. The Director's Nano node and `/api/generate/run`'s image branch take the
+   same hold. Refusal = "top up credits".
+3. **Element sheets charged** at the Pro price, shown on the toggle.
+4. **Drop `NANO_DAILY_CAP`** (and `NANO_GLOBAL_DAILY_CAP`) from `nano_banana` and
+   `generative.cap_error`'s nano entry.
+5. **Remove Higgsfield**: `src/higgsfield.py`, its IMAGE_TOOLS entry, refgen's and
+   scene_chain's Soul paths moved to Nano; `mcp-subscription` stays in
+   `SUBSCRIPTION_SOURCES` for old rows.
+6. **MCP `research` / `generate`** hold like a Create for non-exempt callers — which,
+   with Create free, means: refused for an account with no plan and no balance.
+7. `ledger.reap` learns the nano provider.
+8. The studio surfaces (section 4), minus the Create price.
+9. One real keyframe approve and one real trial sign-up on a non-exempt test account,
+   read back from `credit_entries` before sign-up opens.
