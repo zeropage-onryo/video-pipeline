@@ -64,6 +64,11 @@ Change a plan, the markup, a band or a rate card → re-export → commit, or
 - **A still** (a Nano Banana keyframe, a Director Nano node, an element's
   reference sheet): its provider price x 2.4, floor 10 — 10 cr on Flash, 33 on
   Pro (`pricing.still_credits`), held in `nano_banana.generate_from_prompt`.
+- **A generated reference** (`refgen`, the MCP `imagine_reference` tool,
+  2026-09-29): the still that drew it — 10 cr on Nano Flash, 33 on Pro (Michael's
+  face), 65 via Midjourney — held at the dearest provider that can actually run,
+  settled at the one that did. The scout's own crawl passes no account, so it is
+  nobody's bill.
 - **A Create** (writing a scene): **0 credits**. Mike, 2026-09-29: it is
   included in the subscription, its Gemini cost (~$0.04) priced into the plans
   rather than debited per click. A Starter plan spent entirely on renders leaves

@@ -1986,7 +1986,8 @@ the Queue refuses you for having no credit. Both `zeropage` and `antihero` are O
 2026-09-18. Unset `STRIPE_*` = the plan
 buttons say so and nothing else changes.
 **Beyond renders (2026-09-28/29, Mike's calls; docs/BILLING.md):** a still costs credits
-(10 Flash / 33 Pro, held in `nano_banana.generate_from_prompt`); a **Create costs 0** --
+(10 Flash / 33 Pro, held in `nano_banana.generate_from_prompt`; a `refgen` reference is
+charged the still that drew it, since 2026-09-29); a **Create costs 0** --
 included in the subscription, priced into the plans -- but `charge.create_refusal` refuses
 it (402 `subscribe_or_top_up`) for an account with no plan and no balance, and the MCP
 `research` / `generate` tools ask the same predicate; a new open sign-up gets a one-time

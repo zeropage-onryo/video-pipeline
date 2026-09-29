@@ -183,3 +183,72 @@ def test_a_still_of_michael_goes_to_nano_with_his_photos(monkeypatch, tmp_path):
     seen.clear()
     result = refgen.render(prompt, identity=True)
     assert result["tried"][0][0] == "nano" and "likeness photos" in result["tried"][0][1]
+
+
+# ---------- the caller pays (2026-09-29) ----------
+
+@pytest.fixture
+def payer(tmp_db, monkeypatch):
+    from src import accounts, ledger
+    accounts.init(tmp_db)
+    ledger.init(tmp_db)
+    account_id = accounts.upsert_account("pilot", "Pilot", dsn=tmp_db)
+    monkeypatch.delenv("MIDJOURNEY_SPEND_OK", raising=False)   # Nano is the reachable one
+    return account_id
+
+
+def _entries(account_id, dsn):
+    from src import ledger
+    return [(e["kind"], e["delta"]) for e in ledger.entries(account_id, dsn)]
+
+
+def test_a_reference_is_charged_the_still_that_drew_it(tmp_db, a_spark, payer, monkeypatch):
+    from src import ledger, nano_banana, pricing
+    stub_renderers(monkeypatch, midjourney=RuntimeError("not approved"), nano=real_jpeg())
+    ledger.grant(payer, 100, "purchase", dsn=tmp_db)
+    out = refgen.render_for_finding(a_spark, "hook", dsn=tmp_db, account_id=payer)
+    each = pricing.still_credits(nano_banana.MODEL)
+    assert out["ok"] and out["provider"] == "nano"
+    assert out["credits"] == each
+    assert ledger.available(payer, dsn=tmp_db) == 100 - each
+    assert ledger.outstanding(payer, tmp_db) == 0
+
+
+def test_an_empty_balance_is_a_note_and_nothing_renders(tmp_db, a_spark, payer, monkeypatch):
+    calls = stub_renderers(monkeypatch, nano=real_jpeg())
+    out = refgen.render_for_finding(a_spark, "hook", dsn=tmp_db, account_id=payer)
+    assert not out["ok"] and "top up" in out["note"]
+    assert calls == []                                      # no provider was called
+    assert scout.bin_for_finding(a_spark, dsn=tmp_db) == []
+
+
+def test_nothing_rendered_is_released(tmp_db, a_spark, payer, monkeypatch):
+    from src import ledger
+    stub_renderers(monkeypatch)                             # every provider raises
+    ledger.grant(payer, 100, "purchase", dsn=tmp_db)
+    out = refgen.render_for_finding(a_spark, "hook", dsn=tmp_db, account_id=payer)
+    assert not out["ok"]
+    assert ledger.available(payer, dsn=tmp_db) == 100
+    assert "release" in [k for k, _ in _entries(payer, tmp_db)]
+
+
+def test_the_crawl_and_an_exempt_account_are_not_charged(tmp_db, a_spark, payer, monkeypatch):
+    from src import accounts
+    stub_renderers(monkeypatch, nano=real_jpeg())
+    assert refgen.render_for_finding(a_spark, "hook", dsn=tmp_db)["ok"]   # no account
+    accounts.set_credit_exempt("pilot", True, dsn=tmp_db)
+    other = mcp_server.bank_spark("zeropage", "a second spark, one still each",
+                                  rationale="r", dsn=tmp_db)["id"]
+    out = refgen.render_for_finding(other, "hook two", dsn=tmp_db, account_id=payer)
+    assert out["ok"] and out["credits"] == 0
+    assert _entries(payer, tmp_db) == []
+
+
+def test_the_hold_is_sized_for_a_provider_that_can_actually_run(monkeypatch):
+    from src import midjourney, nano_banana, pricing
+    monkeypatch.delenv("REFGEN_PROVIDERS", raising=False)
+    monkeypatch.delenv("MIDJOURNEY_SPEND_OK", raising=False)
+    assert refgen.hold_usd() == pricing.still_usd(nano_banana.MODEL)
+    monkeypatch.setenv("MIDJOURNEY_SPEND_OK", "1")
+    monkeypatch.setenv("ACEDATA_API_KEY", "k")
+    assert refgen.hold_usd() == float(midjourney.COST_USD)
