@@ -549,6 +549,88 @@ async def creative_guide_act(request: Request,
     return {"ok": True, "tool": tool, "result": result}
 
 
+# --- the assistant pill's memory (2026-09-29, src/assistant_store.py) --------
+# The persona and the open project used to live in the browser (localStorage
+# and sessionStorage), so a closed tab lost the conversation and every new
+# browser asked for the persona again. The writes carry the same header
+# guard as a Guide turn: a cross-site form must not be able to rewrite them.
+
+async def _json_body(request: Request) -> Optional[dict]:
+    try:
+        body = await request.json()
+    except ValueError:
+        return None
+    return body if isinstance(body, dict) else None
+
+
+@router.get("/assistant")
+def assistant_get(account_id: int = Depends(auth.current_account_id)):
+    """The persona (None until set up) and the open project (None until the
+    first turn is saved)."""
+    from src import assistant_store
+    return {"persona": assistant_store.get_persona(account_id=account_id),
+            "project": assistant_store.open_project(account_id=account_id)}
+
+
+@router.put("/assistant/persona")
+async def assistant_persona(request: Request,
+                            account_id: int = Depends(auth.current_account_id)):
+    model_connections.mutation_header(request)
+    body = await _json_body(request)
+    if body is None:
+        return _error(400, "bad_request", "expected JSON {name, avatar, tone}")
+    from src import assistant_store
+    return {"persona": assistant_store.save_persona(
+        body.get("name"), body.get("avatar"), body.get("tone"), account_id=account_id)}
+
+
+@router.put("/assistant/project")
+async def assistant_project_save(request: Request,
+                                 account_id: int = Depends(auth.current_account_id)):
+    model_connections.mutation_header(request)
+    body = await _json_body(request)
+    if body is None or not isinstance(body.get("turns"), list):
+        return _error(400, "bad_request", "expected JSON {turns: [...], stage}")
+    from src import assistant_store
+    project = assistant_store.save_project(body["turns"], body.get("stage"),
+                                           account_id=account_id)
+    # the thread is the client's; echoing it back would double every save
+    return {"project": {k: v for k, v in project.items() if k != "turns"}}
+
+
+@router.post("/assistant/project/new")
+async def assistant_project_new(request: Request,
+                                account_id: int = Depends(auth.current_account_id)):
+    """Archive the open project -- kept, like a passed-over concept -- so
+    the next turn starts a fresh one."""
+    model_connections.mutation_header(request)
+    from src import assistant_store
+    assistant_store.new_project(account_id=account_id)
+    return {"ok": True}
+
+
+@router.post("/assistant/reference-verdicts")
+async def assistant_reference_verdicts(request: Request,
+                                       account_id: int = Depends(auth.current_account_id)):
+    """The Keep click, against the checker: one row per frame on the sheet.
+    Ids only a hunt served are recorded."""
+    model_connections.mutation_header(request)
+    body = await _json_body(request)
+    if body is None or not isinstance(body.get("frames"), list):
+        return _error(400, "bad_request", "expected JSON {frames: [...]}")
+    from src import assistant_store
+    project = assistant_store.open_project(account_id=account_id)
+    n = assistant_store.record_verdicts(body["frames"], account_id=account_id,
+                                        project_id=project["id"] if project else None)
+    return {"recorded": n, "agreement": assistant_store.agreement(account_id=account_id)}
+
+
+@router.get("/assistant/reference-agreement")
+def assistant_reference_agreement(account_id: int = Depends(auth.current_account_id)):
+    from src import assistant_store
+    return assistant_store.agreement(account_id=account_id)
+
+
 def _personal_connected(provider: str, scope) -> bool:
     """Is this person's own model account connected?
 

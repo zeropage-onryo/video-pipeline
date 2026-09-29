@@ -91,6 +91,8 @@ def test_every_owned_table_grows_an_account_id(pg):
     from src.cut import store as cut_store
     cut_store.init(pg)
     cut_moments.init(pg)
+    from src import assistant_store
+    assistant_store.init(pg)
     with db.connect(pg) as conn:
         for table in db.OWNED_TABLES:
             assert "account_id" in db.columns(conn, table), f"{table} has no owner"
@@ -997,6 +999,8 @@ def _init_everything(path):
     cut_store.init(path)
     from src.cut import moments as cut_moments
     cut_moments.init(path)
+    from src import assistant_store
+    assistant_store.init(path)
 
 
 AUTH_SCHEMA = {"users", "accounts", "account_members"}
