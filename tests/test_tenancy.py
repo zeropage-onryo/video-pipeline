@@ -38,6 +38,19 @@ from src import (
 )
 
 
+def _seed_two(email, dsn):
+    """accounts.seed makes ONE account since the 2026-09-28 fold; these
+    tests are about a person who belongs to two, so the second is made
+    here explicitly rather than by the setup command."""
+    from src import accounts as _accounts
+
+    seeded = _accounts.seed(email, dsn=dsn)
+    second = _accounts.upsert_account("antihero", "ANTIHERO", "#d64550", dsn=dsn)
+    _accounts.add_member(second, seeded["user_id"], dsn=dsn)
+    return {**seeded, "accounts": [*seeded["accounts"], second]}
+
+
+
 def _one(dsn, query, args=()):
     with db.connect(dsn) as conn:
         return conn.execute(query, args).fetchone()[0]
@@ -65,7 +78,7 @@ def unowned(pg):
 
 @pytest.fixture
 def migrated(unowned):
-    accounts.seed("mike@example.com", dsn=unowned)
+    _seed_two("mike@example.com", dsn=unowned)
     preprod.init(unowned)     # idempotence is part of the contract
     return unowned
 
@@ -112,7 +125,7 @@ def test_init_before_seed_leaves_rows_unowned_rather_than_guessing(unowned):
 
 
 def test_seeding_afterwards_claims_them(unowned):
-    accounts.seed("mike@example.com", dsn=unowned)
+    _seed_two("mike@example.com", dsn=unowned)
     assert _one(unowned, "SELECT count(*) FROM locations WHERE account_id IS NULL") == 0
 
 
@@ -196,7 +209,7 @@ def two_accounts(pg):
     preprod.init(path)
     entities.init(path)
     generative.init(path)
-    accounts.seed("mike@example.com", dsn=path)
+    _seed_two("mike@example.com", dsn=path)
     with db.connect(path) as conn:
         a = conn.execute("SELECT id FROM accounts WHERE slug='zeropage'").fetchone()["id"]
         b = conn.execute("SELECT id FROM accounts WHERE slug='antihero'").fetchone()["id"]
@@ -1050,7 +1063,7 @@ def test_existing_holds_and_canvases_are_claimed_by_the_bootstrap_account(pg):
     assert _one(pg, "SELECT count(*) FROM hold_queue WHERE account_id IS NULL") == 2
     assert _one(pg, "SELECT count(*) FROM workflows WHERE account_id IS NULL") == 1
 
-    accounts.seed("mike@example.com", dsn=pg)
+    _seed_two("mike@example.com", dsn=pg)
     owner = _one(pg, "SELECT MIN(id) FROM accounts")
     assert _one(pg, "SELECT count(*) FROM hold_queue WHERE account_id = %s", (owner,)) == 2
     assert _one(pg, "SELECT count(*) FROM workflows WHERE account_id = %s", (owner,)) == 1

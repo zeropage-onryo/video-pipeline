@@ -354,7 +354,11 @@ def load_brand(brand: str) -> str:
         if line.startswith("[") and line.rstrip().endswith("]"):
             block = block.split(line, 1)[0]
             break
-    return block.strip()
+    # the active project's brief + memory (src/project_context.py,
+    # 2026-09-28); "" outside a project, so the block reads exactly as before
+    from . import project_context
+    extra = project_context.block()
+    return block.strip() + (f"\n\n{extra}" if extra else "")
 
 
 def location_variety_note(locations: list, lock: bool = False) -> str:

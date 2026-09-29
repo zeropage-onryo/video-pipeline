@@ -317,6 +317,9 @@ OWNED_TABLES = (
     # a generated asset is one account's paid render
     "generated_assets",
     "creative_projects",
+    # studio projects (2026-09-28, src/projects.py): one client's brief and
+    # what that project has learned -- the addressed half of the memory
+    "projects",
     # the LLM meter (2026-09-04): a metered call is one account's spend
     "llm_calls",
     # the prepaid credit ledger (2026-09-08, docs/CREDIT_LEDGER_DESIGN.md).

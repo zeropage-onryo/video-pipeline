@@ -163,6 +163,10 @@ def init(dsn: Optional[str] = None) -> None:
         own_table(conn, "locations")
         own_table(conn, "shoot_concepts")
         own_table(conn, "scene_briefs")
+    # studio projects (2026-09-28): the table, and project_id on
+    # shoot_concepts -- after the block above, since it ALTERs that table
+    from . import projects
+    projects.init(dsn)
 
 
 def save_judge_score(concept_id: int, judge: dict, dsn: Optional[str] = None, *,
@@ -627,7 +631,8 @@ _CARD_SHOTS = ("(shots_json::jsonb #- '{0,written_prompt}' #- '{0,model_prompt}'
 def list_concepts(limit: int = 100, dsn: Optional[str] = None, *,
                   account_id: int, brand: Optional[str] = None,
                   lean: bool = False,
-                  shelf: Optional[str] = None) -> list[dict[str, Any]]:
+                  shelf: Optional[str] = None,
+                  project_id: Optional[int] = None) -> list[dict[str, Any]]:
     """This account's concepts, newest first -- the ones you just
     generated are the ones you're deciding about.
 
@@ -655,12 +660,15 @@ def list_concepts(limit: int = 100, dsn: Optional[str] = None, *,
     `limit`, so the board's open cards and its archived cards are the two
     halves of one list, as they were when the page split it itself. The
     board reads the open half on load and the archived half only when its
-    Archived filter is opened; ~80% of a window is archived."""
-    scoped = brand if brand in BRANDS else None
+    Archived filter is opened; ~80% of a window is archived.
+
+    `project_id` (2026-09-28, src/projects.py) narrows the window the same
+    way `brand` does, in SQL: a project's board spends the limit on its
+    own concepts."""
     columns = f"{_CARD_COLUMNS}, {_CARD_SHOTS}" if lean else "*"
+    where, args = _window_filter(brand, project_id)
     window = ("SELECT id FROM shoot_concepts WHERE account_id IS NOT DISTINCT FROM %s "
-              + ("AND brand = %s " if scoped else "")
-              + "ORDER BY id DESC LIMIT %s")
+              + where + "ORDER BY id DESC LIMIT %s")
     keep = {"open": "AND archived_at IS NULL ",
             "archived": "AND archived_at IS NOT NULL "}.get(shelf or "", "")
     with connect(dsn) as conn:
@@ -668,24 +676,37 @@ def list_concepts(limit: int = 100, dsn: Optional[str] = None, *,
             f"SELECT {columns} FROM shoot_concepts "
             f"WHERE account_id IS NOT DISTINCT FROM %s AND id IN ({window}) "
             + keep + "ORDER BY id DESC",
-            (account_id, account_id, scoped, limit) if scoped else (account_id, account_id, limit),
+            (account_id, account_id, *args, limit),
         ).fetchall()
         return _concept_rows(rows, conn, account_id)
 
 
+def _window_filter(brand: Optional[str], project_id: Optional[int]) -> tuple[str, list]:
+    """The board window's extra predicates: a known brand (an unknown one
+    is ignored, a stale cookie must not empty the board) and a project."""
+    where, args = "", []
+    if brand in BRANDS:
+        where += "AND brand = %s "
+        args.append(brand)
+    if project_id is not None:
+        where += "AND project_id = %s "
+        args.append(int(project_id))
+    return where, args
+
+
 def board_counts(limit: int = 100, dsn: Optional[str] = None, *,
-                 account_id: int, brand: Optional[str] = None) -> dict[str, int]:
+                 account_id: int, brand: Optional[str] = None,
+                 project_id: Optional[int] = None) -> dict[str, int]:
     """The board's count line, counted in Postgres (2026-09-25):
     {open, picked, archived} over list_concepts' window, SCENES ONLY
     (exactly one shot) -- the board's unit, the same tally the page used
     to make over every card it fetched. `picked` is open-and-picked, as
     the Picked filter shows it. So the page can say where every card went
     (the 2026-09-02 lesson) without fetching the archived ones to count."""
-    scoped = brand if brand in BRANDS else None
+    where, args = _window_filter(brand, project_id)
     window = ("SELECT id, picked_at, archived_at, shots_json FROM shoot_concepts "
               "WHERE account_id IS NOT DISTINCT FROM %s "
-              + ("AND brand = %s " if scoped else "")
-              + "ORDER BY id DESC LIMIT %s")
+              + where + "ORDER BY id DESC LIMIT %s")
     with connect(dsn) as conn:
         row = conn.execute(
             "SELECT count(*) FILTER (WHERE archived_at IS NULL) AS open, "
@@ -694,7 +715,7 @@ def board_counts(limit: int = 100, dsn: Optional[str] = None, *,
             "FROM (" + window + ") w "
             "WHERE jsonb_typeof(shots_json::jsonb) = 'array' "
             "AND jsonb_array_length(shots_json::jsonb) = 1",
-            (account_id, scoped, limit) if scoped else (account_id, limit),
+            (account_id, *args, limit),
         ).fetchone()
     return {k: int(row[k] or 0) for k in ("open", "picked", "archived")}
 

@@ -19,6 +19,19 @@ from app import auth as auth_mod
 from app.main import app
 from src import accounts, db
 
+
+def _seed_two(email, dsn):
+    """accounts.seed makes ONE account since the 2026-09-28 fold; these
+    tests are about a person who belongs to two, so the second is made
+    here explicitly rather than by the setup command."""
+    from src import accounts as _accounts
+
+    seeded = _accounts.seed(email, dsn=dsn)
+    second = _accounts.upsert_account("antihero", "ANTIHERO", "#d64550", dsn=dsn)
+    _accounts.add_member(second, seeded["user_id"], dsn=dsn)
+    return {**seeded, "accounts": [*seeded["accounts"], second]}
+
+
 client = TestClient(app)
 
 JWT_SECRET = "test-jwt-secret-that-is-at-least-32-bytes-long"
@@ -115,7 +128,7 @@ def login(email, password):
 def seed_mike(path, gotrue, password="mikes-password-1"):
     """Mike is seeded by email (unclaimed); Supabase knows his password."""
     gotrue.register("mike@example.com", password, uid="uid-mike-supabase")
-    return accounts.seed("mike@example.com", dsn=path)
+    return _seed_two("mike@example.com", dsn=path)
 
 
 # ---------- password doors ----------
@@ -408,7 +421,7 @@ def test_claim_existing_id_signs_in_and_keeps_the_profile(clean_slate):
 def test_claim_takes_the_seeded_unclaimed_row(clean_slate):
     """Mike seeds with email only; his first sign-in attaches the
     Supabase id to that row instead of erroring or duplicating."""
-    seeded = accounts.seed("mike@example.com", dsn=clean_slate)
+    seeded = _seed_two("mike@example.com", dsn=clean_slate)
     uid, error = accounts.claim("mike-sb", "mike@example.com", "Mike", None, dsn=clean_slate)
     assert error is None and uid == "mike-sb"
     assert accounts.get_user(seeded["user_id"], dsn=clean_slate) is None
