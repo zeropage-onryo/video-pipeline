@@ -79,6 +79,7 @@ OP_NOTES = {
     "add_marker": "a labelled marker at a frame",
     "add_transition": "turn the hard cut INTO a clip into a crossfade of N frames",
     "set_canvas": "change the frame size (even numbers), e.g. 720x1280 for 9:16",
+    "add_track": "an empty track: kind video|audio|caption; an audio track needs role voice|music|sfx",
 }
 
 

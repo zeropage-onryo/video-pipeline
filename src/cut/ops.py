@@ -11,7 +11,10 @@ The v0 set: insert, ripple_delete, trim, split, move, set_gain, duck,
 add_caption_track, add_marker, add_transition. The editor (phase B,
 2026-09-28) added what a person at a timeline reaches for that an
 assembler never needed: lift (delete and leave the gap), set_canvas,
-and the caption edits set_cue / delete_cue / set_caption_style. The rest
+and the caption edits set_cue / delete_cue / set_caption_style. The
+first live walk (T25, 2026-09-29) added add_track: a cut Assemble made
+has V1 and A1 only, so a music bed had nowhere to land but behind the
+clips' own sound. The rest
 of section 5.2's list (swap_take, set_speed, set_lane_key, apply_look,
 match_grade, reframe) arrives with the phases that need it.
 
@@ -410,6 +413,42 @@ def delete_cue(doc: dict, track_id: str, cue_id: str) -> dict:
     return _finish(doc)
 
 
+def add_track(doc: dict, kind: str, role: Optional[str] = None,
+              track_id: Optional[str] = None) -> dict:
+    """An empty track: `video`, `audio` (with a `role`) or `caption`. Its id
+    is the next free V<n> / A<n> / T<n> unless one is asked for. A cut
+    made by Assemble has no music track, and a bed laid on the sfx track
+    would sit behind the clips' own sound and could not be ducked under it
+    -- this is how the editor gives it a place of its own."""
+    doc = _copy(doc)
+    if kind not in d.TRACK_KINDS:
+        raise OpError(f"track kind must be one of {list(d.TRACK_KINDS)}")
+    if kind == "audio":
+        if role not in d.AUDIO_ROLES:
+            raise OpError(f"an audio track needs a role, one of {list(d.AUDIO_ROLES)}")
+    elif role is not None:
+        raise OpError(f"only audio tracks have a role, not {kind} tracks")
+    prefix = {"video": "V", "audio": "A", "caption": "T"}[kind]
+    if track_id is None:
+        n = 1
+        while d.track(doc, f"{prefix}{n}"):
+            n += 1
+        track_id = f"{prefix}{n}"
+    elif d.track(doc, track_id):
+        raise OpError(f"track {track_id} already exists")
+    t: dict[str, Any] = {"id": track_id, "kind": kind}
+    if kind == "audio":
+        t["role"] = role
+        t["clips"] = []
+    elif kind == "caption":
+        t["style"] = d.DEFAULT_CAPTION_STYLE
+        t["cues"] = []
+    else:
+        t["clips"] = []
+    doc["tracks"].append(t)
+    return _finish(doc)
+
+
 def set_caption_style(doc: dict, track_id: str, style: str) -> dict:
     doc = _copy(doc)
     t = _need_caption_track(doc, track_id)
@@ -435,6 +474,7 @@ OPS: dict[str, Callable[..., dict]] = {
     "add_caption_track": add_caption_track,
     "add_marker": add_marker,
     "add_transition": add_transition,
+    "add_track": add_track,
 }
 
 
@@ -499,6 +539,9 @@ def describe(op: str, args: Optional[dict[str, Any]] = None, fps: int = d.DEFAUL
             return f"marker '{str(a.get('label', ''))[:30]}' at {_secs(a.get('frame'), fps)}"
         if op == "add_transition":
             return f"crossfade into {clip_id} ({a.get('frames', '?')}f)"
+        if op == "add_track":
+            what = a.get("role") or a.get("kind", "?")
+            return f"add {what} track" + (f" {a['track_id']}" if a.get("track_id") else "")
         if op == "set_canvas":
             return f"canvas {a.get('width', '?')}x{a.get('height', '?')}"
         if op == "set_cue":

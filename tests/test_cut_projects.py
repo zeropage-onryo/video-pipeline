@@ -312,6 +312,8 @@ def test_every_op_is_reachable_through_the_route(api):
     step("ripple_delete", clip_id=c2)
     doc = step("set_canvas", width=1080, height=1080)
     assert doc["size"] == [1080, 1080]
+    doc = step("add_track", kind="audio", role="voice")
+    assert d.track(doc, "A3")["role"] == "voice"
     assert set(used) == set(ops.OPS), set(ops.OPS) - set(used)
     got = _open(client, pid)
     assert got["project"]["aspect"] == "1:1"

@@ -125,8 +125,22 @@ export async function placeMedia(
   at?: number,
   range?: { src_in: number; src_out: number },
 ): Promise<boolean> {
-  const d = doc();
+  let d = doc();
   if (!d) return false;
+  // A sound file with nowhere of its own to go gets a music track first
+  // (a cut Assemble made has V1 and A1 only): a bed laid on the sfx track
+  // would sit behind the clips' own sound and could not duck under it.
+  // Two versions, each undoable -- the track, then the clip.
+  if (!trackId && item.kind === "audio" && !d.tracks.some((t) => t.kind === "audio" && t.role === "music")) {
+    if (!(await state().op("add_track", { kind: "audio", role: "music" }, { quiet: true }))) return false;
+    d = doc();
+    if (!d) return false;
+    // a new bed starts under the picture, not after the last sound, and
+    // stops where the picture stops rather than stretching the cut
+    at = at ?? 0;
+    const pictureEnd = Math.max(0, ...d.tracks.filter((t) => t.kind === "video").map(trackEnd));
+    if (!range && pictureEnd > at) range = { src_in: 0, src_out: pictureEnd - at };
+  }
   const track = trackId ? d.tracks.find((t) => t.id === trackId) : defaultTrack(d, item);
   if (!track) {
     state().toast(item.kind === "audio" ? "This cut has no audio track" : "This cut has no video track", "err");
