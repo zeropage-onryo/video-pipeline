@@ -516,8 +516,8 @@ def test_the_manual_lane_is_gated_and_the_billed_adapter_is_not(tmp_db):
     spends the operator's key under its own spend gate, cap and credit
     hold -- it was not touched and must not be."""
     assert set(rq.GATED_PROVIDERS) == set(rq.PROVIDERS) == {"manual"}
-    from src import fal, higgsfield
-    for adapter in (higgsfield, fal):
+    from src import fal
+    for adapter in (fal,):
         assert not hasattr(adapter, "manual_lane_allowed")
         assert "manual_lane" not in dir(adapter)
 
@@ -565,7 +565,7 @@ def test_provenance_reads_rows_written_before_the_field_existed(tmp_db, monkeypa
     shot_row = generative.add_shot(Shot(subject="x", action="y"),
                                    dsn=tmp_db, account_id=account_id)
     generative.record_generation(
-        shot_row, "higgsfield", "a close shot",
+        shot_row, "manual", "a close shot",
         params={"model": "seedance1_5", "source": "mcp-subscription",
                 "credits": 4.8, "concept_id": cid, "shot_n": 1},
         cost_usd=None, dsn=tmp_db, account_id=account_id)

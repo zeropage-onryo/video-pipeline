@@ -238,8 +238,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # any real clip and indistinguishable from one in a listing or in the
 # Queue. Twenty had accumulated there before anyone noticed.
 OUTPUT_ROOTS = (
-    ("src.higgsfield", "RENDERS_ROOT", "data/renders"),
-    ("src.higgsfield", "RENDER_DIR", "data/renders/higgsfield"),
     ("src.fal", "RENDERS_ROOT", "data/renders"),
     ("src.fal", "RENDER_DIR", "data/renders/fal"),
     ("src.nano_banana", "RENDER_DIR", "data/renders/nano"),

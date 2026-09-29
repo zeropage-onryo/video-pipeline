@@ -134,8 +134,8 @@ venv/bin/python -m src.mcp_server --engine   # stdio; Claude Desktop launches th
 # ONE lane since 2026-09-28: the generic `manual` import (a clip rendered
 # anywhere, filed free -- it was the Runway Unlimited lane until 2026-09-26).
 # The Higgsfield-MCP lane was REMOVED that day (Mike's call); its old
-# `mcp-subscription` rows still read as FREE, and src/higgsfield.py's Soul
-# STILL path is untouched. Mike expects to retire this import too
+# `mcp-subscription` rows still read as FREE (src/higgsfield.py itself was
+# removed 2026-09-29). Mike expects to retire this import too
 # (docs/BACKLOG.md #21). `list`
 # says what is waiting, `import` files the mp4 into data/renders/manual/
 # and writes a FREE row (cost_usd NULL, params.source = the lane marker, so
@@ -262,8 +262,10 @@ docs/tasks/task-fal-only.md).** Every video door -- Queue approve, approve-all,
 the Director Generate node, the board's per-shot render, the nightly graph,
 autopilot -- renders through `src/fal.py` on the operator's `FAL_KEY` and holds
 credits (`src/charge.py`). `src/runway.py`, `src/veo.py` and
-`src/account_keys.py` are deleted; `src/higgsfield.py` keeps only its Soul
-STILLS path; Veo lives on as the fal model `veo3.1`. `providers.VIDEO_PROVIDERS`
+`src/account_keys.py` are deleted; `src/higgsfield.py` followed on 2026-09-29
+(Mike's call -- the Soul stills too: refgen falls back Midjourney -> Nano, and the
+unreachable `scene_chain.visual_target` went with it); Veo lives on as the fal
+model `veo3.1`. `providers.VIDEO_PROVIDERS`
 is `{"fal": fal}`. A shot still carrying `RUNWAY`/`HIGGSFIELD` as its tool is
 read as the fal default at render time (`providers.platform_default`,
 `RETIRED_PLATFORMS`) and never rewritten. `ledger.is_billable` has one

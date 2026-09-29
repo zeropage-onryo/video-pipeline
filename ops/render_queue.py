@@ -13,8 +13,7 @@ The Higgsfield-MCP lane (`--provider higgsfield`: a Claude session
 rendering on the operator's Higgsfield app subscription and filing the
 clip here) was removed on 2026-09-28, Mike's call. Its rows keep their
 `mcp-subscription` source marker, which src/manual_lane.py still lists so
-they read as FREE. src/higgsfield.py's Soul STILL path is untouched --
-refgen and scene_chain's visual targets use it.
+they read as FREE. (src/higgsfield.py itself was removed 2026-09-29.)
 
 THE LANE IS OPERATOR-ONLY. It spends nothing, but it files a render with
 no ledger hold, so it sits behind the operator gate. `src/manual_lane.py`

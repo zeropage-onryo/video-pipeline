@@ -445,8 +445,8 @@ def test_no_ceiling_is_the_default_and_means_no_ceiling(two_accounts):
     """2026-09-14, Mike's call: every *_GLOBAL_DAILY_CAP defaults to 0, and
     0 means the wall is OFF -- not a wall at zero that refuses everything,
     which is the reading that would brick every render on the install."""
-    from src import fal, higgsfield, midjourney, nano_banana
-    for mod in (fal, higgsfield, midjourney):
+    from src import fal, midjourney, nano_banana
+    for mod in (fal, midjourney):
         assert mod.GLOBAL_DAILY_CAP == 0, mod.__name__
     # Nano has no cap of either kind since 2026-09-29: every still is
     # charged credits, so the balance is the limit
@@ -1287,7 +1287,7 @@ def test_the_global_ceiling_is_off_by_default_and_says_how_to_restore_it():
         "these turn the installation-wide ceiling back on for every "
         f"deployment that copies the example: {sorted(live)}")
 
-    for module in ("higgsfield", "midjourney", "fal"):     # nano: no cap at all
+    for module in ("midjourney", "fal"):     # nano: no cap at all; higgsfield: gone
         source = (root / "src" / f"{module}.py").read_text()
         shipped = re.search(
             r'environ\.get\("[A-Z_]+_GLOBAL_DAILY_CAP", "(\d+)"\)', source)
