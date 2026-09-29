@@ -17,7 +17,11 @@ an agent retrying once should fix them all in one go). `validate` raises
 (handle -> {"frames", "video", "audio"}, from sources.probe) the doc is
 also checked against what the files really are -- unknown handles,
 src_out past the end of the media, a picture clip on a file with no
-picture, sound from a file with no sound.
+picture, sound from a file with no sound. A handle mapped to None is
+KNOWN BUT UNMEASURED (a clip already on the timeline whose file could not
+be probed this time): it is not called unknown, and nothing is checked
+against it -- refusing every edit to a cut because one of its files is
+briefly unreachable would make the whole cut uneditable.
 
 What v0 deliberately refuses rather than half-supports: `speed` other
 than 1 (set_speed is not built), and lanes (keyframes are "later" in
@@ -97,7 +101,7 @@ def _check_clip(t: dict, c: dict, media: Optional[dict], out: list[str]) -> bool
     h = c.get("media")
     if d.parse_handle(h) is None:
         out.append(f"{where}: media must be a gen:<id> or asset:<id> handle, got {h!r}")
-    elif media is not None:
+    elif media is not None and not (h in media and media[h] is None):
         info = media.get(h)
         if info is None:
             out.append(f"{where}: unknown media handle {h}")
@@ -142,6 +146,10 @@ def _check_overlaps(t: dict, clips: list[dict], out: list[str]) -> None:
 
 
 def _check_cues(t: dict, out: list[str]) -> None:
+    style = t.get("style", d.DEFAULT_CAPTION_STYLE)
+    if style not in d.CAPTION_STYLES:
+        out.append(f"caption track {t.get('id')}: style must be one of "
+                   f"{list(d.CAPTION_STYLES)}, got {style!r}")
     cues = t.get("cues")
     if not isinstance(cues, list):
         out.append(f"caption track {t.get('id')}: cues must be a list")

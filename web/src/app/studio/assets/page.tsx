@@ -17,7 +17,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { AnimatePresence, motion } from "motion/react";
-import { Download, Film, Folder, FolderInput, Image as ImageIcon, Search, Sparkles, Star, Trash2, UserRound, X } from "lucide-react";
+import { Download, Film, Folder, FolderInput, Image as ImageIcon, Scissors, Search, Sparkles, Star, Trash2, UserRound, X } from "lucide-react";
+import { OpenInEditor } from "@/components/cut/open-in-editor";
 import { API_URL } from "@/lib/api";
 import {
   deleteGenerated,
@@ -379,6 +380,11 @@ export default function AssetsPage() {
               </dl>
             </div>
             <div className="adfoot" style={{ flexWrap: "wrap" }}>
+              {open.generated_id ? (
+                <OpenInEditor handles={[`gen:${open.generated_id}`]} className="btn pri" title="Start a cut with this render">
+                  <Scissors strokeWidth={1.6} /> Edit
+                </OpenInEditor>
+              ) : null}
               {open.kind === "image" ? (
                 <>
                   <Link href={`/studio?attach=${encodeURIComponent(open.asset_id)}`} className="btn pri">

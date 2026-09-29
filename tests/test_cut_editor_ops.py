@@ -1,0 +1,276 @@
+"""The editor's ops, the validator rules they lean on, the op summaries,
+and the renderer's half of them (phase B of docs/CUT_EDITOR.md).
+
+Pure: no database, no ffmpeg -- the ffmpeg-backed parts are in
+test_cut_preview.py and test_cut_projects.py.
+"""
+import copy
+from pathlib import Path
+
+import pytest
+
+from src.cut import doc as d
+from src.cut import ops, render
+from src.cut import validate as v
+
+MEDIA = {
+    "gen:1": {"frames": 150, "video": True, "audio": True},
+    "gen:2": {"frames": 120, "video": True, "audio": True},
+    "gen:3": {"frames": 90, "video": True, "audio": False},
+    "asset:7": {"frames": 900, "video": False, "audio": True},
+}
+
+
+def cut():
+    """V1: three shots, the second crossfading in from the first; A1 their
+    sound, linked; T1 a caption track with two cues."""
+    return {
+        "fps": 30, "size": [720, 1280], "duration": 352, "markers": [],
+        "tracks": [
+            {"id": "V1", "kind": "video", "clips": [
+                {"id": "c1", "media": "gen:1", "src_in": 0, "src_out": 150, "at": 0, "speed": 1},
+                {"id": "c2", "media": "gen:2", "src_in": 0, "src_out": 120, "at": 142, "speed": 1,
+                 "transition_in": {"kind": "xfade", "frames": 8}},
+                {"id": "c3", "media": "gen:3", "src_in": 0, "src_out": 90, "at": 262, "speed": 1},
+            ]},
+            {"id": "A1", "kind": "audio", "role": "sfx", "clips": [
+                {"id": "c1a", "media": "gen:1", "src_in": 0, "src_out": 150, "at": 0,
+                 "speed": 1, "link": "c1", "gain_db": 0},
+                {"id": "c2a", "media": "gen:2", "src_in": 0, "src_out": 120, "at": 142,
+                 "speed": 1, "link": "c2", "gain_db": 0,
+                 "transition_in": {"kind": "xfade", "frames": 8}},
+            ]},
+            {"id": "T1", "kind": "caption", "style": "preset:bold_center", "cues": [
+                {"id": "q1", "start": 0, "end": 45, "text": "one"},
+                {"id": "q2", "start": 60, "end": 90, "text": "two"}]},
+        ],
+    }
+
+
+def test_the_fixture_is_valid():
+    assert v.problems(cut(), MEDIA) == []
+
+
+# --------------------------------------------------------------------------
+# lift
+# --------------------------------------------------------------------------
+
+def test_lift_leaves_the_gap_and_moves_nothing():
+    doc = ops.lift(cut(), "c3")
+    assert [c["id"] for c in d.track(doc, "V1")["clips"]] == ["c1", "c2"]
+    assert doc["duration"] == 262 and v.problems(doc, MEDIA) == []
+
+
+def test_lift_takes_the_partners_and_drops_the_next_clips_transition():
+    doc = ops.lift(cut(), "c1")
+    assert d.find_clip(doc, "c1a") is None
+    c2 = d.find_clip(doc, "c2")[1]
+    assert c2["at"] == 142 and "transition_in" not in c2
+    assert "transition_in" not in d.find_clip(doc, "c2a")[1]
+    assert v.problems(doc, MEDIA) == []
+
+
+def test_lifting_from_the_sound_lifts_the_picture_too():
+    doc = ops.lift(cut(), "c2a")
+    assert d.find_clip(doc, "c2") is None and d.find_clip(doc, "c3")[1]["at"] == 262
+
+
+def test_lift_refuses_a_clip_that_is_not_there():
+    with pytest.raises(ops.OpError):
+        ops.lift(cut(), "nope")
+
+
+# --------------------------------------------------------------------------
+# set_canvas
+# --------------------------------------------------------------------------
+
+def test_set_canvas_changes_the_frame_and_nothing_else():
+    doc = ops.set_canvas(cut(), 1280, 720)
+    assert doc["size"] == [1280, 720]
+    assert doc["tracks"] == cut()["tracks"]
+
+
+def test_set_canvas_odd_or_silly_sizes_are_the_validators_to_refuse():
+    with pytest.raises(ops.OpError) as e:
+        ops.apply(cut(), "set_canvas", {"width": 721, "height": 1280})
+    assert any("even" in p for p in e.value.problems)
+    with pytest.raises(ops.OpError):
+        ops.set_canvas(cut(), "720", 1280)
+
+
+# --------------------------------------------------------------------------
+# captions
+# --------------------------------------------------------------------------
+
+def test_set_cue_adds_one_with_a_fresh_id():
+    doc = ops.set_cue(cut(), "T1", 100, 130, "  three ")
+    cues = d.track(doc, "T1")["cues"]
+    assert [q["id"] for q in cues] == ["q1", "q2", "q3"] and cues[-1]["text"] == "three"
+
+
+def test_set_cue_with_an_id_edits_that_cue():
+    doc = ops.set_cue(cut(), "T1", 10, 40, "ONE", cue_id="q1")
+    assert d.track(doc, "T1")["cues"][0] == {"id": "q1", "start": 10, "end": 40, "text": "ONE"}
+
+
+def test_set_cue_refuses_a_missing_cue_a_missing_track_and_a_clip_track():
+    with pytest.raises(ops.OpError):
+        ops.set_cue(cut(), "T1", 0, 10, "x", cue_id="q9")
+    with pytest.raises(ops.OpError):
+        ops.set_cue(cut(), "T9", 0, 10, "x")
+    with pytest.raises(ops.OpError):
+        ops.set_cue(cut(), "V1", 0, 10, "x")
+
+
+def test_an_overlapping_or_empty_cue_is_the_validators_to_refuse():
+    with pytest.raises(ops.OpError) as e:
+        ops.apply(cut(), "set_cue", {"track_id": "T1", "start": 30, "end": 70, "text": "x"})
+    assert any("overlap" in p for p in e.value.problems)
+    with pytest.raises(ops.OpError) as e:
+        ops.apply(cut(), "set_cue", {"track_id": "T1", "start": 100, "end": 120, "text": " "})
+    assert any("empty" in p for p in e.value.problems)
+
+
+def test_delete_cue():
+    doc = ops.delete_cue(cut(), "T1", "q1")
+    assert [q["id"] for q in d.track(doc, "T1")["cues"]] == ["q2"]
+    with pytest.raises(ops.OpError):
+        ops.delete_cue(cut(), "T1", "q1x")
+
+
+def test_set_caption_style_only_takes_a_style_the_renderer_draws():
+    for style in d.CAPTION_STYLES:
+        assert d.track(ops.set_caption_style(cut(), "T1", style), "T1")["style"] == style
+    with pytest.raises(ops.OpError):
+        ops.set_caption_style(cut(), "T1", "preset:comic_sans")
+
+
+def test_the_validator_refuses_an_unknown_style_from_any_writer():
+    doc = cut()
+    d.track(doc, "T1")["style"] = "preset:nope"
+    assert any("style" in p for p in v.problems(doc, MEDIA))
+
+
+def test_an_empty_caption_track_is_valid_and_cues_can_then_be_typed_onto_it():
+    doc = ops.apply(cut(), "add_caption_track", {"cues": [], "style": "preset:lower_third"})
+    t2 = d.track(doc, "T2")
+    assert t2["cues"] == [] and t2["style"] == "preset:lower_third"
+    doc = ops.apply(doc, "set_cue", {"track_id": "T2", "start": 0, "end": 30, "text": "hi"},
+                    media=MEDIA)
+    assert d.track(doc, "T2")["cues"][0]["id"] == "q3"
+
+
+# --------------------------------------------------------------------------
+# the validator: unmeasured media
+# --------------------------------------------------------------------------
+
+def test_a_handle_mapped_to_none_is_known_but_unmeasured():
+    media = {**MEDIA, "gen:2": None}
+    assert v.problems(cut(), media) == []
+    del media["gen:2"]
+    assert any("unknown media handle gen:2" in p for p in v.problems(cut(), media))
+
+
+# --------------------------------------------------------------------------
+# describe: every op has words
+# --------------------------------------------------------------------------
+
+ARGS = {
+    "insert": {"track_id": "V1", "clip": {"media": "gen:3", "src_in": 0, "src_out": 30},
+               "at": 262},
+    "ripple_delete": {"clip_id": "c2"},
+    "lift": {"clip_id": "c3"},
+    "trim": {"clip_id": "c1", "head": 0, "tail": -10},
+    "split": {"clip_id": "c3", "frame": 126 + 150},
+    "move": {"clip_id": "c3", "at": 300},
+    "set_gain": {"clip_id": "c1a", "db": -6},
+    "duck": {"track_id": "A1", "under": "voice"},
+    "add_caption_track": {"cues": []},
+    "add_marker": {"frame": 150, "label": "Shot 2"},
+    "add_transition": {"clip_id": "c3", "frames": 8},
+    "set_canvas": {"width": 1280, "height": 720},
+    "set_cue": {"track_id": "T1", "start": 100, "end": 130, "text": "three"},
+    "delete_cue": {"track_id": "T1", "cue_id": "q2"},
+    "set_caption_style": {"track_id": "T1", "style": "preset:minimal_top"},
+}
+
+
+def test_every_op_has_a_summary_and_it_is_not_just_its_name():
+    assert set(ARGS) == set(ops.OPS)
+    for name, args in ARGS.items():
+        text = ops.describe(name, args, 30)
+        assert text and text != name, name
+
+
+def test_the_summary_speaks_seconds():
+    assert ops.describe("split", {"clip_id": "c3", "frame": 126}, 30) == "split c3 at 4.2s"
+    assert ops.describe("trim", {"clip_id": "c1", "head": 10}, 30) == "trim c1 head +10f"
+
+
+def test_describe_never_raises_on_garbage():
+    assert ops.describe("split", {"frame": "soon"}, 30)
+    assert ops.describe("made_up", None, 30) == "made_up"
+
+
+@pytest.mark.parametrize("name", sorted(ARGS))
+def test_no_new_or_old_op_touches_the_doc_it_was_given(name):
+    before = cut()
+    frozen = copy.deepcopy(before)
+    ops.OPS[name](before, **ARGS[name])
+    assert before == frozen
+
+
+# --------------------------------------------------------------------------
+# the doc helpers
+# --------------------------------------------------------------------------
+
+def test_aspect_names_the_offered_canvases_and_reduces_the_rest():
+    assert d.aspect_of([720, 1280]) == "9:16" and d.aspect_of([1080, 1920]) == "9:16"
+    assert d.aspect_of([1280, 720]) == "16:9" and d.aspect_of([1080, 1080]) == "1:1"
+    assert d.aspect_of([1080, 1350]) == "4:5"
+
+
+def test_the_starter_doc_is_valid_and_has_somewhere_to_put_things():
+    doc = d.starter_doc(30, d.ASPECT_SIZES["16:9"])
+    assert v.problems(doc) == [] and doc["size"] == [1280, 720]
+    assert [(t["id"], t.get("role")) for t in doc["tracks"]] == [
+        ("V1", None), ("A1", "sfx"), ("A2", "music")]
+    assert "duck_under" not in d.track(doc, "A2")
+
+
+# --------------------------------------------------------------------------
+# render: the caption looks and stills
+# --------------------------------------------------------------------------
+
+def test_every_caption_style_is_one_the_renderer_draws():
+    assert set(render.CAPTION_PRESETS) == set(d.CAPTION_STYLES)
+
+
+def test_the_three_looks_render_as_three_different_ass_styles():
+    doc = cut()
+    doc = ops.add_caption_track(doc, [{"start": 100, "end": 130, "text": "a name"}],
+                                style="preset:lower_third")
+    doc = ops.add_caption_track(doc, [{"start": 140, "end": 160, "text": "quiet"}],
+                                style="preset:minimal_top")
+    styles = [ln for ln in render.ass_document(doc).splitlines() if ln.startswith("Style:")]
+    assert len(styles) == 3
+    fields = [s.split(",") for s in styles]
+    # Format: ... BorderStyle(16), Outline, Shadow, Alignment(19) ...
+    assert [f[18] for f in fields] == ["2", "1", "8"]          # centre, lower-left, top
+    assert fields[1][15] == "3" and fields[0][15] == "1"       # lower third is boxed
+    assert fields[2][7] == "0"                                 # minimal_top is not bold
+
+
+def test_a_still_is_looped_and_bounded():
+    doc = {"fps": 30, "size": [720, 1280], "duration": 90, "markers": [],
+           "tracks": [{"id": "V1", "kind": "video", "clips": [
+               {"id": "c1", "media": "asset:4", "src_in": 0, "src_out": 60, "at": 0, "speed": 1},
+               {"id": "c2", "media": "gen:1", "src_in": 0, "src_out": 30, "at": 60, "speed": 1}]}]}
+    paths = {"asset:4": Path("/x/still.png"), "gen:1": Path("/x/clip.mp4")}
+    argv = render.compile_args(doc, paths, Path("/x/out.mp4"),
+                               stills=render.stills_in(None, paths))
+    i = argv.index("/x/still.png")
+    assert argv[i - 7:i] == ["-loop", "1", "-framerate", "30", "-t", "2", "-i"]
+    j = argv.index("/x/clip.mp4")
+    assert argv[j - 1] == "-i" and "-loop" not in argv[j - 3:j]
+    assert render.stills_in({"gen:9": {"still": True}}, {}) == {"gen:9"}

@@ -8,9 +8,16 @@ lets an agent's proposed edit be computed, shown as a diff card and thrown
 away without anything having happened.
 
 The v0 set: insert, ripple_delete, trim, split, move, set_gain, duck,
-add_caption_track, add_marker, add_transition. The rest of section 5.2's
-list (lift, swap_take, set_speed, set_lane_key, apply_look, match_grade,
-reframe) arrives with the phases that need it.
+add_caption_track, add_marker, add_transition. The editor (phase B,
+2026-09-28) added what a person at a timeline reaches for that an
+assembler never needed: lift (delete and leave the gap), set_canvas,
+and the caption edits set_cue / delete_cue / set_caption_style. The rest
+of section 5.2's list (swap_take, set_speed, set_lane_key, apply_look,
+match_grade, reframe) arrives with the phases that need it.
+
+`describe(op, args, fps)` is the one-line summary a version is stored
+under ("split c3 at 4.2s") -- written here, beside the ops, so a new op
+cannot land without a way to say what it did.
 
 Two rules every op keeps:
 
@@ -279,10 +286,15 @@ def duck(doc: dict, track_id: str, under: Optional[str]) -> dict:
 
 def add_caption_track(doc: dict, cues: list, *, track_id: Optional[str] = None,
                       style: str = d.DEFAULT_CAPTION_STYLE) -> dict:
-    """A new caption track from `[{start, end, text}]` (frames)."""
+    """A new caption track from `[{start, end, text}]` (frames). An EMPTY
+    list is allowed when it is passed explicitly -- the editor adds a T
+    track first and types cues onto it with set_cue -- but `cues` itself
+    is still required, so an agent cannot add a track by forgetting it."""
     doc = _copy(doc)
-    if not isinstance(cues, list) or not cues:
-        raise OpError("a caption track needs at least one cue")
+    if not isinstance(cues, list):
+        raise OpError("cues must be a list of {start, end, text} (it may be empty)")
+    if style not in d.CAPTION_STYLES:
+        raise OpError(f"caption style must be one of {list(d.CAPTION_STYLES)}")
     if track_id is None:
         n = 1
         while d.track(doc, f"T{n}"):
@@ -335,9 +347,86 @@ def add_transition(doc: dict, clip_id: str, frames: int, kind: str = "xfade") ->
     return _finish(doc)
 
 
+def lift(doc: dict, clip_id: str) -> dict:
+    """Remove a clip (and its partners) and LEAVE THE GAP -- the other
+    half of ripple_delete, the one an editor reaches for when timing
+    after the clip is already right. Nothing moves. The clip after it
+    loses its transition_in: what it faded from is gone, and a fade out
+    of black was nobody's decision."""
+    doc = _copy(doc)
+    _need_clip(doc, clip_id)
+    for t, gone in d.partners(doc, clip_id):
+        followers = _after(t, gone)
+        t["clips"] = [c for c in t["clips"] if c is not gone]
+        if followers and followers[0].get("transition_in"):
+            followers[0].pop("transition_in", None)
+    return _finish(doc)
+
+
+def set_canvas(doc: dict, width: int, height: int) -> dict:
+    """Change the frame size. Every clip is fitted into the new frame at
+    render (scale to fit, pad black), so nothing on the timeline moves;
+    the validator holds the size to even numbers."""
+    doc = _copy(doc)
+    doc["size"] = [_need_int("width", width), _need_int("height", height)]
+    return _finish(doc)
+
+
+def _need_caption_track(doc: dict, track_id: str) -> dict:
+    t = _need_track(doc, track_id, "caption")
+    t.setdefault("cues", [])
+    return t
+
+
+def set_cue(doc: dict, track_id: str, start: int, end: int, text: str,
+            cue_id: Optional[str] = None) -> dict:
+    """Add a cue to a caption track, or (with `cue_id`) replace that
+    cue's timing and text. Creates nothing else: the track must exist
+    (add_caption_track makes one), and an unknown cue_id is an error
+    rather than a quiet add -- an edit to a cue that is gone should say so."""
+    doc = _copy(doc)
+    t = _need_caption_track(doc, track_id)
+    _need_int("start", start)
+    _need_int("end", end)
+    if not isinstance(text, str):
+        raise OpError(f"cue text must be text, got {text!r}")
+    if cue_id is None:
+        t["cues"].append({"id": d.fresh_id(doc, stem="q"), "start": start, "end": end,
+                          "text": text.strip()})
+    else:
+        cue = next((q for q in t["cues"] if q.get("id") == cue_id), None)
+        if cue is None:
+            raise OpError(f"no cue {cue_id} on {track_id}")
+        cue.update({"start": start, "end": end, "text": text.strip()})
+    return _finish(doc)
+
+
+def delete_cue(doc: dict, track_id: str, cue_id: str) -> dict:
+    doc = _copy(doc)
+    t = _need_caption_track(doc, track_id)
+    if not any(q.get("id") == cue_id for q in t["cues"]):
+        raise OpError(f"no cue {cue_id} on {track_id}")
+    t["cues"] = [q for q in t["cues"] if q.get("id") != cue_id]
+    return _finish(doc)
+
+
+def set_caption_style(doc: dict, track_id: str, style: str) -> dict:
+    doc = _copy(doc)
+    t = _need_caption_track(doc, track_id)
+    if style not in d.CAPTION_STYLES:
+        raise OpError(f"caption style must be one of {list(d.CAPTION_STYLES)}")
+    t["style"] = style
+    return _finish(doc)
+
+
 OPS: dict[str, Callable[..., dict]] = {
     "insert": insert,
     "ripple_delete": ripple_delete,
+    "lift": lift,
+    "set_canvas": set_canvas,
+    "set_cue": set_cue,
+    "delete_cue": delete_cue,
+    "set_caption_style": set_caption_style,
     "trim": trim,
     "split": split,
     "move": move,
@@ -367,3 +456,59 @@ def apply(doc: dict, op: str, args: Optional[dict[str, Any]] = None, *,
     if found:
         raise OpError(f"{op} would leave an invalid timeline", found)
     return out
+
+
+def _secs(frames, fps: int) -> str:
+    try:
+        return f"{int(frames) / fps:.1f}s"
+    except (TypeError, ValueError):
+        return "?"
+
+
+def describe(op: str, args: Optional[dict[str, Any]] = None, fps: int = d.DEFAULT_FPS) -> str:
+    """A version's op_summary, in the words the version list shows:
+    "split c3 at 4.2s", "trim c1 -10f head". Never raises -- a summary is
+    a label, and a missing one must not fail an edit that validated."""
+    a = args or {}
+    clip_id = a.get("clip_id", "?")
+    try:
+        if op == "insert":
+            c = a.get("clip") or {}
+            where = f" at {_secs(a['at'], fps)}" if a.get("at") is not None else " at the end"
+            return f"insert {c.get('media', '?')} on {a.get('track_id', '?')}{where}"
+        if op in ("ripple_delete", "lift"):
+            return f"{'delete' if op == 'ripple_delete' else 'lift'} {clip_id}"
+        if op == "trim":
+            parts = [f"{k} {int(a[k]):+d}f" for k in ("head", "tail") if a.get(k)]
+            return f"trim {clip_id} " + (" ".join(parts) or "0f") + (" ripple" if a.get("ripple") else "")
+        if op == "split":
+            return f"split {clip_id} at {_secs(a.get('frame'), fps)}"
+        if op == "move":
+            to = f" to {a['track_id']}" if a.get("track_id") else ""
+            return f"move {clip_id}{to} at {_secs(a.get('at'), fps)}"
+        if op == "set_gain":
+            return f"gain {clip_id} {float(a.get('db', 0)):+g} dB"
+        if op == "duck":
+            under = a.get("under")
+            return (f"duck {a.get('track_id', '?')} under {under}" if under
+                    else f"stop ducking {a.get('track_id', '?')}")
+        if op == "add_caption_track":
+            n = len(a.get("cues") or [])
+            return f"add caption track ({n} cue{'s' if n != 1 else ''})"
+        if op == "add_marker":
+            return f"marker '{str(a.get('label', ''))[:30]}' at {_secs(a.get('frame'), fps)}"
+        if op == "add_transition":
+            return f"crossfade into {clip_id} ({a.get('frames', '?')}f)"
+        if op == "set_canvas":
+            return f"canvas {a.get('width', '?')}x{a.get('height', '?')}"
+        if op == "set_cue":
+            verb = f"edit cue {a['cue_id']}" if a.get("cue_id") else "add cue"
+            return f"{verb} on {a.get('track_id', '?')}: \"{str(a.get('text', ''))[:30]}\""
+        if op == "delete_cue":
+            return f"delete cue {a.get('cue_id', '?')} on {a.get('track_id', '?')}"
+        if op == "set_caption_style":
+            return (f"caption style {str(a.get('style', '?')).removeprefix('preset:')} "
+                    f"on {a.get('track_id', '?')}")
+    except (TypeError, ValueError, KeyError):
+        pass
+    return op

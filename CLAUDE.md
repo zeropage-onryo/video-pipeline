@@ -1708,8 +1708,9 @@ is yours, in Resolve, by hand.
   file (local first, else `media.url_for` fetched through `refbin.public_host`); `store.py`
   owns `timelines` (insert-only versions with `parent_id`; the one later write is
   `export_url`, a derivative of that frozen doc), `timeline_heads` (rollback moves the
-  pointer) and `cut_media` (uploaded audio), all three OWNED; a project is `concept:<id>` for
-  now. `assemble.py` refuses a part with no clip or a clip with no Asset Bank row rather than
+  pointer) and `cut_media` (uploads: audio, and since phase B video and stills), all three
+  OWNED; a timeline key is `concept:<id>` (or, since phase B, a scratch `cut:<uuid>`).
+  `assemble.py` refuses a part with no clip or a clip with no Asset Bank row rather than
   fall back to a URL; `render.py` compiles one `filter_complex` and files the MP4 under
   `data/renders/cut/`, mirrored like any render. **Homebrew's ffmpeg has no libass**, so on the
   Mac captions are NOT burned (the `.ass` lands beside the MP4 and the job says so); the Fly
@@ -1726,6 +1727,58 @@ is yours, in Resolve, by hand.
   `GET /api/cut/search` and the pill's read-only `search_footage` tool, which returns handles
   and times, never URLs. Captions on Export were considered and dropped (Mike, 2026-09-28):
   editorial features belong to the editor, not to Assemble.
+  **The editor's server half (phase B, 2026-09-28)** is what `web/src/app/studio/cut/` reads.
+  A project is an OWNED `cut_projects` row (Mike's D2) naming the `timeline_key` its versions
+  live under: `cut:<uuid>` for a scratch project (a starter doc: V1, A1 sfx, A2 music, not
+  ducked, at 9:16 / 16:9 / 1:1), `concept:<id>` for a concept's cut -- create-or-return, so it
+  shares Assemble's history; with no history yet v1 is `assemble.build_doc` over the CACHED
+  probe (never rendered), or the empty starter when a clip is missing. `src/cut/projects.py`
+  is the one door an edit takes: `POST /api/cut/projects/{id}/ops {base_id, op, args}` ->
+  409 `stale` (with `head_id`) unless base_id is still the head (checked under a row lock in
+  `store.save_version(expect_head=)`), 422 `invalid` with `problems` from `ops.apply`, else a
+  user version whose `op_summary` is `ops.describe` ("split c3 at 4.2s"). Undo/redo move the
+  head; `timeline_heads.redo_id` holds the TOP of the undone chain (so multi-step redo works)
+  and anything that makes history clears it. **Media is measured once:** `cut_media_cache`
+  (OWNED) holds each handle's probe keyed to the `media_url` it was taken from (a re-pointed
+  render is re-probed) plus its previews, because a `gen:` file lives in R2 on Fly and an op
+  must not download the timeline to validate a trim; `sources.measure` is the reader. A handle
+  already on the timeline that cannot be measured is passed to the validator as None
+  (known-but-unmeasured -- one unreachable file must not freeze the cut); a handle an op would
+  ADD must measure, or 422. Ops added: `lift`, `set_canvas`, `set_cue` / `delete_cue` /
+  `set_caption_style` (styles are `doc.CAPTION_STYLES`, drawn by `render.CAPTION_PRESETS` --
+  bold_center, lower_third, minimal_top -- and the validator refuses any other), and
+  `add_caption_track(cues=[])` makes an empty T track. Uploads take video and images too; an
+  image probes as a STILL (`d.STILL_SECONDS` of picture, no sound) and renders with `-loop 1`.
+  `src/cut/preview.py` builds per file (by sha256, reused across handles) a 540p proxy keyed
+  every second, a 90px filmstrip sprite (<=120 frames) and waveform peaks (50/s, absolute),
+  as a job on upload or on the first `GET /api/cut/media/{handle}/preview` (a compare-and-set
+  claim, so two polls start one build; `failed` is not retried by polling), under
+  data/renders/cut/preview/ and mirrored to R2. `POST .../export {timeline_id?, aspect?}`
+  renders any version in a job; another aspect first becomes a user `set_canvas` version.
+  Nothing in any of it spends.
+  **The agent (phase E, 2026-09-28, Mike's D4)** never edits: every edit is a PROPOSAL
+  (`{summary, ops, base_id, region, duration_delta, doc, kind}`) the person Keeps or Undoes.
+  `POST /api/cut/projects/{id}/agent {message, playhead?, selection?}` is a job;
+  `src/cut/agent_tools.py` shows the model the head doc as text (`read_timeline`, with names
+  from `store.handle_names`), the playhead, the selection and an op catalogue DERIVED from
+  `ops.OPS` signatures + `OP_NOTES` (a test fails when an op has no line), and gives it three
+  tools: `read_timeline`, the pill's `search_footage`, `propose_ops`. A proposal is run through
+  `projects.check_ops` (the ops in order via `ops.apply`, against the measured media, with the
+  add-media rule) BEFORE it is shown; a refusal goes back with the validator's reasons ONCE,
+  a second ends the turn with the reasons in `notes`. `call_model` is the one seam (tests
+  script it); metered as stage `cut_agent`; no key or a dead model finishes the job with a
+  reply saying so. `.../agent/keep {base_id, ops, summary}` RE-APPLIES the ops to the head
+  (409 `stale`, 422 `invalid`) and saves ONE version by `agent`; Undo is client-side, nothing
+  was saved. `src/cut/cleanup.py` is the two model-free jobs, both answering a proposal off
+  the index's WORD timings: `.../cleanup` (silences between words over `min_silence`, 0.12 s of
+  air left each side, and um/uh/erm/er/ah/hmm -- split+split+ripple_delete, or a ripple trim at
+  a clip edge, applied from the END backwards; only sound that is on the timeline, a clip
+  whose sound is not is skipped with a note; captions are NOT moved and it says so) and
+  `.../captions` (cues of <= max_words and 2.5 s, broken at 0.4 s pauses, mapped through each
+  clip's src_in/at; a new track, or `set_cue` onto an existing one without overlapping it).
+  Both list `needs_index`; `.../index` indexes exactly the head's unindexed media (cents: the
+  click is the approval). `POST /api/cut/projects {handles}` (phase F) starts a scratch cut
+  from a selection: footage on V1 with its sound on A1, stills held 5 s, audio-only on A2.
 - **`src/pricing.py`** — what a render costs, and the signed quote that says so (steps 1–4 of
   `docs/tasks/task-pricing-and-quotes.md`, on main 2026-09-18; read that doc's "As built"
   section before touching it). Pure module, three answers: `estimate()` is the provider's USD

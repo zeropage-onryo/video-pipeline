@@ -517,17 +517,25 @@ def test_another_account_sees_no_cut_and_cannot_export(api):
 
 
 @needs_ffmpeg
-def test_uploading_a_music_bed_gives_an_asset_handle(api, clips):
+def test_uploading_a_music_bed_gives_an_asset_handle(api, clips, monkeypatch, tmp_path):
+    from src.cut import preview
+    monkeypatch.setattr(preview, "PREVIEW_DIR", tmp_path / "preview")
     client, r = api
     with open(clips / "music.m4a", "rb") as fh:
         res = client.post("/api/cut/media", files={"file": ("bed.m4a", fh, "audio/mp4")})
     assert res.status_code == 200, res.text
     body = res.json()
     assert body["handle"].startswith("asset:") and body["seconds"] == pytest.approx(30, abs=0.1)
+    # the upload started its waveform build; let it land in this test's database
+    end = time.monotonic() + 60
+    while client.get(f"/api/cut/media/{body['handle']}/preview").json()["status"] == "pending":
+        assert time.monotonic() < end, "waveform still pending"
+        time.sleep(0.2)
     row = store.get_media(int(body["handle"].split(":")[1]), account_id=r["a"], dsn=r["dsn"])
     assert row["filename"] == "bed.m4a" and row["media_url"].startswith("/renders/cut/media/")
-    with open(clips / "c.mp4", "rb") as fh:
-        assert client.post("/api/cut/media",
-                           files={"file": ("x.mp4", fh, "video/mp4")}).status_code == 400
+    # footage is an upload too since the editor (phase B); a type that is
+    # neither audio, video nor an image is still refused
+    assert client.post("/api/cut/media",
+                       files={"file": ("x.txt", b"words", "text/plain")}).status_code == 400
     assert client.post("/api/cut/media",
                        files={"file": ("x.wav", b"not audio", "audio/wav")}).status_code == 400
