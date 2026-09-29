@@ -198,6 +198,9 @@ def check_image_cap(dsn: Optional[str] = None, *, account_id: Optional[int] = No
     still refuse at the point of spend.
     """
     from . import nano_banana
+    if nano_banana.DAILY_CAP is None:
+        # no image cap since 2026-09-29: the credit balance is the limit
+        return {"ok": True, "headroom": None, "detail": "no image cap"}
     try:
         used = nano_banana.generations_today(db_path=dsn, account_id=account_id)
         everyone = nano_banana.generations_today(db_path=dsn, everyone=True)

@@ -257,7 +257,20 @@ def test_a_failed_workspace_never_fails_the_sign_in(clean_slate, gotrue, open_do
 
 # ---------- the welcome grant ----------
 
-def test_no_welcome_credits_unless_configured(clean_slate, gotrue, open_door):
+def test_a_new_sign_up_gets_the_100_credit_trial(clean_slate, gotrue, open_door,
+                                                 monkeypatch):
+    """2026-09-29, Mike's call: InVideo's shape -- a one-time trial, then
+    subscribe or buy credits."""
+    monkeypatch.delenv("ZEROPAGE_SIGNUP_CREDITS", raising=False)
+    ledger.init(clean_slate)
+    code_sign_in()
+    user = accounts.get_user_by_email("new@example.com", dsn=clean_slate)
+    account_id = accounts.memberships(user["id"], dsn=clean_slate)[0]["id"]
+    assert ledger.available(account_id, dsn=clean_slate) == 100
+
+
+def test_the_trial_can_be_turned_off(clean_slate, gotrue, open_door, monkeypatch):
+    monkeypatch.setenv("ZEROPAGE_SIGNUP_CREDITS", "0")
     ledger.init(clean_slate)
     code_sign_in()
     user = accounts.get_user_by_email("new@example.com", dsn=clean_slate)
@@ -292,6 +305,9 @@ def test_a_new_person_is_handed_straight_to_the_studio(clean_slate, gotrue, open
 
 def test_the_free_credit_row_shows_only_when_a_grant_is_configured(clean_slate, open_door,
                                                                    monkeypatch):
+    monkeypatch.delenv("ZEROPAGE_SIGNUP_CREDITS", raising=False)
+    assert "get 100 free credits" in client.get("/signin").text   # the trial
+    monkeypatch.setenv("ZEROPAGE_SIGNUP_CREDITS", "0")
     assert "free credits" not in client.get("/signin").text
     monkeypatch.setenv("ZEROPAGE_SIGNUP_CREDITS", "150")
     assert "get 150 free credits" in client.get("/signin").text

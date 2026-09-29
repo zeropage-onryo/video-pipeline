@@ -42,9 +42,9 @@ from typing import Callable, Optional
 from . import db, edit_teach, imagery, nano_banana, preprod, shootgen, timeline
 
 # Enhancing and keyframing are per-scene model calls, so a batch of 4 is
-# 4 of each. The cap that actually bites is nano_banana.DAILY_CAP (20/day,
-# shared with every Director render) -- nothing here raises it, it just
-# reports what it could not do.
+# 4 of each. There is no image cap since 2026-09-29 -- the credit balance
+# is the limit (src/charge.py) -- and a refused still is reported, not
+# raised.
 MAX_SCENES = 4
 
 

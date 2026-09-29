@@ -2,14 +2,14 @@
 The Nano Banana connector -- Gemini image generation on the same SDK
 and key everything else already uses. runway.py's exact shape: a thin
 raising wrapper (generate_image) under a never-raises edge
-(generate_from_prompt), every attempt a generations row, a DB-enforced
-daily cap.
+(generate_from_prompt), every attempt a generations row.
 
-No separate spend gate, deliberately: this is the GEMINI_API_KEY the
-whole pipeline already bills against, and one image costs cents where
-a Runway render burns real credits. The wall here is NANO_DAILY_CAP
-(default 20/day), counted from the generations table so it can't drift
-from the log.
+NO DAILY CAP since 2026-09-29 (Mike's call): every still is charged
+credits (src/charge.py, pricing.still_credits), so for a paying or trial
+account the credit balance is the limit, and the cap went for everyone --
+the operator's exempt accounts included. `DAILY_CAP` / `GLOBAL_DAILY_CAP`
+stay as None so the readers that show caps (costs.today, the nightly
+preflight) can say "no cap" rather than break.
 
 Model verified against this account's own models.list on 2026-09-12:
 "gemini-2.5-flash-image" is Nano Banana and "gemini-3-pro-image" is
@@ -49,17 +49,10 @@ from .gemini_utils import sniff_mime
 from .shot import Shot
 
 MODEL = os.environ.get("NANO_BANANA_MODEL", "gemini-2.5-flash-image")
-DAILY_CAP = int(os.environ.get("NANO_DAILY_CAP", "20"))
-# The installation-wide wall, beside the per-account one. Defaults to the
-# SAME number, so a single-operator database behaves exactly as it did --
-# admitting a second account is what forces a deliberate decision about
-# whose card is paying, instead of the total quietly doubling.
-# 0 = no installation-wide ceiling (2026-09-14, Mike's call): a user who
-# brought their own key was still consuming the operator's shared budget and
-# could lock everyone else out of money nobody spent. The per-account cap
-# (NANO_DAILY_CAP) is the wall that remains. Set NANO_GLOBAL_DAILY_CAP to a
-# positive number to put the ceiling back -- see generative.cap_error.
-GLOBAL_DAILY_CAP = int(os.environ.get("NANO_GLOBAL_DAILY_CAP", "0"))
+# No cap (2026-09-29, see the module docstring). NANO_DAILY_CAP and
+# NANO_GLOBAL_DAILY_CAP are no longer read.
+DAILY_CAP: Optional[int] = None
+GLOBAL_DAILY_CAP: Optional[int] = None
 RETRIES = int(os.environ.get("NANO_RETRIES", "3"))
 RETRY_DELAY = 4.0
 
@@ -402,17 +395,6 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
                              "installation"}
 
         generative.init(**kwargs)
-        refusal = generative.cap_error(
-            "nano", 1, account_id=account_id,
-            per_account=DAILY_CAP, ceiling=GLOBAL_DAILY_CAP,
-            dsn=db_path,
-            env_prefix="NANO", phrase="images generated",
-            used=generations_today(db_path=db_path, account_id=account_id),
-            used_everywhere=generations_today(db_path=db_path, everyone=True,
-                                             operator_billed_only=True),
-        )
-        if refusal:
-            return {"ok": False, "error": refusal}
 
         references = as_reference_list(reference_image)
 

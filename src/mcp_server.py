@@ -835,6 +835,18 @@ def engine_enabled() -> bool:
     return os.environ.get(ENGINE_ENV) == "1"
 
 
+def _create_gate(account_id: Optional[int], dsn=None) -> None:
+    """research and generate spend Gemini money for their caller, so they
+    ask the same question Studio's Create does (charge.create_refusal,
+    2026-09-29): an account with no plan and no credit balance is Refused
+    -- a deliberate no, so an agent stops rather than retrying. The
+    operator's key resolves to an exempt account and is never refused."""
+    from . import charge
+    reason = charge.create_refusal(_account(account_id, dsn), dsn=dsn)
+    if reason:
+        raise Refused(reason)
+
+
 def run_research(brand: str, count: int = 4, lanes=None,
                  dsn: Optional[str] = None,
                  account_id: Optional[int] = None) -> dict[str, Any]:
@@ -847,6 +859,7 @@ def run_research(brand: str, count: int = 4, lanes=None,
     layer out.
     """
     _check(brand, scout.BRANDS, "brand")
+    _create_gate(account_id, dsn)
     lanes = tuple(lanes) if lanes else scout.default_lanes(_account(account_id, dsn), dsn=dsn)
     unknown = [lane for lane in lanes if lane not in LANES]
     if unknown:
@@ -963,6 +976,7 @@ def run_graph(spark: str = "", brand: str = "", goal: str = "",
             "credit, and this surface is not allowed to be what trips "
             "it. Run the graph on the machine, or unset the flag."
         )
+    _create_gate(account_id)
     # DATABASE_URL read at CALL time, like _account above: a default bound
     # at import is the path the process started with, not the one a
     # test (or a later reconfiguration) points the module at.

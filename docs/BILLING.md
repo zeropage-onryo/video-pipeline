@@ -59,6 +59,22 @@ somebody paid for. A lapse cancels the schedule; months already released follow
 Change a plan, the markup, a band or a rate card → re-export → commit, or
 `tests/test_plans.py` fails naming the drift.
 
+## What costs credits besides a render (2026-09-28 / 09-29)
+
+- **A still** (a Nano Banana keyframe, a Director Nano node, an element's
+  reference sheet): its provider price x 2.4, floor 10 — 10 cr on Flash, 33 on
+  Pro (`pricing.still_credits`), held in `nano_banana.generate_from_prompt`.
+- **A Create** (writing a scene): **0 credits**. Mike, 2026-09-29: it is
+  included in the subscription, its Gemini cost (~$0.04) priced into the plans
+  rather than debited per click. A Starter plan spent entirely on renders leaves
+  ~$8.75 of margin, ~580 Creates a month. Create is **refused** (402
+  `subscribe_or_top_up`) only for an account with no plan and no balance —
+  `charge.create_refusal`, which the MCP `research` / `generate` tools ask too.
+- **The trial**: a new open sign-up gets **100 credits once**
+  (`ZEROPAGE_SIGNUP_CREDITS`, default 100; 0 turns it off), InVideo's shape.
+- **No image cap**: `NANO_DAILY_CAP` is gone (2026-09-29) — for everyone,
+  exempt accounts included. The balance is the limit.
+
 ## Who is not charged (one predicate: `ledger.hold_for_render`)
 
 - BYOK — `key_source == "account"`: the provider bills them directly.
@@ -104,9 +120,10 @@ Stripe dashboard (Settings → Billing → Customer portal).
 
 ## Still open
 
-- Phase 4 of the Stripe task doc — a per-account daily Gemini
-  budget for accounts holding no credit — is not built; the ledger is the wall for
-  anyone with a plan, and a stranger's ideation still bills the operator's key.
+- Phase 4 of the Stripe task doc — a per-account daily Gemini budget — is not
+  built. The Create gate means an account with no plan and no balance cannot
+  Create at all; one with a trial or a plan Creates free per click, so the
+  creative guide, Direct and Polish (all free) are still unbounded per day.
 - The studio shell does not show the balance yet; `GET /api/billing/balance` is
   there for it.
 - Negative balances (settle can overdraw; the next hold refuses), downgrade timing

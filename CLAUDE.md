@@ -1923,6 +1923,13 @@ Yearly plans are a SCHEDULE (`credit_schedules`, released monthly by
 the Queue refuses you for having no credit. Both `zeropage` and `antihero` are ON live as of
 2026-09-18. Unset `STRIPE_*` = the plan
 buttons say so and nothing else changes.
+**Beyond renders (2026-09-28/29, Mike's calls; docs/BILLING.md):** a still costs credits
+(10 Flash / 33 Pro, held in `nano_banana.generate_from_prompt`); a **Create costs 0** --
+included in the subscription, priced into the plans -- but `charge.create_refusal` refuses
+it (402 `subscribe_or_top_up`) for an account with no plan and no balance, and the MCP
+`research` / `generate` tools ask the same predicate; a new open sign-up gets a one-time
+**100-credit trial** (`ZEROPAGE_SIGNUP_CREDITS`); and **`NANO_DAILY_CAP` is gone** for
+everyone (`nano_banana.DAILY_CAP is None`) -- the balance is the limit.
 
 **THE LOOP CLOSED ON 2026-09-18.** Concept #375 "Neon City Ascent" went spark -> scene ->
 references -> keyframe -> pick -> render -> post -> measured, and it is the first one that ever

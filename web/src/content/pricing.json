@@ -121,10 +121,7 @@
     }
   ],
   "actions": {
-    "create": {
-      "fast": 15,
-      "reasoning": 44
-    },
+    "create": 0,
     "still": {
       "standard": 10,
       "pro": 33
