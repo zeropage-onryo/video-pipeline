@@ -35,12 +35,14 @@ import { Popover } from "@base-ui/react/popover";
 import { Camera, ChevronDown, Clock, Copy, Film, Monitor, Music, RectangleVertical, Upload, X } from "lucide-react";
 import { API_URL } from "@/lib/api";
 import {
+  announceBalanceChange,
   announceQueueChange,
   cancelJob,
   clearJob,
   cutAssemble,
   cutReady,
   cutUploadMedia,
+  drawKeyframes,
   fileLaneClip,
   getCapabilities,
   listJobs,
@@ -50,6 +52,7 @@ import {
   queuePending,
   queueReject,
   queueShot,
+  waitForJob,
   type Concept,
   type CutReady,
   type Job,
@@ -298,6 +301,29 @@ export default function QueuePage() {
     const r = renderers[p];
     if (!r.available) return `${r.label}: not configured on this server`;
     return `${r.label}: ready${r.today != null ? ` · ${r.today}${r.cap ? `/${r.cap}` : ""} today` : ""}`;
+  };
+  // The priced approve for a scene's keyframes (2026-09-29, Mike's call):
+  // a pick no longer draws, so this is the one button that spends a still.
+  const [drawing, setDrawing] = useState<Record<number, boolean>>({});
+  const drawStills = async (c: Concept) => {
+    const q = c.keyframes;
+    if (!q) return;
+    setDrawing((d) => ({ ...d, [c.id]: true }));
+    try {
+      const res = await drawKeyframes(c.id);
+      toast(`Drawing ${q.stills} keyframe${q.stills === 1 ? "" : "s"} for ${c.n} — ${creditsText(q.credits, !!balance?.exempt)}`);
+      announceBalanceChange();
+      if (res.job_id) {
+        const job = await waitForJob(res.job_id);
+        if (job.status === "failed") toast(job.error || "The keyframes did not draw", "err");
+      }
+      announceBalanceChange();
+      loadPending();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "That did not go through", "err");
+    } finally {
+      setDrawing((d) => ({ ...d, [c.id]: false }));
+    }
   };
   const decide = async (c: Concept, what: "approve" | "reject" | "shot") => {
     setBusy((b) => ({ ...b, [c.id]: what }));
@@ -708,6 +734,24 @@ export default function QueuePage() {
                   >
                     ATTACH REFERENCES IN DIRECTOR →
                   </Link>
+                ) : null}
+                {!locked && !did && c.keyframes ? (
+                  // nothing is drawn until this is pressed: the pick only
+                  // chose the scene (2026-09-29)
+                  <button
+                    type="button"
+                    disabled={!!drawing[c.id]}
+                    onClick={() => void drawStills(c)}
+                    aria-label={`Draw ${c.keyframes.stills} keyframe${c.keyframes.stills === 1 ? "" : "s"} for ${c.title} — ${creditsText(c.keyframes.credits, !!balance?.exempt)}`}
+                    className="-mt-1 inline-flex min-h-11 items-center justify-between gap-2 rounded-[8px] border border-noir-line px-3 font-plex! text-[11px]! tracking-[0.08em] text-bone! hover:enabled:border-bone disabled:cursor-wait disabled:text-bone3!"
+                  >
+                    <span>
+                      {drawing[c.id]
+                        ? "DRAWING KEYFRAMES…"
+                        : `DRAW ${c.keyframes.stills === 1 ? "KEYFRAME" : `${c.keyframes.stills} KEYFRAMES`}`}
+                    </span>
+                    <span>{creditsText(c.keyframes.credits, !!balance?.exempt).toUpperCase()}</span>
+                  </button>
                 ) : null}
 
                 {/* the renderer: ONE chip, and a popover over the same catalogue */}

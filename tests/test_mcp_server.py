@@ -575,13 +575,11 @@ def test_engine_flag_is_the_same_switch_as_the_env_var(tmp_db, monkeypatch):
     assert mcp_server.engine_enabled()
 
 
-# ---------- picking from a phone draws the still ----------
-# 2026-09-08, Mike's call, and a deliberate amendment to "the read/decide
-# tools never spend". The budget rule is that the night writes text and
-# the PICK draws the image; a pick from a phone that produced no still
-# meant the board and the phone disagreed about what picking means, and
-# the card he opened next had nothing on it. The CLIP is still dollars
-# behind the Queue's approve, on the machine.
+# ---------- picking from a phone spends nothing ----------
+# From 2026-09-08 a pick from the phone drew the scene's still. Since
+# 2026-09-29 a still costs credits, and every spend of credits sits behind
+# a priced approve a person presses (the Queue card's "Draw keyframes"), so
+# the pick is back to recording the choice and saying what drawing costs.
 
 def _scene(path, title="Cold Open", prompt="P", **shot):
     base = {"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
@@ -604,73 +602,43 @@ def stills(monkeypatch):
     return calls
 
 
-def test_picking_from_a_phone_draws_the_still(tmp_db, stills):
+def test_picking_from_a_phone_draws_nothing_and_says_the_price(tmp_db, stills):
+    from src import nano_banana, pricing
     cid = _scene(tmp_db)
     card = mcp_server.pick_idea(cid, dsn=tmp_db)
     assert card["status"] == "picked"
-    assert card["keyframe"]["ok"] is True
-    assert card["keyframe"]["url"] == "https://example.test/k.jpg"
-    assert card["keyframe"]["frames"] == 1
-    assert stills == [(cid, 1)]
+    assert stills == []                                   # nothing drawn
+    each = pricing.still_credits(nano_banana.MODEL)
+    assert card["keyframes"]["stills"] == 1
+    assert card["keyframes"]["credits"] == each
+    assert "Draw keyframes" in card["keyframes"]["note"]
+    assert "keyframe" not in card                         # the old field is gone
 
 
 def test_unpicking_draws_nothing(tmp_db, stills):
     cid = _scene(tmp_db)
     card = mcp_server.pick_idea(cid, picked=False, dsn=tmp_db)
-    assert "keyframe" not in card
+    assert "keyframes" not in card
     assert stills == []
 
 
-def test_a_scene_that_already_has_a_still_is_not_re_billed(tmp_db, stills):
-    """An agent re-picking a card must not buy a second image."""
+def test_a_scene_that_already_has_a_still_quotes_nothing(tmp_db, stills):
     cid = _scene(tmp_db, reference_image="https://example.test/old.jpg")
     card = mcp_server.pick_idea(cid, dsn=tmp_db)
-    assert card["keyframe"] == {"ok": False, "note": "already has a still"}
+    assert "keyframes" not in card
     assert stills == []
 
 
-def test_a_still_that_cannot_be_drawn_is_a_note_and_never_an_error(tmp_db,
-                                                                   monkeypatch):
-    """An agent that sees a tool error retries the identical call, and the
-    retry is what would spend twice. So the failure rides back on the
-    card and the pick -- the label, which is the part that matters --
-    stands."""
-    from src import scene_chain
-    monkeypatch.setattr(scene_chain, "keyframe_scene",
-                        lambda *a, **k: {"ok": False,
-                                         "error": "daily ceiling: 60/60 images"})
-    cid = _scene(tmp_db)
-    card = mcp_server.pick_idea(cid, dsn=tmp_db)
-    assert card["status"] == "picked"
-    assert card["keyframe"]["ok"] is False
-    assert "60/60" in card["keyframe"]["note"]
-
-
-def test_a_keyframe_that_raises_still_leaves_the_concept_picked(tmp_db,
-                                                                monkeypatch):
-    from src import scene_chain
-
-    def boom(*a, **k):
-        raise RuntimeError("the image model fell over")
-
-    monkeypatch.setattr(scene_chain, "keyframe_scene", boom)
-    cid = _scene(tmp_db)
-    card = mcp_server.pick_idea(cid, dsn=tmp_db)
-    assert card["status"] == "picked"
-    assert card["keyframe"]["ok"] is False
-
-
-def test_the_drawing_can_be_turned_off(tmp_db, stills, monkeypatch):
+def test_with_drawing_off_there_is_nothing_to_quote(tmp_db, stills, monkeypatch):
     monkeypatch.setenv("ZEROPAGE_KEYFRAME_ON_PICK", "0")
     cid = _scene(tmp_db)
-    assert mcp_server.pick_idea(cid, dsn=tmp_db)["keyframe"]["note"] == \
-        "drawing on pick is off"
+    assert "keyframes" not in mcp_server.pick_idea(cid, dsn=tmp_db)
     assert stills == []
 
 
 def test_the_clip_is_still_not_reachable_from_here(tmp_db, stills):
-    """The amendment is the KEYFRAME -- cents on the Gemini key under
-    NANO_DAILY_CAP. Picking must still not be able to call Runway."""
+    """Picking must not be able to call a renderer -- or, since
+    2026-09-29, the image model."""
     cid = _scene(tmp_db)
     mcp_server.pick_idea(cid, dsn=tmp_db)
     source = Path(mcp_server.__file__).read_text()
