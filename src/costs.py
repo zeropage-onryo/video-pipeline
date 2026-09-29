@@ -38,12 +38,11 @@ NOTES = (
 
 
 def _tools() -> list[tuple[str, Any]]:
-    # fal is the only video renderer since 2026-09-26; higgsfield renders
-    # Soul stills only. Each module answers its own count (fal sums its
-    # platforms -- a video row is logged under kling/ltx/..., never "fal").
-    from . import fal, higgsfield, midjourney, nano_banana
-    return [("fal", fal), ("higgsfield", higgsfield),
-            ("midjourney", midjourney), ("nano", nano_banana)]
+    # fal is the only video renderer since 2026-09-26; Higgsfield is gone
+    # entirely since 2026-09-29. Each module answers its own count (fal sums
+    # its platforms -- a video row is logged under kling/ltx/..., never "fal").
+    from . import fal, midjourney, nano_banana
+    return [("fal", fal), ("midjourney", midjourney), ("nano", nano_banana)]
 
 
 def _used(name: str, module, dsn, **kw) -> int:

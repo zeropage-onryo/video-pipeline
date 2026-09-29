@@ -1329,7 +1329,7 @@ def test_every_shot_row_call_site_forwards_the_account():
 
     root = pathlib.Path(__file__).resolve().parent.parent
     unstamped = []
-    for name in ("nano_banana", "fal", "higgsfield"):
+    for name in ("nano_banana", "fal"):
         path = root / "src" / f"{name}.py"
         tree = ast.parse(path.read_text())
         for node in ast.walk(tree):

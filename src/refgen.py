@@ -35,7 +35,7 @@ from pathlib import Path
 from . import db, looks, refbin, scout
 
 DAILY_CAP = int(os.environ.get("REFGEN_DAILY_CAP", "8"))
-PROVIDERS = ("midjourney", "nano", "higgsfield")
+PROVIDERS = ("midjourney", "nano")
 
 # THE LIKENESS PATH (2026-09-06, Mike: "This isn't what I look like").
 # What reproduces his face is Nano Banana Pro handed his REAL PHOTOS as
@@ -197,12 +197,7 @@ def _nano(prompt: str, out: Path, identity: bool = False) -> Path:
                                       reference_bytes=refs, aspect_ratio="9:16")
 
 
-def _higgsfield(prompt: str, out: Path) -> Path:
-    from . import higgsfield
-    return higgsfield.generate_image(prompt, out, aspect_ratio="9:16")
-
-
-_RENDERERS = {"midjourney": _midjourney, "nano": _nano, "higgsfield": _higgsfield}
+_RENDERERS = {"midjourney": _midjourney, "nano": _nano}
 
 
 def render(prompt: str, identity: bool = False) -> dict:

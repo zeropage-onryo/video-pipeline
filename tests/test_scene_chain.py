@@ -19,7 +19,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from src import db, imagery, nano_banana, preprod, scene_chain, shootgen
+from src import imagery, nano_banana, preprod, scene_chain, shootgen
 
 client = TestClient(app)
 
@@ -288,119 +288,6 @@ def test_the_stages_stay_callable_from_a_graph_and_from_a_request():
     # and src/ never imports app/: the app-layer capabilities are injected
     assert "from app" not in source and "import app" not in source
     assert "attach_refs" in source and "resolve_photo" in source
-
-
-# --- a scene with no references gets one generated (2026-09-02) -------------
-#
-# keyframe_scene passes reference_image=None when shot["refs"] is empty, so the
-# still renders from prompt text alone. For Zero Page that is EVERY scene: no
-# cast to attach, and the scout's image bin empty since Instagram's
-# public-content endpoint started refusing. The brand built on grounded texture
-# was the one keyframing blind.
-
-def _scene_without_refs(tmp_db):
-    return preprod.save_concept(
-        {"title": "The Living Wall", "shots": [
-            {"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY",
-             "prompt": "a sponge on a wall that bruises under pressure"},
-        ]},
-        brand="zeropage", dsn=tmp_db, account_id=None)
-
-
-def _fake_generator(monkeypatch, calls):
-    from src import higgsfield
-
-    def fake_generate(prompt, **k):
-        calls.append(prompt)
-        return {"ok": True, "media_url": f"/refs/target-{len(calls)}.jpg"}
-
-    monkeypatch.setattr(higgsfield, "generate_image_from_prompt", fake_generate)
-    monkeypatch.setattr(scene_chain.shootgen, "still_prompt",
-                        lambda *a, **k: "a bruised wall --ar 9:16 --style raw")
-
-
-def test_no_target_without_spend_approval(tmp_db, monkeypatch):
-    """HIGGSFIELD_SPEND_OK is per-run by design -- "an approval that's
-    always on isn't an approval". Unapproved, behaviour is unchanged."""
-    monkeypatch.delenv("HIGGSFIELD_SPEND_OK", raising=False)
-    cid = _scene_without_refs(tmp_db)
-    shot = preprod.get_concept(cid, dsn=tmp_db, account_id=None)["shots"][0]
-
-    assert scene_chain.visual_target(cid, shot, spark="a wall that bruises",
-                                     db_path=tmp_db, account_id=None) == []
-
-
-def test_a_spark_pays_once_and_the_batch_reuses_it(tmp_db, monkeypatch):
-    """The point of moving this off per-concept: a spark produces several
-    concepts sharing one world, so the second must cost nothing AND look
-    like it belongs beside the first."""
-    monkeypatch.setenv("HIGGSFIELD_SPEND_OK", "1")
-    calls = []
-    _fake_generator(monkeypatch, calls)
-
-    first = _scene_without_refs(tmp_db)
-    second = _scene_without_refs(tmp_db)
-    shot_a = preprod.get_concept(first, dsn=tmp_db, account_id=None)["shots"][0]
-    shot_b = preprod.get_concept(second, dsn=tmp_db, account_id=None)["shots"][0]
-
-    made = scene_chain.visual_target(first, shot_a, spark="a wall that bruises",
-                                     db_path=tmp_db, account_id=None)
-    assert len(made) == scene_chain.TARGETS_PER_SPARK
-    spent = len(calls)
-
-    again = scene_chain.visual_target(second, shot_b, spark="a wall that bruises",
-                                      db_path=tmp_db, account_id=None)
-    assert again == made, "the batch did not reuse the spark's targets"
-    assert len(calls) == spent, "it paid twice for the same spark"
-
-
-def test_reuse_survives_a_capitalisation_difference(tmp_db, monkeypatch):
-    """Keyed on _spark_key, the same normalisation novelty uses -- or the
-    same idea typed twice buys the same pictures twice."""
-    monkeypatch.setenv("HIGGSFIELD_SPEND_OK", "1")
-    calls = []
-    _fake_generator(monkeypatch, calls)
-    cid = _scene_without_refs(tmp_db)
-    shot = preprod.get_concept(cid, dsn=tmp_db, account_id=None)["shots"][0]
-
-    scene_chain.visual_target(cid, shot, spark="A wall that bruises.",
-                              db_path=tmp_db, account_id=None)
-    spent = len(calls)
-    scene_chain.visual_target(cid, shot, spark="a wall that bruises",
-                              db_path=tmp_db, account_id=None)
-    assert len(calls) == spent
-
-
-def test_a_target_row_is_not_evidence(tmp_db, monkeypatch):
-    """The bin's other rows carry a source_url proving a frame came from
-    a video that travelled. A generated target has no such claim and must
-    not look like it does."""
-    monkeypatch.setenv("HIGGSFIELD_SPEND_OK", "1")
-    _fake_generator(monkeypatch, [])
-    cid = _scene_without_refs(tmp_db)
-    shot = preprod.get_concept(cid, dsn=tmp_db, account_id=None)["shots"][0]
-    scene_chain.visual_target(cid, shot, spark="a wall that bruises",
-                              db_path=tmp_db, account_id=None)
-
-    with db.connect(tmp_db) as conn:
-        rows = list(conn.execute("SELECT lane, source_url FROM scout_bin"))
-    assert rows and all(r["lane"] == "target" for r in rows)
-    assert all(not r["source_url"] for r in rows)
-
-
-def test_a_failed_target_is_never_fatal(tmp_db, monkeypatch):
-    """A scene with no target keyframes the way it always did."""
-    monkeypatch.setenv("HIGGSFIELD_SPEND_OK", "1")
-    from src import higgsfield
-    monkeypatch.setattr(scene_chain.shootgen, "still_prompt",
-                        lambda *a, **k: "a bruised wall")
-    monkeypatch.setattr(higgsfield, "generate_image_from_prompt",
-                        lambda prompt, **k: {"ok": False, "error": "cap reached"})
-    cid = _scene_without_refs(tmp_db)
-    shot = preprod.get_concept(cid, dsn=tmp_db, account_id=None)["shots"][0]
-
-    assert scene_chain.visual_target(cid, shot, spark="x", db_path=tmp_db,
-                                     account_id=None) == []
 
 
 # --- separate images, not one combined one (Mike, 2026-09-02) --------------

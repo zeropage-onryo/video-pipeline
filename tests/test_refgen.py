@@ -144,8 +144,8 @@ def test_a_still_of_michael_goes_to_nano_with_his_photos(monkeypatch, tmp_path):
     for him; the prompt opens by naming the attached man as the subject
     and the photos ride as labelled reference parts."""
     monkeypatch.delenv("REFGEN_PROVIDERS", raising=False)
-    assert refgen.provider_order() == ("midjourney", "nano", "higgsfield")
-    assert refgen.provider_order(identity=True) == ("nano", "midjourney", "higgsfield")
+    assert refgen.provider_order() == ("midjourney", "nano")          # no Higgsfield since 2026-09-29
+    assert refgen.provider_order(identity=True) == ("nano", "midjourney")
     assert refgen.is_identity("Michael at the gate, visor up", "antihero")
     assert not refgen.is_identity("a stranger at the gate", "zeropage")
 
