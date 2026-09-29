@@ -38,9 +38,14 @@ number debited by construction. Tests: `tests/test_charge.py`, `tests/test_billi
 | starter | standard | 15 | 1,500 | LTX 2.3, Runway Gen-4 Turbo / 4.5, Wan 3.0 |
 | creator | creator | 35 | 3,500 | + Kling 2.5 / 3 Turbo Pro, Seedance 2.0 / Fast |
 | studio | premium | 95 | 9,500 | + Veo 3 |
-| topup | — | 10 (one-time) | 1,000 | a `purchase` lot |
+| topup | — | 10 (one-time) | 750 | a `purchase` lot; **plan holders only** |
 
-1 credit = 1¢ of charge; a render = provider estimate × 2.4, rounded up, floor 10.
+1 credit = 1¢ of charge on a plan; a render = provider estimate × 2.4, rounded up, floor 10.
+**The top-up is dearer and plan-only (2026-09-29, Mike's call):** 750 credits for $10
+(1.33¢ a credit against a plan's 1.0¢), and `billing.checkout_url` refuses it for an
+account with no plan (`403 plan_required`, before any Stripe call). At 1,000 for $10 it was
+the same rate as Starter, which gave nobody a reason to subscribe. The Stripe Price stays
+$10; only the grant changed, so no Stripe edit is needed.
 Lots expire 2 months after they land (`ledger.EXPIRY_MONTHS`).
 
 **Yearly = 12 months at 20% off** (Starter $144, Creator $336, Studio $912 — $12 / $28 /
@@ -134,7 +139,8 @@ webhook the way Stripe does. All commands run from the checkout root:
    `settle`, and 1485 available.
 9. Redelivery: `venv/bin/python -m ops.billing_walkthrough relay --again`. **Expect**
    every event to answer 200 and `status` to show no second grant.
-10. Top-up: `checkout topup`, pay again. **Expect** +1000.
+10. Top-up: `checkout topup`, pay again. **Expect** +750. (Before step 6, while the
+    account has no plan, `checkout topup` should be refused: `plan_required`.)
 11. Cancel: enable the Customer Portal once (Stripe → Settings → Billing → Customer
     portal), then cancel the Starter subscription from the Stripe dashboard (Customers →
     the walk's customer → subscription → Cancel immediately). **Expect** after `relay`

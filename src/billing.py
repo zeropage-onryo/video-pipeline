@@ -221,6 +221,11 @@ class BillingUnconfigured(RuntimeError):
         self.what = what
 
 
+class PlanRequired(ValueError):
+    """A top-up asked for by an account with no plan: top-ups extend a
+    subscription, they do not replace one (2026-09-29, Mike's call)."""
+
+
 class UnknownCustomer(LookupError):
     """An event for a Stripe customer no account pays as."""
 
@@ -348,6 +353,11 @@ def checkout_url(account_id: int, key: str, *, interval: str = "month",
     interval = (interval or "month").strip().lower()
     if interval not in INTERVALS:
         raise ValueError(f"interval must be one of {INTERVALS}, not {interval!r}")
+    if not is_plan(key) and not accounts.plan_of(account_id, dsn=dsn):
+        # checked BEFORE any Stripe call: no customer is created and no
+        # session opened for a purchase the account may not make
+        raise PlanRequired("top-ups are for accounts on a plan -- choose a plan first, "
+                           "then top up when your monthly credits run out")
     price = price_id(key, interval)
     if not price:
         raise BillingUnconfigured(price_env_for(key, interval) or item.price_env)
