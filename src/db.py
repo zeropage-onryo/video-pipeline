@@ -336,6 +336,10 @@ OWNED_TABLES = (
     "timelines",
     "timeline_heads",
     "cut_media",
+    # the editor (2026-09-28, src/cut/store.py): an account's cut
+    # projects, and what its media files are plus their browser previews
+    "cut_projects",
+    "cut_media_cache",
     # the index (2026-09-28, src/cut/moments.py): what is in each clip,
     # and the words, sentences and shots search runs over
     "media_index",

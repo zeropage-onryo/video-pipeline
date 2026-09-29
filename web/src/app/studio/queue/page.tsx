@@ -32,7 +32,8 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { Popover } from "@base-ui/react/popover";
-import { Camera, ChevronDown, Clock, Copy, Film, Monitor, Music, RectangleVertical, Upload, X } from "lucide-react";
+import { Camera, ChevronDown, Clock, Copy, Film, Monitor, Music, RectangleVertical, Scissors, Upload, X } from "lucide-react";
+import { OpenInEditor } from "@/components/cut/open-in-editor";
 import { API_URL } from "@/lib/api";
 import {
   announceQueueChange,
@@ -940,6 +941,9 @@ export default function QueuePage() {
                       </a>
                     ) : null}
                     <span className="spacer" />
+                    <OpenInEditor concept_id={item.concept_id} className="tag">
+                      <Scissors size={12} strokeWidth={1.6} /> Open in editor
+                    </OpenInEditor>
                     <button
                       type="button"
                       className="tag"

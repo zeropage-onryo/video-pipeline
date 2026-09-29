@@ -8,9 +8,12 @@ modules, in the order data moves through them:
     ops.py       pure doc -> doc edits (the only edits an agent may emit)
     validate.py  the safety rail every doc passes before it is stored or rendered
     sources.py   handle -> local file + probe (the only place a URL is read)
-    store.py     `timelines` (insert-only versions + a head pointer) and `cut_media`
+    store.py     `timelines` (insert-only versions + a head pointer), `cut_media`,
+                 `cut_projects` and `cut_media_cache` (probes + previews)
     assemble.py  a concept's clips, in timeline.py part order -> version 1
     render.py    doc -> one ffmpeg filter_complex -> MP4
+    projects.py  the editor's projects, and the one door a hand edit takes
+    preview.py   proxy + filmstrip + waveform per file, for the browser
 
 The rule copied from invideo and kept everywhere here: an edit is a typed,
 validated document, never pixels, and a clip names its media by HANDLE
