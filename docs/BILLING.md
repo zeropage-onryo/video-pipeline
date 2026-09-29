@@ -102,6 +102,55 @@ Stripe dashboard (Settings → Billing → Customer portal).
 6. Daily: `venv/bin/python -m src.billing release` (yearly months; harmless when there
    are none).
 
+## Walking it in test mode (`ops/billing_walkthrough.py`, 2026-09-29)
+
+The whole paid path, once, as a customer would meet it, before anyone real pays. It runs
+on its OWN schema (`billwalk`) on the local throwaway Postgres, on port 8021, with R2 and
+fal blanked. It refuses any Stripe key that is not a test key, and it needs no Stripe CLI:
+`relay` reads the test account's events off the Stripe API and signs them to the local
+webhook the way Stripe does. All commands run from the checkout root:
+
+1. **Stripe dashboard, Test mode** (the toggle top right) → Developers → API keys → reveal
+   the *Secret key* (`sk_test_…`). Put it in `.env.billing-walk` at the checkout root as
+   `STRIPE_SECRET_KEY=sk_test_…`. That file is gitignored (`.env.*`) and is created with
+   owner-only permissions by `seed`.
+2. `venv/bin/python -m ops.billing_walkthrough seed --fresh`: the schema, a user
+   (`walkthrough@example.test`) and two NON-exempt accounts. It also writes a session
+   secret and the local webhook secret into the file.
+3. `venv/bin/python -m ops.billing_walkthrough prices`: creates the seven test Prices
+   from `pricing.PLANS` / `TOPUP`, found by lookup key so it never duplicates them, and
+   writes their ids into the file. It refuses if Stripe's amount disagrees with
+   `pricing.py`.
+4. `venv/bin/python -m ops.billing_walkthrough serve`: prints the server command. Run
+   what it prints in its own terminal.
+5. In a second terminal: `venv/bin/python -m ops.billing_walkthrough relay --watch 1800`.
+6. `venv/bin/python -m ops.billing_walkthrough checkout starter`: it opens nothing, it
+   prints a Stripe Checkout URL. Open it and pay with the test card
+   `4242 4242 4242 4242`, any future date, any CVC.
+7. `venv/bin/python -m ops.billing_walkthrough status`. **Expect** `plan: starter`,
+   `available: 1500`, and one `grant` entry of 1500.
+8. `venv/bin/python -m ops.billing_walkthrough create`. This is one real Gemini call,
+   about $0.04. **Expect** the job to finish, then `status` shows a `hold` of −15 and a
+   `settle`, and 1485 available.
+9. Redelivery: `venv/bin/python -m ops.billing_walkthrough relay --again`. **Expect**
+   every event to answer 200 and `status` to show no second grant.
+10. Top-up: `checkout topup`, pay again. **Expect** +1000.
+11. Cancel: enable the Customer Portal once (Stripe → Settings → Billing → Customer
+    portal), then cancel the Starter subscription from the Stripe dashboard (Customers →
+    the walk's customer → subscription → Cancel immediately). **Expect** after `relay`
+    the plan cleared and the subscription lot expired per `LAPSE_POLICY`, with the
+    top-up lot untouched.
+
+Not in the walk: an API-billed render. The render hold → settle was verified live on
+fal separately; `serve --with-render` keeps `FAL_KEY` for anyone who wants it here too,
+at real cost.
+
+Dry-run on 2026-09-29, without a Stripe key, on the local server:
+- A hand-built top-up event, signed as `relay` signs, granted 1,000.
+- A redelivery returned the same lot, with no second entry.
+- A wrong signature got a 400.
+- The walk's customer read `exempt: false`, `available: 0` before the grant.
+
 ## Still open
 
 - Phase 4 of the Stripe task doc — a per-account daily Gemini
