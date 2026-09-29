@@ -99,41 +99,17 @@ MARKUP = "2.4"
 CREDIT_FLOOR = 10
 
 
-# --- the studio actions that are not renders (2026-09-28, Mike's call) -----
-# Writing a scene and drawing a still cost real Gemini money and were free
-# to the person pressing the button; only the clip was charged. InVideo
-# charges credits for "agent processing" as well as generation, and so do
-# we now -- at the SAME markup and floor as a render, through the same
-# hold -> settle/release (src/charge.py), with the operator's exemption and
-# the unowned nightly pool exactly as renders have them.
+# --- the studio actions that are not renders ----------------------------
+# A STILL costs credits (2026-09-28, Mike's call): a Nano Banana image is
+# real Gemini money, charged at the render markup and floor through the
+# same hold -> settle/release (src/charge.py), exempt accounts and the
+# unowned pool excepted exactly as for renders.
 #
-# A FIXED price per action, not a per-token settle: the person is told the
-# number before pressing, and a scene that happens to think longer is not
-# a surprise. Sized from the live meter (llm_calls, read 2026-09-28):
-# a Fast Create -- scene writing + timeline + grounding -- averaged ~$0.04
-# and ran ~$0.06 at worst over 205 scenes, so $0.06 is what is priced.
-# Reasoning is NOT MEASURED: no Reasoning-brain Create had a priced row.
-# It is gemini 3.1 pro at thinking HIGH, ~$0.017 per Pro call measured
-# across stages at ordinary thinking and "~4x the tokens" on this tier,
-# so ~$0.18 for a Create. Re-read llm_calls once a few exist and move it.
-ACTION_USD = {
-    "create:fast": 0.06,
-    "create:reasoning": 0.18,
-}
-
-
-def action_credits(action: str) -> int:
-    """What one studio action costs in credits: its provider USD, marked
-    up and floored by credits_for -- the render path's own conversion."""
-    return credits_for(usd_micros(ACTION_USD[action]))
-
-
-def create_action(brain: Optional[str]) -> str:
-    """The ACTION_USD key a Create on this brain is priced under. An
-    unknown brain prices as the dearer one -- the charge should never be
-    the thing a typo makes cheaper."""
-    key = f"create:{brain or 'fast'}"
-    return key if key in ACTION_USD else "create:reasoning"
+# A CREATE does not (2026-09-29, Mike's call, reversing the 2026-09-28
+# per-Create price): writing a scene is included in the subscription and
+# its cost (~$0.04 a Create, llm_calls) is priced into the plans, not
+# debited per click. The gate that remains is charge.create_refusal: no
+# plan and no balance, no Create.
 
 
 def still_usd(model: str) -> float:
@@ -721,7 +697,7 @@ def display(*, account_id: Optional[int], shot: dict, shot_id: int,
 
 
 __all__ = ["PRICING_VERSION", "CREDIT_CENTS", "MARKUP", "CREDIT_FLOOR",
-           "ACTION_USD", "action_credits", "create_action", "still_usd", "still_credits",
+           "still_usd", "still_credits",
            "PricingRefused", "Estimate", "Quote",
            "usd_micros", "credits_for", "content_hash",
            "windows_to_render", "estimate", "estimate_scene", "billable", "quote", "display",
@@ -796,10 +772,11 @@ def public_catalog() -> dict:
         "topup": {"key": TOPUP.key, "name": TOPUP.name, "usd": TOPUP.usd,
                   "credits": TOPUP.credits},
         "models": catalog_models(),
-        # what the studio charges before a clip exists (2026-09-28)
+        # what the studio charges before a clip exists: a still (2026-09-28).
+        # A Create is included in the plan (2026-09-29) -- 0 here, not absent,
+        # so the site can say so rather than guess.
         "actions": {
-            "create": {"fast": action_credits("create:fast"),
-                       "reasoning": action_credits("create:reasoning")},
+            "create": 0,
             "still": {"standard": still_credits("gemini-2.5-flash-image"),
                       "pro": still_credits("gemini-3-pro-image-preview")},
         },

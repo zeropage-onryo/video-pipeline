@@ -101,21 +101,17 @@ def _error(status: int, code: str, message: str) -> JSONResponse:
                         content={"error": {"code": code, "message": message}})
 
 
-def _create_charge(account_id: Optional[int], brain: Optional[str]):
-    """Hold the credits one Create costs (2026-09-28, pricing.ACTION_USD),
-    or raise ledger.InsufficientCredit BEFORE any job or model call. The
-    job settles it when a scene was written and releases it when none
-    was. Exempt accounts and the unowned pool take no hold (charge.py)."""
-    import uuid
-
+def _create_gate(account_id: Optional[int]) -> Optional[JSONResponse]:
+    """A Create costs no credits (2026-09-29, Mike's call: included in the
+    subscription, priced into the plans). It is refused -- 402, BEFORE any
+    job or model call -- only for an account with no plan and no credit
+    balance (charge.create_refusal, the one predicate the MCP tools ask
+    too)."""
     from src import charge as charging
-    from src import pricing
-    action = pricing.create_action(brain)
-    charge = charging.Charge(account_id, provider="gemini",
-                             ref=f"{action.replace(':', '-')}-{uuid.uuid4().hex}",
-                             estimate_usd=pricing.ACTION_USD[action])
-    charge.take()
-    return charge
+    reason = charging.create_refusal(account_id)
+    if reason:
+        return _error(402, "subscribe_or_top_up", reason)
+    return None
 
 
 def _out_of_credits(e, what: str) -> JSONResponse:
@@ -2123,11 +2119,9 @@ async def scenes_run(request: Request, account_id: int = Depends(auth.current_ac
     if scout_claimed:
         scout.bank_urls(scout_finding_id, refs, lane="composer")
 
-    from src import ledger
-    try:
-        charge = _create_charge(account_id, brain)
-    except ledger.InsufficientCredit as e:
-        return _out_of_credits(e, "this scene")
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
 
     def work(job):
         from google import genai
@@ -2146,23 +2140,15 @@ async def scenes_run(request: Request, account_id: int = Depends(auth.current_ac
         # the clip are the Director canvas's job when a person is doing
         # this by hand -- and the nightly graph's job when nobody is
         # (src/orchestrator.py calls the same stage functions).
-        try:
-            result = scene_chain.run(
-                idea, brand, count=count, refs=refs, image_refs=image_refs or None,
-                db_path=None, account_id=account_id,
-                gemini_client=client, video_parts=video_parts,
-                resolve_photo=_resolve_asset_photo,
-                attach_refs=_attach_scene_refs,
-                brain=brain, ratio=ratio or None, seconds=seconds,
-                progress=lambda fraction, detail: jobs.progress(job, fraction, detail))
-        except BaseException as e:
-            charge.release(f"create: {type(e).__name__}")
-            raise
+        result = scene_chain.run(
+            idea, brand, count=count, refs=refs, image_refs=image_refs or None,
+            db_path=None, account_id=account_id,
+            gemini_client=client, video_parts=video_parts,
+            resolve_photo=_resolve_asset_photo,
+            attach_refs=_attach_scene_refs,
+            brain=brain, ratio=ratio or None, seconds=seconds,
+            progress=lambda fraction, detail: jobs.progress(job, fraction, detail))
         saved = result["scenes"]
-        if saved:
-            charge.settle()
-        else:
-            charge.release("create: wrote nothing")
         if scout_claimed and saved:
             scout.mark_used(scout_finding_id,
                             run_id=f"concept:{saved[0]['concept_id']}")
@@ -3853,23 +3839,12 @@ async def pipeline_run(request: Request, account_id: int = Depends(auth.current_
 
     image_refs, refs, _ = await _collect_refs(form)
 
-    from src import ledger
-    try:
-        charge = _create_charge(account_id, None)
-    except ledger.InsufficientCredit as e:
-        return _out_of_credits(e, "this scene")
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
 
     def work(job):
-        try:
-            out = _brief_work(job)
-        except BaseException as e:
-            charge.release(f"create: {type(e).__name__}")
-            raise
-        if out.get("ref_id"):
-            charge.settle()
-        else:
-            charge.release("create: wrote nothing")
-        return out
+        return _brief_work(job)
 
     def _brief_work(job):
         from google import genai

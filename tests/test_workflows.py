@@ -675,18 +675,20 @@ def test_nano_generate_renders_and_logs(tmp_db, tmp_path, monkeypatch):
     assert asset["model"] == nano_banana.MODEL
 
 
-def test_nano_generate_honours_the_daily_cap(tmp_db, tmp_path, monkeypatch):
+def test_nano_generate_has_no_daily_cap(tmp_db, tmp_path, monkeypatch):
+    """2026-09-29, Mike's call: every still is charged credits, so the
+    balance is the limit and the daily cap is gone -- for everyone. Setting
+    the old env var must not bring it back."""
     from src import nano_banana
 
     monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setenv("NANO_DAILY_CAP", "1")
     monkeypatch.setattr(nano_banana, "RENDER_DIR", tmp_path / "nano")
     monkeypatch.setattr("src.storage.configured", lambda: False)
-    monkeypatch.setattr(nano_banana, "DAILY_CAP", 1)
     fake = FakeGeminiImageClient()
-    assert nano_banana.generate_from_prompt("one", db_path=tmp_db, client=fake)["ok"]
-    second = nano_banana.generate_from_prompt("two", db_path=tmp_db, client=fake)
-    assert not second["ok"] and "daily cap" in second["error"]
-    assert len(fake.calls) == 1                          # capped before the call
+    for prompt in ("one", "two", "three"):
+        assert nano_banana.generate_from_prompt(prompt, db_path=tmp_db, client=fake)["ok"]
+    assert len(fake.calls) == 3
 
 
 def test_nano_generate_refuses_an_empty_prompt_and_missing_key(tmp_db, monkeypatch):

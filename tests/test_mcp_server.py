@@ -386,6 +386,29 @@ def test_generate_by_finding_id_hands_the_graph_its_bin(tmp_db, monkeypatch, gra
     assert out["finding_id"] == fid and out["reference_photos"] == call["reference_photos"]
 
 
+def test_research_and_generate_ask_the_create_gate(tmp_db, monkeypatch, graph_calls):
+    """2026-09-29: research and generate spend Gemini for their caller, so
+    they ask charge.create_refusal like Studio's Create -- and a refusal is
+    Refused (stop asking), never a ValueError (ask again), and happens
+    before the graph or the crawl runs."""
+    from src import charge
+    from src import scout as scout_mod
+    monkeypatch.setenv("DATABASE_URL", tmp_db)
+    monkeypatch.setattr(charge, "create_refusal",
+                        lambda account_id, dsn=None: charge.CREATE_REFUSAL)
+    monkeypatch.setattr(scout_mod, "scout",
+                        lambda **kw: pytest.fail("crawled past the gate"))
+    with pytest.raises(mcp_server.Refused, match="subscribe or top up"):
+        mcp_server.run_graph("a bench with one glove", "zeropage")
+    with pytest.raises(mcp_server.Refused, match="subscribe or top up"):
+        mcp_server.run_research("zeropage", lanes=["web"], dsn=tmp_db)
+    assert graph_calls == []
+
+    monkeypatch.setattr(charge, "create_refusal", lambda account_id, dsn=None: None)
+    mcp_server.run_graph("a bench with one glove", "zeropage")
+    assert len(graph_calls) == 1
+
+
 def test_generate_by_spark_text_finds_its_own_photographs(tmp_db, monkeypatch, graph_calls):
     """add_spark -> reference -> generate(spark) must work without the
     agent carrying an id between calls, and fixing the capitals must

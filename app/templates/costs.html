@@ -97,8 +97,8 @@
         <tbody>
         {% for t in c.today.tools %}
           <tr><td class="mono">{{ t.tool }}</td>
-              <td{% if t.used >= t.cap %} style="color:var(--red)"{% endif %}>{{ t.used }}</td><td>{{ t.cap }}</td>
-              <td{% if t.everyone >= t.ceiling %} style="color:var(--red)"{% endif %}>{{ t.everyone }}</td><td>{{ t.ceiling }}</td>
+              <td{% if t.cap is not none and t.used >= t.cap %} style="color:var(--red)"{% endif %}>{{ t.used }}</td><td>{{ t.cap if t.cap is not none else "none" }}</td>
+              <td{% if t.ceiling and t.everyone >= t.ceiling %} style="color:var(--red)"{% endif %}>{{ t.everyone }}</td><td>{{ t.ceiling if t.ceiling else "none" }}</td>
               <td class="mono dim">{{ t.spend_env or "cap only" }}</td></tr>
         {% endfor %}
           <tr><td class="mono">llm (gemini)</td><td colspan="2">{{ c.today.llm.calls }} calls · ${{ "%.4f"|format(c.today.llm.cost_usd) }}{% if c.today.llm.unpriced %} <span class="dim">(+{{ c.today.llm.unpriced }} unpriced)</span>{% endif %}</td>
