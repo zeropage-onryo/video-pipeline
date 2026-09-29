@@ -68,7 +68,9 @@ def test_the_prompt_is_the_hook_frame_plus_the_look(tmp_db, a_spark, monkeypatch
     # 150` is appended by _midjourney itself, so it is not in what the
     # renderer is HANDED. prompts/look_antihero.txt carries the framing
     # in prose ("vertical 9:16") for the providers that take no flags.
-    assert "teal" in prompt.lower() and "9:16" in prompt
+    # 2026-09-28: no house look any more (prompts/look_zeropage.txt is
+    # neutral), so nothing grades the still but the hook frame itself
+    assert "9:16" in prompt and "teal" not in prompt.lower()
 
 
 def test_the_render_is_banked_on_its_own_pass_and_read_first(tmp_db, a_spark, monkeypatch):

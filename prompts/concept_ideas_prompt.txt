@@ -35,7 +35,7 @@ if a reference shows something these rooms can't deliver on camera,
 that's an AI shot, not a reason to avoid the idea):
 {references}
 
-CHANNEL DIRECTION (rough context, not strict generation rules):
+STUDIO + PROJECT DIRECTION (the project's brief and memory, when there is one):
 {brand}
 {client}
 

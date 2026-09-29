@@ -13,9 +13,9 @@ RUN-SPECIFIC CREATIVE AUTHORITY:
 The filmmaker's idea or spark above is the primary brief. Any images attached
 to this run are direct visual evidence: follow what they actually show for the
 relevant identity, environment, wardrobe, objects, composition, palette and
-mood. The selected reference library supports those inputs. The channel note
-below is only broad background and may fill details the run leaves open; it
-must never override, narrow or redirect the idea or images. If anything
+mood. The selected reference library supports those inputs. The studio +
+project direction below fills details the run leaves open and keeps the
+project consistent; it must never override, narrow or redirect the idea or images. If anything
 conflicts, the idea and attached images win.
 
 WHAT THE SPARK IS, AND WHAT YOU DO WITH IT: it is the filmmaker's IDEA, told
@@ -34,7 +34,7 @@ clothing where they apply; name them, don't redescribe their appearance):
 REFERENCE LIBRARY (tone and structure to echo):
 {references}
 
-CHANNEL DIRECTION (rough context, not strict generation rules):
+STUDIO + PROJECT DIRECTION (the project's brief and memory, when there is one):
 {brand}
 
 GOLD-STANDARD EXAMPLE — match the SHAPE and craft of this proven prompt (its
@@ -47,7 +47,7 @@ Write the "brief" as a single cohesive prompt with these five parts, in order:
 1. OPEN LINE: "Ultra-realistic grounded [tone] video in 9:16," then state which
    uploaded reference is the EXACT face and which is the EXACT outfit (only if
    cast/props are on file; otherwise describe the character plainly).
-2. STYLE: the brand's LOOK below, stated in cinematography and grade terms —
+2. STYLE: the LOOK below, stated in cinematography and grade terms —
    its palette, air, wet surfaces, lens and finish. Fold in the run's
    references and stated mood here; the attached references win over the
    look on any detail they show. Do NOT reach for "raw handheld, matte,

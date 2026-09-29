@@ -60,16 +60,19 @@ SHOT_SIZE = (
 # that doesn't exist in Shot yet -- see runway_parameters().
 RUNWAY_MODES = ("generate", "restyle")
 
-# Zero Page Films house style, from prompts/brief.txt and settings.txt.
-# Every rendered prompt carries this so generated clips cut against real
-# footage without a visible seam.
+# The default look a Shot carries when nothing more specific was given.
+# NEUTRAL since 2026-09-28 (Mike's call): the studio has no house style any
+# more -- it was the noir/crushed-shadows grade of his personal channel --
+# so a project's look comes from its brief and references, and this default
+# only asks for grounded craft. The negative keeps the failures that are
+# wrong for every client (text, logos, flares) and drops the ban on bright
+# grades, which was a channel's taste, not a rule.
 HOUSE_LOOK = (
-    "noir, gritty, high contrast, crushed shadows, desaturated, "
-    "warmth only from practical light sources"
+    "grounded cinematic realism, motivated practical light, "
+    "real texture and physics"
 )
 HOUSE_NEGATIVE = (
-    "no subject addressing camera, no text overlays, no logos, "
-    "no lens flares, no upbeat or saturated colour grading"
+    "no text overlays, no logos, no watermarks, no lens flares"
 )
 HOUSE_ASPECT = "9:16"
 

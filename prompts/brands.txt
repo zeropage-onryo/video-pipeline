@@ -1,39 +1,33 @@
-# Brand modes for concept generation. One block per brand, keyed by the
-# name after [ ]. Edited here, not in Python -- same as brief.txt.
-
-[antihero]
-ANTIHERO — Michael's PERSONAL channel.
-
-STATUS: ROUGH CHANNEL DIRECTION, NOT A RULEBOOK FOR AN INDIVIDUAL RUN.
-This note only suggests territory the channel may revisit over time. The idea
-or spark typed into Create and the reference images selected for that run are
-the creative brief and always take priority. Follow their subject, character,
-setting, genre, mood, palette and visual language. Do not rewrite them into a
-motorcycle ritual, a nocturnal loner, a menacing persona or a fixed neo-noir
-look merely because this is the Antihero channel. Michael need not appear
-unless the idea names him or his reference is selected. Let the channel evolve
-and allow individual videos to depart completely from this note.
-
-WHEN THE RUN LEAVES A CHOICE OPEN, possible recurring territory includes a
-cinematic personal point of view, grounded physical storytelling, real-feeling
-spaces and restrained performance. Moto/noir, night energy, practical lamps,
-shadows, minimal dialogue and action told through objects are available motifs,
-not required ingredients. An available fallback grade is crushed shadows and
-deep blacks, film grain, low saturation with a restrained hot accent, and cool
-shadow tones against warm practical light. Use it only for details the run's
-idea and references do not already define.
+# The studio's standing direction, read into every scene prompt as {brand}.
+# Edited here, not in Python.
+#
+# ONE block since 2026-09-28 (Mike's call): ANTIHERO was folded into Zero
+# Page and the studio stopped being two in-house channels. There is no house
+# persona, no house star and no house look any more -- each PROJECT carries
+# its own brief and memory (src/projects.py), appended below this block at
+# generation time. `load_brand("antihero")` still reads this block, so rows
+# written before the fold keep loading.
 
 [zeropage]
-ZERO PAGE FILMS — Michael's VIRAL content engine. PURPOSE: garner
-attention at volume — trend-driven content, products, brand and client
-spots, and short films engineered to travel and spread. This is the high-output channel:
-most concepts are AI-generated and auto-posted through the pipeline (the
-queue / autopilot path) until Michael grants full approvals, so every
-idea must be strong enough to ship with light review. The STAR is the
-content itself — a product, a trend, a place, a film moment — never a
-recurring person; Michael stays behind the camera, though this channel
-also works to grow and assist his personal (Antihero) brand. Chase what
-spreads now: strong hooks, current trends and formats, shareable
-payloads. Same craft — dark, contrasty, cinematic, never flat corporate
-— but here the aesthetic serves reach and the product, not a personal
-myth.
+ZERO PAGE — an AI production studio. There is no house channel, no house star
+and no house look. Every run is made for somebody's vision: a brand, an ad, a
+product, a music video, a filmmaker's short.
+
+WHERE THE BRIEF COMES FROM, in order of authority:
+1. The idea typed into this run, and the reference images and elements
+   attached to it.
+2. The project's brief and what the project has learned, when this run belongs
+   to a project (appended below). Stay consistent with the work already picked
+   in that project — same people, wardrobe, world and grade — unless the idea
+   asks to break from it.
+3. Nothing else. Do not invent a recurring character, a signature grade, a
+   genre or a mood the run and the project did not ask for.
+
+PEOPLE: cast only what the run names or attaches. An element with reference
+photos on file is that exact person or product, held consistently. Anyone
+else is described plainly by appearance.
+
+WHEN A CHOICE IS LEFT OPEN: make it cinematic and specific — motivated light,
+real texture, one clear subject, an arresting first second — in whatever look
+serves the idea. Never flat or corporate by default, and never a default
+dark neo-noir either.

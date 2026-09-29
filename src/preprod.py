@@ -163,6 +163,10 @@ def init(dsn: Optional[str] = None) -> None:
         own_table(conn, "locations")
         own_table(conn, "shoot_concepts")
         own_table(conn, "scene_briefs")
+    # studio projects (2026-09-28): the table, and project_id on
+    # shoot_concepts -- after the block above, since it ALTERs that table
+    from . import projects
+    projects.init(dsn)
 
 
 def save_judge_score(concept_id: int, judge: dict, dsn: Optional[str] = None, *,
@@ -605,7 +609,8 @@ def get_concept(concept_id: int, dsn: Optional[str] = None, *,
 
 
 def list_concepts(limit: int = 100, dsn: Optional[str] = None, *,
-                  account_id: int, brand: Optional[str] = None) -> list[dict[str, Any]]:
+                  account_id: int, brand: Optional[str] = None,
+                  project_id: Optional[int] = None) -> list[dict[str, Any]]:
     """This account's concepts, newest first -- the ones you just
     generated are the ones you're deciding about.
 
@@ -623,12 +628,20 @@ def list_concepts(limit: int = 100, dsn: Optional[str] = None, *,
     pass a cookie value, and a stale cookie should show the board, not
     empty it."""
     scoped = brand if brand in BRANDS else None
+    # `project_id` filters in SQL for the same reason brand does: a
+    # project's page must spend the limit on its own concepts.
+    where, args = "", [account_id]
+    if scoped:
+        where += "AND brand = %s "
+        args.append(scoped)
+    if project_id is not None:
+        where += "AND project_id = %s "
+        args.append(int(project_id))
     with connect(dsn) as conn:
         rows = conn.execute(
             "SELECT * FROM shoot_concepts WHERE account_id IS NOT DISTINCT FROM %s "
-            + ("AND brand = %s " if scoped else "")
-            + "ORDER BY id DESC LIMIT %s",
-            (account_id, scoped, limit) if scoped else (account_id, limit),
+            + where + "ORDER BY id DESC LIMIT %s",
+            (*args, limit),
         ).fetchall()
         # The board and Queue read hundreds of rows. Hydrate locations in
         # one round trip, including an explicit empty list for scenes without

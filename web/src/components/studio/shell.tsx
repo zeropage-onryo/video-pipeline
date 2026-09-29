@@ -25,6 +25,7 @@ import {
   AtSign,
   Clapperboard,
   ChevronsUpDown,
+  FolderKanban,
   House,
   Images,
   Layers,
@@ -45,10 +46,11 @@ import {
 /* eslint-disable @next/next/no-img-element */
 import "@/app/studio/studio.css";
 
-export type ViewId = "studio" | "assets" | "pipeline" | "director" | "elements" | "references" | "queue";
+export type ViewId = "studio" | "projects" | "assets" | "pipeline" | "director" | "elements" | "references" | "queue";
 
 const NAV: { id: ViewId; label: string; href: string; icon: typeof House; external?: boolean }[] = [
   { id: "studio", label: "Studio", href: "/studio", icon: House },
+  { id: "projects", label: "Projects", href: "/studio/projects", icon: FolderKanban },
   { id: "assets", label: "Assets", href: "/studio/assets", icon: Layers },
   { id: "pipeline", label: "Pipeline", href: "/studio/pipeline", icon: Workflow },
   { id: "director", label: "Director", href: "/studio/flows", icon: Clapperboard },
@@ -58,6 +60,7 @@ const NAV: { id: ViewId; label: string; href: string; icon: typeof House; extern
 ];
 
 const VIEW_BY_PATH: [string, ViewId][] = [
+  ["/studio/projects", "projects"],
   ["/studio/flows", "director"],
   ["/studio/elements", "elements"],
   ["/studio/references", "references"],

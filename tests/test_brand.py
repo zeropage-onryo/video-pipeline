@@ -35,7 +35,7 @@ def test_set_brand_sets_cookie_and_honours_next():
 def test_set_brand_rejects_unknown_brand_and_offsite_next():
     r = client.post("/brand/nope", data={"next": "https://evil.example"},
                     follow_redirects=False)
-    assert "brand=antihero" in r.headers.get("set-cookie", "")
+    assert "brand=zeropage" in r.headers.get("set-cookie", "")   # the default since the 2026-09-28 fold
     assert r.headers["location"] == "/studio"   # safe_next rejected the offsite path
     client.cookies.clear()
 

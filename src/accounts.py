@@ -493,8 +493,8 @@ def manual_lane_operators(dsn: Optional[str] = None) -> list[dict[str, Any]]:
 def seed(email: str, display_name: str = "Mike",
          dsn: Optional[str] = None) -> dict[str, Any]:
     """
-    The once-only bootstrap: Mike's user, the two real accounts, and
-    owner membership on both. Idempotent -- re-running finds instead of
+    The once-only bootstrap: Mike's user, the one real account, and
+    owner membership on it. Idempotent -- re-running finds instead of
     duplicating. The user row is UNCLAIMED until the first Supabase
     sign-in with that email (`claim`), which is what attaches the real
     identity; there is no password here -- Supabase holds those. Brand
@@ -506,12 +506,14 @@ def seed(email: str, display_name: str = "Mike",
     user_id = user["id"] if user else create_user(
         email, display_name=display_name, dsn=dsn)
 
+    # ONE account since 2026-09-28 (Mike's call): ANTIHERO was folded into
+    # Zero Page and its row deleted, so re-running setup must not bring it
+    # back. The studio's projects (src/projects.py) are how work is
+    # separated now, not accounts.
     zeropage = upsert_account("zeropage", "Zero Page Films", "#8b5cf6", dsn=dsn)
-    antihero = upsert_account("antihero", "ANTIHERO", "#d64550", dsn=dsn)
     add_member(zeropage, user_id, dsn=dsn)
-    add_member(antihero, user_id, dsn=dsn)
     claimed = claim_unowned_rows(dsn=dsn)
-    return {"user_id": user_id, "accounts": [zeropage, antihero],
+    return {"user_id": user_id, "accounts": [zeropage],
             "claimed": claimed}
 
 
@@ -668,7 +670,7 @@ def main(argv=None) -> None:
                     "the two brand accounts. Identity itself is Supabase Auth's.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
-    p_seed = sub.add_parser("seed", help="create user + zeropage/antihero accounts")
+    p_seed = sub.add_parser("seed", help="create user + the zeropage account")
     p_seed.add_argument("email")
     p_seed.add_argument("--name", default="Mike")
 
@@ -829,7 +831,7 @@ def main(argv=None) -> None:
         return
 
     result = seed(args.email, display_name=args.name)
-    print(f"seeded user {args.email} as owner of zeropage + antihero -- the first "
+    print(f"seeded user {args.email} as owner of zeropage -- the first "
           "sign-in through Supabase with that email claims it")
 
 

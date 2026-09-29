@@ -22,6 +22,25 @@ Post-production (footage ingest -> pitches -> cut lists) was cut in Aug 2026: th
 the pre-production loop, and the edit happens by hand in Resolve.
 Experimental — the loop is structurally in place but needs weeks of real use to mean anything.
 
+## One account, neutral studio, per-project memory (2026-09-28, Mike's call)
+
+- **ANTIHERO was folded into Zero Page.** Account 2 and its membership are deleted on the
+  live DB; every `antihero`-tagged row was retagged `zeropage` (backup of the ids:
+  `data/backups/2026-09-28-account-merge.json`). `accounts.seed` now creates ONE account, the
+  nightly walks `zeropage` only (`nightly.PAIRS`), and a request's brand comes from membership
+  (`api._request_brand`), never a raw `brand` cookie. `load_brand("antihero")` / `look_block`
+  still answer, with the zeropage text, so old rows load. `preprod.BRANDS` keeps both names.
+- **No house persona, star or look.** `prompts/brands.txt` is one neutral studio block;
+  `prompts/look_zeropage.txt` defers to references + project; `shot.HOUSE_LOOK` is neutral;
+  `CAST_BRANDS` includes zeropage (cast is scoped by what the run names/attaches, not by brand).
+- **Projects carry the direction** (`src/projects.py`, table `projects`, `shoot_concepts.project_id`).
+  A project = brief (typed, or drafted from three answers via `POST /api/projects/draft-brief`) +
+  memory (picks, passes with reason, hand edits of prompts made inside it, capped at 60).
+  `/scenes/run` and the Guide take `project_id`; `project_context.active(project)` makes
+  `shootgen.load_brand` append `projects.brief_block` for the job. React: `/studio/projects`
+  (rail item), composer chip via `?project=`. Per-project memory is the ADDRESSED half; the
+  shared brain (winning_prompts, RAG shelves) still learns from everything.
+
 ## Backlog
 
 Parked ideas, known bugs and next builds live in `docs/BACKLOG.md`.

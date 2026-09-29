@@ -4,7 +4,7 @@ import pytest
 
 from src import db
 from src import generative as gen
-from src.shot import PLATFORMS, Shot, render, render_all
+from src.shot import HOUSE_LOOK, PLATFORMS, Shot, render, render_all
 
 
 def make_shot(**kw):
@@ -68,7 +68,7 @@ def test_renderers_disagree():
 def test_house_look_in_every_prompt():
     out = render_all(make_shot())
     for tool, prompt in out.items():
-        assert "crushed shadows" in prompt, f"{tool} dropped the house look"
+        assert HOUSE_LOOK.split(",")[0] in prompt, f"{tool} dropped the default look"
 
 
 def test_camera_vocabulary_is_translated_not_leaked():

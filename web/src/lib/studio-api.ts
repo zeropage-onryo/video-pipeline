@@ -317,10 +317,11 @@ export type PickRate = { generated: number; picked: number; rate: number | null 
 /** GET /api/pipeline/concepts — the board. Ask for the archived rows
  *  too and filter client-side, so the count line can say where every
  *  card went (the 2026-09-02 lesson). */
-export const boardConcepts = (brand?: string, archived = false) => {
+export const boardConcepts = (brand?: string, archived = false, project?: number) => {
   const params = new URLSearchParams();
   if (brand) params.set("brand", brand);
   if (archived) params.set("archived", "true");
+  if (project) params.set("project", String(project));
   const qs = params.toString();
   return apiFetch<{ items: Concept[]; pick?: PickRate }>(`/pipeline/concepts${qs ? `?${qs}` : ""}`);
 };
@@ -551,3 +552,73 @@ export async function switchAccount(slug: string) {
 export const QUEUE_EVENT = "zpf:queue";
 export const announceQueueChange = () =>
   window.dispatchEvent(new Event(QUEUE_EVENT));
+
+/* ── projects (2026-09-28) ──
+   One brief and one memory per piece of work (src/projects.py). The
+   memory is what the project LEARNED -- picks, passes with their reason,
+   hand edits -- and every Create inside the project is written against
+   the brief plus that memory, which is how its renders stay consistent. */
+export type ProjectMemory = {
+  kind: "pick" | "pass" | "edit" | "note";
+  text: string;
+  concept_id: number | null;
+  at: string;
+};
+export type Project = {
+  id: number;
+  title: string;
+  brief: string;
+  memory: ProjectMemory[];
+  archived: boolean;
+  created_at: string;
+  updated_at: string;
+  concepts?: number;
+  picked?: number;
+  rendered?: number;
+};
+export type ProjectQuestion = { key: string; label: string };
+export const listProjects = (archived = false) =>
+  apiFetch<{ items: Project[]; questions: ProjectQuestion[] }>(
+    `/projects${archived ? "?archived=true" : ""}`,
+  );
+export const getProject = (id: number) => apiFetch<Project>(`/projects/${id}`);
+export const createProject = (title: string, brief: string) =>
+  apiFetch<Project>("/projects", { method: "POST", body: JSON.stringify({ title, brief }) });
+export const updateProject = (id: number, patch: { title?: string; brief?: string }) =>
+  apiFetch<Project>(`/projects/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
+export const archiveProject = (id: number, archived = true) =>
+  apiFetch<{ ok: boolean }>(`/projects/${id}/archive`, {
+    method: "POST",
+    body: JSON.stringify({ archived }),
+  });
+export const forgetProjectMemory = (id: number, at: string) =>
+  apiFetch<{ ok: boolean; removed: boolean }>(`/projects/${id}/forget`, {
+    method: "POST",
+    body: JSON.stringify({ at }),
+  });
+export const draftProjectBrief = (title: string, answers: Record<string, string>) =>
+  apiFetch<{ brief: string }>("/projects/draft-brief", {
+    method: "POST",
+    body: JSON.stringify({ title, answers }),
+  });
+
+/* The project the Studio composer is writing inside. Carried as ?project=
+   from the Projects page and remembered per browser so a reload keeps it;
+   clearing it is one click on the composer's chip. */
+export const ACTIVE_PROJECT_KEY = "zp.project";
+export function rememberActiveProject(id: number | null) {
+  try {
+    if (id) localStorage.setItem(ACTIVE_PROJECT_KEY, String(id));
+    else localStorage.removeItem(ACTIVE_PROJECT_KEY);
+  } catch {
+    /* private window: the ?project= param still works */
+  }
+}
+export function recallActiveProject(): number | null {
+  try {
+    const v = Number(localStorage.getItem(ACTIVE_PROJECT_KEY));
+    return Number.isFinite(v) && v > 0 ? v : null;
+  } catch {
+    return null;
+  }
+}

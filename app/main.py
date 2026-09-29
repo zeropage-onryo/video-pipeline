@@ -111,7 +111,7 @@ templates.env.filters["clean_title"] = clean_title
 # channel's holds and which brand's analytics you see, and shows a distinct
 # label + accent everywhere.
 BRANDS = tuple(preprod.BRANDS)
-DEFAULT_BRAND = "antihero"
+DEFAULT_BRAND = "zeropage"  # one brand since 2026-09-28 (ANTIHERO folded in)
 BRAND_META = {
     "antihero": {"label": "ANTIHERO", "accent": "#d64550",
                  "note": "personal brand — Michael is the star"},

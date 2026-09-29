@@ -42,6 +42,10 @@ import {
   getAssets,
   getCapabilities,
   runCreativeGuide,
+  getProject,
+  recallActiveProject,
+  rememberActiveProject,
+  type Project,
   runScenes,
   waitForJob,
   type Asset,
@@ -154,7 +158,16 @@ function Composer() {
   const { brand, toast } = useShell();
   const params = useSearchParams();
   const attachId = params.get("attach");
-  const [idea, setIdea] = useState("");
+  // An idea typed into the landing page's hero arrives as ?spark= and the
+  // composer opens already carrying it -- the sentence a visitor wrote is
+  // the one thing on that page that must not be thrown away.
+  const [idea, setIdea] = useState(params.get("spark") ?? "");
+  // The project this composer writes inside (2026-09-28): handed over by
+  // the Projects page as ?project=, remembered per browser, cleared by the
+  // chip's ×. Create and the Guide both send it, so the scene is written
+  // against the project's brief + memory and filed under it.
+  const projectParam = params.get("project");
+  const [project, setProject] = useState<Project | null>(null);
   const [caps, setCaps] = useState<Capabilities>({});
   const [assets, setAssets] = useState<Asset[]>([]);
   const [filter, setFilter] = useState<Filter>("all");
@@ -264,6 +277,26 @@ function Composer() {
   // picks as `refs`, a field nothing server-side has ever read, so a
   // @Michael pick reached the scene only when it was also a file
   // (2026-09-18).
+  useEffect(() => {
+    const id = Number(projectParam) || recallActiveProject();
+    if (!id) return;
+    getProject(id)
+      .then((p) => {
+        if (p.archived) throw new Error("archived");
+        setProject(p);
+        rememberActiveProject(p.id);
+      })
+      .catch(() => {
+        setProject(null);
+        rememberActiveProject(null);
+      });
+  }, [projectParam]);
+
+  const leaveProject = () => {
+    setProject(null);
+    rememberActiveProject(null);
+  };
+
   const appendReferences = (form: FormData) => {
     attachments.forEach((a) => form.append("files", a.file, a.name));
     picked.forEach((u) => form.append("asset_photos", u));
@@ -291,6 +324,7 @@ function Composer() {
         if (brain) form.append("brain", brain);
         if (seconds) form.append("seconds", String(seconds));
         if (ratio) form.append("ratio", ratio);
+        if (project) form.append("project_id", String(project.id));
         appendReferences(form);
         const started = await runScenes(form);
         say("Writing the scene…");
@@ -323,6 +357,7 @@ function Composer() {
         if (brand) form.append("brand", brand);
         form.append("guide_provider", "gemini");
         form.append("idea", asked);
+        if (project) form.append("project_id", String(project.id));
         // The same Fast / Reasoning pill Create sends. Without it the
         // Guide answered every turn on the reasoning tier -- ~1.5c a
         // message for "which direction?" -- and the pill did nothing
@@ -505,6 +540,26 @@ function Composer() {
           want to create?
         </h1>
         <div className="stack">
+          {project ? (
+            <div className="mb-2 flex items-center gap-2 text-[12px] text-white/60">
+              <span className="rounded-full border border-white/15 bg-white/[0.06] px-3 py-1">
+                Project ·{" "}
+                <Link href="/studio/projects" className="text-white/90 hover:underline">
+                  {project.title}
+                </Link>
+                <button
+                  type="button"
+                  onClick={leaveProject}
+                  className="ml-2 text-white/40 hover:text-white/90"
+                  aria-label="Leave this project"
+                  title="Write outside any project"
+                >
+                  ×
+                </button>
+              </span>
+              <span className="text-white/40">written against its brief and {project.memory.length} learned</span>
+            </div>
+          ) : null}
           <div
             className={`glass cbox${idea ? " awake" : ""}${dragging ? " drop" : ""}${busy ? " busy" : ""}`}
             onDragEnter={onDragEnter}

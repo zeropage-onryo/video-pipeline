@@ -20,6 +20,19 @@ from app import jobs, workflow_runner
 from app.main import app
 from src import generative, imagery, render_assets, runway, workflows
 
+
+def _seed_two(email, dsn):
+    """accounts.seed makes ONE account since the 2026-09-28 fold; these
+    tests are about a person who belongs to two, so the second is made
+    here explicitly rather than by the setup command."""
+    from src import accounts as _accounts
+
+    seeded = _accounts.seed(email, dsn=dsn)
+    second = _accounts.upsert_account("antihero", "ANTIHERO", "#d64550", dsn=dsn)
+    _accounts.add_member(second, seeded["user_id"], dsn=dsn)
+    return {**seeded, "accounts": [*seeded["accounts"], second]}
+
+
 client = TestClient(app)
 
 
@@ -1364,12 +1377,12 @@ def test_capabilities_report_nano(tmp_db, monkeypatch):
 
 def test_nano_generate_stamps_the_shot_with_the_callers_account(
         tmp_db, tmp_path, monkeypatch):
-    from src import accounts, nano_banana
+    from src import nano_banana
 
     # shots.account_id is a real foreign key, so the owner has to exist --
     # which is itself half the point: an unowned write only looks harmless
     # because NULL skips the constraint.
-    accounts.seed("mike@example.com", dsn=tmp_db)
+    _seed_two("mike@example.com", dsn=tmp_db)
     with generative.connect(tmp_db) as conn:
         owner = conn.execute("SELECT MIN(id) AS id FROM accounts").fetchone()["id"]
 

@@ -22,6 +22,10 @@ def look_block(brand: str) -> str:
     """The look text for a brand, or a one-line note when the file is
     missing -- never an error, because a prompt with no look is a worse
     night, not a broken one."""
+    # One studio look since the 2026-09-28 fold: neutral, deferring to the
+    # run's references and the project brief (prompts/look_zeropage.txt).
+    if brand == "antihero":
+        brand = "zeropage"
     try:
         return (PROMPTS_DIR / f"look_{brand}.txt").read_text().strip()
     except OSError:

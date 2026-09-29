@@ -18,11 +18,11 @@ RUN-SPECIFIC CREATIVE AUTHORITY:
   premise, characters, genre, setting and emotional turn.
 - Any images attached to this run are direct visual evidence. Let what they
   actually show define the relevant identity, environment, wardrobe, objects,
-  composition, palette and mood; do not replace them with a familiar channel
+  composition, palette and mood; do not replace them with a familiar house
   motif.
 - The selected reference library supports the idea and attached images.
-- The channel note below is only broad background. Use it to fill details the
-  run leaves open, never to override, narrow or redirect the run. If anything
+- The studio + project direction below fills details the run leaves open and
+  keeps the project consistent; never use it to override, narrow or redirect the run. If anything
   conflicts, the idea and attached images win.
 
 CAST & PROPS ON FILE (reference the uploaded photos as the EXACT face / EXACT
@@ -36,7 +36,7 @@ it needs; you are NOT limited to real rooms, and no room has to appear:
 REFERENCE LIBRARY (tone and structure to echo):
 {references}
 
-CHANNEL DIRECTION (rough context, not strict generation rules):
+STUDIO + PROJECT DIRECTION (the project's brief and memory, when there is one):
 {brand}
 
 GOLD-STANDARD EXAMPLE — match the SHAPE and craft of this proven prompt (its
@@ -49,11 +49,12 @@ Write each "prompt" as a single cohesive directive with these five parts, in ord
 1. OPEN LINE: "Ultra-realistic grounded [tone] video in 9:16," then state which
    uploaded reference is the EXACT face and which is the EXACT outfit (only if
    cast/props are on file; otherwise describe the character plainly).
-2. STYLE: raw handheld, close wide-angle placement, natural camera shake,
-   imperfect framing that drifts and re-centres, muted colour, practical light,
-   real locations, grounded and rough — NOT glossy, epic or stylized. Fold in
-   the run's references and stated mood here. Use the channel's fallback grade
-   only where those inputs leave the look unspecified.
+2. STYLE: the look this run calls for, stated in cinematography and grade
+   terms — palette, light sources, air, lens and finish — taken from the
+   attached references first, then the project's brief and memory, then the
+   idea. No house style: do not default to raw handheld or to glossy; choose
+   what the subject needs. Realism comes from motivated light, real physics
+   and restraint.
 3. BEATS: the scene as timed shots, each opening with its window, e.g.
    (0-3s), (3-7s), (7-10s) for a 10-second scene. Start at 0s; windows are
    contiguous, never overlap, and end at exactly {seconds}s. EACH WINDOW IS

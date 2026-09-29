@@ -19,6 +19,19 @@ from src import accounts, db, generative, ledger
 from src.shot import Shot
 
 
+def _seed_two(email, dsn):
+    """accounts.seed makes ONE account since the 2026-09-28 fold; these
+    tests are about a person who belongs to two, so the second is made
+    here explicitly rather than by the setup command."""
+    from src import accounts as _accounts
+
+    seeded = _accounts.seed(email, dsn=dsn)
+    second = _accounts.upsert_account("antihero", "ANTIHERO", "#d64550", dsn=dsn)
+    _accounts.add_member(second, seeded["user_id"], dsn=dsn)
+    return {**seeded, "accounts": [*seeded["accounts"], second]}
+
+
+
 @pytest.fixture
 def led(pg):
     """A ledger on a seeded schema, and the account that owns it.
@@ -29,7 +42,7 @@ def led(pg):
     about.
     """
     accounts.init(pg)
-    accounts.seed("mike@example.com", dsn=pg)
+    _seed_two("mike@example.com", dsn=pg)
     generative.init(pg)
     ledger.init(pg)
     with db.connect(pg) as conn:
@@ -804,7 +817,7 @@ def test_the_triggers_are_installed_on_a_database_that_predates_them(pg):
     shape `submitted_at` already uses, because the CREATEs cover a fresh
     database and this covers the one on the machine you are typing on."""
     accounts.init(pg)
-    accounts.seed("mike@example.com", dsn=pg)
+    _seed_two("mike@example.com", dsn=pg)
     ledger.init(pg)
     with db.connect(pg) as conn:
         conn.execute("DROP TRIGGER ledger_lot_balance ON credit_lots")

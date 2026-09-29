@@ -343,6 +343,9 @@ def load_brand(brand: str) -> str:
     """
     if brand not in preprod.BRANDS:
         raise ValueError(f"brand must be one of {preprod.BRANDS}, got {brand!r}")
+    # ANTIHERO was folded into Zero Page (2026-09-28): one studio block,
+    # with the active project's brief + memory appended (project_context).
+    brand = "zeropage"
 
     text = (PROMPTS_DIR / "brands.txt").read_text()
     marker = f"[{brand}]"
@@ -355,7 +358,9 @@ def load_brand(brand: str) -> str:
         if line.startswith("[") and line.rstrip().endswith("]"):
             block = block.split(line, 1)[0]
             break
-    return block.strip()
+    from . import project_context
+    extra = project_context.block()
+    return block.strip() + (f"\n\n{extra}" if extra else "")
 
 
 def location_variety_note(locations: list, lock: bool = False) -> str:
@@ -742,7 +747,10 @@ def cast_detail(asset: dict) -> str:
 # by a brand -- the same jacket could appear in either -- what differs is
 # whether a brand is allowed to NAME a recurring person at all. That is a
 # property of the brand, so it lives here.
-CAST_BRANDS = ("antihero",)
+# 2026-09-28: every brand. The studio has no faceless house channel any more;
+# what a scene may cast is decided upstream by what the run names or attaches
+# (asset scoping), not by which channel it is for.
+CAST_BRANDS = ("antihero", "zeropage")
 
 
 STILL_RUBRIC = """Write a Midjourney prompt for a single STILL that will be the

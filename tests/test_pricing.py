@@ -8,7 +8,20 @@ names the line.
 import pytest
 from cryptography.fernet import Fernet
 
-from src import account_keys, accounts, db, ledger, pricing, providers, timeline
+from src import account_keys, db, ledger, pricing, providers, timeline
+
+
+def _seed_two(email, dsn):
+    """accounts.seed makes ONE account since the 2026-09-28 fold; these
+    tests are about a person who belongs to two, so the second is made
+    here explicitly rather than by the setup command."""
+    from src import accounts as _accounts
+
+    seeded = _accounts.seed(email, dsn=dsn)
+    second = _accounts.upsert_account("antihero", "ANTIHERO", "#d64550", dsn=dsn)
+    _accounts.add_member(second, seeded["user_id"], dsn=dsn)
+    return {**seeded, "accounts": [*seeded["accounts"], second]}
+
 
 RENDER_KEYS = ("RUNWAYML_API_SECRET", "FAL_KEY", "FAL_API_KEY", "HIGGSFIELD_API_KEY_ID",
                "HF_API_KEY_ID", "HIGGSFIELD_API_KEY_SECRET", "HF_API_KEY_SECRET",
@@ -262,7 +275,7 @@ def two_accounts(pg, monkeypatch, runway_only):
     Runway secret, `plain` did not."""
     monkeypatch.setenv("DATABASE_URL", pg)
     monkeypatch.setenv("ACCOUNT_KEYS_SECRET", Fernet.generate_key().decode())
-    accounts.seed("mike@example.com", dsn=pg)
+    _seed_two("mike@example.com", dsn=pg)
     with db.connect(pg) as conn:
         ids = [r["id"] for r in conn.execute("SELECT id FROM accounts ORDER BY id").fetchall()]
     assert len(ids) >= 2

@@ -136,7 +136,7 @@ def test_attached_images_are_explicit_creative_authority(tmp_db, monkeypatch):
     assert "reference images are attached above" in prompt
     assert "Don't ignore them and write a generic idea" in prompt
     assert prompt.index("a bright daytime reunion") < prompt.index(
-        "CHANNEL DIRECTION")
+        "STUDIO + PROJECT DIRECTION")
 
 
 def test_the_run_route_refuses_an_empty_idea_and_a_missing_key(tmp_db, monkeypatch):

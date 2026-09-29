@@ -266,10 +266,12 @@ def preflight_line(report: dict) -> str:
 BUDGET_ENV = "NIGHTLY_BUDGET_USD"
 DEFAULT_BUDGET_USD = 5.00
 
-# Both brand/channel pairs, matched, exactly as the bash loop passed them
-# (see run_morning_prompts.sh's step 4 comment for why they are paired
-# rather than crossed).
-PAIRS = (("antihero", "antihero"), ("zeropage", "zeropage"))
+# The brand/channel pairs a night walks. ONE since 2026-09-28 (Mike's
+# call): ANTIHERO and Zero Page were folded into a single account, and the
+# studio is a production studio for anyone's brand rather than two in-house
+# channels, so the night writes Zero Page only. `walk(pairs=...)` still
+# takes several -- the loop is unchanged, only the default is.
+PAIRS = (("zeropage", "zeropage"),)
 
 # HOW MANY SPARKS A NIGHT WALKS, per pair. 2026-09-08, Mike's call: cut
 # to 5 (so 5 antihero + 5 zeropage = 10 runs) until the concepts are

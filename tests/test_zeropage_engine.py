@@ -73,8 +73,12 @@ PROPS = [{"name": "Ducati Panigale 959", "photo_count": 2,
           "description": '{"look": "red"}'}]
 
 
-def test_zeropage_gets_no_cast_block():
-    assert shootgen.cast_for("zeropage", CHARACTERS, PROPS) == ""
+def test_zeropage_gets_the_cast_the_run_attached():
+    """2026-09-28: no faceless house channel any more. What a scene may
+    cast is decided upstream (named or attached, scene_chain's scope),
+    not by the brand."""
+    block = shootgen.cast_for("zeropage", CHARACTERS, PROPS)
+    assert "Michael" in block and "Ducati" in block
 
 
 def test_antihero_still_gets_its_cast():
@@ -90,7 +94,7 @@ def test_an_empty_cast_tells_the_model_to_describe_plainly():
     recurring person to fill the gap."""
     prompt = shootgen.build_scene_brief_prompt(
         "zeropage", spark="a routine performed wrong",
-        cast=shootgen.cast_for("zeropage", CHARACTERS, PROPS))
+        cast=shootgen.cast_for("zeropage", [], []))
     assert "{cast}" not in prompt
     assert shootgen.NO_CAST_NOTE in prompt
 

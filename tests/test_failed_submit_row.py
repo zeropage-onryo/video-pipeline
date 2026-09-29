@@ -24,7 +24,20 @@ from types import SimpleNamespace
 
 import pytest
 
-from src import accounts, db, fal, generative, higgsfield, ledger, preprod, runway, veo
+from src import db, fal, generative, higgsfield, ledger, preprod, runway, veo
+
+
+def _seed_two(email, dsn):
+    """accounts.seed makes ONE account since the 2026-09-28 fold; these
+    tests are about a person who belongs to two, so the second is made
+    here explicitly rather than by the setup command."""
+    from src import accounts as _accounts
+
+    seeded = _accounts.seed(email, dsn=dsn)
+    second = _accounts.upsert_account("antihero", "ANTIHERO", "#d64550", dsn=dsn)
+    _accounts.add_member(second, seeded["user_id"], dsn=dsn)
+    return {**seeded, "accounts": [*seeded["accounts"], second]}
+
 
 PROMPT = "a man walks into a rain-lit bar and does not look back " * 2
 LOCKED = "HTTP Error 423: Locked"
@@ -59,7 +72,7 @@ def studio(pg, monkeypatch, tmp_path):
         monkeypatch.setenv(name, "OPERATOR-SECRET")
     generative.init(pg)
     preprod.init(pg)
-    accounts.seed("mike@example.com", dsn=pg)
+    _seed_two("mike@example.com", dsn=pg)
     ledger.init(pg)
     with db.connect(pg) as conn:
         account_id = int(conn.execute(

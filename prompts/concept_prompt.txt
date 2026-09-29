@@ -43,7 +43,7 @@ that's a candidate for an AI shot, not a reason to call for a room he
 doesn't have):
 {references}
 
-CHANNEL DIRECTION (rough context, not strict generation rules):
+STUDIO + PROJECT DIRECTION (the project's brief and memory, when there is one):
 {brand}
 {client}
 

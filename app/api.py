@@ -49,6 +49,7 @@ from src import (
     preprod,
     presets,
     pricing,
+    projects,
     providers,
     rag,
     rag_eval,
@@ -99,6 +100,51 @@ def _eval_k() -> int:
     tunable (settings -> EVAL_K env -> 5), resolved per run so a
     change takes effect on the next run, no restart."""
     return settings.eval_k()
+
+
+# ONE brand since 2026-09-28 (Mike's call): ANTIHERO was folded into Zero
+# Page and its account row deleted. A signed-in request takes its brand
+# from MEMBERSHIP (auth.current_account), never from a raw `brand` cookie:
+# a browser can still carry `brand=antihero` from before the fold, and
+# reading that cookie directly would keep writing rows under a brand no
+# account can switch to -- rows the board would then never show.
+DEFAULT_BRAND = "zeropage"
+
+
+def _form_project(form, account_id: int) -> Optional[dict]:
+    """The project a multipart form names (`project_id`), or None when it
+    names none or one this account does not own."""
+    raw = (form.get("project_id") or "").strip()
+    if not raw:
+        return None
+    try:
+        return projects.get(int(raw), account_id=account_id)
+    except (TypeError, ValueError):
+        return None
+
+
+def _in_project(project: Optional[dict], work):
+    """A job body that runs inside `project` (src/project_context.py): the
+    ContextVar is set on the worker thread, where the prompts are built."""
+    from src import project_context
+
+    def run(job):
+        with project_context.active(project):
+            return work(job)
+    return run
+
+
+def _request_brand(request: Request, submitted: Optional[str] = None) -> str:
+    """The brand a request writes under: an explicit valid form value,
+    else the signed-in account's slug, else a valid cookie (only reachable
+    without a session -- the dev console and tests), else DEFAULT_BRAND."""
+    if submitted in preprod.BRANDS:
+        return submitted
+    account = auth.current_account(request) or {}
+    if account.get("slug") in preprod.BRANDS:
+        return account["slug"]
+    cookie = request.cookies.get("brand")
+    return cookie if cookie in preprod.BRANDS else DEFAULT_BRAND
 
 
 def _error(status: int, code: str, message: str) -> JSONResponse:
@@ -390,7 +436,7 @@ async def creative_guide_reply(request: Request,
     # form value would let one brand's context be pulled while signed in
     # to another. The form's `brand` is ignored on purpose.
     account = auth.current_account(request) or {}
-    brand = account.get("slug") if account.get("slug") in preprod.BRANDS else "antihero"
+    brand = account.get("slug") if account.get("slug") in preprod.BRANDS else DEFAULT_BRAND
 
     provider = (form.get("guide_provider") or "gemini").strip().lower()
     model = (form.get("guide_model") or "").strip() or None
@@ -418,6 +464,9 @@ async def creative_guide_reply(request: Request,
 
     image_refs, ref_urls, _ = await _collect_refs(form)
     idea = (form.get("idea") or form.get("prompt") or "").strip()
+    # The Guide talks inside the same project a Create would write into
+    # (2026-09-28), so its suggestions follow that project's brief and memory.
+    project = _form_project(form, account_id)
 
     def work(job):
         # Grounded through scene_chain.ground -- the same scoped set a
@@ -452,7 +501,8 @@ async def creative_guide_reply(request: Request,
                 "brain": None if personal else brain,
                 "detail": "ready"}
 
-    job = jobs.start("guide", "creative guide", work, account_id=account_id)
+    job = jobs.start("guide", "creative guide", _in_project(project, work),
+                     account_id=account_id)
     return {"job_id": job["id"]}
 
 
@@ -1538,7 +1588,7 @@ def _timeline_card(shot: dict, account_id: Optional[int] = None) -> Optional[dic
 
 @router.get("/pipeline/concepts")
 def pipeline_concepts(brand: Optional[str] = None, status: Optional[str] = None,
-                      archived: bool = False,
+                      archived: bool = False, project: Optional[int] = None,
                       account_id: int = Depends(auth.current_account_id),
 ):
     """The board. Archived concepts are hidden by default -- they are
@@ -1551,7 +1601,8 @@ def pipeline_concepts(brand: Optional[str] = None, status: Optional[str] = None,
     # whole limit and quietly shorten the other's board.
     # one query for the whole board rather than one per card
     subscription_ids = generative.subscription_rendered(account_id=account_id)
-    concepts = preprod.list_concepts(account_id=account_id, brand=brand)
+    concepts = preprod.list_concepts(account_id=account_id, brand=brand,
+                                     project_id=project)
     # ...and two for every card's gate verdict, not two per card
     gates = autonomy.gates_for_concepts([c["id"] for c in concepts],
                                         account_id=account_id)
@@ -1816,10 +1867,14 @@ async def scenes_run(request: Request, account_id: int = Depends(auth.current_ac
     api_key = _gemini_key(account_id)
     if not api_key:
         return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
-    brand_raw = form.get("brand")
-    brand = brand_raw if brand_raw in preprod.BRANDS else (
-        request.cookies.get("brand") if request.cookies.get("brand") in preprod.BRANDS
-        else "antihero")
+    brand = _request_brand(request, form.get("brand"))
+    # The project this Create runs inside (2026-09-28): its brief and memory
+    # are appended under the studio's block for the whole job, and the
+    # scenes it writes are filed under it. An unknown id is refused -- a
+    # Create that silently dropped its project would write off-brief.
+    project = _form_project(form, account_id)
+    if (form.get("project_id") or "").strip() and project is None:
+        return _error(404, "no_project", f"no project {form.get('project_id')}")
     try:
         count = int(form.get("count") or SCENE_COUNT_DEFAULT)
     except (TypeError, ValueError):
@@ -1907,15 +1962,20 @@ async def scenes_run(request: Request, account_id: int = Depends(auth.current_ac
         # the clip are the Director canvas's job when a person is doing
         # this by hand -- and the nightly graph's job when nobody is
         # (src/orchestrator.py calls the same stage functions).
-        result = scene_chain.run(
-            idea, brand, count=count, refs=refs, image_refs=image_refs or None,
-            db_path=None, account_id=account_id,
-            gemini_client=client, video_parts=video_parts,
-            resolve_photo=_resolve_asset_photo,
-            attach_refs=_attach_scene_refs,
-            brain=brain, ratio=ratio or None, seconds=seconds,
-            progress=lambda fraction, detail: jobs.progress(job, fraction, detail))
+        from src import project_context
+        with project_context.active(project):
+            result = scene_chain.run(
+                idea, brand, count=count, refs=refs, image_refs=image_refs or None,
+                db_path=None, account_id=account_id,
+                gemini_client=client, video_parts=video_parts,
+                resolve_photo=_resolve_asset_photo,
+                attach_refs=_attach_scene_refs,
+                brain=brain, ratio=ratio or None, seconds=seconds,
+                progress=lambda fraction, detail: jobs.progress(job, fraction, detail))
         saved = result["scenes"]
+        if project and saved:
+            projects.tag_concepts([s["concept_id"] for s in saved], project["id"],
+                                  account_id=account_id)
         if scout_claimed and saved:
             scout.mark_used(scout_finding_id,
                             run_id=f"concept:{saved[0]['concept_id']}")
@@ -1929,7 +1989,108 @@ async def scenes_run(request: Request, account_id: int = Depends(auth.current_ac
 
     job = jobs.start("scenes", f"concepts · {idea[:60]}", work, account_id=account_id)
     return {"job_id": job["id"], "image_refs": len(image_refs),
-            "video_refs": len(video_refs), "brain": brain, "seconds": seconds}
+            "video_refs": len(video_refs), "brain": brain, "seconds": seconds,
+            "project_id": project["id"] if project else None}
+
+
+# --- studio projects (2026-09-28) ---------------------------------------------
+# One brief and one memory per piece of work -- src/projects.py says why.
+# The Projects page is the only door: it creates a project (brief typed, or
+# drafted from three answers), shows what the project has learned, and
+# opens the Studio composer inside it (?project=<id>), which posts
+# `project_id` to /scenes/run.
+
+
+class ProjectBody(BaseModel):
+    title: Optional[str] = None
+    brief: Optional[str] = None
+
+
+class ProjectDraftBody(BaseModel):
+    title: str = ""
+    answers: dict = Field(default_factory=dict)
+
+
+class ProjectArchiveBody(BaseModel):
+    archived: bool = True
+
+
+class ProjectForgetBody(BaseModel):
+    at: str
+
+
+@router.get("/projects")
+def projects_list(archived: bool = False,
+                  account_id: int = Depends(auth.current_account_id)):
+    return {"items": projects.list_projects(account_id=account_id,
+                                            include_archived=archived),
+            "questions": [{"key": k, "label": label} for k, label in projects.QUESTIONS]}
+
+
+@router.post("/projects")
+def projects_create(body: ProjectBody, account_id: int = Depends(auth.current_account_id)):
+    try:
+        return projects.create(body.title or "", body.brief or "", account_id=account_id)
+    except ValueError as e:
+        return _error(400, "bad_project", str(e))
+
+
+@router.post("/projects/draft-brief")
+def projects_draft_brief(body: ProjectDraftBody,
+                         account_id: int = Depends(auth.current_account_id)):
+    """The chat-built half of a brief: three answers in, a draft out, for the
+    person to edit before saving. Nothing is stored here."""
+    api_key = _gemini_key(account_id)
+    if not api_key:
+        return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
+    if not any((body.answers.get(k) or "").strip() for k, _ in projects.QUESTIONS):
+        return _error(400, "no_answers", "answer at least one question first")
+    from google import genai
+    try:
+        brief = projects.draft_brief(body.title or "untitled",
+                                     {k: str(v) for k, v in body.answers.items()},
+                                     genai.Client(api_key=api_key), account_id=account_id)
+    except Exception as e:  # the draft IS the deliverable here
+        return _error(502, "draft_failed", f"couldn't draft the brief: {e}"[:300])
+    return {"brief": brief}
+
+
+@router.get("/projects/{project_id}")
+def projects_get(project_id: int, account_id: int = Depends(auth.current_account_id)):
+    project = projects.get(project_id, account_id=account_id)
+    if project is None:
+        return _error(404, "not_found", f"no project {project_id}")
+    return project
+
+
+@router.patch("/projects/{project_id}")
+def projects_update(project_id: int, body: ProjectBody,
+                    account_id: int = Depends(auth.current_account_id)):
+    try:
+        return projects.update(project_id, account_id=account_id,
+                               title=body.title, brief=body.brief)
+    except ValueError as e:
+        return _error(404 if "no project" in str(e) else 400, "bad_project", str(e))
+
+
+@router.post("/projects/{project_id}/archive")
+def projects_archive(project_id: int, body: ProjectArchiveBody,
+                     account_id: int = Depends(auth.current_account_id)):
+    try:
+        projects.set_archived(project_id, body.archived, account_id=account_id)
+    except ValueError as e:
+        return _error(404, "not_found", str(e))
+    return {"ok": True, "archived": body.archived}
+
+
+@router.post("/projects/{project_id}/forget")
+def projects_forget(project_id: int, body: ProjectForgetBody,
+                    account_id: int = Depends(auth.current_account_id)):
+    try:
+        removed = projects.forget(project_id, body.at, account_id=account_id)
+    except ValueError as e:
+        return _error(404, "not_found", str(e))
+    return {"ok": True, "removed": removed}
 
 
 # --- the research scout -----------------------------------------------------
@@ -1954,7 +2115,7 @@ def scout_spark(brand: Optional[str] = None, account_id: int = Depends(auth.curr
     researched yet" is a normal state of this surface, and the composer
     renders it as an invitation to research rather than as an error.
     """
-    brand = brand if brand in preprod.BRANDS else "antihero"
+    brand = brand if brand in preprod.BRANDS else DEFAULT_BRAND
     finding = scout.next_spark(brand)
     if not finding:
         return {"spark": None, "brand": brand, "bin": [],
@@ -1990,7 +2151,7 @@ def scout_run(body: ScoutRunBody, account_id: int = Depends(auth.current_account
     silent button is indistinguishable from a broken one."""
     if not _gemini_key(account_id):
         return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
-    brand = body.brand if body.brand in preprod.BRANDS else "antihero"
+    brand = body.brand if body.brand in preprod.BRANDS else DEFAULT_BRAND
     count = max(1, min(6, int(body.count or 4)))
 
     def work(job):
@@ -2034,7 +2195,7 @@ def references_sparks(brand: Optional[str] = None,
     generated from at all (preprod.reference_gate), so it is the column
     worth sorting a person's attention by -- 0 means the night would
     write a scene that never reaches the board."""
-    brand = brand if brand in preprod.BRANDS else "antihero"
+    brand = brand if brand in preprod.BRANDS else DEFAULT_BRAND
     items = []
     for row in scout.list_findings(brand=brand, unused_only=True, limit=20):
         items.append({
@@ -2190,8 +2351,11 @@ def concept_pick(concept_id: int, body: PickBody, account_id: int = Depends(auth
             ruled = _board_verdict(concept, "worked", BOARD_PICK_NOTE)
             # The still is rendered for the ones you pick, and only those.
             job_id = _keyframe_on_pick(concept, account_id)
+            # ...and the project it belongs to remembers what was chosen
+            projects.remember_decision(concept, "pick", account_id=account_id)
         else:
             _withdraw_board_verdict(concept)
+            projects.withdraw_decision(concept, "pick", account_id=account_id)
     return {"ok": True, "picked": body.picked, "ruled": ruled,
             "job_id": job_id,
             "pick": preprod.pick_rate(account_id=account_id)}
@@ -2345,8 +2509,11 @@ def concept_archive(concept_id: int, body: ArchiveBody,
 
     if body.archived:
         ruled = _board_verdict(concept, "didnt_work", BOARD_PASS_NOTE)
+        projects.remember_decision(concept, "pass", account_id=account_id,
+                                   reason=concept.get("archive_reason") or "")
     else:
         _withdraw_board_verdict(concept)
+        projects.withdraw_decision(concept, "pass", account_id=account_id)
         ruled = False
     return {"ok": True, "archived": body.archived, "ruled": ruled}
 
@@ -3849,10 +4016,7 @@ async def pipeline_run(request: Request, account_id: int = Depends(auth.current_
     api_key = _gemini_key(account_id)
     if not api_key:
         return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
-    brand_raw = form.get("brand")
-    brand = brand_raw if brand_raw in preprod.BRANDS else (
-        request.cookies.get("brand") if request.cookies.get("brand") in preprod.BRANDS
-        else "antihero")
+    brand = _request_brand(request, form.get("brand"))
 
     image_refs, refs, _ = await _collect_refs(form)
 
@@ -3940,9 +4104,7 @@ def director_landing(request: Request, brand: Optional[str] = None,
     yet, so it leads with the sample composer alone."""
     from src import shootgen
 
-    brand = brand if brand in preprod.BRANDS else (
-        request.cookies.get("brand")
-        if request.cookies.get("brand") in preprod.BRANDS else "antihero")
+    brand = _request_brand(request, brand)
     sample = shootgen.gold_standard_example()
     if sample:
         paragraphs = [p for p in sample.split("\n\n") if p.strip()]
@@ -4015,10 +4177,7 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
     api_key = _gemini_key(account_id)
     if not api_key:
         return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
-    brand_raw = form.get("brand")
-    brand = brand_raw if brand_raw in preprod.BRANDS else (
-        request.cookies.get("brand") if request.cookies.get("brand") in preprod.BRANDS
-        else "antihero")
+    brand = _request_brand(request, form.get("brand"))
     output = form.get("output")
     if output not in GENERATE_OUTPUTS:
         output = "image"
@@ -4288,6 +4447,9 @@ def shot_prompt_update(concept_id: int, shot_n: int, body: ShotPromptBody,
         if concept.get("brand") == "zeropage" else None)
     preprod.update_concept_shots(concept_id, {"shots": shots},
                                  warnings=warnings, account_id=account_id)
+    if text != before:
+        projects.remember_decision(concept, "edit", account_id=account_id,
+                                   edited_prompt=text)
     # the canvas that made this edit is still a true drawing of the shot;
     # hand it the new hash, or its very next autosave is refused as stale
     return {"concept_id": concept_id, "shot_n": shot_n, "warnings": warnings,
@@ -4852,9 +5014,7 @@ def workflows_list(brand: Optional[str] = None,
 @router.post("/workflows")
 def workflows_create(body: WorkflowBody, request: Request,
                      account_id: int = Depends(auth.current_account_id)):
-    brand = body.brand if body.brand in preprod.BRANDS else (
-        request.cookies.get("brand")
-        if request.cookies.get("brand") in preprod.BRANDS else "antihero")
+    brand = _request_brand(request, body.brand)
     workflow_id = workflows.create_workflow(
         body.name or "Untitled workflow", body.graph or {},
         brand=brand, account_id=account_id)

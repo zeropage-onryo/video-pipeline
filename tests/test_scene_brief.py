@@ -40,14 +40,14 @@ def test_build_scene_brief_prompt_has_the_full_skeleton():
         assert marker in p
     # the per-brand look (2026-09-05) replaces the "raw handheld, matte"
     # house style that flattened every reference carrying it
-    assert "{look}" not in p and "ANTIHERO LOOK" in p
+    assert "{look}" not in p and "NO HOUSE LOOK" in p   # one neutral look since 2026-09-28
     assert "raw handheld, close wide-angle" not in p
 
 
 def test_scene_brief_marks_brand_as_fallback_context():
     p = shootgen.build_scene_brief_prompt(
         "antihero", spark="a sunlit romantic comedy")
-    assert p.index("a sunlit romantic comedy") < p.index("CHANNEL DIRECTION")
+    assert p.index("a sunlit romantic comedy") < p.index("STUDIO + PROJECT DIRECTION")
     assert "idea and attached images win" in p
 
 

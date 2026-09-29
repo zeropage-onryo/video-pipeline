@@ -13,10 +13,10 @@ type Cursor = {
 };
 
 const CURSORS: Cursor[] = [
-  { name: "You", color: "var(--signal)", className: "left-[6%] top-10", delay: "-0.2s" },
-  { name: "Scout", color: "#1f9d64", className: "right-[6%] top-9", delay: "-1.4s" },
-  { name: "Director", color: "#4f5be6", className: "left-[8%] top-[400px]", delay: "-2.8s" },
-  { name: "Queue", color: "#8b5cf6", className: "right-[8%] top-[400px]", delay: "-4.1s" },
+  { name: "You", color: "var(--signal)", className: "left-[4%] top-4", delay: "-0.2s" },
+  { name: "Scout", color: "#1f9d64", className: "right-[4%] top-3", delay: "-1.4s" },
+  { name: "Director", color: "#4f5be6", className: "left-[7%] top-[330px]", delay: "-2.8s" },
+  { name: "Queue", color: "#8b5cf6", className: "right-[7%] top-[330px]", delay: "-4.1s" },
 ];
 
 export function HeroCursors() {

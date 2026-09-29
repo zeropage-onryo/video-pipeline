@@ -55,18 +55,17 @@ LOCATION_NAMES = ["hallway", "garage"]
 
 # ---------- brands ----------
 
-def test_load_brand_returns_antihero_block():
-    text = shootgen.load_brand("antihero")
-    assert "ANTIHERO" in text
-    assert "crushed shadows" in text
-    assert "ROUGH CHANNEL DIRECTION" in text
-    assert "always take priority" in text
+def test_load_brand_antihero_reads_the_one_studio_block():
+    """ANTIHERO was folded into Zero Page (2026-09-28): old rows tagged
+    antihero still load, and get the same neutral studio block."""
+    assert shootgen.load_brand("antihero") == shootgen.load_brand("zeropage")
 
 
 def test_load_brand_returns_zeropage_block():
     text = shootgen.load_brand("zeropage")
     assert "ZERO PAGE" in text
-    assert "client" in text.lower()
+    assert "no house look" in text.lower()
+    assert "Michael" not in text      # no personal channel any more
 
 
 def test_load_brand_rejects_unknown_brand():
@@ -81,7 +80,7 @@ def test_build_concept_prompt_includes_locations_and_brand(tmp_db):
     prompt = shootgen.build_concept_prompt(locations, "antihero", None, "someone at the door")
 
     assert "hallway" in prompt and "garage" in prompt
-    assert "ANTIHERO" in prompt
+    assert "ZERO PAGE" in prompt
     assert "someone at the door" in prompt
     for placeholder in ("{locations}", "{brand}", "{client}", "{spark}"):
         assert placeholder not in prompt
@@ -93,7 +92,7 @@ def test_run_specific_inputs_outrank_the_channel_note(tmp_db):
         locations, "antihero", None, "a bright daytime family comedy")
 
     assert prompt.index("a bright daytime family comedy") < prompt.index(
-        "CHANNEL DIRECTION")
+        "STUDIO + PROJECT DIRECTION")
     assert "idea and attached images win" in prompt
 
 
@@ -374,7 +373,7 @@ def test_build_ideas_prompt_includes_locations_brand_and_count(tmp_db):
     prompt = shootgen.build_ideas_prompt(locations, "antihero", None, "a door", count=8)
 
     assert "hallway" in prompt and "garage" in prompt
-    assert "ANTIHERO" in prompt
+    assert "ZERO PAGE" in prompt
     assert "a door" in prompt
     assert "8" in prompt
     for placeholder in ("{locations}", "{brand}", "{client}", "{spark}", "{count}"):
