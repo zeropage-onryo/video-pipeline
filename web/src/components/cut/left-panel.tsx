@@ -324,6 +324,7 @@ function AudioTab() {
       {audio.map((t) => (
         <AudioTrackCard key={t.id} track={t} doc={doc} />
       ))}
+      <MissingTracks doc={doc} />
       <div className="cx-card">
         <h4 className="cx-h">Loudness</h4>
         <p className="cx-note">
@@ -331,6 +332,25 @@ function AudioTab() {
           relative to each other, not to the meter. Mute and solo here are for listening only; they are not edits.
         </p>
       </div>
+    </div>
+  );
+}
+
+/* A cut Assemble made has only the clips' own sound (A1 sfx). The roles it
+   lacks are one click away, each an add_track op like any other edit. */
+function MissingTracks({ doc }: { doc: Doc }) {
+  const op = useCut((s) => s.op);
+  const missing = (["music", "voice"] as const).filter(
+    (r) => !doc.tracks.some((t) => t.kind === "audio" && t.role === r),
+  );
+  if (!missing.length) return null;
+  return (
+    <div className="cx-field-row" style={{ marginBottom: 12 }}>
+      {missing.map((r) => (
+        <button key={r} type="button" className="cx-btn ghost" onClick={() => op("add_track", { kind: "audio", role: r })}>
+          <Plus /> {r === "music" ? "Music track" : "Voice track"}
+        </button>
+      ))}
     </div>
   );
 }

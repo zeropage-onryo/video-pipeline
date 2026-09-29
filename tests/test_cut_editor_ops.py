@@ -192,6 +192,7 @@ ARGS = {
     "set_cue": {"track_id": "T1", "start": 100, "end": 130, "text": "three"},
     "delete_cue": {"track_id": "T1", "cue_id": "q2"},
     "set_caption_style": {"track_id": "T1", "style": "preset:minimal_top"},
+    "add_track": {"kind": "audio", "role": "music"},
 }
 
 
@@ -274,3 +275,43 @@ def test_a_still_is_looped_and_bounded():
     j = argv.index("/x/clip.mp4")
     assert argv[j - 1] == "-i" and "-loop" not in argv[j - 3:j]
     assert render.stills_in({"gen:9": {"still": True}}, {}) == {"gen:9"}
+
+
+# --------------------------------------------------------------------------
+# add_track (the first live walk, 2026-09-29: an Assembled cut has no
+# music track, so a bed had nowhere to go but behind the clips' sound)
+# --------------------------------------------------------------------------
+
+def test_add_track_takes_the_next_free_id_and_validates():
+    doc = cut()
+    out = ops.apply(doc, "add_track", {"kind": "audio", "role": "music"}, media=MEDIA)
+    music = d.track(out, "A2")
+    assert music == {"id": "A2", "kind": "audio", "role": "music", "clips": []}
+    assert d.track(doc, "A2") is None, "the input is untouched"
+    out = ops.apply(out, "add_track", {"kind": "video"}, media=MEDIA)
+    assert d.track(out, "V2") == {"id": "V2", "kind": "video", "clips": []}
+    out = ops.apply(out, "add_track", {"kind": "caption"}, media=MEDIA)
+    assert d.track(out, "T2")["cues"] == [] and d.track(out, "T2")["style"] == d.DEFAULT_CAPTION_STYLE
+    # a bed on its own track can be laid under the picture and ducked
+    out = ops.apply(out, "insert", {"track_id": "A2", "at": 0, "ripple": False,
+                                    "clip": {"media": "asset:7", "src_in": 0, "src_out": 352}},
+                    media=MEDIA)
+    out = ops.apply(out, "duck", {"track_id": "A2", "under": "sfx"}, media=MEDIA)
+    assert out["duration"] == 352
+
+
+@pytest.mark.parametrize("args, reason", [
+    ({"kind": "audio"}, "needs a role"),
+    ({"kind": "audio", "role": "drums"}, "needs a role"),
+    ({"kind": "video", "role": "music"}, "only audio tracks"),
+    ({"kind": "subtitle"}, "track kind"),
+    ({"kind": "audio", "role": "music", "track_id": "A1"}, "already exists"),
+])
+def test_add_track_refuses(args, reason):
+    with pytest.raises(ops.OpError) as e:
+        ops.apply(cut(), "add_track", args, media=MEDIA)
+    assert reason in str(e.value)
+
+
+def test_add_track_is_described():
+    assert ops.describe("add_track", {"kind": "audio", "role": "music"}) == "add music track"
