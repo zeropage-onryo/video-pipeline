@@ -63,6 +63,81 @@ os.environ["ZEROPAGE_REQUIRE_REFS"] = "0"
 # resume does with the account on the checkpoint.
 os.environ["ZEROPAGE_CHECKPOINT"] = "0"
 
+# THE SUITE'S DATABASE IS THE THROWAWAY, AND NOTHING ELSE (2026-09-28).
+# app.main calls load_dotenv() at import, and load_dotenv searches PARENT
+# directories -- so a worktree under .claude/worktrees/ picks up the main
+# checkout's .env, whose DATABASE_URL is the LIVE Supabase database. Any
+# code path under test that called db.connect(None) then read production:
+# test_element_sheet drew a still for account 1 with no db_path and the
+# credit charge read the live ledger (no write, only because account 1 is
+# credit_exempt). CI never saw it because CI has no .env.
+#
+# Set here, BEFORE app.main is imported, because load_dotenv never
+# overrides a variable that is already set. RAG_DATABASE_URL too: it
+# outranks DATABASE_URL in rag.connect, and the same .env sets it. A test
+# that points either at its own pg schema still does so with setenv.
+# `no_live_database` below is the backstop for anything that slips past.
+TEST_DSN = os.environ.get("TEST_DATABASE_URL") or "postgresql://zeropage:zeropage@localhost:5432/zeropage"
+os.environ["DATABASE_URL"] = TEST_DSN
+os.environ["RAG_DATABASE_URL"] = TEST_DSN
+os.environ.pop("SUPABASE_RAG_DATABASE_URL", None)
+
+
+class LiveDatabaseInTest(RuntimeError):
+    pass
+
+
+def _install_no_live_database() -> None:
+    """Refuse, at connect time, any Postgres that is not on this machine.
+
+    no_network below cannot do this: libpq opens its socket below Python's
+    socket module. So the wall goes on psycopg itself -- both doors, since
+    `psycopg.connect` is a bound method captured at import and the pool
+    calls `Connection.connect` on the class. Local hosts are allowed
+    (throwaway schemas, and the tests that point at a dead 127.0.0.1:1 on
+    purpose), plus whatever host TEST_DSN names, so a CI service container
+    reached by name still works. Anything else -- the Supabase pooler --
+    fails the test loudly instead of reading or writing production.
+
+    Installed once for the process, not per test: it is a wall, not a
+    fixture a test could forget, and a test that wraps psycopg.connect
+    (test_queue_pending_scaling) wraps the guarded one."""
+    import psycopg
+    from psycopg.conninfo import conninfo_to_dict
+
+    allowed = {"", "localhost", "127.0.0.1", "::1"}
+    allowed |= {h for h in (conninfo_to_dict(TEST_DSN).get("host") or "").split(",")}
+
+    def check(conninfo, kwargs):
+        params = conninfo_to_dict(conninfo or "", **{
+            k: kwargs[k] for k in ("host", "hostaddr") if kwargs.get(k)})
+        hosts = str(params.get("hostaddr") or params.get("host")
+                    or os.environ.get("PGHOST") or "")
+        for host in hosts.split(","):
+            if host.strip() not in allowed and not host.startswith("/"):
+                raise LiveDatabaseInTest(
+                    f"a test tried to connect to Postgres at {host!r}, which is "
+                    f"not the throwaway ({TEST_DSN!r}). Something resolved a DSN "
+                    "from the environment instead of the test's own pg schema.")
+
+    sync_connect = psycopg.Connection.connect.__func__
+    async_connect = psycopg.AsyncConnection.connect.__func__
+
+    def guarded(cls, conninfo="", **kwargs):
+        check(conninfo, kwargs)
+        return sync_connect(cls, conninfo, **kwargs)
+
+    async def guarded_async(cls, conninfo="", **kwargs):
+        check(conninfo, kwargs)
+        return await async_connect(cls, conninfo, **kwargs)
+
+    psycopg.Connection.connect = classmethod(guarded)
+    psycopg.AsyncConnection.connect = classmethod(guarded_async)
+    psycopg.connect = psycopg.Connection.connect
+
+
+_install_no_live_database()
+
 
 from app.main import app as _APP_AT_IMPORT  # noqa: E402  (see account_scope)
 
@@ -280,11 +355,11 @@ def account_scope():
 # the throwaway Postgres (docs/tasks/task-postgres-migration.md)
 # ---------------------------------------------------------------------------
 
-# Where the port's tests run. NEVER DATABASE_URL: that is the live database
-# in any real .env, and this fixture creates and drops schemas. The default
-# is the docker-compose box, which is also the throwaway on Mike's machine
-# (a role+database of that name on Postgres.app, 2026-09-03).
-TEST_DSN = os.environ.get("TEST_DATABASE_URL") or "postgresql://zeropage:zeropage@localhost:5432/zeropage"
+# Where the port's tests run: TEST_DSN, defined at the top of this file.
+# Never read off DATABASE_URL: that is the live database in any real .env,
+# and this fixture creates and drops schemas. The default is the
+# docker-compose box, which is also the throwaway on Mike's machine (a
+# role+database of that name on Postgres.app, 2026-09-03).
 
 
 @pytest.fixture
