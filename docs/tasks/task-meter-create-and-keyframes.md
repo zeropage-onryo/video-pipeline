@@ -1,6 +1,20 @@
 # Task: charge Create (Gemini) and Nano keyframes through the credit ledger
 
-**Status: DECIDED (Mike, 2026-09-29 — section 0). Not built yet.**
+**Status: DECIDED (Mike, 2026-09-29 — section 0); BUILT in three stacked PRs.**
+Note: while this design waited, PR #87 (2026-09-28) had already started
+charging a Create (15 / 44 cr) and every still, quietly and with no price
+labels. The build below takes #87 as its base and applies section 0 on top:
+- **#97** — Create 0 cr + `charge.create_refusal` (no plan and no balance →
+  402 `subscribe_or_top_up`; MCP research/generate too), the 100-credit trial
+  (`ZEROPAGE_SIGNUP_CREDITS` default 100), `NANO_DAILY_CAP` removed for everyone.
+- **#99** — keyframes behind a priced approve: the pick draws nothing; the
+  Queue card's "Draw keyframes · N cr" posts `POST /api/concepts/{id}/keyframes`
+  (402 "top up" unless the whole strip fits); Director Nano node and the
+  element-sheet toggle show their price.
+- **#100** — Higgsfield removed. `scene_chain.visual_target` was DELETED rather
+  than moved to Nano (section 7 step 5 said "move"): it only ran for a scene
+  with no refs, which the reference gate archives first, and a Nano port would
+  have been a charge with no approve.
 Written 2026-09-28. Follows `task-fal-only.md` ("Still Mike's call": metering
 Create and Nano keyframes) and phase 4 of `task-stripe-billing.md`.
 
