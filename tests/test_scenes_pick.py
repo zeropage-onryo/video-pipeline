@@ -991,12 +991,12 @@ def test_validation_still_knows_every_real_room(tmp_db, monkeypatch):
     assert not any("unknown location" in w for w in warnings)
 
 
-# --- the still is drawn for the ones you pick -------------------------------
-# 2026-09-08, Mike's call. The nightly graph's keyframe step stays off
-# (ZEROPAGE_KEYFRAME=0): a 40-spark walk that draws every scene spends the
-# whole Nano cap on concepts nobody has looked at. The pick is the first
-# moment a human has said this one is worth something, so that is where the
-# cents get spent -- one step before the Queue, which is where the dollars do.
+# --- the pick chooses; the priced approve draws ------------------------------
+# From 2026-09-08 the pick drew the scene's still. Since 2026-09-29 a still
+# costs credits, and Mike's rule is an approve button before every spend of
+# credits: the pick records the choice, the card quotes the stills
+# (`keyframes`), and POST /concepts/{id}/keyframes draws them -- refused
+# with "top up" unless the WHOLE strip fits the balance.
 
 def a_drawn_scene(path, title="Already drawn"):
     return preprod.save_concept(
@@ -1024,74 +1024,76 @@ def keyframes(monkeypatch):
     return calls
 
 
-def test_picking_draws_the_still(tmp_db, keyframes):
+def _draw(cid):
+    return client.post(f"/api/concepts/{cid}/keyframes")
+
+
+def test_picking_draws_nothing(tmp_db, keyframes):
     cid = a_scene(tmp_db, "Cold Open")
     res = client.post(f"/api/concepts/{cid}/pick", json={"picked": True}).json()
     assert res["picked"] is True
-    assert res["job_id"], "the pick should have started a keyframe job"
-    job = wait_for_job(res["job_id"])
+    assert res.get("job_id") is None
+    assert keyframes == []
+
+
+def test_the_card_quotes_the_stills_and_the_approve_draws_them(tmp_db, keyframes):
+    from src import nano_banana, pricing
+    cid = a_scene(tmp_db, "Cold Open")
+    client.post(f"/api/concepts/{cid}/pick", json={"picked": True})
+    card = next(c for c in client.get("/api/queue/pending").json()["items"] if c["id"] == cid)
+    each = pricing.still_credits(nano_banana.MODEL)
+    assert card["keyframes"] == {"stills": 1, "each": each, "credits": each}
+    res = _draw(cid)
+    assert res.status_code == 200, res.text
+    job = wait_for_job(res.json()["job_id"])
     assert job["status"] == "done", job.get("error")
     assert keyframes == [(cid, 1)]
 
 
-def test_unpicking_draws_nothing(tmp_db, keyframes):
-    cid = a_scene(tmp_db, "Cold Open")
-    assert client.post(f"/api/concepts/{cid}/pick",
-                       json={"picked": False}).json()["job_id"] is None
-    assert keyframes == []
-
-
-def test_a_scene_that_already_has_a_still_is_not_re_billed(tmp_db, keyframes):
-    """Unpicking and re-picking a card must not quietly buy a second image,
-    and the Director canvas's own keyframe is the one a person chose."""
+def test_a_scene_that_already_has_a_still_has_nothing_to_draw(tmp_db, keyframes):
+    """Re-picking must not quietly buy a second image, and the Director
+    canvas's own keyframe is the one a person chose."""
     cid = a_drawn_scene(tmp_db)
-    assert client.post(f"/api/concepts/{cid}/pick",
-                       json={"picked": True}).json()["job_id"] is None
+    res = _draw(cid)
+    assert res.status_code == 409
+    assert res.json()["error"]["code"] == "nothing_to_draw"
     assert keyframes == []
 
 
-def test_a_legacy_multi_shot_concept_draws_nothing(tmp_db, keyframes):
-    """Six stills off one tap is not what the pick means."""
+def test_a_legacy_multi_shot_concept_has_nothing_to_draw(tmp_db, keyframes):
+    """Six stills off one tap is not what a draw means."""
     cid = preprod.save_concept(
         {"title": "old", "hook": "", "logline": "",
          "shots": [{"n": 1, "type": "BROLL", "source": "AI", "prompt": "x"},
                    {"n": 2, "type": "BROLL", "source": "AI", "prompt": "y"}]},
         brand="zeropage", dsn=tmp_db, account_id=None)
-    assert client.post(f"/api/concepts/{cid}/pick",
-                       json={"picked": True}).json()["job_id"] is None
+    assert _draw(cid).status_code == 409
     assert keyframes == []
 
 
-def test_the_drawing_can_be_turned_off_without_touching_the_route(tmp_db, keyframes,
-                                                                 monkeypatch):
+def test_the_drawing_can_be_turned_off(tmp_db, keyframes, monkeypatch):
     monkeypatch.setenv("ZEROPAGE_KEYFRAME_ON_PICK", "0")
     cid = a_scene(tmp_db, "Cold Open")
-    assert client.post(f"/api/concepts/{cid}/pick",
-                       json={"picked": True}).json()["job_id"] is None
+    assert _draw(cid).status_code == 409
     assert keyframes == []
 
 
-def test_no_key_means_no_job_rather_than_a_500(tmp_db, keyframes, monkeypatch):
+def test_no_key_is_a_503_not_a_500(tmp_db, keyframes, monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     cid = a_scene(tmp_db, "Cold Open")
-    res = client.post(f"/api/concepts/{cid}/pick", json={"picked": True})
-    assert res.status_code == 200
-    assert res.json()["picked"] is True and res.json()["job_id"] is None
+    assert _draw(cid).status_code == 503
+    assert keyframes == []
 
 
-def test_a_keyframe_that_fails_still_leaves_the_scene_picked(tmp_db, keyframes,
-                                                             monkeypatch):
-    """The cap, a 503, a missing prompt -- the pick is already recorded by
-    the time the job runs, and a scene nobody drew is what every scene
-    looked like before this existed."""
+def test_a_keyframe_that_fails_leaves_the_scene_picked(tmp_db, keyframes,
+                                                       monkeypatch):
     from src import scene_chain
     monkeypatch.setattr(scene_chain, "keyframe_scene",
-                        lambda *a, **k: {"ok": False,
-                                         "error": "daily ceiling: 60/60 images"})
+                        lambda *a, **k: {"ok": False, "error": "the image model said 503"})
     cid = a_scene(tmp_db, "Cold Open")
-    res = client.post(f"/api/concepts/{cid}/pick", json={"picked": True}).json()
-    job = wait_for_job(res["job_id"])
+    client.post(f"/api/concepts/{cid}/pick", json={"picked": True})
+    job = wait_for_job(_draw(cid).json()["job_id"])
     assert job["status"] == "failed"
-    assert "60/60" in (job.get("error") or "")
+    assert "503" in (job.get("error") or "")
     assert preprod.get_concept(cid, dsn=tmp_db, account_id=None)["picked"] is True

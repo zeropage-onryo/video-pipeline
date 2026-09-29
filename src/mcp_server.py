@@ -388,55 +388,30 @@ def pick_idea(idea_id: int, picked: bool = True,
               dsn: Optional[str] = None,
               account_id: Optional[int] = None,
 ) -> dict[str, Any]:
-    """Mark a concept worth rendering -- the label `pick_rate` reads --
-    and draw its still.
+    """Mark a concept worth rendering -- the label `pick_rate` reads.
 
-    THE ONE PLACE THIS SURFACE SPENDS (2026-09-08, Mike's call), and a
-    deliberate amendment to "the read/decide tools never spend", not an
-    oversight. The rule it serves is the budget one: the night writes
-    text and the PICK draws the image, so a pick from a phone that
-    produced no still meant the board and the phone disagreed about what
-    picking means -- and the card Mike opens next has nothing on it.
-
-    It is still not the RENDER gate. A keyframe is cents on the existing
-    Gemini key under NANO_DAILY_CAP; the clip is dollars through Runway,
-    and approving in the Queue, on the machine, is still the only thing
-    that calls it. `scene_chain.pick_skip_reason` is the same guard the
-    board uses -- one predicate, so the two doors cannot drift into
-    billing a scene twice.
-    """
-    account_id = _account(account_id, dsn)
-    preprod.set_picked(int(idea_id), picked=picked, dsn=dsn, account_id=account_id)
-    card = _card(preprod.get_concept(int(idea_id), dsn=dsn, account_id=account_id))
-    if picked:
-        card["keyframe"] = draw_pick_still(idea_id, dsn=dsn, account_id=account_id)
-    return card
-
-
-def draw_pick_still(idea_id: int, dsn: Optional[str] = None,
-                    account_id: Optional[int] = None) -> dict[str, Any]:
-    """Render the picked scene's still, reporting rather than raising.
-
-    The pick has already been recorded by the time this runs, and it is
-    the label that matters; a still that could not be drawn (the daily
-    cap, no key, a 503) leaves a scene that is picked, prompted and not
-    yet drawn -- which is what every scene looked like before this
-    existed. So this never raises: the tool result carries what
-    happened instead, because an agent that sees a tool error retries
-    the identical call, and the retry is what would spend twice.
+    SPENDS NOTHING AGAIN (2026-09-29, Mike's call). From 2026-09-08 this
+    drew the scene's still on pick; a still now costs credits, and every
+    spend of credits sits behind a priced approve a person presses. So the
+    pick records the choice and says what drawing would cost
+    (`keyframes`: stills and credits, from scene_chain.stills_to_draw);
+    the draw is the "Draw keyframes" button on the Queue card
+    (`POST /api/concepts/{id}/keyframes`). The read/decide tools are back
+    to never spending.
     """
     from . import scene_chain
-    try:
-        result = scene_chain.draw_on_pick(int(idea_id), db_path=dsn,
-                                          account_id=account_id)
-    except Exception as e:                      # pragma: no cover - defensive
-        return {"ok": False, "note": f"still not drawn: {e}"}
-    if result.get("skipped"):
-        return {"ok": False, "note": result["skipped"]}
-    if not result.get("ok"):
-        return {"ok": False, "note": result.get("error") or "keyframe failed"}
-    return {"ok": True, "url": result.get("media_url"),
-            "frames": len(result.get("frames") or [])}
+    account_id = _account(account_id, dsn)
+    preprod.set_picked(int(idea_id), picked=picked, dsn=dsn, account_id=account_id)
+    concept = preprod.get_concept(int(idea_id), dsn=dsn, account_id=account_id)
+    card = _card(concept)
+    if picked:
+        quote = scene_chain.keyframe_quote(concept)
+        if quote:
+            card["keyframes"] = {
+                "stills": quote["stills"], "credits": quote["credits"],
+                "note": "not drawn -- approve \"Draw keyframes\" on the "
+                        "Queue card in the studio to spend the credits"}
+    return card
 
 
 def shoot_idea(idea_id: int, shot: bool = True,
@@ -811,7 +786,7 @@ def spark_images(finding_id: int, dsn: Optional[str] = None) -> dict[str, Any]:
 #
 # Reading and deciding is free, so it is always on. A scout pass spends
 # a grounded search plus one digest call; a graph run spends generation,
-# the judge, and a Nano keyframe under NANO_DAILY_CAP. Cents, not
+# the judge, and a Nano keyframe charged in credits. Cents, not
 # dollars -- but cents fired by something that is not sitting in front
 # of the machine, so they register only under ZEROPAGE_MCP_ENGINE=1,
 # the same shape as ZEROPAGE_RENDER and RUNWAY_SPEND_OK.
@@ -1159,17 +1134,16 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
 
     @server.tool(annotations=writes)
     def pick(idea_id: int, picked: bool = True) -> dict:
-        """Mark a concept worth rendering, and draw its keyframe.
+        """Mark a concept worth rendering. Spends nothing.
 
-        The still costs cents and is the point of picking: the nightly
-        run writes text, and the image is drawn for the ones a person
-        chose. `keyframe` in the result says whether one was drawn and
-        why not when it was not -- it is never an error, so do NOT
-        retry a pick that came back without a still.
+        Picking puts the scene in the Queue. Its keyframes cost credits
+        and are drawn only when a person presses the priced "Draw
+        keyframes" approve on the Queue card; `keyframes` in the result
+        says how many stills that would be and what they cost. Do not
+        retry a pick to get a still -- a pick never draws one.
 
-        This is still not the video: the CLIP is dollars, and approving
-        in the Queue on the machine is the only thing that spends
-        them."""
+        The CLIP is spent the same way: approving it in the Queue is the
+        only thing that renders it."""
         return _t(pick_idea, idea_id, picked=picked, dsn=dsn)
 
     @server.tool(annotations=writes)

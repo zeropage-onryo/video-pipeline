@@ -324,12 +324,18 @@ export default function PipelinePage() {
                         <button
                           type="button"
                           className={`${ICON_BTN} ${c.picked ? "border-noir-red! bg-noir-red! text-noir-bg!" : "text-bone!"}`}
-                          title={c.picked ? "Picked — click to unpick" : "Pick this"}
+                          title={
+                            c.picked
+                              ? "Picked — click to unpick"
+                              : c.keyframes
+                                ? `Pick this — it goes to the Queue; its ${c.keyframes.stills === 1 ? "keyframe is" : `${c.keyframes.stills} keyframes are`} drawn only when you approve them there`
+                                : "Pick this"
+                          }
                           aria-label={`${c.picked ? "Unpick" : "Pick"} ${c.title}`}
                           aria-pressed={c.picked}
                           disabled={busy[c.id] || !!c.media_url}
                           onClick={() =>
-                            act(c, () => pickConcept(c.id, !c.picked), c.picked ? "Unpicked" : `${c.n} is in the Queue — approving it there renders`)
+                            act(c, () => pickConcept(c.id, !c.picked), c.picked ? "Unpicked" : `${c.n} is in the Queue — draw its keyframes and approve the render there`)
                           }
                         >
                           <Check size={18} strokeWidth={2} aria-hidden />

@@ -1552,6 +1552,16 @@ def _ref_sources(refs: list, sources: Optional[dict]) -> list:
     return out
 
 
+def _keyframe_quote(concept: dict) -> Optional[dict]:
+    """{stills, each, credits} for drawing this scene's keyframes, or None
+    when there is nothing to draw. Priced for the image model THIS server
+    draws keyframes with (nano_banana.MODEL), so the label never quotes the
+    other model. Whether the account is actually charged is the balance's
+    `exempt`, which the card reads beside it."""
+    from src import scene_chain
+    return scene_chain.keyframe_quote(concept)
+
+
 def _concept_card(c: dict, subscription_ids: Optional[set] = None,
                   gates: Optional[dict] = None,
                   sources: Optional[dict] = None) -> dict:
@@ -1620,6 +1630,10 @@ def _concept_card(c: dict, subscription_ids: Optional[set] = None,
         # will render, and the approve re-plans it first.
         "timeline": _timeline_card((c.get("shots") or [{}])[0], c.get("account_id"))
                     if c.get("is_scene") else None,
+        # what drawing this scene's keyframes would cost (2026-09-29, Mike's
+        # call: a still is spent only behind a priced approve). None when
+        # there is nothing to draw.
+        "keyframes": _keyframe_quote(c) if c.get("is_scene") else None,
         # WHO PAID FOR THIS CLIP. A hand-rendered clip off the operator's
         # subscription and an API-rendered one billed to somebody's credit
         # are the same mp4 in the same folder; only `params.source` on the
@@ -2242,7 +2256,8 @@ def scout_run(body: ScoutRunBody, account_id: int = Depends(auth.current_account
 
 def _keyframe_on_pick(concept: dict, account_id: int):
     """Render the picked scene's still(s), in the background. Returns a
-    job id, or None when there is nothing to do.
+    job id, or None when there is nothing to do. Called by the priced
+    approve (`concept_keyframes`), not by the pick, since 2026-09-29.
 
     WHY HERE AND NOT IN THE NIGHT (2026-09-08, Mike's call). The nightly
     graph's keyframe step is off (`ZEROPAGE_KEYFRAME=0`, a deliberate
@@ -2329,13 +2344,49 @@ def concept_pick(concept_id: int, body: PickBody, account_id: int = Depends(auth
     if concept is not None:
         if body.picked:
             ruled = _board_verdict(concept, "worked", BOARD_PICK_NOTE)
-            # The still is rendered for the ones you pick, and only those.
-            job_id = _keyframe_on_pick(concept, account_id)
+            # The pick no longer draws (2026-09-29, Mike's call): a still is
+            # charged, so it is spent behind the card's priced "Draw
+            # keyframes" approve, POST /concepts/{id}/keyframes.
         else:
             _withdraw_board_verdict(concept)
     return {"ok": True, "picked": body.picked, "ruled": ruled,
             "job_id": job_id,
             "pick": preprod.pick_rate(account_id=account_id)}
+
+
+@router.post("/concepts/{concept_id}/keyframes")
+def concept_keyframes(concept_id: int, account_id: int = Depends(auth.current_account_id)):
+    """The priced approve for a scene's keyframes (2026-09-29, Mike's call:
+    "an approve button before each render that spends credits"). The card
+    shows `keyframes` -- how many stills, what they cost -- and nothing is
+    drawn until this is pressed.
+
+    The WHOLE strip must be affordable before anything is drawn: a strip
+    that runs dry halfway leaves a scene half-anchored, so it is refused
+    with "top up" instead (402 out_of_credits). Each still still holds and
+    settles its own credit inside nano_banana, exactly as before; this is
+    the check in front of them. Exempt accounts are never refused."""
+    concept = preprod.get_concept(concept_id, account_id=account_id)
+    if concept is None:
+        return _error(404, "not_found", "no such concept")
+    quote = _keyframe_quote(concept)
+    if not quote:
+        from src import scene_chain
+        return _error(409, "nothing_to_draw",
+                      scene_chain.pick_skip_reason(concept) or "nothing to draw")
+    if not _gemini_key(account_id):
+        return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
+    from src import accounts, ledger
+    # the unowned pool and the operator's exempt accounts are never charged
+    # (ledger.hold_for_render), so they are never refused here either
+    if account_id is not None and not accounts.is_credit_exempt(account_id):
+        have = ledger.available(account_id)
+        if have < quote["credits"]:
+            return _out_of_credits(
+                ledger.InsufficientCredit(account_id, quote["credits"], have),
+                f"{quote['stills']} keyframe{'s' if quote['stills'] != 1 else ''}")
+    job_id = _keyframe_on_pick(concept, account_id)
+    return {"ok": True, "job_id": job_id, "keyframes": quote}
 
 
 class ArchiveBody(BaseModel):

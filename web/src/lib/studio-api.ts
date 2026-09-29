@@ -185,6 +185,7 @@ export const organizeGenerated = (id: number, body: { folder?: string; starred?:
   });
 
 /* ── the board and the queue ── */
+export type KeyframeQuote = { stills: number; each: number; credits: number };
 export type Concept = {
   id: number;
   n: string;
@@ -237,6 +238,8 @@ export type Concept = {
   } | null;
   /** the timed shots a scene renders as, or null for one that renders whole */
   timeline?: Timeline | null;
+  /** what drawing this scene's keyframes would cost; null when nothing to draw (2026-09-29) */
+  keyframes?: KeyframeQuote | null;
 };
 export type TimelinePart = {
   n: number;
@@ -489,6 +492,14 @@ export const queueCount = (brand?: string) =>
   );
 /** The pick. Puts a concept in front of the Queue's approval gate;
  *  approving THERE is what renders. */
+/** The priced approve for a scene's keyframes (2026-09-29): nothing is
+ *  drawn until this is pressed. 402 out_of_credits when the whole strip
+ *  does not fit the balance. */
+export const drawKeyframes = (id: number) =>
+  apiFetch<{ ok: boolean; job_id: number | null; keyframes: KeyframeQuote }>(`/concepts/${id}/keyframes`, {
+    method: "POST",
+  });
+
 export const pickConcept = (id: number, picked = true) =>
   apiFetch<{ ok: boolean }>(`/concepts/${id}/pick`, {
     method: "POST",
@@ -610,6 +621,8 @@ export type Balance = {
   checkout_configured: boolean;
   yearly_configured: boolean;
   portal: boolean;
+  /** what a still costs on THIS server (app/billing.action_prices) */
+  prices?: { still: number };
 };
 export const getBalance = () => apiFetch<Balance>("/billing/balance");
 /** fired after anything that moves credit: an approve takes a hold, a

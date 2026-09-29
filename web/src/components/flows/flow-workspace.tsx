@@ -81,6 +81,7 @@ import {
 } from "lucide-react";
 import { apiFetch, API_URL, goToSignIn } from "@/lib/api";
 import { sceneMenu, uploadRefs, type SceneMenuRow } from "@/lib/studio-api";
+import { creditsText } from "@/lib/render-choice";
 import {
   announceQueueChange,
   getAssets,
@@ -196,7 +197,9 @@ const Actions = createContext<{
   run: (id: string) => void;
   renderer: RendererState | null;
   caps: Capabilities;
-}>({ update: () => {}, addFrames: () => {}, remove: () => {}, duplicate: () => {}, run: () => {}, renderer: null, caps: {} });
+  /** what one still costs, and whether this account is charged (2026-09-29) */
+  still: { credits: number; exempt: boolean } | null;
+}>({ update: () => {}, addFrames: () => {}, remove: () => {}, duplicate: () => {}, run: () => {}, renderer: null, caps: {}, still: null });
 
 function KindIcon({ data, size, strokeWidth }: { data: CardData; size: number; strokeWidth: number }) {
   const props = { size, strokeWidth };
@@ -490,7 +493,9 @@ function StudioNode({ id, data, selected }: NodeProps<FlowNode>) {
             <span className="m">
               {data.kind === "video" && rw?.estimate_usd != null
                 ? `est. $${Number(rw.estimate_usd).toFixed(2)}`
-                : data.busy
+                : data.kind === "image" && actions.still && !data.busy
+                  ? creditsText(actions.still.credits, actions.still.exempt)
+                  : data.busy
                   ? "processing"
                   : data.url
                     ? "ready"
@@ -1321,6 +1326,7 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
         },
         renderer: rw,
         caps,
+        still: shell.balance?.prices?.still != null ? { credits: shell.balance.prices.still, exempt: !!shell.balance.exempt } : null,
       }}
     >
       <main className={`flows-workspace ${showTemplates ? "templates-open" : ""} tool-${tool}${selectedNode ? " has-inspector" : ""}`}>
@@ -1694,7 +1700,9 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
               <p>
                 {nodes.find((n) => n.id === confirm)?.data.kind === "video"
                   ? "This renders a clip on fal and holds credits — the adapter's own gate still has the last word."
-                  : "This is a billed model call under the project's daily caps."}
+                  : nodes.find((n) => n.id === confirm)?.data.kind === "image" && shell.balance?.prices?.still != null
+                    ? `This draws one still — ${creditsText(shell.balance.prices.still, !!shell.balance.exempt)}.`
+                    : "This is a billed model call."}
               </p>
               <div>
                 <button onClick={() => setConfirm(null)}>Keep editing</button>

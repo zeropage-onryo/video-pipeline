@@ -701,7 +701,12 @@ new `keyframe` node sits between the prompt gate and the (still dry) render:
 **THE NIGHT NO LONGER DRAWS ANYTHING (2026-09-08, Mike's call).** `ZEROPAGE_KEYFRAME=0`
 is the standing posture, not a temporary cut: a walk that draws every scene spends the
 whole Nano cap on concepts nobody has looked at, and the night of 09-07 produced 75 stills'
-worth of scenes with 0 stills and nobody the wiser. **The PICK draws the still instead** —
+worth of scenes with 0 stills and nobody the wiser. **SINCE 2026-09-29 THE PICK DRAWS NOTHING
+EITHER** (Mike's call: every spend of credits sits behind a priced approve): the card carries
+`keyframes` (`scene_chain.keyframe_quote` — stills missing, credits), and the Queue card's
+**Draw keyframes** button posts `POST /api/concepts/{id}/keyframes`, which refuses with "top up"
+(402) unless the WHOLE strip fits the balance, then runs `draw_on_pick` as a job. What follows is
+the 2026-09-08 history. **The PICK draws the still instead** —
 `scene_chain.draw_on_pick`, called from the board (`POST /api/concepts/{id}/pick`, as a
 background job) and from the MCP `pick`, guarded by one shared `scene_chain.pick_skip_reason`
 so the two doors cannot drift into billing a scene twice. It is skipped for a scene that
@@ -1329,7 +1334,9 @@ is yours, in Resolve, by hand.
   `scout`, and `data/pipeline.db` stays the one source of truth — a synced second store is
   the mistake `asset_shelf` exists to fix. The read/decide tools (`board`, `idea`,
   `search`, `capture`, `pick`, `shoot`, `archive`, `add_spark`, `tonight`, `sparks`,
-  `images`, `stats`, `job`) are always on. **`pick` is the ONE that spends, and only
+  `images`, `stats`, `job`) are always on. **`pick` spends nothing again since
+  2026-09-29** -- it returns the `keyframes` quote and a note to approve the draw in the
+  studio; the history: **`pick` was the ONE that spent, and only
   cents** (2026-09-08, Mike's call — a deliberate amendment to "nothing on them spends",
   not an oversight): it draws the scene's keyframe through `scene_chain.draw_on_pick`,
   because the night stopped drawing and the pick is what earns a still, so a pick from a

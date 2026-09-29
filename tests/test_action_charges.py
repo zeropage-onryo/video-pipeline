@@ -265,3 +265,67 @@ def test_the_unowned_nightly_pool_is_not_charged(studio, nano):
     assert result["ok"], result["error"]
     assert _kinds(studio) == []
 
+
+
+# --- keyframes behind a priced approve (2026-09-29) -------------------------
+
+
+@pytest.fixture
+def drawn(monkeypatch):
+    """keyframe_scene replaced and counted: the gate is the subject."""
+    from src import scene_chain
+    calls = []
+    monkeypatch.delenv("ZEROPAGE_KEYFRAME_ON_PICK", raising=False)
+    monkeypatch.setattr("google.genai.Client", lambda api_key=None: object())
+    monkeypatch.setattr(scene_chain, "keyframe_scene",
+                        lambda cid, n=None, **kw: calls.append(cid) or
+                        {"ok": True, "media_url": "https://example.test/k.jpg", "frames": []})
+    return calls
+
+
+def _timed_scene(studio, parts=3):
+    """A one-shot scene whose CURRENT timeline has `parts` shots, none drawn."""
+    from src import timeline
+    shot = {"n": 1, "type": "BROLL", "source": "AI", "tool": "LTX",
+            "prompt": "(0-3s) a. (3-6s) b. (6-9s) c.", "refs": ["/refs/x.jpg"]}
+    shot["timeline"] = {
+        "seconds": 9, "planner": "split", "continuity": "",
+        "source": timeline.source_hash(shot["prompt"], shot["refs"]),
+        "parts": [{"n": i + 1, "start": 3 * i, "end": 3 * i + 3, "seconds": 3,
+                   "text": "x", "prompt": "x", "refs": shot["refs"]} for i in range(parts)]}
+    return preprod.save_concept({"title": "T", "hook": "", "logline": "", "shots": [shot]},
+                                brand="zeropage", prompt_template="T", dsn=studio["dsn"],
+                                account_id=studio["account_id"])
+
+
+def test_drawing_keyframes_needs_the_whole_strip_in_the_balance(client, studio, drawn):
+    from src import nano_banana
+    cid = _timed_scene(studio)
+    each = pricing.still_credits(nano_banana.MODEL)
+    _fund(studio, 2 * each)                    # two of three stills
+    res = client.post(f"/api/concepts/{cid}/keyframes")
+    assert res.status_code == 402
+    body = res.json()["error"]
+    assert body["code"] == "out_of_credits"
+    assert f"needs {3 * each}" in body["message"] and "top up" in body["message"]
+    assert drawn == []                          # never a partial strip
+
+    _fund(studio, each)
+    res = client.post(f"/api/concepts/{cid}/keyframes")
+    assert res.status_code == 200, res.text
+    assert res.json()["keyframes"]["stills"] == 3
+    assert _wait(client, res.json()["job_id"])["status"] == "done"
+    assert drawn == [cid]
+
+
+def test_an_exempt_account_draws_with_no_balance(client, studio, drawn):
+    accounts.set_credit_exempt("zeropage", True, dsn=studio["dsn"])
+    cid = _timed_scene(studio, parts=1)
+    res = client.post(f"/api/concepts/{cid}/keyframes")
+    assert res.status_code == 200, res.text
+
+
+def test_the_balance_carries_the_still_price(client, studio):
+    from src import nano_banana
+    prices = client.get("/api/billing/balance").json()["prices"]
+    assert prices == {"still": pricing.still_credits(nano_banana.MODEL)}

@@ -789,9 +789,42 @@ def pick_skip_reason(concept: Optional[dict]) -> Optional[str]:
     return None
 
 
+def stills_to_draw(concept: Optional[dict]) -> int:
+    """How many stills drawing this scene's keyframes would make -- 0 when
+    there is nothing to draw (pick_skip_reason's rule). One per timed shot
+    still missing one, else one for the scene. What the card quotes and
+    what the approve checks the balance against (2026-09-29), so it counts
+    exactly what _keyframe_timeline would draw, never what it would skip."""
+    if pick_skip_reason(concept):
+        return 0
+    shot = (concept.get("shots") or [{}])[0]
+    parts = ((shot.get("timeline") or {}).get("parts") or []
+             if timeline.is_current(shot) else [])
+    if parts:
+        return sum(1 for p in parts if not p.get("reference_image"))
+    return 0 if shot.get("reference_image") else 1
+
+
+def keyframe_quote(concept: Optional[dict]) -> Optional[dict]:
+    """{stills, each, credits} for drawing this scene's keyframes, or None
+    when there is nothing to draw -- what the Queue card's priced approve
+    says, and what the MCP pick reports. Priced for the image model THIS
+    server draws keyframes with (nano_banana.MODEL), so a label never
+    quotes the other model. Whether the account is actually charged is its
+    `credit_exempt`, which the caller reads beside it."""
+    from . import pricing
+    stills = stills_to_draw(concept)
+    if not stills:
+        return None
+    each = pricing.still_credits(nano_banana.MODEL)
+    return {"stills": stills, "each": each, "credits": stills * each}
+
+
 def draw_on_pick(concept_id: int, *, db_path=None, account_id: Optional[int] = None,
                  resolve_photo=None, gemini_client=None) -> dict:
-    """Render the still for a scene somebody just picked.
+    """Render the stills for a picked scene -- called by the priced
+    approve (`POST /api/concepts/{id}/keyframes`, 2026-09-29), never by the
+    pick itself any more; the name is historical.
 
     THE BUDGET RULE (2026-09-08, Mike's call). The nightly graph writes
     text and stops (`ZEROPAGE_KEYFRAME=0`): a 40-spark walk that draws
