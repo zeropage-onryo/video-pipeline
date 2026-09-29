@@ -101,6 +101,8 @@ def billing_checkout(body: CheckoutBody, request: Request,
                                    interval=body.interval, email=user.get("email"))
     except billing.BillingUnconfigured as e:
         return _error(503, "billing_unconfigured", str(e))
+    except billing.PlanRequired as e:
+        return _error(403, "plan_required", str(e))
     except ValueError as e:
         return _error(400, "bad_item", str(e))
     return {"url": url}

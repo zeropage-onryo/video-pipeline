@@ -199,8 +199,13 @@ class Pack:
     price_env: str
 
 
-# A one-time top-up: a `purchase` lot, bought by any account with a plan.
-TOPUP = Pack("topup", "1,000 credits", 10, 1000, "STRIPE_PRICE_TOPUP")
+# A one-time top-up: a `purchase` lot, for accounts ON A PLAN only
+# (billing.checkout_url refuses the rest). 750 for $10 since 2026-09-29,
+# Mike's call: 1.33c a credit against a plan's 1.0c, so a top-up is what
+# you buy when your month runs out, never a cheaper way to skip the plan.
+# It was 1,000 -- the same rate as Starter, which gave nobody a reason to
+# subscribe. The Stripe Price is unchanged ($10); only the grant moved.
+TOPUP = Pack("topup", "750 credits", 10, 750, "STRIPE_PRICE_TOPUP")
 
 
 def plan_for_tier(tier: str) -> Optional[Plan]:
