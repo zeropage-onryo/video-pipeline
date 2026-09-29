@@ -1689,6 +1689,22 @@ is yours, in Resolve, by hand.
   a bare `scout run` (as the bootstrap account) all ask it; an explicit lane list is honoured
   either way. The MCP tool used to default to its own `LANES`, which ran Instagram for every
   caller and had drifted (named `feeds`, missed `pinterest`); it is `scout.KNOWN_LANES` now.
+- **`src/projects.py`** + **`src/project_context.py`** — studio PROJECTS (2026-09-28, Mike's
+  call, the day ANTIHERO was merged into Zero Page): one brief and one memory per piece of
+  work (a client's ad, a short). `projects` is OWNED; `shoot_concepts.project_id` files a
+  scene under one. The memory is what the project LEARNED -- every board pick and pass
+  inside it, one entry per concept (a re-pick replaces, a pass cancels the pick, an un-pick
+  withdraws) -- and `brief_block` hands the brief + the newest `PROMPT_MEMORY` lessons to
+  the writer through a ContextVar that `shootgen.load_brand` appends ("" outside a project,
+  so the block is byte for byte what it was). Per project on purpose: a perfume ad's lesson
+  must not steer a horror short; the shared shelves still learn from everything.
+  `/api/projects` (CRUD, `draft-brief`, `archive`, `forget`); `/scenes/run` and the Guide
+  take `project_id` (unknown -> 404); the board takes `?project=`, narrowed INSIDE the
+  window. The React Projects page opens the composer with `?project=<id>`, remembered per
+  browser. `accounts.seed` now makes ONE account. NOT ported with it, left on
+  `wip/main-checkout-2026-09-28` as Mike's to decide: `load_brand` forcing every run to
+  zeropage, `CAST_BRANDS` gaining zeropage (lifts the faceless rule), and the rewritten
+  brand/look/scene prompts.
 - **`src/refbin.py`** — one owner for `data/refs`, both directions: the content-addressed name,
   the JPEG normalisation (EXIF transpose BEFORE `convert("RGB")`, HEIC when `pillow-heif` is
   present), `save`, `fetch` (bounded download for scouted images) and `resolve`. It exists
