@@ -118,10 +118,20 @@ def test_blend_is_between_the_two_inputs():
 
 # ---------- judge_spark: never raises, degrades under no_network ----------
 
-def test_judge_spark_degrades_gracefully_with_no_network(monkeypatch):
+def _dead_library(monkeypatch, why="no store"):
+    # psycopg connects below the socket guard, so a test that touches the
+    # store must patch it explicitly (CLAUDE.md, RAG notes)
+    from src import rag
+    monkeypatch.setattr(rag, "connect",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError(why)))
+
+
+def test_judge_spark_never_raises_when_the_model_call_fails(monkeypatch):
+    _dead_library(monkeypatch)
+
     class FakeModels:
         def generate_content(self, model, contents):
-            raise AssertionError("should never reach the model -- RAG should fail first")
+            raise RuntimeError("no network")
 
     class FakeClient:
         models = FakeModels()
@@ -130,7 +140,26 @@ def test_judge_spark_degrades_gracefully_with_no_network(monkeypatch):
 
     assert result["ok"] is False
     assert result["score"] is None
-    assert "error" in result
+    assert "no network" in result["error"]
+
+
+def test_judge_spark_grades_without_the_library_when_it_is_unreachable(monkeypatch):
+    """The ad judge's rule, now the story judge's too: a dead RAG store
+    costs the verdict its context, not the verdict."""
+    _dead_library(monkeypatch, "password authentication failed")
+    seen = []
+
+    class FakeModels:
+        def generate_content(self, model, contents):
+            seen.append(contents)
+            return type("R", (), {"text": '{"score": 0.6, "verdict": "the spine holds", "missing": []}'})()
+
+    class FakeClient:
+        models = FakeModels()
+
+    result = story_judge.judge_spark("a spark", "a rationale", FakeClient(), "fake-model")
+    assert result["ok"] and result["score"] == 0.6
+    assert "(nothing on file yet)" in seen[0]
 
 
 # ---------- judge_ad: a short ad graded on its own terms ----------
