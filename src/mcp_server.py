@@ -1224,13 +1224,19 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
         of a flooded mall lit by generators exists, so one is rendered.
         Pass the `hook_frame` you wrote for the spark (what is on screen
         in frame one), nothing else -- the look is added here. Midjourney
-        first, then Gemini's image model, then Higgsfield; the result
-        says which one rendered. One call per spark; there is a daily
-        cap and the note tells you when it is reached. Do this BEFORE
+        first, then Gemini's image model; the result says which one
+        rendered and the `credits` it cost the caller (a still, charged
+        like any other; not charged on the operator's exempt account).
+        Out of credits comes back as a note, never an error -- do not
+        retry it. One call per spark; there is a daily cap and the note
+        tells you when it is reached. Do this BEFORE
         `images_for`, and then add one or two real photographs for the
         light and the surfaces."""
         from . import refgen
-        return _t(refgen.render_for_finding, finding_id, hook_frame, dsn=dsn)
+        # the caller pays (2026-09-29): a signed-in account is charged the
+        # still, the operator's key resolves to an exempt account
+        return _t(refgen.render_for_finding, finding_id, hook_frame, dsn=dsn,
+                  account_id=_account(None, dsn))
 
     @server.tool(annotations=read_only)
     def images_for(query: str, brand: str = "", limit: int = 6) -> dict:
