@@ -216,4 +216,40 @@ def refusal(e: ledger.InsufficientCredit, what: str = "this render") -> str:
             f"{e.available} -- top up to continue")
 
 
-__all__ = ["Charge", "attempt_ref", "refusal"]
+CREATE_REFUSAL = ("Create is included with a plan -- subscribe or top up "
+                  "credits to continue")
+
+
+def create_refusal(account_id: Optional[int], *, dsn: Optional[str] = None) -> Optional[str]:
+    """Why this account may not Create (write a scene), or None when it may.
+
+    A Create costs no credits (2026-09-29, Mike's call: it is included in
+    the subscription, its Gemini cost priced into the plans rather than
+    debited per click). "Included" still needs something to be included
+    IN: an account may Create while it has an active plan or any credit
+    balance -- the 100-credit trial counts -- and is refused with
+    CREATE_REFUSAL once it has neither. The operator's exempt accounts and
+    the unowned pool (the CLI, the nightly walk) are never refused.
+
+    Fails OPEN on a read error, with a stderr line: a Create is free per
+    click, so a flaky balance read must not take the composer down; the
+    renders and stills behind it still hold credit and still refuse."""
+    if account_id is None:
+        return None
+    try:
+        from . import accounts
+        if accounts.is_credit_exempt(account_id, dsn=dsn):
+            return None
+        if accounts.plan_of(account_id, dsn=dsn):
+            return None
+        if ledger.available(account_id, dsn=dsn) > 0:
+            return None
+    except Exception as e:  # noqa: BLE001 -- see docstring
+        import sys
+        print(f"[charge] create gate unreadable for account {account_id}: {e}",
+              file=sys.stderr)
+        return None
+    return CREATE_REFUSAL
+
+
+__all__ = ["Charge", "CREATE_REFUSAL", "attempt_ref", "create_refusal", "refusal"]

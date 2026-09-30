@@ -18,7 +18,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, ChevronDown, ChevronUp, ExternalLink, Settings2 } from "lucide-react";
+import { ArrowRight, ChevronDown, ChevronUp, ExternalLink, Settings2, SquarePen } from "lucide-react";
 import { useShell } from "@/components/studio/shell";
 import {
   getBalance,
@@ -37,14 +37,19 @@ import {
   TONES,
   cleanName,
   firstEmoji,
+  getAssistantMemory,
   isStage,
   keepReferences,
   laterStage,
   loadPersona,
   pageName,
   pageStage,
+  postVerdicts,
+  putPersona,
+  putProject,
   savePersona,
   sendToComposer,
+  startNewProject,
   type ComposerState,
   type ContactSheet,
   type Persona,
@@ -115,16 +120,46 @@ export function AssistantPill() {
   const body = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
 
-  // persona + thread are per account: two brands, two conversations
+  // persona + thread are per account: two brands, two conversations.
+  // The browser's copy paints first; the server's copy (src/assistant_store.py)
+  // then wins. Something only this browser has -- set up before the server
+  // remembered anything -- is sent up once, so nothing already made is lost.
   useEffect(() => {
     if (!account) return;
+    let live = true;
+    const localPersona = loadPersona(account);
+    const local = loadThread(account);
     // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage is only readable after mount
-    setPersona(loadPersona(account));
-    const t = loadThread(account);
-    setTurns(t.turns);
-    setConvStage(t.stage);
-    setTurnsFor(account);
+    setPersona(localPersona);
+    setTurns(local.turns);
+    setConvStage(local.stage);
+    getAssistantMemory()
+      .then((m) => {
+        if (!live) return;
+        if (m.persona) {
+          const p = { name: m.persona.name, avatar: m.persona.avatar, tone: m.persona.tone };
+          setPersona(p);
+          savePersona(account, p);
+        } else if (localPersona) {
+          void putPersona(localPersona).catch(() => {});
+        }
+        if (m.project) {
+          setTurns((m.project.turns as Turn[]) || []);
+          setConvStage(isStage(m.project.stage) ? m.project.stage : "");
+        } else if (local.turns.length) {
+          void putProject(local.turns, local.stage).catch(() => {});
+        }
+      })
+      .catch(() => {
+        /* the server cannot be asked: the browser's copy is what there is */
+      })
+      .finally(() => live && setTurnsFor(account));
+    return () => {
+      live = false;
+    };
   }, [account]);
+  // every change is saved -- to the server (debounced: a turn and its
+  // extras land in a burst) and to this tab as the offline fallback
   useEffect(() => {
     if (!account || turnsFor !== account) return;
     try {
@@ -132,6 +167,11 @@ export function AssistantPill() {
     } catch {
       /* the thread just forgets on reload */
     }
+    if (!turns.length) return;
+    const t = setTimeout(() => {
+      void putProject(turns.filter((x) => !x.failed), convStage).catch(() => {});
+    }, 700);
+    return () => clearTimeout(t);
   }, [turns, convStage, account, turnsFor]);
 
   // what the composer holds, so a turn can see the idea and its picks
@@ -234,6 +274,22 @@ export function AssistantPill() {
     setDetail("Keeping the frames…");
     try {
       const res = await keepReferences(ids);
+      // the click against the checker, every frame the sheet showed: which
+      // ones refcheck kept, which ones the person kept. Best-effort -- a
+      // verdict that did not record must never undo a keep that did.
+      void postVerdicts(
+        sheet.sheet.flatMap((n) =>
+          [...n.keepers, ...n.rejected].map((f) => ({
+            id: f.id,
+            role: n.role,
+            query: n.query,
+            checker_kept: n.keepers.includes(f),
+            why: f.why || f.kept_for || "",
+            person_kept: !!chosen[f.id],
+            source_url: f.source_url || "",
+          })),
+        ),
+      ).catch(() => {});
       const urls = res.result.kept.map((k) => k.url);
       if (urls.length) sendToComposer({ refs: urls, by: persona.name, avatar: persona.avatar });
       const refused = res.result.refused.length;
@@ -256,6 +312,27 @@ export function AssistantPill() {
     }
   }
 
+  /* A fresh project: the current one is archived on the server -- kept,
+     never deleted -- and the card starts empty. */
+  async function newProject() {
+    if (busy) return;
+    try {
+      await startNewProject();
+    } catch {
+      toast("Could not start a new project", "err");
+      return;
+    }
+    setTurns([]);
+    setConvStage("");
+    setText("");
+    try {
+      sessionStorage.removeItem(`${THREAD_KEY}.${account}`);
+    } catch {
+      /* nothing kept here to clear */
+    }
+    setTimeout(() => input.current?.focus(), 50);
+  }
+
   function pickDirection(i: number, j: number, d: { title: string; logline: string; turn?: string }) {
     if (!persona) return;
     const written = [d.logline.trim(), d.turn?.trim()].filter(Boolean).join(" ");
@@ -267,6 +344,9 @@ export function AssistantPill() {
   }
 
   if (signedOut || !me?.account) return null;
+  // the editor seats its agent in its own left panel (invideo's place), so
+  // a floating pill over the timeline would be a second, competing one
+  if (/^\/studio\/cut\/[^/]+/.test(pathname)) return null;
 
   const pillLine = !project
     ? "Start a project, or ask me anything"
@@ -291,6 +371,10 @@ export function AssistantPill() {
               onDone={(p) => {
                 savePersona(account, p);
                 setPersona(p);
+                // the account's copy, so every browser meets the same assistant
+                putPersona(p)
+                  .then((r) => setPersona(r.persona))
+                  .catch(() => toast("Saved in this browser only -- the studio could not be reached", "err"));
                 setSetup(false);
                 setTimeout(() => input.current?.focus(), 50);
               }}
@@ -302,6 +386,18 @@ export function AssistantPill() {
                 <div className="zpa-title">
                   <b>{persona.name}</b>
                   <span>on {where}</span>
+                  {project ? (
+                    <button
+                      type="button"
+                      className="zpa-icon"
+                      title="New project -- this one is kept"
+                      aria-label="New project"
+                      disabled={busy}
+                      onClick={() => void newProject()}
+                    >
+                      <SquarePen strokeWidth={1.6} />
+                    </button>
+                  ) : null}
                   <button type="button" className="zpa-icon" title="Rename or change the look" onClick={() => setSetup(true)}>
                     <Settings2 strokeWidth={1.6} />
                   </button>

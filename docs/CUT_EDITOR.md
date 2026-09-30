@@ -195,7 +195,9 @@ Three extras:
 1. **Assemble v0, the step 8 in the guided spec.** Timeline doc, ops and validator, and an ffmpeg render. It auto-assembles a project's approved Queue clips in `timeline.py` order, with a music bed, auto-duck, loudnorm and burned-in captions. There is no UI yet, just an Export button on the Queue. **It turns ZPF from "clips" into "a finished video", and it's the smallest piece that proves the architecture.**
 2. **The index:** proxies, transcripts, shots and shot logs, plus pgvector search. Ship Search as a pill tool.
 3. **Agent jobs on the doc:** Cleanup, Restructure / cut to length and Versions (cutdowns and 9:16), with a diff card and rollback.
+   - *Server half as built (2026-09-28):* `POST /api/cut/projects/{id}/agent` (a job: reply + a validated proposal or none), `.../agent/keep` (one `agent` version), `.../cleanup` and `.../captions` (no model, off the index's word timings), `.../index` (this cut's unindexed media). Every edit is a proposal the person Keeps or Undoes; nothing is saved without the click. See CLAUDE.md's `src/cut/` notes.
 4. **The /studio/cut timeline UI**, minimal.
+   - *Server half as built (2026-09-28):* `cut_projects` (scratch `cut:<uuid>` or a concept's `concept:<id>`), `POST /api/cut/projects/{id}/ops` with a `base_id` optimistic lock, undo/redo on the head pointer, a media bin of renders + uploads (video, stills, audio), per-file proxies / filmstrips / waveforms (`src/cut/preview.py`), and export of any version. New ops: `lift`, `set_canvas`, `set_cue`, `delete_cue`, `set_caption_style`. See CLAUDE.md's `src/cut/` notes.
 5. **Assembly from uploaded footage** plus a script (the "first cut" door), Multicam, Grade and Sound.
 6. **OTIO export and import**, dubbing with lip-sync, review links with frame comments, and Reference match and Beat sync.
 

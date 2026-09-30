@@ -125,21 +125,17 @@ def _error(status: int, code: str, message: str) -> JSONResponse:
                         content={"error": {"code": code, "message": message}})
 
 
-def _create_charge(account_id: Optional[int], brain: Optional[str]):
-    """Hold the credits one Create costs (2026-09-28, pricing.ACTION_USD),
-    or raise ledger.InsufficientCredit BEFORE any job or model call. The
-    job settles it when a scene was written and releases it when none
-    was. Exempt accounts and the unowned pool take no hold (charge.py)."""
-    import uuid
-
+def _create_gate(account_id: Optional[int]) -> Optional[JSONResponse]:
+    """A Create costs no credits (2026-09-29, Mike's call: included in the
+    subscription, priced into the plans). It is refused -- 402, BEFORE any
+    job or model call -- only for an account with no plan and no credit
+    balance (charge.create_refusal, the one predicate the MCP tools ask
+    too)."""
     from src import charge as charging
-    from src import pricing
-    action = pricing.create_action(brain)
-    charge = charging.Charge(account_id, provider="gemini",
-                             ref=f"{action.replace(':', '-')}-{uuid.uuid4().hex}",
-                             estimate_usd=pricing.ACTION_USD[action])
-    charge.take()
-    return charge
+    reason = charging.create_refusal(account_id)
+    if reason:
+        return _error(402, "subscribe_or_top_up", reason)
+    return None
 
 
 def _out_of_credits(e, what: str) -> JSONResponse:
@@ -575,6 +571,88 @@ async def creative_guide_act(request: Request,
         except ValueError:
             pass
     return {"ok": True, "tool": tool, "result": result}
+
+
+# --- the assistant pill's memory (2026-09-29, src/assistant_store.py) --------
+# The persona and the open project used to live in the browser (localStorage
+# and sessionStorage), so a closed tab lost the conversation and every new
+# browser asked for the persona again. The writes carry the same header
+# guard as a Guide turn: a cross-site form must not be able to rewrite them.
+
+async def _json_body(request: Request) -> Optional[dict]:
+    try:
+        body = await request.json()
+    except ValueError:
+        return None
+    return body if isinstance(body, dict) else None
+
+
+@router.get("/assistant")
+def assistant_get(account_id: int = Depends(auth.current_account_id)):
+    """The persona (None until set up) and the open project (None until the
+    first turn is saved)."""
+    from src import assistant_store
+    return {"persona": assistant_store.get_persona(account_id=account_id),
+            "project": assistant_store.open_project(account_id=account_id)}
+
+
+@router.put("/assistant/persona")
+async def assistant_persona(request: Request,
+                            account_id: int = Depends(auth.current_account_id)):
+    model_connections.mutation_header(request)
+    body = await _json_body(request)
+    if body is None:
+        return _error(400, "bad_request", "expected JSON {name, avatar, tone}")
+    from src import assistant_store
+    return {"persona": assistant_store.save_persona(
+        body.get("name"), body.get("avatar"), body.get("tone"), account_id=account_id)}
+
+
+@router.put("/assistant/project")
+async def assistant_project_save(request: Request,
+                                 account_id: int = Depends(auth.current_account_id)):
+    model_connections.mutation_header(request)
+    body = await _json_body(request)
+    if body is None or not isinstance(body.get("turns"), list):
+        return _error(400, "bad_request", "expected JSON {turns: [...], stage}")
+    from src import assistant_store
+    project = assistant_store.save_project(body["turns"], body.get("stage"),
+                                           account_id=account_id)
+    # the thread is the client's; echoing it back would double every save
+    return {"project": {k: v for k, v in project.items() if k != "turns"}}
+
+
+@router.post("/assistant/project/new")
+async def assistant_project_new(request: Request,
+                                account_id: int = Depends(auth.current_account_id)):
+    """Archive the open project -- kept, like a passed-over concept -- so
+    the next turn starts a fresh one."""
+    model_connections.mutation_header(request)
+    from src import assistant_store
+    assistant_store.new_project(account_id=account_id)
+    return {"ok": True}
+
+
+@router.post("/assistant/reference-verdicts")
+async def assistant_reference_verdicts(request: Request,
+                                       account_id: int = Depends(auth.current_account_id)):
+    """The Keep click, against the checker: one row per frame on the sheet.
+    Ids only a hunt served are recorded."""
+    model_connections.mutation_header(request)
+    body = await _json_body(request)
+    if body is None or not isinstance(body.get("frames"), list):
+        return _error(400, "bad_request", "expected JSON {frames: [...]}")
+    from src import assistant_store
+    project = assistant_store.open_project(account_id=account_id)
+    n = assistant_store.record_verdicts(body["frames"], account_id=account_id,
+                                        project_id=project["id"] if project else None)
+    return {"recorded": n, "agreement": assistant_store.agreement(account_id=account_id)}
+
+
+@router.get("/assistant/reference-agreement")
+def assistant_reference_agreement(account_id: int = Depends(auth.current_account_id)):
+    from src import assistant_store
+    return assistant_store.agreement(account_id=account_id)
 
 
 def _personal_connected(provider: str, scope) -> bool:
@@ -1502,6 +1580,16 @@ def _ref_sources(refs: list, sources: Optional[dict]) -> list:
     return out
 
 
+def _keyframe_quote(concept: dict) -> Optional[dict]:
+    """{stills, each, credits} for drawing this scene's keyframes, or None
+    when there is nothing to draw. Priced for the image model THIS server
+    draws keyframes with (nano_banana.MODEL), so the label never quotes the
+    other model. Whether the account is actually charged is the balance's
+    `exempt`, which the card reads beside it."""
+    from src import scene_chain
+    return scene_chain.keyframe_quote(concept)
+
+
 def _concept_card(c: dict, subscription_ids: Optional[set] = None,
                   gates: Optional[dict] = None,
                   sources: Optional[dict] = None) -> dict:
@@ -1570,6 +1658,10 @@ def _concept_card(c: dict, subscription_ids: Optional[set] = None,
         # will render, and the approve re-plans it first.
         "timeline": _timeline_card((c.get("shots") or [{}])[0], c.get("account_id"))
                     if c.get("is_scene") else None,
+        # what drawing this scene's keyframes would cost (2026-09-29, Mike's
+        # call: a still is spent only behind a priced approve). None when
+        # there is nothing to draw.
+        "keyframes": _keyframe_quote(c) if c.get("is_scene") else None,
         # WHO PAID FOR THIS CLIP. A hand-rendered clip off the operator's
         # subscription and an API-rendered one billed to somebody's credit
         # are the same mp4 in the same folder; only `params.source` on the
@@ -2079,11 +2171,9 @@ async def scenes_run(request: Request, account_id: int = Depends(auth.current_ac
     if scout_claimed:
         scout.bank_urls(scout_finding_id, refs, lane="composer")
 
-    from src import ledger
-    try:
-        charge = _create_charge(account_id, brain)
-    except ledger.InsufficientCredit as e:
-        return _out_of_credits(e, "this scene")
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
 
     def work(job):
         from google import genai
@@ -2103,24 +2193,16 @@ async def scenes_run(request: Request, account_id: int = Depends(auth.current_ac
         # this by hand -- and the nightly graph's job when nobody is
         # (src/orchestrator.py calls the same stage functions).
         from src import project_context
-        try:
-            with project_context.active(project):
-                result = scene_chain.run(
-                    idea, brand, count=count, refs=refs, image_refs=image_refs or None,
-                    db_path=None, account_id=account_id,
-                    gemini_client=client, video_parts=video_parts,
-                    resolve_photo=_resolve_asset_photo,
-                    attach_refs=_attach_scene_refs,
-                    brain=brain, ratio=ratio or None, seconds=seconds,
-                    progress=lambda fraction, detail: jobs.progress(job, fraction, detail))
-        except BaseException as e:
-            charge.release(f"create: {type(e).__name__}")
-            raise
+        with project_context.active(project):
+            result = scene_chain.run(
+                idea, brand, count=count, refs=refs, image_refs=image_refs or None,
+                db_path=None, account_id=account_id,
+                gemini_client=client, video_parts=video_parts,
+                resolve_photo=_resolve_asset_photo,
+                attach_refs=_attach_scene_refs,
+                brain=brain, ratio=ratio or None, seconds=seconds,
+                progress=lambda fraction, detail: jobs.progress(job, fraction, detail))
         saved = result["scenes"]
-        if saved:
-            charge.settle()
-        else:
-            charge.release("create: wrote nothing")
         if project and saved:
             projects.tag_concepts([s["concept_id"] for s in saved], project["id"],
                                   account_id=account_id)
@@ -2318,7 +2400,8 @@ def scout_run(body: ScoutRunBody, account_id: int = Depends(auth.current_account
 
 def _keyframe_on_pick(concept: dict, account_id: int):
     """Render the picked scene's still(s), in the background. Returns a
-    job id, or None when there is nothing to do.
+    job id, or None when there is nothing to do. Called by the priced
+    approve (`concept_keyframes`), not by the pick, since 2026-09-29.
 
     WHY HERE AND NOT IN THE NIGHT (2026-09-08, Mike's call). The nightly
     graph's keyframe step is off (`ZEROPAGE_KEYFRAME=0`, a deliberate
@@ -2405,8 +2488,9 @@ def concept_pick(concept_id: int, body: PickBody, account_id: int = Depends(auth
     if concept is not None:
         if body.picked:
             ruled = _board_verdict(concept, "worked", BOARD_PICK_NOTE)
-            # The still is rendered for the ones you pick, and only those.
-            job_id = _keyframe_on_pick(concept, account_id)
+            # The pick no longer draws (2026-09-29, Mike's call): a still is
+            # charged, so it is spent behind the card's priced "Draw
+            # keyframes" approve, POST /concepts/{id}/keyframes.
             # ...and the project it belongs to remembers what was chosen
             projects.remember_decision(concept, "pick", account_id=account_id)
         else:
@@ -2415,6 +2499,41 @@ def concept_pick(concept_id: int, body: PickBody, account_id: int = Depends(auth
     return {"ok": True, "picked": body.picked, "ruled": ruled,
             "job_id": job_id,
             "pick": preprod.pick_rate(account_id=account_id)}
+
+
+@router.post("/concepts/{concept_id}/keyframes")
+def concept_keyframes(concept_id: int, account_id: int = Depends(auth.current_account_id)):
+    """The priced approve for a scene's keyframes (2026-09-29, Mike's call:
+    "an approve button before each render that spends credits"). The card
+    shows `keyframes` -- how many stills, what they cost -- and nothing is
+    drawn until this is pressed.
+
+    The WHOLE strip must be affordable before anything is drawn: a strip
+    that runs dry halfway leaves a scene half-anchored, so it is refused
+    with "top up" instead (402 out_of_credits). Each still still holds and
+    settles its own credit inside nano_banana, exactly as before; this is
+    the check in front of them. Exempt accounts are never refused."""
+    concept = preprod.get_concept(concept_id, account_id=account_id)
+    if concept is None:
+        return _error(404, "not_found", "no such concept")
+    quote = _keyframe_quote(concept)
+    if not quote:
+        from src import scene_chain
+        return _error(409, "nothing_to_draw",
+                      scene_chain.pick_skip_reason(concept) or "nothing to draw")
+    if not _gemini_key(account_id):
+        return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
+    from src import accounts, ledger
+    # the unowned pool and the operator's exempt accounts are never charged
+    # (ledger.hold_for_render), so they are never refused here either
+    if account_id is not None and not accounts.is_credit_exempt(account_id):
+        have = ledger.available(account_id)
+        if have < quote["credits"]:
+            return _out_of_credits(
+                ledger.InsufficientCredit(account_id, quote["credits"], have),
+                f"{quote['stills']} keyframe{'s' if quote['stills'] != 1 else ''}")
+    job_id = _keyframe_on_pick(concept, account_id)
+    return {"ok": True, "job_id": job_id, "keyframes": quote}
 
 
 class ArchiveBody(BaseModel):
@@ -3921,23 +4040,12 @@ async def pipeline_run(request: Request, account_id: int = Depends(auth.current_
 
     image_refs, refs, _ = await _collect_refs(form)
 
-    from src import ledger
-    try:
-        charge = _create_charge(account_id, None)
-    except ledger.InsufficientCredit as e:
-        return _out_of_credits(e, "this scene")
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
 
     def work(job):
-        try:
-            out = _brief_work(job)
-        except BaseException as e:
-            charge.release(f"create: {type(e).__name__}")
-            raise
-        if out.get("ref_id"):
-            charge.settle()
-        else:
-            charge.release("create: wrote nothing")
-        return out
+        return _brief_work(job)
 
     def _brief_work(job):
         from google import genai

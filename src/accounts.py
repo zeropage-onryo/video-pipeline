@@ -788,12 +788,13 @@ def provision_personal(user_id: str, email: Optional[str] = None,
 
 
 def signup_credits() -> int:
-    """`ZEROPAGE_SIGNUP_CREDITS`: the welcome grant a new workspace gets.
-    0 (the default) grants nothing -- how much free rendering a stranger
-    gets is a pricing decision, not a default somebody inherits."""
+    """`ZEROPAGE_SIGNUP_CREDITS`: the one-time trial grant a new workspace
+    gets. 100 by default (2026-09-29, Mike's call -- InVideo's shape: no
+    card, try it, then subscribe or buy credits): one LTX render and a
+    keyframe, or ten keyframes. Set it to 0 to grant nothing."""
     import os
     try:
-        return max(0, int(os.environ.get("ZEROPAGE_SIGNUP_CREDITS", "0")))
+        return max(0, int(os.environ.get("ZEROPAGE_SIGNUP_CREDITS", "100")))
     except ValueError:
         return 0
 
@@ -810,7 +811,7 @@ def grant_signup_credits(account_id: int, *, dsn: Optional[str] = None) -> int:
         from . import ledger
         ledger.grant(account_id, credits, "promo",
                      source_ref=f"signup:{account_id}",
-                     note="welcome credits (open sign-up)", dsn=dsn)
+                     note="trial credits (open sign-up)", dsn=dsn)
         return credits
     except Exception as exc:  # noqa: BLE001 -- see docstring
         print(f"[accounts] signup credits not granted to {account_id}: {exc}",

@@ -260,7 +260,10 @@ def test_the_plans_are_the_three_tiers_in_ascending_order():
     # the peg on the page: a dollar of plan buys 100 credits of charge
     for p in pricing.PLANS.values():
         assert p.credits == p.monthly_usd * 100
-    assert pricing.TOPUP.credits == pricing.TOPUP.usd * 100
+    # a top-up is dearer per credit than any plan (2026-09-29): it tops a
+    # plan up, it is never the cheaper way around subscribing
+    assert pricing.TOPUP.credits < pricing.TOPUP.usd * 100
+    assert pricing.TOPUP.credits == 750 and pricing.TOPUP.usd == 10
     assert sum(1 for p in pricing.PLANS.values() if p.popular) == 1
 
 

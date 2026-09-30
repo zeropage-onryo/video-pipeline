@@ -101,6 +101,8 @@ def billing_checkout(body: CheckoutBody, request: Request,
                                    interval=body.interval, email=user.get("email"))
     except billing.BillingUnconfigured as e:
         return _error(503, "billing_unconfigured", str(e))
+    except billing.PlanRequired as e:
+        return _error(403, "plan_required", str(e))
     except ValueError as e:
         return _error(400, "bad_item", str(e))
     return {"url": url}
@@ -121,7 +123,18 @@ def billing_portal(account_id: int = Depends(auth.current_account_id)):
 def billing_balance(account_id: int = Depends(auth.current_account_id)):
     if account_id is None:
         return _no_account()
-    return billing.balance(account_id)
+    return {**billing.balance(account_id), "prices": action_prices()}
+
+
+def action_prices() -> dict:
+    """What a still costs on THIS server (2026-09-29), for the labels on
+    the buttons that spend it -- the Queue card's "Draw keyframes", the
+    Director's Nano node, the element sheet toggle. Priced for the image
+    model this server draws with (nano_banana.MODEL), so no label quotes
+    the other model's price. A Create is 0 (included in the plan) and is
+    not listed."""
+    from src import nano_banana, pricing
+    return {"still": pricing.still_credits(nano_banana.MODEL)}
 
 
 # (path under /api, handler, methods) -- app/api.py registers these

@@ -134,8 +134,8 @@ venv/bin/python -m src.mcp_server --engine   # stdio; Claude Desktop launches th
 # ONE lane since 2026-09-28: the generic `manual` import (a clip rendered
 # anywhere, filed free -- it was the Runway Unlimited lane until 2026-09-26).
 # The Higgsfield-MCP lane was REMOVED that day (Mike's call); its old
-# `mcp-subscription` rows still read as FREE, and src/higgsfield.py's Soul
-# STILL path is untouched. Mike expects to retire this import too
+# `mcp-subscription` rows still read as FREE (src/higgsfield.py itself was
+# removed 2026-09-29). Mike expects to retire this import too
 # (docs/BACKLOG.md #21). `list`
 # says what is waiting, `import` files the mp4 into data/renders/manual/
 # and writes a FREE row (cost_usd NULL, params.source = the lane marker, so
@@ -262,8 +262,10 @@ docs/tasks/task-fal-only.md).** Every video door -- Queue approve, approve-all,
 the Director Generate node, the board's per-shot render, the nightly graph,
 autopilot -- renders through `src/fal.py` on the operator's `FAL_KEY` and holds
 credits (`src/charge.py`). `src/runway.py`, `src/veo.py` and
-`src/account_keys.py` are deleted; `src/higgsfield.py` keeps only its Soul
-STILLS path; Veo lives on as the fal model `veo3.1`. `providers.VIDEO_PROVIDERS`
+`src/account_keys.py` are deleted; `src/higgsfield.py` followed on 2026-09-29
+(Mike's call -- the Soul stills too: refgen falls back Midjourney -> Nano, and the
+unreachable `scene_chain.visual_target` went with it); Veo lives on as the fal
+model `veo3.1`. `providers.VIDEO_PROVIDERS`
 is `{"fal": fal}`. A shot still carrying `RUNWAY`/`HIGGSFIELD` as its tool is
 read as the fal default at render time (`providers.platform_default`,
 `RETIRED_PLATFORMS`) and never rewritten. `ledger.is_billable` has one
@@ -701,7 +703,12 @@ new `keyframe` node sits between the prompt gate and the (still dry) render:
 **THE NIGHT NO LONGER DRAWS ANYTHING (2026-09-08, Mike's call).** `ZEROPAGE_KEYFRAME=0`
 is the standing posture, not a temporary cut: a walk that draws every scene spends the
 whole Nano cap on concepts nobody has looked at, and the night of 09-07 produced 75 stills'
-worth of scenes with 0 stills and nobody the wiser. **The PICK draws the still instead** —
+worth of scenes with 0 stills and nobody the wiser. **SINCE 2026-09-29 THE PICK DRAWS NOTHING
+EITHER** (Mike's call: every spend of credits sits behind a priced approve): the card carries
+`keyframes` (`scene_chain.keyframe_quote` — stills missing, credits), and the Queue card's
+**Draw keyframes** button posts `POST /api/concepts/{id}/keyframes`, which refuses with "top up"
+(402) unless the WHOLE strip fits the balance, then runs `draw_on_pick` as a job. What follows is
+the 2026-09-08 history. **The PICK draws the still instead** —
 `scene_chain.draw_on_pick`, called from the board (`POST /api/concepts/{id}/pick`, as a
 background job) and from the MCP `pick`, guarded by one shared `scene_chain.pick_skip_reason`
 so the two doors cannot drift into billing a scene twice. It is skipped for a scene that
@@ -1329,7 +1336,9 @@ is yours, in Resolve, by hand.
   `scout`, and `data/pipeline.db` stays the one source of truth — a synced second store is
   the mistake `asset_shelf` exists to fix. The read/decide tools (`board`, `idea`,
   `search`, `capture`, `pick`, `shoot`, `archive`, `add_spark`, `tonight`, `sparks`,
-  `images`, `stats`, `job`) are always on. **`pick` is the ONE that spends, and only
+  `images`, `stats`, `job`) are always on. **`pick` spends nothing again since
+  2026-09-29** -- it returns the `keyframes` quote and a note to approve the draw in the
+  studio; the history: **`pick` was the ONE that spent, and only
   cents** (2026-09-08, Mike's call — a deliberate amendment to "nothing on them spends",
   not an oversight): it draws the scene's keyframe through `scene_chain.draw_on_pick`,
   because the night stopped drawing and the pick is what earns a still, so a pick from a
@@ -1724,8 +1733,9 @@ is yours, in Resolve, by hand.
   file (local first, else `media.url_for` fetched through `refbin.public_host`); `store.py`
   owns `timelines` (insert-only versions with `parent_id`; the one later write is
   `export_url`, a derivative of that frozen doc), `timeline_heads` (rollback moves the
-  pointer) and `cut_media` (uploaded audio), all three OWNED; a project is `concept:<id>` for
-  now. `assemble.py` refuses a part with no clip or a clip with no Asset Bank row rather than
+  pointer) and `cut_media` (uploads: audio, and since phase B video and stills), all three
+  OWNED; a timeline key is `concept:<id>` (or, since phase B, a scratch `cut:<uuid>`).
+  `assemble.py` refuses a part with no clip or a clip with no Asset Bank row rather than
   fall back to a URL; `render.py` compiles one `filter_complex` and files the MP4 under
   `data/renders/cut/`, mirrored like any render. **Homebrew's ffmpeg has no libass**, so on the
   Mac captions are NOT burned (the `.ass` lands beside the MP4 and the job says so); the Fly
@@ -1742,6 +1752,58 @@ is yours, in Resolve, by hand.
   `GET /api/cut/search` and the pill's read-only `search_footage` tool, which returns handles
   and times, never URLs. Captions on Export were considered and dropped (Mike, 2026-09-28):
   editorial features belong to the editor, not to Assemble.
+  **The editor's server half (phase B, 2026-09-28)** is what `web/src/app/studio/cut/` reads.
+  A project is an OWNED `cut_projects` row (Mike's D2) naming the `timeline_key` its versions
+  live under: `cut:<uuid>` for a scratch project (a starter doc: V1, A1 sfx, A2 music, not
+  ducked, at 9:16 / 16:9 / 1:1), `concept:<id>` for a concept's cut -- create-or-return, so it
+  shares Assemble's history; with no history yet v1 is `assemble.build_doc` over the CACHED
+  probe (never rendered), or the empty starter when a clip is missing. `src/cut/projects.py`
+  is the one door an edit takes: `POST /api/cut/projects/{id}/ops {base_id, op, args}` ->
+  409 `stale` (with `head_id`) unless base_id is still the head (checked under a row lock in
+  `store.save_version(expect_head=)`), 422 `invalid` with `problems` from `ops.apply`, else a
+  user version whose `op_summary` is `ops.describe` ("split c3 at 4.2s"). Undo/redo move the
+  head; `timeline_heads.redo_id` holds the TOP of the undone chain (so multi-step redo works)
+  and anything that makes history clears it. **Media is measured once:** `cut_media_cache`
+  (OWNED) holds each handle's probe keyed to the `media_url` it was taken from (a re-pointed
+  render is re-probed) plus its previews, because a `gen:` file lives in R2 on Fly and an op
+  must not download the timeline to validate a trim; `sources.measure` is the reader. A handle
+  already on the timeline that cannot be measured is passed to the validator as None
+  (known-but-unmeasured -- one unreachable file must not freeze the cut); a handle an op would
+  ADD must measure, or 422. Ops added: `lift`, `set_canvas`, `set_cue` / `delete_cue` /
+  `set_caption_style` (styles are `doc.CAPTION_STYLES`, drawn by `render.CAPTION_PRESETS` --
+  bold_center, lower_third, minimal_top -- and the validator refuses any other), and
+  `add_caption_track(cues=[])` makes an empty T track. Uploads take video and images too; an
+  image probes as a STILL (`d.STILL_SECONDS` of picture, no sound) and renders with `-loop 1`.
+  `src/cut/preview.py` builds per file (by sha256, reused across handles) a 540p proxy keyed
+  every second, a 90px filmstrip sprite (<=120 frames) and waveform peaks (50/s, absolute),
+  as a job on upload or on the first `GET /api/cut/media/{handle}/preview` (a compare-and-set
+  claim, so two polls start one build; `failed` is not retried by polling), under
+  data/renders/cut/preview/ and mirrored to R2. `POST .../export {timeline_id?, aspect?}`
+  renders any version in a job; another aspect first becomes a user `set_canvas` version.
+  Nothing in any of it spends.
+  **The agent (phase E, 2026-09-28, Mike's D4)** never edits: every edit is a PROPOSAL
+  (`{summary, ops, base_id, region, duration_delta, doc, kind}`) the person Keeps or Undoes.
+  `POST /api/cut/projects/{id}/agent {message, playhead?, selection?}` is a job;
+  `src/cut/agent_tools.py` shows the model the head doc as text (`read_timeline`, with names
+  from `store.handle_names`), the playhead, the selection and an op catalogue DERIVED from
+  `ops.OPS` signatures + `OP_NOTES` (a test fails when an op has no line), and gives it three
+  tools: `read_timeline`, the pill's `search_footage`, `propose_ops`. A proposal is run through
+  `projects.check_ops` (the ops in order via `ops.apply`, against the measured media, with the
+  add-media rule) BEFORE it is shown; a refusal goes back with the validator's reasons ONCE,
+  a second ends the turn with the reasons in `notes`. `call_model` is the one seam (tests
+  script it); metered as stage `cut_agent`; no key or a dead model finishes the job with a
+  reply saying so. `.../agent/keep {base_id, ops, summary}` RE-APPLIES the ops to the head
+  (409 `stale`, 422 `invalid`) and saves ONE version by `agent`; Undo is client-side, nothing
+  was saved. `src/cut/cleanup.py` is the two model-free jobs, both answering a proposal off
+  the index's WORD timings: `.../cleanup` (silences between words over `min_silence`, 0.12 s of
+  air left each side, and um/uh/erm/er/ah/hmm -- split+split+ripple_delete, or a ripple trim at
+  a clip edge, applied from the END backwards; only sound that is on the timeline, a clip
+  whose sound is not is skipped with a note; captions are NOT moved and it says so) and
+  `.../captions` (cues of <= max_words and 2.5 s, broken at 0.4 s pauses, mapped through each
+  clip's src_in/at; a new track, or `set_cue` onto an existing one without overlapping it).
+  Both list `needs_index`; `.../index` indexes exactly the head's unindexed media (cents: the
+  click is the approval). `POST /api/cut/projects {handles}` (phase F) starts a scratch cut
+  from a selection: footage on V1 with its sound on A1, stills held 5 s, audio-only on A2.
 - **`src/pricing.py`** — what a render costs, and the signed quote that says so (steps 1–4 of
   `docs/tasks/task-pricing-and-quotes.md`, on main 2026-09-18; read that doc's "As built"
   section before touching it). Pure module, three answers: `estimate()` is the provider's USD
@@ -1939,6 +2001,14 @@ Yearly plans are a SCHEDULE (`credit_schedules`, released monthly by
 the Queue refuses you for having no credit. Both `zeropage` and `antihero` are ON live as of
 2026-09-18. Unset `STRIPE_*` = the plan
 buttons say so and nothing else changes.
+**Beyond renders (2026-09-28/29, Mike's calls; docs/BILLING.md):** a still costs credits
+(10 Flash / 33 Pro, held in `nano_banana.generate_from_prompt`; a `refgen` reference is
+charged the still that drew it, since 2026-09-29); a **Create costs 0** --
+included in the subscription, priced into the plans -- but `charge.create_refusal` refuses
+it (402 `subscribe_or_top_up`) for an account with no plan and no balance, and the MCP
+`research` / `generate` tools ask the same predicate; a new open sign-up gets a one-time
+**100-credit trial** (`ZEROPAGE_SIGNUP_CREDITS`); and **`NANO_DAILY_CAP` is gone** for
+everyone (`nano_banana.DAILY_CAP is None`) -- the balance is the limit.
 
 **THE LOOP CLOSED ON 2026-09-18.** Concept #375 "Neon City Ascent" went spark -> scene ->
 references -> keyframe -> pick -> render -> post -> measured, and it is the first one that ever

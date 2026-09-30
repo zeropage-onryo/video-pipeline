@@ -281,6 +281,15 @@ def test_checkout_makes_a_session_for_this_account_and_binds_the_customer(shop, 
     assert calls["session"]["success_url"].endswith("/pricing?checkout=success")
     assert accounts.stripe_customer_of(acct, dsn=shop["dsn"]) == "cus_new"
 
+    # a top-up is for accounts ON A PLAN (2026-09-29): the creator checkout
+    # above has not been paid yet, so this account has none -- refused,
+    # and refused before Stripe, so no session is opened for it
+    sessions_before = calls["session"]
+    r = client.post("/api/billing/checkout", json={"item": "topup"})
+    assert r.status_code == 403 and r.json()["error"]["code"] == "plan_required"
+    assert calls["session"] is sessions_before
+    accounts.set_plan(acct, "creator", dsn=shop["dsn"])     # what invoice.paid records
+
     r = client.post("/api/billing/checkout", json={"item": "topup"})
     assert r.status_code == 200
     assert calls["session"]["mode"] == "payment"
@@ -447,6 +456,7 @@ def test_yearly_checkout_uses_the_yearly_price(shop, monkeypatch):
     monkeypatch.delenv(pricing.PLANS["studio"].price_env_yearly)
     r = client.post("/api/billing/checkout", json={"item": "studio", "interval": "year"})
     assert r.status_code == 503 and "STRIPE_PRICE_STUDIO_YEAR" in r.json()["error"]["message"]
-    # the top-up has no interval and ignores one
+    # the top-up has no interval and ignores one (and needs a plan)
+    accounts.set_plan(shop["account_id"], "studio", dsn=shop["dsn"])
     r = client.post("/api/billing/checkout", json={"item": "topup", "interval": "year"})
     assert r.status_code == 200

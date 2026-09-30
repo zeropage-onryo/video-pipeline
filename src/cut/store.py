@@ -1,7 +1,8 @@
 """
 src/cut/store.py -- where timelines live (docs/CUT_EDITOR.md section 5.1).
 
-Three OWNED tables (db.OWNED_TABLES):
+Five OWNED tables (db.OWNED_TABLES) -- the first three from Assemble v0,
+the last two from the editor (phase B, 2026-09-28):
 
 - `timelines` -- one row per VERSION of a project's cut, and a version's
   `doc` is never updated. Every edit is a new row whose `parent_id` is the
@@ -12,14 +13,25 @@ Three OWNED tables (db.OWNED_TABLES):
 - `timeline_heads` -- the pointer. Undo and rollback MOVE it to an older
   version; nothing is deleted, the director_canvas rule that expensive
   work is never thrown away.
-- `cut_media` -- what an `asset:<id>` handle names: an uploaded music bed
-  or voiceover. `gen:<id>` names a generated_assets row and needs nothing
-  here.
+- `cut_media` -- what an `asset:<id>` handle names: an uploaded music bed,
+  voiceover, piece of footage or still. `gen:<id>` names a
+  generated_assets row and needs nothing here.
+- `cut_projects` -- what the editor lists: a title, an fps, and the
+  `timeline_key` its versions live under. A scratch project's key is
+  `cut:<uuid>`; opening a concept's cut creates-or-returns the project
+  whose key is `concept:<id>`, so it shares the history Assemble already
+  wrote (Mike's D2). Deleting one is SOFT: the versions stay.
+- `cut_media_cache` -- what each handle's file IS (the probe: length,
+  picture, sound, size) and its browser previews (proxy, filmstrip,
+  waveform). The probe is cached because an op is validated against the
+  media on every edit, and a `gen:` clip's bytes live in R2 on the
+  deployed box -- downloading them per keystroke would be absurd. It is
+  keyed to the `source` string the handle pointed at when measured, so a
+  re-pointed row is re-measured on read (the seed_hash pattern).
 
-`project_id` is TEXT and namespaced. In v0 a project IS a concept
-(`concept:<id>`), because a concept is the unit that has approved clips;
-a creative_projects id can live in the same column later without a
-migration.
+The timeline tables' `project_id` is TEXT and namespaced -- a project's
+`timeline_key`. Assemble writes `concept:<id>`; the editor adds `cut:<uuid>`
+in the same column, no migration.
 
 Every function takes `account_id` keyword-only with no default -- the
 preprod.get_concept rule: a forgotten owner is a TypeError at the call,
@@ -29,9 +41,11 @@ one.
 from __future__ import annotations
 
 import json
+import uuid
 from typing import Any, Optional
 
 from .. import db
+from . import doc as d
 from . import validate as v
 
 SCHEMA = """
@@ -70,16 +84,66 @@ CREATE TABLE IF NOT EXISTS cut_media (
     sha256      TEXT,
     account_id  BIGINT
 );
+
+CREATE TABLE IF NOT EXISTS cut_projects (
+    id           TEXT    PRIMARY KEY,
+    created_at   TEXT    NOT NULL,
+    updated_at   TEXT    NOT NULL,
+    title        TEXT    NOT NULL,
+    timeline_key TEXT    NOT NULL,
+    concept_id   BIGINT,
+    fps          INTEGER NOT NULL,
+    deleted_at   TEXT,
+    account_id   BIGINT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS cut_projects_concept
+    ON cut_projects (concept_id, account_id) NULLS NOT DISTINCT
+    WHERE concept_id IS NOT NULL AND deleted_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS cut_media_cache (
+    handle         TEXT    NOT NULL,
+    source         TEXT    NOT NULL,
+    sha256         TEXT,
+    seconds        DOUBLE PRECISION,
+    has_video      BOOLEAN,
+    has_audio      BOOLEAN,
+    still          BOOLEAN NOT NULL DEFAULT FALSE,
+    width          INTEGER,
+    height         INTEGER,
+    size_bytes     BIGINT,
+    probed_at      TEXT,
+    preview_status TEXT,
+    preview_at     TEXT,
+    proxy_url      TEXT,
+    filmstrip      JSONB,
+    waveform       JSONB,
+    poster_url     TEXT,
+    preview_note   TEXT,
+    account_id     BIGINT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS cut_media_cache_handle
+    ON cut_media_cache (handle, account_id) NULLS NOT DISTINCT;
 """
 
+# Additive ALTERs, the picked_at/archived_at pattern. `redo_id` is set by
+# undo to the TOP of the chain that was undone and cleared by anything
+# that makes history (an op, a rollback): an undo you can redo is only an
+# undo until you do something else.
+HEAD_COLUMNS = (("redo_id", "BIGINT"),)
+
 AUTHORS = ("user", "agent", "assemble")
-MEDIA_KINDS = ("audio",)
+# `audio` is a music bed or voiceover; `video` and `image` are footage and
+# stills uploaded into the editor's bin (phase B, 2026-09-28).
+MEDIA_KINDS = ("audio", "video", "image")
+OWNED = ("timelines", "timeline_heads", "cut_media", "cut_projects", "cut_media_cache")
 
 
 def init(dsn: Optional[str] = None) -> None:
     with db.connect(dsn) as conn:
         conn.execute(SCHEMA)
-        for table in ("timelines", "timeline_heads", "cut_media"):
+        for column, kind in HEAD_COLUMNS:
+            conn.execute(f"ALTER TABLE timeline_heads ADD COLUMN IF NOT EXISTS {column} {kind}")
+        for table in OWNED:
             db.own_table(conn, table)
 
 
@@ -96,23 +160,43 @@ def _row(row) -> Optional[dict[str, Any]]:
     return out
 
 
+class StaleHead(RuntimeError):
+    """The head moved between the read an edit was made against and the
+    write. Carries the head it is on now."""
+
+    def __init__(self, head_id: Optional[int]):
+        self.head_id = head_id
+        super().__init__(f"the cut moved on (head is {head_id})")
+
+
 def save_version(project_id: str, doc: dict, *, account_id: Optional[int],
                  author: str, op_summary: str, parent_id: Optional[int] = None,
+                 expect_head: Optional[int] = None,
                  dsn: Optional[str] = None) -> dict[str, Any]:
     """Append one version and point the head at it. The doc is validated
     for STRUCTURE here (its media was checked by whoever built it, since
     that needs the files) -- a malformed doc never reaches the table, from
-    any writer. `parent_id` defaults to the current head."""
+    any writer. `parent_id` defaults to the current head.
+
+    `expect_head` is the editor's optimistic lock: the head row is locked
+    and compared inside the same transaction as the insert, so two tabs
+    editing one cut cannot both land on the version they both read --
+    the second gets StaleHead and refetches, instead of silently forking
+    the history and moving the head off the first one's edit."""
     if author not in AUTHORS:
         raise ValueError(f"author must be one of {AUTHORS}")
     v.validate(doc)
     now = db._now()
     with db.connect(dsn) as conn:
+        head = conn.execute(
+            "SELECT timeline_id FROM timeline_heads WHERE project_id = %s "
+            "AND account_id IS NOT DISTINCT FROM %s FOR UPDATE",
+            (project_id, account_id)).fetchone()
+        current = head["timeline_id"] if head else None
+        if expect_head is not None and current != expect_head:
+            raise StaleHead(current)
         if parent_id is None:
-            head = conn.execute(
-                "SELECT timeline_id FROM timeline_heads WHERE project_id = %s "
-                "AND account_id IS NOT DISTINCT FROM %s", (project_id, account_id)).fetchone()
-            parent_id = head["timeline_id"] if head else None
+            parent_id = current
         elif not conn.execute(
                 "SELECT 1 FROM timelines WHERE id = %s AND project_id = %s "
                 "AND account_id IS NOT DISTINCT FROM %s",
@@ -131,19 +215,24 @@ def save_version(project_id: str, doc: dict, *, account_id: Optional[int],
     return _row(row)
 
 
-def _point(conn, project_id: str, timeline_id: int, account_id: Optional[int], now: str) -> None:
+def _point(conn, project_id: str, timeline_id: int, account_id: Optional[int], now: str,
+           redo_id: Optional[int] = None) -> None:
+    """Move the head. Every caller but undo/redo passes no `redo_id`,
+    which is what clears it: a new version or a rollback is new history,
+    and redoing into the old future after it would be a jump nobody made."""
     conn.execute(
-        "INSERT INTO timeline_heads (project_id, timeline_id, updated_at, account_id) "
-        "VALUES (%s, %s, %s, %s) ON CONFLICT (project_id, account_id) "
-        "DO UPDATE SET timeline_id = excluded.timeline_id, updated_at = excluded.updated_at",
-        (project_id, timeline_id, now, account_id))
+        "INSERT INTO timeline_heads (project_id, timeline_id, updated_at, redo_id, account_id) "
+        "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (project_id, account_id) "
+        "DO UPDATE SET timeline_id = excluded.timeline_id, updated_at = excluded.updated_at, "
+        "redo_id = excluded.redo_id",
+        (project_id, timeline_id, now, redo_id, account_id))
 
 
 def head(project_id: str, *, account_id: Optional[int],
          dsn: Optional[str] = None) -> Optional[dict[str, Any]]:
     with db.connect(dsn) as conn:
         return _row(conn.execute(
-            "SELECT t.* FROM timeline_heads h JOIN timelines t ON t.id = h.timeline_id "
+            "SELECT t.*, h.redo_id FROM timeline_heads h JOIN timelines t ON t.id = h.timeline_id "
             "WHERE h.project_id = %s AND h.account_id IS NOT DISTINCT FROM %s "
             "AND t.account_id IS NOT DISTINCT FROM %s",
             (project_id, account_id, account_id)).fetchone())
@@ -234,3 +323,349 @@ def get_media(media_id: int, *, account_id: Optional[int],
             "SELECT * FROM cut_media WHERE id = %s AND account_id IS NOT DISTINCT FROM %s",
             (media_id, account_id)).fetchone()
     return dict(row) if row else None
+
+
+# --------------------------------------------------------------------------
+# undo / redo -- the head pointer walking the chain
+# --------------------------------------------------------------------------
+
+def _chain(conn, project_id: str, account_id: Optional[int]) -> dict[int, Optional[int]]:
+    """id -> parent_id for every version of one project. A cut is tens of
+    versions, not thousands, so the walk is done here rather than in a
+    recursive query."""
+    return {r["id"]: r["parent_id"] for r in conn.execute(
+        "SELECT id, parent_id FROM timelines WHERE project_id = %s "
+        "AND account_id IS NOT DISTINCT FROM %s", (project_id, account_id)).fetchall()}
+
+
+def _is_ancestor(chain: dict, ancestor: int, node: Optional[int]) -> bool:
+    """Whether `ancestor` is `node` or on the way from `node` to the root."""
+    seen: set = set()
+    while node is not None and node not in seen:
+        if node == ancestor:
+            return True
+        seen.add(node)
+        node = chain.get(node)
+    return False
+
+
+def undo(project_id: str, *, account_id: Optional[int],
+         dsn: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """Move the head to its parent. `redo_id` keeps the TOP of the undone
+    chain (not just the version undone last), so undo, undo, redo, redo
+    walks all the way back: redo finds its way down from the top to the
+    child of wherever the head is. None when the head has no parent (or
+    there is no head)."""
+    with db.connect(dsn) as conn:
+        h = conn.execute(
+            "SELECT h.timeline_id, h.redo_id, t.parent_id FROM timeline_heads h "
+            "JOIN timelines t ON t.id = h.timeline_id WHERE h.project_id = %s "
+            "AND h.account_id IS NOT DISTINCT FROM %s AND t.account_id IS NOT DISTINCT FROM %s "
+            "FOR UPDATE OF h", (project_id, account_id, account_id)).fetchone()
+        if not h or h["parent_id"] is None:
+            return None
+        chain = _chain(conn, project_id, account_id)
+        top = h["redo_id"]
+        if top is None or not _is_ancestor(chain, h["timeline_id"], top):
+            top = h["timeline_id"]
+        _point(conn, project_id, h["parent_id"], account_id, db._now(), redo_id=top)
+    return head(project_id, account_id=account_id, dsn=dsn)
+
+
+def redo(project_id: str, *, account_id: Optional[int],
+         dsn: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """Move the head one step back towards `redo_id`. None when there is
+    nothing to redo -- including a redo_id that is no longer below the
+    head, which only a hand-edited row could produce."""
+    with db.connect(dsn) as conn:
+        h = conn.execute(
+            "SELECT timeline_id, redo_id FROM timeline_heads WHERE project_id = %s "
+            "AND account_id IS NOT DISTINCT FROM %s FOR UPDATE",
+            (project_id, account_id)).fetchone()
+        if not h or h["redo_id"] is None:
+            return None
+        chain = _chain(conn, project_id, account_id)
+        step = h["redo_id"]
+        while step is not None and chain.get(step) != h["timeline_id"]:
+            step = chain.get(step)
+        if step is None:
+            return None
+        remaining = None if step == h["redo_id"] else h["redo_id"]
+        _point(conn, project_id, step, account_id, db._now(), redo_id=remaining)
+    return head(project_id, account_id=account_id, dsn=dsn)
+
+
+# --------------------------------------------------------------------------
+# cut_projects -- what the editor lists
+# --------------------------------------------------------------------------
+
+def scratch_key(project_uuid: str) -> str:
+    return f"cut:{project_uuid}"
+
+
+def create_project(*, account_id: Optional[int], title: str, timeline_key: Optional[str] = None,
+                   concept_id: Optional[int] = None, fps: int = 30,
+                   dsn: Optional[str] = None) -> dict[str, Any]:
+    """A new project row. With no `timeline_key` it is a scratch project
+    and gets `cut:<its own id>`."""
+    pid = str(uuid.uuid4())
+    now = db._now()
+    with db.connect(dsn) as conn:
+        return dict(conn.execute(
+            "INSERT INTO cut_projects (id, created_at, updated_at, title, timeline_key, "
+            "concept_id, fps, account_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING *",
+            (pid, now, now, title, timeline_key or scratch_key(pid), concept_id, int(fps),
+             account_id)).fetchone())
+
+
+def get_project(project_id: str, *, account_id: Optional[int],
+                dsn: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """One live project of this account's. A deleted one, someone else's
+    and a malformed id are all None."""
+    with db.connect(dsn) as conn:
+        row = conn.execute(
+            "SELECT * FROM cut_projects WHERE id = %s AND deleted_at IS NULL "
+            "AND account_id IS NOT DISTINCT FROM %s", (str(project_id), account_id)).fetchone()
+    return dict(row) if row else None
+
+
+def project_for_concept_id(concept_id: int, *, account_id: Optional[int],
+                           dsn: Optional[str] = None) -> Optional[dict[str, Any]]:
+    with db.connect(dsn) as conn:
+        row = conn.execute(
+            "SELECT * FROM cut_projects WHERE concept_id = %s AND deleted_at IS NULL "
+            "AND account_id IS NOT DISTINCT FROM %s", (int(concept_id), account_id)).fetchone()
+    return dict(row) if row else None
+
+
+def list_projects(*, account_id: Optional[int], dsn: Optional[str] = None) -> list[dict[str, Any]]:
+    """Every live project, newest-updated first, each with what its card
+    draws from the head version -- size, duration, version, export and
+    the first picture clip's handle (the poster) -- read out of the doc in
+    SQL, so a list of twenty cuts does not pull twenty whole docs over the
+    wire (the lean-listings rule)."""
+    with db.connect(dsn) as conn:
+        rows = conn.execute(
+            "SELECT p.*, t.id AS head_id, t.version, t.export_url, "
+            "t.doc->'size' AS size, t.doc->'duration' AS duration, "
+            "jsonb_path_query_first(t.doc, "
+            "'$.tracks[*] ? (@.kind == \"video\").clips[0].media') #>> '{}' AS poster_handle "
+            "FROM cut_projects p "
+            "LEFT JOIN timeline_heads h ON h.project_id = p.timeline_key "
+            "AND h.account_id IS NOT DISTINCT FROM p.account_id "
+            "LEFT JOIN timelines t ON t.id = h.timeline_id "
+            "AND t.account_id IS NOT DISTINCT FROM p.account_id "
+            "WHERE p.deleted_at IS NULL AND p.account_id IS NOT DISTINCT FROM %s "
+            "ORDER BY p.updated_at DESC, p.created_at DESC, p.id", (account_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_project(project_id: str, *, account_id: Optional[int], title: Optional[str] = None,
+                   dsn: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """Rename and bump updated_at -- every edit touches its project, so
+    the list is newest-EDITED first. None when it is not this account's."""
+    with db.connect(dsn) as conn:
+        row = conn.execute(
+            "UPDATE cut_projects SET title = COALESCE(%s, title), updated_at = %s "
+            "WHERE id = %s AND deleted_at IS NULL AND account_id IS NOT DISTINCT FROM %s "
+            "RETURNING *", (title, db._now(), str(project_id), account_id)).fetchone()
+    return dict(row) if row else None
+
+
+def delete_project(project_id: str, *, account_id: Optional[int],
+                   dsn: Optional[str] = None) -> bool:
+    """SOFT: the project leaves the list, its versions and exports stay.
+    A concept's cut opened again later is a new project on the same
+    history."""
+    with db.connect(dsn) as conn:
+        cur = conn.execute(
+            "UPDATE cut_projects SET deleted_at = %s WHERE id = %s AND deleted_at IS NULL "
+            "AND account_id IS NOT DISTINCT FROM %s", (db._now(), str(project_id), account_id))
+        return bool(cur.rowcount)
+
+
+# --------------------------------------------------------------------------
+# cut_media_cache -- what a handle's file is, and its previews
+# --------------------------------------------------------------------------
+
+def handle_sources(handles, *, account_id: Optional[int],
+                   dsn: Optional[str] = None) -> dict[str, dict[str, Any]]:
+    """handle -> {"media_url", "output_path", "kind"} for every handle of
+    this account's, in at most two queries (one per handle kind).
+    Someone else's handle, and one that never existed, are simply absent."""
+    gen, asset = [], []
+    for h in handles:
+        parsed = d.parse_handle(h)
+        if parsed:
+            (gen if parsed[0] == "gen" else asset).append(parsed[1])
+    out: dict[str, dict[str, Any]] = {}
+    with db.connect(dsn) as conn:
+        if gen and db.table_exists(conn, "generated_assets"):
+            for r in conn.execute(
+                    "SELECT id, media_url, output_path, media_kind AS kind FROM generated_assets "
+                    "WHERE id = ANY(%s) AND account_id IS NOT DISTINCT FROM %s",
+                    (gen, account_id)).fetchall():
+                out[f"gen:{r['id']}"] = dict(r)
+        if asset:
+            for r in conn.execute(
+                    "SELECT id, media_url, output_path, kind FROM cut_media "
+                    "WHERE id = ANY(%s) AND account_id IS NOT DISTINCT FROM %s",
+                    (asset, account_id)).fetchall():
+                out[f"asset:{r['id']}"] = dict(r)
+    return out
+
+
+def handle_names(handles, *, account_id: Optional[int],
+                 dsn: Optional[str] = None) -> dict[str, dict[str, Any]]:
+    """handle -> {"name", "about"} -- what a person (or the agent) calls a
+    piece of media: the bin tile's name ("Runway #812", an upload's
+    filename) and, for a render, the start of its prompt. Two queries,
+    scoped like handle_sources; a render the Asset Bank soft-deleted is
+    still named, since a timeline may still hold it."""
+    from .. import render_assets
+    gen, asset = [], []
+    for h in handles:
+        parsed = d.parse_handle(h)
+        if parsed:
+            (gen if parsed[0] == "gen" else asset).append(parsed[1])
+    out: dict[str, dict[str, Any]] = {}
+    with db.connect(dsn) as conn:
+        if gen and db.table_exists(conn, "generated_assets"):
+            for r in conn.execute(
+                    "SELECT id, tool, model, left(prompt, 90) AS about FROM generated_assets "
+                    "WHERE id = ANY(%s) AND account_id IS NOT DISTINCT FROM %s",
+                    (gen, account_id)).fetchall():
+                label = render_assets._label(r["tool"] or "", r["model"] or "")
+                out[f"gen:{r['id']}"] = {"name": f"{label} #{r['id']}",
+                                         "about": " ".join((r["about"] or "").split())}
+        if asset:
+            for r in conn.execute(
+                    "SELECT id, filename FROM cut_media "
+                    "WHERE id = ANY(%s) AND account_id IS NOT DISTINCT FROM %s",
+                    (asset, account_id)).fetchall():
+                out[f"asset:{r['id']}"] = {"name": r["filename"] or f"asset:{r['id']}",
+                                           "about": ""}
+    return out
+
+
+def cached(handles, *, account_id: Optional[int],
+           dsn: Optional[str] = None) -> dict[str, dict[str, Any]]:
+    handles = list(handles)
+    if not handles:
+        return {}
+    with db.connect(dsn) as conn:
+        rows = conn.execute(
+            "SELECT * FROM cut_media_cache WHERE handle = ANY(%s) "
+            "AND account_id IS NOT DISTINCT FROM %s", (handles, account_id)).fetchall()
+    return {r["handle"]: dict(r) for r in rows}
+
+
+def put_probe(handle: str, source: str, info: dict, *, account_id: Optional[int],
+              size_bytes: Optional[int] = None, sha256: Optional[str] = None,
+              dsn: Optional[str] = None) -> None:
+    """Record what a handle's file is. Re-measuring a RE-POINTED handle (a
+    new `source`) drops its sha and preview state: both were of the old
+    file, and a preview of other bytes is worse than none."""
+    with db.connect(dsn) as conn:
+        conn.execute(
+            "INSERT INTO cut_media_cache AS c (handle, source, sha256, seconds, has_video, "
+            "has_audio, still, width, height, size_bytes, probed_at, account_id) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+            "ON CONFLICT (handle, account_id) DO UPDATE SET "
+            "sha256 = COALESCE(excluded.sha256, "
+            "CASE WHEN c.source = excluded.source THEN c.sha256 END), "
+            "seconds = excluded.seconds, has_video = excluded.has_video, "
+            "has_audio = excluded.has_audio, still = excluded.still, width = excluded.width, "
+            "height = excluded.height, size_bytes = COALESCE(excluded.size_bytes, "
+            "CASE WHEN c.source = excluded.source THEN c.size_bytes END), "
+            "probed_at = excluded.probed_at, "
+            "preview_status = CASE WHEN c.source = excluded.source THEN c.preview_status END, "
+            "source = excluded.source",
+            (handle, source, sha256, info.get("seconds"), bool(info.get("video")),
+             bool(info.get("audio")), bool(info.get("still")), info.get("width"),
+             info.get("height"), size_bytes, db._now(), account_id))
+
+
+def set_preview(handle: str, *, account_id: Optional[int], status: str,
+                sha256: Optional[str] = None, proxy_url: Optional[str] = None,
+                filmstrip: Optional[dict] = None, waveform: Optional[dict] = None,
+                poster_url: Optional[str] = None, note: Optional[str] = None,
+                dsn: Optional[str] = None) -> bool:
+    """Write a handle's preview state. The row must exist (put_probe runs
+    first); returns whether it did."""
+    with db.connect(dsn) as conn:
+        cur = conn.execute(
+            "UPDATE cut_media_cache SET preview_status = %s, preview_at = %s, "
+            "sha256 = COALESCE(%s, sha256), proxy_url = %s, filmstrip = %s::jsonb, "
+            "waveform = %s::jsonb, poster_url = %s, preview_note = %s "
+            "WHERE handle = %s AND account_id IS NOT DISTINCT FROM %s",
+            (status, db._now(), sha256, proxy_url,
+             json.dumps(filmstrip) if filmstrip is not None else None,
+             json.dumps(waveform) if waveform is not None else None,
+             poster_url, note, handle, account_id))
+        return bool(cur.rowcount)
+
+
+def claim_preview(handle: str, source: str, *, account_id: Optional[int], stale_before: str,
+                  dsn: Optional[str] = None) -> bool:
+    """Mark a handle's preview `pending` -- IF nobody else has: a compare
+    and set in one statement, so two tabs polling the same new clip start
+    one ffmpeg job, not two. Claimable: no row, no preview yet, a row
+    about a file the handle no longer points at (whose probe is dropped
+    with it), or a `pending` older than `stale_before` (its job died with
+    its process). A `ready` or `failed` row of the same file is not."""
+    with db.connect(dsn) as conn:
+        row = conn.execute(
+            "INSERT INTO cut_media_cache AS c (handle, source, preview_status, preview_at, "
+            "account_id) VALUES (%s, %s, 'pending', %s, %s) "
+            "ON CONFLICT (handle, account_id) DO UPDATE SET preview_status = 'pending', "
+            "preview_at = excluded.preview_at, preview_note = NULL, "
+            "probed_at = CASE WHEN c.source = excluded.source THEN c.probed_at END, "
+            "sha256 = CASE WHEN c.source = excluded.source THEN c.sha256 END, "
+            "source = excluded.source "
+            "WHERE c.account_id IS NOT DISTINCT FROM excluded.account_id AND ("
+            "c.preview_status IS NULL OR c.source <> excluded.source "
+            "OR (c.preview_status = 'pending' AND c.preview_at < %s)) RETURNING handle",
+            (handle, source, db._now(), account_id, stale_before)).fetchone()
+    return row is not None
+
+
+def preview_by_sha(sha256: str, *, account_id: Optional[int],
+                   dsn: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """A finished preview of the same BYTES under another handle -- the
+    same clip banked twice, or uploaded again -- so it is built once."""
+    with db.connect(dsn) as conn:
+        row = conn.execute(
+            "SELECT * FROM cut_media_cache WHERE sha256 = %s AND preview_status = 'ready' "
+            "AND account_id IS NOT DISTINCT FROM %s LIMIT 1", (sha256, account_id)).fetchone()
+    return dict(row) if row else None
+
+
+def media_bin(*, account_id: Optional[int], dsn: Optional[str] = None) -> list[dict[str, Any]]:
+    """Everything this account can put on a timeline: its renders (not
+    soft-deleted, video or image) and its uploads, each beside whatever
+    the cache knows about it. Two queries, and only the columns a bin
+    tile draws -- no metadata_json, no whole prompt (the lean-listings
+    rule: a bin is polled, and every byte selected is egress)."""
+    with db.connect(dsn) as conn:
+        gen = []
+        if db.table_exists(conn, "generated_assets"):
+            gen = conn.execute(
+                "SELECT g.id, g.created_at, g.media_kind AS kind, g.tool, g.model, g.media_url, "
+                "left(g.prompt, 80) AS prompt, c.seconds, c.width, c.height, c.has_video, "
+                "c.has_audio, c.size_bytes, c.poster_url, c.source "
+                "FROM generated_assets g LEFT JOIN cut_media_cache c "
+                "ON c.handle = 'gen:' || g.id AND c.account_id IS NOT DISTINCT FROM g.account_id "
+                "WHERE g.account_id IS NOT DISTINCT FROM %s AND g.deleted_at IS NULL "
+                "AND g.media_kind IN ('video', 'image') ORDER BY g.id DESC",
+                (account_id,)).fetchall()
+        up = conn.execute(
+            "SELECT m.id, m.created_at, m.kind, m.filename, m.media_url, "
+            "COALESCE(c.seconds, m.seconds) AS seconds, c.width, c.height, c.has_video, "
+            "c.has_audio, c.size_bytes, c.poster_url, c.source "
+            "FROM cut_media m LEFT JOIN cut_media_cache c "
+            "ON c.handle = 'asset:' || m.id AND c.account_id IS NOT DISTINCT FROM m.account_id "
+            "WHERE m.account_id IS NOT DISTINCT FROM %s ORDER BY m.id DESC",
+            (account_id,)).fetchall()
+    return ([{**dict(r), "origin": "render"} for r in gen]
+            + [{**dict(r), "origin": "upload"} for r in up])

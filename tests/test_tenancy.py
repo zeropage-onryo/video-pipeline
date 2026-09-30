@@ -92,6 +92,8 @@ def test_every_owned_table_grows_an_account_id(pg):
     from src.cut import store as cut_store
     cut_store.init(pg)
     cut_moments.init(pg)
+    from src import assistant_store
+    assistant_store.init(pg)
     with db.connect(pg) as conn:
         for table in db.OWNED_TABLES:
             assert "account_id" in db.columns(conn, table), f"{table} has no owner"
@@ -444,9 +446,12 @@ def test_no_ceiling_is_the_default_and_means_no_ceiling(two_accounts):
     """2026-09-14, Mike's call: every *_GLOBAL_DAILY_CAP defaults to 0, and
     0 means the wall is OFF -- not a wall at zero that refuses everything,
     which is the reading that would brick every render on the install."""
-    from src import fal, higgsfield, midjourney, nano_banana
-    for mod in (fal, higgsfield, midjourney, nano_banana):
+    from src import fal, midjourney, nano_banana
+    for mod in (fal, midjourney):
         assert mod.GLOBAL_DAILY_CAP == 0, mod.__name__
+    # Nano has no cap of either kind since 2026-09-29: every still is
+    # charged credits, so the balance is the limit
+    assert nano_banana.DAILY_CAP is None and nano_banana.GLOBAL_DAILY_CAP is None
 
     path, a, b = two_accounts
     _log_render(path, a, n=50)
@@ -998,6 +1003,8 @@ def _init_everything(path):
     cut_store.init(path)
     from src.cut import moments as cut_moments
     cut_moments.init(path)
+    from src import assistant_store
+    assistant_store.init(path)
 
 
 AUTH_SCHEMA = {"users", "accounts", "account_members"}
@@ -1281,7 +1288,7 @@ def test_the_global_ceiling_is_off_by_default_and_says_how_to_restore_it():
         "these turn the installation-wide ceiling back on for every "
         f"deployment that copies the example: {sorted(live)}")
 
-    for module in ("higgsfield", "midjourney", "nano_banana", "fal"):
+    for module in ("midjourney", "fal"):     # nano: no cap at all; higgsfield: gone
         source = (root / "src" / f"{module}.py").read_text()
         shipped = re.search(
             r'environ\.get\("[A-Z_]+_GLOBAL_DAILY_CAP", "(\d+)"\)', source)

@@ -238,8 +238,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # any real clip and indistinguishable from one in a listing or in the
 # Queue. Twenty had accumulated there before anyone noticed.
 OUTPUT_ROOTS = (
-    ("src.higgsfield", "RENDERS_ROOT", "data/renders"),
-    ("src.higgsfield", "RENDER_DIR", "data/renders/higgsfield"),
     ("src.fal", "RENDERS_ROOT", "data/renders"),
     ("src.fal", "RENDER_DIR", "data/renders/fal"),
     ("src.nano_banana", "RENDER_DIR", "data/renders/nano"),
@@ -264,11 +262,14 @@ OUTPUT_ROOTS = (
     ("ops.render_queue", "RENDERS_ROOT", "data/renders"),
     ("ops.render_queue", "MANUAL_RENDER_DIR", "data/renders/manual"),
     ("ops.bank", "PLANS_DIR", "data/idea_agent"),
+    ("ops.billing_walkthrough", "SEEN_FILE", "data/billing_walk_relayed.json"),
     # the cut (src/cut/, 2026-09-26): where a handle's local file is looked
     # for, where the MP4 lands, and where uploaded music/VO is kept
     ("src.cut.sources", "RENDERS_DIR", "data/renders"),
     ("src.cut.render", "CUT_DIR", "data/renders/cut"),
     ("app.cut_routes", "MEDIA_DIR", "data/renders/cut/media"),
+    # the editor's browser previews (src/cut/preview.py, 2026-09-28)
+    ("src.cut.preview", "PREVIEW_DIR", "data/renders/cut/preview"),
 )
 
 

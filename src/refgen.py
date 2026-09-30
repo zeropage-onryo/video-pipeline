@@ -17,6 +17,19 @@ those rows (REFGEN_DAILY_CAP, default 8 across both brands) so no new
 table and no new counter; a night that renders eight and stops is the
 designed behaviour.
 
+IT COSTS THE CALLER CREDITS (2026-09-29, Mike's call). With an
+`account_id`, a render holds credits before any provider is called --
+priced at the dearest provider this render could reach (`hold_usd`), so
+the balance is checked for the worst case -- and settles at the price of
+the one that actually drew (`provider_usd`: Midjourney's AceDataCloud
+price, or the Nano still's), at the render markup and floor like every
+other still (src/charge.py, pricing). Nothing rendered, or nothing could
+be saved: released. The operator's exempt accounts and the unowned pool
+(the scout's own crawl, which passes no account) are never charged,
+exactly as for renders. An empty balance comes back as a note, never an
+error -- an agent that sees an error retries, and the retry is what would
+spend twice.
+
 MIDJOURNEY'S OWN GATE STILL HOLDS. midjourney.generate_image refuses
 without MIDJOURNEY_SPEND_OK=1 and ACEDATA_API_KEY -- that gate was
 built so every AceData credit is an explicit approval, and this does
@@ -31,11 +44,12 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 from . import db, looks, refbin, scout
 
 DAILY_CAP = int(os.environ.get("REFGEN_DAILY_CAP", "8"))
-PROVIDERS = ("midjourney", "nano", "higgsfield")
+PROVIDERS = ("midjourney", "nano")
 
 # THE LIKENESS PATH (2026-09-06, Mike: "This isn't what I look like").
 # What reproduces his face is Nano Banana Pro handed his REAL PHOTOS as
@@ -197,12 +211,34 @@ def _nano(prompt: str, out: Path, identity: bool = False) -> Path:
                                       reference_bytes=refs, aspect_ratio="9:16")
 
 
-def _higgsfield(prompt: str, out: Path) -> Path:
-    from . import higgsfield
-    return higgsfield.generate_image(prompt, out, aspect_ratio="9:16")
+_RENDERERS = {"midjourney": _midjourney, "nano": _nano}
 
 
-_RENDERERS = {"midjourney": _midjourney, "nano": _nano, "higgsfield": _higgsfield}
+def provider_usd(name: str, identity: bool = False) -> float:
+    """What one still costs at the provider -- the number a charge settles
+    at. Midjourney is its AceDataCloud per-image price; Nano is the meter's
+    image price for the model this render uses (Pro for Michael's face)."""
+    if name == "midjourney":
+        from . import midjourney
+        return float(midjourney.COST_USD)
+    from . import nano_banana, pricing
+    return pricing.still_usd(LIKENESS_MODEL if identity else nano_banana.MODEL)
+
+
+def _reachable(name: str) -> bool:
+    """Could this provider actually render right now? Midjourney refuses
+    without its per-run approval and its key, so a hold must not be sized
+    for a provider that will be skipped."""
+    if name == "midjourney":
+        from . import midjourney
+        return midjourney.spend_approved() and bool(os.environ.get("ACEDATA_API_KEY"))
+    return True
+
+
+def hold_usd(identity: bool = False) -> float:
+    """The most one render could cost: the dearest provider it could reach."""
+    names = [p for p in provider_order(identity) if _reachable(p)] or ["nano"]
+    return max(provider_usd(p, identity) for p in names)
 
 
 def render(prompt: str, identity: bool = False) -> dict:
@@ -225,9 +261,11 @@ def render(prompt: str, identity: bool = False) -> dict:
 
 
 def render_for_finding(finding_id: int, hook_frame: str, dsn=None,
-                       cap: int = DAILY_CAP) -> dict:
+                       cap: int = DAILY_CAP,
+                       account_id: Optional[int] = None) -> dict:
     """One generated reference for one spark. The public contract for
-    both the MCP tool and the crawl."""
+    both the MCP tool and the crawl. `account_id` is who pays (see the
+    module docstring); None -- the crawl -- is nobody's bill."""
     if not enabled():
         return {"ok": False, "note": "generated references are off (REFGEN_LANE=0)"}
     finding = scout.get_finding(int(finding_id), dsn=dsn)
@@ -240,23 +278,41 @@ def render_for_finding(finding_id: int, hook_frame: str, dsn=None,
         return {"ok": False, "note": f"generated-reference cap reached ({used}/{cap} today, REFGEN_DAILY_CAP)"}
     pass_id = scout.generated_pass_id(finding_id)   # its own bin, read first
     prompt = build_prompt(hook_frame, finding["brand"])
-    result = render(prompt, identity=is_identity(hook_frame, finding["brand"]))
-    if not result["path"]:
-        why = "; ".join(f"{p}: {e}" for p, e in result["tried"]) or "no provider configured"
-        return {"ok": False, "note": f"nothing rendered -- {why}", "prompt": prompt}
-    jpeg = refbin.to_jpeg(Path(result["path"]).read_bytes())
-    stored = refbin.save(jpeg) if jpeg else None
-    if not stored:
-        return {"ok": False, "note": "render could not be normalised to JPEG", "prompt": prompt}
-    row = scout.bin_add(finding["brand"], pass_id, stored,
-                        source_url=f"generated://{result['provider']}/{Path(stored).stem}",
-                        title=f"generated: {result['provider']} -- {hook_frame.strip()[:140]}",
-                        lane="generated", dsn=dsn)
-    if row is None:
-        return {"ok": False, "note": "the pass is full or the write failed", "prompt": prompt}
+    identity = is_identity(hook_frame, finding["brand"])
+
+    import uuid
+
+    from . import charge as charging
+    from . import ledger
+    charge = charging.Charge(account_id, provider="refgen",
+                             ref=f"refgen-{int(finding_id)}-{uuid.uuid4().hex}",
+                             estimate_usd=hold_usd(identity), dsn=dsn)
+    try:
+        charge.take()              # a no-op for the unowned pool and exempt accounts
+    except ledger.InsufficientCredit as e:
+        return {"ok": False, "note": charging.refusal(e, "this reference")}
+    charge.submitted()
+    try:
+        result = render(prompt, identity=identity)
+        if not result["path"]:
+            why = "; ".join(f"{p}: {e}" for p, e in result["tried"]) or "no provider configured"
+            return {"ok": False, "note": f"nothing rendered -- {why}", "prompt": prompt}
+        jpeg = refbin.to_jpeg(Path(result["path"]).read_bytes())
+        stored = refbin.save(jpeg) if jpeg else None
+        if not stored:
+            return {"ok": False, "note": "render could not be normalised to JPEG", "prompt": prompt}
+        row = scout.bin_add(finding["brand"], pass_id, stored,
+                            source_url=f"generated://{result['provider']}/{Path(stored).stem}",
+                            title=f"generated: {result['provider']} -- {hook_frame.strip()[:140]}",
+                            lane="generated", dsn=dsn)
+        if row is None:
+            return {"ok": False, "note": "the pass is full or the write failed", "prompt": prompt}
+        credits = charge.settle(provider_usd(result["provider"], identity))
+    finally:
+        charge.release("refgen: nothing banked")   # a no-op once settled
     print(f"refgen: {result['provider']} rendered a reference for finding {finding_id}",
           file=sys.stderr)
     return {"ok": True, "finding_id": int(finding_id), "pass_id": pass_id,
             "provider": result["provider"], "url": stored, "prompt": prompt,
             "fell_back_from": [p for p, _ in result["tried"]],
-            "rendered_today": used + 1, "cap": cap}
+            "rendered_today": used + 1, "cap": cap, "credits": credits}

@@ -1,16 +1,15 @@
 """
-Writing a scene and drawing a still cost credits, not just the clip
-(2026-09-28, Mike's call: InVideo charges for "agent processing" too, and
-the live meter put a Create at ~$0.04 and a still at ~$0.04 of Gemini that
-nobody was paying for).
+A still costs credits, not just the clip (2026-09-28, Mike's call); a
+Create does not (2026-09-29, Mike's call: it is included in the
+subscription, its cost priced into the plans rather than debited per
+click).
 
 What each test guards:
-- the prices come off the meter's own numbers at the render markup and
-  floor, and an unknown brain or image model never prices as the cheap one
-- Create HOLDS before any job starts: an empty balance is a 402 and the
-  scene writer is never called
-- a Create that wrote a scene SETTLES at its price; one that wrote nothing,
-  or raised, RELEASES -- nobody pays for nothing
+- a still's price comes off the meter's own number at the render markup
+  and floor, and an unknown image model never prices as the cheap one
+- a Create moves no money, but is REFUSED (402, before any job or model
+  call) for an account with no plan and no credit balance -- and allowed
+  for one with either, the trial grant included
 - a still settles on its generations row (the ledger_ref reap reads), an
   empty balance refuses before the image model is called, and a failed
   image is released
@@ -28,26 +27,20 @@ from src import accounts, db, generative, ledger, nano_banana, preprod, pricing
 
 
 def test_prices_are_the_meters_numbers_at_the_render_markup():
-    assert pricing.action_credits("create:fast") == 15        # $0.06 x 2.4, up
-    assert pricing.action_credits("create:reasoning") == 44   # $0.18 x 2.4, up
     assert pricing.still_credits("gemini-2.5-flash-image") == 10    # $0.039 -> floor
     assert pricing.still_credits("gemini-3-pro-image-preview") == 33  # $0.134 x 2.4
     # the non-preview name the .env and refgen actually ask for
     assert pricing.still_credits("gemini-3-pro-image") == 33
 
 
-def test_an_unknown_brain_or_model_never_prices_as_the_cheap_one():
-    assert pricing.create_action("fast") == "create:fast"
-    assert pricing.create_action(None) == "create:fast"
-    assert pricing.create_action("genius") == "create:reasoning"
+def test_an_unknown_image_model_never_prices_as_the_cheap_one():
     assert pricing.still_credits("some-new-image-model") == \
         pricing.still_credits("gemini-3-pro-image-preview")
 
 
 def test_the_public_catalog_prints_the_same_numbers():
     actions = pricing.public_catalog()["actions"]
-    assert actions == {"create": {"fast": 15, "reasoning": 44},
-                       "still": {"standard": 10, "pro": 33}}
+    assert actions == {"create": 0, "still": {"standard": 10, "pro": 33}}
 
 
 # --- a funded account --------------------------------------------------------
@@ -126,47 +119,44 @@ def _create(client, **extra):
                        data={"idea": "gearing up ritual", "brand": "zeropage", **extra})
 
 
-def test_an_empty_balance_refuses_create_before_anything_runs(client, studio, writer):
+def test_no_plan_and_no_balance_refuses_create_before_anything_runs(client, studio,
+                                                                   writer):
     res = _create(client)
     assert res.status_code == 402
     body = res.json()["error"]
-    assert body["code"] == "out_of_credits"
-    assert "this scene needs 15" in body["message"]
+    assert body["code"] == "subscribe_or_top_up"
+    assert "subscribe or top up" in body["message"]
     assert writer["n"] == 0                       # no job, no model call
     assert _kinds(studio) == []
 
 
-def test_a_create_that_wrote_a_scene_is_charged_its_price(client, studio, writer):
+def test_a_create_moves_no_money(client, studio, writer):
     _fund(studio)
+    for brain in ("fast", "reasoning"):
+        res = _create(client, brain=brain)
+        assert res.status_code == 200, res.text
+        assert _wait(client, res.json()["job_id"])["status"] == "done"
+    assert writer["n"] == 2
+    assert _spent(studio) == 0
+    assert _kinds(studio) == ["grant"]
+
+
+def test_the_trial_grant_is_enough_to_create(client, studio, writer):
+    ledger.grant(studio["account_id"], 100, "promo",
+                 source_ref=f"signup:{studio['account_id']}", dsn=studio["dsn"])
+    res = _create(client)
+    assert res.status_code == 200, res.text
+
+
+def test_a_plan_is_enough_to_create_with_no_balance(client, studio, writer):
+    accounts.set_plan(studio["account_id"], "starter", dsn=studio["dsn"])
     res = _create(client)
     assert res.status_code == 200, res.text
     assert _wait(client, res.json()["job_id"])["status"] == "done"
-    assert writer["n"] == 1
-    assert _spent(studio) == 15
-    assert "settle" in _kinds(studio) and "release" not in _kinds(studio)
-    assert ledger.outstanding(studio["account_id"], studio["dsn"]) == 0
-
-
-def test_the_reasoning_brain_costs_more(client, studio, writer):
-    _fund(studio)
-    res = _create(client, brain="reasoning")
-    assert _wait(client, res.json()["job_id"])["status"] == "done"
-    assert _spent(studio) == 44
-
-
-def test_a_create_that_wrote_nothing_or_failed_is_free(client, studio, writer):
-    _fund(studio)
-    writer["scenes"] = []
-    _wait(client, _create(client).json()["job_id"])
-    writer["raise"] = RuntimeError("model down")
-    job = _wait(client, _create(client).json()["job_id"])
-    assert job["status"] == "failed"
     assert _spent(studio) == 0
-    assert _kinds(studio).count("release") == 2
-    assert ledger.outstanding(studio["account_id"], studio["dsn"]) == 0
 
 
-def test_the_director_brief_is_charged_like_create(client, studio, monkeypatch):
+def test_the_director_brief_is_gated_like_create(client, studio, monkeypatch):
     from app import api
     from src import shootgen
     monkeypatch.setattr(api, "scene_grounding", lambda *a, **k: "")
@@ -177,7 +167,7 @@ def test_the_director_brief_is_charged_like_create(client, studio, monkeypatch):
     _fund(studio)
     res = client.post("/api/pipeline/run", data={"prompt": "a rider", "brand": "zeropage"})
     assert _wait(client, res.json()["job_id"])["status"] == "done"
-    assert _spent(studio) == 15
+    assert _spent(studio) == 0
 
 
 def test_the_owner_is_never_charged(client, studio, writer):
@@ -275,3 +265,67 @@ def test_the_unowned_nightly_pool_is_not_charged(studio, nano):
     assert result["ok"], result["error"]
     assert _kinds(studio) == []
 
+
+
+# --- keyframes behind a priced approve (2026-09-29) -------------------------
+
+
+@pytest.fixture
+def drawn(monkeypatch):
+    """keyframe_scene replaced and counted: the gate is the subject."""
+    from src import scene_chain
+    calls = []
+    monkeypatch.delenv("ZEROPAGE_KEYFRAME_ON_PICK", raising=False)
+    monkeypatch.setattr("google.genai.Client", lambda api_key=None: object())
+    monkeypatch.setattr(scene_chain, "keyframe_scene",
+                        lambda cid, n=None, **kw: calls.append(cid) or
+                        {"ok": True, "media_url": "https://example.test/k.jpg", "frames": []})
+    return calls
+
+
+def _timed_scene(studio, parts=3):
+    """A one-shot scene whose CURRENT timeline has `parts` shots, none drawn."""
+    from src import timeline
+    shot = {"n": 1, "type": "BROLL", "source": "AI", "tool": "LTX",
+            "prompt": "(0-3s) a. (3-6s) b. (6-9s) c.", "refs": ["/refs/x.jpg"]}
+    shot["timeline"] = {
+        "seconds": 9, "planner": "split", "continuity": "",
+        "source": timeline.source_hash(shot["prompt"], shot["refs"]),
+        "parts": [{"n": i + 1, "start": 3 * i, "end": 3 * i + 3, "seconds": 3,
+                   "text": "x", "prompt": "x", "refs": shot["refs"]} for i in range(parts)]}
+    return preprod.save_concept({"title": "T", "hook": "", "logline": "", "shots": [shot]},
+                                brand="zeropage", prompt_template="T", dsn=studio["dsn"],
+                                account_id=studio["account_id"])
+
+
+def test_drawing_keyframes_needs_the_whole_strip_in_the_balance(client, studio, drawn):
+    from src import nano_banana
+    cid = _timed_scene(studio)
+    each = pricing.still_credits(nano_banana.MODEL)
+    _fund(studio, 2 * each)                    # two of three stills
+    res = client.post(f"/api/concepts/{cid}/keyframes")
+    assert res.status_code == 402
+    body = res.json()["error"]
+    assert body["code"] == "out_of_credits"
+    assert f"needs {3 * each}" in body["message"] and "top up" in body["message"]
+    assert drawn == []                          # never a partial strip
+
+    _fund(studio, each)
+    res = client.post(f"/api/concepts/{cid}/keyframes")
+    assert res.status_code == 200, res.text
+    assert res.json()["keyframes"]["stills"] == 3
+    assert _wait(client, res.json()["job_id"])["status"] == "done"
+    assert drawn == [cid]
+
+
+def test_an_exempt_account_draws_with_no_balance(client, studio, drawn):
+    accounts.set_credit_exempt("zeropage", True, dsn=studio["dsn"])
+    cid = _timed_scene(studio, parts=1)
+    res = client.post(f"/api/concepts/{cid}/keyframes")
+    assert res.status_code == 200, res.text
+
+
+def test_the_balance_carries_the_still_price(client, studio):
+    from src import nano_banana
+    prices = client.get("/api/billing/balance").json()["prices"]
+    assert prices == {"still": pricing.still_credits(nano_banana.MODEL)}

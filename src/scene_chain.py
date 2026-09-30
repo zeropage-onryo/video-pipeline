@@ -39,12 +39,12 @@ import os
 import sys
 from typing import Callable, Optional
 
-from . import db, edit_teach, imagery, nano_banana, preprod, shootgen, timeline
+from . import edit_teach, imagery, nano_banana, preprod, shootgen, timeline
 
 # Enhancing and keyframing are per-scene model calls, so a batch of 4 is
-# 4 of each. The cap that actually bites is nano_banana.DAILY_CAP (20/day,
-# shared with every Director render) -- nothing here raises it, it just
-# reports what it could not do.
+# 4 of each. There is no image cap since 2026-09-29 -- the credit balance
+# is the limit (src/charge.py) -- and a refused still is reported, not
+# raised.
 MAX_SCENES = 4
 
 
@@ -384,115 +384,6 @@ def persist_prompt(concept_id: int, shot_n, text: str, *, db_path=None, account_
     return True
 
 
-# How many targets one spark gets. Two, not one: a single reference is a
-# picture the model copies, two are a range it interpolates within --
-# and the second costs the same as the first only once per spark now.
-TARGETS_PER_SPARK = 2
-
-
-def visual_target(concept_id: int, shot: dict, *, spark: str = "",
-                  db_path=None, account_id: Optional[int] = None,
-                  gemini_client=None, count: int = TARGETS_PER_SPARK) -> list:
-    """Give a scene with NO references something to look at, generated
-    once PER SPARK and reused by every concept that spark produces.
-
-    THE FAILURE THIS FIXES. keyframe_scene builds its reference list from
-    `shot["refs"]` and passes reference_image=None when that list is
-    empty -- so Nano renders the still from prompt text alone. For
-    Antihero that is rare: the scene names Michael and attach_refs hangs
-    his photo on it. For Zero Page it was EVERY scene -- a faceless brand
-    has no cast to attach, and the scout's image bin has been empty since
-    Instagram's public-content endpoint started refusing (2026-09-02:
-    "8 spark(s) from 33 signals - 0 reference image(s) binned"). The
-    brand whose whole register is grounded uncanny TEXTURE was the one
-    keyframing with nothing to look at.
-
-    WHY PER SPARK AND NOT PER CONCEPT (2026-09-02). One spark produces
-    several concepts and they share a world -- same room, same light,
-    same materials. Generating per concept paid for that world once per
-    concept AND made the batch visually incoherent, since each concept
-    got its own unrelated reference. Banking under a spark-derived
-    pass_id means the second concept from a spark costs nothing and
-    looks like it belongs beside the first.
-
-    The bin is where they go because that is the path that already
-    exists: bin_for_pass reads it, the composer renders it, and the URL
-    shape is the same /refs/<sha>.jpg a dragged-on photo gets.
-
-    A generated target is NOT a banked crawl image and the row says so
-    -- lane="target", source_url="" -- because the bin's other rows are
-    EVIDENCE (a frame from a video that travelled, carrying the URL that
-    proves it) and this is a visual target for one idea. Conflating them
-    would turn a mood board into a citation.
-
-    WHY HIGGSFIELD AND NOT MIDJOURNEY (2026-09-02). This was wired to
-    midjourney.generate_image first, because _midjourney_still was
-    sitting there half-built. Running it showed the flaw: that path goes
-    through AceDataCloud, a paid reseller, and ACEDATA_API_KEY is not
-    set -- so it could never have produced an image, and a Midjourney
-    subscription would not have helped, since the subscription and the
-    reseller are separate bills. Higgsfield is already configured, costs
-    $0.05 against Midjourney-via-reseller's $0.27, and returns its
-    failures rather than raising.
-
-    Gated by higgsfield.spend_approved() (HIGGSFIELD_SPEND_OK, per-run by
-    design -- "an approval that's always on isn't an approval"), and by
-    HIGGSFIELD_DAILY_CAP (6) underneath it. Returns [] on anything going
-    wrong: a scene with no target keyframes the way it always did.
-    """
-    from . import higgsfield, scout
-
-    path = db_path
-    prompt = (shot.get("prompt") or "").strip()
-    if not prompt:
-        return []
-
-    # Reuse before spending. Keyed on the spark's normalised form, so a
-    # capitalisation difference does not buy the same pictures twice.
-    pass_id = f"target-{scout._spark_key(spark)}" if (spark or "").strip() else ""
-    if pass_id:
-        banked = [r["url"] for r in scout.bin_for_pass(pass_id, dsn=path)]
-        if banked:
-            return banked
-
-    if not higgsfield.spend_approved():
-        return []
-
-    made = []
-    try:
-        line = shootgen.still_prompt(prompt, gemini_client=gemini_client)
-        if not line:
-            return []
-        for _ in range(max(1, count)):
-            # Never raises; a refusal (cap, no key, upstream error) comes
-            # back as ok=False, which is a reason to stop rather than to
-            # keep paying for the same failure.
-            result = higgsfield.generate_image_from_prompt(
-                line, db_path=path, account_id=account_id)
-            if not result.get("ok"):
-                print(f"note: no visual target — {result.get('error')}",
-                      file=sys.stderr)
-                break
-            url = result.get("media_url") or ""
-            if url:
-                made.append(url)
-    except Exception as e:                      # surfaced, never fatal
-        print(f"note: visual target stopped ({type(e).__name__}: {e})",
-              file=sys.stderr)
-
-    if made and pass_id:
-        scout.init(path)
-        with db.connect(path) as conn:
-            for url in made:
-                conn.execute(
-                    "INSERT INTO scout_bin (created_at, pass_id, brand, url, "
-                    "source_url, title, lane, metric) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
-                    (scout._now(), pass_id, "", url, "", (spark or "")[:120],
-                     "target", ""),
-                )
-    return made
-
-
 def _replace_shot(shots: list, shot: dict) -> list:
     """This shot updated, every other shot left alone.
 
@@ -555,17 +446,10 @@ def keyframe_scene(concept_id: int, shot_n=None, *, db_path=None,
         # while the card still claimed the scene was grounded.
         from . import asset_shelf
         resolve_photo = asset_shelf.resolve_photo
-    # No references at all means the still would be rendered from the
-    # prompt text alone -- which is every Zero Page scene, every night.
-    # Generate a target first when the spend is approved.
-    if not (shot.get("refs") or []):
-        made = visual_target(concept_id, shot, spark=concept.get("spark") or "",
-                             db_path=path, account_id=account_id)
-        if made:
-            shot = dict(shot, refs=made)
-            preprod.update_concept_shots(
-                concept_id, {"shots": _replace_shot(shots, shot)},
-                dsn=path, account_id=account_id)
+    # (A scene with no references used to get a Higgsfield-drawn "visual
+    # target" here. Removed 2026-09-29 with Higgsfield: since 2026-09-08 a
+    # scene with no refs is archived before it can be picked, so the only
+    # scenes that reach a draw already carry photographs.)
 
     # A SCENE OF SEVERAL SHOTS draws one still per shot (2026-09-10): each
     # timed window renders as its own clip, and each clip anchors on its
@@ -789,9 +673,42 @@ def pick_skip_reason(concept: Optional[dict]) -> Optional[str]:
     return None
 
 
+def stills_to_draw(concept: Optional[dict]) -> int:
+    """How many stills drawing this scene's keyframes would make -- 0 when
+    there is nothing to draw (pick_skip_reason's rule). One per timed shot
+    still missing one, else one for the scene. What the card quotes and
+    what the approve checks the balance against (2026-09-29), so it counts
+    exactly what _keyframe_timeline would draw, never what it would skip."""
+    if pick_skip_reason(concept):
+        return 0
+    shot = (concept.get("shots") or [{}])[0]
+    parts = ((shot.get("timeline") or {}).get("parts") or []
+             if timeline.is_current(shot) else [])
+    if parts:
+        return sum(1 for p in parts if not p.get("reference_image"))
+    return 0 if shot.get("reference_image") else 1
+
+
+def keyframe_quote(concept: Optional[dict]) -> Optional[dict]:
+    """{stills, each, credits} for drawing this scene's keyframes, or None
+    when there is nothing to draw -- what the Queue card's priced approve
+    says, and what the MCP pick reports. Priced for the image model THIS
+    server draws keyframes with (nano_banana.MODEL), so a label never
+    quotes the other model. Whether the account is actually charged is its
+    `credit_exempt`, which the caller reads beside it."""
+    from . import pricing
+    stills = stills_to_draw(concept)
+    if not stills:
+        return None
+    each = pricing.still_credits(nano_banana.MODEL)
+    return {"stills": stills, "each": each, "credits": stills * each}
+
+
 def draw_on_pick(concept_id: int, *, db_path=None, account_id: Optional[int] = None,
                  resolve_photo=None, gemini_client=None) -> dict:
-    """Render the still for a scene somebody just picked.
+    """Render the stills for a picked scene -- called by the priced
+    approve (`POST /api/concepts/{id}/keyframes`, 2026-09-29), never by the
+    pick itself any more; the name is historical.
 
     THE BUDGET RULE (2026-09-08, Mike's call). The nightly graph writes
     text and stops (`ZEROPAGE_KEYFRAME=0`): a 40-spark walk that draws

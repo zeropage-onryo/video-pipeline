@@ -40,6 +40,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from src import accounts as accounts_mod
 from src import (
     asset_shelf,
+    assistant_store,
     autonomy,
     autopilot,
     db,
@@ -192,6 +193,7 @@ async def lifespan(app: FastAPI):
         accounts_mod.init()  # users / identities / accounts / members
         settings_mod.init()  # the Dev Studio tunables (gate/threshold/k)
         fal_requests.init()  # fal's queue receipts, persisted at submit
+        assistant_store.init()  # the pill's persona, project and Keep clicks
         # A deploy restarts this process mid-render and app/jobs.py's
         # threads die with it (2026-09-26: #121 and #135 orphaned). The
         # sweep reattaches to any fal job whose worker stopped beating and

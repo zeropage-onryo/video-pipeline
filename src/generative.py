@@ -46,11 +46,11 @@ from .shot import TOOLS, Shot
 # $0.30 and $1.51 into one meaningless row. The split is also what keeps
 # fal's video daily cap from moving when someone renders a still.
 #
-# "higgsfield" joined on 2026-09-26: its video path was retired (fal is the
-# only video renderer), so it left shot.PLATFORMS and logs Soul STILLS only.
+# "higgsfield" left on 2026-09-29 with src/higgsfield.py (Mike's call); its
+# old rows keep their tool name, nothing writes it now.
 # "manual" is the generic clip import (ops/render_queue.py): a clip rendered
-# anywhere, filed free. Neither is a platform a concept may plan a shot on.
-IMAGE_TOOLS = ("midjourney", "nano", "fal", "higgsfield")
+# anywhere, filed free. Not a platform a concept may plan a shot on.
+IMAGE_TOOLS = ("midjourney", "nano", "fal")
 MANUAL_TOOLS = ("manual",)
 LOG_TOOLS = TOOLS + IMAGE_TOOLS + MANUAL_TOOLS
 

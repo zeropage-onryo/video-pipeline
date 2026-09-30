@@ -339,10 +339,20 @@ OWNED_TABLES = (
     "timelines",
     "timeline_heads",
     "cut_media",
+    # the editor (2026-09-28, src/cut/store.py): an account's cut
+    # projects, and what its media files are plus their browser previews
+    "cut_projects",
+    "cut_media_cache",
     # the index (2026-09-28, src/cut/moments.py): what is in each clip,
     # and the words, sentences and shots search runs over
     "media_index",
     "media_moments",
+    # the assistant pill's memory (2026-09-29, src/assistant_store.py): an
+    # account's persona, its conversation, and its Keep clicks on the
+    # contact sheets -- other people's taste must not steer yours
+    "assistants",
+    "assistant_projects",
+    "reference_verdicts",
 )
 
 # The tables that are global BY DECISION, each with the reason. This is
