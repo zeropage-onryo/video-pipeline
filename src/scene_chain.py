@@ -487,15 +487,15 @@ def keyframe_scene(concept_id: int, shot_n=None, *, db_path=None,
     frames: list = []
     result: dict = {}
     for beat in (beats or [""]):
-        # No account_id, deliberately: nano's own shot row is created
-        # unowned by _shot_row_for_prompt, and record_generation scopes
-        # its lookup by account -- so passing one here raises "no shot
-        # with id N" on a row that plainly exists. The whole path is
-        # account-None and self-consistent; making it tenanted is a
-        # change to generative.py, not something to do sideways here.
+        # The account pays for its still and owns its row (2026-09-30). This
+        # used to pass none, deliberately, while nano's shot row was created
+        # unowned; _shot_row_for_prompt forwards the account since, so the
+        # omission only meant every keyframe was drawn FREE and filed under
+        # the bootstrap account -- found by the first real keyframe approve
+        # on a non-exempt account.
         result = nano_banana.generate_from_prompt(
             prompt, reference_image=references or None, db_path=path,
-            concept_id=concept_id, beat=beat)
+            concept_id=concept_id, beat=beat, account_id=account_id)
         if not (result.get("ok") and result.get("media_url")):
             # Usually NANO_DAILY_CAP. Stop rather than spend the rest of
             # the strip against a wall we have already hit -- and keep
@@ -600,10 +600,10 @@ def _keyframe_timeline(concept_id: int, shot_n, tl: dict, *, db_path=None,
         if previous:
             references.append((CONTINUITY_REF_LABEL, previous))
         prompt = shootgen.bind_references(timeline.render_prompt(part, tl), resolved)
-        # No account_id -- keyframe_scene's reason, unchanged.
+        # the account pays and owns the row -- see keyframe_scene
         result = nano_banana.generate_from_prompt(
             prompt, reference_image=references or None, db_path=db_path,
-            concept_id=concept_id,
+            concept_id=concept_id, account_id=account_id,
             beat=(f"the FIRST frame of shot {n} of {total} -- the instant it "
                   f"opens on, before its action plays out; the clip starts here"))
         if not (result.get("ok") and result.get("media_url")):

@@ -329,3 +329,64 @@ def test_the_balance_carries_the_still_price(client, studio):
     from src import nano_banana
     prices = client.get("/api/billing/balance").json()["prices"]
     assert prices == {"still": pricing.still_credits(nano_banana.MODEL)}
+
+
+# --- the doors that draw a still charge THEIR account (2026-09-30) -----------
+# Found by the first real keyframe approve on a non-exempt account: the
+# keyframe paths, the Director's Nano node, /api/generate/run's image branch
+# and Run all passed no account into nano_banana, so every one of those stills
+# was drawn FREE and its generations row was filed under the bootstrap
+# account. These drive the real paths with only the image model faked.
+
+
+def _gen_owners(studio):
+    with db.connect(studio["dsn"]) as conn:
+        return [r["account_id"] for r in conn.execute(
+            "SELECT account_id FROM generations WHERE tool = 'nano' ORDER BY id")]
+
+
+def test_the_keyframe_approve_charges_every_still_to_the_account(client, studio, nano,
+                                                                 monkeypatch):
+    from src import nano_banana
+    monkeypatch.delenv("ZEROPAGE_KEYFRAME_ON_PICK", raising=False)
+    cid = _timed_scene(studio)
+    each = pricing.still_credits(nano_banana.MODEL)
+    _fund(studio, 3 * each)
+    res = client.post(f"/api/concepts/{cid}/keyframes")
+    assert res.status_code == 200, res.text
+    assert _wait(client, res.json()["job_id"])["status"] == "done"
+    assert nano["n"] == 3
+    assert _spent(studio) == 3 * each
+    assert _kinds(studio).count("settle") == 3
+    assert ledger.outstanding(studio["account_id"], studio["dsn"]) == 0
+    assert _gen_owners(studio) == [studio["account_id"]] * 3
+
+
+def test_the_director_nano_node_charges_the_account(client, studio, nano):
+    from src import nano_banana
+    each = pricing.still_credits(nano_banana.MODEL)
+    _fund(studio, each)
+    res = client.post("/api/workflows/exec/nano", json={"prompt": "a bench in fog"})
+    assert res.status_code == 200, res.text
+    assert _wait(client, res.json()["job_id"])["status"] == "done"
+    assert _spent(studio) == each
+    assert _gen_owners(studio) == [studio["account_id"]]
+
+
+def test_every_nano_caller_forwards_the_account():
+    """The shape of the bug, asserted on the source: a generate_from_prompt
+    call that does not pass account_id is a still nobody pays for."""
+    import ast
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parent.parent
+    missing = []
+    for rel in ("src/scene_chain.py", "src/element_sheet.py", "app/api.py",
+                "app/workflow_runner.py"):
+        tree = ast.parse((root / rel).read_text())
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "generate_from_prompt"
+                    and getattr(node.func.value, "id", None) == "nano_banana"
+                    and not any(k.arg == "account_id" for k in node.keywords)):
+                missing.append(f"{rel}:{node.lineno}")
+    assert not missing, f"nano_banana.generate_from_prompt without account_id: {missing}"

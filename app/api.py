@@ -2452,7 +2452,10 @@ def _keyframe_on_pick(concept: dict, account_id: int):
         if not result.get("ok"):
             raise RuntimeError(result.get("error") or "keyframe failed")
         frames = result.get("frames") or []
-        detail = f"{1 + len(frames)} still(s)" if frames else "1 still"
+        # a timed scene's `frames` IS every shot's still; a one-window
+        # scene's are the beats drawn beside its main still
+        count = len(frames) if result.get("parts") else 1 + len(frames)
+        detail = f"{count} still(s)" if count != 1 else "1 still"
         return {"detail": detail, "ref_id": concept_id}
 
     job = jobs.start("keyframe", f"keyframe · {title}", work,
@@ -4293,7 +4296,7 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
             jobs.progress(job, 0.7, "rendering image via Nano Banana")
             result = nano_banana.generate_from_prompt(
                 enhanced, reference_image=image_refs[0][0] if image_refs else None,
-                db_path=None)
+                db_path=None, account_id=account_id)
             if result.get("ok"):
                 preprod.set_shot_reference_image(
                     concept_id, shot["n"], result["media_url"], account_id=account_id)
@@ -5324,10 +5327,10 @@ def workflow_exec_generate(body: WfGenerateBody, account_id: int = Depends(auth.
 @router.post("/workflows/exec/nano")
 def workflow_exec_nano(body: WfGenerateBody, account_id: int = Depends(auth.current_account_id)):
     """The Nano Banana node's own Run: one Gemini image render from a
-    free-standing prompt + optional reference. Billed on the same
-    GEMINI_API_KEY as everything else, capped by NANO_DAILY_CAP inside
-    generate_from_prompt -- no separate spend gate, an image costs
-    cents where a video render burns credits."""
+    free-standing prompt + optional reference. The still is charged to
+    this account inside generate_from_prompt (2026-09-30: this route passed
+    no account, so the still was drawn free and filed under the bootstrap
+    account); the node's Run confirm is the approve that says its price."""
     from src import nano_banana
 
     shot = _exec_shot(body, account_id)
@@ -5348,7 +5351,8 @@ def workflow_exec_nano(body: WfGenerateBody, account_id: int = Depends(auth.curr
             if data
         ]
         result = nano_banana.generate_from_prompt(
-            body.prompt, reference_image=reference, db_path=None)
+            body.prompt, reference_image=reference, db_path=None,
+            account_id=account_id)
         if not result.get("ok"):
             raise RuntimeError(result.get("error") or "render failed")
         if shot is not None:
