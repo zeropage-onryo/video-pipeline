@@ -78,6 +78,14 @@ class RenderError(RuntimeError):
     pass
 
 
+# Threads cost memory (every decoder and encoder thread holds frames of
+# its own) and buy nothing on the 1-shared-CPU Fly machine the render runs
+# on. With the inputs split by stream, these caps took #375's v9 from
+# 1.1 GB to 0.35 GB peak (measured 2026-09-30).
+DECODE_THREADS = 2
+ENCODE_THREADS = 2
+
+
 def _s(frames: int, fps: int) -> str:
     """Frames -> seconds as ffmpeg takes them: exact to the microsecond,
     never scientific notation."""
@@ -320,20 +328,40 @@ def compile_args(doc: dict, paths: dict[str, Path], out: Path, *,
     missing = [h for h in handles if h not in paths]
     if missing:
         raise RenderError(f"no file for {', '.join(missing)}")
-    index = {h: i for i, h in enumerate(handles)}
-    parts: list[str] = []
-    vout = _video_graph(doc, index, parts, burn)
-    aout = _audio_graph(doc, index, parts)
-    argv = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
+    # A file is opened ONCE FOR ITS PICTURE AND ONCE FOR ITS SOUND, never
+    # once for both. The sound of every clip is mixed from the first frame
+    # of the cut (amix, with adelay placing each clip), so ffmpeg reads
+    # every file's audio at once -- and reading a file's audio demuxes its
+    # video too, whose decoded frames then queue until the picture reaches
+    # that clip. On #375's v9 (T25, 2026-09-30) that queue was the whole
+    # render's memory: 1.1 GB, and the kernel killed ffmpeg on Fly's 1 GB
+    # machine. `-an` / `-vn` on the inputs keep each read to its own stream.
     fps = doc["fps"]
+    on_video = {c.get("media") for t in d.tracks_of(doc, "video") for c in t.get("clips") or []}
+    on_audio = {c.get("media") for t in d.tracks_of(doc, "audio") for c in t.get("clips") or []}
+    argv = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
+    vindex: dict[str, int] = {}
+    aindex: dict[str, int] = {}
+    n = 0
     for h in handles:
-        if h in stills:
-            need = max([c["src_out"] for _, c in d.all_clips(doc) if c.get("media") == h] or [1])
-            argv += ["-loop", "1", "-framerate", str(fps), "-t", _s(need, fps)]
-        argv += ["-i", str(paths[h])]
-    argv += ["-filter_complex", ";".join(parts),
+        if h in on_video:
+            if h in stills:
+                need = max([c["src_out"] for _, c in d.all_clips(doc) if c.get("media") == h] or [1])
+                argv += ["-loop", "1", "-framerate", str(fps), "-t", _s(need, fps)]
+            argv += ["-threads", str(DECODE_THREADS), "-an", "-i", str(paths[h])]
+            vindex[h] = n
+            n += 1
+        if h in on_audio:
+            argv += ["-threads", str(DECODE_THREADS), "-vn", "-i", str(paths[h])]
+            aindex[h] = n
+            n += 1
+    parts: list[str] = []
+    vout = _video_graph(doc, vindex, parts, burn)
+    aout = _audio_graph(doc, aindex, parts)
+    argv += ["-filter_complex_threads", "1", "-filter_complex", ";".join(parts),
              "-map", f"[{vout}]", "-map", f"[{aout}]",
              "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+             "-threads", str(ENCODE_THREADS),
              "-r", str(doc["fps"]),
              "-c:a", "aac", "-b:a", "192k", "-ar", str(SAMPLE_RATE),
              "-movflags", "+faststart", "-t", _s(doc["duration"], doc["fps"]), str(out)]

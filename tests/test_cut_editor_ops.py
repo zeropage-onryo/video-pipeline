@@ -271,9 +271,10 @@ def test_a_still_is_looped_and_bounded():
     argv = render.compile_args(doc, paths, Path("/x/out.mp4"),
                                stills=render.stills_in(None, paths))
     i = argv.index("/x/still.png")
-    assert argv[i - 7:i] == ["-loop", "1", "-framerate", "30", "-t", "2", "-i"]
+    assert argv[i - 10:i] == ["-loop", "1", "-framerate", "30", "-t", "2",
+                              "-threads", str(render.DECODE_THREADS), "-an", "-i"]
     j = argv.index("/x/clip.mp4")
-    assert argv[j - 1] == "-i" and "-loop" not in argv[j - 3:j]
+    assert argv[j - 2:j] == ["-an", "-i"] and "-loop" not in argv[j - 5:j]
     assert render.stills_in({"gen:9": {"still": True}}, {}) == {"gen:9"}
 
 
