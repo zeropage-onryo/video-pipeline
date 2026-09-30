@@ -88,3 +88,13 @@ one real small purchase → refund it (refunds are logged, NOT clawed back — d
 - Don't kick off renders or generations without Mike saying so.
 - Don't change prices in Stripe by hand — change `pricing.PLANS`, `python -m src.pricing export`,
   rerun the script.
+
+## Progress (Claude Code, 2026-09-30)
+
+- Steps 0–4 DONE. Script reviewed + fixed (commits a9d1001, ada4084 on `feat/stripe-setup`),
+  run against the "ZeroPage Studio sandbox" (acct_1ULOEo2QmnGupZ1S): 4 Products, 7 Prices,
+  webhook endpoint pinned to 2026-08-26.dahlia; rerun reuses all 8. Pushed with `--fly`.
+- FRONTEND_ORIGINS on Fly is now `https://zeropage-web.fly.dev,https://zpf-web.vercel.app,https://zeropage.studio`
+  (the first two were probed as trusted beforehand and kept). Verified after the restart:
+  CORS allows zeropage.studio; `/billing/webhook` refuses an unsigned POST with 400 bad_signature.
+- Next: step 5 (portal Save, Mike), step 7 (Mike's own test checkout with 4242).
