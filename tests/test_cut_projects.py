@@ -14,8 +14,9 @@ import subprocess
 import time
 
 import pytest
+from conftest import seed_two  # noqa: E402
 
-from src import accounts, db, preprod, render_assets
+from src import db, preprod, render_assets
 from src.cut import doc as d
 from src.cut import ops, preview, sources, store
 
@@ -54,7 +55,7 @@ def world(pg):
     preprod.init(pg)
     render_assets.init(pg)
     store.init(pg)
-    accounts.seed("mike@example.com", dsn=pg)
+    seed_two("mike@example.com", dsn=pg)
     with db.connect(pg) as conn:
         a = conn.execute("SELECT id FROM accounts WHERE slug='zeropage'").fetchone()["id"]
         b = conn.execute("SELECT id FROM accounts WHERE slug='antihero'").fetchone()["id"]

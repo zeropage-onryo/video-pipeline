@@ -3,9 +3,10 @@ existed gets that row, and nothing is guessed."""
 import json
 
 import pytest
+from conftest import seed_two  # noqa: E402
 
 from ops import backfill_render_assets as bf
-from src import accounts, db, generative, preprod, render_assets
+from src import db, generative, preprod, render_assets
 from src.cut import assemble
 
 
@@ -14,7 +15,7 @@ def live(pg, monkeypatch):
     preprod.init(pg)
     generative.init(pg)
     render_assets.init(pg)
-    accounts.seed("mike@example.com", dsn=pg)
+    seed_two("mike@example.com", dsn=pg)
     monkeypatch.setenv("DATABASE_URL", pg)
     # record() also files a RAG chunk; best-effort, and not what is under test
     monkeypatch.setattr(render_assets, "_ingest", lambda *a, **k: {"ok": False})

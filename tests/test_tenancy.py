@@ -24,6 +24,7 @@ import re
 
 import psycopg
 import pytest
+from conftest import seed_two as _seed_two  # noqa: E402
 from starlette.datastructures import State
 
 from src import (
@@ -65,7 +66,7 @@ def unowned(pg):
 
 @pytest.fixture
 def migrated(unowned):
-    accounts.seed("mike@example.com", dsn=unowned)
+    _seed_two("mike@example.com", dsn=unowned)
     preprod.init(unowned)     # idempotence is part of the contract
     return unowned
 
@@ -114,7 +115,7 @@ def test_init_before_seed_leaves_rows_unowned_rather_than_guessing(unowned):
 
 
 def test_seeding_afterwards_claims_them(unowned):
-    accounts.seed("mike@example.com", dsn=unowned)
+    _seed_two("mike@example.com", dsn=unowned)
     assert _one(unowned, "SELECT count(*) FROM locations WHERE account_id IS NULL") == 0
 
 
@@ -198,7 +199,7 @@ def two_accounts(pg):
     preprod.init(path)
     entities.init(path)
     generative.init(path)
-    accounts.seed("mike@example.com", dsn=path)
+    _seed_two("mike@example.com", dsn=path)
     with db.connect(path) as conn:
         a = conn.execute("SELECT id FROM accounts WHERE slug='zeropage'").fetchone()["id"]
         b = conn.execute("SELECT id FROM accounts WHERE slug='antihero'").fetchone()["id"]
@@ -1057,7 +1058,7 @@ def test_existing_holds_and_canvases_are_claimed_by_the_bootstrap_account(pg):
     assert _one(pg, "SELECT count(*) FROM hold_queue WHERE account_id IS NULL") == 2
     assert _one(pg, "SELECT count(*) FROM workflows WHERE account_id IS NULL") == 1
 
-    accounts.seed("mike@example.com", dsn=pg)
+    _seed_two("mike@example.com", dsn=pg)
     owner = _one(pg, "SELECT MIN(id) FROM accounts")
     assert _one(pg, "SELECT count(*) FROM hold_queue WHERE account_id = %s", (owner,)) == 2
     assert _one(pg, "SELECT count(*) FROM workflows WHERE account_id = %s", (owner,)) == 1

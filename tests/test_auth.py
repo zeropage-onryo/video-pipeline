@@ -13,6 +13,7 @@ import time
 
 import jwt
 import pytest
+from conftest import seed_two as _seed_two  # noqa: E402
 from fastapi.testclient import TestClient
 
 from app import auth as auth_mod
@@ -115,7 +116,7 @@ def login(email, password):
 def seed_mike(path, gotrue, password="mikes-password-1"):
     """Mike is seeded by email (unclaimed); Supabase knows his password."""
     gotrue.register("mike@example.com", password, uid="uid-mike-supabase")
-    return accounts.seed("mike@example.com", dsn=path)
+    return _seed_two("mike@example.com", dsn=path)
 
 
 # ---------- password doors ----------
@@ -408,7 +409,7 @@ def test_claim_existing_id_signs_in_and_keeps_the_profile(clean_slate):
 def test_claim_takes_the_seeded_unclaimed_row(clean_slate):
     """Mike seeds with email only; his first sign-in attaches the
     Supabase id to that row instead of erroring or duplicating."""
-    seeded = accounts.seed("mike@example.com", dsn=clean_slate)
+    seeded = _seed_two("mike@example.com", dsn=clean_slate)
     uid, error = accounts.claim("mike-sb", "mike@example.com", "Mike", None, dsn=clean_slate)
     assert error is None and uid == "mike-sb"
     assert accounts.get_user(seeded["user_id"], dsn=clean_slate) is None
