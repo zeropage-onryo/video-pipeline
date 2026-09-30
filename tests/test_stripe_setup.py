@@ -12,6 +12,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
+import stripe
 
 from ops import stripe_setup as setup
 from src import billing, pricing
@@ -36,7 +37,9 @@ class FakeStripe:
 
             @staticmethod
             def create(name, metadata):
-                p = obj("prod", name=name, metadata=metadata)
+                # the real SDK's type: .get() raises on it, which a dict hides
+                p = obj("prod", name=name,
+                        metadata=stripe.StripeObject.construct_from(metadata, None))
                 fake.products.append(p)
                 return p
 

@@ -62,7 +62,9 @@ def read_env() -> dict[str, str]:
 
 
 def write_env(updates: dict[str, str]) -> Path:
-    backup = ENV.with_name(f".env.bak.stripe.{time.strftime('%Y%m%d-%H%M%S')}")
+    # beside the REAL file: a worktree's .env is a symlink, and a backup
+    # left in the worktree goes when the worktree does
+    backup = ENV.resolve().with_name(f".env.bak.stripe.{time.strftime('%Y%m%d-%H%M%S')}")
     shutil.copy2(ENV, backup)
     lines = ENV.read_text().splitlines()
     seen: set[str] = set()
@@ -87,7 +89,9 @@ def find_product(item: str):
     search is eventually consistent, so a quick rerun would miss the
     Product the first run just made and create a duplicate."""
     for product in stripe.Product.list(active=True, limit=100).auto_paging_iter():
-        if (product.metadata or {}).get("zpf_item") == item:
+        # a StripeObject, not a dict: .get() raises on it
+        metadata = product.metadata.to_dict() if product.metadata else {}
+        if metadata.get("zpf_item") == item:
             return product
     return None
 
