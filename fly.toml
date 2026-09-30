@@ -5,6 +5,13 @@
 
 app = 'zeropage-studio'
 primary_region = 'iad'
+# How long a deploy waits for the old process after SIGINT before SIGKILL.
+# Fly's default is 5s, and uvicorn's graceful shutdown (ops/fly/
+# supervisord.conf) is 3s plus supervisord's own teardown -- too close.
+# A process SIGKILLed here is reported by Fly's init as "Process appears
+# to have been OOM killed!", which is what the 16:18 "OOM" on 2026-09-30
+# was: no workload, no memory growth, one open /api/jobs/stream.
+kill_timeout = '15s'
 
 [build]
 [env]
