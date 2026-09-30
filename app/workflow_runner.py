@@ -351,8 +351,11 @@ def execute_graph(graph: dict, *, gemini_client=None, resolve_photo=None,
                         for url in urls)
                     if data
                 ]
+                # the account pays for its still (2026-09-30: passing none
+                # drew it free and filed the row under the bootstrap account)
                 result = nano_banana.generate_from_prompt(
-                    prompt, reference_image=references, db_path=db_path)
+                    prompt, reference_image=references, db_path=db_path,
+                    account_id=account_id)
                 if not result["ok"]:
                     raise RuntimeError(result["error"] or "render failed")
                 kind, value = "image", result["media_url"]

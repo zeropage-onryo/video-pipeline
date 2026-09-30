@@ -203,7 +203,7 @@ def hermetic_generate(monkeypatch):
 def test_generate_run_saves_a_real_one_shot_concept(tmp_db, hermetic_generate,
                                                     monkeypatch):
     monkeypatch.setattr("src.nano_banana.generate_from_prompt",
-                        lambda prompt, reference_image=None, db_path=None:
+                        lambda prompt, reference_image=None, db_path=None, **kw:
                         {"ok": True, "media_url": "/renders/frame.png"})
     job_id = client.post("/api/generate/run", data={
         "prompt": "the Ducati tank badge, low key",
