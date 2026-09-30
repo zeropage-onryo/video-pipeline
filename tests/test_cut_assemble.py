@@ -341,7 +341,15 @@ def test_the_graph_has_every_stage_the_spec_names():
     # runs to 360, so the cut stays 12s and the picture is padded black
     assert argv[argv.index("-t") + 1] == "12"
     assert "tpad=stop_mode=add:stop_duration=0.266667" in graph
-    assert argv.count("-i") == 5
+    # a file is opened once for its picture (-an) and once for its sound
+    # (-vn), never once for both: reading a clip's sound early must not
+    # queue its decoded picture (T25's v9 OOM on Fly, 2026-09-30)
+    inputs = [i for i, a in enumerate(argv) if a == "-i"]
+    assert all(argv[i - 1] in ("-an", "-vn") for i in inputs)
+    on_video = {c["media"] for c in d.track(doc, "V1")["clips"]}
+    on_audio = {c["media"] for t in d.tracks_of(doc, "audio") for c in t["clips"]}
+    assert len(inputs) == len(on_video) + len(on_audio)
+    assert "-filter_complex_threads" in argv and argv[argv.index("-c:v"):].count("-threads") == 1
 
 
 def test_a_gap_renders_as_black_and_an_empty_track_is_silence():
