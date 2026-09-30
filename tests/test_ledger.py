@@ -14,6 +14,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from conftest import seed_two  # noqa: E402
 
 from src import accounts, db, generative, ledger
 from src.shot import Shot
@@ -29,7 +30,7 @@ def led(pg):
     about.
     """
     accounts.init(pg)
-    accounts.seed("mike@example.com", dsn=pg)
+    seed_two("mike@example.com", dsn=pg)
     generative.init(pg)
     ledger.init(pg)
     with db.connect(pg) as conn:
@@ -800,7 +801,7 @@ def test_the_triggers_are_installed_on_a_database_that_predates_them(pg):
     shape `submitted_at` already uses, because the CREATEs cover a fresh
     database and this covers the one on the machine you are typing on."""
     accounts.init(pg)
-    accounts.seed("mike@example.com", dsn=pg)
+    seed_two("mike@example.com", dsn=pg)
     ledger.init(pg)
     with db.connect(pg) as conn:
         conn.execute("DROP TRIGGER ledger_lot_balance ON credit_lots")
@@ -888,7 +889,7 @@ def test_outstanding_everyone_is_the_operators_liability(led):
 
 def test_one_accounts_balance_is_invisible_to_another(led):
     dsn, account = led
-    # accounts.seed makes both brands, so there is always a second one
+    # the fixture seeds two accounts (seed_two), so there is always a second one
     with db.connect(dsn) as conn:
         other = conn.execute(
             "SELECT id FROM accounts WHERE id <> %s ORDER BY id LIMIT 1",

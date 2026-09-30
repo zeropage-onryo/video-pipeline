@@ -24,6 +24,7 @@ import re
 
 import psycopg
 import pytest
+from conftest import seed_two as _seed_two  # noqa: E402
 from starlette.datastructures import State
 
 from src import (
@@ -36,19 +37,6 @@ from src import (
     render_assets,
     workflows,
 )
-
-
-def _seed_two(email, dsn):
-    """accounts.seed makes ONE account since the 2026-09-28 fold; these
-    tests are about a person who belongs to two, so the second is made
-    here explicitly rather than by the setup command."""
-    from src import accounts as _accounts
-
-    seeded = _accounts.seed(email, dsn=dsn)
-    second = _accounts.upsert_account("antihero", "ANTIHERO", "#d64550", dsn=dsn)
-    _accounts.add_member(second, seeded["user_id"], dsn=dsn)
-    return {**seeded, "accounts": [*seeded["accounts"], second]}
-
 
 
 def _one(dsn, query, args=()):

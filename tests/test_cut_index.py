@@ -13,8 +13,9 @@ import subprocess
 from types import SimpleNamespace
 
 import pytest
+from conftest import seed_two  # noqa: E402
 
-from src import accounts, db, preprod, render_assets
+from src import db, preprod, render_assets
 from src.cut import index, moments
 
 HAS_FFMPEG = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
@@ -176,7 +177,7 @@ def banked(pg, clips, monkeypatch):
     moments.init(pg)
     from src.cut import store
     store.init(pg)
-    accounts.seed("mike@example.com", dsn=pg)
+    seed_two("mike@example.com", dsn=pg)
     with db.connect(pg) as conn:
         a = conn.execute("SELECT id FROM accounts WHERE slug='zeropage'").fetchone()["id"]
         b = conn.execute("SELECT id FROM accounts WHERE slug='antihero'").fetchone()["id"]

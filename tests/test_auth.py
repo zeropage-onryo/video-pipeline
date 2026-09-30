@@ -13,24 +13,12 @@ import time
 
 import jwt
 import pytest
+from conftest import seed_two as _seed_two  # noqa: E402
 from fastapi.testclient import TestClient
 
 from app import auth as auth_mod
 from app.main import app
 from src import accounts, db
-
-
-def _seed_two(email, dsn):
-    """accounts.seed makes ONE account since the 2026-09-28 fold; these
-    tests are about a person who belongs to two, so the second is made
-    here explicitly rather than by the setup command."""
-    from src import accounts as _accounts
-
-    seeded = _accounts.seed(email, dsn=dsn)
-    second = _accounts.upsert_account("antihero", "ANTIHERO", "#d64550", dsn=dsn)
-    _accounts.add_member(second, seeded["user_id"], dsn=dsn)
-    return {**seeded, "accounts": [*seeded["accounts"], second]}
-
 
 client = TestClient(app)
 

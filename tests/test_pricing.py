@@ -6,8 +6,9 @@ names the line.
 """
 
 import pytest
+from conftest import seed_two  # noqa: E402
 
-from src import accounts, db, fal, ledger, pricing, providers, timeline
+from src import db, fal, ledger, pricing, providers, timeline
 
 RENDER_KEYS = ("FAL_KEY", "FAL_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY")
 
@@ -262,7 +263,7 @@ def test_editing_the_prompt_changes_the_hash_before_any_replan():
 @pytest.fixture
 def two_accounts(pg, monkeypatch, fal_keyed):
     monkeypatch.setenv("DATABASE_URL", pg)
-    accounts.seed("mike@example.com", dsn=pg)
+    seed_two("mike@example.com", dsn=pg)
     with db.connect(pg) as conn:
         ids = [r["id"] for r in conn.execute("SELECT id FROM accounts ORDER BY id").fetchall()]
     assert len(ids) >= 2

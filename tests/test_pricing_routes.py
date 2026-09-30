@@ -8,11 +8,12 @@ import pathlib
 import time
 
 import pytest
+from conftest import seed_two  # noqa: E402
 from fastapi.testclient import TestClient
 
 from app import auth
 from app.main import app
-from src import accounts, db, fal, preprod, pricing, timeline
+from src import db, fal, preprod, pricing, timeline
 
 client = TestClient(app)
 
@@ -128,7 +129,7 @@ def test_a_pick_the_model_cannot_render_is_refused_with_the_reason(tmp_db):
 # conftest's None override this is green whatever the route does, so it
 # seeds two real accounts and sets its own.
 def test_another_accounts_concept_has_no_price(tmp_db):
-    accounts.seed("mike@example.com", dsn=tmp_db)
+    seed_two("mike@example.com", dsn=tmp_db)
     with db.connect(tmp_db) as conn:
         ids = [r["id"] for r in conn.execute("SELECT id FROM accounts ORDER BY id").fetchall()]
     owner, stranger = ids[0], ids[1]
