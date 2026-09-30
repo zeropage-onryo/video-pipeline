@@ -139,6 +139,31 @@ def ensure_webhook(env: dict[str, str], rotate: bool) -> dict[str, str]:
     return {"STRIPE_WEBHOOK_SECRET": ep.secret, ENDPOINT_ENV: ep.id}
 
 
+def ensure_portal(updates: dict[str, str]) -> None:
+    """Plan switching on the default Customer Portal configuration, with
+    proration OFF. src/billing.py grants a whole plan per paid invoice and
+    reads the plan off the invoice's first line, so a proration invoice
+    would grant a second allowance mid-cycle, and a renewal carrying an
+    "unused time on <old plan>" line first would record the old plan.
+    With proration off the new price starts at the next invoice, which
+    grants the new plan cleanly. The portal itself is created by the
+    dashboard's Save, once per mode; until then this only says so."""
+    default = [c for c in stripe.billing_portal.Configuration.list(limit=100).data
+               if c.is_default]
+    if not default:
+        print("  ! no Customer Portal yet -- Save it in the dashboard, then rerun")
+        return
+    products = []
+    for plan in pricing.PLANS.values():
+        month = stripe.Price.retrieve(updates[plan.price_env])
+        products.append({"product": month.product,
+                         "prices": [month.id, updates[plan.price_env_yearly]]})
+    stripe.billing_portal.Configuration.modify(default[0].id, features={"subscription_update": {
+        "enabled": True, "default_allowed_updates": ["price"],
+        "proration_behavior": "none", "products": products}})
+    print(f"  = portal {default[0].id}: plan switching on, {len(products)} plans, no proration")
+
+
 def push_to_fly(values: dict[str, str]) -> None:
     body = "".join(f"{k}={v}\n" for k, v in values.items())
     try:
@@ -183,6 +208,9 @@ def main(argv: list[str] | None = None) -> None:
     updates.update(ensure_webhook(env, a.rotate))
     updates["BILLING_RETURN_URL"] = RETURN_URL
 
+    print("Customer portal:")
+    ensure_portal(updates)
+
     backup = write_env(updates)
     print(f".env: {len(updates)} values written (backup: {backup.name})")
 
@@ -193,8 +221,8 @@ def main(argv: list[str] | None = None) -> None:
             fly_values["STRIPE_WEBHOOK_SECRET"] = env["STRIPE_WEBHOOK_SECRET"]
         push_to_fly(fly_values)
 
-    print("\nLeft for you, once per mode, in the dashboard:")
-    print("  Settings -> Billing -> Customer portal -> Save (turns on 'Manage plan').")
+    print("\nOnce per mode, in the dashboard: Settings -> Billing -> Customer portal ->")
+    print("Save (turns on 'Manage plan'); rerun after, and plan switching is set here.")
 
 
 if __name__ == "__main__":

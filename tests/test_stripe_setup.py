@@ -90,6 +90,19 @@ class FakeStripe:
                 fake.hooks[:] = [h for h in fake.hooks if h.id != hid]
                 fake.deleted_hooks.append(hid)
 
+        self.portals = []
+
+        class Configuration:
+            @staticmethod
+            def list(limit=100):
+                return SimpleNamespace(data=list(fake.portals))
+
+            @staticmethod
+            def modify(cid, features):
+                next(c for c in fake.portals if c.id == cid).features = features
+
+        self.billing_portal = SimpleNamespace(Configuration=Configuration)
+        Price.retrieve = staticmethod(lambda pid: next(p for p in fake.prices if p.id == pid))
         self.Product, self.Price, self.WebhookEndpoint = Product, Price, WebhookEndpoint
         self.api_key = None
 
@@ -198,3 +211,19 @@ def test_fly_push_goes_through_stdin(env, monkeypatch):
     assert pushed["STRIPE_WEBHOOK_SECRET"].startswith("whsec_")
     assert setup.ENDPOINT_ENV not in pushed
     assert pricing.TOPUP.price_env in pushed
+
+
+def test_portal_plan_switching_without_proration(env):
+    env.fake.portals.append(SimpleNamespace(id="bpc_1", is_default=True, features=None))
+    setup.main([])
+    v = values(env.path)
+    update = env.fake.portals[0].features["subscription_update"]
+    assert update["enabled"] and update["proration_behavior"] == "none"
+    assert len(update["products"]) == len(pricing.PLANS)
+    for plan, entry in zip(pricing.PLANS.values(), update["products"]):
+        assert entry["prices"] == [v[plan.price_env], v[plan.price_env_yearly]]
+
+
+def test_no_portal_yet_is_a_note_not_a_failure(env, capsys):
+    setup.main([])
+    assert "no Customer Portal yet" in capsys.readouterr().out
