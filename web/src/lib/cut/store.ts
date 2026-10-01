@@ -45,7 +45,7 @@ import { describeOp, endOf, type Doc } from "@/lib/cut/timeline";
 export type Tool = "select" | "blade";
 export type Selection = { ids: string[]; kind: "clip" | "cue" | null };
 export type TrackMix = { mute?: boolean; solo?: boolean };
-export type LeftTab = "agent" | "media" | "text" | "audio" | "transitions" | "search";
+export type LeftTab = "agent" | "media" | "text" | "audio" | "transitions" | "index" | "search";
 /* Resolve's pages (2026-10-01): one editor, three layouts over the same
    doc -- Edit, Audio (the mixer over the sound tracks) and Color (basic
    correction per picture clip). Switching is a view, never an edit. */

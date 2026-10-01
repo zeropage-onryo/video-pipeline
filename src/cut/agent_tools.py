@@ -77,6 +77,8 @@ OP_NOTES = {
     "delete_cue": "remove one cue from a caption track",
     "set_caption_style": "caption look: preset:bold_center | preset:lower_third | preset:minimal_top",
     "add_marker": "a labelled marker at a frame",
+    "set_marker": "rename the marker at a frame (label) and/or move it (to)",
+    "delete_marker": "remove the marker at a frame",
     "add_transition": "turn the hard cut INTO a clip into a transition of N frames; style is the look: fade "
                       "(default) | dissolve | fadeblack | fadewhite | wipeleft/right/up/down | slideleft/right/"
                       "up/down | circleopen | circleclose | zoomin | pixelize | hblur | ... (ffmpeg xfade names)",
