@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Authorize access · Zero Page</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* Deliberately self-contained, the way signin.html is: this page is the
+   only one a stranger's OAuth client sends a person to, and it must not
+   change shape when the studio's skin does. */
+:root{
+  --bg:#0b0b0c; --card:#161618; --line:rgb(255 255 255 / .09);
+  --text:#f4f3f2; --dim:#9a9894; --accent:#E4002B; --r:14px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font:14px/1.5 Inter,-apple-system,sans-serif;
+     min-height:100vh;display:grid;place-items:center;padding:24px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);
+      padding:28px;max-width:420px;width:100%}
+h1{font-size:19px;font-weight:600;margin-bottom:6px}
+p{color:var(--dim);margin-bottom:18px}
+.scope{border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:18px}
+.scope b{display:block;font-weight:500;color:var(--text);margin-bottom:4px}
+.row{display:flex;gap:10px}
+button{flex:1;padding:11px 14px;border-radius:10px;border:1px solid var(--line);
+       background:transparent;color:var(--text);font:inherit;font-weight:500;cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button[disabled]{opacity:.5;cursor:default}
+.note{color:var(--dim);font-size:13px;margin-top:16px}
+.err{color:var(--accent)}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1 id="title">Checking your sign-in…</h1>
+  <p id="lede">One moment.</p>
+  <div id="detail" hidden>
+    <div class="scope"><b id="client">An application</b><span id="scopes"></span></div>
+    <div class="row">
+      <button id="deny">Deny</button>
+      <button id="approve" class="primary">Allow access</button>
+    </div>
+  </div>
+  <p class="note" id="note"></p>
+</div>
+
+<script type="module">
+// WHY THE APPROVAL HAPPENS IN THE BROWSER (2026-10-01, the A/B decision).
+// Approving is ACTING AS THE USER against Supabase, and this app
+// deliberately keeps no Supabase token after sign-in -- app/auth.py's rule
+// is that the zp_session cookie carries the user id and nothing else.
+// Storing a token server-side to approve here would break that rule for one
+// screen. So the consent call is made by the person's own browser session
+// with supabase-js, and the server stays out of it: this route renders a
+// page and never touches the authorization.
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+const params = new URLSearchParams(location.search);
+const authorizationId = params.get("authorization_id");
+const supabase = createClient({{ supabase_url | tojson }}, {{ anon_key | tojson }});
+
+const el = (id) => document.getElementById(id);
+const fail = (message) => {
+  el("title").textContent = "Something went wrong";
+  el("lede").innerHTML = '<span class="err"></span>';
+  el("lede").firstChild.textContent = message;
+  el("detail").hidden = true;
+};
+
+if (!authorizationId) {
+  fail("This link is missing its authorization id. Start the connection again from the app you were connecting.");
+} else {
+  try {
+    // An unauthenticated visitor signs in FIRST, carrying the
+    // authorization_id through so the flow resumes where it left off.
+    const { data: claims } = await supabase.auth.getClaims();
+    if (!claims) {
+      const back = encodeURIComponent(location.pathname + location.search);
+      location.href = `/signin?next=${back}`;
+    } else {
+      const { data, error } = await supabase.auth.oauth.getAuthorizationDetails(authorizationId);
+      if (error) throw error;
+      // Already consented once: Supabase hands back the redirect directly.
+      if (data?.redirect_url) {
+        location.href = data.redirect_url;
+      } else {
+        el("title").textContent = "Authorize access";
+        el("lede").textContent = "This application is asking to use your Zero Page account.";
+        el("client").textContent = data?.client?.name || "An application";
+        el("scopes").textContent = data?.scope
+          ? `Requested: ${data.scope}`
+          : "It will act as you on your own board.";
+        el("note").textContent = data?.redirect_uri ? `Returns you to ${data.redirect_uri}` : "";
+        el("detail").hidden = false;
+
+        const decide = async (fn) => {
+          el("approve").disabled = el("deny").disabled = true;
+          const { data: result, error: decisionError } = await fn(authorizationId);
+          if (decisionError || !result?.redirect_url) {
+            fail(decisionError?.message || "Supabase did not return a redirect.");
+            el("approve").disabled = el("deny").disabled = false;
+            return;
+          }
+          location.href = result.redirect_url;
+        };
+        el("approve").onclick = () => decide(supabase.auth.oauth.approveAuthorization.bind(supabase.auth.oauth));
+        el("deny").onclick = () => decide(supabase.auth.oauth.denyAuthorization.bind(supabase.auth.oauth));
+      }
+    }
+  } catch (problem) {
+    fail(problem?.message || String(problem));
+  }
+}
+</script>
+</body>
+</html>

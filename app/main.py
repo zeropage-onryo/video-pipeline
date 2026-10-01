@@ -383,6 +383,38 @@ def _site_origin(url: Optional[str]) -> Optional[str]:
     return f"{parts.scheme}://{parts.netloc}" if parts.scheme and parts.netloc else None
 
 
+@app.get("/oauth/consent", response_class=HTMLResponse)
+def oauth_consent(request: Request):
+    """The consent screen Supabase's OAuth 2.1 server sends people to.
+
+    Supabase does NOT render its own approval screen: it validates the
+    client, then redirects here with `?authorization_id=`, and the
+    application is expected to show who is asking and call approve/deny.
+    Without this route the whole connector flow dies on a 404 that says
+    nothing about why (found 2026-09-28, driving the Claude connector
+    through its first real handshake).
+
+    **The decision this route encodes (2026-10-01).** Approving is acting
+    as the user against Supabase, and `auth.py`'s rule is that this app
+    never does: sign-in exchanges the code server-side and keeps only the
+    user id in `zp_session`, no Supabase token. Rather than break that
+    for one screen, the approval is made by the person's own browser with
+    supabase-js. So this handler renders a page and nothing else -- it
+    reads no authorization, holds no token, and makes no call to
+    Supabase. The anon key it passes to the template is the public one
+    the sign-in page already ships.
+
+    Unconditional, like /signin: a connector reaches it before the person
+    has any session here, and a deployment with DEV_TOOLS off still needs
+    it.
+    """
+    return templates.TemplateResponse(
+        request, "oauth_consent.html",
+        {"supabase_url": auth.supabase_url(),
+         "anon_key": os.environ.get("SUPABASE_ANON_KEY", "")},
+    )
+
+
 @app.get("/signin")
 def signin(request: Request, error: Optional[str] = None,
            mode: Optional[str] = None, email: Optional[str] = None,
