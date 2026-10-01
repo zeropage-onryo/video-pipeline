@@ -33,7 +33,10 @@ cannot drift apart.
 
 `transition_in` is how a crossfade is spelled: the incoming clip starts
 `frames` early, overlapping the tail of the clip before it by exactly that
-much. That is the ONE overlap the validator allows on a track.
+much. That is the ONE overlap the validator allows on a track. Its
+`style` (TRANSITION_STYLES, default "fade") is how the PICTURE blends
+over that overlap -- a wipe, a slide, an iris; the sound always
+crossfades.
 
 Pure module: no I/O, no database. What a handle points at is sources.py's
 business.
@@ -52,6 +55,45 @@ TRACK_KINDS = ("video", "audio", "caption")
 # generated clip's own diegetic sound lands.
 AUDIO_ROLES = ("voice", "music", "sfx")
 TRANSITION_KINDS = ("xfade",)
+# What an xfade LOOKS like (2026-10-01): ffmpeg's own xfade transitions,
+# every one present in Fly's ffmpeg 7.1 (checked that day), grouped the way
+# the bin's Transitions tab shows them. style -> (group, label). The
+# overlap mechanics are the same for all of them; only the picture's
+# blend differs, and the sound always crossfades.
+TRANSITION_GROUPS = ("Fades", "Wipes", "Slides", "Shapes", "Slices")
+TRANSITION_STYLES: dict[str, tuple[str, str]] = {
+    "fade": ("Fades", "Crossfade"), "dissolve": ("Fades", "Dissolve"),
+    "fadeblack": ("Fades", "Dip to black"), "fadewhite": ("Fades", "Dip to white"),
+    "fadegrays": ("Fades", "Fade through grey"), "fadefast": ("Fades", "Fast fade"),
+    "fadeslow": ("Fades", "Slow fade"), "hblur": ("Fades", "Blur"),
+    "pixelize": ("Fades", "Pixelate"), "distance": ("Fades", "Distance"),
+    "wipeleft": ("Wipes", "Wipe left"), "wiperight": ("Wipes", "Wipe right"),
+    "wipeup": ("Wipes", "Wipe up"), "wipedown": ("Wipes", "Wipe down"),
+    "wipetl": ("Wipes", "Wipe top-left"), "wipetr": ("Wipes", "Wipe top-right"),
+    "wipebl": ("Wipes", "Wipe bottom-left"), "wipebr": ("Wipes", "Wipe bottom-right"),
+    "smoothleft": ("Wipes", "Smooth left"), "smoothright": ("Wipes", "Smooth right"),
+    "smoothup": ("Wipes", "Smooth up"), "smoothdown": ("Wipes", "Smooth down"),
+    "diagtl": ("Wipes", "Diagonal top-left"), "diagtr": ("Wipes", "Diagonal top-right"),
+    "diagbl": ("Wipes", "Diagonal bottom-left"), "diagbr": ("Wipes", "Diagonal bottom-right"),
+    "radial": ("Wipes", "Clock wipe"),
+    "slideleft": ("Slides", "Slide left"), "slideright": ("Slides", "Slide right"),
+    "slideup": ("Slides", "Slide up"), "slidedown": ("Slides", "Slide down"),
+    "coverleft": ("Slides", "Cover left"), "coverright": ("Slides", "Cover right"),
+    "coverup": ("Slides", "Cover up"), "coverdown": ("Slides", "Cover down"),
+    "revealleft": ("Slides", "Reveal left"), "revealright": ("Slides", "Reveal right"),
+    "revealup": ("Slides", "Reveal up"), "revealdown": ("Slides", "Reveal down"),
+    "circleopen": ("Shapes", "Iris open"), "circleclose": ("Shapes", "Iris close"),
+    "circlecrop": ("Shapes", "Circle crop"), "rectcrop": ("Shapes", "Box crop"),
+    "vertopen": ("Shapes", "Barn door open"), "vertclose": ("Shapes", "Barn door close"),
+    "horzopen": ("Shapes", "Split open"), "horzclose": ("Shapes", "Split close"),
+    "squeezeh": ("Shapes", "Squeeze across"), "squeezev": ("Shapes", "Squeeze down"),
+    "zoomin": ("Shapes", "Zoom in"),
+    "hlslice": ("Slices", "Slices left"), "hrslice": ("Slices", "Slices right"),
+    "vuslice": ("Slices", "Slices up"), "vdslice": ("Slices", "Slices down"),
+    "hlwind": ("Slices", "Wind left"), "hrwind": ("Slices", "Wind right"),
+    "vuwind": ("Slices", "Wind up"), "vdwind": ("Slices", "Wind down"),
+}
+DEFAULT_TRANSITION_STYLE = "fade"
 
 # `gen:` is a generated_assets row (a render this pipeline paid for);
 # `asset:` is a cut_media row (an uploaded music bed or voiceover).

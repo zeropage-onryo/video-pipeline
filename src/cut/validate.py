@@ -97,11 +97,20 @@ def _check_clip(t: dict, c: dict, media: Optional[dict], out: list[str]) -> bool
                 out.append(f"{where}: speed {sp:.2f}x is outside {d.MIN_SPEED:g}x-{d.MAX_SPEED:g}x")
     if c.get("reverse") is not None and not isinstance(c["reverse"], bool):
         out.append(f"{where}: reverse must be true or false, got {c['reverse']!r}")
-    if c.get("lanes") is not None or c.get("crop") is not None or c.get("opacity") is not None:
+    if c.get("crop") is not None or c.get("opacity") is not None:
         if t.get("kind") != "video":
-            out.append(f"{where}: keyframes, crop and opacity belong to picture clips")
-        else:
-            out.extend(lanes.check(c, d.clip_length(c) if ok else 0, where))
+            out.append(f"{where}: crop and opacity belong to picture clips")
+    if c.get("lanes") is not None or c.get("crop") is not None or c.get("opacity") is not None:
+        paths = lanes.PATHS if t.get("kind") == "video" else lanes.AUDIO_PATHS
+        out.extend(lanes.check(c, d.clip_length(c) if ok else 0, where, paths))
+    for key in ("fade_in", "fade_out"):
+        f = c.get(key)
+        if f is None:
+            continue
+        if t.get("kind") != "audio":
+            out.append(f"{where}: {key} belongs to sound clips")
+        elif not _is_int(f) or f < 0 or (ok and f > d.clip_length(c)):
+            out.append(f"{where}: {key} must be 0 to the clip's length in frames, got {f!r}")
     gain = c.get("gain_db", 0)
     if not isinstance(gain, (int, float)) or isinstance(gain, bool) \
             or not MIN_GAIN_DB <= gain <= MAX_GAIN_DB:
@@ -110,6 +119,8 @@ def _check_clip(t: dict, c: dict, media: Optional[dict], out: list[str]) -> bool
     if tr is not None:
         if not isinstance(tr, dict) or tr.get("kind") not in d.TRANSITION_KINDS:
             out.append(f"{where}: transition_in kind must be one of {list(d.TRANSITION_KINDS)}")
+        elif tr.get("style", d.DEFAULT_TRANSITION_STYLE) not in d.TRANSITION_STYLES:
+            out.append(f"{where}: transition style {tr.get('style')!r} is not one this editor renders")
         elif not _is_int(tr.get("frames")) or tr["frames"] < 1:
             out.append(f"{where}: transition_in frames must be a whole number >= 1")
         elif ok and tr["frames"] >= d.clip_length(c):
@@ -222,6 +233,14 @@ def problems(doc: dict, media: Optional[dict] = None) -> list[str]:
         if kind == "audio":
             if t.get("role") not in d.AUDIO_ROLES:
                 out.append(f"audio track {tid}: role must be one of {list(d.AUDIO_ROLES)}")
+            g = t.get("gain_db", 0)
+            if not isinstance(g, (int, float)) or isinstance(g, bool) or not MIN_GAIN_DB <= g <= MAX_GAIN_DB:
+                out.append(f"audio track {tid}: gain_db must be {MIN_GAIN_DB:g} to {MAX_GAIN_DB:g} dB, got {g!r}")
+            pan = t.get("pan", 0)
+            if not isinstance(pan, (int, float)) or isinstance(pan, bool) or not -1 <= pan <= 1:
+                out.append(f"audio track {tid}: pan must be -1 (left) to 1 (right), got {pan!r}")
+        elif t.get("gain_db") is not None or t.get("pan") is not None:
+            out.append(f"track {tid}: only an audio track has a fader and pan")
         clips = t.get("clips")
         if not isinstance(clips, list):
             out.append(f"track {tid}: clips must be a list")

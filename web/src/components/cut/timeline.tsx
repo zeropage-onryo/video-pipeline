@@ -29,7 +29,8 @@ import {
 } from "react";
 import { Eye, Lock, Type, Volume2 } from "lucide-react";
 import { useCut, useDrawnDoc } from "@/lib/cut/store";
-import { placeMedia, splitClip } from "@/lib/cut/actions";
+import { applyTransition, placeMedia, splitClip } from "@/lib/cut/actions";
+import { TRANSITION_MIME } from "@/components/cut/transitions-tab";
 import type { BinItem, Preview } from "@/lib/cut/api";
 import { keyFrames } from "@/lib/cut/lanes";
 import {
@@ -419,6 +420,16 @@ export function Timeline() {
     }
   };
   const onLaneDragOver = (e: React.DragEvent, track: Track) => {
+    if (track.kind === "video" && e.dataTransfer.types.includes(TRANSITION_MIME)) {
+      // a transition lands on a CUT: show the nearest one on this track
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+      const frame = frameAtClientX(e.clientX);
+      const cuts = (track.clips ?? []).filter((c) => c.at > 0).map((c) => c.at);
+      const at = cuts.length ? cuts.reduce((a, b) => (Math.abs(b - frame) < Math.abs(a - frame) ? b : a)) : frame;
+      setDrop((cur) => (cur && cur.trackId === track.id && cur.frame === at ? cur : { trackId: track.id, frame: at }));
+      return;
+    }
     if (!e.dataTransfer.types.includes(MEDIA_MIME)) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "copy";
@@ -428,6 +439,15 @@ export function Timeline() {
     setDrop((cur) => (cur && cur.trackId === track.id && cur.frame === frame ? cur : { trackId: track.id, frame }));
   };
   const onLaneDrop = (e: React.DragEvent, track: Track) => {
+    const style = e.dataTransfer.getData(TRANSITION_MIME);
+    if (style) {
+      const at = drop?.frame ?? frameAtClientX(e.clientX);
+      setDrop(null);
+      e.preventDefault();
+      const into = (track.clips ?? []).find((c) => c.at === at);
+      applyTransition(style, into?.id, at);
+      return;
+    }
     const item = readDrop(e);
     const at = drop?.frame ?? frameAtClientX(e.clientX);
     setDrop(null);
@@ -666,6 +686,12 @@ const ClipView = memo(function ClipView({
         </span>
       ) : null}
       {xf ? <i className="cx-xfade" style={{ width: framesToPx(xf, fps, pps) }} /> : null}
+      {track.kind === "audio" && clip.fade_in ? (
+        <i className="cx-fade" data-side="in" style={{ width: framesToPx(clip.fade_in, fps, pps) }} />
+      ) : null}
+      {track.kind === "audio" && clip.fade_out ? (
+        <i className="cx-fade" data-side="out" style={{ width: framesToPx(clip.fade_out, fps, pps) }} />
+      ) : null}
       {track.kind === "video" && clip.lanes ? (
         <span className="cx-clip-keys">
           {keyFrames(clip).map((f) => (

@@ -51,7 +51,8 @@ import {
   type Doc,
   type Track,
 } from "@/lib/cut/timeline";
-import { fitBoxes, lookAt } from "@/lib/cut/lanes";
+import { fitBoxes, lookAt, valueOf } from "@/lib/cut/lanes";
+import { lookAt as transitionLook } from "@/lib/cut/transitions";
 
 const DUCK = 0.32; // ~ -10 dB
 const WINDOW_BEFORE_S = 0.5;
@@ -184,7 +185,7 @@ export function Viewer() {
             const m = mix[track.id];
             const silent = !!m?.mute || (anySolo && !m?.solo);
             const ducked = !!track.duck_under && sounding.has(track.duck_under);
-            const gain = Math.min(1, Math.pow(10, (clip.gain_db ?? 0) / 20)) * (ducked ? DUCK : 1);
+            const gain = Math.min(1, soundLevel(clip, track, playhead)) * (ducked ? DUCK : 1);
             return (
               <SoundEl
                 key={clip.id}
@@ -254,6 +255,19 @@ function topClipAt(doc: Doc, frame: number): Clip | null {
     if (c) return c;
   }
   return null;
+}
+
+/* a sound clip's level at the playhead, linear: its own gain, its track's
+   fader, its volume keys and its fades -- what render.py multiplies. Pan
+   cannot be heard here (an <audio> element has no balance). */
+function soundLevel(clip: Clip, track: Track, playhead: number): number {
+  const rel = Math.max(0, Math.min(playhead - clip.at, clipLength(clip)));
+  const db = (clip.gain_db ?? 0) + (track.gain_db ?? 0) + valueOf(clip, "volume", rel);
+  let level = Math.pow(10, db / 20);
+  const len = clipLength(clip);
+  if (clip.fade_in && rel < clip.fade_in) level *= rel / clip.fade_in;
+  if (clip.fade_out && rel > len - clip.fade_out) level *= Math.max(0, (len - rel) / clip.fade_out);
+  return level;
 }
 
 /* where in its media a clip is at the playhead, in seconds -- through
@@ -331,7 +345,16 @@ function PictureEl({
   const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
   let fade = active ? 1 : 0;
   const xf = clip.transition_in?.frames ?? 0;
-  if (active && xf && playhead < clip.at + xf) fade = (playhead - clip.at + 1) / (xf + 1);
+  // inside its transition: the style's look (transitions.ts), an
+  // approximation of ffmpeg's xfade -- wipes and irises clip, slides move,
+  // the rest fade
+  let blend: React.CSSProperties = {};
+  if (active && xf && playhead < clip.at + xf) {
+    const p = (playhead - clip.at + 1) / (xf + 1);
+    const t = transitionLook(clip.transition_in?.style, p);
+    blend = t.css as React.CSSProperties;
+    fade = t.fade ? p : 1;
+  }
 
   /* The picture as render.py draws it: the CROPPED source fitted inside
      the frame (letterboxed, never cut off), then zoomed and rotated about
@@ -353,6 +376,7 @@ function PictureEl({
     transform: `translate(${look.x * frameW}px, ${look.y * frameH}px) rotate(${look.rotation}deg) scale(${look.zoom})`,
     transformOrigin: "50% 50%",
     opacity: fade * look.opacity,
+    ...blend,
     zIndex: z,
     pointerEvents: "none",
   };

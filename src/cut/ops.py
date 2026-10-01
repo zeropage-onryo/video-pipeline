@@ -365,7 +365,14 @@ def add_marker(doc: dict, frame: int, label: str) -> dict:
     return _finish(doc)
 
 
-def add_transition(doc: dict, clip_id: str, frames: int, kind: str = "xfade") -> dict:
+def _need_style(style) -> None:
+    if style not in d.TRANSITION_STYLES:
+        raise OpError(f"transition style {style!r} is not one of the editor's "
+                      f"({len(d.TRANSITION_STYLES)} styles, e.g. fade, wipeleft, slideup, circleopen)")
+
+
+def add_transition(doc: dict, clip_id: str, frames: int, kind: str = "xfade",
+                   style: str = d.DEFAULT_TRANSITION_STYLE) -> dict:
     """Turn the hard cut INTO `clip_id` into a crossfade of `frames`. The
     clip (and everything after it) slides left by `frames` so it overlaps
     the clip before by exactly that much -- the one overlap the validator
@@ -377,6 +384,7 @@ def add_transition(doc: dict, clip_id: str, frames: int, kind: str = "xfade") ->
         raise OpError("a transition is at least one frame")
     if kind not in d.TRANSITION_KINDS:
         raise OpError(f"transition kind must be one of {list(d.TRANSITION_KINDS)}")
+    _need_style(style)
     t, root = _need_clip(doc, clip_id)
     prev = _before(t, root)
     if prev is None or d.clip_end(prev) != root["at"] or root.get("transition_in"):
@@ -386,9 +394,47 @@ def add_transition(doc: dict, clip_id: str, frames: int, kind: str = "xfade") ->
         followers = _after(tr, c)
         if p is not None and d.clip_end(p) == c["at"]:
             c["transition_in"] = {"kind": kind, "frames": frames}
+            if style != d.DEFAULT_TRANSITION_STYLE:
+                c["transition_in"]["style"] = style
         c["at"] -= frames
         _shift(followers, -frames)
     return _finish(doc)
+
+
+def remove_transition(doc: dict, clip_id: str) -> dict:
+    """Back to a hard cut: the exact inverse of add_transition. The clip
+    (and everything after it, with its partners) slides right by the
+    transition's frames, so nothing that was visible is lost."""
+    doc = _copy(doc)
+    _, root = _need_clip(doc, clip_id)
+    tr = root.get("transition_in")
+    if not tr:
+        raise OpError(f"clip {clip_id} has no transition in")
+    frames = int(tr["frames"])
+    for t, c in d.partners(doc, clip_id):
+        followers = _after(t, c)
+        c.pop("transition_in", None)
+        c["at"] += frames
+        _shift(followers, frames)
+    return _finish(doc)
+
+
+def set_transition(doc: dict, clip_id: str, style: Optional[str] = None,
+                   frames: Optional[int] = None) -> dict:
+    """Change a transition already on a clip: its look (`style`), its
+    length (`frames`), or both. A length change is remove-then-add, so the
+    timeline moves exactly as those two would move it."""
+    _, root = _need_clip(doc, clip_id)
+    tr = root.get("transition_in")
+    if not tr:
+        raise OpError(f"clip {clip_id} has no transition in -- add one first")
+    style = style if style is not None else tr.get("style", d.DEFAULT_TRANSITION_STYLE)
+    _need_style(style)
+    if frames is None:
+        frames = int(tr["frames"])
+    _need_int("frames", frames)
+    out = remove_transition(doc, clip_id)
+    return add_transition(out, clip_id, frames, tr.get("kind", "xfade"), style)
 
 
 def lift(doc: dict, clip_id: str) -> dict:
@@ -500,6 +546,49 @@ def set_reverse(doc: dict, clip_id: str, on: bool = True) -> dict:
     return _finish(doc)
 
 
+def set_track_mix(doc: dict, track_id: str, gain_db: Optional[float] = None,
+                  pan: Optional[float] = None) -> dict:
+    """An audio track's mixer strip: its fader (`gain_db`, -60 to +12, on
+    top of every clip's own gain) and its `pan` (-1 left, 0 centre, 1
+    right). Either may be given alone; 0 removes the field."""
+    doc = _copy(doc)
+    t = _need_track(doc, track_id, "audio")
+    for key, val, lo, hi in (("gain_db", gain_db, v.MIN_GAIN_DB, v.MAX_GAIN_DB), ("pan", pan, -1, 1)):
+        if val is None:
+            continue
+        if not isinstance(val, (int, float)) or isinstance(val, bool) or not lo <= val <= hi:
+            raise OpError(f"{key} must be {lo:g} to {hi:g}, got {val!r}")
+        if abs(val) < 1e-9:
+            t.pop(key, None)
+        else:
+            t[key] = round(float(val), 3)
+    return _finish(doc)
+
+
+def set_fade(doc: dict, clip_id: str, fade_in: Optional[int] = None,
+             fade_out: Optional[int] = None) -> dict:
+    """A sound clip's fade in and fade out, in frames (0 removes one). On a
+    picture clip it goes to the clip's own sound -- the linked partner
+    on an audio track -- since a picture has nothing to fade."""
+    doc = _copy(doc)
+    t, c = _need_clip(doc, clip_id)
+    targets = [x for tr, x in d.partners(doc, clip_id) if tr.get("kind") == "audio"]
+    if not targets:
+        raise OpError(f"clip {clip_id} has no sound on the timeline to fade")
+    for key, val in (("fade_in", fade_in), ("fade_out", fade_out)):
+        if val is None:
+            continue
+        _need_int(key, val)
+        for x in targets:
+            if not 0 <= val <= d.clip_length(x):
+                raise OpError(f"{key} {val} is longer than {x['id']} ({d.clip_length(x)} frames)")
+            if val:
+                x[key] = val
+            else:
+                x.pop(key, None)
+    return _finish(doc)
+
+
 def _need_picture(doc: dict, clip_id: str) -> dict:
     t, c = _need_clip(doc, clip_id)
     if t.get("kind") != "video":
@@ -509,19 +598,33 @@ def _need_picture(doc: dict, clip_id: str) -> dict:
 
 
 def _need_path(path: str) -> None:
-    if path not in ln.PATHS:
-        raise OpError(f"path must be one of {list(ln.PATHS)}, got {path!r}")
+    if path not in ln.ALL_PATHS:
+        raise OpError(f"path must be one of {list(ln.ALL_PATHS)}, got {path!r}")
+
+
+def _need_keyable(doc: dict, clip_id: str, path: str) -> dict:
+    """The clip a key on `path` goes on: a picture clip for zoom / x / y /
+    rotation, a SOUND clip for volume."""
+    _need_path(path)
+    t, c = _need_clip(doc, clip_id)
+    if path in ln.AUDIO_PATHS:
+        if t.get("kind") != "audio":
+            raise OpError(f"clip {clip_id} is on {t['id']}: volume is keyed on its sound")
+        return c
+    if t.get("kind") != "video":
+        raise OpError(f"clip {clip_id} is on {t['id']}: {path} belongs to picture clips")
+    return c
 
 
 def set_key(doc: dict, clip_id: str, path: str, frame: int, value: float,
             ease: str = "linear") -> dict:
-    """Put a key on one of a picture clip's lanes at a CLIP-RELATIVE frame
+    """Put a key on one of a clip's lanes (picture: zoom / x / y / rotation;
+    sound: volume in dB) at a CLIP-RELATIVE frame
     (0 is its first frame on the timeline), replacing a key already there.
     A lane with one key is a constant -- setting a property while it is not
     animated is a key at frame 0."""
     doc = _copy(doc)
-    c = _need_picture(doc, clip_id)
-    _need_path(path)
+    c = _need_keyable(doc, clip_id, path)
     _need_int("frame", frame)
     if not 0 <= frame <= d.clip_length(c):
         raise OpError(f"frame {frame} is outside clip {clip_id} (0-{d.clip_length(c)})")
@@ -544,8 +647,7 @@ def delete_key(doc: dict, clip_id: str, path: str, frame: int) -> dict:
     """Remove one key. The last key going takes the lane with it (the
     property returns to its default)."""
     doc = _copy(doc)
-    c = _need_picture(doc, clip_id)
-    _need_path(path)
+    c = _need_keyable(doc, clip_id, path)
     lane = ln.lane(c, path)
     if not lane or not any(k["frame"] == frame for k in lane["keys"]):
         raise OpError(f"no {path} key at frame {frame} on {clip_id}")
@@ -560,8 +662,7 @@ def delete_key(doc: dict, clip_id: str, path: str, frame: int) -> dict:
 def clear_lane(doc: dict, clip_id: str, path: str) -> dict:
     """Reset one property: its lane goes, it is back at its default."""
     doc = _copy(doc)
-    c = _need_picture(doc, clip_id)
-    _need_path(path)
+    c = _need_keyable(doc, clip_id, path)
     if ln.lane(c, path) is None:
         raise OpError(f"{clip_id} has no {path} to reset")
     c["lanes"] = [x for x in c["lanes"] if x.get("path") != path]
@@ -708,6 +809,8 @@ OPS: dict[str, Callable[..., dict]] = {
     "add_caption_track": add_caption_track,
     "add_marker": add_marker,
     "add_transition": add_transition,
+    "remove_transition": remove_transition,
+    "set_transition": set_transition,
     "add_track": add_track,
     "overwrite": overwrite,
     "set_key": set_key,
@@ -716,6 +819,8 @@ OPS: dict[str, Callable[..., dict]] = {
     "set_crop": set_crop,
     "set_opacity": set_opacity,
     "set_speed": set_speed,
+    "set_track_mix": set_track_mix,
+    "set_fade": set_fade,
     "set_reverse": set_reverse,
 }
 
@@ -780,7 +885,17 @@ def describe(op: str, args: Optional[dict[str, Any]] = None, fps: int = d.DEFAUL
         if op == "add_marker":
             return f"marker '{str(a.get('label', ''))[:30]}' at {_secs(a.get('frame'), fps)}"
         if op == "add_transition":
-            return f"crossfade into {clip_id} ({a.get('frames', '?')}f)"
+            look = d.TRANSITION_STYLES.get(a.get("style") or d.DEFAULT_TRANSITION_STYLE, ("", "transition"))[1]
+            return f"{look.lower()} into {clip_id} ({a.get('frames', '?')}f)"
+        if op == "remove_transition":
+            return f"hard cut into {clip_id}"
+        if op == "set_transition":
+            bits = []
+            if a.get("style"):
+                bits.append(d.TRANSITION_STYLES.get(a["style"], ("", a["style"]))[1].lower())
+            if a.get("frames") is not None:
+                bits.append(f"{a['frames']}f")
+            return f"transition into {clip_id}: " + (", ".join(bits) or "unchanged")
         if op == "set_key":
             return (f"{a.get('path', '?')} {float(a.get('value', 0)):g} on {clip_id} "
                     f"at +{_secs(a.get('frame'), fps)}")
@@ -794,6 +909,18 @@ def describe(op: str, args: Optional[dict[str, Any]] = None, fps: int = d.DEFAUL
             return f"crop {clip_id} " + (" ".join(sides) or "off")
         if op == "set_opacity":
             return f"opacity {clip_id} {float(a.get('value', 1)) * 100:.0f}%"
+        if op == "set_track_mix":
+            bits = []
+            if a.get("gain_db") is not None:
+                bits.append(f"{float(a['gain_db']):+g} dB")
+            if a.get("pan") is not None:
+                p = float(a["pan"])
+                bits.append("pan centre" if not p else f"pan {abs(p) * 100:.0f}% {'left' if p < 0 else 'right'}")
+            return f"mix {a.get('track_id', '?')}: " + (", ".join(bits) or "unchanged")
+        if op == "set_fade":
+            bits = [f"{k.replace('_', ' ')} {_secs(a[k], fps)}" for k in ("fade_in", "fade_out")
+                    if a.get(k) is not None]
+            return f"{clip_id} " + (", ".join(bits) or "fades unchanged")
         if op == "set_speed":
             return f"speed {float(a.get('speed', 1)):g}x on {clip_id}"
         if op == "set_reverse":

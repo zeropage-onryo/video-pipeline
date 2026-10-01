@@ -191,6 +191,8 @@ ARGS = {
     "add_caption_track": {"cues": []},
     "add_marker": {"frame": 150, "label": "Shot 2"},
     "add_transition": {"clip_id": "c3", "frames": 8},
+    "remove_transition": {"clip_id": "c2"},
+    "set_transition": {"clip_id": "c2", "style": "wipeleft"},
     "set_canvas": {"width": 1280, "height": 720},
     "set_cue": {"track_id": "T1", "start": 100, "end": 130, "text": "three"},
     "delete_cue": {"track_id": "T1", "cue_id": "q2"},
@@ -203,6 +205,8 @@ ARGS = {
     "set_crop": {"clip_id": "c1", "left": 0.1},
     "set_opacity": {"clip_id": "c1", "value": 0.5},
     "set_speed": {"clip_id": "c1", "speed": 2},
+    "set_track_mix": {"track_id": "A1", "gain_db": -3, "pan": -0.5},
+    "set_fade": {"clip_id": "c1", "fade_in": 15, "fade_out": 30},
     "set_reverse": {"clip_id": "c1", "on": True},
 }
 
