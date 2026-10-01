@@ -98,3 +98,7 @@ one real small purchase → refund it (refunds are logged, NOT clawed back — d
   (the first two were probed as trusted beforehand and kept). Verified after the restart:
   CORS allows zeropage.studio; `/billing/webhook` refuses an unsigned POST with 400 bad_signature.
 - Next: step 5 (portal Save, Mike), step 7 (Mike's own test checkout with 4242).
+- 2026-10-01 LIVE: account activated; restricted `rk_live_` key; live portal saved; Mike ran
+  `ops.stripe_setup --live --fly`. Verified after: 7 live Prices, live webhook enabled and matching
+  `.env`, portal plan switching (3 plans, proration none), API restarted healthy. Account 1 was
+  reset first (sandbox customer unlinked, test lots expired). Radar Lite; Stripe Tax collection off.
