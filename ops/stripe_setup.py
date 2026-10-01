@@ -188,6 +188,9 @@ def main(argv: list[str] | None = None) -> None:
     if not key:
         sys.exit("Put STRIPE_SECRET_KEY=sk_test_... in .env first "
                  "(Stripe dashboard -> Developers -> API keys, Test mode on).")
+    if not key.startswith(("sk_", "rk_")):
+        sys.exit("STRIPE_SECRET_KEY is not a secret key (sk_... or rk_...); the "
+                 "publishable pk_ key is the other one on the API keys page.")
     mode = "live" if key.startswith(("sk_live_", "rk_live_")) else "test"
     if mode == "live" and not a.live:
         sys.exit("That's a LIVE key. Rerun with --live if you mean it.")

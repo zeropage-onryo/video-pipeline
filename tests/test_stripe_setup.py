@@ -227,3 +227,10 @@ def test_portal_plan_switching_without_proration(env):
 def test_no_portal_yet_is_a_note_not_a_failure(env, capsys):
     setup.main([])
     assert "no Customer Portal yet" in capsys.readouterr().out
+
+
+def test_a_publishable_key_is_refused(env):
+    env.path.write_text("STRIPE_SECRET_KEY=pk_live_x\n")
+    with pytest.raises(SystemExit, match="not a secret key"):
+        setup.main(["--live"])
+    assert not env.fake.prices
