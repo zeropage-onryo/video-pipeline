@@ -22,6 +22,7 @@ import { clampPps } from "@/lib/cut/timeline";
 import { TopBar } from "@/components/cut/top-bar";
 import { LeftPanel } from "@/components/cut/left-panel";
 import { Viewer } from "@/components/cut/viewer";
+import { SourceViewer } from "@/components/cut/source-viewer";
 import { Inspector } from "@/components/cut/inspector";
 import { ToolStrip } from "@/components/cut/tool-strip";
 import { Timeline } from "@/components/cut/timeline";
@@ -84,7 +85,9 @@ export function Editor({ projectId }: { projectId: string }) {
 
   const outer = useDefaultLayout({ id: "zpf-cut-outer", storage: safeStorage });
   const vertical = useDefaultLayout({ id: "zpf-cut-vertical", storage: safeStorage });
-  const upper = useDefaultLayout({ id: "zpf-cut-upper", storage: safeStorage });
+  // a new key with the Source pane: a remembered two-pane layout would not
+  // fit three panels, and react-resizable-panels restores by panel id
+  const upper = useDefaultLayout({ id: "zpf-cut-upper-src", storage: safeStorage });
 
   if (error) {
     return (
@@ -123,15 +126,19 @@ export function Editor({ projectId }: { projectId: string }) {
               <Panel id="upper" defaultSize="56" minSize="25">
                 <Group
                   orientation="horizontal"
-                  id="zpf-cut-upper"
+                  id="zpf-cut-upper-src"
                   defaultLayout={upper.defaultLayout}
                   onLayoutChanged={upper.onLayoutChanged}
                 >
-                  <Panel id="viewer" minSize="35">
+                  <Panel id="source" defaultSize="30" minSize={220} collapsible collapsedSize={0}>
+                    {doc ? <SourceViewer /> : null}
+                  </Panel>
+                  <Separator className="cx-handle v" />
+                  <Panel id="viewer" minSize="25">
                     {doc ? <Viewer /> : <Loading loading={loading} />}
                   </Panel>
                   <Separator className="cx-handle v" />
-                  <Panel id="inspector" defaultSize="30" minSize={230} maxSize="45">
+                  <Panel id="inspector" defaultSize="24" minSize={230} maxSize="40">
                     <Inspector />
                   </Panel>
                 </Group>

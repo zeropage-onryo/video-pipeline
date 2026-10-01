@@ -604,3 +604,23 @@ def test_the_index_route_indexes_only_what_this_cut_has_not(api, monkeypatch):
     assert "1 indexed" in job["detail"] and job["ref_id"] == p["id"]
     res = client.post(f"/api/cut/projects/{p['id']}/index")
     assert res.status_code == 409 and res.json()["error"]["code"] == "nothing_to_index"
+
+
+# --------------------------------------------------------------------------
+# the Source viewer's Transcript tab (2026-10-01)
+# --------------------------------------------------------------------------
+
+def test_transcript_is_words_and_shots_in_seconds_and_scoped(api):
+    client, w = api
+    got = _ok(client.get(f"/api/cut/media/{w['g1']}/transcript"))
+    assert got == {"status": "not_indexed", "speech": None, "words": [], "shots": []}
+    _words(w["dsn"], w["g1"], w["a"], G1_WORDS)
+    got = _ok(client.get(f"/api/cut/media/{w['g1']}/transcript"))
+    assert got["status"] == "indexed"
+    assert [x["text"] for x in got["words"]] == [t for _, _, t in G1_WORDS]
+    # seconds at the INDEX fps, not frames the client would have to convert
+    first = got["words"][1]
+    assert (first["start"], first["end"]) == (round(18 / FPS, 3), round(24 / FPS, 3))
+    # someone else's file is exactly as missing as one that never existed
+    assert client.get(f"/api/cut/media/{w['gb']}/transcript").status_code == 404
+    assert client.get("/api/cut/media/nonsense/transcript").status_code == 404

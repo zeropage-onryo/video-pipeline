@@ -219,3 +219,14 @@ export const proposeCaptions = (id: string, body: { base_id?: number; track_id?:
   post<Suggested & { cues: number }>(`/projects/${encodeURIComponent(id)}/captions`, body);
 export const indexProject = (id: string) =>
   post<{ job_id: number; handles: string[] }>(`/projects/${encodeURIComponent(id)}/index`);
+
+/* the Source viewer's Transcript tab: what the index heard and saw in one
+   file, in SECONDS (the index's own fps is converted on the server) */
+export type Transcript = {
+  status: "indexed" | "not_indexed";
+  speech: boolean | null;
+  words: { start: number; end: number; text: string; speaker?: string | null }[];
+  shots: { start: number; end: number; text: string }[];
+};
+export const getTranscript = (handle: string) =>
+  cutFetch<Transcript>(`/media/${encodeURIComponent(handle)}/transcript`);

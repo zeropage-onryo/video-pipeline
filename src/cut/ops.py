@@ -366,6 +366,50 @@ def lift(doc: dict, clip_id: str) -> dict:
     return _finish(doc)
 
 
+def overwrite(doc: dict, track_id: str, clip: dict, at: int, *,
+              sound_track: Optional[str] = None) -> dict:
+    """Lay `clip` on `track_id` at frame `at` OVER whatever is there, the
+    Source viewer's Overwrite (Resolve's F10): nothing after it moves.
+    Whatever occupies [at, at + length) on the target tracks is cleared
+    first -- a clip straddling either edge is split there, and every piece
+    inside is lifted -- so the place is empty when the clip lands. Clips
+    are cleared as LINK GROUPS (split and lift both carry partners), so a
+    picture is never overwritten out from under its own sound.
+
+    Composed from split, lift and insert rather than written fresh: the
+    validator already trusts those three, and a new op that re-derived
+    their rules is how the rules would drift apart."""
+    doc = _copy(doc)
+    _need_track(doc, track_id)
+    for key in ("src_in", "src_out"):
+        _need_int(key, clip.get(key))
+    _need_int("at", at)
+    if at < 0:
+        raise OpError("at cannot be negative")
+    length = int(clip["src_out"]) - int(clip["src_in"])
+    if length <= 0:
+        raise OpError("src_out must be after src_in")
+    end = at + length
+    targets = [track_id] + ([sound_track] if sound_track else [])
+    if sound_track:
+        _need_track(doc, sound_track, "audio")
+    # straddlers first: split at each edge, so every piece is either wholly
+    # inside the region or wholly outside it
+    for edge in (at, end):
+        for tid in targets:
+            for c in list(d.track(doc, tid)["clips"]):
+                if c["at"] < edge < d.clip_end(c):
+                    doc = split(doc, c["id"], edge)
+    for tid in targets:
+        while True:
+            inside = [c for c in d.track(doc, tid)["clips"]
+                      if c["at"] >= at and d.clip_end(c) <= end]
+            if not inside:
+                break
+            doc = lift(doc, inside[0]["id"])
+    return insert(doc, track_id, clip, at, ripple=False, sound_track=sound_track)
+
+
 def set_canvas(doc: dict, width: int, height: int) -> dict:
     """Change the frame size. Every clip is fitted into the new frame at
     render (scale to fit, pad black), so nothing on the timeline moves;
@@ -475,6 +519,7 @@ OPS: dict[str, Callable[..., dict]] = {
     "add_marker": add_marker,
     "add_transition": add_transition,
     "add_track": add_track,
+    "overwrite": overwrite,
 }
 
 
@@ -539,6 +584,9 @@ def describe(op: str, args: Optional[dict[str, Any]] = None, fps: int = d.DEFAUL
             return f"marker '{str(a.get('label', ''))[:30]}' at {_secs(a.get('frame'), fps)}"
         if op == "add_transition":
             return f"crossfade into {clip_id} ({a.get('frames', '?')}f)"
+        if op == "overwrite":
+            c = a.get("clip") or {}
+            return f"overwrite {c.get('media', '?')} on {a.get('track_id', '?')} at {_secs(a.get('at'), fps)}"
         if op == "add_track":
             what = a.get("role") or a.get("kind", "?")
             return f"add {what} track" + (f" {a['track_id']}" if a.get("track_id") else "")

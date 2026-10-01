@@ -54,6 +54,7 @@ export function Viewer() {
   const mix = useCut((s) => s.mix);
   const bin = useCut((s) => s.bin);
   const previews = useCut((s) => s.previews);
+  const active = useCut((s) => s.activeViewer === "program");
   const binByHandle = useMemo(() => new Map(bin.map((b) => [b.handle, b])), [bin]);
 
   /* ── the clock ── */
@@ -135,8 +136,13 @@ export function Viewer() {
   const scrub = !playing || rate < 0 || rate > 2;
 
   return (
-    <div className="cx-viewer">
+    <div
+      className="cx-viewer"
+      data-active={active ? "1" : undefined}
+      onPointerDown={() => useCut.getState().setActiveViewer("program")}
+    >
       <div className="cx-viewer-head">
+        <span className="cx-h" style={{ fontSize: 11 }}>Program</span>
         <span className="cx-label" style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {shown ? (binByHandle.get(shown.media)?.name ?? shown.media) : "—"}
         </span>

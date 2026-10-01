@@ -119,11 +119,22 @@ export function mediaFrames(item: BinItem, fps: number): number {
    clip lands in any NLE. A frame inside a clip moves to that clip's
    nearest edge -- insert refuses a frame inside a clip, and a drop that
    silently splits somebody's shot is worse than one that lands beside it. */
+/* How a placed clip meets what is already there:
+   - "insert": a drop from the bin. A frame inside a clip moves to that
+     clip's nearest edge; everything after rides right.
+   - "insert-at": the Source viewer's Insert (F9). The clip goes in EXACTLY
+     at the frame -- a clip under it is split there first, as Resolve does
+     -- and everything after rides right. Two versions: the split, the clip.
+   - "overwrite": the Source viewer's Overwrite (F10). It lands over what is
+     there and nothing moves (ops.overwrite clears the span first). */
+export type PlaceMode = "insert" | "insert-at" | "overwrite";
+
 export async function placeMedia(
   item: BinItem,
   trackId?: string,
   at?: number,
   range?: { src_in: number; src_out: number },
+  mode: PlaceMode = "insert",
 ): Promise<boolean> {
   let d = doc();
   if (!d) return false;
@@ -163,7 +174,8 @@ export async function placeMedia(
   // a generous one and let the server's refusal name the real length
   const unknownLength = item.kind === "video" && !item.seconds && !range;
   const frames = unknownLength ? UNPROBED_SECONDS * d.fps : mediaFrames(item, d.fps);
-  const where = at === undefined ? trackEnd(track) : nearestCutPoint(track, Math.max(0, at));
+  const where =
+    at === undefined ? trackEnd(track) : mode === "insert" ? nearestCutPoint(track, Math.max(0, at)) : Math.max(0, at);
   const args: Record<string, unknown> = {
     track_id: track.id,
     clip: range
@@ -176,13 +188,24 @@ export async function placeMedia(
     const sound = audio.find((t) => t.role === "sfx") ?? audio.find((t) => t.role === "voice") ?? audio[0];
     if (sound) args.sound_track = sound.id;
   }
+  if (mode === "insert-at") {
+    // split whatever straddles the frame on the tracks this clip lands on;
+    // a picture's split carries its own sound, so one split per link group
+    const tracks = [track.id, args.sound_track as string | undefined].filter(Boolean) as string[];
+    for (const tid of tracks) {
+      const t = doc()?.tracks.find((x) => x.id === tid);
+      const under = (t?.clips ?? []).find((c) => c.at < where && where < clipEnd(c));
+      if (under && !(await state().op("split", { clip_id: under.id, frame: where }, { quiet: true }))) return false;
+    }
+  }
+  const opName = mode === "overwrite" ? "overwrite" : "insert";
   const unsure = unknownLength || (item.has_audio === null && !!args.sound_track);
-  if (!unsure) return state().op("insert", args);
+  if (!unsure) return state().op(opName, args);
 
   // Up to two silent corrections, each read off the validator's own words:
   // "src_out N is past the end of <h> (F frames)" and "<h> has no sound".
   for (let tries = 0; tries < 3; tries++) {
-    if (await state().op("insert", args, { silent: tries < 2 })) return true;
+    if (await state().op(opName, args, { silent: tries < 2 })) return true;
     const problems = state().lastError?.problems ?? [];
     let changed = false;
     for (const p of problems) {
@@ -239,4 +262,75 @@ export function jumpCut(direction: 1 | -1): void {
     state().setPlaying(false);
     state().seek(next);
   }
+}
+
+/* ── the Source viewer's edits (2026-10-01) ──
+   The marked range (or the whole clip) goes onto the timeline: Insert at
+   the playhead pushes everything after it right, Overwrite lays it over
+   what is there, Append puts it at the end of the track. The target is the
+   selected clip's track when its kind fits, else the track a drop would
+   use. Afterwards the timeline playhead sits at the end of what landed,
+   so the next edit follows it -- the Resolve rhythm (mark, F9, mark, F9). */
+export type SourceEdit = "insert" | "overwrite" | "append";
+
+export function sourceRange(): { src_in: number; src_out: number } | undefined {
+  const s = state();
+  const h = s.source.handle;
+  if (!h) return undefined;
+  const m = s.marks[h] ?? {};
+  const frames = s.source.frames;
+  if (m.in === undefined && m.out === undefined && frames === null) return undefined;
+  const src_in = m.in ?? 0;
+  const src_out = m.out ?? frames ?? src_in + 1;
+  return { src_in, src_out };
+}
+
+export async function editFromSource(kind: SourceEdit): Promise<boolean> {
+  const s = state();
+  const d = s.doc;
+  const h = s.source.handle;
+  if (!d || !h) {
+    s.toast("Load a clip into the Source viewer first — double-click it in the bin", "err");
+    return false;
+  }
+  const item = s.bin.find((b) => b.handle === h);
+  if (!item) {
+    s.toast("That clip is no longer in the bin", "err");
+    return false;
+  }
+  const range = sourceRange();
+  if (range && range.src_out <= range.src_in) {
+    s.toast("The Out mark is before the In mark", "err");
+    return false;
+  }
+  // the selected clip's track, when it takes this kind of media
+  let trackId: string | undefined;
+  if (s.selection.kind === "clip" && s.selection.ids.length) {
+    const f = findClip(d, s.selection.ids[0]);
+    const wantsAudio = item.kind === "audio";
+    if (f && (f.track.kind === "audio") === wantsAudio && f.track.kind !== "caption") trackId = f.track.id;
+  }
+  const at = kind === "append" ? undefined : s.playhead;
+  const ok = await placeMedia(item, trackId, at, range, kind === "insert" ? "insert-at" : kind === "overwrite" ? "overwrite" : "insert");
+  if (ok) {
+    // land the playhead on the end of what was just placed
+    const after = state().doc;
+    const placed = after?.tracks
+      .flatMap((t) => t.clips ?? [])
+      .filter((c) => c.media === h && !c.link)
+      .sort((a, b) => clipEnd(b) - clipEnd(a))
+      .find((c) => (at === undefined ? true : c.at === Math.max(0, at)));
+    if (placed) state().seek(clipEnd(placed));
+  }
+  return ok;
+}
+
+export function sourceToMark(which: "in" | "out"): void {
+  const s = state();
+  const h = s.source.handle;
+  const m = h ? s.marks[h] : undefined;
+  const f = which === "in" ? m?.in : m?.out !== undefined ? m.out - 1 : undefined;
+  if (f === undefined) return;
+  s.setSourcePlaying(false);
+  s.sourceSeek(f);
 }
