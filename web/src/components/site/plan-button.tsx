@@ -33,10 +33,16 @@ export function PlanButton({
 
   // The async half. Every state write happens after an await, in a
   // continuation -- never synchronously inside the effect below.
-  function run(): Promise<void> {
+  function run(resumed = false): Promise<void> {
     return startCheckout(item, interval).then((outcome) => {
       if (outcome.kind === "redirect") {
         window.location.href = outcome.url;
+        return;
+      }
+      if (outcome.kind === "sign-in" && resumed) {
+        // just back from sign-in and still not signed in here: another
+        // trip would only come back to this same answer, so stop
+        setState({ phase: "note", message: "Sign-in didn't stick on this page — reload and try again." });
         return;
       }
       if (outcome.kind === "sign-in") {
@@ -60,7 +66,10 @@ export function PlanButton({
 
   useEffect(() => {
     // back from sign-in with ?checkout=<this item>: pick the checkout up
-    if (resume) void run();
+    if (!resume) return;
+    // used once: a reload must not start another checkout
+    window.history.replaceState(null, "", window.location.pathname);
+    void run(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resume]);
 

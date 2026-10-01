@@ -101,6 +101,17 @@ Change a plan, the markup, a band or a rate card → re-export → commit, or
 
 ## Switching Stripe on (test mode first)
 
+**Steps 1–3 are one command since 2026-09-30:** put `STRIPE_SECRET_KEY` in `.env`, then
+`venv/bin/python -m ops.stripe_setup` (add `--fly` to push the same values to Fly,
+`--live` for an `sk_live_` key). It creates the seven Prices off `pricing.PLANS`/`TOPUP`
+(idempotent by lookup key `zpf_<item>_<month|year|once>`), the Fly webhook endpoint with
+`billing.HANDLED_EVENTS` pinned to the SDK's API version, and writes the `STRIPE_PRICE_*`
+ids, `STRIPE_WEBHOOK_SECRET`, `STRIPE_WEBHOOK_ENDPOINT` (the id that secret belongs to --
+a secret is only reused for the endpoint it was issued for) and
+`BILLING_RETURN_URL=https://zeropage.studio`. Prices change in `pricing.py`, never in the
+dashboard: edit, rerun, and the lookup key moves to a new Price. The manual steps below
+are what it does, kept for reference.
+
 1. Stripe dashboard → Products: create seven Prices — recurring monthly $15 / $35 /
    $95, recurring yearly $144 / $336 / $912, one-time $10. The amounts MUST equal
    `pricing.PLANS` (`monthly_usd`, `yearly_usd`) / `TOPUP` — the site prints pricing.py's
