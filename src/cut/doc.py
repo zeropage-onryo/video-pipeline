@@ -95,6 +95,16 @@ TRANSITION_STYLES: dict[str, tuple[str, str]] = {
 }
 DEFAULT_TRANSITION_STYLE = "fade"
 
+# A picture clip's basic correction (2026-10-01, the Color page): field ->
+# (min, max, neutral). Exposure is in stops, temperature -1 (cool) .. +1
+# (warm). Static per clip; a field at its neutral value is not stored.
+GRADE_FIELDS: dict[str, tuple[float, float, float]] = {
+    "exposure": (-2.0, 2.0, 0.0),
+    "contrast": (0.5, 2.0, 1.0),
+    "saturation": (0.0, 2.0, 1.0),
+    "temperature": (-1.0, 1.0, 0.0),
+}
+
 # `gen:` is a generated_assets row (a render this pipeline paid for);
 # `asset:` is a cut_media row (an uploaded music bed or voiceover).
 HANDLE_KINDS = ("gen", "asset")

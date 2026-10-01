@@ -24,6 +24,8 @@ import { LeftPanel } from "@/components/cut/left-panel";
 import { Viewer } from "@/components/cut/viewer";
 import { SourceViewer } from "@/components/cut/source-viewer";
 import { Inspector } from "@/components/cut/inspector";
+import { Mixer } from "@/components/cut/mixer";
+import { ColorPanel } from "@/components/cut/color";
 import { ToolStrip } from "@/components/cut/tool-strip";
 import { Timeline } from "@/components/cut/timeline";
 import { useEditorKeys, zoomToFit } from "@/components/cut/commands";
@@ -57,6 +59,7 @@ export function Editor({ projectId }: { projectId: string }) {
   const doc = useCut((s) => s.doc);
   const tool = useCut((s) => s.tool);
   const pps = useCut((s) => s.pps);
+  const page = useCut((s) => s.page);
   const zoomRestored = useRef<string | null>(null);
 
   useEffect(() => {
@@ -107,8 +110,19 @@ export function Editor({ projectId }: { projectId: string }) {
     );
   }
 
+  if (page !== "edit") {
+    return (
+      <div className="cx" data-tool={tool} data-page={page}>
+        <TopBar />
+        <div className="cx-body">
+          <PageLayout page={page} loading={loading} />
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="cx" data-tool={tool}>
+    <div className="cx" data-tool={tool} data-page="edit">
       <TopBar />
       <div className="cx-body">
         <Group orientation="horizontal" id="zpf-cut-outer" defaultLayout={outer.defaultLayout} onLayoutChanged={outer.onLayoutChanged}>
@@ -155,6 +169,53 @@ export function Editor({ projectId }: { projectId: string }) {
         </Group>
       </div>
     </div>
+  );
+}
+
+/* The Audio and Color pages (2026-10-01): the same doc in another layout,
+   Resolve's model. Audio is the mixer beside the Program viewer over the
+   SOUND tracks; Color is the Program viewer beside the grade over the
+   PICTURE tracks. Each keeps its own remembered pane sizes. */
+function PageLayout({ page, loading }: { page: "audio" | "color"; loading: boolean }) {
+  const doc = useCut((s) => s.doc);
+  const v = useDefaultLayout({ id: `zpf-cut-${page}-v`, storage: safeStorage });
+  const h = useDefaultLayout({ id: `zpf-cut-${page}-h`, storage: safeStorage });
+  return (
+    <Group orientation="vertical" id={`zpf-cut-${page}-v`} defaultLayout={v.defaultLayout} onLayoutChanged={v.onLayoutChanged}>
+      <Panel id="upper" defaultSize={page === "audio" ? "50" : "62"} minSize="25">
+        <Group orientation="horizontal" id={`zpf-cut-${page}-h`} defaultLayout={h.defaultLayout} onLayoutChanged={h.onLayoutChanged}>
+          <Panel id="viewer" defaultSize={page === "audio" ? "34" : "58"} minSize="20">
+            {doc ? <Viewer /> : <Loading loading={loading} />}
+          </Panel>
+          <Separator className="cx-handle v" />
+          <Panel id="tool" minSize="25">
+            <div className="cx-pane">
+              <div className="cx-pane-head">
+                <span className="cx-tab" aria-selected>
+                  {page === "audio" ? "Mixer" : "Color"}
+                </span>
+              </div>
+              <div className="cx-pane-body">{page === "audio" ? <Mixer /> : <ColorPanel />}</div>
+            </div>
+          </Panel>
+          {page === "audio" ? (
+            <>
+              <Separator className="cx-handle v" />
+              <Panel id="inspector" defaultSize="26" minSize={230} maxSize="40">
+                <Inspector />
+              </Panel>
+            </>
+          ) : null}
+        </Group>
+      </Panel>
+      <Separator className="cx-handle h" />
+      <Panel id="timeline" minSize={150}>
+        <div className="cx-pane" style={{ background: "var(--cx-bg)" }}>
+          <ToolStrip />
+          {doc ? <Timeline only={page === "audio" ? "audio" : "video"} /> : null}
+        </div>
+      </Panel>
+    </Group>
   );
 }
 

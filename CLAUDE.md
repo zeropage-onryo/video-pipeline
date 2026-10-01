@@ -1872,6 +1872,16 @@ is yours, in Resolve, by hand.
   `source_range.duration` is its TIMELINE length (the warp applies to the media), which is what
   OpenTimelineIO 0.18 reads back to exactly the cut's duration. Keyframes, crop, fades and the
   mix have no OTIO field; they ride in `metadata["zpf"]` so nothing is lost.
+  **Pages (2026-10-01), Resolve's model:** one doc, three layouts -- Edit, Audio (the Program
+  viewer beside a large Mixer over the SOUND tracks only) and Color (the Program viewer beside the
+  grade over the PICTURE tracks only); `store.page`, the top bar's switch, and Resolve's keys
+  Shift+4 / Shift+7 / Shift+6. Switching is a view, never an edit. The Color page edits a picture
+  clip's basic correction, `clip.grade` = {exposure (stops), contrast, saturation, temperature
+  -1..1} (`doc.GRADE_FIELDS`, `set_grade`, neutral values not stored), rendered on the source
+  picture before the fit as `exposure`, `eq` and `colortemperature` (+1 warm = a 3500 K light) --
+  all three present in Fly's ffmpeg 7.1 -- and previewed as a CSS filter plus a soft-light tint.
+  It grades the selected picture clip, else the one at the playhead, so scrubbing walks it from
+  shot to shot. Wheels, curves, qualifiers and LUTs are still a later phase.
   **The agent (phase E, 2026-09-28, Mike's D4)** never edits: every edit is a PROPOSAL
   (`{summary, ops, base_id, region, duration_delta, doc, kind}`) the person Keeps or Undoes.
   `POST /api/cut/projects/{id}/agent {message, playhead?, selection?}` is a job;

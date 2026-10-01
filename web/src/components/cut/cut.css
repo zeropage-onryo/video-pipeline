@@ -1996,3 +1996,23 @@ input.cx-title {
   right: 0;
   background: linear-gradient(to top left, transparent 49%, rgb(255 255 255 / 0.55) 50%, transparent 52%);
 }
+
+/* ── pages ── */
+.cx-pages button {
+  padding: 0 14px;
+}
+.cx[data-page="audio"] .cx-mixer-strips {
+  padding: 4px 2px 8px;
+}
+.cx[data-page="audio"] .cx-mstrip {
+  width: 92px;
+}
+.cx[data-page="audio"] .cx-fader {
+  height: 200px;
+}
+.cx[data-page="audio"] .cx-fader-input {
+  height: 190px;
+}
+.cx[data-page="color"] .cx-grade {
+  max-width: 520px;
+}

@@ -16,6 +16,7 @@ import { deleteSelection } from "@/lib/cut/actions";
 import { LookInspector } from "@/components/cut/look-inspector";
 import { PlaybackCard } from "@/components/cut/playback-inspector";
 import { Mixer, SoundInspector } from "@/components/cut/mixer";
+import { ColorPanel } from "@/components/cut/color";
 import { DEFAULT_STYLE, GROUPS, STYLES, labelOf } from "@/lib/cut/transitions";
 import {
   ASPECTS,
@@ -73,11 +74,13 @@ export function Inspector() {
         <button type="button" role="tab" className="cx-tab" aria-selected={tab === "mixer"} onClick={() => setTab("mixer")}>
           Mixer
         </button>
-        <button type="button" role="tab" className="cx-tab" aria-selected={tab === "color"} disabled title="Grading arrives in a later phase">
+        <button type="button" role="tab" className="cx-tab" aria-selected={tab === "color"} onClick={() => setTab("color")}>
           Color
         </button>
       </div>
-      <div className="cx-pane-body">{tab === "mixer" ? <Mixer /> : (body ?? <ProjectInspector doc={doc} />)}</div>
+      <div className="cx-pane-body">
+        {tab === "mixer" ? <Mixer /> : tab === "color" ? <ColorPanel /> : (body ?? <ProjectInspector doc={doc} />)}
+      </div>
     </div>
   );
 }

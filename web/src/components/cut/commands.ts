@@ -219,6 +219,20 @@ export function useEditorKeys() {
         }
       }
 
+      // Resolve's page keys: Shift+4 Edit, Shift+6 Color, Shift+7 Fairlight
+      // (Audio). `code`, because Shift turns the key into $ ^ &
+      if (e.shiftKey && !mod) {
+        const page = { Digit4: "edit", Digit6: "color", Digit7: "audio" }[e.code] as
+          | "edit"
+          | "color"
+          | "audio"
+          | undefined;
+        if (page) {
+          handled();
+          return st.setPage(page);
+        }
+      }
+
       // Shift+Z, whichever case the platform reports the key in
       if (e.shiftKey && key.toLowerCase() === "z") {
         handled();

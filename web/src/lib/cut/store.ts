@@ -46,6 +46,10 @@ export type Tool = "select" | "blade";
 export type Selection = { ids: string[]; kind: "clip" | "cue" | null };
 export type TrackMix = { mute?: boolean; solo?: boolean };
 export type LeftTab = "agent" | "media" | "text" | "audio" | "transitions" | "search";
+/* Resolve's pages (2026-10-01): one editor, three layouts over the same
+   doc -- Edit, Audio (the mixer over the sound tracks) and Color (basic
+   correction per picture clip). Switching is a view, never an edit. */
+export type Page = "edit" | "audio" | "color";
 /* Which viewer the transport keys drive (Resolve's model): clicking a
    viewer -- or loading a clip into Source -- makes it active. */
 export type ActiveViewer = "source" | "program";
@@ -96,6 +100,7 @@ export type CutStore = {
   bin: BinItem[];
   binLoading: boolean;
   leftTab: LeftTab;
+  page: Page;
   thread: Turn[];
   /** the proposal whose AFTER is on screen (its doc is the ghost) */
   previewing: string | null;
@@ -139,6 +144,7 @@ export type CutStore = {
   loadBin: () => Promise<void>;
   addToBin: (item: BinItem) => void;
   setLeftTab: (t: LeftTab) => void;
+  setPage: (p: Page) => void;
   pushTurn: (t: Omit<Turn, "id">) => string;
   updateTurn: (id: string, patch: Partial<Turn>) => void;
   preview: (turnId: string | null) => void;
@@ -216,6 +222,7 @@ export const useCut = create<CutStore>((set, get) => {
     bin: [],
     binLoading: false,
     leftTab: "media",
+    page: "edit",
     thread: [],
     previewing: null,
     source: { handle: null, playhead: 0, playing: false, rate: 1, frames: null },
@@ -368,6 +375,7 @@ export const useCut = create<CutStore>((set, get) => {
     },
     addToBin: (item) => set((s) => ({ bin: [item, ...s.bin.filter((b) => b.handle !== item.handle)] })),
     setLeftTab: (leftTab) => set({ leftTab }),
+    setPage: (page) => set({ page }),
     pushTurn: (t) => {
       const id = `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
       set((s) => ({ thread: [...s.thread.slice(-59), { ...t, id }] }));
