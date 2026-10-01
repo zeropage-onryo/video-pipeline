@@ -686,6 +686,12 @@ const ClipView = memo(function ClipView({
         </span>
       ) : null}
       {xf ? <i className="cx-xfade" style={{ width: framesToPx(xf, fps, pps) }} /> : null}
+      {track.kind === "audio" && clip.fade_in ? (
+        <i className="cx-fade" data-side="in" style={{ width: framesToPx(clip.fade_in, fps, pps) }} />
+      ) : null}
+      {track.kind === "audio" && clip.fade_out ? (
+        <i className="cx-fade" data-side="out" style={{ width: framesToPx(clip.fade_out, fps, pps) }} />
+      ) : null}
       {track.kind === "video" && clip.lanes ? (
         <span className="cx-clip-keys">
           {keyFrames(clip).map((f) => (

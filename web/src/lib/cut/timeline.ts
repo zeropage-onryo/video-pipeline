@@ -30,7 +30,10 @@ export type Clip = {
   link?: string;
   gain_db?: number;
   transition_in?: TransitionIn;
-  lanes?: { path: "zoom" | "x" | "y" | "rotation"; keys: LaneKey[] }[];
+  lanes?: { path: "zoom" | "x" | "y" | "rotation" | "volume"; keys: LaneKey[] }[];
+  /* a sound clip's fades, in frames */
+  fade_in?: number;
+  fade_out?: number;
   crop?: { left?: number; right?: number; top?: number; bottom?: number };
   opacity?: number;
 };
@@ -42,6 +45,9 @@ export type Track = {
   kind: TrackKind;
   role?: AudioRole;
   duck_under?: AudioRole;
+  /* the mixer strip: fader in dB, pan -1..1 */
+  gain_db?: number;
+  pan?: number;
   style?: string;
   clips?: Clip[];
   cues?: Cue[];
@@ -403,6 +409,10 @@ export function describeOp(op: string, args: Record<string, unknown>, fps: numbe
       return `Transition ${args.style ? String(args.style) : ""}${args.frames ? ` ${args.frames}f` : ""}`.trim();
     case "remove_transition":
       return `Hard cut into ${args.clip_id}`;
+    case "set_track_mix":
+      return `Mix ${args.track_id}`;
+    case "set_fade":
+      return `Fades on ${args.clip_id}`;
     case "set_speed":
       return `Speed ${args.speed}×`;
     case "set_reverse":

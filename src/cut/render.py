@@ -337,17 +337,35 @@ def _audio_graph(doc: dict, index: dict[str, int], parts: list[str]) -> str:
             fout = int(((nxt or {}).get("transition_in") or {}).get("frames") or 0)
             if fout:
                 chain.append(f"afade=t=out:st={_s(d.clip_length(c) - fout, fps)}:d={_s(fout, fps)}")
+            # the mixer (2026-10-01): volume keys (dB, clip-relative t) and
+            # the clip's own fades, all on the clip's timeline length
+            vol = (lanes.lane(c, "volume") or {}).get("keys") or []
+            if vol and (len(vol) > 1 or abs(float(vol[0]["value"])) > 1e-9):
+                chain.append(f"volume=volume='pow(10,({lanes.expr(vol, fps, 0.0)})/20)':eval=frame")
+            if c.get("fade_in"):
+                chain.append(f"afade=t=in:st=0:d={_s(c['fade_in'], fps)}")
+            if c.get("fade_out"):
+                chain.append(f"afade=t=out:st={_s(d.clip_length(c) - c['fade_out'], fps)}"
+                             f":d={_s(c['fade_out'], fps)}")
             if c["at"]:
                 chain.append(f"adelay=delays={round(c['at'] * 1000 / fps)}:all=1")
             label = f"a{t['id']}_{k}"
             parts.append(f"[{index[c['media']]}:a]{','.join(chain)}[{label}]")
             labels.append(label)
         out = f"t{t['id']}"
+        strip = fit
+        if t.get("gain_db"):
+            strip += f",volume={float(t['gain_db']):g}dB"
+        if t.get("pan"):
+            # a balance control: the far side drops, the near side holds
+            p = float(t["pan"])
+            left, right = min(1.0, 1.0 - p), min(1.0, 1.0 + p)
+            strip += f",pan=stereo|c0={left:.4f}*c0|c1={right:.4f}*c1"
         if len(labels) == 1:
-            parts.append(f"[{labels[0]}]{fit}[{out}]")
+            parts.append(f"[{labels[0]}]{strip}[{out}]")
         else:
             parts.append("".join(f"[{x}]" for x in labels)
-                         + f"amix=inputs={len(labels)}:normalize=0:dropout_transition=0,{fit}[{out}]")
+                         + f"amix=inputs={len(labels)}:normalize=0:dropout_transition=0,{strip}[{out}]")
         streams[t["id"]] = out
         roles.setdefault(t.get("role"), []).append(t["id"])
 

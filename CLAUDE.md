@@ -1831,6 +1831,16 @@ is yours, in Resolve, by hand.
   (`web/src/lib/cut/transitions.ts`, pinned to the Python list by a test) plays each look on hover
   with the same CSS approximation the viewer draws -- wipes/irises as a clip-path, slides as a
   translate, the rest as the fade -- and a tile clicks onto the selected cut or drops onto a clip.
+  **The mixer (2026-10-01):** an audio track carries a fader (`gain_db`, on top of every clip's
+  gain) and a `pan` (-1..1, a balance: the far side drops), set by `set_track_mix` and rendered
+  per track after its mix (`volume`, `pan=stereo`); a sound clip carries `fade_in` / `fade_out`
+  (frames, `set_fade`, which on a picture clip goes to its linked sound) and ONE keyframe lane,
+  `volume` in dB (`lanes.AUDIO_PATHS`, keyed through the same `set_key`), rendered as
+  `volume=...:eval=frame`. The Inspector's Mixer tab is one strip per audio track: role, pan, a
+  vertical fader, and M / S, which stay MONITORING (preview only, like the track headers). The Main
+  strip says the truth about the sum: the export is loudness-normalised to -14 LUFS, so the faders
+  set balance, not level. The preview multiplies gain x fader x volume key x fades, but an
+  `<audio>` element can neither boost past 0 dB nor pan; the strip says so.
   **The agent (phase E, 2026-09-28, Mike's D4)** never edits: every edit is a PROPOSAL
   (`{summary, ops, base_id, region, duration_delta, doc, kind}`) the person Keeps or Undoes.
   `POST /api/cut/projects/{id}/agent {message, playhead?, selection?}` is a job;

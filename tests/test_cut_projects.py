@@ -303,6 +303,9 @@ def test_every_op_is_reachable_through_the_route(api):
     step("move", clip_id=c1, at=0)
     sfx = d.track(doc, "A1")["clips"][0]["id"]
     step("set_gain", clip_id=sfx, db=-3)
+    step("set_fade", clip_id=sfx, fade_in=10, fade_out=10)
+    step("set_key", clip_id=sfx, path="volume", frame=0, value=-6)
+    step("set_track_mix", track_id="A1", gain_db=-2, pan=0.25)
     step("duck", track_id="A2", under="sfx")
     doc = step("add_caption_track", cues=[])
     step("set_cue", track_id="T1", start=0, end=30, text="first")

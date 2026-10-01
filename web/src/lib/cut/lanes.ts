@@ -10,7 +10,7 @@
 export type Ease = "linear" | "ease" | "hold";
 export type Key = { frame: number; value: number; ease?: Ease };
 export type Lane = { path: LanePath; keys: Key[] };
-export type LanePath = "zoom" | "x" | "y" | "rotation";
+export type LanePath = "zoom" | "x" | "y" | "rotation" | "volume";
 export type Crop = { left?: number; right?: number; top?: number; bottom?: number };
 export type Looked = { lanes?: Lane[]; crop?: Crop; opacity?: number };
 
@@ -20,6 +20,8 @@ export const PATHS: Record<LanePath, [number, number, number]> = {
   x: [-1, 1, 0],
   y: [-1, 1, 0],
   rotation: [-360, 360, 0],
+  /* a SOUND clip's one lane, in dB (lanes.AUDIO_PATHS) */
+  volume: [-60, 12, 0],
 };
 export const EASES: Ease[] = ["linear", "ease", "hold"];
 export const MAX_CROP = 0.45;

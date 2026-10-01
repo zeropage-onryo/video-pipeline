@@ -15,6 +15,7 @@ import { useCut, useDrawnDoc } from "@/lib/cut/store";
 import { deleteSelection } from "@/lib/cut/actions";
 import { LookInspector } from "@/components/cut/look-inspector";
 import { PlaybackCard } from "@/components/cut/playback-inspector";
+import { Mixer, SoundInspector } from "@/components/cut/mixer";
 import { DEFAULT_STYLE, GROUPS, STYLES, labelOf } from "@/lib/cut/transitions";
 import {
   ASPECTS,
@@ -41,7 +42,7 @@ export const CAPTION_STYLES: { id: string; label: string }[] = [
 export function Inspector() {
   const doc = useDrawnDoc();
   const selection = useCut((s) => s.selection);
-  const [tab, setTab] = useState<"inspect" | "color">("inspect");
+  const [tab, setTab] = useState<"inspect" | "mixer" | "color">("inspect");
   if (!doc) return null;
 
   let body: React.ReactNode;
@@ -69,11 +70,14 @@ export function Inspector() {
         <button type="button" role="tab" className="cx-tab" aria-selected={tab === "inspect"} onClick={() => setTab("inspect")}>
           Inspector
         </button>
+        <button type="button" role="tab" className="cx-tab" aria-selected={tab === "mixer"} onClick={() => setTab("mixer")}>
+          Mixer
+        </button>
         <button type="button" role="tab" className="cx-tab" aria-selected={tab === "color"} disabled title="Grading arrives in a later phase">
           Color
         </button>
       </div>
-      <div className="cx-pane-body">{body ?? <ProjectInspector doc={doc} />}</div>
+      <div className="cx-pane-body">{tab === "mixer" ? <Mixer /> : (body ?? <ProjectInspector doc={doc} />)}</div>
     </div>
   );
 }
@@ -90,7 +94,7 @@ function parseFrames(text: string, fps: number): number | null {
   return null;
 }
 
-function FrameField({
+export function FrameField({
   label,
   value,
   fps,
@@ -218,6 +222,9 @@ function ClipInspector({ doc, clip, track }: { doc: Doc; clip: Clip; track: Trac
             onKeyUp={() => gain !== (clip.gain_db ?? 0) && op("set_gain", { clip_id: clip.id, db: gain })}
           />
         </label>
+      ) : null}
+      {track.kind === "audio" ? (
+        <SoundInspector doc={doc} clip={clip} />
       ) : (
         <LookInspector doc={doc} clip={clip} />
       )}

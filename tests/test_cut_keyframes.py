@@ -148,10 +148,11 @@ def test_refusals(op, args, reason):
     assert reason in str(e.value) or any(reason in p for p in e.value.problems)
 
 
-def test_sound_clips_take_no_keyframes():
+def test_sound_clips_take_no_picture_keyframes():
+    # a sound clip's only lane is volume (the mixer, tests/test_cut_mixer.py)
     doc = cut()
     sound = d.track(doc, "A1")["clips"][0]["id"]
-    with pytest.raises(ops.OpError, match="belong to picture clips"):
+    with pytest.raises(ops.OpError, match="belongs to picture clips"):
         ops.apply(doc, "set_key", {"clip_id": sound, "path": "zoom", "frame": 0, "value": 1.2}, media=MEDIA)
     bad = cut()
     d.track(bad, "A1")["clips"][0]["opacity"] = 0.5

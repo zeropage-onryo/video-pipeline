@@ -1908,3 +1908,91 @@ input.cx-title {
   line-height: 1.25;
   color: var(--text);
 }
+
+/* ── the mixer ── */
+.cx-mixer-strips {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+}
+.cx-mstrip {
+  flex: none;
+  width: 76px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 6px;
+  border: 1px solid var(--cx-line);
+  border-radius: 8px;
+  background: var(--cx-bg);
+}
+.cx-mstrip-main {
+  width: 150px;
+  align-items: stretch;
+}
+.cx-mstrip-main .cx-note {
+  font-size: 10.5px;
+  margin: 0;
+}
+.cx-mstrip-id {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text);
+}
+.cx-mstrip-role {
+  font-size: 10px;
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  text-align: center;
+}
+.cx-mstrip[data-role="voice"] .cx-mstrip-id { color: #8fd3ff; }
+.cx-mstrip[data-role="music"] .cx-mstrip-id { color: #ffd38f; }
+.cx-mstrip[data-role="sfx"] .cx-mstrip-id { color: #a8f0b4; }
+.cx-mstrip-pan {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.cx-fader {
+  height: 150px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+}
+.cx-fader-input {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  height: 140px;
+  width: 22px;
+  accent-color: var(--signal);
+}
+.cx-mstrip-db {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text);
+}
+.cx-mstrip-ms {
+  display: flex;
+  gap: 4px;
+}
+.cx-fade {
+  position: absolute;
+  top: 15px;
+  bottom: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+.cx-fade[data-side="in"] {
+  left: 0;
+  background: linear-gradient(to top right, transparent 49%, rgb(255 255 255 / 0.55) 50%, transparent 52%);
+}
+.cx-fade[data-side="out"] {
+  right: 0;
+  background: linear-gradient(to top left, transparent 49%, rgb(255 255 255 / 0.55) 50%, transparent 52%);
+}

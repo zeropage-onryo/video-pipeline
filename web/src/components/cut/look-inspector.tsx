@@ -22,7 +22,7 @@ import { useCut } from "@/lib/cut/store";
 import { EASES, MAX_CROP, PATHS, laneOf, valueOf, withKey, type Ease, type LanePath } from "@/lib/cut/lanes";
 import { clipLength, findClip, type Clip, type Doc } from "@/lib/cut/timeline";
 
-type Row = {
+export type Row = {
   path: LanePath;
   label: string;
   /* how the value reads, and back */
@@ -81,7 +81,7 @@ export function LookInspector({ doc, clip }: { doc: Doc; clip: Clip }) {
   );
 }
 
-function LaneRow({
+export function LaneRow({
   doc,
   clip,
   row,

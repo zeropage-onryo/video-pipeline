@@ -38,13 +38,19 @@ PATHS: dict[str, tuple[float, float, float]] = {
     "y": (-1.0, 1.0, 0.0),
     "rotation": (-360.0, 360.0, 0.0),
 }
+# A SOUND clip has one lane (2026-10-01, the mixer): its volume in dB,
+# keyframed like a picture property -- invideo's Audio page keys Volume.
+AUDIO_PATHS: dict[str, tuple[float, float, float]] = {
+    "volume": (-60.0, 12.0, 0.0),
+}
+ALL_PATHS = {**PATHS, **AUDIO_PATHS}
 EASES = ("linear", "ease", "hold")
 CROP_SIDES = ("left", "right", "top", "bottom")
 MAX_CROP = 0.45          # per side; two opposite sides together stay under 0.9
 
 
 def default(path: str) -> float:
-    return PATHS[path][2]
+    return ALL_PATHS[path][2]
 
 
 def lane(clip: dict, path: str) -> Optional[dict]:
@@ -156,8 +162,11 @@ def window(lanes: list[dict], start: int, end: int) -> list[dict]:
     return out
 
 
-def check(clip: dict, length: int, where: str) -> list[str]:
-    """The validator's reasons for this clip's lanes, crop and opacity."""
+def check(clip: dict, length: int, where: str, paths: Optional[dict] = None) -> list[str]:
+    """The validator's reasons for this clip's lanes, crop and opacity.
+    `paths` is the lanes this kind of clip may carry (PATHS for picture,
+    AUDIO_PATHS for sound)."""
+    paths = PATHS if paths is None else paths
     out: list[str] = []
     lanes = clip.get("lanes")
     if lanes is not None:
@@ -166,13 +175,13 @@ def check(clip: dict, length: int, where: str) -> list[str]:
         seen = set()
         for ln in lanes:
             path = ln.get("path") if isinstance(ln, dict) else None
-            if path not in PATHS:
-                out.append(f"{where}: lane path must be one of {list(PATHS)}, got {path!r}")
+            if path not in paths:
+                out.append(f"{where}: lane path must be one of {list(paths)}, got {path!r}")
                 continue
             if path in seen:
                 out.append(f"{where}: two lanes for {path}")
             seen.add(path)
-            lo, hi, _ = PATHS[path]
+            lo, hi, _ = paths[path]
             keys = ln.get("keys")
             if not isinstance(keys, list) or not keys:
                 out.append(f"{where}: lane {path} has no keys")

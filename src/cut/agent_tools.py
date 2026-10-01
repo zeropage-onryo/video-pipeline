@@ -85,13 +85,16 @@ OP_NOTES = {
     "set_canvas": "change the frame size (even numbers), e.g. 720x1280 for 9:16",
     "overwrite": "lay a clip {media, src_in, src_out} on a track at a frame OVER what is there "
                  "(nothing after it moves); sound_track also lays its own sound",
-    "set_key": "animate a PICTURE clip: a key on path zoom (0.1-4) | x | y (-1..1, fraction of the "
-               "frame) | rotation (degrees) at a clip-relative frame; ease linear|ease|hold. One key = a "
-               "constant",
+    "set_key": "animate a clip: a key at a clip-relative frame on a PICTURE clip's zoom (0.1-4) | x | y "
+               "(-1..1, fraction of the frame) | rotation (degrees), or a SOUND clip's volume (dB, -60..12); "
+               "ease linear|ease|hold. One key = a constant",
     "delete_key": "remove one key from a picture clip's lane",
     "clear_lane": "reset a picture clip's zoom | x | y | rotation to its default",
     "set_crop": "crop a picture clip's edges: left/right/top/bottom as fractions (0-0.45)",
     "set_opacity": "a picture clip's opacity, 0-1",
+    "set_track_mix": "an audio track's mixer strip: gain_db (-60..12, the fader) and/or pan (-1 left..1 right)",
+    "set_fade": "fade a clip's SOUND in/out over N frames (fade_in, fade_out; 0 removes); on a picture clip it "
+                "fades the linked sound",
     "set_speed": "play a clip (and its linked sound) at speed 0.25-4 (1 = normal); its length on the "
                  "timeline becomes src span / speed and, with ripple (default), what follows moves",
     "set_reverse": "play a clip (and its linked sound) backwards (on=true) or forwards again (on=false)",
@@ -150,6 +153,10 @@ def read_timeline(doc: dict, names: Optional[dict] = None) -> str:
         if kind == "audio":
             head += f", {t.get('role')}" + (f", ducks under {t['duck_under']}"
                                             if t.get("duck_under") else "")
+            if t.get("gain_db"):
+                head += f", fader {t['gain_db']:+g} dB"
+            if t.get("pan"):
+                head += f", pan {t['pan']:+g}"
         if kind == "caption":
             head += f", {t.get('style')}"
         lines.append(head + "):")
@@ -181,6 +188,10 @@ def read_timeline(doc: dict, names: Optional[dict] = None) -> str:
                 line += f" · {tr.get('style') or 'fade'} in over {tr.get('frames')}f"
             if kind == "audio" and c.get("gain_db"):
                 line += f" · gain {c['gain_db']:+g} dB"
+            if c.get("fade_in") or c.get("fade_out"):
+                line += f" · fades {c.get('fade_in', 0)}f in / {c.get('fade_out', 0)}f out"
+            if c.get("lanes"):
+                line += " · keyed " + ", ".join(sorted({x.get('path', '?') for x in c['lanes']}))
             lines.append(line)
         if not t.get("clips"):
             lines.append("  (empty)")

@@ -205,6 +205,8 @@ ARGS = {
     "set_crop": {"clip_id": "c1", "left": 0.1},
     "set_opacity": {"clip_id": "c1", "value": 0.5},
     "set_speed": {"clip_id": "c1", "speed": 2},
+    "set_track_mix": {"track_id": "A1", "gain_db": -3, "pan": -0.5},
+    "set_fade": {"clip_id": "c1", "fade_in": 15, "fade_out": 30},
     "set_reverse": {"clip_id": "c1", "on": True},
 }
 
