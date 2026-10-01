@@ -39,7 +39,7 @@ export default function PricingPage() {
             <div>
               <h2 className="serif text-2xl">Top up</h2>
               <p className="mt-1 text-[15px] text-[#afafaf]">
-                {num(TOPUP.credits)} credits for {usd(TOPUP.usd)}, one time, on any plan. Purchased credit is spent
+                {num(TOPUP.credits)} credits for {usd(TOPUP.usd)}, one time, for accounts on a plan. Purchased credit is spent
                 after your monthly allowance.
               </p>
             </div>
