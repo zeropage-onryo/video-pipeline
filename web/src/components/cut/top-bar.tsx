@@ -128,6 +128,8 @@ export function TopBar() {
         ))}
       </select>
       <span className="spacer" />
+      <PageSwitch />
+      <span className="spacer" />
       <span className={`cx-saved${busy ? " busy" : ""}`} title="Every edit is saved as a version the moment it lands">
         <i />
         {busy ? "Saving…" : head ? `Saved · v${head.version}` : "—"}
@@ -138,6 +140,27 @@ export function TopBar() {
       </button>
       {exportOpen ? <ExportDialog onClose={() => setExportOpen(false)} /> : null}
     </header>
+  );
+}
+
+const PAGES = [
+  { id: "edit", label: "Edit", key: "⇧4" },
+  { id: "audio", label: "Audio", key: "⇧7" },
+  { id: "color", label: "Color", key: "⇧6" },
+] as const;
+
+/* Resolve's pages: one doc, three layouts. A view, never an edit. */
+function PageSwitch() {
+  const page = useCut((s) => s.page);
+  const setPage = useCut((s) => s.setPage);
+  return (
+    <span className="cx-seg cx-pages" role="tablist" aria-label="Page">
+      {PAGES.map((p) => (
+        <button key={p.id} type="button" role="tab" aria-selected={page === p.id} title={`${p.label} page (${p.key})`} onClick={() => setPage(p.id)}>
+          {p.label}
+        </button>
+      ))}
+    </span>
   );
 }
 

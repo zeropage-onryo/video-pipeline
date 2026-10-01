@@ -327,6 +327,7 @@ def test_every_op_is_reachable_through_the_route(api):
     step("clear_lane", clip_id=pic, path="zoom")
     step("set_crop", clip_id=pic, left=0.1, right=0.05)
     doc = step("set_opacity", clip_id=pic, value=0.6)
+    step("set_grade", clip_id=pic, exposure=0.5, temperature=-0.3)
     doc = step("set_speed", clip_id=pic, speed=2)
     doc = step("set_reverse", clip_id=pic, on=True)
     assert d.track(doc, "V1")["clips"][0]["opacity"] == 0.6

@@ -53,6 +53,7 @@ import {
 } from "@/lib/cut/timeline";
 import { fitBoxes, lookAt, valueOf } from "@/lib/cut/lanes";
 import { lookAt as transitionLook } from "@/lib/cut/transitions";
+import { gradeFilter, gradeTint } from "@/components/cut/color";
 
 const DUCK = 0.32; // ~ -10 dB
 const WINDOW_BEFORE_S = 0.5;
@@ -376,10 +377,12 @@ function PictureEl({
     transform: `translate(${look.x * frameW}px, ${look.y * frameH}px) rotate(${look.rotation}deg) scale(${look.zoom})`,
     transformOrigin: "50% 50%",
     opacity: fade * look.opacity,
+    filter: gradeFilter(clip.grade),
     ...blend,
     zIndex: z,
     pointerEvents: "none",
   };
+  const tint = gradeTint(clip.grade);
   const fill: React.CSSProperties = {
     position: "absolute",
     inset: "auto",
@@ -403,6 +406,7 @@ function PictureEl({
           style={fill}
           onLoad={(e) => setNatural({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
         />
+        {tint ? <i style={tint} /> : null}
       </div>
     );
   }
@@ -424,6 +428,7 @@ function PictureEl({
           e.currentTarget.currentTime = Math.max(0.001, sourceTime(clip, Math.max(playhead, clip.at), fps));
         }}
       />
+      {tint ? <i style={tint} /> : null}
     </div>
   );
 }

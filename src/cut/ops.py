@@ -701,6 +701,34 @@ def set_opacity(doc: dict, clip_id: str, value: float) -> dict:
     return _finish(doc)
 
 
+def set_grade(doc: dict, clip_id: str, exposure: Optional[float] = None,
+              contrast: Optional[float] = None, saturation: Optional[float] = None,
+              temperature: Optional[float] = None, reset: bool = False) -> dict:
+    """A picture clip's basic correction (the Color page): exposure in
+    stops, contrast and saturation as factors (1 = as shot), temperature
+    -1 cool .. +1 warm. Only the fields given change; `reset` clears them
+    all first. A field at its neutral value is removed."""
+    doc = _copy(doc)
+    c = _need_picture(doc, clip_id)
+    grade = {} if reset else dict(c.get("grade") or {})
+    for key, val in (("exposure", exposure), ("contrast", contrast),
+                     ("saturation", saturation), ("temperature", temperature)):
+        if val is None:
+            continue
+        lo, hi, neutral = d.GRADE_FIELDS[key]
+        if not isinstance(val, (int, float)) or isinstance(val, bool) or not lo <= val <= hi:
+            raise OpError(f"{key} must be {lo:g} to {hi:g}, got {val!r}")
+        if abs(val - neutral) < 1e-9:
+            grade.pop(key, None)
+        else:
+            grade[key] = round(float(val), 4)
+    if grade:
+        c["grade"] = grade
+    else:
+        c.pop("grade", None)
+    return _finish(doc)
+
+
 def set_canvas(doc: dict, width: int, height: int) -> dict:
     """Change the frame size. Every clip is fitted into the new frame at
     render (scale to fit, pad black), so nothing on the timeline moves;
@@ -820,6 +848,7 @@ OPS: dict[str, Callable[..., dict]] = {
     "set_opacity": set_opacity,
     "set_speed": set_speed,
     "set_track_mix": set_track_mix,
+    "set_grade": set_grade,
     "set_fade": set_fade,
     "set_reverse": set_reverse,
 }
@@ -909,6 +938,12 @@ def describe(op: str, args: Optional[dict[str, Any]] = None, fps: int = d.DEFAUL
             return f"crop {clip_id} " + (" ".join(sides) or "off")
         if op == "set_opacity":
             return f"opacity {clip_id} {float(a.get('value', 1)) * 100:.0f}%"
+        if op == "set_grade":
+            if a.get("reset") and not any(a.get(k) is not None for k in d.GRADE_FIELDS):
+                return f"reset the grade on {clip_id}"
+            bits = [f"{k} {float(a[k]):+g}" if k in ("exposure", "temperature") else f"{k} {float(a[k]):g}"
+                    for k in d.GRADE_FIELDS if a.get(k) is not None]
+            return f"grade {clip_id}: " + (", ".join(bits) or "unchanged")
         if op == "set_track_mix":
             bits = []
             if a.get("gain_db") is not None:

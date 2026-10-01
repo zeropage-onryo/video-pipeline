@@ -103,6 +103,17 @@ def _check_clip(t: dict, c: dict, media: Optional[dict], out: list[str]) -> bool
     if c.get("lanes") is not None or c.get("crop") is not None or c.get("opacity") is not None:
         paths = lanes.PATHS if t.get("kind") == "video" else lanes.AUDIO_PATHS
         out.extend(lanes.check(c, d.clip_length(c) if ok else 0, where, paths))
+    grade = c.get("grade")
+    if grade is not None:
+        if t.get("kind") != "video":
+            out.append(f"{where}: a grade belongs to picture clips")
+        elif not isinstance(grade, dict) or set(grade) - set(d.GRADE_FIELDS):
+            out.append(f"{where}: grade is {{{', '.join(d.GRADE_FIELDS)}}}")
+        else:
+            for key, val in grade.items():
+                lo, hi, _ = d.GRADE_FIELDS[key]
+                if not isinstance(val, (int, float)) or isinstance(val, bool) or not lo <= val <= hi:
+                    out.append(f"{where}: grade {key} must be {lo:g} to {hi:g}, got {val!r}")
     for key in ("fade_in", "fade_out"):
         f = c.get(key)
         if f is None:

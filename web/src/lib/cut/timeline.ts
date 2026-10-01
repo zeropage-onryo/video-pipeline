@@ -31,6 +31,8 @@ export type Clip = {
   gain_db?: number;
   transition_in?: TransitionIn;
   lanes?: { path: "zoom" | "x" | "y" | "rotation" | "volume"; keys: LaneKey[] }[];
+  /* a picture clip's basic correction (the Color page) */
+  grade?: { exposure?: number; contrast?: number; saturation?: number; temperature?: number };
   /* a sound clip's fades, in frames */
   fade_in?: number;
   fade_out?: number;
@@ -409,6 +411,8 @@ export function describeOp(op: string, args: Record<string, unknown>, fps: numbe
       return `Transition ${args.style ? String(args.style) : ""}${args.frames ? ` ${args.frames}f` : ""}`.trim();
     case "remove_transition":
       return `Hard cut into ${args.clip_id}`;
+    case "set_grade":
+      return args.reset ? `Grade reset on ${args.clip_id}` : `Graded ${args.clip_id}`;
     case "set_track_mix":
       return `Mix ${args.track_id}`;
     case "set_fade":

@@ -208,6 +208,18 @@ def _segment(c: dict, src: str, seg: str, fps: int, w: int, h: int, norm: str,
         # a retimed span lands within a frame of its length; hold the last
         # frame and cut, so the concat/xfade offsets stay exact
         exact = f",tpad=stop_mode=clone:stop=2,trim=end={_s(length, fps)}"
+    grade = c.get("grade") or {}
+    if grade:
+        # the Color page's basic correction, on the source picture before
+        # it is fitted -- the same order the preview's CSS filter uses
+        if grade.get("exposure"):
+            head += f",exposure=exposure={grade['exposure']:.4f}"
+        if "contrast" in grade or "saturation" in grade:
+            head += f",eq=contrast={grade.get('contrast', 1):.4f}:saturation={grade.get('saturation', 1):.4f}"
+        if grade.get("temperature"):
+            # +1 warm is a 3500 K light, -1 cool a 9500 K one, around daylight
+            head += f",colortemperature=temperature={6500 - 3000 * grade['temperature']:.0f}"
+        head += ",format=yuv420p"
     if not lanes.has_look(c):
         return [f"{head},{norm}{exact}[{seg}]"]
     keys = {p: (lanes.lane(c, p) or {}).get("keys") or [] for p in lanes.PATHS}

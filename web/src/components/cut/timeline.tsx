@@ -88,7 +88,7 @@ type Drag =
       moved: boolean;
     };
 
-export function Timeline() {
+export function Timeline({ only }: { only?: Track["kind"] } = {}) {
   const doc = useDrawnDoc();
   const head = useCut((s) => s.doc);
   const pps = useCut((s) => s.pps);
@@ -110,7 +110,11 @@ export function Timeline() {
   const binByHandle = useMemo(() => new Map(bin.map((b) => [b.handle, b])), [bin]);
 
   const fps = doc?.fps ?? 30;
-  const tracks = useMemo(() => (doc ? stackOrder(doc.tracks) : []), [doc]);
+  // a page shows only its own kind of track (the Audio page, the Color page)
+  const tracks = useMemo(
+    () => (doc ? stackOrder(doc.tracks).filter((t) => !only || t.kind === only) : []),
+    [doc, only],
+  );
   const tops = useMemo(
     () => tracks.map((_, i) => tracks.slice(0, i).reduce((h, t) => h + HEIGHT[t.kind], 0)),
     [tracks],

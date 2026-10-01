@@ -92,6 +92,8 @@ OP_NOTES = {
     "clear_lane": "reset a picture clip's zoom | x | y | rotation to its default",
     "set_crop": "crop a picture clip's edges: left/right/top/bottom as fractions (0-0.45)",
     "set_opacity": "a picture clip's opacity, 0-1",
+    "set_grade": "a PICTURE clip's basic correction: exposure (stops, -2..2), contrast (0.5..2), saturation "
+                 "(0..2), temperature (-1 cool..1 warm); reset=true clears it first",
     "set_track_mix": "an audio track's mixer strip: gain_db (-60..12, the fader) and/or pan (-1 left..1 right)",
     "set_fade": "fade a clip's SOUND in/out over N frames (fade_in, fade_out; 0 removes); on a picture clip it "
                 "fades the linked sound",
@@ -190,6 +192,8 @@ def read_timeline(doc: dict, names: Optional[dict] = None) -> str:
                 line += f" · gain {c['gain_db']:+g} dB"
             if c.get("fade_in") or c.get("fade_out"):
                 line += f" · fades {c.get('fade_in', 0)}f in / {c.get('fade_out', 0)}f out"
+            if c.get("grade"):
+                line += " · graded " + ", ".join(f"{k} {v:g}" for k, v in c["grade"].items())
             if c.get("lanes"):
                 line += " · keyed " + ", ".join(sorted({x.get('path', '?') for x in c['lanes']}))
             lines.append(line)
