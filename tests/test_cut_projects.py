@@ -689,7 +689,7 @@ def test_export_renders_a_version_in_a_job_and_lists_it(api, monkeypatch):
     import app.cut_routes as cut_routes
     rendered = []
 
-    def fake_render(doc, *, account_id, name, paths, media):
+    def fake_render(doc, *, account_id, name, paths, media, fmt="mp4", frame=0):
         rendered.append((doc["size"], name))
         return {"stored": f"/renders/cut/{name}.mp4", "url": f"/renders/cut/{name}.mp4",
                 "seconds": doc["duration"] / doc["fps"], "notes": [], "path": "x", "bytes": 1}
@@ -761,3 +761,45 @@ def test_a_real_export_holds_a_still_and_cuts_to_a_clip(api, files):
     # let the upload's preview builds finish inside this test's database
     for handle in (still, clip):
         _wait_preview(client, handle)
+
+
+def test_export_makes_the_sound_a_still_or_an_editable_project(api, monkeypatch, tmp_path):
+    client, w = api
+    import app.cut_routes as cut_routes
+    calls = []
+
+    def fake_render(doc, *, account_id, name, paths, media, fmt="mp4", frame=0):
+        calls.append((fmt, frame, name))
+        ext = {"audio": "m4a", "still": "png"}[fmt]
+        return {"stored": f"/renders/cut/{name}.{ext}", "url": f"/renders/cut/{name}.{ext}",
+                "seconds": 3.0, "notes": [], "path": "x", "bytes": 1}
+
+    monkeypatch.setattr(cut_routes.cut_render, "render", fake_render)
+    monkeypatch.setattr(cut_routes.cut_render, "CUT_DIR", tmp_path)
+    monkeypatch.setattr(cut_routes.cut_sources, "gather", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(cut_routes.cut_sources, "ffmpeg_bin", lambda: "/usr/bin/ffmpeg")
+    import src.media as media_mod
+    monkeypatch.setattr(media_mod, "mirror", lambda *a, **k: None)
+    pid = _new(client)["id"]
+    base = _open(client, pid)["head"]["id"]
+    _ok(_op(client, pid, base, "insert", track_id="V1", sound_track="A1",
+            clip={"media": w["g1"], "src_in": 0, "src_out": 90}))
+
+    job = _wait(client, _ok(client.post(f"/api/cut/projects/{pid}/export", json={"format": "audio"}))["job_id"])
+    assert job["format"] == "audio" and job["file_url"].endswith(".m4a") and job["mp4_url"] is None
+    job = _wait(client, _ok(client.post(f"/api/cut/projects/{pid}/export",
+                                        json={"format": "still", "frame": 45}))["job_id"])
+    assert job["file_url"].endswith("-f45.png") and calls[-1][:2] == ("still", 45)
+    res = client.post(f"/api/cut/projects/{pid}/export", json={"format": "still", "frame": 900})
+    assert res.status_code == 422
+    # none of them is the version's export of record
+    assert _ok(client.get(f"/api/cut/projects/{pid}/exports"))["exports"] == []
+
+    # the editable project needs no ffmpeg at all
+    monkeypatch.setattr(cut_routes.cut_sources, "ffmpeg_bin", lambda: None)
+    job = _wait(client, _ok(client.post(f"/api/cut/projects/{pid}/export", json={"format": "project"}))["job_id"])
+    assert job["status"] == "done", job
+    written = json.loads(next(tmp_path.glob("*.otio")).read_text())
+    assert written["OTIO_SCHEMA"] == "Timeline.1"
+    assert [t["kind"] for t in written["tracks"]["children"]] == ["Video", "Audio", "Audio"]
+    assert job["otio_url"].endswith(".otio") and job["srt_url"] is None

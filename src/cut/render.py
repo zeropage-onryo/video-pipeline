@@ -418,16 +418,29 @@ def stills_in(media: Optional[dict], paths: dict[str, Path]) -> set[str]:
     return out | {h for h, p in paths.items() if Path(p).suffix.lower() in sources.IMAGE_EXTS}
 
 
+FORMATS = {
+    # what render() can write: suffix, mime -- the export dialog's targets
+    "mp4": (".mp4", "video/mp4"),
+    "audio": (".m4a", "audio/mp4"),
+    "still": (".png", "image/png"),
+}
+
+
 def compile_args(doc: dict, paths: dict[str, Path], out: Path, *,
                  burn: Optional[str] = None, ffmpeg: str = "ffmpeg",
-                 stills=()) -> list[str]:
+                 stills=(), fmt: str = "mp4", frame: int = 0) -> list[str]:
     """The whole ffmpeg argv for one doc. Pure. `burn` is the .ass file
     name to burn in (relative to the cwd ffmpeg runs in), or None.
 
     A handle in `stills` is an image: it is read with `-loop 1` at the
     project fps, bounded by `-t` to the furthest frame any clip asks of
     it, so the same trim/setpts chain that cuts a video cuts a held
-    still -- and an image never becomes an endless input."""
+    still -- and an image never becomes an endless input.
+
+    `fmt` "audio" is the sound alone (no picture input is even opened),
+    "still" the one picture frame at `frame` (no sound input opened)."""
+    if fmt not in FORMATS:
+        raise RenderError(f"no export format {fmt!r}")
     handles = d.handles(doc)
     missing = [h for h in handles if h not in paths]
     if missing:
@@ -443,6 +456,10 @@ def compile_args(doc: dict, paths: dict[str, Path], out: Path, *,
     fps = doc["fps"]
     on_video = {c.get("media") for t in d.tracks_of(doc, "video") for c in t.get("clips") or []}
     on_audio = {c.get("media") for t in d.tracks_of(doc, "audio") for c in t.get("clips") or []}
+    if fmt == "audio":
+        on_video = set()
+    if fmt == "still":
+        on_audio = set()
     argv = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
     vindex: dict[str, int] = {}
     aindex: dict[str, int] = {}
@@ -463,7 +480,7 @@ def compile_args(doc: dict, paths: dict[str, Path], out: Path, *,
     # one (paths["rev:<clip id>"], reverse_source): the `reverse` filter
     # holds the whole span in memory, which a 1 GB machine cannot spare
     rev_index: dict[str, int] = {}
-    for t in d.tracks_of(doc, "video"):
+    for t in (d.tracks_of(doc, "video") if fmt != "audio" else []):
         for c in t.get("clips") or []:
             key = f"rev:{c.get('id')}"
             if c.get("reverse") and key in paths:
@@ -471,7 +488,18 @@ def compile_args(doc: dict, paths: dict[str, Path], out: Path, *,
                 rev_index[c["id"]] = n
                 n += 1
     parts: list[str] = []
+    if fmt == "audio":
+        aout = _audio_graph(doc, aindex, parts)
+        return argv + ["-filter_complex_threads", "1", "-filter_complex", ";".join(parts),
+                       "-map", f"[{aout}]", "-c:a", "aac", "-b:a", "192k", "-ar", str(SAMPLE_RATE),
+                       "-movflags", "+faststart", "-t", _s(doc["duration"], doc["fps"]), str(out)]
     vout = _video_graph(doc, vindex, parts, burn, rev_index, stills)
+    if fmt == "still":
+        if not 0 <= frame < doc["duration"]:
+            raise RenderError(f"frame {frame} is outside the cut (0-{doc['duration'] - 1})")
+        parts.append(f"[{vout}]trim=start_frame={frame}:end_frame={frame + 1},setpts=PTS-STARTPTS[still]")
+        return argv + ["-filter_complex_threads", "1", "-filter_complex", ";".join(parts),
+                       "-map", "[still]", "-frames:v", "1", "-c:v", "png", str(out)]
     aout = _audio_graph(doc, aindex, parts)
     argv += ["-filter_complex_threads", "1", "-filter_complex", ";".join(parts),
              "-map", f"[{vout}]", "-map", f"[{aout}]",
@@ -526,11 +554,16 @@ def reverse_source(exe: str, src: Path, start: int, end: int, fps: int, work: Pa
 
 def render(doc: dict, *, account_id: Optional[int], name: str,
            paths: Optional[dict[str, Path]] = None, media: Optional[dict] = None,
-           dsn: Optional[str] = None, out_dir: Optional[Path] = None) -> dict[str, Any]:
-    """Render a doc to data/renders/cut/<name>.mp4 (and R2). Returns
+           dsn: Optional[str] = None, out_dir: Optional[Path] = None,
+           fmt: str = "mp4", frame: int = 0) -> dict[str, Any]:
+    """Render a doc to data/renders/cut/<name>.mp4 (and R2) -- or, with
+    `fmt`, its sound as .m4a or the frame at `frame` as .png. Returns
     {"stored", "url", "path", "seconds", "bytes", "notes"}. Raises
     RenderError / sources.SourceError / validate.InvalidDoc with a reason
     a person can act on."""
+    suffix, mime = FORMATS.get(fmt, (None, None))
+    if suffix is None:
+        raise RenderError(f"no export format {fmt!r}")
     exe = sources.ffmpeg_bin()
     if not exe:
         raise RenderError("ffmpeg is not installed on this machine")
@@ -545,7 +578,7 @@ def render(doc: dict, *, account_id: Optional[int], name: str,
             paths, media = sources.gather(d.handles(doc), account_id=account_id,
                                           fps=doc["fps"], workdir=work, dsn=dsn)
         v.validate(doc, media)
-        ass = ass_document(doc)
+        ass = ass_document(doc) if fmt != "audio" else None
         burn = None
         if ass:
             (work / "captions.ass").write_text(ass, encoding="utf-8")
@@ -556,15 +589,15 @@ def render(doc: dict, *, account_id: Optional[int], name: str,
                 notes.append("captions NOT burned in: this ffmpeg has no libass -- "
                              f"written beside the MP4 as {name}.ass")
         paths = dict(paths)
-        for t in d.tracks_of(doc, "video"):
+        for t in (d.tracks_of(doc, "video") if fmt != "audio" else []):
             for c in t.get("clips") or []:
                 if c.get("reverse") and c["media"] in paths and c["media"] not in stills_in(media, paths):
                     paths[f"rev:{c['id']}"] = reverse_source(
                         exe, Path(paths[c["media"]]), c["src_in"], c["src_out"], doc["fps"],
                         work, f"rev_{c['id']}")
-        tmp_out = work / "out.mp4"
+        tmp_out = work / f"out{suffix}"
         argv = compile_args(doc, paths, tmp_out, burn=burn, ffmpeg=exe,
-                            stills=stills_in(media, paths))
+                            stills=stills_in(media, paths), fmt=fmt, frame=frame)
         started = time.monotonic()
         try:
             proc = subprocess.run(argv, cwd=work, capture_output=True, text=True,
@@ -574,11 +607,14 @@ def render(doc: dict, *, account_id: Optional[int], name: str,
         if proc.returncode != 0 or not tmp_out.is_file():
             tail = (proc.stderr or "").strip().splitlines()[-3:]
             raise RenderError("ffmpeg failed: " + (" | ".join(tail) or f"exit {proc.returncode}"))
-        final = out_dir / f"{name}.mp4"
+        final = out_dir / f"{name}{suffix}"
         shutil.move(str(tmp_out), final)
-    got = sources.probe(final, doc["fps"])
-    if abs(got["frames"] - doc["duration"]) > 2:
-        notes.append(f"rendered {got['frames']} frames against a {doc['duration']}-frame cut")
+    if fmt == "still":
+        got = {"seconds": 0.0}
+    else:
+        got = sources.probe(final, doc["fps"])
+        if abs(got["frames"] - doc["duration"]) > 2:
+            notes.append(f"rendered {got['frames']} frames against a {doc['duration']}-frame cut")
 
     from .. import media as media_mod
     stored = url = None
@@ -587,7 +623,7 @@ def render(doc: dict, *, account_id: Optional[int], name: str,
         # url_for mints the R2 string when it landed there
         stored = f"/renders/cut/{final.name}"
         media_mod.mirror(final, f"renders/cut/{final.name}", account_id,
-                         content_type="video/mp4", derive=False)
+                         content_type=mime, derive=False)
         url = media_mod.url_for(stored, account_id)
     return {"stored": stored, "url": url,
             "path": str(final), "seconds": got["seconds"],

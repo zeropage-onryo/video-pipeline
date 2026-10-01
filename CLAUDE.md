@@ -1861,6 +1861,17 @@ is yours, in Resolve, by hand.
   strip says the truth about the sum: the export is loudness-normalised to -14 LUFS, so the faders
   set balance, not level. The preview multiplies gain x fader x volume key x fades, but an
   `<audio>` element can neither boost past 0 dB nor pan; the strip says so.
+  **Export targets (2026-10-01):** `POST .../export {format}` makes the MP4 (`mp4`, the default
+  and the only one stored as the version's `export_url`), the mix alone (`audio`, AAC .m4a --
+  `compile_args(fmt="audio")` opens no picture input at all), the frame at `frame` (`still`, a PNG;
+  no sound input opened), or an EDITABLE PROJECT (`project`): `src/cut/otio.py` writes the doc as
+  OpenTimelineIO JSON (.otio, media by public URL and name, gaps, transitions, speed/reverse as a
+  LinearTimeWarp, markers) plus captions as .srt -- no ffmpeg. Two OTIO conventions to keep: items
+  ABUT, so our overlap becomes the outgoing clip ending at the incoming one's start plus a
+  Transition whose `in_offset` borrows the outgoing media past the cut; and an item's
+  `source_range.duration` is its TIMELINE length (the warp applies to the media), which is what
+  OpenTimelineIO 0.18 reads back to exactly the cut's duration. Keyframes, crop, fades and the
+  mix have no OTIO field; they ride in `metadata["zpf"]` so nothing is lost.
   **The agent (phase E, 2026-09-28, Mike's D4)** never edits: every edit is a PROPOSAL
   (`{summary, ops, base_id, region, duration_delta, doc, kind}`) the person Keeps or Undoes.
   `POST /api/cut/projects/{id}/agent {message, playhead?, selection?}` is a job;
