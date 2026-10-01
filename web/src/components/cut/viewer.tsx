@@ -38,7 +38,19 @@ import {
 import { useCut, useDrawnDoc } from "@/lib/cut/store";
 import { jumpCut, nudge, toEnd, toStart } from "@/lib/cut/actions";
 import type { BinItem, Preview } from "@/lib/cut/api";
-import { clipAt, clipEnd, clipLength, endOf, stackOrder, timecode, type Clip, type Doc, type Track } from "@/lib/cut/timeline";
+import {
+  clipAt,
+  clipEnd,
+  clipLength,
+  endOf,
+  sourceFrameAt,
+  speedOf,
+  stackOrder,
+  timecode,
+  type Clip,
+  type Doc,
+  type Track,
+} from "@/lib/cut/timeline";
 import { fitBoxes, lookAt } from "@/lib/cut/lanes";
 
 const DUCK = 0.32; // ~ -10 dB
@@ -244,9 +256,10 @@ function topClipAt(doc: Doc, frame: number): Clip | null {
   return null;
 }
 
-/* where in its media a clip is at the playhead, in seconds */
+/* where in its media a clip is at the playhead, in seconds -- through
+   its speed, and from the end of the span when it plays backwards */
 const sourceTime = (clip: Clip, playhead: number, fps: number) =>
-  (clip.src_in + Math.max(0, Math.min(playhead, clipEnd(clip) - 1) - clip.at)) / fps;
+  sourceFrameAt(clip, Math.max(0, Math.min(playhead, clipEnd(clip) - 1) - clip.at)) / fps;
 
 function useFollow(
   ref: React.RefObject<HTMLMediaElement | null>,
@@ -259,10 +272,24 @@ function useFollow(
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const want = active ? sourceTime(clip, playhead, fps) : clip.src_in / fps;
-    if (active && playing) {
-      if (Math.abs(el.currentTime - want) > 0.25) el.currentTime = want;
+    const want = active ? sourceTime(clip, playhead, fps) : sourceFrameAt(clip, 0) / fps;
+    if (active && playing && !clip.reverse) {
+      const rate = speedOf(clip);
+      if (el.playbackRate !== rate) el.playbackRate = rate;
+      if (Math.abs(el.currentTime - want) > 0.25 * Math.max(1, rate)) el.currentTime = want;
       if (el.paused) el.play().catch(() => undefined);
+    } else if (active && playing) {
+      // a browser will not play backwards: a reversed clip is SEEKED to
+      // each frame the clock reaches (silent, a little stepped; the
+      // export is the smooth one)
+      if (!el.paused) el.pause();
+      if (Math.abs(el.currentTime - want) > 0.5 / fps) {
+        try {
+          el.currentTime = want;
+        } catch {
+          /* not seekable yet */
+        }
+      }
     } else {
       if (!el.paused) el.pause();
       if (Math.abs(el.currentTime - want) > 0.5 / fps) {

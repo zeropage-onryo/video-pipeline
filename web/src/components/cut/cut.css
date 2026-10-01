@@ -877,6 +877,20 @@ input.cx-title {
   color: rgb(255 255 255 / 0.75);
   pointer-events: none;
 }
+.cx-clip-speed {
+  position: absolute;
+  right: 4px;
+  bottom: 3px;
+  z-index: 3;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 9px;
+  line-height: 13px;
+  color: var(--ink, #fff);
+  background: rgb(0 0 0 / 0.6);
+  pointer-events: none;
+}
 .cx-xfade {
   position: absolute;
   top: 0;
@@ -1796,4 +1810,29 @@ input.cx-title {
   rotate: 45deg;
   background: #d8a93a;
   box-shadow: 0 0 0 1px rgb(0 0 0 / 0.7);
+}
+
+/* ── the Playback card (speed / reverse) ── */
+.cx-playback .cx-field-row {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.cx-speed-box {
+  width: 56px;
+}
+.cx-check {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 6px 0;
+  font-size: 12px;
+  cursor: pointer;
+}
+.cx-check input {
+  accent-color: var(--signal);
+}
+.cx-note-inline {
+  color: var(--ink-3, rgb(255 255 255 / 0.5));
+  font-size: 11px;
 }

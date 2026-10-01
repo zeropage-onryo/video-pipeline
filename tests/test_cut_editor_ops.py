@@ -202,6 +202,8 @@ ARGS = {
     "clear_lane": {"clip_id": "c1", "path": "zoom"},
     "set_crop": {"clip_id": "c1", "left": 0.1},
     "set_opacity": {"clip_id": "c1", "value": 0.5},
+    "set_speed": {"clip_id": "c1", "speed": 2},
+    "set_reverse": {"clip_id": "c1", "on": True},
 }
 
 

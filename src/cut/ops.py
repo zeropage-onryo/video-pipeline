@@ -15,8 +15,11 @@ and the caption edits set_cue / delete_cue / set_caption_style. The
 first live walk (T25, 2026-09-29) added add_track: a cut Assemble made
 has V1 and A1 only, so a music bed had nowhere to land but behind the
 clips' own sound. The rest
-of section 5.2's list (swap_take, set_speed, set_lane_key, apply_look,
-match_grade, reframe) arrives with the phases that need it.
+of section 5.2's list (swap_take, apply_look, match_grade, reframe)
+arrives with the phases that need it. Keyframes, crop and opacity landed
+2026-10-01 (set_key ...), and speed and reverse the same day (set_speed,
+set_reverse): trim and split take TIMELINE frames on a sped clip and round
+only the source point, so the timeline stays exact.
 
 `describe(op, args, fps)` is the one-line summary a version is stored
 under ("split c3 at 4.2s") -- written here, beside the ops, so a new op
@@ -199,8 +202,21 @@ def trim(doc: dict, clip_id: str, *, head: int = 0, tail: int = 0,
     for t, c in d.partners(doc, clip_id):
         followers = _after(t, c)
         before = d.clip_length(c)
-        c["src_in"] += head
-        c["src_out"] -= tail
+        if d.is_retimed(c):
+            # head / tail are timeline frames; the source moves by the
+            # speed, and a reversed clip's head is the END of its source
+            sp = d.speed_of(c)
+            sh, st = round(head * sp), round(tail * sp)
+            if c.get("reverse"):
+                sh, st = st, sh
+            c["src_in"] += sh
+            c["src_out"] -= st
+            c["dur"] = before - head - tail
+            if c["dur"] <= 0 or d.span(c) <= 0:
+                raise OpError(f"trimming {head}+{tail} frames leaves nothing of {c['id']}")
+        else:
+            c["src_in"] += head
+            c["src_out"] -= tail
         if d.clip_length(c) <= 0:
             raise OpError(f"trimming {head}+{tail} frames leaves nothing of {c['id']}")
         if c.get("lanes"):
@@ -238,9 +254,23 @@ def split(doc: dict, clip_id: str, frame: int) -> dict:
         second.pop("transition_in", None)
         cut = frame - c["at"]
         whole = d.clip_length(c)
-        second["src_in"] = c["src_in"] + cut
         second["at"] = frame
-        c["src_out"] = c["src_in"] + cut
+        if d.is_retimed(c):
+            # the timeline splits exactly at `cut`; only the source point
+            # rounds, kept inside the span so both halves have picture
+            if d.span(c) < 2:
+                raise OpError(f"clip {c['id']} is too short in its source to split")
+            sc = min(max(round(cut * d.speed_of(c)), 1), d.span(c) - 1)
+            if c.get("reverse"):
+                second["src_out"] = c["src_out"] - sc
+                c["src_in"] = c["src_out"] - sc
+            else:
+                second["src_in"] = c["src_in"] + sc
+                c["src_out"] = c["src_in"] + sc
+            c["dur"], second["dur"] = cut, whole - cut
+        else:
+            second["src_in"] = c["src_in"] + cut
+            c["src_out"] = c["src_in"] + cut
         if c.get("lanes"):
             # each half keeps exactly the motion it had in the whole clip
             second["lanes"] = ln.window(c["lanes"], cut, whole)
@@ -397,9 +427,9 @@ def overwrite(doc: dict, track_id: str, clip: dict, at: int, *,
     _need_int("at", at)
     if at < 0:
         raise OpError("at cannot be negative")
-    length = int(clip["src_out"]) - int(clip["src_in"])
-    if length <= 0:
+    if int(clip["src_out"]) <= int(clip["src_in"]):
         raise OpError("src_out must be after src_in")
+    length = d.clip_length(clip)
     end = at + length
     targets = [track_id] + ([sound_track] if sound_track else [])
     if sound_track:
@@ -419,6 +449,55 @@ def overwrite(doc: dict, track_id: str, clip: dict, at: int, *,
                 break
             doc = lift(doc, inside[0]["id"])
     return insert(doc, track_id, clip, at, ripple=False, sound_track=sound_track)
+
+
+def set_speed(doc: dict, clip_id: str, speed: float, *, ripple: bool = True) -> dict:
+    """Play a clip (and its linked sound) at `speed`x: 0.25 to 4, 1 to
+    reset. The clip keeps its source span and takes `round(span / speed)`
+    timeline frames. With `ripple` (the default, invideo's "Ripple
+    timeline") what follows on each track moves to close or make room;
+    without it, a clip that grows into its neighbour is the validator's to
+    refuse. Keys stay at the same place IN THE CLIP (rescaled), so an
+    animation keeps its shape at the new speed."""
+    doc = _copy(doc)
+    if not isinstance(speed, (int, float)) or isinstance(speed, bool):
+        raise OpError(f"speed must be a number, got {speed!r}")
+    if not d.MIN_SPEED <= speed <= d.MAX_SPEED:
+        raise OpError(f"speed must be {d.MIN_SPEED:g} to {d.MAX_SPEED:g}, got {speed:g}")
+    _need_clip(doc, clip_id)
+    for t, c in d.partners(doc, clip_id):
+        followers = _after(t, c)
+        before = d.clip_length(c)
+        dur = max(1, round(d.span(c) / speed))
+        c.pop("speed", None)
+        if dur == d.span(c):
+            c.pop("dur", None)
+        else:
+            c["dur"] = dur
+        if c.get("lanes") and before:
+            for lane in c["lanes"]:
+                seen: dict[int, dict] = {}
+                for k in lane["keys"]:
+                    seen[round(k["frame"] * dur / before)] = {**k, "frame": round(k["frame"] * dur / before)}
+                lane["keys"] = [seen[f] for f in sorted(seen)]
+        if ripple:
+            _shift(followers, dur - before)
+    return _finish(doc)
+
+
+def set_reverse(doc: dict, clip_id: str, on: bool = True) -> dict:
+    """Play a clip (and its linked sound) backwards, or forwards again.
+    Its place and length on the timeline do not change."""
+    doc = _copy(doc)
+    if not isinstance(on, bool):
+        raise OpError(f"on must be true or false, got {on!r}")
+    _need_clip(doc, clip_id)
+    for _, c in d.partners(doc, clip_id):
+        if on:
+            c["reverse"] = True
+        else:
+            c.pop("reverse", None)
+    return _finish(doc)
 
 
 def _need_picture(doc: dict, clip_id: str) -> dict:
@@ -636,6 +715,8 @@ OPS: dict[str, Callable[..., dict]] = {
     "clear_lane": clear_lane,
     "set_crop": set_crop,
     "set_opacity": set_opacity,
+    "set_speed": set_speed,
+    "set_reverse": set_reverse,
 }
 
 
@@ -713,6 +794,10 @@ def describe(op: str, args: Optional[dict[str, Any]] = None, fps: int = d.DEFAUL
             return f"crop {clip_id} " + (" ".join(sides) or "off")
         if op == "set_opacity":
             return f"opacity {clip_id} {float(a.get('value', 1)) * 100:.0f}%"
+        if op == "set_speed":
+            return f"speed {float(a.get('speed', 1)):g}x on {clip_id}"
+        if op == "set_reverse":
+            return f"{'reverse' if a.get('on', True) else 'play forwards'} {clip_id}"
         if op == "overwrite":
             c = a.get("clip") or {}
             return f"overwrite {c.get('media', '?')} on {a.get('track_id', '?')} at {_secs(a.get('at'), fps)}"

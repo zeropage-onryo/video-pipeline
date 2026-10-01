@@ -146,10 +146,12 @@ def test_picture_from_an_audio_file_is_rejected():
     _has(doc, "asset:7 has no picture")
 
 
-def test_speed_is_refused_until_it_renders_and_lanes_are_checked():
+def test_the_old_speed_key_is_refused_and_lanes_are_checked():
+    # speed is a clip's dur since 2026-10-01 (set_speed); a stray `speed`
+    # key would claim a speed the render does not play
     doc = cut()
     clip(doc, "c1")["speed"] = 2
-    _has(doc, "speed 2 is not supported")
+    _has(doc, "the speed key must be 1")
     # lanes render since 2026-10-01 (lanes.py): a bad one is refused with
     # its reason, a good one passes (tests/test_cut_keyframes.py has the rest)
     doc = cut()

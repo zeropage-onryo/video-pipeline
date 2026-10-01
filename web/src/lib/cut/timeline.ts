@@ -22,7 +22,11 @@ export type Clip = {
   src_in: number;
   src_out: number;
   at: number;
+  /* legacy, always 1: speed is `dur` against the span (src/cut/doc.py) */
   speed?: number;
+  /* timeline frames when retimed; absent = the span (1x) */
+  dur?: number;
+  reverse?: boolean;
   link?: string;
   gain_db?: number;
   transition_in?: TransitionIn;
@@ -66,8 +70,21 @@ export function aspectOf(size: [number, number]): Aspect | null {
   return null;
 }
 
-export const clipLength = (c: Pick<Clip, "src_in" | "src_out">) => c.src_out - c.src_in;
+/* Source frames a clip uses, and the timeline frames it covers -- `dur`
+   when sped, else the span. Speed is never stored: it is span / length. */
+export const clipSpan = (c: Pick<Clip, "src_in" | "src_out">) => c.src_out - c.src_in;
+export const clipLength = (c: Pick<Clip, "src_in" | "src_out" | "dur">) => c.dur ?? clipSpan(c);
 export const clipEnd = (c: Clip) => c.at + clipLength(c);
+export const speedOf = (c: Pick<Clip, "src_in" | "src_out" | "dur">) => {
+  const len = clipLength(c);
+  return len ? clipSpan(c) / len : 1;
+};
+export const isRetimed = (c: Clip) => !!c.reverse || clipLength(c) !== clipSpan(c);
+/* the source frame shown `rel` timeline frames into the clip */
+export const sourceFrameAt = (c: Clip, rel: number) =>
+  c.reverse ? c.src_out - rel * speedOf(c) : c.src_in + rel * speedOf(c);
+export const SPEED_MIN = 0.25;
+export const SPEED_MAX = 4;
 
 /* `mm:ss:ff` -- the transport's clock. Hours only when a cut runs that
    long, which a short never does. */
@@ -285,8 +302,20 @@ export function ghostTrim(doc: Doc, clipId: string, head: number, tail: number, 
     for (const c of ordered) {
       if (!partners(out, clipId).includes(c)) continue;
       const followers = ordered.filter((o) => o.at > c.at);
-      c.src_in += head;
-      c.src_out -= tail;
+      if (isRetimed(c)) {
+        // timeline frames in, the source moves by the speed (ops.trim)
+        const sp = speedOf(c);
+        const before = clipLength(c);
+        let sh = Math.round(head * sp);
+        let st = Math.round(tail * sp);
+        if (c.reverse) [sh, st] = [st, sh];
+        c.src_in += sh;
+        c.src_out -= st;
+        c.dur = before - head - tail;
+      } else {
+        c.src_in += head;
+        c.src_out -= tail;
+      }
       if (ripple) for (const f of followers) f.at -= head + tail;
       else c.at += head;
     }
@@ -304,9 +333,14 @@ export function clampTrim(
   mediaFrames: number | null,
 ): { head: number; tail: number } {
   const len = clipLength(clip);
-  let h = Math.max(head, -clip.src_in);
-  let t = tail;
-  if (mediaFrames !== null) t = Math.max(t, clip.src_out - mediaFrames);
+  const sp = speedOf(clip);
+  // how far each END may extend, in timeline frames: the head of a
+  // reversed clip is its source's end
+  const room = (src: number) => -Math.floor(src / sp);
+  const before = clip.src_in;
+  const after = mediaFrames !== null ? mediaFrames - clip.src_out : Infinity;
+  let h = Math.max(head, room(clip.reverse ? after : before));
+  let t = after === Infinity && !clip.reverse ? tail : Math.max(tail, room(clip.reverse ? before : after));
   if (len - h - t < 1) {
     if (head !== 0) h = len - t - 1;
     else t = len - h - 1;

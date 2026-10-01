@@ -125,6 +125,9 @@ def sound_units(doc: dict, media: dict) -> tuple[list[tuple[dict, dict]], list[s
                 continue
             seen.add(root)
             sound = [(tr, x) for tr, x in group if tr.get("kind") == "audio"]
+            if sound and d.is_retimed(sound[0][1]):
+                notes.append(f"skipped {c['id']}: its sound is sped up, slowed or reversed")
+                continue
             if sound:
                 units.append(sound[0])
                 continue
@@ -135,6 +138,9 @@ def sound_units(doc: dict, media: dict) -> tuple[list[tuple[dict, dict]], list[s
     for t in d.tracks_of(doc, "audio", "voice"):
         for c in t.get("clips") or []:
             if len(d.partners(doc, c["id"])) == 1:
+                if d.is_retimed(c):
+                    notes.append(f"skipped {c['id']}: its sound is sped up, slowed or reversed")
+                    continue
                 units.append((t, c))
     return units, notes
 
@@ -290,8 +296,10 @@ def cleanup(doc: dict, *, account_id: Optional[int], media: dict,
 
 def timeline_words(doc: dict, timings: dict[str, dict]) -> list[tuple[int, int, str]]:
     """Every word of the sound on the timeline (not the music) in
-    TIMELINE frames: mapped through each clip's src_in / at, and a word
-    that starts outside the used part of its file dropped."""
+    TIMELINE frames: mapped through each clip's src_in / at (and its
+    speed), and a word that starts outside the used part of its file
+    dropped. A reversed clip's words are not captioned -- they are not
+    words any more."""
     fps = int(doc["fps"])
     out = []
     for t in d.tracks_of(doc, "audio"):
@@ -299,13 +307,15 @@ def timeline_words(doc: dict, timings: dict[str, dict]) -> list[tuple[int, int, 
             continue
         for c in t.get("clips") or []:
             timing = timings.get(c.get("media"))
-            if not timing:
+            if not timing or c.get("reverse"):
                 continue
             for a, b, text in _words_in(c, timing, fps):
                 if not c["src_in"] <= a < c["src_out"] or not text.strip():
                     continue
                 b = min(b, c["src_out"])
-                out.append((c["at"] + a - c["src_in"], c["at"] + b - c["src_in"], text.strip()))
+                ta = int(round(d.timeline_frame(c, a)))
+                tb = max(ta + 1, min(int(round(d.timeline_frame(c, b))), d.clip_end(c)))
+                out.append((ta, tb, text.strip()))
     return sorted(out)
 
 

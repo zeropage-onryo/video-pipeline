@@ -23,9 +23,10 @@ be probed this time): it is not called unknown, and nothing is checked
 against it -- refusing every edit to a cut because one of its files is
 briefly unreachable would make the whole cut uneditable.
 
-What v0 deliberately refuses rather than half-supports: `speed` other
-than 1 (set_speed is not built). A doc carrying it would render as
-something other than what it says. Keyframe lanes, crop and opacity
+Speed is `dur` (timeline frames) against the source span, 0.25x-4x, and
+`reverse` a bool (2026-10-01); the old `speed` key is refused unless it is
+1, because a doc carrying it would render as something other than what it
+says. Keyframe lanes, crop and opacity
 (lanes.py, 2026-10-01) are checked by lanes.check, on picture clips only.
 """
 from __future__ import annotations
@@ -83,7 +84,19 @@ def _check_clip(t: dict, c: dict, media: Optional[dict], out: list[str]) -> bool
             out.append(f"{where}: src_out ({c['src_out']}) must be after src_in ({c['src_in']})")
             ok = False
     if c.get("speed", 1) != 1:
-        out.append(f"{where}: speed {c.get('speed')!r} is not supported yet (only 1)")
+        out.append(f"{where}: speed is set with set_speed (a clip's dur), "
+                   f"the speed key must be 1, got {c.get('speed')!r}")
+    if c.get("dur") is not None:
+        dur = c["dur"]
+        if not _is_int(dur) or dur < 1:
+            out.append(f"{where}: dur must be a whole number of frames >= 1, got {dur!r}")
+            ok = False
+        elif ok:
+            sp = d.span(c) / dur
+            if not d.MIN_SPEED - 1e-9 <= sp <= d.MAX_SPEED + 1e-9:
+                out.append(f"{where}: speed {sp:.2f}x is outside {d.MIN_SPEED:g}x-{d.MAX_SPEED:g}x")
+    if c.get("reverse") is not None and not isinstance(c["reverse"], bool):
+        out.append(f"{where}: reverse must be true or false, got {c['reverse']!r}")
     if c.get("lanes") is not None or c.get("crop") is not None or c.get("opacity") is not None:
         if t.get("kind") != "video":
             out.append(f"{where}: keyframes, crop and opacity belong to picture clips")

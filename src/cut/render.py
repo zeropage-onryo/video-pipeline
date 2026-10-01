@@ -171,7 +171,8 @@ def ass_document(doc: dict) -> Optional[str]:
 # the graph
 # --------------------------------------------------------------------------
 
-def _segment(c: dict, src: str, seg: str, fps: int, w: int, h: int, norm: str) -> list[str]:
+def _segment(c: dict, src: str, seg: str, fps: int, w: int, h: int, norm: str,
+             prereversed: bool = False) -> list[str]:
     """One picture clip's chain, ending in [seg] at the canvas size.
 
     A clip with no look takes the plain path: trim, fit, pad (`norm`). A
@@ -182,15 +183,33 @@ def _segment(c: dict, src: str, seg: str, fps: int, w: int, h: int, norm: str) -
     preview does. `t` in every expression is clip-relative (setpts zeroed
     it), which is what the keys' frames are. Crop applies to the source
     picture before any of it, so it is in the picture's own proportions."""
-    head = f"{src}trim=start={_s(c['src_in'], fps)}:end={_s(c['src_out'], fps)},setpts=PTS-STARTPTS"
+    length = d.clip_length(c)
+    if prereversed:
+        # pre-reversed by reverse_source: the file IS the span, backwards
+        head = f"{src}setpts=PTS-STARTPTS"
+    else:
+        head = f"{src}trim=start={_s(c['src_in'], fps)}:end={_s(c['src_out'], fps)},setpts=PTS-STARTPTS"
+        if c.get("reverse"):
+            # in-graph fallback (compile_args without a pre-pass): holds
+            # the whole span in memory, which render() never asks of it
+            head += ",reverse"
+    if length != d.span(c):
+        # speed: stretch the span to the clip's length; `fps` (in norm /
+        # fit) then drops or repeats frames at the project rate
+        head += f",setpts=PTS*{length / d.span(c):.6f}"
     crop = c.get("crop")
     if crop:
         left, right = crop.get("left", 0), crop.get("right", 0)
         top, bottom = crop.get("top", 0), crop.get("bottom", 0)
         head += (f",crop=iw*{1 - left - right:.4f}:ih*{1 - top - bottom:.4f}"
                  f":iw*{left:.4f}:ih*{top:.4f}")
+    exact = ""
+    if d.is_retimed(c):
+        # a retimed span lands within a frame of its length; hold the last
+        # frame and cut, so the concat/xfade offsets stay exact
+        exact = f",tpad=stop_mode=clone:stop=2,trim=end={_s(length, fps)}"
     if not lanes.has_look(c):
-        return [f"{head},{norm}[{seg}]"]
+        return [f"{head},{norm}{exact}[{seg}]"]
     keys = {p: (lanes.lane(c, p) or {}).get("keys") or [] for p in lanes.PATHS}
     fit = (f"fps={fps},scale={w}:{h}:force_original_aspect_ratio=decrease,setsar=1,"
            "format=yuva420p")
@@ -206,7 +225,6 @@ def _segment(c: dict, src: str, seg: str, fps: int, w: int, h: int, norm: str) -
         fit += f",rotate=a='({r})*PI/180':c=none:ow='hypot(iw,ih)':oh='hypot(iw,ih)'"
     x = lanes.expr(keys["x"], fps, 0.0)
     y = lanes.expr(keys["y"], fps, 0.0)
-    length = d.clip_length(c)
     return [
         f"color=c=black:s={w}x{h}:r={fps}:d={_s(length, fps)},format=yuv420p[{seg}bg]",
         f"{head},{fit}[{seg}fg]",
@@ -216,7 +234,9 @@ def _segment(c: dict, src: str, seg: str, fps: int, w: int, h: int, norm: str) -
 
 
 def _video_graph(doc: dict, index: dict[str, int], parts: list[str],
-                 burn: Optional[str]) -> str:
+                 burn: Optional[str], rev_index: Optional[dict[str, int]] = None,
+                 stills=()) -> str:
+    rev_index = rev_index or {}
     fps, (w, h), total = doc["fps"], doc["size"], doc["duration"]
     norm = (f"fps={fps},scale={w}:{h}:force_original_aspect_ratio=decrease,"
             f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,format=yuv420p,settb=AVTB")
@@ -253,7 +273,11 @@ def _video_graph(doc: dict, index: dict[str, int], parts: list[str],
             join(black(c["at"] - cursor, f"vg{k}"), 0)
             cursor = c["at"]
         seg = f"v{k}"
-        parts.extend(_segment(c, f"[{index[c['media']]}:v]", seg, fps, w, h, norm))
+        if c.get("reverse") and c.get("media") in stills:
+            c = {k: val for k, val in c.items() if k != "reverse"}   # a still is its own reverse
+        rev = rev_index.get(c.get("id")) if c.get("reverse") else None
+        src = f"[{rev}:v]" if rev is not None else f"[{index[c['media']]}:v]"
+        parts.extend(_segment(c, src, seg, fps, w, h, norm, prereversed=rev is not None))
         join(seg, frames)
         cursor = c["at"] + d.clip_length(c) if not frames else cursor - frames + d.clip_length(c)
     if acc is None:
@@ -267,6 +291,18 @@ def _video_graph(doc: dict, index: dict[str, int], parts: list[str],
     tail.append(f"trim=end={_s(total, fps)}")
     parts.append(f"[{acc}]{','.join(tail)}[vout]")
     return "vout"
+
+
+def _atempo(factor: float) -> list[str]:
+    out = []
+    while factor > 2.0:
+        out.append("atempo=2.0")
+        factor /= 2.0
+    while factor < 0.5:
+        out.append("atempo=0.5")
+        factor /= 0.5
+    out.append(f"atempo={factor:.6f}")
+    return out
 
 
 def _audio_graph(doc: dict, index: dict[str, int], parts: list[str]) -> str:
@@ -285,6 +321,13 @@ def _audio_graph(doc: dict, index: dict[str, int], parts: list[str]) -> str:
             chain = [f"atrim=start={_s(c['src_in'], fps)}:end={_s(c['src_out'], fps)}",
                      "asetpts=PTS-STARTPTS",
                      f"aformat=sample_rates={SAMPLE_RATE}:channel_layouts=stereo"]
+            if c.get("reverse"):
+                chain.append("areverse")
+            if d.clip_length(c) != d.span(c):
+                # pitch-kept tempo; atempo takes 0.5-2 per instance
+                chain += _atempo(d.span(c) / d.clip_length(c))
+                cl = _s(d.clip_length(c), fps)
+                chain += [f"apad=whole_dur={cl}", f"atrim=end={cl}"]
             gain = float(c.get("gain_db") or 0)
             if gain:
                 chain.append(f"volume={gain:g}dB")
@@ -398,8 +441,19 @@ def compile_args(doc: dict, paths: dict[str, Path], out: Path, *,
             argv += ["-threads", str(DECODE_THREADS), "-vn", "-i", str(paths[h])]
             aindex[h] = n
             n += 1
+    # a reversed picture clip reads a PRE-REVERSED file when render() made
+    # one (paths["rev:<clip id>"], reverse_source): the `reverse` filter
+    # holds the whole span in memory, which a 1 GB machine cannot spare
+    rev_index: dict[str, int] = {}
+    for t in d.tracks_of(doc, "video"):
+        for c in t.get("clips") or []:
+            key = f"rev:{c.get('id')}"
+            if c.get("reverse") and key in paths:
+                argv += ["-threads", str(DECODE_THREADS), "-an", "-i", str(paths[key])]
+                rev_index[c["id"]] = n
+                n += 1
     parts: list[str] = []
-    vout = _video_graph(doc, vindex, parts, burn)
+    vout = _video_graph(doc, vindex, parts, burn, rev_index, stills)
     aout = _audio_graph(doc, aindex, parts)
     argv += ["-filter_complex_threads", "1", "-filter_complex", ";".join(parts),
              "-map", f"[{vout}]", "-map", f"[{aout}]",
@@ -414,6 +468,43 @@ def compile_args(doc: dict, paths: dict[str, Path], out: Path, *,
 # --------------------------------------------------------------------------
 # running it
 # --------------------------------------------------------------------------
+
+REVERSE_CHUNK_SECONDS = 1.0
+
+
+def reverse_source(exe: str, src: Path, start: int, end: int, fps: int, work: Path,
+                   name: str) -> Path:
+    """Source frames [start, end) of `src`, backwards, as one file -- made
+    one second at a time (each chunk reversed alone, the chunks joined
+    last-first) so no more than a second of decoded picture is ever held.
+    The `reverse` filter on a whole 10 s 1080p span is ~1.8 GB of frames."""
+    chunk = max(1, round(REVERSE_CHUNK_SECONDS * fps))
+    pieces: list[Path] = []
+    a = start
+    while a < end:
+        b = min(end, a + chunk)
+        out = work / f"{name}_{len(pieces):04d}.mp4"
+        argv = [exe, "-hide_banner", "-loglevel", "error", "-y",
+                "-ss", _s(a, fps), "-threads", str(DECODE_THREADS), "-an", "-i", str(src),
+                "-vf", f"fps={fps},trim=end_frame={b - a},setpts=PTS-STARTPTS,reverse",
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "12", "-pix_fmt", "yuv420p",
+                "-threads", str(ENCODE_THREADS), str(out)]
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=RENDER_TIMEOUT)
+        if proc.returncode != 0 or not out.is_file():
+            tail = (proc.stderr or "").strip().splitlines()[-2:]
+            raise RenderError("reversing a clip failed: " + (" | ".join(tail) or f"exit {proc.returncode}"))
+        pieces.append(out)
+        a = b
+    listing = work / f"{name}.txt"
+    listing.write_text("".join(f"file '{p.name}'\n" for p in reversed(pieces)), encoding="utf-8")
+    final = work / f"{name}.mp4"
+    proc = subprocess.run([exe, "-hide_banner", "-loglevel", "error", "-y", "-f", "concat",
+                           "-safe", "0", "-i", str(listing), "-c", "copy", str(final)],
+                          cwd=work, capture_output=True, text=True, timeout=RENDER_TIMEOUT)
+    if proc.returncode != 0 or not final.is_file():
+        raise RenderError("joining a reversed clip failed")
+    return final
+
 
 def render(doc: dict, *, account_id: Optional[int], name: str,
            paths: Optional[dict[str, Path]] = None, media: Optional[dict] = None,
@@ -446,6 +537,13 @@ def render(doc: dict, *, account_id: Optional[int], name: str,
                 shutil.copyfile(work / "captions.ass", out_dir / f"{name}.ass")
                 notes.append("captions NOT burned in: this ffmpeg has no libass -- "
                              f"written beside the MP4 as {name}.ass")
+        paths = dict(paths)
+        for t in d.tracks_of(doc, "video"):
+            for c in t.get("clips") or []:
+                if c.get("reverse") and c["media"] in paths and c["media"] not in stills_in(media, paths):
+                    paths[f"rev:{c['id']}"] = reverse_source(
+                        exe, Path(paths[c["media"]]), c["src_in"], c["src_out"], doc["fps"],
+                        work, f"rev_{c['id']}")
         tmp_out = work / "out.mp4"
         argv = compile_args(doc, paths, tmp_out, burn=burn, ffmpeg=exe,
                             stills=stills_in(media, paths))
