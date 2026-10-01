@@ -88,6 +88,9 @@ OP_NOTES = {
     "clear_lane": "reset a picture clip's zoom | x | y | rotation to its default",
     "set_crop": "crop a picture clip's edges: left/right/top/bottom as fractions (0-0.45)",
     "set_opacity": "a picture clip's opacity, 0-1",
+    "set_speed": "play a clip (and its linked sound) at speed 0.25-4 (1 = normal); its length on the "
+                 "timeline becomes src span / speed and, with ripple (default), what follows moves",
+    "set_reverse": "play a clip (and its linked sound) backwards (on=true) or forwards again (on=false)",
     "add_track": "an empty track: kind video|audio|caption; an audio track needs role voice|music|sfx",
 }
 
@@ -165,6 +168,10 @@ def read_timeline(doc: dict, names: Optional[dict] = None) -> str:
                     f"src {c['src_in']}-{c['src_out']}f")
             if c.get("link"):
                 line += f" · linked to {c['link']}"
+            if d.clip_length(c) != d.span(c):
+                line += f" · {d.speed_of(c):.2f}x speed"
+            if c.get("reverse"):
+                line += " · reversed"
             if c.get("transition_in"):
                 line += f" · crossfades in over {c['transition_in'].get('frames')}f"
             if kind == "audio" and c.get("gain_db"):
@@ -265,7 +272,7 @@ def region(before: dict, after: dict) -> Optional[dict]:
     new = {c["id"]: c for _, c in d.all_clips(after)}
     for cid, c in old.items():
         n = new.get(cid)
-        if n is None or _changed(c, n, ("media", "src_in", "src_out", "transition_in")):
+        if n is None or _changed(c, n, ("media", "src_in", "src_out", "dur", "reverse", "transition_in")):
             spans.append((c["at"], d.clip_end(c)))
         elif n["at"] != c["at"]:
             slides += [(c["at"], d.clip_end(c)), (n["at"], d.clip_end(n))]

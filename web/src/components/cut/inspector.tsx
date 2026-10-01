@@ -14,12 +14,14 @@ import { Trash2 } from "lucide-react";
 import { useCut, useDrawnDoc } from "@/lib/cut/store";
 import { deleteSelection } from "@/lib/cut/actions";
 import { LookInspector } from "@/components/cut/look-inspector";
+import { PlaybackCard } from "@/components/cut/playback-inspector";
 import {
   ASPECTS,
   aspectOf,
   clipLength,
   findClip,
   findCue,
+  speedOf,
   timecode,
   type Aspect,
   type AudioRole,
@@ -174,13 +176,21 @@ function ClipInspector({ doc, clip, track }: { doc: Doc; clip: Clip; track: Trac
         label="Source in"
         value={clip.src_in}
         fps={fps}
-        onCommit={(f) => op("trim", { clip_id: clip.id, head: f - clip.src_in, tail: 0 })}
+        onCommit={(f) => {
+          // trim takes TIMELINE frames: a source move is divided by the
+          // speed, and a reversed clip's source in is its tail
+          const d = Math.round((f - clip.src_in) / speedOf(clip));
+          op("trim", { clip_id: clip.id, head: clip.reverse ? 0 : d, tail: clip.reverse ? d : 0 });
+        }}
       />
       <FrameField
         label="Source out"
         value={clip.src_out}
         fps={fps}
-        onCommit={(f) => op("trim", { clip_id: clip.id, head: 0, tail: clip.src_out - f })}
+        onCommit={(f) => {
+          const d = Math.round((clip.src_out - f) / speedOf(clip));
+          op("trim", { clip_id: clip.id, head: clip.reverse ? d : 0, tail: clip.reverse ? 0 : d });
+        }}
       />
       <FrameField
         label="Starts at"
@@ -210,6 +220,7 @@ function ClipInspector({ doc, clip, track }: { doc: Doc; clip: Clip; track: Trac
       ) : (
         <LookInspector doc={doc} clip={clip} />
       )}
+      <PlaybackCard key={`${clip.id}-${clip.dur ?? 0}`} doc={doc} clip={clip} />
 
       <div className="cx-field">
         <span className="cx-label">Transition in</span>

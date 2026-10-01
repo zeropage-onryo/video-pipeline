@@ -45,6 +45,8 @@ import {
   partners,
   pxToFrames,
   rulerLabel,
+  sourceFrameAt,
+  speedOf,
   rulerStep,
   snap,
   snapMove,
@@ -646,6 +648,12 @@ const ClipView = memo(function ClipView({
       title={`${name} · ${clip.id}`}
     >
       <span className="cx-clip-name">{name}</span>
+      {clipLength(clip) !== clip.src_out - clip.src_in || clip.reverse ? (
+        <span className="cx-clip-speed" title="Speed and direction (Inspector · Playback)">
+          {clip.reverse ? "◀ " : ""}
+          {clipLength(clip) !== clip.src_out - clip.src_in ? `${+speedOf(clip).toFixed(2)}×` : ""}
+        </span>
+      ) : null}
       {track.kind === "video" ? (
         <Filmstrip clip={clip} fps={fps} pps={pps} width={width} height={bodyH} preview={preview} poster={item?.poster} />
       ) : (
@@ -701,7 +709,7 @@ function Filmstrip({
   const n = Math.min(80, Math.ceil(width / tileW));
   const tiles = [];
   for (let i = 0; i < n; i++) {
-    const t = clip.src_in / fps + (i * tileW) / pps;
+    const t = sourceFrameAt(clip, ((i * tileW) / pps) * fps) / fps;
     const idx = Math.min(strip.count - 1, Math.max(0, Math.floor(t / (strip.interval || 1))));
     tiles.push(
       <i
@@ -752,8 +760,9 @@ function Waveform({ clip, fps, width, preview }: { clip: Clip; fps: number; widt
       ctx.scale(dpr, dpr);
       ctx.clearRect(0, 0, w, h);
       ctx.fillStyle = "rgba(255,255,255,0.62)";
-      const a = (clip.src_in / fps) * wave.per_second;
-      const b = (clip.src_out / fps) * wave.per_second;
+      // a reversed clip draws its span backwards; speed only squeezes it
+      const a = ((clip.reverse ? clip.src_out : clip.src_in) / fps) * wave.per_second;
+      const b = ((clip.reverse ? clip.src_in : clip.src_out) / fps) * wave.per_second;
       const mid = h / 2;
       for (let px = 0; px < w; px++) {
         const i0 = Math.floor(a + ((b - a) * px) / w);
@@ -767,7 +776,7 @@ function Waveform({ clip, fps, width, preview }: { clip: Clip; fps: number; widt
     return () => {
       alive = false;
     };
-  }, [wave, clip.src_in, clip.src_out, fps, width]);
+  }, [wave, clip.src_in, clip.src_out, clip.reverse, fps, width]);
   if (!wave) return null;
   return <canvas ref={ref} className="cx-wave" />;
 }

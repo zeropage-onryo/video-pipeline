@@ -1829,6 +1829,20 @@ is yours, in Resolve, by hand.
   then CSS `translate rotate scale` in the render's order. The Inspector's sliders preview through
   the store's ghost and commit ONE op on release, comparing against the SAVED clip (comparing
   against the drawn ghost read every drag as "no change").
+  **Speed and reverse (2026-10-01)** finish that Inspector (its Playback row). Speed is never
+  stored as a number: a retimed clip carries `dur` (timeline frames) beside its source span, and
+  speed is `span / dur` (0.25x-4x; `doc.speed_of`, `source_frame`, `timeline_frame`). That keeps
+  the timeline in whole frames however a sped clip is cut -- `trim` and `split` take TIMELINE
+  frames and round only the source point, and a reversed clip's head is the END of its source.
+  The legacy `speed` key is refused unless it is 1. Ops `set_speed(clip_id, speed, ripple=True)`
+  (keys rescaled to keep their place in the clip) and `set_reverse(clip_id, on)`, both on the
+  clip and its linked sound. The render: `setpts=PTS*dur/span` then hold-and-trim to the exact
+  length, `atempo` (chained, pitch kept) and `areverse` for sound, and a reversed PICTURE is
+  pre-rendered one second at a time (`render.reverse_source`, chunks reversed alone and joined
+  last-first) because the `reverse` filter holds the whole span in memory -- ~1.8 GB for 10 s of
+  1080p on a 1 GB machine. Clean up skips retimed sound with a note; auto-captions follow the
+  speed and skip a reversed clip. The preview sets `playbackRate`; a browser will not play
+  backwards, so a reversed clip is SEEKED per frame while playing, silently.
   **The agent (phase E, 2026-09-28, Mike's D4)** never edits: every edit is a PROPOSAL
   (`{summary, ops, base_id, region, duration_delta, doc, kind}`) the person Keeps or Undoes.
   `POST /api/cut/projects/{id}/agent {message, playhead?, selection?}` is a job;

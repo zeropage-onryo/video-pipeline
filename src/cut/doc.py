@@ -20,8 +20,13 @@ frames back into the seconds ffmpeg takes.
         "cues": [{"id": "q1", "start": 0, "end": 45, "text": "..."}]}],
      "markers": [{"frame": 150, "label": "Shot 2"}]}
 
-A clip covers timeline frames [at, at + (src_out - src_in)). `src_in` /
-`src_out` are frames INTO the media, at the project fps. `link` ties a
+A clip covers timeline frames [at, at + length). `src_in` / `src_out` are
+frames INTO the media, at the project fps, and the length is `dur` when a
+clip carries one (a speed change, 2026-10-01) and `src_out - src_in`
+otherwise. Speed is never stored as a number: it is `span / dur`, so the
+timeline stays whole frames however a sped clip is cut -- a split or trim
+moves `dur` by exactly the frames asked and rounds only the SOURCE point.
+`reverse: true` plays the span backwards. `link` ties a
 clip to a partner on another track (a video clip's own sound): the ops
 move, trim, split and delete partners together, so picture and its sound
 cannot drift apart.
@@ -119,8 +124,45 @@ def starter_doc(fps: int = DEFAULT_FPS, size=DEFAULT_SIZE) -> dict:
     return doc
 
 
-def clip_length(clip: dict) -> int:
+MIN_SPEED = 0.25
+MAX_SPEED = 4.0
+
+
+def span(clip: dict) -> int:
+    """Source frames the clip uses."""
     return int(clip["src_out"]) - int(clip["src_in"])
+
+
+def clip_length(clip: dict) -> int:
+    """Timeline frames the clip covers."""
+    dur = clip.get("dur")
+    return int(dur) if dur is not None else span(clip)
+
+
+def speed_of(clip: dict) -> float:
+    length = clip_length(clip)
+    return span(clip) / length if length else 1.0
+
+
+def is_retimed(clip: dict) -> bool:
+    """Does this clip play at anything other than 1x, forwards?"""
+    return bool(clip.get("reverse")) or clip_length(clip) != span(clip)
+
+
+def source_frame(clip: dict, rel: float) -> float:
+    """The source frame shown `rel` timeline frames into the clip."""
+    s = speed_of(clip)
+    if clip.get("reverse"):
+        return int(clip["src_out"]) - rel * s
+    return int(clip["src_in"]) + rel * s
+
+
+def timeline_frame(clip: dict, src: float) -> float:
+    """Where source frame `src` lands on the timeline (may be outside the
+    clip; callers check). The inverse of source_frame."""
+    s = speed_of(clip) or 1.0
+    rel = (int(clip["src_out"]) - src) / s if clip.get("reverse") else (src - int(clip["src_in"])) / s
+    return int(clip["at"]) + rel
 
 
 def clip_end(clip: dict) -> int:
