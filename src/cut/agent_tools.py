@@ -77,7 +77,11 @@ OP_NOTES = {
     "delete_cue": "remove one cue from a caption track",
     "set_caption_style": "caption look: preset:bold_center | preset:lower_third | preset:minimal_top",
     "add_marker": "a labelled marker at a frame",
-    "add_transition": "turn the hard cut INTO a clip into a crossfade of N frames",
+    "add_transition": "turn the hard cut INTO a clip into a transition of N frames; style is the look: fade "
+                      "(default) | dissolve | fadeblack | fadewhite | wipeleft/right/up/down | slideleft/right/"
+                      "up/down | circleopen | circleclose | zoomin | pixelize | hblur | ... (ffmpeg xfade names)",
+    "remove_transition": "turn a clip's transition in back into a hard cut",
+    "set_transition": "change a clip's transition in: style and/or frames",
     "set_canvas": "change the frame size (even numbers), e.g. 720x1280 for 9:16",
     "overwrite": "lay a clip {media, src_in, src_out} on a track at a frame OVER what is there "
                  "(nothing after it moves); sound_track also lays its own sound",
@@ -173,7 +177,8 @@ def read_timeline(doc: dict, names: Optional[dict] = None) -> str:
             if c.get("reverse"):
                 line += " · reversed"
             if c.get("transition_in"):
-                line += f" · crossfades in over {c['transition_in'].get('frames')}f"
+                tr = c["transition_in"]
+                line += f" · {tr.get('style') or 'fade'} in over {tr.get('frames')}f"
             if kind == "audio" and c.get("gain_db"):
                 line += f" · gain {c['gain_db']:+g} dB"
             lines.append(line)

@@ -334,3 +334,41 @@ export function sourceToMark(which: "in" | "out"): void {
   s.setSourcePlaying(false);
   s.sourceSeek(f);
 }
+
+/* A transition style onto a cut (2026-10-01): the Transitions tab's click
+   and drop. The cut is the one INTO `clipId` when given; else the selected
+   picture clip's; else the picture cut nearest the playhead. A cut that
+   already has a transition changes its style; a hard cut gets one of half
+   a second. */
+export function applyTransition(style: string, clipId?: string, near?: number): void {
+  const d = doc();
+  if (!d) return;
+  const { playhead, selection } = state();
+  const pictures = d.tracks.filter((t) => t.kind === "video");
+  const isCut = (id: string) => {
+    const f = findClip(d, id);
+    if (!f || f.track.kind !== "video") return false;
+    return (f.track.clips ?? []).some((o) => o !== f.clip && clipEnd(o) === f.clip.at) || !!f.clip.transition_in;
+  };
+  let target = clipId && isCut(clipId) ? clipId : null;
+  if (!target && clipId === undefined && selection.kind === "clip") target = selection.ids.find(isCut) ?? null;
+  if (!target) {
+    const at = near ?? playhead;
+    let best: { id: string; dist: number } | null = null;
+    for (const t of pictures) {
+      for (const c of t.clips ?? []) {
+        if (!isCut(c.id)) continue;
+        const dist = Math.abs(c.at - at);
+        if (!best || dist < best.dist) best = { id: c.id, dist };
+      }
+    }
+    target = best?.id ?? null;
+  }
+  if (!target) {
+    state().toast("No cut between two picture clips to put a transition on", "err");
+    return;
+  }
+  const f = findClip(d, target);
+  if (f?.clip.transition_in) void state().op("set_transition", { clip_id: target, style });
+  else void state().op("add_transition", { clip_id: target, frames: Math.max(1, Math.round(d.fps / 2)), style });
+}

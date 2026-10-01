@@ -1823,6 +1823,14 @@ is yours, in Resolve, by hand.
   1080p on a 1 GB machine. Clean up skips retimed sound with a note; auto-captions follow the
   speed and skip a reversed clip. The preview sets `playbackRate`; a browser will not play
   backwards, so a reversed clip is SEEKED per frame while playing, silently.
+  **Transition styles (2026-10-01):** `transition_in.style` is how the PICTURE blends over the
+  overlap -- 58 of ffmpeg's xfade transitions (`doc.TRANSITION_STYLES`, grouped Fades / Wipes /
+  Slides / Shapes / Slices, every one checked present in Fly's ffmpeg 7.1); absent means `fade`, and
+  the sound always crossfades. Ops `add_transition(..., style=)`, `set_transition(clip_id, style?,
+  frames?)` and `remove_transition` (the exact inverse of add). The bin's Transitions tab
+  (`web/src/lib/cut/transitions.ts`, pinned to the Python list by a test) plays each look on hover
+  with the same CSS approximation the viewer draws -- wipes/irises as a clip-path, slides as a
+  translate, the rest as the fade -- and a tile clicks onto the selected cut or drops onto a clip.
   **The agent (phase E, 2026-09-28, Mike's D4)** never edits: every edit is a PROPOSAL
   (`{summary, ops, base_id, region, duration_delta, doc, kind}`) the person Keeps or Undoes.
   `POST /api/cut/projects/{id}/agent {message, playhead?, selection?}` is a job;

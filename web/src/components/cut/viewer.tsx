@@ -52,6 +52,7 @@ import {
   type Track,
 } from "@/lib/cut/timeline";
 import { fitBoxes, lookAt } from "@/lib/cut/lanes";
+import { lookAt as transitionLook } from "@/lib/cut/transitions";
 
 const DUCK = 0.32; // ~ -10 dB
 const WINDOW_BEFORE_S = 0.5;
@@ -331,7 +332,16 @@ function PictureEl({
   const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
   let fade = active ? 1 : 0;
   const xf = clip.transition_in?.frames ?? 0;
-  if (active && xf && playhead < clip.at + xf) fade = (playhead - clip.at + 1) / (xf + 1);
+  // inside its transition: the style's look (transitions.ts), an
+  // approximation of ffmpeg's xfade -- wipes and irises clip, slides move,
+  // the rest fade
+  let blend: React.CSSProperties = {};
+  if (active && xf && playhead < clip.at + xf) {
+    const p = (playhead - clip.at + 1) / (xf + 1);
+    const t = transitionLook(clip.transition_in?.style, p);
+    blend = t.css as React.CSSProperties;
+    fade = t.fade ? p : 1;
+  }
 
   /* The picture as render.py draws it: the CROPPED source fitted inside
      the frame (letterboxed, never cut off), then zoomed and rotated about
@@ -353,6 +363,7 @@ function PictureEl({
     transform: `translate(${look.x * frameW}px, ${look.y * frameH}px) rotate(${look.rotation}deg) scale(${look.zoom})`,
     transformOrigin: "50% 50%",
     opacity: fade * look.opacity,
+    ...blend,
     zIndex: z,
     pointerEvents: "none",
   };

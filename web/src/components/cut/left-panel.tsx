@@ -1,7 +1,7 @@
 "use client";
 
 /* The left panel: invideo's placement, the agent beside "Open Media".
-   Five tabs -- Agent, Media, Text, Audio, Search -- and the tool strip's
+   Six tabs -- Agent, Media, Text, Audio, Transitions, Search -- and the tool strip's
    buttons open the same tabs, so there is one media bin, not two.
 
    AGENT is its own module (agent-panel.tsx): a composer with invideo's two
@@ -10,6 +10,7 @@
 import { useRef, useState } from "react";
 import {
   AudioLines,
+  Blend,
   Brackets,
   Bot,
   Captions,
@@ -28,12 +29,14 @@ import { clipAt, timecode, type Doc, type Track } from "@/lib/cut/timeline";
 import { MEDIA_MIME } from "@/components/cut/timeline";
 import { CaptionStyle } from "@/components/cut/inspector";
 import { AgentPanel, suggest } from "@/components/cut/agent-panel";
+import { TransitionsTab } from "@/components/cut/transitions-tab";
 
 const TABS = [
   { id: "agent", label: "Agent", icon: Bot },
   { id: "media", label: "Media", icon: Film },
   { id: "text", label: "Text", icon: Captions },
   { id: "audio", label: "Audio", icon: Music },
+  { id: "transitions", label: "Transitions", icon: Blend },
   { id: "search", label: "Search", icon: Search },
 ] as const;
 
@@ -53,6 +56,7 @@ export function LeftPanel() {
       {tab === "media" ? <MediaTab /> : null}
       {tab === "text" ? <TextTab /> : null}
       {tab === "audio" ? <AudioTab /> : null}
+      {tab === "transitions" ? <TransitionsTab /> : null}
       {tab === "search" ? <SearchTab /> : null}
     </div>
   );

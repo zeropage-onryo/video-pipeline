@@ -297,6 +297,9 @@ def test_every_op_is_reachable_through_the_route(api):
     tail = [c for c in d.track(doc, "V1")["clips"] if c["at"] == 60][0]["id"]
     step("trim", clip_id=tail, tail=10, ripple=True)
     step("add_transition", clip_id=c2, frames=6)
+    step("set_transition", clip_id=c2, style="slideup", frames=8)
+    step("remove_transition", clip_id=c2)
+    step("add_transition", clip_id=c2, frames=6, style="circleopen")
     step("move", clip_id=c1, at=0)
     sfx = d.track(doc, "A1")["clips"][0]["id"]
     step("set_gain", clip_id=sfx, db=-3)

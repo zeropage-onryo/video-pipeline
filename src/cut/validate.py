@@ -110,6 +110,8 @@ def _check_clip(t: dict, c: dict, media: Optional[dict], out: list[str]) -> bool
     if tr is not None:
         if not isinstance(tr, dict) or tr.get("kind") not in d.TRANSITION_KINDS:
             out.append(f"{where}: transition_in kind must be one of {list(d.TRANSITION_KINDS)}")
+        elif tr.get("style", d.DEFAULT_TRANSITION_STYLE) not in d.TRANSITION_STYLES:
+            out.append(f"{where}: transition style {tr.get('style')!r} is not one this editor renders")
         elif not _is_int(tr.get("frames")) or tr["frames"] < 1:
             out.append(f"{where}: transition_in frames must be a whole number >= 1")
         elif ok and tr["frames"] >= d.clip_length(c):

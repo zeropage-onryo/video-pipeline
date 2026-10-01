@@ -12,7 +12,7 @@
    what lives here is how a doc is DRAWN, how a drag is snapped, and the
    ghost a drag leaves while its op is in flight. */
 
-export type TransitionIn = { kind: "xfade"; frames: number };
+export type TransitionIn = { kind: "xfade"; frames: number; style?: string };
 /* keyframe lanes, crop and opacity on a picture clip (lanes.ts, twin of
    src/cut/lanes.py); declared here so this file stays import-free */
 type LaneKey = { frame: number; value: number; ease?: "linear" | "ease" | "hold" };
@@ -398,7 +398,15 @@ export function describeOp(op: string, args: Record<string, unknown>, fps: numbe
     case "set_gain":
       return `Gain ${args.db} dB`;
     case "add_transition":
-      return `Crossfade ${args.frames}f`;
+      return `Transition ${args.frames}f${args.style ? ` · ${String(args.style)}` : ""}`;
+    case "set_transition":
+      return `Transition ${args.style ? String(args.style) : ""}${args.frames ? ` ${args.frames}f` : ""}`.trim();
+    case "remove_transition":
+      return `Hard cut into ${args.clip_id}`;
+    case "set_speed":
+      return `Speed ${args.speed}×`;
+    case "set_reverse":
+      return args.on === false ? "Plays forwards" : "Reversed";
     default:
       return op.replace(/_/g, " ");
   }

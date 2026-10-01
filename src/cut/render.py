@@ -253,7 +253,7 @@ def _video_graph(doc: dict, index: dict[str, int], parts: list[str],
 
     acc, cursor, n = None, 0, 0
 
-    def join(seg: str, transition: int) -> None:
+    def join(seg: str, transition: int, style: str = d.DEFAULT_TRANSITION_STYLE) -> None:
         nonlocal acc, n
         if acc is None:
             acc = seg
@@ -261,7 +261,7 @@ def _video_graph(doc: dict, index: dict[str, int], parts: list[str],
         n += 1
         out = f"vj{n}"
         if transition:
-            parts.append(f"[{acc}][{seg}]xfade=transition=fade:duration={_s(transition, fps)}:"
+            parts.append(f"[{acc}][{seg}]xfade=transition={style}:duration={_s(transition, fps)}:"
                          f"offset={_s(cursor - transition, fps)}[{out}]")
         else:
             parts.append(f"[{acc}][{seg}]concat=n=2:v=1:a=0[{out}]")
@@ -278,7 +278,7 @@ def _video_graph(doc: dict, index: dict[str, int], parts: list[str],
         rev = rev_index.get(c.get("id")) if c.get("reverse") else None
         src = f"[{rev}:v]" if rev is not None else f"[{index[c['media']]}:v]"
         parts.extend(_segment(c, src, seg, fps, w, h, norm, prereversed=rev is not None))
-        join(seg, frames)
+        join(seg, frames, (c.get("transition_in") or {}).get("style") or d.DEFAULT_TRANSITION_STYLE)
         cursor = c["at"] + d.clip_length(c) if not frames else cursor - frames + d.clip_length(c)
     if acc is None:
         acc = black(max(total, 1), "vblack")

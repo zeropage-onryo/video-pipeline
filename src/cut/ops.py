@@ -365,7 +365,14 @@ def add_marker(doc: dict, frame: int, label: str) -> dict:
     return _finish(doc)
 
 
-def add_transition(doc: dict, clip_id: str, frames: int, kind: str = "xfade") -> dict:
+def _need_style(style) -> None:
+    if style not in d.TRANSITION_STYLES:
+        raise OpError(f"transition style {style!r} is not one of the editor's "
+                      f"({len(d.TRANSITION_STYLES)} styles, e.g. fade, wipeleft, slideup, circleopen)")
+
+
+def add_transition(doc: dict, clip_id: str, frames: int, kind: str = "xfade",
+                   style: str = d.DEFAULT_TRANSITION_STYLE) -> dict:
     """Turn the hard cut INTO `clip_id` into a crossfade of `frames`. The
     clip (and everything after it) slides left by `frames` so it overlaps
     the clip before by exactly that much -- the one overlap the validator
@@ -377,6 +384,7 @@ def add_transition(doc: dict, clip_id: str, frames: int, kind: str = "xfade") ->
         raise OpError("a transition is at least one frame")
     if kind not in d.TRANSITION_KINDS:
         raise OpError(f"transition kind must be one of {list(d.TRANSITION_KINDS)}")
+    _need_style(style)
     t, root = _need_clip(doc, clip_id)
     prev = _before(t, root)
     if prev is None or d.clip_end(prev) != root["at"] or root.get("transition_in"):
@@ -386,9 +394,47 @@ def add_transition(doc: dict, clip_id: str, frames: int, kind: str = "xfade") ->
         followers = _after(tr, c)
         if p is not None and d.clip_end(p) == c["at"]:
             c["transition_in"] = {"kind": kind, "frames": frames}
+            if style != d.DEFAULT_TRANSITION_STYLE:
+                c["transition_in"]["style"] = style
         c["at"] -= frames
         _shift(followers, -frames)
     return _finish(doc)
+
+
+def remove_transition(doc: dict, clip_id: str) -> dict:
+    """Back to a hard cut: the exact inverse of add_transition. The clip
+    (and everything after it, with its partners) slides right by the
+    transition's frames, so nothing that was visible is lost."""
+    doc = _copy(doc)
+    _, root = _need_clip(doc, clip_id)
+    tr = root.get("transition_in")
+    if not tr:
+        raise OpError(f"clip {clip_id} has no transition in")
+    frames = int(tr["frames"])
+    for t, c in d.partners(doc, clip_id):
+        followers = _after(t, c)
+        c.pop("transition_in", None)
+        c["at"] += frames
+        _shift(followers, frames)
+    return _finish(doc)
+
+
+def set_transition(doc: dict, clip_id: str, style: Optional[str] = None,
+                   frames: Optional[int] = None) -> dict:
+    """Change a transition already on a clip: its look (`style`), its
+    length (`frames`), or both. A length change is remove-then-add, so the
+    timeline moves exactly as those two would move it."""
+    _, root = _need_clip(doc, clip_id)
+    tr = root.get("transition_in")
+    if not tr:
+        raise OpError(f"clip {clip_id} has no transition in -- add one first")
+    style = style if style is not None else tr.get("style", d.DEFAULT_TRANSITION_STYLE)
+    _need_style(style)
+    if frames is None:
+        frames = int(tr["frames"])
+    _need_int("frames", frames)
+    out = remove_transition(doc, clip_id)
+    return add_transition(out, clip_id, frames, tr.get("kind", "xfade"), style)
 
 
 def lift(doc: dict, clip_id: str) -> dict:
@@ -708,6 +754,8 @@ OPS: dict[str, Callable[..., dict]] = {
     "add_caption_track": add_caption_track,
     "add_marker": add_marker,
     "add_transition": add_transition,
+    "remove_transition": remove_transition,
+    "set_transition": set_transition,
     "add_track": add_track,
     "overwrite": overwrite,
     "set_key": set_key,
@@ -780,7 +828,17 @@ def describe(op: str, args: Optional[dict[str, Any]] = None, fps: int = d.DEFAUL
         if op == "add_marker":
             return f"marker '{str(a.get('label', ''))[:30]}' at {_secs(a.get('frame'), fps)}"
         if op == "add_transition":
-            return f"crossfade into {clip_id} ({a.get('frames', '?')}f)"
+            look = d.TRANSITION_STYLES.get(a.get("style") or d.DEFAULT_TRANSITION_STYLE, ("", "transition"))[1]
+            return f"{look.lower()} into {clip_id} ({a.get('frames', '?')}f)"
+        if op == "remove_transition":
+            return f"hard cut into {clip_id}"
+        if op == "set_transition":
+            bits = []
+            if a.get("style"):
+                bits.append(d.TRANSITION_STYLES.get(a["style"], ("", a["style"]))[1].lower())
+            if a.get("frames") is not None:
+                bits.append(f"{a['frames']}f")
+            return f"transition into {clip_id}: " + (", ".join(bits) or "unchanged")
         if op == "set_key":
             return (f"{a.get('path', '?')} {float(a.get('value', 0)):g} on {clip_id} "
                     f"at +{_secs(a.get('frame'), fps)}")

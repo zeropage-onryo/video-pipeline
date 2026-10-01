@@ -1836,3 +1836,75 @@ input.cx-title {
   color: var(--ink-3, rgb(255 255 255 / 0.5));
   font-size: 11px;
 }
+
+/* ── the Transitions tab ── */
+.cx-xt .cx-note {
+  margin: 4px 0 10px;
+}
+.cx-xt-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.cx-xt-search svg {
+  width: 14px;
+  height: 14px;
+  color: var(--dim);
+  flex: none;
+}
+.cx-xt-search .cx-input {
+  flex: 1;
+}
+.cx-xt-group {
+  margin-bottom: 14px;
+}
+.cx-xt-group .cx-label {
+  margin: 0 0 6px;
+}
+.cx-xt-group .cx-dim {
+  color: var(--dim);
+  margin-left: 4px;
+}
+.cx-xt-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+  gap: 8px;
+}
+.cx-xt-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: grab;
+}
+.cx-xt-demo {
+  position: relative;
+  display: block;
+  aspect-ratio: 16 / 10;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--cx-line);
+}
+.cx-xt-tile:hover .cx-xt-demo,
+.cx-xt-tile:focus-visible .cx-xt-demo {
+  border-color: var(--signal);
+}
+.cx-xt-a,
+.cx-xt-b {
+  position: absolute;
+  inset: 0;
+}
+.cx-xt-a {
+  background: linear-gradient(135deg, #2a2d33, #15171b);
+}
+.cx-xt-b {
+  background: linear-gradient(135deg, var(--signal), #7a1a14);
+}
+.cx-xt-name {
+  font-size: 10.5px;
+  line-height: 1.25;
+  color: var(--text);
+}

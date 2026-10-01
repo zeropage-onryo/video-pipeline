@@ -15,6 +15,7 @@ import { useCut, useDrawnDoc } from "@/lib/cut/store";
 import { deleteSelection } from "@/lib/cut/actions";
 import { LookInspector } from "@/components/cut/look-inspector";
 import { PlaybackCard } from "@/components/cut/playback-inspector";
+import { DEFAULT_STYLE, GROUPS, STYLES, labelOf } from "@/lib/cut/transitions";
 import {
   ASPECTS,
   aspectOf,
@@ -225,10 +226,48 @@ function ClipInspector({ doc, clip, track }: { doc: Doc; clip: Clip; track: Trac
       <div className="cx-field">
         <span className="cx-label">Transition in</span>
         {clip.transition_in ? (
-          <p className="cx-note">
-            Crossfade of {clip.transition_in.frames} frames ({(clip.transition_in.frames / fps).toFixed(2)}s) from the
-            clip before.
-          </p>
+          <>
+            <span className="cx-field-row">
+              <select
+                className="cx-input"
+                value={clip.transition_in.style ?? DEFAULT_STYLE}
+                onChange={(e) => op("set_transition", { clip_id: clip.id, style: e.target.value })}
+                aria-label="Transition style"
+              >
+                {GROUPS.map((g) => (
+                  <optgroup key={g} label={g}>
+                    {STYLES.filter((x) => x.group === g).map((x) => (
+                      <option key={x.style} value={x.style}>
+                        {x.label}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+              <input
+                className="cx-input cx-mono"
+                style={{ width: 64 }}
+                value={xf}
+                onChange={(e) => setXf(e.target.value)}
+                onKeyDown={(e) => {
+                  e.stopPropagation();
+                  if (e.key !== "Enter") return;
+                  const frames = parseFrames(xf, fps);
+                  if (frames && frames > 0 && frames !== clip.transition_in?.frames)
+                    op("set_transition", { clip_id: clip.id, frames });
+                }}
+                title="length in frames (Enter)"
+                aria-label="Transition length"
+              />
+            </span>
+            <p className="cx-note">
+              {labelOf(clip.transition_in.style)} over {clip.transition_in.frames} frames (
+              {(clip.transition_in.frames / fps).toFixed(2)}s) from the clip before.{" "}
+              <button type="button" className="cx-link" onClick={() => op("remove_transition", { clip_id: clip.id })}>
+                Make it a hard cut
+              </button>
+            </p>
+          </>
         ) : (
           <span className="cx-field-row">
             <input
@@ -250,6 +289,7 @@ function ClipInspector({ doc, clip, track }: { doc: Doc; clip: Clip; track: Trac
             </button>
           </span>
         )}
+        <span className="cx-note">More looks in the Transitions tab — drag one onto a clip.</span>
       </div>
 
       {track.kind === "audio" && track.role === "music" ? <DuckControl track={track} /> : null}

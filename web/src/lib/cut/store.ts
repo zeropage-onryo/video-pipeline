@@ -45,7 +45,7 @@ import { describeOp, endOf, type Doc } from "@/lib/cut/timeline";
 export type Tool = "select" | "blade";
 export type Selection = { ids: string[]; kind: "clip" | "cue" | null };
 export type TrackMix = { mute?: boolean; solo?: boolean };
-export type LeftTab = "agent" | "media" | "text" | "audio" | "search";
+export type LeftTab = "agent" | "media" | "text" | "audio" | "transitions" | "search";
 /* Which viewer the transport keys drive (Resolve's model): clicking a
    viewer -- or loading a clip into Source -- makes it active. */
 export type ActiveViewer = "source" | "program";
