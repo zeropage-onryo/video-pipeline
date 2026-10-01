@@ -96,6 +96,10 @@ data/.research/
 docs/reference-look/**/*.mp4
 docs/reference-look/**/*.png
 docs/reference-look/**/*.jpg
+# ...except the invideo editor captures (T0, ~620 KB): the README beside
+# them is a checklist read against the images, and CUT_EDITOR_UI.md asks for
+# them in the repo.
+!docs/reference-look/invideo-editor/*.jpg
 docs/sprints/**/*.mp4
 docs/sprints/**/*.png
 docs/sprints/**/*.jpg
