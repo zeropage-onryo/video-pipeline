@@ -466,6 +466,10 @@ def keep_references(candidate_ids, *, account_id=None, dsn=None, get=None, fetch
             refused.append({"id": cid, "error": "not an id a hunt served"})
             continue
         path = fetch(candidate.get("image_url") or "")
+        if not path and candidate.get("fallback_url"):
+            # the same frame through the lane's second address (the
+            # screen step had to use it too, or it would not be offered)
+            path = fetch(candidate["fallback_url"])
         if not path:
             refused.append({"id": cid, "error": "the image could not be fetched"})
             continue

@@ -78,6 +78,11 @@ class Refused(ValueError):
     """A call this bridge will not make -- the message is for the person."""
 
 
+# Board tools the model is not offered when the local hunt is: they
+# overlap find_references and their results never reach the screen.
+HIDDEN_WITH_LOCAL = frozenset({"images_for"})
+
+
 def is_write(name: str) -> bool:
     return name in WRITE_TOOLS or name in LOCAL_WRITE
 
@@ -221,6 +226,11 @@ def session(dsn: Optional[str] = None, account_id: Optional[int] = None,
         raise Refused("the board's tools are not installed here")
     if local:
         from . import assistant_brain
+        # `images_for` hands the model ids and captions and nothing the
+        # person can see: a chat turn that used it "found references" and
+        # drew no images (2026-10-01, the composer's Guide). Where the
+        # contact-sheet hunt is published it is the only image search.
+        tool_specs = [s for s in tool_specs if s.get("name") not in HIDDEN_WITH_LOCAL]
         tool_specs = tool_specs + [dict(s) for s in assistant_brain.LOCAL_SPECS]
 
     attachments: dict = {}

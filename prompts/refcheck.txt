@@ -29,6 +29,11 @@ That means: any watermark or stock overlay, burned-in subtitles or captions,
 video player chrome or progress bars, a channel or brand logo, large text laid
 over the image, a grid or collage of several images, or a screenshot of an app
 or web page. A reference carries its defects into the render.
+The logo means one laid OVER the picture. When the need names a real product
+("Ghost energy drink orange cream can"), the label and logo printed ON that
+product are the subject -- the whole reason for the frame -- never a defect,
+and a clean product shot of it is not stock_gloss. Flag wrong_subject when it
+is a different product, flavour or brand.
 
 ALSO FLAG
 - wrong_subject: it does not show what was wanted.

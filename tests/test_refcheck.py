@@ -146,3 +146,28 @@ def test_the_prompt_fills_with_no_placeholder_left():
     assert "3 frame(s)" in text and "beige prestige drama" in text
     assert "watermark" in text and "sodium glow" in text
     assert not re.findall(r"\{(count|role|want|query|look|anti|flags|hard)\}", text)
+
+
+def test_screen_falls_back_to_the_second_address_when_the_first_will_not_fetch():
+    """2026-10-01: Flickr's static hosts refused the deployed API while the
+    browser drew the same frames; Openverse's thumbnail proxy did not."""
+    asked = []
+
+    def fetch(url):
+        asked.append(url)
+        return b"\xff\xd8\xff bytes" if "thumb" in url else None
+
+    candidates = [{"id": "c1", "image_url": "https://live.staticflickr.com/1.jpg",
+                   "fallback_url": "https://api.openverse.org/v1/images/1/thumb/"}]
+    client = _Client(_frames([{"id": "c1", "keep": True, "flags": [], "why": "ok",
+                               "caption": "the can"}]))
+    result = refcheck.screen(candidates, {"role": "prop", "query": "can"},
+                             fetch=fetch, client=client, model="m")
+    assert asked == ["https://live.staticflickr.com/1.jpg",
+                     "https://api.openverse.org/v1/images/1/thumb/"]
+    assert [c["id"] for c in result["keepers"]] == ["c1"]
+
+
+def test_a_products_own_label_is_not_the_logo_flag():
+    text = refcheck.build_prompt({"role": "prop", "query": "Ghost energy drink orange cream can"})
+    assert "printed ON that" in text and "never a defect" in text

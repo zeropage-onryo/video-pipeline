@@ -39,11 +39,14 @@ def real_jpeg() -> bytes:
     return buf.getvalue()
 
 
+REAL_SERPER = imagesearch.serper_images
+
+
 @pytest.fixture(autouse=True)
 def no_web(monkeypatch):
     """The web lanes (2026-09-05) are real HTTP; tests never make them.
     Each test that wants a lane patches it back in."""
-    for lane in ("openverse", "google_images", "unsplash", "pexels"):
+    for lane in ("openverse", "google_images", "serper_images", "unsplash", "pexels"):
         monkeypatch.setattr(imagesearch, lane, lambda q, limit=6: [])
     for lane in ("reddit", "pinterest"):
         monkeypatch.setattr(imagesearch, lane, lambda q, brand=None, limit=6: [])
@@ -202,7 +205,8 @@ def test_an_unconfigured_lane_says_so(tmp_db, monkeypatch):
     assert "no image source is configured" in out["note"]
     assert out["sources"] == {"openverse": False, "google": False,
                               "reddit": False, "pinterest": False,
-                              "unsplash": False, "pexels": False}
+                              "unsplash": False, "pexels": False,
+                              "serper": False}
 
 
 def test_openverse_is_the_keyless_floor(tmp_db, monkeypatch):
@@ -294,3 +298,56 @@ def test_a_configured_lane_that_matched_nothing_says_something_else(tmp_db,
 
     out = mcp_server.find_images("nothing at all", brand="zeropage", dsn=tmp_db)
     assert out["count"] == 0 and "nothing matched" in out["note"]
+
+
+# ---------- serper: the whole-web lane that can find a NAMED thing ----------
+
+def test_serper_is_off_without_a_key(monkeypatch):
+    monkeypatch.setattr(imagesearch, "serper_images", REAL_SERPER)
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    assert imagesearch.serper_images("Ghost energy orange cream can") == []
+    assert imagesearch.sources()["serper"] is False
+
+
+def test_serper_maps_results_and_keeps_the_thumbnail_as_a_second_address(monkeypatch):
+    import requests
+
+    monkeypatch.setattr(imagesearch, "serper_images", REAL_SERPER)
+    monkeypatch.setenv("SERPER_API_KEY", "k")
+    seen = {}
+
+    class _R:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"images": [
+                {"title": "Ghost Orange Cream", "imageUrl": "https://cdn.shop/ghost.jpg",
+                 "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/t.jpg",
+                 "link": "https://shop.example/ghost", "source": "shop.example"},
+                {"title": "no page", "imageUrl": "https://cdn.shop/x.jpg"},
+                {"title": "not http", "imageUrl": "data:image/png;base64,AA", "link": "https://p"},
+            ]}
+
+    def post(url, headers=None, json=None, timeout=None):
+        seen.update(url=url, key=headers.get("X-API-KEY"), q=json["q"])
+        return _R()
+
+    monkeypatch.setattr(requests, "post", post)
+    out = imagesearch.serper_images("Ghost energy orange cream can", limit=6)
+    assert seen == {"url": "https://google.serper.dev/images", "key": "k",
+                    "q": "Ghost energy orange cream can"}
+    assert out == [{"source": "google", "image_url": "https://cdn.shop/ghost.jpg",
+                    "source_url": "https://shop.example/ghost", "title": "Ghost Orange Cream",
+                    "credit": "shop.example",
+                    "fallback_url": "https://encrypted-tbn0.gstatic.com/t.jpg"}]
+
+
+def test_the_second_address_is_stored_and_redeemed(tmp_db):
+    imagesearch.remember([{"source": "openverse", "image_url": "https://live.staticflickr.com/a.jpg",
+                           "source_url": "https://flickr.com/p/a", "title": "a",
+                           "fallback_url": "https://api.openverse.org/v1/images/a/thumb/"}],
+                         query="q", dsn=tmp_db)
+    cid = imagesearch._cid("openverse", "https://live.staticflickr.com/a.jpg")
+    row = imagesearch.get(cid, dsn=tmp_db)
+    assert row["fallback_url"] == "https://api.openverse.org/v1/images/a/thumb/"

@@ -218,13 +218,30 @@ def screen(candidates, need: Optional[dict] = None, *, brand: str = "",
                 "note": "nothing to screen"}
     if fetch is None:
         from .imagery import fetch_image_bytes as fetch
+
+    def bytes_of(c):
+        # The frame's own address first, then the lane's second one
+        # (imagesearch's fallback_url -- Openverse's thumbnail proxy): a
+        # host that refuses this server is not a frame nobody can see.
+        for url in (c.get("image_url"), c.get("fallback_url")):
+            if not url:
+                continue
+            try:
+                data = fetch(url)
+            except Exception:
+                data = None
+            if data:
+                return data
+        return None
+
+    # In parallel: six sequential fetches at a 10s timeout each was a
+    # minute of a chat turn spent waiting on hosts that never answer.
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=min(8, len(candidates))) as pool:
+        fetched = list(pool.map(bytes_of, candidates))
     images = []
-    for c in candidates:
+    for c, data in zip(candidates, fetched):
         cid = str(c.get("id") or c.get("image_url") or "")
-        try:
-            data = fetch(c.get("image_url") or "")
-        except Exception:
-            data = None
         if data:
             images.append({"id": cid, "bytes": data})
     if not images:

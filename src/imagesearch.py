@@ -62,11 +62,17 @@ CREATE TABLE IF NOT EXISTS image_candidates (
     credit     TEXT
 );
 """
+# A second address for the same frame, tried when image_url will not
+# fetch -- Openverse's own thumbnail proxy. Flickr's static hosts refused
+# the deployed API while the browser drew the same URLs (2026-10-01), so
+# a hunt saw every frame and could look at none of them. Additive.
+MIGRATE = "ALTER TABLE image_candidates ADD COLUMN IF NOT EXISTS fallback_url TEXT"
 
 
 def init(dsn=None) -> None:
     with db.connect(dsn) as conn:
         conn.execute(SCHEMA)
+        conn.execute(MIGRATE)
 
 
 def _now() -> str:
@@ -104,12 +110,14 @@ def sources() -> dict:
         "pinterest": bool(os.environ.get("PINTEREST_ACCESS_TOKEN")),
         "unsplash": bool(os.environ.get("UNSPLASH_ACCESS_KEY")),
         "pexels": bool(os.environ.get("PEXELS_API_KEY")),
+        "serper": bool(os.environ.get("SERPER_API_KEY")),
     }
 
 
 def any_web(live: Optional[dict] = None) -> bool:
     live = live or sources()
-    return any(live.get(k) for k in ("pinterest", "openverse", "google", "reddit", "unsplash", "pexels"))
+    return any(live.get(k) for k in ("pinterest", "openverse", "google", "reddit", "unsplash",
+                                     "pexels", "serper"))
 
 
 IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp")
@@ -145,7 +153,8 @@ def openverse(query: str, limit: int = 6) -> list[dict]:
         out.append({"source": "openverse", "image_url": image, "source_url": page,
                     "title": (r.get("title") or "").strip(),
                     "credit": f"{who} on {src}" if who else src,
-                    "license": r.get("license") or ""})
+                    "license": r.get("license") or "",
+                    "fallback_url": r.get("thumbnail") or ""})
         if len(out) >= limit:
             break
     return out
@@ -179,6 +188,44 @@ def google_images(query: str, limit: int = 6) -> list[dict]:
         out.append({"source": "google", "image_url": image, "source_url": page,
                     "title": (it.get("title") or "").strip(),
                     "credit": (it.get("displayLink") or "").strip()})
+    return out
+
+
+def serper_images(query: str, limit: int = 6) -> list[dict]:
+    """Google Images through serper.dev -- the whole web by query, which
+    is the only lane that can find a NAMED thing: a real product, a
+    brand's can, a landmark. Openverse indexes openly licensed photos,
+    so "Ghost energy orange cream can" returns nothing there however the
+    query is cut (checked 2026-10-01: one unrelated hit). Google's own
+    Custom Search JSON API is closed to new keys and shuts down
+    2027-01-01, so this is the whole-web lane going forward.
+    SERPER_API_KEY; no key = off. These are other people's frames;
+    attribution is the page each sits on."""
+    key = os.environ.get("SERPER_API_KEY")
+    if not key:
+        return []
+    try:
+        import requests
+        resp = requests.post("https://google.serper.dev/images",
+                             headers={"X-API-KEY": key, "Content-Type": "application/json"},
+                             json={"q": query, "num": max(1, min(limit * 2, 20))},
+                             timeout=TIMEOUT)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception:
+        return []
+    out = []
+    for it in (data.get("images") or []):
+        image = it.get("imageUrl") or ""
+        page = it.get("link") or ""
+        if not image.startswith(("http://", "https://")) or not page:
+            continue
+        out.append({"source": "google", "image_url": image, "source_url": page,
+                    "title": (it.get("title") or "").strip(),
+                    "credit": (it.get("source") or it.get("domain") or "").strip(),
+                    "fallback_url": it.get("thumbnailUrl") or ""})
+        if len(out) >= limit:
+            break
     return out
 
 
@@ -447,10 +494,12 @@ def remember(candidates: list[dict], query: str = "", dsn=None) -> list[dict]:
             cid = _cid(c["source"], c["image_url"])
             conn.execute(
                 "INSERT INTO image_candidates (id, created_at, query, source, "
-                "image_url, source_url, title, credit) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) "
+                "image_url, source_url, title, credit, fallback_url) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) "
                 "ON CONFLICT(id) DO UPDATE SET query=excluded.query",
                 (cid, _now(), query, c["source"], c["image_url"],
-                 c["source_url"], c.get("title") or "", c.get("credit") or ""))
+                 c["source_url"], c.get("title") or "", c.get("credit") or "",
+                 c.get("fallback_url") or None))
             out.append({**c, "id": cid})
     return out
 
@@ -511,7 +560,8 @@ def search(query: str, brand: Optional[str] = None, limit: int = 6,
         # His own board first (curated by hand), then Reddit (people's
         # own frames of these worlds), the whole web, the open index.
         found = pinterest(query, brand, limit) + found
-        found += _interleave(reddit(query, brand, limit),
+        found += _interleave(serper_images(query, limit),
+                             reddit(query, brand, limit),
                              google_images(query, limit),
                              openverse(query, limit))
     if "stock" in lanes:
