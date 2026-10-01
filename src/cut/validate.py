@@ -24,15 +24,16 @@ against it -- refusing every edit to a cut because one of its files is
 briefly unreachable would make the whole cut uneditable.
 
 What v0 deliberately refuses rather than half-supports: `speed` other
-than 1 (set_speed is not built), and lanes (keyframes are "later" in
-section 4). A doc carrying either would render as something other than
-what it says.
+than 1 (set_speed is not built). A doc carrying it would render as
+something other than what it says. Keyframe lanes, crop and opacity
+(lanes.py, 2026-10-01) are checked by lanes.check, on picture clips only.
 """
 from __future__ import annotations
 
 from typing import Optional
 
 from . import doc as d
+from . import lanes
 
 MIN_GAIN_DB = -60.0
 MAX_GAIN_DB = 12.0
@@ -83,8 +84,11 @@ def _check_clip(t: dict, c: dict, media: Optional[dict], out: list[str]) -> bool
             ok = False
     if c.get("speed", 1) != 1:
         out.append(f"{where}: speed {c.get('speed')!r} is not supported yet (only 1)")
-    if c.get("lanes"):
-        out.append(f"{where}: keyframe lanes are not supported yet")
+    if c.get("lanes") is not None or c.get("crop") is not None or c.get("opacity") is not None:
+        if t.get("kind") != "video":
+            out.append(f"{where}: keyframes, crop and opacity belong to picture clips")
+        else:
+            out.extend(lanes.check(c, d.clip_length(c) if ok else 0, where))
     gain = c.get("gain_db", 0)
     if not isinstance(gain, (int, float)) or isinstance(gain, bool) \
             or not MIN_GAIN_DB <= gain <= MAX_GAIN_DB:

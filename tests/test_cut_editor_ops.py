@@ -28,7 +28,10 @@ def cut():
         "fps": 30, "size": [720, 1280], "duration": 352, "markers": [],
         "tracks": [
             {"id": "V1", "kind": "video", "clips": [
-                {"id": "c1", "media": "gen:1", "src_in": 0, "src_out": 150, "at": 0, "speed": 1},
+                # a zoom lane at its default: renders exactly as none, and gives
+                # delete_key / clear_lane a key to act on
+                {"id": "c1", "media": "gen:1", "src_in": 0, "src_out": 150, "at": 0, "speed": 1,
+                 "lanes": [{"path": "zoom", "keys": [{"frame": 0, "value": 1.0, "ease": "linear"}]}]},
                 {"id": "c2", "media": "gen:2", "src_in": 0, "src_out": 120, "at": 142, "speed": 1,
                  "transition_in": {"kind": "xfade", "frames": 8}},
                 {"id": "c3", "media": "gen:3", "src_in": 0, "src_out": 90, "at": 262, "speed": 1},
@@ -194,6 +197,11 @@ ARGS = {
     "set_caption_style": {"track_id": "T1", "style": "preset:minimal_top"},
     "add_track": {"kind": "audio", "role": "music"},
     "overwrite": {"track_id": "V1", "clip": {"media": "gen:3", "src_in": 0, "src_out": 30}, "at": 60},
+    "set_key": {"clip_id": "c1", "path": "zoom", "frame": 30, "value": 1.5},
+    "delete_key": {"clip_id": "c1", "path": "zoom", "frame": 0},
+    "clear_lane": {"clip_id": "c1", "path": "zoom"},
+    "set_crop": {"clip_id": "c1", "left": 0.1},
+    "set_opacity": {"clip_id": "c1", "value": 0.5},
 }
 
 

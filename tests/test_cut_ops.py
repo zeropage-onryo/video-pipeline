@@ -146,13 +146,18 @@ def test_picture_from_an_audio_file_is_rejected():
     _has(doc, "asset:7 has no picture")
 
 
-def test_speed_and_lanes_are_refused_until_they_render():
+def test_speed_is_refused_until_it_renders_and_lanes_are_checked():
     doc = cut()
     clip(doc, "c1")["speed"] = 2
     _has(doc, "speed 2 is not supported")
+    # lanes render since 2026-10-01 (lanes.py): a bad one is refused with
+    # its reason, a good one passes (tests/test_cut_keyframes.py has the rest)
     doc = cut()
     clip(doc, "c1")["lanes"] = [{"path": "transform.scale", "keys": []}]
-    _has(doc, "lanes are not supported")
+    _has(doc, "lane path must be one of")
+    doc = cut()
+    clip(doc, "c1")["lanes"] = [{"path": "zoom", "keys": [{"frame": 0, "value": 1.2, "ease": "linear"}]}]
+    assert v.problems(doc) == []
 
 
 def test_gain_out_of_range_is_rejected():

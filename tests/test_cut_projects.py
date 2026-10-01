@@ -314,6 +314,14 @@ def test_every_op_is_reachable_through_the_route(api):
     doc = step("overwrite", track_id="V1", clip={"media": w["g1"], "src_in": 0, "src_out": 30},
                at=0, sound_track="A1")
     assert d.track(doc, "V1")["clips"][0]["src_out"] == 30
+    pic = d.track(doc, "V1")["clips"][0]["id"]
+    step("set_key", clip_id=pic, path="zoom", frame=0, value=1.2)
+    step("set_key", clip_id=pic, path="zoom", frame=20, value=1.4, ease="ease")
+    step("delete_key", clip_id=pic, path="zoom", frame=20)
+    step("clear_lane", clip_id=pic, path="zoom")
+    step("set_crop", clip_id=pic, left=0.1, right=0.05)
+    doc = step("set_opacity", clip_id=pic, value=0.6)
+    assert d.track(doc, "V1")["clips"][0]["opacity"] == 0.6
     doc = step("set_canvas", width=1080, height=1080)
     assert doc["size"] == [1080, 1080]
     doc = step("add_track", kind="audio", role="voice")

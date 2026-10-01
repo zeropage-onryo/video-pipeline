@@ -1667,3 +1667,133 @@ input.cx-title {
   background: rgb(255 255 255 / 0.09);
   color: var(--text) !important;
 }
+
+/* ── the clip look: Transform lanes, crop, opacity (2026-10-01) ── */
+.cx-lane-row {
+  display: grid;
+  grid-template-columns: 74px 1fr 76px auto;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 0;
+  border-bottom: 1px solid rgb(255 255 255 / 0.04);
+}
+.cx-lane-row:last-child {
+  border-bottom: 0;
+}
+.cx-card .cx-lane-row:has(> .cx-label:last-child) {
+  grid-template-columns: 74px 1fr 44px;
+}
+.cx-lane-label {
+  font-size: 11.5px;
+  color: var(--dim);
+  white-space: nowrap;
+}
+.cx-lane-row[data-animated="1"] .cx-lane-label {
+  color: #d8a93a;
+}
+.cx-num {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.cx-num .cx-input {
+  width: 100%;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  text-align: right;
+  font-size: 11px !important;
+}
+.cx-unit {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--dimmer);
+  width: 10px;
+}
+.cx-key-tools {
+  display: inline-flex;
+  align-items: center;
+}
+.cx-key-btn {
+  width: 20px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--dimmer) !important;
+  padding: 0;
+}
+.cx-key-btn svg {
+  width: 12px;
+  height: 12px;
+}
+.cx-key-btn:hover:not(:disabled) {
+  color: var(--text) !important;
+  background: rgb(255 255 255 / 0.06);
+}
+.cx-key-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+.cx-diamond svg {
+  width: 11px;
+  height: 11px;
+}
+.cx-diamond[aria-pressed="true"] {
+  color: #d8a93a !important;
+}
+.cx-diamond[aria-pressed="true"] svg {
+  fill: #d8a93a;
+}
+/* a keyframed row: label and key tools on top, slider and value under */
+.cx-lane-row.cx-lane-keyed {
+  grid-template-columns: minmax(0, 1fr) 84px;
+  row-gap: 2px;
+}
+.cx-lane-keyed .cx-key-tools {
+  justify-self: end;
+}
+.cx-ease {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.cx-ease button {
+  height: 20px;
+  padding: 0 7px;
+  border: 1px solid var(--cx-line);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--dim) !important;
+  font-family: var(--mono) !important;
+  font-size: 9px !important;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.cx-ease button[aria-pressed="true"] {
+  border-color: rgb(216 169 58 / 0.6);
+  color: #d8a93a !important;
+}
+/* keyframes on a timeline clip: a row of small diamonds along its foot */
+.cx-clip-keys {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 2px;
+  height: 8px;
+  z-index: 3;
+  pointer-events: none;
+}
+.cx-clip-keys > i {
+  position: absolute;
+  bottom: 0;
+  width: 7px;
+  height: 7px;
+  margin-left: -3.5px;
+  rotate: 45deg;
+  background: #d8a93a;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.7);
+}

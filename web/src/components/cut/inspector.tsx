@@ -13,6 +13,7 @@ import { useState } from "react";
 import { Trash2 } from "lucide-react";
 import { useCut, useDrawnDoc } from "@/lib/cut/store";
 import { deleteSelection } from "@/lib/cut/actions";
+import { LookInspector } from "@/components/cut/look-inspector";
 import {
   ASPECTS,
   aspectOf,
@@ -207,9 +208,7 @@ function ClipInspector({ doc, clip, track }: { doc: Doc; clip: Clip; track: Trac
           />
         </label>
       ) : (
-        <p className="cx-note" style={{ marginBottom: 14 }}>
-          Picture has no level of its own — its sound is the linked clip on the audio track.
-        </p>
+        <LookInspector doc={doc} clip={clip} />
       )}
 
       <div className="cx-field">

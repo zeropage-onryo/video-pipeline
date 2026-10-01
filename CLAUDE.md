@@ -1794,6 +1794,21 @@ is yours, in Resolve, by hand.
   `GET /api/cut/media/{handle}/transcript` serves the index's words and shots in SECONDS (the
   index has its own fps) for the Transcript tab: click a word to go there, drag across words to
   mark them. Not indexed answers `not_indexed`; the tab says so and never runs the index.
+  **Keyframes, crop and opacity (2026-10-01)** are the clip Inspector the invideo captures showed
+  (06-clip-selected-inspector.jpg). `src/cut/lanes.py` (twin: `web/src/lib/cut/lanes.ts`, tests
+  pin both to the same numbers) holds a picture clip's `lanes`: `zoom` (0.1-4, 1 = fitted),
+  `x` / `y` (fractions of the canvas), `rotation` (degrees); each a list of keys at CLIP-RELATIVE
+  frames, one key = a constant, `ease` (linear / ease / hold) on the key a segment starts at. Crop
+  (`clip.crop`, fractions per side, <= 0.45) and `clip.opacity` are static. Ops: `set_key`,
+  `delete_key`, `clear_lane`, `set_crop`, `set_opacity`; split and trim carry keys through
+  `lanes.window` (exact for linear/hold, an eased segment cut in two is re-eased). The render
+  gives a looked clip its own chain -- fit without pad, yuva, `scale ... eval=frame`, `rotate`,
+  `overlay` at per-frame x/y onto a black canvas of the clip's length -- so the letterbox is the
+  canvas; a clip with no look keeps the old pad path byte for byte. Verified on Fly's ffmpeg 7.1.
+  The preview draws the same: the CROPPED picture fitted (`lanes.fitBoxes`, contain, not cover),
+  then CSS `translate rotate scale` in the render's order. The Inspector's sliders preview through
+  the store's ghost and commit ONE op on release, comparing against the SAVED clip (comparing
+  against the drawn ghost read every drag as "no change").
   **The agent (phase E, 2026-09-28, Mike's D4)** never edits: every edit is a PROPOSAL
   (`{summary, ops, base_id, region, duration_delta, doc, kind}`) the person Keeps or Undoes.
   `POST /api/cut/projects/{id}/agent {message, playhead?, selection?}` is a job;

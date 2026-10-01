@@ -81,6 +81,13 @@ OP_NOTES = {
     "set_canvas": "change the frame size (even numbers), e.g. 720x1280 for 9:16",
     "overwrite": "lay a clip {media, src_in, src_out} on a track at a frame OVER what is there "
                  "(nothing after it moves); sound_track also lays its own sound",
+    "set_key": "animate a PICTURE clip: a key on path zoom (0.1-4) | x | y (-1..1, fraction of the "
+               "frame) | rotation (degrees) at a clip-relative frame; ease linear|ease|hold. One key = a "
+               "constant",
+    "delete_key": "remove one key from a picture clip's lane",
+    "clear_lane": "reset a picture clip's zoom | x | y | rotation to its default",
+    "set_crop": "crop a picture clip's edges: left/right/top/bottom as fractions (0-0.45)",
+    "set_opacity": "a picture clip's opacity, 0-1",
     "add_track": "an empty track: kind video|audio|caption; an audio track needs role voice|music|sfx",
 }
 

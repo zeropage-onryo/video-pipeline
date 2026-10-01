@@ -13,6 +13,9 @@
    ghost a drag leaves while its op is in flight. */
 
 export type TransitionIn = { kind: "xfade"; frames: number };
+/* keyframe lanes, crop and opacity on a picture clip (lanes.ts, twin of
+   src/cut/lanes.py); declared here so this file stays import-free */
+type LaneKey = { frame: number; value: number; ease?: "linear" | "ease" | "hold" };
 export type Clip = {
   id: string;
   media: string;
@@ -23,6 +26,9 @@ export type Clip = {
   link?: string;
   gain_db?: number;
   transition_in?: TransitionIn;
+  lanes?: { path: "zoom" | "x" | "y" | "rotation"; keys: LaneKey[] }[];
+  crop?: { left?: number; right?: number; top?: number; bottom?: number };
+  opacity?: number;
 };
 export type Cue = { id: string; start: number; end: number; text: string };
 export type TrackKind = "video" | "audio" | "caption";
