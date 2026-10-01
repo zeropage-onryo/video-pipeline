@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from . import doc as d
-from . import sources
+from . import lanes, sources
 from . import validate as v
 
 LOUDNESS_LUFS = -14
@@ -171,6 +171,50 @@ def ass_document(doc: dict) -> Optional[str]:
 # the graph
 # --------------------------------------------------------------------------
 
+def _segment(c: dict, src: str, seg: str, fps: int, w: int, h: int, norm: str) -> list[str]:
+    """One picture clip's chain, ending in [seg] at the canvas size.
+
+    A clip with no look takes the plain path: trim, fit, pad (`norm`). A
+    clip with keyframes (lanes.py) or opacity is fitted WITHOUT the pad,
+    given an alpha channel, zoomed and rotated per frame, and laid over a
+    black canvas of its own length at its per-frame offset -- the letterbox
+    is the canvas, so a zoom-out shows black around the picture, as the
+    preview does. `t` in every expression is clip-relative (setpts zeroed
+    it), which is what the keys' frames are. Crop applies to the source
+    picture before any of it, so it is in the picture's own proportions."""
+    head = f"{src}trim=start={_s(c['src_in'], fps)}:end={_s(c['src_out'], fps)},setpts=PTS-STARTPTS"
+    crop = c.get("crop")
+    if crop:
+        left, right = crop.get("left", 0), crop.get("right", 0)
+        top, bottom = crop.get("top", 0), crop.get("bottom", 0)
+        head += (f",crop=iw*{1 - left - right:.4f}:ih*{1 - top - bottom:.4f}"
+                 f":iw*{left:.4f}:ih*{top:.4f}")
+    if not lanes.has_look(c):
+        return [f"{head},{norm}[{seg}]"]
+    keys = {p: (lanes.lane(c, p) or {}).get("keys") or [] for p in lanes.PATHS}
+    fit = (f"fps={fps},scale={w}:{h}:force_original_aspect_ratio=decrease,setsar=1,"
+           "format=yuva420p")
+    opacity = c.get("opacity")
+    if opacity is not None and opacity < 1:
+        fit += f",colorchannelmixer=aa={opacity:.4f}"
+    if lanes.animated(c, "zoom"):
+        z = lanes.expr(keys["zoom"], fps, 1.0)
+        fit += (f",scale=w='max(2,trunc(iw*({z})/2)*2)':h='max(2,trunc(ih*({z})/2)*2)'"
+                ":eval=frame")
+    if lanes.animated(c, "rotation"):
+        r = lanes.expr(keys["rotation"], fps, 0.0)
+        fit += f",rotate=a='({r})*PI/180':c=none:ow='hypot(iw,ih)':oh='hypot(iw,ih)'"
+    x = lanes.expr(keys["x"], fps, 0.0)
+    y = lanes.expr(keys["y"], fps, 0.0)
+    length = d.clip_length(c)
+    return [
+        f"color=c=black:s={w}x{h}:r={fps}:d={_s(length, fps)},format=yuv420p[{seg}bg]",
+        f"{head},{fit}[{seg}fg]",
+        f"[{seg}bg][{seg}fg]overlay=x='(W-w)/2+({x})*W':y='(H-h)/2+({y})*H':eval=frame:"
+        f"eof_action=pass,setsar=1,format=yuv420p,settb=AVTB[{seg}]",
+    ]
+
+
 def _video_graph(doc: dict, index: dict[str, int], parts: list[str],
                  burn: Optional[str]) -> str:
     fps, (w, h), total = doc["fps"], doc["size"], doc["duration"]
@@ -209,8 +253,7 @@ def _video_graph(doc: dict, index: dict[str, int], parts: list[str],
             join(black(c["at"] - cursor, f"vg{k}"), 0)
             cursor = c["at"]
         seg = f"v{k}"
-        parts.append(f"[{index[c['media']]}:v]trim=start={_s(c['src_in'], fps)}:"
-                     f"end={_s(c['src_out'], fps)},setpts=PTS-STARTPTS,{norm}[{seg}]")
+        parts.extend(_segment(c, f"[{index[c['media']]}:v]", seg, fps, w, h, norm))
         join(seg, frames)
         cursor = c["at"] + d.clip_length(c) if not frames else cursor - frames + d.clip_length(c)
     if acc is None:

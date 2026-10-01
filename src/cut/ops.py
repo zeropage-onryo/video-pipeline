@@ -40,6 +40,7 @@ import copy
 from typing import Any, Callable, Optional
 
 from . import doc as d
+from . import lanes as ln
 from . import validate as v
 
 
@@ -197,10 +198,15 @@ def trim(doc: dict, clip_id: str, *, head: int = 0, tail: int = 0,
     _need_clip(doc, clip_id)
     for t, c in d.partners(doc, clip_id):
         followers = _after(t, c)
+        before = d.clip_length(c)
         c["src_in"] += head
         c["src_out"] -= tail
         if d.clip_length(c) <= 0:
             raise OpError(f"trimming {head}+{tail} frames leaves nothing of {c['id']}")
+        if c.get("lanes"):
+            # the keys are clip-relative: what remains keeps the motion it
+            # had over that stretch, with a key at each new edge
+            c["lanes"] = ln.window(c["lanes"], head, before - tail)
         if ripple:
             _shift(followers, -(head + tail))
         else:
@@ -231,9 +237,14 @@ def split(doc: dict, clip_id: str, frame: int) -> dict:
         second["id"] = ids[c["id"]]
         second.pop("transition_in", None)
         cut = frame - c["at"]
+        whole = d.clip_length(c)
         second["src_in"] = c["src_in"] + cut
         second["at"] = frame
         c["src_out"] = c["src_in"] + cut
+        if c.get("lanes"):
+            # each half keeps exactly the motion it had in the whole clip
+            second["lanes"] = ln.window(c["lanes"], cut, whole)
+            c["lanes"] = ln.window(c["lanes"], 0, cut)
         if c["id"] != root_id:
             second["link"] = ids[root_id]
         t["clips"].append(second)
@@ -410,6 +421,106 @@ def overwrite(doc: dict, track_id: str, clip: dict, at: int, *,
     return insert(doc, track_id, clip, at, ripple=False, sound_track=sound_track)
 
 
+def _need_picture(doc: dict, clip_id: str) -> dict:
+    t, c = _need_clip(doc, clip_id)
+    if t.get("kind") != "video":
+        raise OpError(f"clip {clip_id} is on {t['id']}: keyframes, crop and opacity "
+                      "belong to picture clips")
+    return c
+
+
+def _need_path(path: str) -> None:
+    if path not in ln.PATHS:
+        raise OpError(f"path must be one of {list(ln.PATHS)}, got {path!r}")
+
+
+def set_key(doc: dict, clip_id: str, path: str, frame: int, value: float,
+            ease: str = "linear") -> dict:
+    """Put a key on one of a picture clip's lanes at a CLIP-RELATIVE frame
+    (0 is its first frame on the timeline), replacing a key already there.
+    A lane with one key is a constant -- setting a property while it is not
+    animated is a key at frame 0."""
+    doc = _copy(doc)
+    c = _need_picture(doc, clip_id)
+    _need_path(path)
+    _need_int("frame", frame)
+    if not 0 <= frame <= d.clip_length(c):
+        raise OpError(f"frame {frame} is outside clip {clip_id} (0-{d.clip_length(c)})")
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise OpError(f"{path} must be a number, got {value!r}")
+    if ease not in ln.EASES:
+        raise OpError(f"ease must be one of {list(ln.EASES)}")
+    lanes = c.setdefault("lanes", [])
+    lane = next((x for x in lanes if x.get("path") == path), None)
+    if lane is None:
+        lane = {"path": path, "keys": []}
+        lanes.append(lane)
+    lane["keys"] = sorted([k for k in lane["keys"] if k["frame"] != frame]
+                          + [{"frame": frame, "value": round(float(value), 6), "ease": ease}],
+                          key=lambda k: k["frame"])
+    return _finish(doc)
+
+
+def delete_key(doc: dict, clip_id: str, path: str, frame: int) -> dict:
+    """Remove one key. The last key going takes the lane with it (the
+    property returns to its default)."""
+    doc = _copy(doc)
+    c = _need_picture(doc, clip_id)
+    _need_path(path)
+    lane = ln.lane(c, path)
+    if not lane or not any(k["frame"] == frame for k in lane["keys"]):
+        raise OpError(f"no {path} key at frame {frame} on {clip_id}")
+    lane["keys"] = [k for k in lane["keys"] if k["frame"] != frame]
+    if not lane["keys"]:
+        c["lanes"] = [x for x in c["lanes"] if x is not lane]
+        if not c["lanes"]:
+            c.pop("lanes")
+    return _finish(doc)
+
+
+def clear_lane(doc: dict, clip_id: str, path: str) -> dict:
+    """Reset one property: its lane goes, it is back at its default."""
+    doc = _copy(doc)
+    c = _need_picture(doc, clip_id)
+    _need_path(path)
+    if ln.lane(c, path) is None:
+        raise OpError(f"{clip_id} has no {path} to reset")
+    c["lanes"] = [x for x in c["lanes"] if x.get("path") != path]
+    if not c["lanes"]:
+        c.pop("lanes")
+    return _finish(doc)
+
+
+def set_crop(doc: dict, clip_id: str, left: float = 0, right: float = 0,
+             top: float = 0, bottom: float = 0) -> dict:
+    """Cut each edge of the picture in, as a fraction of its own width or
+    height (0.1 = a tenth). All zero removes the crop. Static per clip."""
+    doc = _copy(doc)
+    c = _need_picture(doc, clip_id)
+    sides = {"left": left, "right": right, "top": top, "bottom": bottom}
+    for k, x in sides.items():
+        if not isinstance(x, (int, float)) or isinstance(x, bool):
+            raise OpError(f"crop {k} must be a number, got {x!r}")
+    if all(x == 0 for x in sides.values()):
+        c.pop("crop", None)
+    else:
+        c["crop"] = {k: round(float(x), 4) for k, x in sides.items()}
+    return _finish(doc)
+
+
+def set_opacity(doc: dict, clip_id: str, value: float) -> dict:
+    """The picture's opacity, 0 to 1 (1 removes it). Static per clip."""
+    doc = _copy(doc)
+    c = _need_picture(doc, clip_id)
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise OpError(f"opacity must be a number, got {value!r}")
+    if value >= 1:
+        c.pop("opacity", None)
+    else:
+        c["opacity"] = round(float(value), 4)
+    return _finish(doc)
+
+
 def set_canvas(doc: dict, width: int, height: int) -> dict:
     """Change the frame size. Every clip is fitted into the new frame at
     render (scale to fit, pad black), so nothing on the timeline moves;
@@ -520,6 +631,11 @@ OPS: dict[str, Callable[..., dict]] = {
     "add_transition": add_transition,
     "add_track": add_track,
     "overwrite": overwrite,
+    "set_key": set_key,
+    "delete_key": delete_key,
+    "clear_lane": clear_lane,
+    "set_crop": set_crop,
+    "set_opacity": set_opacity,
 }
 
 
@@ -584,6 +700,19 @@ def describe(op: str, args: Optional[dict[str, Any]] = None, fps: int = d.DEFAUL
             return f"marker '{str(a.get('label', ''))[:30]}' at {_secs(a.get('frame'), fps)}"
         if op == "add_transition":
             return f"crossfade into {clip_id} ({a.get('frames', '?')}f)"
+        if op == "set_key":
+            return (f"{a.get('path', '?')} {float(a.get('value', 0)):g} on {clip_id} "
+                    f"at +{_secs(a.get('frame'), fps)}")
+        if op == "delete_key":
+            return f"remove {a.get('path', '?')} key on {clip_id} at +{_secs(a.get('frame'), fps)}"
+        if op == "clear_lane":
+            return f"reset {a.get('path', '?')} on {clip_id}"
+        if op == "set_crop":
+            sides = [f"{k[0]}{float(a.get(k, 0)) * 100:.0f}%" for k in ("left", "right", "top", "bottom")
+                     if a.get(k)]
+            return f"crop {clip_id} " + (" ".join(sides) or "off")
+        if op == "set_opacity":
+            return f"opacity {clip_id} {float(a.get('value', 1)) * 100:.0f}%"
         if op == "overwrite":
             c = a.get("clip") or {}
             return f"overwrite {c.get('media', '?')} on {a.get('track_id', '?')} at {_secs(a.get('at'), fps)}"

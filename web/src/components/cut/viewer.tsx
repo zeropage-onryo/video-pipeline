@@ -38,7 +38,8 @@ import {
 import { useCut, useDrawnDoc } from "@/lib/cut/store";
 import { jumpCut, nudge, toEnd, toStart } from "@/lib/cut/actions";
 import type { BinItem, Preview } from "@/lib/cut/api";
-import { clipAt, clipEnd, endOf, stackOrder, timecode, type Clip, type Doc, type Track } from "@/lib/cut/timeline";
+import { clipAt, clipEnd, clipLength, endOf, stackOrder, timecode, type Clip, type Doc, type Track } from "@/lib/cut/timeline";
+import { fitBoxes, lookAt } from "@/lib/cut/lanes";
 
 const DUCK = 0.32; // ~ -10 dB
 const WINDOW_BEFORE_S = 0.5;
@@ -163,6 +164,8 @@ export function Viewer() {
               playing={playing && !scrub}
               item={binByHandle.get(clip.media)}
               preview={previews[clip.media]}
+              frameW={box.w}
+              frameH={box.h}
             />
           ))}
           {live.audio.map(({ clip, track }) => {
@@ -282,6 +285,8 @@ function PictureEl({
   playing,
   item,
   preview,
+  frameW,
+  frameH,
 }: {
   clip: Clip;
   z: number;
@@ -290,33 +295,85 @@ function PictureEl({
   playing: boolean;
   item?: BinItem;
   preview?: Preview;
+  frameW: number;
+  frameH: number;
 }) {
   const ref = useRef<HTMLVideoElement>(null);
   const active = useFollow(ref, clip, playhead, fps, playing);
-  let opacity = active ? 1 : 0;
+  // the file's own size: the bin's, else the element's once it has read it
+  const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
+  let fade = active ? 1 : 0;
   const xf = clip.transition_in?.frames ?? 0;
-  if (active && xf && playhead < clip.at + xf) opacity = (playhead - clip.at + 1) / (xf + 1);
+  if (active && xf && playhead < clip.at + xf) fade = (playhead - clip.at + 1) / (xf + 1);
+
+  /* The picture as render.py draws it: the CROPPED source fitted inside
+     the frame (letterboxed, never cut off), then zoomed and rotated about
+     its centre and offset by x / y of the frame -- CSS applies transforms
+     right to left, so scale, then rotate, then translate, the render's
+     order. The box clips the crop; the element inside is the whole file. */
+  const rel = Math.max(0, Math.min(playhead - clip.at, clipLength(clip)));
+  const look = lookAt(clip, rel);
+  const mw = item?.width || natural?.w || frameW;
+  const mh = item?.height || natural?.h || frameH;
+  const { pic, el } = fitBoxes(frameW, frameH, mw, mh, look.crop);
+  const box: React.CSSProperties = {
+    position: "absolute",
+    left: pic.left,
+    top: pic.top,
+    width: pic.width,
+    height: pic.height,
+    overflow: "hidden",
+    transform: `translate(${look.x * frameW}px, ${look.y * frameH}px) rotate(${look.rotation}deg) scale(${look.zoom})`,
+    transformOrigin: "50% 50%",
+    opacity: fade * look.opacity,
+    zIndex: z,
+    pointerEvents: "none",
+  };
+  const fill: React.CSSProperties = {
+    position: "absolute",
+    inset: "auto",
+    left: el.left,
+    top: el.top,
+    width: el.width,
+    height: el.height,
+    objectFit: "fill",
+  };
+
   if (item?.kind === "image") {
     const src = item.url ?? item.poster;
-    /* eslint-disable-next-line @next/next/no-img-element */
-    return src ? <img className="cx-still" src={src} alt="" style={{ opacity, zIndex: z }} /> : null;
+    if (!src) return null;
+    return (
+      <div style={box}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          className="cx-still"
+          src={src}
+          alt=""
+          style={fill}
+          onLoad={(e) => setNatural({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
+        />
+      </div>
+    );
   }
   const src = preview?.proxy ?? item?.url ?? null;
   if (!src) return null;
   return (
-    <video
-      ref={ref}
-      src={src}
-      muted
-      playsInline
-      preload="auto"
-      style={{ opacity, zIndex: z }}
-      onLoadedData={(e) => {
-        // a paused <video> sitting at 0 is never painted until something
-        // seeks it; a hair past the wanted time forces the first frame up
-        e.currentTarget.currentTime = Math.max(0.001, sourceTime(clip, Math.max(playhead, clip.at), fps));
-      }}
-    />
+    <div style={box}>
+      <video
+        ref={ref}
+        src={src}
+        muted
+        playsInline
+        preload="auto"
+        style={fill}
+        onLoadedMetadata={(e) => setNatural({ w: e.currentTarget.videoWidth, h: e.currentTarget.videoHeight })}
+        onLoadedData={(e) => {
+          // a paused <video> sitting at 0 is never painted until something
+          // seeks it; a hair past the wanted time forces the first frame up
+          e.currentTarget.currentTime = Math.max(0.001, sourceTime(clip, Math.max(playhead, clip.at), fps));
+        }}
+      />
+    </div>
   );
 }
 

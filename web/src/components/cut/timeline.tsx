@@ -31,6 +31,7 @@ import { Eye, Lock, Type, Volume2 } from "lucide-react";
 import { useCut, useDrawnDoc } from "@/lib/cut/store";
 import { placeMedia, splitClip } from "@/lib/cut/actions";
 import type { BinItem, Preview } from "@/lib/cut/api";
+import { keyFrames } from "@/lib/cut/lanes";
 import {
   clampPps,
   clampTrim,
@@ -657,6 +658,13 @@ const ClipView = memo(function ClipView({
         </span>
       ) : null}
       {xf ? <i className="cx-xfade" style={{ width: framesToPx(xf, fps, pps) }} /> : null}
+      {track.kind === "video" && clip.lanes ? (
+        <span className="cx-clip-keys">
+          {keyFrames(clip).map((f) => (
+            <i key={f} style={{ left: framesToPx(f, fps, pps) }} />
+          ))}
+        </span>
+      ) : null}
       <i className="cx-edge head" onPointerDown={(e) => onDown(e, "head")} />
       <i className="cx-edge tail" onPointerDown={(e) => onDown(e, "tail")} />
     </div>
