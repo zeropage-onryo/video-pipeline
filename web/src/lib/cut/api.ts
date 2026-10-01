@@ -164,7 +164,11 @@ export const uploadMedia = (file: File) => {
 export const getPreview = (handle: string) => cutFetch<Preview>(`/media/${encodeURIComponent(handle)}/preview`);
 
 /* ── export ── */
-export const exportProject = (id: string, body: { timeline_id?: number; aspect?: Aspect }) =>
+export type ExportFormat = "mp4" | "audio" | "still" | "project";
+export const exportProject = (
+  id: string,
+  body: { timeline_id?: number; aspect?: Aspect; format?: ExportFormat; frame?: number },
+) =>
   post<{ job_id: number; timeline_id: number; version: number }>(`/projects/${encodeURIComponent(id)}/export`, body);
 export const listExports = (id: string) =>
   cutFetch<{

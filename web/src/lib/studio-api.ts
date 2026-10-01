@@ -529,6 +529,11 @@ export type Job = {
   /** a finished cut job (/api/cut/assemble) */
   mp4_url?: string | null;
   version?: number | null;
+  /** an editor export (2026-10-01): what it made, and where */
+  format?: "mp4" | "audio" | "still" | "project";
+  file_url?: string | null;
+  otio_url?: string | null;
+  srt_url?: string | null;
 };
 /** POST /api/scenes/run — multipart: idea, brand, count (1–4), refs
  *  (asset photo urls) and files (uploads), exactly what the Jinja

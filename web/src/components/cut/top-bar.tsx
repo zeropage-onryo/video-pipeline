@@ -20,9 +20,9 @@ import { Dialog } from "@base-ui/react/dialog";
 import { Popover } from "@base-ui/react/popover";
 import { ChevronLeft, Copy, Download, History, Loader2, Redo2, Undo2, X } from "lucide-react";
 import { useCut } from "@/lib/cut/store";
-import { exportProject, listExports, renameProject } from "@/lib/cut/api";
+import { exportProject, listExports, renameProject, type ExportFormat } from "@/lib/cut/api";
 import { getJob, type Job } from "@/lib/studio-api";
-import { ASPECTS, aspectOf, type Aspect } from "@/lib/cut/timeline";
+import { ASPECTS, aspectOf, timecode, type Aspect } from "@/lib/cut/timeline";
 
 function ago(iso: string | null | undefined): string {
   if (!iso) return "";
@@ -196,6 +196,18 @@ function HistoryPopover() {
 
 type ExportRow = { timeline_id: number; version: number; export_url: string | null; created_at: string; op_summary: string };
 
+const FORMATS: { id: ExportFormat; label: string; verb: string; note: (at: string) => string }[] = [
+  { id: "mp4", label: "Video", verb: "Render MP4", note: () => "H.264 MP4 with its sound, the render of record." },
+  { id: "audio", label: "Audio only", verb: "Render audio", note: () => "The mix alone as AAC (.m4a), at −14 LUFS." },
+  { id: "still", label: "Still", verb: "Render still", note: (at) => `The frame at the playhead (${at}) as a PNG, captions and all.` },
+  {
+    id: "project",
+    label: "Editable project",
+    verb: "Write project",
+    note: () => "OpenTimelineIO (.otio) for Resolve or another editor, plus captions as .srt. Nothing is rendered.",
+  },
+];
+
 function ExportDialog({ onClose }: { onClose: () => void }) {
   const project = useCut((s) => s.project);
   const head = useCut((s) => s.head);
@@ -205,8 +217,11 @@ function ExportDialog({ onClose }: { onClose: () => void }) {
   const refresh = useCut((s) => s.refresh);
   const [aspect, setAspect] = useState<Aspect>((doc && aspectOf(doc.size)) || "9:16");
   const [versionId, setVersionId] = useState<number | null>(head?.id ?? null);
+  const [format, setFormat] = useState<ExportFormat>("mp4");
+  const playhead = useCut((s) => s.playhead);
   const [job, setJob] = useState<Job | null>(null);
   const [result, setResult] = useState<string | null>(null);
+  const [done, setDone] = useState<Job | null>(null);
   const [past, setPast] = useState<ExportRow[]>([]);
 
   const loadPast = useCallback(() => {
@@ -224,8 +239,14 @@ function ExportDialog({ onClose }: { onClose: () => void }) {
   const start = async () => {
     if (!project) return;
     setResult(null);
+    setDone(null);
     try {
-      const res = await exportProject(project.id, { timeline_id: versionId ?? undefined, aspect });
+      const res = await exportProject(project.id, {
+        timeline_id: versionId ?? undefined,
+        aspect,
+        format,
+        frame: format === "still" ? playhead : undefined,
+      });
       let j: Job = { id: res.job_id, kind: "cut", label: "export", status: "queued", progress: 0, detail: "" };
       setJob(j);
       for (;;) {
@@ -235,6 +256,7 @@ function ExportDialog({ onClose }: { onClose: () => void }) {
         if (["done", "failed", "cancelled"].includes(j.status)) break;
       }
       if (j.status === "done") {
+        setDone(j);
         setResult(j.mp4_url ?? null);
         loadPast();
         // an aspect change is a new version: pick it up
@@ -261,10 +283,22 @@ function ExportDialog({ onClose }: { onClose: () => void }) {
             </Dialog.Close>
           </div>
           <p className="cx-note" style={{ marginBottom: 16 }}>
-            An MP4 rendered by ffmpeg from the exact version you pick, loudness-normalised to −14 LUFS, with captions
-            burned in where the server&apos;s ffmpeg can (the render says so when it cannot). This is the render of record;
-            the preview only approximates it. It costs no credits.
+            Made by ffmpeg from the exact version you pick — sound loudness-normalised to −14 LUFS, captions burned in where
+            the server&apos;s ffmpeg can (the render says so when it cannot). This is the render of record; the preview only
+            approximates it. It costs no credits.
           </p>
+
+          <div className="cx-field">
+            <span className="cx-label">Make</span>
+            <span className="cx-seg" role="group" aria-label="Export format">
+              {FORMATS.map((f) => (
+                <button key={f.id} type="button" aria-pressed={format === f.id} onClick={() => setFormat(f.id)} disabled={running}>
+                  {f.label}
+                </button>
+              ))}
+            </span>
+            <p className="cx-note">{FORMATS.find((f) => f.id === format)?.note(timecode(playhead, doc?.fps ?? 30))}</p>
+          </div>
 
           <div className="cx-field">
             <span className="cx-label">Aspect</span>
@@ -337,10 +371,47 @@ function ExportDialog({ onClose }: { onClose: () => void }) {
             </div>
           ) : null}
 
+          {done && done.format === "audio" && done.file_url ? (
+            <div className="cx-card">
+              <audio src={done.file_url} controls style={{ width: "100%" }} />
+              <a className="cx-go" href={done.file_url} download target="_blank" rel="noreferrer" style={{ marginTop: 10 }}>
+                <Download /> Download .m4a
+              </a>
+            </div>
+          ) : null}
+          {done && done.format === "still" && done.file_url ? (
+            <div className="cx-card">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={done.file_url} alt="The exported frame" style={{ width: "100%", maxHeight: 320, objectFit: "contain", background: "#000", borderRadius: 8 }} />
+              <a className="cx-go" href={done.file_url} download target="_blank" rel="noreferrer" style={{ marginTop: 10 }}>
+                <Download /> Download .png
+              </a>
+            </div>
+          ) : null}
+          {done && done.format === "project" && done.otio_url ? (
+            <div className="cx-card">
+              <p className="cx-note" style={{ marginTop: 0 }}>
+                Import the .otio in DaVinci Resolve (File › Import › Timeline) or any OpenTimelineIO editor. Cuts, gaps,
+                transitions (as dissolves), speed and markers carry over; keyframes, crop and the mix do not — they are
+                kept in the file&apos;s metadata. Captions come as a separate .srt.
+              </p>
+              <span className="cx-field-row">
+                <a className="cx-go" href={done.otio_url} download target="_blank" rel="noreferrer">
+                  <Download /> .otio
+                </a>
+                {done.srt_url ? (
+                  <a className="cx-btn ghost" href={done.srt_url} download target="_blank" rel="noreferrer">
+                    <Download /> .srt
+                  </a>
+                ) : null}
+              </span>
+            </div>
+          ) : null}
+
           <div className="cx-field-row" style={{ justifyContent: "flex-end", margin: "6px 0 18px" }}>
             <button type="button" className="cx-go" onClick={() => void start()} disabled={running || !versionId}>
               {running ? <Loader2 className="animate-spin" /> : <Download />}
-              {running ? "Rendering…" : "Render MP4"}
+              {running ? "Working…" : FORMATS.find((f) => f.id === format)?.verb}
             </button>
           </div>
 

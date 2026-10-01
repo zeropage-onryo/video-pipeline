@@ -67,6 +67,7 @@ from src.cut import doc as cut_doc
 from src.cut import index as cut_index
 from src.cut import moments as cut_moments
 from src.cut import ops as cut_ops
+from src.cut import otio as cut_otio
 from src.cut import preview as cut_preview
 from src.cut import projects as cut_projects
 from src.cut import render as cut_render
@@ -662,6 +663,44 @@ def cut_media_transcript(handle: str, account_id: int = Depends(auth.current_acc
 class ExportBody(BaseModel):
     timeline_id: Optional[int] = None
     aspect: Optional[Aspect] = None
+    # what to make: the MP4 (default), its sound alone (.m4a), the frame at
+    # `frame` (.png), or an editable project (.otio + .srt) for an NLE
+    format: Literal["mp4", "audio", "still", "project"] = "mp4"
+    frame: Optional[int] = Field(default=None, ge=0)
+
+
+def _project_files(doc: dict, *, name: str, title: str, account_id: int) -> dict:
+    """The editable project: OTIO (media by URL, named) and an SRT of the
+    captions, written beside the renders and mirrored like them."""
+    import json
+
+    from src import media as media_mod
+    handles = cut_doc.handles(doc)
+    sources = cut_store.handle_sources(handles, account_id=account_id)
+    names = cut_store.handle_names(handles, account_id=account_id)
+    refs = {h: {"url": _mint((sources.get(h) or {}).get("media_url"), account_id),
+                "name": (names.get(h) or {}).get("name") or h}
+            for h in handles}
+    out_dir = cut_render.CUT_DIR
+    out_dir.mkdir(parents=True, exist_ok=True)
+    files = {}
+    otio_path = out_dir / f"{name}.otio"
+    otio_path.write_text(json.dumps(cut_otio.timeline(doc, refs, name=title), indent=2), encoding="utf-8")
+    files["otio"] = otio_path
+    subs = cut_otio.srt(doc)
+    if subs:
+        srt_path = out_dir / f"{name}.srt"
+        srt_path.write_text(subs, encoding="utf-8")
+        files["srt"] = srt_path
+    urls = {}
+    for kind, path in files.items():
+        stored = f"/renders/cut/{path.name}"
+        media_mod.mirror(path, f"renders/cut/{path.name}", account_id,
+                         content_type="application/json" if kind == "otio" else "text/plain",
+                         derive=False)
+        urls[kind] = _mint(stored, account_id)
+    offline = sorted(h for h, r in refs.items() if not r["url"])
+    return {"urls": urls, "offline": offline}
 
 
 @router.post("/projects/{project_id}/export")
@@ -684,7 +723,7 @@ def cut_project_export(project_id: str, body: ExportBody,
         target, err = _head_or_409(project, account_id)
         if err:
             return err
-    if not cut_sources.ffmpeg_bin():
+    if body.format != "project" and not cut_sources.ffmpeg_bin():
         return _error(503, "no_ffmpeg", "ffmpeg is not installed on this server")
     doc = target["doc"]
     if doc.get("duration", 0) <= 0:
@@ -702,6 +741,30 @@ def cut_project_export(project_id: str, body: ExportBody,
         cut_store.update_project(project["id"], account_id=account_id)
     tl_id, version, doc = target["id"], target["version"], target["doc"]
     name = f"{key.replace(':', '-')}-v{version}-{tl_id}"
+    fmt = body.format
+    if fmt == "still":
+        frame = body.frame if body.frame is not None else 0
+        if frame >= doc["duration"]:
+            return _error(422, "invalid", f"frame {frame} is past the end of the cut ({doc['duration']} frames)")
+        name += f"-f{frame}"
+    else:
+        frame = 0
+
+    if fmt == "project":
+        def work(job):
+            jobs.progress(job, 0.3, "writing the project")
+            got = _project_files(doc, name=name, title=f"{project['title']} v{version}",
+                                 account_id=account_id)
+            detail = f"project v{version} · .otio" + (" + .srt" if "srt" in got["urls"] else "")
+            if got["offline"]:
+                detail += f" · {len(got['offline'])} media without a public URL (relink by name)"
+            return {"detail": detail, "timeline_id": tl_id, "version": version, "format": fmt,
+                    "otio_url": got["urls"]["otio"], "srt_url": got["urls"].get("srt"),
+                    "ref_id": project["id"]}
+
+        job = jobs.start("cut", f"project · {project['title'][:60]} v{version}", work,
+                         account_id=account_id)
+        return {"job_id": job["id"], "timeline_id": tl_id, "version": version}
 
     def work(job):
         jobs.progress(job, 0.1, "fetching the media")
@@ -710,16 +773,23 @@ def cut_project_export(project_id: str, body: ExportBody,
                                               fps=doc["fps"], workdir=Path(tmp))
             jobs.progress(job, 0.4, f"rendering version {version}")
             result = cut_render.render(doc, account_id=account_id, name=name,
-                                       paths=paths, media=media)
-        cut_store.set_export(tl_id, result["stored"], account_id=account_id)
-        detail = f"export v{version} · {result['seconds']:.1f}s"
+                                       paths=paths, media=media, fmt=fmt, frame=frame)
+        if fmt == "mp4":
+            # export_url is the version's MP4; a still or the sound alone
+            # is a derivative the dialog hands over, not the export of record
+            cut_store.set_export(tl_id, result["stored"], account_id=account_id)
+        what = {"mp4": "export", "audio": "audio", "still": "still"}[fmt]
+        detail = f"{what} v{version}" + (f" · {result['seconds']:.1f}s" if fmt != "still"
+                                         else f" · frame {frame}")
         for note in result["notes"]:
             detail += f" · {note}"
-        return {"detail": detail, "timeline_id": tl_id, "version": version,
-                "mp4_url": result["url"], "seconds": result["seconds"],
+        return {"detail": detail, "timeline_id": tl_id, "version": version, "format": fmt,
+                "mp4_url": result["url"] if fmt == "mp4" else None,
+                "file_url": result["url"], "seconds": result["seconds"],
                 "notes": result["notes"], "ref_id": project["id"]}
 
-    job = jobs.start("cut", f"export · {project['title'][:60]} v{version}", work,
+    label = {"mp4": "export", "audio": "audio", "still": "still"}[fmt]
+    job = jobs.start("cut", f"{label} · {project['title'][:60]} v{version}", work,
                      account_id=account_id)
     return {"job_id": job["id"], "timeline_id": tl_id, "version": version}
 
