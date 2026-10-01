@@ -522,6 +522,136 @@ def footage_for_model(found: dict) -> str:
     return "\n".join(lines + notes) or "no moment matched -- the clip may not be indexed yet"
 
 
+# --- a pasted link's frames (2026-10-01, src/linkrefs.py) ---------------------
+
+LINK_ROLE = "link"
+
+
+def link_sheet(urls, *, brand: str = "", account_id=None, dsn=None, read=None,
+               screen=None, remember=None, client=None) -> Optional[dict]:
+    """The frames behind the links in a person's own message, as ONE
+    contact-sheet row per link, screened like any hunt.
+
+    Three things that differ from `find_references`, all because the
+    person chose this picture rather than a search finding it:
+
+    - the URLs come from the ROUTE reading the person's message, never
+      from a tool argument (guide_tools.check_args refuses those);
+    - a frame the look rejected is still on the sheet, greyed with the
+      reason -- the card lets them keep it anyway; a frame nobody could
+      look at (no key, a dead judge) is OFFERED with that note, where a
+      hunted one would be withheld, because an upload is never judged
+      either and this is the same act with a URL;
+    - a link that gives up nothing is a row with a note, never a silent
+      empty one.
+
+    Candidates are registered through `imagesearch.remember` so they get
+    real ids: that is what lets `keep_references` keep them with no new
+    write path. None when there are no links; never raises.
+    """
+    urls = [str(u or "").strip() for u in (urls or []) if str(u or "").strip()]
+    if not urls:
+        return None
+    if read is None:
+        from .linkrefs import read_link as read
+    if remember is None:
+        from .imagesearch import remember
+    if screen is None:
+        from .refcheck import screen
+    sheet, unchecked = [], 0
+    for url in urls:
+        try:
+            page = read(url)
+        except Exception as e:                   # the reader never raises; the injected one may
+            page = {"url": url, "title": url, "images": [], "note": f"could not read it: {e}"}
+        entry = {"role": LINK_ROLE, "query": _link_label(page), "keepers": [],
+                 "rejected": [], "note": page.get("note") or ""}
+        candidates = list(page.get("images") or [])
+        if not candidates:
+            entry["note"] = entry["note"] or "no image on that page"
+            sheet.append(entry)
+            continue
+        try:
+            candidates = (remember(candidates, query=entry["query"], dsn=dsn) if dsn is not None
+                          else remember(candidates, query=entry["query"]))
+        except Exception as e:
+            entry["note"] = f"could not register the frames: {e}"
+            sheet.append(entry)
+            continue
+        need = {"role": LINK_ROLE, "query": entry["query"],
+                "want": f"the picture on the page the person pasted ({entry['query']})"}
+        try:
+            looked = screen(candidates, need, brand=brand, client=client, account_id=account_id)
+        except Exception as e:
+            looked = {"checked": False, "keepers": [], "rejected": [], "note": str(e)}
+        if not looked.get("checked"):
+            unchecked += 1
+            why = f"not looked at -- {looked.get('note', '')}".strip(" -")
+            entry["keepers"] = [_public({**c, "why": why, "kept_for": "your link, as pasted"})
+                                for c in candidates]
+            entry["note"] = why
+        else:
+            entry["keepers"] = [_public(k) for k in (looked.get("keepers") or [])]
+            entry["rejected"] = [_public(r) for r in (looked.get("rejected") or [])]
+            entry["note"] = looked.get("note", "")
+        sheet.append(entry)
+    kept = sum(len(e["keepers"]) for e in sheet)
+    shown = kept + sum(len(e["rejected"]) for e in sheet)
+    return {"ok": kept > 0, "sheet": sheet, "checked": unchecked == 0, "faces": 0,
+            "links": len(urls),
+            "note": (f"{shown} frame(s) from the link(s) you pasted, {kept} kept"
+                     if shown else "the link(s) you pasted gave up no image")}
+
+
+def _link_label(page: dict) -> str:
+    """What the row is called: the page title, unless it carries an
+    address of its own (some titles do), then the host."""
+    from urllib.parse import urlparse
+
+    from .guide_tools import _URL
+    title = " ".join(str(page.get("title") or "").split())[:120]
+    host = urlparse(str(page.get("url") or "")).hostname or ""
+    if not title or _URL.search(title):
+        return host or "pasted link"
+    return title
+
+
+def merge_sheets(links: Optional[dict], hunted: Optional[dict]) -> Optional[dict]:
+    """One sheet for the reply: the pasted link's row(s) FIRST, then
+    whatever find_references found this turn. Either side may be None."""
+    if not links:
+        return hunted
+    if not hunted:
+        return links
+    rows = list(links.get("sheet") or []) + list(hunted.get("sheet") or [])
+    return {"ok": bool(links.get("ok") or hunted.get("ok")), "sheet": rows,
+            "checked": bool(links.get("checked", True) and hunted.get("checked", True)),
+            "faces": int(hunted.get("faces") or 0), "links": links.get("links", 0),
+            "note": "; ".join(n for n in (links.get("note"), hunted.get("note")) if n)}
+
+
+def link_note(links: Optional[dict]) -> str:
+    """The ONE line the model is told about the link: how many frames are
+    on the sheet, or that the page gave nothing -- never the address.
+    The sheet is drawn by the studio under the message; the model only
+    has to not contradict it."""
+    if not links:
+        return ""
+    kept = sum(len(e.get("keepers") or []) for e in links.get("sheet") or [])
+    shown = kept + sum(len(e.get("rejected") or []) for e in links.get("sheet") or [])
+    n = int(links.get("links") or 1)
+    which = "link" if n == 1 else f"{n} links"
+    if not shown:
+        notes = "; ".join(e.get("note") or "" for e in links.get("sheet") or []).strip("; ")
+        return (f"The {which} they pasted gave up no image ({notes or 'nothing on the page'}). "
+                "Say so plainly and ask them to save the picture and drop it in. "
+                "Do not call find_references for it unless they ask.")
+    return (f"{shown} frame(s) from the {which} they pasted are already on the contact sheet "
+            f"under your message ({kept} kept by the look; the rest shown greyed with a reason). "
+            "The studio read the page itself; you cannot see the frames or the address. "
+            "Say they are on the sheet and ask what to keep -- do not describe or hunt for them.")
+
+
 # --- the checking step ------------------------------------------------------------
 
 # An ad is graded as an ad (story_judge.judge_ad), everything else as a

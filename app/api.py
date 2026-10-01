@@ -464,6 +464,12 @@ async def creative_guide_reply(request: Request,
     # The Guide talks inside the same project a Create would write into
     # (2026-09-28), so its suggestions follow that project's brief and memory.
     project = _form_project(form, account_id)
+    # A link the person pasted (2026-10-01, src/linkrefs.py): read off
+    # THEIR OWN last message, here, never off a tool argument -- the
+    # model never handles a URL (guide_tools.check_args). Its frames go
+    # first on reply.sheet; the model is told only that they are there.
+    from src import linkrefs
+    pasted = linkrefs.extract_links(conversation.messages[-1].content)
 
     def work(job):
         # Grounded through scene_chain.ground -- the same scoped set a
@@ -477,11 +483,16 @@ async def creative_guide_reply(request: Request,
             from src import assistant_brain
             note("remembering what you like")
             assistant["memory"] = assistant_brain.memory(brand, account_id)
+        links = None
+        if pasted:
+            from src import assistant_brain
+            note("reading the link you pasted")
+            links = assistant_brain.link_sheet(pasted, brand=brand, account_id=account_id)
         if personal:
             reply = creative_guide.respond_personal(
                 conversation, provider=provider, scope=scope, model=model,
                 brand=brand, grounding=grounding, image_refs=image_refs,
-                assistant=assistant)
+                assistant=assistant, links=links)
         else:
             from google import genai
             # The board's tools, in-process (src/guide_tools.py,
@@ -500,7 +511,7 @@ async def creative_guide_reply(request: Request,
                 conversation, client=genai.Client(api_key=_gemini_key(account_id)),
                 brand=brand, grounding=grounding, image_refs=image_refs,
                 account_id=account_id, on_retry=note, tools=tools, run_tool=run_tool,
-                brain=brain, assistant=assistant)
+                brain=brain, assistant=assistant, links=links)
         # `billing` says WHOSE plan paid: a personal connection spends
         # the person's own ChatGPT/Claude subscription and never touches
         # this install's Gemini credit, and /costs must not count it.

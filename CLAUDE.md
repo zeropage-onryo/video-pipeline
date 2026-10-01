@@ -1722,6 +1722,26 @@ is yours, in Resolve, by hand.
   saves successfully and then resolves to nothing. `app/api.py`'s `_to_jpeg`/`_save_upload_ref`/
   `_resolve_asset_photo` now delegate. **The URL shape is the point**: a scouted image comes out
   as `/refs/<sha>.jpg`, so it rides the composer path with no new route or resolver.
+- **`src/linkrefs.py`** — a link the person pastes into the Guide becomes a reference frame
+  (2026-10-01, Mike: "focus on image first"). The one place scraping is right: a page the PERSON
+  chose, one fetch, its own preview image (`og:image` / `twitter:image` / `<link image_src>` /
+  JSON-LD `Product.image`), no model, no headless browser, no crawl — a vision model browsing for
+  images was refused (10-50x the cost, blocked hosts, invented URLs). **The model never handles the
+  URL**: `guide_tools.check_args` refuses one in any tool argument, so the route
+  (`creative_guide_reply`) reads up to 3 links off the person's own last message, `assistant_brain.
+  link_sheet` registers the frames through `imagesearch.remember` (real ids, so `keep_references`
+  keeps them with no new write path) and screens them with `refcheck.screen`, and the row goes
+  FIRST on `reply.sheet` — a rejected frame stays on the sheet greyed with the reason, a frame
+  nobody could look at is still offered (the person chose it, like an upload), and a page that
+  gives nothing is a row with a note, never a silent one. The model gets ONE line
+  (`assistant_brain.link_note`: "N frames from the link they pasted are on the sheet"), never the
+  address. Fetches go through `refbin.public_host` on every redirect hop (followed by hand),
+  `FETCH_HEADERS`, a 2 MB streamed cap. Read live: Shopify pages put the site LOGO in `og:image`
+  (http AND https, one file) and the product photos in JSON-LD, so one file under two schemes is
+  one frame and logo/placeholder names sort last; Ghost's energy-can page itself exposes NO
+  product image in any of those (only body `<img>` tags behind a dozen nav tiles) and honestly
+  yields the logo greyed plus the note; the Legend/sticks orange-cream pages and Pinterest pins
+  give real frames; an Instagram POST gives nothing without a session (the note says so).
 - **`src/cut/`** — the editor, phase 1 of `docs/CUT_EDITOR.md` (Assemble v0, 2026-09-26).
   `doc.py` is the timeline document (OTIO-shaped, INTEGER FRAMES at the project fps, tracks
   V / A with a role voice|music|sfx / T captions, media named by `gen:<generated_assets.id>` or
