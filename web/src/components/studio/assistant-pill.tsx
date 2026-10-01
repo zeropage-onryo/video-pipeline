@@ -17,8 +17,8 @@
    and the conversation follows the person from page to page. */
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, ChevronDown, ChevronUp, ExternalLink, Settings2, SquarePen } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ArrowRight, ChevronDown, ChevronUp, Settings2, SquarePen } from "lucide-react";
 import { useShell } from "@/components/studio/shell";
 import {
   getBalance,
@@ -57,7 +57,7 @@ import {
   type Tone,
 } from "@/lib/assistant";
 import "@/components/studio/assistant.css";
-/* eslint-disable @next/next/no-img-element */
+import { ContactSheetView } from "@/components/studio/contact-sheet";
 
 type Turn = {
   role: "user" | "assistant";
@@ -551,8 +551,6 @@ function Extras({
   onKeep: (sheet: ContactSheet) => void;
 }) {
   const sheet = reply.sheet;
-  const frames = useMemo(() => sheet?.sheet?.flatMap((n) => [...n.keepers, ...n.rejected]) ?? [], [sheet]);
-  const count = frames.filter((f) => chosen[f.id]).length;
   // a question whose options are just the directions' titles says the
   // same thing twice; the direction cards are the better tap
   const titles = new Set((reply.directions ?? []).map((d) => d.title.trim().toLowerCase()));
@@ -615,63 +613,7 @@ function Extras({
       ) : null}
 
       {sheet ? (
-        <div className="zpa-sheet">
-          <span className="zpa-mono dim">{sheet.note}</span>
-          {sheet.faces ? <span className="zpa-face">A face comes from your Elements (@name), never the web.</span> : null}
-          {sheet.sheet.map((n, k) => {
-            const all = [...n.keepers, ...n.rejected];
-            return (
-              <div key={k} className="zpa-need">
-                <div className="zpa-needhead">
-                  <span className="zpa-mono">
-                    {n.role} · {n.query}
-                  </span>
-                  <span className="zpa-mono dim">
-                    {n.keepers.length}/{all.length}
-                  </span>
-                </div>
-                {all.length ? (
-                  <div className="zpa-grid">
-                    {all.map((f) => {
-                      const rejected = n.rejected.includes(f);
-                      const on = !!chosen[f.id];
-                      return (
-                        <span key={f.id} className="zpa-frame-wrap">
-                          <button
-                            type="button"
-                            className={`zpa-frame${on ? " on" : ""}${rejected ? " rej" : ""}`}
-                            aria-pressed={on}
-                            disabled={kept}
-                            title={`${f.title || f.source}${rejected ? ` — cut: ${f.why}` : f.kept_for ? ` — ${f.kept_for}` : ""}${rejected ? " · click to keep anyway" : ""}`}
-                            onClick={() => onToggle(f.id)}
-                          >
-                            <img src={f.image_url} alt={f.title || "reference"} loading="lazy" referrerPolicy="no-referrer" />
-                            <span className="zpa-tag">{rejected && !on ? `✕ ${f.why || "cut"}` : f.source}</span>
-                          </button>
-                          {f.source_url ? (
-                            <a href={f.source_url} target="_blank" rel="noreferrer" className="zpa-src" aria-label={`Where ${f.title || "this frame"} came from`}>
-                              <ExternalLink strokeWidth={1.8} />
-                            </a>
-                          ) : null}
-                        </span>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <span className="zpa-mono dim">{n.note || "nothing found"}</span>
-                )}
-              </div>
-            );
-          })}
-          {frames.length ? (
-            <button type="button" className="zpa-keep" disabled={busy || kept || !count} onClick={() => onKeep(sheet)}>
-              {kept ? "Kept · on your composer" : `Keep ${count} · 0 cr`}
-            </button>
-          ) : null}
-          {frames.length && !kept ? (
-            <span className="zpa-mono dim">Kept frames go on the composer. {name} never presses Create.</span>
-          ) : null}
-        </div>
+        <ContactSheetView sheet={sheet} chosen={chosen} kept={kept} busy={busy} name={name} onToggle={onToggle} onKeep={onKeep} />
       ) : null}
     </>
   );

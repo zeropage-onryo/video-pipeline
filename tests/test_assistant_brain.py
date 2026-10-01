@@ -477,3 +477,33 @@ def test_the_turn_tells_the_judge_what_the_person_asked_for(monkeypatch):
     reply = {"message": "three ways", "directions": [{"title": "A", "logline": "b"}]}
     creative_guide._finish(reply, client=object(), said="an ad for a nice watch, 6 seconds")
     assert seen["kind"] == "ad" and seen["seconds"] == 6
+
+
+def test_with_the_local_hunt_the_board_image_search_is_not_offered(monkeypatch):
+    """images_for answers in ids nobody can see; a chat turn that used it
+    said it found references and drew nothing (2026-10-01)."""
+    monkeypatch.setattr(guide_tools, "available", lambda: True)
+    monkeypatch.setattr(guide_tools, "_sync", lambda coro: (coro.close(), [
+        {"name": "board", "description": "", "input_schema": {}, "write": False},
+        {"name": "images_for", "description": "", "input_schema": {}, "write": False}])[1])
+    monkeypatch.setattr(guide_tools, "build", lambda **kw: None)
+    names = {s["name"] for s in guide_tools.session(local=True)[0]}
+    assert "images_for" not in names and {"board", "find_references"} <= names
+    names = {s["name"] for s in guide_tools.session(local=False)[0]}
+    assert "images_for" in names
+
+
+def test_keep_uses_the_second_address_when_the_first_will_not_fetch():
+    rows = {"c-1": {"id": "c-1", "image_url": "https://live.staticflickr.com/1.jpg",
+                    "fallback_url": "https://api.openverse.org/v1/images/1/thumb/",
+                    "source_url": "https://flickr.com/p/1", "title": "t"}}
+    out = assistant_brain.keep_references(
+        ["c-1"], get=lambda cid, dsn=None: rows.get(cid),
+        fetch=lambda url: "/refs/abc.jpg" if "thumb" in url else None)
+    assert out["kept"][0]["url"] == "/refs/abc.jpg" and out["refused"] == []
+
+
+def test_the_needs_prompt_names_a_real_product_first():
+    from src import reference_needs
+    text = reference_needs.build_prompt("a can of Ghost Orange Cream on a wet bar")
+    assert "A REAL THING THE SCENE NAMES" in text and "goes FIRST" in text

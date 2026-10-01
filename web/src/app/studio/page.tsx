@@ -61,7 +61,8 @@ import { useShell } from "@/components/studio/shell";
 import { AddElement } from "@/components/studio/add-element";
 import { ElementSheet } from "@/components/studio/element-sheet";
 import { ELEMENT_KINDS, displayPhoto, drawable, elementKind, isElement, kindLabel, type ElementKind } from "@/lib/elements";
-import { FILL_EVENT, announceComposer, takePendingFill } from "@/lib/assistant";
+import { FILL_EVENT, announceComposer, keepReferences, takePendingFill, type ContactSheet } from "@/lib/assistant";
+import { ContactSheetView, keepersOf } from "@/components/studio/contact-sheet";
 
 type Attachment = { id: string; name: string; file: File; url: string };
 type Option = { id: string; label: string; note?: string };
@@ -77,6 +78,11 @@ type GuideMessage = {
   /** a write the guide proposed; drawn as a confirm card until decided */
   proposal?: GuideProposal | null;
   decided?: "done" | "skipped";
+  /** the frames a find_references hunt looked at, drawn under the answer */
+  sheet?: ContactSheet | null;
+  /** which of the sheet's frames are ticked, and whether they were kept */
+  chosen?: Record<string, boolean>;
+  kept?: boolean;
 };
 type Written = { conceptId: number | null; detail: string };
 /* the shelf under the box is ELEMENTS only -- the characters, props,
@@ -385,7 +391,10 @@ function Composer() {
         setIdea("");
         setChoices([]);
         const form = new FormData();
-        form.append("conversation", JSON.stringify({ messages: next }));
+        form.append(
+          "conversation",
+          JSON.stringify({ messages: next.map(({ role, content }) => ({ role, content })) }),
+        );
         if (brand) form.append("brand", brand);
         form.append("guide_provider", "gemini");
         form.append("idea", asked);
@@ -418,6 +427,8 @@ function Composer() {
             content: reply.message,
             looked: (reply.tool_runs ?? []).filter((r) => r.ok).map((r) => r.tool),
             proposal: reply.proposal ?? null,
+            sheet: reply.sheet ?? null,
+            chosen: keepersOf(reply.sheet),
           },
         ]);
         setChoices(reply.choices ?? []);
@@ -466,6 +477,36 @@ function Composer() {
       say("Banked.");
     } catch (e) {
       say(e instanceof Error ? e.message : "That did not go through.", true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /* Keep, from a contact sheet in the thread: the frames come back as
+     /refs paths and go straight onto this composer's picks -- the same
+     route the pill's Keep takes. Nothing is generated or charged. */
+  const toggleFrame = (i: number, id: string) =>
+    setThread((t) =>
+      t.map((m, j) => (j === i ? { ...m, chosen: { ...(m.chosen ?? {}), [id]: !m.chosen?.[id] } } : m)),
+    );
+  async function keepFrames(i: number, sheet: ContactSheet) {
+    const chosen = thread[i]?.chosen ?? {};
+    const ids = sheet.sheet.flatMap((n) => [...n.keepers, ...n.rejected]).filter((f) => chosen[f.id]).map((f) => f.id);
+    if (!ids.length || busy) return;
+    setBusy(true);
+    try {
+      const res = await keepReferences(ids);
+      const urls = res.result.kept.map((k) => k.url);
+      if (urls.length) setPicked((was) => [...new Set([...was, ...urls])]);
+      setThread((t) => t.map((m, j) => (j === i ? { ...m, kept: true } : m)));
+      const refused = res.result.refused.length;
+      toast(
+        `${urls.length} reference${urls.length === 1 ? "" : "s"} added to the composer` +
+          (refused ? ` · ${refused} could not be kept` : ""),
+        urls.length ? "ok" : "err",
+      );
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Those frames were not kept.", "err");
     } finally {
       setBusy(false);
     }
@@ -627,6 +668,17 @@ function Composer() {
                       {m.content}
                       {m.failed ? <span className="cmsg-failed">Not sent — try again</span> : null}
                     </p>
+                    {m.sheet ? (
+                      <ContactSheetView
+                        sheet={m.sheet}
+                        chosen={m.chosen ?? {}}
+                        kept={!!m.kept}
+                        busy={busy}
+                        name="The Guide"
+                        onToggle={(id) => toggleFrame(i, id)}
+                        onKeep={(sh) => keepFrames(i, sh)}
+                      />
+                    ) : null}
                     {m.proposal ? (
                       <div className={`ccard${m.decided ? ` ${m.decided}` : ""}`}>
                         <b>{m.proposal.label}</b>

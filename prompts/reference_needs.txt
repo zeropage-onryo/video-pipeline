@@ -24,6 +24,13 @@ RULES
   ("a 1970s hospital corridor"), false when it leaves it open ("she looks
   striking" — striking how?). Say false when in doubt; an open question is
   what a reference is for.
+- A REAL THING THE SCENE NAMES -- a product, a brand's packaging, a car
+  model, a landmark ("a can of Ghost Orange Cream", "a Ducati Panigale") --
+  is a need of its own and it goes FIRST: role "prop" (or "place" for a
+  landmark), the query is the exact name the way a shopper would type it
+  plus what it is ("Ghost energy drink orange cream can"), and "specified"
+  is false. The label, logo and shape are exactly what a photograph is for;
+  this is the one query that names instead of describing surfaces.
 - One need per visual question. Do not split a room into six textures.
 - role "face" is for a person's identity only. Do not use it for wardrobe,
   hair or silhouette.

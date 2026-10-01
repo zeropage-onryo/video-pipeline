@@ -37,6 +37,15 @@ REFS_DIR = PROJECT_ROOT / "data" / "refs"
 # cost more to decode than it is worth. Bounded because scout fetches
 # URLs it did not choose.
 MAX_FETCH_BYTES = 8 * 1024 * 1024
+# Who we say we are when we fetch a frame. requests' default
+# ("python-requests/x") is refused outright by Wikimedia (403, its UA
+# policy wants a name and a contact) and throttled by other image hosts,
+# so a hunt from the deployed API came back "no candidate image could be
+# fetched" while the same URLs loaded fine in the browser (2026-10-01).
+FETCH_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (compatible; ZeroPageStudio/1.0; +https://zpf-web.vercel.app)",
+    "Accept": "image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8",
+}
 FETCH_TIMEOUT = 10
 
 
@@ -183,7 +192,8 @@ def fetch(url: str) -> Optional[str]:
     if not public_host(parsed.hostname):
         return None
     try:
-        with requests.get(url, stream=True, timeout=FETCH_TIMEOUT) as resp:
+        with requests.get(url, stream=True, timeout=FETCH_TIMEOUT,
+                          headers=FETCH_HEADERS) as resp:
             resp.raise_for_status()
             chunks, total = [], 0
             for chunk in resp.iter_content(64 * 1024):

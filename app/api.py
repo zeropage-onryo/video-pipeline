@@ -489,8 +489,13 @@ async def creative_guide_reply(request: Request,
             # tool comes back as `reply.proposal` for the confirm
             # card, and nothing here spends. Absent `mcp`, the plain
             # conversation it always was.
-            tools, run_tool = _guide_tools(account_id, local=assistant is not None,
-                                           brand=brand)
+            # local=True for EVERY Guide turn, not just the pill's: the
+            # composer's Guide was offered only the board's `images_for`,
+            # whose results the thread cannot draw, so "find me images of
+            # X" answered in words with nothing to look at (2026-10-01).
+            # find_references comes back as reply.sheet, which both
+            # threads now draw.
+            tools, run_tool = _guide_tools(account_id, local=True, brand=brand)
             reply = creative_guide.respond(
                 conversation, client=genai.Client(api_key=_gemini_key(account_id)),
                 brand=brand, grounding=grounding, image_refs=image_refs,

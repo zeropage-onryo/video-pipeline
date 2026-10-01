@@ -69,7 +69,9 @@ def fetch_image_bytes(url):
     if not _public_host(parsed.hostname):
         return None
     try:
-        with requests.get(url, stream=True, timeout=FETCH_TIMEOUT) as response:
+        from .refbin import FETCH_HEADERS
+        with requests.get(url, stream=True, timeout=FETCH_TIMEOUT,
+                          headers=FETCH_HEADERS) as response:
             response.raise_for_status()
             kind = (response.headers.get("content-type") or "").split(";")[0].strip()
             if kind and not kind.startswith("image/"):
