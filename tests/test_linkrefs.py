@@ -116,6 +116,53 @@ def test_one_file_under_two_schemes_is_one_frame_and_the_logo_goes_last(public):
         "http://shop.example/cdn/shopifycloud/no-image-2048_large.gif"]
 
 
+def test_a_malformed_address_on_the_page_is_skipped_not_a_traceback(public):
+    """drinkghost.com (live, 2026-10-01) writes `https:/cdn...` with one
+    slash: a scheme and no host. It was an IndexError out of a function
+    documented never to raise; now it is skipped and the good tags count."""
+    body = """<html><head><title>GHOST ENERGY</title>
+    <meta property="og:image" content="https:/cdn.example/one-slash.jpg">
+    <meta property="og:image" content="https://cdn.example/fine.jpg">
+    <meta name="twitter:image" content="mailto:nobody@example.com"></head></html>"""
+    got = linkrefs.read_link("https://shop.example/p/1", get=lambda url: _page(body))
+    assert [c["image_url"] for c in got["images"]] == ["https://cdn.example/fine.jpg"]
+    assert got["title"] == "GHOST ENERGY"
+    # and a parser that blows up outright still answers with a note
+    import pytest as _pytest
+    monkey = _pytest.MonkeyPatch()
+    monkey.setattr(linkrefs, "parse_images", lambda html, base: 1 / 0)
+    try:
+        got = linkrefs.read_link("https://shop.example/p/1", get=lambda url: _page(body))
+    finally:
+        monkey.undo()
+    assert got["images"] == [] and linkrefs.BLOCKED_NOTE in got["note"]
+
+
+def test_json_ld_gives_the_pages_own_product_not_every_flavour_and_a_usable_size(public):
+    """drinkghost.com, live 2026-10-01: the page's ProductGroup (one
+    Product, a 300px thumbnail) is followed by a ProductGroup of every
+    flavour. Only the first product's images count, with its own
+    variants, and Shopify's documented width parameter is raised."""
+    body = ("<html><head><title>GHOST ENERGY | ORANGE CREAM</title><script type='application/ld+json'>"
+            + json.dumps([
+                {"@type": "ProductGroup", "name": "Orange Cream", "hasVariant": [
+                    {"@type": "Product", "image": "https://drinkghost.com/cdn/shop/files/OrangeCreamFront.webp?v=1&width=300",
+                     "hasVariant": [{"@type": "Product", "image": "https://drinkghost.com/cdn/shop/files/OrangeCreamBack.webp?width=300"}]}]},
+                {"@type": "ProductGroup", "name": "Every flavour", "hasVariant": [
+                    {"@type": "Product", "image": "https://drinkghost.com/cdn/shop/files/Warheads.webp?width=300"},
+                    {"@type": "Product", "image": "https://drinkghost.com/cdn/shop/files/Peaches.webp?width=300"}]}])
+            + "</script><script type='application/ld+json'>"
+            + json.dumps({"@type": "Product", "name": "4-pack", "image": "https://drinkghost.com/cdn/shop/files/4Pack.png?width=300"})
+            + "</script></head></html>")
+    got = linkrefs.read_link("https://drinkghost.com/products/x", get=lambda url: _page(body))
+    assert [c["image_url"] for c in got["images"]] == [
+        "https://drinkghost.com/cdn/shop/files/OrangeCreamFront.webp?v=1&width=1200",
+        "https://drinkghost.com/cdn/shop/files/OrangeCreamBack.webp?width=1200"]
+    # the size rule is Shopify's CDN only; another host's query is untouched
+    assert linkrefs._usable_size("https://i.example/a.jpg?width=300") == "https://i.example/a.jpg?width=300"
+    assert linkrefs._usable_size("https://s.example/cdn/shop/files/a.jpg?width=2048") == "https://s.example/cdn/shop/files/a.jpg?width=2048"
+
+
 def test_twitter_image_alone_is_enough(public):
     body = '<html><head><meta name="twitter:image" content="https://i.example/t.png"></head></html>'
     got = linkrefs.read_link("https://a.example/x", get=lambda url: _page(body))
