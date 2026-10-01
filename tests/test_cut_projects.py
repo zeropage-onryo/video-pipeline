@@ -315,6 +315,9 @@ def test_every_op_is_reachable_through_the_route(api):
     step("delete_cue", track_id="T1", cue_id="q1")
     step("set_caption_style", track_id="T1", style="preset:lower_third")
     step("add_marker", frame=30, label="beat")
+    step("set_marker", frame=30, label="the beat", to=36)
+    step("add_marker", frame=40, label="gone")
+    step("delete_marker", frame=40)
     step("lift", clip_id=tail)
     step("ripple_delete", clip_id=c2)
     doc = step("overwrite", track_id="V1", clip={"media": w["g1"], "src_in": 0, "src_out": 30},

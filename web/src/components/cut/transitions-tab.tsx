@@ -10,9 +10,86 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Search } from "lucide-react";
 import { applyTransition } from "@/lib/cut/actions";
+import { useCut, useDrawnDoc } from "@/lib/cut/store";
+import { gradeFilter, gradeTarget, gradeTint } from "@/components/cut/color";
 import { GROUPS, STYLES, lookAt, type TransitionStyle } from "@/lib/cut/transitions";
 
 export const TRANSITION_MIME = "application/x-zpf-transition";
+
+/* The Effects tab: the transitions, and LOOKS -- one-click basic
+   corrections (the Color page's set_grade) for the clip the Color page
+   would grade: the selected picture clip, else the one at the playhead. */
+export function EffectsTab() {
+  const [view, setView] = useState<"transitions" | "looks">("transitions");
+  return (
+    <div className="cx-pane-body cx-xt">
+      <span className="cx-seg" role="tablist" aria-label="Effects" style={{ marginBottom: 10 }}>
+        <button type="button" role="tab" aria-selected={view === "transitions"} onClick={() => setView("transitions")}>
+          Transitions
+        </button>
+        <button type="button" role="tab" aria-selected={view === "looks"} onClick={() => setView("looks")}>
+          Looks
+        </button>
+      </span>
+      {view === "transitions" ? <TransitionsTab /> : <LooksTab />}
+    </div>
+  );
+}
+
+export const LOOKS: { id: string; label: string; grade: { exposure?: number; contrast?: number; saturation?: number; temperature?: number } }[] = [
+  { id: "natural", label: "As shot", grade: {} },
+  { id: "warm", label: "Golden", grade: { temperature: 0.45, saturation: 1.1 } },
+  { id: "cool", label: "Steel", grade: { temperature: -0.45, saturation: 0.9 } },
+  { id: "punchy", label: "Punchy", grade: { contrast: 1.25, saturation: 1.3 } },
+  { id: "faded", label: "Faded", grade: { contrast: 0.75, saturation: 0.7, exposure: 0.2 } },
+  { id: "mono", label: "Mono", grade: { saturation: 0, contrast: 1.15 } },
+  { id: "bright", label: "Bright", grade: { exposure: 0.5, contrast: 0.95 } },
+  { id: "moody", label: "Moody", grade: { exposure: -0.5, contrast: 1.2, saturation: 0.8, temperature: -0.2 } },
+];
+
+function LooksTab() {
+  const doc = useDrawnDoc();
+  const selection = useCut((s) => s.selection);
+  const playhead = useCut((s) => s.playhead);
+  const bin = useCut((s) => s.bin);
+  const op = useCut((s) => s.op);
+  if (!doc) return null;
+  const clip = gradeTarget(doc, selection, playhead);
+  const poster = clip ? bin.find((b) => b.handle === clip.media)?.poster : null;
+  return (
+    <>
+      <p className="cx-note">
+        {clip
+          ? `A look replaces ${clip.id}'s grade in one edit; fine-tune it on the Color page (⇧6).`
+          : "Select a picture clip, or put the playhead on one, to give it a look."}
+      </p>
+      <div className="cx-xt-grid">
+        {LOOKS.map((l) => (
+          <button
+            key={l.id}
+            type="button"
+            className="cx-xt-tile"
+            disabled={!clip}
+            title={l.label}
+            onClick={() => clip && void op("set_grade", { clip_id: clip.id, reset: true, ...l.grade })}
+          >
+            <span className="cx-xt-demo" aria-hidden>
+              <i
+                className="cx-xt-look"
+                style={{
+                  backgroundImage: poster ? `url(${poster})` : undefined,
+                  filter: gradeFilter(l.grade),
+                }}
+              />
+              {gradeTint(l.grade) ? <i style={gradeTint(l.grade)!} /> : null}
+            </span>
+            <span className="cx-xt-name">{l.label}</span>
+          </button>
+        ))}
+      </div>
+    </>
+  );
+}
 
 export function TransitionsTab() {
   const [q, setQ] = useState("");
@@ -23,7 +100,7 @@ export function TransitionsTab() {
       : STYLES;
   }, [q]);
   return (
-    <div className="cx-pane-body cx-xt">
+    <>
       <label className="cx-xt-search">
         <Search />
         <input
@@ -52,7 +129,7 @@ export function TransitionsTab() {
         );
       })}
       {!shown.length ? <p className="cx-note">No transition called “{q}”.</p> : null}
-    </div>
+    </>
   );
 }
 

@@ -1882,6 +1882,14 @@ is yours, in Resolve, by hand.
   all three present in Fly's ffmpeg 7.1 -- and previewed as a CSS filter plus a soft-light tint.
   It grades the selected picture clip, else the one at the playhead, so scrubbing walks it from
   shot to shot. Wheels, curves, qualifiers and LUTs are still a later phase.
+  **More bin tabs (2026-10-01):** the left panel's Transitions tab became **Effects**
+  (Transitions | Looks -- eight one-click grades, each ONE `set_grade` with `reset`, on the clip the
+  Color page would grade), and an **Index** tab holds Resolve's Edit index (every clip and cue in
+  record order: track, record and source in/out, and what is done to it -- speed, reverse,
+  transition, grade, keys, fades, gain; a click selects and seeks) and Markers (go to, rename in
+  place, remove, add at the playhead). Markers are named by their frame: `set_marker(frame, label?,
+  to?)` (a move onto another marker is refused) and `delete_marker(frame)`. Seven tabs still fit the
+  panel's 250px minimum, icons only.
   **The agent (phase E, 2026-09-28, Mike's D4)** never edits: every edit is a PROPOSAL
   (`{summary, ops, base_id, region, duration_delta, doc, kind}`) the person Keeps or Undoes.
   `POST /api/cut/projects/{id}/agent {message, playhead?, selection?}` is a job;

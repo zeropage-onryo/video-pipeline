@@ -25,7 +25,7 @@ def cut():
     """V1: three shots, the second crossfading in from the first; A1 their
     sound, linked; T1 a caption track with two cues."""
     return {
-        "fps": 30, "size": [720, 1280], "duration": 352, "markers": [],
+        "fps": 30, "size": [720, 1280], "duration": 352, "markers": [{"frame": 150, "label": "Shot 2"}],
         "tracks": [
             {"id": "V1", "kind": "video", "clips": [
                 # a zoom lane at its default: renders exactly as none, and gives
@@ -190,6 +190,8 @@ ARGS = {
     "duck": {"track_id": "A1", "under": "voice"},
     "add_caption_track": {"cues": []},
     "add_marker": {"frame": 150, "label": "Shot 2"},
+    "set_marker": {"frame": 150, "label": "Beat", "to": 160},
+    "delete_marker": {"frame": 150},
     "add_transition": {"clip_id": "c3", "frames": 8},
     "remove_transition": {"clip_id": "c2"},
     "set_transition": {"clip_id": "c2", "style": "wipeleft"},
@@ -397,3 +399,14 @@ def test_overwrite_refuses(args, reason):
 def test_overwrite_is_described():
     assert ops.describe("overwrite", {"track_id": "V1", "at": 90, "clip": {"media": "gen:2"}}, 30) \
         == "overwrite gen:2 on V1 at 3.0s"
+
+
+def test_markers_are_renamed_moved_and_removed_by_their_frame():
+    doc = ops.apply(cut(), "set_marker", {"frame": 150, "label": "Beat", "to": 160})
+    assert doc["markers"] == [{"frame": 160, "label": "Beat"}]
+    doc = ops.apply(doc, "add_marker", {"frame": 20, "label": "Open"})
+    with pytest.raises(ops.OpError, match="already a marker"):
+        ops.apply(doc, "set_marker", {"frame": 20, "to": 160})
+    with pytest.raises(ops.OpError, match="no marker at frame 21"):
+        ops.apply(doc, "delete_marker", {"frame": 21})
+    assert ops.apply(doc, "delete_marker", {"frame": 160})["markers"] == [{"frame": 20, "label": "Open"}]

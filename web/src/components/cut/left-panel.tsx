@@ -1,7 +1,8 @@
 "use client";
 
 /* The left panel: invideo's placement, the agent beside "Open Media".
-   Six tabs -- Agent, Media, Text, Audio, Transitions, Search -- and the tool strip's
+   Seven tabs -- Agent, Media, Text, Audio, Effects (transitions and looks),
+   Index (the edit index and markers), Search -- and the tool strip's
    buttons open the same tabs, so there is one media bin, not two.
 
    AGENT is its own module (agent-panel.tsx): a composer with invideo's two
@@ -16,6 +17,7 @@ import {
   Captions,
   Film,
   ImageIcon,
+  ListOrdered,
   Loader2,
   Music,
   Plus,
@@ -29,14 +31,16 @@ import { clipAt, timecode, type Doc, type Track } from "@/lib/cut/timeline";
 import { MEDIA_MIME } from "@/components/cut/timeline";
 import { CaptionStyle } from "@/components/cut/inspector";
 import { AgentPanel, suggest } from "@/components/cut/agent-panel";
-import { TransitionsTab } from "@/components/cut/transitions-tab";
+import { EffectsTab } from "@/components/cut/transitions-tab";
+import { IndexTab } from "@/components/cut/index-tab";
 
 const TABS = [
   { id: "agent", label: "Agent", icon: Bot },
   { id: "media", label: "Media", icon: Film },
   { id: "text", label: "Text", icon: Captions },
   { id: "audio", label: "Audio", icon: Music },
-  { id: "transitions", label: "Transitions", icon: Blend },
+  { id: "transitions", label: "Effects", icon: Blend },
+  { id: "index", label: "Index", icon: ListOrdered },
   { id: "search", label: "Search", icon: Search },
 ] as const;
 
@@ -56,7 +60,8 @@ export function LeftPanel() {
       {tab === "media" ? <MediaTab /> : null}
       {tab === "text" ? <TextTab /> : null}
       {tab === "audio" ? <AudioTab /> : null}
-      {tab === "transitions" ? <TransitionsTab /> : null}
+      {tab === "transitions" ? <EffectsTab /> : null}
+      {tab === "index" ? <IndexTab /> : null}
       {tab === "search" ? <SearchTab /> : null}
     </div>
   );

@@ -365,6 +365,41 @@ def add_marker(doc: dict, frame: int, label: str) -> dict:
     return _finish(doc)
 
 
+def _need_marker(doc: dict, frame: int) -> dict:
+    _need_int("frame", frame)
+    for m in doc.get("markers") or []:
+        if m.get("frame") == frame:
+            return m
+    raise OpError(f"no marker at frame {frame}")
+
+
+def set_marker(doc: dict, frame: int, label: Optional[str] = None,
+               to: Optional[int] = None) -> dict:
+    """Rename the marker at `frame`, and/or move it `to` another frame. A
+    marker is named by its frame -- there is one per frame at most once it
+    has moved, since a move onto another marker is refused."""
+    doc = _copy(doc)
+    m = _need_marker(doc, frame)
+    if to is not None:
+        _need_int("to", to)
+        if to < 0:
+            raise OpError("a marker cannot sit before the start")
+        if to != frame and any(x.get("frame") == to for x in doc["markers"]):
+            raise OpError(f"there is already a marker at frame {to}")
+        m["frame"] = to
+    if label is not None:
+        m["label"] = str(label)
+    doc["markers"].sort(key=lambda x: x["frame"])
+    return _finish(doc)
+
+
+def delete_marker(doc: dict, frame: int) -> dict:
+    doc = _copy(doc)
+    m = _need_marker(doc, frame)
+    doc["markers"] = [x for x in doc["markers"] if x is not m]
+    return _finish(doc)
+
+
 def _need_style(style) -> None:
     if style not in d.TRANSITION_STYLES:
         raise OpError(f"transition style {style!r} is not one of the editor's "
@@ -836,6 +871,8 @@ OPS: dict[str, Callable[..., dict]] = {
     "duck": duck,
     "add_caption_track": add_caption_track,
     "add_marker": add_marker,
+    "set_marker": set_marker,
+    "delete_marker": delete_marker,
     "add_transition": add_transition,
     "remove_transition": remove_transition,
     "set_transition": set_transition,
@@ -913,6 +950,15 @@ def describe(op: str, args: Optional[dict[str, Any]] = None, fps: int = d.DEFAUL
             return f"add caption track ({n} cue{'s' if n != 1 else ''})"
         if op == "add_marker":
             return f"marker '{str(a.get('label', ''))[:30]}' at {_secs(a.get('frame'), fps)}"
+        if op == "set_marker":
+            bits = []
+            if a.get("label") is not None:
+                bits.append(f"'{str(a['label'])[:30]}'")
+            if a.get("to") is not None:
+                bits.append(f"to {_secs(a['to'], fps)}")
+            return f"marker at {_secs(a.get('frame'), fps)}: " + (" ".join(bits) or "unchanged")
+        if op == "delete_marker":
+            return f"remove the marker at {_secs(a.get('frame'), fps)}"
         if op == "add_transition":
             look = d.TRANSITION_STYLES.get(a.get("style") or d.DEFAULT_TRANSITION_STYLE, ("", "transition"))[1]
             return f"{look.lower()} into {clip_id} ({a.get('frames', '?')}f)"
