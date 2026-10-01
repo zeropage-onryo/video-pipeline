@@ -203,10 +203,19 @@ def _ld_images(block: str) -> list[str]:
         elif isinstance(value, dict):
             take(value.get("contentUrl") or value.get("url") or "")
 
+    # THE PAGE'S OWN product only: the first Product node carrying an
+    # image, plus its own variants. drinkghost.com (live, 2026-10-01)
+    # follows the page's ProductGroup with a second one listing every
+    # flavour, and "every flavour" is not what the person pasted.
     products = [n for n in nodes if "product" in str(n.get("@type") or "").lower()]
     for node in products or nodes:
-        if "image" in node:
-            take(node["image"])
+        if "image" not in node:
+            continue
+        take(node["image"])
+        for variant in (node.get("hasVariant") or []) if isinstance(node.get("hasVariant"), list) else []:
+            if isinstance(variant, dict) and "image" in variant:
+                take(variant["image"])
+        break
     return out
 
 
@@ -223,24 +232,33 @@ def parse_images(html: str, base_url: str) -> tuple[list[str], str]:
         found += [v for k, v in head.metas if k == key]
     found += head.links
     for block in head.ld:
-        found += _ld_images(block)
+        # the first JSON-LD block that names a product with a picture is
+        # the page's own; later blocks are the shop's other products
+        ld = _ld_images(block)
+        if ld:
+            found += ld
+            break
     title = next((v for k, v in head.metas if k == "og:title"), "") or head.title
     out: list[str] = []
     seen: dict[str, int] = {}
     for raw in found:
         raw = (raw or "").strip()
-        if not raw:
+        if not raw or _bare_scheme(raw):
             continue
         url = urljoin(base_url, raw)
         parsed = urlparse(url)
-        if parsed.scheme.lower() not in ("http", "https"):
+        if parsed.scheme.lower() not in ("http", "https") or not parsed.netloc:
+            # "https:/cdn.example/x.jpg" (one slash -- seen live on
+            # drinkghost.com, 2026-10-01) parses with a scheme and no host
             continue
         if parsed.path.lower().endswith(".svg"):
             continue                      # not a photograph, and nothing here can look at one
         # One file, whatever the scheme: Shopify writes og:image as http
         # and og:image:secure_url as https for the SAME logo, which cost
         # a slot of four (Ghost, 2026-10-01). https wins.
-        key = url.split("://", 1)[1]
+        url = _usable_size(url)
+        parsed = urlparse(url)
+        key = parsed._replace(scheme="").geturl().lstrip("/")
         if key in seen:
             if parsed.scheme == "https":
                 out[seen[key]] = url
@@ -256,6 +274,36 @@ def parse_images(html: str, base_url: str) -> tuple[list[str], str]:
 
 
 _CHROME = ("logo", "no-image", "noimage", "placeholder", "sprite", "favicon", "icon")
+
+
+def _usable_size(url: str) -> str:
+    """Shopify's CDN sizes an image by its `width=` query parameter
+    (documented), and a shop's JSON-LD hands out the 300px thumbnail.
+    On that CDN only, ask for a reference-sized one; the file is the
+    same, so this invents no address. Any other host is left alone."""
+    from urllib.parse import parse_qsl, urlencode
+
+    parsed = urlparse(url)
+    if "/cdn/shop/" not in parsed.path or not parsed.query:
+        return url
+    params = parse_qsl(parsed.query, keep_blank_values=True)
+    changed = False
+    for i, (k, v) in enumerate(params):
+        if k == "width" and v.isdigit() and int(v) < SHOPIFY_WIDTH:
+            params[i] = (k, str(SHOPIFY_WIDTH))
+            changed = True
+    return parsed._replace(query=urlencode(params)).geturl() if changed else url
+
+
+SHOPIFY_WIDTH = 1200
+
+
+def _bare_scheme(raw: str) -> bool:
+    """"https:/cdn.example/x.jpg" or "mailto:x" -- a scheme with no "//".
+    urljoin would glue the first onto the PAGE's host (one slash, seen
+    live on drinkghost.com 2026-10-01) and offer a frame that 404s."""
+    head = raw.split("/", 1)[0]
+    return ":" in head and "://" not in raw
 
 
 def _looks_like_chrome(url: str) -> bool:
@@ -310,7 +358,10 @@ def read_link(url: str, *, get: Optional[Callable[[str], dict]] = None) -> dict:
         text = body[:MAX_HTML_BYTES].decode("utf-8", "replace")
     else:
         text = str(body)[:MAX_HTML_BYTES]
-    images, title = parse_images(text, final)
+    try:
+        images, title = parse_images(text, final)
+    except Exception:                        # a page is untrusted input; never a traceback
+        images, title = [], ""
     title = title or host
     result["title"] = title
     result["images"] = [_candidate(image, url, title, host) for image in images[:MAX_PER_LINK]]
