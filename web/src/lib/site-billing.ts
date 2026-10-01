@@ -6,6 +6,10 @@
 //   - a URL: go there (Stripe)
 //   - 401: not signed in -- sign in with `next` pointing back at
 //     /pricing?checkout=<item>, and the page resumes the checkout
+//   - 403 is NOT a sign-in: the server answers it to a signed-in person
+//     (plan_required: a top-up with no plan; no_account), and sending them
+//     to sign in bounces straight back to a page that retries -- the loop
+//     found on the live switch-on, 2026-10-01. Its message is shown.
 //   - 503: the install has no Stripe keys yet -- say so on the button
 import { ApiError, AUTH_ORIGIN, apiFetch } from "@/lib/api";
 
@@ -26,7 +30,7 @@ export async function startCheckout(item: string, interval: Interval = "month"):
     return { kind: "redirect", url };
   } catch (e) {
     if (e instanceof ApiError) {
-      if (e.status === 401 || e.status === 403) return { kind: "sign-in" };
+      if (e.status === 401) return { kind: "sign-in" };
       if (e.status === 503) return { kind: "unconfigured", message: e.message };
       if (e.status >= 500) return { kind: "error", message: "The studio is unreachable right now — try again in a minute." };
       return { kind: "error", message: e.message };
@@ -50,7 +54,7 @@ export async function openPortal(): Promise<CheckoutOutcome> {
     return { kind: "redirect", url };
   } catch (e) {
     if (e instanceof ApiError) {
-      if (e.status === 401 || e.status === 403) return { kind: "sign-in" };
+      if (e.status === 401) return { kind: "sign-in" };
       if (e.status === 503) return { kind: "unconfigured", message: e.message };
       return { kind: "error", message: e.message };
     }
