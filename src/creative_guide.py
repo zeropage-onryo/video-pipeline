@@ -91,7 +91,7 @@ class Reply(Answer):
     sheet: Optional[dict] = None
 
 
-def _contents(conversation, grounding, image_refs):
+def _contents(conversation, grounding, image_refs, notes=()):
     contents = [types.Content(role="user", parts=[types.Part.from_text(
         text="Studio grounding (context only):\n" + json.dumps(grounding, default=str)[:24000])])]
     for message in conversation.messages:
@@ -100,6 +100,9 @@ def _contents(conversation, grounding, image_refs):
             parts=[types.Part.from_text(text=message.content)]))
     contents[-1].parts.append(types.Part.from_text(
         text=f"Current composer reference images supplied: {len(image_refs)}."))
+    for note in notes:
+        if note:
+            contents[-1].parts.append(types.Part.from_text(text=note))
     for raw, mime, label in image_refs:
         contents[-1].parts.extend([types.Part.from_text(text=label or "Reference image"),
                                    types.Part.from_bytes(data=raw, mime_type=mime)])
@@ -119,7 +122,7 @@ DEFAULT_BRAIN = "fast"
 
 def respond(conversation, *, client, brand, grounding, image_refs=(),
             account_id=None, on_retry=None, tools=None, run_tool=None, brain=None,
-            assistant=None, judge=None):
+            assistant=None, judge=None, links=None):
     """One Guide turn.
 
     With `tools` (the specs `guide_tools.session` returns) and
@@ -141,6 +144,13 @@ def respond(conversation, *, client, brand, grounding, image_refs=(),
     the model writes are graded by story_judge (`judge`, injectable)
     before they are returned. Without it, the Guide is byte-for-byte
     what it was.
+
+    `links` (2026-10-01) is `assistant_brain.link_sheet`'s result for the
+    http(s) links the ROUTE read off the person's own last message: their
+    frames go FIRST on `reply.sheet`, ahead of anything find_references
+    found this turn, and the model is handed one line saying they are
+    there (`assistant_brain.link_note`) -- never the address. Without it,
+    nothing changes.
     """
     brain = gemini_utils.resolve_brain(brain or DEFAULT_BRAIN)
     # The fast tier's config is None on purpose (its request is the one
@@ -150,7 +160,10 @@ def respond(conversation, *, client, brand, grounding, image_refs=(),
               else types.GenerateContentConfig())
     config.system_instruction = instructions(brand, with_tools=bool(tools),
                                              assistant=assistant)
-    contents = _contents(conversation, grounding, image_refs)
+    from . import assistant_brain
+
+    contents = _contents(conversation, grounding, image_refs,
+                         notes=(assistant_brain.link_note(links),))
     if not tools:
         config.response_mime_type = "application/json"
         config.response_json_schema = Answer.model_json_schema()
@@ -161,6 +174,8 @@ def respond(conversation, *, client, brand, grounding, image_refs=(),
     else:
         reply = _respond_with_tools(client, brain, config, contents, tools, run_tool,
                                     account_id=account_id, on_retry=on_retry)
+    if links:
+        reply["sheet"] = assistant_brain.merge_sheets(links, reply.get("sheet"))
     if assistant is not None:
         reply = _finish(reply, client=client, judge=judge, on_retry=on_retry,
                         said=" ".join(m.content for m in conversation.messages
@@ -313,11 +328,12 @@ def _strict(schema: dict) -> dict:
 
 
 def respond_personal(conversation, *, provider, scope, model, brand, grounding, image_refs=(),
-                     assistant=None):
-    from . import personal_models
+                     assistant=None, links=None):
+    from . import assistant_brain, personal_models
 
     prompt = json.dumps({"grounding": grounding, "conversation": conversation.model_dump(),
-                         "reference_images_supplied": len(image_refs)}, default=str)
+                         "reference_images_supplied": len(image_refs),
+                         "pasted_links": assistant_brain.link_note(links)}, default=str)
     schema = Answer.model_json_schema()
     if assistant is None:
         # The plain Guide on a personal plan answers the three fields it
@@ -337,9 +353,10 @@ def respond_personal(conversation, *, provider, scope, model, brand, grounding, 
     else:
         raise ValueError("Unknown personal provider")
     reply = Reply.model_validate_json(raw).model_dump()
+    if links:
+        reply["sheet"] = assistant_brain.merge_sheets(links, reply.get("sheet"))
     if assistant is not None:
         # No judge here: it would bill this install's Gemini for a turn
         # the person's own plan is paying for. Stage is still clamped.
-        from . import assistant_brain
         reply["stage"] = assistant_brain.clean_stage(reply.get("stage"))
     return reply
