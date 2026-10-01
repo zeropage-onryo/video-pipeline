@@ -1781,6 +1781,19 @@ is yours, in Resolve, by hand.
   data/renders/cut/preview/ and mirrored to R2. `POST .../export {timeline_id?, aspect?}`
   renders any version in a job; another aspect first becomes a user `set_canvas` version.
   Nothing in any of it spends.
+  **The Source viewer (2026-10-01)** is the first gap the invideo captures named
+  (`docs/reference-look/invideo-editor/`): a clip is looked at, marked and cut BEFORE it touches
+  the timeline. Double-click a bin tile to load it (the tile's `+` still appends); it has its own
+  clock and In/Out marks per handle (`I`/`O`, session-only, frames at the PROJECT fps so a range
+  is already the op's `src_in`/`src_out`, Out exclusive). Insert (`F9`/`,`) puts the range in AT
+  the timeline playhead, splitting a clip under it first (two versions: the split, the insert);
+  Overwrite (`F10`/`.`) is the new pure op `ops.overwrite(track_id, clip, at, sound_track=)` --
+  composed from split, lift and insert, clearing the span as LINK GROUPS so picture is never
+  overwritten out from under its own sound -- and Append (`Shift+F12`) goes to the track end.
+  The transport keys follow the ACTIVE viewer (`activeViewer` in the store, a red rule on top).
+  `GET /api/cut/media/{handle}/transcript` serves the index's words and shots in SECONDS (the
+  index has its own fps) for the Transcript tab: click a word to go there, drag across words to
+  mark them. Not indexed answers `not_indexed`; the tab says so and never runs the index.
   **The agent (phase E, 2026-09-28, Mike's D4)** never edits: every edit is a PROPOSAL
   (`{summary, ops, base_id, region, duration_delta, doc, kind}`) the person Keeps or Undoes.
   `POST /api/cut/projects/{id}/agent {message, playhead?, selection?}` is a job;

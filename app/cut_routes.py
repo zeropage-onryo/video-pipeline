@@ -633,6 +633,32 @@ def cut_media_preview(handle: str, account_id: int = Depends(auth.current_accoun
     return cut_preview.view(row, account_id)
 
 
+@router.get("/media/{handle}/transcript")
+def cut_media_transcript(handle: str, account_id: int = Depends(auth.current_account_id)):
+    """What the index heard and saw in one file, for the Source viewer's
+    Transcript tab: its words (click one to seek, drag across them to mark
+    In/Out) and its shots. Times are SECONDS, not frames: the index runs
+    at its own fps (media_index.fps), and a client converting someone
+    else's frames is how a word ends up a frame off. Not indexed answers
+    `not_indexed` -- the tab offers the index, it never runs it."""
+    if parse_handle(handle) is None:
+        return _error(404, "not_found", f"no media {handle}")
+    if cut_store.handle_sources([handle], account_id=account_id).get(handle) is None:
+        return _error(404, "not_found", f"no media {handle}")
+    row = cut_moments.indexed(handle, account_id=account_id)
+    if row is None or row.get("status") != "done":
+        return {"status": "not_indexed", "speech": None, "words": [], "shots": []}
+    fps = float(row.get("fps") or 30)
+    words, shots = [], []
+    for m in cut_moments.moments_for(handle, account_id=account_id):
+        span = {"start": round(m["start_f"] / fps, 3), "end": round(m["end_f"] / fps, 3)}
+        if m["kind"] == "word":
+            words.append({**span, "text": m.get("text") or "", "speaker": m.get("speaker")})
+        elif m["kind"] == "shot":
+            shots.append({**span, "text": m.get("text") or ""})
+    return {"status": "indexed", "speech": row.get("speech"), "words": words, "shots": shots}
+
+
 class ExportBody(BaseModel):
     timeline_id: Optional[int] = None
     aspect: Optional[Aspect] = None

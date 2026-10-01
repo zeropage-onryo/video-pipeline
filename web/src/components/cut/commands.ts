@@ -11,7 +11,10 @@
    select tool and C the blade (B is taken by split, per the task list). */
 import { useEffect } from "react";
 import {
+  ArrowDownToLine,
   ArrowLeftRight,
+  ArrowRightToLine,
+  Replace,
   Captions,
   Diamond,
   Download,
@@ -36,6 +39,8 @@ import {
   splitAtPlayhead,
   toEnd,
   toStart,
+  editFromSource,
+  sourceToMark,
 } from "@/lib/cut/actions";
 import { clampPps, endOf, fitPps } from "@/lib/cut/timeline";
 
@@ -98,6 +103,9 @@ export const COMMANDS: Command[] = [
   { id: "select", label: "Select tool", icon: MousePointer2, keys: "A", run: () => s().setTool("select") },
   { id: "blade", label: "Blade tool", icon: Slice, keys: "C", words: ["razor"], run: () => s().setTool("blade") },
   { id: "play", label: "Play / pause", icon: Pause, keys: "Space", run: togglePlay },
+  { id: "src-insert", label: "Insert from Source", icon: ArrowDownToLine, keys: "F9", words: ["source", "insert"], run: () => void editFromSource("insert") },
+  { id: "src-overwrite", label: "Overwrite from Source", icon: Replace, keys: "F10", words: ["source", "overwrite"], run: () => void editFromSource("overwrite") },
+  { id: "src-append", label: "Append from Source", icon: ArrowRightToLine, keys: "⇧F12", words: ["source", "append"], run: () => void editFromSource("append") },
   { id: "export", label: "Export…", icon: Download, keys: "⌘E", words: ["render", "mp4", "download"], run: openExport },
 ];
 
@@ -141,6 +149,76 @@ export function useEditorKeys() {
         return openExport();
       }
       if (mod) return;
+
+      /* The Source viewer's keys. Marking and the three edits work from
+         either viewer once a clip is loaded (I/O always mean the Source,
+         since the timeline has no In/Out of its own yet); the transport
+         keys follow whichever viewer is active. */
+      if (st.source.handle) {
+        const lower = key.toLowerCase();
+        if (lower === "i" || lower === "o") {
+          handled();
+          if (e.shiftKey) return sourceToMark(lower === "i" ? "in" : "out");
+          return lower === "i" ? st.markIn() : st.markOut();
+        }
+        if (e.altKey && lower === "x") {
+          handled();
+          return st.clearMarks();
+        }
+        if (key === "F9" || key === ",") {
+          handled();
+          return void editFromSource("insert");
+        }
+        if (key === "F10" || key === ".") {
+          handled();
+          return void editFromSource("overwrite");
+        }
+        if (key === "F12" && e.shiftKey) {
+          handled();
+          return void editFromSource("append");
+        }
+        if (st.activeViewer === "source") {
+          const src = st.source;
+          const go = (f: number) => {
+            st.setSourcePlaying(false);
+            st.sourceSeek(f);
+          };
+          switch (key) {
+            case " ":
+              handled();
+              if (src.playing) return st.setSourcePlaying(false);
+              st.setSourceRate(1);
+              return st.setSourcePlaying(true);
+            case "k":
+            case "K":
+              handled();
+              return st.setSourcePlaying(false);
+            case "l":
+            case "L":
+              handled();
+              st.setSourceRate(src.playing && src.rate > 0 ? Math.min(4, src.rate * 2) : 1);
+              return st.setSourcePlaying(true);
+            case "j":
+            case "J":
+              handled();
+              st.setSourceRate(src.playing && src.rate < 0 ? Math.max(-4, src.rate * 2) : -1);
+              return st.setSourcePlaying(true);
+            case "ArrowLeft":
+              handled();
+              return go(src.playhead - (e.shiftKey ? fps : 1));
+            case "ArrowRight":
+              handled();
+              return go(src.playhead + (e.shiftKey ? fps : 1));
+            case "Home":
+              handled();
+              return go(0);
+            case "End":
+              handled();
+              return go((src.frames ?? 1) - 1);
+          }
+        }
+      }
+
       // Shift+Z, whichever case the platform reports the key in
       if (e.shiftKey && key.toLowerCase() === "z") {
         handled();

@@ -10,6 +10,7 @@
 import { useRef, useState } from "react";
 import {
   AudioLines,
+  Brackets,
   Bot,
   Captions,
   Film,
@@ -144,18 +145,43 @@ function DropZone({ accept, label }: { accept: string; label: string }) {
 function BinTile({ item }: { item: BinItem }) {
   const fps = useCut((s) => s.doc?.fps ?? 30);
   const Icon = item.kind === "audio" ? AudioLines : item.kind === "image" ? ImageIcon : Film;
+  const loaded = useCut((s) => s.source.handle === item.handle);
+  // double-click (or Enter) loads it into the Source viewer, Resolve's
+  // gesture; the + appends it to the end of its track in one click
+  const load = () => useCut.getState().loadSource(item.handle);
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       className="cx-bin-item"
+      aria-current={loaded ? "true" : undefined}
       draggable
-      title={`${item.name} — drag onto a track, or double-click to append`}
+      title={`${item.name} — double-click to open in Source, drag onto a track, or + to append`}
       onDragStart={(e) => {
         e.dataTransfer.setData(MEDIA_MIME, JSON.stringify(item));
         e.dataTransfer.effectAllowed = "copy";
       }}
-      onDoubleClick={() => void placeMedia(item)}
+      onDoubleClick={load}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.stopPropagation();
+          load();
+        }
+      }}
     >
+      <button
+        type="button"
+        className="cx-bin-append"
+        title="Append to the end of the timeline"
+        aria-label={`Append ${item.name}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          void placeMedia(item);
+        }}
+        onDoubleClick={(e) => e.stopPropagation()}
+      >
+        <Plus />
+      </button>
       <span className="cx-bin-thumb" style={item.poster ? { backgroundImage: `url(${item.poster})` } : undefined}>
         {item.poster ? null : <Icon />}
         <span className="cx-bin-kind">{item.source === "upload" ? `${item.kind} · up` : item.kind}</span>
@@ -164,7 +190,7 @@ function BinTile({ item }: { item: BinItem }) {
         ) : null}
       </span>
       <span className="cx-bin-name">{item.name}</span>
-    </button>
+    </div>
   );
 }
 
@@ -459,14 +485,31 @@ function SearchTab() {
                 {h.text || "—"}
               </p>
               {item ? (
-                <button
-                  type="button"
-                  className="cx-btn ghost"
-                  style={{ marginTop: 6 }}
-                  onClick={() => void placeMedia(item, undefined, undefined, { src_in: h.start_f, src_out: h.end_f })}
-                >
-                  <Plus /> Append this moment
-                </button>
+                <>
+                  <button
+                    type="button"
+                    className="cx-btn ghost"
+                    style={{ marginTop: 6, marginRight: 4 }}
+                    title="Load it into Source with this moment marked In to Out"
+                    onClick={() => {
+                      const s = useCut.getState();
+                      s.loadSource(item.handle);
+                      s.markIn(h.start_f);
+                      s.markOut(Math.max(h.start_f, h.end_f - 1));
+                      s.sourceSeek(h.start_f);
+                    }}
+                  >
+                    <Brackets /> Open in Source
+                  </button>
+                  <button
+                    type="button"
+                    className="cx-btn ghost"
+                    style={{ marginTop: 6 }}
+                    onClick={() => void placeMedia(item, undefined, undefined, { src_in: h.start_f, src_out: h.end_f })}
+                  >
+                    <Plus /> Append this moment
+                  </button>
+                </>
               ) : null}
             </div>
           );

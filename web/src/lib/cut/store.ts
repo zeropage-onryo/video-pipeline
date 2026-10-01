@@ -46,6 +46,10 @@ export type Tool = "select" | "blade";
 export type Selection = { ids: string[]; kind: "clip" | "cue" | null };
 export type TrackMix = { mute?: boolean; solo?: boolean };
 export type LeftTab = "agent" | "media" | "text" | "audio" | "search";
+/* Which viewer the transport keys drive (Resolve's model): clicking a
+   viewer -- or loading a clip into Source -- makes it active. */
+export type ActiveViewer = "source" | "program";
+export type Marks = { in?: number; out?: number };
 /* one line of the agent's thread. A proposal's status is the person's
    click: pending until Keep or Undo, and nothing else changes it. */
 export type Turn = {
@@ -96,6 +100,15 @@ export type CutStore = {
   /** the proposal whose AFTER is on screen (its doc is the ghost) */
   previewing: string | null;
 
+  /* the Source viewer: one bin item, its own clock, its own marks. Frames
+     are at the PROJECT fps, so a marked range is already the src_in /
+     src_out an op takes. */
+  source: { handle: string | null; playhead: number; playing: boolean; rate: number; frames: number | null };
+  /** In/Out per handle, kept for the session: reloading a clip into Source
+   *  finds its marks where you left them */
+  marks: Record<string, Marks>;
+  activeViewer: ActiveViewer;
+
   toast: Toast;
   setToast: (t: Toast) => void;
   load: (id: string) => Promise<void>;
@@ -129,6 +142,17 @@ export type CutStore = {
   pushTurn: (t: Omit<Turn, "id">) => string;
   updateTurn: (id: string, patch: Partial<Turn>) => void;
   preview: (turnId: string | null) => void;
+  loadSource: (handle: string) => void;
+  sourceSeek: (frame: number) => void;
+  setSourcePlaying: (p: boolean) => void;
+  setSourceRate: (r: number) => void;
+  /** the clip's real length, once the player has read it (a render nobody
+   *  probed has none on its bin row) */
+  setSourceFrames: (frames: number) => void;
+  markIn: (frame?: number) => void;
+  markOut: (frame?: number) => void;
+  clearMarks: () => void;
+  setActiveViewer: (v: ActiveViewer) => void;
 };
 
 let chain: Promise<unknown> = Promise.resolve();
@@ -194,6 +218,9 @@ export const useCut = create<CutStore>((set, get) => {
     leftTab: "media",
     thread: [],
     previewing: null,
+    source: { handle: null, playhead: 0, playing: false, rate: 1, frames: null },
+    marks: {},
+    activeViewer: "program",
 
     toast: () => {},
     setToast: (toast) => set({ toast }),
@@ -210,6 +237,8 @@ export const useCut = create<CutStore>((set, get) => {
         previewing: null,
         ghost: null,
         highlight: null,
+        source: { handle: null, playhead: 0, playing: false, rate: 1, frames: null },
+        activeViewer: "program",
       });
       try {
         const res = await getProject(id);
@@ -316,7 +345,8 @@ export const useCut = create<CutStore>((set, get) => {
       const end = doc ? endOf(doc) : 0;
       set({ playhead: Math.max(0, Math.min(Math.round(frame), end)) });
     },
-    setPlaying: (playing) => set(playing ? { playing } : { playing, rate: 1 }),
+    setPlaying: (playing) =>
+      set((s) => (playing ? { playing, source: { ...s.source, playing: false } } : { playing, rate: 1 })),
     setRate: (rate) => set({ rate }),
     setTool: (tool) => set({ tool }),
     toggleSnap: () => set((s) => ({ snapOn: !s.snapOn })),
@@ -343,6 +373,60 @@ export const useCut = create<CutStore>((set, get) => {
       set((s) => ({ thread: [...s.thread.slice(-59), { ...t, id }] }));
       return id;
     },
+    loadSource: (handle) =>
+      set((s) => {
+        const fps = s.doc?.fps ?? 30;
+        const known = s.media[handle]?.frames;
+        const item = s.bin.find((b) => b.handle === handle);
+        const frames = known ?? (item?.kind === "image" ? 5 * fps : item?.seconds ? Math.floor(item.seconds * fps) : null);
+        const m = s.marks[handle];
+        return {
+          source: { handle, playhead: m?.in ?? 0, playing: false, rate: 1, frames },
+          activeViewer: "source",
+          playing: false,
+        };
+      }),
+    sourceSeek: (frame) =>
+      set((s) => {
+        const end = s.source.frames ?? Number.MAX_SAFE_INTEGER;
+        return { source: { ...s.source, playhead: Math.max(0, Math.min(Math.round(frame), Math.max(0, end - 1))) } };
+      }),
+    setSourcePlaying: (playing) =>
+      set((s) => ({ source: { ...s.source, playing, rate: playing ? s.source.rate : 1 }, ...(playing ? { playing: false } : {}) })),
+    setSourceRate: (rate) => set((s) => ({ source: { ...s.source, rate } })),
+    setSourceFrames: (frames) =>
+      set((s) => (s.source.frames === frames ? {} : { source: { ...s.source, frames } })),
+    /* An In after the Out (or an Out before the In) drops the other mark,
+       as every NLE does, rather than leaving a range that runs backwards. */
+    markIn: (frame) =>
+      set((s) => {
+        const h = s.source.handle;
+        if (!h) return {};
+        const f = frame ?? s.source.playhead;
+        const cur = s.marks[h] ?? {};
+        const next: Marks = { in: f, out: cur.out !== undefined && cur.out > f ? cur.out : undefined };
+        return { marks: { ...s.marks, [h]: next } };
+      }),
+    markOut: (frame) =>
+      set((s) => {
+        const h = s.source.handle;
+        if (!h) return {};
+        // the Out is EXCLUSIVE (src_out): marking at the playhead keeps the
+        // frame on screen, so the mark sits one past it
+        const f = (frame ?? s.source.playhead) + 1;
+        const cur = s.marks[h] ?? {};
+        const next: Marks = { out: f, in: cur.in !== undefined && cur.in < f ? cur.in : undefined };
+        return { marks: { ...s.marks, [h]: next } };
+      }),
+    clearMarks: () =>
+      set((s) => {
+        const h = s.source.handle;
+        if (!h) return {};
+        const rest = { ...s.marks };
+        delete rest[h];
+        return { marks: rest };
+      }),
+    setActiveViewer: (activeViewer) => set({ activeViewer }),
     updateTurn: (id, patch) => set((s) => ({ thread: s.thread.map((t) => (t.id === id ? { ...t, ...patch } : t)) })),
     /* Before/after: the proposal's doc drawn as the ghost -- the viewer and
        the timeline both read the ghost, so "after" plays as well as shows.

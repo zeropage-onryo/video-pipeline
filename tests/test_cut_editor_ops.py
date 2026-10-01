@@ -193,6 +193,7 @@ ARGS = {
     "delete_cue": {"track_id": "T1", "cue_id": "q2"},
     "set_caption_style": {"track_id": "T1", "style": "preset:minimal_top"},
     "add_track": {"kind": "audio", "role": "music"},
+    "overwrite": {"track_id": "V1", "clip": {"media": "gen:3", "src_in": 0, "src_out": 30}, "at": 60},
 }
 
 
@@ -316,3 +317,68 @@ def test_add_track_refuses(args, reason):
 
 def test_add_track_is_described():
     assert ops.describe("add_track", {"kind": "audio", "role": "music"}) == "add music track"
+
+
+# --------------------------------------------------------------------------
+# overwrite (the Source viewer's F10, 2026-10-01): lay a clip over what is
+# there; nothing after it moves
+# --------------------------------------------------------------------------
+
+def _spans(doc, tid):
+    return [(c["id"], c["at"], c["src_in"], c["src_out"]) for c in d.track(doc, tid)["clips"]]
+
+
+def test_overwrite_in_the_middle_of_a_clip_splits_it_around_the_new_one():
+    doc = cut()
+    out = ops.apply(doc, "overwrite", {"track_id": "V1", "at": 30, "sound_track": "A1",
+                                       "clip": {"media": "gen:2", "src_in": 0, "src_out": 30}},
+                    media=MEDIA)
+    v1 = _spans(out, "V1")
+    assert v1[0] == ("c1", 0, 0, 30)                     # c1 cut at 30
+    assert (v1[1][1], v1[1][2], v1[1][3]) == (30, 0, 30)  # the new clip, 30-60
+    assert v1[2][1:] == (60, 60, 150)                    # c1's tail from 60 on, same source
+    assert out["duration"] == doc["duration"], "nothing after it moved"
+    # its own sound landed on A1, linked, and c1's sound was cleared with c1
+    a1 = _spans(out, "A1")
+    assert (a1[1][1], a1[1][3]) == (30, 30)
+    new = d.track(out, "V1")["clips"][1]["id"]
+    assert d.track(out, "A1")["clips"][1]["link"] == new
+    assert v.problems(out, MEDIA) == []
+
+
+def test_overwrite_across_a_cut_replaces_both_sides_and_leaves_the_rest():
+    doc = cut()
+    # 120-200 covers c1's tail (to 150) and c2's head (c2 starts 142 with an 8f fade)
+    out = ops.apply(doc, "overwrite", {"track_id": "V1", "at": 120,
+                                       "clip": {"media": "gen:3", "src_in": 0, "src_out": 80}},
+                    media=MEDIA)
+    v1 = _spans(out, "V1")
+    assert [x[1] for x in v1] == [0, 120, 200, 262]
+    assert v1[0][3] == 120 and v1[2][2] == 58        # c1 ends at 120; c2 resumes 58f in
+    assert v.problems(out, MEDIA) == []
+
+
+def test_overwrite_past_the_end_just_places_it():
+    doc = cut()
+    out = ops.apply(doc, "overwrite", {"track_id": "V1", "at": 400,
+                                       "clip": {"media": "gen:3", "src_in": 0, "src_out": 30}},
+                    media=MEDIA)
+    assert _spans(out, "V1")[-1][1] == 400 and out["duration"] == 430
+
+
+@pytest.mark.parametrize("args, reason", [
+    ({"track_id": "V9", "at": 0, "clip": {"media": "gen:3", "src_in": 0, "src_out": 30}}, "no track"),
+    ({"track_id": "V1", "at": -5, "clip": {"media": "gen:3", "src_in": 0, "src_out": 30}}, "negative"),
+    ({"track_id": "V1", "at": 0, "clip": {"media": "gen:3", "src_in": 30, "src_out": 30}}, "after src_in"),
+    ({"track_id": "V1", "at": 0, "sound_track": "V1",
+      "clip": {"media": "gen:1", "src_in": 0, "src_out": 30}}, "not audio"),
+])
+def test_overwrite_refuses(args, reason):
+    with pytest.raises(ops.OpError) as e:
+        ops.apply(cut(), "overwrite", args, media=MEDIA)
+    assert reason in str(e.value)
+
+
+def test_overwrite_is_described():
+    assert ops.describe("overwrite", {"track_id": "V1", "at": 90, "clip": {"media": "gen:2"}}, 30) \
+        == "overwrite gen:2 on V1 at 3.0s"

@@ -222,6 +222,7 @@ export function Timeline() {
   const onRulerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     e.preventDefault();
     const s = useCut.getState();
+    s.setActiveViewer("program");
     s.setPlaying(false);
     s.seek(frameAtClientX(e.clientX));
     const move = (ev: PointerEvent) => useCut.getState().seek(frameAtClientX(ev.clientX));
@@ -239,6 +240,7 @@ export function Timeline() {
     e.stopPropagation();
     e.preventDefault();
     const s = useCut.getState();
+    s.setActiveViewer("program");
     if (s.tool === "blade") {
       let frame = frameAtClientX(e.clientX);
       if (s.snapOn) frame = snap(frame, snapPoints(head, s.playhead), snapRadius).frame;
@@ -433,6 +435,7 @@ export function Timeline() {
 
   const onLaneDown = (e: ReactPointerEvent) => {
     if (e.button !== 0) return;
+    useCut.getState().setActiveViewer("program");
     useCut.getState().clearSelection();
   };
   const onLaneMove = (e: ReactPointerEvent) => {
@@ -542,7 +545,7 @@ export function Timeline() {
           {tool === "blade" && bladeAt !== null ? <i className="cx-blade-line" style={{ left: x(bladeAt) }} /> : null}
           <i className="cx-playhead" style={{ left: x(playhead) }} />
           {tracks.every((t) => !(t.clips?.length || t.cues?.length)) ? (
-            <div className="cx-empty-tl">Drag media here from the bin — or double-click it to append</div>
+            <div className="cx-empty-tl">Drag media here from the bin — or double-click it to load it into Source</div>
           ) : null}
         </div>
       </div>

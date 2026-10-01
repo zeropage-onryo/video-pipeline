@@ -311,6 +311,9 @@ def test_every_op_is_reachable_through_the_route(api):
     step("add_marker", frame=30, label="beat")
     step("lift", clip_id=tail)
     step("ripple_delete", clip_id=c2)
+    doc = step("overwrite", track_id="V1", clip={"media": w["g1"], "src_in": 0, "src_out": 30},
+               at=0, sound_track="A1")
+    assert d.track(doc, "V1")["clips"][0]["src_out"] == 30
     doc = step("set_canvas", width=1080, height=1080)
     assert doc["size"] == [1080, 1080]
     doc = step("add_track", kind="audio", role="voice")
