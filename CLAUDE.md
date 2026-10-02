@@ -1710,7 +1710,18 @@ is yours, in Resolve, by hand.
   `/api/projects` (CRUD, `draft-brief`, `archive`, `forget`); `/scenes/run` and the Guide
   take `project_id` (unknown -> 404); the board takes `?project=`, narrowed INSIDE the
   window. The React Projects page opens the composer with `?project=<id>`, remembered per
-  browser. `accounts.seed` now makes ONE account. NOT ported with it, left on
+  browser. `accounts.seed` now makes ONE account.
+  **The LOOK belongs to the project too (2026-10-02, Mike's call: the studio has no house
+  style).** `projects.look` (additive column, `''` by default; POST/PATCH `/api/projects`
+  take `look`, no UI box yet) is resolved in ONE place, `looks.look_block`: a project in
+  scope (passed, or `project_context.current()`) -> its look, or `""` when none is typed --
+  NEVER the brand file, which is how a house style comes back unnoticed; no project (the
+  night, the crawl, research) -> `prompts/look_<brand>.txt`; else `""`. All seven readers
+  follow the ContextVar with no argument threaded. Both scene writers carry a `{look}` slot
+  (`scenes_prompt.txt` gained one -- the Studio Create never read the look before) and
+  print `prompts/look_unset.txt` in its place when it is empty. `look_zeropage.txt` was
+  rewritten the same day as a genre-free NOTE (no horror finish, creature, "wrongness" or
+  rain). `tests/test_project_look.py` guards the order and the no-genre regression. NOT ported with it, left on
   `wip/main-checkout-2026-09-28` as Mike's to decide: `load_brand` forcing every run to
   zeropage, `CAST_BRANDS` gaining zeropage (lifts the faceless rule), and the rewritten
   brand/look/scene prompts.

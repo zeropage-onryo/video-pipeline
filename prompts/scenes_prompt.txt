@@ -53,7 +53,13 @@ Write each "prompt" as a single cohesive directive with these five parts, in ord
    imperfect framing that drifts and re-centres, muted colour, practical light,
    real locations, grounded and rough — NOT glossy, epic or stylized. Fold in
    the run's references and stated mood here. Use the channel's fallback grade
-   only where those inputs leave the look unspecified.
+   only where those inputs leave the look unspecified. THE LOOK below is this
+   run's own: on any detail it names (palette, light, lens, camera movement,
+   finish) it overrides the defaults in this STYLE part and in AVOID. The
+   attached references still win on what they actually show.
+
+   THE LOOK:
+{look}
 3. BEATS: the scene as timed shots, each opening with its window, e.g.
    (0-3s), (3-7s), (7-10s) for a 10-second scene. Start at 0s; windows are
    contiguous, never overlap, and end at exactly {seconds}s. EACH WINDOW IS
