@@ -1,7 +1,8 @@
 "use client";
 
 /* A find_references contact sheet: one row per need, every frame the hunt
-   looked at, the cut ones greyed with the reason. Drawn under a Guide
+   looked at, the cut ones carrying their reason on the tag (never greyed:
+   the red glow is the hover, and it stays once chosen). Drawn under a Guide
    answer -- by the assistant pill and by the composer's own Guide thread
    (2026-10-01: the composer's Guide "found references" and drew nothing,
    because only the pill knew how to draw a sheet). Keeping is the
