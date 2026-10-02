@@ -1742,6 +1742,12 @@ is yours, in Resolve, by hand.
   product image in any of those (only body `<img>` tags behind a dozen nav tiles) and honestly
   yields the logo greyed plus the note; the Legend/sticks orange-cream pages and Pinterest pins
   give real frames; an Instagram POST gives nothing without a session (the note says so).
+  **A prop or link frame is judged on IDENTITY, not mood (2026-10-02, Mike's call).** With
+  Serper live, every clean packshot of the Ghost can was cut as "studio render on white" against
+  the brand look -- the frames most worth keeping. `refcheck.IDENTITY_ROLES` (`prop`, `link`)
+  swap the look block for `IDENTITY_BLOCK` (does it show the exact thing, large and sharp; a
+  packshot on white is a KEEP); the clean-frame floor and the anti-references still apply, and
+  place / light / mood / texture / wardrobe still sit inside the look.
 - **`src/cut/`** — the editor, phase 1 of `docs/CUT_EDITOR.md` (Assemble v0, 2026-09-26).
   `doc.py` is the timeline document (OTIO-shaped, INTEGER FRAMES at the project fps, tracks
   V / A with a role voice|music|sfx / T captions, media named by `gen:<generated_assets.id>` or
