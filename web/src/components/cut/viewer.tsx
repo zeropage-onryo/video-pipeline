@@ -344,6 +344,10 @@ function PictureEl({
   const active = useFollow(ref, clip, playhead, fps, playing);
   // the file's own size: the bin's, else the element's once it has read it
   const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
+  // has the element drawn a picture yet? The warm/cool tint is a soft-light
+  // layer: over a frame still loading it blends with nothing and shows as a
+  // flat block of colour, so it waits for the picture (found live, 2026-10-01)
+  const [painted, setPainted] = useState(false);
   let fade = active ? 1 : 0;
   const xf = clip.transition_in?.frames ?? 0;
   // inside its transition: the style's look (transitions.ts), an
@@ -382,7 +386,7 @@ function PictureEl({
     zIndex: z,
     pointerEvents: "none",
   };
-  const tint = gradeTint(clip.grade);
+  const tint = painted ? gradeTint(clip.grade) : null;
   const fill: React.CSSProperties = {
     position: "absolute",
     inset: "auto",
@@ -404,7 +408,10 @@ function PictureEl({
           src={src}
           alt=""
           style={fill}
-          onLoad={(e) => setNatural({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
+          onLoad={(e) => {
+            setNatural({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight });
+            setPainted(true);
+          }}
         />
         {tint ? <i style={tint} /> : null}
       </div>
@@ -426,7 +433,9 @@ function PictureEl({
           // a paused <video> sitting at 0 is never painted until something
           // seeks it; a hair past the wanted time forces the first frame up
           e.currentTarget.currentTime = Math.max(0.001, sourceTime(clip, Math.max(playhead, clip.at), fps));
+          setPainted(true);
         }}
+        onEmptied={() => setPainted(false)}
       />
       {tint ? <i style={tint} /> : null}
     </div>
