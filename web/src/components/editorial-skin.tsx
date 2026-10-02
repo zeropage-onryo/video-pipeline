@@ -5,9 +5,20 @@ import type { ReactNode } from "react";
 // `.editorial` (globals.css) re-declares every shadcn token underneath
 // it -- warm black, white primary, Inter, 8px radius -- so every
 // component below reads the new palette through the same class names.
-export function EditorialSkin({ children }: { children: ReactNode }) {
+// `tone="light"` adds `.editorial-light`, the same tokens inverted (white
+// ground, black type) -- the /make landing pages wear it; the homepage
+// and the legal pages stay dark.
+export function EditorialSkin({
+  children,
+  tone = "dark",
+}: {
+  children: ReactNode;
+  tone?: "dark" | "light";
+}) {
   return (
-    <div className="editorial flex min-h-svh flex-1 flex-col bg-background text-foreground">
+    <div
+      className={`editorial ${tone === "light" ? "editorial-light" : ""} flex min-h-svh flex-1 flex-col bg-background text-foreground`}
+    >
       {children}
     </div>
   );

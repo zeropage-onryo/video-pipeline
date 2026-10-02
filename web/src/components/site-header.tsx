@@ -45,7 +45,7 @@ export function SiteHeader() {
             <Link
               key={link.href}
               href={link.href}
-              className="rounded-md px-3 py-2 text-[13.5px] tracking-[-0.005em] text-[#c6c4c0] transition-colors hover:bg-secondary hover:text-foreground"
+              className="rounded-md px-3 py-2 text-[13.5px] tracking-[-0.005em] text-[var(--nav-fg)] transition-colors hover:bg-secondary hover:text-foreground"
             >
               {link.label}
             </Link>

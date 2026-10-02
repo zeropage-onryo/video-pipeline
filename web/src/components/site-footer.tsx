@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Wordmark } from "@/components/wordmark";
+import { MAKE_PAGES, makePath } from "@/landing-pages/pages";
 
 const COLUMNS: { title: string; links: [string, string][] }[] = [
   {
@@ -10,6 +11,12 @@ const COLUMNS: { title: string; links: [string, string][] }[] = [
       ["Frames", "/#frames"],
       ["Who it's for", "/#work"],
     ],
+  },
+  {
+    title: "Make",
+    // every /make landing page, off its own entry, so the site links to
+    // each one from every page (crawlers find it; the person does too)
+    links: MAKE_PAGES.map((page) => [page.h1, makePath(page.slug)]),
   },
   {
     title: "Plans",
@@ -33,10 +40,10 @@ export function SiteFooter() {
   return (
     <footer className="border-t border-border">
       <div className="mx-auto max-w-[1200px] px-6 py-14">
-        <div className="grid gap-10 md:grid-cols-[1.4fr_repeat(3,1fr)]">
+        <div className="grid gap-10 sm:grid-cols-2 md:grid-cols-[1.4fr_repeat(4,1fr)]">
           <div className="max-w-xs">
             <Wordmark />
-            <p className="mt-4 text-sm leading-relaxed text-[#afafaf]">
+            <p className="mt-4 text-sm leading-relaxed text-[var(--ink-2)]">
               The AI content studio that creates for you — for filmmakers, brands, and creators.
             </p>
           </div>
@@ -47,7 +54,7 @@ export function SiteFooter() {
                 <Link
                   key={label + href}
                   href={href}
-                  className="text-sm text-[#c6c4c0] transition-colors hover:text-foreground"
+                  className="text-sm text-[var(--nav-fg)] transition-colors hover:text-foreground"
                 >
                   {label}
                 </Link>
@@ -56,7 +63,7 @@ export function SiteFooter() {
           ))}
         </div>
 
-        <div className="mt-12 flex flex-col gap-2 border-t border-border pt-6 text-[13px] text-[#82807d] sm:flex-row sm:items-center sm:justify-between">
+        <div className="mt-12 flex flex-col gap-2 border-t border-border pt-6 text-[13px] text-[var(--ink-3)] sm:flex-row sm:items-center sm:justify-between">
           <span>© {new Date().getFullYear()} Zero Page Films</span>
           <span>From idea to creation</span>
         </div>
