@@ -353,10 +353,18 @@ def find_references(scene: str, *, brand: str = "", account_id=None,
         return {"ok": False, "sheet": [], "checked": True, "note": f"could not read the scene: {e}"}
     needs = reference_needs.open_needs(mapped.get("needs") or [])
     wanted = {str(d).strip().lower() for d in (departments or []) if str(d).strip()}
-    if wanted:
-        needs = [n for n in needs if n.get("role") in wanted] or needs
-    needs = needs[:CHAT_NEEDS]
     faces = [n for n in (mapped.get("needs") or []) if n.get("source") == "elements"]
+    if wanted:
+        # Exactly the departments asked for. This used to fall back to EVERY
+        # need when none matched, so "the can itself" came back padded with a
+        # parking garage and a wardrobe (2026-10-02, Mike: "I didn't ask for
+        # place light mood texture and wardrobe frames"). An empty match is an
+        # honest answer; a padded one is not.
+        needs = [n for n in needs if n.get("role") in wanted]
+        if not needs:
+            return {"ok": False, "sheet": [], "checked": True, "faces": len(faces),
+                    "note": f"nothing to hunt for under {', '.join(sorted(wanted))} in that request"}
+    needs = needs[:CHAT_NEEDS]
     if not needs:
         return {"ok": False, "sheet": [], "checked": True, "faces": len(faces),
                 "note": "nothing in this scene needs a photograph off the web"}
