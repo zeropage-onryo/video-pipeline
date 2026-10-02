@@ -54,8 +54,8 @@ def test_scene_brief_marks_brand_as_fallback_context():
 def test_gold_standard_is_injected_into_the_scene_brief_prompt():
     p = shootgen.build_scene_brief_prompt("antihero")
     assert "GOLD-STANDARD EXAMPLE" in p and "match the SHAPE" in p
-    assert "portal door" in p          # the exemplar itself is present
-    assert "reuse the scene" in p   # the shape-not-subject guardrail
+    assert "three-tier white cake" in p   # the exemplar itself is present
+    assert "NEVER its subject, specific content or look" in p   # shape, not subject
 
 
 def test_seed_gold_standard_records_a_winner_once(tmp_db, monkeypatch):
@@ -65,7 +65,7 @@ def test_seed_gold_standard_records_a_winner_once(tmp_db, monkeypatch):
     gs = [w for w in winners.list_all(dsn=tmp_db)
           if (w.get("note") or "").startswith("gold standard")]
     assert len(gs) == 1
-    assert "portal door" in gs[0]["prompt"]
+    assert "three-tier white cake" in gs[0]["prompt"]
 
 
 def test_realism_recipe_is_in_the_shot_prompts():

@@ -1202,8 +1202,12 @@ def generate_concept_ideas(brand: str, client=None, spark=None, gemini_client=No
 
 
 def gold_standard_example() -> str:
-    """The canonical proven prompt (prompts/gold_standard.md), injected as the
-    exemplar every scene brief is measured against. '' if the file is absent --
+    """The exemplar (prompts/gold_standard.md) every scene brief is
+    measured against -- for its five-part SHAPE, which is the proven part.
+    Its subject and look were rewritten 2026-10-02: the original (a dark
+    comedy, a monster in a bed, raw handheld and muted colour; in git
+    history) leaked its genre into look-less runs, and the studio has no
+    house look. '' if the file is absent --
     the exemplar is an enhancement, never a hard dependency."""
     try:
         return (PROMPTS_DIR / "gold_standard.md").read_text().strip()

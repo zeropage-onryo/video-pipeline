@@ -88,22 +88,24 @@ def test_a_scene_prompt_in_a_look_less_project_carries_no_house_genre(build, bra
     assert looks.unset_note() in prompt
 
 
-# guards: the writers' own defaults -- the house style lived in the
-# templates too, and both verification Creates copied it verbatim. The
-# exemplar is stubbed out: it quotes its own grade and is matched for SHAPE.
-TEMPLATE_HOUSE_STYLE = ("raw handheld, close wide-angle", "muted colour", "wet surfaces",
+# guards: the house style everywhere ELSE a scene writer reads it from --
+# the templates' own defaults, the zeropage brand note ("dark, contrasty")
+# and the gold-standard exemplar (a dark comedy with a monster). Both
+# verification Creates copied the template defaults verbatim, and a
+# look-less Create still went "gritty ... deep blacks" off the other two.
+HOUSE_STYLE_DEFAULTS = ("raw handheld, close wide-angle", "muted colour", "wet surfaces",
                         "wet physics", "second red accent", "daylight flatness",
                         "heavy colour grading", "smooth commercial camera movement",
-                        "physical comedy or tension")
+                        "physical comedy or tension", "dark, contrasty", "dark comedy",
+                        "monster", "portal")
 
 
 @pytest.mark.parametrize("build", [build_scene_brief, build_scenes])
-def test_the_scene_writers_carry_no_default_style_of_their_own(build, monkeypatch):
-    monkeypatch.setattr(shootgen, "gold_standard_example", lambda: "")
+def test_the_scene_writers_carry_no_default_style_of_their_own(build):
     with project_context.active(a_project()):
         prompt = build("zeropage")
-    found = [w for w in TEMPLATE_HOUSE_STYLE if w in prompt]
-    assert found == [], f"a template default would fight the project's look: {found}"
+    found = [w for w in HOUSE_STYLE_DEFAULTS if w in prompt.lower()]
+    assert found == [], f"a default would fight the project's look: {found}"
 
 
 # guards: the {look} slot in BOTH writers carrying the project's look
