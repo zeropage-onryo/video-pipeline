@@ -305,6 +305,31 @@ def record_pair(tool, failed_prompt, working_prompt, note="", video_ref="",
     }
 
 
+def retire_by_note(note: str, dsn=None) -> int:
+    """Delete every entry whose note is exactly `note`, its RAG chunks
+    first. Chunks before rows on purpose: if the store cannot be reached
+    the row stays, so the next call retries instead of leaving chunks
+    with nothing to say where they came from. Returns rows removed."""
+    init(dsn)
+    with db.connect(dsn) as conn:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT id, rag_source FROM winning_prompts WHERE note = %s", (note,))]
+    removed = 0
+    for row in rows:
+        if row.get("rag_source"):
+            from . import rag
+            store = rag.connect()
+            try:
+                rag.delete_source(store, row["rag_source"])
+            finally:
+                store.close()
+        with db.connect(dsn) as conn:
+            removed += conn.execute(
+                "DELETE FROM winning_prompts WHERE id = %s AND note = %s",
+                (row["id"], note)).rowcount
+    return removed
+
+
 def avoid_guidance(limit=8, dsn=None) -> str:
     """A negative-steer block from prompts you marked 'didn't work', folded
     into generation so the next batch avoids repeating them. '' when none."""

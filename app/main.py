@@ -141,23 +141,25 @@ templates.env.globals["BRANDS"] = BRANDS
 POSTED_WINDOWS = {"3": 90, "6": 180, "12": 365, "all": None}
 
 
-def seed_gold_standard():
-    """Record the canonical example prompt (prompts/gold_standard.md) as a
-    winning prompt once, so the RAG loop reinforces it. Idempotent (keyed on
-    the note), best-effort ingest -- never blocks startup."""
-    text = shootgen.gold_standard_example()
-    if not text:
-        return
+# The note the startup seed wrote on the gold-standard winner until
+# 2026-10-02 -- see retire_gold_standard.
+GOLD_STANDARD_NOTE = "gold standard structural exemplar"
+
+
+def retire_gold_standard():
+    """Keep the gold-standard exemplar OFF the winners shelf (2026-10-02,
+    Mike's call). Until then startup recorded prompts/gold_standard.md as a
+    "worked" winner so the RAG loop would reinforce it -- the monster/portal
+    dark comedy, i.e. the house style, retrieved as a taught reference into
+    look-less runs. It was never a rendered result, only the exemplar, and
+    the exemplar already reaches every writer through {example}. The live
+    row (#2, 4 chunks) was deleted by hand that day; this runs at boot
+    because a process still on the old seed re-adds the row whenever none
+    exists, so the first boot of this code clears whatever came back.
+    Exact note only -- nothing a person wrote is touched. Never blocks
+    startup."""
     try:
-        already = any((w.get("note") or "").startswith("gold standard")
-                      for w in winners.list_all())
-        if not already:
-            with db.connect() as conn:
-                owner = db.bootstrap_account_id(conn)
-            winners.record_and_learn(
-                winners.DEFAULT_TOOL, text, note="gold standard structural exemplar",
-                verdict="worked",
-                project=accounts_mod.slug_of(owner))
+        winners.retire_by_note(GOLD_STANDARD_NOTE)
     except Exception:
         pass
 
@@ -201,7 +203,7 @@ async def lifespan(app: FastAPI):
         # Off with FAL_RECOVER=0.
         if os.environ.get("FAL_RECOVER", "1") != "0":
             fal_requests.start_background()
-        seed_gold_standard()                # records the canonical example as a winner
+        retire_gold_standard()              # the exemplar is not a winner (2026-10-02)
         # The MCP transport is not self-starting: its session manager has
         # to be entered by whoever hosts it. A no-op when MCP is off.
         async with mcp_mount.session_lifespan(MCP_SESSIONS):

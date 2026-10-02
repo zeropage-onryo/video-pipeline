@@ -58,14 +58,33 @@ def test_gold_standard_is_injected_into_the_scene_brief_prompt():
     assert "NEVER its subject, specific content or look" in p   # shape, not subject
 
 
-def test_seed_gold_standard_records_a_winner_once(tmp_db, monkeypatch):
-    monkeypatch.setattr(app_main.winners, "ingest_to_rag", lambda *a, **k: {"ok": False})
-    app_main.seed_gold_standard()
-    app_main.seed_gold_standard()   # idempotent
-    gs = [w for w in winners.list_all(dsn=tmp_db)
-          if (w.get("note") or "").startswith("gold standard")]
-    assert len(gs) == 1
-    assert "three-tier white cake" in gs[0]["prompt"]
+# guards: retire_gold_standard -- the exemplar leaves the winners shelf
+# (row AND chunks), nothing is seeded back, and only the exact note goes
+def test_boot_retires_the_gold_standard_winner_and_seeds_nothing(tmp_db, monkeypatch):
+    from src import rag
+    dropped = []
+
+    class Store:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(rag, "connect", lambda *a, **k: Store())
+    monkeypatch.setattr(rag, "delete_source", lambda conn, source: dropped.append(source) or 4)
+    old = winners.add("runway", "a giant monster on the bed",
+                      note=app_main.GOLD_STANDARD_NOTE, dsn=tmp_db)
+    with app_main.db.connect(tmp_db) as conn:
+        conn.execute("UPDATE winning_prompts SET rag_source = %s, ingested = 1 WHERE id = %s",
+                     (f"winning_prompts/entry-{old}.txt", old))
+    mine = winners.add("ltx", "a prompt a person taught", note="gold standard for my ad",
+                       dsn=tmp_db)
+
+    app_main.retire_gold_standard()
+    app_main.retire_gold_standard()          # a second boot finds nothing to do
+
+    notes = {w["id"]: w["note"] for w in winners.list_all(dsn=tmp_db)}
+    assert old not in notes and mine in notes
+    assert app_main.GOLD_STANDARD_NOTE not in notes.values()     # nothing seeded back
+    assert dropped == [f"winning_prompts/entry-{old}.txt"]
 
 
 def test_realism_recipe_is_in_the_shot_prompts():
