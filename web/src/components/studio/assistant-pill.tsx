@@ -14,12 +14,18 @@
    pressing Create, like pressing Approve, stays the person's.
 
    Mounted once in studio/layout.tsx, so it survives client navigation
-   and the conversation follows the person from page to page. */
+   and the conversation follows the person from page to page. The thread
+   itself is not this component's (2026-10-02): it is the one
+   AssistantThreadProvider holds for the whole studio, which the Studio
+   composer's Guide writes into too -- so a talk started in the box is
+   here when the pill opens on Pipeline, and the box is still full when
+   the person comes back. */
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowRight, ChevronDown, ChevronUp, Settings2, SquarePen } from "lucide-react";
 import { useShell } from "@/components/studio/shell";
+import { useAssistantThread } from "@/components/studio/assistant-thread";
 import {
   getBalance,
   queuePending,
@@ -31,7 +37,6 @@ import {
 } from "@/lib/studio-api";
 import {
   AVATARS,
-  COMPOSER_EVENT,
   STAGES,
   STAGE_LABEL,
   TONES,
@@ -46,34 +51,16 @@ import {
   pageStage,
   postVerdicts,
   putPersona,
-  putProject,
   savePersona,
   sendToComposer,
-  startNewProject,
-  type ComposerState,
   type ContactSheet,
   type Persona,
   type Stage,
   type Tone,
+  type Turn,
 } from "@/lib/assistant";
 import "@/components/studio/assistant.css";
 import { ContactSheetView } from "@/components/studio/contact-sheet";
-
-type Turn = {
-  role: "user" | "assistant";
-  content: string;
-  failed?: boolean;
-  /** an assistant turn's extras: chips, directions, the contact sheet */
-  reply?: GuideReply;
-  /** the contact sheet's frames as the person has them chosen (default: what the check kept) */
-  chosen?: Record<string, boolean>;
-  /** Keep has run for this sheet */
-  kept?: boolean;
-  /** the direction put in the composer */
-  picked?: number;
-  /** the pill's next-move line after a local step (a keep, a pick) */
-  nudge?: string;
-};
 
 /* a sheet opens with the frames the check kept already chosen */
 const chosenOf = (t: Turn): Record<string, boolean> => {
@@ -83,56 +70,44 @@ const chosenOf = (t: Turn): Record<string, boolean> => {
   return sel;
 };
 
-const THREAD_KEY = "zpf.assistant.thread";
 const GREETED_KEY = "zpf.assistant.greeted";
-
-function loadThread(account: string): { turns: Turn[]; stage: Stage | "" } {
-  try {
-    const raw = sessionStorage.getItem(`${THREAD_KEY}.${account}`);
-    if (raw) {
-      const t = JSON.parse(raw) as { turns: Turn[]; stage: string };
-      return { turns: t.turns ?? [], stage: isStage(t.stage) ? t.stage : "" };
-    }
-  } catch {
-    /* a fresh start */
-  }
-  return { turns: [], stage: "" };
-}
 
 export function AssistantPill() {
   const pathname = usePathname() || "/studio";
-  const { me, signedOut, brand, toast } = useShell();
-  const account = brand || me?.account?.slug || "";
+  const { me, signedOut, toast } = useShell();
+  // the thread, the step and the composer's box are the studio's, shared
+  // with the Studio page's Guide (assistant-thread.tsx)
+  const {
+    account,
+    turns,
+    setTurns,
+    stage: convStage,
+    setStage: setConvStage,
+    draft: composer,
+    newProject: resetProject,
+  } = useAssistantThread();
   const [persona, setPersona] = useState<Persona | null>(null);
   const [setup, setSetup] = useState(false);
   const [open, setOpen] = useState(false);
-  const [turns, setTurns] = useState<Turn[]>([]);
-  const [convStage, setConvStage] = useState<Stage | "">("");
-  // whose conversation `turns` is: saving must never write one account's
-  // thread under the other's key in the render between a switch and its load
-  const [turnsFor, setTurnsFor] = useState("");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [detail, setDetail] = useState("");
   const [bubble, setBubble] = useState("");
-  const [composer, setComposer] = useState<ComposerState>({ idea: "", picked: [] });
   const bubbleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const body = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
 
-  // persona + thread are per account: two brands, two conversations.
-  // The browser's copy paints first; the server's copy (src/assistant_store.py)
-  // then wins. Something only this browser has -- set up before the server
-  // remembered anything -- is sent up once, so nothing already made is lost.
+  // the persona is per account: two brands, two assistants. The browser's
+  // copy paints first; the server's copy (src/assistant_store.py) then
+  // wins. One set up here before the server remembered anything is sent
+  // up once, so nothing already made is lost. (The thread used to load
+  // here too; the provider owns that now.)
   useEffect(() => {
     if (!account) return;
     let live = true;
     const localPersona = loadPersona(account);
-    const local = loadThread(account);
     // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage is only readable after mount
     setPersona(localPersona);
-    setTurns(local.turns);
-    setConvStage(local.stage);
     getAssistantMemory()
       .then((m) => {
         if (!live) return;
@@ -143,43 +118,14 @@ export function AssistantPill() {
         } else if (localPersona) {
           void putPersona(localPersona).catch(() => {});
         }
-        if (m.project) {
-          setTurns((m.project.turns as Turn[]) || []);
-          setConvStage(isStage(m.project.stage) ? m.project.stage : "");
-        } else if (local.turns.length) {
-          void putProject(local.turns, local.stage).catch(() => {});
-        }
       })
       .catch(() => {
         /* the server cannot be asked: the browser's copy is what there is */
-      })
-      .finally(() => live && setTurnsFor(account));
+      });
     return () => {
       live = false;
     };
   }, [account]);
-  // every change is saved -- to the server (debounced: a turn and its
-  // extras land in a burst) and to this tab as the offline fallback
-  useEffect(() => {
-    if (!account || turnsFor !== account) return;
-    try {
-      sessionStorage.setItem(`${THREAD_KEY}.${account}`, JSON.stringify({ turns: turns.slice(-24), stage: convStage }));
-    } catch {
-      /* the thread just forgets on reload */
-    }
-    if (!turns.length) return;
-    const t = setTimeout(() => {
-      void putProject(turns.filter((x) => !x.failed), convStage).catch(() => {});
-    }, 700);
-    return () => clearTimeout(t);
-  }, [turns, convStage, account, turnsFor]);
-
-  // what the composer holds, so a turn can see the idea and its picks
-  useEffect(() => {
-    const on = (e: Event) => setComposer((e as CustomEvent<ComposerState>).detail);
-    window.addEventListener(COMPOSER_EVENT, on);
-    return () => window.removeEventListener(COMPOSER_EVENT, on);
-  }, []);
 
   const say = useCallback((line: string, ms = 6500) => {
     setBubble(line);
@@ -245,8 +191,9 @@ export function AssistantPill() {
       form.append("stage", stage);
       form.append("page", pathname);
       form.append("brain", "auto");
-      // the composer's picks ride along, so the turn sees what the box sees
-      composer.picked.forEach((u) => form.append("asset_photos", u));
+      // the composer's references ride along, so the turn sees what the box
+      // sees: its uploads (saved to the bin on attach) and then its picks
+      [...composer.uploads.map((u) => u.url), ...composer.picked].forEach((u) => form.append("asset_photos", u));
       const started = await runCreativeGuide(form);
       const job = await waitForJob(started.job_id, (j) => setDetail(j.detail || "Thinking…"));
       const reply = (job as unknown as { reply?: GuideReply }).reply;
@@ -313,23 +260,16 @@ export function AssistantPill() {
   }
 
   /* A fresh project: the current one is archived on the server -- kept,
-     never deleted -- and the card starts empty. */
+     never deleted -- and the card AND the composer's box start empty. */
   async function newProject() {
     if (busy) return;
     try {
-      await startNewProject();
+      await resetProject();
     } catch {
       toast("Could not start a new project", "err");
       return;
     }
-    setTurns([]);
-    setConvStage("");
     setText("");
-    try {
-      sessionStorage.removeItem(`${THREAD_KEY}.${account}`);
-    } catch {
-      /* nothing kept here to clear */
-    }
     setTimeout(() => input.current?.focus(), 50);
   }
 
