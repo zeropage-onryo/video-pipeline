@@ -1,159 +1,298 @@
 "use client";
 
-/* What each send made, drawn above the composer: the prompt as a bubble,
-   then the result. IMAGE turns show the still; VIDEO turns show the
-   written scene as its timed shots -- a scene is text until the Queue
-   renders it, so it is never drawn as finished footage. */
+/* The stream above the composer, drawn to the "ZPF Composer Directions"
+   mock: what was asked as a bubble on the right, what came back under it.
+
+   A SEND (a turn carrying `made`) shows its result as tiles -- an IMAGE
+   turn the still, a VIDEO turn the written scene as its timed shots. A
+   scene is text until the Queue renders it, so a shot tile is its still
+   when one has been drawn and its number otherwise, never fake footage;
+   a tile with a clip (rendered later, read back here) gets the play mark.
+   The Guide's turns are the same stream: the person's words on the
+   right, the answer on the left with its chips, sheet and confirm card. */
 import Link from "next/link";
-import { Clapperboard, Film, ImagePlus, RotateCcw, Workflow } from "lucide-react";
-import { cssAspect, mediaSrc, type Turn } from "@/lib/composer";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { Clapperboard, Film, ImagePlus, Play, RotateCcw, Workflow } from "lucide-react";
+import { cssAspect, madeMeta, mediaSrc, type Made } from "@/lib/composer";
+import type { ContactSheet, Turn } from "@/lib/assistant";
+import { ContactSheetView } from "@/components/studio/contact-sheet";
 
 const pad = (n: number) => String(n).padStart(2, "0");
-const ratioOf = (t: Turn) => cssAspect(t.frame) ?? "4 / 5";
 
-function Meta({ t }: { t: Turn }) {
-  if (t.status === "running") {
+export type Live = { progress: number; detail: string };
+
+type Handlers = {
+  busy: boolean;
+  onAnimate: (m: Made) => void;
+  onUseAsRef: (m: Made) => void;
+  onReuse: (t: Turn) => void;
+  onSelect: (madeId: string, n: number) => void;
+  onChip: (text: string) => void;
+  onDecide: (i: number, yes: boolean) => void;
+  onToggleFrame: (i: number, id: string) => void;
+  onKeep: (i: number, sheet: ContactSheet) => void;
+};
+
+function Meta({ m, live }: { m: Made; live?: Live }) {
+  if (m.status === "running") {
     return (
       <div className="zc-meta">
         <span className="zc-live" aria-hidden />
-        {t.detail || (t.output === "image" ? "Drawing the image…" : "Writing the scene…")}
+        {live?.detail || m.detail || (m.output === "image" ? "Drawing the image…" : "Writing the scene…")}
       </div>
     );
   }
-  if (t.status === "failed") return <div className="zc-meta bad">{t.detail || "That one did not finish."}</div>;
-  if (t.status === "stopped") return <div className="zc-meta">Stopped</div>;
-  const bits =
-    t.output === "image"
-      ? ["1 image", t.frame].filter(Boolean)
-      : [
-          "Scene",
-          t.parts?.length ? `${t.parts.length} shot${t.parts.length === 1 ? "" : "s"}` : null,
-          t.seconds ? `${t.seconds}s` : null,
-          t.frame,
-        ].filter(Boolean);
-  return <div className="zc-meta">{bits.join(" · ")}</div>;
+  if (m.status === "failed") return <div className="zc-meta bad">{m.detail || "That one did not finish."}</div>;
+  if (m.status === "stopped") return <div className="zc-meta">Stopped</div>;
+  return <div className="zc-meta">{madeMeta(m)}</div>;
 }
 
-export function ComposerTurns({
+/* one plate with the percentage and the red bar, while a send runs */
+function RunningTile({ m, live }: { m: Made; live?: Live }) {
+  const pct = Math.round((live?.progress ?? 0) * 100);
+  return (
+    <div className={`zc-tiles${m.output === "image" ? " one" : ""}`}>
+      <div className="zc-tilewrap">
+        <div className="zc-tile running" style={{ aspectRatio: m.output === "image" ? cssAspect(m.frame) ?? "4 / 5" : undefined }}>
+          <span className="zc-pct">{pct}%</span>
+          <span className="zc-bar" style={{ width: `${Math.max(4, pct)}%` }} />
+        </div>
+        <span className="zc-label">{m.output === "image" ? "Image 01" : "Writing…"}</span>
+      </div>
+    </div>
+  );
+}
+
+function MadeView({ m, live, h, turn }: { m: Made; live?: Live; h: Handlers; turn: Turn }) {
+  const still = useReducedMotion();
+  const selected = m.shot ?? 1;
+  const tile = (i: number) => ({
+    initial: still ? false : { opacity: 0, y: 8 },
+    animate: { opacity: 1, y: 0 },
+    transition: { duration: 0.28, delay: Math.min(i, 6) * 0.05, ease: [0.22, 0.61, 0.36, 1] as const },
+  });
+
+  let body: React.ReactNode = null;
+  if (m.status === "running") body = <RunningTile m={m} live={live} />;
+  else if (m.status === "done" && m.output === "image") {
+    const ratio = cssAspect(m.frame) ?? "4 / 5";
+    body = (
+      <div className="zc-tiles one">
+        <motion.div className="zc-tilewrap" {...tile(0)} style={{ maxWidth: `calc(420px * (${ratio}))` }}>
+          <button type="button" className="zc-tile on" style={{ aspectRatio: ratio }} onClick={() => h.onSelect(m.id, 1)}>
+            {m.image ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={mediaSrc(m.image)} alt="" />
+            ) : (
+              <span className="zc-pct">Saved without an image · {m.detail}</span>
+            )}
+          </button>
+          <span className="zc-label on">Image 01 · selected</span>
+        </motion.div>
+      </div>
+    );
+  } else if (m.status === "done") {
+    const parts = m.parts ?? [];
+    body = parts.length ? (
+      <div className={`zc-tiles${parts.length >= 4 ? " four" : ""}`}>
+        {parts.map((p, i) => {
+          const on = p.n === selected;
+          return (
+            <motion.div key={p.n} className="zc-tilewrap" {...tile(i)}>
+              <button
+                type="button"
+                className={`zc-tile${on ? " on" : ""}`}
+                aria-pressed={on}
+                title={p.text || p.prompt || `Shot ${pad(p.n)}`}
+                onClick={() => h.onSelect(m.id, p.n)}
+              >
+                {p.reference_image ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={mediaSrc(p.reference_image)} alt="" />
+                ) : (
+                  <span className="zc-tile-n">{pad(p.n)}</span>
+                )}
+                {!p.reference_image && (p.text || p.prompt) ? (
+                  <span className="zc-tile-text">
+                    <span>{p.text || p.prompt}</span>
+                  </span>
+                ) : null}
+                {p.media_url ? (
+                  <span className="zc-play" aria-label="rendered">
+                    <Play strokeWidth={2} fill="currentColor" />
+                  </span>
+                ) : null}
+                <span className="zc-badge">{p.seconds}s</span>
+              </button>
+              <span className={`zc-label${on ? " on" : ""}`}>
+                Shot {pad(p.n)} · {p.start}–{p.end}s{on ? " · selected" : ""}
+              </span>
+            </motion.div>
+          );
+        })}
+      </div>
+    ) : (
+      <div className="zc-tiles one">
+        <motion.div className="zc-tilewrap" {...tile(0)}>
+          <div className="zc-tile on">
+            <span className="zc-tile-n">01</span>
+            {m.seconds ? <span className="zc-badge">{m.seconds}s</span> : null}
+          </div>
+          <span className="zc-label on">One continuous shot · {m.detail}</span>
+        </motion.div>
+      </div>
+    );
+  }
+
+  const director = m.conceptId ? `/studio/flows?concept=${m.conceptId}&shot=${m.output === "video" ? selected : 1}` : null;
+
+  return (
+    <>
+      <Meta m={m} live={live} />
+      {body}
+      {m.status === "done" ? (
+        <div className="zc-actions">
+          {m.output === "image" && m.image ? (
+            <>
+              <button type="button" className="zc-act" disabled={h.busy} onClick={() => h.onAnimate(m)}>
+                <Film strokeWidth={1.6} /> Animate into a shot
+              </button>
+              <button type="button" className="zc-act" disabled={h.busy} onClick={() => h.onUseAsRef(m)}>
+                <ImagePlus strokeWidth={1.6} /> Use as reference
+              </button>
+            </>
+          ) : null}
+          {m.output === "video" ? (
+            <Link href="/studio/pipeline" className="zc-act">
+              <Workflow strokeWidth={1.6} /> Pick on Pipeline
+            </Link>
+          ) : null}
+          {director ? (
+            <Link href={director} className="zc-act">
+              <Clapperboard strokeWidth={1.6} /> Open in Director
+            </Link>
+          ) : null}
+          <button type="button" className="zc-act" disabled={h.busy} onClick={() => h.onReuse(turn)}>
+            <RotateCcw strokeWidth={1.6} /> Reuse prompt
+          </button>
+        </div>
+      ) : m.status === "failed" || m.status === "stopped" ? (
+        <div className="zc-actions">
+          <button type="button" className="zc-act" disabled={h.busy} onClick={() => h.onReuse(turn)}>
+            <RotateCcw strokeWidth={1.6} /> Try again
+          </button>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+export function ComposerStream({
   turns,
-  busy,
-  onAnimate,
-  onUseAsRef,
-  onRetry,
+  live,
+  choices,
+  working,
+  handlers,
 }: {
   turns: Turn[];
-  busy: boolean;
-  onAnimate: (t: Turn) => void;
-  onUseAsRef: (t: Turn) => void;
-  onRetry: (t: Turn) => void;
+  /** progress per running send, by made id (page state) */
+  live: Record<string, Live>;
+  /** the Guide's offered replies after its newest answer */
+  choices: string[];
+  /** the Guide is answering: its detail line, drawn as a working row */
+  working: string | null;
+  handlers: Handlers;
 }) {
+  const still = useReducedMotion();
   if (!turns.length) return null;
+  const lastAnswer = turns.map((t) => t.role === "assistant" && !t.failed).lastIndexOf(true);
   return (
-    <div className="zc-turns" aria-live="polite">
-      {turns.map((t) => (
-        <article key={t.id} className="zc-turn">
-          <div className="zc-ask">
-            <div className="zc-bubble">
-              {t.refs.length ? (
-                <span className="zc-bubble-refs">
-                  {t.refs.slice(0, 4).map((u) => (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img key={u} src={mediaSrc(u)} alt="" />
-                  ))}
-                  {t.refs.length > 4 ? <b>+{t.refs.length - 4}</b> : null}
-                </span>
-              ) : null}
-              <p>{t.prompt}</p>
-            </div>
-          </div>
-
-          <Meta t={t} />
-
-          {t.output === "image" ? (
-            <div
-              className="zc-image"
-              data-state={t.status}
-              style={{ aspectRatio: ratioOf(t), maxWidth: `calc(560px * (${ratioOf(t)}))` }}
-            >
-              {t.status === "done" && t.image ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={mediaSrc(t.image)} alt={t.prompt} />
-              ) : t.status === "running" ? (
-                <span className="zc-pct">{Math.round(t.progress * 100)}%</span>
-              ) : t.status === "done" ? (
-                <span className="zc-pct">Saved without an image · {t.detail}</span>
-              ) : null}
-              {t.status === "running" ? (
-                <span className="zc-bar" style={{ width: `${Math.max(4, Math.round(t.progress * 100))}%` }} />
-              ) : null}
-            </div>
-          ) : t.status === "done" ? (
-            <div className="zc-scene">
-              {t.title ? <b className="zc-scene-title">{t.title}</b> : null}
-              {t.parts?.length ? (
-                <ol className="zc-shots">
-                  {t.parts.map((p) => (
-                    <li key={p.n} className="zc-shot">
-                      <span className="zc-shot-frame">
-                        {p.reference_image ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img src={mediaSrc(p.reference_image)} alt="" />
-                        ) : (
-                          <span>{pad(p.n)}</span>
-                        )}
-                      </span>
-                      <span className="zc-shot-time">
-                        {p.start}–{p.end}s
-                      </span>
-                      <span className="zc-shot-text">{p.text || p.prompt}</span>
-                    </li>
-                  ))}
-                </ol>
-              ) : (
-                <p className="zc-scene-one">One continuous shot · {t.detail}</p>
-              )}
-            </div>
-          ) : t.status === "running" ? (
-            <div className="zc-scene running">
-              <span className="zc-bar" style={{ width: `${Math.max(4, Math.round(t.progress * 100))}%` }} />
-            </div>
-          ) : null}
-
-          {t.status === "done" ? (
-            <div className="zc-actions">
-              {t.output === "image" && t.image ? (
-                <>
-                  <button type="button" className="zc-act" disabled={busy} onClick={() => onAnimate(t)}>
-                    <Film strokeWidth={1.6} /> Animate into a scene
-                  </button>
-                  <button type="button" className="zc-act" disabled={busy} onClick={() => onUseAsRef(t)}>
-                    <ImagePlus strokeWidth={1.6} /> Use as reference
-                  </button>
-                </>
-              ) : null}
-              {t.output === "video" ? (
-                <Link href="/studio/pipeline" className="zc-act">
-                  <Workflow strokeWidth={1.6} /> Pick on Pipeline
-                </Link>
-              ) : null}
-              {t.conceptId ? (
-                <Link href={`/studio/flows?concept=${t.conceptId}&shot=1`} className="zc-act">
-                  <Clapperboard strokeWidth={1.6} /> Open in Director
-                </Link>
-              ) : null}
-              <button type="button" className="zc-act" disabled={busy} onClick={() => onRetry(t)}>
-                <RotateCcw strokeWidth={1.6} /> Reuse prompt
-              </button>
-            </div>
-          ) : t.status === "failed" || t.status === "stopped" ? (
-            <div className="zc-actions">
-              <button type="button" className="zc-act" disabled={busy} onClick={() => onRetry(t)}>
-                <RotateCcw strokeWidth={1.6} /> Try again
-              </button>
-            </div>
-          ) : null}
-        </article>
-      ))}
+    <div className="zc-stream" aria-live="polite">
+      <AnimatePresence initial={false}>
+        {turns.map((t, i) => (
+          <motion.article
+            key={t.made?.id ?? `${i}:${t.role}`}
+            className="zc-turn"
+            initial={still ? false : { opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3, ease: [0.22, 0.61, 0.36, 1] }}
+          >
+            {t.role === "user" ? (
+              <div className="zc-ask">
+                <div className={`zc-bubble${t.failed ? " failed" : ""}`}>
+                  {t.made?.refs.length ? (
+                    <span className="zc-bubble-refs">
+                      {t.made.refs.slice(0, 4).map((u) => (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img key={u} src={mediaSrc(u)} alt="" />
+                      ))}
+                      {t.made.refs.length > 4 ? <b>+{t.made.refs.length - 4}</b> : null}
+                    </span>
+                  ) : null}
+                  <p>{t.content}</p>
+                  {t.failed ? <span className="zc-bubble-failed">Not sent — try again</span> : null}
+                </div>
+              </div>
+            ) : (
+              <div className="zc-reply">
+                {t.looked?.length ? <span className="zc-looked">looked at {t.looked.join(", ")}</span> : null}
+                <p>{t.content}</p>
+                {t.reply?.sheet ? (
+                  <ContactSheetView
+                    sheet={t.reply.sheet}
+                    chosen={t.chosen ?? {}}
+                    kept={!!t.kept}
+                    busy={handlers.busy}
+                    name="The Guide"
+                    onToggle={(id) => handlers.onToggleFrame(i, id)}
+                    onKeep={(sh) => handlers.onKeep(i, sh)}
+                  />
+                ) : null}
+                {t.reply?.proposal ? (
+                  <div className={`ccard${t.decided ? ` ${t.decided}` : ""}`}>
+                    <b>{t.reply.proposal.label}</b>
+                    <dl>
+                      {Object.entries(t.reply.proposal.args).map(([k, v]) => (
+                        <div key={k}>
+                          <dt>{k}</dt>
+                          <dd>{String(v)}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                    {t.decided ? (
+                      <span className="ccard-state">{t.decided === "done" ? "Done" : "Skipped"}</span>
+                    ) : (
+                      <div className="ccard-actions">
+                        <button type="button" className="yes" disabled={handlers.busy} onClick={() => handlers.onDecide(i, true)}>
+                          Confirm
+                        </button>
+                        <button type="button" disabled={handlers.busy} onClick={() => handlers.onDecide(i, false)}>
+                          Skip
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+                {i === lastAnswer && choices.length ? (
+                  <div className="zc-choices">
+                    {choices.map((c) => (
+                      <button type="button" key={c} onClick={() => handlers.onChip(c)}>
+                        {c}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            )}
+            {t.made ? <MadeView m={t.made} live={live[t.made.id]} h={handlers} turn={t} /> : null}
+          </motion.article>
+        ))}
+      </AnimatePresence>
+      {working !== null ? (
+        <div className="zc-working" role="status">
+          <span className="zc-live" aria-hidden /> {working || "Thinking…"}
+        </div>
+      ) : null}
     </div>
   );
 }

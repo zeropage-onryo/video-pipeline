@@ -1,12 +1,13 @@
 "use client";
 
-/* The `/` menu above the composer. Keyboard is owned by the textarea
-   (page.tsx: arrows move, Enter/Tab pick, Escape closes); this only
-   draws the list and takes clicks. */
+/* The `/` menu above the composer (the mock's "VIDEO PRESETS" list).
+   Keyboard is owned by the textarea (page.tsx: arrows move, Enter/Tab
+   pick, Escape closes); this only draws the list and takes clicks. */
+import { motion } from "motion/react";
 import type { SlashCommand } from "@/lib/composer";
 
 const GROUP_LABEL: Record<SlashCommand["group"], string> = {
-  make: "Make",
+  make: "Commands",
   camera: "Camera presets",
   use: "Use",
 };
@@ -22,15 +23,17 @@ export function SlashMenu({
   onPick: (c: SlashCommand) => void;
   onHover: (i: number) => void;
 }) {
-  if (!items.length) {
-    return (
-      <div className="zc-slash" role="listbox" aria-label="Commands">
-        <div className="zc-slash-empty">No command matches</div>
-      </div>
-    );
-  }
   return (
-    <div className="zc-slash" role="listbox" aria-label="Commands">
+    <motion.div
+      className="zc-slash"
+      role="listbox"
+      aria-label="Commands"
+      initial={{ opacity: 0, y: 6, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: 6, scale: 0.98 }}
+      transition={{ duration: 0.16, ease: [0.22, 0.61, 0.36, 1] }}
+    >
+      {!items.length ? <div className="zc-slash-empty">No command matches</div> : null}
       {items.map((c, i) => {
         const head = i === 0 || items[i - 1].group !== c.group ? GROUP_LABEL[c.group] : null;
         return (
@@ -55,6 +58,6 @@ export function SlashMenu({
           </div>
         );
       })}
-    </div>
+    </motion.div>
   );
 }

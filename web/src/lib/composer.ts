@@ -1,4 +1,5 @@
-/* The studio composer's model (2026-10-02, the "Direction A" redesign).
+/* The studio composer's model (2026-10-02, the "Direction A" redesign,
+   drawn to the "ZPF Composer Directions" mock the same day).
 
    The box makes two kinds of thing, and they go through two routes that
    already existed before the redesign:
@@ -6,13 +7,21 @@
    - VIDEO  -> POST /api/scenes/run  (Create): writes ONE scene, timed
      shots and all, and stops on the board. No clip is rendered here --
      the Queue is where money is spent, so the result is a written scene
-     with links to Pipeline and Director, never a fake take grid.
+     drawn as its shots, with links to Pipeline and Director, never a
+     fake take grid.
    - IMAGE  -> POST /api/generate/run with output=image: one Nano Banana
      still, saved as a one-shot concept whose shot carries the image as
      its reference_image (so it opens in Director like anything else).
 
    ONE output per send. There is no take/count control on purpose
-   (2026-09-10, server-enforced as SCENE_COUNT_MAX = 1). */
+   (2026-09-10, server-enforced as SCENE_COUNT_MAX = 1).
+
+   WHAT A SEND MADE IS PART OF THE CONVERSATION (2026-10-02). A send is a
+   user turn in the studio's one thread (lib/assistant.ts `Turn`) carrying
+   `made` -- this file's `Made` -- so the still a person drew is there
+   when they come back from Pipeline, the same way the Guide's talk is.
+   Progress ticks stay in page state (a save per tick would be a PUT a
+   second); only the result and the status changes are saved. */
 import { API_URL } from "@/lib/api";
 import { getJob, type Job, type TimelinePart } from "@/lib/studio-api";
 
@@ -28,18 +37,18 @@ export const IMAGE_ASPECTS: { id: string; label: string }[] = [
   { id: "9:16", label: "9:16" },
 ];
 
-export type TurnStatus = "running" | "done" | "failed" | "stopped";
+export type MadeStatus = "running" | "done" | "failed" | "stopped";
 
-/** One send and what came back, drawn above the box. */
-export type Turn = {
+/** What one send made -- saved on its user turn (`Turn.made`). */
+export type Made = {
   id: string;
   output: Output;
-  prompt: string;
   /** drawable thumbnails of the references that rode along */
   refs: string[];
-  status: TurnStatus;
-  progress: number;
+  status: MadeStatus;
+  /** the last detail line the job gave; the live one is page state */
   detail: string;
+  /** the server job, so a run left mid-way is picked up on return */
   jobId?: number;
   conceptId?: number | null;
   /** IMAGE: the rendered still (absolute or /refs path) */
@@ -50,12 +59,14 @@ export type Turn = {
   seconds?: number | null;
   /** the aspect / frame label the send was made at, for the meta line */
   frame?: string;
+  /** the shot (or image) the person selected; Director opens on it */
+  shot?: number;
 };
 
-export const newTurnId = () =>
+export const newMadeId = () =>
   typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
-    : `t${Date.now()}${Math.random().toString(36).slice(2, 7)}`;
+    : `m${Date.now()}${Math.random().toString(36).slice(2, 7)}`;
 
 /** a stored media path made drawable from this origin */
 export const mediaSrc = (u: string | null | undefined) =>
@@ -82,7 +93,7 @@ export const BASE_COMMANDS: SlashCommand[] = [
   { id: "image", cmd: "image", desc: "Make a still", group: "make" },
   { id: "video", cmd: "video", desc: "Write a video scene", group: "make" },
   { id: "guide", cmd: "guide", desc: "Talk the idea through first", group: "make" },
-  { id: "animate", cmd: "animate", desc: "Turn the last image into a scene", group: "use", needsImage: true },
+  { id: "animate", cmd: "animate", desc: "Turn the last image into a shot", group: "use", needsImage: true },
   { id: "ref", cmd: "ref", desc: "Attach a reference image", group: "use" },
   { id: "element", cmd: "element", desc: "Reference a saved element (@)", group: "use" },
 ];
@@ -147,3 +158,17 @@ export const cssAspect = (label?: string) => {
   const m = /^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/.exec(label ?? "");
   return m ? `${m[1]} / ${m[2]}` : undefined;
 };
+
+/** the one-line summary under a finished result: "3 shots · 16:9 · 10s" */
+export function madeMeta(m: Made): string {
+  if (m.output === "image") return ["1 image", m.frame].filter(Boolean).join(" · ");
+  const n = m.parts?.length ?? 0;
+  return [
+    m.title,
+    n ? `${n} shot${n === 1 ? "" : "s"}` : "one continuous shot",
+    m.frame,
+    m.seconds ? `${m.seconds}s` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
