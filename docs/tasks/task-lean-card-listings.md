@@ -27,6 +27,10 @@ fell from 382,296 to 44,873 bytes.
 | 25 Sep | 74.97 MB | 74.958 MB | 9.1 KB | after #48 |
 | 26 Sep | 44.92 MB | 44.902 MB | 19.8 KB | mixed: #59–#62 deployed ~04:16 UTC |
 | 27 Sep | **11.12 MB** | 11.116 MB (100%) | — | first full day after #59–#62 |
+| 28 Sep | 95.76 MB | 95.756 MB | 4.0 KB | Mon; 18 merges to main (each a Fly deploy), incl. backfills #76/#79 and the cut index #86 |
+| 29 Sep | 7.23 MB | 7.212 MB | 29.6 KB | Tue |
+| 30 Sep | 6.28 MB | 6.271 MB | 8.0 KB | Wed |
+| 1 Oct | 19.27 MB | 19.262 MB | 8.4 KB | Thu; 14 merges to main |
 
 27 Sep is the lowest day on the chart since 22 Sep: 11.1 MB against a
 23–25 Sep mean of ~40.8 MB (−73%), and ~7% of the free plan's ~165 MB/day.
@@ -36,9 +40,22 @@ shows how much usage alone moves the number), so read a few more weekdays before
 calling it settled. Nearly all egress is the Shared Pooler, i.e. database
 traffic; storage, realtime and cached egress are zero or absent.
 
+Weekday follow-up (read 2026-10-02): the weekdays confirm the drop. 29 Sep,
+30 Sep and 1 Oct read 7.2 / 6.3 / 19.3 MB (mean ~10.9 MB), level with the
+27 Sep Sunday and ~73% under the 23–25 Sep mean of ~40.8 MB. That is about 7%
+of the ~165 MB/day budget. 28 Sep is the exception at 95.8 MB (~58% of the
+daily budget). It was the heaviest deploy day in the window: 18 PRs merged to
+main, each a Fly deploy, including two render-asset backfills (#76, #79) and
+the cut index (#86). That points to deploys and one-off backfills, not page
+traffic, but the chart cannot say which. Even with 28 Sep included, the four
+days average ~32 MB, under the pre-fix mean. Pooler is still ~100% of every day.
+
 Source: Supabase dashboard, Organization → Usage → "Egress per day", project
 `zeropage-studio`, read 2026-09-28 by hovering each bar (tooltip values, not
-estimated off the axis). The chart does not label its time zone; the page's
+estimated off the axis). The 28 Sep–1 Oct rows were read 2026-10-02 from the
+JSON the same page loads (`/platform/organizations/<org>/usage/daily`, metric
+`EGRESS`, `egress_supavisor` / `egress_auth`), converted at 1 MB = 2^20 bytes;
+that reproduces the earlier rows exactly. The chart does not label its time zone; the page's
 request asks for the cycle starting `2026-09-03T00:00:00Z`, so the buckets are
 most likely UTC days.
 
