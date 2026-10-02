@@ -53,16 +53,20 @@ export async function apiFetch<T>(
 // `mode: "signup"` only changes the door's heading ("Create your account");
 // logging in and signing up are the same form since 2026-09-24 -- the
 // first pass through it makes the person's workspace (InVideo's shape).
-export function goToSignIn(mode?: "signup") {
+// `path` is where on THIS origin the person lands after sign-in -- the
+// studio by default; a landing page passes `/studio?spark=...` so the
+// starting point it offered survives the round trip (the API keeps the
+// query through auth.handoff_redirect, 2026-10-01).
+export function goToSignIn(mode?: "signup", path: string = "/studio") {
   if (typeof window !== "undefined") {
     // Full navigation on purpose -- this leaves the Next.js app entirely
     // for the API's own origin (a different domain in production), not
     // an internal route, so next/navigation's router isn't the tool here.
     // `next` asks the API to send the browser back here after sign-in;
     // the API honours it only for an origin in its FRONTEND_ORIGINS.
-    const next = encodeURIComponent(`${window.location.origin}/studio`);
-    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+    const next = encodeURIComponent(`${window.location.origin}${path}`);
     const which = mode === "signup" ? "&mode=signup" : "";
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
     window.location.href = `${AUTH_ORIGIN}/signin?next=${next}${which}`;
   }
 }

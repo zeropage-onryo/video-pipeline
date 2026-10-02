@@ -45,15 +45,14 @@ REAL_SERPER = imagesearch.serper_images
 @pytest.fixture(autouse=True)
 def no_web(monkeypatch):
     """The web lanes (2026-09-05) are real HTTP; tests never make them.
-    Each test that wants a lane patches it back in."""
+    Each test that wants a lane patches it back in. Every lane's KEY is
+    already unset by conftest (imagesearch.LANE_ENV); Openverse needs
+    none and is on unless told otherwise, so it is switched off here."""
     for lane in ("openverse", "google_images", "serper_images", "unsplash", "pexels"):
         monkeypatch.setattr(imagesearch, lane, lambda q, limit=6: [])
     for lane in ("reddit", "pinterest"):
         monkeypatch.setattr(imagesearch, lane, lambda q, brand=None, limit=6: [])
-    monkeypatch.delenv("PINTEREST_ACCESS_TOKEN", raising=False)
     monkeypatch.setenv("OPENVERSE_LANE", "0")
-    for k in ("GOOGLE_CSE_ID", "REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET"):
-        monkeypatch.delenv(k, raising=False)
 
 
 @pytest.fixture
@@ -194,11 +193,9 @@ def test_neither_a_candidate_nor_a_url_is_a_caller_error(tmp_db, a_spark):
 
 # ---------- "nothing configured" is not "nothing matched" ----------
 
-def test_an_unconfigured_lane_says_so(tmp_db, monkeypatch):
-    """The distinction the empty scout bin hid for two days."""
-    monkeypatch.delenv("UNSPLASH_ACCESS_KEY", raising=False)
-    monkeypatch.delenv("PEXELS_API_KEY", raising=False)
-
+def test_an_unconfigured_lane_says_so(tmp_db):
+    """The distinction the empty scout bin hid for two days. No key is
+    set: conftest unsets every lane's, whatever this machine's .env says."""
     out = mcp_server.find_images("anything", brand="zeropage", dsn=tmp_db)
 
     assert out["count"] == 0
@@ -207,6 +204,23 @@ def test_an_unconfigured_lane_says_so(tmp_db, monkeypatch):
                               "reddit": False, "pinterest": False,
                               "unsplash": False, "pexels": False,
                               "serper": False}
+
+
+def test_the_lane_keys_the_suite_unsets_are_all_of_them(monkeypatch):
+    """conftest unsets imagesearch.LANE_ENV for every test; this checks the
+    list is whole. Every OTHER variable reads as set, the way a full .env
+    does, so a lane keyed on anything missing from the list lights up here
+    -- the SERPER_API_KEY leak of 2026-10-02, caught in CI instead of on
+    one Mac."""
+    import types
+
+    class FullEnv(dict):
+        def get(self, key, default=None):
+            return default if key in imagesearch.LANE_ENV else "set"
+
+    monkeypatch.setattr(imagesearch, "os", types.SimpleNamespace(environ=FullEnv()))
+    live = imagesearch.sources()
+    assert [lane for lane, on in live.items() if on] == ["openverse"]
 
 
 def test_openverse_is_the_keyless_floor(tmp_db, monkeypatch):

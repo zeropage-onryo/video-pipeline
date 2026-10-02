@@ -66,11 +66,16 @@ DEFAULT_SCENE_SECONDS = 10
 # padding windows to fill the clock.
 MIN_SCENE_SECONDS = 4
 MAX_SCENE_SECONDS = 30
+# The legacy /ui select's menu. The React composer's duration is a SLIDER
+# over MIN..MAX (2026-10-02, Mike: "toggle it like a slider and choose any
+# amount of time"), and scene_seconds takes any whole second in between.
 SCENE_SECONDS_CHOICES = (5, 10, 15, 20, 30)
-# The most parts one scene is split into. A 30s scene in 2s windows is 15
-# clips, 15 stills and 15 renders; nobody asked for that, and the writer is
-# told windows of 2-10s, so this only ever trims a runaway answer.
-MAX_PARTS = 8
+# There is NO cap on how many shots a scene is split into (2026-10-02,
+# Mike's call: "as many shots as are needed by the prompt"). There used to
+# be -- MAX_PARTS = 8, which dropped every window past the 8th without a
+# word, off the card, the price and the render. Every part is its own still
+# and its own clip, but every one of those is priced and sits behind a
+# person's approve; the approve is the limit, not a constant here.
 
 # --- WHAT A VIDEO MODEL IS ACTUALLY FOR (2026-09-12) ----------------------
 # Every renderer this repo drives is image-to-video: it is handed a frame and
@@ -161,7 +166,14 @@ def parse_windows(prompt: str) -> list[dict]:
     shot, which is what the scene already is, and splitting it would buy a
     planning call and nothing else. Windows that run backwards or have no
     length are dropped rather than repaired: they are model output, and
-    guessing what it meant is how a 3s shot becomes a 30s render."""
+    guessing what it meant is how a 3s shot becomes a 30s render. Every
+    other window is kept, however many there are: no cap."""
+    windows = _windows(prompt)
+    return windows if len(windows) >= 2 else []
+
+
+def _windows(prompt: str) -> list[dict]:
+    """Every well-formed window, including a lone one."""
     prompt = prompt or ""
     marks = [m for m in _WINDOW.finditer(prompt) if m.group(2) or m.group(4)]
     windows = []
@@ -178,11 +190,99 @@ def parse_windows(prompt: str) -> list[dict]:
                         "seconds": _num(end - start),
                         "text": " ".join(text.split()).strip(" .;,-") })
     windows.sort(key=lambda w: w["start"])
-    return windows[:MAX_PARTS] if len(windows) >= 2 else []
+    return windows
 
 
 def _num(x: float):
     return int(x) if float(x).is_integer() else round(float(x), 2)
+
+
+# --- how many shots, and who decided --------------------------------------
+# The count is the IDEA's (2026-10-02, Mike: "as many shots as are needed
+# by the prompt"), cut into two or more by default, and a single continuous
+# take only when the person asked for one ("I don't want just one
+# continuous shot unless asked for in the prompt or chatting with the
+# agent"). The writers are TOLD that (prompts/scenes_prompt.txt,
+# scene_brief_prompt.txt); this is the code that checks the answer, and it
+# only ever ADVISES -- a warning on the saved concept, never a rejected
+# scene (prompts request, code advises).
+#
+# What reads as asking for one take. Generous on purpose: a phrase wrongly
+# read as a one-take request only SKIPS a warning, so a miss here costs
+# nothing a person can see.
+_ONE_TAKE = re.compile(
+    r"\b(?:one|single|1)[\s-]+(?:continuous[\s-]+|unbroken[\s-]+|uncut[\s-]+)?(?:take|shot)\b"
+    r"|\b(?:continuous|unbroken|uncut)[\s-]+(?:take|shot)\b|\blong[\s-]+take\b"
+    r"|\boner\b|\bno[\s-]+cuts?\b|\bwithout[\s-]+(?:a[\s-]+|any[\s-]+)?cuts?\b",
+    re.IGNORECASE)
+_NUMBER_WORDS = {w: i for i, w in enumerate(
+    "zero one two three four five six seven eight nine ten eleven twelve "
+    "thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty".split())}
+_COUNT = r"(\d{1,2}|" + "|".join(_NUMBER_WORDS) + r")"
+# A count of SHOTS, asked for in so many words. Strict on purpose, the
+# other way round: "he fires two shots", "two shots of espresso" are not a
+# request about the edit, and a phrase wrongly read as one puts a false
+# warning on the card. So the number needs a word around it that makes it
+# about structure ("in 2 shots", "make it two shots", "a 3-shot scene",
+# "4 shots total") -- a request phrased any other way is still honoured by
+# the writer, which reads the whole idea; it just isn't checked here.
+_ASKED_COUNT = re.compile(
+    r"\b(?:in|into|across|over|as|use|using|make\s+it|cut\s+(?:it\s+)?(?:in)?to|"
+    r"just|only|exactly|down\s+to|up\s+to)\s+" + _COUNT + r"[\s-]+shots?\b(?!\s+of\b)"
+    r"|\b" + _COUNT + r"[\s-]+shots?\s+(?:total|only|max(?:imum)?|in\s+all)\b"
+    r"|\b" + _COUNT + r"-shot\s+(?:scene|sequence|version|cut|edit)\b",
+    re.IGNORECASE)
+
+
+def _count(word: str) -> Optional[int]:
+    word = (word or "").lower()
+    if word.isdigit():
+        return int(word)
+    return _NUMBER_WORDS.get(word)
+
+
+def requested_shots(asked: str) -> Optional[int]:
+    """How many shots the person asked for, or None when they did not say.
+
+    Two ways of saying it. The reliable one: what they asked for already
+    CARRIES its own timed windows -- the Guide writes its brief that way,
+    and a count agreed there ("bring it down to 2 shots") arrives as that
+    many windows, scene by scene. Otherwise a count asked for in so many
+    words (_ASKED_COUNT), the last one said winning, since a later
+    sentence in a conversation is the change of mind."""
+    marked = _windows(asked)
+    if marked:
+        return len(marked)
+    found = [_count(next(g for g in m.groups() if g))
+             for m in _ASKED_COUNT.finditer(asked or "")]
+    found = [n for n in found if n]
+    return found[-1] if found else None
+
+
+def one_take_requested(asked: str) -> bool:
+    """Did the person ask for a single continuous take?"""
+    return requested_shots(asked) == 1 or bool(_ONE_TAKE.search(asked or ""))
+
+
+def shot_count_warnings(prompt: str, asked: str = "") -> list[str]:
+    """Advice for a written scene whose shot count is not what was asked.
+
+    `prompt` is the scene as written, `asked` what the person typed (the
+    idea, or the Guide's brief that went in as the idea). A scene with no
+    timed windows, or one window, renders as ONE clip, so both count as
+    one shot. Never raises; [] when the count is fine."""
+    try:
+        written = max(1, len(_windows(prompt)))
+        want = requested_shots(asked)
+        if want is not None and written != want:
+            return [f"shot 1: asked for {want} shot{'s' if want != 1 else ''}, "
+                    f"the scene was written as {written}"]
+        if want is None and written == 1 and not one_take_requested(asked):
+            return ["shot 1: written as one continuous take, and nobody asked for "
+                    "one -- it renders as a single clip"]
+    except Exception as e:      # advice is never worth a failed write
+        print(f"note: shot count not checked: {e}", file=sys.stderr)
+    return []
 
 
 def source_hash(prompt: str, refs) -> str:

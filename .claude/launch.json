@@ -3,9 +3,22 @@
   "configurations": [
     {
       "name": "studio",
-      "runtimeExecutable": "venv/bin/uvicorn",
-      "runtimeArgs": ["app.main:app", "--reload", "--timeout-graceful-shutdown", "3"],
-      "port": 8000
+      "port": 8000,
+      "url": "http://localhost:8000"
+    },
+    {
+      "name": "web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "web",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "3000"
+      ],
+      "port": 3000
     }
   ]
 }

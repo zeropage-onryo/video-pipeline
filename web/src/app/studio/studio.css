@@ -78,8 +78,13 @@
   opacity: 0.3;
   transition: opacity 0.5s;
 }
+/* the Studio page is flat near-black (2026-10-02, the composer mock): no
+   red field behind the box, and the shell's void lifted a shade */
 .zps[data-view="studio"] .zps-field {
-  opacity: 1;
+  display: none;
+}
+.zps[data-view="studio"] {
+  background: #0b0b0b;
 }
 .zps[data-stage="1"] .zps-field {
   display: none;
@@ -404,20 +409,131 @@
   flex-direction: column;
   min-height: 0;
 }
+/* the header (2026-10-02, the composer mock): one 64px row with a hairline
+   under it, on every page -- the rail is the full navigation, this is the
+   brand, the three tabs the mock names, the balance, New session and you */
 .bar {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 18px 42px;
+  height: 64px;
+  padding: 0 28px;
   flex: none;
-}
-.zps[data-stage="1"] .bar {
-  padding: 14px 24px;
-  border-bottom: 1px solid var(--line);
-  background: rgb(4 4 5 / 0.72);
-  backdrop-filter: blur(16px);
   position: relative;
   z-index: 30;
+  border-bottom: 1px solid rgb(255 255 255 / 0.07);
+  background: rgb(11 11 11 / 0.82);
+  backdrop-filter: blur(16px);
+}
+.hbrand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--body);
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  white-space: nowrap;
+}
+.hbrand b {
+  font-weight: inherit;
+}
+.hdot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--signal);
+  box-shadow: 0 0 10px rgb(228 0 43 / 0.55);
+}
+.htabs {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 26px;
+}
+.htabs a {
+  font-size: 14px;
+  color: var(--dim);
+  transition: color var(--t);
+}
+.htabs a:hover {
+  color: var(--text);
+}
+.htabs a[aria-current] {
+  color: var(--text);
+}
+.hnew {
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 9px;
+  border: 1px solid rgb(255 255 255 / 0.14);
+  background: rgb(255 255 255 / 0.02);
+  color: var(--text);
+  font-size: 13.5px;
+  white-space: nowrap;
+  transition:
+    border-color var(--t),
+    background var(--t);
+}
+.hnew:hover {
+  border-color: rgb(255 255 255 / 0.3);
+  background: rgb(255 255 255 / 0.05);
+}
+.havatar-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.havatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid rgb(255 255 255 / 0.14);
+  background: #1b1b1b;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  padding: 0;
+  transition: border-color var(--t);
+}
+.havatar:hover,
+.havatar[aria-expanded="true"] {
+  border-color: rgb(255 255 255 / 0.35);
+}
+.havatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.rmenu.hmenu {
+  left: auto;
+  right: 0;
+  bottom: auto;
+  top: calc(100% + 8px);
+  min-width: 220px;
+}
+@media (max-width: 900px) {
+  .htabs {
+    position: static;
+    transform: none;
+    gap: 18px;
+  }
+}
+@media (max-width: 640px) {
+  .hbrand b {
+    display: none;
+  }
+  .hnew {
+    display: none;
+  }
 }
 .brand {
   font-family: var(--display);
@@ -837,6 +953,72 @@ button.tag:hover {
 .pillmenu button[aria-current] {
   background: rgb(255 255 255 / 0.06);
   color: var(--text);
+}
+/* the scene length's slider (components/studio/duration-pill.tsx) */
+.durationmenu {
+  min-width: 280px;
+  padding: 8px 8px 10px;
+}
+.durationrow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px 2px;
+}
+.durationrow input[type="range"] {
+  flex: 1;
+  height: 4px;
+  appearance: none;
+  border-radius: var(--rp);
+  background: linear-gradient(
+    to right,
+    var(--signal) 0 var(--filled, 0%),
+    rgb(255 255 255 / 0.12) var(--filled, 0%) 100%
+  );
+  cursor: pointer;
+}
+.durationrow input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--void);
+  background: var(--text);
+  box-shadow: 0 0 0 1px var(--line-hi);
+}
+.durationrow input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--void);
+  background: var(--text);
+}
+.durationrow input[type="range"]:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 4px;
+}
+.durationrow output {
+  min-width: 34px;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text);
+  text-align: right;
+}
+.durationends {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 56px 0 10px;
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--dimmer);
+}
+/* a phone: the popover hangs off the pill's right edge, so it must be
+   narrow enough not to run off the left of the screen */
+@media (max-width: 520px) {
+  .durationmenu {
+    min-width: 0;
+    width: 232px;
+  }
 }
 .mentiondrop {
   position: absolute;
@@ -2749,7 +2931,7 @@ select.zin {
     padding-bottom: 80px;
   }
   .bar {
-    padding: 14px 18px;
+    padding: 0 16px;
   }
   .view {
     padding-bottom: 60px;

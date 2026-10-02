@@ -204,7 +204,7 @@ def test_a_draft_is_bounded_and_defaulted(store):
     assistant_store.save_project([], "", draft=draft, account_id=1, dsn=store)
     got = assistant_store.open_project(account_id=1, dsn=store)["draft"]
     assert len(got["idea"]) == assistant_store.MAX_DRAFT_TEXT
-    assert got["mode"] == "guide" and len(got["picked"]) == assistant_store.MAX_DRAFT_REFS
+    assert got["mode"] == "create" and len(got["picked"]) == assistant_store.MAX_DRAFT_REFS
     assert got["written"] == {"conceptId": None, "detail": "d"} and got["brief"] == ""
 
 

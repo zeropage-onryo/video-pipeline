@@ -2,8 +2,8 @@ You write {count} SEPARATE, paste-ready SCENE PROMPTS for an AI video model that
 generates a whole scene from a single description (Veo / Kling / Seedance / LTX /
 OpenArt Director). Return ONLY JSON, no markdown fences, no preamble.
 
-Each one is a STANDALONE scene that may contain one or multiple shots, cuts and
-locations, and is {seconds} seconds long. These separate prompts are
+Each one is a STANDALONE scene, {seconds} seconds long, cut into as many shots,
+cuts and locations as its idea needs (see BEATS). These separate prompts are
 alternative takes, NOT parts of one longer video: the filmmaker will pick the
 ones worth rendering and discard the rest, so make each one a different swing
 at the idea rather than
@@ -40,10 +40,13 @@ CHANNEL DIRECTION (rough context, not strict generation rules):
 {brand}
 
 GOLD-STANDARD EXAMPLE — match the SHAPE and craft of this prompt (its hook,
-grounded style block, timed beats, diegetic-sound block, and hard avoid-list --
-that shape is the proven part), NEVER its subject, specific content or look.
-Imitate the STRUCTURE; do not reuse the staircase, the cake or the dog, and take
-the look from THE LOOK below, never from this example:
+grounded style block, sequential beats, diegetic-sound block, and hard
+avoid-list -- that shape is the proven part),
+NEVER its subject, specific content or look. Imitate the STRUCTURE; do not
+reuse the staircase, the cake or the dog; take the look from THE LOOK below,
+never from this example -- and not its single continuous take either: that
+was ITS idea, and how many shots a scene has comes from its own idea (see
+BEATS):
 {example}
 
 Write each "prompt" as a single cohesive directive with these five parts, in order:
@@ -58,15 +61,23 @@ Write each "prompt" as a single cohesive directive with these five parts, in ord
 
    THE LOOK:
 {look}
-3. BEATS: the scene as timed shots, each opening with its window, e.g.
-   (0-3s), (3-7s), (7-10s) for a 10-second scene. Start at 0s; windows are
-   contiguous, never overlap, and end at exactly {seconds}s. EACH WINDOW IS
-   RENDERED AS ITS OWN SEPARATE CLIP, one after another, by a model that sees
-   only that window -- so every window is ONE shot: one camera setup, one
-   clear action that fits its length, 2-10 seconds long. Cuts and location
+3. BEATS: the scene as timed shots. HOW MANY SHOTS is decided by this
+   scene's idea, never by habit or by the example: use exactly as many as the
+   story needs to land -- a held reaction might want only a couple, a chase or
+   a montage many short ones. Each take decides its own count.
+   - Cut every scene into TWO OR MORE windows. Write ONE window covering the
+     whole scene only when the idea explicitly asks for a single take ("one
+     continuous shot", "single take", "oner", "no cuts").
+   - When the idea already sets the shots -- it carries its own timed windows,
+     or says how many shots it wants ("in 2 shots") -- keep exactly that many,
+     in that order, retimed to fill {seconds}s. The filmmaker chose that count.
+   Each window opens with its time marker, written like (4-7s). Start at 0s;
+   windows are contiguous, never overlap, and end at exactly {seconds}s. EACH
+   WINDOW IS RENDERED AS ITS OWN SEPARATE CLIP, one after another, by a model
+   that sees only that window -- so every window is ONE shot: one camera setup,
+   one clear action that fits its length, 2-10 seconds long. Cuts and location
    changes happen BETWEEN windows, never inside one; say them ("hard cut to",
-   "reverse on"). One window for the whole scene is right when the idea is one
-   continuous moment. Open on an uncomfortable or arresting image (the frame-1
+   "reverse on"). Open on an uncomfortable or arresting image (the frame-1
    hook), turn/reveal, and END ABRUPTLY. Reactions are serious and physically
    believable, never cartoon.
 4. SOUND: begin "No background music." then the diegetic sound only — exactly

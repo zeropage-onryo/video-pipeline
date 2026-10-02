@@ -337,10 +337,22 @@ the keyframe and the clip when it opens in Director.
 **A scene is written as TIMED SHOTS and rendered ONE SHOT AT A TIME (2026-09-10, Mike's
 call).** The one-continuous-action rule is gone: a scene prompt's BEATS are now timed
 windows — `(0-3s)` one shot, `(3-7s)` a different one, cuts and location changes between
-them — filling a total length (`timeline.scene_seconds`: the composer's `cseconds` select via
+them — filling a total length (`timeline.scene_seconds`: the composer's length slider via
 `GET /api/scene-lengths`, else `ZEROPAGE_SCENE_SECONDS`, else 10; clamped 4–30, never
 refused). Both writer templates get `{seconds}`, and tell the writer each window is rendered
 as its own clip, so each window must be ONE shot (one camera setup, one clear action, 2–10s).
+**How MANY shots is the idea's (2026-10-02, Mike's calls):** "as many shots as are needed by
+the prompt", never a habitual three — the writers no longer carry a three-window example.
+Two or more windows by default; ONE only when the person asked for a single take ("I don't
+want just one continuous shot unless asked for in the prompt or chatting with the agent");
+a count the idea already sets — its own timed windows, which is how the Guide's brief arrives
+after "bring it down to 2 shots", or "in 2 shots" in so many words — is kept, scene by scene.
+Code advises: `timeline.shot_count_warnings` adds a concept warning when the count is not what
+was asked (`requested_shots` / `one_take_requested` read the idea), checked against the
+DIRECTION, never the steer. **No cap**: `MAX_PARTS = 8` silently dropped every window past the
+8th off the card, the price and the render; it is gone, and the priced approve is the limit.
+The React composer's length is a **slider** (`components/studio/duration-pill.tsx`), any whole
+second between the route's `min` and `max`; `SCENE_SECONDS_CHOICES` is only the legacy select.
 **`src/timeline.py` is the step between the scene and the renderer.** It runs on the SAME
 brain that wrote the scene (the composer's Reasoning tier, or `ZEROPAGE_BRAIN` at night) and
 turns the windows into `shot["timeline"]` = `{seconds, planner, source, brain, continuity,
@@ -1725,6 +1737,38 @@ is yours, in Resolve, by hand.
   `wip/main-checkout-2026-09-28` as Mike's to decide: `load_brand` forcing every run to
   zeropage, `CAST_BRANDS` gaining zeropage (lifts the faceless rule), and the rewritten
   brand/look/scene prompts.
+- **THE COMPOSER IS DRAWN TO THE "ZPF COMPOSER DIRECTIONS" MOCK (2026-10-02, Mike:
+  "create a similar look to the images shown in our mock design" -- the first port,
+  Direction A, had not translated).** `web/src/app/studio/page.tsx` +
+  `components/studio/composer/` (`composer.css`, `turns.tsx`, `slash-menu.tsx`) +
+  `lib/composer.ts`. The page is flat #0b0b0b with the red field off, one centred box
+  under "What are we making?" (Inter, not Oswald), an Image | Video segment, Guide as
+  a toggle beside it, the settings as one line (frame · length · model ⌄), a round red
+  send that dims when there is nothing to send, four starters, a mono keyboard hint
+  pinned to the bottom; `/` opens commands (Direction A's: image / video / guide /
+  animate / ref / element + the camera presets off `/api/presets`), a drop covers the
+  box, Enter sends, a running send shows Stop. A send becomes a bubble on the right
+  with its result as tiles underneath -- a VIDEO send's written scene as its timed
+  shots (its still when one was drawn, else the number, a seconds badge, red border
+  on the selected one, which is the shot Director opens on), an IMAGE send's one still
+  at its aspect -- then Pick on Pipeline / Open in Director / Reuse prompt; the Guide's
+  answer sits on the left in the same stream with its chips, sheet and confirm card.
+  Motion (`motion/react`) draws the entrances, the slash menu and the send button.
+  **What a send made is SAVED on its turn** (`Turn.made`, `lib/composer.ts Made`): the
+  thread is the one `assistant-thread.tsx` keeps, so a still drawn here survives a trip
+  to Pipeline, and a send left running is picked up again on return by its job id
+  (page state holds only the progress ticks -- a save per tick would be a PUT a
+  second). The pill leaves `made` turns out of its card and of the conversation it
+  sends, and stays off `/studio` itself (the Guide is in the box there, on this same
+  thread). **The header is the mock's, on every studio page** (`shell.tsx`): the red
+  dot + Zero Page Studio, Create / Library / Timeline in the middle (the box, the
+  Assets wall, the editor -- the rail still carries every page), the balance, **New
+  session** (`lib/assistant.ts requestNewSession`, a window event the thread provider
+  takes, since the shell sits above it: the open conversation is archived -- kept,
+  never deleted -- and the box cleared) and the avatar, which opens the account menu.
+  `EMPTY_DRAFT.mode` is `create` now. Verified in the Browser pane against a stubbed
+  API (real routes, real rows, every model call replaced): send, slash, drop, Guide,
+  reload, resume, Stop, New session, 390px.
 - **ONE conversation, and it is saved (2026-10-02, Mike: "when I click out of the
   studio page the entire conversation, images that were generated goes away").** The
   Studio composer's Guide thread was React state in `web/src/app/studio/page.tsx`, so

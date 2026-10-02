@@ -178,10 +178,60 @@
   --ring: #e4002b;
   --signal: #e4002b;
   --radius: 0.5rem;
+  /* The greys the sections read, as tokens (2026-10-01) so a tone can
+     re-declare them: body copy, captions, nav links, a card's hover line,
+     the scrolled nav's glass, the hero grid's hairlines. */
+  --ink-2: #afafaf;
+  --ink-3: #82807d;
+  --nav-fg: #c6c4c0;
+  --line-hover: #343331;
+  /* a card's outline (features, model and how-to cards); the hairline by
+     default, its own colour on the light tone */
+  --card-line: var(--border);
+  --glass: rgba(16, 16, 16, 0.72);
+  --grid-line: rgba(255, 255, 255, 0.035);
+  --grid-spot: rgba(255, 255, 255, 0.11);
   /* Inter for body copy, nav and buttons; the studio keeps Geist. */
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
   font-family: var(--font-sans);
   color-scheme: dark;
+}
+
+/*
+ * The light tone (2026-10-01, Mike: "I want it white and black"): the
+ * same skin inverted -- white ground, black type, black as the only
+ * button colour -- for the /make landing pages. Applied beside
+ * `.editorial` by EditorialSkin's `tone="light"`, so the homepage keeps
+ * the dark tone above and a page picks its own.
+ */
+.editorial.editorial-light {
+  --background: #ffffff;
+  --foreground: #0a0a0a;
+  --card: #f6f5f2;
+  --card-foreground: #0a0a0a;
+  --popover: #ffffff;
+  --popover-foreground: #0a0a0a;
+  /* red buttons (2026-10-01, Mike), the brand's signal red */
+  --primary: #e4002b;
+  --primary-foreground: #ffffff;
+  --secondary: #efeeea;
+  --secondary-foreground: #0a0a0a;
+  --muted: #efeeea;
+  --muted-foreground: #6b6964;
+  --accent: #e9e8e4;
+  --accent-foreground: #0a0a0a;
+  --border: #e3e1dc;
+  --input: #cfcdc7;
+  --ink-2: #4f4d49;
+  --ink-3: #77756f;
+  --nav-fg: #3a3936;
+  /* cards wear a light red outline that deepens on hover (2026-10-01) */
+  --card-line: #f2b9c3;
+  --line-hover: #e4002b;
+  --glass: rgba(255, 255, 255, 0.78);
+  --grid-line: rgba(0, 0, 0, 0.05);
+  --grid-spot: rgba(0, 0, 0, 0.14);
+  color-scheme: light;
 }
 
 @layer base {
@@ -312,6 +362,15 @@
     text-wrap: pretty;
   }
 
+  /* The /make pages' headline (2026-10-01, Mike: "bolder and bigger"):
+     the serif at 700, tighter still. Stacks on .serif and must follow it
+     here so the weight wins. */
+  .serif-bold {
+    font-weight: 700;
+    line-height: 0.98;
+    letter-spacing: -0.035em;
+  }
+
   /* Mono eyebrow above a section: the only place the mono face appears. */
   .eyebrow {
     font-family: var(--font-mono);
@@ -326,8 +385,8 @@
      out before the media frame so the frame sits on plain ground. */
   .hero-grid {
     background-image:
-      linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
-      linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+      linear-gradient(90deg, var(--grid-line, rgba(255, 255, 255, 0.035)) 1px, transparent 1px),
+      linear-gradient(var(--grid-line, rgba(255, 255, 255, 0.035)) 1px, transparent 1px);
     background-position: 0 -4px;
     background-size: 22px 22px;
     mask-image: linear-gradient(#000 0%, #000 55%, transparent 100%);
@@ -352,8 +411,8 @@
      pointer (HeroSpotlight sets --x / --y). */
   .hero-spot {
     background-image:
-      linear-gradient(90deg, rgba(255, 255, 255, 0.11) 1px, transparent 1px),
-      linear-gradient(rgba(255, 255, 255, 0.11) 1px, transparent 1px);
+      linear-gradient(90deg, var(--grid-spot, rgba(255, 255, 255, 0.11)) 1px, transparent 1px),
+      linear-gradient(var(--grid-spot, rgba(255, 255, 255, 0.11)) 1px, transparent 1px);
     background-position: 0 -4px;
     background-size: 22px 22px;
     -webkit-mask-image: radial-gradient(240px 240px at var(--x, 50%) var(--y, 0px), #000 0%, transparent 70%);
@@ -365,8 +424,8 @@
     transition: background-color 0.26s, border-color 0.26s, backdrop-filter 0.26s;
   }
   .glass-nav[data-at-top="false"] {
-    background-color: rgba(16, 16, 16, 0.72);
-    border-bottom-color: rgba(255, 255, 255, 0.06);
+    background-color: var(--glass, rgba(16, 16, 16, 0.72));
+    border-bottom-color: var(--border);
     -webkit-backdrop-filter: saturate(140%) blur(14px);
     backdrop-filter: saturate(140%) blur(14px);
   }

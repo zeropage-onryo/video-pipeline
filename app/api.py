@@ -4137,6 +4137,10 @@ async def pipeline_run(request: Request, account_id: int = Depends(auth.current_
 # working unmodified.
 
 GENERATE_OUTPUTS = ("image", "video", "prompt")
+# The image shapes the composer may ask Nano Banana for (2026-10-02). An id
+# outside this set is ignored and the still is drawn at the module default
+# (NANO_ASPECT_RATIO), never a refused or failed call.
+GENERATE_ASPECTS = ("1:1", "4:5", "5:4", "3:4", "4:3", "2:3", "3:2", "9:16", "16:9", "21:9")
 
 
 @router.get("/presets")
@@ -4243,6 +4247,8 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
     if output not in GENERATE_OUTPUTS:
         output = "image"
     preset = presets.get_preset(form.get("preset"))
+    aspect = form.get("aspect")
+    aspect = aspect if aspect in GENERATE_ASPECTS else None
     concept_id_raw = (form.get("concept_id") or "").strip()
     attach_to = int(concept_id_raw) if concept_id_raw.isdigit() else None
     if attach_to is not None and preprod.get_concept(attach_to, account_id=account_id) is None:
@@ -4255,6 +4261,13 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
                   if output == "video" else None)
     if video_pick and _quote_required(account_id, video_pick["provider"]):
         return _error(400, "missing_quote", _QUEUE_ONLY)
+    # gated like Create (2026-10-02): the composer's Image button made this
+    # a front door, and every run grounds, enhances and saves a concept
+    # before the still's own hold can refuse -- refused here, before any of
+    # it, for an account with no plan and no balance
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
 
     image_refs, ref_urls, video_refs = await _collect_refs(form, want_video=True)
 
@@ -4321,7 +4334,8 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
             jobs.progress(job, 0.7, "rendering image via Nano Banana")
             result = nano_banana.generate_from_prompt(
                 enhanced, reference_image=image_refs[0][0] if image_refs else None,
-                db_path=None, account_id=account_id)
+                db_path=None, account_id=account_id,
+                **({"aspect_ratio": aspect} if aspect else {}))
             if result.get("ok"):
                 preprod.set_shot_reference_image(
                     concept_id, shot["n"], result["media_url"], account_id=account_id)
