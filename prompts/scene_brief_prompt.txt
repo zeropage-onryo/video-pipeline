@@ -20,10 +20,10 @@ conflicts, the idea and attached images win.
 
 WHAT THE SPARK IS, AND WHAT YOU DO WITH IT: it is the filmmaker's IDEA, told
 in full -- who is there, what they want, what is in the way, what changes.
-Write one paste-ready prompt that may contain one or multiple shots, cuts and
-locations as the idea requires, fitted to the scene's total length below. Do
-not throw story events away to keep it to one continuous action -- the scene
-is rendered one timed window at a time (see BEATS), so the whole idea can fit.
+Write one paste-ready prompt cut into as many shots, cuts and locations as
+the idea requires, fitted to the scene's total length below. Do not throw
+story events away to keep it to one continuous action -- the scene is
+rendered one timed window at a time (see BEATS), so the whole idea can fit.
 
 TOTAL LENGTH OF THIS SCENE: {seconds} seconds.
 
@@ -40,7 +40,9 @@ CHANNEL DIRECTION (rough context, not strict generation rules):
 GOLD-STANDARD EXAMPLE — match the SHAPE and craft of this proven prompt (its
 hook, grounded style block, sequential beats, diegetic-sound block, and hard
 avoid-list), NEVER its subject or specific content. Imitate the STRUCTURE; do
-not reuse the scene, the portal, or the monster:
+not reuse the scene, the portal, or the monster -- and not its single continuous
+take either: that was ITS idea, and how many shots a scene has comes from its
+own idea (see BEATS):
 {example}
 
 Write the "brief" as a single cohesive prompt with these five parts, in order:
@@ -58,17 +60,25 @@ Write the "brief" as a single cohesive prompt with these five parts, in order:
 
    THE LOOK:
 {look}
-3. BEATS: the scene as timed shots, each opening with its window, e.g.
-   (0-3s), (3-7s), (7-10s) for a 10-second scene. Start at 0s; windows are
-   contiguous, never overlap, and end at exactly {seconds}s. EACH WINDOW IS
-   RENDERED AS ITS OWN SEPARATE CLIP, one after another, by a model that sees
-   only that window -- so every window is ONE shot: one camera setup, one
-   clear action that fits its length, 2-10 seconds long. Cuts and location
+3. BEATS: the scene as timed shots. HOW MANY SHOTS is decided by the idea,
+   never by habit or by the example: use exactly as many as the story needs
+   to land -- a held reaction might want only a couple, a chase or a montage
+   many short ones.
+   - Cut the scene into TWO OR MORE windows. Write ONE window covering the
+     whole scene only when the idea explicitly asks for a single take ("one
+     continuous shot", "single take", "oner", "no cuts").
+   - When the idea already sets the shots -- it carries its own timed windows,
+     or says how many shots it wants ("in 2 shots") -- keep exactly that many,
+     in that order, retimed to fill {seconds}s. The filmmaker chose that count.
+   Each window opens with its time marker, written like (4-7s). Start at 0s;
+   windows are contiguous, never overlap, and end at exactly {seconds}s. EACH
+   WINDOW IS RENDERED AS ITS OWN SEPARATE CLIP, one after another, by a model
+   that sees only that window -- so every window is ONE shot: one camera setup,
+   one clear action that fits its length, 2-10 seconds long. Cuts and location
    changes happen BETWEEN windows, never inside one; say them ("hard cut to",
-   "reverse on"). One window for the whole scene is right when the idea is one
-   continuous moment or the brief asks for one take. Open on an uncomfortable
-   or arresting image, turn/reveal, and END ABRUPTLY. Reactions are serious
-   and physically believable, never cartoon.
+   "reverse on"). Open on an uncomfortable or arresting image, turn/reveal,
+   and END ABRUPTLY. Reactions are serious and physically believable, never
+   cartoon.
 4. SOUND: begin "No background music." then the diegetic sound only — exactly
    what you would hear in that scene.
 5. AVOID: no plastic AI sheen, no CGI-looking skin or fabric, no cartoon

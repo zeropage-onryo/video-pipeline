@@ -72,6 +72,7 @@ import { useMentions } from "@/components/studio/mentions";
 import { useShell } from "@/components/studio/shell";
 import { useAssistantThread } from "@/components/studio/assistant-thread";
 import { AddElement } from "@/components/studio/add-element";
+import { DurationPill, type SceneLengths } from "@/components/studio/duration-pill";
 import { ElementSheet } from "@/components/studio/element-sheet";
 import { ELEMENT_KINDS, displayPhoto, drawable, elementKind, isElement, kindLabel, type ElementKind } from "@/lib/elements";
 import { FILL_EVENT, keepReferences, takePendingFill, type ComposerDraft, type ContactSheet, type Turn } from "@/lib/assistant";
@@ -217,7 +218,8 @@ function Composer() {
   // the optional pills: each shows only when its route answers
   const [brains, setBrains] = useState<Option[]>([]);
   const [brain, setBrain] = useState("");
-  const [lengths, setLengths] = useState<number[]>([]);
+  // the scene length's slider bounds, off /scene-lengths; null hides the pill
+  const [lengths, setLengths] = useState<SceneLengths | null>(null);
   const [seconds, setSeconds] = useState(0);
   const [ratios, setRatios] = useState<Option[]>([]);
   const [ratio, setRatio] = useState("");
@@ -251,12 +253,12 @@ function Composer() {
         setBrain(r.default);
       })
       .catch(() => setBrains([]));
-    apiFetch<{ choices: number[]; default: number }>("/scene-lengths")
+    apiFetch<SceneLengths>("/scene-lengths")
       .then((r) => {
-        setLengths(r.choices);
+        setLengths({ min: r.min, max: r.max, default: r.default });
         setSeconds(r.default);
       })
-      .catch(() => setLengths([]));
+      .catch(() => setLengths(null));
     apiFetch<{ ratios: { id: string; label: string; size: string }[]; default: string }>("/render-choices")
       .then((r) => {
         setRatios(r.ratios.map((x) => ({ id: x.id, label: x.label, note: x.size })));
@@ -942,17 +944,16 @@ function Composer() {
                   )}
                 />
               ) : null}
-              {lengths.length ? (
-                <PillMenu
-                  heading="How long the scene is"
-                  value={String(seconds)}
-                  onChange={(v) => setSeconds(Number(v))}
-                  options={lengths.map((s) => ({ id: String(s), label: `${s} sec` }))}
+              {lengths ? (
+                <DurationPill
+                  seconds={seconds}
+                  span={lengths}
+                  onChange={setSeconds}
                   end
                   trigger={(open) => (
                     <button type="button" className="pill" aria-expanded={open}>
                       <Clock strokeWidth={1.6} />
-                      {seconds} sec
+                      {seconds}s
                     </button>
                   )}
                 />
