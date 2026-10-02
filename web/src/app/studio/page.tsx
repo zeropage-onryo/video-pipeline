@@ -17,7 +17,19 @@
    rather than a button that 404s. The model / length / frame pills
    likewise appear only when their routes answer.
 
-   The composer redesign (2026-10-02, "Direction A"): an Image | Video
+   NOTHING IN THE BOX IS THIS PAGE'S TO LOSE (2026-10-02). The Guide
+   thread, the idea, the brief, the references and the "scene written"
+   card used to be React state here, so clicking to Pipeline and back
+   threw the conversation and every frame a hunt had drawn away. They are
+   the studio's now: the thread is the same one the assistant pill talks
+   in (components/studio/assistant-thread.tsx, saved to the server as the
+   open project), the box is its `draft`, and an upload is saved to the
+   reference bin the moment it is dropped (POST /api/refs/upload) so what
+   the draft remembers is a URL that resolves on every machine. Leaving
+   and coming back -- or opening the pill on another page -- picks up
+   exactly where the talk was.
+
+The composer redesign (2026-10-02, "Direction A"): an Image | Video
    toggle picks what a send makes -- VIDEO is the Create above, IMAGE is
    one Nano Banana still through /api/generate/run. Each send becomes a
    turn drawn above the box (components/studio/composer/turns.tsx); the
@@ -25,12 +37,13 @@
    send can be stopped. Guide is a toggle beside the output, no longer
    the default. Still ONE output per send. */
 import Link from "next/link";
-import { Suspense, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   ArrowUp,
   AtSign,
   Brain,
+  Clapperboard,
   Clock,
   Ellipsis,
   Image as ImageIcon,
@@ -42,6 +55,7 @@ import {
   RectangleVertical,
   Search,
   Video,
+  Workflow,
   X,
 } from "lucide-react";
 import { API_URL, apiFetch } from "@/lib/api";
@@ -62,20 +76,21 @@ import {
   rememberActiveProject,
   type Project,
   runScenes,
+  uploadRefs,
   waitForJob,
   type Asset,
   type AssetHit,
   type Capabilities,
   runGuideAction,
-  type GuideProposal,
   type GuideReply,
 } from "@/lib/studio-api";
 import { useMentions } from "@/components/studio/mentions";
 import { useShell } from "@/components/studio/shell";
+import { useAssistantThread } from "@/components/studio/assistant-thread";
 import { AddElement } from "@/components/studio/add-element";
 import { ElementSheet } from "@/components/studio/element-sheet";
 import { ELEMENT_KINDS, displayPhoto, drawable, elementKind, isElement, kindLabel, type ElementKind } from "@/lib/elements";
-import { FILL_EVENT, announceComposer, keepReferences, takePendingFill, type ContactSheet } from "@/lib/assistant";
+import { FILL_EVENT, keepReferences, takePendingFill, type ComposerDraft, type ContactSheet, type Turn } from "@/lib/assistant";
 import { ContactSheetView, keepersOf } from "@/components/studio/contact-sheet";
 import {
   BASE_COMMANDS,
@@ -88,32 +103,16 @@ import {
   saveOutput,
   type Output,
   type SlashCommand,
-  type Turn,
+  type Turn as MadeTurn,
 } from "@/lib/composer";
 import { ComposerTurns } from "@/components/studio/composer/turns";
 import { SlashMenu } from "@/components/studio/composer/slash-menu";
 import "@/components/studio/composer/composer.css";
 
-type Attachment = { id: string; name: string; file: File; url: string };
+/* an upload on its way to the bin: drawn from its object URL until the
+   server answers with the URL the draft keeps */
+type Pending = { id: string; name: string; url: string };
 type Option = { id: string; label: string; note?: string };
-/* `failed` marks a turn the guide never answered. It is drawn on the
-   bubble itself and dropped from the next turn's conversation, so a
-   retry neither repeats it on screen nor sends it twice. */
-type GuideMessage = {
-  role: "user" | "assistant";
-  content: string;
-  failed?: boolean;
-  /** which board tools the guide looked at before this answer */
-  looked?: string[];
-  /** a write the guide proposed; drawn as a confirm card until decided */
-  proposal?: GuideProposal | null;
-  decided?: "done" | "skipped";
-  /** the frames a find_references hunt looked at, drawn under the answer */
-  sheet?: ContactSheet | null;
-  /** which of the sheet's frames are ticked, and whether they were kept */
-  chosen?: Record<string, boolean>;
-  kept?: boolean;
-};
 /* the shelf under the box is ELEMENTS only -- the characters, props,
    products and places a person created to @ in a prompt (Mike's call,
    2026-09-15). Blank until one exists; the Assets wall's generated
@@ -197,8 +196,26 @@ function Composer() {
   const attachId = params.get("attach");
   // An idea typed into the landing page's hero arrives as ?spark= and the
   // composer opens already carrying it -- the sentence a visitor wrote is
-  // the one thing on that page that must not be thrown away.
-  const [idea, setIdea] = useState(params.get("spark") ?? "");
+  // the one thing on that page that must not be thrown away. It is put
+  // in the box once the saved draft has loaded, so the draft cannot
+  // land on top of it (and it outranks whatever the draft held).
+  const sparkParam = params.get("spark");
+  // The thread and the box are the studio's (assistant-thread.tsx): the
+  // same turns the pill shows, and a draft that survives leaving the page.
+  const { turns: thread, setTurns: setThread, draft, setDraft, ready } = useAssistantThread();
+  const { idea, picked, brief, written, uploads, mode: wantMode } = draft;
+  const setIdea = useCallback(
+    (v: string | ((s: string) => string)) => setDraft((d) => ({ ...d, idea: typeof v === "function" ? v(d.idea) : v })),
+    [setDraft],
+  );
+  const setPicked = useCallback(
+    (v: string[] | ((s: string[]) => string[])) =>
+      setDraft((d) => ({ ...d, picked: typeof v === "function" ? v(d.picked) : v })),
+    [setDraft],
+  );
+  const setBrief = (v: string) => setDraft({ brief: v });
+  const setWritten = (w: ComposerDraft["written"]) => setDraft({ written: w });
+  const setMode = useCallback((m: "guide" | "create") => setDraft({ mode: m }), [setDraft]);
   // The project this composer writes inside (2026-09-28): handed over by
   // the Projects page as ?project=, remembered per browser, cleared by the
   // chip's ×. Create and the Guide both send it, so the scene is written
@@ -211,8 +228,7 @@ function Composer() {
   const [query, setQuery] = useState("");
   const [adding, setAdding] = useState(false);
   const [open, setOpen] = useState<Asset | null>(null);
-  const [picked, setPicked] = useState<string[]>([]); // asset photo urls
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [pending, setPending] = useState<Pending[]>([]);
   const [busy, setBusy] = useState(false);
   // Two kinds of note, and they used to render identically: progress
   // ("Writing…") and failure. A failure in the hint's own slot, small
@@ -224,10 +240,12 @@ function Composer() {
   const [noteBad, setNoteBad] = useState(false);
   const [progress, setProgress] = useState(0);
   const [dragging, setDragging] = useState(false);
-  const [wantMode, setMode] = useState<"guide" | "create">("create");
-  const [thread, setThread] = useState<GuideMessage[]>([]);
-  const [choices, setChoices] = useState<string[]>([]);
-  const [brief, setBrief] = useState("");
+  // the frames "Use in a shot" handed over, held until the draft has loaded
+  const [attachPhotos, setAttachPhotos] = useState<string[] | null>(null);
+  const paramsApplied = useRef(false);
+  // the guide's offered replies: the newest answer's, gone once replied to
+  const last = thread[thread.length - 1];
+  const choices = last && last.role === "assistant" && !last.failed ? last.reply?.choices ?? [] : [];
   // the optional pills: each shows only when its route answers
   const [brains, setBrains] = useState<Option[]>([]);
   const [brain, setBrain] = useState("");
@@ -250,11 +268,10 @@ function Composer() {
   const [aspect, setAspect] = useState(IMAGE_ASPECTS[0].id);
   const [presets, setPresets] = useState<Preset[]>([]);
   const [preset, setPreset] = useState<Preset | null>(null);
-  const [turns, setTurns] = useState<Turn[]>([]);
+  const [turns, setTurns] = useState<MadeTurn[]>([]);
   const [slashAt, setSlashAt] = useState(0);
   const [liveTurn, setLiveTurn] = useState<string | null>(null);
   const running = useRef<{ turnId: string; jobId?: number; stopped: boolean } | null>(null);
-  const objectUrls = useRef<string[]>([]);
   const setOutput = (o: Output) => {
     setOutputState(o);
     saveOutput(o);
@@ -281,7 +298,7 @@ function Composer() {
         setAssets(r.items.filter((a) => (a.category as string) !== "generated"));
         // "Use in a shot" on Assets lands here with the asset attached
         const hit = attachId ? r.items.find((a) => a.id === attachId) : null;
-        if (hit) setPicked(hit.photos.slice(0, FRAMES_PER_ASSET));
+        if (hit) setAttachPhotos(hit.photos.slice(0, FRAMES_PER_ASSET));
       })
       .catch(() => setAssets([]));
     apiFetch<{ brains: { id: string; label: string; note: string }[]; default: string }>("/brains")
@@ -305,10 +322,21 @@ function Composer() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // What the URL asked for goes in AFTER the saved draft has loaded, or the
+  // load would land on top of it: ?spark= replaces the idea (the visitor's
+  // sentence outranks an old draft), ?attach= adds its frames to the picks.
+  useEffect(() => {
+    if (!ready || paramsApplied.current) return;
+    if (attachId && attachPhotos === null) return; // its photos are still being looked up
+    paramsApplied.current = true;
+    if (sparkParam) setIdea(sparkParam);
+    if (attachPhotos?.length) setPicked((was) => [...new Set([...was, ...attachPhotos])]);
+  }, [ready, sparkParam, attachId, attachPhotos, setIdea, setPicked]);
+
   // The assistant pill writes into this box through a window event (it
-  // floats over every page; this state lives here). A fill asked for from
-  // another page waited in sessionStorage and is taken on mount. It only
-  // ever FILLS: Create is still the person's click.
+  // floats over every page). A fill asked for from another page waited in
+  // sessionStorage and is taken on mount. It only ever FILLS: Create is
+  // still the person's click.
   useEffect(() => {
     const take = () => {
       const fill = takePendingFill();
@@ -323,16 +351,12 @@ function Composer() {
     take();
     window.addEventListener(FILL_EVENT, take);
     return () => window.removeEventListener(FILL_EVENT, take);
-  }, []);
-  useEffect(() => {
-    announceComposer({ idea, picked });
-  }, [idea, picked]);
+  }, [setIdea, setMode, setPicked]);
 
-  // object URLs for uploads are revoked when the composer unmounts (all
-  // of them -- the attachments list at mount was always empty)
+  // object URLs for uploads still in flight are revoked when the composer unmounts
   useEffect(() => {
-    const urls = objectUrls.current;
-    return () => urls.forEach((u) => URL.revokeObjectURL(u));
+    return () => pending.forEach((a) => URL.revokeObjectURL(a.url));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Guide only when the server says the route is there; otherwise the
@@ -384,18 +408,22 @@ function Composer() {
   };
   const mentions = useMentions(textarea, idea, setIdea, attachAsset);
 
-  const canSend = !busy && (mode === "create" ? !!(idea.trim() || brief.trim()) : !!idea.trim());
-  const referenceCount = picked.length + attachments.length;
+  // an upload still on its way to the bin would be left out of the run
+  const canSend = !busy && !pending.length && (mode === "create" ? !!(idea.trim() || brief.trim()) : !!idea.trim());
+  const referenceCount = picked.length + uploads.length + pending.length;
 
-  // The references on screen, in the two field names the API reads
-  // (app/api.py:_collect_refs): `files` for uploads, `asset_photos` for
-  // picks out of the asset bank. ONE helper for both buttons, the way
-  // the vanilla composer's collectRunForm is -- when the Guide built its
-  // own FormData it sent neither, so the model was told "0 reference
-  // images supplied" over two visible thumbnails; and Create sent the
-  // picks as `refs`, a field nothing server-side has ever read, so a
-  // @Michael pick reached the scene only when it was also a file
-  // (2026-09-18).
+  // The references on screen, in the field name the API reads for a
+  // stored reference (app/api.py:_collect_refs, `asset_photos`). Uploads
+  // go first -- refs[0] is the frame the clip anchors on, and an upload
+  // was read before the picks when it rode as `files` -- then the picks
+  // out of the asset bank. ONE helper for both buttons, the way the
+  // vanilla composer's collectRunForm is -- when the Guide built its own
+  // FormData it sent neither, so the model was told "0 reference images
+  // supplied" over two visible thumbnails; and Create sent the picks as
+  // `refs`, a field nothing server-side has ever read, so a @Michael pick
+  // reached the scene only when it was also a file (2026-09-18). Since
+  // 2026-10-02 an upload is already in the bin by the time Send is
+  // pressed (attach() saves it), so it is a URL like any pick.
   useEffect(() => {
     const id = Number(projectParam) || recallActiveProject();
     if (!id) return;
@@ -417,8 +445,7 @@ function Composer() {
   };
 
   const appendReferences = (form: FormData) => {
-    attachments.forEach((a) => form.append("files", a.file, a.name));
-    picked.forEach((u) => form.append("asset_photos", u));
+    [...uploads.map((u) => u.url), ...picked].forEach((u) => form.append("asset_photos", u));
   };
 
   const say = (text: string | null, bad = false) => {
@@ -428,7 +455,7 @@ function Composer() {
   };
 
   /* A turn is patched by id: the poll's ticks, the result, a Stop. */
-  const patchTurn = (id: string, p: Partial<Turn>) =>
+  const patchTurn = (id: string, p: Partial<MadeTurn>) =>
     setTurns((ts) => ts.map((t) => (t.id === id ? { ...t, ...p } : t)));
 
   /* Stop: the wait ends at once and the turn says so. The server is
@@ -451,7 +478,7 @@ function Composer() {
     const turnId = newTurnId();
     const isImage = output === "image";
     const frame = isImage ? aspect : ratios.find((r) => r.id === ratio)?.label;
-    const refThumbs = [...attachments.map((a) => a.url), ...picked.filter(drawable)];
+    const refThumbs = [...uploads.map((u) => u.url), ...picked.filter(drawable)];
     setTurns((ts) => [
       ...ts,
       { id: turnId, output, prompt: text, refs: refThumbs, status: "running", progress: 0, detail: "", frame },
@@ -518,6 +545,9 @@ function Composer() {
         parts: timeline?.parts ?? [],
         seconds: timeline?.seconds ?? detail?.duration ?? (seconds || null),
       });
+      // saved with the draft, so leaving the page and coming back still
+      // says what was written (the turns themselves are this visit's)
+      setWritten({ conceptId, detail: job.detail || "on the board" });
       toast("Scene written · it is on Pipeline to pick");
       announceQueueChange();
     }
@@ -527,22 +557,20 @@ function Composer() {
     if (!canSend) return;
     setBusy(true);
     setProgress(0);
+    setWritten(null);
     setFilledBy(null);
     say(null);
-    let asking: GuideMessage[] | null = null;
+    let asking: Turn | null = null;
     try {
       if (mode === "create") {
         await make(brief.trim() || idea.trim());
       } else {
-        const next: GuideMessage[] = [
-          ...thread.filter((m) => !m.failed),
-          { role: "user", content: idea.trim() },
-        ];
         const asked = idea.trim();
-        asking = next;
+        const mine: Turn = { role: "user", content: asked };
+        const next: Turn[] = [...thread.filter((m) => !m.failed), mine];
+        asking = mine;
         setThread(next);
         setIdea("");
-        setChoices([]);
         const form = new FormData();
         form.append(
           "conversation",
@@ -573,18 +601,18 @@ function Composer() {
         });
         const reply = (job as unknown as { reply?: GuideReply }).reply;
         if (job.status !== "done" || !reply) throw new Error(job.error || "The guide stopped.");
-        setThread([
-          ...next,
+        // appended to whatever the thread holds NOW: the pill shares it and
+        // may have added a turn while this one was out
+        setThread((all) => [
+          ...all,
           {
             role: "assistant",
             content: reply.message,
+            reply,
             looked: (reply.tool_runs ?? []).filter((r) => r.ok).map((r) => r.tool),
-            proposal: reply.proposal ?? null,
-            sheet: reply.sheet ?? null,
             chosen: keepersOf(reply.sheet),
           },
         ]);
-        setChoices(reply.choices ?? []);
         if (reply.brief) setBrief(reply.brief);
         say(
           reply.proposal
@@ -599,9 +627,9 @@ function Composer() {
       // so a failed turn must say so ON its own bubble, and hand the
       // words back for a retry.
       if (asking) {
-        const last = asking[asking.length - 1];
-        setThread([...asking.slice(0, -1), { ...last, failed: true }]);
-        setIdea((now) => now || last.content);
+        const mine = asking;
+        setThread((all) => all.map((m) => (m === mine ? { ...m, failed: true } : m)));
+        setIdea((now) => now || mine.content);
       }
       const r = running.current;
       if (r && !r.stopped) {
@@ -644,12 +672,12 @@ function Composer() {
   }
 
   /* a finished still becomes a reference for what comes next */
-  function attachResult(t: Turn) {
+  function attachResult(t: MadeTurn) {
     if (!t.image) return;
     setPicked((was) => [...new Set([...was, t.image!])]);
     toast("Image attached as a reference");
   }
-  function animate(t: Turn) {
+  function animate(t: MadeTurn) {
     if (!t.image) return;
     setPicked((was) => [...new Set([...was, t.image!])]);
     setOutput("video");
@@ -658,7 +686,7 @@ function Composer() {
     toast("Image attached · describe how the scene moves");
   }
   /* "Reuse prompt" fills the box; it never spends on its own */
-  function reuse(t: Turn) {
+  function reuse(t: MadeTurn) {
     setOutput(t.output);
     setMode("create");
     setIdea(t.prompt);
@@ -671,14 +699,15 @@ function Composer() {
      conversation says what was banked. */
   async function decide(i: number, yes: boolean) {
     const entry = thread[i];
-    if (!entry?.proposal || entry.decided || busy) return;
+    const proposal = entry?.reply?.proposal;
+    if (!proposal || entry.decided || busy) return;
     if (!yes) {
       setThread((t) => t.map((m, j) => (j === i ? { ...m, decided: "skipped" } : m)));
       return;
     }
     setBusy(true);
     try {
-      const done = await runGuideAction(entry.proposal);
+      const done = await runGuideAction(proposal);
       setThread((t) => [
         ...t.map((m, j) => (j === i ? { ...m, decided: "done" as const } : m)),
         { role: "assistant", content: `Done — ${done.result}` },
@@ -721,22 +750,41 @@ function Composer() {
     }
   }
 
+  /* An upload goes to the reference bin the moment it lands
+     (POST /api/refs/upload: JPEG-normalised, content-addressed, mirrored
+     to R2 -- the same bin a Create used to save it into). The draft then
+     remembers a URL that resolves on every machine, which is what lets
+     the box survive leaving the page; a File object never could. The tile
+     draws from the object URL until the server answers. */
   const attach = (files: FileList | File[] | null | undefined) => {
     const images = imageFiles(files);
     if (!images.length) return;
-    const made = images.map((f) => ({
-      id: crypto.randomUUID(),
-      name: f.name,
-      file: f,
-      url: URL.createObjectURL(f),
-    }));
-    made.forEach((m) => objectUrls.current.push(m.url));
-    setAttachments((was) => [...was, ...made]);
-    toast(`${images.length} image${images.length === 1 ? "" : "s"} attached as reference`);
+    const rows: Pending[] = images.map((f) => ({ id: crypto.randomUUID(), name: f.name, url: URL.createObjectURL(f) }));
+    setPending((was) => [...was, ...rows]);
+    const settle = () => {
+      rows.forEach((r) => URL.revokeObjectURL(r.url));
+      setPending((was) => was.filter((p) => !rows.some((r) => r.id === p.id)));
+    };
+    uploadRefs(images)
+      .then((r) => {
+        // names pair by position, best-effort: the server drops a duplicate
+        // or an unreadable file, and the name is only the tile's tooltip
+        const named = r.urls.map((url, i) => ({ url, name: rows[i]?.name ?? "reference" }));
+        setDraft((d) => ({
+          ...d,
+          uploads: [...d.uploads, ...named.filter((n) => !d.uploads.some((u) => u.url === n.url))],
+        }));
+        settle();
+        const n = r.urls.length;
+        if (n) toast(`${n} image${n === 1 ? "" : "s"} attached as reference` + (r.skipped ? ` · ${r.skipped} could not be read` : ""));
+        else toast("Those images could not be read", "err");
+      })
+      .catch((e) => {
+        settle();
+        toast(e instanceof Error ? e.message : "The upload did not go through.", "err");
+      });
   };
-  // not revoked here: a sent turn's bubble may still be drawing it. Every
-  // object URL is revoked once, when the composer unmounts.
-  const removeAttachment = (id: string) => setAttachments((w) => w.filter((x) => x.id !== id));
+  const removeUpload = (url: string) => setDraft((d) => ({ ...d, uploads: d.uploads.filter((u) => u.url !== url) }));
 
   /* drop anywhere on the box; the depth counter keeps the highlight
      steady while the cursor crosses the box's own children */
@@ -880,9 +928,9 @@ function Composer() {
                       {m.content}
                       {m.failed ? <span className="cmsg-failed">Not sent — try again</span> : null}
                     </p>
-                    {m.sheet ? (
+                    {m.reply?.sheet ? (
                       <ContactSheetView
-                        sheet={m.sheet}
+                        sheet={m.reply.sheet}
                         chosen={m.chosen ?? {}}
                         kept={!!m.kept}
                         busy={busy}
@@ -891,11 +939,11 @@ function Composer() {
                         onKeep={(sh) => keepFrames(i, sh)}
                       />
                     ) : null}
-                    {m.proposal ? (
+                    {m.reply?.proposal ? (
                       <div className={`ccard${m.decided ? ` ${m.decided}` : ""}`}>
-                        <b>{m.proposal.label}</b>
+                        <b>{m.reply.proposal.label}</b>
                         <dl>
-                          {Object.entries(m.proposal.args).map(([k, v]) => (
+                          {Object.entries(m.reply.proposal.args).map(([k, v]) => (
                             <div key={k}>
                               <dt>{k}</dt>
                               <dd>{String(v)}</dd>
@@ -940,13 +988,24 @@ function Composer() {
                     </button>
                   </span>
                 ) : null}
-                {attachments.map((a) => (
-                  <span key={a.id} className="zc-chip" title={a.name}>
-                    <span className="zc-chip-thumb" style={{ backgroundImage: `url(${a.url})` }} />
-                    <span className="zc-chip-name">{a.name}</span>
-                    <button type="button" aria-label={`Remove ${a.name}`} onClick={() => removeAttachment(a.id)}>
+                {uploads.map((a) => (
+                  <span key={a.url} className="zc-chip" title={a.name || a.url}>
+                    <span
+                      className="zc-chip-thumb"
+                      style={drawable(a.url) ? { backgroundImage: `url(${mediaSrc(a.url)})` } : undefined}
+                    >
+                      {drawable(a.url) ? null : a.url.split(".").pop()?.split("?")[0]?.toUpperCase()}
+                    </span>
+                    <span className="zc-chip-name">{a.name || "upload"}</span>
+                    <button type="button" aria-label={`Remove ${a.name || "upload"}`} onClick={() => removeUpload(a.url)}>
                       <X strokeWidth={2} />
                     </button>
+                  </span>
+                ))}
+                {pending.map((a) => (
+                  <span key={a.id} className="zc-chip pending" title={`${a.name} · uploading…`} aria-busy="true">
+                    <span className="zc-chip-thumb" style={{ backgroundImage: `url(${a.url})` }} />
+                    <span className="zc-chip-name">{a.name}</span>
                   </span>
                 ))}
                 {picked.map((u) => {
@@ -974,10 +1033,7 @@ function Composer() {
                   <button
                     type="button"
                     className="cclear"
-                    onClick={() => {
-                      setAttachments([]);
-                      setPicked([]);
-                    }}
+                    onClick={() => setDraft({ picked: [], uploads: [] })}
                   >
                     Clear {referenceCount}
                   </button>
@@ -1077,6 +1133,25 @@ function Composer() {
                     Create from this brief
                   </button>
                 ) : null}
+              </div>
+            ) : null}
+
+            {written && !turns.length ? (
+              <div className="cresult" role="status">
+                <span className="m">Scene written · {written.detail}</span>
+                <span className="cresult-links">
+                  <Link href="/studio/pipeline" className="pill chosen">
+                    <Workflow strokeWidth={1.6} /> Pick on Pipeline
+                  </Link>
+                  {written.conceptId ? (
+                    <Link href={`/studio/flows?concept=${written.conceptId}&shot=1`} className="pill">
+                      <Clapperboard strokeWidth={1.6} /> Open in Director
+                    </Link>
+                  ) : null}
+                  <button type="button" className="pill" onClick={() => setWritten(null)}>
+                    Write another
+                  </button>
+                </span>
               </div>
             ) : null}
 

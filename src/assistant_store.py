@@ -10,10 +10,16 @@ OWNED tables, one owner each:
   One row per account. Cleaned with the same rules the brain applies when
   it puts the name into a prompt (assistant_brain.clean_name/clean_tone),
   so the pill never shows a name the model was not given.
-- `assistant_projects`: the conversation and the step it is on. One OPEN
-  project per account (archived_at NULL); "New project" archives it and a
-  fresh one starts. Archived rows are kept -- the same rule as the board:
-  leaving is never deleting.
+- `assistant_projects`: the conversation and the step it is on, and since
+  2026-10-02 the composer's DRAFT beside it (`draft_json`: the idea in the
+  box, the brief the guide wrote, the picked references, the uploads as
+  their bin URLs, which mode the box is in, the last "scene written"
+  card). One OPEN project per account (archived_at NULL); "New project"
+  archives it and a fresh one starts. Archived rows are kept -- the same
+  rule as the board: leaving is never deleting. The Studio composer's own
+  Guide thread lived only in the page's React state until today, so
+  clicking to another tab lost the conversation and every frame the hunt
+  had drawn; now the composer and the pill are two views on this one row.
 - `reference_verdicts`: the person's click on a contact sheet beside what
   refcheck decided about the same frame. Keep a frame the checker cut, or
   leave one it kept, and that disagreement is the only evidence there is of
@@ -40,6 +46,11 @@ from . import db
 MAX_TURNS = 40
 MAX_TURNS_BYTES = 400_000
 MAX_AVATAR_CHARS = 16          # one emoji can be a long ZWJ sequence
+# The draft is bounded by construction (_clean_draft keeps known keys and
+# cuts each), so no byte cap is needed beyond the per-field ones.
+MAX_DRAFT_TEXT = 10_000        # the composer's own textarea maxLength
+MAX_DRAFT_REFS = 40            # picked photos / uploads, each a URL
+DRAFT_MODES = ("guide", "create")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS assistants (
@@ -54,6 +65,7 @@ CREATE TABLE IF NOT EXISTS assistant_projects (
     title       TEXT NOT NULL DEFAULT '',
     stage       TEXT NOT NULL DEFAULT '',
     turns_json  TEXT NOT NULL DEFAULT '[]',
+    draft_json  TEXT NOT NULL DEFAULT '{}',
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL,
     archived_at TEXT
@@ -86,6 +98,9 @@ TABLES = ("assistants", "assistant_projects", "reference_verdicts")
 def init(dsn: Optional[str] = None) -> None:
     with db.connect(dsn) as conn:
         conn.execute(SCHEMA)
+        # additive, for the live table made before the draft existed
+        conn.execute("ALTER TABLE assistant_projects "
+                     "ADD COLUMN IF NOT EXISTS draft_json TEXT NOT NULL DEFAULT '{}'")
         for table in TABLES:
             db.own_table(conn, table)
         conn.execute(INDEXES)
@@ -140,27 +155,84 @@ def _bounded(turns: list) -> list:
     return turns
 
 
+def _urls(value) -> list:
+    """A list of reference URLs as the composer holds them: site-relative
+    paths or http(s), strings only, deduplicated in order, bounded."""
+    out: list = []
+    for u in (value if isinstance(value, list) else [])[:MAX_DRAFT_REFS * 2]:
+        u = str(u or "").strip() if isinstance(u, str) else ""
+        if u and len(u) <= 1000 and (u.startswith("/") or u.startswith("http")) \
+                and u not in out:
+            out.append(u)
+        if len(out) >= MAX_DRAFT_REFS:
+            break
+    return out
+
+
+def _clean_draft(draft) -> dict:
+    """The composer's draft, keys and types this store knows and nothing
+    else. A field the page never wrote comes back as its empty value, so
+    the client can trust the shape and never has to default it."""
+    d = draft if isinstance(draft, dict) else {}
+    uploads: list = []
+    for item in (d.get("uploads") if isinstance(d.get("uploads"), list) else [])[:MAX_DRAFT_REFS]:
+        if not isinstance(item, dict):
+            continue
+        url = _urls([item.get("url")])
+        if url:
+            uploads.append({"url": url[0],
+                            "name": " ".join(str(item.get("name") or "").split())[:200]})
+    written = d.get("written") if isinstance(d.get("written"), dict) else None
+    if written is not None:
+        cid = written.get("conceptId")
+        written = {"conceptId": int(cid) if isinstance(cid, int) and not isinstance(cid, bool) else None,
+                   "detail": str(written.get("detail") or "")[:300]}
+    mode = str(d.get("mode") or "")
+    return {"idea": str(d.get("idea") or "")[:MAX_DRAFT_TEXT],
+            "brief": str(d.get("brief") or "")[:MAX_DRAFT_TEXT],
+            # Create is the box's default (Direction A, 2026-10-02); a
+            # Guide the person chose is stored and kept
+            "mode": mode if mode in DRAFT_MODES else "create",
+            "picked": _urls(d.get("picked")),
+            "uploads": uploads,
+            "written": written}
+
+
+EMPTY_DRAFT = _clean_draft({})
+
+
 def _project(row) -> dict:
     out = dict(row)
     try:
         out["turns"] = json.loads(out.pop("turns_json") or "[]")
     except ValueError:
         out["turns"] = []
+    try:
+        out["draft"] = _clean_draft(json.loads(out.pop("draft_json", None) or "{}"))
+    except ValueError:
+        out["draft"] = dict(EMPTY_DRAFT)
     return out
+
+
+_PROJECT_COLS = "id, title, stage, turns_json, draft_json, created_at, updated_at"
 
 
 def open_project(*, account_id: int, dsn: Optional[str] = None) -> Optional[dict]:
     with db.connect(dsn) as conn:
         row = conn.execute(
-            "SELECT id, title, stage, turns_json, created_at, updated_at "
+            f"SELECT {_PROJECT_COLS} "
             "FROM assistant_projects WHERE account_id = %s AND archived_at IS NULL",
             (account_id,)).fetchone()
     return _project(row) if row else None
 
 
 def save_project(turns, stage, *, account_id: int, title: str = "",
-                 dsn: Optional[str] = None) -> dict:
-    """Write the open project's thread and step, creating it on first save."""
+                 draft: Optional[dict] = None, dsn: Optional[str] = None) -> dict:
+    """Write the open project's thread and step, creating it on first save.
+
+    `draft` is the composer's box (see _clean_draft); None -- a caller
+    that only knows the thread, like the pill did before the two shared
+    a row -- leaves whatever draft is stored exactly as it was."""
     from . import assistant_brain
     turns = _bounded(turns)
     stage = assistant_brain.clean_stage(stage)
@@ -170,21 +242,23 @@ def save_project(turns, stage, *, account_id: int, title: str = "",
                       if t.get("role") == "user" and t.get("content")), "")
         title = " ".join(str(first).split())[:80]
     blob = json.dumps(turns, default=str)
+    draft_blob = json.dumps(_clean_draft(draft)) if draft is not None else None
     now = _now()
     with db.connect(dsn) as conn:
         row = conn.execute(
             "UPDATE assistant_projects SET turns_json = %s, stage = %s, "
+            "draft_json = COALESCE(%s, draft_json), "
             "title = CASE WHEN title = '' THEN %s ELSE title END, updated_at = %s "
             "WHERE account_id = %s AND archived_at IS NULL "
-            "RETURNING id, title, stage, turns_json, created_at, updated_at",
-            (blob, stage, title, now, account_id)).fetchone()
+            f"RETURNING {_PROJECT_COLS}",
+            (blob, stage, draft_blob, title, now, account_id)).fetchone()
         if row is None:
             row = conn.execute(
                 "INSERT INTO assistant_projects "
-                "(account_id, title, stage, turns_json, created_at, updated_at) "
-                "VALUES (%s, %s, %s, %s, %s, %s) "
-                "RETURNING id, title, stage, turns_json, created_at, updated_at",
-                (account_id, title, stage, blob, now, now)).fetchone()
+                "(account_id, title, stage, turns_json, draft_json, created_at, updated_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s) "
+                f"RETURNING {_PROJECT_COLS}",
+                (account_id, title, stage, blob, draft_blob or "{}", now, now)).fetchone()
     return _project(row)
 
 

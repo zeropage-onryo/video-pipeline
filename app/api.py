@@ -606,7 +606,7 @@ async def _json_body(request: Request) -> Optional[dict]:
 @router.get("/assistant")
 def assistant_get(account_id: int = Depends(auth.current_account_id)):
     """The persona (None until set up) and the open project (None until the
-    first turn is saved)."""
+    first turn or draft is saved): its turns, step and the composer's draft."""
     from src import assistant_store
     return {"persona": assistant_store.get_persona(account_id=account_id),
             "project": assistant_store.open_project(account_id=account_id)}
@@ -630,12 +630,19 @@ async def assistant_project_save(request: Request,
     model_connections.mutation_header(request)
     body = await _json_body(request)
     if body is None or not isinstance(body.get("turns"), list):
-        return _error(400, "bad_request", "expected JSON {turns: [...], stage}")
+        return _error(400, "bad_request", "expected JSON {turns: [...], stage, draft?}")
+    # the composer's draft rides beside the thread (2026-10-02); a body
+    # without one -- or with something that is not an object -- leaves the
+    # stored draft alone, so the pill's save never blanks the box
+    draft = body.get("draft")
+    if draft is not None and not isinstance(draft, dict):
+        return _error(400, "bad_request", "draft must be an object")
     from src import assistant_store
     project = assistant_store.save_project(body["turns"], body.get("stage"),
-                                           account_id=account_id)
-    # the thread is the client's; echoing it back would double every save
-    return {"project": {k: v for k, v in project.items() if k != "turns"}}
+                                           draft=draft, account_id=account_id)
+    # the thread and the draft are the client's; echoing them back would
+    # double every save
+    return {"project": {k: v for k, v in project.items() if k not in ("turns", "draft")}}
 
 
 @router.post("/assistant/project/new")

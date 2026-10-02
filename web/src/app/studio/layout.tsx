@@ -3,6 +3,7 @@ import { cardFonts } from "@/components/studio/card-fonts";
 import { StudioShell } from "@/components/studio/shell";
 import { FilmGrain } from "@/components/film-grain";
 import { AssistantPill } from "@/components/studio/assistant-pill";
+import { AssistantThreadProvider } from "@/components/studio/assistant-thread";
 
 export const metadata: Metadata = {
   title: "Studio",
@@ -23,10 +24,14 @@ export default function StudioLayout({ children }: { children: React.ReactNode }
     <div className={`${cardFonts} contents`}>
       <FilmGrain />
       <StudioShell>
-        {children}
-        {/* the assistant pill: one per shell, so the conversation follows
-            the person from page to page (components/studio/assistant-pill.tsx) */}
-        <AssistantPill />
+        {/* ONE conversation for the pill and the Studio composer's Guide
+            (assistant-thread.tsx): loaded per account, saved on every
+            change, so it follows the person from page to page and back */}
+        <AssistantThreadProvider>
+          {children}
+          {/* the assistant pill: one per shell (components/studio/assistant-pill.tsx) */}
+          <AssistantPill />
+        </AssistantThreadProvider>
       </StudioShell>
     </div>
   );

@@ -683,6 +683,12 @@ button.tag:hover {
   color: var(--text);
   border-color: var(--signal);
 }
+/* an upload still on its way to the reference bin (page.tsx attach()):
+   drawn from its object URL, dimmed, no remove button until it has landed */
+.cattach.pending {
+  opacity: 0.55;
+  border-style: dashed;
+}
 /* a reference the browser cannot draw (HEIC off an iPhone): still a valid
    ref for the renderers, shown as its format rather than a blank tile */
 .cattach.raw {
