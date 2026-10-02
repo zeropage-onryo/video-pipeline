@@ -14,12 +14,19 @@ OWNED tables, one owner each:
   2026-10-02 the composer's DRAFT beside it (`draft_json`: the idea in the
   box, the brief the guide wrote, the picked references, the uploads as
   their bin URLs, which mode the box is in, the last "scene written"
-  card). One OPEN project per account (archived_at NULL); "New project"
-  archives it and a fresh one starts. Archived rows are kept -- the same
-  rule as the board: leaving is never deleting. The Studio composer's own
-  Guide thread lived only in the page's React state until today, so
-  clicking to another tab lost the conversation and every frame the hunt
-  had drawn; now the composer and the pill are two views on this one row.
+  card). One row per account, and it is WORKING MEMORY, not a record
+  (2026-10-02, Mike's call): a conversation exists only so the person can
+  pick up where they left off, on any page and in any browser. Once the
+  scene is CREATED the conversation goes away -- what it produced lives
+  on the concept and, after a render, on the asset with its prompt (the
+  Assets wall shows it there). The pill's button clears it the same way.
+  Nothing is ever archived: `clear_project` DELETES the row, and `init`
+  drops any row the earlier archive-on-new behaviour (2026-09-29 to
+  2026-10-02) left behind. `archived_at` stays on the live table but is
+  never set. The Studio composer's own Guide thread lived only in the
+  page's React state until today, so clicking to another tab lost the
+  conversation and every frame the hunt had drawn; now the composer and
+  the pill are two views on this one row.
 - `reference_verdicts`: the person's click on a contact sheet beside what
   refcheck decided about the same frame. Keep a frame the checker cut, or
   leave one it kept, and that disagreement is the only evidence there is of
@@ -101,6 +108,9 @@ def init(dsn: Optional[str] = None) -> None:
         # additive, for the live table made before the draft existed
         conn.execute("ALTER TABLE assistant_projects "
                      "ADD COLUMN IF NOT EXISTS draft_json TEXT NOT NULL DEFAULT '{}'")
+        # conversations are never archived (2026-10-02): rows the earlier
+        # archive-on-new left behind are dropped, once, here
+        conn.execute("DELETE FROM assistant_projects WHERE archived_at IS NOT NULL")
         for table in TABLES:
             db.own_table(conn, table)
         conn.execute(INDEXES)
@@ -260,12 +270,13 @@ def save_project(turns, stage, *, account_id: int, title: str = "",
     return _project(row)
 
 
-def new_project(*, account_id: int, dsn: Optional[str] = None) -> None:
-    """Archive the open project, if any. The next save starts a fresh one."""
+def clear_project(*, account_id: int, dsn: Optional[str] = None) -> None:
+    """Delete the account's conversation, if any. The next save starts a
+    fresh one. Nothing is archived: what a conversation produced is on
+    the concept it created, and the talk itself is working memory."""
     with db.connect(dsn) as conn:
-        conn.execute("UPDATE assistant_projects SET archived_at = %s "
-                     "WHERE account_id = %s AND archived_at IS NULL",
-                     (_now(), account_id))
+        conn.execute("DELETE FROM assistant_projects WHERE account_id = %s",
+                     (account_id,))
 
 
 # --- keep / reject against the checker -------------------------------------

@@ -27,7 +27,12 @@
    reference bin the moment it is dropped (POST /api/refs/upload) so what
    the draft remembers is a URL that resolves on every machine. Leaving
    and coming back -- or opening the pill on another page -- picks up
-   exactly where the talk was. */
+   exactly where the talk was. And ONLY that: a conversation is working
+   memory, not a record (Mike's call, same day). Once Create has written
+   the scene it goes away -- the talk, the brief, the box and its
+   references -- leaving the "scene written" card; what it produced is on
+   the concept and, rendered, on the asset with its prompt. The pill's
+   button clears it the same way. Nothing is archived. */
 import Link from "next/link";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useSearchParams } from "next/navigation";
@@ -170,7 +175,7 @@ function Composer() {
   const sparkParam = params.get("spark");
   // The thread and the box are the studio's (assistant-thread.tsx): the
   // same turns the pill shows, and a draft that survives leaving the page.
-  const { turns: thread, setTurns: setThread, draft, setDraft, ready } = useAssistantThread();
+  const { turns: thread, setTurns: setThread, draft, setDraft, ready, finishProject } = useAssistantThread();
   const { idea, picked, brief, written, uploads, mode: wantMode } = draft;
   const setIdea = useCallback(
     (v: string | ((s: string) => string)) => setDraft((d) => ({ ...d, idea: typeof v === "function" ? v(d.idea) : v })),
@@ -398,9 +403,11 @@ function Composer() {
         if (job.status === "done") {
           setProgress(1);
           say(null);
-          setWritten({ conceptId: job.ref_id ?? null, detail: job.detail || "on the board" });
+          // the conversation did its job: the scene is on the board with
+          // its prompt and references, so the talk, the brief and the box
+          // go away and only this card stays (2026-10-02, Mike's call)
+          finishProject({ conceptId: job.ref_id ?? null, detail: job.detail || "on the board" });
           toast("Scene written · it is on Pipeline to pick");
-          setIdea("");
           announceQueueChange();
         } else {
           say(job.error || "That run did not finish.", true);

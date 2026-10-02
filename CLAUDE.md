@@ -1736,8 +1736,15 @@ is yours, in Resolve, by hand.
   File object could never have survived the page. Load is the pill's rule, kept: the tab's
   sessionStorage copy paints first, the server's copy wins; `?spark=` and `?attach=` are
   applied only after that load so a saved draft cannot land on top of the visitor's
-  sentence. "New project" (the pill's pen) archives the row and clears the box too. Nothing
-  here calls a model or spends. Verified in Chrome against a throwaway schema: idea, pick
+  sentence. **A conversation is WORKING MEMORY, never a record (same day, Mike's call):**
+  it is saved only so the person can pick it up where they left off, on any page. Once
+  Create has written the scene it goes away -- `finishProject` clears the turns, the brief,
+  the box and its references, leaving only the "scene written" card -- and the pill's pen
+  (`clearProject`) does the same by hand. Nothing is ever archived: `DELETE
+  /api/assistant/project` deletes the row (`/project/new` is the older name for the same),
+  and `assistant_store.init` drops the rows the 2026-09-29 archive-on-new left behind. What
+  a conversation produced lives on the concept and, once rendered, on the asset with its
+  prompt, which the Assets wall shows. Nothing here calls a model or spends. Verified in Chrome against a throwaway schema: idea, pick
   and upload survived a rail round-trip and a reload with sessionStorage cleared; a real
   Guide turn in the box appeared in the pill on Pipeline, and the pill's reply there was
   the fourth turn in the box.

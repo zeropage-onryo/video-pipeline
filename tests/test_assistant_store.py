@@ -5,7 +5,7 @@ persona, the open project, and the Keep clicks against the checker.
 What each test guards:
 - a persona is cleaned the way the brain cleans it before it reaches a prompt
 - a project survives: the thread and the step come back as saved, bounded
-- "New project" archives rather than deletes, and the next save starts fresh
+- clearing DELETES the conversation (never archives), and the next save starts fresh
 - one account never sees another's persona, project or verdicts
 - a verdict is recorded only for an id a hunt actually served, and
   agreement() counts the disagreements in both directions
@@ -79,9 +79,9 @@ def test_an_unknown_stage_is_not_stored(store):
     assert assistant_store.open_project(account_id=1, dsn=store)["stage"] == ""
 
 
-def test_new_project_archives_and_the_next_save_starts_fresh(store):
+def test_clearing_deletes_the_conversation_and_the_next_save_starts_fresh(store):
     first = assistant_store.save_project(_turns(1), "story", account_id=1, dsn=store)
-    assistant_store.new_project(account_id=1, dsn=store)
+    assistant_store.clear_project(account_id=1, dsn=store)
     assert assistant_store.open_project(account_id=1, dsn=store) is None
     second = assistant_store.save_project([{"role": "user", "content": "a watch ad"}],
                                           "", account_id=1, dsn=store)
@@ -90,7 +90,18 @@ def test_new_project_archives_and_the_next_save_starts_fresh(store):
     with db.connect(store) as conn:
         kept = conn.execute("SELECT COUNT(*) AS n FROM assistant_projects "
                             "WHERE account_id = %s", (1,)).fetchone()["n"]
-    assert kept == 2                                        # archived, never deleted
+    assert kept == 1                                        # deleted, never archived
+
+
+def test_rows_archived_before_the_rule_are_dropped_on_init(store):
+    from src import db
+    assistant_store.save_project(_turns(1), "story", account_id=1, dsn=store)
+    with db.connect(store) as conn:
+        conn.execute("UPDATE assistant_projects SET archived_at = 'x' WHERE account_id = 1")
+    assistant_store.init(store)
+    with db.connect(store) as conn:
+        n = conn.execute("SELECT COUNT(*) AS n FROM assistant_projects").fetchone()["n"]
+    assert n == 0
 
 
 def test_accounts_never_see_each_others_memory(store):
@@ -153,6 +164,10 @@ def test_the_routes_round_trip_the_callers_memory(client, served):
     r = client.post("/api/assistant/reference-verdicts", headers=GUARD,
                     json={"frames": [{"id": "ope-a", "checker_kept": False, "person_kept": True}]})
     assert r.json()["recorded"] == 1 and r.json()["agreement"]["kept_anyway"] == 1
+    assert client.delete("/api/assistant/project", headers=GUARD).status_code == 200
+    assert client.get("/api/assistant").json()["project"] is None
+    # the older name still clears
+    client.put("/api/assistant/project", headers=GUARD, json={"turns": _turns(1), "stage": ""})
     assert client.post("/api/assistant/project/new", headers=GUARD).status_code == 200
     assert client.get("/api/assistant").json()["project"] is None
 
@@ -161,8 +176,9 @@ def test_the_writes_refuse_a_request_without_the_guide_header(client):
     for method, path, body in (("put", "/api/assistant/persona", {"name": "x"}),
                                ("put", "/api/assistant/project", {"turns": []}),
                                ("post", "/api/assistant/project/new", {}),
+                               ("delete", "/api/assistant/project", None),
                                ("post", "/api/assistant/reference-verdicts", {"frames": []})):
-        r = getattr(client, method)(path, json=body)
+        r = getattr(client, method)(path, **({"json": body} if body is not None else {}))
         assert r.status_code == 403, (path, r.status_code)
 
 
@@ -208,9 +224,9 @@ def test_a_draft_is_bounded_and_defaulted(store):
     assert got["written"] == {"conceptId": None, "detail": "d"} and got["brief"] == ""
 
 
-def test_new_project_starts_with_an_empty_draft(store):
+def test_a_cleared_conversation_starts_with_an_empty_draft(store):
     assistant_store.save_project([], "", draft={"idea": "old"}, account_id=1, dsn=store)
-    assistant_store.new_project(account_id=1, dsn=store)
+    assistant_store.clear_project(account_id=1, dsn=store)
     assistant_store.save_project([], "", draft={"idea": "new"}, account_id=1, dsn=store)
     assert assistant_store.open_project(account_id=1, dsn=store)["draft"]["idea"] == "new"
 

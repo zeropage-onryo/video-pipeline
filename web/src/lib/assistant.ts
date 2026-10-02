@@ -231,8 +231,11 @@ export const putProject = (turns: unknown[], stage: string, draft?: ComposerDraf
     headers: GUARDED_HEADERS,
     body: JSON.stringify(draft ? { turns, stage, draft } : { turns, stage }),
   });
-export const startNewProject = () =>
-  apiFetch<{ ok: boolean }>("/assistant/project/new", { method: "POST", headers: GUARDED_HEADERS, body: "{}" });
+/* Clear the conversation: DELETED on the server, never archived (2026-10-02,
+   Mike's call -- a conversation is working memory; what it made is on the
+   concept, and a render carries its prompt on the Assets wall). */
+export const clearProject = () =>
+  apiFetch<{ ok: boolean }>("/assistant/project", { method: "DELETE", headers: GUARDED_HEADERS });
 /* the Keep click against the checker, one entry per frame the sheet showed */
 export type FrameVerdict = {
   id: string;

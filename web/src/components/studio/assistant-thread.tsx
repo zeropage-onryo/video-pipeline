@@ -16,8 +16,16 @@
    The load is the pill's rule, kept: the browser's copy paints first, the
    server's copy then wins. A draft typed before the server answered is
    kept only when the server had none, and is pushed up by the save that
-   follows. "New project" archives the open row (never deletes) and clears
-   all three. Nothing here calls a model or spends. */
+   follows.
+
+   A CONVERSATION IS WORKING MEMORY (2026-10-02, Mike's call): it is saved
+   only so the person can pick it up where they left off. Once the scene is
+   CREATED it goes away (`finishProject`: the turns, the brief, the box and
+   its references are cleared, and only the "scene written" card remains
+   until "Write another"); the pill's button clears it the same way
+   (`clearProject`). Nothing is ever archived -- the server DELETES the row.
+   What the talk produced lives on the concept and, once rendered, on the
+   asset with its prompt. Nothing here calls a model or spends. */
 import {
   createContext,
   useCallback,
@@ -38,7 +46,7 @@ import {
   getAssistantMemory,
   isStage,
   putProject,
-  startNewProject,
+  clearProject as clearProjectOnServer,
   type ComposerDraft,
   type Stage,
   type Turn,
@@ -57,8 +65,10 @@ export type AssistantThread = {
   setStage: (s: Stage | "") => void;
   draft: ComposerDraft;
   setDraft: (update: DraftUpdate) => void;
-  /** archive the open project on the server and start empty */
-  newProject: () => Promise<void>;
+  /** delete the conversation on the server and start empty */
+  clearProject: () => Promise<void>;
+  /** the scene was created: the conversation is done, only its card remains */
+  finishProject: (written: ComposerDraft["written"]) => void;
 };
 
 const Ctx = createContext<AssistantThread>({
@@ -70,7 +80,8 @@ const Ctx = createContext<AssistantThread>({
   setStage: () => {},
   draft: EMPTY_DRAFT,
   setDraft: () => {},
-  newProject: async () => {},
+  clearProject: async () => {},
+  finishProject: () => {},
 });
 export const useAssistantThread = () => useContext(Ctx);
 
@@ -185,8 +196,8 @@ export function AssistantThreadProvider({ children }: { children: ReactNode }) {
     setDraftState((d) => (typeof update === "function" ? update(d) : { ...d, ...update }));
   }, []);
 
-  const newProject = useCallback(async () => {
-    await startNewProject();
+  const clearProject = useCallback(async () => {
+    await clearProjectOnServer();
     setTurns([]);
     setStage("");
     setDraftState(EMPTY_DRAFT);
@@ -197,6 +208,14 @@ export function AssistantThreadProvider({ children }: { children: ReactNode }) {
       /* nothing kept here to clear */
     }
   }, [account]);
+  // Create wrote the scene: everything the conversation was for is on the
+  // concept now. The card pointing at it is all that stays, and the save
+  // effect writes exactly that (a row with no turns and only the card).
+  const finishProject = useCallback((written: ComposerDraft["written"]) => {
+    setTurns([]);
+    setStage("");
+    setDraftState({ ...EMPTY_DRAFT, written });
+  }, []);
 
   const value = useMemo<AssistantThread>(
     () => ({
@@ -208,9 +227,10 @@ export function AssistantThreadProvider({ children }: { children: ReactNode }) {
       setStage,
       draft,
       setDraft,
-      newProject,
+      clearProject,
+      finishProject,
     }),
-    [account, loadedFor, turns, stage, draft, setDraft, newProject],
+    [account, loadedFor, turns, stage, draft, setDraft, clearProject, finishProject],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
