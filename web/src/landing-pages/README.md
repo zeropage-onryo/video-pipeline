@@ -9,7 +9,7 @@ The SEO landing pages under `/make/<slug>` live here, in one folder:
   subhead, the two buttons, the spotlight), `ad-wall` (one heavy uppercase
   line, an eight-tile wall on Motion -- tilt, lift, label slide -- and the
   Explore button; a tile with no `src` is a gradient plate), `features-section`
-  (nine cards on Motion, `features-grid`), `faq-section` (Base UI accordion), `related-section` (hidden
+  (nine cards on Motion, `features-grid`), `faq-section` (one big line over centered-question rows, Base UI accordion), `related-section` (hidden
   while empty), `final-cta`. `section-title` is the wall's headline.
   `make-page.tsx` assembles them inside the homepage's header, footer and skin.
 

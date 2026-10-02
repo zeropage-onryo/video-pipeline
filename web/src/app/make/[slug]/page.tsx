@@ -49,7 +49,7 @@ export default async function Page({ params }: Props) {
   const faqJsonLd = {
     "@context": "https://schema.org",
     "@type": "FAQPage",
-    mainEntity: page.faq.map((item) => ({
+    mainEntity: page.faq.items.map((item) => ({
       "@type": "Question",
       name: item.q,
       acceptedAnswer: { "@type": "Answer", text: item.a },

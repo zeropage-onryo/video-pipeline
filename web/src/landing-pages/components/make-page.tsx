@@ -25,7 +25,7 @@ export function MakePage({ page }: { page: MakePageEntry }) {
         <FeaturesSection page={page} />
         <ModelsSection page={page} />
         <HowToSection page={page} />
-        <FaqSection items={page.faq} />
+        <FaqSection title={page.faq.title} items={page.faq.items} />
         <RelatedSection page={page} />
         <FinalCta page={page} />
       </main>

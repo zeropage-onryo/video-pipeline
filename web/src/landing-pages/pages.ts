@@ -8,7 +8,7 @@
 // the composer takes `?spark=` and `?attach=` only, the Queue is the one
 // spend, prices come from the catalog below and are never typed by hand.
 //
-import { CATALOG, MODELS, num } from "@/lib/catalog";
+import { MODELS, num } from "@/lib/catalog";
 
 // One tile in the wall under the hero (the InVideo-style wall, 2026-10-01).
 // A tile with no `src` draws as a soft gradient plate, the way the
@@ -70,7 +70,8 @@ export type MakePage = {
   models: { title: string; items: MakeCard[] };
   /** Three numbered how-to cards under one big line. */
   howTo: { title: string; items: MakeCard[] };
-  faq: MakeFaq[];
+  /** The FAQ: one big line, then centered-question rows (faq-section.tsx). */
+  faq: { title: string; items: MakeFaq[] };
   /** Slugs of other /make pages to link to. Empty hides the section. */
   related: string[];
   finalCta: { eyebrow: string; title: string; body: string };
@@ -82,8 +83,9 @@ const model = (id: string) => {
   return m;
 };
 
-// The prices the FAQ quotes, read off the generated catalog so a re-export
-// of src/pricing.py changes the page and nothing has to be remembered.
+// The three models the model cards quote, read off the generated catalog so
+// a re-export of src/pricing.py changes the page and nothing has to be
+// remembered. The FAQ names every model and no price (2026-10-02).
 const ltx = model("ltx2.3");
 const kling = model("kling3-turbo-pro");
 const veo = model("veo3.1");
@@ -95,6 +97,12 @@ const modelCard = (m: typeof ltx): MakeCard => ({
   title: m.name,
   body: `${m.blurb} ${num(m.credits)} credits for a ${m.seconds}-second clip, on ${PLAN_FOR[m.tier]}.`,
 });
+// Every model name off the catalog, "A, B and C", for the FAQ.
+const MODEL_NAMES = (() => {
+  const n = MODELS.map((m) => m.name);
+  return n.length > 1 ? `${n.slice(0, -1).join(", ")} and ${n[n.length - 1]}` : n.join("");
+})();
+
 const MODEL_CARDS: MakeCard[] = [
   modelCard(ltx),
   modelCard(kling),
@@ -214,38 +222,54 @@ export const MAKE_PAGES: MakePage[] = [
         },
       ],
     },
-    faq: [
+    faq: {
+      // One line at the title's full size; longer wraps (measured 2026-10-02).
+      title: "FAQs about AI Ad Generator",
+      // The reference's questions (what it is, how to, the prompt, people,
+      // styles, references, models, length, commercial use), each answer
+      // checked against the code on 2026-10-02. Cost stays out of this
+      // section (Mike's call): prices live on /pricing and /models.
+      items: [
         {
-          q: "What do I need to start?",
-          a: "A few photos of the product and a sentence about the ad. Photos go into the composer as references, or into Elements as a product you reuse across ads.",
+          q: "What is an AI product ad generator?",
+          a: "A studio that writes a short ad from your product photos and one line about it. The scene is written as timed shots, each shot's first frame is drawn from your photos, and each shot renders as its own clip on the video model you pick. The clips assemble into one MP4.",
         },
         {
-          q: "How long is an ad?",
+          q: "How do I make a product ad with it?",
+          a: "Sign in, drop a few product photos into the composer, write one line about the ad, and press Create. Pick the scene on the board, which draws its keyframes, then approve each shot in the Queue. The clips land on your Assets wall, and Export joins them in shot order into one MP4.",
+        },
+        {
+          q: "How do I write the prompt for the best ad?",
+          a: "Name the product, one action per shot, and the look you want. The studio writes the full scene prompt as timed shots from that line and your photos. If you would rather talk it through, the Guide works through story, look and pacing with you first. Then check each shot's keyframe before you render: that still is what the clip anchors on, and the Director lets you edit the prompt, swap a reference and redraw it.",
+        },
+        {
+          q: "Can I upload my own product photos as references?",
+          a: "Yes. Upload photos into the composer for one ad, or save the product as an element with its photos and reuse it across ads. Every keyframe is drawn from the references attached to the scene, and a scene with no references never reaches the Queue.",
+        },
+        {
+          q: "Can it show a real person or the same product every time?",
+          a: "Save the person or product as an element with a few photos, and every scene written against it is held to those frames, keyframe and clip. Video models still vary between renders, so look at the keyframe before you approve. No pixel match is promised, and you need the consent of anyone whose likeness you upload.",
+        },
+        {
+          q: "What looks and styles can it make?",
+          a: "Whatever you can describe: the prompt carries the look, the lighting and the camera, and the keyframe shows it before a clip renders. Attach a reference image for the mood and the writing is grounded in it. The Guide can work through the look with you if you have not settled on one.",
+        },
+        {
+          q: "Which video models does it render on?",
+          a: `${MODEL_NAMES}, chosen per shot in the Queue with a length and a frame.`,
+          link: { href: "/models", label: "See every model" },
+        },
+        {
+          q: "How long can an ad be?",
           a: "A scene runs 4 to 30 seconds, written as timed shots. Each shot renders as its own clip, fitted to the lengths the model you picked supports.",
         },
         {
-          q: "Which models can I use?",
-          a: "LTX 2.3 and Wan 3.0 on every plan, Kling 3 Turbo Pro and Seedance 2.0 from Creator, Veo 3.1 on Studio. You pick per approve.",
-          link: { href: "/models", label: "See every model and its price" },
+          q: "Can I use the ads commercially?",
+          a: "What the studio generates for your account is yours to use, subject to the terms of the model that rendered it. The output is AI-made, so review it before you publish it.",
+          link: { href: "/terms", label: "Read the terms" },
         },
-        {
-          q: "What does one cost?",
-          a: `A credit is ${CATALOG.credit_cents === 1 ? "a cent" : `${CATALOG.credit_cents} cents`}. A ${ltx.seconds}-second ${ltx.name} clip is ${num(ltx.credits)} credits, a ${kling.seconds}-second ${kling.name} clip ${num(kling.credits)}, a ${veo.seconds}-second ${veo.name} clip ${num(veo.credits)}. A three-shot ad on ${ltx.name} is a few hundred credits.`,
-          link: { href: "/pricing", label: "See the plans" },
-        },
-        {
-          q: "Will the product look exactly like my photos?",
-          a: "Each clip anchors on a keyframe drawn from your references, and you approve that still before rendering. Video models still vary, so redraw the keyframe until it is right before you spend. No pixel match is promised.",
-        },
-        {
-          q: "Can I add music?",
-          a: "Export can lay a music bed you upload under the clips' own sound, levelled for social.",
-        },
-        {
-          q: "Does it post the ad for me?",
-          a: "No. Download it or export the MP4 and post it where you like.",
-        },
-    ],
+      ],
+    },
     related: [],
     finalCta: {
       eyebrow: "Your first ad",
