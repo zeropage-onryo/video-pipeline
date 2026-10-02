@@ -3,7 +3,7 @@
 The SEO landing pages under `/make/<slug>` live here, in one folder:
 
 - `pages.ts` — one typed entry per page. **Adding a page is adding an entry.**
-  The route, the sitemap, the footer's Make column and the FAQ JSON-LD all
+  The route, the sitemap, the header's Solutions menu, the footer's Tools column and the FAQ JSON-LD all
   read this list. Prices in copy are read off `@/lib/catalog`, never typed.
 - `components/` — the sections, in page order: `make-hero` (bold serif H1,
   subhead, the two buttons, the spotlight), `ad-wall` (one heavy uppercase

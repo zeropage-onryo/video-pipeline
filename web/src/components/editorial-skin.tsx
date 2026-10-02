@@ -1,4 +1,6 @@
-import type { ReactNode } from "react";
+"use client";
+
+import { createContext, useContext, type ReactNode } from "react";
 
 // The public site's skin, applied as a wrapper rather than on <html>:
 // the root layout is shared with /studio, which keeps the noir tokens.
@@ -8,18 +10,30 @@ import type { ReactNode } from "react";
 // `tone="light"` adds `.editorial-light`, the same tokens inverted (white
 // ground, black type) -- the /make landing pages wear it; the homepage
 // and the legal pages stay dark.
-export function EditorialSkin({
-  children,
-  tone = "dark",
-}: {
-  children: ReactNode;
-  tone?: "dark" | "light";
-}) {
+//
+// The tone is also published through a context, because anything that
+// PORTALS to <body> (the header's Solutions panel) leaves this wrapper and
+// would otherwise draw with the root's noir tokens on a white page. Such a
+// portal stamps `skinClass(useTone())` onto its root.
+export type Tone = "dark" | "light";
+
+const ToneContext = createContext<Tone>("dark");
+
+export function useTone(): Tone {
+  return useContext(ToneContext);
+}
+
+/** The classes that make an element read the skin's tokens. */
+export function skinClass(tone: Tone): string {
+  return `editorial ${tone === "light" ? "editorial-light" : ""}`;
+}
+
+export function EditorialSkin({ children, tone = "dark" }: { children: ReactNode; tone?: Tone }) {
   return (
-    <div
-      className={`editorial ${tone === "light" ? "editorial-light" : ""} flex min-h-svh flex-1 flex-col bg-background text-foreground`}
-    >
-      {children}
-    </div>
+    <ToneContext.Provider value={tone}>
+      <div className={`${skinClass(tone)} flex min-h-svh flex-1 flex-col bg-background text-foreground`}>
+        {children}
+      </div>
+    </ToneContext.Provider>
   );
 }

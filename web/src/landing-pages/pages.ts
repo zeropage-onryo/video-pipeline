@@ -54,6 +54,8 @@ export type MakePage = {
   title: string;
   description: string;
   h1: string;
+  /** The short line in the header's Solutions menu (site-header.tsx). */
+  menu: string;
   subhead: string;
   cta: { label: string; /** carried into the composer as ?spark= */ spark: string };
   /** Which starting shape the composer opens with. Only "spark" exists
@@ -134,10 +136,11 @@ const TILES: MakeTile[] = [
 export const MAKE_PAGES: MakePage[] = [
   {
     slug: "ai-product-ad-generator",
-    title: "AI Product Generator",
+    title: "AI Ad Generator",
     description:
       "Upload your product, pick a look, and render a short ad on Kling, Seedance, LTX, Wan or Veo.",
-    h1: "AI Product Generator",
+    h1: "AI Ad Generator",
+    menu: "AI Ad Generator",
     subhead: "Upload your product, pick a look, and render a short ad on the model you choose.",
     cta: {
       label: "Create your ad",

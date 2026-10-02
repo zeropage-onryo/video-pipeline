@@ -13,7 +13,9 @@ const COLUMNS: { title: string; links: [string, string][] }[] = [
     ],
   },
   {
-    title: "Make",
+    // "Tools" (Mike, 2026-10-02): the word the generator sites use and the
+    // phrase people search; "Make" is the URL segment, not a label.
+    title: "Tools",
     // every /make landing page, off its own entry, so the site links to
     // each one from every page (crawlers find it; the person does too)
     links: MAKE_PAGES.map((page) => [page.h1, makePath(page.slug)]),
