@@ -90,6 +90,25 @@ def _on(var: str, default: str = "1") -> bool:
     return (os.environ.get(var, default) or "").strip().lower() not in ("", "0", "no", "off", "false")
 
 
+# Every variable `sources()` reads to decide whether a lane can run. The
+# test suite unsets all of them (tests/conftest.py), because a key in one
+# machine's .env turns a lane on there and nowhere in CI: SERPER_API_KEY
+# went into Mike's .env on 2026-10-02 and a test of "nothing configured"
+# failed on his Mac only. A new lane's key goes here, or
+# test_imagesearch's check that this list is whole fails. GEMINI_API_KEY
+# is left out on purpose: it is only the Google lane's fallback key, and
+# that lane is off without GOOGLE_CSE_ID.
+LANE_ENV = (
+    "OPENVERSE_LANE",
+    "GOOGLE_CSE_ID", "GOOGLE_CSE_KEY",
+    "REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET",
+    "PINTEREST_ACCESS_TOKEN",
+    "UNSPLASH_ACCESS_KEY",
+    "PEXELS_API_KEY",
+    "SERPER_API_KEY",
+)
+
+
 def sources() -> dict:
     """Which lanes can run. "Not configured" is a normal state and has
     to be visible: an empty result with no explanation is what let an
