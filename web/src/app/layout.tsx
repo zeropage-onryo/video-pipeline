@@ -35,7 +35,9 @@ const inter = Inter({
 const lora = Lora({
   variable: "--font-lora",
   subsets: ["latin"],
-  weight: ["400", "500"],
+  // 700 is for the /make pages' headline only (`.serif-bold`, 2026-10-01);
+  // every other serif on the site stays at 400.
+  weight: ["400", "500", "700"],
 });
 
 const jetbrains = JetBrains_Mono({

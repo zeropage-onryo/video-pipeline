@@ -1,0 +1,576 @@
+/* The studio composer, "Direction A" (2026-10-02). Everything is scoped
+   under .zc (set on the Studio page's .hero) so the shared studio.css
+   rules the other pages use are untouched. Tokens are studio.css's own:
+   --signal, --line, --line-hi, --text, --dim, --dimmer, --body, --mono.
+   Minimal pro-tool: one quiet box, red only where something is live --
+   the send button, a selected state, progress, the drop target. */
+
+.zc.hero.zc-active {
+  padding-top: 4vh;
+}
+.zc .stack {
+  max-width: 820px;
+}
+
+/* ── the box ── */
+.zc .zc-box {
+  border-radius: 18px;
+  background: rgb(18 18 21 / 0.82);
+}
+/* Docked under the turns. The assistant pill is fixed bottom-right on
+   every page (assistant.css: right 36px, ~380px wide), so below 1800px
+   the docked column moves left and narrows to clear it rather than
+   letting the pill sit on the send button. Phones do not dock at all:
+   the pill and the tab bar already own the bottom of the screen there. */
+.zc.zc-active .zc-box {
+  position: sticky;
+  bottom: 18px;
+  z-index: 4;
+}
+@media (max-width: 1799px) {
+  .zc.hero.zc-active {
+    align-items: flex-start;
+  }
+  .zc.zc-active .stack {
+    max-width: min(820px, calc(100% - 440px));
+  }
+}
+@media (max-width: 900px) {
+  .zc.hero.zc-active {
+    align-items: center;
+  }
+  .zc.zc-active .stack {
+    max-width: 820px;
+  }
+  .zc.zc-active .zc-box {
+    position: relative;
+    bottom: auto;
+  }
+}
+.zc .zc-box textarea {
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.55;
+  min-height: 72px;
+  padding: 16px 20px 4px;
+}
+.zc .zc-box textarea:focus-visible {
+  /* the box's own glow (.glass.awake) is the focus signal */
+  outline: none;
+}
+.zc.zc-active .zc-box textarea {
+  min-height: 52px;
+}
+
+/* compact reference chips (replace the big slots) */
+.zc .zc-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 12px 14px 0;
+}
+.zc .zc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 4px 0 4px;
+  border-radius: 9px;
+  background: rgb(255 255 255 / 0.06);
+  color: #c9c8c6;
+  font-size: 12px;
+  max-width: 220px;
+}
+.zc .zc-chip-thumb {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: #1c1c20 center / cover no-repeat;
+  flex: none;
+  display: grid;
+  place-items: center;
+  font-family: var(--mono);
+  font-size: 7px;
+  color: var(--dim);
+}
+.zc .zc-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.zc .zc-chip.preset {
+  padding-left: 10px;
+  border: 1px solid rgb(228 0 43 / 0.4);
+  background: var(--signal-soft);
+  color: var(--text);
+}
+.zc .zc-chip button {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dim);
+  display: grid;
+  place-items: center;
+  padding: 0;
+  flex: none;
+}
+.zc .zc-chip button:hover {
+  color: var(--text);
+  background: rgb(255 255 255 / 0.08);
+}
+.zc .zc-chip button svg {
+  width: 12px;
+  height: 12px;
+}
+.zc .zc-chips .cclear {
+  height: 32px;
+}
+
+/* ── the toolbar ── */
+.zc .zc-tools {
+  gap: 4px;
+  padding: 8px 10px 10px 12px;
+}
+.zc .zc-seg {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  border-radius: 11px;
+  background: rgb(0 0 0 / 0.35);
+  border: 1px solid var(--line);
+}
+.zc .zc-seg button {
+  height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dim);
+  font-family: var(--body);
+  font-size: 12.5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition:
+    background var(--t),
+    color var(--t);
+}
+.zc .zc-seg button svg {
+  width: 14px;
+  height: 14px;
+}
+.zc .zc-seg button:hover {
+  color: var(--text);
+}
+.zc .zc-seg button[aria-checked="true"] {
+  background: rgb(255 255 255 / 0.1);
+  color: var(--text);
+}
+.zc .zc-tool {
+  height: 36px;
+  min-width: 36px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--dim);
+  font-family: var(--body);
+  font-size: 12.5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition:
+    background var(--t),
+    color var(--t);
+}
+.zc .zc-tool:hover,
+.zc .zc-tool[aria-expanded="true"] {
+  color: var(--text);
+  background: rgb(255 255 255 / 0.06);
+}
+.zc .zc-tool[aria-pressed="true"] {
+  color: var(--text);
+  background: rgb(255 255 255 / 0.1);
+}
+.zc .zc-tool svg {
+  width: 15px;
+  height: 15px;
+}
+.zc .zc-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 4px;
+  background: var(--line);
+}
+.zc .zc-send {
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--signal);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  transition:
+    filter var(--t),
+    opacity var(--t),
+    transform var(--t);
+}
+.zc .zc-send:hover {
+  filter: brightness(1.12);
+}
+.zc .zc-send:active {
+  transform: translateY(1px);
+}
+.zc .zc-send:disabled {
+  opacity: 0.4;
+  cursor: default;
+  filter: none;
+}
+.zc .zc-send svg {
+  width: 17px;
+  height: 17px;
+}
+.zc .zc-send.zpa-ring {
+  box-shadow: 0 0 0 3px rgb(228 0 43 / 0.35);
+}
+.zc .zc-stop {
+  height: 40px;
+  padding: 0 14px;
+  border-radius: 12px;
+  border: 1px solid var(--signal);
+  background: transparent;
+  color: var(--text);
+  font-family: var(--body);
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.zc .zc-stop::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--signal);
+}
+.zc .zc-thinking {
+  height: 40px;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 12.5px;
+  color: var(--dim);
+}
+
+/* ── the slash menu ── */
+.zc .zc-slash {
+  position: absolute;
+  left: 12px;
+  bottom: calc(100% + 6px);
+  width: min(400px, calc(100% - 24px));
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 6px;
+  border-radius: 13px;
+  border: 1px solid var(--line-hi);
+  background: #141417;
+  box-shadow: 0 18px 44px rgb(0 0 0 / 0.55);
+  z-index: 20;
+}
+.zc .zc-slash-head {
+  padding: 8px 10px 4px;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dimmer);
+}
+.zc .zc-slash-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  height: 38px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+.zc .zc-slash-item[aria-selected="true"] {
+  background: rgb(255 255 255 / 0.07);
+}
+.zc .zc-slash-cmd {
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+.zc .zc-slash-desc {
+  font-size: 12px;
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.zc .zc-slash-empty {
+  padding: 10px;
+  font-size: 12px;
+  color: var(--dim);
+}
+
+/* ── turns: what each send made ── */
+.zc .zc-turns {
+  display: flex;
+  flex-direction: column;
+  gap: 30px;
+  padding-bottom: 8px;
+}
+.zc .zc-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.zc .zc-ask {
+  display: flex;
+  justify-content: flex-end;
+}
+.zc .zc-bubble {
+  max-width: min(560px, 85%);
+  padding: 12px 16px;
+  border-radius: 16px;
+  background: rgb(255 255 255 / 0.07);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.zc .zc-bubble p {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.zc .zc-bubble-refs {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.zc .zc-bubble-refs img {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  object-fit: cover;
+}
+.zc .zc-bubble-refs b {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--dim);
+}
+.zc .zc-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--dim);
+}
+.zc .zc-meta.bad {
+  color: var(--signal);
+}
+.zc .zc-live {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--signal);
+  animation: zc-pulse 1.4s ease-in-out infinite;
+}
+@keyframes zc-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .zc-live {
+    animation: none;
+  }
+}
+.zc .zc-image {
+  position: relative;
+  /* 420px wide at most, and never taller than 560px: turns.tsx sets the
+     frame's aspect-ratio and a max-width of 560px x that ratio, so a tall
+     frame narrows instead of being cropped to fit (a 9:16 still drawn in a
+     420x560 box lost a quarter of its height to object-fit: cover) */
+  width: min(420px, 100%);
+  border-radius: 12px;
+  overflow: hidden;
+  background: #121215;
+  border: 1px solid var(--line);
+  display: grid;
+  place-items: center;
+}
+.zc .zc-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.zc .zc-pct {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--dim);
+  padding: 0 16px;
+  text-align: center;
+}
+.zc .zc-bar {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--signal);
+  transition: width 400ms ease;
+}
+.zc .zc-scene {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.zc .zc-scene.running {
+  height: 90px;
+  border-radius: 12px;
+  background: #121215;
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+.zc .zc-scene-title {
+  font-size: 15px;
+  font-weight: 500;
+}
+.zc .zc-scene-one {
+  margin: 0;
+  font-size: 13px;
+  color: var(--dim);
+}
+.zc .zc-shots {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+}
+.zc .zc-shot {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.zc .zc-shot-frame {
+  aspect-ratio: 16 / 9;
+  border-radius: 9px;
+  overflow: hidden;
+  background: #151518;
+  border: 1px solid var(--line);
+  display: grid;
+  place-items: center;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--dimmer);
+}
+.zc .zc-shot-frame img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.zc .zc-shot-time {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--dim);
+}
+.zc .zc-shot-text {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: #c9c8c6;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  line-clamp: 3;
+  overflow: hidden;
+}
+.zc .zc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.zc .zc-act {
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: #c9c8c6;
+  font-family: var(--body);
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+  transition:
+    border-color var(--t),
+    color var(--t);
+}
+.zc .zc-act:hover {
+  border-color: var(--line-hi);
+  color: var(--text);
+}
+.zc .zc-act:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.zc .zc-act svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* the starters under an empty box */
+.zc .zc-starters {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+.zc .zc-starters button {
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgb(255 255 255 / 0.02);
+  color: var(--dim);
+  font-family: var(--body);
+  font-size: 13px;
+  transition:
+    color var(--t),
+    border-color var(--t);
+}
+.zc .zc-starters button:hover {
+  color: var(--text);
+  border-color: var(--line-hi);
+}
+
+@media (max-width: 640px) {
+  .zc .zc-tools {
+    row-gap: 6px;
+  }
+  .zc-seg button {
+    padding: 0 10px;
+  }
+  .zc-shots {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

@@ -13,6 +13,9 @@ const nextConfig: NextConfig = {
   // them, so a 2MB PNG reaches the page as a ~60KB WebP.
   images: {
     remotePatterns: [{ protocol: "https", hostname: "*.r2.dev" }],
+    // the qualities the pages ask for (70 on the landing tiles, 60 on the
+    // /make close); Next 16 warns on any value not listed here
+    qualities: [60, 70, 75],
   },
   // A separate build directory lets production validation run alongside dev.
   async rewrites() {

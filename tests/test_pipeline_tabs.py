@@ -229,6 +229,25 @@ def test_generate_run_saves_a_real_one_shot_concept(tmp_db, hermetic_generate,
     assert job["output"].startswith("ENHANCED[")
 
 
+def test_generate_run_passes_an_allowed_image_aspect(tmp_db, hermetic_generate,
+                                                    monkeypatch):
+    """The composer's image shape (2026-10-02): an allowlisted aspect reaches
+    Nano Banana; anything else is dropped so the module default applies."""
+    seen = []
+
+    def fake(prompt, reference_image=None, db_path=None, **kw):
+        seen.append(kw.get("aspect_ratio"))
+        return {"ok": True, "media_url": "/renders/frame.png"}
+
+    monkeypatch.setattr("src.nano_banana.generate_from_prompt", fake)
+    for aspect in ("4:5", "7:3"):
+        job = wait_for_job(client.post("/api/generate/run", data={
+            "prompt": "a still", "output": "image", "aspect": aspect,
+        }).json()["job_id"])
+        assert job["status"] == "done"
+    assert seen == ["4:5", None]
+
+
 def test_generate_run_attaches_to_an_existing_concept(tmp_db, hermetic_generate):
     concept_id = seed_concept(tmp_db)
     job = wait_for_job(client.post("/api/generate/run", data={

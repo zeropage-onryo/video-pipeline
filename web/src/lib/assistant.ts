@@ -182,7 +182,7 @@ export type ComposerDraft = {
   uploads: UploadRef[];
   written: { conceptId: number | null; detail: string } | null;
 };
-export const EMPTY_DRAFT: ComposerDraft = { idea: "", brief: "", mode: "guide", picked: [], uploads: [], written: null };
+export const EMPTY_DRAFT: ComposerDraft = { idea: "", brief: "", mode: "create", picked: [], uploads: [], written: null };
 export const draftHasContent = (d: ComposerDraft | null | undefined) =>
   !!d && !!(d.idea.trim() || d.brief.trim() || d.picked.length || d.uploads.length || d.written);
 /* whatever came back, in the shape the page can trust */
@@ -191,7 +191,7 @@ export function asDraft(raw: unknown): ComposerDraft {
   return {
     idea: typeof d.idea === "string" ? d.idea : "",
     brief: typeof d.brief === "string" ? d.brief : "",
-    mode: d.mode === "create" ? "create" : "guide",
+    mode: d.mode === "guide" ? "guide" : "create",
     picked: Array.isArray(d.picked) ? d.picked.filter((u): u is string => typeof u === "string") : [],
     uploads: Array.isArray(d.uploads)
       ? d.uploads.filter((u): u is UploadRef => !!u && typeof u === "object" && typeof (u as UploadRef).url === "string")
