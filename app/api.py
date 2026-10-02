@@ -2257,6 +2257,7 @@ async def scenes_run(request: Request, account_id: int = Depends(auth.current_ac
 class ProjectBody(BaseModel):
     title: Optional[str] = None
     brief: Optional[str] = None
+    look: Optional[str] = None
 
 
 class ProjectDraftBody(BaseModel):
@@ -2283,7 +2284,8 @@ def projects_list(archived: bool = False,
 @router.post("/projects")
 def projects_create(body: ProjectBody, account_id: int = Depends(auth.current_account_id)):
     try:
-        return projects.create(body.title or "", body.brief or "", account_id=account_id)
+        return projects.create(body.title or "", body.brief or "", account_id=account_id,
+                               look=body.look or "")
     except ValueError as e:
         return _error(400, "bad_project", str(e))
 
@@ -2321,7 +2323,7 @@ def projects_update(project_id: int, body: ProjectBody,
                     account_id: int = Depends(auth.current_account_id)):
     try:
         return projects.update(project_id, account_id=account_id,
-                               title=body.title, brief=body.brief)
+                               title=body.title, brief=body.brief, look=body.look)
     except ValueError as e:
         return _error(404 if "no project" in str(e) else 400, "bad_project", str(e))
 

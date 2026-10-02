@@ -1202,8 +1202,12 @@ def generate_concept_ideas(brand: str, client=None, spark=None, gemini_client=No
 
 
 def gold_standard_example() -> str:
-    """The canonical proven prompt (prompts/gold_standard.md), injected as the
-    exemplar every scene brief is measured against. '' if the file is absent --
+    """The exemplar (prompts/gold_standard.md) every scene brief is
+    measured against -- for its five-part SHAPE, which is the proven part.
+    Its subject and look were rewritten 2026-10-02: the original (a dark
+    comedy, a monster in a bed, raw handheld and muted colour; in git
+    history) leaked its genre into look-less runs, and the studio has no
+    house look. '' if the file is absent --
     the exemplar is an enhancement, never a hard dependency."""
     try:
         return (PROMPTS_DIR / "gold_standard.md").read_text().strip()
@@ -1254,7 +1258,7 @@ def build_scene_brief_prompt(brand: str, spark=None, references: str = "",
             .replace("{card_line_rules}", CARD_LINE_RULES)
             .replace("{seconds}", str(timeline.scene_seconds(seconds)))
             .replace("{brand}", load_brand(brand))
-            .replace("{look}", looks.look_block(brand))
+            .replace("{look}", looks.look_block(brand) or looks.unset_note())
             .replace("{spark}", f"CREATIVE SPARK FROM THE FILMMAKER: {spark}" if spark else "")
             .replace("{references}", references or NO_REFERENCES_NOTE)
             .replace("{cast}", cast or NO_CAST_NOTE)
@@ -1441,6 +1445,7 @@ def build_scenes_prompt(idea: str, brand: str, count: int, locations: list,
             .replace("{seconds}", str(timeline.scene_seconds(seconds)))
             .replace("{idea}", (idea or "").strip() or "(no idea given — surprise me)")
             .replace("{brand}", load_brand(brand))
+            .replace("{look}", looks.look_block(brand) or looks.unset_note())
             .replace("{cast}", cast or NO_CAST_NOTE)
             .replace("{locations}", format_scene_locations(locations))
             .replace("{references}", references or NO_REFERENCES_NOTE)
