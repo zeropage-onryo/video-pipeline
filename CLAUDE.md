@@ -1733,7 +1733,13 @@ is yours, in Resolve, by hand.
   (`scenes_prompt.txt` gained one -- the Studio Create never read the look before) and
   print `prompts/look_unset.txt` in its place when it is empty. `look_zeropage.txt` was
   rewritten the same day as a genre-free NOTE (no horror finish, creature, "wrongness" or
-  rain). `tests/test_project_look.py` guards the order and the no-genre regression. NOT ported with it, left on
+  rain). `tests/test_project_look.py` guards the order and the no-genre regression.
+  The same day `brands.txt` `[zeropage]` lost "dark, contrasty" and `gold_standard.md` was
+  rewritten off the monster/portal dark comedy (same five-part shape, one take, daylight).
+  The exemplar is NO LONGER a winner: startup used to seed it onto the `winning_prompts`
+  shelf (`seed_gold_standard`); live row #2 and its 4 chunks were deleted by hand, and
+  `app.main.retire_gold_standard` now runs at boot instead, removing any row with that exact
+  note (and its chunks, via `winners.retire_by_note`) and seeding nothing. NOT ported with it, left on
   `wip/main-checkout-2026-09-28` as Mike's to decide: `load_brand` forcing every run to
   zeropage, `CAST_BRANDS` gaining zeropage (lifts the faceless rule), and the rewritten
   brand/look/scene prompts.
