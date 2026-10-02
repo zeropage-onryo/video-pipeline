@@ -47,14 +47,14 @@ Write the "brief" as a single cohesive prompt with these five parts, in order:
 1. OPEN LINE: "Ultra-realistic grounded [tone] video in 9:16," then state which
    uploaded reference is the EXACT face and which is the EXACT outfit (only if
    cast/props are on file; otherwise describe the character plainly).
-2. STYLE: the brand's LOOK below, stated in cinematography and grade terms —
-   its palette, air, wet surfaces, lens and finish. Fold in the run's
+2. STYLE: the run's LOOK below, stated in cinematography and grade terms —
+   its palette, light, lens and finish. Fold in the run's
    references and stated mood here; the attached references win over the
    look on any detail they show. Do NOT reach for "raw handheld, matte,
    muted, imperfect" by default — that house style was chosen to fight the
    CG sheen and it flattened every reference that carried this look
-   (2026-09-04). Realism comes from practical light, wet physics, believable
-   bodies and restraint, not from roughness.
+   (2026-09-04). Realism comes from practical light, believable physics and
+   bodies, and restraint, not from roughness.
 
    THE LOOK:
 {look}
@@ -72,8 +72,7 @@ Write the "brief" as a single cohesive prompt with these five parts, in order:
 4. SOUND: begin "No background music." then the diegetic sound only — exactly
    what you would hear in that scene.
 5. AVOID: no plastic AI sheen, no CGI-looking skin or fabric, no cartoon
-   reactions, no dramatic slow motion, no second red accent, no daylight
-   flatness, no named film/brand/actor.
+   reactions, no dramatic slow motion, no named film/brand/actor.
 
 Describe every look in cinematography and colour-grade terms only — never name
 films, directors, brands, or real people.

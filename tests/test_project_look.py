@@ -88,6 +88,24 @@ def test_a_scene_prompt_in_a_look_less_project_carries_no_house_genre(build, bra
     assert looks.unset_note() in prompt
 
 
+# guards: the writers' own defaults -- the house style lived in the
+# templates too, and both verification Creates copied it verbatim. The
+# exemplar is stubbed out: it quotes its own grade and is matched for SHAPE.
+TEMPLATE_HOUSE_STYLE = ("raw handheld, close wide-angle", "muted colour", "wet surfaces",
+                        "wet physics", "second red accent", "daylight flatness",
+                        "heavy colour grading", "smooth commercial camera movement",
+                        "physical comedy or tension")
+
+
+@pytest.mark.parametrize("build", [build_scene_brief, build_scenes])
+def test_the_scene_writers_carry_no_default_style_of_their_own(build, monkeypatch):
+    monkeypatch.setattr(shootgen, "gold_standard_example", lambda: "")
+    with project_context.active(a_project()):
+        prompt = build("zeropage")
+    found = [w for w in TEMPLATE_HOUSE_STYLE if w in prompt]
+    assert found == [], f"a template default would fight the project's look: {found}"
+
+
 # guards: the {look} slot in BOTH writers carrying the project's look
 @pytest.mark.parametrize("build", [build_scene_brief, build_scenes])
 def test_a_scene_prompt_in_a_project_carries_its_look(build):

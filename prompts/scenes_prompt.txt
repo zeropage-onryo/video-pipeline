@@ -49,14 +49,11 @@ Write each "prompt" as a single cohesive directive with these five parts, in ord
 1. OPEN LINE: "Ultra-realistic grounded [tone] video in 9:16," then state which
    uploaded reference is the EXACT face and which is the EXACT outfit (only if
    cast/props are on file; otherwise describe the character plainly).
-2. STYLE: raw handheld, close wide-angle placement, natural camera shake,
-   imperfect framing that drifts and re-centres, muted colour, practical light,
-   real locations, grounded and rough — NOT glossy, epic or stylized. Fold in
-   the run's references and stated mood here. Use the channel's fallback grade
-   only where those inputs leave the look unspecified. THE LOOK below is this
-   run's own: on any detail it names (palette, light, lens, camera movement,
-   finish) it overrides the defaults in this STYLE part and in AVOID. The
-   attached references still win on what they actually show.
+2. STYLE: the run's look in cinematography and grade terms — palette, light,
+   lens, camera movement and finish — taken from THE LOOK below and the
+   attached references (which win on what they actually show), then the
+   stated mood. Realism comes from motivated light, believable bodies and
+   restraint; never plastic AI sheen.
 
    THE LOOK:
 {look}
@@ -69,14 +66,13 @@ Write each "prompt" as a single cohesive directive with these five parts, in ord
    changes happen BETWEEN windows, never inside one; say them ("hard cut to",
    "reverse on"). One window for the whole scene is right when the idea is one
    continuous moment. Open on an uncomfortable or arresting image (the frame-1
-   hook), turn/reveal, escalate with grounded physical comedy or tension, and
-   END ABRUPTLY. Reactions are serious and physically believable — that
-   restraint is what makes it funny or tense, never cartoon.
+   hook), turn/reveal, and END ABRUPTLY. Reactions are serious and physically
+   believable, never cartoon.
 4. SOUND: begin "No background music." then the diegetic sound only — exactly
    what you would hear in that scene.
-5. AVOID: no polished/fantasy gloss, no dramatic slow motion, no glossy CGI, no
-   plastic AI sheen, no cartoon reactions, no heavy colour grading, no smooth
-   commercial camera movement.
+5. AVOID: no plastic AI sheen, no glossy CGI or CGI-looking skin and fabric, no
+   cartoon reactions, no dramatic slow motion unless THE LOOK asks for it, no
+   named film/brand/actor.
 
 Describe every look in cinematography and colour-grade terms only — never name
 films, directors, brands, or real people.
