@@ -17,7 +17,7 @@ import { MODELS, num } from "@/lib/catalog";
 export type MakeTile = {
   /** The bold label on the tile. Empty = no label at all. */
   title: string;
-  /** The small chip under the label ("UGC Ad", "Product Film"). */
+  /** The small chip under the label ("UGC Ad", "Product Film"). Empty = no chip. */
   tag: string;
   /** A third line under the chip (a price, a length). */
   meta?: string;
@@ -117,20 +117,21 @@ const MODEL_CARDS: MakeCard[] = [
   },
 ];
 
-// The wall's stills are the studio's own keyframes (src/content/landing-
-// media.ts: real output off the board, never stock), captioned with the
-// concept's title. Two slots stay gradient plates, as in the reference.
-// Swap any entry for an ad once one is rendered.
-const R2 = "https://pub-62d6d70ed50d44449d464cd43245b69d.r2.dev/renders/nano";
+// The wall's stills are eight product ads generated in the studio (Mike,
+// 2026-10-02; 928x1152 JPEGs under public/make/<slug>/, named by product
+// type). Every slot carries one, so no gradient plate is drawn. The slot
+// order follows the wall's bento (ad-wall.tsx): 0 is the short tile, 1 and
+// 4 the tall narrow ones, 5 the wide one, 6 and 7 the pair at the end.
+const ADS = "/make/ai-product-ad-generator";
 const TILES: MakeTile[] = [
-  { title: "", tag: "" },
-  { title: "The Crimson Descent", tag: "Keyframe", src: `${R2}/c361-20260911-161358.png` },
-  { title: "The Last Breath", tag: "Keyframe", src: `${R2}/c351-20260910-135712.png` },
-  { title: "The Crimson Path", tag: "Keyframe", src: `${R2}/c353-20260909-181442.png` },
-  { title: "The Final Check", tag: "Keyframe", src: `${R2}/c348-20260908-073120.png` },
-  { title: "The Infinite Loop", tag: "Keyframe", src: `${R2}/c265-20260907-024101.png` },
-  { title: "", tag: "" },
-  { title: "Frozen Checkpoint", tag: "Keyframe", src: `${R2}/c264-20260907-023841.png` },
+  { title: "Lip tint", tag: "", src: `${ADS}/lip-tint.jpg` },
+  { title: "Fragrance", tag: "", src: `${ADS}/fragrance.jpg` },
+  { title: "Energy drink", tag: "", src: `${ADS}/energy-drink.jpg` },
+  { title: "Headphones", tag: "", src: `${ADS}/headphones.jpg` },
+  { title: "Sneaker", tag: "", src: `${ADS}/sneaker.jpg` },
+  { title: "Tumbler", tag: "", src: `${ADS}/tumbler.jpg` },
+  { title: "Hot sauce", tag: "", src: `${ADS}/hot-sauce.jpg` },
+  { title: "Matcha", tag: "", src: `${ADS}/matcha.jpg` },
 ];
 
 export const MAKE_PAGES: MakePage[] = [
@@ -150,7 +151,7 @@ export const MAKE_PAGES: MakePage[] = [
     template: "spark",
     tone: "light",
     wall: {
-      title: "A ZeroPage Ad Generator",
+      title: "ZeroPage Ad Generator",
       tiles: TILES,
       explore: { label: "Explore more", href: "#features" },
     },

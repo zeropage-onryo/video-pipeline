@@ -204,9 +204,11 @@ export function Tile({
             <span className="text-[15px] font-semibold leading-tight tracking-[-0.01em] md:text-[17px]">
               {tile.title}
             </span>
-            <span className="rounded-md bg-white/15 px-2 py-1 text-[11px] font-medium backdrop-blur-sm">
-              {tile.tag}
-            </span>
+            {tile.tag && (
+              <span className="rounded-md bg-white/15 px-2 py-1 text-[11px] font-medium backdrop-blur-sm">
+                {tile.tag}
+              </span>
+            )}
             {tile.meta && <span className="text-[12px] text-white/75">{tile.meta}</span>}
           </motion.div>
         </>
