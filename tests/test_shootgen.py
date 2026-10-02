@@ -515,8 +515,11 @@ def test_parse_plan_response_rejects_a_plan_with_no_shots():
         shootgen.parse_plan_response(json.dumps({"plan": {"shots": []}}))
 
 
+# Cut into timed shots, as every scene is written since 2026-10-02: one
+# window nobody asked for is a warning (timeline.shot_count_warnings).
 SCENE_RESPONSE = ('{"title": "Rewritten", "hook": "a hand", "logline": "he waits", '
-                  '"brief": "Ultra-realistic grounded video in 9:16. The scene."}')
+                  '"brief": "Ultra-realistic grounded video in 9:16. '
+                  '(0-4s) A hand on the door. (4-10s) Hard cut: he waits."}')
 
 
 def test_write_scene_fills_in_a_chosen_idea(tmp_db, monkeypatch):

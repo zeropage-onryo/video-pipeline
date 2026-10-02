@@ -337,10 +337,22 @@ the keyframe and the clip when it opens in Director.
 **A scene is written as TIMED SHOTS and rendered ONE SHOT AT A TIME (2026-09-10, Mike's
 call).** The one-continuous-action rule is gone: a scene prompt's BEATS are now timed
 windows — `(0-3s)` one shot, `(3-7s)` a different one, cuts and location changes between
-them — filling a total length (`timeline.scene_seconds`: the composer's `cseconds` select via
+them — filling a total length (`timeline.scene_seconds`: the composer's length slider via
 `GET /api/scene-lengths`, else `ZEROPAGE_SCENE_SECONDS`, else 10; clamped 4–30, never
 refused). Both writer templates get `{seconds}`, and tell the writer each window is rendered
 as its own clip, so each window must be ONE shot (one camera setup, one clear action, 2–10s).
+**How MANY shots is the idea's (2026-10-02, Mike's calls):** "as many shots as are needed by
+the prompt", never a habitual three — the writers no longer carry a three-window example.
+Two or more windows by default; ONE only when the person asked for a single take ("I don't
+want just one continuous shot unless asked for in the prompt or chatting with the agent");
+a count the idea already sets — its own timed windows, which is how the Guide's brief arrives
+after "bring it down to 2 shots", or "in 2 shots" in so many words — is kept, scene by scene.
+Code advises: `timeline.shot_count_warnings` adds a concept warning when the count is not what
+was asked (`requested_shots` / `one_take_requested` read the idea), checked against the
+DIRECTION, never the steer. **No cap**: `MAX_PARTS = 8` silently dropped every window past the
+8th off the card, the price and the render; it is gone, and the priced approve is the limit.
+The React composer's length is a **slider** (`components/studio/duration-pill.tsx`), any whole
+second between the route's `min` and `max`; `SCENE_SECONDS_CHOICES` is only the legacy select.
 **`src/timeline.py` is the step between the scene and the renderer.** It runs on the SAME
 brain that wrote the scene (the composer's Reasoning tier, or `ZEROPAGE_BRAIN` at night) and
 turns the windows into `shot["timeline"]` = `{seconds, planner, source, brain, continuity,
