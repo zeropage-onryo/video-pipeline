@@ -140,6 +140,7 @@ _install_no_live_database()
 
 
 from app.main import app as _APP_AT_IMPORT  # noqa: E402  (see account_scope)
+from src.imagesearch import LANE_ENV as IMAGE_LANE_ENV  # noqa: E402  (see POSTURE_ENV)
 
 # Modules that are ABOUT the reference rule turn it back on for
 # themselves. Keeping the list here rather than a fixture in each file is
@@ -198,7 +199,7 @@ POSTURE_ENV = R2_ENV + (
     # a suite that inherited .env's would call Meta from a test
     "IG_ACCESS_TOKEN", "INSTAGRAM_ACCESS_TOKEN", "IG_GRAPH_TOKEN", "FB_GRAPH_TOKEN",
     "IG_USER_ID", "INSTAGRAM_USER_ID", "IG_BUSINESS_ID", "IG_RESEARCH_APP_ID",
-)
+) + IMAGE_LANE_ENV  # every image-search lane's key (src/imagesearch.py owns the list)
 
 
 @pytest.fixture(autouse=True)

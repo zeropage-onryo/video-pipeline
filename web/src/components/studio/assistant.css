@@ -410,8 +410,8 @@
   border: 2px solid #2a2a2a;
   background: #161616;
   transition:
-    opacity var(--t),
-    border-color var(--t);
+    border-color var(--t),
+    box-shadow var(--t);
 }
 .zpa-frame img {
   width: 100%;
@@ -419,12 +419,16 @@
   object-fit: cover;
   display: block;
 }
+/* Every frame is shown as it is -- a cut one is not greyed (Mike, 2026-10-02:
+   "I don't want images greyed out ... just when you hover over them the red
+   glowing outline until chosen"). The reason it was cut stays on its tag. The
+   red glow is the hover, and it stays on a frame once it is chosen. */
+.zpa-frame:hover:not(:disabled),
 .zpa-frame.on {
   border-color: var(--signal);
-}
-.zpa-frame.rej:not(.on) {
-  opacity: 0.42;
-  filter: grayscale(1);
+  box-shadow:
+    0 0 0 1px var(--signal),
+    0 0 14px rgba(228, 0, 43, 0.55);
 }
 .zpa-frame:disabled {
   cursor: default;

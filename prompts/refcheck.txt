@@ -7,8 +7,7 @@ role: {role}
 wanted: {want}
 searched as: {query}
 
-THE LOOK it has to sit inside
-{look}
+{look_block}
 
 MUST NOT LOOK LIKE (anti-references)
 {anti}
@@ -44,6 +43,6 @@ ALSO FLAG
   that would be recognised as that film.
 - low_quality: too small, soft, heavily compressed, or badly blown out.
 
-Keep a frame when it answers the need, sits inside the look, and is clean.
+Keep a frame when it answers the need, meets the block above, and is clean.
 Say false when in doubt: an empty result is a fine answer, a poisoned
 reference is not.
