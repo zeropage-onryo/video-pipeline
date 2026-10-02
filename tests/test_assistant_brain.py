@@ -507,3 +507,38 @@ def test_the_needs_prompt_names_a_real_product_first():
     from src import reference_needs
     text = reference_needs.build_prompt("a can of Ghost Orange Cream on a wet bar")
     assert "A REAL THING THE SCENE NAMES" in text and "goes FIRST" in text
+
+
+def test_departments_are_exactly_what_was_asked_never_padded():
+    """2026-10-02, Mike: "I didn't ask for place light mood texture and
+    wardrobe frames." A department filter that matches nothing used to fall
+    back to every need the planner invented."""
+    plan = lambda scene, **k: {"needs": [                                   # noqa: E731
+        {"role": "place", "query": "parking garage wet floor", "source": "web"},
+        {"role": "light", "query": "red digital clock glow", "source": "web"}]}
+    searched = []
+    out = assistant_brain.find_references(
+        "reference photos of a Ghost Energy orange cream can", departments=["prop"],
+        plan=plan, search=lambda q, b, limit=6, dsn=None: searched.append(q) or [],
+        screen=lambda *a, **k: pytest.fail("nothing to screen"))
+    assert out["sheet"] == [] and searched == []
+    assert "nothing to hunt for under prop" in out["note"]
+    # and when the planner did list the thing, only the thing is hunted
+    plan = lambda scene, **k: {"needs": [                                   # noqa: E731
+        {"role": "prop", "query": "Ghost energy drink orange cream can", "source": "web"},
+        {"role": "place", "query": "parking garage wet floor", "source": "web"}]}
+    out = assistant_brain.find_references(
+        "the can itself", departments=["prop"], plan=plan,
+        search=lambda q, b, limit=6, dsn=None: searched.append(q) or [],
+        screen=lambda *a, **k: pytest.fail("nothing to screen"))
+    assert [e["role"] for e in out["sheet"]] == ["prop"]
+    assert searched[0] == "Ghost energy drink orange cream can"       # then its shorter prefixes
+    assert not any("garage" in q for q in searched)
+
+
+def test_the_planner_and_the_guide_are_told_to_hunt_only_what_was_asked():
+    text = (assistant_brain.ROOT / "prompts" / "reference_needs.txt").read_text()
+    assert "PLAN ONLY WHAT THE TEXT ASKS FOR" in text and "return that ONE need" in text
+    tools = (assistant_brain.ROOT / "prompts" / "creative_guide_tools.txt").read_text()
+    assert '["prop"]' in tools and "never a setting, lighting or wardrobe" in tools
+    assert "never a setting, lighting or wardrobe" in assistant_brain.brain_prompt()

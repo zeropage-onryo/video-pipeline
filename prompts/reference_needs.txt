@@ -20,6 +20,13 @@ Return at most {count} needs as JSON and nothing else:
 ]}}
 
 RULES
+- PLAN ONLY WHAT THE TEXT ASKS FOR. When it is a request for one specific
+  thing ("reference photos of a Ghost Energy orange cream can", "the 16oz
+  can itself", "pictures of the Chrysler Building") return that ONE need
+  and nothing else -- no setting, no lighting, no wardrobe, no mood the
+  request never mentioned. Only a SCENE (a place, an action, a time of
+  day, people) earns place / light / mood / texture / wardrobe needs, and
+  only the ones that scene actually raises.
 - "specified" is true when the scene already answers this visual question
   ("a 1970s hospital corridor"), false when it leaves it open ("she looks
   striking" — striking how?). Say false when in doubt; an open question is
