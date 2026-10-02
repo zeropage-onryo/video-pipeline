@@ -12,7 +12,7 @@
      in sessionStorage until the composer mounts. The assistant only ever
      FILLS the box; Create stays the person's click. */
 import { apiFetch } from "@/lib/api";
-import { GUARDED_HEADERS } from "@/lib/studio-api";
+import { GUARDED_HEADERS, type GuideReply } from "@/lib/studio-api";
 
 export const STAGES = ["brief", "story", "cast", "references", "shots", "stills", "clips"] as const;
 export type Stage = (typeof STAGES)[number];
@@ -139,11 +139,83 @@ export const keepReferences = (ids: string[]) =>
     },
   );
 
+/* ── ONE conversation, two views (2026-10-02) ──
+   The pill and the Studio composer's Guide used to hold separate threads,
+   and the composer's lived only in its page's React state: clicking to
+   another tab lost the talk and every frame a hunt had drawn. Both now read
+   and write the one thread components/studio/assistant-thread.tsx holds,
+   so a turn asked in the box is there when the pill opens on Pipeline, and
+   the other way round. A Turn is the union of what either surface writes;
+   each draws what it knows and leaves the rest alone. */
+export type Turn = {
+  role: "user" | "assistant";
+  content: string;
+  /** the guide never answered: drawn on the bubble, dropped from the next turn */
+  failed?: boolean;
+  /** an assistant turn's extras -- chips, directions, brief, proposal, the contact sheet */
+  reply?: GuideReply;
+  /** the sheet's frames as the person has them chosen (default: what the check kept) */
+  chosen?: Record<string, boolean>;
+  /** Keep has run for this sheet */
+  kept?: boolean;
+  /** the pill: the direction put in the composer */
+  picked?: number;
+  /** the pill: its next-move line after a local step (a keep, a pick) */
+  nudge?: string;
+  /** the composer: which board tools the guide looked at before this answer */
+  looked?: string[];
+  /** the composer: the proposal's confirm card has been decided */
+  decided?: "done" | "skipped";
+};
+
+/* The composer's box, saved beside the thread so leaving the page keeps
+   it: the idea, the guide's brief, references (picks by URL, uploads by
+   the bin URL they were saved under), the mode, the "scene written" card.
+   Mirrors src/assistant_store._clean_draft -- the server bounds every
+   field and answers this exact shape. */
+export type UploadRef = { url: string; name: string };
+export type ComposerDraft = {
+  idea: string;
+  brief: string;
+  mode: "guide" | "create";
+  picked: string[];
+  uploads: UploadRef[];
+  written: { conceptId: number | null; detail: string } | null;
+};
+export const EMPTY_DRAFT: ComposerDraft = { idea: "", brief: "", mode: "guide", picked: [], uploads: [], written: null };
+export const draftHasContent = (d: ComposerDraft | null | undefined) =>
+  !!d && !!(d.idea.trim() || d.brief.trim() || d.picked.length || d.uploads.length || d.written);
+/* whatever came back, in the shape the page can trust */
+export function asDraft(raw: unknown): ComposerDraft {
+  const d = (raw && typeof raw === "object" ? raw : {}) as Partial<ComposerDraft>;
+  return {
+    idea: typeof d.idea === "string" ? d.idea : "",
+    brief: typeof d.brief === "string" ? d.brief : "",
+    mode: d.mode === "create" ? "create" : "guide",
+    picked: Array.isArray(d.picked) ? d.picked.filter((u): u is string => typeof u === "string") : [],
+    uploads: Array.isArray(d.uploads)
+      ? d.uploads.filter((u): u is UploadRef => !!u && typeof u === "object" && typeof (u as UploadRef).url === "string")
+      : [],
+    written:
+      d.written && typeof d.written === "object"
+        ? { conceptId: typeof d.written.conceptId === "number" ? d.written.conceptId : null, detail: String(d.written.detail ?? "") }
+        : null,
+  };
+}
+
 /* ── what the server remembers (2026-09-29, src/assistant_store.py) ──
    The persona and the open project used to live only in this browser, so a
    closed tab lost the thread. localStorage/sessionStorage stay as a fast
    first paint and an offline fallback; the server's copy wins on load. */
-export type SavedProject = { id: number; title: string; stage: string; turns: unknown[]; updated_at: string };
+export type SavedProject = {
+  id: number;
+  title: string;
+  stage: string;
+  turns: unknown[];
+  /** the composer's box (2026-10-02); older servers answer none */
+  draft?: unknown;
+  updated_at: string;
+};
 export const getAssistantMemory = () =>
   apiFetch<{ persona: (Persona & { updated_at?: string }) | null; project: SavedProject | null }>("/assistant");
 export const putPersona = (p: Persona) =>
@@ -152,11 +224,12 @@ export const putPersona = (p: Persona) =>
     headers: GUARDED_HEADERS,
     body: JSON.stringify(p),
   });
-export const putProject = (turns: unknown[], stage: string) =>
-  apiFetch<{ project: Omit<SavedProject, "turns"> }>("/assistant/project", {
+/* `draft` undefined leaves the stored draft as it is (the server's COALESCE) */
+export const putProject = (turns: unknown[], stage: string, draft?: ComposerDraft) =>
+  apiFetch<{ project: Omit<SavedProject, "turns" | "draft"> }>("/assistant/project", {
     method: "PUT",
     headers: GUARDED_HEADERS,
-    body: JSON.stringify({ turns, stage }),
+    body: JSON.stringify(draft ? { turns, stage, draft } : { turns, stage }),
   });
 export const startNewProject = () =>
   apiFetch<{ ok: boolean }>("/assistant/project/new", { method: "POST", headers: GUARDED_HEADERS, body: "{}" });
@@ -178,12 +251,14 @@ export const postVerdicts = (frames: FrameVerdict[]) =>
   });
 
 
-/* ── the composer bridge ── */
+/* ── the composer bridge ──
+   The pill reads what the box holds straight off the shared draft now
+   (assistant-thread.tsx); what is left here is the one direction the draft
+   does not cover: a fill that must say WHO filled it, so the composer can
+   tag the text and ring Create. */
 export const FILL_EVENT = "zpf:assistant-fill";
-export const COMPOSER_EVENT = "zpf:composer-state";
 const PENDING_KEY = "zpf.assistant.pending";
 export type Fill = { text?: string; refs?: string[]; by: string; avatar?: string };
-export type ComposerState = { idea: string; picked: string[] };
 
 /* Ask the composer to take this. When it is mounted it takes it at once;
    otherwise it is waiting in sessionStorage for the next mount. */
@@ -212,5 +287,3 @@ export function takePendingFill(): Fill | null {
     return null;
   }
 }
-export const announceComposer = (state: ComposerState) =>
-  window.dispatchEvent(new CustomEvent<ComposerState>(COMPOSER_EVENT, { detail: state }));

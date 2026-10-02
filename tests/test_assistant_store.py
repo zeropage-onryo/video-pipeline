@@ -169,3 +169,60 @@ def test_the_writes_refuse_a_request_without_the_guide_header(client):
 def test_a_malformed_project_is_refused(client):
     r = client.put("/api/assistant/project", headers=GUARD, json={"turns": "not a list"})
     assert r.status_code == 400
+
+
+# --- the composer's draft (2026-10-02) ----------------------------------------
+
+def test_a_draft_is_saved_beside_the_thread_and_cleaned(store):
+    draft = {"idea": "a watch ad", "brief": "B", "mode": "create",
+             "picked": ["/characters/michael/photo/a.jpg", "/characters/michael/photo/a.jpg", "javascript:x"],
+             "uploads": [{"url": "/refs/abc.jpg", "name": "IMG_1.heic"}, "junk", {"url": "nope"}],
+             "written": {"conceptId": 375, "detail": "on the board"},
+             "stray": "dropped"}
+    assistant_store.save_project([], "", draft=draft, account_id=1, dsn=store)
+    got = assistant_store.open_project(account_id=1, dsn=store)["draft"]
+    assert got == {"idea": "a watch ad", "brief": "B", "mode": "create",
+                   "picked": ["/characters/michael/photo/a.jpg"],
+                   "uploads": [{"url": "/refs/abc.jpg", "name": "IMG_1.heic"}],
+                   "written": {"conceptId": 375, "detail": "on the board"}}
+
+
+def test_a_save_without_a_draft_leaves_the_stored_one_alone(store):
+    assistant_store.save_project([], "", draft={"idea": "keep me"}, account_id=1, dsn=store)
+    # the pill's shape: turns and a stage, no draft
+    assistant_store.save_project(_turns(1), "story", account_id=1, dsn=store)
+    got = assistant_store.open_project(account_id=1, dsn=store)
+    assert got["draft"]["idea"] == "keep me" and len(got["turns"]) == 2
+    # an explicit empty draft clears it
+    assistant_store.save_project(_turns(1), "story", draft={}, account_id=1, dsn=store)
+    assert assistant_store.open_project(account_id=1, dsn=store)["draft"] == assistant_store.EMPTY_DRAFT
+
+
+def test_a_draft_is_bounded_and_defaulted(store):
+    draft = {"idea": "x" * 20_000, "mode": "render", "picked": [f"/refs/{i}.jpg" for i in range(100)],
+             "written": {"conceptId": "375", "detail": "d"}}
+    assistant_store.save_project([], "", draft=draft, account_id=1, dsn=store)
+    got = assistant_store.open_project(account_id=1, dsn=store)["draft"]
+    assert len(got["idea"]) == assistant_store.MAX_DRAFT_TEXT
+    assert got["mode"] == "guide" and len(got["picked"]) == assistant_store.MAX_DRAFT_REFS
+    assert got["written"] == {"conceptId": None, "detail": "d"} and got["brief"] == ""
+
+
+def test_new_project_starts_with_an_empty_draft(store):
+    assistant_store.save_project([], "", draft={"idea": "old"}, account_id=1, dsn=store)
+    assistant_store.new_project(account_id=1, dsn=store)
+    assistant_store.save_project([], "", draft={"idea": "new"}, account_id=1, dsn=store)
+    assert assistant_store.open_project(account_id=1, dsn=store)["draft"]["idea"] == "new"
+
+
+def test_the_route_round_trips_the_draft_and_refuses_a_bad_one(client):
+    r = client.put("/api/assistant/project", headers=GUARD,
+                   json={"turns": [], "stage": "", "draft": {"idea": "a watch ad", "picked": ["/refs/a.jpg"]}})
+    assert r.status_code == 200 and "draft" not in r.json()["project"]
+    got = client.get("/api/assistant").json()["project"]
+    assert got["draft"]["idea"] == "a watch ad" and got["draft"]["picked"] == ["/refs/a.jpg"]
+    # the pill's save, no draft: the box is still there
+    client.put("/api/assistant/project", headers=GUARD, json={"turns": _turns(1), "stage": "story"})
+    assert client.get("/api/assistant").json()["project"]["draft"]["idea"] == "a watch ad"
+    r = client.put("/api/assistant/project", headers=GUARD, json={"turns": [], "draft": "not an object"})
+    assert r.status_code == 400

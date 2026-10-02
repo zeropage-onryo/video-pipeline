@@ -1714,6 +1714,33 @@ is yours, in Resolve, by hand.
   `wip/main-checkout-2026-09-28` as Mike's to decide: `load_brand` forcing every run to
   zeropage, `CAST_BRANDS` gaining zeropage (lifts the faceless rule), and the rewritten
   brand/look/scene prompts.
+- **ONE conversation, and it is saved (2026-10-02, Mike: "when I click out of the
+  studio page the entire conversation, images that were generated goes away").** The
+  Studio composer's Guide thread was React state in `web/src/app/studio/page.tsx`, so
+  leaving the route threw away the talk and every contact sheet under it, while the
+  floating pill kept its OWN thread in `assistant_projects` (`src/assistant_store.py`,
+  2026-09-29). Now `web/src/components/studio/assistant-thread.tsx` holds the one thread
+  for the whole studio -- mounted in `studio/layout.tsx` above both the pill and the
+  pages -- and the composer and the pill are two views on it: a turn typed in the box is
+  in the pill when it opens on Pipeline, and a chip tapped there is in the box on the
+  way back. `lib/assistant.Turn` is the union of what either surface writes (`reply`
+  carries the sheet, the proposal, the brief, the directions); each draws what it knows.
+  **The box is saved with it:** `assistant_projects.draft_json` (additive ALTER,
+  `_clean_draft` bounds every field) holds the idea, the guide's brief, the mode, the
+  picked references, the uploads and the "scene written" card; `PUT /api/assistant/project`
+  takes an optional `draft` and a body without one leaves the stored draft alone
+  (COALESCE), so the pill's old save shape cannot blank the box. **An upload is saved to
+  the bin the moment it is dropped** (`POST /api/refs/upload`, the Director's route) and
+  the draft remembers its `/refs/<sha>.jpg` URL, sent as `asset_photos` like a pick --
+  uploads first, since refs[0] anchors the clip and they were read first as `files`. A
+  File object could never have survived the page. Load is the pill's rule, kept: the tab's
+  sessionStorage copy paints first, the server's copy wins; `?spark=` and `?attach=` are
+  applied only after that load so a saved draft cannot land on top of the visitor's
+  sentence. "New project" (the pill's pen) archives the row and clears the box too. Nothing
+  here calls a model or spends. Verified in Chrome against a throwaway schema: idea, pick
+  and upload survived a rail round-trip and a reload with sessionStorage cleared; a real
+  Guide turn in the box appeared in the pill on Pipeline, and the pill's reply there was
+  the fourth turn in the box.
 - **`src/refbin.py`** — one owner for `data/refs`, both directions: the content-addressed name,
   the JPEG normalisation (EXIF transpose BEFORE `convert("RGB")`, HEIC when `pillow-heif` is
   present), `save`, `fetch` (bounded download for scouted images) and `resolve`. It exists
