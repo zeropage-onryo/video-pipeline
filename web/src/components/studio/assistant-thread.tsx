@@ -33,6 +33,7 @@ import {
 import { useShell } from "@/components/studio/shell";
 import {
   EMPTY_DRAFT,
+  NEW_SESSION_EVENT,
   asDraft,
   draftHasContent,
   getAssistantMemory,
@@ -197,6 +198,18 @@ export function AssistantThreadProvider({ children }: { children: ReactNode }) {
       /* nothing kept here to clear */
     }
   }, [account]);
+
+  // the header's "New session" (lib/assistant.ts requestNewSession): the
+  // shell cannot reach this context, so it asks through a window event
+  useEffect(() => {
+    const on = () => {
+      newProject().catch(() => {
+        /* the server could not archive it: the thread stays as it is */
+      });
+    };
+    window.addEventListener(NEW_SESSION_EVENT, on);
+    return () => window.removeEventListener(NEW_SESSION_EVENT, on);
+  }, [newProject]);
 
   const value = useMemo<AssistantThread>(
     () => ({

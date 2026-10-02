@@ -712,3 +712,20 @@ export function recallActiveProject(): number | null {
     return null;
   }
 }
+
+/* ── the composer's IMAGE output (2026-10-02) ──
+   POST /api/generate/run, output=image: preset + prompt + the same two
+   reference fields Create sends (`files`, `asset_photos`) -> one Nano
+   Banana still saved as a one-shot concept. Not mutation_header-guarded
+   (the Create route beside it is not either). `aspect` is optional and
+   allowlisted server-side. */
+export const runImage = (form: FormData) =>
+  apiForm<{ job_id: number; image_refs: number; video_refs: number }>("/generate/run", form);
+
+/** GET /api/concepts/{id} — the card plus its shots; the composer reads
+ *  the still off the card (reference_image) or the scene's timeline. */
+export type ConceptDetail = Concept & {
+  duration?: number | null;
+  shots?: { n: number; reference_image?: string | null; timeline?: Timeline | null }[];
+};
+export const getConceptDetail = (id: number) => apiFetch<ConceptDetail>(`/concepts/${id}`);

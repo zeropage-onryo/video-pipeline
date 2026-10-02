@@ -1,0 +1,901 @@
+/* The studio composer, drawn to the "ZPF Composer Directions" mock
+   (2026-10-02). Everything is scoped under .zc (set on the Studio page's
+   .hero) so the shared studio.css rules the other pages use are untouched.
+   Tokens are studio.css's own: --signal, --line, --line-hi, --text, --dim,
+   --dimmer, --body, --mono. The mock's palette on top: a flat #0b0b0b page,
+   a #141414 box with a #262626 hairline, Inter for everything a person
+   reads and the mono face for labels. Red only where something is live --
+   the send button, a selected tile, progress, the drop target, Stop. */
+
+.zc {
+  --zc-box: #141414;
+  --zc-line: #262626;
+  --zc-line-hi: #333;
+  --zc-plate: #121212;
+  --zc-ink: #f2f2f2;
+  --zc-ink-2: #a8a8a8;
+  --zc-ink-3: #6b6b6b;
+}
+
+/* ── the page ── */
+.zc.hero {
+  padding: 0 42px 24px;
+  align-items: center;
+}
+.zc.hero.zc-empty {
+  position: relative;
+  min-height: calc(100vh - 64px);
+  justify-content: center;
+  padding-bottom: 80px;
+}
+.zc.hero.zc-active {
+  padding-top: 28px;
+}
+.zc .stack {
+  max-width: 880px;
+  gap: 14px;
+}
+.zc h1 {
+  font-family: var(--body);
+  font-size: clamp(2rem, 3.4vw, 2.75rem);
+  font-weight: 500;
+  line-height: 1.1;
+  letter-spacing: -0.022em;
+  text-transform: none;
+  text-align: center;
+  color: var(--zc-ink);
+  margin: 0 0 30px;
+}
+/* pinned to the bottom of the first screen; an auto margin here would eat
+   the centring's free space and push the box to the top */
+.zc-hint {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 28px;
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+  color: var(--zc-ink-3);
+  text-align: center;
+}
+.zc-hint kbd {
+  font: inherit;
+}
+
+/* ── the box ── */
+.zc .zc-box {
+  position: relative;
+  border-radius: 18px;
+  border: 1px solid var(--zc-line);
+  background: var(--zc-box);
+  box-shadow: 0 30px 80px -40px rgb(0 0 0 / 0.9);
+  transition:
+    border-color var(--t),
+    box-shadow 280ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+.zc .zc-box.awake,
+.zc .zc-box:focus-within {
+  border-color: var(--zc-line-hi);
+}
+.zc .zc-box.drop {
+  border-color: var(--signal);
+  border-style: dashed;
+}
+/* Docked under the turns. Phones do not dock: the tab bar owns the bottom
+   of the screen there. */
+.zc.zc-active .zc-box {
+  position: sticky;
+  bottom: 18px;
+  z-index: 4;
+}
+@media (max-width: 720px) {
+  .zc.zc-active .zc-box {
+    position: relative;
+    bottom: auto;
+  }
+}
+.zc .zc-field {
+  position: relative;
+}
+.zc .zc-box textarea {
+  display: block;
+  width: 100%;
+  min-height: 92px;
+  max-height: 320px;
+  resize: none;
+  border: 0;
+  background: transparent;
+  color: var(--zc-ink);
+  font-family: var(--body);
+  font-size: 17px;
+  font-weight: 400;
+  line-height: 1.5;
+  padding: 18px 20px 6px;
+  outline: none;
+}
+.zc .zc-box textarea::placeholder {
+  color: var(--zc-ink-3);
+}
+.zc .zc-box textarea:focus-visible {
+  outline: none;
+}
+.zc.zc-active .zc-box textarea {
+  min-height: 60px;
+  font-size: 16px;
+}
+
+/* the drop target: the mock's overlay over the whole box */
+.zc .zc-drop {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 17px;
+  background: rgb(11 11 11 / 0.86);
+  backdrop-filter: blur(4px);
+  color: var(--zc-ink);
+  pointer-events: none;
+  text-align: center;
+  padding: 16px;
+}
+.zc .zc-drop svg {
+  width: 22px;
+  height: 22px;
+  margin-bottom: 6px;
+}
+.zc .zc-drop b {
+  font-size: 15.5px;
+  font-weight: 600;
+}
+.zc .zc-drop span {
+  font-size: 13.5px;
+  color: var(--zc-ink-2);
+}
+
+/* compact reference chips, above the text (the mock's ref_look.jpg ×) */
+.zc .zc-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 12px 14px 0;
+}
+.zc .zc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 4px 0 4px;
+  border-radius: 8px;
+  border: 1px solid var(--zc-line);
+  background: #1a1a1a;
+  color: #cfcfcf;
+  font-size: 12.5px;
+  max-width: 220px;
+}
+.zc .zc-chip.pending {
+  opacity: 0.55;
+  border-style: dashed;
+}
+.zc .zc-chip-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  background: #222 center / cover no-repeat;
+  flex: none;
+  display: grid;
+  place-items: center;
+  font-family: var(--mono);
+  font-size: 7px;
+  color: var(--zc-ink-3);
+}
+.zc .zc-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.zc .zc-chip.preset {
+  padding-left: 10px;
+  border-color: rgb(228 0 43 / 0.45);
+  background: rgb(228 0 43 / 0.1);
+  color: var(--zc-ink);
+}
+.zc .zc-chip button {
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--zc-ink-3);
+  display: grid;
+  place-items: center;
+  padding: 0;
+  flex: none;
+}
+.zc .zc-chip button:hover {
+  color: var(--zc-ink);
+  background: rgb(255 255 255 / 0.08);
+}
+.zc .zc-chip button svg {
+  width: 11px;
+  height: 11px;
+}
+.zc .zc-chips .cclear {
+  height: 30px;
+}
+
+/* ── the toolbar ── */
+.zc .zc-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 8px 12px 12px 14px;
+}
+.zc .zc-seg {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  border-radius: 11px;
+  background: #1b1b1b;
+  border: 1px solid var(--zc-line);
+}
+.zc .zc-seg button {
+  height: 32px;
+  padding: 0 13px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--zc-ink-2);
+  font-family: var(--body);
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  transition:
+    background var(--t),
+    color var(--t);
+}
+.zc .zc-seg button svg {
+  width: 14px;
+  height: 14px;
+}
+.zc .zc-seg button:hover {
+  color: var(--zc-ink);
+}
+.zc .zc-seg button[aria-checked="true"] {
+  background: #2a2a2a;
+  color: var(--zc-ink);
+  box-shadow: 0 1px 0 rgb(0 0 0 / 0.3);
+}
+.zc .zc-tool {
+  height: 36px;
+  min-width: 36px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--zc-ink-2);
+  font-family: var(--body);
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition:
+    background var(--t),
+    color var(--t);
+}
+.zc .zc-tool:hover,
+.zc .zc-tool[aria-expanded="true"] {
+  color: var(--zc-ink);
+  background: rgb(255 255 255 / 0.06);
+}
+.zc .zc-tool[aria-pressed="true"] {
+  color: var(--zc-ink);
+  background: rgb(228 0 43 / 0.14);
+  box-shadow: inset 0 0 0 1px rgb(228 0 43 / 0.4);
+}
+.zc .zc-tool svg {
+  width: 16px;
+  height: 16px;
+}
+.zc .zc-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 6px;
+  background: var(--zc-line);
+}
+/* the settings read as one line: 16:9 · 5s · [MODEL] ⌄ */
+.zc .zc-opts {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 4px;
+}
+.zc .zc-opt {
+  height: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--zc-ink-2);
+  font-family: var(--body);
+  font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  transition:
+    background var(--t),
+    color var(--t);
+}
+.zc .zc-opt:hover,
+.zc .zc-opt[aria-expanded="true"] {
+  color: var(--zc-ink);
+  background: rgb(255 255 255 / 0.06);
+}
+.zc .zc-opt svg {
+  width: 13px;
+  height: 13px;
+  color: var(--zc-ink-3);
+}
+.zc .zc-dot {
+  color: var(--zc-ink-3);
+  font-size: 11px;
+  padding: 0 2px;
+  user-select: none;
+}
+.zc .zc-send {
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--signal);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  transition:
+    filter var(--t),
+    opacity var(--t),
+    background var(--t);
+}
+.zc .zc-send:hover {
+  filter: brightness(1.12);
+}
+.zc .zc-send:disabled {
+  background: #6e1a1f;
+  color: rgb(255 255 255 / 0.55);
+  cursor: default;
+  filter: none;
+}
+.zc .zc-send svg {
+  width: 18px;
+  height: 18px;
+}
+.zc .zc-send.zpa-ring {
+  box-shadow: 0 0 0 3px rgb(228 0 43 / 0.35);
+}
+.zc .zc-stop {
+  height: 40px;
+  padding: 0 16px 0 14px;
+  border-radius: 11px;
+  border: 1px solid var(--signal);
+  background: transparent;
+  color: var(--zc-ink);
+  font-family: var(--body);
+  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+}
+.zc .zc-stop::before {
+  content: "";
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  background: var(--signal);
+}
+.zc .zc-stop:hover {
+  background: rgb(228 0 43 / 0.1);
+}
+.zc .zc-thinking {
+  height: 40px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--zc-ink-2);
+}
+.zc .zc-live {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--signal);
+  flex: none;
+  animation: zc-pulse 1.4s ease-in-out infinite;
+}
+@keyframes zc-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .zc .zc-live {
+    animation: none;
+  }
+}
+
+/* the option menus (frame, length, model) */
+.zc .pillwrap {
+  display: inline-flex;
+}
+.zc .pillmenu {
+  min-width: 230px;
+  border-radius: 12px;
+  border: 1px solid var(--zc-line);
+  background: #141414;
+}
+
+/* ── the slash menu ── */
+.zc .zc-slash {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  width: min(440px, 100%);
+  max-height: 340px;
+  overflow-y: auto;
+  padding: 8px;
+  border-radius: 14px;
+  border: 1px solid var(--zc-line);
+  background: #131313;
+  box-shadow: 0 24px 60px rgb(0 0 0 / 0.6);
+  z-index: 20;
+  transform-origin: bottom left;
+}
+.zc .zc-slash-head {
+  padding: 8px 12px 6px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--zc-ink-3);
+}
+.zc .zc-slash-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  height: 44px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--zc-ink);
+  text-align: left;
+}
+.zc .zc-slash-item[aria-selected="true"] {
+  background: #1d1d1d;
+}
+.zc .zc-slash-cmd {
+  font-family: var(--mono);
+  font-size: 13.5px;
+}
+.zc .zc-slash-desc {
+  font-size: 13px;
+  color: var(--zc-ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.zc .zc-slash-empty {
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--zc-ink-2);
+}
+
+/* ── the stream: what was asked and what came back ── */
+.zc .zc-stream {
+  display: flex;
+  flex-direction: column;
+  gap: 34px;
+  padding-bottom: 10px;
+}
+.zc .zc-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.zc .zc-ask {
+  display: flex;
+  justify-content: flex-end;
+}
+.zc .zc-bubble {
+  max-width: min(640px, 88%);
+  padding: 14px 18px;
+  border-radius: 14px;
+  background: #1a1a1a;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.zc .zc-bubble p {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--zc-ink);
+  white-space: pre-wrap;
+}
+.zc .zc-bubble.failed {
+  box-shadow: inset 0 0 0 1px rgb(228 0 43 / 0.6);
+}
+.zc .zc-bubble-failed {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--signal);
+}
+.zc .zc-bubble-refs {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.zc .zc-bubble-refs img {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  object-fit: cover;
+}
+.zc .zc-bubble-refs b {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--zc-ink-2);
+}
+/* the Guide's answer, on the left */
+.zc .zc-reply {
+  max-width: min(680px, 92%);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.zc .zc-reply > p {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.55;
+  color: #d9d9d9;
+  white-space: pre-wrap;
+}
+.zc .zc-looked {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--zc-ink-3);
+}
+.zc .zc-reply .ccard {
+  margin-right: 0;
+}
+.zc .zc-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.zc .zc-choices button {
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--zc-line);
+  background: #121212;
+  color: #cfcfcf;
+  font-family: var(--body);
+  font-size: 13px;
+  transition:
+    color var(--t),
+    border-color var(--t);
+}
+.zc .zc-choices button:hover {
+  color: var(--zc-ink);
+  border-color: var(--zc-line-hi);
+}
+.zc .zc-working {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--zc-ink-2);
+}
+
+/* the mono line over a result: "3 shots · 16:9 · 10s" */
+.zc .zc-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: var(--zc-ink-2);
+}
+.zc .zc-meta.bad {
+  color: var(--signal);
+}
+
+/* tiles: one per shot, one per image */
+.zc .zc-tiles {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.zc .zc-tiles.one {
+  grid-template-columns: minmax(0, 420px);
+}
+.zc .zc-tiles.four {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.zc .zc-tilewrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.zc .zc-tile {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 10px;
+  border: 1px solid var(--zc-line);
+  background: var(--zc-plate);
+  overflow: hidden;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition:
+    border-color var(--t),
+    box-shadow var(--t);
+  text-align: left;
+}
+.zc .zc-tile:hover {
+  border-color: var(--zc-line-hi);
+}
+.zc .zc-tile.on {
+  border-color: var(--signal);
+  box-shadow: 0 0 0 1px var(--signal);
+}
+.zc .zc-tile.running {
+  cursor: default;
+}
+.zc .zc-tile img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.zc .zc-tile-n {
+  font-family: var(--mono);
+  font-size: 26px;
+  color: #2e2e2e;
+  letter-spacing: 0.04em;
+}
+/* the shot's sentence, two lines at most, clear of the duration badge */
+.zc .zc-tile-text {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 26px 56px 10px 12px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #d0d0d0;
+  background: linear-gradient(180deg, transparent, rgb(0 0 0 / 0.85));
+}
+.zc .zc-tile-text > span {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-clamp: 2;
+  overflow: hidden;
+}
+.zc .zc-badge {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 6px;
+  background: rgb(0 0 0 / 0.75);
+  color: var(--zc-ink);
+  font-family: var(--mono);
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+}
+.zc .zc-play {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: rgb(0 0 0 / 0.75);
+  color: var(--zc-ink);
+  display: grid;
+  place-items: center;
+}
+.zc .zc-play svg {
+  width: 12px;
+  height: 12px;
+  margin-left: 2px;
+}
+.zc .zc-pct {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--zc-ink-2);
+}
+.zc .zc-bar {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--signal);
+  transition: width 400ms ease;
+}
+.zc .zc-label {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: var(--zc-ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.zc .zc-label.on {
+  color: var(--zc-ink);
+}
+.zc .zc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.zc .zc-act {
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 9px;
+  border: 1px solid #2c2c2c;
+  background: transparent;
+  color: var(--zc-ink);
+  font-family: var(--body);
+  font-size: 13.5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  text-decoration: none;
+  transition:
+    border-color var(--t),
+    background var(--t);
+}
+.zc .zc-act:hover {
+  border-color: #444;
+  background: rgb(255 255 255 / 0.03);
+}
+.zc .zc-act:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.zc .zc-act svg {
+  width: 14px;
+  height: 14px;
+  color: var(--zc-ink-2);
+}
+
+/* the project chip above the box */
+.zc .zc-project {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+  color: var(--zc-ink-3);
+}
+.zc .zc-project > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 6px 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--zc-line);
+  background: #121212;
+  color: var(--zc-ink-2);
+}
+.zc .zc-project a {
+  color: var(--zc-ink);
+}
+.zc .zc-project a:hover {
+  text-decoration: underline;
+}
+.zc .zc-project button {
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--zc-ink-3);
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+.zc .zc-project button:hover {
+  color: var(--zc-ink);
+  background: rgb(255 255 255 / 0.08);
+}
+
+/* the starters under an empty box */
+.zc .zc-starters {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+.zc .zc-starters button {
+  height: 38px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid var(--zc-line);
+  background: #121212;
+  color: #cfcfcf;
+  font-family: var(--body);
+  font-size: 13.5px;
+  transition:
+    color var(--t),
+    border-color var(--t),
+    background var(--t);
+}
+.zc .zc-starters button:hover {
+  color: var(--zc-ink);
+  border-color: var(--zc-line-hi);
+  background: #171717;
+}
+
+/* the guide's brief inside the box keeps studio.css's .cbrief; the filled-by
+   tag keeps assistant.css's .zpa-filled */
+
+@media (max-width: 720px) {
+  .zc.hero {
+    padding: 0 16px 16px;
+  }
+  .zc.hero.zc-empty {
+    min-height: calc(100vh - 64px - 80px);
+  }
+  .zc h1 {
+    margin-bottom: 22px;
+  }
+  .zc .zc-tiles,
+  .zc .zc-tiles.four {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .zc .zc-tools {
+    row-gap: 6px;
+  }
+  .zc .zc-seg button {
+    padding: 0 10px;
+  }
+  .zc .zc-sep {
+    display: none;
+  }
+  .zc-hint {
+    display: none;
+  }
+}
