@@ -6,11 +6,15 @@ from the PROJECT it belongs to -- a client's ad, a filmmaker's short, a
 product launch. "It's only by project basis so it's able to keep
 consistency with renders across the project."
 
-A project carries three things, and only the first two are typed:
+A project carries four things, and only the first three are typed:
 
 - `brief`  -- who it is for, the look, the must-haves and the nevers.
   Written by hand, or drafted by the model from three answers
   (`draft_brief`) and then edited.
+- `look`   -- the style every prompt in the project is held to (2026-10-02,
+  Mike's call: the look belongs to the project, the studio has none).
+  Read only through `looks.look_block`, never here; "" -- the default --
+  means the project imposes no look at all, NOT "use the brand's".
 - `memory` -- what the project has LEARNED: every pick, every pass with its
   reason, every hand edit of a prompt made inside it. Appended by the routes
   that already record those decisions, newest last, capped at MEMORY_MAX.
@@ -38,6 +42,7 @@ from .db import connect, own_table
 MEMORY_MAX = 60          # entries kept per project; the oldest fall off
 PROMPT_MEMORY = 14       # how many of the newest reach a prompt
 EXCERPT = 320            # characters of a scene prompt kept per pick
+LOOK_MAX = 4000          # characters of a project's look
 
 # The three questions the brief is drafted from. The keys are the form
 # fields; the wording is what the Projects page shows.
@@ -70,6 +75,10 @@ def init(dsn: Optional[str] = None) -> None:
     with connect(dsn) as conn:
         conn.execute(SCHEMA)
         own_table(conn, "projects")
+        # the look (2026-10-02) -- additive, and "" for every row that
+        # existed before it, which is exactly "no look imposed"
+        conn.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS look "
+                     "TEXT NOT NULL DEFAULT ''")
         conn.execute("ALTER TABLE shoot_concepts ADD COLUMN IF NOT EXISTS project_id BIGINT")
         conn.execute("CREATE INDEX IF NOT EXISTS shoot_concepts_project "
                      "ON shoot_concepts(project_id)")
@@ -89,14 +98,15 @@ def _row(row) -> dict[str, Any]:
 
 
 def create(title: str, brief: str = "", dsn: Optional[str] = None, *,
-           account_id: int) -> dict[str, Any]:
+           account_id: int, look: str = "") -> dict[str, Any]:
     title = (title or "").strip()[:120]
     if not title:
         raise ValueError("a project needs a name")
     with connect(dsn) as conn:
         row = conn.execute(
-            "INSERT INTO projects (account_id, title, brief) VALUES (%s, %s, %s) "
-            "RETURNING *", (account_id, title, (brief or "").strip()[:8000])).fetchone()
+            "INSERT INTO projects (account_id, title, brief, look) VALUES (%s, %s, %s, %s) "
+            "RETURNING *", (account_id, title, (brief or "").strip()[:8000],
+                            (look or "").strip()[:LOOK_MAX])).fetchone()
         return _row(row)
 
 
@@ -130,7 +140,8 @@ def list_projects(dsn: Optional[str] = None, *, account_id: int,
 
 
 def update(project_id: int, dsn: Optional[str] = None, *, account_id: int,
-           title: Optional[str] = None, brief: Optional[str] = None) -> dict[str, Any]:
+           title: Optional[str] = None, brief: Optional[str] = None,
+           look: Optional[str] = None) -> dict[str, Any]:
     sets, args = [], []
     if title is not None:
         if not title.strip():
@@ -140,6 +151,9 @@ def update(project_id: int, dsn: Optional[str] = None, *, account_id: int,
     if brief is not None:
         sets.append("brief = %s")
         args.append(brief.strip()[:8000])
+    if look is not None:                  # "" clears it: no look imposed
+        sets.append("look = %s")
+        args.append(look.strip()[:LOOK_MAX])
     if not sets:
         found = get(project_id, dsn, account_id=account_id)
         if not found:

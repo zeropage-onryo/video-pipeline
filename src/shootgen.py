@@ -1202,8 +1202,12 @@ def generate_concept_ideas(brand: str, client=None, spark=None, gemini_client=No
 
 
 def gold_standard_example() -> str:
-    """The canonical proven prompt (prompts/gold_standard.md), injected as the
-    exemplar every scene brief is measured against. '' if the file is absent --
+    """The exemplar (prompts/gold_standard.md) every scene brief is
+    measured against -- for its five-part SHAPE, which is the proven part.
+    Its subject and look were rewritten 2026-10-02: the original (a dark
+    comedy, a monster in a bed, raw handheld and muted colour; in git
+    history) leaked its genre into look-less runs, and the studio has no
+    house look. '' if the file is absent --
     the exemplar is an enhancement, never a hard dependency."""
     try:
         return (PROMPTS_DIR / "gold_standard.md").read_text().strip()
@@ -1254,7 +1258,7 @@ def build_scene_brief_prompt(brand: str, spark=None, references: str = "",
             .replace("{card_line_rules}", CARD_LINE_RULES)
             .replace("{seconds}", str(timeline.scene_seconds(seconds)))
             .replace("{brand}", load_brand(brand))
-            .replace("{look}", looks.look_block(brand))
+            .replace("{look}", looks.look_block(brand) or looks.unset_note())
             .replace("{spark}", f"CREATIVE SPARK FROM THE FILMMAKER: {spark}" if spark else "")
             .replace("{references}", references or NO_REFERENCES_NOTE)
             .replace("{cast}", cast or NO_CAST_NOTE)
@@ -1367,7 +1371,10 @@ def generate_scene_concept(brand: str, spark=None, steer: str = "",
                "duration": f"{seconds}s", "shots": [shot]}
     location_names = [loc["name"] for loc in preprod.list_locations(**kwargs, account_id=account_id)]
     allowed = ZEROPAGE_AI_TOOLS if brand == "zeropage" else None
-    warnings = validate_concept(concept, location_names, allowed_tools=allowed)
+    # Checked against the DIRECTION, never the steer: the steer is craft
+    # notes and winning prompts, whose own windows are not a request.
+    warnings = (validate_concept(concept, location_names, allowed_tools=allowed)
+                + timeline.shot_count_warnings(shot["prompt"], spark or ""))
     concept_id = preprod.save_concept(
         concept, brand=brand, spark=spark, prompt_template=prompt,
         warnings=warnings, **kwargs, account_id=account_id)
@@ -1438,6 +1445,7 @@ def build_scenes_prompt(idea: str, brand: str, count: int, locations: list,
             .replace("{seconds}", str(timeline.scene_seconds(seconds)))
             .replace("{idea}", (idea or "").strip() or "(no idea given — surprise me)")
             .replace("{brand}", load_brand(brand))
+            .replace("{look}", looks.look_block(brand) or looks.unset_note())
             .replace("{cast}", cast or NO_CAST_NOTE)
             .replace("{locations}", format_scene_locations(locations))
             .replace("{references}", references or NO_REFERENCES_NOTE)
@@ -1584,7 +1592,8 @@ def generate_scene_concepts(idea: str, brand: str, count: int = 4,
         concept = {"title": scene["title"], "hook": "", "logline": "",
                    "card_line": card_line, "duration": f"{seconds}s",
                    "shots": [shot]}
-        warnings = validate_concept(concept, location_names, allowed_tools=allowed)
+        warnings = (validate_concept(concept, location_names, allowed_tools=allowed)
+                    + timeline.shot_count_warnings(scene["prompt"], idea or ""))
         concept_id = preprod.save_concept(
             concept, brand=brand, spark=idea, prompt_template=hashed,
             warnings=warnings, **kwargs, account_id=account_id)
@@ -1637,9 +1646,11 @@ def write_scene_for_concept(concept_id: int, gemini_client=None,
             "prompt": parsed["brief"]}
     location_names = [loc["name"] for loc in preprod.list_locations(**kwargs, account_id=account_id)]
     allowed = ZEROPAGE_AI_TOOLS if concept.get("brand") == "zeropage" else None
-    warnings = validate_concept({**concept, "shots": [shot]}, location_names,
-                                use_pov=bool(concept.get("use_pov")),
-                                allowed_tools=allowed)
+    from . import timeline
+    warnings = (validate_concept({**concept, "shots": [shot]}, location_names,
+                                 use_pov=bool(concept.get("use_pov")),
+                                 allowed_tools=allowed)
+                + timeline.shot_count_warnings(shot["prompt"], spark))
     preprod.update_concept_shots(concept_id, {"shots": [shot]},
                                  warnings=warnings, **kwargs, account_id=account_id)
     return {"concept_id": concept_id, "shots": [shot], "warnings": warnings}

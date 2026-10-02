@@ -47,6 +47,7 @@ import {
   type Me,
 } from "@/lib/studio-api";
 import { CreditPill } from "@/components/studio/credit-pill";
+import { requestNewSession } from "@/lib/assistant";
 /* eslint-disable @next/next/no-img-element */
 import "@/app/studio/studio.css";
 
@@ -61,6 +62,15 @@ const NAV: { id: ViewId; label: string; href: string; icon: typeof House; extern
   { id: "cut", label: "Edit", href: "/studio/cut", icon: Scissors },
   { id: "elements", label: "Elements", href: "/studio/elements", icon: AtSign },
   { id: "queue", label: "Queue", href: "/studio/queue", icon: ListVideo },
+];
+
+/* The header's three tabs (2026-10-02, the "ZPF Composer Directions"
+   mock): Create is the box, Library the Assets wall, Timeline the editor.
+   The rail still carries every page; these are the three the mock names. */
+const TABS: { label: string; href: string; view: ViewId }[] = [
+  { label: "Create", href: "/studio", view: "studio" },
+  { label: "Library", href: "/studio/assets", view: "assets" },
+  { label: "Timeline", href: "/studio/cut", view: "cut" },
 ];
 
 const VIEW_BY_PATH: [string, ViewId][] = [
@@ -128,6 +138,9 @@ export function StudioShell({ children }: { children: ReactNode }) {
   const [signedOut, setSignedOut] = useState(false);
   const pinned = useSyncExternalStore(subscribePin, readPin, () => false);
   const [menu, setMenu] = useState(false);
+  // the header's avatar menu (accounts, sign out) -- its own flag, so the
+  // rail's account row and the avatar never open each other's
+  const [hmenu, setHmenu] = useState(false);
   const [pending, setPending] = useState(0);
   // keyed by the account it was read for, so a switch never shows the
   // previous account's number while the new one is being asked
@@ -238,6 +251,15 @@ export function StudioShell({ children }: { children: ReactNode }) {
     window.dispatchEvent(new Event(PIN_EVENT));
   };
 
+  useEffect(() => {
+    if (!hmenu) return;
+    const off = (e: MouseEvent) => {
+      if (!(e.target as Element | null)?.closest?.(".havatar-wrap")) setHmenu(false);
+    };
+    document.addEventListener("pointerdown", off);
+    return () => document.removeEventListener("pointerdown", off);
+  }, [hmenu]);
+
   const toast = useCallback((text: string, kind: "ok" | "err" = "ok") => {
     setToastState({ text, kind });
     if (toastTimer.current) clearTimeout(toastTimer.current);
@@ -251,6 +273,7 @@ export function StudioShell({ children }: { children: ReactNode }) {
   // Queue, the board and the badge re-ask -- no reload (BACKLOG #19).
   const pickAccount = (slug: string) => {
     setMenu(false);
+    setHmenu(false);
     if (slug === brand) return;
     switchAccount(slug)
       .then(loadMe)
@@ -357,22 +380,71 @@ export function StudioShell({ children }: { children: ReactNode }) {
         </nav>
 
         <div className="shell">
-          <div className="bar">
-            <span className="brand">ZPF</span>
-            <span className="sep">/</span>
-            <span className="cur">{view === "cut" ? "edit" : view}</span>
+          {/* THE HEADER (2026-10-02, the composer mock): the brand with its
+              red dot, Create / Library / Timeline in the middle, and on the
+              right the balance, New session and the account's avatar. Every
+              piece is wired: the tabs are pages, New session archives the
+              open conversation (lib/assistant.ts requestNewSession, taken by
+              AssistantThreadProvider), the avatar opens the account menu. */}
+          <header className="bar hdr">
+            <Link href="/studio" className="hbrand" title="Studio">
+              <span className="hdot" aria-hidden />
+              <b>Zero Page Studio</b>
+            </Link>
+            <nav className="htabs" aria-label="Studio">
+              {TABS.map((t) => (
+                <Link key={t.href} href={t.href} aria-current={view === t.view ? "page" : undefined}>
+                  {t.label}
+                </Link>
+              ))}
+            </nav>
             {bar}
             <span className="spacer" />
             <CreditPill balance={balance} onError={(text) => toast(text, "err")} />
-            <button
-              type="button"
-              className="tag"
-              title={signedOut ? "Sign in" : "Switch account"}
-              onClick={() => (signedOut ? goToSignIn() : setMenu((v) => !v))}
-            >
-              {signedOut ? "Sign in" : `${me?.account?.label ?? "—"} · switch`}
-            </button>
-          </div>
+            {!signedOut && me?.account ? (
+              <button
+                type="button"
+                className="hnew"
+                title="Start a new session -- this one is kept"
+                onClick={() => {
+                  requestNewSession();
+                  toast("New session · the last one is kept");
+                }}
+              >
+                New session
+              </button>
+            ) : null}
+            <span className="havatar-wrap">
+              <button
+                type="button"
+                className="havatar"
+                aria-haspopup="menu"
+                aria-expanded={hmenu}
+                title={signedOut ? "Sign in" : `${who} · account`}
+                onClick={() => (signedOut ? goToSignIn() : setHmenu((v) => !v))}
+              >
+                {me?.user.avatar_url ? <img src={me.user.avatar_url} alt="" /> : initials.slice(0, 1) || "ZP"}
+              </button>
+              {hmenu && me ? (
+                <span className="rmenu hmenu" role="menu">
+                  <span className="m">{who}</span>
+                  {me.accounts.map((a) => (
+                    <button
+                      key={a.id}
+                      type="button"
+                      aria-current={a.slug === brand ? "true" : undefined}
+                      onClick={() => pickAccount(a.slug)}
+                    >
+                      {a.label}
+                    </button>
+                  ))}
+                  <button type="button" onClick={signOut}>
+                    <LogOut strokeWidth={1.6} /> Sign out
+                  </button>
+                </span>
+              ) : null}
+            </span>
+          </header>
           {stage ? <div className="stage">{children}</div> : children}
         </div>
 

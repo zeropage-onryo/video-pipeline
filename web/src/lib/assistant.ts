@@ -13,6 +13,7 @@
      FILLS the box; Create stays the person's click. */
 import { apiFetch } from "@/lib/api";
 import { GUARDED_HEADERS, type GuideReply } from "@/lib/studio-api";
+import type { Made } from "@/lib/composer";
 
 export const STAGES = ["brief", "story", "cast", "references", "shots", "stills", "clips"] as const;
 export type Stage = (typeof STAGES)[number];
@@ -166,6 +167,10 @@ export type Turn = {
   looked?: string[];
   /** the composer: the proposal's confirm card has been decided */
   decided?: "done" | "skipped";
+  /** the composer (2026-10-02): this user turn was a SEND, and what it made
+   *  (lib/composer.ts). The pill leaves these turns out of its card and of
+   *  the conversation it sends: they are the box's, not the Guide's. */
+  made?: Made;
 };
 
 /* The composer's box, saved beside the thread so leaving the page keeps
@@ -182,6 +187,8 @@ export type ComposerDraft = {
   uploads: UploadRef[];
   written: { conceptId: number | null; detail: string } | null;
 };
+/* Create is the default (2026-10-02, the composer mock): the box makes;
+   the Guide is a toggle beside Image | Video. */
 export const EMPTY_DRAFT: ComposerDraft = { idea: "", brief: "", mode: "create", picked: [], uploads: [], written: null };
 export const draftHasContent = (d: ComposerDraft | null | undefined) =>
   !!d && !!(d.idea.trim() || d.brief.trim() || d.picked.length || d.uploads.length || d.written);
@@ -253,6 +260,18 @@ export const postVerdicts = (frames: FrameVerdict[]) =>
     body: JSON.stringify({ frames }),
   });
 
+
+/* ── New session (2026-10-02, the header's button) ──
+   The header lives in the shell, ABOVE the thread provider (the provider
+   reads the shell for whose thread it is), so the button cannot call
+   clearProject() itself: it asks through a window event, and the provider
+   deletes the open conversation on the server and starts empty.
+   The Studio page listens too, to stop a live run and clear what is only
+   its own (progress, selection). */
+export const NEW_SESSION_EVENT = "zpf:new-session";
+export function requestNewSession() {
+  window.dispatchEvent(new Event(NEW_SESSION_EVENT));
+}
 
 /* ── the composer bridge ──
    The pill reads what the box holds straight off the shared draft now

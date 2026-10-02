@@ -181,7 +181,13 @@ export function AssistantPill() {
     setDetail("Thinking…");
     try {
       const form = new FormData();
-      form.append("conversation", JSON.stringify({ messages: next.map(({ role, content }) => ({ role, content })) }));
+      // the box's own sends (t.made) are left out: they were never asked of
+      // the Guide, and two user turns in a row with no answer between
+      // would read as an unanswered question
+      form.append(
+        "conversation",
+        JSON.stringify({ messages: next.filter((t) => !t.made).map(({ role, content }) => ({ role, content })) }),
+      );
       if (account) form.append("brand", account);
       form.append("guide_provider", "gemini");
       form.append("idea", composer.idea.trim() || said);
@@ -287,6 +293,10 @@ export function AssistantPill() {
   // the editor seats its agent in its own left panel (invideo's place), so
   // a floating pill over the timeline would be a second, competing one
   if (/^\/studio\/cut\/[^/]+/.test(pathname)) return null;
+  // the Studio composer has the Guide IN its box, on this same thread
+  // (2026-10-02, the composer mock): a pill floating over the send button
+  // would be the same helper twice, so it stays off on that one page
+  if (pathname.replace(/\/$/, "") === "/studio") return null;
 
   const pillLine = !project
     ? "Start a project, or ask me anything"
@@ -363,7 +373,7 @@ export function AssistantPill() {
                       : "Tell me what you want to make. I'll ask a couple of things, pitch directions, find references and put it all in your composer. Create and Approve stay your clicks."}
                   </p>
                 ) : null}
-                {turns.map((t, i) => (
+                {turns.map((t, i) => t.made ? null : (
                   <div key={i} className="zpa-turn">
                     <p className={`zpa-msg${t.role === "user" ? " me" : ""}${t.failed ? " failed" : ""}`}>
                       {t.content}

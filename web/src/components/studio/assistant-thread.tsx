@@ -41,6 +41,7 @@ import {
 import { useShell } from "@/components/studio/shell";
 import {
   EMPTY_DRAFT,
+  NEW_SESSION_EVENT,
   asDraft,
   draftHasContent,
   getAssistantMemory,
@@ -209,13 +210,28 @@ export function AssistantThreadProvider({ children }: { children: ReactNode }) {
     }
   }, [account]);
   // Create wrote the scene: everything the conversation was for is on the
-  // concept now. The card pointing at it is all that stays, and the save
-  // effect writes exactly that (a row with no turns and only the card).
+  // concept now. The Guide talk, the brief, the box and its references go;
+  // what stays is the card pointing at it -- and the composer's own send
+  // bubbles (`t.made`, lib/composer.ts), each of which carries its result
+  // and is the "scene written" card the mock composer draws. The save
+  // effect writes exactly that.
   const finishProject = useCallback((written: ComposerDraft["written"]) => {
-    setTurns([]);
+    setTurns((ts) => ts.filter((t) => !!t.made));
     setStage("");
     setDraftState({ ...EMPTY_DRAFT, written });
   }, []);
+
+  // the header's "New session" (lib/assistant.ts requestNewSession): the
+  // shell cannot reach this context, so it asks through a window event
+  useEffect(() => {
+    const on = () => {
+      clearProject().catch(() => {
+        /* the server could not delete it: the thread stays as it is */
+      });
+    };
+    window.addEventListener(NEW_SESSION_EVENT, on);
+    return () => window.removeEventListener(NEW_SESSION_EVENT, on);
+  }, [clearProject]);
 
   const value = useMemo<AssistantThread>(
     () => ({
