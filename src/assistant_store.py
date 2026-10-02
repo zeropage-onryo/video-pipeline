@@ -190,7 +190,9 @@ def _clean_draft(draft) -> dict:
     mode = str(d.get("mode") or "")
     return {"idea": str(d.get("idea") or "")[:MAX_DRAFT_TEXT],
             "brief": str(d.get("brief") or "")[:MAX_DRAFT_TEXT],
-            "mode": mode if mode in DRAFT_MODES else "guide",
+            # Create is the box's default (Direction A, 2026-10-02); a
+            # Guide the person chose is stored and kept
+            "mode": mode if mode in DRAFT_MODES else "create",
             "picked": _urls(d.get("picked")),
             "uploads": uploads,
             "written": written}
