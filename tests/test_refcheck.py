@@ -145,7 +145,7 @@ def test_the_prompt_fills_with_no_placeholder_left():
                                  count=3)
     assert "3 frame(s)" in text and "beige prestige drama" in text
     assert "watermark" in text and "sodium glow" in text
-    assert not re.findall(r"\{(count|role|want|query|look|anti|flags|hard)\}", text)
+    assert not re.findall(r"\{(count|role|want|query|look_block|look|anti|flags|hard)\}", text)
 
 
 def test_screen_falls_back_to_the_second_address_when_the_first_will_not_fetch():
@@ -171,3 +171,23 @@ def test_screen_falls_back_to_the_second_address_when_the_first_will_not_fetch()
 def test_a_products_own_label_is_not_the_logo_flag():
     text = refcheck.build_prompt({"role": "prop", "query": "Ghost energy drink orange cream can"})
     assert "printed ON that" in text and "never a defect" in text
+
+
+def test_a_product_or_pasted_link_is_judged_on_identity_not_the_brand_look():
+    """2026-10-02: with Serper live, every clean packshot of the Ghost can
+    was cut as "studio render on white" against the brand look -- the
+    frames most worth keeping. A prop (a real thing the scene names) and a
+    link (a page the person pasted) are judged on whether they show the
+    thing; mood comes from the other needs."""
+    for role in refcheck.IDENTITY_ROLES:
+        text = refcheck.build_prompt({"role": role, "query": "Ghost energy drink orange cream can"},
+                                     look="GRADE sodium and damp, teal shadows.", anti=["beige prestige drama"])
+        assert "identity, not mood" in text and "packshot on white" in text and "is a KEEP" in text
+        assert "GRADE sodium and damp" not in text and "THE LOOK it has to sit inside" not in text
+        assert "beige prestige drama" in text                 # anti-references still apply
+        assert "watermark" in text and "wrong_subject" in text   # and so does the floor
+    # every other need still sits inside the brand look
+    text = refcheck.build_prompt({"role": "place", "query": "dive bar"}, look="GRADE sodium and damp.")
+    assert "THE LOOK it has to sit inside" in text and "GRADE sodium and damp." in text
+    assert "identity, not mood" not in text
+    assert set(refcheck.IDENTITY_ROLES) == {"prop", "link"}

@@ -51,18 +51,44 @@ HARD_FLAGS = ("watermark", "subtitles", "player_ui", "logo",
 MAX_BATCH = 6          # a contact sheet's worth per call
 MAX_CAPTION = 160
 
+# Needs judged on IDENTITY, not mood (2026-10-02, Mike's call). A product
+# reference's job is to show the exact can, label and shape so the render
+# gets it right; the scene's grade comes from the place / light / mood
+# frames. Judged against the brand look, every clean packshot of the Ghost
+# can was cut as "studio render on white" -- the frames most worth keeping
+# were the ones the rubric rejected. `prop` is a real thing the scene
+# names (reference_needs puts it first); `link` is a page the person
+# pasted (assistant_brain.link_sheet). The clean-frame floor still applies.
+IDENTITY_ROLES = ("prop", "link")
+IDENTITY_BLOCK = """WHAT COUNTS FOR THIS FRAME -- identity, not mood
+This need is a THING the scene has to get right (a product, an object, a
+page the person chose), not the scene's atmosphere. Judge only whether the
+frame shows that thing clearly and accurately: the right product, flavour,
+label, shape and colour, large and sharp enough to copy from. A plain studio
+packshot on white, a catalogue render or a store listing photo is a KEEP --
+that is the best possible identity reference. Lighting, grade, era, mood
+and "cinematic" quality do NOT count here; do not flag wrong_look or
+stock_gloss for them. Flag wrong_subject when it is a different product,
+flavour or brand, and the clean-frame floor below still applies."""
+
 
 def build_prompt(need: Optional[dict] = None, *, look: str = "", anti=(),
                  count: int = 1) -> str:
     need = need or {}
     template = PROMPT_PATH.read_text()
     anti_block = "\n".join(f"- {line}" for line in anti) or "- (none given)"
+    role = need.get("role") or "mood"
+    if role in IDENTITY_ROLES:
+        look_block = IDENTITY_BLOCK
+    else:
+        look_block = ("THE LOOK it has to sit inside\n"
+                      + ((look or "").strip() or "(no look file for this brand)"))
     return template.format(
         count=count,
-        role=need.get("role") or "mood",
+        role=role,
         want=need.get("want") or need.get("query") or "a frame for this scene",
         query=need.get("query") or "",
-        look=(look or "").strip() or "(no look file for this brand)",
+        look_block=look_block,
         anti=anti_block,
         flags=", ".join(FLAGS),
         hard=", ".join(HARD_FLAGS),
