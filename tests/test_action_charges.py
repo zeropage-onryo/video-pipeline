@@ -170,6 +170,34 @@ def test_the_director_brief_is_gated_like_create(client, studio, monkeypatch):
     assert _spent(studio) == 0
 
 
+def test_the_composers_image_door_is_gated_like_create(client, studio, monkeypatch):
+    """/generate/run grounds, enhances and saves a concept before the
+    still's own hold is reached (2026-10-02: the composer's Image button)."""
+    from app import api
+    from src import shootgen
+    calls = {"enhance": 0}
+
+    def fake_enhance(*a, **k):
+        calls["enhance"] += 1
+        return "ENHANCED"
+
+    monkeypatch.setattr(shootgen, "reference_block", lambda **k: "")
+    monkeypatch.setattr(api, "_enhance_generate_prompt", fake_enhance)
+    monkeypatch.setattr(nano_banana, "generate_from_prompt",
+                        lambda *a, **k: {"ok": True, "media_url": "/renders/f.png"})
+    import google.genai as genai_mod
+    monkeypatch.setattr(genai_mod, "Client", lambda api_key=None: object())
+    form = {"prompt": "a still", "output": "image", "brand": "zeropage"}
+    res = client.post("/api/generate/run", data=form)
+    assert res.status_code == 402
+    assert res.json()["error"]["code"] == "subscribe_or_top_up"
+    assert calls["enhance"] == 0                  # no job, no model call
+    _fund(studio)
+    res = client.post("/api/generate/run", data=form)
+    assert _wait(client, res.json()["job_id"])["status"] == "done"
+    assert calls["enhance"] == 1
+
+
 def test_the_owner_is_never_charged(client, studio, writer):
     accounts.set_credit_exempt("zeropage", True, dsn=studio["dsn"])
     res = _create(client)                          # no credit at all

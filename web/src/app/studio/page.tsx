@@ -15,30 +15,44 @@
    Guide mode (talk the idea through first) shows only when the server
    reports the creative_guide capability, so Create is the primary action
    rather than a button that 404s. The model / length / frame pills
-   likewise appear only when their routes answer. */
+   likewise appear only when their routes answer.
+
+   The composer redesign (2026-10-02, "Direction A"): an Image | Video
+   toggle picks what a send makes -- VIDEO is the Create above, IMAGE is
+   one Nano Banana still through /api/generate/run. Each send becomes a
+   turn drawn above the box (components/studio/composer/turns.tsx); the
+   box docks under them, Enter sends, `/` opens commands, and a running
+   send can be stopped. Guide is a toggle beside the output, no longer
+   the default. Still ONE output per send. */
 import Link from "next/link";
 import { Suspense, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useSearchParams } from "next/navigation";
 import {
+  ArrowUp,
   AtSign,
   Brain,
-  Clapperboard,
   Clock,
   Ellipsis,
   Image as ImageIcon,
   ImageOff,
   MessageSquare,
+  Paperclip,
   Play,
   Plus,
   RectangleVertical,
   Search,
-  Sparkles,
-  Workflow,
+  Video,
   X,
 } from "lucide-react";
 import { API_URL, apiFetch } from "@/lib/api";
 import {
   announceBalanceChange,
+  cancelJob,
+  getConceptDetail,
+  getPresets,
+  runImage,
+  type ConceptDetail,
+  type Preset,
   announceQueueChange,
   getAssets,
   getCapabilities,
@@ -63,6 +77,22 @@ import { ElementSheet } from "@/components/studio/element-sheet";
 import { ELEMENT_KINDS, displayPhoto, drawable, elementKind, isElement, kindLabel, type ElementKind } from "@/lib/elements";
 import { FILL_EVENT, announceComposer, keepReferences, takePendingFill, type ContactSheet } from "@/lib/assistant";
 import { ContactSheetView, keepersOf } from "@/components/studio/contact-sheet";
+import {
+  BASE_COMMANDS,
+  IMAGE_ASPECTS,
+  loadOutput,
+  matchCommands,
+  mediaSrc,
+  newTurnId,
+  pollJob,
+  saveOutput,
+  type Output,
+  type SlashCommand,
+  type Turn,
+} from "@/lib/composer";
+import { ComposerTurns } from "@/components/studio/composer/turns";
+import { SlashMenu } from "@/components/studio/composer/slash-menu";
+import "@/components/studio/composer/composer.css";
 
 type Attachment = { id: string; name: string; file: File; url: string };
 type Option = { id: string; label: string; note?: string };
@@ -84,7 +114,6 @@ type GuideMessage = {
   chosen?: Record<string, boolean>;
   kept?: boolean;
 };
-type Written = { conceptId: number | null; detail: string };
 /* the shelf under the box is ELEMENTS only -- the characters, props,
    products and places a person created to @ in a prompt (Mike's call,
    2026-09-15). Blank until one exists; the Assets wall's generated
@@ -194,9 +223,8 @@ function Composer() {
   const [note, setNote] = useState<string | null>(null);
   const [noteBad, setNoteBad] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [written, setWritten] = useState<Written | null>(null);
   const [dragging, setDragging] = useState(false);
-  const [wantMode, setMode] = useState<"guide" | "create">("guide");
+  const [wantMode, setMode] = useState<"guide" | "create">("create");
   const [thread, setThread] = useState<GuideMessage[]>([]);
   const [choices, setChoices] = useState<string[]>([]);
   const [brief, setBrief] = useState("");
@@ -210,8 +238,30 @@ function Composer() {
   // the assistant pill filled the box: who, so the tag can say so and
   // Create can wear a ring until the person presses it (or edits it away)
   const [filledBy, setFilledBy] = useState<{ name: string; avatar?: string } | null>(null);
+  // the redesign (2026-10-02): what a send makes, and what came back.
+  // The composer IS server-rendered (as video), so the stored choice is
+  // read after mount -- read in the initializer, a saved "image" failed
+  // hydration on every load.
+  const [output, setOutputState] = useState<Output>("video");
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage is only readable after mount
+    setOutputState(loadOutput());
+  }, []);
+  const [aspect, setAspect] = useState(IMAGE_ASPECTS[0].id);
+  const [presets, setPresets] = useState<Preset[]>([]);
+  const [preset, setPreset] = useState<Preset | null>(null);
+  const [turns, setTurns] = useState<Turn[]>([]);
+  const [slashAt, setSlashAt] = useState(0);
+  const [liveTurn, setLiveTurn] = useState<string | null>(null);
+  const running = useRef<{ turnId: string; jobId?: number; stopped: boolean } | null>(null);
+  const objectUrls = useRef<string[]>([]);
+  const setOutput = (o: Output) => {
+    setOutputState(o);
+    saveOutput(o);
+  };
   const fileInput = useRef<HTMLInputElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
+  const stackRef = useRef<HTMLDivElement>(null);
   const dragDepth = useRef(0);
 
   const loadAssets = () =>
@@ -221,6 +271,9 @@ function Composer() {
 
   useEffect(() => {
     getCapabilities().then(setCaps).catch(() => setCaps({}));
+    getPresets()
+      .then((r) => setPresets(r.items))
+      .catch(() => setPresets([]));
     // the picker lists elements only; a render handed over from the
     // Assets wall ("Use in a shot") needs the wider scope to resolve
     getAssets(undefined, attachId?.startsWith("generated-") ? "all" : "elements")
@@ -275,16 +328,48 @@ function Composer() {
     announceComposer({ idea, picked });
   }, [idea, picked]);
 
-  // object URLs for uploads are revoked when the composer unmounts
+  // object URLs for uploads are revoked when the composer unmounts (all
+  // of them -- the attachments list at mount was always empty)
   useEffect(() => {
-    return () => attachments.forEach((a) => URL.revokeObjectURL(a.url));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const urls = objectUrls.current;
+    return () => urls.forEach((u) => URL.revokeObjectURL(u));
   }, []);
 
   // Guide only when the server says the route is there; otherwise the
   // primary action is Create rather than a button that 404s
   const guideReady = caps.creative_guide === true;
   const mode: "guide" | "create" = guideReady ? wantMode : "create";
+
+  // the slash menu: the fixed commands plus GET /api/presets as camera chips
+  const commands = useMemo<SlashCommand[]>(
+    () => [
+      ...BASE_COMMANDS.filter((c) => c.id !== "guide" || guideReady),
+      ...presets.map((p) => ({
+        id: `preset:${p.id}`,
+        cmd: p.id.replace(/[^\w-]+/g, "-").toLowerCase(),
+        desc: p.label,
+        group: "camera" as const,
+      })),
+    ],
+    [presets, guideReady],
+  );
+  // The newest turn is lifted clear of the docked box -- on the send, and
+  // again when it finishes (a finished turn is taller). Without it a still
+  // landed with its bottom under the box and nothing on screen said so.
+  const lastTurn = turns[turns.length - 1];
+  useEffect(() => {
+    const stack = stackRef.current;
+    const box = stack?.querySelector<HTMLElement>(".zc-box");
+    const turn = stack?.querySelector<HTMLElement>(".zc-turn:last-of-type");
+    if (!box || !turn) return;
+    const hidden = turn.getBoundingClientRect().bottom + 16 - box.getBoundingClientRect().top;
+    if (hidden <= 0) return;
+    const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    window.scrollBy({ top: hidden, behavior: still ? "auto" : "smooth" });
+  }, [turns.length, lastTurn?.status]);
+
+  const hasImage = turns.some((t) => t.output === "image" && t.status === "done" && !!t.image);
+  const slashItems = matchCommands(idea, commands, output, hasImage);
 
   // @Michael in the box attaches his frames as references
   const attachAsset = (hit: AssetHit) => {
@@ -342,44 +427,112 @@ function Composer() {
     if (bad && text) toast(text, "err");
   };
 
+  /* A turn is patched by id: the poll's ticks, the result, a Stop. */
+  const patchTurn = (id: string, p: Partial<Turn>) =>
+    setTurns((ts) => ts.map((t) => (t.id === id ? { ...t, ...p } : t)));
+
+  /* Stop: the wait ends at once and the turn says so. The server is
+     asked to cancel too, but nothing waits on its answer -- a job that
+     finishes anyway still lands on the board, the way it always has. */
+  function stop() {
+    const r = running.current;
+    if (!r) return;
+    r.stopped = true;
+    if (r.jobId) cancelJob(r.jobId).catch(() => {});
+    patchTurn(r.turnId, { status: "stopped" });
+    running.current = null;
+    setLiveTurn(null);
+    setBusy(false);
+    say(null);
+  }
+
+  /* IMAGE and VIDEO sends: one turn each, one output each. */
+  async function make(text: string) {
+    const turnId = newTurnId();
+    const isImage = output === "image";
+    const frame = isImage ? aspect : ratios.find((r) => r.id === ratio)?.label;
+    const refThumbs = [...attachments.map((a) => a.url), ...picked.filter(drawable)];
+    setTurns((ts) => [
+      ...ts,
+      { id: turnId, output, prompt: text, refs: refThumbs, status: "running", progress: 0, detail: "", frame },
+    ]);
+    const me = { turnId, stopped: false } as { turnId: string; jobId?: number; stopped: boolean };
+    running.current = me;
+    setLiveTurn(turnId);
+    setIdea("");
+
+    const form = new FormData();
+    if (brand) form.append("brand", brand);
+    if (isImage) {
+      form.append("prompt", text);
+      form.append("output", "image");
+      if (preset) form.append("preset", preset.id);
+      form.append("aspect", aspect);
+    } else {
+      // a camera preset is a line the writer reads, not a hidden field:
+      // /scenes/run has no preset input, so it rides in the idea
+      form.append("idea", preset ? `${text}\n\nCamera: ${preset.how}` : text);
+      form.append("count", "1");
+      if (brain) form.append("brain", brain);
+      if (seconds) form.append("seconds", String(seconds));
+      if (ratio) form.append("ratio", ratio);
+      // written against the project's brief + memory and filed under it;
+      // /generate/run takes no project, so a still is filed outside one
+      if (project) form.append("project_id", String(project.id));
+    }
+    appendReferences(form);
+
+    const started = isImage ? await runImage(form) : await runScenes(form);
+    me.jobId = started.job_id;
+    const job = await pollJob(
+      started.job_id,
+      (j) => patchTurn(turnId, { progress: j.progress || 0, detail: j.detail || "" }),
+      () => me.stopped,
+    );
+    if (!job) return; // stopped: stop() already drew it
+    running.current = null;
+    // charged quietly, the InVideo way: no price on the button, the
+    // balance pill just moves (2026-09-28)
+    announceBalanceChange();
+    if (job.status !== "done") {
+      patchTurn(turnId, { status: "failed", detail: job.error || "That run did not finish." });
+      say(job.error || "That run did not finish.", true);
+      return;
+    }
+    const conceptId = job.ref_id ?? null;
+    let detail: ConceptDetail | null = null;
+    if (conceptId) detail = await getConceptDetail(conceptId).catch(() => null);
+    if (isImage) {
+      const shots = detail?.shots ?? [];
+      const image = detail?.reference_image || shots[shots.length - 1]?.reference_image || null;
+      patchTurn(turnId, { status: "done", progress: 1, conceptId, image, detail: job.detail || "" });
+      if (!image) say(job.detail || "Saved, but no image came back.", true);
+    } else {
+      const timeline = detail?.timeline ?? detail?.shots?.[0]?.timeline ?? null;
+      patchTurn(turnId, {
+        status: "done",
+        progress: 1,
+        conceptId,
+        detail: job.detail || "on the board",
+        title: detail?.title,
+        parts: timeline?.parts ?? [],
+        seconds: timeline?.seconds ?? detail?.duration ?? (seconds || null),
+      });
+      toast("Scene written · it is on Pipeline to pick");
+      announceQueueChange();
+    }
+  }
+
   async function send() {
     if (!canSend) return;
     setBusy(true);
     setProgress(0);
-    setWritten(null);
     setFilledBy(null);
     say(null);
     let asking: GuideMessage[] | null = null;
     try {
       if (mode === "create") {
-        const form = new FormData();
-        form.append("idea", brief.trim() || idea.trim());
-        if (brand) form.append("brand", brand);
-        form.append("count", "1");
-        if (brain) form.append("brain", brain);
-        if (seconds) form.append("seconds", String(seconds));
-        if (ratio) form.append("ratio", ratio);
-        if (project) form.append("project_id", String(project.id));
-        appendReferences(form);
-        const started = await runScenes(form);
-        say("Writing the scene…");
-        const job = await waitForJob(started.job_id, (j) => {
-          setProgress(j.progress || 0);
-          say(j.detail || "Writing the scene…");
-        });
-        // a Create is charged quietly, the way InVideo does it: no price on
-        // the button, the balance pill just moves (2026-09-28, Mike's call)
-        announceBalanceChange();
-        if (job.status === "done") {
-          setProgress(1);
-          say(null);
-          setWritten({ conceptId: job.ref_id ?? null, detail: job.detail || "on the board" });
-          toast("Scene written · it is on Pipeline to pick");
-          setIdea("");
-          announceQueueChange();
-        } else {
-          say(job.error || "That run did not finish.", true);
-        }
+        await make(brief.trim() || idea.trim());
       } else {
         const next: GuideMessage[] = [
           ...thread.filter((m) => !m.failed),
@@ -450,10 +603,66 @@ function Composer() {
         setThread([...asking.slice(0, -1), { ...last, failed: true }]);
         setIdea((now) => now || last.content);
       }
+      const r = running.current;
+      if (r && !r.stopped) {
+        patchTurn(r.turnId, {
+          status: "failed",
+          detail: e instanceof Error ? e.message : "That did not go through.",
+        });
+        running.current = null;
+      }
       say(e instanceof Error ? e.message : "That did not go through.", true);
     } finally {
+      setLiveTurn(null);
       setBusy(false);
     }
+  }
+
+  /* the slash menu: every command changes something visible */
+  function runCommand(c: SlashCommand) {
+    setIdea("");
+    setSlashAt(0);
+    if (c.id === "image" || c.id === "video") {
+      setOutput(c.id);
+      setMode("create");
+    } else if (c.id === "guide") {
+      if (guideReady) setMode("guide");
+      else toast("The guide is not available on this account", "err");
+    } else if (c.id === "animate") {
+      const last = [...turns].reverse().find((t) => t.output === "image" && t.status === "done" && t.image);
+      if (last) animate(last);
+      return;
+    } else if (c.id === "ref") {
+      fileInput.current?.click();
+    } else if (c.id === "element") {
+      setIdea("@");
+    } else if (c.id.startsWith("preset:")) {
+      const p = presets.find((x) => `preset:${x.id}` === c.id);
+      if (p) setPreset(p);
+    }
+    textarea.current?.focus();
+  }
+
+  /* a finished still becomes a reference for what comes next */
+  function attachResult(t: Turn) {
+    if (!t.image) return;
+    setPicked((was) => [...new Set([...was, t.image!])]);
+    toast("Image attached as a reference");
+  }
+  function animate(t: Turn) {
+    if (!t.image) return;
+    setPicked((was) => [...new Set([...was, t.image!])]);
+    setOutput("video");
+    setMode("create");
+    textarea.current?.focus();
+    toast("Image attached · describe how the scene moves");
+  }
+  /* "Reuse prompt" fills the box; it never spends on its own */
+  function reuse(t: Turn) {
+    setOutput(t.output);
+    setMode("create");
+    setIdea(t.prompt);
+    textarea.current?.focus();
   }
 
   /* The confirm card. Nothing has run until this: the guide's turn
@@ -515,23 +724,19 @@ function Composer() {
   const attach = (files: FileList | File[] | null | undefined) => {
     const images = imageFiles(files);
     if (!images.length) return;
-    setAttachments((was) => [
-      ...was,
-      ...images.map((f) => ({
-        id: crypto.randomUUID(),
-        name: f.name,
-        file: f,
-        url: URL.createObjectURL(f),
-      })),
-    ]);
+    const made = images.map((f) => ({
+      id: crypto.randomUUID(),
+      name: f.name,
+      file: f,
+      url: URL.createObjectURL(f),
+    }));
+    made.forEach((m) => objectUrls.current.push(m.url));
+    setAttachments((was) => [...was, ...made]);
     toast(`${images.length} image${images.length === 1 ? "" : "s"} attached as reference`);
   };
-  const removeAttachment = (id: string) =>
-    setAttachments((w) => {
-      const gone = w.find((x) => x.id === id);
-      if (gone) URL.revokeObjectURL(gone.url);
-      return w.filter((x) => x.id !== id);
-    });
+  // not revoked here: a sent turn's bubble may still be drawing it. Every
+  // object URL is revoked once, when the composer unmounts.
+  const removeAttachment = (id: string) => setAttachments((w) => w.filter((x) => x.id !== id));
 
   /* drop anywhere on the box; the depth counter keeps the highlight
      steady while the cursor crosses the box's own children */
@@ -581,38 +786,45 @@ function Composer() {
     setPicked((was) => (on ? was.filter((u) => !urls.includes(u)) : [...new Set([...was, ...urls])]));
   };
 
-  const modeSwitch = guideReady ? (
-    <span className="cmode" role="radiogroup" aria-label="What Send does">
-      <button
-        type="button"
-        role="radio"
-        aria-checked={mode === "guide"}
-        title="Talk the idea through first"
-        onClick={() => setMode("guide")}
-      >
-        <MessageSquare strokeWidth={1.6} /> Guide
-      </button>
-      <button
-        type="button"
-        role="radio"
-        aria-checked={mode === "create"}
-        title="Write the scene from what is in the box"
-        onClick={() => setMode("create")}
-      >
-        <Play strokeWidth={1.6} /> Create
-      </button>
-    </span>
-  ) : null;
+  const empty = !turns.length && !(thread.length && mode === "guide");
+  const sendLabel = mode === "guide" ? "Send" : output === "image" ? "Generate" : "Create";
+  const placeholder =
+    mode === "guide"
+      ? "Describe your idea or ask for a direction. We'll work through the story, look and pacing…"
+      : output === "image"
+        ? turns.length
+          ? "Refine, vary, or describe the next image…"
+          : "Describe an image, a look, or a still… (@ an element, / for commands)"
+        : turns.length
+          ? "Refine, or describe the next scene…"
+          : "Describe a shot, scene, or sequence… (@ an element, / for commands)";
+  const starters: { label: string; run: () => void }[] = [
+    ...(guideReady
+      ? [{ label: "Pitch me a concept", run: () => { setMode("guide"); setIdea("Pitch me three short concepts for "); } }]
+      : []),
+    { label: "Write a scene", run: () => { setOutput("video"); setMode("create"); setIdea(""); } },
+    { label: "Make a still", run: () => { setOutput("image"); setMode("create"); setIdea(""); } },
+    { label: "Match a reference look", run: () => fileInput.current?.click() },
+  ];
 
   return (
     <section className="view" style={{ paddingTop: 0 }}>
-      <div className="hero">
-        <h1>
-          What do you
-          <br />
-          want to create?
-        </h1>
-        <div className="stack">
+      <div className={`hero zc${empty ? "" : " zc-active"}`}>
+        {empty ? (
+          <h1>
+            What do you
+            <br />
+            want to create?
+          </h1>
+        ) : null}
+        <div className="stack" ref={stackRef}>
+          <ComposerTurns
+            turns={turns}
+            busy={busy}
+            onAnimate={animate}
+            onUseAsRef={attachResult}
+            onRetry={reuse}
+          />
           {project ? (
             <div className="mb-2 flex items-center gap-2 text-[12px] text-white/60">
               <span className="rounded-full border border-white/15 bg-white/[0.06] px-3 py-1">
@@ -634,13 +846,13 @@ function Composer() {
             </div>
           ) : null}
           <div
-            className={`glass cbox${idea ? " awake" : ""}${dragging ? " drop" : ""}${busy ? " busy" : ""}`}
+            className={`glass cbox zc-box${idea ? " awake" : ""}${dragging ? " drop" : ""}${busy ? " busy" : ""}`}
             onDragEnter={onDragEnter}
             onDragOver={(e) => e.preventDefault()}
             onDragLeave={onDragLeave}
             onDrop={onDrop}
           >
-            {busy ? (
+            {busy && mode === "guide" ? (
               <span
                 className="cprogress"
                 role="progressbar"
@@ -653,7 +865,7 @@ function Composer() {
             {dragging ? (
               <span className="cdrop" aria-hidden>
                 <ImageIcon strokeWidth={1.5} />
-                Drop to attach as a reference
+                Drop to add as a reference
               </span>
             ) : null}
 
@@ -718,68 +930,60 @@ function Composer() {
               </div>
             ) : null}
 
-            <div className="cslots">
-              <button type="button" className="cslot" onClick={() => fileInput.current?.click()}>
-                <ImageIcon strokeWidth={1.5} />
-                <b>
-                  Add image
-                  <br />
-                  reference
-                </b>
-              </button>
-              <button
-                type="button"
-                className="cslot"
-                onClick={() => {
-                  setIdea((v) => `${v}${v && !v.endsWith(" ") ? " " : ""}@`);
-                  textarea.current?.focus();
-                }}
-              >
-                <AtSign strokeWidth={1.5} />
-                <b>
-                  Consistent
-                  <br />
-                  element
-                </b>
-              </button>
-              {attachments.map((a) => (
-                <span key={a.id} className="cattach" title={a.name} style={{ backgroundImage: `url(${a.url})` }}>
-                  <button type="button" aria-label={`Remove ${a.name}`} onClick={() => removeAttachment(a.id)}>
-                    <X strokeWidth={2} />
-                  </button>
-                </span>
-              ))}
-              {picked.map((u) => (
-                <span
-                  key={u}
-                  className={`cattach${drawable(u) ? "" : " raw"}`}
-                  title={u}
-                  data-ext={drawable(u) ? undefined : u.split(".").pop()?.split("?")[0]?.toUpperCase()}
-                  style={drawable(u) ? { backgroundImage: `url(${API_URL}${u})` } : undefined}
-                >
+            {referenceCount || preset ? (
+              <div className="zc-chips">
+                {preset ? (
+                  <span className="zc-chip preset" title={preset.how}>
+                    <span className="zc-chip-name">{preset.label}</span>
+                    <button type="button" aria-label={`Remove preset ${preset.label}`} onClick={() => setPreset(null)}>
+                      <X strokeWidth={2} />
+                    </button>
+                  </span>
+                ) : null}
+                {attachments.map((a) => (
+                  <span key={a.id} className="zc-chip" title={a.name}>
+                    <span className="zc-chip-thumb" style={{ backgroundImage: `url(${a.url})` }} />
+                    <span className="zc-chip-name">{a.name}</span>
+                    <button type="button" aria-label={`Remove ${a.name}`} onClick={() => removeAttachment(a.id)}>
+                      <X strokeWidth={2} />
+                    </button>
+                  </span>
+                ))}
+                {picked.map((u) => {
+                  const name = decodeURIComponent(u.split("/").pop()?.split("?")[0] ?? "reference");
+                  return (
+                    <span key={u} className="zc-chip" title={u}>
+                      <span
+                        className="zc-chip-thumb"
+                        style={drawable(u) ? { backgroundImage: `url(${mediaSrc(u)})` } : undefined}
+                      >
+                        {drawable(u) ? null : u.split(".").pop()?.split("?")[0]?.toUpperCase()}
+                      </span>
+                      <span className="zc-chip-name">{name}</span>
+                      <button
+                        type="button"
+                        aria-label={`Remove ${name}`}
+                        onClick={() => setPicked((w) => w.filter((x) => x !== u))}
+                      >
+                        <X strokeWidth={2} />
+                      </button>
+                    </span>
+                  );
+                })}
+                {referenceCount > 1 ? (
                   <button
                     type="button"
-                    aria-label="Remove reference"
-                    onClick={() => setPicked((w) => w.filter((x) => x !== u))}
+                    className="cclear"
+                    onClick={() => {
+                      setAttachments([]);
+                      setPicked([]);
+                    }}
                   >
-                    <X strokeWidth={2} />
+                    Clear {referenceCount}
                   </button>
-                </span>
-              ))}
-              {referenceCount > 1 ? (
-                <button
-                  type="button"
-                  className="cclear"
-                  onClick={() => {
-                    attachments.forEach((a) => URL.revokeObjectURL(a.url));
-                    setAttachments([]);
-                    setPicked([]);
-                  }}
-                >
-                  Clear {referenceCount}
-                </button>
-              ) : null}
-            </div>
+                ) : null}
+              </div>
+            ) : null}
             <input
               ref={fileInput}
               type="file"
@@ -793,18 +997,50 @@ function Composer() {
             />
 
             <div style={{ position: "relative" }}>
+              {slashItems ? (
+                <SlashMenu
+                  items={slashItems}
+                  active={Math.min(slashAt, Math.max(0, slashItems.length - 1))}
+                  onPick={runCommand}
+                  onHover={setSlashAt}
+                />
+              ) : null}
               <textarea
                 ref={textarea}
                 value={idea}
                 maxLength={10000}
-                rows={3}
+                rows={empty ? 3 : 2}
                 onChange={(e) => {
                   setIdea(e.target.value);
+                  setSlashAt(0);
                   if (!e.target.value.trim()) setFilledBy(null);
                 }}
                 onKeyDown={(e) => {
                   if (mentions.onKeyDown(e)) return;
-                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void send();
+                  if (slashItems) {
+                    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                      e.preventDefault();
+                      const n = slashItems.length || 1;
+                      setSlashAt((i) => (i + (e.key === "ArrowDown" ? 1 : n - 1)) % n);
+                      return;
+                    }
+                    if ((e.key === "Enter" || e.key === "Tab") && slashItems.length) {
+                      e.preventDefault();
+                      runCommand(slashItems[Math.min(slashAt, slashItems.length - 1)]);
+                      return;
+                    }
+                    if (e.key === "Escape") {
+                      e.preventDefault();
+                      setIdea("");
+                      return;
+                    }
+                  }
+                  // Enter sends, Shift+Enter is a new line (⌘/Ctrl+Enter
+                  // still sends, for the hands that learned it)
+                  if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                    e.preventDefault();
+                    void send();
+                  }
                 }}
                 onPaste={(e) => {
                   const files = Array.from(e.clipboardData.items)
@@ -817,11 +1053,7 @@ function Composer() {
                   }
                 }}
                 onBlur={mentions.onBlur}
-                placeholder={
-                  mode === "create"
-                    ? "A rider suits up in a dark garage and something is already wrong… (@ to reference an element)"
-                    : "Describe your video or ask for a direction. We'll work through the story, look and pacing…"
-                }
+                placeholder={placeholder}
                 aria-label="Your idea"
               />
               {mentions.dropdown}
@@ -848,111 +1080,173 @@ function Composer() {
               </div>
             ) : null}
 
-            {written ? (
-              <div className="cresult" role="status">
-                <span className="m">Scene written · {written.detail}</span>
-                <span className="cresult-links">
-                  <Link href="/studio/pipeline" className="pill chosen">
-                    <Workflow strokeWidth={1.6} /> Pick on Pipeline
-                  </Link>
-                  {written.conceptId ? (
-                    <Link href={`/studio/flows?concept=${written.conceptId}&shot=1`} className="pill">
-                      <Clapperboard strokeWidth={1.6} /> Open in Director
-                    </Link>
-                  ) : null}
-                  <button type="button" className="pill" onClick={() => setWritten(null)}>
-                    Write another
-                  </button>
-                </span>
-              </div>
-            ) : null}
-
-            <div className="cfoot">
-              {modeSwitch}
-              <button type="button" className="pill" title="Add media" onClick={() => fileInput.current?.click()}>
-                <Plus strokeWidth={1.6} />
-              </button>
-              <span className="spacer" />
-              {filledBy && idea.trim() ? (
-                <span className="zpa-filled">
-                  {filledBy.avatar ? `${filledBy.avatar} ` : ""}Filled by {filledBy.name}
-                </span>
+            <div className="cfoot zc-tools">
+              <span className="zc-seg" role="radiogroup" aria-label="What to make">
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={output === "image"}
+                  onClick={() => setOutput("image")}
+                >
+                  <ImageIcon strokeWidth={1.6} /> Image
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={output === "video"}
+                  onClick={() => setOutput("video")}
+                >
+                  <Video strokeWidth={1.6} /> Video
+                </button>
+              </span>
+              {guideReady ? (
+                <button
+                  type="button"
+                  className="zc-tool"
+                  aria-pressed={mode === "guide"}
+                  title="Talk the idea through first"
+                  onClick={() => setMode(mode === "guide" ? "create" : "guide")}
+                >
+                  <MessageSquare strokeWidth={1.6} /> Guide
+                </button>
               ) : null}
-              {brains.length ? (
+              <span className="zc-sep" aria-hidden />
+              <button
+                type="button"
+                className="zc-tool"
+                aria-label="Attach a reference image"
+                title="Attach a reference image"
+                onClick={() => fileInput.current?.click()}
+              >
+                <Paperclip strokeWidth={1.6} />
+              </button>
+              <button
+                type="button"
+                className="zc-tool"
+                aria-label="Reference a saved element"
+                title="Reference a saved element (@)"
+                onClick={() => {
+                  setIdea((v) => `${v}${v && !v.endsWith(" ") ? " " : ""}@`);
+                  textarea.current?.focus();
+                }}
+              >
+                <AtSign strokeWidth={1.6} />
+              </button>
+              {output === "image" ? (
+                <PillMenu
+                  heading="Image shape"
+                  value={aspect}
+                  onChange={setAspect}
+                  options={IMAGE_ASPECTS}
+                  trigger={(open) => (
+                    <button type="button" className="zc-tool" aria-expanded={open}>
+                      <RectangleVertical strokeWidth={1.6} />
+                      {aspect}
+                    </button>
+                  )}
+                />
+              ) : (
+                <>
+                  {ratios.length ? (
+                    <PillMenu
+                      heading="Frame"
+                      value={ratio}
+                      onChange={setRatio}
+                      options={ratios}
+                      trigger={(open) => (
+                        <button type="button" className="zc-tool" aria-expanded={open}>
+                          <RectangleVertical strokeWidth={1.6} />
+                          {ratios.find((r) => r.id === ratio)?.label ?? "Frame"}
+                        </button>
+                      )}
+                    />
+                  ) : null}
+                  {lengths.length ? (
+                    <PillMenu
+                      heading="How long the scene is"
+                      value={String(seconds)}
+                      onChange={(v) => setSeconds(Number(v))}
+                      options={lengths.map((s) => ({ id: String(s), label: `${s} sec` }))}
+                      trigger={(open) => (
+                        <button type="button" className="zc-tool" aria-expanded={open}>
+                          <Clock strokeWidth={1.6} />
+                          {seconds}s
+                        </button>
+                      )}
+                    />
+                  ) : null}
+                </>
+              )}
+              {brains.length && (output === "video" || mode === "guide") ? (
                 <PillMenu
                   heading={mode === "guide" ? "Which model answers" : "Which model writes"}
                   value={brain}
                   onChange={setBrain}
                   options={brains}
-                  end
                   trigger={(open) => (
-                    <button type="button" className="pill" aria-expanded={open}>
+                    <button type="button" className="zc-tool" aria-expanded={open}>
                       <Brain strokeWidth={1.6} />
                       {brains.find((b) => b.id === brain)?.label ?? "Model"}
                     </button>
                   )}
                 />
               ) : null}
-              {lengths.length ? (
-                <PillMenu
-                  heading="How long the scene is"
-                  value={String(seconds)}
-                  onChange={(v) => setSeconds(Number(v))}
-                  options={lengths.map((s) => ({ id: String(s), label: `${s} sec` }))}
-                  end
-                  trigger={(open) => (
-                    <button type="button" className="pill" aria-expanded={open}>
-                      <Clock strokeWidth={1.6} />
-                      {seconds} sec
-                    </button>
-                  )}
-                />
+              <span className="spacer" />
+              {filledBy && idea.trim() ? (
+                <span className="zpa-filled">
+                  {filledBy.avatar ? `${filledBy.avatar} ` : ""}Filled by {filledBy.name}
+                </span>
               ) : null}
-              {ratios.length ? (
-                <PillMenu
-                  heading="Frame"
-                  value={ratio}
-                  onChange={setRatio}
-                  options={ratios}
-                  end
-                  trigger={(open) => (
-                    <button type="button" className="pill" aria-expanded={open}>
-                      <RectangleVertical strokeWidth={1.6} />
-                      {ratios.find((r) => r.id === ratio)?.label ?? "Frame"}
-                    </button>
-                  )}
-                />
-              ) : null}
-              <button
-                type="button"
-                className={`go${filledBy && idea.trim() && mode === "create" && !busy ? " zpa-ring" : ""}`}
-                disabled={!canSend}
-                onClick={() => void send()}
-              >
-                <Sparkles strokeWidth={2} />
-                {busy ? (mode === "create" ? "Writing…" : "Thinking…") : mode === "create" ? "Create" : "Send"}
-              </button>
+              {busy && liveTurn ? (
+                <button type="button" className="zc-stop" onClick={stop}>
+                  Stop
+                </button>
+              ) : busy ? (
+                <span className="zc-thinking" role="status">
+                  Thinking…
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  className={`zc-send${filledBy && idea.trim() && mode === "create" ? " zpa-ring" : ""}`}
+                  disabled={!canSend}
+                  aria-label={sendLabel}
+                  title={`${sendLabel} (Enter)`}
+                  onClick={() => void send()}
+                >
+                  <ArrowUp strokeWidth={2.2} />
+                </button>
+              )}
             </div>
             <div className="cstatus">
               <span
-                className={`m cnote${noteBad ? " bad" : note && !busy && !written ? " said" : ""}`}
+                className={`m cnote${noteBad ? " bad" : note && !busy ? " said" : ""}`}
                 role={noteBad ? "alert" : undefined}
                 title={noteBad && note ? note : undefined}
               >
                 {note ??
                   (referenceCount
-                    ? `${referenceCount} reference${referenceCount === 1 ? "" : "s"} attached · they ride into the prompt, the keyframe and the clip`
-                    : "references ride into every node — prompt, keyframe and clip")}
+                    ? `${referenceCount} reference${referenceCount === 1 ? "" : "s"} attached · they ride into the prompt, the still and the clip`
+                    : output === "image"
+                      ? "one still per send · it opens in Director like any scene"
+                      : "one scene per send · it lands on Pipeline to pick")}
               </span>
               <span className="m ckbd">
-                <kbd>⌘</kbd>
-                <kbd>⏎</kbd> {mode === "create" ? "create" : "send"}
+                <kbd>⏎</kbd> {sendLabel.toLowerCase()} · <kbd>/</kbd> commands
               </span>
             </div>
           </div>
+          {empty ? (
+            <div className="zc-starters">
+              {starters.map((s) => (
+                <button type="button" key={s.label} onClick={s.run}>
+                  {s.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
         </div>
       </div>
-
       <div className="row">
         <div className="rowfilters">
           {FILTERS.map(([id, label]) => (
