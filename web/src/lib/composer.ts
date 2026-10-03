@@ -62,6 +62,10 @@ export type Made = {
   frame?: string;
   /** the shot (or image) the person selected; Director opens on it */
   shot?: number;
+  /** the text the hand-off wrote or drew from, when it was the Guide's
+   *  brief rather than the box: the bubble then says so in one line
+   *  instead of echoing the whole spec, and Reuse puts it back as the brief */
+  prompt?: string;
 };
 
 export const newMadeId = () =>

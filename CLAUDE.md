@@ -1817,7 +1817,9 @@ is yours, in Resolve, by hand.
   Guide's brief when there is one, else the box; lands on Pipeline), DRAW A STILL (one
   Nano still, at the frame's shape when Nano takes it), OPEN IN DIRECTOR (the last scene
   written here) and SEND TO QUEUE (`pickConcept`; approving in Queue is still the one
-  click that spends). An item that cannot run yet says why instead of hiding. `/scene`
+  click that spends). An item that cannot run yet says why instead of hiding. A hand-off from the
+  brief says so in one line on its bubble (`Made.prompt` keeps the text; Reuse puts it back
+  as the brief) rather than echoing the whole spec above the tiles. `/scene`
   and `/still` are the same two doors from the slash menu; `/image`, `/video` and
   `/guide` are gone, as is the stored output choice. `ComposerDraft.mode` is still
   stored and no longer read. Without the `creative_guide` capability a send says the

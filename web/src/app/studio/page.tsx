@@ -676,15 +676,22 @@ function Composer() {
   /* The hand-offs that make something: ONE scene or ONE still per call,
      saved on its own turn. A still is drawn at the frame's shape when
      Nano takes it (16:9, 9:16, 1:1, 4:5), else at the first one. */
-  async function make(output: Output, text: string) {
+  async function make(output: Output, text: string, fromBrief = false) {
     const madeId = newMadeId();
     const isImage = output === "image";
     const frameLabel = ratios.find((r) => r.id === ratio)?.label;
     const aspect = IMAGE_ASPECTS.find((a) => a.id === frameLabel)?.id ?? IMAGE_ASPECTS[0].id;
     const frame = isImage ? aspect : frameLabel;
     const refThumbs = [...uploads.map((u) => u.url), ...picked].filter(drawable);
-    const made: Made = { id: madeId, output, refs: refThumbs, status: "running", detail: "", frame };
-    setThread((ts) => [...ts, { role: "user", content: text, made }]);
+    // a hand-off from the brief says so in one line: the brief is already
+    // on screen under the box, and a bubble echoing the whole spec buried
+    // the tiles under it on a phone
+    const made: Made = {
+      id: madeId, output, refs: refThumbs, status: "running", detail: "", frame,
+      ...(fromBrief ? { prompt: text } : {}),
+    };
+    const said = fromBrief ? (isImage ? "Draw a still from the brief" : "Write the scene from the brief") : text;
+    setThread((ts) => [...ts, { role: "user", content: said, made }]);
     const me = { madeId, stopped: false } as { madeId: string; jobId?: number; stopped: boolean };
     running.current = me;
     polling.current.add(madeId);
@@ -823,7 +830,7 @@ function Composer() {
         toast("Nothing to write yet — say what the scene is first", "err");
         return;
       }
-      await make(what === "still" ? "image" : "video", handoffText);
+      await make(what === "still" ? "image" : "video", handoffText, !!brief.trim());
     } catch (e) {
       const r = running.current;
       if (r && !r.stopped) {
@@ -902,9 +909,15 @@ function Composer() {
     textarea.current?.focus();
     toast("Image attached · say how the shot moves, then Ready → Write the scene");
   }
-  /* "Reuse prompt" fills the box; it never spends on its own */
+  /* "Reuse prompt" fills the box -- or puts a brief-sourced hand-off's
+     text back as the brief; it never spends on its own */
   function reuse(t: Turn) {
-    setIdea(t.content);
+    if (t.made?.prompt) {
+      setBrief(t.made.prompt);
+      toast("Brief restored · edit it, then Ready → Write the scene");
+    } else {
+      setIdea(t.content);
+    }
     textarea.current?.focus();
   }
   const select = (madeId: string, n: number) => patchMade(madeId, { shot: n });

@@ -307,7 +307,7 @@ export function ComposerStream({
                         .map(([k, v]) => (
                           <div key={k}>
                             <dt>{k}</dt>
-                            <dd>{String(v)}</dd>
+                            <dd>{typeof v === "boolean" ? (v ? "yes" : "no") : String(v)}</dd>
                           </div>
                         ))}
                     </dl>
