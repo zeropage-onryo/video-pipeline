@@ -29,32 +29,43 @@
 
    THE LOOK IS THE "ZPF COMPOSER DIRECTIONS" MOCK (2026-10-02, Mike:
    "create a similar look to the images shown in our mock design"). One
-   centred box under "What are we making?", an Image | Video switch, the
-   settings as one line, a red round send; a send becomes a bubble with
-   its result as tiles above a docked box; `/` opens commands; a drop
-   covers the box; a running send can be stopped. Still ONE output per
-   send -- IMAGE is one Nano Banana still through /api/generate/run, VIDEO
-   is the Create above -- and a send is saved on its turn (lib/composer.ts
-   `Made`), so a still drawn here survives a trip to Pipeline. A send
-   left running is picked up again on return (its job id is on the turn). */
+   centred box under "What are we making?", the settings as one line, a
+   red round send; a result becomes tiles above a docked box; `/` opens
+   commands; a drop covers the box; a running job can be stopped.
+
+   THE BOX IS THE CONVERSATION, AND READY IS THE HAND-OFF (2026-10-03,
+   Mike, from the live studio: "get rid of the create mode in there and
+   only have a button ... when we're ready to send it to concept,
+   director, or approve render"). There is no Create mode and no
+   Image | Video switch any more: every send is a Guide turn, and the
+   Guide develops the idea into an editable brief. The READY menu beside
+   send is the only door out of the talk, and each item is one existing
+   step: WRITE THE SCENE (one concept through /api/scenes/run, from the
+   brief when there is one, else the box -- it lands on Pipeline), DRAW A
+   STILL (one Nano Banana still through /api/generate/run), OPEN IN
+   DIRECTOR (the last scene written here) and SEND TO QUEUE (picks that
+   scene; approving in Queue is still the one click that spends). Each
+   hand-off is saved on its turn (lib/composer.ts `Made`), so a still
+   drawn here survives a trip to Pipeline, and a job left running is
+   picked up again on return (its job id is on the turn). */
 import Link from "next/link";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   ArrowUp,
   ArrowUpFromLine,
   AtSign,
   ChevronDown,
+  Clapperboard,
   Ellipsis,
-  Image as ImageIcon,
   ImageOff,
-  MessageSquare,
+  ImagePlus,
+  ListVideo,
   Paperclip,
   Play,
   Plus,
   Search,
-  Video,
   X,
 } from "lucide-react";
 import { API_URL, apiFetch } from "@/lib/api";
@@ -67,6 +78,7 @@ import {
   getConceptDetail,
   getPresets,
   getProject,
+  pickConcept,
   recallActiveProject,
   rememberActiveProject,
   runCreativeGuide,
@@ -99,17 +111,14 @@ import {
   type ElementMade,
   type Turn,
 } from "@/lib/assistant";
-import { readsAsTalk } from "@/lib/talk";
 import { keepersOf } from "@/components/studio/contact-sheet";
 import {
   BASE_COMMANDS,
   IMAGE_ASPECTS,
-  loadOutput,
   matchCommands,
   mediaSrc,
   newMadeId,
   pollJob,
-  saveOutput,
   type Made,
   type Output,
   type SlashCommand,
@@ -191,6 +200,64 @@ function OptMenu({
   );
 }
 
+/* The hand-off out of the conversation: one menu, four doors, each an
+   existing step (write the scene, draw a still, Director, Queue). An
+   item that cannot run yet says why instead of hiding. */
+export type Handoff = "scene" | "still" | "director" | "queue";
+type HandoffItem = { id: Handoff; label: string; note: string; icon: React.ReactNode; disabled?: boolean };
+
+function ReadyMenu({ items, onPick, disabled }: { items: HandoffItem[]; onPick: (id: Handoff) => void; disabled: boolean }) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const off = (e: MouseEvent) => {
+      if (!box.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", off);
+    return () => document.removeEventListener("pointerdown", off);
+  }, [open]);
+  return (
+    <span className="pillwrap" ref={box}>
+      <button
+        type="button"
+        className="zc-ready"
+        aria-expanded={open}
+        aria-haspopup="menu"
+        disabled={disabled}
+        title="When the idea is ready: write it, draw it, direct it, or render it"
+        onClick={() => setOpen((v) => !v)}
+      >
+        Ready
+        <ChevronDown strokeWidth={2} />
+      </button>
+      {open ? (
+        <span className="pillmenu end zc-ready-menu" role="menu">
+          <span className="m">Send it on</span>
+          {items.map((it) => (
+            <button
+              type="button"
+              key={it.id}
+              role="menuitem"
+              disabled={it.disabled}
+              onClick={() => {
+                setOpen(false);
+                onPick(it.id);
+              }}
+            >
+              {it.icon}
+              <span>
+                {it.label}
+                <small>{it.note}</small>
+              </span>
+            </button>
+          ))}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 /* useSearchParams needs a Suspense boundary above it for the static
    shell Next prerenders; the composer itself is the client page */
 export default function StudioPage() {
@@ -206,6 +273,7 @@ const imageFiles = (list: FileList | File[] | null | undefined) =>
 
 function Composer() {
   const { brand, toast } = useShell();
+  const router = useRouter();
   const params = useSearchParams();
   const attachId = params.get("attach");
   // An idea typed into the landing page's hero arrives as ?spark= and the
@@ -217,7 +285,7 @@ function Composer() {
   // The thread and the box are the studio's (assistant-thread.tsx): the
   // same turns the pill shows, and a draft that survives leaving the page.
   const { turns: thread, setTurns: setThread, draft, setDraft, ready } = useAssistantThread();
-  const { idea, picked, brief, uploads, mode: wantMode } = draft;
+  const { idea, picked, brief, uploads } = draft;
   const setIdea = useCallback(
     (v: string | ((s: string) => string)) => setDraft((d) => ({ ...d, idea: typeof v === "function" ? v(d.idea) : v })),
     [setDraft],
@@ -228,7 +296,6 @@ function Composer() {
     [setDraft],
   );
   const setBrief = (v: string) => setDraft({ brief: v });
-  const setMode = useCallback((m: "guide" | "create") => setDraft({ mode: m }), [setDraft]);
   // The project this composer writes inside (2026-09-28): handed over by
   // the Projects page as ?project=, remembered per browser, cleared by the
   // chip's ×. Create and the Guide both send it, so the scene is written
@@ -264,19 +331,6 @@ function Composer() {
   // the assistant pill filled the box: who, so the tag can say so and
   // send can wear a ring until the person presses it (or edits it away)
   const [filledBy, setFilledBy] = useState<{ name: string; avatar?: string } | null>(null);
-  // what a send makes (2026-10-02). The composer IS server-rendered (as
-  // video), so the stored choice is read after mount -- read in the
-  // initializer, a saved "image" failed hydration on every load.
-  const [output, setOutputState] = useState<Output>("video");
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage is only readable after mount
-    setOutputState(loadOutput());
-  }, []);
-  const setOutput = (o: Output) => {
-    setOutputState(o);
-    saveOutput(o);
-  };
-  const [aspect, setAspect] = useState(IMAGE_ASPECTS[0].id);
   const [presets, setPresets] = useState<Preset[]>([]);
   const [preset, setPreset] = useState<Preset | null>(null);
   const [slashAt, setSlashAt] = useState(0);
@@ -358,7 +412,6 @@ function Composer() {
       if (!fill) return;
       if (fill.text) {
         setIdea(fill.text);
-        setMode("create");
         setFilledBy({ name: fill.by, avatar: fill.avatar });
       }
       if (fill.refs?.length) setPicked((was) => [...new Set([...was, ...fill.refs!])]);
@@ -366,7 +419,7 @@ function Composer() {
     take();
     window.addEventListener(FILL_EVENT, take);
     return () => window.removeEventListener(FILL_EVENT, take);
-  }, [setIdea, setMode, setPicked]);
+  }, [setIdea, setPicked]);
 
   // object URLs for uploads still in flight are revoked when the composer unmounts
   useEffect(() => {
@@ -382,15 +435,14 @@ function Composer() {
     el.style.height = `${el.scrollHeight}px`;
   }, [idea]);
 
-  // Guide only when the server says the route is there; otherwise the
-  // primary action is a send rather than a button that 404s
+  // the Guide answers every send; without the route (no Gemini key) the
+  // box says so rather than 404ing on Enter
   const guideReady = caps.creative_guide === true;
-  const mode: "guide" | "create" = guideReady ? wantMode : "create";
 
   // the slash menu: the fixed commands plus GET /api/presets as camera chips
   const commands = useMemo<SlashCommand[]>(
     () => [
-      ...BASE_COMMANDS.filter((c) => c.id !== "guide" || guideReady),
+      ...BASE_COMMANDS,
       ...presets.map((p) => ({
         id: `preset:${p.id}`,
         cmd: p.id.replace(/[^\w-]+/g, "-").toLowerCase(),
@@ -398,10 +450,10 @@ function Composer() {
         group: "camera" as const,
       })),
     ],
-    [presets, guideReady],
+    [presets],
   );
   const hasImage = thread.some((t) => t.made?.output === "image" && t.made.status === "done" && !!t.made.image);
-  const slashItems = matchCommands(idea, commands, output, hasImage);
+  const slashItems = matchCommands(idea, commands, hasImage);
 
   // The newest turn is lifted clear of the docked box -- on the send, and
   // again when it finishes (a finished turn is taller). Without it a still
@@ -430,8 +482,13 @@ function Composer() {
   };
   const mentions = useMentions(textarea, idea, setIdea, attachAsset);
 
-  // an upload still on its way to the bin would be left out of the run
-  const canSend = !busy && !pending.length && (mode === "create" ? !!(idea.trim() || brief.trim()) : !!idea.trim());
+  // an upload still on its way to the bin would be left out of the turn
+  const canSend = !busy && !pending.length && !!idea.trim();
+  // what Ready writes or draws from: the Guide's brief when there is one,
+  // else whatever is in the box
+  const handoffText = brief.trim() || idea.trim();
+  // the last scene written here, for Director and the Queue
+  const lastScene = [...thread].reverse().find((t) => t.made?.output === "video" && t.made.status === "done" && !!t.made.conceptId)?.made ?? null;
   const referenceCount = picked.length + uploads.length + pending.length;
 
   useEffect(() => {
@@ -616,11 +673,15 @@ function Composer() {
     return () => window.removeEventListener(NEW_SESSION_EVENT, on);
   }, [stop]);
 
-  /* IMAGE and VIDEO sends: one turn each, one output each. */
-  async function make(text: string) {
+  /* The hand-offs that make something: ONE scene or ONE still per call,
+     saved on its own turn. A still is drawn at the frame's shape when
+     Nano takes it (16:9, 9:16, 1:1, 4:5), else at the first one. */
+  async function make(output: Output, text: string) {
     const madeId = newMadeId();
     const isImage = output === "image";
-    const frame = isImage ? aspect : ratios.find((r) => r.id === ratio)?.label;
+    const frameLabel = ratios.find((r) => r.id === ratio)?.label;
+    const aspect = IMAGE_ASPECTS.find((a) => a.id === frameLabel)?.id ?? IMAGE_ASPECTS[0].id;
+    const frame = isImage ? aspect : frameLabel;
     const refThumbs = [...uploads.map((u) => u.url), ...picked].filter(drawable);
     const made: Made = { id: madeId, output, refs: refThumbs, status: "running", detail: "", frame };
     setThread((ts) => [...ts, { role: "user", content: text, made }]);
@@ -665,65 +726,56 @@ function Composer() {
     setFilledBy(null);
     let asking: Turn | null = null;
     try {
-      // A sentence addressed to the studio -- a question, "can we…",
-      // "let's…", an element sheet asked for by name -- is talk, whatever
-      // the segment says (2026-10-03, Mike: "the chat isn't conversing").
-      // Create had been handing it to the renderer as a prompt: an Image
-      // send drew a still of a can for "Can we create an Element sheet of
-      // the sugar free redbull can". The Guide answers it, and the box
-      // flips to Guide so the next line continues the talk; Image | Video
-      // flips it back. Only where the Guide is there; else Create as before.
+      // Every send is a Guide turn (2026-10-03). The box used to be in
+      // Create by default, so "Can we create an Element sheet of the
+      // sugar free redbull can" went to the image renderer as a prompt;
+      // now nothing leaves the talk until Ready is pressed.
+      if (!guideReady) throw new Error("The Guide needs GEMINI_API_KEY on the server before it can answer.");
       const asked = idea.trim();
-      const talk = mode === "guide" || (guideReady && readsAsTalk(asked));
-      if (!talk) {
-        await make(brief.trim() || asked);
-      } else {
-        if (mode !== "guide") setMode("guide");
-        const mine: Turn = { role: "user", content: asked };
-        // the box's own sends (t.made) are not the Guide's turns: left out of
-        // the conversation it answers
-        const next: Turn[] = [...thread.filter((m) => !m.failed && !m.made), mine];
-        asking = mine;
-        setThread((all) => [...all, mine]);
-        setIdea("");
-        setGuideWorking("Thinking…");
-        const form = new FormData();
-        form.append(
-          "conversation",
-          JSON.stringify({ messages: next.map(({ role, content }) => ({ role, content })) }),
-        );
-        if (brand) form.append("brand", brand);
-        form.append("guide_provider", "gemini");
-        form.append("idea", asked);
-        if (project) form.append("project_id", String(project.id));
-        // The same Fast / Reasoning pill a send carries. Without it the
-        // Guide answered every turn on the reasoning tier -- ~1.5c a
-        // message for "which direction?". Server clamps it; absent means Fast.
-        if (brain) form.append("brain", brain);
-        // The same photos a send would carry: the guide grounds on them
-        // (scene_chain.ground) and the model is shown them, so it can
-        // answer about a face instead of asking where the photos are.
-        appendReferences(form);
-        // runCreativeGuide, never a bare fetch: the route is behind
-        // mutation_header and a call without GUARDED_HEADERS is refused 403.
-        const started = await runCreativeGuide(form);
-        const job = await waitForJob(started.job_id, (j) => setGuideWorking(j.detail || "Considering your direction…"));
-        const reply = (job as unknown as { reply?: GuideReply }).reply;
-        if (job.status !== "done" || !reply) throw new Error(job.error || "The guide stopped.");
-        // appended to whatever the thread holds NOW: the pill shares it and
-        // may have added a turn while this one was out
-        setThread((all) => [
-          ...all,
-          {
-            role: "assistant",
-            content: reply.message,
-            reply,
-            looked: (reply.tool_runs ?? []).filter((r) => r.ok).map((r) => r.tool),
-            chosen: keepersOf(reply.sheet),
-          },
-        ]);
-        if (reply.brief) setBrief(reply.brief);
-      }
+      const mine: Turn = { role: "user", content: asked };
+      // the box's own sends (t.made) are not the Guide's turns: left out of
+      // the conversation it answers
+      const next: Turn[] = [...thread.filter((m) => !m.failed && !m.made), mine];
+      asking = mine;
+      setThread((all) => [...all, mine]);
+      setIdea("");
+      setGuideWorking("Thinking…");
+      const form = new FormData();
+      form.append(
+        "conversation",
+        JSON.stringify({ messages: next.map(({ role, content }) => ({ role, content })) }),
+      );
+      if (brand) form.append("brand", brand);
+      form.append("guide_provider", "gemini");
+      form.append("idea", asked);
+      if (project) form.append("project_id", String(project.id));
+      // The same Fast / Reasoning pill a send carries. Without it the
+      // Guide answered every turn on the reasoning tier -- ~1.5c a
+      // message for "which direction?". Server clamps it; absent means Fast.
+      if (brain) form.append("brain", brain);
+      // The same photos a send would carry: the guide grounds on them
+      // (scene_chain.ground) and the model is shown them, so it can
+      // answer about a face instead of asking where the photos are.
+      appendReferences(form);
+      // runCreativeGuide, never a bare fetch: the route is behind
+      // mutation_header and a call without GUARDED_HEADERS is refused 403.
+      const started = await runCreativeGuide(form);
+      const job = await waitForJob(started.job_id, (j) => setGuideWorking(j.detail || "Considering your direction…"));
+      const reply = (job as unknown as { reply?: GuideReply }).reply;
+      if (job.status !== "done" || !reply) throw new Error(job.error || "The guide stopped.");
+      // appended to whatever the thread holds NOW: the pill shares it and
+      // may have added a turn while this one was out
+      setThread((all) => [
+        ...all,
+        {
+          role: "assistant",
+          content: reply.message,
+          reply,
+          looked: (reply.tool_runs ?? []).filter((r) => r.ok).map((r) => r.tool),
+          chosen: keepersOf(reply.sheet),
+        },
+      ]);
+      if (reply.brief) setBrief(reply.brief);
     } catch (e) {
       // The thread and the box were cleared before the request went out,
       // so a failed turn must say so ON its own bubble, and hand the
@@ -746,16 +798,82 @@ function Composer() {
     }
   }
 
+  /* READY: the one door out of the conversation. Write the scene and
+     Draw a still make a turn of their own (make); Director and Queue go
+     to the last scene written here. Send to Queue PICKS -- approving in
+     Queue is still the one click that spends. */
+  async function handoff(what: Handoff) {
+    if (busy) return;
+    if (what === "director") {
+      if (lastScene?.conceptId) router.push(`/studio/flows?concept=${lastScene.conceptId}&shot=${lastScene.shot ?? 1}`);
+      return;
+    }
+    setBusy(true);
+    setFilledBy(null);
+    try {
+      if (what === "queue") {
+        if (!lastScene?.conceptId) return;
+        await pickConcept(lastScene.conceptId);
+        announceQueueChange();
+        toast("Picked · approve the render in Queue");
+        router.push("/studio/queue");
+        return;
+      }
+      if (!handoffText) {
+        toast("Nothing to write yet — say what the scene is first", "err");
+        return;
+      }
+      await make(what === "still" ? "image" : "video", handoffText);
+    } catch (e) {
+      const r = running.current;
+      if (r && !r.stopped) {
+        polling.current.delete(r.madeId);
+        patchMade(r.madeId, { status: "failed", detail: e instanceof Error ? e.message : "That did not go through." });
+        running.current = null;
+      }
+      toast(e instanceof Error ? e.message : "That did not go through.", "err");
+    } finally {
+      setBusy(false);
+    }
+  }
+  const handoffItems: HandoffItem[] = [
+    {
+      id: "scene",
+      label: "Write the scene",
+      note: handoffText ? (brief.trim() ? "from the brief · lands on Pipeline" : "from the box · lands on Pipeline") : "say what the scene is first",
+      icon: <ListVideo strokeWidth={1.6} />,
+      disabled: !handoffText,
+    },
+    {
+      id: "still",
+      label: "Draw a still",
+      note: handoffText ? "one image, charged like any still" : "say what to draw first",
+      icon: <ImagePlus strokeWidth={1.6} />,
+      disabled: !handoffText,
+    },
+    {
+      id: "director",
+      label: "Open in Director",
+      note: lastScene ? lastScene.title || "the last scene written here" : "write a scene first",
+      icon: <Clapperboard strokeWidth={1.6} />,
+      disabled: !lastScene,
+    },
+    {
+      id: "queue",
+      label: "Send to Queue",
+      note: lastScene ? "picks it · approving there is what renders" : "write a scene first",
+      icon: <Play strokeWidth={1.6} />,
+      disabled: !lastScene,
+    },
+  ];
+
   /* the slash menu: every command changes something visible */
   function runCommand(c: SlashCommand) {
     setIdea("");
     setSlashAt(0);
-    if (c.id === "image" || c.id === "video") {
-      setOutput(c.id);
-      setMode("create");
-    } else if (c.id === "guide") {
-      if (guideReady) setMode("guide");
-      else toast("The guide is not available on this account", "err");
+    if (c.id === "scene" || c.id === "still") {
+      void handoff(c.id);
+      return;
     } else if (c.id === "animate") {
       const lastImage = [...thread].reverse().find((t) => t.made?.output === "image" && t.made.status === "done" && t.made.image);
       if (lastImage?.made) animate(lastImage.made);
@@ -780,15 +898,12 @@ function Composer() {
   function animate(m: Made) {
     if (!m.image) return;
     setPicked((was) => [...new Set([...was, m.image!])]);
-    setOutput("video");
-    setMode("create");
+    setIdea((v) => v || "Animate this still: ");
     textarea.current?.focus();
-    toast("Image attached · describe how the shot moves");
+    toast("Image attached · say how the shot moves, then Ready → Write the scene");
   }
   /* "Reuse prompt" fills the box; it never spends on its own */
   function reuse(t: Turn) {
-    if (t.made) setOutput(t.made.output);
-    setMode("create");
     setIdea(t.content);
     textarea.current?.focus();
   }
@@ -956,45 +1071,22 @@ function Composer() {
 
   const empty = !thread.length;
   const liveRun = running.current && busy;
-  const sendLabel = mode === "guide" ? "Send" : output === "image" ? "Generate" : "Create";
-  const placeholder =
-    mode === "guide"
-      ? "Describe your idea or ask for a direction…"
-      : output === "image"
-        ? empty
-          ? "Describe an image, a look, or a still…"
-          : "Refine, vary, or describe the next image…"
-        : empty
-          ? "Describe a shot, scene, or sequence…"
-          : "Refine, extend, or describe the next shot…";
+  const sendLabel = "Send";
+  const placeholder = empty
+    ? "Describe the idea, ask for a direction, or drop in a photo…"
+    : "Reply, steer, or ask for the next step…";
+  const fill = (text: string) => {
+    setIdea(text);
+    textarea.current?.focus();
+  };
   const starters: { label: string; run: () => void }[] = [
-    ...(guideReady
-      ? [
-          {
-            label: "Pitch a concept",
-            run: () => {
-              setMode("guide");
-              setIdea("Pitch me three short concepts for ");
-              textarea.current?.focus();
-            },
-          },
-        ]
-      : []),
-    {
-      label: "Storyboard a scene",
-      run: () => {
-        setOutput("video");
-        setMode("create");
-        setIdea("Storyboard a scene: ");
-        textarea.current?.focus();
-      },
-    },
+    { label: "Pitch a concept", run: () => fill("Pitch me three short concepts for ") },
+    { label: "Spec a commercial", run: () => fill("I'm writing a spec for a commercial for ") },
     { label: "Match a reference look", run: () => fileInput.current?.click() },
     {
       label: "Turn a still into a shot",
       run: () => {
-        setOutput("video");
-        setMode("create");
+        fill("Animate this still: ");
         fileInput.current?.click();
       },
     },
@@ -1027,11 +1119,7 @@ function Composer() {
                 onUseAsRef: attachResult,
                 onReuse: reuse,
                 onSelect: select,
-                onChip: (c) => {
-                  setMode("guide");
-                  setIdea(c);
-                  textarea.current?.focus();
-                },
+                onChip: fill,
                 onDecide: decide,
                 onToggleFrame: toggleFrame,
                 onKeep: keepFrames,
@@ -1227,57 +1315,17 @@ function Composer() {
               // the brief sat in state behind the mode pill (2026-09-18).
               <div className="cbrief">
                 <span className="m" style={{ fontSize: 8.5, display: "block", marginBottom: 6 }}>
-                  {mode === "create"
-                    ? "Brief from the guide · editable · this is what Create writes from"
-                    : "Brief from the guide · editable · Create writes from this, not from the box"}
+                  Brief from the guide · editable · Ready writes from this, not from the box
                 </span>
                 <textarea value={brief} onChange={(e) => setBrief(e.target.value)} rows={5} />
-                {mode === "guide" ? (
-                  <button type="button" className="pill chosen cbrief-go" onClick={() => setMode("create")}>
-                    <Play strokeWidth={1.6} />
-                    Create from this brief
-                  </button>
-                ) : null}
+                <button type="button" className="pill chosen cbrief-go" disabled={busy} onClick={() => void handoff("scene")}>
+                  <ListVideo strokeWidth={1.6} />
+                  Write the scene
+                </button>
               </div>
             ) : null}
 
             <div className="zc-tools">
-              <span className="zc-seg" role="radiogroup" aria-label="What to make">
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={output === "image"}
-                  onClick={() => {
-                    setOutput("image");
-                    setMode("create");
-                  }}
-                >
-                  <ImageIcon strokeWidth={1.6} /> Image
-                </button>
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={output === "video"}
-                  onClick={() => {
-                    setOutput("video");
-                    setMode("create");
-                  }}
-                >
-                  <Video strokeWidth={1.6} /> Video
-                </button>
-              </span>
-              {guideReady ? (
-                <button
-                  type="button"
-                  className="zc-tool"
-                  aria-pressed={mode === "guide"}
-                  title="Talk the idea through first"
-                  onClick={() => setMode(mode === "guide" ? "create" : "guide")}
-                >
-                  <MessageSquare strokeWidth={1.6} /> Guide
-                </button>
-              ) : null}
-              <span className="zc-sep" aria-hidden />
               <button
                 type="button"
                 className="zc-tool"
@@ -1300,13 +1348,10 @@ function Composer() {
                 <AtSign strokeWidth={1.6} />
               </button>
               <span className="zc-opts">
-                {output === "image" && mode !== "guide" ? (
-                  <OptMenu heading="Image shape" value={aspect} onChange={setAspect} options={IMAGE_ASPECTS} label={aspect} />
-                ) : null}
-                {output === "video" && mode !== "guide" && ratios.length ? (
+                {ratios.length ? (
                   <OptMenu heading="Frame" value={ratio} onChange={setRatio} options={ratios} label={frameLabel} />
                 ) : null}
-                {output === "video" && mode !== "guide" && lengths ? (
+                {lengths ? (
                   <>
                     <span className="zc-dot" aria-hidden>
                       ·
@@ -1323,15 +1368,13 @@ function Composer() {
                     />
                   </>
                 ) : null}
-                {brains.length && (output === "video" || mode === "guide") ? (
+                {brains.length ? (
                   <>
-                    {mode !== "guide" ? (
-                      <span className="zc-dot" aria-hidden>
-                        ·
-                      </span>
-                    ) : null}
+                    <span className="zc-dot" aria-hidden>
+                      ·
+                    </span>
                     <OptMenu
-                      heading={mode === "guide" ? "Which model answers" : "Which model writes"}
+                      heading="Which model answers and writes"
                       value={brain}
                       onChange={setBrain}
                       options={brains}
@@ -1356,9 +1399,11 @@ function Composer() {
                   <span className="zc-live" aria-hidden /> Thinking…
                 </span>
               ) : (
-                <motion.button
+                <>
+                  <ReadyMenu items={handoffItems} onPick={(id) => void handoff(id)} disabled={busy || !!pending.length} />
+                  <motion.button
                   type="button"
-                  className={`zc-send${filledBy && idea.trim() && mode === "create" ? " zpa-ring" : ""}`}
+                  className={`zc-send${filledBy && idea.trim() ? " zpa-ring" : ""}`}
                   disabled={!canSend}
                   aria-label={sendLabel}
                   title={`${sendLabel} (Enter)`}
@@ -1368,6 +1413,7 @@ function Composer() {
                 >
                   <ArrowUp strokeWidth={2.2} />
                 </motion.button>
+                </>
               )}
             </div>
           </motion.div>
@@ -1388,7 +1434,7 @@ function Composer() {
         </div>
         {empty ? (
           <p className="zc-hint">
-            <kbd>↵</kbd> {sendLabel.toLowerCase()} · <kbd>⇧↵</kbd> new line · <kbd>/</kbd> commands · drop files to add references
+            <kbd>↵</kbd> send · <kbd>⇧↵</kbd> new line · <kbd>/</kbd> commands · drop files to add references · <b>Ready</b> when it is time to write, draw, direct or render
           </p>
         ) : null}
       </div>

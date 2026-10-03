@@ -1802,35 +1802,41 @@ is yours, in Resolve, by hand.
   and upload survived a rail round-trip and a reload with sessionStorage cleared; a real
   Guide turn in the box appeared in the pill on Pipeline, and the pill's reply there was
   the fourth turn in the box.
-- **TALK GOES TO THE GUIDE, AND THE GUIDE CAN MAKE AN ELEMENT (2026-10-03, Mike: "I'm
-  writing a spec for a redbull commercial and the chat isn't conversing nor giving me
-  what I need").** He typed "Can we create an Element sheet of the sugar free redbull
-  can" into the box with the can's photo attached and got a Nano still of a can: the
-  box was in Create (the mock's default), so the sentence went to `/api/generate/run`
-  as an image prompt, and even in Guide the prompt could only SAY that a product becomes
-  an Element on another page. Two fixes. **The composer reads the words**
-  (`web/src/lib/talk.ts readsAsTalk`, no imports so `node --experimental-strip-types`
-  checks it): a question mark, an asking/steering opener ("can we", "let's", "how
-  about", "I'm writing"), or a studio noun no renderer draws (an element sheet, the
-  board, the brief) is talk and goes to the Guide whatever the segment says, and the box
-  flips to Guide so the next line continues it -- Image | Video flips it back; a prompt
-  ("a Red Bull can on a wet steel counter") still renders, and without the capability
-  Create behaves exactly as before. **`add_element` is the Guide's one write that makes
-  something** (`assistant_brain.ELEMENT_SPEC`, published with the local set): proposed
-  like every write, drawn as a confirm card WITH the photos it will save, and run by
-  `app/api._element_from_guide` on the click through the same `_save_element` /
-  `_save_location` bodies the modal's create routes now share (a product is a prop with
-  `PRODUCT_CATEGORY`), vision describe, assets shelf and the reference-sheet job
-  included. The model never handles a URL: `check_args` refuses one in its args, the
-  TURN stamps `proposal.photos` off the references the person attached (`ref_urls`),
-  and the click posts them back; no readable photo means 400 `no_photos` and no row,
-  since the card promised a sheet drawn from real photos. The reply turn carries
-  `Turn.element` (photos now, the sheet when the job lands, resumed after a reload) with
-  "Use as reference" -- photos first, sheet behind, the order `refs[0]` needs.
-  `prompts/creative_guide_tools.txt` tells the model the rules (no photo attached: ask
-  for one, never call it), and `creative_guide.txt` now treats a commercial or spec ad
-  as product first, then idea / audience / format / end card, brief as timed shots.
-  `tests/test_guide_element.py`.
+- **THE BOX IS THE CONVERSATION, READY IS THE HAND-OFF, AND THE GUIDE CAN MAKE AN
+  ELEMENT (2026-10-03, Mike: "I'm writing a spec for a redbull commercial and the chat
+  isn't conversing nor giving me what I need", then from the live studio: "get rid of
+  the create mode in there and only have a button ... when we're ready to send it to
+  concept, director, or approve render").** He typed "Can we create an Element sheet of
+  the sugar free redbull can" into the box with the can's photo attached and got a Nano
+  still of a can: the box was in Create (the mock's default), so the sentence went to
+  `/api/generate/run` as an image prompt, and even in Guide the prompt could only SAY
+  that a product becomes an Element on another page. **The composer has no Create mode
+  now** (`web/src/app/studio/page.tsx`): the Image | Video segment and the Guide toggle
+  are gone, every send is a Guide turn, and the READY menu beside send is the only door
+  out of the talk -- WRITE THE SCENE (one concept through `/api/scenes/run`, from the
+  Guide's brief when there is one, else the box; lands on Pipeline), DRAW A STILL (one
+  Nano still, at the frame's shape when Nano takes it), OPEN IN DIRECTOR (the last scene
+  written here) and SEND TO QUEUE (`pickConcept`; approving in Queue is still the one
+  click that spends). An item that cannot run yet says why instead of hiding. `/scene`
+  and `/still` are the same two doors from the slash menu; `/image`, `/video` and
+  `/guide` are gone, as is the stored output choice. `ComposerDraft.mode` is still
+  stored and no longer read. Without the `creative_guide` capability a send says the
+  Guide needs the key rather than falling back to writing a scene. **`add_element` is
+  the Guide's one write that makes something** (`assistant_brain.ELEMENT_SPEC`,
+  published with the local set): proposed like every write, drawn as a confirm card WITH
+  the photos it will save, and run by `app/api._element_from_guide` on the click through
+  the same `_save_element` / `_save_location` bodies the modal's create routes now share
+  (a product is a prop with `PRODUCT_CATEGORY`), vision describe, assets shelf and the
+  reference-sheet job included. The model never handles a URL: `check_args` refuses one
+  in its args, the TURN stamps `proposal.photos` off the references the person attached
+  (`ref_urls`), and the click posts them back; no readable photo means 400 `no_photos`
+  and no row, since the card promised a sheet drawn from real photos. The reply turn
+  carries `Turn.element` (photos now, the sheet when the job lands, resumed after a
+  reload) with "Use as reference" -- photos first, sheet behind, the order `refs[0]`
+  needs. `prompts/creative_guide_tools.txt` tells the model the rules (no photo
+  attached: ask for one, never call it), and `creative_guide.txt` now treats a
+  commercial or spec ad as product first, then idea / audience / format / end card,
+  brief as timed shots. `tests/test_guide_element.py`.
 - **`src/refbin.py`** — one owner for `data/refs`, both directions: the content-addressed name,
   the JPEG normalisation (EXIF transpose BEFORE `convert("RGB")`, HEIC when `pillow-heif` is
   present), `save`, `fetch` (bounded download for scouted images) and `resolve`. It exists

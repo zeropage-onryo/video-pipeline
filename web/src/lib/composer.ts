@@ -1,8 +1,9 @@
 /* The studio composer's model (2026-10-02, the "Direction A" redesign,
-   drawn to the "ZPF Composer Directions" mock the same day).
+   drawn to the "ZPF Composer Directions" mock the same day; chat-only
+   with a READY hand-off since 2026-10-03, Mike's call).
 
-   The box makes two kinds of thing, and they go through two routes that
-   already existed before the redesign:
+   The box TALKS (every send is a Guide turn); the Ready menu makes two
+   kinds of thing, through two routes that already existed:
 
    - VIDEO  -> POST /api/scenes/run  (Create): writes ONE scene, timed
      shots and all, and stops on the board. No clip is rendered here --
@@ -13,10 +14,10 @@
      still, saved as a one-shot concept whose shot carries the image as
      its reference_image (so it opens in Director like anything else).
 
-   ONE output per send. There is no take/count control on purpose
+   ONE output per hand-off. There is no take/count control on purpose
    (2026-09-10, server-enforced as SCENE_COUNT_MAX = 1).
 
-   WHAT A SEND MADE IS PART OF THE CONVERSATION (2026-10-02). A send is a
+   WHAT A HAND-OFF MADE IS PART OF THE CONVERSATION (2026-10-02). It is a
    user turn in the studio's one thread (lib/assistant.ts `Turn`) carrying
    `made` -- this file's `Made` -- so the still a person drew is there
    when they come back from Pipeline, the same way the Guide's talk is.
@@ -39,7 +40,7 @@ export const IMAGE_ASPECTS: { id: string; label: string }[] = [
 
 export type MadeStatus = "running" | "done" | "failed" | "stopped";
 
-/** What one send made -- saved on its user turn (`Turn.made`). */
+/** What one hand-off made -- saved on its user turn (`Turn.made`). */
 export type Made = {
   id: string;
   output: Output;
@@ -74,64 +75,33 @@ export const mediaSrc = (u: string | null | undefined) =>
 
 /* ── the slash menu ──
    Commands are ACTIONS on the composer, never hidden prompt text: each
-   one changes a control the person can see (output, a preset chip, the
-   Guide toggle, a reference). Presets come from GET /api/presets so the
-   menu cannot drift from what Enhance folds in. */
+   one does something the person can see (a hand-off, a preset chip, a
+   reference). Presets come from GET /api/presets so the menu cannot
+   drift from what Enhance folds in. */
 export type SlashCommand = {
   id: string;
   /** what is typed after the slash */
   cmd: string;
   desc: string;
   group: "make" | "camera" | "use";
-  /** only offered in this output (absent = both) */
-  only?: Output;
   /** only offered once there is a finished image to act on */
   needsImage?: boolean;
 };
 
 export const BASE_COMMANDS: SlashCommand[] = [
-  { id: "image", cmd: "image", desc: "Make a still", group: "make" },
-  { id: "video", cmd: "video", desc: "Write a video scene", group: "make" },
-  { id: "guide", cmd: "guide", desc: "Talk the idea through first", group: "make" },
+  { id: "scene", cmd: "scene", desc: "Write the scene now (Ready → Write the scene)", group: "make" },
+  { id: "still", cmd: "still", desc: "Draw a still now (Ready → Draw a still)", group: "make" },
   { id: "animate", cmd: "animate", desc: "Turn the last image into a shot", group: "use", needsImage: true },
   { id: "ref", cmd: "ref", desc: "Attach a reference image", group: "use" },
   { id: "element", cmd: "element", desc: "Reference a saved element (@)", group: "use" },
 ];
 
-/** `/pu` -> the commands whose name starts with "pu" */
-export function matchCommands(
-  text: string,
-  all: SlashCommand[],
-  output: Output,
-  hasImage: boolean,
-): SlashCommand[] | null {
+/** `/sc` -> the commands whose name starts with "sc" */
+export function matchCommands(text: string, all: SlashCommand[], hasImage: boolean): SlashCommand[] | null {
   const m = /^\/([\w-]*)$/.exec(text);
   if (!m) return null;
   const q = m[1].toLowerCase();
-  return all.filter(
-    (c) =>
-      c.cmd.startsWith(q) &&
-      (!c.only || c.only === output) &&
-      (!c.needsImage || hasImage),
-  );
-}
-
-/* the last choice of output survives a reload; storage can throw in a
-   private window, and the default is simply video */
-const OUTPUT_KEY = "zpf:composer:output";
-export function loadOutput(): Output {
-  try {
-    return localStorage.getItem(OUTPUT_KEY) === "image" ? "image" : "video";
-  } catch {
-    return "video";
-  }
-}
-export function saveOutput(o: Output) {
-  try {
-    localStorage.setItem(OUTPUT_KEY, o);
-  } catch {
-    /* fine */
-  }
+  return all.filter((c) => c.cmd.startsWith(q) && (!c.needsImage || hasImage));
 }
 
 /* waitForJob without the abort: a Stop on the composer has to end the

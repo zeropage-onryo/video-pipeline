@@ -383,6 +383,71 @@
 .zc .zc-send.zpa-ring {
   box-shadow: 0 0 0 3px rgb(228 0 43 / 0.35);
 }
+/* READY: the hand-off out of the talk, beside send */
+.zc .zc-ready {
+  height: 40px;
+  padding: 0 10px 0 14px;
+  border-radius: 11px;
+  border: 1px solid var(--zc-line-hi);
+  background: transparent;
+  color: var(--zc-ink);
+  font-family: var(--body);
+  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 8px;
+  transition:
+    border-color var(--t),
+    background var(--t);
+}
+.zc .zc-ready:hover,
+.zc .zc-ready[aria-expanded="true"] {
+  background: rgb(255 255 255 / 0.06);
+  border-color: var(--signal);
+}
+.zc .zc-ready:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.zc .zc-ready svg {
+  width: 14px;
+  height: 14px;
+}
+.zc .zc-ready-menu {
+  min-width: 260px;
+}
+.zc .zc-ready-menu button {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 10px;
+  text-align: left;
+}
+.zc .zc-ready-menu button > svg {
+  width: 15px;
+  height: 15px;
+  margin-top: 2px;
+  flex: none;
+  color: var(--zc-ink-2);
+}
+.zc .zc-ready-menu button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.zc .zc-ready-menu button small {
+  display: block;
+}
+/* on a phone the toolbar wraps and Ready sits at the LEFT of its row, so
+   a right-anchored menu opens off the screen: anchor it left there */
+@media (max-width: 640px) {
+  .zc .zc-ready-menu.end {
+    left: 0;
+    right: auto;
+    min-width: 0;
+    width: min(300px, calc(100vw - 48px));
+  }
+}
 .zc .zc-stop {
   height: 40px;
   padding: 0 16px 0 14px;
