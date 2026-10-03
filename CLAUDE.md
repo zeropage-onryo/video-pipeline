@@ -31,6 +31,13 @@ script (e.g. `ops/ingest-saved-images.py` is the local-file route into
 the reference bin that `bank_reference`'s URL-only signature implies is
 missing).
 
+## Claude Code mods
+
+Three mods for how this repo is actually driven (`/ship`, `/merge`, `/wrap`,
+`/handoff`, `/servers`, `/ci`, a spend guard, a CI watcher) live under
+`.claude/skills/zp-*`; `docs/CLAUDE_MODS.md` says what each does, how to load
+them, and what else the session logs suggested.
+
 ## Commands
 
 All Python commands run through the project's venv, not system Python:
