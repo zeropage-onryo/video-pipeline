@@ -8,8 +8,20 @@ thing that has actually gone wrong.
 A new person at zeropage.studio typed their email, got no code, and had
 no way to make a password. Two separate things, and only one is code.
 
-**The code never arrived because Supabase's built-in mailer does not
-deliver to strangers.** It sends only to the Supabase organisation's own
+**What the project's auth logs showed, read the same day:** the
+confirmation mail WAS sent to the tester (06:12:06 UTC, from
+`noreply@mail.app.supabase.io`), they clicked its link, GoTrue verified
+it and sent them to `/auth/callback` — and no token exchange followed,
+because the PKCE verifier lives in the cookie of the browser that asked
+and a link opened from a mail app does not have it (Gmail's link scanner
+also fetched the link seven seconds later: `403: Email link is invalid
+or has expired`, from a Google address). They got in on a second try.
+The mail carried no CODE because the default templates only carry the
+link. So `/auth/confirm` was added (a `{{ .TokenHash }}` link, verified
+server-side, works from any browser) and
+`docs/SUPABASE_EMAIL_TEMPLATES.md` has the bodies to paste.
+
+**Beyond that tester, the built-in mailer does not deliver to strangers.** It sends only to the Supabase organisation's own
 members, a few per hour, as a development courtesy — so Mike's own
 address worked and nobody else's did, which is exactly what "didn't send
 a code" looks like. The fix is dashboard work, not a deploy: custom SMTP

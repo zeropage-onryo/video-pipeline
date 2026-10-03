@@ -995,6 +995,66 @@ async def handoff(request: Request, t: str = "", next: Optional[str] = None):
 
 
 # --------------------------------------------------------------------------
+# the LINK in the email, made to work from ANY browser (2026-10-03)
+#
+# Read off the live auth logs the day the settings page was built: a new
+# person on an iPhone requested a sign-in email at 06:12:06, GoTrue
+# verified their click at 06:12:30 and sent them to /auth/callback -- and
+# no /token exchange followed. The PKCE verifier lives in the cookie of
+# the browser that ASKED, and a link opened from a mail app (its in-app
+# browser), another tab's profile, or pre-fetched by Gmail's link scanner
+# (the 403 "Email link is invalid or has expired" seven seconds later,
+# from a Google address) does not have it. They got in on the second try.
+#
+# GoTrue's own answer is the token_hash link: a template that points the
+# person at THIS route with {{ .TokenHash }} instead of the PKCE
+# {{ .ConfirmationURL }}, verified server-side with POST /verify
+# {type, token_hash} -- no verifier, no cookie, any browser, and the
+# link is consumed by the first real visit rather than by a scanner's
+# HEAD. docs/SUPABASE_EMAIL_TEMPLATES.md has the bodies to paste. The
+# PKCE callback above stays for the OAuth doors and for a template not
+# yet switched.
+# --------------------------------------------------------------------------
+
+# GoTrue's verify types a token_hash link may carry: a sign-in or sign-up
+# code (`email` covers both on current GoTrue; `signup` / `magiclink` are
+# what the older templates name), a password recovery, an email change.
+CONFIRM_TYPES = ("email", "signup", "magiclink", "recovery", "email_change")
+
+
+@router.get("/confirm")
+async def confirm(request: Request, token_hash: str = "", type: str = "",
+                  next: Optional[str] = None):
+    """The emailed link, verified here rather than at Supabase. A sign-in
+    link ends in _finish like every door; a recovery link parks the
+    session and lands on the new-password step; an email-change link
+    just confirms and signs in (the mirror row follows in _finish via
+    accounts.claim). `next` is the front end's return address, validated
+    like /signin's. A bad or spent link is a sign-in error with a way to
+    ask for a new one, never a 500."""
+    if _rate_limited(request, "verify"):
+        return _signin_error("too many attempts -- wait a minute")
+    if not configured():
+        return _not_configured()
+    kind = (type or "").strip().lower()
+    if kind not in CONFIRM_TYPES or not token_hash.strip():
+        return _signin_error("that link is not one of ours -- ask for a new one",
+                             open_step="email")
+    if next:
+        request.session["post_login_redirect"] = next
+    status, body = gotrue("POST", "/verify",
+                          json={"type": kind, "token_hash": token_hash.strip()})
+    if status >= 400 or not body.get("access_token"):
+        return _signin_error("that link is invalid or has expired -- ask for a new one",
+                             open_step="forgot" if kind == "recovery" else "email")
+    if kind == "recovery":
+        request.session[RESET_TOKEN_SESSION_KEY] = body["access_token"]
+        claims = verify_token(body["access_token"]) or {}
+        return _reset_page(claims.get("email") or "", "newpassword")
+    return _finish(request, body)
+
+
+# --------------------------------------------------------------------------
 # OAuth through Supabase (PKCE)
 # --------------------------------------------------------------------------
 

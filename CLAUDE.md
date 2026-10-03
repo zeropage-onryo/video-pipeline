@@ -259,7 +259,12 @@ not set. An email change is only a request until the person clicks Supabase's co
 onto an address another row holds). **The code not arriving is a Supabase dashboard matter,
 not code:** its built-in mailer delivers only to the org's own members, and the default
 templates carry no `{{ .Token }}` — `.env.example`'s Supabase block and `docs/RUNBOOK.md`
-2026-10-03 say what to set.
+2026-10-03 say what to set. **The emailed LINK is `GET /auth/confirm?token_hash=&type=`**
+(same day, read off the live auth logs: a tester's PKCE link failed in a mail app's browser
+and was pre-fetched by Gmail's scanner): verified server-side with GoTrue's
+`POST /verify {type, token_hash}`, no verifier cookie, any browser; a `recovery` link lands
+on the new-password step. `docs/SUPABASE_EMAIL_TEMPLATES.md` is the four template bodies to
+paste; `/auth/callback` stays for OAuth and for a template not yet switched.
 **The React studio gets its session through a handoff, never cross-site (2026-09-14,
 found on the live account).** `zeropage-web.fly.dev` and `zeropage-studio.fly.dev` are
 different sites (fly.dev is a public suffix), so the API's cookie was a third-party cookie

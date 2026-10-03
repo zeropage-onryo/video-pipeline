@@ -220,6 +220,62 @@ def test_an_ordinary_oauth_return_still_signs_straight_in(clean_slate, gotrue):
     assert auth_mod.SESSION_COOKIE in landed.cookies
 
 
+# ---------- the token_hash link (/auth/confirm) ----------
+
+def test_a_sign_in_link_works_in_a_browser_that_never_asked(clean_slate, gotrue):
+    """The whole point: no PKCE verifier in any cookie -- a mail app's
+    in-app browser -- and the link still signs the person in."""
+    gotrue.register("new@example.com", uid="uid-new")
+    gotrue.hashes["th-email-new@example.com"] = "new@example.com"
+    client.cookies.clear()
+    landed = client.get("/auth/confirm?token_hash=th-email-new@example.com&type=email",
+                        follow_redirects=False)
+    assert landed.status_code == 303, landed.headers.get("location")
+    assert auth_mod.SESSION_COOKIE in landed.cookies
+    assert gotrue.calls[-1][1:3] == ("/verify", {"type": "email",
+                                                 "token_hash": "th-email-new@example.com"})
+    assert user(clean_slate)["id"] == "uid-new"
+
+
+def test_a_recovery_link_lands_on_the_new_password_step(clean_slate, gotrue):
+    gotrue.register("new@example.com", "old-password-1", uid="uid-new")
+    client.post("/auth/forgot", data={"email": "new@example.com"}, follow_redirects=False)
+    client.cookies.clear()                              # another browser entirely
+    landed = client.get("/auth/confirm?token_hash=th-recovery-new@example.com&type=recovery",
+                        follow_redirects=False)
+    assert landed.headers["location"] == "/signin?step=newpassword&email=new%40example.com"
+    assert auth_mod.SESSION_COOKIE not in landed.cookies
+    response = client.post("/auth/reset", data={
+        "password": "brand-new-pass", "password2": "brand-new-pass"}, follow_redirects=False)
+    assert auth_mod.SESSION_COOKIE in response.cookies
+    assert gotrue.users["new@example.com"]["password"] == "brand-new-pass"
+
+
+def test_a_spent_or_foreign_link_is_an_error_not_a_session(clean_slate, gotrue):
+    gotrue.register("new@example.com", uid="uid-new")
+    gotrue.hashes["th-email-new@example.com"] = "new@example.com"
+    first = client.get("/auth/confirm?token_hash=th-email-new@example.com&type=email",
+                       follow_redirects=False)
+    assert auth_mod.SESSION_COOKIE in first.cookies
+    client.cookies.clear()
+    again = client.get("/auth/confirm?token_hash=th-email-new@example.com&type=email",
+                       follow_redirects=False)
+    assert auth_mod.SESSION_COOKIE not in again.cookies
+    assert "expired" in again.headers["location"]
+    bad_type = client.get("/auth/confirm?token_hash=x&type=admin", follow_redirects=False)
+    assert "not%20one%20of%20ours" in bad_type.headers["location"]
+    assert not any(c[1] == "/verify" and c[2].get("token_hash") == "x" for c in gotrue.calls)
+
+
+def test_a_link_carries_the_front_end_back(clean_slate, gotrue, monkeypatch):
+    monkeypatch.setenv("FRONTEND_ORIGINS", "https://studio.example")
+    gotrue.register("new@example.com", uid="uid-new")
+    gotrue.hashes["th-email-new@example.com"] = "new@example.com"
+    landed = client.get("/auth/confirm?token_hash=th-email-new@example.com&type=email"
+                        "&next=https://studio.example/studio", follow_redirects=False)
+    assert landed.headers["location"].startswith("https://studio.example/auth/handoff?t=")
+
+
 # ---------- the settings API ----------
 
 def signed_in(gotrue, email="new@example.com", password=None, uid=None):

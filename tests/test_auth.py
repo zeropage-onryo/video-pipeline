@@ -33,6 +33,7 @@ class FakeGoTrue:
         self.users: dict[str, dict] = {}     # email -> {uid, password, meta}
         self.codes: dict[str, str] = {}      # auth_code -> email
         self.recovery: dict[str, str] = {}   # email -> the recovery code mailed
+        self.hashes: dict[str, str] = {}     # token_hash in a mailed link -> email
         self.calls: list = []
         self.confirm_email = False
 
@@ -78,9 +79,18 @@ class FakeGoTrue:
             email = json["email"]
             if email in self.users:
                 self.recovery[email] = "654321"
+                self.hashes[f"th-recovery-{email}"] = email
                 if json.get("code_challenge"):
                     self.codes[f"rec-{email}"] = email
             return 200, {}
+        if path == "/verify" and json.get("token_hash"):
+            # a token_hash link: the fake mints "th-<kind>-<email>" hashes
+            # when a mail would be sent; one visit spends it
+            email = self.hashes.pop(json["token_hash"], None)
+            if not email:
+                return 403, {"error_code": "otp_expired",
+                             "msg": "Email link is invalid or has expired"}
+            return 200, self.session(email)
         if path == "/verify" and json.get("type") == "recovery":
             email = json["email"]
             if self.recovery.get(email) != json.get("token"):
