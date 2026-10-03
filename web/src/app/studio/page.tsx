@@ -107,6 +107,7 @@ import { AddElement } from "@/components/studio/add-element";
 import { DurationPill, type SceneLengths } from "@/components/studio/duration-pill";
 import { ElementSheet } from "@/components/studio/element-sheet";
 import { ELEMENT_KINDS, displayPhoto, drawable, elementKind, isElement, kindLabel, type ElementKind } from "@/lib/elements";
+import { creditsText } from "@/lib/render-choice";
 import {
   FILL_EVENT,
   NEW_SESSION_EVENT,
@@ -277,7 +278,7 @@ const imageFiles = (list: FileList | File[] | null | undefined) =>
   Array.from(list ?? []).filter((f) => f.type.startsWith("image/"));
 
 function Composer() {
-  const { brand, toast } = useShell();
+  const { brand, toast, balance } = useShell();
   const router = useRouter();
   const params = useSearchParams();
   const attachId = params.get("attach");
@@ -1138,6 +1139,7 @@ function Composer() {
               working={guideWorking}
               handlers={{
                 busy,
+                sheetPrice: balance?.prices ? creditsText(balance.prices.still, !!balance.exempt) : null,
                 onAnimate: animate,
                 onUseAsRef: attachResult,
                 onReuse: reuse,

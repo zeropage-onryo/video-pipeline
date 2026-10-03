@@ -23,6 +23,10 @@ export type Live = { progress: number; detail: string };
 
 type Handlers = {
   busy: boolean;
+  /** what an element's reference sheet costs, as the shell's pill says it
+   *  (creditsText; null until the balance has answered) -- the card says
+   *  it, since confirming is the one click that spends here */
+  sheetPrice: string | null;
   onAnimate: (m: Made) => void;
   onUseAsRef: (m: Made) => void;
   onReuse: (t: Turn) => void;
@@ -311,6 +315,11 @@ export function ComposerStream({
                           </div>
                         ))}
                     </dl>
+                    {t.reply.proposal.tool === "add_element" && t.reply.proposal.args.sheet !== false && !t.decided ? (
+                      <div className="zc-meta">
+                        reference sheet{handlers.sheetPrice ? ` · ${handlers.sheetPrice}` : ""} · the element itself is free
+                      </div>
+                    ) : null}
                     {t.reply.proposal.photos?.length ? (
                       // the photos the click saves: the turn's own references
                       <div className="ccard-photos" aria-label="From these photos">
