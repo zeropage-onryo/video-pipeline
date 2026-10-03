@@ -69,6 +69,8 @@ MIN_PASSWORD_LEN = 8
 PKCE_SESSION_KEY = "sb_pkce_verifier"
 JWT_AUDIENCE = "authenticated"
 DEFAULT_PROVIDERS = ("google", "discord", "apple")
+# the sign-in page's in-place steps a redirect may reopen (?open=)
+OPEN_STEPS = ("email", "password", "signup", "forgot")
 
 
 def _session_secret() -> str:
@@ -465,7 +467,11 @@ def _redirect(url: str) -> Exception:
 
 _hits: dict[tuple, deque] = defaultdict(deque)
 RATE_LIMITS = {"login": (10, 60.0), "signup": (5, 60.0),     # (max, window s)
-               "otp": (5, 60.0), "verify": (10, 60.0)}
+               "otp": (5, 60.0), "verify": (10, 60.0),
+               # a password set/change/reset: each one re-proves the
+               # person (a password check or a code), so it is a login
+               # attempt in disguise and brakes like one
+               "password": (10, 60.0)}
 
 
 def _rate_limited(request: Request, bucket: str) -> bool:
@@ -507,16 +513,23 @@ def providers_available() -> dict[str, bool]:
 
 
 def gotrue(method: str, path: str, *, json: Optional[dict] = None,
-           params: Optional[dict] = None) -> tuple[int, dict]:
+           params: Optional[dict] = None,
+           token: Optional[str] = None) -> tuple[int, dict]:
     """ONE call to GoTrue. The seam the tests patch -- every HTTP
     request this module makes to Supabase goes through here, so a test
     that stubs it can be sure nothing reaches the network (conftest's
-    guard catches anything that slips). Returns (status, body)."""
+    guard catches anything that slips). Returns (status, body).
+
+    `token` is a USER's access token, for the one family of calls made
+    as the person rather than as the app (PUT /user: a password or an
+    email change). It is never stored: the settings routes mint it for
+    the call by re-proving the person (their password, or a code from
+    their inbox) and drop it on return."""
     anon = os.environ.get("SUPABASE_ANON_KEY") or ""
     with httpx.Client(timeout=10) as client:
         response = client.request(
             method, f"{supabase_url()}/auth/v1{path}", json=json, params=params,
-            headers={"apikey": anon, "Authorization": f"Bearer {anon}",
+            headers={"apikey": anon, "Authorization": f"Bearer {token or anon}",
                      "Content-Type": "application/json"})
     try:
         body = response.json()
@@ -566,7 +579,7 @@ def _signin_error(message: str, mode: str = "signin",
     """Back to the door with the message. `open_step` reopens the step
     the error came from (the email field, the password form), so the
     person is not sent back to the list of buttons to find it again."""
-    step = f"&open={open_step}" if open_step in ("email", "password") else ""
+    step = f"&open={open_step}" if open_step in OPEN_STEPS else ""
     return RedirectResponse(
         f"/signin?error={quote(message)}&mode={mode}{step}", status_code=303)
 
@@ -713,32 +726,40 @@ async def verify_code(request: Request, email: str = Form(...),
 
 @router.post("/signup")
 async def signup(request: Request, email: str = Form(...),
-                 password: str = Form(...)):
+                 password: str = Form(...),
+                 password2: Optional[str] = Form(None)):
+    """Create an account WITH a password (the sign-in page's "Create a
+    password" step since 2026-10-03 -- the route had been here since
+    2026-09-03 with no form posting to it). `password2` is the confirm
+    field; a client without one is accepted as before."""
     if _rate_limited(request, "signup"):
-        return _signin_error("too many attempts -- wait a minute", "signup")
+        return _signin_error("too many attempts -- wait a minute", "signup",
+                             open_step="signup")
     if not configured():
         return _not_configured()
     email = email.strip().lower()
-    if "@" not in email or "." not in email.split("@")[-1]:
-        return _signin_error("enter a real email address", "signup")
-    if len(password) < MIN_PASSWORD_LEN:
-        return _signin_error(
-            f"password needs at least {MIN_PASSWORD_LEN} characters", "signup")
+    if not _valid_email(email):
+        return _signin_error("enter a real email address", "signup", open_step="signup")
+    problem = password_problem(password, password2)
+    if problem:
+        return _signin_error(problem, "signup", open_step="signup")
 
     status, body = gotrue("POST", "/signup", json={"email": email, "password": password})
     if status >= 400:
         text = _error_text(body, "sign-up failed")
         if "already" in text.lower() or body.get("error_code") == "user_already_exists":
             return _signin_error(
-                "an account with this email already exists -- try signing in "
-                "the other way", "signin")
-        return _signin_error(text, "signup")
+                "an account with this email already exists -- log in with its "
+                "password, or reset it", "signin", open_step="password")
+        return _signin_error(text, "signup", open_step="signup")
     if not body.get("access_token"):
         # confirmation email on: Supabase made the user, no session yet
         return RedirectResponse(
             f"/signin?error={quote('check your email to confirm the address, then sign in')}"
-            f"&mode=signin&email={quote(email)}", status_code=303)
-    return _finish(request, body)
+            f"&mode=signin&email={quote(email)}&open=password", status_code=303)
+    response = _finish(request, body)
+    _stamp_password(body)
+    return response
 
 
 @router.post("/login")
@@ -754,7 +775,187 @@ async def login(request: Request, email: str = Form(...),
     # the email exists or the password was wrong.
     if status >= 400 or not body.get("access_token"):
         return _signin_error("invalid email or password", open_step="password")
-    return _finish(request, body)
+    response = _finish(request, body)
+    # a password that just worked is a password the person has: stamp
+    # it, so the settings page offers "change" rather than "set"
+    _stamp_password(body)
+    return response
+
+
+# --------------------------------------------------------------------------
+# passwords: forgot / reset on the sign-in page, set / change on the
+# settings page (2026-10-03, Mike: "Supabase didn't send a code or allow
+# a new user to create a password")
+#
+# GoTrue changes a password through PUT /user AS THE PERSON -- it wants
+# their access token, and this app keeps none (the cookie carries only
+# the verified user id). So every password write first re-proves the
+# person and takes a fresh session from GoTrue for the one call:
+#
+#   - their current password  -> POST /token?grant_type=password
+#   - a code from their inbox -> POST /recover, then POST /verify
+#                                {type: recovery}
+#
+# Both doors use the same two primitives (user_session_by_password,
+# user_session_by_code) and the same write (set_user_fields), and the
+# token lives exactly as long as the request. The settings page offers
+# both; a person who signed up with Google or a code has no current
+# password and takes the emailed one, which is also what "forgot my
+# password" on the sign-in page is.
+# --------------------------------------------------------------------------
+
+RECOVERY_SESSION_KEY = "sb_recovery"        # a /recover was sent for this email
+RESET_TOKEN_SESSION_KEY = "sb_reset_token"  # the recovery link's session, for /reset
+
+
+def password_problem(password: str, password2: Optional[str] = None) -> Optional[str]:
+    """Why a new password is refused, or None. `password2` None means
+    no confirm field was offered (a bare client), not an empty one."""
+    if len(password or "") < MIN_PASSWORD_LEN:
+        return f"password needs at least {MIN_PASSWORD_LEN} characters"
+    if password2 is not None and password2 != password:
+        return "the two passwords don't match"
+    return None
+
+
+def user_session_by_password(email: str, password: str) -> Optional[dict]:
+    """A GoTrue session for this email+password, or None. One generic
+    None for every failure -- a caller never learns which part was wrong."""
+    status, body = gotrue("POST", "/token", params={"grant_type": "password"},
+                          json={"email": email.strip().lower(), "password": password})
+    if status >= 400 or not body.get("access_token"):
+        return None
+    return body
+
+
+def user_session_by_code(email: str, code: str, kind: str = "recovery") -> Optional[dict]:
+    """A GoTrue session for a code from the person's inbox, or None.
+    `kind` is GoTrue's verify type: `recovery` for a /recover code,
+    `email` for a sign-in code."""
+    code = "".join(ch for ch in (code or "") if ch.isdigit())
+    if not 6 <= len(code) <= 10:
+        return None
+    status, body = gotrue("POST", "/verify",
+                          json={"type": kind, "email": email.strip().lower(), "token": code})
+    if status >= 400 or not body.get("access_token"):
+        return None
+    return body
+
+
+def send_recovery_code(email: str, *, challenge: Optional[str] = None,
+                       redirect_to: Optional[str] = None) -> Optional[str]:
+    """Ask GoTrue to email a recovery code (and link) to this address.
+    Returns the error text, or None when it was accepted. With a PKCE
+    challenge the link lands on /auth/callback like an OAuth return;
+    without one only the code is useful, which is what the settings
+    page wants (its link would land on an origin with no verifier)."""
+    body: dict = {"email": email.strip().lower()}
+    params: dict = {}
+    if challenge:
+        body.update({"code_challenge": challenge, "code_challenge_method": "s256"})
+    if redirect_to:
+        params["redirect_to"] = redirect_to
+    status, answer = gotrue("POST", "/recover", json=body, params=params or None)
+    if status >= 400:
+        return _error_text(answer, "could not send a code -- try again")
+    return None
+
+
+def set_user_fields(token: str, fields: dict) -> Optional[str]:
+    """PUT /user as the person: `{"password": ...}` or `{"email": ...}`.
+    Returns the error text, or None when GoTrue took it. An email change
+    is not done when this returns: GoTrue mails a confirmation (to both
+    addresses under "secure email change") and the identity moves only
+    once it is clicked -- accounts.claim follows it at the next sign-in."""
+    status, body = gotrue("PUT", "/user", json=fields, token=token)
+    if status >= 400:
+        return _error_text(body, "Supabase refused the change")
+    return None
+
+
+def _stamp_password(session: dict) -> None:
+    """users.password_set_at for the person a session names. Best effort
+    and after the fact -- never a reason a sign-in fails."""
+    claims = verify_token(session.get("access_token") or "") or {}
+    if claims.get("sub"):
+        try:
+            accounts.mark_password_set(claims["sub"])
+        except Exception as exc:  # noqa: BLE001 -- bookkeeping, never the door
+            print(f"[auth] could not stamp password_set_at: {exc}", file=sys.stderr)
+
+
+def _reset_page(email: str, step: str = "reset",
+                error: Optional[str] = None) -> RedirectResponse:
+    query = {"step": step, "email": email}
+    if error:
+        query["error"] = error
+    return RedirectResponse(f"/signin?{urlencode(query)}", status_code=303)
+
+
+@router.post("/forgot")
+async def forgot(request: Request, email: str = Form(...)):
+    """Forgot my password: a recovery code (and link) to the address.
+    Always lands on the reset step, never says whether the address has
+    an account -- the same posture as the code door."""
+    email = email.strip().lower()
+    if _rate_limited(request, "otp"):
+        return _signin_error("too many codes requested -- wait a minute",
+                             open_step="forgot")
+    if not configured():
+        return _not_configured()
+    if not _valid_email(email):
+        return _signin_error("enter a real email address", open_step="forgot")
+    verifier, challenge = _pkce_pair()
+    request.session[PKCE_SESSION_KEY] = verifier
+    request.session[RECOVERY_SESSION_KEY] = email
+    error = send_recovery_code(email, challenge=challenge,
+                               redirect_to=str(request.url_for("auth_callback")))
+    if error:
+        return _signin_error(error, open_step="forgot")
+    return _reset_page(email)
+
+
+@router.post("/reset")
+async def reset(request: Request, password: str = Form(...),
+                password2: Optional[str] = Form(None),
+                email: str = Form(""), token: str = Form("")):
+    """The new password. Two ways to have proved the inbox: the code
+    typed on the reset step (`token`, verified as type=recovery), or the
+    recovery LINK, whose callback parked the session's token in the
+    cookie session (RESET_TOKEN_SESSION_KEY) and sent the person to the
+    new-password step. Either way the password is written through
+    set_user_fields and the person is signed in."""
+    email = email.strip().lower()
+    with_code = bool(token.strip())
+    step = "reset" if with_code else "newpassword"
+    if _rate_limited(request, "password"):
+        return _reset_page(email, step, "too many attempts -- wait a minute")
+    if not configured():
+        return _not_configured()
+    problem = password_problem(password, password2)
+    if problem:
+        return _reset_page(email, step, problem)
+    if with_code:
+        if not _valid_email(email):
+            return _reset_page(email, step, "enter the code from the email")
+        session = user_session_by_code(email, token, "recovery")
+        if not session:
+            return _reset_page(email, step,
+                               "that code didn't work -- check it, or send a new one")
+    else:
+        access_token = request.session.get(RESET_TOKEN_SESSION_KEY)
+        if not access_token:
+            return _signin_error("the reset link expired -- ask for a new one",
+                                 open_step="forgot")
+        session = {"access_token": access_token}
+    error = set_user_fields(session["access_token"], {"password": password})
+    if error:
+        return _reset_page(email, step, error)
+    request.session.pop(RESET_TOKEN_SESSION_KEY, None)
+    request.session.pop(RECOVERY_SESSION_KEY, None)
+    response = _finish(request, session)
+    _stamp_password(session)
+    return response
 
 
 @router.post("/logout")
@@ -791,6 +992,66 @@ async def handoff(request: Request, t: str = "", next: Optional[str] = None):
     response = RedirectResponse(_local_path(next), status_code=303)
     issue_session(response, data["uid"], request)
     return response
+
+
+# --------------------------------------------------------------------------
+# the LINK in the email, made to work from ANY browser (2026-10-03)
+#
+# Read off the live auth logs the day the settings page was built: a new
+# person on an iPhone requested a sign-in email at 06:12:06, GoTrue
+# verified their click at 06:12:30 and sent them to /auth/callback -- and
+# no /token exchange followed. The PKCE verifier lives in the cookie of
+# the browser that ASKED, and a link opened from a mail app (its in-app
+# browser), another tab's profile, or pre-fetched by Gmail's link scanner
+# (the 403 "Email link is invalid or has expired" seven seconds later,
+# from a Google address) does not have it. They got in on the second try.
+#
+# GoTrue's own answer is the token_hash link: a template that points the
+# person at THIS route with {{ .TokenHash }} instead of the PKCE
+# {{ .ConfirmationURL }}, verified server-side with POST /verify
+# {type, token_hash} -- no verifier, no cookie, any browser, and the
+# link is consumed by the first real visit rather than by a scanner's
+# HEAD. docs/SUPABASE_EMAIL_TEMPLATES.md has the bodies to paste. The
+# PKCE callback above stays for the OAuth doors and for a template not
+# yet switched.
+# --------------------------------------------------------------------------
+
+# GoTrue's verify types a token_hash link may carry: a sign-in or sign-up
+# code (`email` covers both on current GoTrue; `signup` / `magiclink` are
+# what the older templates name), a password recovery, an email change.
+CONFIRM_TYPES = ("email", "signup", "magiclink", "recovery", "email_change")
+
+
+@router.get("/confirm")
+async def confirm(request: Request, token_hash: str = "", type: str = "",
+                  next: Optional[str] = None):
+    """The emailed link, verified here rather than at Supabase. A sign-in
+    link ends in _finish like every door; a recovery link parks the
+    session and lands on the new-password step; an email-change link
+    just confirms and signs in (the mirror row follows in _finish via
+    accounts.claim). `next` is the front end's return address, validated
+    like /signin's. A bad or spent link is a sign-in error with a way to
+    ask for a new one, never a 500."""
+    if _rate_limited(request, "verify"):
+        return _signin_error("too many attempts -- wait a minute")
+    if not configured():
+        return _not_configured()
+    kind = (type or "").strip().lower()
+    if kind not in CONFIRM_TYPES or not token_hash.strip():
+        return _signin_error("that link is not one of ours -- ask for a new one",
+                             open_step="email")
+    if next:
+        request.session["post_login_redirect"] = next
+    status, body = gotrue("POST", "/verify",
+                          json={"type": kind, "token_hash": token_hash.strip()})
+    if status >= 400 or not body.get("access_token"):
+        return _signin_error("that link is invalid or has expired -- ask for a new one",
+                             open_step="forgot" if kind == "recovery" else "email")
+    if kind == "recovery":
+        request.session[RESET_TOKEN_SESSION_KEY] = body["access_token"]
+        claims = verify_token(body["access_token"]) or {}
+        return _reset_page(claims.get("email") or "", "newpassword")
+    return _finish(request, body)
 
 
 # --------------------------------------------------------------------------
@@ -852,6 +1113,14 @@ async def auth_callback(request: Request, code: Optional[str] = None,
                           json={"auth_code": code, "code_verifier": verifier})
     if status >= 400 or not body.get("access_token"):
         return _signin_error(_error_text(body, "sign-in was cancelled or failed -- try again"))
+    recovering = request.session.pop(RECOVERY_SESSION_KEY, None)
+    if recovering:
+        # the link from a "forgot my password" email: the person has
+        # proved the inbox, so the new password is the next screen, and
+        # the session GoTrue just minted is what /reset writes it with.
+        # Not signed in yet -- the password is what they came for.
+        request.session[RESET_TOKEN_SESSION_KEY] = body["access_token"]
+        return _reset_page(recovering, "newpassword")
     return _finish(request, body)
 
 

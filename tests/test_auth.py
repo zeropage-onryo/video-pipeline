@@ -32,6 +32,8 @@ class FakeGoTrue:
     def __init__(self):
         self.users: dict[str, dict] = {}     # email -> {uid, password, meta}
         self.codes: dict[str, str] = {}      # auth_code -> email
+        self.recovery: dict[str, str] = {}   # email -> the recovery code mailed
+        self.hashes: dict[str, str] = {}     # token_hash in a mailed link -> email
         self.calls: list = []
         self.confirm_email = False
 
@@ -48,13 +50,68 @@ class FakeGoTrue:
                            "app_metadata": {"provider": u["provider"]},
                            "user_metadata": u["meta"]}, JWT_SECRET, algorithm="HS256")
 
+    def confirm_email_change(self, email):
+        """The person clicked the confirmation mail(s): the identity moves."""
+        user = self.users.pop(email)
+        new = user.pop("new_email")
+        self.users[new] = user
+        return new
+
     def session(self, email):
         return {"access_token": self.token_for(email), "token_type": "bearer",
                 "refresh_token": "r", "user": {"id": self.users[email]["uid"],
                                                "email": email}}
 
-    def __call__(self, method, path, *, json=None, params=None):
+    def user_for_token(self, token):
+        """The user a (real, signed) access token names, or None."""
+        try:
+            claims = jwt.decode(token or "", JWT_SECRET, algorithms=["HS256"],
+                                audience="authenticated")
+        except jwt.PyJWTError:
+            return None
+        return next(((e, u) for e, u in self.users.items() if u["uid"] == claims["sub"]),
+                    None)
+
+    def __call__(self, method, path, *, json=None, params=None, token=None):
         self.calls.append((method, path, json, params))
+        if path == "/recover":
+            # like GoTrue: 200 whether or not the address has a user
+            email = json["email"]
+            if email in self.users:
+                self.recovery[email] = "654321"
+                self.hashes[f"th-recovery-{email}"] = email
+                if json.get("code_challenge"):
+                    self.codes[f"rec-{email}"] = email
+            return 200, {}
+        if path == "/verify" and json.get("token_hash"):
+            # a token_hash link: the fake mints "th-<kind>-<email>" hashes
+            # when a mail would be sent; one visit spends it
+            email = self.hashes.pop(json["token_hash"], None)
+            if not email:
+                return 403, {"error_code": "otp_expired",
+                             "msg": "Email link is invalid or has expired"}
+            return 200, self.session(email)
+        if path == "/verify" and json.get("type") == "recovery":
+            email = json["email"]
+            if self.recovery.get(email) != json.get("token"):
+                return 403, {"error_code": "otp_expired",
+                             "msg": "Token has expired or is invalid"}
+            del self.recovery[email]
+            return 200, self.session(email)
+        if path == "/user" and method == "PUT":
+            found = self.user_for_token(token)
+            if not found:
+                return 401, {"msg": "invalid JWT"}
+            email, user = found
+            if "password" in json:
+                if len(json["password"]) < 6:
+                    return 422, {"msg": "Password should be at least 6 characters"}
+                user["password"] = json["password"]
+            if "email" in json:
+                # GoTrue only RECORDS the wish until the mails are clicked;
+                # the fake's `confirm_email_change` is that click
+                user["new_email"] = json["email"]
+            return 200, {"id": user["uid"], "email": email}
         if path == "/signup":
             email = json["email"]
             if email in self.users:

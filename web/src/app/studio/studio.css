@@ -363,7 +363,8 @@
   font-size: 8.5px;
   color: var(--dimmer);
 }
-.rmenu button {
+.rmenu button,
+.rmenu a {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -374,12 +375,15 @@
   color: var(--dim);
   font-size: 13px;
   text-align: left;
+  text-decoration: none;
 }
-.rmenu button:hover {
+.rmenu button:hover,
+.rmenu a:hover {
   background: rgb(255 255 255 / 0.06);
   color: var(--text);
 }
-.rmenu button svg {
+.rmenu button svg,
+.rmenu a svg {
   width: 14px;
   height: 14px;
 }
