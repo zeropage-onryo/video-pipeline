@@ -645,15 +645,25 @@ async def assistant_project_save(request: Request,
     return {"project": {k: v for k, v in project.items() if k not in ("turns", "draft")}}
 
 
+@router.delete("/assistant/project")
+async def assistant_project_clear(request: Request,
+                                  account_id: int = Depends(auth.current_account_id)):
+    """Clear the conversation: the row is DELETED, never archived
+    (2026-10-02, Mike's call -- a conversation is working memory; what it
+    made is on the concept). The pill's button and a finished Create both
+    end here."""
+    model_connections.mutation_header(request)
+    from src import assistant_store
+    assistant_store.clear_project(account_id=account_id)
+    return {"ok": True}
+
+
 @router.post("/assistant/project/new")
 async def assistant_project_new(request: Request,
                                 account_id: int = Depends(auth.current_account_id)):
-    """Archive the open project -- kept, like a passed-over concept -- so
-    the next turn starts a fresh one."""
-    model_connections.mutation_header(request)
-    from src import assistant_store
-    assistant_store.new_project(account_id=account_id)
-    return {"ok": True}
+    """The older name for the same clear, kept for a client that still
+    posts it."""
+    return await assistant_project_clear(request, account_id)
 
 
 @router.post("/assistant/reference-verdicts")
