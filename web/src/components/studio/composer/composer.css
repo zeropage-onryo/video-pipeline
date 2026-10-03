@@ -586,6 +586,28 @@
 .zc .zc-reply .ccard {
   margin-right: 0;
 }
+/* the photos an add_element card will save, under its arguments */
+.zc .ccard-photos {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 2px;
+}
+.zc .ccard-photos img {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--zc-line);
+  background: var(--zc-plate);
+}
+/* the element a confirmed card saved: photos, then the sheet */
+.zc .zc-element {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 4px;
+}
 .zc .zc-choices {
   display: flex;
   flex-wrap: wrap;

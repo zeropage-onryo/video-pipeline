@@ -512,6 +512,17 @@ async def creative_guide_reply(request: Request,
                 brand=brand, grounding=grounding, image_refs=image_refs,
                 account_id=account_id, on_retry=note, tools=tools, run_tool=run_tool,
                 brain=brain, assistant=assistant, links=links)
+        # An `add_element` proposal saves the photos THIS turn was handed
+        # (2026-10-03): the model names the thing, never the files --
+        # check_args refuses a URL in its args -- so the route stamps the
+        # composer's own references on the card, and the click posts
+        # them back. A turn with no photos proposes an element with none,
+        # which the act route refuses; the prompt tells the model to ask
+        # for a photo instead.
+        from src import guide_tools
+        proposal = reply.get("proposal") if isinstance(reply, dict) else None
+        if proposal and proposal.get("tool") == guide_tools.ELEMENT_TOOL:
+            proposal["photos"] = list(ref_urls)
         # `billing` says WHOSE plan paid: a personal connection spends
         # the person's own ChatGPT/Claude subscription and never touches
         # this install's Gemini credit, and /costs must not count it.
@@ -568,6 +579,8 @@ async def creative_guide_act(request: Request,
         return _error(400, "bad_tool", f"`{tool}` is not an action the Guide can take")
     if not isinstance(args, dict):
         return _error(400, "bad_request", "args must be an object")
+    if tool == guide_tools.ELEMENT_TOOL:
+        return await _element_from_guide(args, (body or {}).get("photos"), account_id)
     if not guide_tools.is_local(tool) and not guide_tools.available():
         return _error(503, "tools_unavailable", "the board's tools are not installed here")
     extra = {}
@@ -587,6 +600,71 @@ async def creative_guide_act(request: Request,
         except ValueError:
             pass
     return {"ok": True, "tool": tool, "result": result}
+
+
+# The kind the React Elements page files a product under: a prop whose
+# `category` is this word (web/src/lib/elements.ts PRODUCT_KIND, 2026-09-15).
+PRODUCT_CATEGORY = "product"
+
+
+async def _element_from_guide(args, photos, account_id: int):
+    """The Guide's `add_element` card, confirmed (2026-10-03, Mike:
+    "Can we create an Element sheet of the sugar free redbull can" --
+    asked with the can's photo attached, and answered by the composer
+    with a Nano still of a can, because nothing in the chat could make
+    an element).
+
+    The ONE write the Guide can propose that makes something, and it
+    runs here rather than in `guide_tools.run` because saving an element
+    is app-layer work (the photo folders, the vision describe, the sheet
+    job) that `src/` cannot reach. Two rules carried over from every
+    other write: the model never handled a URL (`check_args` refuses one
+    in `args`; the `photos` are the proposal's own, stamped by the TURN
+    off the references the person attached, and posted back by the
+    click), and the click is the only thing that lands here. A product
+    is a prop with PRODUCT_CATEGORY; a place is a location. No photo that
+    can be read means no element: the card promised a sheet drawn from
+    real photos, and a bare row would be a promise the studio broke."""
+    from src import guide_tools
+
+    try:
+        args = guide_tools.check_args(guide_tools.ELEMENT_TOOL, args)
+    except guide_tools.Refused as exc:
+        return _error(400, "refused", str(exc))
+    urls = []
+    for u in (photos if isinstance(photos, list) else []):
+        u = str(u or "").split("?")[0].strip() if isinstance(u, str) else ""
+        if u and u not in urls:
+            urls.append(u)
+    urls = urls[:MAX_IMAGE_REFS]
+    if not urls:
+        return _error(400, "no_photos",
+                      "attach a photo of it first -- an element is made from real photos")
+    kind, name = args["kind"], args["name"]
+    if kind == "place":
+        saved = await _save_location(name, images=[], photo_urls=urls, notes=args["notes"],
+                                     sheet=args["sheet"], account_id=account_id)
+        entity, base_dir = "location", LOCATIONS_DIR
+    else:
+        entity = "character" if kind == "character" else "prop"
+        base_dir = CHARACTERS_DIR if kind == "character" else PROPS_DIR
+        saved = await _save_element(
+            entity, name, field=PRODUCT_CATEGORY if kind == "product" else args["detail"],
+            notes=args["notes"], photos=[], photo_urls=urls, sheet=args["sheet"],
+            account_id=account_id, require_photos=True)
+    if not isinstance(saved, dict):            # a _error from the save path
+        return saved
+    slug = saved["slug"]
+    element = {"kind": kind, "name": name, "slug": slug,
+               "photos": _asset_photo_urls(entity, base_dir, slug, account_id),
+               "sheet_job": saved.get("sheet_job"), "note": saved.get("note")}
+    n = saved.get("photos") or 0
+    text = f"saved {name} as a {kind} with {n} photo{'' if n == 1 else 's'}"
+    if element["sheet_job"]:
+        text += " · drawing its reference sheet"
+    elif args["sheet"]:
+        text += " · no sheet: " + (saved.get("note") or "the image key is not set")
+    return {"ok": True, "tool": guide_tools.ELEMENT_TOOL, "result": text, "element": element}
 
 
 # --- the assistant pill's memory (2026-09-29, src/assistant_store.py) --------
@@ -1231,7 +1309,17 @@ async def asset_create_location(request: Request, account_id: int = Depends(auth
     photo_urls = [u for u in form.getlist("photo_urls") if str(u or "").strip()]
     if not images and not photo_urls:
         return _error(400, "no_photos", "at least one photo is required")
+    return await _save_location(name, images=images, photo_urls=photo_urls,
+                                notes=(form.get("notes") or "").strip(),
+                                sheet=_sheet_wanted(form), account_id=account_id)
 
+
+async def _save_location(name: str, *, images, photo_urls, notes: str,
+                         sheet: bool, account_id: int):
+    """The body of the create route, callable without a Request: the
+    Guide's `add_element` card saves a place through here too
+    (2026-10-03), with the composer's photos as `photo_urls`."""
+    slug = _slug(name)
     space_dir = LOCATIONS_DIR / slug
     space_dir.mkdir(parents=True, exist_ok=True)
     saved = []
@@ -1269,8 +1357,7 @@ async def asset_create_location(request: Request, account_id: int = Depends(auth
     chunk = ingest_asset_chunk("location", slug, slug,
                                {"description": description or {}},
                                project=accounts.slug_of(account_id))
-    sheet_job = _maybe_sheet_job(form, "locations", slug, slug,
-                                 notes=(form.get("notes") or "").strip(),
+    sheet_job = _maybe_sheet_job(sheet, "locations", slug, slug, notes=notes,
                                  account_id=account_id)
     return {"ok": True, "slug": slug, "described": described,
             "photos": len(saved), "note": note, "rag": chunk,
@@ -1281,19 +1368,36 @@ async def _create_entity(kind: str, request: Request, account_id: int):
     """Characters and props are the same shape: name + one labelled
     field + notes + photos. Save the photos, describe them (vision, so
     appearance is retrievable), store the row, put it on the shelf."""
-    base_dir = CHARACTERS_DIR if kind == "character" else PROPS_DIR
     label = "role" if kind == "character" else "category"
-
     form = await request.form()
     name = (form.get("name") or "").strip()
-    slug = _slug(name)
-    if not slug:
+    if not _slug(name):
         return _error(400, "invalid_name", "a name is required")
-    field = (form.get(label) or "").strip()
-    notes = (form.get("notes") or "").strip()
-    ref, count = await _save_uploaded_photos(base_dir, slug, form.getlist("photos"),
-                                             account_id,
-                                             photo_urls=form.getlist("photo_urls"))
+    return await _save_element(kind, name, field=(form.get(label) or "").strip(),
+                               notes=(form.get("notes") or "").strip(),
+                               photos=form.getlist("photos"),
+                               photo_urls=form.getlist("photo_urls"),
+                               sheet=_sheet_wanted(form), account_id=account_id)
+
+
+async def _save_element(kind: str, name: str, *, field: str, notes: str,
+                        photos, photo_urls, sheet: bool, account_id: int,
+                        require_photos: bool = False):
+    """The body of the character / prop create route, callable without a
+    Request (2026-10-03): the Guide's `add_element` card lands here with
+    the composer's own photos as `photo_urls` and no uploads. `field` is
+    the kind's labelled one (a character's role, a prop's category).
+    `require_photos` refuses (400 no_photos) BEFORE the row is written
+    when none of the photos could be read -- the modal may save a bare
+    element to fill in later; the Guide's card promised a sheet, and a
+    sheet needs the real photos."""
+    base_dir = CHARACTERS_DIR if kind == "character" else PROPS_DIR
+    label = "role" if kind == "character" else "category"
+    slug = _slug(name)
+    ref, count = await _save_uploaded_photos(base_dir, slug, photos, account_id,
+                                             photo_urls=photo_urls)
+    if require_photos and not count:
+        return _error(400, "no_photos", "none of the attached photos could be read")
 
     # resolved against THIS route's base_dir, not asset_shelf's module
     # constant -- they're the same in production, but the photos that
@@ -1318,7 +1422,7 @@ async def _create_entity(kind: str, request: Request, account_id: int):
     note = None if vision["ok"] else (
         f"photos saved but not described: {vision['error']}" if count
         else "no photos to describe")
-    sheet_job = _maybe_sheet_job(form, "characters" if kind == "character" else "props",
+    sheet_job = _maybe_sheet_job(sheet, "characters" if kind == "character" else "props",
                                  slug, name, detail=field, notes=notes,
                                  account_id=account_id)
     return {"ok": True, "slug": slug, "photos": count,
@@ -1450,13 +1554,14 @@ def _start_sheet_job(plural: str, slug: str, name: str, *, detail: str = "",
                       account_id=account_id)
 
 
-def _maybe_sheet_job(form, plural: str, slug: str, name: str, *,
+def _maybe_sheet_job(wanted: bool, plural: str, slug: str, name: str, *,
                      detail: str = "", notes: str = "",
                      account_id: int) -> Optional[int]:
     """The create routes' hook: a job id when a sheet was asked for and
     can be drawn, else None -- with the reason in the response note, not
-    an error, because the element itself saved fine."""
-    if not _sheet_wanted(form) or not _gemini_key(account_id):
+    an error, because the element itself saved fine. `wanted` is the
+    form's answer (`_sheet_wanted`) or the Guide's (2026-10-03)."""
+    if not wanted or not _gemini_key(account_id):
         return None
     if not _photo_names(_sheet_kind(plural)[1], slug):
         return None

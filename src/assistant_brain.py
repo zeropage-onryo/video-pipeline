@@ -306,10 +306,47 @@ SEARCH_SPEC = {
     "write": False,
 }
 
+ELEMENT_SPEC = {
+    "name": "add_element",
+    "description": (
+        "Save the thing in the photos attached to this turn as an Element -- a "
+        "character, prop, product or place the studio holds every shot to -- and draw "
+        "its reference sheet from those photos (a turnaround for a prop or product, "
+        "five panels for a person, plates for a place). WRITE -- the person confirms on "
+        "a card; nothing is saved until they do. Use it when they ask to make an "
+        "element, an element sheet, a reference sheet or a turnaround of something they "
+        "attached. The photos are the ones on this turn: you never pass a URL, and with "
+        "NO photo attached do not call this -- say an element needs a real photo and ask "
+        "for one (or hunt for a named product with find_references first)."),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string", "enum": ["character", "prop", "product", "place"],
+                     "description": "product for a thing that is sold (a can, a watch); "
+                                    "prop for any other object; place for a room or site."},
+            "name": {"type": "string",
+                     "description": "Its name as the person says it, e.g. "
+                                    "'Red Bull Sugar Free can'."},
+            "detail": {"type": "string",
+                       "description": "A character's role, or a prop's category. "
+                                      "Empty for a product or a place."},
+            "notes": {"type": "string",
+                      "description": "What the sheet must get right, from the photos and "
+                                     "the conversation: colour, markings, wear, size."},
+            "sheet": {"type": "boolean",
+                      "description": "Draw the reference sheet (default true; costs one "
+                                     "still). False only when they said no sheet."},
+        },
+        "required": ["kind", "name"],
+    },
+    "write": True,
+}
+
 LOCAL_READ = ("find_references", "search_footage")
-LOCAL_WRITE = ("keep_references",)
-LOCAL_SPECS = (FIND_SPEC, KEEP_SPEC, SEARCH_SPEC)
-WRITE_LABELS = {"keep_references": "Keep these references and attach them to the composer"}
+LOCAL_WRITE = ("keep_references", "add_element")
+LOCAL_SPECS = (FIND_SPEC, KEEP_SPEC, SEARCH_SPEC, ELEMENT_SPEC)
+WRITE_LABELS = {"keep_references": "Keep these references and attach them to the composer",
+                "add_element": "Save this as an element and draw its reference sheet"}
 
 
 def _need_line(entry: dict) -> str:
@@ -505,6 +542,12 @@ def run_local(name: str, args: dict, *, brand: str = "", account_id=None,
     if name == "search_footage":
         return footage_for_model(search_footage(args.get("query") or "", k=args.get("k") or 8,
                                                 account_id=account_id, dsn=dsn))
+    if name == "add_element":
+        # Saved by the app (app/api.py _element_from_guide), which holds
+        # the photo folders and the sheet job; a call that reaches here
+        # came in through a door that cannot keep its promise.
+        raise ValueError("add_element is saved through the studio's confirm card, "
+                         "with the composer's photos; it has no library-side runner")
     raise ValueError(f"unknown local tool {name}")
 
 

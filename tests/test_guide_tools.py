@@ -160,7 +160,7 @@ def test_a_write_call_becomes_a_proposal_and_does_not_run(monkeypatch):
     proposal = _Resp(calls=[("add_spark", {"brand": "zeropage", "spark": "a wet seat"})])
     reply, calls = _turn(monkeypatch, [proposal], run_tool)
     assert reply["proposal"] == {"tool": "add_spark", "args": {"brand": "zeropage", "spark": "a wet seat"},
-                                 "label": guide_tools.WRITE_LABELS["add_spark"]}
+                                 "label": guide_tools.WRITE_LABELS["add_spark"], "photos": []}
     assert "Confirm" in reply["message"]
     assert len(calls) == 1
 

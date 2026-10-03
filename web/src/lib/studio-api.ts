@@ -547,7 +547,23 @@ export const runCreativeGuide = (form: FormData) =>
    `proposal` is a WRITE the model asked for and nobody has run: the
    thread draws it as a confirm card and the click is runGuideAction.
    `tool_runs` are the READ tools it looked at before answering. */
-export type GuideProposal = { tool: string; args: Record<string, unknown>; label: string };
+export type GuideProposal = {
+  tool: string;
+  args: Record<string, unknown>;
+  label: string;
+  /** add_element (2026-10-03): the references the turn was handed, stamped by
+   *  the route -- the photos the click saves. The model's args carry no URL. */
+  photos?: string[];
+};
+/** what an add_element click made (src: app/api.py _element_from_guide) */
+export type GuideElement = {
+  kind: string;
+  name: string;
+  slug: string;
+  photos: string[];
+  sheet_job?: number | null;
+  note?: string | null;
+};
 export type GuideToolRun = { tool: string; args: Record<string, unknown>; ok: boolean };
 export type GuideReply = {
   message: string;
@@ -567,10 +583,14 @@ export type GuideReply = {
    ONLY thing that runs a write tool. Guarded like the turn. The server
    re-checks the tool set and refuses any URL in the arguments. */
 export const runGuideAction = (proposal: GuideProposal) =>
-  apiFetch<{ ok: boolean; tool: string; result: string }>("/creative-guide/act", {
+  apiFetch<{ ok: boolean; tool: string; result: string; element?: GuideElement }>("/creative-guide/act", {
     method: "POST",
     headers: GUARDED_HEADERS,
-    body: JSON.stringify({ tool: proposal.tool, args: proposal.args }),
+    body: JSON.stringify({
+      tool: proposal.tool,
+      args: proposal.args,
+      ...(proposal.photos?.length ? { photos: proposal.photos } : {}),
+    }),
   });
 export const getJob = (id: number) => apiFetch<Job>(`/jobs/${id}`);
 export async function waitForJob(id: number, onTick?: (job: Job) => void, everyMs = 1500) {

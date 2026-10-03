@@ -96,8 +96,10 @@ import {
   keepReferences,
   takePendingFill,
   type ContactSheet,
+  type ElementMade,
   type Turn,
 } from "@/lib/assistant";
+import { readsAsTalk } from "@/lib/talk";
 import { keepersOf } from "@/components/studio/contact-sheet";
 import {
   BASE_COMMANDS,
@@ -291,10 +293,13 @@ function Composer() {
   const dragDepth = useRef(0);
   const still = useReducedMotion();
 
-  const loadAssets = () =>
-    getAssets()
-      .then((r) => setAssets(r.items))
-      .catch(() => setAssets([]));
+  const loadAssets = useCallback(
+    () =>
+      getAssets()
+        .then((r) => setAssets(r.items))
+        .catch(() => setAssets([])),
+    [],
+  );
 
   useEffect(() => {
     getCapabilities().then(setCaps).catch(() => setCaps({}));
@@ -512,6 +517,49 @@ function Composer() {
     [patchMade, toast],
   );
 
+  /* An element's reference sheet is a job (cents, Nano Banana Pro); the
+     turn carrying the element shows it drawing, then the sheet. One poll
+     per job id, shared by the click and a resume after a reload. */
+  const sheetPolls = useRef(new Set<number>());
+  const patchElement = useCallback(
+    (jobId: number, p: Partial<ElementMade>) =>
+      setThread((ts) =>
+        ts.map((t) => (t.element?.sheetJob === jobId ? { ...t, element: { ...t.element, ...p } } : t)),
+      ),
+    [setThread],
+  );
+  const watchSheet = useCallback(
+    (jobId: number) => {
+      if (sheetPolls.current.has(jobId)) return;
+      sheetPolls.current.add(jobId);
+      waitForJob(jobId)
+        .then((job) => {
+          const ok = job.status === "done" && !!job.output;
+          patchElement(jobId, {
+            drawing: false,
+            sheet: ok ? job.output : null,
+            note: ok ? null : job.error || job.detail || "The sheet did not draw.",
+          });
+          announceBalanceChange();
+          if (ok) {
+            toast("Reference sheet drawn");
+            void loadAssets();
+          } else toast(job.error || "The sheet did not draw.", "err");
+        })
+        .catch(() => {
+          patchElement(jobId, { drawing: false, note: "The sheet was lost (the server restarted while it drew)." });
+        })
+        .finally(() => sheetPolls.current.delete(jobId));
+    },
+    [patchElement, toast, loadAssets],
+  );
+  useEffect(() => {
+    if (!ready) return;
+    for (const t of thread) {
+      if (t.element?.drawing && t.element.sheetJob) watchSheet(t.element.sheetJob);
+    }
+  }, [ready, thread, watchSheet]);
+
   /* A send left running -- the page was left, or reloaded, mid-way -- is
      picked up again: its job id is on the turn, the job registry still
      holds it (or has finished it). A job the server no longer knows is a
@@ -617,10 +665,20 @@ function Composer() {
     setFilledBy(null);
     let asking: Turn | null = null;
     try {
-      if (mode === "create") {
-        await make(brief.trim() || idea.trim());
+      // A sentence addressed to the studio -- a question, "can we…",
+      // "let's…", an element sheet asked for by name -- is talk, whatever
+      // the segment says (2026-10-03, Mike: "the chat isn't conversing").
+      // Create had been handing it to the renderer as a prompt: an Image
+      // send drew a still of a can for "Can we create an Element sheet of
+      // the sugar free redbull can". The Guide answers it, and the box
+      // flips to Guide so the next line continues the talk; Image | Video
+      // flips it back. Only where the Guide is there; else Create as before.
+      const asked = idea.trim();
+      const talk = mode === "guide" || (guideReady && readsAsTalk(asked));
+      if (!talk) {
+        await make(brief.trim() || asked);
       } else {
-        const asked = idea.trim();
+        if (mode !== "guide") setMode("guide");
         const mine: Turn = { role: "user", content: asked };
         // the box's own sends (t.made) are not the Guide's turns: left out of
         // the conversation it answers
@@ -751,11 +809,31 @@ function Composer() {
     setBusy(true);
     try {
       const done = await runGuideAction(proposal);
+      // add_element (2026-10-03): the element it saved rides on the
+      // turn -- its photos now, its sheet when the job has drawn it
+      const element: ElementMade | undefined = done.element
+        ? {
+            kind: done.element.kind,
+            name: done.element.name,
+            slug: done.element.slug,
+            photos: done.element.photos ?? [],
+            sheet: null,
+            sheetJob: done.element.sheet_job ?? null,
+            drawing: !!done.element.sheet_job,
+            note: done.element.note ?? null,
+          }
+        : undefined;
       setThread((t) => [
         ...t.map((m, j) => (j === i ? { ...m, decided: "done" as const } : m)),
-        { role: "assistant", content: `Done — ${done.result}` },
+        { role: "assistant", content: `Done — ${done.result}`, element },
       ]);
-      toast("Banked.");
+      if (element) {
+        toast(`${element.name} saved as a ${element.kind} · it is on the shelf below`);
+        void loadAssets();
+        if (element.sheetJob) watchSheet(element.sheetJob);
+      } else {
+        toast("Banked.");
+      }
     } catch (e) {
       toast(e instanceof Error ? e.message : "That did not go through.", "err");
     } finally {
@@ -957,6 +1035,13 @@ function Composer() {
                 onDecide: decide,
                 onToggleFrame: toggleFrame,
                 onKeep: keepFrames,
+                onUseElement: (el) => {
+                  // the real photos first -- refs[0] anchors the clip -- and
+                  // the drawn sheet behind them, the same order Elements keeps
+                  const urls = [...el.photos.slice(0, FRAMES_PER_ASSET), ...(el.sheet ? [el.sheet] : [])];
+                  setPicked((was) => [...new Set([...was, ...urls])]);
+                  toast(`${el.name} attached · ${urls.length} frame${urls.length === 1 ? "" : "s"}`);
+                },
               }}
             />
           ) : null}

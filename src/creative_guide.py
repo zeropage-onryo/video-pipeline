@@ -29,6 +29,10 @@ class Proposal(BaseModel):
     tool: str = Field(min_length=1, max_length=64)
     args: dict = Field(default_factory=dict)
     label: str = Field(default="", max_length=200)
+    # The references the write applies to (`add_element`, 2026-10-03):
+    # stamped by the ROUTE off the turn's own refs, never by the model,
+    # whose args may not carry a URL at all (guide_tools.check_args).
+    photos: list[str] = Field(default_factory=list, max_length=12)
 
 
 class ToolRun(BaseModel):
