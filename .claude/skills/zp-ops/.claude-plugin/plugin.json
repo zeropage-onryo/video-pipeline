@@ -1,0 +1,6 @@
+{
+  "name": "zp-ops",
+  "version": "0.1.0",
+  "description": "The phone-length asks as slash commands (/ship, /merge, /wrap, /handoff), a local-servers status line with /servers [stop], and a session-start check for the leftovers other sessions leave: uncommitted work, a stale .git/index.lock, old worktrees.",
+  "author": { "name": "Zero Page Films" }
+}

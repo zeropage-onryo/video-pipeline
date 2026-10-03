@@ -19,8 +19,7 @@ from fastapi.testclient import TestClient
 
 from app import api, auth
 from app.main import app
-from src import (assistant_brain, creative_guide, entities, gemini_utils, guide_tools,
-                 preprod, scene_chain, scout)
+from src import assistant_brain, creative_guide, entities, gemini_utils, guide_tools, preprod, scene_chain, scout
 
 
 @pytest.fixture
@@ -233,7 +232,8 @@ def test_confirm_saves_a_product_from_the_turns_photos_and_draws_its_sheet(clien
     assert "drawing its reference sheet" in body["result"]
     el = body["element"]
     assert el["kind"] == "product" and el["slug"] == "red-bull-sugar-free-can"
-    assert [u.rsplit("/", 1)[-1].split("?")[0] for u in el["photos"]] == [f"gen-{hashlib.sha1(b'can-jpeg').hexdigest()[:16]}.jpg"]
+    saved_name = f"gen-{hashlib.sha1(b'can-jpeg').hexdigest()[:16]}.jpg"
+    assert [u.rsplit("/", 1)[-1].split("?")[0] for u in el["photos"]] == [saved_name]
     # a product is a prop filed under the product category, like the modal's
     [row] = entities.list_props(tmp_db, account_id=None)
     assert row["name"] == "Red Bull Sugar Free can" and row["category"] == "product"

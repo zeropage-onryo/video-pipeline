@@ -67,11 +67,12 @@ export function CreditPill({ balance, onError }: { balance: Balance | null; onEr
       >
         <Coins strokeWidth={1.6} aria-hidden />
         {balance.exempt ? (
-          "Not charged"
+          // the words go below 900px (studio.css); the coin and the title stay
+          <span className="zcredit-exempt">Not charged</span>
         ) : (
           <>
             {num(left)}
-            {/* the word goes on a phone; the number and the coin stay */}
+            {/* the word goes below 900px; the number and the coin stay */}
             <span className="zcredit-word">{left === 1 ? "credit" : "credits"}</span>
           </>
         )}

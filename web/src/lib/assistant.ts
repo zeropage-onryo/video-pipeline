@@ -253,8 +253,11 @@ export const putProject = (turns: unknown[], stage: string, draft?: ComposerDraf
     headers: GUARDED_HEADERS,
     body: JSON.stringify(draft ? { turns, stage, draft } : { turns, stage }),
   });
-export const startNewProject = () =>
-  apiFetch<{ ok: boolean }>("/assistant/project/new", { method: "POST", headers: GUARDED_HEADERS, body: "{}" });
+/* Clear the conversation: DELETED on the server, never archived (2026-10-02,
+   Mike's call -- a conversation is working memory; what it made is on the
+   concept, and a render carries its prompt on the Assets wall). */
+export const clearProject = () =>
+  apiFetch<{ ok: boolean }>("/assistant/project", { method: "DELETE", headers: GUARDED_HEADERS });
 /* the Keep click against the checker, one entry per frame the sheet showed */
 export type FrameVerdict = {
   id: string;
@@ -276,8 +279,8 @@ export const postVerdicts = (frames: FrameVerdict[]) =>
 /* ── New session (2026-10-02, the header's button) ──
    The header lives in the shell, ABOVE the thread provider (the provider
    reads the shell for whose thread it is), so the button cannot call
-   newProject() itself: it asks through a window event, and the provider
-   archives the open project -- kept, never deleted -- and starts empty.
+   clearProject() itself: it asks through a window event, and the provider
+   deletes the open conversation on the server and starts empty.
    The Studio page listens too, to stop a live run and clear what is only
    its own (progress, selection). */
 export const NEW_SESSION_EVENT = "zpf:new-session";

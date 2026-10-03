@@ -31,6 +31,13 @@ script (e.g. `ops/ingest-saved-images.py` is the local-file route into
 the reference bin that `bank_reference`'s URL-only signature implies is
 missing).
 
+## Claude Code mods
+
+Three mods for how this repo is actually driven (`/ship`, `/merge`, `/wrap`,
+`/handoff`, `/servers`, `/ci`, a spend guard, a CI watcher) live under
+`.claude/skills/zp-*`; `docs/CLAUDE_MODS.md` says what each does, how to load
+them, and what else the session logs suggested.
+
 ## Commands
 
 All Python commands run through the project's venv, not system Python:
@@ -1797,8 +1804,17 @@ is yours, in Resolve, by hand.
   File object could never have survived the page. Load is the pill's rule, kept: the tab's
   sessionStorage copy paints first, the server's copy wins; `?spark=` and `?attach=` are
   applied only after that load so a saved draft cannot land on top of the visitor's
-  sentence. "New project" (the pill's pen) archives the row and clears the box too. Nothing
-  here calls a model or spends. Verified in Chrome against a throwaway schema: idea, pick
+  sentence. **A conversation is WORKING MEMORY, never a record (same day, Mike's call):**
+  it is saved only so the person can pick it up where they left off, on any page. Once
+  Create has written the scene it goes away -- `finishProject` clears the Guide turns, the
+  brief, the box and its references, leaving the "scene written" card: with the mock
+  composer that card is the send's own `made` turn, so those turns are the one thing it
+  keeps -- and the pill's pen and the header's New session (`clearProject`) clear
+  everything by hand. Nothing is ever archived: `DELETE
+  /api/assistant/project` deletes the row (`/project/new` is the older name for the same),
+  and `assistant_store.init` drops the rows the 2026-09-29 archive-on-new left behind. What
+  a conversation produced lives on the concept and, once rendered, on the asset with its
+  prompt, which the Assets wall shows. Nothing here calls a model or spends. Verified in Chrome against a throwaway schema: idea, pick
   and upload survived a rail round-trip and a reload with sessionStorage cleared; a real
   Guide turn in the box appeared in the pill on Pipeline, and the pill's reply there was
   the fourth turn in the box.

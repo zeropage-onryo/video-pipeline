@@ -550,6 +550,12 @@ UNSCOPED_ALLOWED = {
     # row on the database once, at the moment the column appears, and an
     # owner predicate would leave half the table unmarked and teaching.
     "UPDATE videos SET legacy = TRUE WHERE concept_id IS NULL",
+    # assistant_store.init's one-time sweep (2026-10-02): a migration, the
+    # hold_queue rename's shape. Conversations are never archived any
+    # more, so the rows the 2026-09-29 archive-on-new left behind are
+    # dropped once, on every account at once -- an owner predicate would
+    # leave every other tenant's dead rows in place.
+    "DELETE FROM assistant_projects WHERE archived_at IS NOT NULL",
     # the two legacy filters, and both are deliberately installation-wide:
     # they read `videos` only to build a set of rows to LEAVE OUT of a
     # SHARED learning surface (winning_prompts, the proven_results shelf),
