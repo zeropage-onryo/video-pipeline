@@ -1,0 +1,6 @@
+{
+  "name": "zp-spend-guard",
+  "version": "0.1.0",
+  "description": "Refuses the Bash and Edit calls that would spend render credit, post, or edit .env by accident. The click is the approval; this keeps a session from clicking for you.",
+  "author": { "name": "Zero Page Films" }
+}

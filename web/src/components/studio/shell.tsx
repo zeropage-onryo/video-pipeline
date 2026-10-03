@@ -52,16 +52,7 @@ import { requestNewSession } from "@/lib/assistant";
 /* eslint-disable @next/next/no-img-element */
 import "@/app/studio/studio.css";
 
-export type ViewId =
-  | "studio"
-  | "projects"
-  | "assets"
-  | "pipeline"
-  | "director"
-  | "cut"
-  | "elements"
-  | "queue"
-  | "settings";
+export type ViewId = "studio" | "projects" | "assets" | "pipeline" | "director" | "cut" | "elements" | "queue" | "settings";
 
 const NAV: { id: ViewId; label: string; href: string; icon: typeof House; external?: boolean }[] = [
   { id: "studio", label: "Studio", href: "/studio", icon: House },
@@ -414,54 +405,57 @@ export function StudioShell({ children }: { children: ReactNode }) {
                 </Link>
               ))}
             </nav>
-            {bar}
-            <span className="spacer" />
-            <CreditPill balance={balance} onError={(text) => toast(text, "err")} />
-            {!signedOut && me?.account ? (
-              <button
-                type="button"
-                className="hnew"
-                title="Start a new session -- this one is kept"
-                onClick={() => {
-                  requestNewSession();
-                  toast("New session · the last one is kept");
-                }}
-              >
-                New session
-              </button>
-            ) : null}
-            <span className="havatar-wrap">
-              <button
-                type="button"
-                className="havatar"
-                aria-haspopup="menu"
-                aria-expanded={hmenu}
-                title={signedOut ? "Sign in" : `${who} · account`}
-                onClick={() => (signedOut ? goToSignIn() : setHmenu((v) => !v))}
-              >
-                {me?.user.avatar_url ? <img src={me.user.avatar_url} alt="" /> : initials.slice(0, 1) || "ZP"}
-              </button>
-              {hmenu && me ? (
-                <span className="rmenu hmenu" role="menu">
-                  <span className="m">{who}</span>
-                  {me.accounts.map((a) => (
-                    <button
-                      key={a.id}
-                      type="button"
-                      aria-current={a.slug === brand ? "true" : undefined}
-                      onClick={() => pickAccount(a.slug)}
-                    >
-                      {a.label}
-                    </button>
-                  ))}
-                  <Link href="/studio/settings" role="menuitem" onClick={() => setHmenu(false)}>
-                    <Settings strokeWidth={1.6} /> Settings
-                  </Link>
-                  <button type="button" onClick={signOut}>
-                    <LogOut strokeWidth={1.6} /> Sign out
-                  </button>
-                </span>
+            {/* the right-hand cluster is one grid cell, so the tabs between
+                it and the brand can never be drawn underneath it */}
+            <span className="hright">
+              {bar}
+              <CreditPill balance={balance} onError={(text) => toast(text, "err")} />
+              {!signedOut && me?.account ? (
+                <button
+                  type="button"
+                  className="hnew"
+                  title="Start a new session -- this one is kept"
+                  onClick={() => {
+                    requestNewSession();
+                    toast("New session · the last one is kept");
+                  }}
+                >
+                  New session
+                </button>
               ) : null}
+              <span className="havatar-wrap">
+                <button
+                  type="button"
+                  className="havatar"
+                  aria-haspopup="menu"
+                  aria-expanded={hmenu}
+                  title={signedOut ? "Sign in" : `${who} · account`}
+                  onClick={() => (signedOut ? goToSignIn() : setHmenu((v) => !v))}
+                >
+                  {me?.user.avatar_url ? <img src={me.user.avatar_url} alt="" /> : initials.slice(0, 1) || "ZP"}
+                </button>
+                {hmenu && me ? (
+                  <span className="rmenu hmenu" role="menu">
+                    <span className="m">{who}</span>
+                    {me.accounts.map((a) => (
+                      <button
+                        key={a.id}
+                        type="button"
+                        aria-current={a.slug === brand ? "true" : undefined}
+                        onClick={() => pickAccount(a.slug)}
+                      >
+                        {a.label}
+                      </button>
+                    ))}
+                    <Link href="/studio/settings" role="menuitem" onClick={() => setHmenu(false)}>
+                      <Settings strokeWidth={1.6} /> Settings
+                    </Link>
+                    <button type="button" onClick={signOut}>
+                      <LogOut strokeWidth={1.6} /> Sign out
+                    </button>
+                  </span>
+                ) : null}
+              </span>
             </span>
           </header>
           {stage ? <div className="stage">{children}</div> : children}

@@ -84,7 +84,7 @@ export function AssistantPill() {
     stage: convStage,
     setStage: setConvStage,
     draft: composer,
-    newProject: resetProject,
+    clearProject: resetProject,
   } = useAssistantThread();
   const [persona, setPersona] = useState<Persona | null>(null);
   const [setup, setSetup] = useState(false);
@@ -265,14 +265,14 @@ export function AssistantPill() {
     }
   }
 
-  /* A fresh project: the current one is archived on the server -- kept,
-     never deleted -- and the card AND the composer's box start empty. */
-  async function newProject() {
+  /* Clear: the conversation is deleted on the server (never archived --
+     it was working memory) and the card AND the composer's box start empty. */
+  async function clearConversation() {
     if (busy) return;
     try {
       await resetProject();
     } catch {
-      toast("Could not start a new project", "err");
+      toast("Could not clear the conversation", "err");
       return;
     }
     setText("");
@@ -340,10 +340,10 @@ export function AssistantPill() {
                     <button
                       type="button"
                       className="zpa-icon"
-                      title="New project -- this one is kept"
-                      aria-label="New project"
+                      title="Clear the conversation -- nothing is kept"
+                      aria-label="Clear conversation"
                       disabled={busy}
-                      onClick={() => void newProject()}
+                      onClick={() => void clearConversation()}
                     >
                       <SquarePen strokeWidth={1.6} />
                     </button>

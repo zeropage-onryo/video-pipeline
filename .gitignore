@@ -111,3 +111,7 @@ data/model_sessions/
 # `*.mp4` above is for renders under data/, and it was silently swallowing
 # the hero recordings in web/public/site.
 !web/public/site/**
+
+# Claude Code mods (.claude/skills/zp-*): the engine lays its own types and tsconfig beside a loaded mod
+.claude/skills/zp-*/.claude-plugin/types/
+.claude/skills/zp-*/tsconfig.json
