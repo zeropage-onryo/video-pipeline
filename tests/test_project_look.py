@@ -195,3 +195,21 @@ def test_create_inside_a_project_writes_with_its_look(tmp_db, monkeypatch):
         assert time.time() < deadline, "job never finished"
         time.sleep(0.02)
     assert seen["look"] == DAYLIGHT and DAYLIGHT in seen["prompt"]
+
+
+# guards: the crawl's digest and the research brief (which carries the
+# digest verbatim) -- both told every spark to open on "a wet, hazed,
+# teal-and-amber frame with one red accent", set it in an outbreak or a
+# rain-neon future, and give it a monster; the brand note said so too.
+CRAWL_HOUSE_GENRE = ("teal", "amber", "rain-neon", "outbreak", "wet, hazed", "red accent",
+                     "a stranger, a monster", "zombie-overrun", "drizzle")
+
+
+def test_the_crawl_prompts_carry_no_house_genre(tmp_db):
+    from src import research_agent, scout
+    scout.init(tmp_db)
+    digest = scout.build_digest_prompt("zeropage", [], 4)
+    brief = research_agent.build_brief("zeropage", 4, dsn=tmp_db)
+    for name, text in (("digest", digest), ("brief", brief)):
+        found = [w for w in CRAWL_HOUSE_GENRE if w in text.lower()]
+        assert found == [], f"the {name} still carries the house genre: {found}"

@@ -243,20 +243,24 @@ SHORTS_QUERIES = {
     # business, not the look. These ask for the look itself.
     "zeropage": ["creature design short film ai", "dystopian world short film cinematic"],
 }
+# No genre here (2026-10-02): these are pasted into the digest and the
+# research brief as {brand_note}, and "an outbreak, a rain-neon future" /
+# "a monster" in them steered every spark the crawl wrote, whatever the
+# photographs showed. The world comes from the image and the idea.
 BRAND_NOTES = {
     "antihero": ("Michael's PERSONAL brand. He is the character and the "
-                 "world is happening to him: Michael and the white Ducati "
-                 "inside an outbreak, a rain-neon future, a flooded city. "
+                 "world is happening to him: Michael inside whatever world "
+                 "the idea and its photograph set -- a city at night or a "
+                 "summer wedding, an ordinary kitchen or a flooded street. "
                  "Personal stakes -- what he wants, what he loses -- carried "
-                 "by the world's rule. The machine rides with him; it is not "
-                 "the subject. Same face, different world, different wardrobe, "
-                 "different thing covering him -- every time."),
-    "zeropage": ("The viral engine. Worlds, creatures and invented products "
-                 "are the star; no recurring person. A stranger, a monster or "
-                 "the product itself is the character -- a new face and a new "
-                 "wardrobe every spark, never the same one twice. Ad-shaped "
-                 "beats welcome: the product does something on screen. Built "
-                 "to stop a thumb in frame one."),
+                 "by the world's rule. Same face, different world, different "
+                 "wardrobe, different thing covering him -- every time."),
+    "zeropage": ("The viral engine. Worlds, places and products are the "
+                 "star; no recurring person. A stranger or the product itself "
+                 "is the character -- a new face and a new wardrobe every "
+                 "spark, never the same one twice. Ad-shaped beats welcome: "
+                 "the product does something on screen. Built to stop a thumb "
+                 "in frame one, in whatever genre the photograph supports."),
 }
 
 
