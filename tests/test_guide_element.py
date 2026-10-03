@@ -114,6 +114,55 @@ def test_the_ask_becomes_a_proposal_and_nothing_is_saved(monkeypatch):
     assert "Confirm" in reply["message"]
 
 
+@pytest.mark.parametrize("message, photos, expect", [
+    ("Can we create an Element sheet of the sugar free redbull can", 1, "call add_element NOW"),
+    ("make the can an element", 2, "2 photos are attached"),
+    ("turnaround of this please", 1, "call add_element NOW"),
+    ("Can we create an Element sheet of the can", 0, "NO photo is attached"),
+    ("a bartender closes the bar at 2am", 3, ""),
+    ("the element of surprise", 1, ""),
+    ("", 1, ""),
+])
+def test_element_note_reads_the_ask_and_the_photos(message, photos, expect):
+    note = assistant_brain.element_note(message, photos)
+    assert (expect in note) if expect else note == ""
+
+
+def test_the_note_reaches_the_model_on_the_turn(monkeypatch):
+    seen = {}
+
+    def generate(client, model, contents, **kwargs):
+        seen["contents"] = contents
+        return json.dumps({"message": "ok", "choices": [], "brief": ""})
+
+    monkeypatch.setattr(gemini_utils, "generate_with_retry", generate)
+    creative_guide.respond(
+        creative_guide.Conversation(messages=[{"role": "user", "content": "make it an element"}]),
+        client=object(), brand="zeropage", grounding={},
+        note=assistant_brain.element_note("make it an element", 1))
+    texts = [part.text for part in seen["contents"][-1].parts if getattr(part, "text", None)]
+    assert any("call add_element NOW" in t for t in texts)
+
+
+def test_the_route_computes_the_note_off_its_own_refs(client, monkeypatch):
+    monkeypatch.setattr(api, "_gemini_key", lambda a=None: "k")
+
+    async def refs(form, **kwargs):
+        return [], ["/refs/abc.jpg", "/refs/def.jpg"], []
+
+    monkeypatch.setattr(api, "_collect_refs", refs)
+    monkeypatch.setattr(scene_chain, "ground", lambda *a, **k: {})
+    monkeypatch.setattr(api, "_guide_tools", lambda account_id, **k: ([], None))
+    seen = {}
+    monkeypatch.setattr(creative_guide, "respond",
+                        lambda conversation, **kw: seen.update(kw) or {"message": "ok"})
+    r = client.post("/api/creative-guide", data={
+        "conversation": json.dumps({"messages": [{"role": "user", "content":
+                                                   "Can we create an Element sheet of the can"}]})})
+    _wait(client, r.json()["job_id"])
+    assert "2 photos are attached" in seen["note"]
+
+
 def test_the_prompt_tells_the_model_the_rules():
     text = Path("prompts/creative_guide_tools.txt").read_text()
     assert "add_element" in text

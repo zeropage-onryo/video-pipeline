@@ -470,6 +470,11 @@ async def creative_guide_reply(request: Request,
     # first on reply.sheet; the model is told only that they are there.
     from src import linkrefs
     pasted = linkrefs.extract_links(conversation.messages[-1].content)
+    # An element asked for by name (2026-10-03): one line on the turn saying
+    # to call add_element now (photos attached) or to ask for a photo (none)
+    # -- off the person's own words and the refs THIS route collected.
+    from src import assistant_brain as _brain
+    element_ask = _brain.element_note(conversation.messages[-1].content, len(ref_urls))
 
     def work(job):
         # Grounded through scene_chain.ground -- the same scoped set a
@@ -492,7 +497,7 @@ async def creative_guide_reply(request: Request,
             reply = creative_guide.respond_personal(
                 conversation, provider=provider, scope=scope, model=model,
                 brand=brand, grounding=grounding, image_refs=image_refs,
-                assistant=assistant, links=links)
+                assistant=assistant, links=links, note=element_ask)
         else:
             from google import genai
             # The board's tools, in-process (src/guide_tools.py,
@@ -511,7 +516,7 @@ async def creative_guide_reply(request: Request,
                 conversation, client=genai.Client(api_key=_gemini_key(account_id)),
                 brand=brand, grounding=grounding, image_refs=image_refs,
                 account_id=account_id, on_retry=note, tools=tools, run_tool=run_tool,
-                brain=brain, assistant=assistant, links=links)
+                brain=brain, assistant=assistant, links=links, note=element_ask)
         # An `add_element` proposal saves the photos THIS turn was handed
         # (2026-10-03): the model names the thing, never the files --
         # check_args refuses a URL in its args -- so the route stamps the

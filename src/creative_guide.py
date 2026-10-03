@@ -126,7 +126,7 @@ DEFAULT_BRAIN = "fast"
 
 def respond(conversation, *, client, brand, grounding, image_refs=(),
             account_id=None, on_retry=None, tools=None, run_tool=None, brain=None,
-            assistant=None, judge=None, links=None):
+            assistant=None, judge=None, links=None, note=""):
     """One Guide turn.
 
     With `tools` (the specs `guide_tools.session` returns) and
@@ -166,8 +166,10 @@ def respond(conversation, *, client, brand, grounding, image_refs=(),
                                              assistant=assistant)
     from . import assistant_brain
 
+    # `note` (2026-10-03) is the route's one line about THIS turn -- an
+    # element asked for with photos attached (assistant_brain.element_note)
     contents = _contents(conversation, grounding, image_refs,
-                         notes=(assistant_brain.link_note(links),))
+                         notes=(assistant_brain.link_note(links), note))
     if not tools:
         config.response_mime_type = "application/json"
         config.response_json_schema = Answer.model_json_schema()
@@ -332,12 +334,13 @@ def _strict(schema: dict) -> dict:
 
 
 def respond_personal(conversation, *, provider, scope, model, brand, grounding, image_refs=(),
-                     assistant=None, links=None):
+                     assistant=None, links=None, note=""):
     from . import assistant_brain, personal_models
 
     prompt = json.dumps({"grounding": grounding, "conversation": conversation.model_dump(),
                          "reference_images_supplied": len(image_refs),
-                         "pasted_links": assistant_brain.link_note(links)}, default=str)
+                         "pasted_links": assistant_brain.link_note(links),
+                         "studio_note": note}, default=str)
     schema = Answer.model_json_schema()
     if assistant is None:
         # The plain Guide on a personal plan answers the three fields it

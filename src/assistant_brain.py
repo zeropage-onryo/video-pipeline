@@ -681,6 +681,34 @@ def merge_sheets(links: Optional[dict], hunted: Optional[dict]) -> Optional[dict
             "note": "; ".join(n for n in (links.get("note"), hunted.get("note")) if n)}
 
 
+# "Can we create an Element sheet of the sugar free redbull can" -- the ask
+# the whole add_element tool exists for. A model told about the tool in a
+# long system prompt still answers such a turn in words often enough that
+# the first live try can land as a paragraph; this is the one line on the
+# TURN that says what to do, computed by the route off the person's own
+# message and the references it collected (never the model's say-so).
+ELEMENT_ASK = re.compile(
+    r"(?i)\b(?:element sheets?|reference sheets?|turnarounds?|(?:as|into) an element|"
+    r"an element (?:of|for|from)|(?:make|create|save|add|build|turn)\b[^.?!]{0,40}\belement)\b")
+
+
+def element_note(message: str, photos: int) -> str:
+    """The line the model gets when the person asks for an element or a
+    sheet: call add_element now (photos attached), or ask for a photo
+    (none). "" when the message is not that ask."""
+    if not ELEMENT_ASK.search(str(message or "")):
+        return ""
+    if photos > 0:
+        return (f"They are asking for an element / reference sheet and {photos} photo"
+                f"{'' if photos == 1 else 's'} {'is' if photos == 1 else 'are'} attached to this "
+                "turn: call add_element NOW with the kind (product for a thing that is sold), "
+                "the name they used, and notes on what the photos show. Say in `message` what "
+                "you are proposing. Do not describe the element in words instead of calling it.")
+    return ("They are asking for an element / reference sheet but NO photo is attached to this "
+            "turn: do not call add_element. Say an element is made from a real photo and ask "
+            "them to drop one in, or offer find_references for a product by name.")
+
+
 def link_note(links: Optional[dict]) -> str:
     """The ONE line the model is told about the link: how many frames are
     on the sheet, or that the page gave nothing -- never the address.
