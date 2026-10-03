@@ -46,8 +46,10 @@ from typing import Any, Optional
 
 from .db import (
     OWNED_TABLES,
+    PASSWORD_SET_AT_COLUMN,
     add_billing_columns,
     add_manual_lane_operator_column,
+    add_password_set_at_column,
     add_prompt_edits_teach_column,
     add_scout_instagram_column,
     backfill_owner,
@@ -65,7 +67,10 @@ CREATE TABLE IF NOT EXISTS users (
     email         TEXT NOT NULL UNIQUE,
     display_name  TEXT,
     avatar_url    TEXT,
-    claimed_at    TEXT
+    claimed_at    TEXT,
+    -- when this app last set the person's password (src/db.py's
+    -- add_password_set_at_column says what it is for); NULL = not known
+    password_set_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS accounts (
@@ -126,6 +131,7 @@ def init(dsn: Optional[str] = None) -> None:
         add_billing_columns(conn)
         add_prompt_edits_teach_column(conn)
         add_scout_instagram_column(conn)
+        add_password_set_at_column(conn)
 
 
 # --------------------------------------------------------------------------
@@ -180,6 +186,40 @@ def update_profile(user_id: str, display_name: Optional[str] = None,
         )
 
 
+def set_display_name(user_id: str, display_name: Optional[str],
+                     dsn: Optional[str] = None) -> bool:
+    """The settings page's rename (2026-10-03): overwrites, unlike
+    update_profile, because the person typed it. Blank clears it, and
+    the shell falls back to the email's local part as it always has.
+    True when a row was updated."""
+    name = (display_name or "").strip() or None
+    with connect(dsn) as conn:
+        cur = conn.execute("UPDATE users SET display_name = %s WHERE id = %s",
+                           (name, str(user_id)))
+        return bool(cur.rowcount)
+
+
+def mark_password_set(user_id: str, dsn: Optional[str] = None) -> bool:
+    """Stamp users.password_set_at: this app just set, or just verified,
+    a password for the person. True when a row was stamped (a person
+    whose mirror row is not there yet -- a password sign-up with email
+    confirmation on -- is stamped on their first password login)."""
+    with connect(dsn) as conn:
+        if PASSWORD_SET_AT_COLUMN not in columns(conn, "users"):
+            return False
+        cur = conn.execute(
+            f"UPDATE users SET {PASSWORD_SET_AT_COLUMN} = %s WHERE id = %s",
+            (_now(), str(user_id)))
+        return bool(cur.rowcount)
+
+
+def has_password(user_id: str, dsn: Optional[str] = None) -> bool:
+    """Whether this app knows the person has a password (see
+    db.add_password_set_at_column). Unknown reads as False."""
+    user = get_user(user_id, dsn=dsn) or {}
+    return bool(user.get(PASSWORD_SET_AT_COLUMN))
+
+
 def claim(user_id: str, email: Optional[str], display_name: Optional[str] = None,
           avatar_url: Optional[str] = None, *,
           dsn: Optional[str] = None) -> tuple[Optional[str], Optional[str]]:
@@ -204,11 +244,24 @@ def claim(user_id: str, email: Optional[str], display_name: Optional[str] = None
     """
     user_id = str(user_id)
     with connect(dsn) as conn:
-        if conn.execute("SELECT 1 FROM users WHERE id = %s", (user_id,)).fetchone():
+        mine = conn.execute("SELECT email FROM users WHERE id = %s", (user_id,)).fetchone()
+        if mine:
             conn.execute(
                 "UPDATE users SET display_name = COALESCE(display_name, %s), "
                 "avatar_url = COALESCE(%s, avatar_url) WHERE id = %s",
                 (display_name, avatar_url, user_id))
+            # The address changed on Supabase's side (the settings page's
+            # "change email", confirmed from the inbox) -- the mirror
+            # follows the identity, never the other way round. Refused
+            # only when another mirror row already holds the new address
+            # (an invite or a seed that is somebody else's to claim).
+            new_email = (email or "").strip().lower()
+            if new_email and new_email != (mine["email"] or "").lower():
+                taken = conn.execute("SELECT 1 FROM users WHERE email = %s AND id <> %s",
+                                     (new_email, user_id)).fetchone()
+                if not taken:
+                    conn.execute("UPDATE users SET email = %s WHERE id = %s",
+                                 (new_email, user_id))
             return user_id, None
         if not email:
             return None, ("the provider did not return a verified email for this "

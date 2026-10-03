@@ -31,7 +31,7 @@ class CodeGoTrue(FakeGoTrue):
         super().__init__()
         self.sent: dict[str, str] = {}      # email -> code
 
-    def __call__(self, method, path, *, json=None, params=None):
+    def __call__(self, method, path, *, json=None, params=None, token=None):
         if path == "/otp":
             self.calls.append((method, path, json, params))
             email = json["email"]
@@ -49,7 +49,7 @@ class CodeGoTrue(FakeGoTrue):
                              "msg": "Token has expired or is invalid"}
             del self.sent[email]
             return 200, self.session(email)
-        return super().__call__(method, path, json=json, params=params)
+        return super().__call__(method, path, json=json, params=params, token=token)
 
 
 @pytest.fixture
@@ -140,7 +140,13 @@ def test_the_start_page_is_one_door(clean_slate):
     assert "Welcome to Zero Page" in page.text
     assert 'action="/auth/email"' in page.text      # the default email door
     assert 'action="/auth/login"' in page.text      # the password fallback
-    assert 'action="/auth/signup"' not in page.text  # no second form to choose
+    # the password forms (log in, create a password, forgot) are folded
+    # steps of the same column (2026-10-03): present for no-JS, and none
+    # of them open until a link is clicked -- the code door stays the one
+    # the page leads with
+    assert 'action="/auth/signup"' in page.text
+    assert 'action="/auth/forgot"' in page.text
+    assert 'data-open=""' in page.text
     signup_page = client.get("/signin?mode=signup")
     assert "Sign up and start creating" in signup_page.text
     assert 'action="/auth/email"' in signup_page.text

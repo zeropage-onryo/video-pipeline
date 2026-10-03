@@ -1170,3 +1170,27 @@ the `operator` subcommand of `src.accounts` and the
 `manual_lane_operator` column (leave the column; drop the CLI), and
 `tests/test_render_queue.py` / `tests/test_manual_lane.py`. #375, the first
 posted clip, was filed through this lane -- its row must still render.
+
+## 22. Settings: what is NOT built yet  (2026-10-03, with the settings page)
+
+`/studio/settings` does the name, the password (set / change / reset) and
+an email change. Left out on purpose, each a small build when wanted:
+
+- **Sign out everywhere.** GoTrue's `POST /logout?scope=global` revokes
+  ITS sessions, but this app's cookie sessions are not GoTrue's — a
+  global sign-out here means a `users.sessions_valid_from` column that
+  `auth.current_user` checks the cookie's issue time against. One
+  column, one comparison, a button on the settings page.
+- **Delete my account.** Needs the service-role key (`DELETE
+  /auth/v1/admin/users/{id}`) and a decision about the person's rows
+  (their workspace, renders, ledger). Not a button to add casually.
+- **Linked providers** ("you can also sign in with Google"). GoTrue
+  reports `identities` on the user object; the page could list and
+  unlink them. Read-only would be cheap; unlink needs the user token
+  (the same re-proof as a password change gives one).
+- **Workspace settings** (rename the account, its accent, invite a
+  member from the page — `src.accounts invite` is CLI-only). The
+  Workspaces card lists and switches; it does not edit.
+- **Avatar upload.** `users.avatar_url` only ever comes from the OAuth
+  provider.
+

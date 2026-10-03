@@ -366,6 +366,186 @@ def me(request: Request, account_id: int = Depends(auth.current_account_id)):
     }
 
 
+# --- settings: the person's own row and their password --------------------
+# /studio/settings (2026-10-03, Mike: "Supabase didn't send a code or allow
+# a new user to create a password ... we need to build out settings and
+# password change etc"). Everything here is about the signed-in PERSON
+# (the users mirror row, their GoTrue identity), not the account, which
+# is why each route reads auth.current_user; `account_id` stays declared
+# because it is the gate every /api route stands behind.
+#
+# A password write re-proves the person first (app/auth.py: their
+# current password, or a code mailed by POST /me/security/code), takes a
+# one-call session from GoTrue, writes through PUT /user and drops the
+# token. Nothing of Supabase's is stored here.
+
+class ProfileBody(BaseModel):
+    display_name: Optional[str] = None
+
+
+class PasswordBody(BaseModel):
+    password: str
+    password2: Optional[str] = None
+    # exactly one of these proves the person
+    current_password: Optional[str] = None
+    code: Optional[str] = None
+
+
+class EmailChangeBody(BaseModel):
+    email: str
+    current_password: Optional[str] = None
+    code: Optional[str] = None
+
+
+def _refresh_user(request: Request) -> Optional[dict]:
+    """auth.current_user caches the mirror row per request; after a write
+    the answer must be the row as it now is."""
+    user = auth.current_user(request) or {}
+    if user.get("id"):
+        request.state.auth_user = accounts.get_user(user["id"])
+    return request.state.auth_user
+
+
+def _security_card(user: dict) -> dict:
+    return {
+        "email": user.get("email"),
+        # what THIS app knows (db.add_password_set_at_column): unknown
+        # reads as False, and a password login or a change stamps it
+        "has_password": bool(user.get("password_set_at")),
+        "password_set_at": user.get("password_set_at"),
+        # the emailed-code door works only when Supabase is wired; a
+        # password check needs the same, so one flag for both
+        "can_change": auth.configured(),
+        "min_password_len": auth.MIN_PASSWORD_LEN,
+    }
+
+
+def _prove_person(user: dict, current_password: Optional[str],
+                  code: Optional[str]):
+    """A GoTrue session for the signed-in person, minted by the proof
+    they offered: their current password, else a code from their inbox.
+    Returns (session, error_response)."""
+    email = user.get("email") or ""
+    if not email:
+        return None, _error(400, "no_email", "this account has no email on file")
+    if current_password:
+        session = auth.user_session_by_password(email, current_password)
+        if not session:
+            return None, _error(400, "wrong_password", "that password is not right")
+    elif code:
+        session = auth.user_session_by_code(email, code, "recovery")
+        if not session:
+            return None, _error(400, "bad_code",
+                                "that code didn't work -- check it, or send a new one")
+    else:
+        return None, _error(400, "proof_required",
+                            "send your current password, or a code from your email")
+    claims = auth.verify_token(session.get("access_token") or "") or {}
+    if claims.get("sub") != user.get("id"):
+        # a code typed for somebody else's address cannot reach here (the
+        # email is the signed-in person's), but the check costs nothing
+        return None, _error(403, "not_you", "that session is not yours")
+    return session, None
+
+
+@router.patch("/me")
+def me_update(request: Request, body: ProfileBody,
+              account_id: int = Depends(auth.current_account_id)):
+    """Rename yourself. Blank clears the name and the shell falls back
+    to the email's local part, as it always has."""
+    user = auth.current_user(request) or {}
+    fields = body.model_dump(exclude_unset=True)
+    if "display_name" not in fields:
+        return _error(400, "nothing_to_change", "send display_name")
+    name = (fields["display_name"] or "").strip()
+    if len(name) > 80:
+        return _error(400, "too_long", "a name is at most 80 characters")
+    accounts.set_display_name(user["id"], name)
+    _refresh_user(request)
+    return me(request, account_id)
+
+
+@router.get("/me/security")
+def me_security(request: Request, account_id: int = Depends(auth.current_account_id)):
+    user = auth.current_user(request) or {}
+    return _security_card(user)
+
+
+@router.post("/me/security/code")
+def me_security_code(request: Request,
+                     account_id: int = Depends(auth.current_account_id)):
+    """Mail a code to the signed-in person's address, to prove it before
+    a password or email change. No PKCE and no redirect on purpose: the
+    link in that email would land on an origin holding no verifier (the
+    studio reaches this API through its proxy), so the CODE is the thing
+    the settings page asks for."""
+    user = auth.current_user(request) or {}
+    if not auth.configured():
+        return _error(503, "not_configured", "sign-in isn't configured (SUPABASE_URL)")
+    if not user.get("email"):
+        return _error(400, "no_email", "this account has no email on file")
+    if auth._rate_limited(request, "otp"):
+        return _error(429, "rate_limited", "too many codes requested -- wait a minute")
+    error = auth.send_recovery_code(user["email"])
+    if error:
+        return _error(502, "not_sent", error)
+    return {"sent": True, "email": user["email"]}
+
+
+@router.post("/me/password")
+def me_password(request: Request, body: PasswordBody,
+                account_id: int = Depends(auth.current_account_id)):
+    """Set or change the password. The proof is the current password or
+    an emailed code (`_prove_person`); the write is GoTrue's PUT /user."""
+    user = auth.current_user(request) or {}
+    if not auth.configured():
+        return _error(503, "not_configured", "sign-in isn't configured (SUPABASE_URL)")
+    if auth._rate_limited(request, "password"):
+        return _error(429, "rate_limited", "too many attempts -- wait a minute")
+    problem = auth.password_problem(body.password, body.password2)
+    if problem:
+        return _error(400, "weak_password", problem)
+    session, refused = _prove_person(user, body.current_password, body.code)
+    if refused:
+        return refused
+    error = auth.set_user_fields(session["access_token"], {"password": body.password})
+    if error:
+        return _error(502, "not_changed", error)
+    accounts.mark_password_set(user["id"])
+    return {"ok": True, **_security_card(_refresh_user(request) or user)}
+
+
+@router.post("/me/email")
+def me_email(request: Request, body: EmailChangeBody,
+             account_id: int = Depends(auth.current_account_id)):
+    """Ask GoTrue to move the identity to another address. Not done when
+    this returns: Supabase mails a confirmation (to both addresses under
+    its "secure email change" default) and the change lands when it is
+    clicked; the mirror row follows at the next sign-in (accounts.claim).
+    The answer says exactly that."""
+    user = auth.current_user(request) or {}
+    if not auth.configured():
+        return _error(503, "not_configured", "sign-in isn't configured (SUPABASE_URL)")
+    if auth._rate_limited(request, "password"):
+        return _error(429, "rate_limited", "too many attempts -- wait a minute")
+    new_email = body.email.strip().lower()
+    if not auth._valid_email(new_email):
+        return _error(400, "bad_email", "enter a real email address")
+    if new_email == (user.get("email") or "").lower():
+        return _error(400, "same_email", "that is already your address")
+    if accounts.get_user_by_email(new_email):
+        return _error(409, "email_taken", "that address belongs to another account here")
+    session, refused = _prove_person(user, body.current_password, body.code)
+    if refused:
+        return refused
+    error = auth.set_user_fields(session["access_token"], {"email": new_email})
+    if error:
+        return _error(502, "not_changed", error)
+    return {"ok": True, "pending": new_email,
+            "note": ("check the inbox at the new address (and the old one) and "
+                     "confirm the change -- it applies at your next sign-in")}
+
+
 # --- the creative guide -----------------------------------------------------
 # Conversational brief development. It writes NOTHING: no concept, no
 # render, no spend beyond the one model call -- the Create button is
