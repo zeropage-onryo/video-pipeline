@@ -473,8 +473,13 @@ async def creative_guide_reply(request: Request,
     # An element asked for by name (2026-10-03): one line on the turn saying
     # to call add_element now (photos attached) or to ask for a photo (none)
     # -- off the person's own words and the refs THIS route collected.
+    # add_element saves NEW photos of the thing: a pick out of the asset bank
+    # is already an element and never folds into another one, so the card
+    # carries the uploads, bin frames and renders on the turn and the note
+    # counts the same list (with only a pick attached there is NO photo).
     from src import assistant_brain as _brain
-    element_ask = _brain.element_note(conversation.messages[-1].content, len(ref_urls))
+    element_photos = [u for u in ref_urls if _ref_kind(u) not in ("character", "prop", "location")]
+    element_ask = _brain.element_note(conversation.messages[-1].content, len(element_photos))
 
     def work(job):
         # Grounded through scene_chain.ground -- the same scoped set a
@@ -527,7 +532,7 @@ async def creative_guide_reply(request: Request,
         from src import guide_tools
         proposal = reply.get("proposal") if isinstance(reply, dict) else None
         if proposal and proposal.get("tool") == guide_tools.ELEMENT_TOOL:
-            proposal["photos"] = list(ref_urls)
+            proposal["photos"] = list(element_photos)
         # `billing` says WHOSE plan paid: a personal connection spends
         # the person's own ChatGPT/Claude subscription and never touches
         # this install's Gemini credit, and /costs must not count it.
@@ -1335,6 +1340,11 @@ async def _save_location(name: str, *, images, photo_urls, notes: str,
     Guide's `add_element` card saves a place through here too
     (2026-10-03), with the composer's photos as `photo_urls`."""
     slug = _slug(name)
+    # the modal's guard, in the shared body so EVERY caller has it (the
+    # review of 2026-10-03 found the Guide's door saving a name with no
+    # letters or digits -- "红牛", "???" -- into the kind folder's ROOT)
+    if not slug:
+        return _error(400, "invalid_name", "a space needs a name with letters or digits in it")
     space_dir = LOCATIONS_DIR / slug
     space_dir.mkdir(parents=True, exist_ok=True)
     saved = []
@@ -1409,6 +1419,8 @@ async def _save_element(kind: str, name: str, *, field: str, notes: str,
     base_dir = CHARACTERS_DIR if kind == "character" else PROPS_DIR
     label = "role" if kind == "character" else "category"
     slug = _slug(name)
+    if not slug:            # see _save_location: the guard lives in the shared body
+        return _error(400, "invalid_name", "an element needs a name with letters or digits in it")
     ref, count = await _save_uploaded_photos(base_dir, slug, photos, account_id,
                                              photo_urls=photo_urls)
     if require_photos and not count:
@@ -2017,6 +2029,19 @@ def _photo_bytes(url: str) -> Optional[bytes]:
         from src import imagery
         return imagery.fetch_image_bytes(url)
     return None
+
+
+def _ref_kind(url: str) -> Optional[str]:
+    """What a reference URL points at, by asset_shelf.parse_ref -- read
+    again with a tenant prefix (`m/<account>/`) stripped, since a public
+    R2 URL of an asset photo carries one and the parser reads the flat
+    shapes. None for a bin frame's URL that is not an asset, a render, a
+    data: URI."""
+    parsed = asset_shelf.parse_ref(url)
+    if parsed is None:
+        stripped = re.sub(r"^(?:https?://[^/]+)?/?m/[^/]+/", "/", str(url or "").split("?")[0])
+        parsed = asset_shelf.parse_ref(stripped) if stripped != url else None
+    return (parsed or {}).get("kind")
 
 
 async def _collect_refs(form, want_video: bool = False, drop_urls=None):

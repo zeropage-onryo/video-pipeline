@@ -241,8 +241,19 @@ def _respond_with_tools(client, brain, config, contents, tools, run_tool, *,
         for fc in calls:
             name, args = fc.name, dict(fc.args or {})
             if guide_tools.is_write(name):
+                try:
+                    checked = guide_tools.check_args(name, args)
+                except guide_tools.Refused as exc:
+                    # A write the bridge will not make -- a URL in an argument,
+                    # a kind off the list -- goes back to the model as the
+                    # tool's answer, so it can fix the arguments or answer in
+                    # words. Raising here failed the whole turn (2026-10-03).
+                    runs.append({"tool": name, "args": args, "ok": False})
+                    parts.append(types.Part.from_function_response(
+                        name=name, response={"result": f"refused: {exc}"}))
+                    continue
                 # The turn ends on the FIRST write: the card is the answer.
-                proposal = {"tool": name, "args": guide_tools.check_args(name, args),
+                proposal = {"tool": name, "args": checked,
                             "label": guide_tools.WRITE_LABELS.get(name, name)}
                 break
             if len(runs) >= MAX_TOOL_CALLS:

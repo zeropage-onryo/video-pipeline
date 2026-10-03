@@ -800,3 +800,56 @@
     max-height: calc(100vh - 160px - 150px);
   }
 }
+
+/* the Guide's confirm card in the pill (2026-10-03): the same write the
+   Studio box draws, so an element asked for on any page can be confirmed */
+.zpa-card {
+  margin: 8px 0 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.zpa-card.decided {
+  opacity: 0.65;
+}
+.zpa-card > b {
+  font-size: 12.5px;
+}
+.zpa-card ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+}
+.zpa-card li {
+  display: flex;
+  gap: 10px;
+}
+.zpa-card li span {
+  flex: none;
+  width: 52px;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dimmer);
+  padding-top: 2px;
+}
+.zpa-card-photos {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.zpa-card-photos img {
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+}

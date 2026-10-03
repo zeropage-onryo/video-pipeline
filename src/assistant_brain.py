@@ -687,9 +687,16 @@ def merge_sheets(links: Optional[dict], hunted: Optional[dict]) -> Optional[dict
 # the first live try can land as a paragraph; this is the one line on the
 # TURN that says what to do, computed by the route off the person's own
 # message and the references it collected (never the model's say-so).
+# "an element of surprise", "build an element of danger into shot 2" are
+# ordinary ad talk and must NOT nudge: the review of 2026-10-03 caught the
+# first pattern hijacking such turns into a card. The idiom "element of /
+# for / from" is excluded everywhere it can appear.
 ELEMENT_ASK = re.compile(
-    r"(?i)\b(?:element sheets?|reference sheets?|turnarounds?|(?:as|into) an element|"
-    r"an element (?:of|for|from)|(?:make|create|save|add|build|turn)\b[^.?!]{0,40}\belement)\b")
+    r"(?i)\b(?:element sheets?|reference sheets?|(?:character|product|prop|location) sheets?|"
+    r"turnarounds?|(?:as|into) an element\b(?!\s+(?:of|for|from)\b)|"
+    r"(?:to|in) (?:my |the |our )?elements\b|"
+    r"(?:make|create|save|add|build|turn)\b[^.?!]{0,40}\b(?:an element|elements)\b"
+    r"(?!\s+(?:of|for|from)\b))")
 
 
 def element_note(message: str, photos: int) -> str:

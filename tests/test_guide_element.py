@@ -121,6 +121,14 @@ def test_the_ask_becomes_a_proposal_and_nothing_is_saved(monkeypatch):
     ("Can we create an Element sheet of the can", 0, "NO photo is attached"),
     ("a bartender closes the bar at 2am", 3, ""),
     ("the element of surprise", 1, ""),
+    ("Add an element of surprise at the end, the can cracks open on the beat", 1, ""),
+    ("Let's build an element of danger into shot 2", 1, ""),
+    ("Keep the pour as an element of the opening shot", 1, ""),
+    ("I'd like an element of humour for the audience", 1, ""),
+    ("the strongest element here is the hiss", 1, ""),
+    ("Add this can to my elements", 1, "call add_element NOW"),
+    ("make a character sheet of Michael", 1, "call add_element NOW"),
+    ("save the kitchen as an element", 2, "2 photos are attached"),
     ("", 1, ""),
 ])
 def test_element_note_reads_the_ask_and_the_photos(message, photos, expect):
@@ -212,6 +220,40 @@ def test_the_turn_puts_the_attached_photos_on_the_card(client, monkeypatch):
     job = _wait(client, r.json()["job_id"])
     assert job["status"] == "done", job
     assert job["reply"]["proposal"]["photos"] == ["/refs/abc.jpg"]
+
+
+def test_a_pick_out_of_the_asset_bank_is_never_folded_into_a_new_element(client, monkeypatch):
+    """The card saves NEW photos of the thing: Michael's face picked out of
+    Elements must not become the can's photo, and with only a pick attached
+    the note says there is NO photo (the review of 2026-10-03)."""
+    monkeypatch.setattr(api, "_gemini_key", lambda a=None: "k")
+
+    async def refs(form, **kwargs):
+        return [], ["/characters/michael/photo/a.jpg", "/refs/abc.jpg",
+                    "https://pub-x.r2.dev/m/1/props/ducati/b.jpg", "/renders/nano/still.png"], []
+
+    monkeypatch.setattr(api, "_collect_refs", refs)
+    monkeypatch.setattr(scene_chain, "ground", lambda *a, **k: {})
+    monkeypatch.setattr(api, "_guide_tools", lambda account_id, **k: ([], None))
+    seen = {}
+    monkeypatch.setattr(creative_guide, "respond", lambda conversation, **kw: seen.update(kw) or {
+        "message": "ok", "proposal": {"tool": "add_element", "args": {"kind": "product", "name": "Can"},
+                                      "label": "x", "photos": []}})
+    r = client.post("/api/creative-guide", data={
+        "conversation": json.dumps({"messages": [{"role": "user", "content": "make the can an element"}]})})
+    job = _wait(client, r.json()["job_id"])
+    assert job["reply"]["proposal"]["photos"] == ["/refs/abc.jpg", "/renders/nano/still.png"]
+    assert "2 photos are attached" in seen["note"]
+
+    async def only_a_pick(form, **kwargs):
+        return [], ["/characters/michael/photo/a.jpg"], []
+
+    monkeypatch.setattr(api, "_collect_refs", only_a_pick)
+    r = client.post("/api/creative-guide", data={
+        "conversation": json.dumps({"messages": [{"role": "user", "content": "make the can an element"}]})})
+    job = _wait(client, r.json()["job_id"])
+    assert job["reply"]["proposal"]["photos"] == []
+    assert "NO photo is attached" in seen["note"]
 
 
 def test_other_proposals_are_not_stamped(client, monkeypatch):
@@ -316,6 +358,25 @@ def test_no_readable_photo_means_no_element(client, element_world, tmp_db, photo
     assert r.status_code == 400 and r.json()["error"]["code"] == "no_photos"
     assert entities.list_props(tmp_db, account_id=None) == []
     assert element_world["drawn"] == []
+
+
+@pytest.mark.parametrize("kind, name", [("product", "红牛"), ("character", "???"), ("place", "レッドブル")])
+def test_a_name_with_no_letters_or_digits_saves_nothing_anywhere(client, element_world, tmp_db, tmp_path,
+                                                                   kind, name):
+    """The modal refused these as invalid_name; the Guide's door used to
+    save them against the kind folder's ROOT (slug "") -- photos and a
+    billed sheet in props/ itself, a row keyed to "", the next such
+    element inheriting the previous one's files. The guard lives in the
+    shared bodies now, so every caller has it."""
+    r = _act(client, {"kind": kind, "name": name}, ["/refs/can.jpg"])
+    assert r.status_code == 400 and r.json()["error"]["code"] == "invalid_name"
+    assert entities.list_props(tmp_db, account_id=None) == []
+    assert entities.list_characters(tmp_db, account_id=None) == []
+    assert preprod.list_locations(tmp_db, account_id=None) == []
+    for folder in ("props", "characters", "locations"):
+        root = tmp_path / folder
+        assert not root.exists() or not [f for f in root.iterdir() if f.is_file()]
+    assert element_world["drawn"] == [] and element_world["vision"] == []
 
 
 def test_the_click_still_refuses_a_url_in_the_args(client, element_world, tmp_db):

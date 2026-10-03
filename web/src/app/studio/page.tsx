@@ -308,7 +308,10 @@ function Composer() {
   // against the project's brief + memory and filed under it.
   const projectParam = params.get("project");
   const [project, setProject] = useState<Project | null>(null);
-  const [caps, setCaps] = useState<Capabilities>({});
+  // null until /api/capabilities answers (or when it cannot): unknown lets
+  // the route answer for itself, which 503s "GEMINI_API_KEY not set" in
+  // its own words; only a server that SAID no blocks a send here
+  const [caps, setCaps] = useState<Capabilities | null>(null);
   const [assets, setAssets] = useState<Asset[]>([]);
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
@@ -362,7 +365,7 @@ function Composer() {
   );
 
   useEffect(() => {
-    getCapabilities().then(setCaps).catch(() => setCaps({}));
+    getCapabilities().then(setCaps).catch(() => setCaps(null));
     getPresets()
       .then((r) => setPresets(r.items))
       .catch(() => setPresets([]));
@@ -443,7 +446,7 @@ function Composer() {
 
   // the Guide answers every send; without the route (no Gemini key) the
   // box says so rather than 404ing on Enter
-  const guideReady = caps.creative_guide === true;
+  const guideReady = caps === null || caps.creative_guide === true;
 
   // the slash menu: the fixed commands plus GET /api/presets as camera chips
   const commands = useMemo<SlashCommand[]>(
@@ -820,8 +823,14 @@ function Composer() {
      Draw a still make a turn of their own (make); Director and Queue go
      to the last scene written here. Send to Queue PICKS -- approving in
      Queue is still the one click that spends. */
-  async function handoff(what: Handoff) {
+  async function handoff(what: Handoff, text = handoffText) {
     if (busy) return;
+    // an upload still on its way to the bin would be left out of the scene,
+    // and the scene would then be archived for having no reference
+    if (pending.length && (what === "scene" || what === "still")) {
+      toast("Wait for the upload to land first — it would be left out of the scene", "err");
+      return;
+    }
     if (what === "director") {
       if (lastScene?.conceptId) router.push(`/studio/flows?concept=${lastScene.conceptId}&shot=${lastScene.shot ?? 1}`);
       return;
@@ -837,11 +846,11 @@ function Composer() {
         router.push("/studio/queue");
         return;
       }
-      if (!handoffText) {
+      if (!text) {
         toast("Nothing to write yet — say what the scene is first", "err");
         return;
       }
-      await make(what === "still" ? "image" : "video", handoffText, !!brief.trim());
+      await make(what === "still" ? "image" : "video", text, !!brief.trim() && text === brief.trim());
     } catch (e) {
       const r = running.current;
       if (r && !r.stopped) {
@@ -890,7 +899,9 @@ function Composer() {
     setIdea("");
     setSlashAt(0);
     if (c.id === "scene" || c.id === "still") {
-      void handoff(c.id);
+      // the box holds only the slash the menu matched on; the brief is
+      // the one thing there is to write from (never "/st" as a prompt)
+      void handoff(c.id, brief.trim());
       return;
     } else if (c.id === "animate") {
       const lastImage = [...thread].reverse().find((t) => t.made?.output === "image" && t.made.status === "done" && t.made.image);
@@ -1343,7 +1354,12 @@ function Composer() {
                   Brief from the guide · editable · Ready writes from this, not from the box
                 </span>
                 <textarea value={brief} onChange={(e) => setBrief(e.target.value)} rows={5} />
-                <button type="button" className="pill chosen cbrief-go" disabled={busy} onClick={() => void handoff("scene")}>
+                <button
+                  type="button"
+                  className="pill chosen cbrief-go"
+                  disabled={busy || !!pending.length}
+                  onClick={() => void handoff("scene")}
+                >
                   <ListVideo strokeWidth={1.6} />
                   Write the scene
                 </button>

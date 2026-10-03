@@ -1854,7 +1854,18 @@ is yours, in Resolve, by hand.
   needs. `prompts/creative_guide_tools.txt` tells the model the rules (no photo
   attached: ask for one, never call it), and `creative_guide.txt` now treats a
   commercial or spec ad as product first, then idea / audience / format / end card,
-  brief as timed shots. `tests/test_guide_element.py`.
+  brief as timed shots. `tests/test_guide_element.py`. **Reviewed adversarially before
+  the PR (same day, 16 agents, 8 findings confirmed and fixed):** the `invalid_name`
+  guard lives in the shared `_save_element` / `_save_location` bodies (the Guide's door
+  had saved "红牛" into the props folder ROOT); the card carries only NEW photos --
+  uploads, bin frames, renders -- never a pick out of the asset bank (`api._ref_kind`,
+  reading a tenant-prefixed R2 URL too), and the note counts that same list; the
+  nudge regex excludes "an element of surprise"-style ad talk; a write the bridge
+  refuses (a URL, a kind off the list) goes back to the model as the tool's answer
+  instead of failing the turn; `/scene` and `/still` write from the brief, never the
+  slash text; every hand-off waits for a pending upload; an unknown capabilities fetch
+  lets the route answer rather than blocking the box; and the assistant pill draws the
+  same confirm card (`decide` in `assistant-pill.tsx`), since the thread is shared.
 - **`src/refbin.py`** — one owner for `data/refs`, both directions: the content-addressed name,
   the JPEG normalisation (EXIF transpose BEFORE `convert("RGB")`, HEIC when `pillow-heif` is
   present), `save`, `fetch` (bounded download for scouted images) and `resolve`. It exists
