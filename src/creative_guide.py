@@ -120,9 +120,21 @@ def _contents(conversation, grounding, image_refs, notes=()):
 DEFAULT_BRAIN = "fast"
 
 
+# What the composer's Image | Video switch means to the model (2026-10-04).
+# One line per output, appended to the person's last message beside the
+# reference count -- the switch is the person's, and the model is told
+# which thing a "make it" would make rather than asked to guess.
+OUTPUT_NOTES = {
+    "image": ("The composer is switched to IMAGE: a 'make it' means ONE still, "
+              "through make_image. Talk in frames, not scenes."),
+    "video": ("The composer is switched to VIDEO: a 'make it' means ONE written "
+              "scene in timed shots, through make_video."),
+}
+
+
 def respond(conversation, *, client, brand, grounding, image_refs=(),
             account_id=None, on_retry=None, tools=None, run_tool=None, brain=None,
-            assistant=None, judge=None, links=None):
+            assistant=None, judge=None, links=None, output=None):
     """One Guide turn.
 
     With `tools` (the specs `guide_tools.session` returns) and
@@ -151,6 +163,13 @@ def respond(conversation, *, client, brand, grounding, image_refs=(),
     found this turn, and the model is handed one line saying they are
     there (`assistant_brain.link_note`) -- never the address. Without it,
     nothing changes.
+
+    `output` (2026-10-04) is the composer's Image | Video switch. With it,
+    the instructions carry the maker block (prompts/creative_guide_make.txt)
+    and the last message says which output a "make it" would make; the
+    tools handed in by the route then include make_image / make_video
+    (guide_tools.MAKE_SPECS). Without it -- the pill, every older caller --
+    the turn is byte for byte what it was.
     """
     brain = gemini_utils.resolve_brain(brain or DEFAULT_BRAIN)
     # The fast tier's config is None on purpose (its request is the one
@@ -159,11 +178,12 @@ def respond(conversation, *, client, brand, grounding, image_refs=(),
     config = (brain["config"].model_copy(deep=True) if brain["config"] is not None
               else types.GenerateContentConfig())
     config.system_instruction = instructions(brand, with_tools=bool(tools),
-                                             assistant=assistant)
+                                             assistant=assistant, maker=bool(output))
     from . import assistant_brain
 
     contents = _contents(conversation, grounding, image_refs,
-                         notes=(assistant_brain.link_note(links),))
+                         notes=(assistant_brain.link_note(links),
+                                OUTPUT_NOTES.get(output or "", "")))
     if not tools:
         config.response_mime_type = "application/json"
         config.response_json_schema = Answer.model_json_schema()
@@ -294,11 +314,13 @@ def _parse_reply(text: str):
         return None
 
 
-def instructions(brand, with_tools: bool = False, assistant=None):
+def instructions(brand, with_tools: bool = False, assistant=None, maker: bool = False):
     root = Path(__file__).resolve().parent.parent
     text = (root / "prompts/creative_guide.txt").read_text()
     if with_tools:
         text += "\n\n" + (root / "prompts/creative_guide_tools.txt").read_text()
+    if maker:
+        text += "\n\n" + (root / "prompts/creative_guide_make.txt").read_text()
     if assistant is not None:
         from . import assistant_brain
         text += "\n\n" + assistant_brain.instructions(
@@ -328,12 +350,16 @@ def _strict(schema: dict) -> dict:
 
 
 def respond_personal(conversation, *, provider, scope, model, brand, grounding, image_refs=(),
-                     assistant=None, links=None):
+                     assistant=None, links=None, output=None):
     from . import assistant_brain, personal_models
 
+    # A personal connection has no tools, so it cannot make; it is told
+    # which output the composer is set to and talks toward it. The brief
+    # it writes is what the composer's "Make this" button makes from.
     prompt = json.dumps({"grounding": grounding, "conversation": conversation.model_dump(),
                          "reference_images_supplied": len(image_refs),
-                         "pasted_links": assistant_brain.link_note(links)}, default=str)
+                         "pasted_links": assistant_brain.link_note(links),
+                         "composer_output": OUTPUT_NOTES.get(output or "", "")}, default=str)
     schema = Answer.model_json_schema()
     if assistant is None:
         # The plain Guide on a personal plan answers the three fields it

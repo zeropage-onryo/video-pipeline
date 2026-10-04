@@ -26,9 +26,11 @@ What these actually guard:
   its own tool name with a key_source, instead of parking as "no adapter
   wired" -- and a retired RUNWAY / HIGGSFIELD shot renders on fal's default.
 """
+import json
+
 import pytest
 
-from src import fal, generative
+from src import db, fal, generative, preprod
 
 
 @pytest.fixture
@@ -684,3 +686,107 @@ def test_an_http_error_carries_fals_reason(monkeypatch):
         fal._request("https://queue.fal.run/x")
     assert "422" in str(err.value) and "Input should be 6, 8 or 10" in str(err.value)
     assert "fal-secret-key" not in fal._safe_error(err.value)
+
+
+# ---------- the image models (2026-10-04) ----------
+# The composer picks a model off fal.IMAGE_MODELS; each is priced on its
+# own terms, takes the frame in its own shape, and is handed references
+# only when it has an edit endpoint.
+
+def test_every_image_model_is_dated_sourced_and_priced():
+    for name, spec in fal.IMAGE_MODELS.items():
+        assert spec["label"] and spec["note"] and spec["endpoint"], name
+        assert spec["checked"] and spec["source"].startswith("https://fal.ai/models/"), name
+        assert ("usd_per_image" in spec) ^ ("usd_per_megapixel" in spec), name
+        assert spec["size"] in ("wh", "aspect", "enum"), name
+        assert fal.image_usd(name) > 0
+    opts = fal.image_options()
+    assert [o["id"] for o in opts] == list(fal.IMAGE_MODELS)
+    assert all(o["usd"] == fal.image_usd(o["id"]) for o in opts)
+
+
+def test_image_usd_prices_megapixels_rounded_up_and_per_image_models_flat():
+    assert fal.image_usd("flux-pro1.1", "1:1") == 0.04          # 1024x1024 = 1MP
+    assert all(fal.image_usd("flux-pro1.1", a) == 0.04 for a in fal.IMAGE_SIZES)  # every frame ~1MP
+    assert fal.megapixels(1024, 1024) == 1 and fal.megapixels(1025, 1024) == 2
+    assert fal.megapixels(2048, 2048) == 4
+    assert fal.image_usd("seedream4", "21:9") == fal.image_usd("seedream4", "1:1")
+    with pytest.raises(ValueError):
+        fal.image_usd("dall-e")
+
+
+def test_references_go_to_the_edit_endpoint_only_where_one_exists():
+    refs = ["https://r2.example/a.jpg", "/refs/local.jpg", "https://r2.example/b.jpg"]
+    endpoint, body, used = fal.image_request("flux2-pro", "a can", aspect="4:5",
+                                             reference_urls=refs)
+    assert endpoint == fal.IMAGE_MODELS["flux2-pro"]["edit"]
+    assert body["image_urls"] == ["https://r2.example/a.jpg", "https://r2.example/b.jpg"]
+    assert used == 2 and body["image_size"] == {"width": 912, "height": 1136}
+    # a text-only model draws from the prompt and says so with used == 0
+    endpoint, body, used = fal.image_request("flux-pro1.1", "a can", aspect="4:5",
+                                             reference_urls=refs)
+    assert endpoint == "fal-ai/flux-pro/v1.1" and "image_urls" not in body and used == 0
+    assert (body["width"], body["height"]) == (912, 1136)
+    # the two other frame shapes
+    assert fal.image_request("nano-banana-pro", "x", aspect="9:16")[1]["aspect_ratio"] == "9:16"
+    assert fal.image_request("ideogram3", "x", aspect="16:9")[1]["image_size"] == "landscape_16_9"
+    assert fal.image_request("ideogram3", "x", aspect="7:5")[1]["image_size"] == "square_hd"
+
+
+def test_a_composer_still_is_charged_held_settled_and_banked(tmp_db, approved, keys,
+                                                              fake_download, monkeypatch):
+    from src import accounts, ledger, pricing, render_assets
+    preprod.init(tmp_db)
+    accounts.seed("mike@example.com", dsn=tmp_db)
+    ledger.init(tmp_db)
+    with db.connect(tmp_db) as conn:
+        account_id = int(conn.execute(
+            "SELECT id FROM accounts WHERE slug = 'zeropage'").fetchone()["id"])
+    ledger.grant(account_id, 1000, "purchase", dsn=tmp_db)
+    http = FakeHttp(result={"images": [{"url": "https://v3.fal.media/i.png"}]})
+    result = fal.generate_image_from_prompt(
+        "a can on steel", db_path=tmp_db, http=http, model="seedream4", aspect="4:5",
+        reference_urls=["https://r2.example/can.jpg"], account_id=account_id)
+    assert result["ok"] is True, result["error"]
+    assert result["references"] == 1
+    url, body = http.calls[0]
+    assert url.endswith(fal.IMAGE_MODELS["seedream4"]["edit"])
+    assert body["image_urls"] == ["https://r2.example/can.jpg"]
+    expected = pricing.credits_for(pricing.usd_micros(fal.image_usd("seedream4", "4:5")))
+    assert result["credits"] == expected
+    spent = -sum(e["delta"] for e in ledger.entries(account_id, tmp_db) if e["kind"] != "grant")
+    assert spent == expected
+    assert ledger.outstanding(account_id, tmp_db) == 0
+    with generative.connect(tmp_db) as conn:
+        row = conn.execute("SELECT tool, cost_usd, params_json FROM generations").fetchone()
+    assert row["tool"] == "fal"
+    assert float(row["cost_usd"]) == fal.image_usd("seedream4", "4:5")
+    params = json.loads(row["params_json"])
+    assert params["model"] == "seedream4" and params["references"] == 1
+    assert params["aspect"] == "4:5" and "ledger_ref" in params
+    wall = render_assets.list_all(tmp_db, account_id=account_id)
+    assert [a["model"] for a in wall] == ["seedream4"]
+
+
+def test_a_failed_fal_still_releases_its_hold(tmp_db, approved, keys, monkeypatch):
+    from src import accounts, ledger
+    preprod.init(tmp_db)
+    accounts.seed("mike@example.com", dsn=tmp_db)
+    ledger.init(tmp_db)
+    with db.connect(tmp_db) as conn:
+        account_id = int(conn.execute(
+            "SELECT id FROM accounts WHERE slug = 'zeropage'").fetchone()["id"])
+    ledger.grant(account_id, 1000, "purchase", dsn=tmp_db)
+    http = FakeHttp(status_error={"error": "boom", "error_type": "ValidationError"})
+    result = fal.generate_image_from_prompt("a can", db_path=tmp_db, http=http,
+                                            model="flux2-pro", account_id=account_id)
+    assert result["ok"] is False and "boom" in result["error"]
+    assert ledger.outstanding(account_id, tmp_db) == 0
+    assert ledger.available(account_id, tmp_db) == 1000
+
+
+def test_an_unknown_image_model_is_refused_before_any_call(tmp_db, approved, keys):
+    http = FakeHttp()
+    result = fal.generate_image_from_prompt("a can", db_path=tmp_db, http=http, model="dall-e")
+    assert result["ok"] is False and "image model" in result["error"]
+    assert http.calls == []

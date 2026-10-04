@@ -9,11 +9,14 @@
    when one has been drawn and its number otherwise, never fake footage;
    a tile with a clip (rendered later, read back here) gets the play mark.
    The Guide's turns are the same stream: the person's words on the
-   right, the answer on the left with its chips, sheet and confirm card. */
+   right, the answer on the left with its chips, sheet and confirm card.
+   Since 2026-10-04 every send IS a Guide turn, and when the brain makes
+   (make_image / make_video) its one-line answer carries `made`: the line
+   on the left, the tiles under it. A make proposal is never a card. */
 import Link from "next/link";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { Clapperboard, Film, ImagePlus, Play, RotateCcw, Workflow } from "lucide-react";
-import { cssAspect, madeMeta, mediaSrc, type Made } from "@/lib/composer";
+import { cssAspect, isMake, madeMeta, mediaSrc, type Made } from "@/lib/composer";
 import type { ContactSheet, Turn } from "@/lib/assistant";
 import { ContactSheetView } from "@/components/studio/contact-sheet";
 
@@ -23,6 +26,8 @@ export type Live = { progress: number; detail: string };
 
 type Handlers = {
   busy: boolean;
+  /** an /image-models id -> its label, for the meta line */
+  modelLabel: (id?: string) => string | undefined;
   onAnimate: (m: Made) => void;
   onUseAsRef: (m: Made) => void;
   onReuse: (t: Turn) => void;
@@ -33,7 +38,7 @@ type Handlers = {
   onKeep: (i: number, sheet: ContactSheet) => void;
 };
 
-function Meta({ m, live }: { m: Made; live?: Live }) {
+function Meta({ m, live, h }: { m: Made; live?: Live; h: Handlers }) {
   if (m.status === "running") {
     return (
       <div className="zc-meta">
@@ -44,7 +49,7 @@ function Meta({ m, live }: { m: Made; live?: Live }) {
   }
   if (m.status === "failed") return <div className="zc-meta bad">{m.detail || "That one did not finish."}</div>;
   if (m.status === "stopped") return <div className="zc-meta">Stopped</div>;
-  return <div className="zc-meta">{madeMeta(m)}</div>;
+  return <div className="zc-meta">{madeMeta(m, h.modelLabel(m.model))}</div>;
 }
 
 /* one plate with the percentage and the red bar, while a send runs */
@@ -148,7 +153,7 @@ function MadeView({ m, live, h, turn }: { m: Made; live?: Live; h: Handlers; tur
 
   return (
     <>
-      <Meta m={m} live={live} />
+      <Meta m={m} live={live} h={h} />
       {body}
       {m.status === "done" ? (
         <div className="zc-actions">
@@ -248,7 +253,7 @@ export function ComposerStream({
                     onKeep={(sh) => handlers.onKeep(i, sh)}
                   />
                 ) : null}
-                {t.reply?.proposal ? (
+                {t.reply?.proposal && !isMake(t.reply.proposal.tool) ? (
                   <div className={`ccard${t.decided ? ` ${t.decided}` : ""}`}>
                     <b>{t.reply.proposal.label}</b>
                     <dl>

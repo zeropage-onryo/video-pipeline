@@ -175,21 +175,20 @@ export type Turn = {
 
 /* The composer's box, saved beside the thread so leaving the page keeps
    it: the idea, the guide's brief, references (picks by URL, uploads by
-   the bin URL they were saved under), the mode, the "scene written" card.
+   the bin URL they were saved under), the "scene written" card.
    Mirrors src/assistant_store._clean_draft -- the server bounds every
-   field and answers this exact shape. */
+   field and answers this exact shape (it still stores a `mode` older
+   drafts wrote; nothing reads it since 2026-10-04 -- there is no Guide
+   toggle, every send is the brain's). */
 export type UploadRef = { url: string; name: string };
 export type ComposerDraft = {
   idea: string;
   brief: string;
-  mode: "guide" | "create";
   picked: string[];
   uploads: UploadRef[];
   written: { conceptId: number | null; detail: string } | null;
 };
-/* Create is the default (2026-10-02, the composer mock): the box makes;
-   the Guide is a toggle beside Image | Video. */
-export const EMPTY_DRAFT: ComposerDraft = { idea: "", brief: "", mode: "create", picked: [], uploads: [], written: null };
+export const EMPTY_DRAFT: ComposerDraft = { idea: "", brief: "", picked: [], uploads: [], written: null };
 export const draftHasContent = (d: ComposerDraft | null | undefined) =>
   !!d && !!(d.idea.trim() || d.brief.trim() || d.picked.length || d.uploads.length || d.written);
 /* whatever came back, in the shape the page can trust */
@@ -198,7 +197,6 @@ export function asDraft(raw: unknown): ComposerDraft {
   return {
     idea: typeof d.idea === "string" ? d.idea : "",
     brief: typeof d.brief === "string" ? d.brief : "",
-    mode: d.mode === "guide" ? "guide" : "create",
     picked: Array.isArray(d.picked) ? d.picked.filter((u): u is string => typeof u === "string") : [],
     uploads: Array.isArray(d.uploads)
       ? d.uploads.filter((u): u is UploadRef => !!u && typeof u === "object" && typeof (u as UploadRef).url === "string")

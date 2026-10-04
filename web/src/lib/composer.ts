@@ -1,17 +1,28 @@
 /* The studio composer's model (2026-10-02, the "Direction A" redesign,
    drawn to the "ZPF Composer Directions" mock the same day).
 
-   The box makes two kinds of thing, and they go through two routes that
-   already existed before the redesign:
+   EVERY SEND GOES TO THE BRAIN FIRST (2026-10-04, Mike: "it is all in one
+   place where you can toggle between image and video that are connected
+   to the reasoning/brain"). There is no Guide toggle: a send is a Guide
+   turn (POST /api/creative-guide with `output`), and the model decides
+   whether the person is talking an idea through (it answers, with chips
+   and a brief) or asking for the thing, in which case it calls
+   make_image / make_video with the prompt it wrote and the page runs
+   that at once, through the two routes that already existed:
 
    - VIDEO  -> POST /api/scenes/run  (Create): writes ONE scene, timed
      shots and all, and stops on the board. No clip is rendered here --
      the Queue is where money is spent, so the result is a written scene
      drawn as its shots, with links to Pipeline and Director, never a
      fake take grid.
-   - IMAGE  -> POST /api/generate/run with output=image: one Nano Banana
-     still, saved as a one-shot concept whose shot carries the image as
-     its reference_image (so it opens in Director like anything else).
+   - IMAGE  -> POST /api/generate/run with output=image and the picked
+     `image_model` (GET /api/image-models: Nano Banana on the Gemini key,
+     or one of fal's image models): one still, saved as a one-shot
+     concept whose shot carries the image as its reference_image (so it
+     opens in Director like anything else).
+
+   Without the guide (no Gemini key: capabilities.creative_guide false) a
+   send makes directly, which is what every send did before.
 
    ONE output per send. There is no take/count control on purpose
    (2026-09-10, server-enforced as SCENE_COUNT_MAX = 1).
@@ -26,6 +37,12 @@ import { API_URL } from "@/lib/api";
 import { getJob, type Job, type TimelinePart } from "@/lib/studio-api";
 
 export type Output = "image" | "video";
+
+/* The Guide's make tools (src/guide_tools.MAKE_TOOLS): a proposal naming
+   one is run by the page the moment it arrives, never drawn as a confirm
+   card -- the send was the ask. */
+export const MAKE_TOOLS: Record<string, Output> = { make_image: "image", make_video: "video" };
+export const isMake = (tool?: string | null) => !!tool && tool in MAKE_TOOLS;
 
 /* Aspect ratios a Nano Banana still can be drawn at. The API keeps its
    own allowlist (app/api.py GENERATE_ASPECTS); an id it does not know
@@ -61,6 +78,11 @@ export type Made = {
   frame?: string;
   /** the shot (or image) the person selected; Director opens on it */
   shot?: number;
+  /** the prompt the thing was made from -- the brain's, when it made it;
+   *  what Reuse prompt puts back in the box */
+  prompt?: string;
+  /** IMAGE: which model drew it (an /image-models id) */
+  model?: string;
 };
 
 export const newMadeId = () =>
@@ -90,9 +112,8 @@ export type SlashCommand = {
 };
 
 export const BASE_COMMANDS: SlashCommand[] = [
-  { id: "image", cmd: "image", desc: "Make a still", group: "make" },
-  { id: "video", cmd: "video", desc: "Write a video scene", group: "make" },
-  { id: "guide", cmd: "guide", desc: "Talk the idea through first", group: "make" },
+  { id: "image", cmd: "image", desc: "Make stills", group: "make" },
+  { id: "video", cmd: "video", desc: "Write video scenes", group: "make" },
   { id: "animate", cmd: "animate", desc: "Turn the last image into a shot", group: "use", needsImage: true },
   { id: "ref", cmd: "ref", desc: "Attach a reference image", group: "use" },
   { id: "element", cmd: "element", desc: "Reference a saved element (@)", group: "use" },
@@ -134,6 +155,23 @@ export function saveOutput(o: Output) {
   }
 }
 
+/* which image model draws, remembered the same way; "" = the server's default */
+const IMAGE_MODEL_KEY = "zpf:composer:image-model";
+export function loadImageModel(): string {
+  try {
+    return localStorage.getItem(IMAGE_MODEL_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+export function saveImageModel(id: string) {
+  try {
+    localStorage.setItem(IMAGE_MODEL_KEY, id);
+  } catch {
+    /* fine */
+  }
+}
+
 /* waitForJob without the abort: a Stop on the composer has to end the
    wait at once, whatever the server does with the cancel. Resolves to
    null when stopped. */
@@ -160,8 +198,8 @@ export const cssAspect = (label?: string) => {
 };
 
 /** the one-line summary under a finished result: "3 shots · 16:9 · 10s" */
-export function madeMeta(m: Made): string {
-  if (m.output === "image") return ["1 image", m.frame].filter(Boolean).join(" · ");
+export function madeMeta(m: Made, modelLabel?: string): string {
+  if (m.output === "image") return ["1 image", m.frame, modelLabel].filter(Boolean).join(" · ");
   const n = m.parts?.length ?? 0;
   return [
     m.title,
