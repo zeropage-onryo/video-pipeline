@@ -1,15 +1,21 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { LEGAL_CONTACT, LegalPage, type LegalSection } from "@/components/legal-page";
+import { CATALOG } from "@/lib/catalog";
 
-// Plain-language terms for an invite-based product. A first draft written
-// 2026-09-17 alongside /privacy; not yet reviewed by a lawyer. Governing
-// law names the United States and no state (2026-09-18, Mike's call).
+// Plain-language terms. A first draft written 2026-09-17 alongside
+// /privacy; not yet reviewed by a lawyer. Governing law names the United
+// States and no state (2026-09-18, Mike's call). Rewritten 2026-10-03 for
+// what is live: open sign-up with a trial grant (2026-09-24), plans,
+// credits and Stripe (2026-09-18, docs/BILLING.md -- the numbers here are
+// read off the catalog so the page cannot drift from /pricing), the
+// optional ChatGPT / Claude sign-in, and nothing posting on anyone's
+// behalf.
 
 export const metadata: Metadata = {
   title: "Terms of Service",
   description:
-    "The terms for using Zero Page: accounts, your content, AI-generated output, third-party providers and acceptable use.",
+    "The terms for using Zero Page: accounts, credits and payment, your content, AI-generated output, third-party providers and acceptable use.",
   alternates: { canonical: "/terms" },
 };
 
@@ -29,11 +35,37 @@ const SECTIONS: LegalSection[] = [
     title: "Accounts & access",
     body: (
       <p>
-        Access is by invitation. Signing in does not by itself grant access to any account;
-        membership is granted by an existing member. You are responsible for activity under your
-        sign-in and for keeping it secure. You must be at least 13, and old enough to enter into
-        these terms where you live. Access may be suspended or ended for a breach of these terms.
+        Anyone can sign up. Your first sign-in creates a workspace of your own; other people reach
+        it only when a member invites them, and you are responsible for whom you invite and for
+        activity under your sign-in. Keep it secure. You must be at least 13, and old enough to
+        enter into these terms where you live. Access may be suspended or ended for a breach of
+        these terms.
       </p>
+    ),
+  },
+  {
+    title: "Plans, credits & payment",
+    body: (
+      <>
+        <p>
+          The Studio is paid for in credits. A new workspace receives a one-time trial grant;
+          after that, credit comes from a plan or a top-up on the{" "}
+          <Link href="/pricing">pricing page</Link>. Writing scenes is included while you hold a
+          plan or any credit balance. Stills and renders cost credits, at the price the Studio
+          shows before you approve them; a render the provider fails to deliver is not charged, and
+          anything held for it is released back to you. A render that completes is charged whether
+          or not you like the result.
+        </p>
+        <p>
+          Every grant expires {CATALOG.expiry_months} months after it lands. A yearly plan is billed
+          once and released month by month, each month on its own clock. You can change or cancel a
+          plan at any time from the billing portal; a cancelled plan stays active to the end of the
+          period you paid for, and any allowance remaining from it ends with it. Credits have no
+          cash value, cannot be transferred between accounts, and are not refundable except where
+          the law requires. Payments are processed by Stripe under its own terms. Prices may change;
+          a change is posted on the pricing page and applies from your next billing period.
+        </p>
+      </>
     ),
   },
   {
@@ -74,11 +106,13 @@ const SECTIONS: LegalSection[] = [
     title: "Third-party providers & costs",
     body: (
       <p>
-        The Studio runs on third-party services — model and rendering providers, storage and
-        hosting — listed in the <Link href="/privacy">Privacy Policy</Link>. Your use of them
-        through the Studio is also subject to their own terms. Renders are charged in credits at the
-        price the Queue shows before you approve; any dollar figures the Studio shows beside them
-        are estimates, not invoices. Rendering only happens when you approve it.
+        The Studio runs on third-party services — model and rendering providers, storage,
+        payments and hosting — listed in the <Link href="/privacy">Privacy Policy</Link>. Your use
+        of them through the Studio is also subject to their own terms. If you connect your own
+        ChatGPT or Claude account to write with, you do so under that provider&apos;s terms and
+        your own agreement with it, and you can disconnect it at any time. Any dollar figures the
+        Studio shows beside a credit price are estimates, not invoices. Rendering only happens when
+        you approve it, and nothing is ever posted anywhere on your behalf.
       </p>
     ),
   },
@@ -95,7 +129,10 @@ const SECTIONS: LegalSection[] = [
           </li>
           <li>generate content that sexualizes minors, or that promotes violence or harassment;</li>
           <li>get around a provider&apos;s safety systems, usage limits or terms;</li>
-          <li>probe, overload or reverse-engineer the service, or access another account&apos;s data.</li>
+          <li>probe, overload or reverse-engineer the service, or access another account&apos;s data;</li>
+          <li>
+            share sign-ins or open repeat workspaces to collect the trial grant more than once.
+          </li>
         </ul>
       </>
     ),
@@ -127,9 +164,10 @@ const SECTIONS: LegalSection[] = [
     title: "Ending & changes",
     body: (
       <p>
-        You can stop using the Studio at any time and ask for your account and its data to be
-        deleted. If these terms change materially, the effective date above will be updated;
-        continued use after a change means you accept the revised terms.
+        You can stop using the Studio at any time, cancel any plan from the billing portal, and
+        ask for your account and its data to be deleted. If access is ended for a breach of these
+        terms, unused credit is forfeited. If these terms change materially, the effective date
+        above will be updated; continued use after a change means you accept the revised terms.
       </p>
     ),
   },
@@ -158,8 +196,8 @@ export default function TermsPage() {
   return (
     <LegalPage
       title="Terms of Service"
-      dek="The plain-language terms for using Zero Page — accounts, your content, what the AI makes, and what is not allowed."
-      effective="17 Sep 2026"
+      dek="The plain-language terms for using Zero Page — accounts, credits and payment, your content, what the AI makes, and what is not allowed."
+      effective="3 Oct 2026"
       sections={SECTIONS}
     />
   );

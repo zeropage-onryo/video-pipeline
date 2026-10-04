@@ -591,7 +591,11 @@ def privacy_policy(request: Request):
     studio site renders the same policy (web/src/app/privacy/page.tsx);
     a change to one is a change to both."""
     return templates.TemplateResponse(
-        request, "privacy.html", {"site_url": seo.site_url()},
+        request, "privacy.html",
+        {"site_url": seo.site_url(),
+         # the pricing page lives on the studio site, the origin
+         # STUDIO_URL names; without one the link stays on this origin
+         "studio_site": _site_origin(auth.studio_url()) or seo.site_url()},
     )
 
 
