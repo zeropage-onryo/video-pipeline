@@ -1195,7 +1195,7 @@ an email change. Left out on purpose, each a small build when wanted:
   provider.
 
 
-## 23. Verify the fal image models' ids, shapes and prices  (2026-10-04, with the composer's image picker)
+## 23. Verify the fal image models' ids, shapes and prices  (2026-10-04, with the composer's image picker -- VERIFIED the same day, see the end)
 
 `fal.IMAGE_MODELS` grew four entries on 2026-10-04 (FLUX.2 Pro, Nano Banana Pro
 through fal, Seedream 4.0, Ideogram 3) so the composer's Image output can pick
@@ -1209,3 +1209,15 @@ id (a wrong one fails the submit loudly, which is the safe failure), the
 shape, and the price (a wrong one mis-charges credits -- the unsafe failure).
 `flux-pro1.1` was read live on 2026-09-08 and is fine. `tests/test_fal.py`
 pins the table's shape, not its numbers.
+
+**Verified 2026-10-04, later the same day**, against each model's fal page as
+surfaced by web search (fal.ai stayed blocked for a direct fetch): the four ids,
+the `/edit` endpoints and their `image_urls` field, Nano Banana Pro's
+`aspect_ratio` + `resolution`, Ideogram's `image_size` enum, and three of the
+four prices matched. The one correction: FLUX.2 Pro is $0.03 for the FIRST
+output megapixel plus $0.015 per further megapixel of input AND output, so a
+reference-image edit is dearer than a text draw -- `usd_per_extra_megapixel`
+in the table and the `references` argument of `fal.image_usd` carry it. Still
+worth a glance at the live /api schema before the first paid render: the
+page text was read, not the schema itself. Seedream 4 wants `image_size` to
+total at least 960x960 pixels; every frame in `fal.IMAGE_SIZES` does.

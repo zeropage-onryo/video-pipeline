@@ -711,6 +711,13 @@ def test_image_usd_prices_megapixels_rounded_up_and_per_image_models_flat():
     assert fal.megapixels(1024, 1024) == 1 and fal.megapixels(1025, 1024) == 2
     assert fal.megapixels(2048, 2048) == 4
     assert fal.image_usd("seedream4", "21:9") == fal.image_usd("seedream4", "1:1")
+    # FLUX.2 Pro (verified 2026-10-04): $0.03 for the first output megapixel,
+    # $0.015 per further megapixel of input and output -- a reference counts
+    # as an input megapixel; a per-image model ignores references
+    assert fal.image_usd("flux2-pro", "1:1") == 0.03
+    assert fal.image_usd("flux2-pro", "1:1", references=2) == 0.06
+    assert fal.image_usd("seedream4", "1:1", references=2) == 0.03
+    assert fal.image_usd("flux-pro1.1", "1:1", references=2) == 0.04   # no edit: refs never sent
     with pytest.raises(ValueError):
         fal.image_usd("dall-e")
 
@@ -752,7 +759,7 @@ def test_a_composer_still_is_charged_held_settled_and_banked(tmp_db, approved, k
     url, body = http.calls[0]
     assert url.endswith(fal.IMAGE_MODELS["seedream4"]["edit"])
     assert body["image_urls"] == ["https://r2.example/can.jpg"]
-    expected = pricing.credits_for(pricing.usd_micros(fal.image_usd("seedream4", "4:5")))
+    expected = pricing.credits_for(pricing.usd_micros(fal.image_usd("seedream4", "4:5", references=1)))
     assert result["credits"] == expected
     spent = -sum(e["delta"] for e in ledger.entries(account_id, tmp_db) if e["kind"] != "grant")
     assert spent == expected

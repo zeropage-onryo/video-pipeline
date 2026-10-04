@@ -1869,9 +1869,12 @@ is yours, in Resolve, by hand.
   row, release on failure), banks the still on the Assets wall under its model, uploads
   each reference public through `as_image_url`, and reports `references` so the card
   says when a text-only model drew from the prompt alone. A megapixel is 1024x1024 and
-  every frame in `fal.IMAGE_SIZES` is under one. **THE FOUR ADDED MODELS' PRICES AND IDS
-  ARE FROM MEMORY**: fal.ai was unreachable from the build session, so each `checked`
-  says so -- read each `source` page before the first paid render on it (BACKLOG #23).
+  every frame in `fal.IMAGE_SIZES` is under one. The four added models' ids and prices
+  were first written from memory (fal.ai unreachable from the build session) and
+  VERIFIED the same day against their fal pages via search: three matched, and FLUX.2
+  Pro's was corrected to $0.03 for the first output megapixel plus $0.015 per further
+  megapixel of input and output, so `image_usd` takes `references` and a FLUX.2 edit is
+  priced dearer than a text draw (BACKLOG #23 has the detail).
 - **ONE conversation, and it is saved (2026-10-02, Mike: "when I click out of the
   studio page the entire conversation, images that were generated goes away").** The
   Studio composer's Guide thread was React state in `web/src/app/studio/page.tsx`, so

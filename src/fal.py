@@ -341,15 +341,18 @@ VIDEO_LOG_TOOLS = tuple(sorted(PLATFORM_MODELS))
 # string, "enum" = fal's named sizes. Priced per MEGAPIXEL (FLUX) or per
 # image; `image_usd` is the one reader.
 #
-# PRICES ARE DATED AND MUST BE RE-CHECKED. flux-pro1.1 was read off its
-# /api page on 2026-09-08. The four added on 2026-10-04 were written from
-# memory of each model's fal page because fal.ai was unreachable from the
-# build session (the proxy refused the tunnel) -- the ids and the shapes
-# are what the pages carried as of mid-2026, the prices are the published
-# per-image figures as remembered, and every one of them wants a look at
-# its `source` before the first paid render on it. A wrong price here
-# mis-charges credits; a wrong id fails the submit loudly, which is the
-# safer of the two.
+# PRICES ARE DATED. flux-pro1.1 was read off its /api page on 2026-09-08.
+# The four added on 2026-10-04 were first written from memory (fal.ai was
+# unreachable from the build session) and VERIFIED the same day against
+# each model's fal page as surfaced by web search -- the page text, not
+# the live /api schema, so the ids, prices and the `image_urls` field are
+# confirmed and the exact input-schema shapes are what the pages describe.
+# FLUX.2 Pro was the one correction: it bills $0.03 for the FIRST output
+# megapixel and $0.015 for every further megapixel of input AND output, so
+# a reference-image edit costs more than a text draw --
+# `usd_per_extra_megapixel` carries that, and image_usd counts each
+# reference as one megapixel (their real size is not known at pricing
+# time; one megapixel is the common case for a bin photo).
 IMAGE_MODELS: dict[str, dict] = {
     "flux-pro1.1": {
         "label": "FLUX 1.1 Pro",
@@ -364,13 +367,17 @@ IMAGE_MODELS: dict[str, dict] = {
     },
     "flux2-pro": {
         "label": "FLUX.2 Pro",
-        "note": "FLUX's newest; takes reference images.",
+        "note": "FLUX's newest; takes up to 9 reference images.",
         "endpoint": "fal-ai/flux-2-pro",
         "edit": "fal-ai/flux-2-pro/edit",
         "size": "wh",
         "params": ("image_size", "seed"),
+        # $0.03 for the first output megapixel, $0.015 per extra megapixel
+        # of input and output, rounded up (the page's own example: a
+        # 1920x1080 draw is $0.045)
         "usd_per_megapixel": 0.03,
-        "checked": "2026-10-04 (from memory; fal.ai unreachable -- re-check)",
+        "usd_per_extra_megapixel": 0.015,
+        "checked": "2026-10-04 (fal model page via search)",
         "source": "https://fal.ai/models/fal-ai/flux-2-pro",
     },
     "nano-banana-pro": {
@@ -381,7 +388,7 @@ IMAGE_MODELS: dict[str, dict] = {
         "size": "aspect",
         "params": ("aspect_ratio", "resolution"),
         "usd_per_image": 0.15,
-        "checked": "2026-10-04 (from memory; fal.ai unreachable -- re-check)",
+        "checked": "2026-10-04 (fal page via search: 1K/2K $0.15; 4K $0.30, not offered here)",
         "source": "https://fal.ai/models/fal-ai/nano-banana-pro",
     },
     "seedream4": {
@@ -392,7 +399,7 @@ IMAGE_MODELS: dict[str, dict] = {
         "size": "wh",
         "params": ("image_size", "seed"),
         "usd_per_image": 0.03,
-        "checked": "2026-10-04 (from memory; fal.ai unreachable -- re-check)",
+        "checked": "2026-10-04 (fal page via search: $0.03/image; image_size >= 960x960 px, all IMAGE_SIZES are)",
         "source": "https://fal.ai/models/fal-ai/bytedance/seedream/v4/text-to-image",
     },
     "ideogram3": {
@@ -403,7 +410,7 @@ IMAGE_MODELS: dict[str, dict] = {
         "size": "enum",
         "params": ("image_size", "rendering_speed"),
         "usd_per_image": 0.06,
-        "checked": "2026-10-04 (from memory; fal.ai unreachable -- re-check)",
+        "checked": "2026-10-04 (fal page via search: $0.06 at BALANCED, the default; TURBO $0.03, QUALITY $0.09)",
         "source": "https://fal.ai/models/fal-ai/ideogram/v3",
     },
 }
@@ -433,18 +440,27 @@ def image_dims(aspect: Optional[str]) -> tuple[int, int]:
     return IMAGE_SIZES.get(aspect or "", IMAGE_SIZES[DEFAULT_IMAGE_ASPECT])
 
 
-def image_usd(model: str, aspect: Optional[str] = None) -> float:
+def image_usd(model: str, aspect: Optional[str] = None, references: int = 0) -> float:
     """One still's provider USD on `model` at `aspect` -- per-image models
     as listed, per-megapixel models at the frame's pixel count rounded UP
-    to the next megapixel (fal's own rule). Unknown model -> ValueError,
-    never a free image."""
+    to the next megapixel (fal's own rule). A model with
+    `usd_per_extra_megapixel` (FLUX.2 Pro) bills the first output
+    megapixel at the base rate and every further megapixel of output AND
+    input at the extra rate; each reference the model is handed counts as
+    one input megapixel. Unknown model -> ValueError, never a free image."""
     spec = IMAGE_MODELS.get(model)
     if spec is None:
         raise ValueError(f"image model must be one of {IMAGE_MODEL_NAMES}, got {model!r}")
     if "usd_per_image" in spec:
         return round(float(spec["usd_per_image"]), 4)
     w, h = image_dims(aspect)
-    return round(float(spec["usd_per_megapixel"]) * megapixels(w, h), 4)
+    mp = megapixels(w, h)
+    base = float(spec["usd_per_megapixel"])
+    extra = spec.get("usd_per_extra_megapixel")
+    if extra is None:
+        return round(base * mp, 4)
+    refs = max(0, int(references or 0)) if spec.get("edit") else 0
+    return round(base + float(extra) * (mp - 1 + refs), 4)
 
 
 def megapixels(width: int, height: int) -> int:
@@ -1639,7 +1655,7 @@ def generate_image_from_prompt(prompt: str, *, db_path=None, http=None,
         out_path = RENDER_DIR / f"{model}-{who}{stamp}.jpg"
         _, _, used = image_request(model, prompt, aspect=aspect,
                                    reference_urls=reference_urls)
-        usd = image_usd(model, aspect)
+        usd = image_usd(model, aspect, references=used)
 
         charge = charging.Charge(
             account_id, provider="fal", ref=charging.attempt_ref(out_path),
