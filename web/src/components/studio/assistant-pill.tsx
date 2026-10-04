@@ -30,11 +30,13 @@ import {
   getBalance,
   queuePending,
   runCreativeGuide,
+  runGuideAction,
   waitForJob,
   type Balance,
   type Concept,
   type GuideReply,
 } from "@/lib/studio-api";
+import { mediaSrc } from "@/lib/composer";
 import {
   AVATARS,
   STAGES,
@@ -54,6 +56,7 @@ import {
   savePersona,
   sendToComposer,
   type ContactSheet,
+  type ElementMade,
   type Persona,
   type Stage,
   type Tone,
@@ -219,6 +222,47 @@ export function AssistantPill() {
 
   /* Keep: the person's click, and the only write here. The frames come
      back as /refs paths and go straight onto the composer's picks. */
+  /* The confirm card, here too (2026-10-03): the thread is shared with the
+     Studio box, and the Guide proposes a write on any page -- "make the can
+     an element" asked on Pipeline came back as a card the pill could not
+     draw. The click is the same one the box makes (runGuideAction); the
+     element's sheet then lands in the Studio box, whose watcher picks the
+     job up on return. */
+  async function decide(i: number, yes: boolean) {
+    const entry = turns[i];
+    const proposal = entry?.reply?.proposal;
+    if (!proposal || entry.decided || busy) return;
+    if (!yes) {
+      setTurn(i, { decided: "skipped" });
+      return;
+    }
+    setBusy(true);
+    try {
+      const done = await runGuideAction(proposal);
+      const element: ElementMade | undefined = done.element
+        ? {
+            kind: done.element.kind,
+            name: done.element.name,
+            slug: done.element.slug,
+            photos: done.element.photos ?? [],
+            sheet: null,
+            sheetJob: done.element.sheet_job ?? null,
+            drawing: !!done.element.sheet_job,
+            note: done.element.note ?? null,
+          }
+        : undefined;
+      setTurns((all) => [
+        ...all.map((m, j) => (j === i ? { ...m, decided: "done" as const } : m)),
+        { role: "assistant", content: `Done — ${done.result}`, element },
+      ]);
+      say(element ? `${element.name} saved${element.sheetJob ? " · its sheet is drawing; it lands in the Studio box" : ""}` : "Banked.");
+    } catch (e) {
+      say(e instanceof Error ? e.message : "That did not go through.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function keep(i: number, sheet: ContactSheet) {
     const chosen = chosenOf(turns[i]);
     const ids = sheet.sheet.flatMap((n) => [...n.keepers, ...n.rejected]).filter((f) => chosen[f.id]).map((f) => f.id);
@@ -394,6 +438,8 @@ export function AssistantPill() {
                           setTurn(i, { chosen: { ...c, [id]: !c[id] } });
                         }}
                         onKeep={(sheet) => void keep(i, sheet)}
+                        decided={t.decided}
+                        onDecide={(yes) => void decide(i, yes)}
                       />
                     ) : null}
                   </div>
@@ -488,6 +534,8 @@ function Extras({
   onDirection,
   onToggle,
   onKeep,
+  decided,
+  onDecide,
 }: {
   reply: GuideReply;
   busy: boolean;
@@ -499,8 +547,13 @@ function Extras({
   onDirection: (j: number, d: { title: string; logline: string; turn?: string }) => void;
   onToggle: (id: string) => void;
   onKeep: (sheet: ContactSheet) => void;
+  /** the proposal's confirm card has been decided */
+  decided?: Turn["decided"];
+  onDecide: (yes: boolean) => void;
 }) {
   const sheet = reply.sheet;
+  const proposal = reply.proposal;
+  const needsPhoto = !!proposal && proposal.tool === "add_element" && !proposal.photos?.length;
   // a question whose options are just the directions' titles says the
   // same thing twice; the direction cards are the better tap
   const titles = new Set((reply.directions ?? []).map((d) => d.title.trim().toLowerCase()));
@@ -564,6 +617,44 @@ function Extras({
 
       {sheet ? (
         <ContactSheetView sheet={sheet} chosen={chosen} kept={kept} busy={busy} name={name} onToggle={onToggle} onKeep={onKeep} />
+      ) : null}
+
+      {proposal ? (
+        <div className={`zpa-card${decided ? " decided" : ""}`}>
+          <b>{proposal.label}</b>
+          <ul>
+            {Object.entries(proposal.args)
+              .filter(([, v]) => v !== "" && v !== null && v !== undefined)
+              .map(([k, v]) => (
+                <li key={k}>
+                  <span>{k}</span>
+                  {typeof v === "boolean" ? (v ? "yes" : "no") : String(v)}
+                </li>
+              ))}
+          </ul>
+          {proposal.photos?.length ? (
+            <div className="zpa-card-photos">
+              {proposal.photos.slice(0, 6).map((u) => (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img key={u} src={mediaSrc(u)} alt="" />
+              ))}
+            </div>
+          ) : needsPhoto && !decided ? (
+            <span className="zpa-mono">No photo attached — drop one into the Studio box and ask again</span>
+          ) : null}
+          {decided ? (
+            <span className="zpa-mono">{decided === "done" ? "Done" : "Skipped"}</span>
+          ) : (
+            <div className="zpa-chips">
+              <button type="button" className="zpa-chip" aria-pressed="true" disabled={busy || needsPhoto} onClick={() => onDecide(true)}>
+                Confirm
+              </button>
+              <button type="button" className="zpa-chip" disabled={busy} onClick={() => onDecide(false)}>
+                Not now
+              </button>
+            </div>
+          )}
+        </div>
       ) : null}
     </>
   );

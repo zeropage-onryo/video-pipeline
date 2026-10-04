@@ -29,6 +29,10 @@ class Proposal(BaseModel):
     tool: str = Field(min_length=1, max_length=64)
     args: dict = Field(default_factory=dict)
     label: str = Field(default="", max_length=200)
+    # The references the write applies to (`add_element`, 2026-10-03):
+    # stamped by the ROUTE off the turn's own refs, never by the model,
+    # whose args may not carry a URL at all (guide_tools.check_args).
+    photos: list[str] = Field(default_factory=list, max_length=12)
 
 
 class ToolRun(BaseModel):
@@ -122,7 +126,7 @@ DEFAULT_BRAIN = "fast"
 
 def respond(conversation, *, client, brand, grounding, image_refs=(),
             account_id=None, on_retry=None, tools=None, run_tool=None, brain=None,
-            assistant=None, judge=None, links=None):
+            assistant=None, judge=None, links=None, note=""):
     """One Guide turn.
 
     With `tools` (the specs `guide_tools.session` returns) and
@@ -162,8 +166,10 @@ def respond(conversation, *, client, brand, grounding, image_refs=(),
                                              assistant=assistant)
     from . import assistant_brain
 
+    # `note` (2026-10-03) is the route's one line about THIS turn -- an
+    # element asked for with photos attached (assistant_brain.element_note)
     contents = _contents(conversation, grounding, image_refs,
-                         notes=(assistant_brain.link_note(links),))
+                         notes=(assistant_brain.link_note(links), note))
     if not tools:
         config.response_mime_type = "application/json"
         config.response_json_schema = Answer.model_json_schema()
@@ -235,8 +241,19 @@ def _respond_with_tools(client, brain, config, contents, tools, run_tool, *,
         for fc in calls:
             name, args = fc.name, dict(fc.args or {})
             if guide_tools.is_write(name):
+                try:
+                    checked = guide_tools.check_args(name, args)
+                except guide_tools.Refused as exc:
+                    # A write the bridge will not make -- a URL in an argument,
+                    # a kind off the list -- goes back to the model as the
+                    # tool's answer, so it can fix the arguments or answer in
+                    # words. Raising here failed the whole turn (2026-10-03).
+                    runs.append({"tool": name, "args": args, "ok": False})
+                    parts.append(types.Part.from_function_response(
+                        name=name, response={"result": f"refused: {exc}"}))
+                    continue
                 # The turn ends on the FIRST write: the card is the answer.
-                proposal = {"tool": name, "args": guide_tools.check_args(name, args),
+                proposal = {"tool": name, "args": checked,
                             "label": guide_tools.WRITE_LABELS.get(name, name)}
                 break
             if len(runs) >= MAX_TOOL_CALLS:
@@ -328,12 +345,13 @@ def _strict(schema: dict) -> dict:
 
 
 def respond_personal(conversation, *, provider, scope, model, brand, grounding, image_refs=(),
-                     assistant=None, links=None):
+                     assistant=None, links=None, note=""):
     from . import assistant_brain, personal_models
 
     prompt = json.dumps({"grounding": grounding, "conversation": conversation.model_dump(),
                          "reference_images_supplied": len(image_refs),
-                         "pasted_links": assistant_brain.link_note(links)}, default=str)
+                         "pasted_links": assistant_brain.link_note(links),
+                         "studio_note": note}, default=str)
     schema = Answer.model_json_schema()
     if assistant is None:
         # The plain Guide on a personal plan answers the three fields it

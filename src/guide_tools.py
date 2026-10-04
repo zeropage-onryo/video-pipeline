@@ -64,10 +64,21 @@ WRITE_LABELS = {
 # Published only when a turn asks for them (`session(local=True)`), so
 # the board's closed set above is unchanged for every other caller.
 LOCAL_READ = ("find_references", "search_footage")
-LOCAL_WRITE = ("keep_references",)
+# add_element (2026-10-03): the one write that MAKES something -- an
+# element from the photos on the composer, and its reference sheet. It
+# is published with the local set and proposed like any write, but the
+# click runs it in app/api.py (`_element_from_guide`), never here: saving
+# an element is the app's work (photo folders, vision, the sheet job).
+ELEMENT_TOOL = "add_element"
+ELEMENT_KINDS = ("character", "prop", "product", "place")
+LOCAL_WRITE = ("keep_references", ELEMENT_TOOL)
 LOCAL_TOOLS = LOCAL_READ + LOCAL_WRITE
 WRITE_LABELS["keep_references"] = "Keep these references and attach them to the composer"
+WRITE_LABELS[ELEMENT_TOOL] = "Save this as an element and draw its reference sheet"
 MAX_KEEP_IDS = 12
+MAX_ELEMENT_NAME = 80
+MAX_ELEMENT_DETAIL = 120
+MAX_ELEMENT_NOTES = 2000
 
 MAX_TOOL_CALLS = 6      # read calls per turn; a Guide answer, not a crawl
 
@@ -126,6 +137,19 @@ def check_args(name: str, args: dict) -> dict:
                                                            for i in ids):
             raise Refused("`keep_references` needs candidate_ids from find_references")
         args = {"candidate_ids": [i.strip() for i in ids][:MAX_KEEP_IDS]}
+    if name == ELEMENT_TOOL:
+        kind = str(args.get("kind") or "").strip().lower()
+        if kind not in ELEMENT_KINDS:
+            raise Refused(f"`{ELEMENT_TOOL}` needs a kind: one of {', '.join(ELEMENT_KINDS)}")
+        title = " ".join(str(args.get("name") or "").split())[:MAX_ELEMENT_NAME]
+        if not title:
+            raise Refused(f"`{ELEMENT_TOOL}` needs the element's name")
+        sheet = args.get("sheet", True)
+        args = {"kind": kind, "name": title,
+                "detail": " ".join(str(args.get("detail") or "").split())[:MAX_ELEMENT_DETAIL],
+                "notes": str(args.get("notes") or "").strip()[:MAX_ELEMENT_NOTES],
+                "sheet": sheet if isinstance(sheet, bool) else
+                str(sheet).strip().lower() not in ("0", "false", "no", "off")}
     if name == "find_references":
         if not str(args.get("scene") or "").strip():
             raise Refused("`find_references` needs the scene to hunt for")

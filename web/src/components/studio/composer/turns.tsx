@@ -12,9 +12,9 @@
    right, the answer on the left with its chips, sheet and confirm card. */
 import Link from "next/link";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { Clapperboard, Film, ImagePlus, Play, RotateCcw, Workflow } from "lucide-react";
+import { AtSign, Clapperboard, Film, ImagePlus, Play, RotateCcw, Workflow } from "lucide-react";
 import { cssAspect, madeMeta, mediaSrc, type Made } from "@/lib/composer";
-import type { ContactSheet, Turn } from "@/lib/assistant";
+import type { ContactSheet, ElementMade, Turn } from "@/lib/assistant";
 import { ContactSheetView } from "@/components/studio/contact-sheet";
 
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -23,6 +23,10 @@ export type Live = { progress: number; detail: string };
 
 type Handlers = {
   busy: boolean;
+  /** what an element's reference sheet costs, as the shell's pill says it
+   *  (creditsText; null until the balance has answered) -- the card says
+   *  it, since confirming is the one click that spends here */
+  sheetPrice: string | null;
   onAnimate: (m: Made) => void;
   onUseAsRef: (m: Made) => void;
   onReuse: (t: Turn) => void;
@@ -31,7 +35,57 @@ type Handlers = {
   onDecide: (i: number, yes: boolean) => void;
   onToggleFrame: (i: number, id: string) => void;
   onKeep: (i: number, sheet: ContactSheet) => void;
+  /** attach a saved element's photos (and sheet) as references */
+  onUseElement: (el: ElementMade) => void;
 };
+
+/* the element an add_element card saved: its photos as tiles, the
+   reference sheet beside them once drawn (a running tile while it is) */
+function ElementView({ el, h }: { el: ElementMade; h: Handlers }) {
+  const photos = el.photos.slice(0, 3);
+  return (
+    <div className="zc-element">
+      <div className="zc-tiles">
+        {photos.map((u, i) => (
+          <div key={u} className="zc-tilewrap">
+            <div className="zc-tile">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={mediaSrc(u)} alt="" />
+            </div>
+            <span className="zc-label">
+              {el.name} · {pad(i + 1)}
+            </span>
+          </div>
+        ))}
+        {el.drawing ? (
+          <div className="zc-tilewrap">
+            <div className="zc-tile running">
+              <span className="zc-pct">Drawing the sheet…</span>
+            </div>
+            <span className="zc-label">Reference sheet</span>
+          </div>
+        ) : el.sheet ? (
+          <div className="zc-tilewrap">
+            <div className="zc-tile on">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={mediaSrc(el.sheet)} alt="" />
+            </div>
+            <span className="zc-label on">Reference sheet</span>
+          </div>
+        ) : null}
+      </div>
+      {!el.drawing && !el.sheet && el.note ? <div className="zc-meta bad">{el.note}</div> : null}
+      <div className="zc-actions">
+        <button type="button" className="zc-act" disabled={h.busy} onClick={() => h.onUseElement(el)}>
+          <ImagePlus strokeWidth={1.6} /> Use as reference
+        </button>
+        <Link href="/studio/elements" className="zc-act">
+          <AtSign strokeWidth={1.6} /> Open on Elements
+        </Link>
+      </div>
+    </div>
+  );
+}
 
 function Meta({ m, live }: { m: Made; live?: Live }) {
   if (m.status === "running") {
@@ -252,18 +306,41 @@ export function ComposerStream({
                   <div className={`ccard${t.decided ? ` ${t.decided}` : ""}`}>
                     <b>{t.reply.proposal.label}</b>
                     <dl>
-                      {Object.entries(t.reply.proposal.args).map(([k, v]) => (
-                        <div key={k}>
-                          <dt>{k}</dt>
-                          <dd>{String(v)}</dd>
-                        </div>
-                      ))}
+                      {Object.entries(t.reply.proposal.args)
+                        .filter(([, v]) => v !== "" && v !== null && v !== undefined)
+                        .map(([k, v]) => (
+                          <div key={k}>
+                            <dt>{k}</dt>
+                            <dd>{typeof v === "boolean" ? (v ? "yes" : "no") : String(v)}</dd>
+                          </div>
+                        ))}
                     </dl>
+                    {t.reply.proposal.tool === "add_element" && t.reply.proposal.args.sheet !== false && !t.decided ? (
+                      <div className="zc-meta">
+                        reference sheet{handlers.sheetPrice ? ` · ${handlers.sheetPrice}` : ""} · the element itself is free
+                      </div>
+                    ) : null}
+                    {t.reply.proposal.photos?.length ? (
+                      // the photos the click saves: the turn's own references
+                      <div className="ccard-photos" aria-label="From these photos">
+                        {t.reply.proposal.photos.slice(0, 6).map((u) => (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img key={u} src={mediaSrc(u)} alt="" />
+                        ))}
+                      </div>
+                    ) : t.reply.proposal.tool === "add_element" && !t.decided ? (
+                      <div className="zc-meta bad">No photo attached — drop one in and ask again</div>
+                    ) : null}
                     {t.decided ? (
                       <span className="ccard-state">{t.decided === "done" ? "Done" : "Skipped"}</span>
                     ) : (
                       <div className="ccard-actions">
-                        <button type="button" className="yes" disabled={handlers.busy} onClick={() => handlers.onDecide(i, true)}>
+                        <button
+                          type="button"
+                          className="yes"
+                          disabled={handlers.busy || (t.reply.proposal.tool === "add_element" && !t.reply.proposal.photos?.length)}
+                          onClick={() => handlers.onDecide(i, true)}
+                        >
                           Confirm
                         </button>
                         <button type="button" disabled={handlers.busy} onClick={() => handlers.onDecide(i, false)}>
@@ -273,6 +350,7 @@ export function ComposerStream({
                     )}
                   </div>
                 ) : null}
+                {t.element ? <ElementView el={t.element} h={handlers} /> : null}
                 {i === lastAnswer && choices.length ? (
                   <div className="zc-choices">
                     {choices.map((c) => (

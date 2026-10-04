@@ -171,6 +171,21 @@ export type Turn = {
    *  (lib/composer.ts). The pill leaves these turns out of its card and of
    *  the conversation it sends: they are the box's, not the Guide's. */
   made?: Made;
+  /** the composer (2026-10-03): an add_element card was confirmed and this
+   *  is the element it saved -- its photos, and its reference sheet once
+   *  the job has drawn it (`drawing` while it runs; a reload picks it up). */
+  element?: ElementMade;
+};
+
+export type ElementMade = {
+  kind: string;
+  name: string;
+  slug: string;
+  photos: string[];
+  sheet: string | null;
+  sheetJob?: number | null;
+  drawing?: boolean;
+  note?: string | null;
 };
 
 /* The composer's box, saved beside the thread so leaving the page keeps

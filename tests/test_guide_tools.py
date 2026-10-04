@@ -121,7 +121,7 @@ def _turn(monkeypatch, responses, run_tool):
     calls = []
 
     def generate(client, model, contents, **kwargs):
-        calls.append(kwargs)
+        calls.append({**kwargs, "contents": contents})
         r = responses.pop(0)
         return r if kwargs.get("raw") else r.text
 
@@ -160,15 +160,27 @@ def test_a_write_call_becomes_a_proposal_and_does_not_run(monkeypatch):
     proposal = _Resp(calls=[("add_spark", {"brand": "zeropage", "spark": "a wet seat"})])
     reply, calls = _turn(monkeypatch, [proposal], run_tool)
     assert reply["proposal"] == {"tool": "add_spark", "args": {"brand": "zeropage", "spark": "a wet seat"},
-                                 "label": guide_tools.WRITE_LABELS["add_spark"]}
+                                 "label": guide_tools.WRITE_LABELS["add_spark"], "photos": []}
     assert "Confirm" in reply["message"]
     assert len(calls) == 1
 
 
-def test_a_proposal_with_a_url_is_refused_not_carried(monkeypatch):
-    with pytest.raises(guide_tools.Refused):
-        _turn(monkeypatch, [_Resp(calls=[("add_spark", {"brand": "zeropage", "spark": "https://x.y/z.jpg"})])],
-              lambda n, a: "")
+def test_a_proposal_with_a_url_is_refused_back_to_the_model_not_carried(monkeypatch):
+    """The refusal is the tool's answer (2026-10-03): the model gets to
+    fix its arguments or answer in words; nothing is carried, and the
+    turn does not die."""
+    answer = json.dumps({"message": "Tell me the spark in words and I will bank it.",
+                         "choices": [], "brief": ""})
+    reply, calls = _turn(monkeypatch,
+                         [_Resp(calls=[("add_spark", {"brand": "zeropage", "spark": "https://x.y/z.jpg"})]),
+                          _Resp(text=answer)],
+                         lambda n, a: pytest.fail("nothing runs for a refused write"))
+    assert reply["proposal"] is None
+    assert reply["message"].startswith("Tell me the spark")
+    assert reply["tool_runs"] == [{"tool": "add_spark",
+                                   "args": {"brand": "zeropage", "spark": "https://x.y/z.jpg"}, "ok": False}]
+    fed_back = calls[1]["contents"][-1].parts[0].function_response.response["result"]
+    assert fed_back.startswith("refused:") and "URL" in fed_back
 
 
 def test_unparseable_answer_gets_one_schema_call(monkeypatch):
