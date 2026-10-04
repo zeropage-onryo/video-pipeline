@@ -1,0 +1,6 @@
+<h2>Reset your password</h2>
+<p>Your reset code:</p>
+<p style="font-size:28px;letter-spacing:.3em"><b>{{ .Token }}</b></p>
+<p>Enter it with your new password, or
+<a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=recovery">choose a new password</a>.</p>
+<p>If you didn't ask for this, ignore it &mdash; nothing changes.</p>

@@ -192,6 +192,14 @@ venv/bin/python -m ops.canonicalize_shot_refs [--account <slug>] [--write]
 # Refuses a non-empty target and never guesses the DSN; --dry-run counts.
 venv/bin/python -m ops.copy_sqlite_to_postgres --dsn "$DATABASE_URL" [--dry-run] [--truncate]
 
+# SUPABASE AUTH EMAIL — what is set (custom SMTP, the four templates, Site
+# URL, the hourly limit) and the whole setup in one PATCH through the
+# Management API (docs/SUPABASE_EMAIL_TEMPLATES.md). Needs a personal access
+# token in SUPABASE_ACCESS_TOKEN; `report` is read-only, `apply` touches only
+# the flags given and refuses a field the live config does not carry.
+venv/bin/python -m ops.supabase_auth_email report
+venv/bin/python -m ops.supabase_auth_email apply --templates [--smtp-host ...] [--dry-run]
+
 # SIGN-IN — seed the auth tables once (idempotent); real login guards /ui + /api
 venv/bin/python -m src.accounts seed you@example.com   # identity is Supabase Auth's
 

@@ -19,7 +19,9 @@ or has expired`, from a Google address). They got in on a second try.
 The mail carried no CODE because the default templates only carry the
 link. So `/auth/confirm` was added (a `{{ .TokenHash }}` link, verified
 server-side, works from any browser) and
-`docs/SUPABASE_EMAIL_TEMPLATES.md` has the bodies to paste.
+`docs/SUPABASE_EMAIL_TEMPLATES.md` has the bodies to paste -- and since
+2026-10-04 `python -m ops.supabase_auth_email apply --templates` sets them
+through the Management API, SMTP and the Site URL with it.
 
 **Beyond that tester, the built-in mailer does not deliver to strangers.** It sends only to the Supabase organisation's own
 members, a few per hour, as a development courtesy — so Mike's own

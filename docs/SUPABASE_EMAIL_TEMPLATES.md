@@ -12,7 +12,28 @@ it, and Gmail's link scanner fetched the same link seven seconds later
 They got in on a second attempt. And the mail carried no CODE to type,
 because the default templates only carry the link.
 
-Three dashboard settings fix all of it. None can be made from code.
+Three settings fix all of it. **They can be applied from the command line
+in one go** (2026-10-04, `ops/supabase_auth_email.py`, through Supabase's
+Management API) -- the one thing it needs from a person is a Supabase
+personal access token (https://supabase.com/dashboard/account/tokens) and,
+for SMTP, a mail provider's credentials:
+
+```bash
+set -a && source .env && set +a             # SUPABASE_URL names the project
+export SUPABASE_ACCESS_TOKEN=sbp_...        # or type it when asked; never printed
+python -m ops.supabase_auth_email report    # what is set now (read-only)
+python -m ops.supabase_auth_email apply --templates --dry-run
+SMTP_PASS=re_... python -m ops.supabase_auth_email apply --templates \
+    --smtp-host smtp.resend.com --smtp-port 465 --smtp-user resend \
+    --sender-email no-reply@zeropage.studio --sender-name "Zero Page" \
+    --site-url https://zeropage-studio.fly.dev --rate-limit 100
+```
+
+The template bodies live in `ops/email_templates/` (the same four shown
+below) and `report` says, per template, whether the live one carries the
+code and the confirm link. The dashboard paths follow for doing it by
+hand.
+
 
 ## 1. Custom SMTP — Authentication → Emails → SMTP Settings
 
@@ -25,7 +46,7 @@ on, every email door (the sign-in code, forgot-password, the settings
 page's "email me a code", an email-change confirmation) works only for
 org members.
 
-## 2. The templates — Authentication → Emails → Templates
+## 2. The templates — Authentication → Emails → Templates (or `apply --templates`)
 
 Each template gets BOTH: the 6-digit code to type (`{{ .Token }}`, which
 is what every page asks for) and a link that works from any browser
