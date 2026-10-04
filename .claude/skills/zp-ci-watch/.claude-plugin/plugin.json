@@ -1,0 +1,6 @@
+{
+  "name": "zp-ci-watch",
+  "version": "0.1.0",
+  "description": "After a git push or a PR merge, follows the GitHub Actions runs on that commit in the status line and toasts green or red, so a session never sleeps in a loop to find out. /ci asks once.",
+  "author": { "name": "Zero Page Films" }
+}

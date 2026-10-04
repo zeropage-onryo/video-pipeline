@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>{% if step == 'code' %}Check your email{% else %}Welcome to Zero Page{% endif %}</title>
+<title>{% if step == 'code' %}Check your email{% elif step in ('reset', 'newpassword') %}Choose a new password{% else %}Welcome to Zero Page{% endif %}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Archivo+Narrow:wght@700&display=swap" rel="stylesheet">
@@ -93,13 +93,21 @@ input:focus{outline:0;border-color:var(--line-hi)}
 .legal{margin-top:10px;font-size:11.5px;color:var(--dimmer)}
 .legal a{color:var(--dim)}
 
-/* email and password are steps of the same column: the button reveals
-   the field (JS); with no JS both forms simply show */
-.js .emailform,.js .pwform{display:none}
+/* email, password, "create a password" and "forgot" are steps of the
+   same column: a button reveals its form (JS); with no JS every form
+   simply shows */
+.js .emailform,.js .pwform,.js .signupform,.js .forgotform{display:none}
 .js [data-open="email"] .emailform{display:block}
 .js [data-open="email"] .emailbtn{display:none}
 .js [data-open="password"] .pwform{display:block}
 .js [data-open="password"] .emailbtn,.js [data-open="password"] .pwlink{display:none}
+.js [data-open="signup"] .signupform{display:block}
+.js [data-open="signup"] .emailbtn,.js [data-open="signup"] .pwlink{display:none}
+.js [data-open="forgot"] .forgotform{display:block}
+.js [data-open="forgot"] .emailbtn,.js [data-open="forgot"] .pwlink{display:none}
+.formfoot{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;
+  margin:-4px 0 12px;font-size:12.5px;color:var(--dim)}
+.hint{font-size:12px;color:var(--dimmer);margin:-6px 0 12px}
 
 @media (max-width:860px){
   body{padding:0;place-items:stretch}
@@ -154,6 +162,40 @@ input:focus{outline:0;border-color:var(--line-hi)}
         &middot; <a class="link" href="/signin">Use a different email</a>
       </form>
 
+      {% elif step == 'reset' %}
+      <h1>Choose a new password</h1>
+      <p class="sub">We sent a code to <b>{{ email }}</b>.<br>Enter it with the password you want.</p>
+      {% if error %}<div class="err">{{ error }}</div>{% endif %}
+      <form method="post" action="/auth/reset">
+        <input type="hidden" name="email" value="{{ email }}">
+        <input class="code" type="text" name="token" inputmode="numeric" autocomplete="one-time-code"
+               pattern="[0-9 ]{6,12}" maxlength="12" placeholder="000000" required autofocus>
+        <input type="password" name="password" placeholder="New password" required
+               autocomplete="new-password" minlength="8">
+        <input type="password" name="password2" placeholder="New password, again" required
+               autocomplete="new-password" minlength="8">
+        <button class="btn primary" type="submit">Set password &amp; log in</button>
+      </form>
+      <form method="post" action="/auth/forgot" class="foot">
+        <input type="hidden" name="email" value="{{ email }}">
+        Didn't get it? <button class="link" type="submit">Send a new code</button>
+        &middot; <a class="link" href="/signin">Back</a>
+      </form>
+
+      {% elif step == 'newpassword' %}
+      <h1>Choose a new password</h1>
+      <p class="sub">Your email is confirmed. Pick the password you want to use.</p>
+      {% if error %}<div class="err">{{ error }}</div>{% endif %}
+      <form method="post" action="/auth/reset">
+        {% if email %}<input type="hidden" name="email" value="{{ email }}">{% endif %}
+        <input type="password" name="password" placeholder="New password" required
+               autocomplete="new-password" minlength="8" autofocus>
+        <input type="password" name="password2" placeholder="New password, again" required
+               autocomplete="new-password" minlength="8">
+        <button class="btn primary" type="submit">Set password &amp; log in</button>
+      </form>
+      <div class="foot"><a class="link" href="/signin?open=forgot">Ask for a new link</a></div>
+
       {% else %}
       <h1>Welcome to Zero Page</h1>
       <p class="sub">{% if mode == 'signup' %}Sign up and start creating{% else %}Log in or sign up &mdash; it's the same door{% endif %}</p>
@@ -199,11 +241,36 @@ input:focus{outline:0;border-color:var(--line-hi)}
       <form class="pwform" method="post" action="/auth/login">
         <input type="email" name="email" placeholder="Email" required autocomplete="email" value="{{ email or '' }}">
         <input type="password" name="password" placeholder="Password" required autocomplete="current-password">
+        <div class="formfoot">
+          <a class="link" data-open-step="forgot">Forgot your password?</a>
+          <a class="link" data-open-step="signup">New here? Create a password</a>
+        </div>
         <button class="btn primary" type="submit">Log in</button>
+      </form>
+      <form class="signupform" method="post" action="/auth/signup">
+        <input type="email" name="email" placeholder="Email" required autocomplete="email" value="{{ email or '' }}">
+        <input type="password" name="password" placeholder="Password (8+ characters)" required
+               autocomplete="new-password" minlength="8">
+        <input type="password" name="password2" placeholder="Password, again" required
+               autocomplete="new-password" minlength="8">
+        <div class="formfoot">
+          <a class="link" data-open-step="password">Already have one? Log in</a>
+          <a class="link" data-open-step="email">Use a code instead</a>
+        </div>
+        <button class="btn primary" type="submit">Create account</button>
+      </form>
+      <form class="forgotform" method="post" action="/auth/forgot">
+        <input type="email" name="email" placeholder="Email" required autocomplete="email" value="{{ email or '' }}">
+        <p class="hint">We'll email a code; enter it with a new password.</p>
+        <div class="formfoot">
+          <a class="link" data-open-step="password">Back to log in</a>
+        </div>
+        <button class="btn primary" type="submit">Email me a reset code</button>
       </form>
 
       <div class="foot">
-        <span class="pwlink">Have a password? <a class="link" data-open-step="password">Log in with it</a></span>
+        <span class="pwlink">Have a password? <a class="link" data-open-step="password">Log in with it</a>
+          &middot; <a class="link" data-open-step="signup">Create one</a></span>
         {% if site_url %}
         <p class="legal">By continuing you agree to the <a href="{{ site_url }}/terms">Terms</a>
           and <a href="{{ site_url }}/privacy">Privacy Policy</a>.</p>
@@ -219,7 +286,8 @@ input:focus{outline:0;border-color:var(--line-hi)}
 document.querySelectorAll('[data-open-step]').forEach(el => el.addEventListener('click', () => {
   const col = document.querySelector('.col');
   col.dataset.open = el.dataset.openStep;
-  const field = col.querySelector(el.dataset.openStep === 'password' ? '.pwform input' : '.emailform input');
+  const form = {password: '.pwform', signup: '.signupform', forgot: '.forgotform'}[el.dataset.openStep] || '.emailform';
+  const field = col.querySelector(form + ' input');
   if (field) field.focus();
 }));
 // the showcase: one slide at a time, the bar under it filling as it plays

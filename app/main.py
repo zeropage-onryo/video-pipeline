@@ -416,14 +416,24 @@ def signin(request: Request, error: Optional[str] = None,
             return auth.handoff_redirect(destination, user["id"])
         return (auth.studio_handoff(user["id"])
                 or RedirectResponse("/ui", status_code=303))
+    # the second screens: `code` (a sign-in code was sent), `reset` (a
+    # recovery code was sent -- code + new password), `newpassword` (the
+    # recovery LINK was clicked -- the new password alone; the session
+    # cookie holds the proof, so no email is needed on the page)
+    if step == "newpassword":
+        screen = "newpassword"
+    elif step in ("code", "reset") and email:
+        screen = step
+    else:
+        screen = "start"
     return templates.TemplateResponse(
         request, "signin.html",
         {"error": error, "mode": mode if mode in ("signin", "signup") else "signin",
-         "email": email, "step": "code" if step == "code" and email else "start",
+         "email": email, "step": screen,
          # the terms and privacy pages live on the public site (web/), the
          # origin STUDIO_URL names; no front end, no legal line
          "site_url": _site_origin(auth.studio_url()),
-         "open": open if open in ("email", "password") else None,
+         "open": open if open in auth.OPEN_STEPS else None,
          # the promo row ("Sign up & get N free credits") shows only when a
          # welcome grant is actually configured -- never a promise the
          # ledger does not keep
@@ -581,7 +591,11 @@ def privacy_policy(request: Request):
     studio site renders the same policy (web/src/app/privacy/page.tsx);
     a change to one is a change to both."""
     return templates.TemplateResponse(
-        request, "privacy.html", {"site_url": seo.site_url()},
+        request, "privacy.html",
+        {"site_url": seo.site_url(),
+         # the pricing page lives on the studio site, the origin
+         # STUDIO_URL names; without one the link stays on this origin
+         "studio_site": _site_origin(auth.studio_url()) or seo.site_url()},
     )
 
 

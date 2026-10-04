@@ -3,6 +3,63 @@
 Operational notes, newest first. Each section is dated and is about a
 thing that has actually gone wrong.
 
+## 2026-10-03 — "Supabase didn't send a code"; settings and passwords
+
+A new person at zeropage.studio typed their email, got no code, and had
+no way to make a password. Two separate things, and only one is code.
+
+**What the project's auth logs showed, read the same day:** the
+confirmation mail WAS sent to the tester (06:12:06 UTC, from
+`noreply@mail.app.supabase.io`), they clicked its link, GoTrue verified
+it and sent them to `/auth/callback` — and no token exchange followed,
+because the PKCE verifier lives in the cookie of the browser that asked
+and a link opened from a mail app does not have it (Gmail's link scanner
+also fetched the link seven seconds later: `403: Email link is invalid
+or has expired`, from a Google address). They got in on a second try.
+The mail carried no CODE because the default templates only carry the
+link. So `/auth/confirm` was added (a `{{ .TokenHash }}` link, verified
+server-side, works from any browser) and
+`docs/SUPABASE_EMAIL_TEMPLATES.md` has the bodies to paste -- and since
+2026-10-04 `python -m ops.supabase_auth_email apply --templates` sets them
+through the Management API, SMTP and the Site URL with it.
+
+**Beyond that tester, the built-in mailer does not deliver to strangers.** It sends only to the Supabase organisation's own
+members, a few per hour, as a development courtesy — so Mike's own
+address worked and nobody else's did, which is exactly what "didn't send
+a code" looks like. The fix is dashboard work, not a deploy: custom SMTP
+under Authentication → Emails (a real provider, a sender on the studio's
+domain), `{{ .Token }}` in the Magic Link / Confirm sign up / Reset
+Password templates (the default bodies carry only the link), and the
+hourly send limit raised once SMTP is on. `.env.example`'s Supabase
+block has the three settings spelled out. Until SMTP is on, every email
+door — the sign-in code, forgot-password, the settings page's "email me
+a code", an email-change confirmation — is dead for everyone but org
+members, and the sign-in page surfaces GoTrue's own error text when it
+refuses (`email rate limit exceeded`, `Email address ... not authorized`)
+rather than pretending a code went out.
+
+**A new user could not create a password because the page never offered
+it.** `POST /auth/signup` had existed since 2026-09-03 with no form
+posting to it. Now the sign-in page's password step carries "New here?
+Create a password" (email, password, confirm → `/auth/signup`) and
+"Forgot your password?" (`/auth/forgot` → a recovery code AND link →
+`/auth/reset`: the code with a new password on one screen, or the link
+landing on a new-password screen through `/auth/callback`). And
+`/studio/settings` (the account menus → Settings) is where a signed-in
+person renames themselves, sets a first password or changes one, and
+moves their email — every write re-proving them with their current
+password or a code mailed to the address on file, because GoTrue takes a
+password change only as the person and this app keeps no token of
+theirs (`app/auth.py`'s "passwords" section; `tests/test_settings_auth.py`).
+`users.password_set_at` is what the page reads to say "set" vs "change";
+a password login stamps it, so accounts from before the column catch up
+on their next login.
+
+Verified by running it (fake GoTrue, real Postgres, Chromium through the
+studio's proxy): sign up with a password → Settings → rename → change
+with the current password → log in with the new one → forgot → code →
+new password → signed in → a code-only change on the settings page.
+
 ## 2026-09-08 — the manual render lanes (`ops/render_queue.py`)
 
 Two lanes spend a subscription instead of API credits, and neither can
