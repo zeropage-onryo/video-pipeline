@@ -29,6 +29,37 @@ export type Me = {
 };
 export const getMe = () => apiFetch<Me>("/me");
 
+/* ── settings (2026-10-03): the person's own row and their password ──
+   PATCH /api/me renames; the password and email writes each re-prove the
+   person (their current password, or a code mailed by sendSecurityCode)
+   and the API mints a one-call Supabase session for the write -- nothing
+   of Supabase's is kept, and nothing here spends. */
+export const updateMe = (display_name: string) =>
+  apiFetch<Me>("/me", { method: "PATCH", body: JSON.stringify({ display_name }) });
+export type Security = {
+  email: string | null;
+  /** what the API KNOWS: false also for a password set before it kept track */
+  has_password: boolean;
+  password_set_at: string | null;
+  /** Supabase is wired, so a password or email change can be made */
+  can_change: boolean;
+  min_password_len: number;
+};
+export const getSecurity = () => apiFetch<Security>("/me/security");
+export const sendSecurityCode = () =>
+  apiFetch<{ sent: boolean; email: string }>("/me/security/code", { method: "POST" });
+export type Proof = { current_password?: string; code?: string };
+export const setPassword = (password: string, password2: string, proof: Proof) =>
+  apiFetch<{ ok: boolean } & Security>("/me/password", {
+    method: "POST",
+    body: JSON.stringify({ password, password2, ...proof }),
+  });
+export const changeEmail = (email: string, proof: Proof) =>
+  apiFetch<{ ok: boolean; pending: string; note: string }>("/me/email", {
+    method: "POST",
+    body: JSON.stringify({ email, ...proof }),
+  });
+
 /* ── what may be drawn ── */
 export type Capabilities = Record<string, boolean>;
 export const getCapabilities = () => apiFetch<Capabilities>("/capabilities");

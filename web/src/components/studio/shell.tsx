@@ -32,6 +32,7 @@ import {
   LogOut,
   PanelLeft,
   Scissors,
+  Settings,
   Workflow,
 } from "lucide-react";
 import { API_URL, ApiError, goToSignIn, signOut } from "@/lib/api";
@@ -51,7 +52,7 @@ import { requestNewSession } from "@/lib/assistant";
 /* eslint-disable @next/next/no-img-element */
 import "@/app/studio/studio.css";
 
-export type ViewId = "studio" | "projects" | "assets" | "pipeline" | "director" | "cut" | "elements" | "queue";
+export type ViewId = "studio" | "projects" | "assets" | "pipeline" | "director" | "cut" | "elements" | "queue" | "settings";
 
 const NAV: { id: ViewId; label: string; href: string; icon: typeof House; external?: boolean }[] = [
   { id: "studio", label: "Studio", href: "/studio", icon: House },
@@ -74,6 +75,9 @@ const TABS: { label: string; href: string; view: ViewId }[] = [
 ];
 
 const VIEW_BY_PATH: [string, ViewId][] = [
+  // settings is reached from the account menus, not the rail (2026-10-03):
+  // its own view id so no rail entry lights up while it is open
+  ["/studio/settings", "settings"],
   ["/studio/projects", "projects"],
   ["/studio/flows", "director"],
   ["/studio/cut", "cut"],
@@ -370,6 +374,9 @@ export function StudioShell({ children }: { children: ReactNode }) {
                       {a.label}
                     </button>
                   ))}
+                  <Link href="/studio/settings" role="menuitem" onClick={() => setMenu(false)}>
+                    <Settings strokeWidth={1.6} /> Settings
+                  </Link>
                   <button type="button" onClick={signOut}>
                     <LogOut strokeWidth={1.6} /> Sign out
                   </button>
@@ -440,6 +447,9 @@ export function StudioShell({ children }: { children: ReactNode }) {
                         {a.label}
                       </button>
                     ))}
+                    <Link href="/studio/settings" role="menuitem" onClick={() => setHmenu(false)}>
+                      <Settings strokeWidth={1.6} /> Settings
+                    </Link>
                     <button type="button" onClick={signOut}>
                       <LogOut strokeWidth={1.6} /> Sign out
                     </button>

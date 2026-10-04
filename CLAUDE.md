@@ -192,6 +192,14 @@ venv/bin/python -m ops.canonicalize_shot_refs [--account <slug>] [--write]
 # Refuses a non-empty target and never guesses the DSN; --dry-run counts.
 venv/bin/python -m ops.copy_sqlite_to_postgres --dsn "$DATABASE_URL" [--dry-run] [--truncate]
 
+# SUPABASE AUTH EMAIL — what is set (custom SMTP, the four templates, Site
+# URL, the hourly limit) and the whole setup in one PATCH through the
+# Management API (docs/SUPABASE_EMAIL_TEMPLATES.md). Needs a personal access
+# token in SUPABASE_ACCESS_TOKEN; `report` is read-only, `apply` touches only
+# the flags given and refuses a field the live config does not carry.
+venv/bin/python -m ops.supabase_auth_email report
+venv/bin/python -m ops.supabase_auth_email apply --templates [--smtp-host ...] [--dry-run]
+
 # SIGN-IN — seed the auth tables once (idempotent); real login guards /ui + /api
 venv/bin/python -m src.accounts seed you@example.com   # identity is Supabase Auth's
 
@@ -246,7 +254,32 @@ pages deliberately stay open as the dev console. Env: `SUPABASE_URL`,
 work — see .env.example), `SESSION_SECRET` (ephemeral dev secret with a stderr note
 when unset). Tests stand in for GoTrue behind the one seam `auth.gotrue` and sign
 real HS256 tokens with a test secret. Not built yet, deliberately: an invite UI,
-sign-out-everywhere; password reset and email verification are Supabase's now.
+sign-out-everywhere (docs/BACKLOG.md #22); email verification is Supabase's.
+**Passwords and settings (2026-10-03, Mike: "Supabase didn't send a code or allow a new user
+to create a password").** The sign-in page's password step now offers "Create a password"
+(`/auth/signup`, with a confirm field) and "Forgot your password?" (`/auth/forgot` → GoTrue
+`/recover` with a PKCE challenge → `/auth/reset`: the emailed CODE with a new password on one
+screen, or the emailed LINK through `/auth/callback`, which parks the recovery session and
+lands on a new-password screen instead of signing in). `/studio/settings` (the account menus)
+is the person's own page: rename, set a first password or change one, change the email, see
+and switch workspaces. **Every password or email write re-proves the person first** — their
+current password (`/token?grant_type=password`) or a code mailed by `POST /api/me/security/code`
+(`/recover`, verified as `type=recovery`) — because GoTrue takes `PUT /user` only AS the person
+and this app stores no token of theirs; the one-call session is minted, used and dropped
+(`auth.user_session_by_password` / `user_session_by_code` / `set_user_fields`; the `gotrue`
+seam gained `token=`). `users.password_set_at` (additive column) is what the page reads for
+"set" vs "change"; a password sign-up, login, reset or change stamps it, and unknown reads as
+not set. An email change is only a request until the person clicks Supabase's confirmation;
+`accounts.claim` moves the mirror row's email to the identity's at the next sign-in (never
+onto an address another row holds). **The code not arriving is a Supabase dashboard matter,
+not code:** its built-in mailer delivers only to the org's own members, and the default
+templates carry no `{{ .Token }}` — `.env.example`'s Supabase block and `docs/RUNBOOK.md`
+2026-10-03 say what to set. **The emailed LINK is `GET /auth/confirm?token_hash=&type=`**
+(same day, read off the live auth logs: a tester's PKCE link failed in a mail app's browser
+and was pre-fetched by Gmail's scanner): verified server-side with GoTrue's
+`POST /verify {type, token_hash}`, no verifier cookie, any browser; a `recovery` link lands
+on the new-password step. `docs/SUPABASE_EMAIL_TEMPLATES.md` is the four template bodies to
+paste; `/auth/callback` stays for OAuth and for a template not yet switched.
 **The React studio gets its session through a handoff, never cross-site (2026-09-14,
 found on the live account).** `zeropage-web.fly.dev` and `zeropage-studio.fly.dev` are
 different sites (fly.dev is a public suffix), so the API's cookie was a third-party cookie

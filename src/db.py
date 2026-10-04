@@ -680,6 +680,25 @@ def add_billing_columns(conn: psycopg.Connection) -> list[str]:
         conn.execute(f"ALTER TABLE accounts ADD COLUMN {PLAN_COLUMN} TEXT")
         added.append(PLAN_COLUMN)
     return added
+PASSWORD_SET_AT_COLUMN = "password_set_at"
+
+
+def add_password_set_at_column(conn: psycopg.Connection) -> bool:
+    """Additive ALTER TABLE on `users` (2026-10-03, the settings page):
+    when THIS app last set a password for the person -- a password
+    sign-up, a password login, a reset, a change on /studio/settings.
+    GoTrue never says whether a user has one, so the settings page reads
+    this to offer "Set a password" or "Change password"; NULL means not
+    known, which the page treats as not set (the emailed code still
+    works either way, and a password login stamps it)."""
+    if not table_exists(conn, "users"):
+        return False
+    if PASSWORD_SET_AT_COLUMN in columns(conn, "users"):
+        return False
+    conn.execute(f"ALTER TABLE users ADD COLUMN {PASSWORD_SET_AT_COLUMN} TEXT")
+    return True
+
+
 def add_scout_instagram_column(conn: psycopg.Connection) -> bool:
     """Additive ALTER TABLE on `accounts`, add_prompt_edits_teach_column's
     twin (2026-09-28): no backfill, every account FALSE, and the one way on

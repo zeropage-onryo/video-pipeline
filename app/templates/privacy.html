@@ -80,63 +80,57 @@ footer{padding-top:24px;border-top:1px solid var(--line);font-family:'IBM Plex M
   <div class="eyebrow">Legal</div>
   <h1>Privacy Policy</h1>
   <p class="dek">What Zero Page collects, why, and how it is handled — across the studio itself and the third-party services it connects to.</p>
-  <div class="meta">Effective 17 Sep 2026 &nbsp;·&nbsp; Zero Page, operated by Michael Massaad</div>
-
+  <div class="meta">Effective 3 Oct 2026 &nbsp;·&nbsp; Zero Page, operated by Michael Massaad</div>
   <section>
     <div class="shead"><span class="snum">01</span><h2>What this is</h2></div>
-    <p>Zero Page ("the Studio") is an AI content studio: it turns ideas, scripts and reference photography into concepts, scene prompts and AI-generated images and video. It is operated as a small, invite-based product by Michael Massaad, not a public consumer app with open sign-up.</p>
+    <p>Zero Page ("the Studio") is an AI pre-production studio: it turns ideas, scripts and reference photography into scene prompts, keyframes and AI-generated video. It is operated by Michael Massaad, trading as Zero Page Films, from the United States. Anyone can sign up; a new workspace starts with a small one-time grant of trial credits, and everything beyond that is paid for through the plans on the <a href="{{ studio_site }}/pricing">pricing page</a>.</p>
   </section>
-
   <section>
-    <div class="shead"><span class="snum">02</span><h2>Accounts</h2></div>
-    <p>Signing in uses Supabase Auth, either by email and password or by OAuth through a provider such as Google or Discord. Zero Page never sees or stores your password with those providers — they authenticate you and return a verified email address, which Supabase and Zero Page use to identify your account. A session is kept in a single signed, HTTP-only cookie on your device; signing out clears it. Zero Page sets no advertising or tracking cookies.</p>
+    <div class="shead"><span class="snum">02</span><h2>Signing in</h2></div>
+    <p>Signing in uses Supabase Auth, either by email and password or through Google or Discord. Zero Page never sees or stores your password with those providers. When you sign in with Google or Discord, the Studio receives only your basic profile: your email address, display name and profile picture. They are used to create and identify your account and for nothing else. Zero Page's use of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noreferrer">Google API Services User Data Policy</a>, including the Limited Use requirements.</p>
+    <p>A session is kept in a single signed, HTTP-only cookie on your device, valid for 30 days; signing out clears it. One further cookie remembers which workspace you had open, and your browser's own storage keeps an unsent draft so it survives a reload. Zero Page sets no advertising or tracking cookies and loads no analytics scripts.</p>
   </section>
-
   <section>
     <div class="shead"><span class="snum">03</span><h2>What's collected</h2></div>
     <ul>
-      <li><span class="label">Account</span> — email address and account identifier.</li>
-      <li><span class="label">Production material</span> — photos, reference images and other media you upload, plus the concepts, prompts and AI-generated images and video produced from them.</li>
-      <li><span class="label">Reference sources</span> — where you connect a service like Instagram or Pinterest, the Studio reads boards, pins or posts from an account you authorize, to gather visual reference for your own projects.</li>
-      <li><span class="label">Your own provider keys</span> — if you add an API key for a rendering service, it is stored against your account and used only to run your own generations.</li>
-      <li><span class="label">Usage</span> — basic operational data (timestamps, error logs, model-call counts) used to keep the pipeline running, meter cost and grade output quality.</li>
+      <li><span class="label">Account</span> — email address, display name, profile picture, an account identifier, and which workspaces you belong to.</li>
+      <li><span class="label">Production material</span> — the photos, reference images, audio and video you upload; the characters, props and places you add; and the ideas, scene prompts, keyframes, rendered clips and cuts produced from them. A web link you paste into the Guide is fetched once, by the Studio, to read that page's own preview image.</li>
+      <li><span class="label">Billing</span> — your plan, your credit balance and a ledger of what each render and still cost. Card details are entered on Stripe's pages and held by Stripe; the Studio stores a Stripe customer identifier and the email on it, never a card number.</li>
+      <li><span class="label">Connected model accounts</span> — optionally, your own ChatGPT or Claude sign-in, if you connect one to write with. The signed-in session those providers issue is kept on the Studio's server, scoped to your account, used only when you ask that model to work, and removed when you press Disconnect.</li>
+      <li><span class="label">Usage</span> — basic operational data (timestamps, error logs, model-call counts and their cost) used to keep the pipeline running, meter spend and grade output quality.</li>
     </ul>
   </section>
-
   <section>
     <div class="shead"><span class="snum">04</span><h2>Third-party services</h2></div>
     <p>The Studio relies on a small set of providers to function, each under its own privacy policy:</p>
     <ul>
-      <li><span class="label">Supabase</span> — authentication and database storage.</li>
-      <li><span class="label">Google (Gemini API)</span> — AI writing, reasoning and image generation over your material.</li>
-      <li><span class="label">fal.ai</span> — video rendering. When you approve a render, the scene's prompt and its reference images are sent to fal.ai, which runs the model you picked (from Kling, ByteDance, Lightricks, Alibaba or Google).</li>
+      <li><span class="label">Supabase</span> — authentication and database storage. The sign-in step may be served under a zeropage.studio address or a supabase.co one; both are this project.</li>
+      <li><span class="label">Google (Gemini API)</span> — writing and judging scenes, describing the photos you upload, and drawing keyframes and reference sheets from them.</li>
+      <li><span class="label">fal.ai</span> — video rendering. When you approve a render, the shot's prompt and its reference images are sent to fal.ai, which runs the model you picked (from Kling, ByteDance, Lightricks, Alibaba or Google). When you index footage in the editor, a clip's speech is transcribed there too.</li>
+      <li><span class="label">Serper</span> — the web image search behind the Guide's reference suggestions. It receives the search text only, never your material.</li>
+      <li><span class="label">Stripe</span> — payments and subscriptions.</li>
       <li><span class="label">Cloudflare R2</span> — storage for reference images and rendered media.</li>
-      <li><span class="label">Meta (Instagram Graph API) / Pinterest API</span> — read-only reference gathering from accounts you explicitly authorize.</li>
+      <li><span class="label">OpenAI and Anthropic</span> — only if you connect your own ChatGPT or Claude account, and only for the work you send to it.</li>
       <li><span class="label">Vercel and Fly.io</span> — application hosting.</li>
     </ul>
-    <p class="dim">None of these providers receive more than what is needed to perform their function, and Zero Page does not authorize any of them to use Studio data for advertising.</p>
+    <p class="dim">The Studio's research scout also reads public feeds and the operator's own connected Instagram, Pinterest and YouTube accounts for visual reference. It never reads a member's social accounts: the Studio asks for no access to them. None of the providers above receive more than what is needed to perform their function, and Zero Page does not authorize any of them to use Studio data for advertising.</p>
   </section>
-
   <section>
     <div class="shead"><span class="snum">05</span><h2>What doesn't happen</h2></div>
-    <div class="card">Zero Page does not sell data, run ads, or share your media, images or account details with data brokers or marketers. Reference-gathering integrations are read-only — the Studio never posts, edits or deletes anything on a connected account without an explicit action from you.</div>
+    <div class="card">Zero Page does not sell data, run ads, train models on your material, or share your media, images or account details with data brokers or marketers. Nothing is posted anywhere on your behalf: every render lands in your Queue, and publishing is an explicit action a person takes.</div>
   </section>
-
   <section>
     <div class="shead"><span class="snum">06</span><h2>Retention &amp; control</h2></div>
-    <p>Production material and account data are kept for as long as your account is active. You can ask for your account and its data to be deleted, or revoke any connected third-party account (under that service's own connected-apps settings), at any time — see contact below.</p>
+    <p>Production material and account data are kept for as long as your account is active. Deleting a render in the Studio removes it from your library at once; the file itself is kept until your account is deleted, so a scene that used it keeps playing. You can disconnect a connected model account at any time from its settings, and you can ask for your account and all of its data to be deleted — see contact below.</p>
   </section>
-
   <section>
     <div class="shead"><span class="snum">07</span><h2>Children</h2></div>
     <p>Zero Page is a professional production tool and is not directed at or knowingly used by children under 13.</p>
   </section>
-
   <section>
     <div class="shead"><span class="snum">08</span><h2>Changes</h2></div>
     <p>If this policy changes materially, the effective date above will be updated. Continued use of the Studio after a change means you accept the revised policy.</p>
   </section>
-
   <section>
     <div class="shead"><span class="snum">09</span><h2>Contact</h2></div>
     <p>Questions about this policy or your data can be sent to <a href="mailto:mikemassaad@gmail.com">mikemassaad@gmail.com</a>.</p>
