@@ -402,6 +402,24 @@ IMAGE_MODELS: dict[str, dict] = {
         "checked": "2026-10-04 (fal page via search: $0.03/image; image_size >= 960x960 px, all IMAGE_SIZES are)",
         "source": "https://fal.ai/models/fal-ai/bytedance/seedream/v4/text-to-image",
     },
+    "gpt-image-2": {
+        "label": "GPT Image 2",
+        "note": "OpenAI's image model; strong on text and instructions, takes up to 16 references.",
+        # the OPENAI namespace, not fal-ai/ (the Wan / Seedance lesson)
+        "endpoint": "openai/gpt-image-2",
+        "edit": "openai/gpt-image-2/edit",
+        # three named sizes, priced each; `quality` is sent explicitly at
+        # medium -- fal's default is high, four times the price
+        "size": "named",
+        "sizes": {"square": "1024x1024", "portrait": "1024x1536", "landscape": "1536x1024"},
+        "quality": "medium",
+        "max_references": 16,
+        "params": ("image_size", "quality"),
+        "usd_by_size": {"1024x1024": 0.053, "1024x1536": 0.042, "1536x1024": 0.042},
+        "checked": ("2026-10-04 (fal page via search: medium 1024x1024 $0.053, 1024x1536 "
+                    "$0.042; 1536x1024 assumed the same as its portrait twin -- re-check)"),
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+    },
     "ideogram3": {
         "label": "Ideogram 3",
         "note": "Graphic, typographic, poster-like. Text-only.",
@@ -440,6 +458,14 @@ def image_dims(aspect: Optional[str]) -> tuple[int, int]:
     return IMAGE_SIZES.get(aspect or "", IMAGE_SIZES[DEFAULT_IMAGE_ASPECT])
 
 
+def named_size(spec: dict, aspect: Optional[str]) -> str:
+    """A `size: "named"` model's size string for the composer's aspect:
+    square, portrait or landscape by the frame's orientation."""
+    w, h = image_dims(aspect)
+    key = "square" if w == h else "portrait" if h > w else "landscape"
+    return spec["sizes"][key]
+
+
 def image_usd(model: str, aspect: Optional[str] = None, references: int = 0) -> float:
     """One still's provider USD on `model` at `aspect` -- per-image models
     as listed, per-megapixel models at the frame's pixel count rounded UP
@@ -453,6 +479,8 @@ def image_usd(model: str, aspect: Optional[str] = None, references: int = 0) -> 
         raise ValueError(f"image model must be one of {IMAGE_MODEL_NAMES}, got {model!r}")
     if "usd_per_image" in spec:
         return round(float(spec["usd_per_image"]), 4)
+    if "usd_by_size" in spec:
+        return round(float(spec["usd_by_size"][named_size(spec, aspect)]), 4)
     w, h = image_dims(aspect)
     mp = megapixels(w, h)
     base = float(spec["usd_per_megapixel"])
@@ -491,11 +519,15 @@ def image_request(model: str, prompt: str, *, aspect: Optional[str] = None,
     used = 0
     if refs and spec.get("edit"):
         endpoint = spec["edit"]
-        body["image_urls"] = refs[:8]
+        body["image_urls"] = refs[:spec.get("max_references", 8)]
         used = len(body["image_urls"])
     size = spec.get("size", "wh")
     w, h = image_dims(aspect)
-    if size == "aspect":
+    if spec.get("quality"):
+        body["quality"] = spec["quality"]
+    if size == "named":
+        body["image_size"] = named_size(spec, aspect)
+    elif size == "aspect":
         body["aspect_ratio"] = aspect if aspect in IMAGE_SIZES else DEFAULT_IMAGE_ASPECT
     elif size == "enum":
         body["image_size"] = IMAGE_SIZE_ENUM.get(aspect or "", "square_hd")
