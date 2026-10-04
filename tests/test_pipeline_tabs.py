@@ -119,12 +119,11 @@ def test_assets_search_is_cross_category_and_prefix_first(tmp_db):
 
 # --- director landing -------------------------------------------------------
 
-def test_director_landing_zeropage_chips_are_the_real_formats(tmp_db):
+def test_director_landing_has_no_brand_chips(tmp_db):
+    """The only chips were Zero Page's format skeletons -- a brand idea,
+    removed 2026-10-04. The field stays for the client, always empty."""
     res = client.get("/api/director/landing?brand=zeropage").json()
-    assert res["brand"] == "zeropage"
-    assert [c["label"] for c in res["chips"]] == \
-        [name for name, _ in shootgen.ZEROPAGE_FORMATS[:4]]
-    assert res["chips"][0]["text"] == shootgen.ZEROPAGE_FORMATS[0][1]
+    assert res["brand"] == "zeropage" and res["chips"] == []
 
 
 def test_director_landing_antihero_has_sample_but_no_chips(tmp_db):

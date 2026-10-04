@@ -591,7 +591,11 @@ def privacy_policy(request: Request):
     studio site renders the same policy (web/src/app/privacy/page.tsx);
     a change to one is a change to both."""
     return templates.TemplateResponse(
-        request, "privacy.html", {"site_url": seo.site_url()},
+        request, "privacy.html",
+        {"site_url": seo.site_url(),
+         # the pricing page lives on the studio site, the origin
+         # STUDIO_URL names; without one the link stays on this origin
+         "studio_site": _site_origin(auth.studio_url()) or seo.site_url()},
     )
 
 
@@ -1145,8 +1149,7 @@ async def grade_fresh(request: Request, account_id: int = Depends(auth.dev_accou
         references = shootgen.reference_block(spark=spark, db_path=None)
         prompt = shootgen.build_ideas_prompt(
             preprod.list_locations(account_id=account_id), brand, None, spark, 1,
-            references=references,
-            formats=shootgen.ranked_formats(dsn=None))
+            references=references)
         ideas = shootgen.parse_ideas_response(
             generate_with_retry(genai.Client(api_key=api_key),
                                 shootgen.MODEL, prompt, stage="concepts",

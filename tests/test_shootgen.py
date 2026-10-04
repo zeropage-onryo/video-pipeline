@@ -55,18 +55,16 @@ LOCATION_NAMES = ["hallway", "garage"]
 
 # ---------- brands ----------
 
-def test_load_brand_returns_antihero_block():
-    text = shootgen.load_brand("antihero")
-    assert "ANTIHERO" in text
-    assert "crushed shadows" in text
-    assert "ROUGH CHANNEL DIRECTION" in text
-    assert "always take priority" in text
-
-
-def test_load_brand_returns_zeropage_block():
-    text = shootgen.load_brand("zeropage")
-    assert "ZERO PAGE" in text
-    assert "client" in text.lower()
+def test_load_brand_carries_no_house_brand_outside_a_project():
+    """No brand notes (2026-10-04, Mike's call): a brand is a label, and
+    outside a project the {brand} slot says only that the idea and the
+    references are the whole brief -- the same words for both brands."""
+    assert not (shootgen.PROMPTS_DIR / "brands.txt").exists()
+    antihero, zeropage = shootgen.load_brand("antihero"), shootgen.load_brand("zeropage")
+    assert antihero == zeropage and "whole brief" in " ".join(antihero.split())
+    for leftover in ("ANTIHERO", "ZERO PAGE", "crushed shadows", "dark, contrasty",
+                     "nocturnal", "viral"):
+        assert leftover not in antihero
 
 
 def test_load_brand_rejects_unknown_brand():
@@ -81,7 +79,7 @@ def test_build_concept_prompt_includes_locations_and_brand(tmp_db):
     prompt = shootgen.build_concept_prompt(locations, "antihero", None, "someone at the door")
 
     assert "hallway" in prompt and "garage" in prompt
-    assert "ANTIHERO" in prompt
+    assert shootgen.load_brand("antihero") in prompt     # the no-project note
     assert "someone at the door" in prompt
     for placeholder in ("{locations}", "{brand}", "{client}", "{spark}"):
         assert placeholder not in prompt
@@ -379,7 +377,7 @@ def test_build_ideas_prompt_includes_locations_brand_and_count(tmp_db):
     prompt = shootgen.build_ideas_prompt(locations, "antihero", None, "a door", count=8)
 
     assert "hallway" in prompt and "garage" in prompt
-    assert "ANTIHERO" in prompt
+    assert shootgen.load_brand("antihero") in prompt     # the no-project note
     assert "a door" in prompt
     assert "8" in prompt
     for placeholder in ("{locations}", "{brand}", "{client}", "{spark}", "{count}"):

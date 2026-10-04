@@ -117,7 +117,7 @@ from typing import Optional
 import requests
 from dotenv import load_dotenv
 
-from . import db, inspiration, looks, refbin, winners
+from . import db, inspiration, refbin, winners
 from .gemini_utils import strip_fences
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -215,54 +215,29 @@ CREATE INDEX IF NOT EXISTS idx_scout_bin_pass ON scout_bin (pass_id);
 # Real signal, wrong altitude -- you cannot shoot a monetisation update.
 # These ask what images and staging are landing, which is the thing a
 # spark can actually be made of.
-WEB_QUERIES = {
-    "antihero": [
-        "what dystopian, outbreak and rain-soaked neon future worlds are "
-        "landing in short film and AI video right now, and what one rule "
-        "makes each world feel real",
-        "what night motorcycle and rider imagery inside sci-fi or horror "
-        "worlds is resonating this month, and what makes it work",
-    ],
-    "zeropage": [
-        "what creature designs, monsters and invented in-world products are "
-        "landing in short horror and sci-fi film right now, and what one "
-        "detail makes them unsettling",
-        "what imagined worlds -- zombie, cyberpunk, flooded city, company "
-        "town -- are people building in AI video this month, and what "
-        "hook frame opens them",
-    ],
-}
+# ONE set for every brand (2026-10-04, Mike's call: no brand ideas). These
+# were brand-keyed -- "creature designs, monsters ... short horror and sci-fi",
+# "zombie, cyberpunk, flooded city", "outbreak and rain-soaked neon" -- and
+# since every spark must be grounded in what the crawl finds, the queries
+# WERE the genre. The dict shape stays only because callers index by brand.
+_WEB_QUERIES = [
+    "what product, food and everyday moments are stopping thumbs in short-form "
+    "video right now, and what happens in frame one",
+    "what imagined places and one-rule worlds people are building in AI video "
+    "this month -- comedy, ads, sport, spectacle -- and what hook frame opens them",
+]
+WEB_QUERIES = {"antihero": _WEB_QUERIES, "zeropage": _WEB_QUERIES}
 # Ordered by RELEVANCE, not view count. Sorting a broad keyword by views
 # over a 30-day window returns whatever went globally viral that month --
 # the first run of this came back with an Encanto clip and a football
 # meme against "ai video shorts" -- which is noise, not format signal.
-SHORTS_QUERIES = {
-    "antihero": ["motorcycle cyberpunk night short film", "rider zombie apocalypse cinematic"],
-    # NOT "faceless channel format" -- that returns videos ABOUT running a
-    # faceless channel (monetisation, policy, how-to), which is the
-    # business, not the look. These ask for the look itself.
-    "zeropage": ["creature design short film ai", "dystopian world short film cinematic"],
-}
-BRAND_NOTES = {
-    "antihero": ("Michael's PERSONAL brand. He is the character and the "
-                 "world is happening to him: Michael and the white Ducati "
-                 "inside an outbreak, a rain-neon future, a flooded city. "
-                 "Personal stakes -- what he wants, what he loses -- carried "
-                 "by the world's rule. The machine rides with him; it is not "
-                 "the subject. Same face, different world, different wardrobe, "
-                 "different thing covering him -- every time."),
-    "zeropage": ("The viral engine. Worlds, creatures and invented products "
-                 "are the star; no recurring person. A stranger, a monster or "
-                 "the product itself is the character -- a new face and a new "
-                 "wardrobe every spark, never the same one twice. Ad-shaped "
-                 "beats welcome: the product does something on screen. Built "
-                 "to stop a thumb in frame one."),
-}
-
-
-def look_block(brand: str) -> str:
-    """See src/looks.py -- kept here as the name both producers call."""
-    return looks.look_block(brand)
+_SHORTS_QUERIES = ["product reveal short film", "one rule short film cinematic"]
+SHORTS_QUERIES = {"antihero": _SHORTS_QUERIES, "zeropage": _SHORTS_QUERIES}
+# There are no brand notes and no house look here (2026-10-04, Mike's call:
+# "you're building the brand and look from scratch" with each project). The
+# crawl writes sparks off the photographs it finds and nothing else; the
+# BRAND_NOTES it used to paste into the digest and the research brief set
+# every spark in an outbreak or a rain-neon future, with a monster in it.
 
 
 def _now() -> str:
@@ -517,10 +492,8 @@ def _first_img(html: str) -> str:
 # counts, and instagram.hashtag_id caches ids forever), so a fixed small
 # set costs its budget once and then runs free. Churning this list is
 # what would starve the lane.
-INSTAGRAM_TAGS = {
-    "antihero": ["motorcyclephotography", "nightphotography", "moodygrams"],
-    "zeropage": ["experimentalfilm", "liminalspaces", "analoghorror"],
-}
+_INSTAGRAM_TAGS = ["cinematography", "productphotography", "shortfilm"]   # no brand genre
+INSTAGRAM_TAGS = {"antihero": _INSTAGRAM_TAGS, "zeropage": _INSTAGRAM_TAGS}
 
 # THE HASHTAG HALF IS ITS OWN OPT-IN (2026-09-26). Hashtag search needs
 # Meta's "Instagram Public Content Access" feature, which is App Review,
@@ -694,10 +667,8 @@ def _ig_signal(post: dict, source: str) -> dict:
 # already does the real work (Pinterest exposes no public pin search, so
 # it reads his own board through the v5 API and ranks pins by keyword
 # overlap with the query below). See [[scout_sources_audit_2026-09-08]].
-PINTEREST_QUERIES = {
-    "antihero": "motorcycle rain neon outbreak apocalypse night rider",
-    "zeropage": "creature monster dystopian uncanny invented product world",
-}
+_PINTEREST_QUERY = "product place light hook frame cinematic"   # no brand genre
+PINTEREST_QUERIES = {"antihero": _PINTEREST_QUERY, "zeropage": _PINTEREST_QUERY}
 
 
 def gather_pinterest(brand: str, limit: int = MAX_PER_LANE) -> list[dict]:
@@ -862,9 +833,6 @@ def build_digest_prompt(brand: str, signals: list[dict], count: int,
     template = DIGEST_PROMPT_PATH.read_text()
     recent = recent or []
     return (template
-            .replace("{brand}", brand)
-            .replace("{brand_note}", BRAND_NOTES.get(brand, ""))
-            .replace("{look}", look_block(brand))
             .replace("{count}", str(count))
             .replace("{avoid}", avoid or "")
             .replace("{recent}", "\n".join(f"- {s}" for s in recent) or "(nothing yet)")

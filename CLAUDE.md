@@ -911,8 +911,8 @@ is yours, in Resolve, by hand.
 - **`src/locations.py`** — scans `locations/<name>/`, sends each space's photos to Gemini vision,
   stores `{space, light_sources, textures, angles, constraints}` per location. Incremental: a
   space already described is skipped unless `--force`.
-- **`src/shootgen.py`** — the scene writer, over a brand block from `prompts/brands.txt` plus
-  whatever grounding the edge handed it. **Two live entry points:**
+- **`src/shootgen.py`** — the scene writer, over the active project's brief (`load_brand`;
+  no brand blocks since 2026-10-04) plus whatever grounding the edge handed it. **Two live entry points:**
   `generate_scene_concept` (ONE scene, ONE prompt — the single-concept Create and the nightly
   graph's `gen_concept`) and `generate_scene_concepts` (N takes off one idea in a single call,
   so they vary against each other rather than being rolled independently — what Studio's Create
@@ -1142,7 +1142,7 @@ is yours, in Resolve, by hand.
   scoped to holding a concept's scenes together shot to shot for continuity. **Arrival is
   the nodes, never a composer:** the view opens onto the newest planned concept's scene
   graph; the chat-first brief composer (pre-filled with `gold_standard_example()`'s opening
-  blocks + quick-start chips from `ZEROPAGE_FORMATS` for Zero Page, served by
+  blocks; its quick-start chips were Zero Page's format skeletons and are always empty since 2026-10-04, served by
   `GET /api/director/landing`; submitting runs the same `/api/pipeline/run` engine and
   lands the result on the canvas) is the fallback when nothing is planned yet, or an
   explicit "← Brief" away. Any concept opens directly from its card's Director button —
@@ -1532,7 +1532,8 @@ is yours, in Resolve, by hand.
   new: **novelty detection had silently stopped working** for every graph row. Split now —
   `generate_scene_concept(spark=..., steer=...)`: the prompt sees both, the row sees the
   direction. Filmmaker corrections ride in `steer` too, still consumed so each note steers once.
-- **A faceless brand is handed no cast** (2026-09-01). `ground_entities` passed every asset on
+- **A faceless brand is handed no cast** (2026-09-01; REVERSED 2026-10-04 -- `CAST_BRANDS` is
+  gone and every brand gets the cast, see "NO LIKENESS AND NO BRAND IDEAS"). `ground_entities` passed every asset on
   file to the shared `{cast}` socket regardless of brand, and that socket says *"reference the
   uploaded photos as the EXACT face … name them"* — flatly against `concept_zeropage.txt`'s
   *"FACELESS — no recurring person; any human is anonymous."* The cast block won: **every Zero
@@ -1766,23 +1767,42 @@ is yours, in Resolve, by hand.
   **The LOOK belongs to the project too (2026-10-02, Mike's call: the studio has no house
   style).** `projects.look` (additive column, `''` by default; POST/PATCH `/api/projects`
   take `look`, no UI box yet) is resolved in ONE place, `looks.look_block`: a project in
-  scope (passed, or `project_context.current()`) -> its look, or `""` when none is typed --
-  NEVER the brand file, which is how a house style comes back unnoticed; no project (the
-  night, the crawl, research) -> `prompts/look_<brand>.txt`; else `""`. All seven readers
-  follow the ContextVar with no argument threaded. Both scene writers carry a `{look}` slot
-  (`scenes_prompt.txt` gained one -- the Studio Create never read the look before) and
-  print `prompts/look_unset.txt` in its place when it is empty. `look_zeropage.txt` was
-  rewritten the same day as a genre-free NOTE (no horror finish, creature, "wrongness" or
-  rain). `tests/test_project_look.py` guards the order and the no-genre regression.
-  The same day `brands.txt` `[zeropage]` lost "dark, contrasty" and `gold_standard.md` was
-  rewritten off the monster/portal dark comedy (same five-part shape, one take, daylight).
+  scope (passed, or `project_context.current()`) -> its look, or `""` when none is typed;
+  anything else -> `""`. All readers follow the ContextVar with no argument threaded. Both
+  scene writers carry a `{look}` slot (`scenes_prompt.txt` gained one -- the Studio Create
+  never read the look before) and print `prompts/look_unset.txt` in its place when it is
+  empty. **NO BRAND LOOK AND NO BRAND NOTES (2026-10-04, Mike: "you're building the brand
+  and look from scratch" with each project).** `prompts/look_zeropage.txt`,
+  `look_antihero.txt` and `brands.txt` are deleted, and so is `scout.BRAND_NOTES`. A brand
+  is a label now: `shootgen.load_brand(brand)` returns the active project's brief + memory,
+  or `prompts/project_unset.txt` ("the idea and the attached references are the whole
+  brief") -- the scene templates' old CHANNEL DIRECTION slot reads PROJECT, keep its
+  must-haves and nevers, the idea and images win on anything else. The crawl digest and the
+  research brief carry no BRAND / brand note / LOOK lines and no Antihero/Zero Page casting
+  rules. **NO LIKENESS AND NO BRAND IDEAS (same day, Mike: "Remove all likeness and brand
+  ideas. Only keep templates related to shots and prompts to help the brain").** Gone:
+  refgen's Michael identity path (his photos, the Pro model, the stubble opener, the framing
+  rule) -- a hook frame naming anyone renders like any other; `shot.HOUSE_LOOK` ("noir,
+  gritty, crushed shadows, desaturated", the default on every `Shot`) -- a Shot has no look
+  unless given one and a renderer with no look writes no Style line, and the negative is
+  only `CLEAN_NEGATIVE` ("no text overlays, no logos"); `ZEROPAGE_FORMATS` +
+  `format_skeletons` + `ranked_formats` + `src/format_feed.py` and the Director chips;
+  `CAST_BRANDS` (every brand gets the cast); the brand-keyed crawl queries (one neutral set,
+  the dicts kept only because callers index by brand); `inspiration.DEFAULT_ACCOUNTS` (three
+  Antihero noir creator profiles seeded from code -- the rows already in a database stay
+  until someone deletes them); the Zero Page-only concept/ideas/shot-list templates,
+  `design-system-antihero.md`, `brief.txt`, `settings.txt` and the dead edit/pitch prompts;
+  the "solo filmmaker" / "Zero Page Films" persona lines in the live templates; the
+  "Michael finds a cyclops" card-line examples. KEPT on purpose: the uncanny judge (Mike's
+  call), the brand LABELS (their removal is scoped separately), and the dead camera-era
+  `concept_prompt.txt` / `shotlist_prompt.txt` with their uncalled builders.
+  `gold_standard.md` was rewritten on 2026-10-02 off the monster/portal
+  dark comedy (same five-part shape, one take, daylight). `tests/test_project_look.py`
+  guards all of it.
   The exemplar is NO LONGER a winner: startup used to seed it onto the `winning_prompts`
   shelf (`seed_gold_standard`); live row #2 and its 4 chunks were deleted by hand, and
   `app.main.retire_gold_standard` now runs at boot instead, removing any row with that exact
-  note (and its chunks, via `winners.retire_by_note`) and seeding nothing. NOT ported with it, left on
-  `wip/main-checkout-2026-09-28` as Mike's to decide: `load_brand` forcing every run to
-  zeropage, `CAST_BRANDS` gaining zeropage (lifts the faceless rule), and the rewritten
-  brand/look/scene prompts.
+  note (and its chunks, via `winners.retire_by_note`) and seeding nothing.
 - **THE COMPOSER IS DRAWN TO THE "ZPF COMPOSER DIRECTIONS" MOCK (2026-10-02, Mike:
   "create a similar look to the images shown in our mock design" -- the first port,
   Direction A, had not translated).** `web/src/app/studio/page.tsx` +

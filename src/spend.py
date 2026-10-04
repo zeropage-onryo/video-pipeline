@@ -139,7 +139,7 @@ DEFAULT_PRICES: dict[str, dict[str, float]] = {
     "gemini-2.5-flash-image":   {"input": 0.30, "output": 2.50, "cached": 0.03, "image": 0.039},
     "gemini-3-pro-image-preview": {"input": 2.00, "output": 12.00, "cached": 0.20, "image": 0.134},
     # The same model under its non-preview name, which is what
-    # NANO_BANANA_MODEL and refgen.LIKENESS_MODEL actually ask for. Missing
+    # NANO_BANANA_MODEL actually asks for. Missing
     # until 2026-09-28, so every Pro still was metered UNPRICED -- and,
     # once stills were charged, would have priced off the fallback.
     "gemini-3-pro-image":       {"input": 2.00, "output": 12.00, "cached": 0.20, "image": 0.134},

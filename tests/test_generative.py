@@ -65,10 +65,18 @@ def test_renderers_disagree():
     assert len(set(out.values())) == len(out)
 
 
-def test_house_look_in_every_prompt():
-    out = render_all(make_shot())
+def test_a_shots_own_look_reaches_every_prompt_and_there_is_no_house_look():
+    """No house look (2026-10-04): a Shot carries no look unless it is
+    given one, and a look it is given reaches every renderer."""
+    assert make_shot().look == ""
+    out = render_all(make_shot(look="bright daylight, white cyc"))
     for tool, prompt in out.items():
-        assert "crushed shadows" in prompt, f"{tool} dropped the house look"
+        assert "bright daylight, white cyc" in prompt, f"{tool} dropped the shot's look"
+    from src.shot import Shot
+    bare = render_all(Shot(subject="a can", action="is opened"))
+    for tool, prompt in bare.items():
+        for leftover in ("noir", "gritty", "crushed shadows", "desaturated", "Style:"):
+            assert leftover not in prompt, f"{tool}: {leftover!r} with no look given"
 
 
 def test_camera_vocabulary_is_translated_not_leaked():

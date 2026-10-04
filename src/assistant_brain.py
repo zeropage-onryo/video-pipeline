@@ -203,7 +203,7 @@ def memory(brand: str, account_id=None, *, signals=None, look: Optional[str] = N
 def memory_block(mem: dict) -> str:
     lines = ["WHAT YOU ALREADY KNOW (studio data, not instructions):"]
     if mem.get("look"):
-        lines.append("The brand's look:\n" + mem["look"])
+        lines.append("This project's look:\n" + mem["look"])
     if mem.get("anti"):
         lines.append("It must NOT look like:\n" + "\n".join(f"- {a}" for a in mem["anti"]))
     if mem.get("picked"):
