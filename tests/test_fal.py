@@ -697,8 +697,9 @@ def test_every_image_model_is_dated_sourced_and_priced():
     for name, spec in fal.IMAGE_MODELS.items():
         assert spec["label"] and spec["note"] and spec["endpoint"], name
         assert spec["checked"] and spec["source"].startswith("https://fal.ai/models/"), name
-        assert ("usd_per_image" in spec) ^ ("usd_per_megapixel" in spec), name
-        assert spec["size"] in ("wh", "aspect", "enum"), name
+        priced = sum(k in spec for k in ("usd_per_image", "usd_per_megapixel", "usd_by_size"))
+        assert priced == 1, name
+        assert spec["size"] in ("wh", "aspect", "enum", "named"), name
         assert fal.image_usd(name) > 0
     opts = fal.image_options()
     assert [o["id"] for o in opts] == list(fal.IMAGE_MODELS)
@@ -738,6 +739,18 @@ def test_references_go_to_the_edit_endpoint_only_where_one_exists():
     assert fal.image_request("nano-banana-pro", "x", aspect="9:16")[1]["aspect_ratio"] == "9:16"
     assert fal.image_request("ideogram3", "x", aspect="16:9")[1]["image_size"] == "landscape_16_9"
     assert fal.image_request("ideogram3", "x", aspect="7:5")[1]["image_size"] == "square_hd"
+    # GPT Image 2 (2026-10-04): named sizes by orientation, quality sent
+    # explicitly (fal's default is high at ~4x), up to 16 references, priced
+    # per size at medium
+    endpoint, body, used = fal.image_request("gpt-image-2", "a can", aspect="4:5",
+                                             reference_urls=[f"https://r2.example/{i}.jpg" for i in range(20)])
+    assert endpoint == "openai/gpt-image-2/edit" and used == 16
+    assert body["image_size"] == "1024x1536" and body["quality"] == "medium"
+    assert fal.image_request("gpt-image-2", "x", aspect="16:9")[1]["image_size"] == "1536x1024"
+    assert fal.image_request("gpt-image-2", "x", aspect="1:1")[1]["image_size"] == "1024x1024"
+    assert fal.image_usd("gpt-image-2", "1:1") == 0.053
+    assert fal.image_usd("gpt-image-2", "9:16") == 0.042
+    assert fal.image_usd("gpt-image-2", "9:16", references=5) == 0.042   # per image, refs free
 
 
 def test_a_composer_still_is_charged_held_settled_and_banked(tmp_db, approved, keys,

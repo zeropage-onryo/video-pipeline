@@ -1221,3 +1221,10 @@ in the table and the `references` argument of `fal.image_usd` carry it. Still
 worth a glance at the live /api schema before the first paid render: the
 page text was read, not the schema itself. Seedream 4 wants `image_size` to
 total at least 960x960 pixels; every frame in `fal.IMAGE_SIZES` does.
+
+**GPT Image 2 added the same evening** (`openai/gpt-image-2` + `/edit`, Mike: "what about
+gpt"), from its fal page via search: medium quality is $0.053 at 1024x1024 and $0.042 at
+1024x1536; the 1536x1024 price was not in the text read and is ASSUMED equal to the
+portrait size -- confirm it on the page. `quality` is sent as `medium` on purpose (fal
+defaults to high, roughly four times the price). The exact `image_size` enum strings are
+what the page text named; the live /api schema is still the thing to glance at.
