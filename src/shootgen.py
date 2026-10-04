@@ -335,30 +335,28 @@ def reference_block(spark=None, client=None, db_path=None, picked_sources=None,
 
 
 def load_brand(brand: str) -> str:
-    """
-    One brand block out of prompts/brands.txt, keyed by [name]. Kept in
-    a text file rather than Python so the wording is editable without
-    touching code, same as brief.txt.
+    """What fills a template's {brand} slot: the active PROJECT -- its
+    brief and what it has learned (project_context.block()) -- or, outside
+    a project, prompts/project_unset.txt saying the idea and references are
+    the whole brief.
+
+    Until 2026-10-04 this read a fixed block per brand out of
+    prompts/brands.txt ("dark, contrasty, cinematic"; "a nocturnal loner"),
+    which every writer received as CHANNEL DIRECTION. Mike's call: there is
+    no house brand -- the brand and the look are built from scratch with
+    each project -- so the file is gone and a brand is only a label now.
+    The name stays because a dozen builders and their tests call it.
     """
     if brand not in preprod.BRANDS:
         raise ValueError(f"brand must be one of {preprod.BRANDS}, got {brand!r}")
-
-    text = (PROMPTS_DIR / "brands.txt").read_text()
-    marker = f"[{brand}]"
-    if marker not in text:
-        raise ValueError(f"no [{brand}] block in prompts/brands.txt")
-
-    block = text.split(marker, 1)[1]
-    # stop at the next [block] header, if any
-    for line in block.splitlines():
-        if line.startswith("[") and line.rstrip().endswith("]"):
-            block = block.split(line, 1)[0]
-            break
-    # the active project's brief + memory (src/project_context.py,
-    # 2026-09-28); "" outside a project, so the block reads exactly as before
     from . import project_context
     extra = project_context.block()
-    return block.strip() + (f"\n\n{extra}" if extra else "")
+    if extra:
+        return extra
+    try:
+        return (PROMPTS_DIR / "project_unset.txt").read_text().strip()
+    except OSError:
+        return ""
 
 
 def location_variety_note(locations: list, lock: bool = False) -> str:

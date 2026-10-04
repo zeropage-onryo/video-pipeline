@@ -6,12 +6,6 @@ the idea calls for, with a character, a product or a place in them -- with
 reference images behind them, so tonight's automated batch has something
 better to generate from than a rotating text file.
 
-BRAND: {brand}
-{brand_note}
-
-═══ THE LOOK -- background craft; an idea may depart from it entirely ═══
-{look}
-
 ═══ WHAT A SPARK IS ═══
 The rules below are the same ones the crawl's digest is held to. They are the
 authority. Read them and obey them; the sections about crawl signals and the
@@ -80,13 +74,11 @@ below disagrees with one named in the steps, the list is right:
    `add_spark` returned and the HOOK FRAME you wrote for it -- what is on
    screen in frame one, one line, concrete, with its light ("a red-faced
    judge in a too-tight blazer behind a trestle table as a pie the size of
-   a tractor tyre slides into frame, bright midday sun"). The look's craft
-   notes are added for you; do not restate them. This is the only way an
-   invented world gets a reference that looks like the world. If Michael is
-   in the frame (antihero), the hook frame is MEDIUM OR CLOSER on him -- his
-   face a third of the frame, the world behind him -- and it copies his
-   LIKENESS line from the look word for word rather than paraphrasing it
-   (a paraphrase is how his hair and stubble drifted) -- the renderer attaches
+   a tractor tyre slides into frame, bright midday sun"). There is no house
+   look added to it, so the light you name is the light it gets. This is the
+   only way an invented world gets a reference that looks like the world. If
+   Michael is in the frame, the hook frame is MEDIUM OR CLOSER on him -- his
+   face a third of the frame, the world behind him -- the renderer attaches
    his real photos itself; a wide frame with a 50px face is not a
    reference for him, it is a reference for a stranger. One call per spark;
    the reply names the renderer (Midjourney when it is available) and

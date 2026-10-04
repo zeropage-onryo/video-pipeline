@@ -1,9 +1,10 @@
 """The LOOK belongs to the project, not the brand (2026-10-02, Mike's call).
 
 `looks.look_block` is the one place the look resolves: the project's own
-look -> the brand file -> "". A project in scope answers by itself, and a
-project with no look typed gets NO look -- falling back to the brand file
-there is exactly how a house style comes back without anybody noticing.
+look, or "". Since 2026-10-04 there are no brand files to fall back to and
+no brand notes either -- "you're building the brand and look from scratch"
+with each project -- so a run with no project, or a project with no look
+typed, gets NO look and NO house brand.
 
 Each test names the line it guards.
 """
@@ -42,9 +43,10 @@ def a_project(look=""):
     return {"id": 1, "title": "Untitled", "brief": "", "memory": [], "look": look}
 
 
-# guards: a project in scope never falls through to the brand file
+# guards: there is no look but a project's -- no file, no fallback
 def test_a_project_with_no_look_gets_no_look():
-    assert looks.look_block("zeropage"), "the brand file is the no-project answer"
+    assert sorted(looks.PROMPTS_DIR.glob("look_*.txt")) == [looks.PROMPTS_DIR / "look_unset.txt"]
+    assert looks.look_block("zeropage") == "" and looks.look_block("antihero") == ""
     assert looks.look_block("zeropage", project=a_project()) == ""
     assert looks.look_block("zeropage", project={"title": "row from before"}) == ""
     with project_context.active(a_project("   ")):
@@ -52,13 +54,12 @@ def test_a_project_with_no_look_gets_no_look():
         assert looks.look_block("antihero") == ""
 
 
-# guards: the order -- project look first
-def test_a_project_look_wins_over_the_brand_file():
-    brand_file = looks.look_block("zeropage")
+# guards: a project's look is the look, and only inside the project
+def test_a_project_look_is_the_only_look():
     assert looks.look_block("zeropage", project=a_project(DAYLIGHT)) == DAYLIGHT
     with project_context.active(a_project(DAYLIGHT)):
         assert looks.look_block("zeropage") == DAYLIGHT
-    assert looks.look_block("zeropage") == brand_file            # reset after
+    assert looks.look_block("zeropage") == ""                    # reset after
 
 
 # guards: look_block's degrade-never-raise contract
@@ -119,9 +120,12 @@ def test_a_scene_prompt_in_a_project_carries_its_look(build):
 
 # guards: the nightly walk (no project) still reads the brand note
 @pytest.mark.parametrize("build", [build_scene_brief, build_scenes])
-def test_with_no_project_the_brand_note_is_the_look(build):
+def test_with_no_project_there_is_no_look_and_no_house_brand(build):
     prompt = build("zeropage")
-    assert looks.look_block("zeropage") in prompt
+    assert looks.unset_note() in prompt
+    assert shootgen.load_brand("zeropage") in prompt       # "no project" note
+    for leftover in ("ZERO PAGE", "ANTIHERO", "CHANNEL DIRECTION", "viral engine"):
+        assert leftover not in prompt
 
 
 # guards: the column, and resolution per project rather than per account
@@ -213,3 +217,16 @@ def test_the_crawl_prompts_carry_no_house_genre(tmp_db):
     for name, text in (("digest", digest), ("brief", brief)):
         found = [w for w in CRAWL_HOUSE_GENRE if w in text.lower()]
         assert found == [], f"the {name} still carries the house genre: {found}"
+
+
+# guards: no brand notes reach the crawl either -- BRAND_NOTES and the
+# BRAND / THE LOOK lines are gone from the digest and the research brief
+def test_the_crawl_carries_no_brand_note_or_look(tmp_db):
+    from src import research_agent, scout
+    scout.init(tmp_db)
+    assert not hasattr(scout, "BRAND_NOTES")
+    digest = scout.build_digest_prompt("zeropage", [], 4)
+    brief = research_agent.build_brief("antihero", 4, dsn=tmp_db)
+    for text in (digest, brief):
+        assert "BRAND:" not in text and "THE LOOK" not in text
+        assert "Antihero:" not in text and "Zero Page:" not in text

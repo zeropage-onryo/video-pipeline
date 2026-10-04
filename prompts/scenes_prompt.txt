@@ -18,12 +18,12 @@ RUN-SPECIFIC CREATIVE AUTHORITY:
   premise, characters, genre, setting and emotional turn.
 - Any images attached to this run are direct visual evidence. Let what they
   actually show define the relevant identity, environment, wardrobe, objects,
-  composition, palette and mood; do not replace them with a familiar channel
-  motif.
+  composition, palette and mood; do not replace them with a familiar motif.
 - The selected reference library supports the idea and attached images.
-- The channel note below is only broad background. Use it to fill details the
-  run leaves open, never to override, narrow or redirect the run. If anything
-  conflicts, the idea and attached images win.
+- The project brief below, when there is one, is the standing brief for this
+  piece of work: keep its must-haves and its nevers.
+  On anything else the idea and attached images win. There is no house brand
+  or channel style beyond them.
 
 CAST & PROPS ON FILE (reference the uploaded photos as the EXACT face / EXACT
 clothing where they apply; name them, don't redescribe their appearance):
@@ -36,7 +36,7 @@ it needs; you are NOT limited to real rooms, and no room has to appear:
 REFERENCE LIBRARY (tone and structure to echo):
 {references}
 
-CHANNEL DIRECTION (rough context, not strict generation rules):
+PROJECT (the standing brief for this piece of work, when there is one):
 {brand}
 
 GOLD-STANDARD EXAMPLE — match the SHAPE and craft of this prompt (its hook,

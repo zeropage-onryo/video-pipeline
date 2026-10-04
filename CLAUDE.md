@@ -871,8 +871,8 @@ is yours, in Resolve, by hand.
 - **`src/locations.py`** — scans `locations/<name>/`, sends each space's photos to Gemini vision,
   stores `{space, light_sources, textures, angles, constraints}` per location. Incremental: a
   space already described is skipped unless `--force`.
-- **`src/shootgen.py`** — the scene writer, over a brand block from `prompts/brands.txt` plus
-  whatever grounding the edge handed it. **Two live entry points:**
+- **`src/shootgen.py`** — the scene writer, over the active project's brief (`load_brand`;
+  no brand blocks since 2026-10-04) plus whatever grounding the edge handed it. **Two live entry points:**
   `generate_scene_concept` (ONE scene, ONE prompt — the single-concept Create and the nightly
   graph's `gen_concept`) and `generate_scene_concepts` (N takes off one idea in a single call,
   so they vary against each other rather than being rolled independently — what Studio's Create
@@ -1726,16 +1726,23 @@ is yours, in Resolve, by hand.
   **The LOOK belongs to the project too (2026-10-02, Mike's call: the studio has no house
   style).** `projects.look` (additive column, `''` by default; POST/PATCH `/api/projects`
   take `look`, no UI box yet) is resolved in ONE place, `looks.look_block`: a project in
-  scope (passed, or `project_context.current()`) -> its look, or `""` when none is typed --
-  NEVER the brand file, which is how a house style comes back unnoticed; no project (the
-  night, the crawl, research) -> `prompts/look_<brand>.txt`; else `""`. All seven readers
-  follow the ContextVar with no argument threaded. Both scene writers carry a `{look}` slot
-  (`scenes_prompt.txt` gained one -- the Studio Create never read the look before) and
-  print `prompts/look_unset.txt` in its place when it is empty. `look_zeropage.txt` was
-  rewritten the same day as a genre-free NOTE (no horror finish, creature, "wrongness" or
-  rain). `tests/test_project_look.py` guards the order and the no-genre regression.
-  The same day `brands.txt` `[zeropage]` lost "dark, contrasty" and `gold_standard.md` was
-  rewritten off the monster/portal dark comedy (same five-part shape, one take, daylight).
+  scope (passed, or `project_context.current()`) -> its look, or `""` when none is typed;
+  anything else -> `""`. All readers follow the ContextVar with no argument threaded. Both
+  scene writers carry a `{look}` slot (`scenes_prompt.txt` gained one -- the Studio Create
+  never read the look before) and print `prompts/look_unset.txt` in its place when it is
+  empty. **NO BRAND LOOK AND NO BRAND NOTES (2026-10-04, Mike: "you're building the brand
+  and look from scratch" with each project).** `prompts/look_zeropage.txt`,
+  `look_antihero.txt` and `brands.txt` are deleted, and so is `scout.BRAND_NOTES`. A brand
+  is a label now: `shootgen.load_brand(brand)` returns the active project's brief + memory,
+  or `prompts/project_unset.txt` ("the idea and the attached references are the whole
+  brief") -- the scene templates' old CHANNEL DIRECTION slot reads PROJECT, keep its
+  must-haves and nevers, the idea and images win on anything else. The crawl digest and the
+  research brief carry no BRAND / brand note / LOOK lines and no Antihero/Zero Page casting
+  rules. Michael's LIKENESS line lived in `look_antihero.txt` and went with it; when he is
+  added as an element it belongs in his character notes (the live `characters` table was
+  empty on the day). `gold_standard.md` was rewritten on 2026-10-02 off the monster/portal
+  dark comedy (same five-part shape, one take, daylight). `tests/test_project_look.py`
+  guards all of it.
   The exemplar is NO LONGER a winner: startup used to seed it onto the `winning_prompts`
   shelf (`seed_gold_standard`); live row #2 and its 4 chunks were deleted by hand, and
   `app.main.retire_gold_standard` now runs at boot instead, removing any row with that exact

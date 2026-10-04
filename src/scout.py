@@ -117,7 +117,7 @@ from typing import Optional
 import requests
 from dotenv import load_dotenv
 
-from . import db, inspiration, looks, refbin, winners
+from . import db, inspiration, refbin, winners
 from .gemini_utils import strip_fences
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -243,30 +243,11 @@ SHORTS_QUERIES = {
     # business, not the look. These ask for the look itself.
     "zeropage": ["creature design short film ai", "dystopian world short film cinematic"],
 }
-# No genre here (2026-10-02): these are pasted into the digest and the
-# research brief as {brand_note}, and "an outbreak, a rain-neon future" /
-# "a monster" in them steered every spark the crawl wrote, whatever the
-# photographs showed. The world comes from the image and the idea.
-BRAND_NOTES = {
-    "antihero": ("Michael's PERSONAL brand. He is the character and the "
-                 "world is happening to him: Michael inside whatever world "
-                 "the idea and its photograph set -- a city at night or a "
-                 "summer wedding, an ordinary kitchen or a flooded street. "
-                 "Personal stakes -- what he wants, what he loses -- carried "
-                 "by the world's rule. Same face, different world, different "
-                 "wardrobe, different thing covering him -- every time."),
-    "zeropage": ("The viral engine. Worlds, places and products are the "
-                 "star; no recurring person. A stranger or the product itself "
-                 "is the character -- a new face and a new wardrobe every "
-                 "spark, never the same one twice. Ad-shaped beats welcome: "
-                 "the product does something on screen. Built to stop a thumb "
-                 "in frame one, in whatever genre the photograph supports."),
-}
-
-
-def look_block(brand: str) -> str:
-    """See src/looks.py -- kept here as the name both producers call."""
-    return looks.look_block(brand)
+# There are no brand notes and no house look here (2026-10-04, Mike's call:
+# "you're building the brand and look from scratch" with each project). The
+# crawl writes sparks off the photographs it finds and nothing else; the
+# BRAND_NOTES it used to paste into the digest and the research brief set
+# every spark in an outbreak or a rain-neon future, with a monster in it.
 
 
 def _now() -> str:
@@ -866,9 +847,6 @@ def build_digest_prompt(brand: str, signals: list[dict], count: int,
     template = DIGEST_PROMPT_PATH.read_text()
     recent = recent or []
     return (template
-            .replace("{brand}", brand)
-            .replace("{brand_note}", BRAND_NOTES.get(brand, ""))
-            .replace("{look}", look_block(brand))
             .replace("{count}", str(count))
             .replace("{avoid}", avoid or "")
             .replace("{recent}", "\n".join(f"- {s}" for s in recent) or "(nothing yet)")

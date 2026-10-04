@@ -1217,13 +1217,14 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
 
     @server.tool(annotations=writes)
     def imagine_reference(finding_id: int, hook_frame: str) -> dict:
-        """Render ONE reference still for a spark, in the brand's look,
-        from its hook frame -- and bank it behind the spark.
+        """Render ONE reference still for a spark from its hook frame --
+        and bank it behind the spark.
 
         This is how an invented world gets a reference: no photograph
-        of a flooded mall lit by generators exists, so one is rendered.
+        of a pie the size of a tractor tyre exists, so one is rendered.
         Pass the `hook_frame` you wrote for the spark (what is on screen
-        in frame one), nothing else -- the look is added here. Midjourney
+        in frame one, and its light), nothing else -- there is no house
+        look to add, so the light you name is the light it gets. Midjourney
         first, then Gemini's image model; the result says which one
         rendered and the `credits` it cost the caller (a still, charged
         like any other; not charged on the operator's exempt account).

@@ -226,9 +226,6 @@ def build_brief(brand: str, count: int, dsn=None, tools=None,
         f"- {t.name}: {(t.description or '').strip().splitlines()[0]}"
         for t in (tools or [])) or "(the server published none)"
     return brief.format(
-        brand=brand,
-        brand_note=scout.BRAND_NOTES.get(brand, ""),
-        look=scout.look_block(brand),
         count=count,
         max_images=scout.MAX_BIN_IMAGES,
         rules=rules,

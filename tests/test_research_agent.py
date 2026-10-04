@@ -294,11 +294,10 @@ def test_the_brief_carries_the_digest_prompt_verbatim(tmp_db):
     # rewrite the idea-agent skill got, so the crawl stops handing back
     # moments dressed as stories
     assert "RE-READS THE OPENING" in brief
-    assert scout.BRAND_NOTES["zeropage"] in brief
     assert str(scout.MAX_BIN_IMAGES) in brief
-    # the look and the world gate reach the agent the same way (2026-09-05)
-    assert scout.look_block("zeropage") in brief
     assert "BUILD THE WORLD" in brief
+    # no brand note and no house look reach the agent (2026-10-04)
+    assert "BRAND:" not in brief and "THE LOOK" not in brief
 
 
 def test_the_brief_names_what_is_already_banked(tmp_db):

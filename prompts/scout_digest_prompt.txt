@@ -8,18 +8,12 @@ room by a real person anymore: crowds, exteriors, vehicles, weather, other eras
 and invented places are all allowed, and so is an ordinary day. No genre is the
 default. One thing is NOT allowed: a world with nothing happening in it.
 
-BRAND: {brand}
-{brand_note}
-
-═══ THE LOOK — a note, not a genre ═══
-{look}
-
-Every spark has to be worth LOOKING at. Two slates were rejected on 2026-09-04
-that were structurally perfect and visually nothing: quiet hands-only stories
-in beige rooms. Frame one has to show something. The look above is background
-craft, not a constraint on what you may invent: each spark takes its place,
-time of day, light and weather from its photograph and its idea, and a slate
-whose sparks all share one palette has failed.
+═══ FRAME ONE — worth looking at ═══
+Two slates were rejected on 2026-09-04 that were structurally perfect and
+visually nothing: quiet hands-only stories in beige rooms. Frame one has to
+show something. There is no house look and no brand style: each spark takes
+its place, time of day, light and weather from its photograph and its idea,
+and a slate whose sparks all share one palette has failed.
 
 ═══ THE IMAGES — what you are allowed to build from (Mike, 2026-09-08) ═══
 Every spark below MUST be grounded in one of the numbered reference images
@@ -42,13 +36,11 @@ Every spark is set in a WORLD with one rule of its own — an invented city or a
 ordinary kitchen, either is fine, as long as the rule holds or breaks on screen
 — and names at least two of:
 
-  CHARACTER  who this is happening to. Antihero: Michael, inside the world —
-             described by what he is doing and wearing there, never by a
-             vehicle. Do not mention the Ducati, a bike, or riding at all
-             unless IMAGE grounding this spark (below) actually shows one
-             (Mike, 2026-09-08: take the bike wording out entirely — a
-             concept follows the image, not a habit). Zero Page: a stranger,
-             never the same one twice — or the product IS the character.
+  CHARACTER  who this is happening to — a person described by what they are
+             doing and wearing there, or the product itself. Do not reach
+             for a vehicle unless the IMAGE grounding this spark actually
+             shows one (Mike, 2026-09-08: a concept follows the image, not a
+             habit).
   PRODUCT    a product people in this world want, real-feeling or invented —
              a drink, a gadget, a dish, a service. It can be the hook, the
              reward or the trap. Ad-shaped beats are welcome here: the
@@ -64,10 +56,8 @@ ordinary kitchen, either is fine, as long as the rule holds or breaks on screen
              wedding suit a size too small, paint-spattered overalls, a
              referee's kit, a sealed white hazmat with one cracked visor.
              Never the same outfit twice in a slate.
-  FACE       who we are looking at. Antihero: Michael's face (photos on
-             file) — but his hair, helmet, mask, scars, age and what
-             covers him change with the world. Zero Page: a NEW face
-             every spark — age, build, skin, hair, expression — or the
+  FACE       who we are looking at — age, build, skin, hair, expression —
+             described so no two sparks in a slate look alike, or the
              product in the face's place.
 
   VARIETY IS A GATE, NOT A PREFERENCE (Mike, 2026-09-06: "use different
@@ -75,8 +65,7 @@ ordinary kitchen, either is fine, as long as the rule holds or breaks on screen
     · no two sparks in the same world, and none in a world listed under
       ALREADY USED RECENTLY unless its rule is new;
     · no two sparks in the same wardrobe;
-    · no two Zero Page sparks with the same face; no two Antihero sparks
-      with Michael dressed the same way;
+    · no two sparks with the same face;
     · no two sparks in the same register or the same light. Spread the
       slate across at least three registers — everyday-gone-wrong · product
       spot · comedy · romance · sport · spectacle · sci-fi · period
@@ -252,7 +241,7 @@ Return ONLY JSON, no prose and no code fence:
    "world": "<one line: the world and its one rule>",
    "cast": "<one line: character / product / place / creature this uses>",
    "wardrobe": "<one line: what they wear, specific to this world>",
-   "face": "<one line: who we see — Michael and what covers/changes him, or a new stranger described>",
+   "face": "<one line: who we see, described>",
    "hook_frame": "<one line: what is on screen in frame one, and its light>",
    "want": "<one line: what they want, and why now>",
    "rule": "<one line: the single rule this idea turns on>",

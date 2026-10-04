@@ -305,7 +305,7 @@ def instructions(brand, with_tools: bool = False, assistant=None):
             name=assistant.get("name", ""), tone=assistant.get("tone", ""),
             stage=assistant.get("stage", ""), page=assistant.get("page", ""),
             mem=assistant.get("memory"))
-    return text + "\n\nBrand guidance:\n" + shootgen.load_brand(brand)
+    return text + "\n\nProject:\n" + shootgen.load_brand(brand)
 
 
 ASSISTANT_FIELDS = ("questions", "directions", "nudge", "stage")

@@ -230,8 +230,8 @@ def test_digest_prompt_carries_the_avoid_list_and_the_recent_sparks(tmp_db):
     assert "an old idea" in prompt
     assert "something found" in prompt
     assert "{signals}" not in prompt and "{brand}" not in prompt
-    # the per-brand look (2026-09-05) is injected, not left as a placeholder
-    assert "{look}" not in prompt and "LOOK" in prompt
+    # no brand note and no look slot any more (2026-10-04)
+    assert "{look}" not in prompt and "{brand_note}" not in prompt
 
 
 def test_format_signals_omits_lanes_that_only_reported_an_error():
