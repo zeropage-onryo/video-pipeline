@@ -95,56 +95,6 @@ IMAGE_REFS_NOTE = (
     "subject, the light. Don't ignore them and write a generic idea.)"
 )
 
-# Zero Page rides FORMAT skeletons, not rooms. These are evergreen vertical
-# short-form structures that travel -- the vehicle each faceless-uncanny beat
-# rides. They are the static seed; the format-trend feed (refresh_metrics /
-# RAG) can override this list with what's actually spiking, but Zero Page can
-# always generate from these alone. Kept here rather than a file because they
-# are structural, not brand wording -- a fixed vocabulary the trend feed ranks
-# against, not something edited per-run.
-ZEROPAGE_FORMATS = [
-    ("The Reveal", "Hold on an ordinary frame, then one element shifts or is "
-     "revealed to be wrong. The reveal is the whole video."),
-    ("Slow Push-In", "One continuous push toward a subject until the wrong "
-     "detail fills the frame. No cuts, escalating unease."),
-    ("Freeze on the Wrong Thing", "Motion, then a hard stop on a detail that "
-     "shouldn't be there. The freeze names the wrongness."),
-    ("POV Walk-In", "First-person entering a space and discovering the "
-     "uncanny thing. The viewer arrives at it with the camera."),
-    ("Seamless Loop", "The last frame flows into the first so it repeats "
-     "forever, the wrongness compounding on each pass."),
-    ("Satisfying, Then Broken", "A satisfying, tactile process (pouring, "
-     "stacking, cleaning) that turns wrong at the last beat."),
-    ("Text-Hook Cold Open", "An on-screen line poses a question in second 1; "
-     "the grounded visual answers it wrong."),
-    ("The Repetition Break", "A repeated action or pattern establishes a "
-     "rhythm, then one repetition breaks it in a way that shouldn't happen."),
-]
-
-
-def ranked_formats(**kwargs):
-    # -> list of (name, how) tuples, or None on failure (CI pins Python 3.9,
-    # so no bare `X | None` return annotation here -- that needs 3.10+).
-    """format_feed.rank_formats(), wired into the actual generation calls.
-    None on any failure -- build_ideas_prompt/build_concept_prompt already
-    fall back to the static evergreen ZEROPAGE_FORMATS order when formats is
-    None, so this stays an enhancement, never a gate, same contract as
-    reference_block / ground_rag."""
-    try:
-        from . import format_feed  # local import -- see docstring above
-        return format_feed.rank_formats(**kwargs)
-    except Exception as e:
-        print(f"note: format feed degraded to evergreens: {e}", file=sys.stderr)
-        return None
-
-
-def format_skeletons(formats=None) -> str:
-    """The hot-format menu Zero Page rides, as the model sees it. Defaults to
-    the evergreen ZEROPAGE_FORMATS; the trend feed passes a ranked live list
-    later. Never a gate -- an empty/failed feed falls back to the evergreens."""
-    formats = formats or ZEROPAGE_FORMATS
-    return "\n".join(f"- {name}: {how}" for name, how in formats)
-
 # Ideation's automatic layer (changed 2026-08-20, narrowed further from
 # the first opt-in-everything pass): craft/structuring advice -- platform
 # mechanics, edit anatomy, what earns a swipe/watch -- not the brand's own
@@ -724,28 +674,6 @@ def cast_detail(asset: dict) -> str:
     return "\n".join(lines)
 
 
-# Brands that get a CAST block at all. Zero Page is absent on purpose
-# (2026-09-01): its own brief says NO RECURRING STAR -- people may appear
-# and their faces may be seen, but nobody comes back -- while the shared
-# {cast} socket says "reference the uploaded photos as the EXACT face ...
-# name them". Two instructions in direct contradiction, and the cast
-# block won: every Zero Page concept on the board named Michael, Cyclops
-# or the Ducati, in the brand whose entire identity is that nobody
-# recurs.
-#
-# This is the right cut under the corrected rule too (Mike, 2026-09-02).
-# Zero Page was never a no-faces channel -- a stranger in close-up is a
-# perfectly good Zero Page frame. What it must not be is tied to his
-# personal account, and the cast block is exactly the thing that ties it
-# there: Michael, by name, with reference photos of his face.
-#
-# Scoped by BRAND, not by a column on characters: an asset is not owned
-# by a brand -- the same jacket could appear in either -- what differs is
-# whether a brand is allowed to NAME a recurring person at all. That is a
-# property of the brand, so it lives here.
-CAST_BRANDS = ("antihero",)
-
-
 STILL_RUBRIC = """Write a Midjourney prompt for a single STILL that will be the
 reference / first frame of this video shot. Describe ONLY what's in the frame --
 subject, composition, framing/lens, lighting, mood, style. NO motion, NO camera
@@ -858,13 +786,12 @@ def beat_moments(shot_prompt: str, *, count: int = BEATS_PER_SHOT,
 
 
 def cast_for(brand: str, characters: list, props: list, *, detail: bool = False) -> str:
-    """The cast block a brand is allowed to see. "" for a brand with no
-    recurring star,
-    which format_cast's callers already handle -- an empty cast falls
+    """The cast block -- the same for every brand since 2026-10-04 (Mike's
+    call: no brand ideas). Zero Page used to get none (CAST_BRANDS, the
+    "no recurring star" rule); a brand is only a label now, so the
+    elements on file are offered to every run. An empty cast still falls
     through to NO_CAST_NOTE, telling the model to describe appearance
     plainly instead of naming anyone."""
-    if brand not in CAST_BRANDS:
-        return ""
     return format_cast(characters, props, detail=detail)
 
 
@@ -929,21 +856,8 @@ def apply_pov(template: str, use_pov: bool) -> str:
 
 def build_concept_prompt(locations: list, brand: str, client=None, spark=None,
                          use_pov: bool = False, references: str = "",
-                         cast: str = "", formats=None,
+                         cast: str = "",
                          lock_location: bool = False) -> str:
-    # Zero Page runs its OWN engine -- faceless, fully-AI, format-driven, not
-    # grounded in his rooms. Antihero keeps the solo-filmmaker-at-home engine.
-    if brand == "zeropage":
-        template = (PROMPTS_DIR / "concept_zeropage.txt").read_text()
-        return (
-            template
-            .replace("{formats}", format_skeletons(formats))
-            .replace("{brand}", load_brand(brand))
-            .replace("{client}", f"CLIENT / SPEC TYPE: {client}" if client else "")
-            .replace("{spark}", f"TREND / SPARK: {spark}" if spark else "")
-            .replace("{references}", references or NO_REFERENCES_NOTE)
-            .replace("{example}", gold_standard_example() or NO_EXAMPLE_NOTE)
-        )
     template = apply_pov((PROMPTS_DIR / "concept_prompt.txt").read_text(), use_pov)
     return (
         template
@@ -960,20 +874,7 @@ def build_concept_prompt(locations: list, brand: str, client=None, spark=None,
 
 def build_ideas_prompt(locations: list, brand: str, client=None, spark=None,
                        count: int = DEFAULT_IDEA_COUNT, references: str = "",
-                       formats=None, lock_location: bool = False) -> str:
-    # Zero Page rides format skeletons + an uncanny beat, faceless and
-    # room-free; Antihero grounds ideas in his real spaces and recurring star.
-    if brand == "zeropage":
-        template = (PROMPTS_DIR / "concept_ideas_zeropage.txt").read_text()
-        return (
-            template
-            .replace("{formats}", format_skeletons(formats))
-            .replace("{brand}", load_brand(brand))
-            .replace("{client}", f"CLIENT / SPEC TYPE: {client}" if client else "")
-            .replace("{spark}", f"TREND / SPARK: {spark}" if spark else "")
-            .replace("{count}", str(count))
-            .replace("{references}", references or NO_REFERENCES_NOTE)
-        )
+                       lock_location: bool = False) -> str:
     template = (PROMPTS_DIR / "concept_ideas_prompt.txt").read_text()
     return (
         template
@@ -1001,24 +902,6 @@ def parse_ideas_response(text: str) -> list:
 
 def build_shotlist_prompt(locations: list, brand: str, client, concept: dict,
                           use_pov: bool = False, cast: str = "") -> str:
-    # Zero Page ships without a shoot -- every shot is AI-generated and
-    # faceless, so stage two has to run the same zeropage engine as stage
-    # one (build_concept_prompt / build_ideas_prompt) instead of the
-    # solo-filmmaker-at-home template. Without this branch, the real cast
-    # and locations on file (a named recurring character, his actual
-    # vehicle/room) leak straight into a Zero Page AI shot prompt.
-    if brand == "zeropage":
-        template = (PROMPTS_DIR / "shotlist_prompt_zeropage.txt").read_text()
-        return (
-            template
-            .replace("{brand}", load_brand(brand))
-            .replace("{client}", f"CLIENT / SPEC TYPE: {client}" if client else "")
-            .replace("{title}", concept.get("title") or "")
-            .replace("{format}", concept.get("format") or "")
-            .replace("{hook}", concept.get("hook") or "")
-            .replace("{logline}", concept.get("logline") or "")
-            .replace("{example}", gold_standard_example() or NO_EXAMPLE_NOTE)
-        )
     template = apply_pov((PROMPTS_DIR / "shotlist_prompt.txt").read_text(), use_pov)
     return (
         template
@@ -1157,7 +1040,7 @@ def apply_scene_bible(shots: list, bible: str) -> list:
 def generate_concept_ideas(brand: str, client=None, spark=None, gemini_client=None,
                            model: str = MODEL, count: int = DEFAULT_IDEA_COUNT,
                            use_pov: bool = False, db_path=None,
-                           references: str = "", formats=None,
+                           references: str = "",
                            only_locations=None,
                            account_id: Optional[int] = None,
 ) -> dict:
@@ -1183,12 +1066,8 @@ def generate_concept_ideas(brand: str, client=None, spark=None, gemini_client=No
 
     locations, lock_location = _apply_location_lock(locations, only_locations)
 
-    if formats is None:
-        formats = ranked_formats(**kwargs)
-
     prompt = build_ideas_prompt(locations, brand, client, spark, count,
-                                references=references, formats=formats,
-                                lock_location=lock_location)
+                                references=references, lock_location=lock_location)
     ideas = parse_ideas_response(generate_with_retry(gemini_client, model, prompt, stage="concepts"))
 
     concept_ids = preprod.save_concept_ideas(
@@ -1231,10 +1110,10 @@ what goes wrong. Name the character and the thing, never the craft: no camera,
 lens, grade, lighting or mood words, and never "a scene in which". Cut every
 adjective that is not doing work; "massive", "frustrated" and "mysterious" are
 the first to go.
-Good: "Michael finds a cyclops asleep in his bed"   (40 characters)
-Good: "Cyclops stretches the wall's latex until it tears"   (48)
-Bad:  "A raw handheld dark-comedy piece exploring domestic unease"   (craft, not action)
-Bad:  "Michael discovers a massive cyclops curiously inspecting his Ducati Panigale"   (76 — far too long)
+Good: "Judge cuts the thinnest slice of giant pie"   (42 characters)
+Good: "Bag scanner finds a suitcase of goldfish"   (40)
+Bad:  "A sun-drenched comedic piece exploring small-town pride"   (craft, not action)
+Bad:  "A nervous judge carefully cuts an enormous homemade pie at the busy county fair"   (79 — far too long)
 """
 
 
@@ -1734,7 +1613,7 @@ def _sentence(text: str) -> str:
 
 def director_prompt(shot: dict, concept=None) -> str:
     # concept: dict or None (CI pins Python 3.9, so no `dict | None`
-    # annotation here -- same constraint ranked_formats notes above).
+    # annotation here).
     """
     The OpenArt Director version of one planned shot: flowing natural
     language with the story context the terse per-tool prompts drop --

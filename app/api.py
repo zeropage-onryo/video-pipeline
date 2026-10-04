@@ -4167,10 +4167,10 @@ def presets_list():
 def director_landing(request: Request, brand: Optional[str] = None,
                      account_id: int = Depends(auth.current_account_id)):
     """Director tab's chat-first entry: a real pre-filled sample brief
-    (the gold-standard exemplar, shortened to its style + action blocks)
-    plus quick-start chips. Zero Page's chips are its real format
-    skeletons (ZEROPAGE_FORMATS); Antihero has no equivalent fixed list
-    yet, so it leads with the sample composer alone."""
+    (the gold-standard exemplar, shortened to its style + action blocks).
+    `chips` stays in the shape for the client but is always empty: the
+    only chips were Zero Page's "wrongness" format skeletons, a brand idea
+    removed on 2026-10-04."""
     from src import shootgen
 
     brand = brand if brand in preprod.BRANDS else (
@@ -4180,11 +4180,7 @@ def director_landing(request: Request, brand: Optional[str] = None,
     if sample:
         paragraphs = [p for p in sample.split("\n\n") if p.strip()]
         sample = "\n\n".join(paragraphs[:2])
-    chips = []
-    if brand == "zeropage":
-        chips = [{"label": name, "text": how}
-                 for name, how in shootgen.ZEROPAGE_FORMATS[:4]]
-    return {"brand": brand, "sample_prompt": sample, "chips": chips}
+    return {"brand": brand, "sample_prompt": sample, "chips": []}
 
 
 def _enhance_generate_prompt(gemini_client, prompt: str, *, preset=None,

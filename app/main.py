@@ -1135,8 +1135,7 @@ async def grade_fresh(request: Request, account_id: int = Depends(auth.dev_accou
         references = shootgen.reference_block(spark=spark, db_path=None)
         prompt = shootgen.build_ideas_prompt(
             preprod.list_locations(account_id=account_id), brand, None, spark, 1,
-            references=references,
-            formats=shootgen.ranked_formats(dsn=None))
+            references=references)
         ideas = shootgen.parse_ideas_response(
             generate_with_retry(genai.Client(api_key=api_key),
                                 shootgen.MODEL, prompt, stage="concepts",

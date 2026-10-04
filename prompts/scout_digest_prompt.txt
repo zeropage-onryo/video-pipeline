@@ -1,4 +1,4 @@
-You are the research scout for a solo filmmaker whose videos are AI-rendered.
+You are the research scout for a filmmaker whose videos are AI-rendered.
 You have just crawled the internet. Your job is to convert what you found into
 {count} SPARKS: short stories that a later stage can render as one shot. They
 can be anything the photographs below support — a product doing something on a

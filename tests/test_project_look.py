@@ -230,3 +230,51 @@ def test_the_crawl_carries_no_brand_note_or_look(tmp_db):
     for text in (digest, brief):
         assert "BRAND:" not in text and "THE LOOK" not in text
         assert "Antihero:" not in text and "Zero Page:" not in text
+
+
+# --- no likeness, no brand ideas (2026-10-04, Mike: "Remove all likeness and
+# brand ideas. Only keep templates related to shots and prompts") -----------
+
+CHARACTERS = [{"name": "Rosa", "role": "lead", "photo_count": 2,
+               "description": '{"look": "red raincoat"}'}]
+PROPS = [{"name": "Brass kettle", "photo_count": 1, "description": "{}"}]
+
+
+# guards: CAST_BRANDS is gone -- no brand is kept from the elements on file
+def test_every_brand_gets_the_cast_and_an_empty_cast_says_so():
+    assert not hasattr(shootgen, "CAST_BRANDS")
+    for brand in ("zeropage", "antihero"):
+        block = shootgen.cast_for(brand, CHARACTERS, PROPS)
+        assert "Rosa" in block and "Brass kettle" in block
+    prompt = shootgen.build_scene_brief_prompt("zeropage", spark="x",
+                                               cast=shootgen.cast_for("zeropage", [], []))
+    assert shootgen.NO_CAST_NOTE in prompt
+
+
+# guards: the crawl asks one neutral set of questions, whatever the brand
+def test_the_crawl_queries_carry_no_brand_genre():
+    from src import scout
+    every = (scout.WEB_QUERIES["zeropage"] + scout.SHORTS_QUERIES["zeropage"]
+             + scout.INSTAGRAM_TAGS["zeropage"] + [scout.PINTEREST_QUERIES["zeropage"]])
+    for table in (scout.WEB_QUERIES, scout.SHORTS_QUERIES, scout.INSTAGRAM_TAGS,
+                  scout.PINTEREST_QUERIES):
+        assert table["zeropage"] == table["antihero"]
+    text = " ".join(every).lower()
+    for genre in ("horror", "zombie", "cyberpunk", "monster", "creature", "dystopian",
+                  "outbreak", "neon", "motorcycle", "uncanny", "liminal"):
+        assert genre not in text, genre
+
+
+# guards: the brand templates and the formats that fed them are gone
+def test_no_brand_templates_or_formats_remain():
+    gone = ("concept_zeropage.txt", "concept_ideas_zeropage.txt",
+            "shotlist_prompt_zeropage.txt", "design-system-antihero.md", "brief.txt",
+            "settings.txt", "edit_prompt.txt", "edit_revise_prompt.txt", "pitch_prompt.txt",
+            "brands.txt", "look_zeropage.txt", "look_antihero.txt")
+    for name in gone:
+        assert not (shootgen.PROMPTS_DIR / name).exists(), name
+    for name in ("ZEROPAGE_FORMATS", "format_skeletons", "ranked_formats"):
+        assert not hasattr(shootgen, name), name
+    for brand in ("zeropage", "antihero"):                 # one template for every brand
+        assert shootgen.build_ideas_prompt([], brand, count=3) == \
+            shootgen.build_ideas_prompt([], "antihero", count=3)

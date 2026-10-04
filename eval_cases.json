@@ -1,13 +1,5 @@
 [
   {
-    "query": "what is the zero page films brand identity and tone",
-    "relevant": ["prompts/brief.txt"]
-  },
-  {
-    "query": "how long should a video run and how fast should it cut",
-    "relevant": ["prompts/settings.txt"]
-  },
-  {
     "query": "how do I write a Veo 3.1 prompt that directs dialogue or sound effects",
     "relevant": [".claude/skills/video-prompting/references/models/veo3/prompting.md"]
   },

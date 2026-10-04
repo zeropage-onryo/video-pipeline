@@ -54,17 +54,13 @@ SHOT_SIZE = (
 )
 
 
-# Zero Page Films house style, from prompts/brief.txt and settings.txt.
-# Every rendered prompt carries this so generated clips cut against real
-# footage without a visible seam.
-HOUSE_LOOK = (
-    "noir, gritty, high contrast, crushed shadows, desaturated, "
-    "warmth only from practical light sources"
-)
-HOUSE_NEGATIVE = (
-    "no subject addressing camera, no text overlays, no logos, "
-    "no lens flares, no upbeat or saturated colour grading"
-)
+# No house look (2026-10-04, Mike's call). This used to be the Zero Page
+# style from prompts/brief.txt -- "noir, gritty, high contrast, crushed
+# shadows, desaturated" -- defaulted onto EVERY Shot, with a negative that
+# banned saturated grading. A shot's look is what the shot or its project
+# says, and a renderer with no look writes no Style line. The negative
+# keeps only clean-frame craft that holds for any look.
+CLEAN_NEGATIVE = "no text overlays, no logos"
 HOUSE_ASPECT = "9:16"
 
 
@@ -86,8 +82,8 @@ class Shot:
     lighting: str = ""
     duration_s: float = 4.0
     aspect: str = HOUSE_ASPECT
-    look: str = HOUSE_LOOK
-    negative: str = HOUSE_NEGATIVE
+    look: str = ""
+    negative: str = CLEAN_NEGATIVE
     notes: str = ""
     audio: str = ""      # ambient/SFX direction for models that generate sound (Veo). No dialogue by house style.
     # URL or path to a real camera capture this AI shot is generated
@@ -165,13 +161,9 @@ VEO_CAMERA = {
 }
 
 # Veo's guide says to phrase exclusions as a described scene rather than an
-# abstract "no X" list, so the house negatives are rewritten as a positive
-# frame description for this model only.
-VEO_NEGATIVE = (
-    "a clean, unbranded frame with no on-screen text, logos, or lens flares; "
-    "the subject faces away from or past the lens and never addresses the camera; "
-    "colour stays muted and filmic, never saturated or upbeat"
-)
+# abstract "no X" list, so the clean-frame negative is rewritten as a
+# positive frame description for this model only.
+VEO_NEGATIVE = "a clean, unbranded frame with no on-screen text or logos"
 
 
 def render_veo(shot: Shot) -> str:
@@ -180,8 +172,7 @@ def render_veo(shot: Shot) -> str:
     [Cinematography] + [Subject] + [Action] + [Context] + [Style & ambiance].
     Aspect/duration are deliberately NOT in the prompt text — Veo's guide says
     keep those as external parameters (see veo_parameters()). Veo generates
-    audio, so it's directed explicitly and defaults to no dialogue to match the
-    house style.
+    audio, so it's directed explicitly and defaults to no dialogue.
     """
     cinematography = _phrase(VEO_CAMERA[shot.camera], f"{_readable_size(shot.size)} shot")
     context = _phrase(shot.setting, shot.lighting)
@@ -192,7 +183,8 @@ def render_veo(shot: Shot) -> str:
     ]
     if context:
         lines.append(f"Context: {context}")
-    lines.append(f"Style & ambiance: {shot.look}")
+    if shot.look.strip():
+        lines.append(f"Style & ambiance: {shot.look}")
     lines.append(f"Audio: {shot.audio.strip() or 'ambient sound only, no dialogue'}")
     lines.append(f"Avoid: {VEO_NEGATIVE}")
     return "\n".join(lines)
@@ -254,7 +246,7 @@ SEEDANCE_CAMERA = {
 def render_seedance(shot: Shot) -> str:
     """
     Seedance takes literal labeled sections and generates audio, so the
-    soundstage is directed explicitly (ambience only by house style).
+    soundstage is directed explicitly (ambience only unless the shot says).
     Reference-asset mapping (@Image/@Video) is out of scope here — this
     renderer covers the text-only path.
     """
@@ -262,10 +254,12 @@ def render_seedance(shot: Shot) -> str:
         f"Setting: {_phrase(shot.setting or 'an unspecified interior', shot.lighting)}",
         f"Action: {_readable_size(shot.size)} shot — {shot.subject} {shot.action}",
         f"Camera: {SEEDANCE_CAMERA[shot.camera]}",
-        f"Style: {shot.look}",
-        f"Audio: {shot.audio.strip() or 'quiet ambience only, no dialogue, no music'}",
-        f"Avoid: {shot.negative}",
     ]
+    if shot.look.strip():
+        lines.append(f"Style: {shot.look}")
+    lines.append(f"Audio: {shot.audio.strip() or 'quiet ambience only, no dialogue, no music'}")
+    if shot.negative.strip():
+        lines.append(f"Avoid: {shot.negative}")
     return "\n".join(lines)
 
 
@@ -296,8 +290,8 @@ def render_ltx(shot: Shot) -> str:
     opens with" framing — the guide bans it.
     """
     audio = shot.audio.strip() or "only quiet ambient sound"
-    sentences = [
-        f"Style: {shot.look}.",
+    sentences = [f"Style: {shot.look}."] if shot.look.strip() else []
+    sentences += [
         _phrase(
             f"A {_readable_size(shot.size)} shot of {shot.subject}",
             shot.setting,
@@ -387,12 +381,14 @@ def render_openart(shot: Shot) -> str:
         )
         + ".",
         f"{shot.subject[:1].upper()}{shot.subject[1:]} {shot.action} while {CAMERA_PROSE[shot.camera]}.",
-        f"The look is {shot.look}.",
     ]
+    if shot.look.strip():
+        sentences.append(f"The look is {shot.look}.")
     if shot.notes.strip():
         sentences.append(f"What matters in this shot: {shot.notes.strip()}.")
     sentences.append(f"For sound, {audio}.")
-    sentences.append(f"Keep the frame clean: {shot.negative}.")
+    if shot.negative.strip():
+        sentences.append(f"Keep the frame clean: {shot.negative}.")
     return " ".join(sentences)
 
 

@@ -1,11 +1,12 @@
-"""Generated references: a still rendered IN THE LOOK for a spark.
+"""Generated references: a still rendered from a spark's hook frame.
 
 Mike, 2026-09-06: the web lanes return real photographs of real streets;
-a spark set in a flooded mall or a company town has nothing on the
-internet that looks like it. So the reference for an invented world is
-rendered from the spark's own hook frame plus the brand's look block --
-Midjourney first (his call), Gemini's image model as the fallback that
-needs no extra key and no per-run approval, Higgsfield Soul last.
+a spark set in an invented world has nothing on the internet that looks
+like it. So the reference for it is rendered from the spark's own hook
+frame -- Midjourney first (his call), Gemini's image model as the
+fallback that needs no extra key and no per-run approval. No house look
+and no likeness path since 2026-10-04 (Mike's call): the hook frame
+names its own light, and nobody's face is special-cased.
 
 ONE STILL PER SPARK, CAPPED. `render_for_finding` is the only entry:
 it renders once, normalises through refbin like every other reference,
@@ -46,93 +47,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from . import db, looks, refbin, scout
+from . import db, refbin, scout
 
 DAILY_CAP = int(os.environ.get("REFGEN_DAILY_CAP", "8"))
 PROVIDERS = ("midjourney", "nano")
-
-# THE LIKENESS PATH (2026-09-06, Mike: "This isn't what I look like").
-# What reproduces his face is Nano Banana Pro handed his REAL PHOTOS as
-# reference parts -- three angles out of characters/michael -- with a
-# prompt that opens by saying the attached man is the subject. Nothing
-# else has passed the test: the trained Soul ("Mike Antihero v2") on Soul
-# Cinema and Soul V2 rendered a different actor (thick mustache,
-# pompadour), an Element hint inside Nano put his mustache on somebody
-# else, and Midjourney has no reference of him at all. So a still with
-# Michael in it goes to nano WITH these photos, first and only-by-default;
-# the Soul path stays callable but is no longer where his face comes from.
-LIKENESS_SLUG = "michael"
-LIKENESS_PHOTOS = tuple(p.strip() for p in os.environ.get(
-    # 2026-09-07: the old default (IMG_0586/0593/0599) was three wide,
-    # full-body shots where his face is a small fraction of the frame --
-    # AND all three happen to have him in the moto jacket, so identity lock
-    # was drifting to a generic archetype AND dragging the jacket into every
-    # scene regardless of what it called for. 07 is an actual tight
-    # headshot; 08 is a clear front angle in a plain shirt, no jacket.
-    "LIKENESS_PHOTOS",
-    "07-headshot-frontal-neutral.jpg,08-frontal-indoor-seated.jpg,IMG_0593.JPG",
-).split(",") if p.strip())
-# Pro, because a face is what this path exists to get right. The GA id, not
-# the preview: both were on this account's models.list on 2026-09-12, and the
-# preview is the one that can be retired under a nightly run. Same price tier
-# either way ($0.134 per 1K/2K image).
-LIKENESS_MODEL = os.environ.get("NANO_LIKENESS_MODEL", "gemini-3-pro-image")
-LIKENESS_OPENER = (
-    "This is the same man as in the attached reference photos: reproduce his "
-    "face exactly -- same features, skin, hair, brows, and his even light "
-    "stubble across the whole jaw and upper lip. He does NOT have a grown or "
-    "shaped mustache -- do not add one. Do not default to any particular "
-    "jacket or outfit from the reference photos unless the scene text below "
-    "specifically calls for it. New scene, new framing, new light, new "
-    "wardrobe: do not copy the photos' backgrounds, poses, or clothing. ")
-
 
 def enabled() -> bool:
     return (os.environ.get("REFGEN_LANE", "1") or "").strip().lower() not in ("", "0", "no", "off", "false")
 
 
-def provider_order(identity: bool = False) -> tuple:
-    """Midjourney first (Mike's call) -- EXCEPT when the still has to be
-    Michael: then nano leads, because nano is the one renderer that can
-    be handed his real photos (see LIKENESS_PHOTOS). Midjourney has no
-    reference of his face to hold and the Soul path rendered someone
-    else, so both fall to the back for him -- still reachable if nano
-    fails, never the first answer. REFGEN_PROVIDERS overrides the base
-    order."""
+def provider_order() -> tuple:
+    """Midjourney first (Mike's call); REFGEN_PROVIDERS overrides it."""
     chosen = [p.strip() for p in (os.environ.get("REFGEN_PROVIDERS") or "").split(",") if p.strip()]
-    order = tuple(p for p in chosen if p in PROVIDERS) or PROVIDERS
-    if identity and "nano" in order:
-        order = ("nano",) + tuple(p for p in order if p != "nano")
-    return order
-
-
-def identity_references() -> list:
-    """Michael's face photos as (label, jpeg bytes) pairs for nano's
-    reference parts -- LIKENESS_PHOTOS out of characters/michael, each
-    normalised through refbin (HEIC and EXIF rotation included). Missing
-    files are skipped, so a deployment without his photos renders from
-    the text line alone and the caller can say so. Never raises."""
-    try:
-        from . import asset_shelf
-        on_disk = {p.name.lower(): p for p in asset_shelf.photos_for("character", LIKENESS_SLUG)}
-    except Exception:
-        return []
-    out = []
-    for i, name in enumerate(LIKENESS_PHOTOS, 1):
-        path = on_disk.get(name.lower())
-        if path is None:
-            continue
-        try:
-            jpeg = refbin.to_jpeg(path.read_bytes())
-        except Exception:
-            jpeg = None
-        if jpeg:
-            out.append((f"Reference photo {i} of Michael", jpeg))
-    return out
-
-
-def is_identity(hook_frame: str, brand: str) -> bool:
-    return brand == "antihero" and "michael" in (hook_frame or "").lower()
+    return tuple(p for p in chosen if p in PROVIDERS) or PROVIDERS
 
 
 def rendered_today(dsn=None) -> int:
@@ -147,47 +74,12 @@ def rendered_today(dsn=None) -> int:
         return 0
 
 
-def build_prompt(hook_frame: str, brand: str) -> str:
-    """The hook frame is the subject; the look block is the grade. Kept
-    short and concrete because a still model reads the first clause
-    hardest, and Midjourney parameters go last."""
-    terms = look_terms(brand)
-    framing = ""
-    if brand == "antihero" and "michael" in hook_frame.lower():
-        # His call, 2026-09-06: a face at 50px is a stranger. The world goes
-        # behind him, not around him, whenever he is the subject.
-        framing = (" Medium shot or closer on Michael, his face at least a "
-                   "third of the frame height, sharp and clearly lit.")
-    opener = LIKENESS_OPENER if is_identity(hook_frame, brand) else ""
-    return (opener + f"{hook_frame.strip().rstrip('.')}. "
-            + " ".join(terms) + framing
-            + " Cinematic film still, vertical 9:16, photorealistic, no text, no logo.")
-
-
-# LIKENESS is read too (2026-09-06): the antihero look carries Michael's
-# feature line, and every generated reference with him in it must say it --
-# the zeropage look has no such entry, so nothing is appended there.
-KEYS = ("GRADE", "AIR", "GROUND", "LENS", "FINISH", "LIKENESS")
-
-
-def look_terms(brand: str) -> list[str]:
-    """The look file's GRADE/AIR/GROUND/LENS/FINISH entries, each with its
-    wrapped continuation lines joined -- the file is written for a model
-    to read, two-space-indented, so an entry runs until the next key."""
-    out, current = {}, None
-    for raw in looks.look_block(brand).splitlines():
-        line = raw.strip()
-        if not line:
-            continue
-        key = line.split(" ", 1)[0]
-        if key in KEYS:
-            current = key
-            out[key] = line.split(None, 1)[1].strip() if " " in line else ""
-        elif key.isupper() and key.isalpha():
-            current = None                      # SCALE / CAST / a heading
-        elif current:
-            out[current] = f"{out[current]} {line}".strip()
-    return [out[k].rstrip(".") + "." for k in KEYS if out.get(k)]
+def build_prompt(hook_frame: str, brand: str = "") -> str:
+    """The hook frame is the whole subject, light included -- there is no
+    house look to add. Kept short and concrete because a still model reads
+    the first clause hardest, and Midjourney parameters go last."""
+    return (f"{hook_frame.strip().rstrip('.')}. "
+            "Cinematic film still, vertical 9:16, photorealistic, no text, no logo.")
 
 
 def _midjourney(prompt: str, out: Path) -> Path:
@@ -195,34 +87,25 @@ def _midjourney(prompt: str, out: Path) -> Path:
     return midjourney.generate_image(prompt + " --ar 9:16 --style raw --s 150", out)
 
 
-def _nano(prompt: str, out: Path, identity: bool = False) -> Path:
+def _nano(prompt: str, out: Path) -> Path:
     from . import nano_banana
     if not nano_banana.has_key():
         raise RuntimeError("no GEMINI_API_KEY")
-    if not identity:
-        return nano_banana.generate_image(prompt, out, aspect_ratio="9:16")
-    refs = identity_references()
-    if not refs:
-        raise RuntimeError(
-            f"no likeness photos found in characters/{LIKENESS_SLUG} "
-            f"({', '.join(LIKENESS_PHOTOS)}) -- a still of Michael without "
-            f"them is a stranger")
-    return nano_banana.generate_image(prompt, out, model=LIKENESS_MODEL,
-                                      reference_bytes=refs, aspect_ratio="9:16")
+    return nano_banana.generate_image(prompt, out, aspect_ratio="9:16")
 
 
 _RENDERERS = {"midjourney": _midjourney, "nano": _nano}
 
 
-def provider_usd(name: str, identity: bool = False) -> float:
+def provider_usd(name: str) -> float:
     """What one still costs at the provider -- the number a charge settles
     at. Midjourney is its AceDataCloud per-image price; Nano is the meter's
-    image price for the model this render uses (Pro for Michael's face)."""
+    image price for its model."""
     if name == "midjourney":
         from . import midjourney
         return float(midjourney.COST_USD)
     from . import nano_banana, pricing
-    return pricing.still_usd(LIKENESS_MODEL if identity else nano_banana.MODEL)
+    return pricing.still_usd(nano_banana.MODEL)
 
 
 def _reachable(name: str) -> bool:
@@ -235,23 +118,20 @@ def _reachable(name: str) -> bool:
     return True
 
 
-def hold_usd(identity: bool = False) -> float:
+def hold_usd() -> float:
     """The most one render could cost: the dearest provider it could reach."""
-    names = [p for p in provider_order(identity) if _reachable(p)] or ["nano"]
-    return max(provider_usd(p, identity) for p in names)
+    names = [p for p in provider_order() if _reachable(p)] or ["nano"]
+    return max(provider_usd(p) for p in names)
 
 
-def render(prompt: str, identity: bool = False) -> dict:
+def render(prompt: str) -> dict:
     """Try the providers in order; first image wins. Never raises.
     Returns {"path", "provider", "tried": [(provider, error), ...]}."""
     tried = []
-    for name in provider_order(identity):
+    for name in provider_order():
         out = Path(tempfile.mkdtemp(prefix="refgen-")) / f"{name}.jpg"
         try:
-            if name == "nano":
-                _RENDERERS[name](prompt, out, identity)
-            else:
-                _RENDERERS[name](prompt, out)
+            _RENDERERS[name](prompt, out)
             if out.is_file() and out.stat().st_size > 0:
                 return {"path": out, "provider": name, "tried": tried}
             tried.append((name, "no file"))
@@ -277,8 +157,7 @@ def render_for_finding(finding_id: int, hook_frame: str, dsn=None,
     if used >= cap:
         return {"ok": False, "note": f"generated-reference cap reached ({used}/{cap} today, REFGEN_DAILY_CAP)"}
     pass_id = scout.generated_pass_id(finding_id)   # its own bin, read first
-    prompt = build_prompt(hook_frame, finding["brand"])
-    identity = is_identity(hook_frame, finding["brand"])
+    prompt = build_prompt(hook_frame)
 
     import uuid
 
@@ -286,14 +165,14 @@ def render_for_finding(finding_id: int, hook_frame: str, dsn=None,
     from . import ledger
     charge = charging.Charge(account_id, provider="refgen",
                              ref=f"refgen-{int(finding_id)}-{uuid.uuid4().hex}",
-                             estimate_usd=hold_usd(identity), dsn=dsn)
+                             estimate_usd=hold_usd(), dsn=dsn)
     try:
         charge.take()              # a no-op for the unowned pool and exempt accounts
     except ledger.InsufficientCredit as e:
         return {"ok": False, "note": charging.refusal(e, "this reference")}
     charge.submitted()
     try:
-        result = render(prompt, identity=identity)
+        result = render(prompt)
         if not result["path"]:
             why = "; ".join(f"{p}: {e}" for p, e in result["tried"]) or "no provider configured"
             return {"ok": False, "note": f"nothing rendered -- {why}", "prompt": prompt}
@@ -307,7 +186,7 @@ def render_for_finding(finding_id: int, hook_frame: str, dsn=None,
                             lane="generated", dsn=dsn)
         if row is None:
             return {"ok": False, "note": "the pass is full or the write failed", "prompt": prompt}
-        credits = charge.settle(provider_usd(result["provider"], identity))
+        credits = charge.settle(provider_usd(result["provider"]))
     finally:
         charge.release("refgen: nothing banked")   # a no-op once settled
     print(f"refgen: {result['provider']} rendered a reference for finding {finding_id}",

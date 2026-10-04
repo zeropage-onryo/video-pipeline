@@ -1,6 +1,7 @@
 """
-Inspiration accounts: the researched defaults seed on init, a chosen
-account's formula is folded into generation, and the store is editable.
+Inspiration accounts: nothing is seeded on init (no brand ideas, 2026-10-04),
+an added account's formula is folded into generation, and the store is
+editable.
 Generation itself is mocked -- only the seeding, grounding, and routing run.
 """
 import pytest
@@ -17,14 +18,17 @@ def tmp_db(pg, monkeypatch):
     from src import preprod
     path = pg
     preprod.init(path)              # reference_block reads the described rooms
-    inspiration.init(path)          # seeds the three researched defaults
+    inspiration.init(path)          # seeds nothing any more
+    inspiration.add("sample.creator", "a test account", "a test formula: one hero "
+                    "object, re-shot in new light", brand="antihero", dsn=path)
     monkeypatch.setenv("DATABASE_URL", path)
     return path
 
 
-def test_init_seeds_the_three_defaults_and_is_idempotent(tmp_db):
+def test_init_seeds_no_brand_accounts_and_is_idempotent(tmp_db):
     handles = {a["handle"] for a in inspiration.list_accounts(dsn=tmp_db)}
-    assert {"layed_black", "manny.walkerrr", "alexisglere"} <= handles
+    assert handles == {"sample.creator"}          # only what the test added
+    assert inspiration.DEFAULT_ACCOUNTS == []
     n = len(inspiration.list_accounts(dsn=tmp_db))
     inspiration.init(tmp_db)        # re-init must not duplicate
     assert len(inspiration.list_accounts(dsn=tmp_db)) == n
@@ -39,15 +43,14 @@ def test_add_cleans_the_handle_and_upserts(tmp_db):
 
 
 def test_grounding_block_wraps_with_the_no_copy_rule(tmp_db):
-    block = inspiration.grounding_block(inspiration.get("layed_black", dsn=tmp_db))
+    block = inspiration.grounding_block(inspiration.get("sample.creator", dsn=tmp_db))
     assert "riff" in block.lower() and "never copy" in block.lower()
-    assert "layed_black" in block
+    assert "sample.creator" in block
 
 
 def test_combined_grounding_lists_every_account(tmp_db):
     block = inspiration.combined_grounding(dsn=tmp_db)
-    for h in ("layed_black", "manny.walkerrr", "alexisglere"):
-        assert h in block
+    assert "sample.creator" in block
     assert "never copy" in block.lower()
 
 
@@ -61,7 +64,7 @@ def test_antihero_generation_auto_grounds_on_inspiration(tmp_db, monkeypatch):
                         lambda db_url=None: (_ for _ in ()).throw(ConnectionError("no store")))
     references = api_mod.scene_grounding("antihero", "a night ride")
     assert "INSPIRATION GROUNDING" in references
-    assert "layed_black" in references
+    assert "sample.creator" in references
 
 
 def test_zeropage_generation_does_not_auto_ground(tmp_db, monkeypatch):
@@ -71,7 +74,7 @@ def test_zeropage_generation_does_not_auto_ground(tmp_db, monkeypatch):
     monkeypatch.setattr(api_mod.rag, "connect",
                         lambda db_url=None: (_ for _ in ()).throw(ConnectionError("no store")))
     references = api_mod.scene_grounding("zeropage", "a night ride")
-    assert "layed_black" not in references
+    assert "sample.creator" not in references
 
 
 def test_scene_grounding_survives_a_dead_inspiration_store(tmp_db, monkeypatch):

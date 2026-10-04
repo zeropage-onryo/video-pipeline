@@ -1102,7 +1102,7 @@ is yours, in Resolve, by hand.
   scoped to holding a concept's scenes together shot to shot for continuity. **Arrival is
   the nodes, never a composer:** the view opens onto the newest planned concept's scene
   graph; the chat-first brief composer (pre-filled with `gold_standard_example()`'s opening
-  blocks + quick-start chips from `ZEROPAGE_FORMATS` for Zero Page, served by
+  blocks; its quick-start chips were Zero Page's format skeletons and are always empty since 2026-10-04, served by
   `GET /api/director/landing`; submitting runs the same `/api/pipeline/run` engine and
   lands the result on the canvas) is the fallback when nothing is planned yet, or an
   explicit "← Brief" away. Any concept opens directly from its card's Director button —
@@ -1492,7 +1492,8 @@ is yours, in Resolve, by hand.
   new: **novelty detection had silently stopped working** for every graph row. Split now —
   `generate_scene_concept(spark=..., steer=...)`: the prompt sees both, the row sees the
   direction. Filmmaker corrections ride in `steer` too, still consumed so each note steers once.
-- **A faceless brand is handed no cast** (2026-09-01). `ground_entities` passed every asset on
+- **A faceless brand is handed no cast** (2026-09-01; REVERSED 2026-10-04 -- `CAST_BRANDS` is
+  gone and every brand gets the cast, see "NO LIKENESS AND NO BRAND IDEAS"). `ground_entities` passed every asset on
   file to the shared `{cast}` socket regardless of brand, and that socket says *"reference the
   uploaded photos as the EXACT face … name them"* — flatly against `concept_zeropage.txt`'s
   *"FACELESS — no recurring person; any human is anonymous."* The cast block won: **every Zero
@@ -1738,18 +1739,30 @@ is yours, in Resolve, by hand.
   brief") -- the scene templates' old CHANNEL DIRECTION slot reads PROJECT, keep its
   must-haves and nevers, the idea and images win on anything else. The crawl digest and the
   research brief carry no BRAND / brand note / LOOK lines and no Antihero/Zero Page casting
-  rules. Michael's LIKENESS line lived in `look_antihero.txt` and went with it; when he is
-  added as an element it belongs in his character notes (the live `characters` table was
-  empty on the day). `gold_standard.md` was rewritten on 2026-10-02 off the monster/portal
+  rules. **NO LIKENESS AND NO BRAND IDEAS (same day, Mike: "Remove all likeness and brand
+  ideas. Only keep templates related to shots and prompts to help the brain").** Gone:
+  refgen's Michael identity path (his photos, the Pro model, the stubble opener, the framing
+  rule) -- a hook frame naming anyone renders like any other; `shot.HOUSE_LOOK` ("noir,
+  gritty, crushed shadows, desaturated", the default on every `Shot`) -- a Shot has no look
+  unless given one and a renderer with no look writes no Style line, and the negative is
+  only `CLEAN_NEGATIVE` ("no text overlays, no logos"); `ZEROPAGE_FORMATS` +
+  `format_skeletons` + `ranked_formats` + `src/format_feed.py` and the Director chips;
+  `CAST_BRANDS` (every brand gets the cast); the brand-keyed crawl queries (one neutral set,
+  the dicts kept only because callers index by brand); `inspiration.DEFAULT_ACCOUNTS` (three
+  Antihero noir creator profiles seeded from code -- the rows already in a database stay
+  until someone deletes them); the Zero Page-only concept/ideas/shot-list templates,
+  `design-system-antihero.md`, `brief.txt`, `settings.txt` and the dead edit/pitch prompts;
+  the "solo filmmaker" / "Zero Page Films" persona lines in the live templates; the
+  "Michael finds a cyclops" card-line examples. KEPT on purpose: the uncanny judge (Mike's
+  call), the brand LABELS (their removal is scoped separately), and the dead camera-era
+  `concept_prompt.txt` / `shotlist_prompt.txt` with their uncalled builders.
+  `gold_standard.md` was rewritten on 2026-10-02 off the monster/portal
   dark comedy (same five-part shape, one take, daylight). `tests/test_project_look.py`
   guards all of it.
   The exemplar is NO LONGER a winner: startup used to seed it onto the `winning_prompts`
   shelf (`seed_gold_standard`); live row #2 and its 4 chunks were deleted by hand, and
   `app.main.retire_gold_standard` now runs at boot instead, removing any row with that exact
-  note (and its chunks, via `winners.retire_by_note`) and seeding nothing. NOT ported with it, left on
-  `wip/main-checkout-2026-09-28` as Mike's to decide: `load_brand` forcing every run to
-  zeropage, `CAST_BRANDS` gaining zeropage (lifts the faceless rule), and the rewritten
-  brand/look/scene prompts.
+  note (and its chunks, via `winners.retire_by_note`) and seeding nothing.
 - **THE COMPOSER IS DRAWN TO THE "ZPF COMPOSER DIRECTIONS" MOCK (2026-10-02, Mike:
   "create a similar look to the images shown in our mock design" -- the first port,
   Direction A, had not translated).** `web/src/app/studio/page.tsx` +

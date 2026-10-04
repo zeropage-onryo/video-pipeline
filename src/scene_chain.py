@@ -109,10 +109,8 @@ def scoped_cast_and_locations(idea: str, brand: str, refs, *, db_path=None,
                  if c["name"] in scoped_names["character"]]
     props = [p for p in entities.list_props(dsn=path, account_id=account_id)
             if p["name"] in scoped_names["prop"]]
-    # Brand-scoped, same rule the graph follows: a faceless brand gets
-    # no cast block, or the {cast} socket instructs it to name a
-    # recurring person its own brief forbids -- unchanged by what got
-    # named or picked, since the brand rule is the stricter one.
+    # The same for every brand since 2026-10-04 (no brand ideas): what was
+    # named or picked, with photos on file, is the cast.
     cast = shootgen.cast_for(brand, characters, props, detail=True)
     locations = [loc for loc in preprod.list_locations(dsn=path, account_id=account_id)
                 if loc["name"] in scoped_names["location"]]

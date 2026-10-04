@@ -21,7 +21,9 @@ def _shot(**kw):
 
 
 def test_render_veo_uses_five_part_labels():
-    out = render_veo(_shot())
+    # a look given, so the Style line has something to say (no house look
+    # since 2026-10-04 -- a shot with none writes no Style line)
+    out = render_veo(_shot(look="soft overcast daylight"))
     for label in ("Cinematography:", "Subject:", "Action:", "Style & ambiance:", "Audio:"):
         assert label in out
 
